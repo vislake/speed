@@ -387,12 +387,13 @@ func TestMiddlewareThenSystemContext_ResolvedTenant_AuditCorrelatesIt(t *testing
 // allowlisted exactly for this reason. The handler still successfully
 // elevates to system context (WithSystemContext never requires a tenant),
 // and the audit event's TenantID stays at its zero value rather than
-// panicking or fabricating one. It then additionally confirms the gap
-// system_context_repository_test.go documents shows up here too, in a real
-// request: even fully elevated, a Repository[T] call this handler makes
-// still fails closed with pkgcore.ErrNoTenant, because nothing in this
-// request ever supplied a tenant and the escape hatch does not substitute
-// for one on Repository[T]'s path.
+// panicking or fabricating one. It then additionally confirms, in a real
+// request rather than only a bare context.Context, that WithSystemContext
+// still does not compose with Repository[T]: even fully elevated, a
+// Repository[T] call this handler makes still fails closed with
+// pkgcore.ErrNoTenant, because nothing in this request ever supplied a
+// tenant and the escape hatch does not substitute for one on
+// Repository[T]'s path.
 func TestMiddlewareThenSystemContext_AllowlistedNoTenant_GrantsWithNoCorrelation(t *testing.T) {
 	const purpose pkgcore.SystemPurpose = "tenancy_test.middleware_system_context.allowlisted"
 	pkgcore.RegisterSystemPurpose(purpose)
@@ -452,9 +453,9 @@ func TestMiddlewareThenSystemContext_AllowlistedNoTenant_GrantsWithNoCorrelation
 		t.Errorf("event.TenantID = %q, want empty; an allowlisted no-tenant request has nothing to correlate", published[0].TenantID)
 	}
 
-	// The gap documented in system_context_repository_test.go, confirmed
-	// once more through this file's real net/http request rather than a
-	// bare context.Context: a granted system reason does not let this
+	// The same WithSystemContext/Repository[T] non-composition property,
+	// confirmed once more through this file's real net/http request rather
+	// than a bare context.Context: a granted system reason does not let this
 	// handler's Repository[T] call read across tenants, or run at all,
 	// despite the elevation having genuinely succeeded above.
 	if !errors.Is(repoErr, pkgcore.ErrNoTenant) {

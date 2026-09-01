@@ -94,11 +94,11 @@ func TestAssertIsolated_Sprocket_Postgres(t *testing.T) {
 	tenancytest.AssertIsolated(t, repo, newSprocket)
 }
 
-// decoyTenantWidget mirrors the unexported fixture of the same name in
-// assert_isolated_system_context_test.go (package tenancytest, one
-// directory up) -- see postgres_assert_isolated_test.go's doc comment on
-// sprocket for why this package defines its own copy rather than sharing
-// one.
+// decoyTenantWidget mirrors the unexported fixture of the same name used
+// by the unit tier's own system-context/Repository[T] composition test for
+// this same scenario (package tenancytest, one directory up) -- see
+// postgres_assert_isolated_test.go's doc comment on sprocket for why this
+// package defines its own copy rather than sharing one.
 type decoyTenantWidget struct {
 	ID       string `gorm:"column:id;primaryKey;size:64"`
 	TenantID string `gorm:"column:tenant_id;primaryKey;size:64"`
@@ -127,20 +127,22 @@ func newDecoyTenantWidget(tenant pkgcore.TenantID) *decoyTenantWidget {
 }
 
 // decoySystemPurpose is this package's own registration, distinct from the
-// unit tier's identically-purposed constant in
-// assert_isolated_system_context_test.go: the two run as separate test
-// binaries (different packages), so nothing requires the string values to
-// match, and keeping them textually distinct avoids any confusion if a
-// system-purpose audit log ever sees both. See pkgcore.RegisterSystemPurpose's
-// own doc comment for why registering a purpose more than once is a safe
-// no-op.
+// unit tier's identically-purposed constant in its own system-context
+// composition test: the two run as separate test binaries (different
+// packages), so nothing requires the string values to match, and keeping
+// them textually distinct avoids any confusion if a system-purpose audit
+// log ever sees both. See pkgcore.RegisterSystemPurpose's own doc comment
+// for why registering a purpose more than once is a safe no-op.
 const decoySystemPurpose = pkgcore.SystemPurpose("tenancytest.assert_isolated_system_context.decoy_postgres")
 
 // TestAssertIsolated_SystemCtxElevatedDB_Postgres is the postgres-dialect
-// leg of tenancytest.TestAssertIsolated_SystemCtxElevatedDB
-// (assert_isolated_system_context_test.go, package tenancytest); see that
-// test's doc comment for what it proves and postgres_assert_isolated_test.go's
-// own doc comment for why the postgres leg lives here instead of there.
+// leg of tenancytest.TestAssertIsolated_SystemCtxElevatedDB, which proves
+// that AssertIsolated's guarantees hold unchanged even when the
+// Repository[T]'s underlying *gorm.DB was itself built from a base context
+// already elevated via pkgcore.WithSystemContext and scoped to an unrelated
+// decoy tenant; see that test's own doc comment for the full mechanism and
+// postgres_assert_isolated_test.go's own doc comment for why the postgres
+// leg lives here instead of there.
 func TestAssertIsolated_SystemCtxElevatedDB_Postgres(t *testing.T) {
 	pkgcore.RegisterSystemPurpose(decoySystemPurpose)
 
@@ -184,13 +186,14 @@ func TestAssertIsolated_SystemCtxElevatedDB_Postgres(t *testing.T) {
 
 // TestAssertIsolated_LongDescriptiveSubtestName_WorksAcrossDialects_Postgres
 // is the postgres-dialect leg of
-// tenancytest.TestAssertIsolated_LongDescriptiveSubtestName_WorksAcrossDialects
-// (assert_isolated_tenant_id_length_test.go, package tenancytest); see that
-// test's doc comment for what it proves -- PostgreSQL is the dialect that
-// actually enforces VARCHAR(64) and is what surfaced the tenant-id-length
-// bug being regression-tested in the first place, so this leg matters more
-// than most -- and postgres_assert_isolated_test.go's own doc comment for
-// why it lives here instead of in the unit tier.
+// tenancytest.TestAssertIsolated_LongDescriptiveSubtestName_WorksAcrossDialects,
+// the regression test proving a long, descriptive subtest name can no
+// longer derive a tenant id overflowing the 64-character tenant_id column
+// -- see that test's own doc comment for the full mechanism. PostgreSQL is
+// the dialect that actually enforces VARCHAR(64) and is what surfaced the
+// tenant-id-length bug being regression-tested in the first place, so this
+// leg matters more than most -- and postgres_assert_isolated_test.go's own
+// doc comment for why it lives here instead of in the unit tier.
 //
 // Reuses the sprocket fixture (type, newSprocket, createSprocketsTableSQL)
 // declared in postgres_assert_isolated_test.go: same package, same

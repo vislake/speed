@@ -350,20 +350,21 @@ func TestAssertIsolated_MinimalTenantScopedModel(t *testing.T) {
 // This means the combination the question asks about does not really
 // "make sense" as a way to grant a Repository[T] elevated privileges: there
 // is no such thing as an "elevated Repository[T]" today, only individual
-// elevated CONTEXT VALUES passed to individual method calls (and, per
-// system_context_repository_test.go in the parent tenancy package, even
-// those have no effect on Repository[T] yet either). A caller trying to
-// build a "privileged repository" by pre-elevating db is relying on
-// behavior that silently does nothing, which is a plausible real mistake --
-// exactly the kind AssertIsolated ought to remain correct in the presence
-// of, which is what this file confirms rather than assumes.
+// elevated CONTEXT VALUES passed to individual method calls (and, as the
+// parent tenancy package's own WithSystemContext-against-Repository[T]
+// tests separately establish, even those have no effect on Repository[T]
+// yet either). A caller trying to build a "privileged repository" by
+// pre-elevating db is relying on behavior that silently does nothing,
+// which is a plausible real mistake -- exactly the kind AssertIsolated
+// ought to remain correct in the presence of, which is what this file
+// confirms rather than assumes.
 
 // decoyTenantWidget is a tenant-scoped fixture local to this file, distinct
 // from sprocket and brokenTenantWidget so this investigation does not lean
 // on either of their setups. It deliberately carries a non-key Note field
-// -- see assert_isolated_minimal_model_test.go in this same package for why
-// that is load-bearing here rather than cosmetic: a TenantScoped model
-// whose ONLY fields are its "ID"/"TenantID" primary key trips an unrelated
+// -- see bareTenantWidget earlier in this same file for why that is
+// load-bearing here rather than cosmetic: a TenantScoped model whose ONLY
+// fields are its "ID"/"TenantID" primary key trips an unrelated
 // dbkit.Repository[T].Update defect this file has nothing to do with
 // investigating, and every other fixture in this package (sprocket,
 // platformSetting) already avoids it the same way, by happening to declare
@@ -419,9 +420,9 @@ const decoySystemPurpose = pkgcore.SystemPurpose("tenancytest.assert_isolated_sy
 // SQLite only -- see TestAssertIsolated_Sprocket's doc comment
 // (assert_isolated_test.go) for why a plain _test.go file must not reach
 // testutil.Dialects()'s postgres entry. The postgres leg of this same
-// scenario runs from
-// tenancytest/integration_test/postgres_assert_isolated_system_context_test.go,
-// behind //go:build integration.
+// scenario -- proving the identical elevated-base-db/decoy-tenant setup
+// stays inert against a real PostgreSQL container too -- runs from
+// tenancytest/integration_test, behind //go:build integration.
 func TestAssertIsolated_SystemCtxElevatedDB(t *testing.T) {
 	pkgcore.RegisterSystemPurpose(decoySystemPurpose)
 
@@ -592,10 +593,10 @@ func TestIsolationTenants_LongDescriptiveSubtestName_StaysWithinMaxTenantIDLen(t
 // important dialect for this particular regression -- it is the one that
 // actually enforces VARCHAR(64) and is what surfaced this bug in the first
 // place -- so its leg is not skipped, merely relocated: it runs from
-// tenancytest/integration_test/postgres_assert_isolated_tenant_id_length_test.go,
-// behind //go:build integration. (The name kept saying "WorksAcrossDialects"
-// across that split only because renaming it added unrelated churn; the two
-// dialects' coverage together is exactly what it always was.)
+// tenancytest/integration_test, behind //go:build integration. (The name
+// kept saying "WorksAcrossDialects" across that split only because
+// renaming it added unrelated churn; the two dialects' coverage together
+// is exactly what it always was.)
 func TestAssertIsolated_LongDescriptiveSubtestName_WorksAcrossDialects(t *testing.T) {
 	t.Run("ADeliberatelyLongAndDescriptiveSubtestNameLikeTheProjectConventionAsksFor", func(t *testing.T) {
 		repo := newSprocketRepo(t, testutil.Dialects()[0].NewDB(t)) // sqlite: see doc comment above
