@@ -11,6 +11,7 @@
 | **`docs/internal/**`**（本目录：设计决策与理由） | **中文** |
 | 代码注释、godoc、TSDoc | **英文** |
 | 模块内 `docs/`、模块 `AGENTS.md` | **英文** |
+| `docs/adr/`、`docs/upgrade/` | **英文**（不属于 `docs/internal/`，同样会被业务方与工具链读取） |
 | 仓库根 `README.md`、`CLAUDE.md` | **英文** |
 | `.claude/skills/**` 编码规范 | **英文** |
 | 面向业务方的文档站 `docs/site/` | **英文**（后续按需增加中文版本） |

@@ -6,7 +6,7 @@ New SaaS projects pull in the capabilities they need via `go get` / `npm install
 
 ## Status
 
-**Design phase.** This repository currently contains design documents only; implementation has not started. The design is complete and awaiting review:
+**Milestone M0, in progress.** The design is complete; implementation is underway module by module, following [the roadmap](docs/internal/15-roadmap.md). `go/pkgcore` — the dependency floor every other module builds on — is implemented and tested (`go build`/`go vet`/`go test -race` all pass). The other 19 planned Go modules and all 16 npm packages are still placeholder stubs.
 
 - 📐 [Design overview](docs/internal/00-overview.md) ← **start here**
 - 🗺️ [Roadmap and milestones](docs/internal/15-roadmap.md)

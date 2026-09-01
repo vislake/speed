@@ -206,7 +206,7 @@ console.log('checkout failed for plan ' + planId);
 | End-to-end | Playwright | the reference-app journeys |
 
 **File and directory layout — not optional:**
-- Unit/component test files are named `<Target>.test.tsx` / `<target>.test.ts`, co-located with the file they test — `PlanCard.tsx` is tested by `PlanCard.test.tsx`. A test file that isn't a 1:1 mirror of one source file is named for the behaviour it verifies (`tenant-switch.test.ts`), never `misc.test.ts` or `extra.test.ts`.
+- Unit/component test files are named `<Target>.test.tsx` / `<target>.test.ts`, co-located with the file they test — `PlanCard.tsx` is tested by `PlanCard.test.tsx`. Default to keeping every test for that target in this one file, including sub-behaviours; split only when it grows unreasonably large, and even then the split file keeps the target's name as a prefix (`PlanCard.pricing.test.tsx`, not bare `pricing.test.tsx`). Never a generic word (`misc.test.ts`, `extra.test.ts`).
 - Shared test helpers, fixtures and custom render utilities go in a dedicated `test-utils/` directory per package, never duplicated across test files.
 - End-to-end/integration specs live physically apart from unit tests, under `e2e/` (Playwright's own convention), never mixed into a package's `src/`. Name each spec for the journey it covers (`checkout-alipay.spec.ts`), not `e2e.spec.ts`.
 

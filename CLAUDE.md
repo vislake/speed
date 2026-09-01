@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Status
 
-**Design phase — there is no source code yet.** The repository currently contains design documents and coding standards. Implementation starts at milestone M0 (see `docs/internal/15-roadmap.md`).
+**Milestone M0 is in progress** (see `docs/internal/15-roadmap.md`). `go.work` lists all 20 planned Go modules; 19 are still placeholder stubs (`go.mod` + a one-line `doc.go` + an `AGENTS.md` pointing at the relevant design doc — nothing to build against yet). `go/pkgcore`, the dependency floor every other module sits on, has real, tested implementation: the `Module`/`Registry`/`Kernel` wiring contract, tenant-context primitives, an in-memory `KVStore` and `EventBus`, `apperr`, and the bootstrap `config` loader.
 
-This matters for how you work here: there is nothing to build, lint or test yet. The commands below are the *planned* entry points defined in the design; they do not exist until M0 lands. Do not invent build commands or claim to have run them.
+This matters for how you work here: **`go build github.com/vislake/speed/go/...`, `go vet`, and `go test ./... -race` genuinely run and pass today for `go/pkgcore`** (run them from inside `go/pkgcore` for the vet/test forms — the repo root is a `go.work` workspace, not a module, so a bare `./...` from the root only works with the full import-path form). Do not assume this claim is stale without checking; conversely, do not assume any *other* module has real code behind it just because its directory exists — check for more than a `doc.go` stub before relying on one. `Taskfile.yml` exists and its underlying commands work, but the `task` CLI binary itself is not installed in this environment as of this writing — run the commands it wraps directly (`go test ./...`, `go vet ./...`, `golangci-lint run ./...`) rather than assuming `task test` works until you've confirmed `task` is on PATH.
 
 ## Language Rule (read this first)
 
@@ -104,7 +104,7 @@ Every rule below is enforced by CI and code review — **these are not style sug
 - **Do not hand-write `WHERE tenant_id = ?`.** Tenant filtering is injected by the GORM plugin and the Repository; writing it by hand means you are bypassing the guard.
 - **Do not accept a caller-supplied `tenant_id` at the API layer.** The tenant comes from the access token claims, never from request parameters, headers or bodies.
 - Every new repository **must** run `tenancytest.AssertIsolated` (tenant data) or `AssertNotTenantScoped` (identity and platform data).
-- **Do not reach for raw SQL to escape tenant filtering.** The only legitimate cross-tenant path is `tenancy.WithSystemContext`, restricted to `admin`, `compliance`, `jobs` and `authn`, and audited on every use.
+- **Do not reach for raw SQL to escape tenant filtering.** The only legitimate cross-tenant path is `pkgcore.WithSystemContext` (the raw primitive, implemented today) — the `tenancy` module, once built, wraps it with audit publishing for business-module use. Either way, it is restricted to `admin`, `compliance`, `jobs` and `authn`, and audited on every use.
 - **Do not create cross-module foreign keys.** Store IDs only — cross-module FKs make independently released migrations and cascading deletes unmanageable.
 
 ### Asynchronous work
@@ -170,7 +170,7 @@ Every rule below is enforced by CI and code review — **these are not style sug
 
 Each of these has bitten real SaaS products:
 
-- **Workers do not inherit tenant context.** Rebuild it explicitly (`tenancy.WithTenant(ctx, job.TenantID)`) or the Repository fails closed.
+- **Workers do not inherit tenant context.** Rebuild it explicitly (`pkgcore.WithTenant(ctx, job.TenantID)`) or the Repository fails closed.
 - **Encrypted fields cannot be queried.** Phone numbers are encrypted at rest yet used as a login identifier, so they need an HMAC blind index column with normalized input (E.164 / lowercased email).
 - **Billing-grade metering cannot fail open.** It uses the outbox pattern in the same transaction as the business write; only analytics-grade metering may drop events.
 - **Notifications are event-driven.** Business modules publish domain events; `notification` subscribes. The sole exception is synchronous verification codes. External recipients who are not users require consent verification before anything is sent.

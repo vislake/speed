@@ -34,6 +34,7 @@ This is the single authoritative standard for the Go side. Design rationale live
 
 **Required:**
 - Module path is `github.com/<org>/speed/go/<module>`.
+- **Package name derives from the directory by stripping hyphens**, since `-` is not a legal character in a Go identifier: `ai-gateway` → package `aigateway`, `billing-gateway` → package `billinggateway`. Lowercase, no separator — do not substitute an underscore or camelCase. Every module generator (including the future `task new:module`) must apply this rule consistently rather than leaving it to individual judgement.
 - Every module carries: `api/openapi.yaml`, `migrations/{postgres,sqlite}/`, `locales/{zh-CN,en-US}.toml`, `docs/`, `AGENTS.md`.
 - Public API stays in the module root package; implementation details go under `internal/` so consumers cannot import them.
 - Create new modules with `task new:module` — doing it by hand always misses the CI matrix entry and the release script entry.
@@ -73,10 +74,10 @@ Violating anything in this section is a security defect, not a style issue.
 ### 3.1 Tenant context has exactly one source
 
 ```go
-tid, ok := tenancy.FromContext(ctx) // the only way to read it
+tid, ok := pkgcore.TenantFromContext(ctx) // the only way to read it
 ```
 
-- **DO NOT** read `tenant_id` from headers, query parameters or request bodies. For authenticated requests the tenant comes from the access token claims and is injected into the context by `tenancy.Middleware`.
+- **DO NOT** read `tenant_id` from headers, query parameters or request bodies. For authenticated requests the tenant comes from the access token claims and is injected into the context by `tenancy.Middleware` (which calls `pkgcore.WithTenant` under the hood).
 - **DO NOT** expose a `tenant_id` parameter on the API surface — spec lint rejects it.
 
 ### 3.2 Data access goes through Repository only
@@ -113,7 +114,7 @@ Before creating a table, decide which domain it belongs to (see `docs/internal/0
 ### 3.4 System context is the only escape hatch
 
 ```go
-ctx = tenancy.WithSystemContext(ctx, tenancy.SystemReason{
+ctx, err = pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
     Actor: actor, Purpose: "admin.tenant_search", Ticket: "SUP-1234",
 })
 ```
@@ -151,7 +152,7 @@ type Subscription struct {
     CreatedAt time.Time `gorm:"autoCreateTime;index:idx_tenant_created,priority:2"`
 }
 
-func (Subscription) GetTenantID() tenancy.TenantID { return ... } // implements TenantScoped
+func (Subscription) GetTenantID() pkgcore.TenantID { return ... } // implements TenantScoped
 ```
 
 **Dual-dialect hard constraints** (PostgreSQL in production, SQLite in development — both must pass):
@@ -201,7 +202,7 @@ return apperr.NotFound("billing.subscription_not_found").
 
 ```go
 func (h *ImageGenHandler) Handle(ctx context.Context, job *jobs.Job, progress jobs.ProgressFn) (jobs.Result, error) {
-    ctx = tenancy.WithTenant(ctx, job.TenantID) // the tenant context must be rebuilt
+    ctx = pkgcore.WithTenant(ctx, job.TenantID) // the tenant context must be rebuilt
     ...
 }
 ```
@@ -297,7 +298,7 @@ log.Info("subscription activated",
 This is a hard convention, not a preference, because it is what makes `go test ./...` fast and `go test -tags=integration ./...` meaningful:
 
 - **Unit test files are named `<target_file>_test.go`**, co-located with the file they test — `registry.go` is tested by `registry_test.go`, `kv.go` by `kv_test.go`. This is standard Go idiom; follow it exactly, one test file per source file being verified.
-- **A test file that is not a 1:1 mirror of a single source file must still be named for the behaviour it verifies**, never a generic word. `concurrency_test.go`, `bootstrap_ordering_test.go`, `quota_enforcement_test.go` are acceptable; `extra_test.go`, `misc_test.go`, `independent_test.go` are not — the name is the first thing a future reader uses to find the right test, and a vague name defeats that.
+- **Default to putting every test for a source file in its one `<target_file>_test.go`**, including tests for a specific sub-behaviour (e.g. how a type marshals to JSON) — do not carve out a separate file just because a group of tests shares a theme. Split into an additional file only when the combined file would become unreasonably large (rough guideline: past 600–800 lines, or when the file mixes clearly distinct concerns that make it hard to scan). When you do split, **the new file name still starts with the target's name** — `apperr_json_test.go`, `registry_bootstrap_test.go`, `kv_concurrency_test.go` — never a bare behaviour name with no target prefix (`json_test.go`, `bootstrap_test.go`) and never a generic word (`extra_test.go`, `misc_test.go`, `independent_test.go`). The target prefix is not optional in either case — it is the first thing a future reader uses to find the right test, and dropping it defeats that.
 - **`Example*` functions live in `example_test.go`** — this is Go's own idiomatic name for godoc-rendered runnable examples and is the one recognized exception to the "name after the target" rule; do not rename it.
 - **Shared test helpers, fakes, builders and assertion utilities go in a dedicated `internal/testutil` package** (e.g. `go/pkgcore/internal/testutil/`), never duplicated across `_test.go` files and never defined inline in a `_test.go` file that another package's tests need to import — Go's `_test.go` files are not importable across packages, so anything meant to be shared has to live in a regular `.go` file in its own package. If a module has no cross-file-shared test helpers yet, it does not need this directory — do not create it speculatively.
 - **Integration tests are physically separate from unit tests**, in a package-level `integration_test/` subdirectory (e.g. `go/dbkit/integration_test/postgres_repository_test.go`), guarded by `//go:build integration`, so a plain `go test ./...` never touches them and CI invokes them explicitly with `-tags=integration`. Name each integration test file for what it exercises against a real dependency (`postgres_repository_test.go`, `redis_kvstore_test.go`), not `integration_test.go` alone if a package has more than one.

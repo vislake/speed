@@ -17,7 +17,7 @@
 // authn 产出：认证结果，刻意不含角色信息，保持 authn / rbac 解耦
 type Principal struct {
     UserID    string
-    TenantID  tenancy.TenantID  // 当前租户，来自令牌 claims
+    TenantID  pkgcore.TenantID  // 当前租户，来自令牌 claims
     SessionID string
     Email     string
     AMR       []string          // 认证方式：password / oidc / social:google / mfa:totp
@@ -25,7 +25,7 @@ type Principal struct {
 
 // rbac 输入：授权只认这两个字段，由认证方拼装
 type Subject struct {
-    TenantID tenancy.TenantID
+    TenantID pkgcore.TenantID
     UserID   string
 }
 
@@ -90,7 +90,7 @@ type ExternalIdentity struct {
 ```go
 type OrgNode struct {
     ID       string
-    TenantID tenancy.TenantID
+    TenantID pkgcore.TenantID
     ParentID *string
     Path     string   // 物化路径 "/group1/region2/store7"，权限前缀匹配依据
     Depth    int
@@ -101,7 +101,7 @@ type OrgNode struct {
 // 用户与租户的多对多桥接，用户表本身不含 tenant_id（见 04 数据分域）
 type Membership struct {
     UserID   string
-    TenantID tenancy.TenantID
+    TenantID pkgcore.TenantID
     NodeID   *string  // 绑定到组织树的某个节点；nil = 租户根
     Roles    []string
     Status   string   // active / invited / suspended

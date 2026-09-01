@@ -64,7 +64,9 @@ type Resolver interface {
 ## 多租户隔离：三重防护
 单靠开发者自觉必然出事，"忘记加 tenant_id 过滤"是 SaaS 最常见的严重漏洞。
 
-1. **GORM 插件自动注入**：对实现 `TenantScoped` 标记接口的 model，在 query/update/delete 回调自动拼 `WHERE tenant_id = ?`，值取自 `tenancy.FromContext(ctx)`。
+> **实现落地更正**（Round 1 实现 `pkgcore` 时确认）：本节下面的 `tenancy.FromContext`/`tenancy.WithSystemContext` 等函数，其**原语实际落在 `pkgcore` 包**，而不是 `tenancy` 模块——因为 `dbkit`（本节的 GORM 插件与 Repository 都在这里）需要直接调用它们，而 `dbkit` 不能 import `tenancy`（`tenancy` 本身依赖 `dbkit` 做 GORM 插件，反向 import 会成环）。`tenancy` 模块建成后，会在这些原语之上包一层面向业务代码的、带审计发布的便捷封装（`tenancy.WithSystemContext` 到时会调用 `pkgcore.WithSystemContext` 再发一条审计事件），但 `dbkit` 内部、以及任何不想引入 `tenancy` 依赖的底层代码，一律直接用 `pkgcore` 版本。下面的代码示例按 `pkgcore` 现状书写。
+
+1. **GORM 插件自动注入**：对实现 `TenantScoped` 标记接口的 model，在 query/update/delete 回调自动拼 `WHERE tenant_id = ?`，值取自 `pkgcore.TenantFromContext(ctx)`。
 2. **强制泛型 Repository 基类**（核心手段）：业务模块的仓储一律**组合** `dbkit.Repository[T]` 而不是直接持有 `*gorm.DB`。`Create` 自动回填 tenant_id（调用方无法伪造），读取时拿不到 tenant 直接 fail-closed 报错。CI 加静态检查，禁止业务模块内出现绕过 Repository 的 `db.Table/db.Model/db.Raw`。
 3. **Postgres RLS 纵深防御**：生产环境对租户表开启 Row-Level Security，事务内 `SET LOCAL app.current_tenant`。即便 Go 层被绕过，数据库也不返回跨租户数据。SQLite 不支持 RLS，这一层仅生产生效（开发环境无真实客户数据，可接受）。
 
@@ -84,9 +86,11 @@ type Resolver interface {
 
 ```go
 // 唯一合法的绕过方式，函数名刻意冗长且醒目
-ctx = tenancy.WithSystemContext(ctx, tenancy.SystemReason{
+// pkgcore 提供的是原语（无审计发布）；tenancy 建成后，业务代码应优先用
+// tenancy.WithSystemContext（同签名，内部多发一条审计事件后委托给这个原语）。
+ctx, err = pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
     Actor:   actor,            // 谁发起的：平台管理员 / 具名的系统任务
-    Purpose: "admin.tenant_search",
+    Purpose: "admin.tenant_search", // 必须先用 pkgcore.RegisterSystemPurpose 注册过，否则报错
     Ticket:  "SUP-1234",       // 可选：工单号等外部依据
 })
 ```

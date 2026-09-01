@@ -67,7 +67,7 @@
 | 前端禁止手写 API 调用 | ESLint 自定义规则：除 `@speed/api-client` 内部外禁止 `fetch`/`axios` 指向后端路径 |
 | spec 与实现必须一致 | 生成的 server interface 参与编译；CI 重新生成并 diff，不一致即失败 |
 | operationId / schema 命名规范 | redocly lint 自定义规则 |
-| 系统上下文只能由白名单模块调用 | `depguard`：仅 admin / compliance / jobs / authn 可 import `tenancy.WithSystemContext` |
+| 系统上下文只能由白名单模块调用 | `depguard`：仅 admin / compliance / jobs / authn 可 import `pkgcore.WithSystemContext`（原语；`tenancy` 建成后如果提供审计封装版，规则同样适用于它） |
 | 禁止手写 `WHERE tenant_id = ?` | `semgrep`：租户过滤只能由插件与 Repository 注入，手写即意味着绕过防护 |
 | API 层不得接受外部传入的 `tenant_id` | `semgrep` + spec lint：请求参数/请求体中出现 `tenant_id` 字段即拒绝 |
 | 禁止 `AutoMigrate` | `semgrep`：生产迁移必须是版本化 SQL |

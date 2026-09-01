@@ -86,7 +86,10 @@ type Module interface {
     DependsOn() []string          // 模块开关的依赖闭包解析依据
 
     // 资产声明（全部用 embed.FS，与模块代码同版本）
-    Migrations() dbkit.MigrationSet  // 双方言迁移文件，由 dbkit.MigrationRegistry 聚合执行
+    Migrations() embed.FS         // 双方言迁移文件，由 dbkit.MigrationRegistry 聚合执行；
+                                   // 类型故意用标准库的 embed.FS 而非任何 dbkit 自定义类型——
+                                   // Module 接口定义在 pkgcore，pkgcore 是 dbkit 的依赖底座，
+                                   // 若这里引用 dbkit 的类型会让 pkgcore 反过来依赖 dbkit，成环
     Locales() embed.FS            // zh-CN / en-US 资源
     OpenAPISpec() []byte          // 该模块的 API 契约片段
 
