@@ -1,0 +1,14 @@
+-- Only succeeds if the "base" module's migrations already ran, since this
+-- inserts into a table "base" owns (base_items), not a table "derived"
+-- itself created. This is what makes MigrationRegistry.Apply's cross-module
+-- dependency ordering observable in a test: migrations_test.go deliberately
+-- registers "derived" before "base", so this statement succeeding is proof
+-- that Apply reordered them by DependsOn rather than by registration order
+-- -- if it had not, this INSERT would fail with "relation \"base_items\"
+-- does not exist".
+--
+-- A real module's migration must never reach into another module's table
+-- like this -- see the "no cross-module foreign keys" rule in
+-- docs/internal/04-data-and-tenancy.md. It is done here, deliberately, only
+-- as a test probe for apply order.
+INSERT INTO base_items (id, tenant_id, label) VALUES ('seed-from-derived', 'tenant-seed', 'from-derived');
