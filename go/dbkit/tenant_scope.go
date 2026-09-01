@@ -46,9 +46,36 @@ type TenantScoped interface {
 	GetTenantID() pkgcore.TenantID
 }
 
-// TenantModel is the embeddable base for tenant-scoped models. Embedding it
-// satisfies TenantScoped and gives the isolation plugin a known column
-// ("tenant_id") to filter on and populate.
+// TenantModel is the embeddable base for tenant-scoped models that do not
+// need tenant_id to be part of their primary key. Embedding it satisfies
+// TenantScoped (via the promoted GetTenantID below) and gives the
+// isolation plugin a known "tenant_id" column to filter on and populate,
+// without declaring that field by hand. See
+// tenant_scope_tenantmodel_test.go for this working end to end through
+// Repository[T] — Create, FindByID, and the tenant-override and
+// cross-tenant-denial guarantees those methods promise, reached through a
+// promoted field exactly as they would a directly-declared one.
+//
+// Its tag deliberately omits "primaryKey": a tenant-scoped table's primary
+// key should be the composite (tenant_id, id) (backend coding standard
+// §5), and TenantModel cannot supply that shape generically for every
+// embedder. Resist the temptation to "fix" this by shadowing — redeclaring
+// a same-named TenantID field directly on the embedding struct with your
+// own primaryKey tag: Go field-selector rules make the shallower,
+// shadowing field the one GORM actually writes and scans, but GetTenantID
+// is a method promoted from TenantModel, so it unconditionally reads
+// TenantModel's OWN embedded copy of TenantID instead — one GORM then
+// never populates. The row's tenant_id column ends up correct; GetTenantID
+// silently does not, which is worse: it makes Repository[T].FindByID deny
+// even the row's legitimate owning tenant, since FindByID's own
+// defense-in-depth check compares GetTenantID's (always empty) answer
+// against ctx's tenant. TestTenantModel_ShadowingPromotedFieldToAddPrimaryKey_BreaksFindByIDForTheOwningTenant
+// proves exactly this. A model that needs the composite key — which, per
+// that standard, is every real tenant-scoped table in this codebase —
+// declares TenantID directly instead, with whatever tag it needs, and does
+// not embed TenantModel at all (as internal/testutil.Widget does).
+// TenantModel is for the narrower case where a plain, non-key tenant_id
+// column is genuinely enough.
 type TenantModel struct {
 	TenantID string `gorm:"column:tenant_id;not null;index:,priority:1"`
 }

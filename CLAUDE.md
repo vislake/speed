@@ -99,7 +99,7 @@ Every rule below is enforced by CI and code review — **these are not style sug
 
 ### Multi-tenant isolation
 
-- **Do not hold a `*gorm.DB` and write queries yourself.** Business repositories must embed `dbkit.Repository[T]`.
+- **Do not hold a `*gorm.DB` and write queries yourself.** Business repositories for tenant-owned data must embed `dbkit.Repository[T]`. Identity and platform data (see the data-domain table in `docs/internal/04-data-and-tenancy.md`) can't use it — the generic constraint requires `TenantScoped`, which those domains must *not* implement — so they use `dbkit.Open()`'s plain `*gorm.DB` directly; see `go/dbkit/AGENTS.md`'s "Known limitations" for why that's safe rather than a loophole.
 - **Do not use `db.Table` / `db.Model` / `db.Raw` to work around the Repository.** CI has a static check.
 - **Do not hand-write `WHERE tenant_id = ?`.** Tenant filtering is injected by the GORM plugin and the Repository; writing it by hand means you are bypassing the guard.
 - **Do not accept a caller-supplied `tenant_id` at the API layer.** The tenant comes from the access token claims, never from request parameters, headers or bodies.
