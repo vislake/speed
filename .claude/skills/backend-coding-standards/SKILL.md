@@ -292,6 +292,16 @@ log.Info("subscription activated",
 | Integration | testcontainers for PostgreSQL / Redis | Before merge |
 | Contract | None | Every commit |
 
+### File and directory layout — not optional
+
+This is a hard convention, not a preference, because it is what makes `go test ./...` fast and `go test -tags=integration ./...` meaningful:
+
+- **Unit test files are named `<target_file>_test.go`**, co-located with the file they test — `registry.go` is tested by `registry_test.go`, `kv.go` by `kv_test.go`. This is standard Go idiom; follow it exactly, one test file per source file being verified.
+- **A test file that is not a 1:1 mirror of a single source file must still be named for the behaviour it verifies**, never a generic word. `concurrency_test.go`, `bootstrap_ordering_test.go`, `quota_enforcement_test.go` are acceptable; `extra_test.go`, `misc_test.go`, `independent_test.go` are not — the name is the first thing a future reader uses to find the right test, and a vague name defeats that.
+- **`Example*` functions live in `example_test.go`** — this is Go's own idiomatic name for godoc-rendered runnable examples and is the one recognized exception to the "name after the target" rule; do not rename it.
+- **Shared test helpers, fakes, builders and assertion utilities go in a dedicated `internal/testutil` package** (e.g. `go/pkgcore/internal/testutil/`), never duplicated across `_test.go` files and never defined inline in a `_test.go` file that another package's tests need to import — Go's `_test.go` files are not importable across packages, so anything meant to be shared has to live in a regular `.go` file in its own package. If a module has no cross-file-shared test helpers yet, it does not need this directory — do not create it speculatively.
+- **Integration tests are physically separate from unit tests**, in a package-level `integration_test/` subdirectory (e.g. `go/dbkit/integration_test/postgres_repository_test.go`), guarded by `//go:build integration`, so a plain `go test ./...` never touches them and CI invokes them explicitly with `-tags=integration`. Name each integration test file for what it exercises against a real dependency (`postgres_repository_test.go`, `redis_kvstore_test.go`), not `integration_test.go` alone if a package has more than one.
+
 **Mandatory suites:**
 - `tenancytest.AssertIsolated` / `AssertNotTenantScoped` — every Repository.
 - Dual-profile consistency — the same cases must produce identical results under demo and production.

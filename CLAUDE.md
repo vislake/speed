@@ -146,6 +146,13 @@ Every rule below is enforced by CI and code review — **these are not style sug
 - **Do not forward internal domain events straight to outbound webhooks.** Map them to a versioned public event schema.
 - Audit records produced during impersonation **must** carry both the impersonated user (`Actor`) and the real administrator (`OnBehalfOf`).
 
+### Testing
+
+- **Unit test files are named after the file they test** (`registry.go` → `registry_test.go`; `PlanCard.tsx` → `PlanCard.test.tsx`). A test file that doesn't map 1:1 to one source file is named for the behaviour it verifies, never a generic word like `misc` or `extra`.
+- **Do not scatter shared test helpers across test files.** Put them in a dedicated `internal/testutil` package (Go) or `test-utils/` directory (frontend) — never duplicated, never inline in a file another package's tests need to import.
+- **Do not mix integration tests into the unit test set.** They live in a physically separate directory (`integration_test/` per Go package, `e2e/` for Playwright), so a plain `go test ./...` or unit test run never touches them.
+- Full detail and examples: `.claude/skills/backend-coding-standards/SKILL.md` §13, `.claude/skills/frontend-coding-standards/SKILL.md` §12.
+
 ### Documentation
 
 - A new public API **must** ship, in the same pull request, with usage docs, a compilable example, and an entry in the module's `AGENTS.md`.

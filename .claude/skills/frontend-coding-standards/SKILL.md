@@ -205,6 +205,11 @@ console.log('checkout failed for plan ' + planId);
 | Visual and docs | Storybook | every public component, in both languages |
 | End-to-end | Playwright | the reference-app journeys |
 
+**File and directory layout — not optional:**
+- Unit/component test files are named `<Target>.test.tsx` / `<target>.test.ts`, co-located with the file they test — `PlanCard.tsx` is tested by `PlanCard.test.tsx`. A test file that isn't a 1:1 mirror of one source file is named for the behaviour it verifies (`tenant-switch.test.ts`), never `misc.test.ts` or `extra.test.ts`.
+- Shared test helpers, fixtures and custom render utilities go in a dedicated `test-utils/` directory per package, never duplicated across test files.
+- End-to-end/integration specs live physically apart from unit tests, under `e2e/` (Playwright's own convention), never mixed into a package's `src/`. Name each spec for the journey it covers (`checkout-alipay.spec.ts`), not `e2e.spec.ts`.
+
 - Test behaviour, not implementation: assert what the user sees. **DO NOT** assert how many times an internal function was called.
 - **Every bug fix ships with a test that reproduces the bug.**
 - **DO NOT** ignore warnings — React console warnings, a11y warnings and lint warnings are all first-class issues.
