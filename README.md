@@ -6,7 +6,7 @@ New SaaS projects pull in the capabilities they need via `go get` / `npm install
 
 ## Status
 
-**Milestone M0, in progress.** The design is complete; implementation is underway module by module, following [the roadmap](docs/internal/15-roadmap.md). `go/pkgcore` — the dependency floor every other module builds on — is implemented and tested (`go build`/`go vet`/`go test -race` all pass). The other 19 planned Go modules and all 16 npm packages are still placeholder stubs.
+**Milestone M0, in progress.** The design is complete; implementation is underway module by module, following [the roadmap](docs/internal/15-roadmap.md). Three Go modules are implemented and tested (`go build`/`go vet`/`go test -race` all pass): `go/pkgcore` — the dependency floor every other module builds on; `go/dbkit` — the dual-dialect data-access layer with the mandatory generic `Repository[T]`; and `go/tenancy` — tenant resolution, the audited system-context escape hatch, and the isolation-assertion test suite. The other 17 planned Go modules and all 16 npm packages are still placeholder stubs.
 
 - 📐 [Design overview](docs/internal/00-overview.md) ← **start here**
 - 🗺️ [Roadmap and milestones](docs/internal/15-roadmap.md)
