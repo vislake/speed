@@ -237,6 +237,114 @@ func TestRepository_Update_EmptyID_ReturnsErrorWithoutInserting(t *testing.T) {
 	}
 }
 
+// newIDAndTenantOnlyMarkerRepo returns a
+// Repository[testutil.IDAndTenantOnlyMarker] backed by a fresh, private
+// in-memory SQLite database (the same testutil.NewTestSQLite connection
+// newWidgetRepo uses), with its own table created by hand since
+// testutil.IDAndTenantOnlyMarker is not part of the widgets fixture
+// testutil.NewTestSQLite migrates. See that type's own doc comment
+// (internal/testutil/id_and_tenant_only_marker.go) for why it exists and
+// why it is shared with the integration tier rather than defined here.
+func newIDAndTenantOnlyMarkerRepo(t *testing.T) *Repository[testutil.IDAndTenantOnlyMarker] {
+	t.Helper()
+	db := testutil.NewTestSQLite(t)
+	if err := db.Exec(testutil.IDAndTenantOnlyMarkerTableSQL).Error; err != nil {
+		t.Fatalf("create id_and_tenant_only_markers table: %v", err)
+	}
+	return NewRepository[testutil.IDAndTenantOnlyMarker](db)
+}
+
+// TestRepository_Update_IDAndTenantIDOnlyModel_SucceedsAsNoOp is the
+// regression test for the bug where Update on a TenantScoped model whose
+// only fields are ID and TenantID — a pure marker/link record with no
+// other column — silently returned ErrRecordNotFound even though the row
+// genuinely existed and was genuinely owned by the calling tenant.
+//
+// Root cause: gorm's Update callback computes its SET clause by excluding
+// every primary-key column (gorm's callbacks/update.go,
+// ConvertToAssignments). When T has no non-key column at all, that SET
+// clause comes back empty, and gorm's own callback returns immediately --
+// no SQL is built, let alone executed — leaving RowsAffected at its zero
+// value. Update used to treat rowsAffected == 0 as "no such row for this
+// tenant" unconditionally, which was wrong here: the row existed the whole
+// time, confirmed by the FindByID call immediately before Update in this
+// test. See Update's own doc comment in repository.go for the fix.
+func TestRepository_Update_IDAndTenantIDOnlyModel_SucceedsAsNoOp(t *testing.T) {
+	repo := newIDAndTenantOnlyMarkerRepo(t)
+	ctx := ctxTenant("tenant-a")
+
+	m := &testutil.IDAndTenantOnlyMarker{ID: "marker-1"}
+	if err := repo.Create(ctx, m); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	got, err := repo.FindByID(ctx, m.ID)
+	if err != nil {
+		t.Fatalf("FindByID() after Create error = %v — the row must genuinely exist and be owned by tenant-a", err)
+	}
+
+	if err := repo.Update(ctx, got); err != nil {
+		t.Fatalf("Update() on an existing, tenant-owned, ID+TenantID-only row error = %v, want nil (this is the bug: gorm's own empty-SET-clause no-op left RowsAffected at 0, which Update misread as ErrRecordNotFound)", err)
+	}
+
+	// The row must still be there afterward, unchanged — Update must not
+	// have deleted it, and must not have fallen back to an upsert-style
+	// Create either (see the Update doc comment's Select("*") discussion).
+	if _, err := repo.FindByID(ctx, m.ID); err != nil {
+		t.Errorf("FindByID() after the no-op Update error = %v, want the row still present", err)
+	}
+}
+
+// TestRepository_Update_IDAndTenantIDOnlyModel_DifferentTenant_ReturnsNotFound
+// proves the fix for the bug above does not weaken tenant isolation: an
+// Update attempt against an ID+TenantID-only row from a DIFFERENT tenant
+// must still return ErrRecordNotFound, exactly like every other T — not
+// be silently treated as a successful no-op just because this T now falls
+// back to an existence-check path when gorm's own SET clause is empty. The
+// existence check that fallback runs is scoped by ctx's tenant exactly
+// like every other Repository query, so it must never find, or report
+// success for, a row belonging to a different tenant.
+func TestRepository_Update_IDAndTenantIDOnlyModel_DifferentTenant_ReturnsNotFound(t *testing.T) {
+	repo := newIDAndTenantOnlyMarkerRepo(t)
+	owner := ctxTenant("tenant-a")
+	other := ctxTenant("tenant-b")
+
+	if err := repo.Create(owner, &testutil.IDAndTenantOnlyMarker{ID: "marker-1"}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	// Same id as the real row, attempted from the other tenant's context.
+	if err := repo.Update(other, &testutil.IDAndTenantOnlyMarker{ID: "marker-1"}); !isRecordNotFound(err) {
+		t.Fatalf("Update() from a different tenant error = %v, want ErrRecordNotFound", err)
+	}
+
+	// The real owner's row must still exist, untouched.
+	if _, err := repo.FindByID(owner, "marker-1"); err != nil {
+		t.Errorf("FindByID() by the real owner after the failed cross-tenant Update error = %v, want the row still present", err)
+	}
+
+	// And no phantom row was created under the attacker's tenant either.
+	if _, err := repo.FindByID(other, "marker-1"); !isRecordNotFound(err) {
+		t.Errorf("FindByID() under the attacking tenant after the failed Update error = %v, want ErrRecordNotFound (no phantom row)", err)
+	}
+}
+
+// TestRepository_Update_IDAndTenantIDOnlyModel_NoSuchID_ReturnsNotFound
+// confirms the fallback existence check the fix above added still returns
+// ErrRecordNotFound, not a false-positive success, when the id genuinely
+// was never created at all (as opposed to existing under a different
+// tenant, covered by the test above) — the fallback path must not treat
+// "found nothing" as anything other than not-found.
+func TestRepository_Update_IDAndTenantIDOnlyModel_NoSuchID_ReturnsNotFound(t *testing.T) {
+	repo := newIDAndTenantOnlyMarkerRepo(t)
+	ctx := ctxTenant("tenant-a")
+
+	err := repo.Update(ctx, &testutil.IDAndTenantOnlyMarker{ID: "never-created"})
+	if !isRecordNotFound(err) {
+		t.Fatalf("Update() for an id that was never created error = %v, want ErrRecordNotFound", err)
+	}
+}
+
 func TestRepository_List_TwoTenants_ReturnsOnlyCallingTenantRows(t *testing.T) {
 	repo := newWidgetRepo(t)
 	tenantA := ctxTenant("tenant-a")

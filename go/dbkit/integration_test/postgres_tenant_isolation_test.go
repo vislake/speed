@@ -132,6 +132,123 @@ func openWidgetDB(t *testing.T, ctx context.Context, dsn string) *gorm.DB {
 	return db
 }
 
+// openIDAndTenantOnlyMarkerDB mirrors openWidgetDB above — same
+// dbkit.Open entry point, own freshly created schema so this test can
+// never collide with another, connection pinned to a single pooled
+// connection for the same search_path reason — but creates
+// testutil.IDAndTenantOnlyMarker's own minimal table by hand instead of
+// applying the widgets fixture migration, since
+// testutil.IDAndTenantOnlyMarker is not part of that fixture. That type
+// mirrors dbkit's own unit-test fixture (repository_test.go, parent
+// package) — the two are in fact the same shared testutil type, not just
+// look-alikes — so this file's Postgres-backed test can reproduce the
+// exact Update-on-an-ID+TenantID-only-model bug against a real PostgreSQL
+// server, not just SQLite. See
+// TestPostgresRepository_Update_IDAndTenantIDOnlyModel_SucceedsAsNoOp's own
+// doc comment below, and Update's doc comment in repository.go, for the
+// full explanation.
+func openIDAndTenantOnlyMarkerDB(t *testing.T, ctx context.Context, dsn string) *gorm.DB {
+	t.Helper()
+
+	db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectPostgres, DSN: dsn})
+	if err != nil {
+		t.Fatalf("dbkit.Open(DialectPostgres) error = %v", err)
+	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get underlying sql.DB: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+
+	schema := "dbkit_it_id_tenant_only_marker"
+	if err := db.Exec("CREATE SCHEMA " + schema).Error; err != nil {
+		t.Fatalf("create schema %s: %v", schema, err)
+	}
+	t.Cleanup(func() {
+		if err := db.Exec("DROP SCHEMA " + schema + " CASCADE").Error; err != nil {
+			t.Errorf("drop schema %s: %v", schema, err)
+		}
+	})
+	if err := db.Exec("SET search_path TO " + schema).Error; err != nil {
+		t.Fatalf("set search_path to %s: %v", schema, err)
+	}
+
+	if err := db.Exec(testutil.IDAndTenantOnlyMarkerTableSQL).Error; err != nil {
+		t.Fatalf("create id_and_tenant_only_markers table: %v", err)
+	}
+
+	return db
+}
+
+// TestPostgresRepository_Update_IDAndTenantIDOnlyModel_SucceedsAsNoOp is the
+// PostgreSQL counterpart of dbkit's own
+// TestRepository_Update_IDAndTenantIDOnlyModel_SucceedsAsNoOp
+// (repository_test.go, parent package): the regression test for the bug
+// where Update on a TenantScoped model whose only fields are ID and
+// TenantID silently returned dbkit.ErrRecordNotFound even though the row
+// genuinely existed and was genuinely owned by the calling tenant. Root
+// cause: gorm's Update callback computes its SET clause by excluding
+// every primary-key column, so when T has no non-key column at all that
+// clause comes back empty and gorm's own callback returns before
+// executing any SQL, leaving RowsAffected at its zero value regardless of
+// whether the row exists — confirmed identical on SQLite and PostgreSQL.
+// This test proves the fix holds against a real PostgreSQL server, with
+// PostgreSQL's own wire protocol, placeholder syntax, and
+// error-translation path, not just SQLite's — the same reason
+// TestPostgresTenantIsolation above exists alongside the parent package's
+// SQLite-only isolation tests. Its DifferentTenant_ReturnsNotFound subtest
+// proves the fix does not weaken isolation: a cross-tenant Update against
+// the same shape of model must still collapse to ErrRecordNotFound.
+func TestPostgresRepository_Update_IDAndTenantIDOnlyModel_SucceedsAsNoOp(t *testing.T) {
+	ctx := context.Background()
+	pgContainer := startPostgresContainer(t, ctx)
+	dsn, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		t.Fatalf("postgres testcontainer connection string: %v", err)
+	}
+
+	db := openIDAndTenantOnlyMarkerDB(t, ctx, dsn)
+	repo := dbkit.NewRepository[testutil.IDAndTenantOnlyMarker](db)
+
+	t.Run("SameTenant_SucceedsAsNoOp", func(t *testing.T) {
+		m := &testutil.IDAndTenantOnlyMarker{ID: "pg-marker-1"}
+		if err := repo.Create(ctxFor(tenantA), m); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+
+		got, err := repo.FindByID(ctxFor(tenantA), m.ID)
+		if err != nil {
+			t.Fatalf("FindByID() after Create error = %v — the row must genuinely exist and be owned by tenant-a", err)
+		}
+
+		if err := repo.Update(ctxFor(tenantA), got); err != nil {
+			t.Errorf("Update() on an existing, tenant-owned, ID+TenantID-only row error = %v, want nil", err)
+		}
+
+		if _, err := repo.FindByID(ctxFor(tenantA), m.ID); err != nil {
+			t.Errorf("FindByID() after the no-op Update error = %v, want the row still present", err)
+		}
+	})
+
+	t.Run("DifferentTenant_ReturnsNotFound", func(t *testing.T) {
+		if err := repo.Create(ctxFor(tenantA), &testutil.IDAndTenantOnlyMarker{ID: "pg-marker-2"}); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+
+		if err := repo.Update(ctxFor(tenantB), &testutil.IDAndTenantOnlyMarker{ID: "pg-marker-2"}); !isRecordNotFound(err) {
+			t.Fatalf("Update() from a different tenant error = %v, want ErrRecordNotFound", err)
+		}
+
+		if _, err := repo.FindByID(ctxFor(tenantA), "pg-marker-2"); err != nil {
+			t.Errorf("FindByID() by the real owner after the failed cross-tenant Update error = %v, want the row still present", err)
+		}
+		if _, err := repo.FindByID(ctxFor(tenantB), "pg-marker-2"); !isRecordNotFound(err) {
+			t.Errorf("FindByID() under the attacking tenant after the failed Update error = %v, want ErrRecordNotFound (no phantom row)", err)
+		}
+	})
+}
+
 // TestPostgresTenantIsolation runs dbkit's core tenant-isolation scenario —
 // two tenants, cross-tenant read/write/delete attempts denied — against a
 // REAL PostgreSQL server instead of SQLite. Every one of dbkit's own

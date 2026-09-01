@@ -224,6 +224,38 @@ func (r *Repository[T]) FindByID(ctx context.Context, id string) (*T, error) {
 // also happens to be exactly the "full record, not partial patch" behavior
 // this method promises regardless.
 //
+// A T whose only columns are its id and tenant_id — a pure marker/link
+// record with no other field — is a special case gorm itself creates, not
+// this package. gorm's Update callback builds its SET clause by excluding
+// every primary-key column (gorm's callbacks/update.go, ConvertToAssignments);
+// when every column of T IS the primary key, that SET clause comes back
+// empty, and gorm's own callback returns immediately — no SQL is built, let
+// alone executed — leaving RowsAffected at its zero value regardless of
+// whether the row exists. RowsAffected == 0 is therefore ambiguous for such
+// a T: unlike every T with at least one non-key column, it no longer means
+// "no matching row" on its own. Update tells the two cases apart by
+// checking whether gorm actually issued any SQL at all
+// (res.Statement.SQL.Len() == 0 is gorm's own tell that the empty-SET,
+// bare-return path above ran) rather than re-deriving T's column shape
+// itself — asking gorm what it did is strictly more reliable than this
+// package re-implementing gorm's own field/tag resolution (embedded
+// fields, "gorm:\"-\"", "gorm:\"->\"", and so on) a second time, and it
+// degrades safely to the same fallback for any other reason a T's SET
+// clause might legitimately end up empty. Only in that no-SQL-issued case
+// does Update fall back to an explicit, still id-and-tenant-scoped
+// existence check (the same WHERE this Save attempt used), run inside the
+// very same transaction WithTenantSession already opened rather than a
+// second one, and treats a row found that way as a successful no-op: there
+// was nothing to write, since m carries no state beyond the identity gorm
+// already matched it on. Because that existence check is scoped by ctx's
+// tenant exactly like every other Repository method, it can never surface,
+// or treat as a success, a row belonging to a different tenant — a
+// cross-tenant Update against such a T still collapses to
+// ErrRecordNotFound, identically to every other T. See
+// TestRepository_Update_IDAndTenantIDOnlyModel_SucceedsAsNoOp and
+// TestRepository_Update_IDAndTenantIDOnlyModel_DifferentTenant_ReturnsNotFound
+// in repository_test.go.
+//
 // Update returns ErrRecordNotFound, not a generic gorm error and not a
 // silently-created row, when nothing matches — including when m's id exists
 // under a different tenant.
@@ -256,8 +288,34 @@ func (r *Repository[T]) Update(ctx context.Context, m *T) error {
 			Select("*").
 			Save(m)
 		rowsAffected = res.RowsAffected
-		return res.Error
+		if res.Error != nil {
+			return res.Error
+		}
+		if rowsAffected != 0 || res.Statement.SQL.Len() != 0 {
+			// Either the write genuinely matched a row, or gorm genuinely
+			// ran a statement that matched none — RowsAffected == 0 is an
+			// unambiguous "no such row for this tenant" in both cases.
+			return nil
+		}
+
+		// gorm issued no SQL at all: see the doc comment above. Resolve
+		// "does this row exist for this tenant" the same way FindByID
+		// does, inside this same transaction so the check is covered by
+		// the very session WithTenantSession just opened, not a second,
+		// separate one.
+		var probe T
+		if err := tx.
+			Where(idColumn+" = ?", id).
+			Where(tenantIDColumn+" = ?", tenant).
+			First(&probe).Error; err != nil {
+			return err
+		}
+		rowsAffected = 1 // independently confirmed to exist and be tenant-owned: a successful no-op touch.
+		return nil
 	}); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrRecordNotFound.WithParam("id", id)
+		}
 		return err
 	}
 	if rowsAffected == 0 {
