@@ -84,7 +84,7 @@
 
 1. **前置校验**：main 分支绿灯、工作区干净、版本号未被占用、changelog 已生成
 2. **全量测试**：跑一次完整矩阵，任何失败即终止
-3. **Go 发布**：为 20 个 Go module 目录各打一个 `go/<module>/v1.2.0` 格式的 tag —— **必须脚本化**，手工打 20 个 tag 一定会漏
+3. **Go 发布**：为 20 个 Go module 目录各打一个 `go/<module>/v1.2.0` 格式的 tag —— **必须脚本化**，手工打 20 个 tag 一定会漏。**首次发布还要多一步**：扫描并清理所有模块 `go.mod` 里指向仓内其他模块的临时 `replace ... => ../<module>` 行（见 [02 仓库结构与发布](02-repo-and-release.md) 的过渡状态说明），替换成刚打好的真实版本号，再跑一次 `go mod tidy` 确认——遗漏任何一条都会导致业务方 `go get` 时因为 `replace` 指向本地路径而直接失败。
 4. **npm 发布**：changesets fixed 版本组统一升版并发布，附带 provenance
 5. **制品**：多架构（amd64/arm64）Docker 镜像、`saasctl` 多平台二进制（goreleaser）、**合并后的 OpenAPI 规范 `speed.yaml`**（Release 附件 + 打包进 `@speed/api-sdk` + 发布到文档站对应版本目录）
 6. **发布后验证**：触发 `scaffold-verify`，用刚发布的版本生成全新项目并跑通，**失败则立即标记该版本为不可用**
