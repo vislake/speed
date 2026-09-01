@@ -75,6 +75,7 @@
 | 日志与响应不得输出明文 PII | `semgrep` 检查敏感字段直接进日志；配合脱敏中间件的单元测试 |
 | `@speed/api-sdk` 不得手改 | 生成物 diff（改了会被下次生成覆盖，CI 提前拦截） |
 | 每个 Repository 必须跑隔离测试 | 自研脚本：扫描 Repository 实现，比对测试覆盖清单 |
+| 每个模块的 `go.mod` 必须能脱离 `go.work` 独立构建 / `tidy`（否则 `replace` 了却漏加 `require` 这类问题会被 workspace 的隐式路径解析掩盖，只有真实消费方或首次 lockstep 发布删掉过渡期 `replace` 行后才会暴露，见 [02 仓库结构与发布](02-repo-and-release.md)） | 过渡手段：`go/tenancy` 的 `TestModuleBuildsStandaloneOutsideWorkspace`（`standalone_build_test.go`）用 `os/exec` 以 `GOWORK=off` 跑一遍该模块自己的 `go build ./...`/`go vet ./...`，随 `go test ./...` 默认执行，不依赖任何 CI 配置；真正的 CI 落地后应替换为流水线里对每个模块单独执行的 `GOWORK=off` 构建步骤 |
 
 **这张表是 CI 的核心价值所在**——纪律靠人记会在三个月后失效，靠 CI 才能长期有效。
 
