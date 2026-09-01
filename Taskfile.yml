@@ -1,0 +1,61 @@
+version: '3'
+
+# Task definitions for the speed monorepo.
+#
+# NOTE ON PACKAGE PATTERNS
+# The repository root is a Go workspace (go.work) but is not itself a module, so
+# relative patterns do not resolve from here:
+#   $ go vet ./...
+#   pattern ./...: directory prefix . does not contain modules listed in go.work
+# Anything that must span every module therefore uses the import-path pattern
+# github.com/vislake/speed/go/... instead of ./... .
+
+vars:
+  ALL_PKGS: github.com/vislake/speed/go/...
+
+tasks:
+  default:
+    desc: List the available tasks.
+    cmds:
+      - task --list
+    silent: true
+
+  setup:
+    desc: Sync the Go workspace so every module agrees on shared dependency versions.
+    cmds:
+      - go work sync
+
+  test:
+    desc: Run unit tests with the race detector and coverage.
+    # Only go/pkgcore has real code right now; every other module is a stub with
+    # no test files. Widen this to {{.ALL_PKGS}} as dbkit, tenancy and the rest land.
+    cmds:
+      - go test ./go/pkgcore/... -race -cover
+
+  lint:
+    desc: Vet every module. golangci-lint is the project standard but is not wired in yet.
+    cmds:
+      - go vet {{.ALL_PKGS}}
+      - |
+        if command -v golangci-lint >/dev/null 2>&1; then
+          echo "note: golangci-lint is installed and .golangci.yml is present, but this task"
+          echo "      deliberately does not invoke it yet -- the modules are still stubs."
+          echo "      Run 'golangci-lint run' manually. See docs/internal/20-quality-and-security.md."
+        else
+          echo "note: golangci-lint is NOT installed. It is required for full linting per"
+          echo "      docs/internal/20-quality-and-security.md, and it is not yet wired"
+          echo "      into this Taskfile. Only 'go vet' ran above."
+        fi
+
+  dev:
+    desc: Not implemented -- there is no runnable server in this repository yet.
+    cmds:
+      - |
+        echo "dev: not implemented yet."
+        echo
+        echo "There is no runnable server here. Every module under go/ is currently a stub"
+        echo "(go.mod + doc.go + AGENTS.md); only go/pkgcore has external dependencies wired,"
+        echo "and it has no implementation files yet either."
+        echo
+        echo "See docs/internal/15-roadmap.md for the delivery order."
+        exit 1

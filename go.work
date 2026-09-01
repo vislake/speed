@@ -1,0 +1,24 @@
+go 1.23
+
+use (
+	./go/admin
+	./go/ai-gateway
+	./go/authn
+	./go/billing
+	./go/billing-gateway
+	./go/compliance
+	./go/config
+	./go/dbkit
+	./go/integration
+	./go/jobs
+	./go/metering
+	./go/notification
+	./go/observability
+	./go/org
+	./go/pkgcore
+	./go/rbac
+	./go/saasctl
+	./go/sharing
+	./go/storage
+	./go/tenancy
+)

@@ -1,0 +1,57 @@
+# golangci-lint configuration for the speed monorepo.
+# Schema: golangci-lint v2 (see docs/internal/20-quality-and-security.md).
+#
+# This file establishes the standard now, while the modules are still stubs, so
+# that linting is not retrofitted later. It is not yet invoked by Taskfile.yml.
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  # "standard" is errcheck, govet, ineffassign, staticcheck and unused.
+  default: standard
+  enable:
+    - gosec        # security-focused static analysis
+    - bodyclose    # HTTP response bodies must be closed
+    - errorlint    # correct error wrapping and comparison
+    - misspell
+    - rowserrcheck # database/sql Rows.Err() must be checked
+    - sqlclosecheck
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+    govet:
+      enable-all: true
+      disable:
+        # Struct field ordering is not worth the churn on domain models.
+        - fieldalignment
+    staticcheck:
+      checks:
+        - all
+    gosec:
+      excludes:
+        # Audited case-by-case in review rather than blanket-failed.
+        - G104
+
+  exclusions:
+    generated: lax
+    rules:
+      # Test code may take shortcuts that production code may not.
+      - path: _test\.go$
+        linters:
+          - gosec
+          - errcheck
+          - bodyclose
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/vislake/speed
