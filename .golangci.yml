@@ -46,12 +46,38 @@ linters:
         # config/ subpackages, which are separate packages under no such
         # constraint.
         #
-        # No other module gets a rule here yet. The CLAUDE.md system-context
-        # whitelist (tenancy/jobs/admin/compliance/authn) is not encoded
-        # because those modules are still stubs with no real code for an
-        # import rule to check; this rule is added alone because pkgcore is
-        # the one module whose dependency floor already has real code to
-        # check it against.
+        # No other module gets a rule here. The CLAUDE.md system-context
+        # whitelist (admin/compliance/jobs/authn, plus tenancy's own audited
+        # wrapper) is deliberately NOT encoded as a second depguard rule --
+        # and, now that go/tenancy/system_context.go is real code calling
+        # pkgcore.WithSystemContext, this is no longer a "those modules are
+        # still stubs" gap for tenancy specifically. It is a hard limit of
+        # depguard itself: depguard allows/denies a whole import path per
+        # file, it cannot single out one symbol (WithSystemContext) from the
+        # rest of an otherwise-needed package. pkgcore's root package is
+        # also where TenantID, WithTenant, apperr and friends live, and
+        # go/dbkit -- real, shipped, and NOT on the whitelist -- legitimately
+        # imports those for reasons that have nothing to do with
+        # WithSystemContext. Verified directly against this repo: a rule
+        # shaped "only admin/compliance/jobs/authn/tenancy may import
+        # github.com/vislake/speed/go/pkgcore" does correctly flag a probe's
+        # WithSystemContext use from go/dbkit, but it also flags 23 of
+        # go/dbkit's pre-existing, unrelated TenantID/apperr imports as
+        # collateral damage -- and would do the same to every other module
+        # the moment it stops being a stub, since pkgcore is the dependency
+        # floor nearly everything sits above. That draft rule was reverted,
+        # not merged.
+        #
+        # The caller whitelist is therefore enforced by code review /
+        # CODEOWNERS on go/pkgcore and go/tenancy plus the doc comments on
+        # pkgcore.WithSystemContext and tenancy.WithSystemContext (business
+        # code should call the latter, which adds the audit publish), not by
+        # static analysis. Making it depguard-checkable would mean moving
+        # WithSystemContext into its own pkgcore subpackage with its own
+        # import path (like apperr/ and config/ already have) -- a public
+        # API change subject to CLAUDE.md's "treat public API as frozen"
+        # rule, and a deliberate call for whoever owns go/pkgcore, not a
+        # side effect of a lint-config edit.
         pkgcore-root:
           files:
             - "**/go/pkgcore/*.go"

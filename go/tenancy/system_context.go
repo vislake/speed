@@ -68,9 +68,12 @@ var ErrAuditPublishFailed = apperr.Internal("tenancy.system_context_audit_publis
 // directly. The raw primitive still exists, and remains the right choice, for
 // code that sits at or below tenancy in the module dependency graph -- dbkit
 // in particular cannot depend on tenancy at all, on pain of an import cycle
-// (tenancy itself depends on dbkit for its GORM plugin machinery) -- so it
-// has no audited wrapper available and uses pkgcore's version directly. Any
-// code able to import tenancy should prefer this one.
+// (the tenancy module already depends on dbkit the other way, via the
+// tenancytest subpackage's assertions over dbkit.Repository[T] and
+// dbkit.TenantScoped; the GORM tenant-isolation plugin itself lives entirely
+// in dbkit, not tenancy -- see dbkit's own tenant_scope.go) -- so it has no
+// audited wrapper available and uses pkgcore's version directly. Any code
+// able to import tenancy should prefer this one.
 //
 // IMPORTANT -- what this does NOT do: granting a system context has no
 // effect on dbkit.Repository[T] (the sanctioned data-access path, backend
@@ -81,9 +84,15 @@ var ErrAuditPublishFailed = apperr.Internal("tenancy.system_context_audit_publis
 // already carries, and on a context with no tenant at all it does not
 // substitute for one either -- Repository[T] still fails closed with
 // pkgcore.ErrNoTenant exactly as if WithSystemContext had never been
-// called. See system_context_repository_test.go and
-// middleware_system_context_test.go for this proved directly against a
-// real Repository[T] and a real net/http request. Until Repository[T]
+// called. This package's own tests prove it directly, not just assert
+// it: against a real dbkit.Repository[T], a system context granted on
+// top of an already tenant-scoped context never sees another tenant's
+// rows, and one granted on top of a context with no tenant at all still
+// fails closed; against a real net/http request, granting a system
+// context after tenancy.Middleware has already resolved a tenant
+// correlates the audit event with that same tenant, while doing so on
+// an allowlisted request carrying no tenant at all correlates with
+// none. Until Repository[T]
 // deliberately implements the cross-tenant escape hatch that dbkit's own
 // tenant_scope.go doc comment anticipates it will, WithSystemContext only
 // produces an audited record that the escape hatch was granted -- it does

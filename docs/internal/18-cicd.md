@@ -67,7 +67,7 @@
 | 前端禁止手写 API 调用 | ESLint 自定义规则：除 `@speed/api-client` 内部外禁止 `fetch`/`axios` 指向后端路径 |
 | spec 与实现必须一致 | 生成的 server interface 参与编译；CI 重新生成并 diff，不一致即失败 |
 | operationId / schema 命名规范 | redocly lint 自定义规则 |
-| 系统上下文只能由白名单模块调用 | `depguard`：仅 admin / compliance / jobs / authn 可 import `pkgcore.WithSystemContext`（原语；`tenancy` 建成后如果提供审计封装版，规则同样适用于它） |
+| 系统上下文只能由白名单模块调用 | 人工评审 + CODEOWNERS（`go/pkgcore`、`go/tenancy`）+ 函数级文档约定；**不是** `depguard`——`WithSystemContext` 与 `TenantID`/`WithTenant`/`apperr` 同属 `pkgcore` 根包同一个 import path，depguard 只能按包路径粒度放行/拒绝，做不到只挡一个符号。已实测验证：把「仅 admin/compliance/jobs/authn/`tenancy` 可 import `pkgcore`」接成 depguard 规则，会连带拦下 `go/dbkit`（真实代码、不在白名单、但合法依赖 `TenantID` 等）23 处无关导入，草稿规则因此未合入。`tenancy` 现已建成，提供审计封装版 `tenancy.WithSystemContext`，业务代码应调用它而非直接调用原语；要让这条纪律真正可静态检查，需要先把 `WithSystemContext` 迁到 `pkgcore` 独立子包（类似 `apperr/`、`config/`），这是一次公开 API 决策，超出本表列出的自动化检查范围 |
 | 禁止手写 `WHERE tenant_id = ?` | `semgrep`：租户过滤只能由插件与 Repository 注入，手写即意味着绕过防护 |
 | API 层不得接受外部传入的 `tenant_id` | `semgrep` + spec lint：请求参数/请求体中出现 `tenant_id` 字段即拒绝 |
 | 禁止 `AutoMigrate` | `semgrep`：生产迁移必须是版本化 SQL |
