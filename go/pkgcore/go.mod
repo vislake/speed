@@ -1,6 +1,6 @@
 module github.com/vislake/speed/go/pkgcore
 
-go 1.23
+go 1.23.0
 
 require (
 	github.com/knadh/koanf/parsers/yaml v1.1.1
