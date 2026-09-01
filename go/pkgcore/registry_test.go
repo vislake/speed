@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // regTestModule is a minimal Module used to drive Bootstrap without pulling in
@@ -81,9 +82,49 @@ func (b *regTestBus) subscriptions() []string {
 	return slices.Clone(b.subscribed)
 }
 
+// regTestKVStore stands in for a production, Redis-backed KVStore. Like
+// regTestBus, it is a distinct type from the demo in-memory store on purpose,
+// so a test can assert which store a registry or kernel actually ended up
+// wired to. Only Set is exercised by the tests below, so the remaining
+// KVStore methods are trivial stubs rather than a full fake implementation.
+type regTestKVStore struct {
+	mu   sync.Mutex
+	sets []string
+}
+
+func newRegTestKVStore() *regTestKVStore { return &regTestKVStore{} }
+
+func (s *regTestKVStore) Get(context.Context, string) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+func (s *regTestKVStore) Set(_ context.Context, key string, _ []byte, _ time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sets = append(s.sets, key)
+	return nil
+}
+
+func (s *regTestKVStore) Delete(context.Context, string) error { return nil }
+
+func (s *regTestKVStore) IncrByFloat(context.Context, string, float64) (float64, error) {
+	return 0, nil
+}
+
+func (s *regTestKVStore) CompareAndSwap(context.Context, string, []byte, []byte) (bool, error) {
+	return false, nil
+}
+
+func (s *regTestKVStore) setKeys() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.sets)
+}
+
 func TestNewRegistry_WiresEveryRegistrar(t *testing.T) {
 	bus := NewMemoryEventBus()
-	reg := NewRegistry(bus)
+	kv := NewMemoryKVStore()
+	reg := NewRegistry(bus, kv)
 
 	if reg.Routes == nil {
 		t.Error("Routes registrar is nil")
@@ -112,10 +153,13 @@ func TestNewRegistry_WiresEveryRegistrar(t *testing.T) {
 	if reg.EventBus() != bus {
 		t.Errorf("EventBus() = %v, want the bus NewRegistry was given", reg.EventBus())
 	}
+	if reg.KVStore() != kv {
+		t.Errorf("KVStore() = %v, want the store NewRegistry was given", reg.KVStore())
+	}
 }
 
 func TestRouteRegistrar_Mount_RecordsRoutesInOrder(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
 
 	billing := regTestHandler{id: "billing"}
 	org := regTestHandler{id: "org"}
@@ -142,7 +186,7 @@ func TestRouteRegistrar_Mount_RecordsRoutesInOrder(t *testing.T) {
 }
 
 func TestRouteRegistrar_Routes_ReturnsCopy(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
 	reg.Routes.Mount("/api/v1/billing", regTestHandler{id: "billing"})
 
 	mutated := reg.Routes.Routes()
@@ -188,7 +232,7 @@ func TestConfigRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reg := NewRegistry(NewMemoryEventBus())
+			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
 			if len(tt.first) > 0 {
 				if err := reg.Config.Add(tt.first...); err != nil {
 					t.Fatalf("first Add() error = %v, want nil", err)
@@ -220,7 +264,7 @@ func TestConfigRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 }
 
 func TestConfigRegistrar_Items_PreservesDeclaration(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
 	want := ConfigItem{
 		Key:         "billing.api_key",
 		Type:        "string",
@@ -243,7 +287,7 @@ func TestConfigRegistrar_Items_PreservesDeclaration(t *testing.T) {
 }
 
 func TestPermissionRegistrar_Add_DuplicateAcrossModulesReturnsError(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
 
 	// Two modules register through the same shared Registry, as Bootstrap does.
 	billing := regTestModule{
@@ -287,7 +331,7 @@ func TestPermissionRegistrar_Add_DuplicateAcrossModulesReturnsError(t *testing.T
 }
 
 func TestPermissionRegistrar_Permissions_IsSorted(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
 	if err := reg.Permissions.Add("org:read", "billing:manage", "admin:impersonate"); err != nil {
 		t.Fatalf("Add() error = %v, want nil", err)
 	}
@@ -305,7 +349,7 @@ func TestPermissionRegistrar_Permissions_IsSorted(t *testing.T) {
 }
 
 func TestJobRegistrar_Handle_DuplicateJobTypeReturnsError(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
 	first := regTestHandler{id: "first"}
 	second := regTestHandler{id: "second"}
 
@@ -329,7 +373,7 @@ func TestJobRegistrar_Handle_DuplicateJobTypeReturnsError(t *testing.T) {
 }
 
 func TestNotificationRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
 	paid := NotificationType{
 		Key:             "billing.invoice_paid",
 		Group:           "billing",
@@ -356,7 +400,7 @@ func TestNotificationRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 }
 
 func TestAuditActionRegistrar_Add_DuplicateReturnsErrorAndSorts(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
 	if err := reg.AuditActions.Add("org.member.removed", "billing.plan.changed"); err != nil {
 		t.Fatalf("Add() error = %v, want nil", err)
 	}
@@ -378,7 +422,7 @@ func TestAuditActionRegistrar_Add_DuplicateReturnsErrorAndSorts(t *testing.T) {
 }
 
 func TestEventRegistrar_Subscribe_IsBackedByTheRegistryEventBus(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
 
 	var mu sync.Mutex
 	var received []Event
@@ -453,7 +497,7 @@ func TestFeatureRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reg := NewRegistry(NewMemoryEventBus())
+			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
 			if len(tt.first) > 0 {
 				if err := reg.Features.Add(tt.first...); err != nil {
 					t.Fatalf("first Add() error = %v, want nil", err)
@@ -515,7 +559,7 @@ func TestBootstrap_DuplicateFeatureFlagAcrossModules_ReturnsError(t *testing.T) 
 }
 
 func TestEventRegistrar_Publishes_RecordsTheDeclaredCatalog(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
 
 	want := []EventDecl{
 		{Type: "billing.invoice.paid", PayloadType: "billing.InvoicePaid", Description: "An invoice was paid in full."},
@@ -580,7 +624,7 @@ func TestEventRegistrar_Publishes_DuplicateTypeReturnsError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reg := NewRegistry(NewMemoryEventBus())
+			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
 			if len(tt.first) > 0 {
 				if err := reg.Events.Publishes(tt.first...); err != nil {
 					t.Fatalf("first Publishes() error = %v, want nil", err)
@@ -615,7 +659,7 @@ func TestEventRegistrar_Publishes_DuplicateTypeReturnsError(t *testing.T) {
 // separately, replacing Events left EventBus() pointing at the old bus, so
 // publishers and subscribers ended up on different buses with no error.
 func TestRegistry_EventBus_FollowsTheEventsRegistrar(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
 
 	production := newRegTestBus()
 	reg.Events = &memoryEventRegistrar{bus: production, types: make(map[string]struct{})}
@@ -637,6 +681,17 @@ func TestRegistry_EventBus_ZeroValueRegistryReturnsNil(t *testing.T) {
 	}
 }
 
+// TestRegistry_KVStore_ZeroValueRegistryReturnsNil mirrors
+// TestRegistry_EventBus_ZeroValueRegistryReturnsNil. Unlike EventBus, KVStore
+// is not derived from a registrar: kv is a plain field, so a zero-value
+// Registry returns nil the same way any zero-value interface field does, with
+// no explicit nil-registrar guard needed inside KVStore() itself.
+func TestRegistry_KVStore_ZeroValueRegistryReturnsNil(t *testing.T) {
+	if kv := (&Registry{}).KVStore(); kv != nil {
+		t.Errorf("KVStore() = %v, want nil for a registry with no kv wired in", kv)
+	}
+}
+
 func TestNewRegistry_NilBus_Panics(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -644,7 +699,19 @@ func TestNewRegistry_NilBus_Panics(t *testing.T) {
 		}
 	}()
 
-	NewRegistry(nil)
+	NewRegistry(nil, NewMemoryKVStore())
+}
+
+// TestNewRegistry_NilKVStore_Panics mirrors TestNewRegistry_NilBus_Panics for
+// the key-value seam.
+func TestNewRegistry_NilKVStore_Panics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("NewRegistry(nil) did not panic, want a panic rather than a registry whose KVStore() panics on first use")
+		}
+	}()
+
+	NewRegistry(NewMemoryEventBus(), nil)
 }
 
 func TestValidateFeatureGraph(t *testing.T) {
@@ -704,7 +771,7 @@ func TestValidateFeatureGraph(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reg := NewRegistry(NewMemoryEventBus())
+			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
 			if err := reg.Features.Add(tt.flags...); err != nil {
 				t.Fatalf("Features.Add() error = %v, want nil", err)
 			}
@@ -1190,7 +1257,9 @@ func TestBootstrap_CancelledContext_StopsBeforeRegistering(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	kernel := NewKernel(ProfileProduction, WithEventBus(newRegTestBus()))
+	// KVStore is wired too, with the demo default: production requires both,
+	// and this test's subject is the context-cancellation check, not wiring.
+	kernel := NewKernel(ProfileProduction, WithEventBus(newRegTestBus()), WithKVStore(NewMemoryKVStore()))
 	reg, err := kernel.Bootstrap(ctx, regTestRecorder("billing", nil, &order))
 
 	if !errors.Is(err, context.Canceled) {
@@ -1232,6 +1301,30 @@ func TestBootstrap_ProductionProfileWithoutEventBus_FailsFast(t *testing.T) {
 	}
 }
 
+// TestBootstrap_ProductionProfileWithoutKVStore_FailsFast mirrors
+// TestBootstrap_ProductionProfileWithoutEventBus_FailsFast for the KVStore
+// seam: the demo in-memory store is single-process, so a production kernel
+// with none wired in must refuse to assemble instead of handing every module
+// a store its replicas cannot share. The bus is wired here so the bus check
+// inside Bootstrap, which runs first, passes and the failure actually
+// exercises the KVStore check instead of masking it.
+func TestBootstrap_ProductionProfileWithoutKVStore_FailsFast(t *testing.T) {
+	var order []string
+
+	kernel := NewKernel(ProfileProduction, WithEventBus(NewMemoryEventBus()))
+	reg, err := kernel.Bootstrap(context.Background(), regTestRecorder("billing", nil, &order))
+
+	if !errors.Is(err, ErrMissingProductionKVStore) {
+		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrMissingProductionKVStore", err)
+	}
+	if reg != nil {
+		t.Error("Bootstrap() returned a registry alongside the error, want nil")
+	}
+	if len(order) != 0 {
+		t.Errorf("modules registered = %v, want none before the wiring was validated", order)
+	}
+}
+
 func TestBootstrap_WiresTheProfileEventBusIntoTheRegistry(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1252,7 +1345,11 @@ func TestBootstrap_WiresTheProfileEventBusIntoTheRegistry(t *testing.T) {
 		{
 			name: "the production profile uses the injected bus",
 			kernel: func(injected EventBus) *Kernel {
-				return NewKernel(ProfileProduction, WithEventBus(injected))
+				// KVStore is wired too, with the demo default: this table
+				// exercises the EventBus seam specifically, and production
+				// also requires a KVStore, so leaving it unwired would fail
+				// Bootstrap before the EventBus wiring under test even runs.
+				return NewKernel(ProfileProduction, WithEventBus(injected), WithKVStore(NewMemoryKVStore()))
 			},
 			wantInjected: true,
 		},
@@ -1297,6 +1394,77 @@ func TestBootstrap_WiresTheProfileEventBusIntoTheRegistry(t *testing.T) {
 	}
 }
 
+// TestBootstrap_WiresTheProfileKVStoreIntoTheRegistry mirrors
+// TestBootstrap_WiresTheProfileEventBusIntoTheRegistry for the KVStore seam:
+// the same three scenarios (demo default, an injected override on the demo
+// profile, and production, which has no default of its own). The bus is
+// wired unconditionally in the production case here, for the same reason the
+// bus table wires KVStore in its own production case: this table exercises
+// KVStore specifically, and production requires both.
+func TestBootstrap_WiresTheProfileKVStoreIntoTheRegistry(t *testing.T) {
+	tests := []struct {
+		name string
+		// kernel receives the injectable stand-in for a production store, and
+		// reports whether the assembled registry must end up wired to it.
+		kernel       func(injected KVStore) *Kernel
+		wantInjected bool
+	}{
+		{
+			name:   "the demo profile falls back to the in-memory store",
+			kernel: func(KVStore) *Kernel { return NewKernel(ProfileDemo) },
+		},
+		{
+			name:         "an injected store replaces the demo default",
+			kernel:       func(injected KVStore) *Kernel { return NewKernel(ProfileDemo, WithKVStore(injected)) },
+			wantInjected: true,
+		},
+		{
+			name: "the production profile uses the injected store",
+			kernel: func(injected KVStore) *Kernel {
+				return NewKernel(ProfileProduction, WithEventBus(NewMemoryEventBus()), WithKVStore(injected))
+			},
+			wantInjected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			injected := newRegTestKVStore()
+			writer := regTestModule{
+				name: "billing",
+				register: func(reg *Registry) error {
+					return reg.KVStore().Set(context.Background(), "billing:seeded", []byte("1"), 0)
+				},
+			}
+
+			reg, err := tt.kernel(injected).Bootstrap(context.Background(), writer)
+			if err != nil {
+				t.Fatalf("Bootstrap() error = %v, want nil", err)
+			}
+			if reg.KVStore() == nil {
+				t.Fatal("KVStore() is nil")
+			}
+			if tt.wantInjected {
+				if reg.KVStore() != KVStore(injected) {
+					t.Fatalf("KVStore() = %v, want the store wired into the kernel", reg.KVStore())
+				}
+				// The module wrote through reg.KVStore(), so the store the
+				// host wired in is the one that actually received the write.
+				if got := injected.setKeys(); len(got) != 1 || got[0] != "billing:seeded" {
+					t.Errorf("wired store recorded sets %v, want [billing:seeded]", got)
+				}
+				return
+			}
+			if reg.KVStore() == KVStore(injected) {
+				t.Error("KVStore() returned the store that was never wired in")
+			}
+			if got := len(injected.setKeys()); got != 0 {
+				t.Errorf("uninjected store recorded %d sets, want 0", got)
+			}
+		})
+	}
+}
+
 func TestBootstrap_UnknownProfile_ReturnsError(t *testing.T) {
 	var order []string
 
@@ -1326,10 +1494,22 @@ func TestWithEventBus_NilBusKeepsTheProfileDefault(t *testing.T) {
 	}
 }
 
+// TestWithKVStore_NilStoreKeepsTheProfileDefault mirrors
+// TestWithEventBus_NilBusKeepsTheProfileDefault for the key-value seam.
+func TestWithKVStore_NilStoreKeepsTheProfileDefault(t *testing.T) {
+	reg, err := NewKernel(ProfileDemo, WithKVStore(nil)).Bootstrap(context.Background())
+	if err != nil {
+		t.Fatalf("Bootstrap() error = %v, want nil", err)
+	}
+	if reg.KVStore() == nil {
+		t.Error("KVStore() is nil, want the demo default")
+	}
+}
+
 func TestRegistry_ConcurrentRegistration_IsRaceFree(t *testing.T) {
 	const goroutines = 8
 
-	reg := NewRegistry(NewMemoryEventBus())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
 

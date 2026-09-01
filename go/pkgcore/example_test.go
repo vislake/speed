@@ -258,7 +258,7 @@ func ExampleKernel_Bootstrap() {
 // has registered: a flag may depend on a flag owned by a module that registers
 // later, so the graph is only resolvable at the end.
 func ExampleValidateFeatureGraph() {
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus())
+	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore())
 	if err := reg.Features.Add(pkgcore.FeatureFlag{
 		Key:         "billing.dunning",
 		Description: "Chase failed payments on a retry schedule.",
@@ -281,15 +281,46 @@ func ExampleValidateFeatureGraph() {
 // no built-in EventBus, because falling back to the in-memory one would give
 // every replica a private bus, so the host injects its own.
 func ExampleWithEventBus() {
-	// Assembling a production kernel without a bus fails at startup.
+	// Assembling a production kernel without a bus fails at startup. A real
+	// production host would also need WithKVStore, but that check runs after
+	// the EventBus check, so leaving it out here still isolates this example
+	// to the EventBus failure.
 	_, err := pkgcore.NewKernel(pkgcore.ProfileProduction).Bootstrap(context.Background())
 	fmt.Println(errors.Is(err, pkgcore.ErrMissingProductionEventBus))
 
 	// A real host passes its broker-backed bus here; the in-memory one stands
-	// in for it in this example.
-	kernel := pkgcore.NewKernel(pkgcore.ProfileProduction, pkgcore.WithEventBus(pkgcore.NewMemoryEventBus()))
+	// in for it in this example. ProfileProduction requires a KVStore too, so
+	// it is wired alongside the bus with its own in-memory stand-in.
+	kernel := pkgcore.NewKernel(pkgcore.ProfileProduction,
+		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus()),
+		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore()))
 	reg, err := kernel.Bootstrap(context.Background(), exampleTenancyModule{})
 	fmt.Println(err, reg.EventBus() != nil)
+
+	// Output:
+	// true
+	// <nil> true
+}
+
+// ExampleWithKVStore shows the production wiring seam for the key-value seam,
+// mirroring ExampleWithEventBus. ProfileProduction has no built-in KVStore,
+// because falling back to the in-memory one would give every replica a
+// private store, so the host injects its own.
+func ExampleWithKVStore() {
+	// Assembling a production kernel without a store fails at startup, once
+	// the bus is wired: the bus check runs first, so it is wired here too, to
+	// isolate the failure this example is about to the KVStore check.
+	_, err := pkgcore.NewKernel(pkgcore.ProfileProduction, pkgcore.WithEventBus(pkgcore.NewMemoryEventBus())).
+		Bootstrap(context.Background())
+	fmt.Println(errors.Is(err, pkgcore.ErrMissingProductionKVStore))
+
+	// A real host passes its Redis-backed store here; the in-memory one
+	// stands in for it in this example.
+	kernel := pkgcore.NewKernel(pkgcore.ProfileProduction,
+		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus()),
+		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore()))
+	reg, err := kernel.Bootstrap(context.Background(), exampleTenancyModule{})
+	fmt.Println(err, reg.KVStore() != nil)
 
 	// Output:
 	// true

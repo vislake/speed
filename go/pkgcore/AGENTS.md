@@ -25,10 +25,12 @@ Two subpackages: `apperr` (the structured application error every module returns
 |---|---|
 | `type Module interface { Name() string; DependsOn() []string; Migrations() embed.FS; Locales() embed.FS; OpenAPISpec() []byte; Register(*Registry) error }` | The contract every module implements |
 | `type Registry struct { Routes; Config; Features; Permissions; Jobs; Notifications; Events; AuditActions }` | Everything a module can contribute, one field per mechanism |
-| `func NewRegistry(bus EventBus) *Registry` | A registry wired to the in-memory registrars and to `bus`. A nil bus panics |
+| `func NewRegistry(bus EventBus, kv KVStore) *Registry` | A registry wired to the in-memory registrars, to `bus` and to `kv`. A nil bus or a nil kv panics |
 | `func (*Registry) EventBus() EventBus` | The bus behind `Registry.Events`, so the host publishes into what modules subscribed to |
+| `func (*Registry) KVStore() KVStore` | The key-value store the registry was built with |
 | `func NewKernel(profile Profile, opts ...KernelOption) *Kernel` | A kernel that assembles modules for one profile |
 | `func WithEventBus(bus EventBus) KernelOption` | Inject the host's `EventBus`. Required for `ProfileProduction`, which has no built-in one |
+| `func WithKVStore(store KVStore) KernelOption` | Inject the host's `KVStore`. Required for `ProfileProduction`, which has no built-in one |
 | `func (*Kernel) Profile() Profile` | The profile the kernel assembles for |
 | `func (*Kernel) Bootstrap(ctx context.Context, modules ...Module) (*Registry, error)` | Dependency-sort, register each module, validate the feature graph |
 | `func ValidateFeatureGraph(reg *Registry) error` | Reports feature flags depending on flags nobody registered |
@@ -118,10 +120,13 @@ Booting a host:
 ```go
 profile, err := pkgcore.ParseProfile(os.Getenv("SPEED_PROFILE"))
 
-// ProfileDemo needs no options; ProfileProduction must be given a bus.
+// ProfileDemo needs no options; ProfileProduction must be given a bus and a
+// key-value store.
 var opts []pkgcore.KernelOption
 if profile == pkgcore.ProfileProduction {
-	opts = append(opts, pkgcore.WithEventBus(broker.NewEventBus(cfg)))
+	opts = append(opts,
+		pkgcore.WithEventBus(broker.NewEventBus(cfg)),
+		pkgcore.WithKVStore(redis.NewKVStore(cfg)))
 }
 reg, err := pkgcore.NewKernel(profile, opts...).Bootstrap(ctx, tenancy.New(), billing.New())
 ```
@@ -146,7 +151,7 @@ Full runnable versions of all of the above live in `example_test.go`, `apperr/ex
 - Do not expose a capability on an infrastructure interface that only one implementation can satisfy. Design against the weaker side, which is the demo profile: no server-side scripting, no pub/sub, no pipelines on `KVStore`.
 - Do not branch on `Profile` outside kernel wiring. Business logic must not contain `if profile == ProfileDemo`.
 - Do not write a mock for `KVStore` or `EventBus`. `NewMemoryKVStore` and `NewMemoryEventBus` are the test doubles.
-- Do not use `NewMemoryEventBus` as a production fallback. It is single-process, so every replica would get a private bus; `ProfileProduction` fails assembly instead, and the host injects a real bus with `WithEventBus`.
+- Do not use `NewMemoryEventBus` or `NewMemoryKVStore` as a production fallback. Both are single-process, so every replica would get a private instance; `ProfileProduction` fails assembly instead, and the host injects real ones with `WithEventBus` and `WithKVStore`.
 - Do not build a read-modify-write cycle out of `Get` + `Set`. Use `IncrByFloat` or `CompareAndSwap`; they are the only operations every backend can make atomic.
 - Do not retain or hand out a caller's byte slice in a `KVStore` implementation, and do not perform an operation on a cancelled context — return the context error instead.
 
@@ -194,6 +199,7 @@ Full runnable versions of all of the above live in `example_test.go`, `apperr/ex
 | `ErrDuplicateConfigKey` / `ErrDuplicateFeatureFlag` / `ErrDuplicatePermission` / `ErrDuplicateJobType` / `ErrDuplicateNotificationType` / `ErrDuplicateEventType` / `ErrDuplicateAuditAction` | The same key registered twice | Two modules own one key; decide which does |
 | `ErrUnresolvedFeatureDependency` | A flag depending on a flag nobody registered | Register the flag, or drop the dependency |
 | `ErrMissingProductionEventBus` | `Bootstrap` on `ProfileProduction` with no bus wired | Inject the host's bus with `WithEventBus` |
+| `ErrMissingProductionKVStore` | `Bootstrap` on `ProfileProduction` with no store wired | Inject the host's store with `WithKVStore` |
 | `config.ErrMissingValue` | A `config:"required"` field left zero | The error names the key and every source consulted |
 | `config.ErrInvalidValue` | A supplied value not applicable to its field | The error names the offending key and its source |
 | `config.ErrSourceUnreadable` | An unparseable config file or malformed flag | Fix the source; startup aborts |

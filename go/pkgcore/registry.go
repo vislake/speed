@@ -52,6 +52,12 @@ var ErrUnresolvedFeatureDependency = errors.New("pkgcore: unresolved feature fla
 // give every replica a private bus, so assembly fails instead.
 var ErrMissingProductionEventBus = errors.New("pkgcore: production profile requires an explicit event bus")
 
+// ErrMissingProductionKVStore is returned by Bootstrap when a Kernel assembled
+// for ProfileProduction has no KVStore wired in. There is no production
+// implementation to fall back on, and falling back to the in-memory store
+// would give every replica a private store, so assembly fails instead.
+var ErrMissingProductionKVStore = errors.New("pkgcore: production profile requires an explicit key-value store")
+
 // errNilFeatureRegistrar guards ValidateFeatureGraph against an unwired registry.
 var errNilFeatureRegistrar = errors.New("pkgcore: registry has no feature registrar")
 
@@ -280,23 +286,39 @@ type Registry struct {
 	Events EventRegistrar
 	// AuditActions receives the audit action enumeration modules define.
 	AuditActions AuditActionRegistrar
+
+	// kv is the KVStore the registry was built with. EventBus is derived from
+	// the Events registrar because Events.Subscribe must install handlers on
+	// the exact bus a publisher uses, so substituting Events has to carry the
+	// bus along with it; nothing in Registry installs anything onto a
+	// KVStore, so there is no registrar for kv to live inside, and it is kept
+	// directly on Registry instead. It is unexported so that KVStore() is the
+	// only way to reach it, mirroring the read-only role EventBus() plays for
+	// bus.
+	kv KVStore
 }
 
 // NewRegistry returns a Registry whose registrars are the in-memory default
-// implementations and whose event seam is bus. The defaults are complete
-// enough to run and to test against right now, and they double as the
-// demo-profile implementations, so no separate test double is needed.
+// implementations, whose event seam is bus, and whose key-value seam is kv.
+// The defaults are complete enough to run and to test against right now, and
+// they double as the demo-profile implementations, so no separate test double
+// is needed.
 //
-// bus is a parameter rather than a built-in default because it is the one
-// registration surface with a real production implementation: the caller
-// decides which bus the modules subscribe to. Kernel.Bootstrap is the normal
-// way to build a Registry, because it picks the bus that matches the runtime
-// profile. A nil bus panics: it is an unrecoverable wiring error at startup,
-// and the alternative is a registry that accepts every subscription and
-// silently drops every event.
-func NewRegistry(bus EventBus) *Registry {
+// bus and kv are parameters rather than a built-in default because they are
+// the two registration surfaces with a real production implementation: the
+// caller decides which bus the modules subscribe to and which store they read
+// and write. Kernel.Bootstrap is the normal way to build a Registry, because
+// it picks the implementations that match the runtime profile. A nil bus or a
+// nil kv panics: each is an unrecoverable wiring error at startup. The
+// alternative for bus is a registry that accepts every subscription and
+// silently drops every event; the alternative for kv is a registry whose
+// KVStore() looks wired but panics the first caller that actually uses it.
+func NewRegistry(bus EventBus, kv KVStore) *Registry {
 	if bus == nil {
 		panic("pkgcore: NewRegistry requires a non-nil EventBus")
+	}
+	if kv == nil {
+		panic("pkgcore: NewRegistry requires a non-nil KVStore")
 	}
 	return &Registry{
 		Routes:        &memoryRouteRegistrar{},
@@ -307,6 +329,7 @@ func NewRegistry(bus EventBus) *Registry {
 		Notifications: &memoryNotificationRegistrar{keys: make(map[string]struct{})},
 		Events:        &memoryEventRegistrar{bus: bus, types: make(map[string]struct{})},
 		AuditActions:  &memoryAuditActionRegistrar{actions: make(map[string]struct{})},
+		kv:            kv,
 	}
 }
 
@@ -321,6 +344,17 @@ func (r *Registry) EventBus() EventBus {
 		return nil
 	}
 	return r.Events.Bus()
+}
+
+// KVStore returns the key-value store the registry was built with.
+//
+// Unlike EventBus, this is not derived from a registrar: no registrar on
+// Registry installs subscriptions, handlers or anything else onto a KVStore,
+// so there is nothing for kv to live inside, and it is stored directly on the
+// struct instead. It returns nil for a zero-value Registry, which only tests
+// construct.
+func (r *Registry) KVStore() KVStore {
+	return r.kv
 }
 
 // checkUnique reports whether any key produced by keyOf is already in
@@ -552,6 +586,7 @@ func (r *memoryAuditActionRegistrar) Actions() []string {
 type Kernel struct {
 	profile Profile
 	bus     EventBus
+	kv      KVStore
 }
 
 // KernelOption injects an infrastructure implementation into a Kernel.
@@ -570,6 +605,19 @@ func WithEventBus(bus EventBus) KernelOption {
 			return
 		}
 		k.bus = bus
+	}
+}
+
+// WithKVStore wires store into every Registry the kernel bootstraps, in place
+// of the profile default. It is the seam a production host uses to supply its
+// Redis-backed KVStore: ProfileProduction has no built-in implementation, so
+// Bootstrap fails without it. A nil store leaves the profile default in place.
+func WithKVStore(store KVStore) KernelOption {
+	return func(k *Kernel) {
+		if store == nil {
+			return
+		}
+		k.kv = store
 	}
 }
 
@@ -604,6 +652,25 @@ func (k *Kernel) eventBus() (EventBus, error) {
 	}
 }
 
+// kvStore returns the KVStore the assembled Registry is wired to: the
+// injected one when the host supplied it, and the in-memory store for
+// ProfileDemo, which is single-process by design. ProfileProduction reports an
+// error instead of falling back, because the in-memory store would give every
+// replica a private store and split state silently.
+func (k *Kernel) kvStore() (KVStore, error) {
+	if k.kv != nil {
+		return k.kv, nil
+	}
+	switch k.profile {
+	case ProfileDemo:
+		return NewMemoryKVStore(), nil
+	case ProfileProduction:
+		return nil, fmt.Errorf("%w: wire one with WithKVStore", ErrMissingProductionKVStore)
+	default:
+		return nil, fmt.Errorf("%w: %q", ErrInvalidProfile, k.profile)
+	}
+}
+
 // Profile returns the runtime profile the kernel assembles modules for.
 func (k *Kernel) Profile() Profile { return k.profile }
 
@@ -622,13 +689,17 @@ func (k *Kernel) Bootstrap(ctx context.Context, modules ...Module) (*Registry, e
 	if err != nil {
 		return nil, err
 	}
+	kv, err := k.kvStore()
+	if err != nil {
+		return nil, err
+	}
 
 	ordered, err := sortModulesByDependency(modules)
 	if err != nil {
 		return nil, err
 	}
 
-	reg := NewRegistry(bus)
+	reg := NewRegistry(bus, kv)
 	for _, module := range ordered {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("pkgcore: bootstrap stopped before registering module %q: %w", module.Name(), err)

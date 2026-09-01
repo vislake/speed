@@ -15,6 +15,7 @@ linters:
   enable:
     - gosec        # security-focused static analysis
     - bodyclose    # HTTP response bodies must be closed
+    - depguard     # restricts which packages a file is allowed to import
     - errorlint    # correct error wrapping and comparison
     - misspell
     - rowserrcheck # database/sql Rows.Err() must be checked
@@ -36,6 +37,33 @@ linters:
       excludes:
         # Audited case-by-case in review rather than blanket-failed.
         - G104
+    depguard:
+      rules:
+        # pkgcore is the dependency floor of the monorepo (see
+        # go/pkgcore/AGENTS.md): every other module imports it, and it must
+        # import none of them. This covers only the files directly in
+        # go/pkgcore/ — the package's own root files — not its apperr/ or
+        # config/ subpackages, which are separate packages under no such
+        # constraint.
+        #
+        # No other module gets a rule here yet. The CLAUDE.md system-context
+        # whitelist (tenancy/jobs/admin/compliance/authn) is not encoded
+        # because those modules are still stubs with no real code for an
+        # import rule to check; this rule is added alone because pkgcore is
+        # the one module whose dependency floor already has real code to
+        # check it against.
+        pkgcore-root:
+          files:
+            - "**/go/pkgcore/*.go"
+          list-mode: lax
+          allow:
+            # The package's own import path, so its external black-box tests
+            # (package pkgcore_test, in example_test.go) can still import the
+            # package they test.
+            - github.com/vislake/speed/go/pkgcore
+          deny:
+            - pkg: github.com/vislake/speed/go/
+              desc: "pkgcore is the dependency floor of the monorepo: its root package must not import any other module under github.com/vislake/speed/go/"
 
   exclusions:
     generated: lax
@@ -50,6 +78,7 @@ linters:
 formatters:
   enable:
     - gofmt
+    - gofumpt
     - goimports
   settings:
     goimports:
