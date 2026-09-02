@@ -6,8 +6,8 @@ docs/internal/19-dev-workflow.md's module-generator section promises
 same skeleton (the doc lists the eight things a new module needs --
 go.mod, directory skeleton, AGENTS.md, design doc, migration directory, test
 skeleton, CI matrix registration, release-script registration). This script
-is the generator behind that task; the Taskfile task itself is wired in a
-later round, and --help documents the intended wiring (see the epilog).
+is the generator behind that task: the root Taskfile.yml's new:module task
+invokes it, and --help documents the wiring contract (see the epilog).
 
 What it scaffolds is exactly the canonical stub the not-yet-implemented
 modules under go/ already carry (go/sharing, go/notification, go/storage,
@@ -217,14 +217,12 @@ def main(argv: list[str] | None = None) -> int:
             "Scaffold the canonical stub (go.mod + doc.go + AGENTS.md) of a "
             "new Go module under go/<name>, reproducing the existing stub "
             "modules' exact file shapes. This is the generator behind the "
-            "planned 'task new:module' (docs/internal/19-dev-workflow.md's "
-            "module-generator section); the Taskfile task itself is wired "
-            "in a later round."
+            "new:module task in the root Taskfile.yml (docs/internal/"
+            "19-dev-workflow.md's module-generator section)."
         ),
         epilog=(
-            "Intended task wiring (docs/internal/19-dev-workflow.md names "
-            "task new:module; the Taskfile stanza is added in a later round "
-            "-- this epilog documents the contract it will implement):\n"
+            "Taskfile wiring: the root Taskfile.yml's new:module task (named "
+            "in docs/internal/19-dev-workflow.md) implements this contract:\n"
             "\n"
             "  # Taskfile.yml\n"
             "  new:module:\n"

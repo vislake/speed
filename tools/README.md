@@ -207,10 +207,10 @@ require/replace blocks appear when an implementation round adds the first
 dependency), `doc.go` (one-line English package doc; the package name is
 the module name with hyphens removed, per the `go/ai-gateway` ->
 `aigateway` precedent), and `AGENTS.md` (the one-liner stub form pointing
-at the design doc). It is the generator behind the `task new:module`
-promised by `docs/internal/19-dev-workflow.md`; the Taskfile task itself is
-wired in a later round, and the intended wiring is documented in the
-script's `--help` epilog.
+at the design doc). It is the generator behind the `new:module` task
+in the root `Taskfile.yml` (promised by `docs/internal/19-dev-workflow.md`);
+the wiring contract the task implements is documented in the script's
+`--help` epilog.
 
 Usage:
 
