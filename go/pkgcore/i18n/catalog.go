@@ -405,6 +405,25 @@ func parseMessageTable(message *goi18n.Message, fileName, code string, table map
 	}
 	slices.Sort(keys)
 
+	// The v1 "translation" key is a whole-message synonym for other: valid
+	// alone (and beside metadata keys), never next to a plural category
+	// key. The mix is checked over the table, before the sorted walk, so
+	// the rejection does not depend on which key the walk reaches first --
+	// "zero" and "two" sort after "translation", and "one", "few" and
+	// "many" never set the other form.
+	v1Key, sawCategory := "", false
+	for key := range table {
+		switch strings.ToLower(key) {
+		case "translation":
+			v1Key = key
+		case "zero", "one", "two", "few", "many", "other":
+			sawCategory = true
+		}
+	}
+	if v1Key != "" && sawCategory {
+		return fmt.Errorf("%w: %s: message %q mixes %q with a plural category", ErrUnsupportedShape, fileName, code, v1Key)
+	}
+
 	hasTranslation := false
 	for _, key := range keys {
 		lower := strings.ToLower(key)
@@ -446,19 +465,17 @@ func parseMessageTable(message *goi18n.Message, fileName, code string, table map
 			message.RightDelim = value
 			continue
 		case "translation":
-			// The v1 "translation" key is accepted as a synonym for other.
-			// Because "other" sorts before "translation", a table mixing
-			// the two is caught here; a nested v1-style table under it is
-			// not supported -- write the plural categories directly.
+			// The v1 "translation" key is accepted as a synonym for other:
+			// a single-form message may be written either way. The check
+			// above the loop already rejected any table mixing it with
+			// plural category keys; a nested v1-style table under it is not
+			// supported either -- write the plural categories directly.
 			value, ok := table[key].(string)
 			if !ok {
 				return fmt.Errorf("%w: %s: message %q: nested tables under %q are not supported; write the plural categories directly", ErrUnsupportedShape, fileName, code, key)
 			}
 			if value == "" {
 				return fmt.Errorf("%w: %s: message %q: key %q has an empty translation", ErrUnsupportedShape, fileName, code, key)
-			}
-			if message.Other != "" {
-				return fmt.Errorf("%w: %s: message %q mixes %q with a plural category", ErrUnsupportedShape, fileName, code, key)
 			}
 			message.Other = value
 			hasTranslation = true

@@ -434,6 +434,93 @@ func TestAddModuleWrapsTheTomlParseError(t *testing.T) {
 	}
 }
 
+func TestAddModuleRejectsTranslationMixedWithPluralCategories(t *testing.T) {
+	// The v1 "translation" key is a synonym for the whole other form: valid
+	// alone, never next to a plural category key. parseMessageTable walks
+	// the table keys in sorted order, and the rejection must not depend on
+	// it -- "zero" and "two" sort after "translation" (a guard keyed off the
+	// already-set other form never fires for them), while "one", "few" and
+	// "many" sort before it without setting the other form. Every category
+	// gets a table mixing it with "translation", plus a mix written with
+	// different key casing.
+	en := `"notes.x" = "text"` + "\n"
+	tests := []struct {
+		name    string
+		zh      string
+		wantErr string
+	}{
+		{
+			name:    "zero, which sorts after translation",
+			zh:      "[\"notes.x\"]\ntranslation = \"中文。\"\nzero = \"...\"\n",
+			wantErr: `mixes "translation" with a plural category`,
+		},
+		{
+			name:    "two, which sorts after translation",
+			zh:      "[\"notes.x\"]\ntranslation = \"中文。\"\ntwo = \"...\"\n",
+			wantErr: `mixes "translation" with a plural category`,
+		},
+		{
+			name:    "one, which sorts before translation",
+			zh:      "[\"notes.x\"]\ntranslation = \"中文。\"\none = \"...\"\n",
+			wantErr: `mixes "translation" with a plural category`,
+		},
+		{
+			name:    "few, which sorts before translation",
+			zh:      "[\"notes.x\"]\ntranslation = \"中文。\"\nfew = \"...\"\n",
+			wantErr: `mixes "translation" with a plural category`,
+		},
+		{
+			name:    "many, which sorts before translation",
+			zh:      "[\"notes.x\"]\ntranslation = \"中文。\"\nmany = \"...\"\n",
+			wantErr: `mixes "translation" with a plural category`,
+		},
+		{
+			name:    "other, which fills the same field",
+			zh:      "[\"notes.x\"]\ntranslation = \"中文。\"\nother = \"...\"\n",
+			wantErr: `mixes "translation" with a plural category`,
+		},
+		{
+			name:    "keys spelled with different case",
+			zh:      "[\"notes.x\"]\nTranslation = \"中文。\"\nZero = \"...\"\n",
+			wantErr: `mixes "Translation" with a plural category`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			b := NewBuilder()
+			err := b.AddModule("notes", localeFS(map[string]string{
+				"zh-CN.toml": tc.zh,
+				"en-US.toml": en,
+			}))
+			wantError(t, err, ErrUnsupportedShape, tc.wantErr)
+		})
+	}
+}
+
+func TestTranslationSynonymRendersSingleFormMessages(t *testing.T) {
+	// The v1 synonym keeps loading for the shape it exists for -- a table
+	// whose only form is the translation key, metadata keys allowed. Only a
+	// mix with plural categories is rejected, so these legitimate tables
+	// must keep rendering in both locales.
+	zh := "[\"notes.x\"]\ntranslation = \"你好,{{.Name}}!\"\ndescription = \"greeting\"\n"
+	en := "[\"notes.x\"]\ntranslation = \"Hello, {{.Name}}!\"\ndescription = \"greeting\"\n"
+	c := mustBuild(t, "notes", zh, en)
+	got, err := c.Lookup(LocaleENUS, "notes.x", map[string]any{"Name": "Ada"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "Hello, Ada!" {
+		t.Errorf("en-US v1-synonym render = %q", got)
+	}
+	got, err = c.Lookup(LocaleZHCN, "notes.x", map[string]any{"Name": "艾达"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "你好,艾达!" {
+		t.Errorf("zh-CN v1-synonym render = %q", got)
+	}
+}
+
 func TestAddModuleEnforcesIdParityBetweenLocales(t *testing.T) {
 	tests := []struct {
 		name string
