@@ -33,5 +33,9 @@
     "selectAllRows": "全选",
     "selectRow": "选择第 {{row}} 行",
     "filterLabel": "筛选"
+  },
+  "pageHeader": {
+    "breadcrumbNav": "面包屑",
+    "showFullPath": "显示完整路径"
   }
 }

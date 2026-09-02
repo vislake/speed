@@ -16,7 +16,11 @@ export {
   AppThemeProvider,
   type AppThemeProviderProps,
 } from './theme/AppThemeProvider.js'
-export { PageHeader, type PageHeaderProps } from './components/PageHeader.js'
+export {
+  PageHeader,
+  type PageHeaderBreadcrumb,
+  type PageHeaderProps,
+} from './components/PageHeader.js'
 export {
   EmptyState,
   type EmptyStateProps,

@@ -33,5 +33,9 @@
     "selectAllRows": "Select all rows",
     "selectRow": "Select row {{row}}",
     "filterLabel": "Filter"
+  },
+  "pageHeader": {
+    "breadcrumbNav": "Breadcrumb",
+    "showFullPath": "Show full path"
   }
 }

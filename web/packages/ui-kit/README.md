@@ -15,7 +15,7 @@ string lives in the bilingual `ui-kit` namespace registered through
 |---|---|
 | `theme/createAppTheme.ts` | `createAppTheme`, `AppTheme` |
 | `theme/AppThemeProvider.tsx` | `AppThemeProvider`, `AppThemeProviderProps` |
-| `components/PageHeader.tsx` | `PageHeader`, `PageHeaderProps` |
+| `components/PageHeader.tsx` | `PageHeader`, `PageHeaderProps`, `PageHeaderBreadcrumb` |
 | `components/EmptyState.tsx` | `EmptyState`, `EmptyStateProps`, `EmptyStateVariant` |
 | `components/ConfirmDialog.tsx` | `ConfirmDialog`, `ConfirmDialogProps`, `ConfirmDialogVariant` |
 | `components/FormField.tsx` | `FormField`, `FormFieldProps`, `FormFieldRenderState`, `REQUIRED_ERROR_KEY` |
@@ -119,10 +119,24 @@ a form, a modal and a server-rendered screen without surprises.
 ### PageHeader
 
 The page-level heading block: title as a semantic `h1` (one per page),
-an optional description in secondary body text, an optional trailing
-action area. All content is caller content -- this component carries no
-built-in strings and no namespace dependency. Props: `title` (ReactNode,
-required), `description?`, `actions?`, `sx?`.
+an optional breadcrumb trail above it, an optional description in
+secondary body text, an optional trailing action area.
+
+The breadcrumb trail is a `breadcrumbs?: PageHeaderBreadcrumb[]` of
+`{ label, href?, onClick? }` steps rendered inside MUI's `Breadcrumbs`
+within a `nav` landmark. The link contract: a crumb with `href`
+renders as a link (attach navigation-interception handlers through
+`onClick`); a crumb without `href` renders as plain text and is never
+interactive. The last crumb stands for the current page and is marked
+`aria-current="page"` whether it links or not. Labels are caller
+content -- render them already translated, matching the rest of this
+component's props. The nav's accessible name (`pageHeader.breadcrumbNav`)
+and the label of MUI's collapse-expand button, shown once a trail
+exceeds eight crumbs (`pageHeader.showFullPath`), are the component's
+only built-in strings, taken from the ui-kit namespace like every other
+component's text -- MUI's stock expand label is an English literal and
+never ships unreplaced. Props: `title` (ReactNode, required),
+`breadcrumbs?`, `description?`, `actions?`, `sx?`.
 
 ### EmptyState
 
@@ -269,6 +283,8 @@ live). The full key set:
 | `confirmDialog.confirmAgainLabel` | danger double-confirm second click | |
 | `form.required` | required-rule message | `REQUIRED_ERROR_KEY` |
 | `form.invalid` | generic invalid-value message | |
+| `pageHeader.breadcrumbNav` | breadcrumb nav landmark accessible name | |
+| `pageHeader.showFullPath` | breadcrumb collapse-expand button label | replaces MUI's stock English "Show path" |
 
 The two files (`src/locales/zh-CN.json` and `en-US.json`) carry
 identical leaf key sets, enforced by registration and by
@@ -288,7 +304,9 @@ contrast result there is neither trustworthy nor actionable, and
 contrast lives in the theme (palette roles over surfaces), which the
 tokens package pins and the factory maps; and `region` is disabled
 because the units under test are components, not full pages. Structure
-choices worth knowing: PageHeader renders a real `h1`; EmptyState icons
+choices worth knowing: PageHeader renders a real `h1` and wraps its
+breadcrumb trail in a labeled `nav` landmark with the current page
+marked `aria-current`; EmptyState icons
 are `aria-hidden` (text carries meaning); ConfirmDialog wires
 `aria-labelledby`/`aria-describedby` ids; DataTable uses real table
 semantics with `columnheader` sort buttons and `aria-sort`, selection
@@ -336,7 +354,7 @@ same rationale documented here.
 ## Development
 
 From `web/packages/ui-kit`: `pnpm lint`, `pnpm typecheck`, `pnpm test`
-(115 tests across 11 files), `pnpm build`. The test suite runs in jsdom
+(123 tests across 11 files), `pnpm build`. The test suite runs in jsdom
 (`vitest.config.ts`); shared helpers live in `test-utils/`
 (`renderWithProviders` builds the host tree -- fresh i18n instance per
 call, namespace registered -- and `expectNoAxeViolations` runs axe).

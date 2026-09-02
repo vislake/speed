@@ -46,9 +46,13 @@ plumbing and deliberately not exported.
 - **Host-content props are fallbacks over namespace defaults, or pure
   host content — never required translations.** `EmptyState` /
   `ConfirmDialog` ship namespace defaults with overridable
-  `title`/`message`/label props; `PageHeader`, column headers and cell
-  renderers are entirely the host's translation surface. No component
-  ever calls `t()` on a host-provided string.
+  `title`/`message`/label props; column headers and cell renderers are
+  entirely the host's translation surface. `PageHeader`'s visible
+  content (title, description, crumb labels, actions) is host content
+  too; its only built-in strings are the breadcrumb nav landmark's
+  accessible name and the collapse-expand button label
+  (`pageHeader.*`), shipped through the namespace like any other. No
+  component ever calls `t()` on a host-provided string.
 - **Error messages follow the validation-error contract.** A message
   that is a ui-kit-namespace key renders as its translation; anything
   else renders verbatim. The form family resolves keys in the ui-kit

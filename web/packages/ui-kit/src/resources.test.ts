@@ -41,7 +41,13 @@ describe('ui-kit resources', () => {
 
   it('document the shipped sections (one per component family with built-in text)', () => {
     const sections = Object.keys(uiKitResources['zh-CN']!).sort()
-    expect(sections).toEqual(['confirmDialog', 'dataTable', 'emptyState', 'form'])
+    expect(sections).toEqual([
+      'confirmDialog',
+      'dataTable',
+      'emptyState',
+      'form',
+      'pageHeader',
+    ])
   })
 
   it('render the zh-CN bundle verbatim through the registered namespace', () => {
