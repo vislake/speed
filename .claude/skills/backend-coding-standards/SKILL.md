@@ -37,7 +37,7 @@ Independent Go modules, each with its own `go.mod`, developed together through `
 - **Package name derives from the directory by stripping hyphens**, since `-` is not a legal character in a Go identifier: `ai-gateway` → package `aigateway`, `billing-gateway` → package `billinggateway`. Lowercase, no separator — do not substitute an underscore or camelCase. Every module generator (including the future `task new:module`) must apply this rule consistently rather than leaving it to individual judgement.
 - Every module carries: `api/openapi.yaml`, `migrations/{postgres,sqlite}/`, `locales/{zh-CN,en-US}.toml`, `docs/`, `AGENTS.md`.
 - Public API stays in the module root package; implementation details go under `internal/` so consumers cannot import them.
-- Create new modules with `task new:module` — doing it by hand always misses the CI matrix entry and the release script entry.
+- Create new modules with the scaffolder, `python3 tools/new_module.py` — the planned `task new:module` Taskfile wrapper will call it once wired (see `docs/internal/19-dev-workflow.md`). The script scaffolds the canonical stub and prints a registration checklist — the go.work `use` entry, the CI matrix row, the lockstep release list — the entries hand-rolling a module always misses; it never edits those shared files itself.
 
 **Prohibited:**
 - **DO NOT** let `rbac` depend on `authn`. Authorization only knows `Subject{TenantID, UserID}`; whoever authenticates assembles the Subject and calls authorization.
