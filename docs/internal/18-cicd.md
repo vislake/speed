@@ -2,7 +2,7 @@
 
 > 基于 GitHub Actions。本文档定义流水线的职责划分、触发时机与成本控制策略。
 >
-> 核心约束：**19 个 Go module + 15 个 npm 包不能各写一套 workflow**。全部通过可复用 workflow 与 composite action 统一，否则 CI 配置本身会成为最大的维护负担。
+> 核心约束：**21 个 Go module + 15 个 npm 包不能各写一套 workflow**。全部通过可复用 workflow 与 composite action 统一，否则 CI 配置本身会成为最大的维护负担。
 
 ## 流水线总览
 
@@ -15,12 +15,12 @@
 | `docs-check` | 涉及文档或公开 API 的 PR | 文档示例编译运行、链接检查、i18n key 一致性、配置清单漂移 | < 5 分钟 |
 | `api-contract` | 涉及 `api/openapi.yaml` 或 handler 的 PR | spec lint、合并冲突检查、**生成物一致性 diff**、**oasdiff 破坏性变更检测** | < 5 分钟 |
 | `scaffold-verify` | 每日 + 发布后 | CLI 生成全新项目 → 构建 → 两种部署模式各启动一次 → 冒烟 | < 15 分钟 |
-| `release` | 手动触发（指定版本号） | lockstep 全量发布：Go tag ×19 + npm ×13 + 镜像 + CLI 二进制 | < 30 分钟 |
+| `release` | 手动触发（指定版本号） | lockstep 全量发布：Go tag ×21 + npm ×16 + 镜像 + CLI 二进制 | < 30 分钟 |
 | `nightly` | 每日 | 全量矩阵 + 性能基准回归 + flaky test 检测 | 不限 |
 
 ## 成本控制：不是每个 PR 都跑全量
 
-19 个模块 × 2 种部署模式 × 2 方言 = 76 种组合，每个 PR 全跑既慢又贵。策略：
+21 个模块 × 2 种部署模式 × 2 方言 = 84 种组合，每个 PR 全跑既慢又贵。策略：
 
 1. **路径过滤**（`dorny/paths-filter`）：只跑改动模块及其**下游依赖**模块。依赖关系从 `go.work` 与 workspace 配置自动推导，不手工维护映射表。
 2. **分层触发**：PR 阶段跑快速检查（单进程部署模式 + SQLite，无需容器）；合入前跑全量矩阵。这利用了单进程部署模式的一个副产品优势——大部分测试不需要 testcontainers 就能跑。
