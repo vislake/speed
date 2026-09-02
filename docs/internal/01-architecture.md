@@ -36,6 +36,7 @@ graph BT
     cfg --> tenancy
     jobs --> tenancy
     jobs --> obs
+    jobs --> dbkit
     storage --> tenancy
     storage --> jobs
     notify --> tenancy

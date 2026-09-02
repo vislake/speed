@@ -27,12 +27,13 @@ tasks:
 
   test:
     desc: Run unit tests with the race detector and coverage.
-    # go/pkgcore, go/dbkit and go/tenancy now have real code and tests; every
-    # other module under go/ is still a stub with no test files. This still
-    # only runs pkgcore's -- widen to {{.ALL_PKGS}} to pick up dbkit and
-    # tenancy too, and once more modules land. examples/reference-app is a
-    # separate module outside go/ (its own go.mod), so {{.ALL_PKGS}} would not
-    # reach it even after widening; it needs its own `go test ./...` run from
+    # go/pkgcore, go/dbkit, go/tenancy, go/observability and go/jobs now have
+    # real code and tests; every other module under go/ is still a stub with
+    # no test files. This still only runs pkgcore's -- widen to {{.ALL_PKGS}}
+    # to pick up dbkit, tenancy, observability and jobs too, and once more
+    # modules land. examples/reference-app is a separate module outside go/
+    # (its own go.mod), so {{.ALL_PKGS}} would not reach it even after
+    # widening; it needs its own `go test ./...` run from
     # examples/reference-app, e.g. a dedicated task once this one is widened.
     cmds:
       - go test ./go/pkgcore/... -race -cover
@@ -58,7 +59,8 @@ tasks:
       - |
         echo "dev: not implemented yet."
         echo
-        echo "go/pkgcore, go/dbkit and go/tenancy have real implementations now, and"
+        echo "go/pkgcore, go/dbkit, go/tenancy, go/observability and go/jobs have"
+        echo "real implementations now, and"
         echo "examples/reference-app/cmd/server is a real, runnable demo-profile server"
         echo "built on them -- see examples/reference-app/README.md. Run it directly:"
         echo "    cd examples/reference-app && go run ./cmd/server"
