@@ -1,0 +1,81 @@
+name: go-module-ci
+
+# Reusable per-module Go CI, called by the pipeline orchestrators (pr-check
+# today; pr-full and nightly when they land). docs/internal/18-cicd.md's
+# reusable-workflow design section is the governing spec: callers enumerate
+# one matrix row per module, so adding a module means adding one row to a
+# caller's matrix -- never copying this file's legs into a workflow.
+#
+# INPUT
+# `module` is the module's directory relative to the repository root
+# (e.g. go/pkgcore). Every leg runs from inside that directory, because the
+# repository root is a go.work workspace, not a module: bare ./... patterns
+# do not resolve there (root CLAUDE.md, "Traps"; Taskfile.yml's package-
+# patterns note).
+#
+# LEGS -- unit tier only, container-free by design:
+#   1. go vet ./...                static analysis (the lint leg today; the
+#                                  Taskfile lint task mirrors it -- its
+#                                  golangci-lint leg runs only when that
+#                                  binary is installed locally, and CI wiring
+#                                  for golangci-lint is deferred to the lint-
+#                                  tooling round so the discipline rules of
+#                                  docs/internal/18-cicd.md's discipline
+#                                  table land together).
+#   2. go test -race ./...         unit suite under the race detector. The
+#                                  Docker-backed integration tiers
+#                                  (-tags=integration, PostgreSQL for dbkit
+#                                  and tenancy, Redis for pkgcore and jobs)
+#                                  intentionally do NOT run here: 18-cicd's
+#                                  layered-triggering rule puts them in the
+#                                  pre-merge full matrix (pr-full), not in
+#                                  the fast per-PR check.
+#   3. go build ./...              module build in workspace context.
+#   4. GOWORK=off go build ./...   standalone build proving the module's
+#                                  go.mod/go.sum suffice outside the
+#                                  workspace. This is the CI replacement for
+#                                  the interim standalone_build_test.go
+#                                  guards (go/pkgcore, go/tenancy), per the
+#                                  last row of 18-cicd's discipline table;
+#                                  those tests stay for local runs and still
+#                                  execute under leg 2 on CI.
+#
+# jobs.timeout-minutes bounds every run (18-cicd cost control); the caller
+# additionally cancels stale runs via concurrency.
+
+on:
+  workflow_call:
+    inputs:
+      module:
+        description: >-
+          Module directory relative to the repository root, e.g. go/pkgcore.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  go-module-ci:
+    name: ${{ inputs.module }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Set up pinned Go toolchain and module cache
+        uses: ./.github/actions/setup-go-env
+      - name: go vet
+        working-directory: ${{ inputs.module }}
+        run: go vet ./...
+      - name: Unit tests under the race detector
+        working-directory: ${{ inputs.module }}
+        run: go test -race ./...
+      - name: Build in workspace context
+        working-directory: ${{ inputs.module }}
+        run: go build ./...
+      - name: Build standalone outside the workspace (GOWORK=off)
+        working-directory: ${{ inputs.module }}
+        env:
+          GOWORK: "off"
+        run: go build ./...

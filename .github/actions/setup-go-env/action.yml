@@ -1,0 +1,36 @@
+name: setup-go-env
+description: Install the pinned Go toolchain and prime the Go module cache for CI jobs.
+
+# Shared Go toolchain setup for every CI job that runs Go commands.
+#
+# VERSION SOURCE
+# This action reads go.work's `go` directive (currently `go 1.25.0`) via
+# actions/setup-go's go-version-file input. go.work is the repository's only
+# Go version declaration today: there is no .tool-versions or mise.toml yet
+# (toolchain pinning is a later round, per docs/internal/19-dev-workflow.md
+# and the roadmap M0 "mise toolchain" engineering item). CI and the local
+# workspace therefore resolve the same file and cannot drift. When that round
+# lands, repoint the go-version-file input below at the shared version file,
+# in this single place.
+#
+# CACHE
+# actions/setup-go's cache: true restores and saves the Go module cache,
+# keyed on the hashes of the dependency files listed in
+# cache-dependency-path: the workspace sum file plus every module's go.sum.
+# The **/go.sum glob picks newly added modules up automatically, so adding a
+# module to a CI matrix extends the cache key without touching this file.
+#
+# Callers must run actions/checkout first: go.work and the go.sum files are
+# resolved from the checked-out tree.
+
+runs:
+  using: composite
+  steps:
+    - name: Install pinned Go toolchain and restore module cache
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      with:
+        go-version-file: go.work
+        cache: true
+        cache-dependency-path: |
+          go.work.sum
+          **/go.sum

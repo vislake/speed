@@ -1,0 +1,35 @@
+name: setup-node-env
+description: Install the pinned Node.js toolchain for npm-package CI jobs.
+
+# Shared Node.js toolchain setup for CI jobs that run npm/pnpm commands
+# (workflows/reusable/npm-package-ci.yml is the future consumer; nothing
+# calls this action yet because no npm package exists in the repository).
+#
+# VERSION SOURCE -- PROVISIONAL PIN
+# There is no Node version source to read today: no web/ workspace, no
+# package.json, no .nvmrc, no .tool-versions. Node 24 (active LTS as of
+# September 2026) is therefore pinned explicitly below. When the frontend
+# and toolchain rounds land (roadmap M0 engineering: pnpm workspace +
+# changesets, mise toolchain), switch to the node-version-file input of
+# actions/setup-node pointing at the shared version file; the pnpm version
+# itself will then travel in the root package.json `packageManager` field
+# (installed by corepack), and the pnpm store cache (keyed on
+# pnpm-lock.yaml) is enabled at the same time. Until a lockfile exists,
+# declaring cache: pnpm would only produce a cache-miss warning.
+#
+# Callers must run actions/checkout first if any file-based resolution is
+# added later.
+
+inputs:
+  node-version:
+    description: Node.js version to install (LTS).
+    required: false
+    default: "24"
+
+runs:
+  using: composite
+  steps:
+    - name: Install pinned Node.js toolchain
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+      with:
+        node-version: ${{ inputs.node-version }}

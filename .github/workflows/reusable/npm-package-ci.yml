@@ -1,0 +1,60 @@
+name: npm-package-ci
+
+# Reusable per-package frontend CI -- a wiring-ready shape, not a runnable
+# check. No workflow calls it yet, and the guard step below makes any
+# premature invocation fail loudly instead of passing silently.
+#
+# docs/internal/18-cicd.md's reusable-workflow design section pairs this with
+# go-module-ci: a package becomes one matrix row in the calling orchestrator
+# (pr-check once frontend packages exist, and later pr-full/release/nightly).
+# The pipeline-overview table's npm duties are lint + typecheck + unit tests
+# + build per package, layered the same way Go modules are layered.
+#
+# INTENDED LEGS (to be filled in by the round that creates the workspace):
+#   1. actions/checkout
+#   2. ./.github/actions/setup-node-env  (version source moves to the shared
+#      version file then; pnpm store cache keyed on pnpm-lock.yaml is enabled
+#      in the same round, per 18-cicd's cost-control caching rule)
+#   3. pnpm install --frozen-lockfile     (workspace root)
+#   4. per-package: lint / typecheck / test / build -- the exact commands
+#      depend on the tooling the workspace round chooses; the discipline
+#      rows of 18-cicd's discipline table (ESLint rules: no bare text nodes,
+#      no hand-written backend calls, i18n key parity via
+#      tools/check_i18n_keys.py) land with the packages that need them.
+#
+# GATE: roadmap M0 engineering -- the pnpm workspace + changesets item. There
+# is no web/ tree, no package.json, no lockfile and no @speed/* package in
+# the repository today, so nothing here can run yet.
+
+on:
+  workflow_call:
+    inputs:
+      package:
+        description: >-
+          Package directory relative to the repository root, e.g.
+          web/packages/tokens. Final shape is settled by the workspace round.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  npm-package-ci:
+    name: ${{ inputs.package }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Set up pinned Node toolchain
+        uses: ./.github/actions/setup-node-env
+      - name: Guard -- the npm workspace does not exist yet
+        run: |
+          echo "error: npm-package-ci is a wiring-ready shape, not a runnable"
+          echo "check. The repository has no pnpm workspace (no"
+          echo "pnpm-workspace.yaml, no packages, no lockfile) -- the roadmap"
+          echo "M0 pnpm-workspace round builds it. Wire the real legs (install /"
+          echo "lint / typecheck / test / build) in that same round, then remove"
+          echo "this guard step."
+          exit 1

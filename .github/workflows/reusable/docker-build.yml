@@ -1,0 +1,44 @@
+name: docker-build
+
+# Reusable multi-architecture container-image build -- a wiring-ready shape,
+# not a runnable check. No workflow calls it, and the guard step below makes
+# any invocation fail loudly instead of passing silently; it stays that way
+# until an image-producing app exists.
+#
+# INTENDED SHAPE (docs/internal/18-cicd.md pipeline table and cost control):
+#   * inputs (final set settled by the first consumer): image name and tag
+#     set, build context, platforms (amd64/arm64 per the release row's
+#     multi-arch artifact requirement), registry and cache scope.
+#   * buildx setup, multi-arch build/push, Docker layer cache keyed per the
+#     18-cicd caching rule -- the docker/* third-party actions are pinned to
+#     full-length commit SHAs here when wired, exactly like the official
+#     actions pinned in this repository's other workflows.
+#   * registry credentials live in GitHub Environments/org secrets and need
+#     their own permission review (20-quality-and-security.md secret
+#     management section); none are declared today.
+#
+# WHO NEEDS IT: the e2e pipeline (service images for reference-app flows),
+# the release pipeline (multi-arch image artifacts) and nightly. None of
+# those are enabled yet, and no Dockerfile exists anywhere in the repository
+# -- the first image-producing app lands with the reference-app/e2e or
+# release rounds (roadmap M4 e2e item; M0 lockstep-release item for the
+# release artifacts).
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  docker-build:
+    name: docker build (stub guard -- no image-producing app yet)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Gated stub
+        run: |
+          echo "docker-build is a wiring-ready shape. Implement it (buildx,"
+          echo "multi-arch push, layer cache, pinned docker/* actions) in the"
+          echo "round that lands the first image-producing app."
+          exit 1
