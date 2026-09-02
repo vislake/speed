@@ -34,7 +34,7 @@ speed/
   web/         16 npm packages (ui-kit / auth-core / api-sdk / layout-kit / ...)
   templates/   minimal starter skeletons produced by the CLIs
   examples/    reference-app: the AI smile simulation platform
-  deploy/      layered docker-compose files (demo / full / observability / dev tools)
+  deploy/      layered docker-compose files (standalone / full / observability / dev tools)
   docs/
     internal/  design documents (Chinese)
     site/      public documentation for consuming teams
