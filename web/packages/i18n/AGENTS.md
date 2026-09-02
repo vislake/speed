@@ -45,6 +45,17 @@ catalog) and is non-negotiable here.
   `saveMissing`). Consuming code never sets these; when the wrapper
   version moves, re-verify them against the runtime before changing tests.
 
+## React bindings
+
+The main entry re-exports react-i18next's `I18nextProvider` and
+`useTranslation` (plus the `UseTranslationResponse` type). Component
+packages and hosts import them from here -- never from `react-i18next`
+directly -- so lockstep single-version shipping can prove one
+react-i18next copy, which is what makes `useTranslation` inside shipped
+components safe. The exact-export test (`index.test.ts`) pins this
+surface; do not grow it with new react-i18next names without the same
+AGENTS/README/test update in one commit.
+
 ## Adding a namespace (consuming-package side)
 
 1. Ship `zh-CN` + `en-US` JSON under the package's

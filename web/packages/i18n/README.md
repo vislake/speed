@@ -39,6 +39,27 @@ const i18n = createI18n() // negotiates, synchronous; react-ready instance
 await switchLanguage(i18n, 'en-US') // persists the canonical choice
 ```
 
+## React bindings
+
+The react-i18next bindings are re-exported from the main entry, so hosts
+and component packages consume the whole i18n surface through one
+`@speed` package (lockstep single-version shipping pins the module
+identity -- no host can end up with two react-i18next copies, which is
+what makes `useTranslation` inside third-party components safe):
+
+```tsx
+import { I18nextProvider, useTranslation } from '@speed/i18n'
+
+export function App() {
+  return <I18nextProvider i18n={i18n}>{/* ... */}</I18nextProvider>
+}
+
+function Greeting() {
+  const { t } = useTranslation('welcome')
+  return <p>{t('greeting.hello')}</p>
+}
+```
+
 ## Namespaces and registration
 
 One namespace per package, in bare, unscoped form: a name matches
