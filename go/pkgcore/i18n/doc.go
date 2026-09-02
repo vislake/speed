@@ -85,7 +85,7 @@
 //     construction; tools/check_i18n_keys.py checks the same rule over the
 //     raw zh-CN/en-US files when it is run -- no workflow runs it yet (its
 //     wiring belongs to the gated docs-check pipeline, docs/internal/
-//     18-cicd.md), so it executes directly, like the other tools/ checkers.
+//     18-cicd.md), so it executes directly.
 //
 // # Plural categories
 //
