@@ -82,8 +82,10 @@
 //   - Every language a module ships must carry the same id set, or
 //     AddModule fails with ErrParityMismatch. Parity is enforced as each
 //     module is added, which makes every catalog that builds well-formed by
-//     construction; tools/check_i18n_keys.py enforces the same rule in CI
-//     over the raw zh-CN/en-US files.
+//     construction; tools/check_i18n_keys.py checks the same rule over the
+//     raw zh-CN/en-US files when it is run -- no workflow runs it yet (its
+//     wiring belongs to the gated docs-check pipeline, docs/internal/
+//     18-cicd.md), so it executes directly, like the other tools/ checkers.
 //
 // # Plural categories
 //

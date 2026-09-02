@@ -923,8 +923,9 @@ func TestRealPkgcoreSeedFiles(t *testing.T) {
 }
 
 func TestRealPkgcoreSeedIdsResolveInEveryLocale(t *testing.T) {
-	// Pins the shipped seed id set on top of the file-level CI check: every
-	// id the bundle declares must resolve through the runtime catalog in both
+	// Pins the shipped seed id set on top of the file-level key-parity check
+	// tools/check_i18n_keys.py performs over the raw files: every id the
+	// bundle declares must resolve through the runtime catalog in both
 	// locales, so an accidental divergence between the two files is caught by
 	// more than one gate.
 	b := NewBuilder()

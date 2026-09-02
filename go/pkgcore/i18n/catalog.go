@@ -80,9 +80,10 @@ var (
 	// ErrParityMismatch is returned by (*Builder).AddModule when a
 	// module's locale files carry different message id sets. The wrapped
 	// text lists, per language, the ids one language has that another
-	// lacks. tools/check_i18n_keys.py enforces the same rule for the
-	// zh-CN/en-US pair in CI; this error is the same check enforced in Go
-	// across every language a module ships, at merge time.
+	// lacks. tools/check_i18n_keys.py checks the same rule for the
+	// zh-CN/en-US pair over the raw locale files when it is run; this
+	// error is that check enforced in Go, across every language a module
+	// ships, at merge time.
 	ErrParityMismatch = errors.New("i18n: locale key parity mismatch")
 
 	// ErrUnknownLocale is returned by Lookup and LookupPlural when locale
@@ -281,7 +282,8 @@ func (b *Builder) AddModule(module string, fsys fs.FS) error {
 }
 
 // fileNames renders locale codes as the .toml file names error text lists,
-// "zh-CN.toml, en-US.toml".
+// in the sorted order its callers' codes are in: "en-US.toml, zh-CN.toml"
+// for the M0 pair.
 func fileNames(codes []string) string {
 	names := make([]string, len(codes))
 	for i, code := range codes {
