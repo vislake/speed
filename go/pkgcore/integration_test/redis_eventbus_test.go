@@ -8,8 +8,10 @@ package pkgcore_test
 // publishing instance run synchronously with the original payload, handlers
 // on every other instance eventually run exactly once with the
 // JSON-reconstructed payload shape, events never cross type streams, a
-// publish that cannot commit delivers nothing anywhere, and Close really
-// stops a replica's delivery.
+// publish that cannot commit delivers nothing anywhere, Close really stops
+// a replica's delivery and destroys the consumer groups its instance
+// created (sparing a peer's), and a reader whose stream or group is removed
+// out from under it recreates it instead of wedging.
 
 import (
 	"context"
@@ -148,6 +150,16 @@ func requireRemoteInvoice(t *testing.T, evt pkgcore.Event, wantID string, wantAm
 	if payload["amount"] != wantAmount {
 		t.Errorf("remote event amount = %v, want %v", payload["amount"], wantAmount)
 	}
+}
+
+// streamKey mirrors pkgcore's unexported redisEventStreamKey: these tests
+// address the stream directly (XGROUP DESTROY, XINFO GROUPS, EXISTS), which
+// the external test package cannot do through the public API. The prefix is
+// part of the bus's wire format, which the implementation's Close docs quote
+// to operators, so writing it out here is a deliberate pin rather than a
+// leak.
+func streamKey(eventType string) string {
+	return "pkgcore:events:" + eventType
 }
 
 // TestRedisEventBus_DeliversExactlyOnceLocallyAndRemotely pins the core
@@ -498,4 +510,163 @@ func TestRedisEventBus_SubscribersNeverCatchUpOnHistory(t *testing.T) {
 	if got := recB.countByTenant(pkgcore.TenantID("tenant-live")); got != 1 {
 		t.Errorf("late subscriber received the live event %d times, want exactly 1", got)
 	}
+}
+
+// TestRedisEventBus_ReaderRecoversFromALostGroup pins the recovery from a
+// vanished stream or group: an operator's cleanup (XGROUP DESTROY, DEL), a
+// FLUSHALL or a failover can remove the stream or this instance's group
+// while the reader is between reads. XREADGROUP then answers NOGROUP
+// forever, and the reader must recreate the group -- treating NOGROUP as a
+// transient blip would wedge the reader silently, and every event published
+// after the removal would be lost for this subscriber.
+func TestRedisEventBus_ReaderRecoversFromALostGroup(t *testing.T) {
+	ctx := context.Background()
+	client := startRedisClient(t, ctx)
+	busA := pkgcore.NewRedisEventBus(client) // publisher only: subscribes no handler
+	busB := pkgcore.NewRedisEventBus(client)
+	t.Cleanup(func() {
+		busA.Close()
+		busB.Close()
+	})
+
+	recB := &eventRecorder{}
+	const paidType = "invoice.paid"
+	busB.Subscribe(paidType, recB.handler())
+
+	// Prove bus B's reader and consumer group exist and consume, then remove
+	// the group the way an operator's cleanup would. bus A never subscribed,
+	// so bus B's group is the stream's only one.
+	warmUp(t, busA, recB, paidType)
+	recB.clear()
+
+	groups, err := client.XInfoGroups(ctx, streamKey(paidType)).Result()
+	if err != nil {
+		t.Fatalf("XInfoGroups: %v", err)
+	}
+	if len(groups) != 1 {
+		t.Fatalf("XInfoGroups reports %d groups, want bus B's single one", len(groups))
+	}
+	if err := client.XGroupDestroy(ctx, streamKey(paidType), groups[0].Name).Err(); err != nil {
+		t.Fatalf("XGroupDestroy: %v", err)
+	}
+
+	// Everything the recorder sees from here on was published after the group
+	// was destroyed, so the first such delivery is the proof of recovery. The
+	// recreated group starts at the live end, so markers published between the
+	// destroy and the recreation are skipped like any pre-group history; the
+	// loop keeps publishing until one lands after the recreation. A reader
+	// wedged on NOGROUP never delivers any of them and the deadline fails.
+	deadline := time.Now().Add(5 * time.Second)
+	for seq := 1; recB.count() == 0; seq++ {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out: no event reached the reader after its group was destroyed -- the reader wedged on NOGROUP")
+		}
+		if err := busA.Publish(ctx, pkgcore.Event{
+			Type: paidType, TenantID: pkgcore.TenantID("tenant-acme"),
+			Payload: invoicePaid{ID: "inv-recovered", Amount: float64(seq)},
+		}); err != nil {
+			t.Fatalf("Publish(%d) error = %v, want nil", seq, err)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	// One more event, counted, to show the reader stayed healthy past the
+	// recovery rather than delivering a single straggler.
+	recB.clear()
+	if err := busA.Publish(ctx, pkgcore.Event{
+		Type: paidType, TenantID: pkgcore.TenantID("tenant-acme"), Payload: invoicePaid{ID: "inv-after", Amount: 1},
+	}); err != nil {
+		t.Fatalf("Publish(after recovery) error = %v, want nil", err)
+	}
+	eventually(t, "the recovered reader to keep delivering", func() bool {
+		return recB.count() == 1
+	})
+}
+
+// TestRedisEventBus_Close_LastReaderLeavesNothingBehind pins the graceful
+// shutdown cleanup: a closed bus destroys the consumer group its instance
+// created, and when it was the stream's only group the stream is deleted
+// with it -- a deployment that closes all its replicas leaves no accumulated
+// group metadata behind on the server. (A crashed instance, which never runs
+// Close, still leaks its group; the Close docs hand operators the XGROUP
+// DESTROY / DEL recipe for that case.)
+func TestRedisEventBus_Close_LastReaderLeavesNothingBehind(t *testing.T) {
+	ctx := context.Background()
+	client := startRedisClient(t, ctx)
+	busA := pkgcore.NewRedisEventBus(client) // publisher only: subscribes no handler
+	busB := pkgcore.NewRedisEventBus(client)
+	t.Cleanup(func() {
+		busA.Close()
+		busB.Close()
+	})
+
+	recB := &eventRecorder{}
+	const paidType = "invoice.paid"
+	busB.Subscribe(paidType, recB.handler())
+	warmUp(t, busA, recB, paidType) // bus B's consumer group provably exists
+
+	busB.Close()
+
+	// The cleanup runs synchronously inside Close, so by the time it returns
+	// the group is gone. XInfoGroups on the deleted stream fails instead of
+	// reporting groups, which is the success case here too.
+	groups, err := client.XInfoGroups(ctx, streamKey(paidType)).Result()
+	if err == nil && len(groups) != 0 {
+		t.Fatalf("XInfoGroups reports %d groups after Close, want 0 (the instance's group destroyed)", len(groups))
+	}
+	exists, err := client.Exists(ctx, streamKey(paidType)).Result()
+	if err != nil {
+		t.Fatalf("EXISTS: %v", err)
+	}
+	if exists != 0 {
+		t.Errorf("stream %q still exists after its last reader closed, want it deleted", streamKey(paidType))
+	}
+}
+
+// TestRedisEventBus_Close_SparesAPeerGroup pins the boundary of the close
+// cleanup: only the closing instance's own group is destroyed, and a stream
+// that still carries another instance's group is not deleted -- a peer's
+// blocked reader must never lose its stream under it. The surviving reader
+// keeps delivering after the other instance closed.
+func TestRedisEventBus_Close_SparesAPeerGroup(t *testing.T) {
+	ctx := context.Background()
+	client := startRedisClient(t, ctx)
+	busA := pkgcore.NewRedisEventBus(client) // publisher only: subscribes no handler
+	busB := pkgcore.NewRedisEventBus(client)
+	busC := pkgcore.NewRedisEventBus(client)
+	t.Cleanup(func() {
+		busA.Close()
+		busB.Close()
+		busC.Close()
+	})
+
+	recB, recC := &eventRecorder{}, &eventRecorder{}
+	const paidType = "invoice.paid"
+	busB.Subscribe(paidType, recB.handler())
+	busC.Subscribe(paidType, recC.handler())
+	warmUp(t, busA, recB, paidType) // both consumer groups provably exist
+	warmUp(t, busA, recC, paidType)
+
+	busB.Close()
+
+	groups, err := client.XInfoGroups(ctx, streamKey(paidType)).Result()
+	if err != nil {
+		t.Fatalf("XInfoGroups: %v", err)
+	}
+	if len(groups) != 1 {
+		t.Fatalf("XInfoGroups reports %d groups after one of two readers closed, want bus C's single one", len(groups))
+	}
+	if groups[0].Name == "" {
+		t.Fatal("XInfoGroups reported a group with an empty name")
+	}
+
+	recC.clear()
+	if err := busA.Publish(ctx, pkgcore.Event{
+		Type: paidType, TenantID: pkgcore.TenantID("tenant-acme"), Payload: invoicePaid{ID: "inv-peer", Amount: 3},
+	}); err != nil {
+		t.Fatalf("Publish() error = %v, want nil", err)
+	}
+	eventually(t, "the surviving reader on bus C to deliver after bus B closed", func() bool {
+		return recC.count() == 1
+	})
 }

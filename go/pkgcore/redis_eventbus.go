@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,8 +22,12 @@ var ErrEventBusClosed = errors.New("pkgcore: event bus is closed")
 
 const (
 	// redisEventStreamPrefix namespaces the per-type Redis Streams that back
-	// the bus, so the bus's keys cannot collide with keys the host stores in
-	// the same Redis.
+	// the bus. It is a convention, not a guarantee: the keys sit in the same
+	// Redis namespace the host stores in, and a host key that happens to
+	// equal pkgcore:events:<type> keeps that type's reader down -- the group
+	// creation fails with WRONGTYPE and retries until the bus is closed,
+	// exactly as if Redis were unreachable. The prefix is the protection;
+	// hosts must not store their own keys under pkgcore:*.
 	redisEventStreamPrefix = "pkgcore:events:"
 
 	// redisEventGroupPrefix namespaces the consumer-group names the bus
@@ -49,6 +54,12 @@ const (
 	// redisEventRetryDelay backs off transient Redis failures (a restart, a
 	// network blip) before a reader tries again.
 	redisEventRetryDelay = 200 * time.Millisecond
+
+	// redisEventGroupCleanupTimeout bounds the cleanup Close runs against
+	// Redis. Close must not hang a shutdown on a Redis that stopped
+	// answering; when the cleanup times out the groups are left behind,
+	// which the Close notes tell an operator how to remove.
+	redisEventGroupCleanupTimeout = time.Second
 )
 
 // RedisEventBus is the distributed deployment mode's EventBus, delivering
@@ -149,16 +160,69 @@ func NewRedisEventBus(client *redis.Client) *RedisEventBus {
 }
 
 // Close stops the bus: Publish fails with ErrEventBusClosed from here on,
-// and the reader goroutines shut down within one read block. A closed bus
-// must not be used again. Close is idempotent and safe for concurrent use;
-// the client the bus was built on stays open, because the host owns it.
+// the reader goroutines shut down within one read block, and the consumer
+// groups this instance created on its streams are destroyed, along with any
+// stream that ends up with no group left on it -- a deployment that shuts
+// every replica down gracefully leaves nothing behind on the server. A
+// replica that crashes instead of closing leaks its groups, one per stream
+// per instance, until an operator removes them with
+//
+//	XGROUP DESTROY pkgcore:events:<type> pkgcore:bus:<instance-id>
+//	DEL pkgcore:events:<type>  # once XINFO GROUPS reports no group left
+//
+// The cleanup is best-effort and bounded by redisEventGroupCleanupTimeout: a
+// Redis that does not answer during Close leaves the groups in place, and
+// the same recipe removes them later. A closed bus must not be used again.
+// Close is idempotent and safe for concurrent use; the client the bus was
+// built on stays open, because the host owns it.
 func (b *RedisEventBus) Close() {
 	b.once.Do(func() {
 		b.mu.Lock()
 		b.closed = true
 		b.mu.Unlock()
 		b.cancel()
+		b.destroyGroups()
 	})
+}
+
+// destroyGroups removes the consumer groups this instance created and the
+// streams they were the last group on. It runs after the readers were told
+// to stop, and it is best-effort: the bus is already closed, so there is no
+// error left to report -- a failure is a leaked group, and the Close notes
+// name the operator command that removes it. The event types this instance
+// ever subscribed to are the whole scope, read under the readers lock; a
+// Subscribe that raced the Close can at worst start a reader whose group
+// creation immediately fails on the bus's cancelled context.
+func (b *RedisEventBus) destroyGroups() {
+	b.readersMu.Lock()
+	eventTypes := make([]string, 0, len(b.readers))
+	for eventType := range b.readers {
+		eventTypes = append(eventTypes, eventType)
+	}
+	b.readersMu.Unlock()
+	if len(eventTypes) == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), redisEventGroupCleanupTimeout)
+	defer cancel()
+
+	group := redisEventGroupPrefix + b.instanceID
+	for _, eventType := range eventTypes {
+		stream := redisEventStreamKey(eventType)
+		// Destroying this instance's group is the point; deleting the stream
+		// is the follow-through for when this instance was its last reader.
+		// The stream is deleted only when Redis confirms no group is left on
+		// it: another instance may have created its group between the
+		// destroy and the check, and that instance's blocked reader must
+		// never lose its stream under it.
+		_ = b.client.XGroupDestroy(ctx, stream, group).Err()
+		groups, err := b.client.XInfoGroups(ctx, stream).Result()
+		if err != nil || len(groups) != 0 {
+			continue
+		}
+		_ = b.client.Del(ctx, stream).Err()
+	}
 }
 
 // Subscribe registers h for the exact event type eventType, mirroring the
@@ -260,7 +324,9 @@ func (b *RedisEventBus) ensureReader(eventType string) {
 // background until Redis answers, so a bus that starts before Redis does
 // comes up on its own -- and then reads entries in batches, blocking for
 // redisEventReaderBlock when the stream is quiet so that a Close is noticed
-// promptly.
+// promptly. A stream or group that vanishes under the reader (an operator's
+// cleanup, FLUSHALL, a failover) is recreated on the first read that answers
+// NOGROUP, so a reader only ever dies with its bus.
 func (b *RedisEventBus) runReader(eventType string) {
 	stream := redisEventStreamKey(eventType)
 	group := redisEventGroupPrefix + b.instanceID
@@ -281,22 +347,39 @@ func (b *RedisEventBus) runReader(eventType string) {
 			Block:    redisEventReaderBlock,
 		}).Result()
 		if err != nil {
-			// A quiet stream times the block out with no entries; anything
-			// else is transient (a restart, a network blip) and worth a
-			// short retry, unless the bus was closed while waiting.
-			if !errors.Is(err, redis.Nil) && b.ctx.Err() == nil {
-				time.Sleep(redisEventRetryDelay)
+			// A quiet stream times the block out with no entries (redis.Nil),
+			// and a bus closed while the read was waiting is a return at the
+			// top of the loop. Everything else is a transient failure worth a
+			// short retry -- one case excepted: XREADGROUP answers NOGROUP
+			// forever once the stream or this instance's group has vanished
+			// (an operator's XGROUP DESTROY or DEL, FLUSHALL, a stream
+			// evicted in full, a failover onto a replica that never had it).
+			// Treating that as transient would wedge the reader silently, so
+			// the group is recreated first; like any group, the recreated one
+			// starts at the live end, so entries published while it was gone
+			// are not replayed.
+			if errors.Is(err, redis.Nil) || b.ctx.Err() != nil {
+				continue
 			}
+			if strings.Contains(err.Error(), "NOGROUP") {
+				if err := b.createGroup(b.ctx, stream, group); err != nil {
+					return
+				}
+				continue
+			}
+			time.Sleep(redisEventRetryDelay)
 			continue
 		}
 		for _, streamEntries := range entries {
 			for _, entry := range streamEntries.Messages {
 				// A Close that arrived while this batch was in flight ends
 				// delivery here. The entries the batch already took off the
-				// stream are acknowledged so the closed instance's group does
-				// not keep a pending set nobody will ever process, and none of
-				// them are delivered: a replica that is shutting down must not
-				// keep running handlers for events published after its Close.
+				// stream are acknowledged so that, when Close's own cleanup
+				// cannot reach Redis to destroy the group, the group it
+				// leaves behind carries no pending set nobody will ever
+				// process; and none of the batch is delivered: a replica that
+				// is shutting down must not keep running handlers for events
+				// published after its Close.
 				if err := b.ctx.Err(); err != nil {
 					b.acknowledge(context.Background(), stream, group, entry.ID)
 					return
