@@ -116,7 +116,7 @@ func TestModule_OpenAPISpec_IsNonEmptyAndDescribesNotesPath(t *testing.T) {
 // goal: "genuinely exercise the registry surface rather than only its
 // minimum"), not only reg.Routes.Mount.
 func TestModule_Register_DeclaresRoutesPermissionsEventsAndAuditActions(t *testing.T) {
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore())
+	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
 	m := NewModule(nil)
 
 	if err := m.Register(reg); err != nil {
