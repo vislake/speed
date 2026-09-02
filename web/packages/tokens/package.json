@@ -1,0 +1,21 @@
+{
+  "name": "@speed/tokens",
+  "version": "0.0.0",
+  "description": "Speed design tokens: pure-data color, typography, spacing, shape, breakpoints, z-index and shadow defaults plus the deep-merge helper for project overrides",
+  "type": "module",
+  "sideEffects": false,
+  "files": ["dist", "README.md", "AGENTS.md"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json"
+  }
+}

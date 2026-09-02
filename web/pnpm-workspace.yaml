@@ -1,0 +1,5 @@
+# pnpm workspace of the speed frontend packages. The repo root is a Go
+# workspace and stays one; web/ is deliberately its own pnpm workspace root
+# (see web/README.md "Why web/ is its own workspace root").
+packages:
+  - packages/*

@@ -1,0 +1,17 @@
+{
+  "greeting": {
+    "hello": "Hello, world",
+    "signIn": "Sign in",
+    "profile": "Profile",
+    "subtitle": "Welcome back, {name}"
+  },
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "unsaved": "You have unsaved changes"
+  },
+  "error": {
+    "network": "Network error, please try again later"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "greeting": {
+    "hello": "你好，世界",
+    "signIn": "登录",
+    "profile": "个人资料",
+    "subtitle": "欢迎回来，{name}"
+  },
+  "common": {
+    "save": "保存",
+    "cancel": "取消",
+    "confirm": "确认",
+    "unsaved": "你有尚未保存的更改"
+  },
+  "error": {
+    "network": "网络连接失败，请稍后重试"
+  }
+}
