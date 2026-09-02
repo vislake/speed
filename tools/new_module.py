@@ -51,8 +51,10 @@ Refusals and guardrails:
     creates <target-dir>/go/<name>/{go.mod,doc.go,AGENTS.md}.
   * --category npm is refused with an explanation: docs/internal/
     19-dev-workflow.md names a future "task new:npm-package" alongside the
-    Go generator, but no web/ workspace or npm package template exists in
-    the repository yet, so there is nothing canonical to scaffold.
+    Go generator, but this tool scaffolds go/<name> module stubs only --
+    no npm package template ships with it (web/'s packages are authored
+    in the workspace without a scaffolder), so there is nothing canonical
+    to scaffold.
 
 After scaffolding, the script prints a registration checklist (go.work use
 entry, CI matrix row, lockstep release tag list, roadmap/design-doc rows)
@@ -235,8 +237,8 @@ def main(argv: list[str] | None = None) -> int:
             "  #   task new:module NAME=sharing DESCRIPTION='...' DESIGN_DOC=docs/internal/07-....md\n"
             "\n"
             "A future task new:npm-package will call this script with "
-            "--category npm once the web/ workspace defines a canonical "
-            "package template (refused today, see --category)."
+            "--category npm once this scaffold grows an npm package "
+            "template (refused today, see --category)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -253,9 +255,9 @@ def main(argv: list[str] | None = None) -> int:
                         "(may not exist yet -- the script warns if missing)")
     parser.add_argument("--category", choices=("go", "npm"), default="go",
                         help="what to scaffold: go (implemented) or npm "
-                        "(refused: no npm template exists in the repo yet, "
-                        "docs/internal/19-dev-workflow.md only names the "
-                        "future task new:npm-package)")
+                        "(refused: no npm package template ships with this "
+                        "tool, docs/internal/19-dev-workflow.md only names "
+                        "the future task new:npm-package)")
     parser.add_argument("--target-dir", metavar="DIR",
                         help="directory the scaffold is created under "
                         "(default: the repository root, auto-detected as "
@@ -293,10 +295,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.category == "npm":
         print("error: --category npm is not implemented yet: "
               "docs/internal/19-dev-workflow.md names a future 'task "
-              "new:npm-package' alongside the Go generator, but no web/ "
-              "workspace or canonical npm package template exists in the "
-              "repository yet, so there is nothing to scaffold. Re-run with "
-              "--category go (default).", file=sys.stderr)
+              "new:npm-package' alongside the Go generator, but this tool "
+              "scaffolds go/<name> module stubs only and ships no npm "
+              "package template, so there is nothing to scaffold. Re-run "
+              "with --category go (default).", file=sys.stderr)
         return 2
 
     if args.target_dir:
