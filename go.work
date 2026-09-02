@@ -17,6 +17,7 @@ use (
 	./go/observability
 	./go/org
 	./go/pkgcore
+	./go/ratelimit
 	./go/rbac
 	./go/saasctl
 	./go/sharing
