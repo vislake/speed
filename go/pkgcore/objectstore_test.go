@@ -641,6 +641,53 @@ func TestLocalObjectStore_ConcurrentUse_IsRaceFree(t *testing.T) {
 	}
 }
 
+// TestLocalObjectStore_ConcurrentPut_AllKeysUnderOneFreshPrefix is the
+// regression test for the creation race inside PutObject's directory walk.
+// Writers are released by a barrier and put distinct keys under one prefix
+// that does not exist yet, so their Mkdir of the shared prefix segment
+// collides: exactly one Mkdir wins, and every loser sees EEXIST from its own.
+// A loser must then re-inspect the path and descend into the directory the
+// winner created. A PutObject that instead kept walking from the stale parent
+// stores the loser's object under the wrong key -- the raced prefix segment
+// silently dropped from the path -- while returning nil, and the requested
+// key reads back ErrObjectNotFound afterwards. A fresh prefix per round makes
+// every round re-enter the race, and every object must read back whole under
+// its requested key once the round's writers are done.
+func TestLocalObjectStore_ConcurrentPut_AllKeysUnderOneFreshPrefix(t *testing.T) {
+	_, store := newRootStore(t)
+	ctx := context.Background()
+	const writers = 16
+	const rounds = 8
+
+	for round := range rounds {
+		prefix := fmt.Sprintf("burst-%d", round)
+		start := make(chan struct{})
+		bodies := make([]string, writers)
+
+		var wg sync.WaitGroup
+		for w := range writers {
+			wg.Add(1)
+			go func(w int) {
+				defer wg.Done()
+				<-start
+				body := strings.Repeat(fmt.Sprintf("body %d; ", w), 64)
+				bodies[w] = body
+				if err := store.PutObject(ctx, fmt.Sprintf("%s/w-%d/blob", prefix, w), strings.NewReader(body)); err != nil {
+					t.Errorf("round %d: PutObject(w-%d) error = %v, want nil", round, w, err)
+				}
+			}(w)
+		}
+		close(start)
+		wg.Wait()
+
+		for w := range writers {
+			if got := getObject(t, store, fmt.Sprintf("%s/w-%d/blob", prefix, w)); got != bodies[w] {
+				t.Errorf("round %d: writer %d's object read back %d bytes, want %d", round, w, len(got), len(bodies[w]))
+			}
+		}
+	}
+}
+
 // TestNewLocalObjectStore_PanicsOnAnUnusableDirectory mirrors the
 // NewSMTPMailer wiring-error panic: an object store whose root can never work
 // is an unrecoverable error at startup, and a panic there is where the wiring

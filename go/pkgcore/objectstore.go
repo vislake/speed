@@ -227,29 +227,45 @@ func (s *localObjectStore) PutObject(ctx context.Context, key string, r io.Reade
 	dir := s.root
 	for _, segment := range segments[:len(segments)-1] {
 		child := filepath.Join(dir, segment)
-		info, err := os.Lstat(child)
-		if err == nil {
-			switch {
-			case info.Mode()&os.ModeSymlink != 0:
-				return fmt.Errorf("pkgcore: local object store: refusing to follow the symbolic link at %q", child)
-			case !info.IsDir():
-				return fmt.Errorf("pkgcore: local object store: the path at %q is an existing object, and a key below it cannot be stored", child)
+
+		// Resolve the segment as a directory, creating it when it is absent.
+		// The Mkdir is raced by concurrent PutObjects of sibling keys: the
+		// loser sees EEXIST and must not walk on from the stale parent -- the
+		// path it is about to join the remaining segments onto no longer is
+		// the tree's parent -- nor assume the EEXIST names the winner's
+		// directory, so the loop goes around and inspects what actually
+		// appeared under the same rules as the Lstat above: a plain directory
+		// is descended into, a symbolic link or an existing object is
+		// refused. Going around also covers the winner's directory being
+		// removed again before it is inspected (a concurrent DeleteObject can
+		// clear the empty directory a racing PutObject just created), in
+		// which case the next round's Mkdir simply succeeds.
+		for {
+			info, err := os.Lstat(child)
+			if err == nil {
+				switch {
+				case info.Mode()&os.ModeSymlink != 0:
+					return fmt.Errorf("pkgcore: local object store: refusing to follow the symbolic link at %q", child)
+				case !info.IsDir():
+					return fmt.Errorf("pkgcore: local object store: the path at %q is an existing object, and a key below it cannot be stored", child)
+				}
+				dir = child
+				break
 			}
-			dir = child
-			continue
-		}
-		if !os.IsNotExist(err) {
-			return fmt.Errorf("pkgcore: local object store: %w", err)
-		}
-		if err := os.Mkdir(child, 0o755); err != nil {
-			if !os.IsExist(err) {
+			if !os.IsNotExist(err) {
 				return fmt.Errorf("pkgcore: local object store: %w", err)
 			}
-			// A concurrent PutObject created the directory first; re-inspect
-			// it rather than assume what appeared there.
-			continue
+			mkdirErr := os.Mkdir(child, 0o755)
+			if mkdirErr == nil {
+				dir = child
+				break
+			}
+			if !os.IsExist(mkdirErr) {
+				return fmt.Errorf("pkgcore: local object store: %w", mkdirErr)
+			}
+			// A concurrent PutObject created the directory between the Lstat
+			// and the Mkdir; go around and inspect what actually appeared.
 		}
-		dir = child
 	}
 
 	temporary, err := os.CreateTemp(dir, ".pkgcore-object-*")
