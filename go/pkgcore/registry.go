@@ -103,13 +103,15 @@ type Module interface {
 	// subdirectory per SQL dialect.
 	Migrations() embed.FS
 
-	// Locales returns the module's zh-CN and en-US translation resources,
-	// embedded flat under the locale file contract documented in the i18n
-	// package. Kernel.Bootstrap feeds it to i18n.Builder.AddModule while it
-	// assembles the merged message catalog, so a module that renders no
-	// content returns an empty embed.FS and a module that ships files must
-	// ship the full pair, prefix its ids with its Name and keep the two
-	// languages' id sets identical.
+	// Locales returns the module's translation resources, one
+	// <language>.toml file per language, embedded flat under the locale
+	// file contract documented in the i18n package. Kernel.Bootstrap feeds
+	// it to i18n.Builder.AddModule while it assembles the merged message
+	// catalog, so a module that renders no content returns an empty
+	// embed.FS and a module that ships files must ship one file for every
+	// language the catalog serves (zh-CN.toml and en-US.toml in M0) and
+	// none for any other, prefix its ids with its Name and keep every
+	// language's id set identical.
 	Locales() embed.FS
 
 	// OpenAPISpec returns the module's OpenAPI contract fragment, which the
@@ -898,8 +900,9 @@ func (k *Kernel) Bootstrap(ctx context.Context, modules ...Module) (*Registry, e
 
 	// The message catalog is assembled alongside registration: each module's
 	// locale resources are validated and merged before the module itself
-	// registers, so a malformed or parity-broken locale pair fails the
-	// bootstrap at the module that owns it. The frozen catalog is installed
+	// registers, so a malformed file set or a parity break between a
+	// module's languages fails the bootstrap at the module that owns it.
+	// The frozen catalog is installed
 	// only after every module has registered, so reg.Locales() is still nil
 	// inside Register, and calling a method on that nil catalog panics. The
 	// catalog becomes reachable through reg only once registration

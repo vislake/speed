@@ -216,9 +216,9 @@ Full runnable versions of all of the above live in `example_test.go` (the shared
 **Internationalization**
 
 - Do not translate API responses with `i18n`. Handlers return codes; the catalog renders backend-generated content only, in the recipient's locale — never the operator's.
-- Do not add a language by widening a module's files. M0 catalogs ship exactly zh-CN/en-US; another language is a change to `pkgcore/i18n`, never per-module code.
+- Do not add a language by editing `pkgcore/i18n`. The catalog's languages are its modules' files: a new language is one new `<language>.toml` file (its name a canonical BCP 47 tag) in every module that ships messages, and nothing else. `docs/internal/11-cross-cutting.md` scopes v1.0's full-coverage guarantee to zh-CN/en-US; the mechanism it requires is deliberately not frozen to them.
 - Do not ship a grouping section (`[errors]`) or an unquoted dotted header in a locale file. go-i18n folds the section name into the id; the contract is one flat top-level entry per message, id quoted and prefixed with the module's `Name` plus a dot.
-- Do not let one locale drift from the other. The two id sets must stay identical; `Builder.AddModule` fails with `ErrParityMismatch` and `tools/check_i18n_keys.py` enforces the same rule over the raw files in CI.
+- Do not let one locale drift from another. Every language a module ships must carry the same id set; `Builder.AddModule` fails with `ErrParityMismatch`, and `tools/check_i18n_keys.py` enforces the same rule for the zh-CN/en-US pair over the raw files in CI.
 - Do not render a missing message in a fallback language. An unknown locale or code must surface as an error; the catalog never falls back silently.
 - Do not add a third-party dependency to the root package for i18n. The one new dependency, nicksnyder/go-i18n, lives in the `i18n` subpackage and was adopted by `docs/internal/11-cross-cutting.md` before it entered the code.
 
@@ -254,10 +254,10 @@ Full runnable versions of all of the above live in `example_test.go` (the shared
 | `config.ErrInvalidTarget` | `Load` given a non-struct-pointer or a bad `config` tag | Programming error; fix the target type |
 | `i18n.ErrEmptyModuleName` | `Builder.AddModule` with an empty module name | Programming error; every module has a `Name()` |
 | `i18n.ErrDuplicateModule` | `Builder.AddModule` with a module already added | Register each module's locales exactly once |
-| `i18n.ErrMissingLocaleFile` | A module shipping only one of the two mandatory files | Add the missing locale; a module must contribute both or neither |
-| `i18n.ErrUnsupportedLocale` | A locale file outside zh-CN/en-US | M0 catalogs ship exactly two languages; extending them is a change to `pkgcore/i18n` |
+| `i18n.ErrMissingLocaleFile` | A module shipping locale files but not one for every language of the catalog | Add the missing file; a module contributes every catalog language or none |
+| `i18n.ErrUnsupportedLocale` | A locale file that is not a canonical language tag, or a file for a language the catalog does not serve | Fix the file name, or add the language to every message-shipping module |
 | `i18n.ErrUnsupportedShape` | A file violating the flat contract: unquoted or dotted headers, a grouping section such as `[errors]`, reserved-key misuse, a table carrying both `translation` and a plural category, or a plural table with no translation | The error names the file and the entry; fix the TOML shape |
-| `i18n.ErrParityMismatch` | The zh-CN and en-US id sets of one module differing | The error names the locale and the missing ids; `tools/check_i18n_keys.py` enforces the same parity over the raw files in CI |
+| `i18n.ErrParityMismatch` | The id sets of one module's locale files differing | The error names the languages and the missing ids; `tools/check_i18n_keys.py` enforces the same zh-CN/en-US parity over the raw files in CI |
 | `i18n.ErrUnknownLocale` | `Lookup`/`LookupPlural` for a locale no module ships | Programming error; the catalog never falls back to a default language |
 | `i18n.ErrUnknownCode` | `Lookup`/`LookupPlural` for a code no module contributed | Programming error; the catalog never falls back to a default language |
 

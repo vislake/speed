@@ -2,6 +2,7 @@ package i18n
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -44,10 +45,30 @@ other = "剩余积分不足,请充值。"
 one = "{{.Count}} credit remains."
 other = "Only {{.Count}} credits remain."
 `
+
+	// The same fixtures in German, added when a third language joins the
+	// catalog -- the point of the file-driven mechanism is that joining it
+	// is exactly this: one more file per message-shipping module, nothing
+	// else. German follows the same one/other CLDR plural rules as English,
+	// so its plural messages carry both forms.
+	notesDE = `# Notes module messages, German.
+"notes.text_required" = "Notiztext darf nicht leer sein."
+"notes.greeting" = "Hallo, {{.Name}}!"
+["notes.over_quota"]
+description = "Gesendet, wenn ein Workspace sein Notizkontingent überschreitet."
+one = "{{.Count}} Notiz verbleibt."
+other = "{{.Count}} Notizen verbleiben."
+`
+	billingDE = `# Billing module messages, German.
+"billing.quota_exceeded" = "Ihr {{.Plan}}-Kontingent ist überschritten."
+["billing.credits_low"]
+one = "{{.Count}} Guthaben verbleibt."
+other = "Nur noch {{.Count}} Guthaben verbleiben."
+`
 )
 
 // localeFS builds an embed-style fs.FS from a file-name to body map, like a
-// module's Locales() embed.FS with zh-CN.toml and en-US.toml flat at its root.
+// module's Locales() embed.FS with its locale files flat at the root.
 func localeFS(files map[string]string) fstest.MapFS {
 	fsys := make(fstest.MapFS, len(files))
 	for name, body := range files {
@@ -62,6 +83,19 @@ func addPair(t *testing.T, b *Builder, module, zh, en string) {
 	if err := b.AddModule(module, localeFS(map[string]string{
 		"zh-CN.toml": zh,
 		"en-US.toml": en,
+	})); err != nil {
+		t.Fatalf("AddModule(%q) = %v", module, err)
+	}
+}
+
+// addTrio adds one module with zh-CN.toml, en-US.toml and de-DE.toml bodies
+// to b, the shape a module takes once a third language joined the catalog.
+func addTrio(t *testing.T, b *Builder, module, zh, en, de string) {
+	t.Helper()
+	if err := b.AddModule(module, localeFS(map[string]string{
+		"zh-CN.toml": zh,
+		"en-US.toml": en,
+		"de-DE.toml": de,
 	})); err != nil {
 		t.Fatalf("AddModule(%q) = %v", module, err)
 	}
@@ -303,21 +337,157 @@ func TestAddModuleRejectsASecondEmptyRegistration(t *testing.T) {
 }
 
 func TestAddModuleRejectsMissingLocaleFile(t *testing.T) {
+	// A lone zh-CN.toml is a legal first module -- it fixes the catalog's
+	// language set to what it ships -- so a missing file only means a
+	// module next to a fuller catalog: once the notes module established
+	// the zh-CN/en-US set, a billing module shipping only zh-CN.toml
+	// leaves en-US uncovered.
 	b := NewBuilder()
-	err := b.AddModule("notes", localeFS(map[string]string{
-		"zh-CN.toml": `"notes.x" = "中文。"` + "\n",
+	addPair(t, b, "notes", notesZH, notesEN)
+	err := b.AddModule("billing", localeFS(map[string]string{
+		"zh-CN.toml": billingZH,
 	}))
 	wantError(t, err, ErrMissingLocaleFile, "en-US.toml")
 }
 
-func TestAddModuleRejectsUnsupportedLocaleFile(t *testing.T) {
+func TestAddModuleRejectsNonLocaleFileNames(t *testing.T) {
+	// A file name is a language, so it must be the canonical spelling of a
+	// BCP 47 tag: a README smuggled in as README.toml, an underscore
+	// spelling, a lowercase spelling -- none of these is a language, and a
+	// file that is not one must fail loudly instead of loading as whatever
+	// language the tag parser would guess ("fr.toml", by contrast, is a
+	// legal file name once French is a language the catalog serves).
+	tests := []struct{ name, wantErr string }{
+		{"README.toml", "README.toml"},
+		{"zh_CN.toml", "zh_CN.toml"},
+		{"zh-cn.toml", "zh-cn.toml"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			b := NewBuilder()
+			err := b.AddModule("notes", localeFS(map[string]string{
+				"zh-CN.toml": `"notes.x" = "中文。"` + "\n",
+				"en-US.toml": `"notes.x" = "text"` + "\n",
+				tc.name:      `"notes.x" = "x"` + "\n",
+			}))
+			wantError(t, err, ErrUnsupportedLocale, tc.wantErr)
+		})
+	}
+}
+
+func TestThirdLanguageNeedsOnlyOneFilePerModule(t *testing.T) {
+	// A language joins the catalog as files, never as code: once the notes
+	// module ships a de-DE.toml next to its existing pair, the billing
+	// module needs only its own de-DE.toml to serve German too. Nothing in
+	// the Builder or the Catalog knows about a language list.
+	b := NewBuilder()
+	addTrio(t, b, "notes", notesZH, notesEN, notesDE)
+	addTrio(t, b, "billing", billingZH, billingEN, billingDE)
+	c := b.Build()
+
+	want := []string{"de-DE", "en-US", "zh-CN"}
+	if got := c.Locales(); !slices.Equal(got, want) {
+		t.Fatalf("Locales() = %v, want %v", got, want)
+	}
+	got, err := c.Lookup("de-DE", "notes.text_required", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "Notiztext darf nicht leer sein." {
+		t.Errorf("de-DE text_required = %q", got)
+	}
+	got, err = c.Lookup("de-DE", "billing.quota_exceeded", map[string]any{"Plan": "Pro"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "Ihr Pro-Kontingent ist überschritten." {
+		t.Errorf("de-DE quota_exceeded = %q", got)
+	}
+	// German follows the same one/other CLDR plural rules as English, so a
+	// count of 1 takes the one form and every other count the other form.
+	one, err := c.LookupPlural("de-DE", "notes.over_quota", 1, map[string]any{"Count": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one != "1 Notiz verbleibt." {
+		t.Errorf("de-DE count=1 = %q", one)
+	}
+	many, err := c.LookupPlural("de-DE", "notes.over_quota", 5, map[string]any{"Count": 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if many != "5 Notizen verbleiben." {
+		t.Errorf("de-DE count=5 = %q", many)
+	}
+	// The original pair still renders exactly as before the third language
+	// joined.
+	if got, err := c.Lookup(LocaleZHCN, "notes.text_required", nil); err != nil || got != "备注内容不能为空。" {
+		t.Errorf("zh-CN after de-DE joined = %q, %v", got, err)
+	}
+}
+
+func TestAddModuleRejectsASecondModuleOffTheCatalogLanguageSet(t *testing.T) {
+	// The first module that ships files fixes the catalog's language set; a
+	// later module must match that set exactly. Both directions are
+	// covered: a module shipping fewer files than the catalog has
+	// languages, and one shipping more.
+	t.Run("missing a catalog language", func(t *testing.T) {
+		b := NewBuilder()
+		addTrio(t, b, "notes", notesZH, notesEN, notesDE)
+		err := b.AddModule("billing", localeFS(map[string]string{
+			"zh-CN.toml": billingZH,
+			"en-US.toml": billingEN,
+		}))
+		wantError(t, err, ErrMissingLocaleFile, "de-DE.toml")
+	})
+	t.Run("an extra language", func(t *testing.T) {
+		b := NewBuilder()
+		addPair(t, b, "notes", notesZH, notesEN)
+		err := b.AddModule("billing", localeFS(map[string]string{
+			"zh-CN.toml": billingZH,
+			"en-US.toml": billingEN,
+			"de-DE.toml": billingDE,
+		}))
+		wantError(t, err, ErrUnsupportedLocale, "de-DE.toml")
+	})
+}
+
+func TestCatalogLanguageSetIsFixedByItsFirstFileShippingModule(t *testing.T) {
+	// The catalog has no language list outside the files, so the first
+	// module that ships any declares the whole set: a module shipping only
+	// zh-CN.toml builds a single-language catalog -- a legitimate consumer
+	// serving one market -- and every other locale is unknown to it, as any
+	// unshipped language is.
+	b := NewBuilder()
+	if err := b.AddModule("notes", localeFS(map[string]string{
+		"zh-CN.toml": notesZH,
+	})); err != nil {
+		t.Fatalf("AddModule(notes, zh-CN only) = %v", err)
+	}
+	c := b.Build()
+	if got := c.Locales(); len(got) != 1 || got[0] != LocaleZHCN {
+		t.Fatalf("Locales() = %v, want [%s]", got, LocaleZHCN)
+	}
+	if got, err := c.Lookup(LocaleZHCN, "notes.text_required", nil); err != nil || got == "" {
+		t.Errorf("zh-CN lookup on the single-language catalog = %q, %v", got, err)
+	}
+	if _, err := c.Lookup(LocaleENUS, "notes.text_required", nil); !errors.Is(err, ErrUnknownLocale) {
+		t.Errorf("en-US lookup on the single-language catalog = %v, want ErrUnknownLocale", err)
+	}
+}
+
+func TestAddModuleEnforcesParityAcrossEveryLocale(t *testing.T) {
+	// Parity is N-way, not a zh-CN/en-US property: a third file that drifts
+	// from the pair fails the module just the same, naming the language
+	// whose file lacks the id.
+	deMissingGreeting := strings.Replace(notesDE, `"notes.greeting" = "Hallo, {{.Name}}!"`+"\n", "", 1)
 	b := NewBuilder()
 	err := b.AddModule("notes", localeFS(map[string]string{
-		"zh-CN.toml": `"notes.x" = "中文。"` + "\n",
-		"en-US.toml": `"notes.x" = "text"` + "\n",
-		"fr.toml":    `"notes.x" = "texte"` + "\n",
+		"zh-CN.toml": notesZH,
+		"en-US.toml": notesEN,
+		"de-DE.toml": deMissingGreeting,
 	}))
-	wantError(t, err, ErrUnsupportedLocale, "fr.toml")
+	wantError(t, err, ErrParityMismatch, "de-DE lacks ids that en-US has: notes.greeting")
 }
 
 func TestAddModuleRejectsMalformedLocaleFiles(t *testing.T) {

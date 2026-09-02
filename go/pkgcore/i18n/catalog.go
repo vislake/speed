@@ -12,10 +12,12 @@ import (
 	"golang.org/x/text/language"
 )
 
-// The locales the M0 catalog ships. They are deliberately the only two:
-// docs/internal/11-cross-cutting.md scopes v1.0 to zh-CN and en-US, and
-// both the language-negotiation chain (which stores these exact values) and
-// the locale files themselves are written against them.
+// LocaleZHCN and LocaleENUS name the two languages whose full coverage v1.0
+// guarantees (docs/internal/11-cross-cutting.md). They are naming
+// conveniences for callers that want the M0 pair by hand -- the zh-CN
+// default of the negotiation chain, the lookup tests -- not a closed list:
+// the catalog serves exactly the languages modules ship locale files for,
+// and a language added later is one more file, never a change here.
 const (
 	// LocaleZHCN is Simplified Chinese, the default language of the
 	// negotiation chain in docs/internal/11-cross-cutting.md.
@@ -23,20 +25,6 @@ const (
 	// LocaleENUS is American English.
 	LocaleENUS = "en-US"
 )
-
-// localeFileNames maps every supported locale to the name of its message
-// file inside a module's Locales() embed.FS.
-var localeFileNames = map[string]string{
-	LocaleZHCN: "zh-CN.toml",
-	LocaleENUS: "en-US.toml",
-}
-
-// localeTags maps every supported locale to its parsed language tag, the
-// form go-i18n's Bundle.AddMessages expects.
-var localeTags = map[string]language.Tag{
-	LocaleZHCN: language.MustParse(LocaleZHCN),
-	LocaleENUS: language.MustParse(LocaleENUS),
-}
 
 // Sentinel errors. Every one of them is wrapped with context (module name,
 // locale, code) before it leaves the package, so errors.Is identifies the
@@ -55,19 +43,21 @@ var (
 	ErrDuplicateModule = errors.New("i18n: duplicate module name")
 
 	// ErrMissingLocaleFile is returned by (*Builder).AddModule when a
-	// module ships some locale files but not the full zh-CN.toml +
-	// en-US.toml pair. A module either ships no locale resources at all
-	// (its Locales() embed.FS is empty, which contributes nothing) or it
-	// ships both languages: the two-language guarantee is the point of the
-	// catalog, and a single file is how an id silently stops existing for
-	// half the users.
+	// module ships some locale files but not one for every language of the
+	// catalog. A module either ships no locale resources at all (its
+	// Locales() embed.FS is empty, which contributes nothing) or it ships
+	// one file per catalog language -- in M0, zh-CN.toml and en-US.toml:
+	// full coverage is the point of the catalog, and a missing file is how
+	// an id silently stops existing for the users of that language.
 	ErrMissingLocaleFile = errors.New("i18n: missing locale file")
 
 	// ErrUnsupportedLocale is returned by (*Builder).AddModule when a
-	// module ships a locale file that is neither zh-CN.toml nor
-	// en-US.toml. M0 catalogs support exactly those two locales; a third
-	// file is a mismatch between the module's resources and the catalog
-	// contract, not a third language this package could render.
+	// module ships a locale file that is not a language of the catalog:
+	// a file name that is not the canonical spelling of a BCP 47 language
+	// tag (the file name is the language), or a file for a language the
+	// catalog does not serve -- the set fixed by the first module that
+	// shipped files. The catalog is not closed to zh-CN and en-US; its
+	// languages are the files modules ship.
 	ErrUnsupportedLocale = errors.New("i18n: unsupported locale file")
 
 	// ErrUnsupportedShape is returned by (*Builder).AddModule when a
@@ -79,10 +69,11 @@ var (
 	ErrUnsupportedShape = errors.New("i18n: unsupported locale file shape")
 
 	// ErrParityMismatch is returned by (*Builder).AddModule when a
-	// module's zh-CN.toml and en-US.toml carry different message id sets.
-	// The wrapped text lists the ids each language has that the other
-	// lacks. tools/check_i18n_keys.py enforces the same rule in CI; this
-	// error is the same check enforced in Go, at merge time.
+	// module's locale files carry different message id sets. The wrapped
+	// text lists, per language, the ids one language has that another
+	// lacks. tools/check_i18n_keys.py enforces the same rule for the
+	// zh-CN/en-US pair in CI; this error is the same check enforced in Go
+	// across every language a module ships, at merge time.
 	ErrParityMismatch = errors.New("i18n: locale key parity mismatch")
 
 	// ErrUnknownLocale is returned by Lookup and LookupPlural when locale
@@ -100,17 +91,35 @@ var (
 // Builder aggregates the locale bundles of every module during kernel
 // wiring, one Builder per bootstrap, and freezes them into a Catalog.
 //
+// The catalog's languages are declared by the locale files themselves,
+// never by this package: a file is <language>.toml at the root of a
+// module's Locales() embed.FS, and the catalog serves exactly the
+// languages the modules ship. The first module that ships files fixes the
+// catalog's language set; every later module that ships files must ship
+// exactly that set, so every catalog language is covered by every module
+// that renders content. Adding a language is therefore one new file per
+// message-shipping module and nothing else -- the mechanism
+// docs/internal/11-cross-cutting.md requires, which scopes v1.0's
+// full-coverage guarantee to zh-CN and en-US without freezing the catalog
+// to them.
+//
 // AddModule validates each module's locale files as they arrive: their
-// shape, their id prefixes, the completeness of the zh-CN/en-US file pair
-// and the parity of the two id sets. Everything that can be wrong with a
-// module's message resources therefore fails the bootstrap at the module
-// that owns it, before the catalog exists and while the error can still
-// name the file. A Builder is not safe for concurrent use and does not need
-// to be: Bootstrap drives it sequentially.
+// shape, their id prefixes, the completeness of the file set against the
+// catalog's languages and the parity of the languages' id sets. Everything
+// that can be wrong with a module's message resources therefore fails the
+// bootstrap at the module that owns it, before the catalog exists and
+// while the error can still name the file. A Builder is not safe for
+// concurrent use and does not need to be: Bootstrap drives it
+// sequentially.
 type Builder struct {
-	modules     map[string]struct{}
-	bundle      *goi18n.Bundle
-	localeCodes map[string]map[string]struct{}
+	modules map[string]struct{}
+	bundle  *goi18n.Bundle
+	// catalogLocales is the catalog's language set: the sorted locale
+	// codes (file stems) of the first module that shipped files. It stays
+	// nil until some module ships files, so a bootstrap whose modules all
+	// render nothing builds a language-less catalog.
+	catalogLocales []string
+	localeCodes    map[string]map[string]struct{}
 }
 
 // NewBuilder returns an empty Builder.
@@ -127,17 +136,21 @@ func NewBuilder() *Builder {
 //
 // module must be the module's Name -- the "<module>" prefix every message
 // id it ships must start with. fsys is the module's Locales() embed.FS,
-// which is expected to hold zh-CN.toml and en-US.toml flat at its root,
-// following the file contract in the package documentation.
+// holding one file per catalog language flat at its root, following the
+// file contract in the package documentation: a file is <language>.toml,
+// and the first module that ships files fixes which languages the catalog
+// serves. A later module must ship exactly that same set -- one file for
+// every catalog language, none for any other.
 //
 // An fsys with no .toml files at all contributes nothing and is not an
 // error: modules that render no content ship an empty embed.FS (the
 // embed.FS{} every current test double returns), and treating that as a
 // module with messages would invent ids rather than detect a bug. Any
 // .toml file at the root of a non-empty fsys, however, commits the module
-// to the full contract: both locale files must be present, each must parse
-// into the flat one-entry-per-message shape, every id must start with
-// module+".", and the two files must carry the same id set.
+// to the full contract: one file per language the catalog serves (in M0,
+// zh-CN.toml and en-US.toml) and no file for any other language, each file
+// parsing into the flat one-entry-per-message shape, every id starting
+// with module+".", and every language carrying the same id set.
 //
 // Nothing is merged when AddModule returns an error. A module may be added
 // at most once; adding it again returns ErrDuplicateModule.
@@ -162,58 +175,104 @@ func (b *Builder) AddModule(module string, fsys fs.FS) error {
 		return nil
 	}
 
+	// A file name is a language: <language>.toml, where <language> must be
+	// the canonical spelling of a BCP 47 tag -- the form lookup and
+	// negotiation values use ("zh-CN", never "zh-cn" or "zh_CN"). Parsing
+	// here yields the tag go-i18n's AddMessages expects and rejects a file
+	// that is not a language at all.
+	shipped := make(map[string]language.Tag, len(files))
+	codes := make([]string, 0, len(files))
 	for _, name := range files {
-		if _, supported := localeFileNames[strings.TrimSuffix(name, ".toml")]; !supported {
+		code := strings.TrimSuffix(name, ".toml")
+		tag, err := language.Parse(code)
+		if err != nil || tag.String() != code {
 			return fmt.Errorf(
-				"%w: module %q ships %q, but M0 catalogs support exactly %s and %s",
-				ErrUnsupportedLocale, module, name, localeFileNames[LocaleZHCN], localeFileNames[LocaleENUS])
+				"%w: module %q ships %q, which is not a locale file name: a locale file is <language>.toml, where <language> is the canonical spelling of a BCP 47 language tag, such as %q",
+				ErrUnsupportedLocale, module, name, LocaleZHCN+".toml")
 		}
+		shipped[code] = tag
+		codes = append(codes, code)
 	}
-	for _, fileName := range localeFileNames {
-		if !slices.Contains(files, fileName) {
-			return fmt.Errorf("%w: module %q ships locale files but not %q: every module ships both languages", ErrMissingLocaleFile, module, fileName)
+	slices.Sort(codes)
+
+	if b.catalogLocales == nil {
+		// The first module to ship files fixes the catalog's language set:
+		// no language list exists outside the files, so whatever this
+		// module ships is what the catalog serves.
+		b.catalogLocales = codes
+	} else {
+		// Every later module must ship exactly that set -- one file per
+		// catalog language, and no file for any other. A module missing a
+		// language's file would render that language's ids nowhere; a
+		// module shipping an extra language would render ids the other
+		// modules never provided. Either mismatch is reported at the
+		// module that carries it.
+		for _, code := range b.catalogLocales {
+			if _, ok := shipped[code]; !ok {
+				return fmt.Errorf(
+					"%w: module %q ships locale files but not %q: every module that ships messages ships one file per language the catalog serves (%s)",
+					ErrMissingLocaleFile, module, code+".toml", fileNames(b.catalogLocales))
+			}
+		}
+		for _, code := range codes {
+			if !slices.Contains(b.catalogLocales, code) {
+				return fmt.Errorf(
+					"%w: module %q ships %q, but this catalog serves %s: adding a language means adding its file to every module that ships messages",
+					ErrUnsupportedLocale, module, code+".toml", fileNames(b.catalogLocales))
+			}
 		}
 	}
 
-	parsed := make(map[string][]*goi18n.Message, len(localeFileNames))
-	for locale, fileName := range localeFileNames {
-		data, err := fs.ReadFile(fsys, fileName)
+	parsed := make(map[string][]*goi18n.Message, len(codes))
+	for _, code := range codes {
+		data, err := fs.ReadFile(fsys, code+".toml")
 		if err != nil {
-			return fmt.Errorf("i18n: read %s of module %q: %w", fileName, module, err)
+			return fmt.Errorf("i18n: read %s of module %q: %w", code+".toml", module, err)
 		}
-		messages, err := parseLocaleFile(module, fileName, data)
+		messages, err := parseLocaleFile(module, code+".toml", data)
 		if err != nil {
 			return err
 		}
-		parsed[locale] = messages
+		parsed[code] = messages
 	}
 
-	if mismatch := parityMismatch(parsed[LocaleZHCN], parsed[LocaleENUS]); mismatch != "" {
+	if mismatch := parityMismatch(parsed); mismatch != "" {
 		return fmt.Errorf("%w: module %q: %s", ErrParityMismatch, module, mismatch)
 	}
 
 	// The merge itself: one AddMessages call per language. Every message
-	// was already validated by parseLocaleFile, and the two id spaces are
-	// disjoint per module by construction, so the only failure left is a
-	// missing plural rule -- impossible for the two locales above -- and a
-	// module is added to the bookkeeping below only after its messages are
-	// in the bundle, so an error here leaves nothing half-merged.
-	for locale, messages := range parsed {
-		if err := b.bundle.AddMessages(localeTags[locale], messages...); err != nil {
-			return fmt.Errorf("i18n: merge %s messages of module %q: %w", locale, module, err)
+	// was already validated by parseLocaleFile, and id spaces are disjoint
+	// per module by construction, so the only failure left is a missing
+	// plural rule -- go-i18n ships CLDR plural rules for every language --
+	// and a module is added to the bookkeeping below only after its
+	// messages are in the bundle, so an error here leaves nothing
+	// half-merged.
+	for _, code := range codes {
+		if err := b.bundle.AddMessages(shipped[code], parsed[code]...); err != nil {
+			return fmt.Errorf("i18n: merge %s messages of module %q: %w", code, module, err)
 		}
-		merged := b.localeCodes[locale]
+		merged := b.localeCodes[code]
 		if merged == nil {
 			merged = make(map[string]struct{})
-			b.localeCodes[locale] = merged
+			b.localeCodes[code] = merged
 		}
-		for code := range codeSet(parsed[locale]) {
-			merged[code] = struct{}{}
+		for id := range codeSet(parsed[code]) {
+			merged[id] = struct{}{}
 		}
 	}
 
 	b.modules[module] = struct{}{}
 	return nil
+}
+
+// fileNames renders locale codes as the .toml file names error text lists,
+// "zh-CN.toml, en-US.toml".
+func fileNames(codes []string) string {
+	names := make([]string, len(codes))
+	for i, code := range codes {
+		names[i] = code + ".toml"
+	}
+	return strings.Join(names, ", ")
 }
 
 // Build freezes the accumulated messages into a read-only Catalog. It
@@ -254,7 +313,8 @@ type Catalog struct {
 }
 
 // Locales returns the locales this catalog ships, sorted, so callers can
-// enumerate what a message renderer supports without hardcoding the pair.
+// enumerate what a message renderer supports without hardcoding a language
+// list.
 func (c *Catalog) Locales() []string {
 	out := make([]string, 0, len(c.locals))
 	for locale := range c.locals {
@@ -268,8 +328,9 @@ func (c *Catalog) Locales() []string {
 // params into its template.
 //
 // code must be a message id the locale carries. locale must be one of the
-// locales this catalog ships (LocaleZHCN or LocaleENUS in M0); it is
-// matched exactly, like the values the negotiation chain stores. params
+// locales this catalog ships -- in M0, LocaleZHCN and LocaleENUS, the pair
+// Catalog.Locales() enumerates; it is matched exactly, like the values the
+// negotiation chain stores. params
 // provides the template data: a message referencing {{.Name}} is rendered
 // with params["Name"], and a parameter the message references but params
 // does not provide renders as "<no value>", Go's text/template default.
@@ -526,33 +587,44 @@ func pluralField(message *goi18n.Message, category string) *string {
 	return nil
 }
 
-// parityMismatch compares the ids of the zh-CN and en-US message sets of
-// one module and returns a human-readable description of every id one
-// language has that the other lacks, or "" when the sets are equal.
-func parityMismatch(zhCN, enUS []*goi18n.Message) string {
-	zhCodes, enCodes := codeSet(zhCN), codeSet(enUS)
-	var missingInZH, missingInEN []string
-	for code := range enCodes {
-		if _, ok := zhCodes[code]; !ok {
-			missingInZH = append(missingInZH, code)
-		}
+// parityMismatch compares the id sets of one module's locale files and
+// returns a human-readable description of every id one language has that
+// another lacks, or "" when the sets are all equal. The first language in
+// sorted order is the reference and every other language is reported
+// against it, so a report has at most two lines per additional language.
+func parityMismatch(byLocale map[string][]*goi18n.Message) string {
+	codes := make([]string, 0, len(byLocale))
+	for code := range byLocale {
+		codes = append(codes, code)
 	}
-	for code := range zhCodes {
-		if _, ok := enCodes[code]; !ok {
-			missingInEN = append(missingInEN, code)
-		}
-	}
-	if len(missingInZH) == 0 && len(missingInEN) == 0 {
+	slices.Sort(codes)
+	if len(codes) < 2 {
 		return ""
 	}
-	slices.Sort(missingInZH)
-	slices.Sort(missingInEN)
+	reference := codes[0]
+	refCodes := codeSet(byLocale[reference])
 	var parts []string
-	if len(missingInZH) > 0 {
-		parts = append(parts, fmt.Sprintf("zh-CN lacks ids that en-US has: %s", strings.Join(missingInZH, ", ")))
-	}
-	if len(missingInEN) > 0 {
-		parts = append(parts, fmt.Sprintf("en-US lacks ids that zh-CN has: %s", strings.Join(missingInEN, ", ")))
+	for _, other := range codes[1:] {
+		otherCodes := codeSet(byLocale[other])
+		var missingInOther, missingInReference []string
+		for code := range refCodes {
+			if _, ok := otherCodes[code]; !ok {
+				missingInOther = append(missingInOther, code)
+			}
+		}
+		for code := range otherCodes {
+			if _, ok := refCodes[code]; !ok {
+				missingInReference = append(missingInReference, code)
+			}
+		}
+		slices.Sort(missingInOther)
+		slices.Sort(missingInReference)
+		if len(missingInOther) > 0 {
+			parts = append(parts, fmt.Sprintf("%s lacks ids that %s has: %s", other, reference, strings.Join(missingInOther, ", ")))
+		}
+		if len(missingInReference) > 0 {
+			parts = append(parts, fmt.Sprintf("%s lacks ids that %s has: %s", reference, other, strings.Join(missingInReference, ", ")))
+		}
 	}
 	return strings.Join(parts, "; ")
 }

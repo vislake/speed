@@ -34,11 +34,17 @@
 //
 // # The locale file contract
 //
-// Every module ships exactly two locale files, zh-CN.toml and en-US.toml,
-// embedded flat at the FS root (examples/reference-app/internal/notes/locales
-// and go/pkgcore/locales show the shape). M0 catalogs support exactly these
-// two locales; adding a language later means widening this package, never
-// per-module code. The files themselves follow one rule:
+// A locale file is <language>.toml, embedded flat at the FS root
+// (examples/reference-app/internal/notes/locales and go/pkgcore/locales
+// show the shape), where <language> is the canonical spelling of a BCP 47
+// language tag. The catalog serves exactly the languages modules ship
+// files for: the first module that ships files fixes the catalog's
+// language set, and every later module that ships messages must ship one
+// file per catalog language. Adding a language is therefore one new file
+// per message-shipping module, never a change to this package --
+// docs/internal/11-cross-cutting.md guarantees full zh-CN and en-US
+// coverage for v1.0 but deliberately does not freeze the mechanism to
+// them. The files themselves follow one rule:
 //
 //   - Every top-level key is a message id; the id is the whole key,
 //     written quoted so the dots stay literal, for example
@@ -69,11 +75,11 @@
 //     message id, so "overlap" is a bug reported at AddModule time, never a
 //     silent override.
 //
-//   - zh-CN and en-US must carry the same id set, per module, or
+//   - Every language a module ships must carry the same id set, or
 //     AddModule fails with ErrParityMismatch. Parity is enforced as each
 //     module is added, which makes every catalog that builds well-formed by
 //     construction; tools/check_i18n_keys.py enforces the same rule in CI
-//     over the raw files.
+//     over the raw zh-CN/en-US files.
 //
 // # Plural categories
 //
