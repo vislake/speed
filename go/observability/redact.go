@@ -43,9 +43,11 @@ package observability
 //     attribute "do not redact me": the sanctioned logger API is FromContext,
 //     and everything logged through it is redacted. The only unredacted
 //     output left is a *slog.Logger a host constructs by hand outside this
-//     API, which root CLAUDE.md's logging rule already confines to process
-//     startup -- that construction site is the documented escape, not a
-//     per-call flag.
+//     API; this module's own rules confine that construction site -- the
+//     documented escape, not a per-call flag -- to process startup and the
+//     other genuinely context-less special cases WithLogger's doc comment
+//     names (root CLAUDE.md and backend-coding-standards.md only require
+//     the context logger where a context exists).
 //  2. Value-shaped, as a fallback net for secrets logged under an
 //     unsuspicious key: attribute string values and error texts are scanned
 //     for the canonical shapes secrets take -- "Bearer <token>", JWTs
@@ -59,7 +61,12 @@ package observability
 // field names every module shares -- tenant_id, user_id, job_id (plus this
 // module's trace_id and span_id): they are exempt from value-shape scanning
 // by exact name (neverRedactKeys), so an id value can never be mangled no
-// matter what it looks like.
+// matter what it looks like. The exemption is checked before the key-based
+// rule and therefore also wins over a sensitive key path: an exempt-named
+// attribute whose key path names a secret ("credentials.user_id", or a
+// user_id attribute logged under a WithGroup("credentials") context) passes
+// untouched all the same, because exemption means no key rule applies
+// whatever the surrounding path says.
 //
 // # Deliberate boundaries
 //
@@ -69,7 +76,13 @@ package observability
 //   - Attributes holding arbitrary structs (slog.Any with a non-error
 //     value) are redacted wholesale under a sensitive key but not
 //     introspected under a plain one -- reflection over unknown types is
-//     out of scope; log structs field-wise under descriptive keys.
+//     out of scope; log structs field-wise under descriptive keys. The
+//     same boundary covers fmt.Stringer values (a *url.URL, say): slog
+//     does not unwrap them, so they arrive as KindAny and their rendered
+//     text never passes through the value-shape net -- a documented
+//     limitation, not a live gap, since no call site logs a Stringer
+//     today; log such values as strings (or field-wise) so the shape scan
+//     applies.
 //   - Short values (< 16 bytes) are never value-scanned; anything that
 //     short is below secret strength and key-based rules still apply.
 //   - There is deliberately no generic "long random string" shape: normal
@@ -356,9 +369,13 @@ type secretShapePattern struct {
 	repl string
 }
 
-// secretShapePatterns is scanned in order; masked output is never
-// re-matchable (RedactedValue contains characters none of the shape
-// classes accepts), so the order is immaterial to correctness.
+// secretShapePatterns is scanned in order; the order is immaterial to
+// correctness because masking is a fixed point: re-scanning masked output
+// leaves it unchanged. That fixed point is not because the marker is
+// unmatchable -- the URL query and userinfo value classes admit '[' and
+// ']', so a re-scan can re-match "access_token=[REDACTED]" and rewrite it
+// to itself -- but because every class that can admit the marker
+// reproduces it exactly, never a new region.
 var secretShapePatterns = []secretShapePattern{
 	{
 		// "Bearer <token>" and friends: the Authorization-header idiom, in
@@ -475,7 +492,12 @@ var secretShapePatterns = []secretShapePattern{
 //     attributes (plus the mirrored group context), which keeps the common
 //     path -- a record with nothing sensitive, the overwhelming majority --
 //     at a single streaming scan with zero allocations: the original record
-//     is forwarded untouched when nothing changed.
+//     is forwarded untouched when nothing changed. The zero-allocation
+//     claim is scoped to scalar attribute values: a benign slog.Group is
+//     rebuilt on every visit (redactAttrValue allocates a fresh child-path
+//     slice and a fresh result slice per nesting level, on the order of
+//     three allocations a level) because its children must be checked
+//     before the record can be forwarded untouched.
 //
 // redactHandler is safe for concurrent use: it carries no mutable state
 // (WithAttrs/WithGroup return new handlers), matching the slog.Handler

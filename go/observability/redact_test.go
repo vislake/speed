@@ -369,9 +369,10 @@ func TestRedact_SecretShapesInValues(t *testing.T) {
 
 // TestRedact_MaskedOutputIsStable asserts the redacted form is
 // deterministic and idempotent: text that already carries the marker is
-// not masked again (the marker contains no character any shape accepts,
-// so re-scanning cannot multiply it), and a value that is masked once
-// always renders as the single fixed marker.
+// not masked into anything else (masking is a fixed point -- a re-scan can
+// re-match the marker where a value class admits its brackets, but only to
+// reproduce it exactly -- so re-scanning cannot multiply it), and a value
+// that is masked once always renders as the single fixed marker.
 func TestRedact_MaskedOutputIsStable(t *testing.T) {
 	var buf bytes.Buffer
 	ctx := textLoggerCtx(context.Background(), &buf)
