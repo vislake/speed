@@ -13,11 +13,15 @@ version: '3'
 # The commands planned in docs/internal/19-dev-workflow.md and the root
 # CLAUDE.md are either implemented honestly or present as an explicit
 # "not implemented yet" stub that exits non-zero; nothing here promises
-# behaviour the repository cannot yet deliver. The three discipline checkers in
-# tools/ (scan_cjk.py, check_i18n_keys.py, check_repo_isolation.py) are
-# intentionally wired into no task: docs/internal/18-cicd.md's discipline table
-# assigns them to CI workflows, which land in a later round. Until then they
-# run directly, exactly as tools/README.md documents.
+# behaviour the repository cannot yet deliver. The discipline checkers in
+# tools/ are intentionally wired into no task: docs/internal/18-cicd.md's
+# discipline table assigns them to CI workflows, and they run directly,
+# exactly as tools/README.md documents. Of the three, tools/scan_cjk.py is
+# wired today -- pr-check's repo-checks job runs it
+# (.github/workflows/pr-check.yml); tools/check_i18n_keys.py and
+# tools/check_repo_isolation.py are still wired into no workflow (the
+# docs-check pipeline that will run the former is a gated stub, per
+# docs/internal/18-cicd.md), so those two keep running directly.
 #
 # NOTE ON RUNNING IN ANOTHER DIRECTORY
 # Commands that must run from a module directory rather than the workspace
@@ -39,11 +43,13 @@ vars:
   # Modules with a Docker-backed integration tier under integration_test/
   # (go test -tags=integration ./... from the module directory): PostgreSQL via
   # testcontainers for dbkit and tenancy (including tenancy's tenancytest
-  # subpackage), Redis via testcontainers for pkgcore and jobs. This list is
-  # the enumeration of the modules' integration_test/ directories: one entry
-  # per module that carries one. A module shipping a tier without an entry
-  # here silently drops out of test:full, so keep the two in step -- verify by
-  # listing the integration_test/ directories under go/.
+  # subpackage), Redis via testcontainers for jobs, and Redis plus MinIO/S3
+  # via testcontainers for pkgcore (its integration_test/ carries both
+  # tiers). This list is the enumeration of the modules' integration_test/
+  # directories: one entry per module that carries one. A module shipping a
+  # tier without an entry here silently drops out of test:full, so keep the
+  # two in step -- verify by listing the integration_test/ directories under
+  # go/.
   INTEGRATION_DIRS: go/dbkit go/tenancy go/jobs go/pkgcore
 
 tasks:
@@ -83,7 +89,7 @@ tasks:
       - cd "{{.APP_DIR}}" && go test ./...
 
   test:full:
-    desc: Full matrix -- unit suite under -race with coverage, then the Docker-backed integration tiers (PostgreSQL, Redis). Requires Docker.
+    desc: Full matrix -- unit suite under -race with coverage, then the Docker-backed integration tiers (PostgreSQL, Redis, MinIO/S3). Requires Docker.
     # docs/internal/19-dev-workflow.md's full matrix will eventually mean dual
     # deployment mode x dual dialect across every module. Until the
     # distributed mode and a second dialect's integration tiers exist, the

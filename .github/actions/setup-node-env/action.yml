@@ -1,9 +1,11 @@
 name: setup-node-env
 description: Install the pinned Node.js toolchain for npm-package CI jobs.
 
-# Shared Node.js toolchain setup for CI jobs that run npm/pnpm commands
-# (workflows/reusable/npm-package-ci.yml is the future consumer; nothing
-# calls this action yet because no npm package exists in the repository).
+# Shared Node.js toolchain setup for CI jobs that run npm/pnpm commands.
+# The one consumer is workflows/reusable/npm-package-ci.yml, which calls
+# this action directly; no orchestrator workflow invokes that reusable yet,
+# because no npm package exists in the repository (roadmap M0 web-workspace
+# item).
 #
 # VERSION SOURCE -- PROVISIONAL PIN
 # There is no Node version source to read today: no web/ workspace, no

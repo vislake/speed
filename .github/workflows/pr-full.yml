@@ -24,7 +24,8 @@ name: pr-full
 #     integration_test/ directory, run from inside the module:
 #     go test -race -tags=integration ./...
 #     PostgreSQL via testcontainers: go/dbkit, go/tenancy
-#     Redis via testcontainers: go/pkgcore, go/jobs
+#     Redis via testcontainers: go/jobs; Redis + MinIO/S3 via testcontainers:
+#     go/pkgcore (its integration_test/ runs both tiers)
 #     (exact mirror of Taskfile test:full's INTEGRATION_DIRS loop; Docker is
 #     preinstalled on ubuntu-latest runners);
 #   * the reference-app module unit suite (examples/reference-app: its own

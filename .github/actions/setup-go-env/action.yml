@@ -7,10 +7,15 @@ description: Install the pinned Go toolchain and prime the Go module cache for C
 # This action reads go.work's `go` directive (currently `go 1.25.0`) via
 # actions/setup-go's go-version-file input. go.work is the repository's
 # single Go toolchain version source for CI -- the one file the action
-# resolves. Each module's go.mod also declares the same `go` version (all
-# go 1.25.0 today), but that is per-module metadata, not a second source CI
-# reads, and it cannot drift from go.work: the toolchain refuses to build a
-# module whose go.mod demands a newer go than go.work declares. There is no
+# resolves. Each module's go.mod also declares a `go` version, but that is
+# per-module metadata, not a second source CI reads, and it cannot drift
+# from go.work: the toolchain refuses to build a module whose go.mod
+# demands a newer go than go.work declares. (Today only the modules CI
+# actually builds -- the six real modules go/dbkit, go/jobs,
+# go/observability, go/pkgcore, go/ratelimit, go/tenancy, plus
+# examples/reference-app -- declare `go 1.25.0`; the fifteen stub modules
+# still say `go 1.23`, and tools/new_module.py keeps writing 1.23 for new
+# stubs, which is fine because nothing in CI builds them.) There is no
 # .tool-versions or mise.toml yet (toolchain pinning is a later round, per
 # docs/internal/19-dev-workflow.md and the roadmap M0 "mise toolchain"
 # engineering item). CI and the local workspace therefore resolve the same
