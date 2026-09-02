@@ -1,0 +1,104 @@
+name: pr-check
+
+# Fast per-PR check pipeline -- docs/internal/18-cicd.md's pipeline table,
+# pr-check row: lint + unit tests + build of the modules a PR can affect,
+# plus the repository-level discipline checks that exist today. Target
+# duration under 8 minutes; every job carries a timeout and stale runs are
+# cancelled via concurrency (18-cicd cost-control rules 4 and 5).
+#
+# COVERAGE -- what genuinely runs today
+#   * go-modules job: the six modules with real, tested implementation
+#     (root CLAUDE.md, Repository Status) each run through the reusable
+#     go-module-ci workflow: go vet, unit tests under -race, a workspace-
+#     context build and a GOWORK=off standalone build. Stub modules (a
+#     go.mod + doc.go only) are deliberately absent: they have no code to
+#     check, and listing them would imply coverage that does not exist.
+#     Adding a module to this matrix is the whole cost of adding it to CI.
+#     npm-package-ci is not called: no npm package exists yet (roadmap M0
+#     web-workspace item).
+#   * repo-checks job, repository-level, all existing today:
+#       - tools/scan_cjk.py -- the CJK discipline scanner enforcing the root
+#         CLAUDE.md Language Rule (18-cicd discipline table row). Scans the
+#         whole tree including this .github directory: comments in these
+#         files must stay English.
+#       - go build github.com/vislake/speed/go/... -- every module compiles
+#         in workspace context from the go.work root.
+#       - go work sync + git diff --exit-code -- the checked-in workspace
+#         sum files must be canonical. This repo has been bitten by a stale
+#         go.work.sum before; the fix discipline (Taskfile setup) is to
+#         commit the sync result together with dependency changes.
+#
+# DELIBERATELY NOT WIRED HERE (18-cicd discipline table rows whose tooling
+# does not exist in the repository yet; each lands with its tooling round --
+# wiring them now would be fake checks):
+#   * golangci-lint per module: the root .golangci.yml (v2 schema) is the
+#     project standard but its CI legs land with the lint-tooling round
+#     (depguard rules etc.), so go vet is the lint leg today -- mirror of
+#     the Taskfile lint task, whose golangci-lint leg runs only when the
+#     binary is installed.
+#   * semgrep rules, ESLint rules, i18n-key parity wiring, spec/API
+#     toolchain, oasdiff, redocly, Playwright e2e -- none of that tooling
+#     exists yet (see the gated pipeline stubs pr-full/e2e/security/
+#     docs-check/api-contract/scaffold-verify/release/nightly in this
+#     directory for where each wires in).
+#   * Docker-backed integration tiers (-tags=integration): 18-cicd's
+#     layered-triggering rule assigns them to pr-full, the pre-merge full
+#     matrix, not to the fast per-PR check.
+#   * dorny/paths-filter path filtering: the module set is small enough that
+#     every PR runs every real module; when the set grows, adopt paths-
+#     filter with the downstream-dependency derivation of 18-cicd's cost-
+#     control section -- a caller-side change only, thanks to the reusable
+#     go-module-ci workflow.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: pr-check-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go-modules:
+    name: go-module-ci (${{ matrix.module }})
+    # Timeout and runner live in the reusable workflow; the callee's
+    # timeout-minutes bounds each call (caller jobs may not set their own).
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - go/pkgcore
+          - go/dbkit
+          - go/tenancy
+          - go/observability
+          - go/jobs
+          - go/ratelimit
+    uses: ./.github/workflows/reusable/go-module-ci.yml
+    with:
+      module: ${{ matrix.module }}
+
+  repo-checks:
+    name: repository-level checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Set up pinned Go toolchain and module cache
+        uses: ./.github/actions/setup-go-env
+      - name: CJK discipline scan (Language Rule)
+        run: python3 tools/scan_cjk.py
+      - name: Build every module in workspace context
+        run: go build github.com/vislake/speed/go/...
+      - name: Workspace integrity (go.work.sum must be canonical)
+        run: |
+          go work sync
+          git diff --exit-code || {
+            echo "error: 'go work sync' left the tree dirty -- commit the"
+            echo "workspace sync together with your dependency changes"
+            echo "(go.work.sum / go.mod / go.sum), see Taskfile setup."
+            exit 1
+          }
