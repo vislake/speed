@@ -99,6 +99,8 @@ PR 模板包含一份 checklist，对应仓库根 [CLAUDE.md](../../CLAUDE.md) �
 
 `task api:gen` 一键完成"合并 spec + 生成后端 interface + 生成前端 sdk"。PR 中 spec 与生成物必须同时存在，CI 会重新生成并比对。
 
+**当前状态：尚未实现。** 仓库里还没有这套自动生成工具链——没有 `api/` 目录与合并后的 spec，没有 oapi-codegen / orval 生成器，也没有 `@speed/api-sdk` 与 web/ 前端工作区（见 [21 API 契约](21-api-contract.md)）。因此 Taskfile 里的 `task api:gen` 是 not-implemented stub：打印上述计划与缺失项、指向本文与 roadmap 后退出非零。上面"先改 spec → 重新生成"的顺序约束不随工具链落地而改变，但"重新生成、编译失败暴露待改点、CI 比对生成物"目前还无法真正执行，要等 API 契约工具链轮次（[15 roadmap](15-roadmap.md)）交付。
+
 **先写实现再补 spec 是被禁止的**——那等于回到 code-first，失去编译期约束的全部意义。
 
 ## CODEOWNERS
