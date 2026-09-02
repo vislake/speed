@@ -104,15 +104,33 @@ pair members must exist in every locale directory.
 
 ### Message-id semantics
 
-A message id is the leaf key of each key/value pair whose value is not a
-table. This matches how the repository itself names keys: a quoted dotted
-key such as `"notes.text_required"` is a single TOML key and is the message
-id, exactly as handler code references it. Section headers such as `[errors]`
-are organizational grouping and do not prefix the id — a flat file and a
-section-grouped file with the same leaf keys match. If one file defines the
-same leaf id under two different paths (two sections carrying a key of the
-same name), the pairing across languages would be ambiguous, and the script
-reports that file as an error rather than comparing it.
+A message id is a key whose value is not a grouping table. Two kinds of
+values make a message id: any non-table value (the plain single-form
+message), and a table whose keys are all message keys — the CLDR plural
+categories `zero`, `one`, `two`, `few`, `many`, `other`, the v1
+`translation` synonym for `other`, and the metadata keys `description`,
+`id`, `hash`, `leftdelim` and `rightdelim`, matched case-insensitively
+(the set go-i18n reserves on a plural message). Such a table is ONE plural
+message: its categories and metadata are forms of that message, not
+separate ids, and the table's own key is the message id. A quoted header
+such as `["notes.over_quota"]` with `one`/`other` entries and an inline
+`"notes.over_quota" = { one = "...", other = "..." }` both declare the
+single id `notes.over_quota`.
+
+Quoted keys are TOML-native single keys, so a quoted dotted key such as
+`"notes.text_required"` stays whole and is the message id, exactly as
+handler code references it. A table with any key outside the message-key
+set is a grouping table (`[errors]`, or an unquoted `[notes.over_quota]`
+section carrying other tables); its message ids are its leaf keys,
+compared leaf-wise, so a flat file and a section-grouped file declaring
+the same messages match. go/pkgcore/i18n's AddModule is deliberately
+stricter — it rejects grouping sections outright (ErrUnsupportedShape)
+and requires the `<module>.` id prefix — so repository files follow the
+flat contract; the script keeps the leaf-level grouping tolerance only so
+its id semantics stay stable across both shapes. If one file defines the
+same leaf id under two different paths (two sections carrying a key of
+the same name), the pairing across languages would be ambiguous, and the
+script reports that file as an error rather than comparing it.
 
 Reported mismatches list the ids and the direction:
 
