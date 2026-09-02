@@ -69,7 +69,7 @@ const (
 // 256 is comfortably above the number of distinct literal routes any real
 // module in this repository registers today (a handful per module; see
 // mountModuleRoutes in examples/reference-app/cmd/server/server.go), even
-// summed across all 20 planned modules, while still bounding worst-case
+// summed across all planned modules, while still bounding worst-case
 // series growth to a small, fixed number instead of the unbounded growth
 // an attacker-supplied path previously produced. If a legitimate route
 // count ever approaches this, that is a signal to build the route-capture

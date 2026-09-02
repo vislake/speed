@@ -165,7 +165,7 @@ Full runnable versions of all of the above live in `example_test.go`, `apperr/ex
 
 **Module contract**
 
-- Do not add a method to `Module`. Under lockstep versioning that breaks all 20 modules at once — add a field to `Registry` instead.
+- Do not add a method to `Module`. Under lockstep versioning that breaks all modules at once — add a field to `Registry` instead.
 - Do not perform I/O in `Register`. It declares; the kernel decides when anything runs.
 - Do not depend on module registration order. Declare the dependency in `DependsOn`; `Bootstrap` sorts, and reports a cycle or a missing dependency rather than guessing.
 - Do not swallow a registrar error. A duplicate key is a bug across modules, not a merge, and nothing is registered when the call returns an error.

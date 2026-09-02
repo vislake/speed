@@ -30,7 +30,7 @@ This is the single authoritative standard for the frontend. Design rationale liv
 
 ## 1. Package Boundaries and Layering
 
-16 independent npm packages. The dependency graph lives in `docs/internal/12-frontend.md` and **only flows bottom-up**:
+Independent npm packages, each with its own `package.json`, developed together through the `web/` workspace. The dependency graph lives in `docs/internal/12-frontend.md` and **only flows bottom-up**:
 
 ```
 tokens / i18n -> ui-kit -> (auth|billing|notification)-core -> *-ui -> layout-kit -> shells

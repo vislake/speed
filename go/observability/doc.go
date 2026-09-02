@@ -36,7 +36,7 @@
 //   - Init(ctx, mode, opts...) wires the TracerProvider and MeterProvider
 //     for the given deployment mode and installs them as OpenTelemetry's
 //     global providers, so that everything below can reach them without a
-//     provider threaded through 20 modules' worth of call sites. It returns
+//     provider threaded through every module's call sites. It returns
 //     a shutdown function for graceful process shutdown.
 //   - FromContext(ctx) returns the *slog.Logger every module must log
 //     through (root CLAUDE.md's "logger from context, not a fresh one"

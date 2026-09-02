@@ -30,7 +30,7 @@ This is the single authoritative standard for the Go side. Design rationale live
 
 ## 1. Module Boundaries
 
-20 independent Go modules, each with its own `go.mod`, developed together through `go.work`. The dependency graph lives in `docs/internal/01-architecture.md` and **only flows bottom-up**.
+Independent Go modules, each with its own `go.mod`, developed together through `go.work`. The dependency graph lives in `docs/internal/01-architecture.md` and **only flows bottom-up**.
 
 **Required:**
 - Module path is `github.com/<org>/speed/go/<module>`.
