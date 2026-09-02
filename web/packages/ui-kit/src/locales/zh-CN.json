@@ -1,0 +1,35 @@
+{
+  "emptyState": {
+    "empty": {
+      "title": "暂无数据",
+      "description": "这里还没有任何内容，数据出现后会显示在这里。"
+    },
+    "noPermission": {
+      "title": "无查看权限",
+      "description": "你没有查看此内容的权限。如果认为这是误判，请联系管理员。"
+    },
+    "error": {
+      "title": "出错了",
+      "description": "内容加载失败，请稍后再试。"
+    }
+  },
+  "confirmDialog": {
+    "title": "请确认此操作",
+    "message": "此操作会立即生效，且无法在界面上撤销。请确认后继续。",
+    "confirmLabel": "确认",
+    "cancelLabel": "取消"
+  },
+  "form": {
+    "required": "此字段为必填项。",
+    "invalid": "请输入有效值。"
+  },
+  "dataTable": {
+    "loading": "加载中",
+    "ariaLabel": "数据表",
+    "rowsPerPage": "每页行数",
+    "displayedRows": "第 {{from}}–{{to}} 条，共 {{count}} 条",
+    "displayedRowsUnknown": "第 {{from}}–{{to}} 条",
+    "selectAllRows": "全选",
+    "selectRow": "选择此行"
+  }
+}

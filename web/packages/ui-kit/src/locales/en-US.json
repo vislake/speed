@@ -1,0 +1,35 @@
+{
+  "emptyState": {
+    "empty": {
+      "title": "No data yet",
+      "description": "There is nothing to show here yet. Data will appear in this space once it exists."
+    },
+    "noPermission": {
+      "title": "No access",
+      "description": "You do not have permission to view this content. Contact the administrator if you believe this is a mistake."
+    },
+    "error": {
+      "title": "Something went wrong",
+      "description": "The content failed to load. Please try again in a moment."
+    }
+  },
+  "confirmDialog": {
+    "title": "Confirm this action",
+    "message": "This action takes effect immediately and cannot be undone from the interface. Continue only if you are sure.",
+    "confirmLabel": "Confirm",
+    "cancelLabel": "Cancel"
+  },
+  "form": {
+    "required": "This field is required.",
+    "invalid": "Enter a valid value."
+  },
+  "dataTable": {
+    "loading": "Loading",
+    "ariaLabel": "Data table",
+    "rowsPerPage": "Rows per page",
+    "displayedRows": "{{from}}–{{to}} of {{count}}",
+    "displayedRowsUnknown": "{{from}}–{{to}}",
+    "selectAllRows": "Select all rows",
+    "selectRow": "Select row"
+  }
+}

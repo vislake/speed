@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": ["src", "test-utils"],
+  "compilerOptions": {
+    // ui-kit is the first package that imports workspace siblings
+    // (@speed/tokens, @speed/i18n) at runtime. The siblings' published
+    // "types" point into their dist/, which is never committed and not yet
+    // built in a fresh checkout (and building upstream to typecheck is a
+    // footgun), so type resolution maps the workspace specifiers straight
+    // onto the siblings' sources. Emitted dist/ keeps the bare specifier,
+    // which consumers resolve against the real published packages. Keep the
+    // two patterns in lockstep with what src/ imports.
+    "paths": {
+      "@speed/i18n": ["../i18n/src/index.ts"],
+      "@speed/i18n/mui-locale": ["../i18n/src/mui-locale.ts"],
+      "@speed/tokens": ["../tokens/src/index.ts"]
+    }
+  }
+}
