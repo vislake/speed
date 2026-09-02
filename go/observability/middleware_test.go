@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	dto "github.com/prometheus/client_model/go"
 
@@ -426,6 +427,111 @@ func TestMiddleware_LongRoutePaths_LabelLengthIsBounded(t *testing.T) {
 	}
 	if got := m.GetCounter().GetValue(); got != 2 {
 		t.Errorf("the single collapsed series recorded %v requests, want 2 (both attacker paths counted under the same truncated label)", got)
+	}
+}
+
+// multiByteRoutePathPrefixLen sizes the ASCII prefix
+// TestMiddleware_MultiByteRoutePath_TruncatesOnRuneBoundary places before
+// multiByteRune, chosen so the rune's bytes straddle byte index
+// obs.MaxRouteLabelLength: the prefix ends 2 bytes before the cut point,
+// so the 4-byte rune placed right after it occupies the cut byte itself
+// plus one byte on each side, putting a continuation byte -- never a
+// rune-start byte -- exactly at index obs.MaxRouteLabelLength. Derived
+// from obs.MaxRouteLabelLength, rather than hardcoded, so this test keeps
+// exercising the same straddle if that constant is ever revisited.
+const multiByteRoutePathPrefixLen = obs.MaxRouteLabelLength - 2
+
+// multiByteRune is a single UTF-8 rune (U+1F600, an emoji) encoded as 4
+// bytes -- the shape truncateRouteLabel's backward scan exists to protect,
+// per its own doc comment in middleware.go: net/http percent-decodes
+// (*http.Request).URL.Path before this package ever sees it, so a path
+// segment can legally contain multi-byte UTF-8 like this one.
+const multiByteRune = "😀"
+
+// TestMiddleware_MultiByteRoutePath_TruncatesOnRuneBoundary is the
+// regression test for the one reason truncateRouteLabel (middleware.go) is
+// not a plain path[:obs.MaxRouteLabelLength] slice. Every attacker path
+// TestMiddleware_LongRoutePaths_LabelLengthIsBounded above sends is built
+// entirely from single-byte ASCII, so its byte-obs.MaxRouteLabelLength cut
+// point always lands on a rune-start byte and never exercises
+// truncateRouteLabel's backward "scan to a rune boundary" loop -- a
+// regression there (off-by-one, wrong comparison, wrong scan direction)
+// would silently slice a multi-byte rune in half, and no test in this file
+// would notice.
+//
+// This test places multiByteRune so its 4 bytes straddle byte index
+// obs.MaxRouteLabelLength: multiByteRoutePathPrefixLen bytes of ASCII,
+// then the rune. A naive path[:obs.MaxRouteLabelLength] slice would keep
+// only the rune's first two bytes -- invalid, truncated UTF-8.
+// truncateRouteLabel must instead back up to the rune's start and return
+// exactly the ASCII prefix: valid UTF-8, one rune short of the cut point.
+//
+// The request target below percent-encodes the rune's bytes
+// (%F0%9F%98%80) rather than embedding them raw, matching how an actual
+// multi-byte path segment reaches this package: net/http percent-decodes
+// (*http.Request).URL.Path before Middleware ever sees it. Verified by
+// hand while writing this test: req.URL.Path below decodes back to
+// exactly prefix+multiByteRune, byte obs.MaxRouteLabelLength of that path
+// is confirmed NOT a rune-start byte, and a naive path[:obs.MaxRouteLabelLength]
+// slice of it is confirmed invalid UTF-8 -- so this test genuinely
+// exercises the backward scan rather than landing on a boundary by luck.
+func TestMiddleware_MultiByteRoutePath_TruncatesOnRuneBoundary(t *testing.T) {
+	reg := setupMeterProvider(t)
+	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// A real mux would 404 an unregistered path, exactly like
+		// TestMiddleware_LongRoutePaths_LabelLengthIsBounded's handler --
+		// the exact status is irrelevant to what this test checks.
+		w.WriteHeader(http.StatusNotFound)
+	}))
+
+	prefix := "/" + strings.Repeat("p", multiByteRoutePathPrefixLen-1)
+	var percentEncodedRune strings.Builder
+	for i := 0; i < len(multiByteRune); i++ {
+		fmt.Fprintf(&percentEncodedRune, "%%%02X", multiByteRune[i])
+	}
+	path := prefix + multiByteRune                 // what (*http.Request).URL.Path must decode to
+	target := prefix + percentEncodedRune.String() // what actually goes on the request line
+
+	if len(multiByteRune) != 4 {
+		t.Fatalf("test setup: multiByteRune must be a 4-byte UTF-8 rune, got %d bytes", len(multiByteRune))
+	}
+	if len(path) <= obs.MaxRouteLabelLength {
+		t.Fatalf("test setup: path must exceed obs.MaxRouteLabelLength (%d) to trigger truncation, got %d bytes", obs.MaxRouteLabelLength, len(path))
+	}
+	if utf8.RuneStart(path[obs.MaxRouteLabelLength]) {
+		t.Fatalf("test setup: byte at index obs.MaxRouteLabelLength (%d) must NOT be a UTF-8 rune-start byte, or this test never actually reaches truncateRouteLabel's backward scan", obs.MaxRouteLabelLength)
+	}
+	if utf8.ValidString(path[:obs.MaxRouteLabelLength]) {
+		t.Fatalf("test setup: a naive path[:obs.MaxRouteLabelLength] slice must be invalid UTF-8, or this test does not prove truncateRouteLabel's backward scan does anything")
+	}
+
+	req := newTestRequest(http.MethodGet, target, "")
+	if req.URL.Path != path {
+		t.Fatalf("test setup: request URL.Path = %q after percent-decoding, want %q: the request target was not built the way this test assumes", req.URL.Path, path)
+	}
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	assertNoTenantLabelAnywhere(t, families)
+
+	counter := findFamily(t, families, promRequestCountFamily)
+	metrics := counter.GetMetric()
+	if got := len(metrics); got != 1 {
+		t.Fatalf("got %d distinct http_route series for a single request, want exactly 1", got)
+	}
+
+	gotLabel := labelMap(metrics[0])["http_route"]
+	if !utf8.ValidString(gotLabel) {
+		t.Fatalf("recorded http_route label %q is not valid UTF-8: truncateRouteLabel cut the straddling multi-byte rune in half", gotLabel)
+	}
+	if got := len(gotLabel); got != multiByteRoutePathPrefixLen {
+		t.Fatalf("recorded http_route label is %d bytes, want exactly %d: truncateRouteLabel should back up to the byte immediately before the straddling rune, no further and no less", got, multiByteRoutePathPrefixLen)
+	}
+	if want := path[:multiByteRoutePathPrefixLen]; gotLabel != want {
+		t.Errorf("recorded http_route label = %q, want the ASCII prefix before the straddling rune (%q)", gotLabel, want)
 	}
 }
 
