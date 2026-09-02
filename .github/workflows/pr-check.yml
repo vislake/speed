@@ -33,10 +33,17 @@ name: pr-check
 # DELIBERATELY NOT WIRED HERE (18-cicd discipline table rows whose tooling
 # does not exist in the repository yet; each lands with its tooling round --
 # wiring them now would be fake checks):
-#   * semgrep rules, ESLint rules, spec/API toolchain, oasdiff, redocly,
+#   * semgrep rules, ESLint rules, spec merging, redocly rules, oasdiff,
 #     Playwright e2e -- none of that tooling exists yet (see the gated
-#     pipeline stubs e2e/security/api-contract/scaffold-verify/release/
-#     nightly in this directory for where each wires in). i18n
+#     pipeline stubs e2e/security/scaffold-verify/release/nightly in this
+#     directory for where each wires in). The API-contract toolchain's
+#     backend half is real but lives in its own path-filtered pipeline,
+#     api-contract.yml, so it is not wired into this check: on PRs
+#     touching the notes module's spec fragment or the generator side it
+#     regenerates the fragment's API surface, diffs the committed
+#     artifact, and builds the reference app so a spec that outgrew its
+#     handler fails compilation without needing a full-ci label. The
+#     frontend sdk (orval) awaits the web/ workspace. i18n
 #     key-parity wiring exists and runs in docs-check on doc/i18n-touching
 #     PRs -- deliberately not here, so this fast per-PR check stays under
 #     its 8-minute budget.

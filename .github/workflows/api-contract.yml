@@ -1,47 +1,119 @@
 name: api-contract
 
-# STUB -- not implemented. Triggered runs fail loudly at the guard step
-# below; nothing in this pipeline can pass silently.
+# API-contract discipline pipeline -- docs/internal/18-cicd.md's pipeline
+# table, api-contract row, backend half now implemented. Backs the root
+# CLAUDE.md API-contract discipline and docs/internal/21-api-contract.md's
+# spec-first order: edit api/openapi.yaml -> task api:gen -> compilation
+# failures reveal every handler to fix -> commit spec, generated artifact
+# and implementation in the same PR. Target under 5 minutes; this job
+# carries a timeout and stale runs are cancelled via concurrency.
 #
-# PIPELINE (docs/internal/18-cicd.md pipeline table, api-contract row):
-# spec linting, merge-conflict checks on spec fragments, generated-artifact
-# consistency diffs, and oasdiff breaking-change detection. Target under 5
-# minutes. Backs the root CLAUDE.md API-contract discipline: spec-first
-# ordering, no hand-written backend calls, no hand-edits of @speed/api-sdk
-# (generated artifacts are overwritten wholesale on release; CI regenerates
-# and diffs so drift fails).
+# DESIGN-TABLE TRIGGER: PRs touching api/openapi.yaml or the generation
+# side of the toolchain, via GitHub-native path filtering on the
+# pull_request event -- zero third-party actions (dorny/paths-filter stays
+# future work, per 18-cicd's cost-control section). The path set below
+# deliberately matches what regeneration can be affected by: the spec
+# fragment(s), the generator config, the api:gen task definition, and this
+# workflow itself. A PR touching only handler code has nothing to
+# regenerate; whether it still implements the interface is a compile
+# question, answered by pr-full's reference-app job on full-ci-labeled PRs
+# (the reference-app unit suite is not part of pr-check -- see pr-check's
+# DELIBERATELY NOT WIRED list).
 #
-# DESIGN-TABLE TRIGGER: PRs touching api/openapi.yaml or handlers, via path
-# filtering; enabled by the implementing round (no api/ tree exists yet to
-# filter on).
+# COVERAGE -- what genuinely runs today
+#   * Regeneration consistency: the pinned oapi-codegen (v2.8.0, the exact
+#     same go run as Taskfile's api:gen task, run from the same directory)
+#     regenerates the notes module's api/notes-server.gen.go from its
+#     api/openapi.yaml fragment, then `git diff --exit-code` fails the job
+#     if the committed artifact is not what the spec generates -- the
+#     21-api-contract.md generated-artifact consistency check for the
+#     backend half, catching a spec edit committed without its regenerated
+#     artifact.
+#   * Compile enforcement: `go build ./...` of examples/reference-app.
+#     This is what makes "spec changed, handler not updated" fail here:
+#     the regenerated api.ServerInterface grows and Handler's compile-time
+#     assertion (internal/notes/handler.go) stops compiling. Without this
+#     leg a spec+artifact PR whose handler lagged would pass both this
+#     pipeline and pr-check (which does not build the reference app).
 #
-# WHAT EXISTS TODAY: none of the contract toolchain -- no api/ tree, no
-# spec fragments, no spec-merge step, no oapi-codegen/orval generation, no
-# merged speed.yaml, no @speed/api-sdk, no redocly rules, no oasdiff gate
-# (docs/internal/21-api-contract.md defines the planned flow). The generated
-# server interface's compile-time enforcement (CLAUDE.md API contract rule)
-# cannot engage until generation exists.
+# DELIBERATELY NOT WIRED HERE -- roadmap M0 API-contract items whose
+# tooling does not exist yet (wiring them now would be fake checks):
+#   * spec merging into build/openapi/speed.yaml (no other module ships a
+#     fragment; the notes fragment is generated from in place).
+#   * frontend sdk generation (orval) -- no web/ workspace or
+#     @speed/api-sdk exists yet.
+#   * spec linting (redocly rules) and breaking-change detection (oasdiff,
+#     the release-gate diff against the last release).
+#   * merge-conflict checks across fragments -- a single-fragment world has
+#     nothing to conflict.
+# Each lands with its tooling round; the stub headers of the other gated
+# pipelines stay until then.
 #
-# GATE: the roadmap M0 "API contract toolchain" engineering item (spec
-# merge, oapi-codegen/orval generation, oasdiff gate, @speed/api-sdk
-# skeleton).
+# PATH SET -- spec/generator-toolchain changes only:
+#   examples/reference-app/internal/notes/api/**   the notes fragment, its
+#                                                  generator config and the
+#                                                  generated artifact (a
+#                                                  hand-edit of the
+#                                                  generated file triggers
+#                                                  the consistency diff)
+#   Taskfile.yml                                   api:gen task (the
+#                                                  regeneration command)
+#   .github/workflows/api-contract.yml             this workflow itself
 
 on:
+  pull_request:
+    paths:
+      - examples/reference-app/internal/notes/api/**
+      - Taskfile.yml
+      - .github/workflows/api-contract.yml
   workflow_dispatch:
+
+concurrency:
+  group: api-contract-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   api-contract:
-    name: api contract checks (stub guard -- not implemented yet)
+    name: api contract consistency and compile enforcement
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
-      - name: Stub guard
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      # golangci-lint is deliberately not installed here (setup-go-env's
+      # install-golangci input, default false): this job never lints, and an
+      # unconditional install would mean a ~20 MB download on every run for
+      # nothing. The Go toolchain is what oapi-codegen (go run) and the
+      # build leg need; the Go build cache makes repeated runs fast.
+      - name: Set up pinned Go toolchain and caches
+        uses: ./.github/actions/setup-go-env
+      - name: Regenerate the notes module's API surface (pinned oapi-codegen v2.8.0)
+        # The same command as Taskfile.yml's api:gen task -- keep the two in
+        # lockstep (both pin the generator at v2.8.0). Run from the fragment's
+        # own directory, where oapi-codegen.yaml's paths are relative.
         run: |
-          echo "error: the api-contract pipeline is not implemented. This"
-          echo "failing run is its stub guard, so the pipeline can never pass"
-          echo "silently. Wire the spec-lint/merge/diff/oasdiff legs when the"
-          echo "roadmap M0 API-contract-toolchain item lands."
-          exit 1
+          cd examples/reference-app/internal/notes/api
+          go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
+            -config oapi-codegen.yaml openapi.yaml
+      - name: Generated artifact must match the committed spec
+        run: |
+          git diff --exit-code || {
+            echo "error: regenerating from the committed spec left the tree"
+            echo "dirty. The checked-in api/notes-server.gen.go is not what"
+            echo "api/openapi.yaml generates -- did you change the spec"
+            echo "without running 'task api:gen' and committing the result?"
+            echo "Per docs/internal/21-api-contract.md, spec + generated"
+            echo "artifact + implementation ship in the same PR."
+            exit 1
+          }
+      - name: Handler must still implement the generated ServerInterface
+        # The compile-enforcement half: if the spec (and with it the
+        # generated interface) outgrew Handler, this build fails on
+        # handler.go's compile-time assertion and shows exactly which
+        # method is missing.
+        run: |
+          cd examples/reference-app
+          go build ./...
