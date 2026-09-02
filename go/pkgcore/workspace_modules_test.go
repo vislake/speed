@@ -55,11 +55,11 @@ func TestGoWorkUseBlock_ListsEveryModuleDirectory(t *testing.T) {
 	}
 
 	goWorkPath := filepath.Join(repoRoot, "go.work")
-	if _, err := os.Stat(goWorkPath); err != nil {
-		if os.IsNotExist(err) {
+	if _, statErr := os.Stat(goWorkPath); statErr != nil {
+		if os.IsNotExist(statErr) {
 			t.Skipf("no go.work at %s -- not running inside the speed monorepo checkout", goWorkPath)
 		}
-		t.Fatalf("stat %s: %v", goWorkPath, err)
+		t.Fatalf("stat %s: %v", goWorkPath, statErr)
 	}
 
 	// Shelling out to `go work edit -json` (mirroring standalone_build_test.go's
