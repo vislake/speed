@@ -44,6 +44,15 @@ import (
 // against the (typically low-entropy) plaintext space of things like phone
 // numbers; a bare SHA-256 of the normalized value would not.
 //
+// BlindIndex itself performs no key validation: it returns a string, never
+// an error, so an empty or short key is silently accepted and produces a
+// well-formed-looking index whose key material offers none of the
+// dictionary-attack resistance above. Fail-closed key validation lives in
+// NewBlindIndexer, which rejects any key other than 32 bytes at
+// construction; construct one (and use Index and Equal) rather than calling
+// this raw function directly, unless the key has already been validated
+// under that same policy.
+//
 // Rotating key requires recomputing the index for every existing row, run as
 // a jobs batch task: unlike Cipher.Decrypt, there is no "retired key"
 // fallback here, because a single equality comparison can only ever match
