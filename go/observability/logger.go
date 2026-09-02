@@ -68,8 +68,9 @@ func baseLogger(ctx context.Context) *slog.Logger {
 //
 //   - trace_id and span_id, when ctx holds an active OTel span (checked via
 //     the span's own SpanContext, so this works for a span from ANY
-//     TracerProvider -- the demo stdout one, a production OTLP one, or a
-//     test's in-memory one -- FromContext itself never touches a provider);
+//     TracerProvider -- the standalone deployment mode's stdout one, the
+//     distributed deployment mode's OTLP one, or a test's in-memory one --
+//     FromContext itself never touches a provider);
 //   - tenant_id, when ctx holds one, via pkgcore.TenantFromContext. Its
 //     second, ok result is handled exactly like TenantFromContext's own
 //     contract: no tenant is not an error, so the field is simply omitted
