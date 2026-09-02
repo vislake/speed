@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -302,6 +303,129 @@ func TestMiddleware_UnboundedRoutePaths_CardinalityIsBounded(t *testing.T) {
 	}
 	if totalRecorded != float64(attackerRequests) {
 		t.Errorf("sum of all recorded requests = %v, want %v (total attacker requests actually sent): a request was lost or double-counted", totalRecorded, attackerRequests)
+	}
+}
+
+// longAttackerPathPrefixLen and longAttackerPathTotalLen size the two
+// attacker paths TestMiddleware_LongRoutePaths_LabelLengthIsBounded sends.
+// longAttackerPathPrefixLen is deliberately > obs.MaxRouteLabelLength (the
+// two paths built by longAttackerPath share every byte up to this length,
+// then diverge), and longAttackerPathTotalLen is a "few KB" -- realistically
+// sized for a test rather than the near-1-MiB path a real attacker could
+// send (see obs.MaxRouteLabelLength's own doc comment for that real-world
+// sizing) -- while still landing well past the cap, which is all the
+// mechanism being tested cares about.
+const (
+	longAttackerPathPrefixLen = 600
+	longAttackerPathTotalLen  = 4096
+)
+
+// longAttackerPath returns a longAttackerPathTotalLen-byte absolute path
+// whose first longAttackerPathPrefixLen bytes are always the same
+// (regardless of suffix), diverging only afterward. Two calls with
+// different suffix bytes are therefore identical within
+// obs.MaxRouteLabelLength (600 > obs.MaxRouteLabelLength=512) and distinct
+// beyond it -- exactly the shape TestMiddleware_LongRoutePaths_LabelLengthIsBounded
+// needs to tell "truncated before use as a map key" apart from "used raw."
+func longAttackerPath(suffix byte) string {
+	prefix := "/" + strings.Repeat("p", longAttackerPathPrefixLen-1)
+	rest := strings.Repeat(string(suffix), longAttackerPathTotalLen-longAttackerPathPrefixLen)
+	return prefix + rest
+}
+
+// TestMiddleware_LongRoutePaths_LabelLengthIsBounded is the regression test
+// for the gap TestMiddleware_UnboundedRoutePaths_CardinalityIsBounded above
+// does NOT cover: that test bounds the NUMBER of distinct http.route
+// values; this one bounds the LENGTH of any single value.
+//
+// examples/reference-app's http.Server (cmd/server/main.go) sets no
+// MaxHeaderBytes, so it inherits net/http.DefaultMaxHeaderBytes (1 MiB) as
+// the effective ceiling on a single request's URL path length. Without a
+// length bound, an unauthenticated attacker sending up to
+// obs.MaxRouteLabelValues requests, each with a distinct, near-1-MiB path,
+// could make routeLabelLimiter's internal "seen" map retain up to roughly
+// obs.MaxRouteLabelValues x 1 MiB of attacker-controlled string data for
+// the life of the process, and could make the actual exported Prometheus
+// series carry labels that large -- see obs.MaxRouteLabelLength's own doc
+// comment for the full reasoning.
+//
+// This test sends two longAttackerPathTotalLen-byte (a few KB, not a
+// literal ~1 MiB -- unnecessary to actually prove the mechanism) paths
+// that share an identical prefix longer than obs.MaxRouteLabelLength and
+// diverge only after it. This shape proves BOTH bounds this middleware
+// needs to enforce, entirely from observable, black-box behavior (this
+// file is package observability_test and routeLabelLimiter's "seen" field
+// is unexported, so there is no other way to reach it):
+//
+//   - The exported metric label itself must come back at exactly
+//     obs.MaxRouteLabelLength bytes -- proving the VALUE handed to the
+//     Prometheus exporter is bounded, not the full attacker-supplied
+//     length.
+//   - The two requests must collapse into exactly ONE series, not two.
+//     This is the internal-state proof: if routeLabelLimiter's "seen" map
+//     used the raw, untruncated path as its key (the pre-fix behavior),
+//     these two paths -- which differ after byte longAttackerPathPrefixLen
+//     -- would be two distinct map entries and therefore two distinct
+//     series. They can collapse into one only if both were truncated to
+//     the same obs.MaxRouteLabelLength-byte prefix BEFORE either became a
+//     map key, which is exactly what routeLabelLimiter.label must now do.
+//
+// Negative-control proof (per this repository's established technique --
+// see TestMiddleware_UnboundedRoutePaths_CardinalityIsBounded's own use of
+// it): temporarily removing the "path = truncateRouteLabel(path)" line
+// from routeLabelLimiter.label makes this test fail on both fronts at
+// once -- 2 series instead of 1, and a recorded label
+// longAttackerPathTotalLen bytes long instead of obs.MaxRouteLabelLength
+// -- then restoring it makes the test pass again. This was verified by
+// hand while writing this test, not merely asserted here.
+func TestMiddleware_LongRoutePaths_LabelLengthIsBounded(t *testing.T) {
+	reg := setupMeterProvider(t)
+	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// A real mux would 404 an unregistered path, exactly like
+		// TestMiddleware_UnboundedRoutePaths_CardinalityIsBounded's handler
+		// -- the exact status is irrelevant to what this test checks.
+		w.WriteHeader(http.StatusNotFound)
+	}))
+
+	pathA := longAttackerPath('a')
+	pathB := longAttackerPath('b')
+	if len(pathA) != longAttackerPathTotalLen || len(pathB) != longAttackerPathTotalLen {
+		t.Fatalf("test setup: attacker paths must be %d bytes, got %d and %d", longAttackerPathTotalLen, len(pathA), len(pathB))
+	}
+	if pathA[:longAttackerPathPrefixLen] != pathB[:longAttackerPathPrefixLen] {
+		t.Fatalf("test setup: attacker paths must share an identical %d-byte prefix", longAttackerPathPrefixLen)
+	}
+	if pathA == pathB {
+		t.Fatalf("test setup: attacker paths must diverge after byte %d, got identical paths", longAttackerPathPrefixLen)
+	}
+
+	handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, pathA, ""))
+	handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, pathB, ""))
+
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	assertNoTenantLabelAnywhere(t, families)
+
+	counter := findFamily(t, families, promRequestCountFamily)
+	metrics := counter.GetMetric()
+	if got := len(metrics); got != 1 {
+		t.Fatalf("got %d distinct http_route series for 2 attacker paths sharing an identical %d-byte prefix (past obs.MaxRouteLabelLength=%d bytes), want exactly 1: routeLabelLimiter's internal map key is not bounded to MaxRouteLabelLength",
+			got, longAttackerPathPrefixLen, obs.MaxRouteLabelLength)
+	}
+
+	m := metrics[0]
+	gotLabel := labelMap(m)["http_route"]
+	if got := len(gotLabel); got != obs.MaxRouteLabelLength {
+		t.Fatalf("recorded http_route label is %d bytes, want exactly %d (obs.MaxRouteLabelLength): a %d-byte attacker path was not truncated",
+			got, obs.MaxRouteLabelLength, longAttackerPathTotalLen)
+	}
+	if want := pathA[:obs.MaxRouteLabelLength]; gotLabel != want {
+		t.Errorf("recorded http_route label = %q, want the attacker path's first %d bytes (%q)", gotLabel, obs.MaxRouteLabelLength, want)
+	}
+	if got := m.GetCounter().GetValue(); got != 2 {
+		t.Errorf("the single collapsed series recorded %v requests, want 2 (both attacker paths counted under the same truncated label)", got)
 	}
 }
 

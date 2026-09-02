@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
@@ -83,6 +84,45 @@ const MaxRouteLabelValues = 256
 // pkgcore.MountedRoute's own doc comment), and this value deliberately is
 // not one.
 const RouteLabelOverflowValue = "{overflow}"
+
+// MaxRouteLabelLength bounds, in bytes, the length of a single http.route
+// value routeLabelLimiter will ever use as its map key or hand back as the
+// metric attribute value -- an orthogonal bound to MaxRouteLabelValues,
+// which caps how many distinct values exist, not how large any one of them
+// is. See routeLabelLimiter.label's own doc comment for exactly where this
+// is applied, and TestMiddleware_LongRoutePaths_LabelLengthIsBounded for
+// the negative-control proof.
+//
+// Capping distinct-value COUNT alone still leaves a narrower, higher-cost
+// resource-exhaustion vector open: examples/reference-app's http.Server
+// (cmd/server/main.go) sets no MaxHeaderBytes, so it inherits
+// net/http.DefaultMaxHeaderBytes (1 MiB) as the effective ceiling on how
+// long a single request's URL path -- and therefore the raw value
+// routeLabelLimiter.label receives -- can be. Without this bound, an
+// attacker sending MaxRouteLabelValues requests, each with a distinct,
+// near-1-MiB path, could make routeLabelLimiter's "seen" map retain up to
+// roughly MaxRouteLabelValues x 1 MiB of attacker-controlled string data
+// for the life of the process, and could make the exported Prometheus
+// series themselves carry labels that large -- its own scrape-payload
+// concern independent of the map.
+//
+// 512 is comfortably above the length of every distinct literal route any
+// real module in this repository registers today: "/api/v1/notes" (the
+// notes module's apiPath) is 14 bytes, and "/healthz" / "/metrics" (see
+// mountModuleRoutes and its callers in
+// examples/reference-app/cmd/server/server.go) are 8 bytes each. It also
+// comfortably outsizes a plausible near-future route this repository does
+// not mount yet but its planned modules (root CLAUDE.md's module
+// dependency graph) could -- for example a four-level nested resource path
+// with a 36-byte UUID at every level plus literal segment names, which
+// totals well under 250 bytes -- while still keeping routeLabelLimiter's
+// worst-case memory footprint a small, fixed number
+// (MaxRouteLabelValues*MaxRouteLabelLength = 128 KiB) instead of the
+// up-to-~256-MiB worst case an unbounded value length previously allowed.
+// If a legitimate route's raw request path ever approaches this, that is a
+// signal to revisit this constant deliberately, not evidence it was set
+// too low by accident.
+const MaxRouteLabelLength = 512
 
 // Middleware wraps next to start a trace span per request (via otelhttp,
 // which also extracts/injects W3C trace-context propagation headers) and
@@ -164,14 +204,19 @@ const RouteLabelOverflowValue = "{overflow}"
 // not the raw path directly: routeLabelLimiter (see its own doc comment)
 // caps the number of distinct http.route METRIC label values this
 // Middleware instance will ever emit at MaxRouteLabelValues, collapsing
-// every value beyond that into the fixed RouteLabelOverflowValue. This
-// does not require knowing an application's real route set in advance --
-// it just stops minting new distinct values once comfortably past what
-// any real, bounded route table could produce. The SPAN attributes are
-// deliberately NOT run through this limiter: a trace is not a Prometheus
-// series, so it does not share the metric instruments' cardinality
-// problem, matching how AnnotateTenant treats tenant_id (span attribute,
-// never a metric label) for exactly the same reason.
+// every value beyond that into the fixed RouteLabelOverflowValue, AND caps
+// the length of any individual value at MaxRouteLabelLength bytes before
+// it can become either routeLabelLimiter's map key or the label value
+// itself (see MaxRouteLabelLength's own doc comment for why value SIZE,
+// not just value COUNT, is its own exploitable dimension here). This does
+// not require knowing an application's real route set in advance -- it
+// just stops minting new distinct values, and bloating any single one of
+// them, once comfortably past what any real, bounded route table could
+// produce. The SPAN attributes are deliberately NOT run through this
+// limiter: a trace is not a Prometheus series, so it does not share the
+// metric instruments' cardinality (or per-value size) problem, matching
+// how AnnotateTenant treats tenant_id (span attribute, never a metric
+// label) for exactly the same reason.
 //
 // This bound is a circuit breaker, not a precision fix: a legitimate,
 // low-cardinality parameterized route (for example
@@ -304,11 +349,16 @@ func AnnotateTenant(ctx context.Context) {
 
 // routeLabelLimiter bounds the number of distinct http.route metric label
 // values a single Middleware instance will ever emit to MaxRouteLabelValues,
-// collapsing every value seen after that into RouteLabelOverflowValue. See
-// Middleware's own "Route label caveat" doc comment for the live,
-// unauthenticated exploit this exists to close: without it, an attacker
-// can create one new, permanent Prometheus/OTel metric series per distinct
-// URL path they send, whether or not it matches a real route.
+// collapsing every value seen after that into RouteLabelOverflowValue, AND
+// bounds the length of any individual value to MaxRouteLabelLength bytes
+// (see label's own doc comment for exactly where that second, orthogonal
+// bound is applied). See Middleware's own "Route label caveat" doc comment
+// for the live, unauthenticated exploit the count bound exists to close:
+// without it, an attacker can create one new, permanent Prometheus/OTel
+// metric series per distinct URL path they send, whether or not it
+// matches a real route. MaxRouteLabelLength's own doc comment covers the
+// narrower, value-SIZE variant of that same exploit the count bound alone
+// does not close.
 //
 // It is created once per Middleware call and shared, via the closure
 // Middleware returns, across every concurrent request that handler serves
@@ -337,7 +387,22 @@ func newRouteLabelLimiter(limit int) *routeLabelLimiter {
 // RouteLabelOverflowValue without recording path, so the number of
 // distinct values label can ever return stays fixed at limit+1 for the
 // lifetime of l.
+//
+// path is truncated to at most MaxRouteLabelLength bytes via
+// truncateRouteLabel BEFORE any of the above happens -- before it is
+// compared against or inserted into l.seen, and before it is returned --
+// so both l.seen's memory footprint and the value the caller goes on to
+// use as the actual metric attribute (see Middleware) are bounded by
+// MaxRouteLabelLength regardless of how long the caller's raw path is.
+// This is an orthogonal bound to the limit/RouteLabelOverflowValue
+// machinery above: truncation can make two distinct long paths collapse
+// into the same tracked value (both being effectively attacker garbage,
+// this is an acceptable, even desirable, side effect), but it never
+// changes how many distinct values l.seen can hold, and never by itself
+// produces RouteLabelOverflowValue.
 func (l *routeLabelLimiter) label(path string) string {
+	path = truncateRouteLabel(path)
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if _, ok := l.seen[path]; ok {
@@ -348,6 +413,25 @@ func (l *routeLabelLimiter) label(path string) string {
 	}
 	l.seen[path] = struct{}{}
 	return path
+}
+
+// truncateRouteLabel caps path at MaxRouteLabelLength bytes, cutting on a
+// UTF-8 rune boundary rather than an arbitrary byte offset: net/http
+// already percent-decodes (*http.Request).URL.Path before this package
+// ever sees it, so a path segment can legally contain multi-byte UTF-8,
+// and slicing mid-rune would hand both l.seen and the exported Prometheus
+// label an invalid, truncated encoding instead of a shorter-but-valid
+// string. path shorter than or equal to the limit is returned unchanged,
+// with no allocation.
+func truncateRouteLabel(path string) string {
+	if len(path) <= MaxRouteLabelLength {
+		return path
+	}
+	cut := MaxRouteLabelLength
+	for cut > 0 && !utf8.RuneStart(path[cut]) {
+		cut--
+	}
+	return path[:cut]
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the status code
