@@ -36,9 +36,10 @@ name: pr-full
 #                    tenancytest/integration_test/; ./... covers it)
 #       go/jobs      Redis
 #       go/pkgcore   Redis and MinIO/S3 -- its integration_test/ runs both
-#                    tiers (redis_kv_test.go/redis_eventbus_test.go against
-#                    Redis, minio_container_test.go/s3_objectstore_test.go
-#                    against MinIO/S3)
+#                    tiers (redis_container_test.go/redis_kv_test.go/
+#                    redis_eventbus_test.go against Redis,
+#                    minio_container_test.go/s3_objectstore_test.go against
+#                    MinIO/S3)
 #   * reference-app job: examples/reference-app's unit suite under -race,
 #     dir-scoped from inside the module -- reference-app is its own module,
 #     listed in go.work but outside go/, so neither the module matrix above
