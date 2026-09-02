@@ -16,9 +16,10 @@ name: e2e
 #
 # WHAT EXISTS TODAY: no e2e suite -- no Playwright config, no e2e/
 # directory, no test doubles for provider calls, and no browser-driven
-# frontend (there is no web/ workspace at all yet). The reference-app
-# server itself runs and its Go module is unit-tested, but nothing
-# exercises it end to end.
+# frontend (the web/ workspace ships only the @speed/tokens and
+# @speed/i18n packages -- no Playwright or e2e tooling exists anywhere).
+# The reference-app server itself runs and its Go module is unit-tested,
+# but nothing exercises it end to end.
 #
 # GATE: the roadmap M4 e2e item (roadmap M4 acceptance: the reference-app
 # full business loop, all key validation chains, including real image-API

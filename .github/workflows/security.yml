@@ -12,16 +12,20 @@ name: security
 #
 # TOOL POSTURE (docs/internal/20-quality-and-security.md, supply-chain and
 # license-compliance sections): govulncheck for Go dependencies; pnpm audit
-# + Renovate for npm once npm dependencies exist; gitleaks (pre-commit hook
-# AND CI) for secret leakage; GitHub CodeQL for static analysis; trivy for
+# + Renovate for npm -- the premise now holds: web/ ships a pnpm lockfile
+# (devDependencies-only so far), but the audit wiring itself is deferred to
+# the M0 implementing round of this pipeline; gitleaks (pre-commit hook AND
+# CI) for secret leakage; GitHub CodeQL for static analysis; trivy for
 # container images once images exist; and a license scan that BANS GPL/AGPL
 # dependencies -- this repo scaffolds commercial deliveries, so dependency
 # licenses transmit to customer projects, and MPL/LGPL needs a recorded ADR.
 #
-# WHAT EXISTS TODAY: none of the scanning tooling is runnable yet -- no
+# WHAT EXISTS TODAY: none of the scanning tooling is wired yet -- no
 # govulncheck invocation or config, no gitleaks config, no CodeQL setup, no
-# images to scan, no npm lockfile to audit. Nothing is wired here on purpose:
-# half-wired scans would be fake checks. The repo holds no real credentials
+# images to scan, no npm audit invocation (web/'s pnpm lockfile exists but
+# is devDependencies-only; audit wiring is deferred to this pipeline's
+# implementing round). Nothing is wired here on purpose: half-wired scans
+# would be fake checks. The repo holds no real credentials
 # of any kind and must never acquire any (20-quality-and-security.md secret
 # management); CI secrets belong to GitHub Environments.
 #

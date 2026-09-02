@@ -40,8 +40,8 @@ name: api-contract
 # tooling does not exist yet (wiring them now would be fake checks):
 #   * spec merging into build/openapi/speed.yaml (no other module ships a
 #     fragment; the notes fragment is generated from in place).
-#   * frontend sdk generation (orval) -- no web/ workspace or
-#     @speed/api-sdk exists yet.
+#   * frontend sdk generation (orval) -- a later web/ workspace round
+#     (api-client/api-sdk): no @speed/api-sdk exists yet.
 #   * spec linting (redocly rules) and breaking-change detection (oasdiff,
 #     the release-gate diff against the last release).
 #   * merge-conflict checks across fragments -- a single-fragment world has
