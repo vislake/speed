@@ -1,0 +1,11 @@
+# notes 模块面向用户的中文（zh-CN）文案。
+#
+# key 与 notes 模块 HTTP 处理器返回的 apperr.Error.Code 一一对应（见
+# internal/notes/handler.go）——接口本身从不直接返回这段文案：按后端编码规范
+# §6.2 的错误处理规则，接口只返回结构化错误码与参数，由客户端根据错误码在自己
+# 的 i18n 目录中查找文案，本文件就是 notes 模块为该目录提供的一份资源。
+[errors]
+"notes.text_required" = "笔记内容不能为空。"
+"notes.text_too_long" = "笔记内容不能超过 4000 个字符。"
+"notes.invalid_request_body" = "请求体不是合法的 JSON。"
+"notes.internal_error" = "服务器内部发生错误，请稍后重试。"

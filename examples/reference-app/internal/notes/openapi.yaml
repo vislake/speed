@@ -1,0 +1,99 @@
+openapi: 3.0.3
+info:
+  title: notes
+  description: >-
+    Placeholder tenant-scoped resource module for examples/reference-app,
+    demonstrating end-to-end usage of the speed module stack (pkgcore,
+    dbkit, tenancy). Standing in for real reference-app business endpoints
+    that land in later milestones; see the module's own doc.go. This
+    fragment follows the operationId (<module>_<action><Resource>) and
+    schema-name (<Module><Type>) conventions from
+    .claude/skills/backend-coding-standards/SKILL.md §6.1, ready for a
+    future task api:gen to merge into the application-wide specification
+    once that tool exists (see root CLAUDE.md's M0 status).
+  version: 0.0.0
+paths:
+  /api/v1/notes:
+    post:
+      operationId: notes_createNote
+      summary: Create a note for the caller's tenant.
+      description: >-
+        The tenant is always the one tenancy.Middleware already resolved
+        from the request; there is no tenant_id field anywhere on this
+        request, by design (root CLAUDE.md's multi-tenant isolation rule).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotesCreateNoteRequest'
+      responses:
+        '201':
+          description: The note was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotesNote'
+        '400':
+          description: >-
+            The request body was missing, malformed, had empty text, or
+            text exceeding the maxLength declared below.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotesError'
+    get:
+      operationId: notes_listNotes
+      summary: List every note belonging to the caller's tenant.
+      responses:
+        '200':
+          description: The caller's tenant's notes, oldest registration order first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotesListNotesResponse'
+components:
+  schemas:
+    NotesCreateNoteRequest:
+      type: object
+      required:
+        - text
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          description: The note's placeholder content.
+    NotesNote:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Application-generated UUID.
+        text:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    NotesListNotesResponse:
+      type: object
+      properties:
+        notes:
+          type: array
+          items:
+            $ref: '#/components/schemas/NotesNote'
+    NotesError:
+      type: object
+      description: >-
+        The structured {code, params} error envelope every speed API
+        returns instead of localized text (backend coding standard §6.2;
+        docs/internal/11-cross-cutting.md) -- a client resolves code
+        through its own i18n catalog, populated from this module's
+        Locales() resources for the codes documented in its error index.
+      properties:
+        code:
+          type: string
+          example: notes.text_required
+        params:
+          type: object
+          additionalProperties: true

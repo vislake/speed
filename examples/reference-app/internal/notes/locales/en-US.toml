@@ -1,0 +1,13 @@
+# English (en-US) user-facing text for the notes module.
+#
+# Keys match the apperr.Error.Code values notes' HTTP handlers return (see
+# internal/notes/handler.go) -- APIs themselves never return this text
+# directly; per the backend coding standard's error-handling rule (§6.2)
+# they return the structured code plus parameters, and a client resolves
+# the code through its own i18n catalog, of which this file is notes' own
+# contribution.
+[errors]
+"notes.text_required" = "Note text must not be empty."
+"notes.text_too_long" = "Note text must not exceed 4000 characters."
+"notes.invalid_request_body" = "The request body is not valid JSON."
+"notes.internal_error" = "An internal error occurred. Please try again later."
