@@ -9,7 +9,10 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -284,20 +287,24 @@ func ExampleValidateFeatureGraph() {
 // injects its own.
 func ExampleWithEventBus() {
 	// Assembling a distributed-mode kernel without a bus fails at startup. A
-	// real distributed-mode host would also need WithKVStore and WithMailer,
-	// but their checks run after the EventBus check, so leaving them out here
-	// still isolates this example to the EventBus failure.
+	// real distributed-mode host would also need WithKVStore, WithMailer and
+	// WithObjectStore, but their checks run after the EventBus check, so
+	// leaving them out here still isolates this example to the EventBus
+	// failure.
 	_, err := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed).Bootstrap(context.Background())
 	fmt.Println(errors.Is(err, pkgcore.ErrMissingDistributedEventBus))
 
 	// A real host passes its broker-backed bus here; the in-memory one stands
-	// in for it in this example. DeploymentModeDistributed requires a KVStore
-	// and a Mailer too, so both are wired alongside the bus with their own
-	// in-memory stand-ins.
+	// in for it in this example. DeploymentModeDistributed requires a KVStore,
+	// a Mailer and an ObjectStore too, so all three are wired alongside the
+	// bus with their own stand-ins.
+	store, cleanup := exampleLocalObjectStore()
+	defer cleanup()
 	kernel := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed,
 		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus()),
 		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore()),
-		pkgcore.WithMailer(pkgcore.NewConsoleMailer()))
+		pkgcore.WithMailer(pkgcore.NewConsoleMailer()),
+		pkgcore.WithObjectStore(store))
 	reg, err := kernel.Bootstrap(context.Background(), exampleTenancyModule{})
 	fmt.Println(err, reg.EventBus() != nil)
 
@@ -319,12 +326,16 @@ func ExampleWithKVStore() {
 	fmt.Println(errors.Is(err, pkgcore.ErrMissingDistributedKVStore))
 
 	// A real host passes its Redis-backed store here; the in-memory one
-	// stands in for it in this example. The Mailer seam is wired too, because
-	// its check runs after the KVStore one and this kernel will succeed.
+	// stands in for it in this example. The Mailer and ObjectStore seams are
+	// wired too, because their checks run after the KVStore one and this
+	// kernel will succeed.
+	store, cleanup := exampleLocalObjectStore()
+	defer cleanup()
 	kernel := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed,
 		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus()),
 		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore()),
-		pkgcore.WithMailer(pkgcore.NewConsoleMailer()))
+		pkgcore.WithMailer(pkgcore.NewConsoleMailer()),
+		pkgcore.WithObjectStore(store))
 	reg, err := kernel.Bootstrap(context.Background(), exampleTenancyModule{})
 	fmt.Println(err, reg.KVStore() != nil)
 
@@ -350,11 +361,17 @@ func ExampleWithMailer() {
 	fmt.Println(errors.Is(err, pkgcore.ErrMissingDistributedMailer))
 
 	// A real host passes its SMTP-backed mailer here; the console one stands
-	// in for it in this example.
+	// in for it in this example, and the local object store stands in for the
+	// S3-backed one, for the same reason the bus and KVStore stand-ins above
+	// do: the distributed mode requires all four seams, so each is wired
+	// alongside the one under test.
+	store, cleanup := exampleLocalObjectStore()
+	defer cleanup()
 	kernel := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed,
 		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus()),
 		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore()),
-		pkgcore.WithMailer(pkgcore.NewConsoleMailer()))
+		pkgcore.WithMailer(pkgcore.NewConsoleMailer()),
+		pkgcore.WithObjectStore(store))
 	reg, err := kernel.Bootstrap(context.Background(), exampleTenancyModule{})
 	fmt.Println(err, reg.Mailer() != nil)
 
@@ -419,4 +436,176 @@ func ExampleNewSMTPMailer() {
 	fmt.Println("mailer wired; the first Send dials the relay")
 	// Output:
 	// mailer wired; the first Send dials the relay
+}
+
+// exampleLocalObjectStore creates a throwaway local object store for the
+// examples that need one, along with the cleanup that removes it. The
+// standalone implementation doubles as the test double for the ObjectStore
+// interface, so it stands in for the S3-backed store of a real
+// distributed-mode host exactly as the in-memory bus and KVStore stand in for
+// their broker-backed counterparts.
+func exampleLocalObjectStore() (pkgcore.ObjectStore, func()) {
+	directory, err := os.MkdirTemp("", "pkgcore-example-object-store-*")
+	if err != nil {
+		fmt.Println("object store temp dir:", err)
+		return nil, func() {}
+	}
+	return pkgcore.NewLocalObjectStore(directory), func() {
+		if err := os.RemoveAll(directory); err != nil {
+			fmt.Println("object store cleanup:", err)
+		}
+	}
+}
+
+// ExampleNewLocalObjectStore shows the standalone deployment mode's object
+// store: objects are files below one directory, and the store doubles as the
+// test double for code written against ObjectStore, the way NewConsoleMailer
+// doubles for Mailer. The directory is the durable home of the objects, so a
+// standalone-mode host keeps them across restarts by opening a store over the
+// same directory again.
+func ExampleNewLocalObjectStore() {
+	directory, err := os.MkdirTemp("", "pkgcore-example-object-store-*")
+	if err != nil {
+		fmt.Println("temp dir:", err)
+		return
+	}
+	defer os.RemoveAll(directory)
+
+	store := pkgcore.NewLocalObjectStore(directory)
+	err = store.PutObject(context.Background(), "invoices/2026/1042", strings.NewReader("invoice bytes"))
+	fmt.Println("put:", err)
+
+	// A later store over the same directory reads what the earlier one wrote:
+	// objects survive the store, only the process hosting it is throwaway.
+	later := pkgcore.NewLocalObjectStore(directory)
+	reader, err := later.GetObject(context.Background(), "invoices/2026/1042")
+	if err != nil {
+		fmt.Println("get:", err)
+		return
+	}
+	body, err := io.ReadAll(reader)
+	if closeErr := reader.Close(); err == nil {
+		err = closeErr
+	}
+	fmt.Printf("object: %s (err=%v)\n", body, err)
+
+	// A missing key is ErrObjectNotFound, the same sentinel every backend
+	// reports, never a backend-specific error.
+	_, err = later.GetObject(context.Background(), "invoices/2026/0001")
+	fmt.Println(errors.Is(err, pkgcore.ErrObjectNotFound))
+
+	// Deleting a missing key is a success: DeleteObject is idempotent, so a
+	// failed cleanup can always be retried.
+	err = later.DeleteObject(context.Background(), "invoices/2026/0001")
+	fmt.Println("delete:", err)
+
+	// Output:
+	// put: <nil>
+	// object: invoice bytes (err=<nil>)
+	// true
+	// delete: <nil>
+}
+
+// ExampleObjectStore shows the three operations of the object seam as a
+// module's code sees them, on the standalone implementation. Objects are
+// whole streams under keys: there is no metadata, no listing and no
+// server-side operation, because no backend the interface must support has
+// all of those.
+func ExampleObjectStore() {
+	store, cleanup := exampleLocalObjectStore()
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// PutObject replaces the object at the key atomically; the write never
+	// leaves a partial object behind for a concurrent reader.
+	err := store.PutObject(ctx, "scans/panoramic/2026-08-31", strings.NewReader("cbct bytes"))
+	fmt.Println("put:", err)
+
+	// GetObject returns a reader over the object as it was when the request
+	// started. The caller owns it and must Close it.
+	reader, err := store.GetObject(ctx, "scans/panoramic/2026-08-31")
+	if err != nil {
+		fmt.Println("get:", err)
+		return
+	}
+	body, err := io.ReadAll(reader)
+	if closeErr := reader.Close(); err == nil {
+		err = closeErr
+	}
+	fmt.Printf("read: %s (err=%v)\n", body, err)
+
+	// A key that names nothing is ErrObjectNotFound.
+	_, err = store.GetObject(ctx, "scans/panoramic/2026-08-30")
+	fmt.Println("missing:", errors.Is(err, pkgcore.ErrObjectNotFound))
+
+	// A key that breaks the shared grammar is ErrInvalidObjectKey before any
+	// backend is touched, so a key accepted by one backend is accepted by all.
+	err = store.PutObject(ctx, "../escape", strings.NewReader("no"))
+	fmt.Println("invalid:", errors.Is(err, pkgcore.ErrInvalidObjectKey))
+
+	// Output:
+	// put: <nil>
+	// read: cbct bytes (err=<nil>)
+	// missing: true
+	// invalid: true
+}
+
+// ExampleWithObjectStore shows the distributed-mode wiring seam for the
+// object-store seam, mirroring ExampleWithEventBus and its counterparts.
+// DeploymentModeDistributed has no built-in ObjectStore, because falling back
+// to the local directory store would give every replica a private store whose
+// objects the other replicas could never read, so the host injects its own.
+func ExampleWithObjectStore() {
+	// Assembling a distributed-mode kernel without an object store fails at
+	// startup, once the bus, the key-value store and the mailer are wired:
+	// their checks run first, so all three are wired here too, to isolate the
+	// failure this example is about to the ObjectStore check.
+	_, err := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed,
+		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus()),
+		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore()),
+		pkgcore.WithMailer(pkgcore.NewConsoleMailer())).
+		Bootstrap(context.Background())
+	fmt.Println(errors.Is(err, pkgcore.ErrMissingDistributedObjectStore))
+
+	// A real host passes its S3-backed store here; the local one stands in
+	// for it in this example, and every module's ObjectStore() calls reach
+	// the store the host wired in.
+	store, cleanup := exampleLocalObjectStore()
+	defer cleanup()
+	kernel := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed,
+		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus()),
+		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore()),
+		pkgcore.WithMailer(pkgcore.NewConsoleMailer()),
+		pkgcore.WithObjectStore(store))
+	reg, err := kernel.Bootstrap(context.Background(), exampleTenancyModule{})
+	fmt.Println(err, reg.ObjectStore() != nil)
+
+	// Output:
+	// true
+	// <nil> true
+}
+
+// ExampleNewS3ObjectStore shows the distributed deployment mode's object
+// store: an S3-compatible service (MinIO, Aliyun OSS or AWS S3) reached
+// through the bucket and credentials in S3Config, the counterpart of the
+// local store of ExampleNewLocalObjectStore. Nothing is dialed at
+// construction -- the service is contacted on the first operation -- so a
+// host can wire the store at startup whether or not the service is
+// reachable, and an unusable configuration (an empty endpoint, bucket or
+// credential) panics there instead, where the wiring error is visible.
+func ExampleNewS3ObjectStore() {
+	store := pkgcore.NewS3ObjectStore(pkgcore.S3Config{
+		Endpoint:  "s3.example.com:9000",
+		Bucket:    "objects",
+		AccessKey: "access-key",
+		SecretKey: "secret-key",
+		Region:    "us-east-1",
+		UseSSL:    true, // HTTPS: the setting for anything beyond a local MinIO
+	})
+	var _ pkgcore.ObjectStore = store // drop-in for the local store of ExampleNewLocalObjectStore
+
+	fmt.Println("store wired; the first operation contacts the service")
+	// Output:
+	// store wired; the first operation contacts the service
 }

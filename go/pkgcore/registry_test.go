@@ -5,6 +5,7 @@ import (
 	"context"
 	"embed"
 	"errors"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -704,6 +705,28 @@ func TestRegistry_Mailer_ZeroValueRegistryReturnsNil(t *testing.T) {
 	}
 }
 
+// TestRegistry_ObjectStore_ZeroValueRegistryReturnsNil mirrors
+// TestRegistry_Mailer_ZeroValueRegistryReturnsNil for the object-store seam:
+// objectStore is a plain field for the same reason mailer's is, so the
+// zero-value Registry answers nil the same way.
+func TestRegistry_ObjectStore_ZeroValueRegistryReturnsNil(t *testing.T) {
+	if store := (&Registry{}).ObjectStore(); store != nil {
+		t.Errorf("ObjectStore() = %v, want nil for a registry with no store wired in", store)
+	}
+}
+
+// TestRegistry_ObjectStore_NewRegistryBuiltRegistryReturnsNil pins the
+// accessor's contract that only a Bootstrap-built registry carries an object
+// store. NewRegistry's three-argument signature predates the seam and cannot
+// accept one, so a registry built by hand answers nil until Bootstrap fills
+// the field in, before any module registration runs.
+func TestRegistry_ObjectStore_NewRegistryBuiltRegistryReturnsNil(t *testing.T) {
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+	if store := reg.ObjectStore(); store != nil {
+		t.Errorf("ObjectStore() = %v, want nil until Bootstrap resolves one", store)
+	}
+}
+
 func TestNewRegistry_NilBus_Panics(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -1281,10 +1304,12 @@ func TestBootstrap_CancelledContext_StopsBeforeRegistering(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	// KVStore and Mailer are wired too, with the standalone defaults: the
-	// distributed mode requires all three seams, and this test's subject is
-	// the context-cancellation check, not wiring.
-	kernel := NewKernel(DeploymentModeDistributed, WithEventBus(newRegTestBus()), WithKVStore(NewMemoryKVStore()), WithMailer(NewConsoleMailer()))
+	// KVStore, Mailer and ObjectStore are wired too, with the standalone
+	// defaults: the distributed mode requires all four seams, and this test's
+	// subject is the context-cancellation check, not wiring.
+	kernel := NewKernel(DeploymentModeDistributed,
+		WithEventBus(newRegTestBus()), WithKVStore(NewMemoryKVStore()),
+		WithMailer(NewConsoleMailer()), WithObjectStore(NewLocalObjectStore(t.TempDir())))
 	reg, err := kernel.Bootstrap(ctx, regTestRecorder("billing", nil, &order))
 
 	if !errors.Is(err, context.Canceled) {
@@ -1371,12 +1396,12 @@ func TestBootstrap_WiresTheDeploymentModeEventBusIntoTheRegistry(t *testing.T) {
 		{
 			name: "the distributed deployment mode uses the injected bus",
 			kernel: func(injected EventBus) *Kernel {
-				// KVStore is wired too, with the standalone default: this
-				// table exercises the EventBus seam specifically, and the
-				// distributed mode also requires a KVStore, so leaving it
-				// unwired would fail Bootstrap before the EventBus wiring
-				// under test even runs.
-				return NewKernel(DeploymentModeDistributed, WithEventBus(injected), WithKVStore(NewMemoryKVStore()), WithMailer(NewConsoleMailer()))
+				// KVStore, Mailer and ObjectStore are wired too, with the
+				// standalone defaults: this table exercises the EventBus seam
+				// specifically, and the distributed mode also requires the
+				// other seams, so leaving them unwired would fail Bootstrap
+				// before the EventBus wiring under test even runs.
+				return NewKernel(DeploymentModeDistributed, WithEventBus(injected), WithKVStore(NewMemoryKVStore()), WithMailer(NewConsoleMailer()), WithObjectStore(NewLocalObjectStore(t.TempDir())))
 			},
 			wantInjected: true,
 		},
@@ -1425,10 +1450,10 @@ func TestBootstrap_WiresTheDeploymentModeEventBusIntoTheRegistry(t *testing.T) {
 // TestBootstrap_WiresTheDeploymentModeEventBusIntoTheRegistry for the KVStore
 // seam: the same three scenarios (standalone default, an injected override on
 // the standalone deployment mode, and the distributed mode, which has no
-// default of its own). The bus is wired unconditionally in the distributed
-// case here, for the same reason the bus table wires KVStore in its own
-// distributed case: this table exercises KVStore specifically, and the
-// distributed mode requires both.
+// default of its own). The bus, Mailer and ObjectStore are wired
+// unconditionally in the distributed case here, for the same reason the bus
+// table wires KVStore in its own distributed case: this table exercises
+// KVStore specifically, and the distributed mode requires all four seams.
 func TestBootstrap_WiresTheDeploymentModeKVStoreIntoTheRegistry(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1449,7 +1474,7 @@ func TestBootstrap_WiresTheDeploymentModeKVStoreIntoTheRegistry(t *testing.T) {
 		{
 			name: "the distributed deployment mode uses the injected store",
 			kernel: func(injected KVStore) *Kernel {
-				return NewKernel(DeploymentModeDistributed, WithEventBus(NewMemoryEventBus()), WithKVStore(injected), WithMailer(NewConsoleMailer()))
+				return NewKernel(DeploymentModeDistributed, WithEventBus(NewMemoryEventBus()), WithKVStore(injected), WithMailer(NewConsoleMailer()), WithObjectStore(NewLocalObjectStore(t.TempDir())))
 			},
 			wantInjected: true,
 		},
@@ -1559,6 +1584,32 @@ func TestBootstrap_DistributedModeWithoutMailer_FailsFast(t *testing.T) {
 	}
 }
 
+// TestBootstrap_DistributedModeWithoutObjectStore_FailsFast mirrors
+// TestBootstrap_DistributedModeWithoutMailer_FailsFast and its older
+// counterparts for the object-store seam: the standalone deployment mode's
+// local store is a throwaway directory on one host's disk, so a
+// distributed-mode kernel with none wired in must refuse to assemble instead
+// of handing every module a store whose objects its replicas can never see.
+// Bus, KVStore and Mailer are wired here so their checks inside Bootstrap,
+// which run first, pass and the failure actually exercises the ObjectStore
+// check instead of masking it.
+func TestBootstrap_DistributedModeWithoutObjectStore_FailsFast(t *testing.T) {
+	var order []string
+
+	kernel := NewKernel(DeploymentModeDistributed, WithEventBus(NewMemoryEventBus()), WithKVStore(NewMemoryKVStore()), WithMailer(NewConsoleMailer()))
+	reg, err := kernel.Bootstrap(context.Background(), regTestRecorder("billing", nil, &order))
+
+	if !errors.Is(err, ErrMissingDistributedObjectStore) {
+		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrMissingDistributedObjectStore", err)
+	}
+	if reg != nil {
+		t.Error("Bootstrap() returned a registry alongside the error, want nil")
+	}
+	if len(order) != 0 {
+		t.Errorf("modules registered = %v, want none before the wiring was validated", order)
+	}
+}
+
 // TestBootstrap_WiresTheDeploymentModeMailerIntoTheRegistry mirrors
 // TestBootstrap_WiresTheDeploymentModeEventBusIntoTheRegistry and its KVStore
 // counterpart for the mail seam: the same three scenarios (standalone
@@ -1587,7 +1638,7 @@ func TestBootstrap_WiresTheDeploymentModeMailerIntoTheRegistry(t *testing.T) {
 		{
 			name: "the distributed deployment mode uses the injected mailer",
 			kernel: func(injected Mailer) *Kernel {
-				return NewKernel(DeploymentModeDistributed, WithEventBus(NewMemoryEventBus()), WithKVStore(NewMemoryKVStore()), WithMailer(injected))
+				return NewKernel(DeploymentModeDistributed, WithEventBus(NewMemoryEventBus()), WithKVStore(NewMemoryKVStore()), WithMailer(injected), WithObjectStore(NewLocalObjectStore(t.TempDir())))
 			},
 			wantInjected: true,
 		},
@@ -1642,6 +1693,109 @@ func TestWithMailer_NilMailerKeepsTheDeploymentModeDefault(t *testing.T) {
 	}
 	if reg.Mailer() == nil {
 		t.Error("Mailer() is nil, want the standalone deployment mode's default")
+	}
+}
+
+// TestWithObjectStore_NilStoreKeepsTheDeploymentModeDefault mirrors
+// TestWithMailer_NilMailerKeepsTheDeploymentModeDefault and its older
+// counterparts for the object-store seam.
+func TestWithObjectStore_NilStoreKeepsTheDeploymentModeDefault(t *testing.T) {
+	reg, err := NewKernel(DeploymentModeStandalone, WithObjectStore(nil)).Bootstrap(context.Background())
+	if err != nil {
+		t.Fatalf("Bootstrap() error = %v, want nil", err)
+	}
+	if reg.ObjectStore() == nil {
+		t.Error("ObjectStore() is nil, want the standalone deployment mode's default")
+	}
+}
+
+// TestBootstrap_WiresTheDeploymentModeObjectStoreIntoTheRegistry mirrors
+// TestBootstrap_WiresTheDeploymentModeMailerIntoTheRegistry and its older
+// counterparts for the object-store seam: the same three scenarios
+// (standalone default, an injected override on the standalone deployment
+// mode, and the distributed mode, which has no default of its own). The
+// standalone default is a throwaway directory the kernel creates for itself,
+// so it cannot be recognised by identity across bootstraps the way the
+// in-memory bus and KVStore can; the table asserts behaviour instead, by
+// storing an object through the assembled registry and asking each store
+// whether it received it.
+func TestBootstrap_WiresTheDeploymentModeObjectStoreIntoTheRegistry(t *testing.T) {
+	tests := []struct {
+		name string
+		// kernel receives the injectable stand-in for a distributed store,
+		// and reports whether the assembled registry must end up wired to it.
+		kernel       func(injected ObjectStore) *Kernel
+		wantInjected bool
+	}{
+		{
+			name:   "the standalone deployment mode falls back to a private store",
+			kernel: func(ObjectStore) *Kernel { return NewKernel(DeploymentModeStandalone) },
+		},
+		{
+			name: "an injected store replaces the standalone default",
+			kernel: func(injected ObjectStore) *Kernel {
+				return NewKernel(DeploymentModeStandalone, WithObjectStore(injected))
+			},
+			wantInjected: true,
+		},
+		{
+			name: "the distributed deployment mode uses the injected store",
+			kernel: func(injected ObjectStore) *Kernel {
+				return NewKernel(DeploymentModeDistributed, WithEventBus(NewMemoryEventBus()), WithKVStore(NewMemoryKVStore()), WithMailer(NewConsoleMailer()), WithObjectStore(injected))
+			},
+			wantInjected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			injected := NewLocalObjectStore(t.TempDir())
+
+			reg, err := tt.kernel(injected).Bootstrap(context.Background())
+			if err != nil {
+				t.Fatalf("Bootstrap() error = %v, want nil", err)
+			}
+			if reg.ObjectStore() == nil {
+				t.Fatal("ObjectStore() is nil")
+			}
+			// The registry hands out the kernel's store, so storing through it
+			// must reach the store the host wired in and no other.
+			if err := reg.ObjectStore().PutObject(context.Background(), "wiring/check", strings.NewReader("reached")); err != nil {
+				t.Fatalf("PutObject() error = %v, want nil", err)
+			}
+			if tt.wantInjected {
+				if reg.ObjectStore() != ObjectStore(injected) {
+					t.Fatalf("ObjectStore() = %v, want the store wired into the kernel", reg.ObjectStore())
+				}
+				reader, err := injected.GetObject(context.Background(), "wiring/check")
+				if err != nil {
+					t.Errorf("wired store GetObject() error = %v, want the object the module stored", err)
+					return
+				}
+				body, err := io.ReadAll(reader)
+				if closeErr := reader.Close(); err == nil {
+					err = closeErr
+				}
+				if err != nil {
+					t.Errorf("reading the wired store back failed: %v", err)
+					return
+				}
+				if got := string(body); got != "reached" {
+					t.Errorf("wired store holds %q, want %q", got, "reached")
+				}
+				return
+			}
+			if reg.ObjectStore() == ObjectStore(injected) {
+				t.Error("ObjectStore() returned the store that was never wired in")
+			}
+			reader, err := injected.GetObject(context.Background(), "wiring/check")
+			if err == nil {
+				reader.Close()
+				t.Error("uninjected store holds the fallback object, want ErrObjectNotFound: the fallback store must be private to the kernel")
+			} else if !errors.Is(err, ErrObjectNotFound) {
+				t.Errorf("uninjected store GetObject() error = %v, want ErrObjectNotFound", err)
+			}
+		})
 	}
 }
 

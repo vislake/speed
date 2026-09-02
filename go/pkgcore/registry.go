@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -66,6 +67,13 @@ var ErrMissingDistributedKVStore = errors.New("pkgcore: distributed deployment m
 // mailer would print every message to a replica's stdout where nobody reads
 // it, so assembly fails instead.
 var ErrMissingDistributedMailer = errors.New("pkgcore: distributed deployment mode requires an explicit mailer")
+
+// ErrMissingDistributedObjectStore is returned by Bootstrap when a Kernel
+// assembled for DeploymentModeDistributed has no ObjectStore wired in. There
+// is no distributed implementation to fall back on, and falling back to the
+// local file system store would give every replica its own private disk and
+// split the objectspace silently, so assembly fails instead.
+var ErrMissingDistributedObjectStore = errors.New("pkgcore: distributed deployment mode requires an explicit object store")
 
 // errNilFeatureRegistrar guards ValidateFeatureGraph against an unwired registry.
 var errNilFeatureRegistrar = errors.New("pkgcore: registry has no feature registrar")
@@ -311,6 +319,15 @@ type Registry struct {
 	// anything onto a Mailer, so no registrar would have anything to hold. It
 	// is unexported so that Mailer() is the only way to reach it.
 	mailer Mailer
+
+	// objectStore is the ObjectStore the kernel wired the registry to. It is
+	// kept directly on Registry for the same reason kv and mailer are, and it
+	// is unexported so that ObjectStore() is the only way to reach it. It is
+	// deliberately not a NewRegistry parameter: the object-store seam
+	// post-dates the constructor, whose three-argument signature is frozen,
+	// so Bootstrap installs the store it resolved after NewRegistry returns,
+	// and a registry built directly with NewRegistry has none.
+	objectStore ObjectStore
 }
 
 // NewRegistry returns a Registry whose registrars are the in-memory default
@@ -330,6 +347,9 @@ type Registry struct {
 // every event; the alternative for kv is a registry whose KVStore() looks
 // wired but panics the first caller that actually uses it; the alternative
 // for mailer is a registry whose Mailer() sends nothing and reports success.
+// The object-store seam is not a parameter either: it post-dates this
+// constructor, whose signature is frozen, so ObjectStore() is nil on a
+// registry built here and is only ever set by Bootstrap.
 func NewRegistry(bus EventBus, kv KVStore, mailer Mailer) *Registry {
 	if bus == nil {
 		panic("pkgcore: NewRegistry requires a non-nil EventBus")
@@ -384,6 +404,19 @@ func (r *Registry) KVStore() KVStore {
 // nil for a zero-value Registry, which only tests construct.
 func (r *Registry) Mailer() Mailer {
 	return r.mailer
+}
+
+// ObjectStore returns the object store the registry was wired to, the store
+// the modules' files leave through. Like KVStore and Mailer, it is stored
+// directly on the struct because no registrar installs anything onto it.
+// Unlike them it is not a NewRegistry parameter -- the seam post-dates that
+// constructor, whose three-argument signature is frozen -- so it returns nil
+// for a Registry built directly with NewRegistry and only ever carries a
+// store once Bootstrap has resolved one. A module that needs the store must
+// therefore be exercised through a bootstrapped Registry, never through a
+// hand-built one: calling a method on a nil ObjectStore panics.
+func (r *Registry) ObjectStore() ObjectStore {
+	return r.objectStore
 }
 
 // checkUnique reports whether any key produced by keyOf is already in
@@ -618,6 +651,7 @@ type Kernel struct {
 	bus            EventBus
 	kv             KVStore
 	mailer         Mailer
+	objectStore    ObjectStore
 }
 
 // KernelOption injects an infrastructure implementation into a Kernel.
@@ -667,6 +701,23 @@ func WithMailer(mailer Mailer) KernelOption {
 			return
 		}
 		k.mailer = mailer
+	}
+}
+
+// WithObjectStore wires store into every Registry the kernel bootstraps, in
+// place of the deployment mode's default. It is the seam a distributed-mode
+// host uses to supply its S3-backed ObjectStore: DeploymentModeDistributed
+// has no built-in implementation, so Bootstrap fails without it. A
+// DeploymentModeStandalone host that must keep objects across restarts
+// injects its own local store here too, because the standalone default is a
+// throwaway directory. A nil store leaves the deployment mode's default in
+// place.
+func WithObjectStore(store ObjectStore) KernelOption {
+	return func(k *Kernel) {
+		if store == nil {
+			return
+		}
+		k.objectStore = store
 	}
 }
 
@@ -743,6 +794,35 @@ func (k *Kernel) resolveMailer() (Mailer, error) {
 	}
 }
 
+// resolveObjectStore returns the ObjectStore the assembled Registry is wired
+// to: the injected one when the host supplied it, and a fresh private
+// temporary directory for DeploymentModeStandalone. The standalone default
+// is deliberately throwaway: the deployment mode keeps nothing across
+// restarts by itself, and a host that must keep objects injects a
+// NewLocalObjectStore of its own directory with WithObjectStore.
+// DeploymentModeDistributed reports an error instead of falling back, because
+// a local store would give every replica its own private disk and split the
+// objectspace silently. It parallels eventBus, kvStore and resolveMailer; the
+// field it resolves is named objectStore, which a method of the same name
+// could not be.
+func (k *Kernel) resolveObjectStore() (ObjectStore, error) {
+	if k.objectStore != nil {
+		return k.objectStore, nil
+	}
+	switch k.deploymentMode {
+	case DeploymentModeStandalone:
+		directory, err := os.MkdirTemp("", "pkgcore-object-store-*")
+		if err != nil {
+			return nil, fmt.Errorf("pkgcore: standalone object store: %w", err)
+		}
+		return NewLocalObjectStore(directory), nil
+	case DeploymentModeDistributed:
+		return nil, fmt.Errorf("%w: wire one with WithObjectStore", ErrMissingDistributedObjectStore)
+	default:
+		return nil, fmt.Errorf("%w: %q", ErrInvalidDeploymentMode, k.deploymentMode)
+	}
+}
+
 // DeploymentMode returns the deployment mode the kernel assembles modules for.
 func (k *Kernel) DeploymentMode() DeploymentMode { return k.deploymentMode }
 
@@ -770,6 +850,10 @@ func (k *Kernel) Bootstrap(ctx context.Context, modules ...Module) (*Registry, e
 	if err != nil {
 		return nil, err
 	}
+	objectStore, err := k.resolveObjectStore()
+	if err != nil {
+		return nil, err
+	}
 
 	ordered, err := sortModulesByDependency(modules)
 	if err != nil {
@@ -777,6 +861,10 @@ func (k *Kernel) Bootstrap(ctx context.Context, modules ...Module) (*Registry, e
 	}
 
 	reg := NewRegistry(bus, kv, mailer)
+	// The object-store seam post-dates NewRegistry's three-argument
+	// signature, so the resolved store is installed here, before any module
+	// registers and can reach it.
+	reg.objectStore = objectStore
 	for _, module := range ordered {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("pkgcore: bootstrap stopped before registering module %q: %w", module.Name(), err)

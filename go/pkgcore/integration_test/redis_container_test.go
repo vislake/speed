@@ -2,7 +2,9 @@
 
 // Package pkgcore_test holds go/pkgcore's integration tier: tests that
 // exercise the Redis-backed implementations of the KVStore and EventBus
-// seams against a real Redis server. It is physically separate from
+// seams against a real Redis server and the S3-backed implementation of the
+// ObjectStore seam against a real MinIO server. It is physically separate
+// from
 // go/pkgcore's unit tests (all of which live in package pkgcore itself, one
 // file per source file, per the backend coding standard's testing layout
 // rule) and carries the "integration" build tag: a plain "go test ./..."
@@ -12,9 +14,11 @@
 // go/dbkit/integration_test; the container lifecycle below follows
 // go/jobs/integration_test/redis_container_test.go almost line for line.
 //
-// Every test here spins up its own disposable Redis container and requires a
-// working Docker (or Docker-API-compatible) daemon; there is no fallback or
-// skip-on-missing-Docker path, matching go/jobs's own integration tier.
+// Every test here spins up its own disposable container -- a Redis for the
+// KVStore and EventBus tests, a MinIO for the ObjectStore tests -- and
+// requires a working Docker (or Docker-API-compatible) daemon; there is no
+// fallback or skip-on-missing-Docker path, matching go/jobs's own
+// integration tier.
 package pkgcore_test
 
 import (
