@@ -1,0 +1,55 @@
+name: docs-check
+
+# STUB -- not implemented. Triggered runs fail loudly at the guard step
+# below; nothing in this pipeline can pass silently.
+#
+# PIPELINE (docs/internal/18-cicd.md pipeline table, docs-check row):
+# documentation and public-API discipline -- documentation code examples
+# compile and run, link checks, zh-CN/en-US i18n key-set parity, and config-
+# reference drift detection. Target under 5 minutes. This pipeline is also a
+# branch-protection required check at 18-cicd's branch-protection section
+# (alongside pr-check and security).
+#
+# DESIGN-TABLE TRIGGER: PRs touching documentation or a public API, via
+# path filtering (dorny/paths-filter); enabled by the implementing round.
+#
+# WHAT WIRES WHEN THIS IS IMPLEMENTED -- content that exists TODAY:
+#   * tools/check_i18n_keys.py -- the real, runnable zh-CN/en-US key-parity
+#     checker (one locale pair exists today:
+#     examples/reference-app/internal/notes/locales); it is wired into no
+#     workflow yet (tools/README.md) and belongs to this pipeline;
+#   * a documentation-example compile/run harness: the root CLAUDE.md
+#     Documentation rules make examples part of the build, and Go example
+#     tests already compile and run inside the per-module unit suites
+#     (go-module-ci); a dedicated harness for prose-embedded samples and
+#     docs/site content does not exist yet.
+#
+# NOT YET: link checking, config-reference generation drift (the reference
+# is generated from the pkgcore/config schema, generation not in CI), the
+# docs site itself -- all roadmap M0 docs-engineering items.
+#
+# GATE: the roadmap M0 docs-engineering items (docs templates, AGENTS.md
+# standards, example-compile checks, docs-site skeleton) and the i18n
+# registration round; the check_i18n_keys leg above can be enabled as soon
+# as this pipeline is implemented, independently of the docs site.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docs-check:
+    name: docs checks (stub guard -- not implemented yet)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Stub guard
+        run: |
+          echo "error: the docs-check pipeline is not implemented. This"
+          echo "failing run is its stub guard, so the pipeline can never pass"
+          echo "silently. Wire the checks named in the file header"
+          echo "(tools/check_i18n_keys.py, example-compile harness) when the"
+          echo "roadmap M0 docs-engineering items land."
+          exit 1

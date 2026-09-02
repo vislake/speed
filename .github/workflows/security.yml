@@ -1,0 +1,51 @@
+name: security
+
+# STUB -- not implemented. Triggered runs fail loudly at the guard step
+# below; nothing in this pipeline can pass silently.
+#
+# PIPELINE (docs/internal/18-cicd.md pipeline table, security row): supply-
+# chain and security scans -- dependency vulnerabilities, secret scanning,
+# SAST, container image scanning, license checks. Target under 10 minutes.
+#
+# DESIGN-TABLE TRIGGER: every PR plus a daily run; both are enabled by the
+# implementing round (a daily scheduled stub would only produce noise).
+#
+# TOOL POSTURE (docs/internal/20-quality-and-security.md, supply-chain and
+# license-compliance sections): govulncheck for Go dependencies; pnpm audit
+# + Renovate for npm once npm dependencies exist; gitleaks (pre-commit hook
+# AND CI) for secret leakage; GitHub CodeQL for static analysis; trivy for
+# container images once images exist; and a license scan that BANS GPL/AGPL
+# dependencies -- this repo scaffolds commercial deliveries, so dependency
+# licenses transmit to customer projects, and MPL/LGPL needs a recorded ADR.
+#
+# WHAT EXISTS TODAY: none of the scanning tooling is runnable yet -- no
+# govulncheck invocation or config, no gitleaks config, no CodeQL setup, no
+# images to scan, no npm lockfile to audit. Nothing is wired here on purpose:
+# half-wired scans would be fake checks. The repo holds no real credentials
+# of any kind and must never acquire any (20-quality-and-security.md secret
+# management); CI secrets belong to GitHub Environments.
+#
+# GATE: the roadmap M0 engineering item "security and license scanning"
+# (semgrep/depguard discipline rules land in the same round per the roadmap,
+# but they are separate discipline-table rows, not this pipeline).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    name: security scans (stub guard -- not implemented yet)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Stub guard
+        run: |
+          echo "error: the security pipeline is not implemented. This failing"
+          echo "run is its stub guard, so the pipeline can never pass"
+          echo "silently. Wire the scans named in the file header (govulncheck,"
+          echo "gitleaks, CodeQL, trivy, license scan) when the roadmap M0"
+          echo "security-and-license-scanning item lands."
+          exit 1

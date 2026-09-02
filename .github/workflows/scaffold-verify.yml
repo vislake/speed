@@ -1,0 +1,42 @@
+name: scaffold-verify
+
+# STUB -- not implemented. Triggered runs fail loudly at the guard step
+# below; nothing in this pipeline can pass silently.
+#
+# PIPELINE (docs/internal/18-cicd.md pipeline table, scaffold-verify row):
+# generate a fresh project with the CLI, build it, boot it once in each
+# deployment mode, and smoke-test it. Target under 15 minutes. Runs daily
+# and after every release; a post-release failure marks the released
+# version unusable (18-cicd release section, step 6).
+#
+# DESIGN-TABLE TRIGGER: daily plus post-release; both are enabled by the
+# implementing round.
+#
+# WHAT EXISTS TODAY: no project scaffold -- tools/new_module.py generates
+# go/<name> module STUBS only (module generator, documented in
+# tools/README.md), go/saasctl is itself a stub module with no commands,
+# and no create-saas-app npm package exists.
+#
+# GATE: the roadmap M4 acceptance "saasctl new + create-saas-app generate a
+# fresh project that boots in both deployment modes"; earliest partial
+# wiring happens when go/saasctl grows a real new-project command.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scaffold-verify:
+    name: scaffold verify (stub guard -- not implemented yet)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Stub guard
+        run: |
+          echo "error: the scaffold-verify pipeline is not implemented. This"
+          echo "failing run is its stub guard, so the pipeline can never pass"
+          echo "silently. Wire the generate/build/boot/smoke legs when the"
+          echo "saasctl project scaffold exists (roadmap M4 acceptance)."
+          exit 1

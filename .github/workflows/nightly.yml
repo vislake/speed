@@ -1,0 +1,48 @@
+name: nightly
+
+# STUB -- not implemented. Triggered runs fail loudly at the guard step
+# below; nothing in this pipeline can pass silently.
+#
+# PIPELINE (docs/internal/18-cicd.md pipeline table, nightly row): the full
+# matrix plus performance-benchmark regression detection and flaky-test
+# detection, unbounded duration. Runs daily.
+#
+# DESIGN-TABLE TRIGGER: a daily schedule; enabled by the implementing round
+# (a scheduled stub would only produce daily noise).
+#
+# CONTENT PLANNED:
+#   * the full matrix -- inherits everything pr-full runs, so nightly cannot
+#     be meaningfully implemented before pr-full exists;
+#   * benchmark regression: docs/internal/20-quality-and-security.md names
+#     the planned hotspots (tenant-filtered repository queries,
+#     authorization decisions, dynamic-config reads, session validation
+#     under immediate-invalidation, metering throughput) -- no benchmark
+#     suite exists in the repository yet; benches land with the modules
+#     that own the hotspots (roadmap M1-M3);
+#   * flaky detection: nightly reruns mark unstable tests and auto-open
+#     tracking issues (20-quality-and-security.md flaky-test governance);
+#     the auto-issue mechanism needs a token with issues: write, reviewed
+#     when the round lands.
+#
+# GATE: pr-full live (roadmap M0 full-matrix acceptance) plus the first
+# benchmark suites (roadmap M1 onward).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nightly:
+    name: nightly full matrix (stub guard -- not implemented yet)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Stub guard
+        run: |
+          echo "error: the nightly pipeline is not implemented. This failing"
+          echo "run is its stub guard, so the pipeline can never pass"
+          echo "silently. Wire the full matrix + benchmark + flaky-detection"
+          echo "legs once pr-full is live and the first benchmarks exist."
+          exit 1

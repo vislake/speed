@@ -1,0 +1,45 @@
+name: e2e
+
+# STUB -- not implemented. Triggered runs fail loudly at the guard step
+# below; nothing in this pipeline can pass silently.
+#
+# PIPELINE (docs/internal/18-cicd.md pipeline table, e2e row): reference-app
+# end-to-end tests with Playwright, run on merge to main and daily. Target
+# under 20 minutes. The root CLAUDE.md Reference-App section states the CI
+# suite runs with recorded/replayed AI responses; real provider calls happen
+# only during milestone acceptance and demos.
+#
+# DESIGN-TABLE TRIGGER: push to main plus a daily schedule; both are enabled
+# by the implementing round (a scheduled stub would only produce daily
+# noise).
+#
+# WHAT EXISTS TODAY: no e2e suite -- no Playwright config, no e2e/
+# directory, no test doubles for provider calls, and no browser-driven
+# frontend (there is no web/ workspace at all yet). The reference-app
+# server itself runs and its Go module is unit-tested, but nothing
+# exercises it end to end.
+#
+# GATE: the roadmap M4 e2e item (roadmap M4 acceptance: the reference-app
+# full business loop, all key validation chains, including real image-API
+# calls). Earliest partial wiring is possible as soon as the reference-app
+# round ships a first Playwright suite.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: reference-app e2e (stub guard -- not implemented yet)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Stub guard
+        run: |
+          echo "error: the e2e pipeline is not implemented. This failing run"
+          echo "is its stub guard, so the pipeline can never pass silently."
+          echo "Wire the reference-app Playwright suite when the roadmap M4"
+          echo "e2e item lands."
+          exit 1

@@ -1,0 +1,47 @@
+name: api-contract
+
+# STUB -- not implemented. Triggered runs fail loudly at the guard step
+# below; nothing in this pipeline can pass silently.
+#
+# PIPELINE (docs/internal/18-cicd.md pipeline table, api-contract row):
+# spec linting, merge-conflict checks on spec fragments, generated-artifact
+# consistency diffs, and oasdiff breaking-change detection. Target under 5
+# minutes. Backs the root CLAUDE.md API-contract discipline: spec-first
+# ordering, no hand-written backend calls, no hand-edits of @speed/api-sdk
+# (generated artifacts are overwritten wholesale on release; CI regenerates
+# and diffs so drift fails).
+#
+# DESIGN-TABLE TRIGGER: PRs touching api/openapi.yaml or handlers, via path
+# filtering; enabled by the implementing round (no api/ tree exists yet to
+# filter on).
+#
+# WHAT EXISTS TODAY: none of the contract toolchain -- no api/ tree, no
+# spec fragments, no spec-merge step, no oapi-codegen/orval generation, no
+# merged speed.yaml, no @speed/api-sdk, no redocly rules, no oasdiff gate
+# (docs/internal/21-api-contract.md defines the planned flow). The generated
+# server interface's compile-time enforcement (CLAUDE.md API contract rule)
+# cannot engage until generation exists.
+#
+# GATE: the roadmap M0 "API contract toolchain" engineering item (spec
+# merge, oapi-codegen/orval generation, oasdiff gate, @speed/api-sdk
+# skeleton).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  api-contract:
+    name: api contract checks (stub guard -- not implemented yet)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Stub guard
+        run: |
+          echo "error: the api-contract pipeline is not implemented. This"
+          echo "failing run is its stub guard, so the pipeline can never pass"
+          echo "silently. Wire the spec-lint/merge/diff/oasdiff legs when the"
+          echo "roadmap M0 API-contract-toolchain item lands."
+          exit 1

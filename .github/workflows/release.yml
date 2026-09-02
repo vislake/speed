@@ -1,0 +1,69 @@
+name: release
+
+# STUB -- not implemented. Triggered runs fail loudly at the guard step
+# below; nothing in this pipeline can pass silently.
+#
+# PIPELINE (docs/internal/18-cicd.md, release section): the lockstep release,
+# manually dispatched with a version number (the declared `version` input
+# below is part of the contract and stays). Sequence per 18-cicd:
+#   1. preflight -- main branch green, clean workspace, version unused,
+#      changelog generated;
+#   2. full test matrix, any failure aborts;
+#   3. Go release -- one tag per module directory, go/<module>/<version>
+#      form, MUST be scripted (hand-tagging always misses one). The first
+#      release additionally scans every module go.mod for transitional
+#      `replace ... => ../<module>` lines, rewrites them to the real
+#      versions and re-runs go mod tidy (docs/internal/02-repo-and-release.
+#      md transition state; a missed line breaks consumer `go get`);
+#   4. npm release -- changesets fixed version group, published with
+#      provenance;
+#   5. artifacts -- multi-arch (amd64/arm64) images, saasctl binaries
+#      (goreleaser), the merged OpenAPI spec speed.yaml (Release asset +
+#      @speed/api-sdk + docs-site version directory);
+#   6. post-release scaffold-verify on the just-released version;
+#   7. outputs -- GitHub Release + changelog + SBOM.
+# Pre-release channels ship v<version>-rc.N first (reference-app validates,
+# then the stable release). Rollback policy: released Go tags cannot be
+# recalled (module proxies cache), so rollback = patch release, never tag
+# deletion; npm packages are deprecated, not deleted. The pipeline doc must
+# state this.
+#
+# WHAT EXISTS TODAY: none of the machinery -- no release scripts, no
+# changesets, no goreleaser config, no tags ever published. Versioning is
+# lockstep (root CLAUDE.md); the roadmap publishes externally once, as
+# v1.0 at M4.
+#
+# GATE: the roadmap M0 "lockstep release scripts" engineering item (M0 exit
+# acceptance: one command releases every module under the same version);
+# first end-to-end run at the v1.0 release (M4).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Version to release, e.g. v1.2.0 or a pre-release v1.2.0-rc.1.
+        required: true
+        type: string
+        # Format validation: workflow_dispatch inputs accept no `pattern`
+        # key, so the implementing round validates the version in the
+        # pipeline's first step against ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$
+        # and aborts the run on a mismatch.
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: lockstep release (stub guard -- not implemented yet)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Stub guard
+        run: |
+          echo "error: the release pipeline is not implemented. This failing"
+          echo "run is its stub guard, so the pipeline can never pass"
+          echo "silently. The 'version' input above is the future contract."
+          echo "Wire the 18-cicd release sequence when the roadmap M0"
+          echo "lockstep-release-scripts item lands."
+          exit 1
