@@ -70,10 +70,14 @@
 //     with ErrUnsupportedShape.
 //
 //   - Every message id must start with "<module>." -- the module's own
-//     Name plus a dot. This keeps each module's id space disjoint, which is
-//     what makes a merge unambiguous: two modules can never own the same
-//     message id, so "overlap" is a bug reported at AddModule time, never a
-//     silent override.
+//     Name plus a dot -- and AddModule rejects a module name containing a
+//     dot with ErrInvalidModuleName. Together the rules keep each module's
+//     id space disjoint by construction: a dotted name would nest one
+//     module's prefix inside another's ("my" and "my.module" could both
+//     own "my.module.user_invite"), while no id can start with two
+//     different dot-free "<module>." prefixes. Two modules can therefore
+//     never own the same message id, and a merge is unambiguous -- there
+//     is no silent override to defend against.
 //
 //   - Every language a module ships must carry the same id set, or
 //     AddModule fails with ErrParityMismatch. Parity is enforced as each

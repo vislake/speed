@@ -315,6 +315,28 @@ func TestAddModuleRejectsEmptyModuleName(t *testing.T) {
 	wantError(t, err, ErrEmptyModuleName, "")
 }
 
+func TestAddModuleRejectsDottedModuleName(t *testing.T) {
+	// A module name is the "<module>." prefix of every message id the
+	// module ships, and go-i18n silently overwrites a message whose id is
+	// added twice. A dotted name would nest one module's prefix inside
+	// another's -- "my" and "my.module" could both own
+	// "my.module.user_invite" -- so AddModule must refuse it up front,
+	// which is what keeps every module's id space disjoint by construction.
+	b := NewBuilder()
+	err := b.AddModule("notes.api", localeFS(map[string]string{
+		"zh-CN.toml": `"notes.api.x" = "中文。"` + "\n",
+		"en-US.toml": `"notes.api.x" = "text"` + "\n",
+	}))
+	wantError(t, err, ErrInvalidModuleName, `"notes.api"`)
+	// The rejection happens before anything merges: a dot-free name is
+	// still addable afterwards, and the dotted one leaves no trace.
+	addPair(t, b, "notes", notesZH, notesEN)
+	c := b.Build()
+	if got, err := c.Lookup(LocaleENUS, "notes.text_required", nil); err != nil || got == "" {
+		t.Errorf("notes id after rejected dotted AddModule: %q, %v", got, err)
+	}
+}
+
 func TestAddModuleRejectsDuplicateModule(t *testing.T) {
 	b := NewBuilder()
 	addPair(t, b, "notes", notesZH, notesEN)

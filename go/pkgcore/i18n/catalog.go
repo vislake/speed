@@ -35,6 +35,15 @@ var (
 	// ships, so an unnamed module cannot own any message.
 	ErrEmptyModuleName = errors.New("i18n: module name is empty")
 
+	// ErrInvalidModuleName is returned by (*Builder).AddModule when module
+	// contains a dot. The module name is the "<module>" half of every
+	// message id the module ships, and a dotted name would let two modules'
+	// "<module>." id prefixes nest ("my" and "my.module" could both own
+	// "my.module.user_invite", and go-i18n silently overwrites a message
+	// whose id is added twice); rejecting dots keeps every module's id
+	// space disjoint by construction.
+	ErrInvalidModuleName = errors.New("i18n: invalid module name")
+
 	// ErrDuplicateModule is returned by (*Builder).AddModule when a module
 	// with the same name was already added. Each module contributes its
 	// messages once; a second bundle from the same module would be a bug
@@ -135,7 +144,10 @@ func NewBuilder() *Builder {
 // catalog under construction.
 //
 // module must be the module's Name -- the "<module>" prefix every message
-// id it ships must start with. fsys is the module's Locales() embed.FS,
+// id it ships must start with -- and must not contain a dot: a dotted name
+// would let one module's "<module>." prefix nest inside another's, so
+// AddModule rejects it with ErrInvalidModuleName and only dot-free names
+// are accepted. fsys is the module's Locales() embed.FS,
 // holding one file per catalog language flat at its root, following the
 // file contract in the package documentation: a file is <language>.toml,
 // and the first module that ships files fixes which languages the catalog
@@ -157,6 +169,9 @@ func NewBuilder() *Builder {
 func (b *Builder) AddModule(module string, fsys fs.FS) error {
 	if module == "" {
 		return ErrEmptyModuleName
+	}
+	if strings.Contains(module, ".") {
+		return fmt.Errorf("%w: module name %q contains a dot: a module name is the \"<module>\" half of every message id it ships, and a dotted name would let two modules' id prefixes nest (\"my\" and \"my.module\" could both own \"my.module.user_invite\")", ErrInvalidModuleName, module)
 	}
 	if _, seen := b.modules[module]; seen {
 		return fmt.Errorf("%w: %q", ErrDuplicateModule, module)
