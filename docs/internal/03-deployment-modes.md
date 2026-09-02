@@ -9,7 +9,7 @@
 | | **单进程部署模式**（本地开发 / 演示 / CI） | **分布式部署模式** |
 |---|---|---|
 | 目标 | 一个二进制 + 一个数据文件即可跑起全部功能，**零外部依赖** | 完整能力、可水平扩展、数据可靠 |
-| 启动 | `./app` 或 `docker compose -f docker-compose.demo.yml up`（单容器） | `docker compose up`（app + pg + redis，可叠加观测栈） |
+| 启动 | `./app` 或 `docker compose -f docker-compose.standalone.yml up`（单容器） | `docker compose up`（app + pg + redis，可叠加观测栈） |
 | 冷启动 | 秒级 | 分钟级 |
 
 ## 能力降级矩阵
@@ -48,7 +48,7 @@
 按需组合，而非一个大文件：
 
 ```
-docker-compose.demo.yml          # 仅 app 一个容器 + SQLite 卷
+docker-compose.standalone.yml    # 仅 app 一个容器 + SQLite 卷
 docker-compose.yml               # app + postgres + redis
 docker-compose.observability.yml # 叠加 otel-collector/prometheus/tempo/loki/grafana
 docker-compose.dev-tools.yml     # 可选：MinIO、MailHog、支付沙箱代理

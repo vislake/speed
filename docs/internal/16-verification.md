@@ -22,7 +22,7 @@
 - 每个里程碑出口条件对应一组 e2e 用例，只增不减
 
 **5. 脚手架生成验证（防止模板腐化）**
-- CI 定时任务：`saasctl new tmpapp` + `create-saas-app tmpapp-web` → `go build` / `pnpm build` → 先 `docker compose -f docker-compose.demo.yml up`（应在数十秒内就绪）再 `docker compose up` → 两次都跑冒烟脚本打健康检查与登录接口
+- CI 定时任务：`saasctl new tmpapp` + `create-saas-app tmpapp-web` → `go build` / `pnpm build` → 先 `docker compose -f docker-compose.standalone.yml up`（应在数十秒内就绪）再 `docker compose up` → 两次都跑冒烟脚本打健康检查与登录接口
 - 这条流水线一旦红，说明模板与模块版本已脱节，必须立即修复
 
 **6. 国际化**

@@ -27,7 +27,7 @@ speed/
   examples/
     reference-app/                             # 强制验证消费者
   deploy/
-    docker-compose.demo.yml           # 单容器，SQLite，零外部依赖
+    docker-compose.standalone.yml     # 单容器，SQLite，零外部依赖
     docker-compose.yml                # app + postgres + redis
     docker-compose.observability.yml  # 叠加 LGTM 栈
     docker-compose.dev-tools.yml      # 可选：MinIO / MailHog / 支付沙箱
