@@ -27,8 +27,10 @@ name: pr-full
 #     Redis via testcontainers: go/pkgcore, go/jobs
 #     (exact mirror of Taskfile test:full's INTEGRATION_DIRS loop; Docker is
 #     preinstalled on ubuntu-latest runners);
-#   * the reference-app module unit suite (examples/reference-app, its own
-#     module outside go/, covered by no workspace pattern).
+#   * the reference-app module unit suite (examples/reference-app: its own
+#     module, listed in go.work but outside go/ -- covered by neither the
+#     pr-check module matrix nor the go/... import-path build, so run it
+#     dir-scoped from inside the module, as Taskfile's APP_DIR legs do).
 #
 # GATE: the roadmap M0 full-matrix acceptance (dual deployment mode x dual
 # dialect across every module). The integration-tier legs above are real
