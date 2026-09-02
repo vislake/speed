@@ -26,6 +26,8 @@ task new:module     # 脚手架自身的模块生成器（见下）
 ### 种子数据
 `task seed` 生成一套可用的演示数据：两个租户、多层级组织、若干用户与角色、示例套餐与订阅。reference-app 的演示和本地调试都依赖它，必须保持可用（纳入 CI 检查）。
 
+**当前状态：尚未实现。** reference-app 目前没有任何演示数据装载路径——`cmd/server/server.go` 只硬编码了两个演示 Host→租户映射，各表启动时为空。因此 Taskfile 里的 `task seed` 是 not-implemented stub（说明缺什么、如何临时手动演示，退出非零），待 reference-app 接入 authn/org/billing 等模块后随真正的数据装载器一起落地（见 [14 reference-app](14-reference-app.md)）。
+
 ## 模块生成器
 
 新增一个 Go module 需要八件事：go.mod、目录骨架、`AGENTS.md`、`docs/` 设计文档、迁移目录、测试骨架、CI 矩阵登记、发布脚本登记。手工做八件事必然遗漏，所以生成器 `tools/new_module.py` 自动完成其中可以安全自动化的部分，其余以**注册清单**逐项提醒，不让任何一件无声漏掉：
@@ -34,14 +36,20 @@ task new:module     # 脚手架自身的模块生成器（见下）
 python3 tools/new_module.py NAME --description '...' --design-doc docs/internal/NN-name.md
 ```
 
-生成器一次产出与现有未实现模块（`go/sharing`、`go/notification`、`go/storage`）完全一致的 stub 形态——`go/<name>/` 下的 go.mod（`module github.com/vislake/speed/go/<name>` + 裸 `go 1.23` 指令）、doc.go、`AGENTS.md` 三个文件，仅此而已。它**从不改写共享仓库文件**（go.work、CI 矩阵、发布脚本等）——一个会静默改写 go.work 与 CI 矩阵的脚手架会让评审 diff 不可读，所以注册类事项以清单打印，交给人（或未来接入的 Taskfile 任务）执行。八件事的覆盖情况：
+生成器一次产出与现有未实现模块（`go/sharing`、`go/notification`、`go/storage`）完全一致的 stub 形态——`go/<name>/` 下的 go.mod（`module github.com/vislake/speed/go/<name>` + 裸 `go 1.23` 指令）、doc.go、`AGENTS.md` 三个文件，仅此而已。它**从不改写共享仓库文件**（go.work、CI 矩阵、发布脚本等）——一个会静默改写 go.work 与 CI 矩阵的脚手架会让评审 diff 不可读，所以注册类事项以清单打印，交给人逐项执行——`task new:module` 只是转调入口，同样只打印清单、绝不代写共享文件。八件事的覆盖情况：
 
 - **go.mod、目录骨架、`AGENTS.md`**：由生成器产出，即 stub 的全部文件。
 - **`docs/` 设计文档**：作为 `--design-doc` 输入参数；尚不存在时生成器仅警告、不失败——但 `AGENTS.md` 的 stub 行已经指向它，设计文档必须与该模块同 PR 提交。
 - **CI 矩阵登记、发布脚本登记**：出现在注册清单里（连同 go.work `use` 条目与 roadmap/文档导航登记）。这两类登记漏掉不会立即报错，却会让模块漏跑 CI、漏打 lockstep tag，正是生成器要兜住的遗漏。
 - **迁移目录、测试骨架**：stub 没有迁移也没有测试，生成器不为它们占位空目录；两者在模块的实现轮次随代码落地（版本化迁移与测试要求见根 [CLAUDE.md](../../CLAUDE.md)），比骨架阶段占位更贴近真实状态。
 
-`task new:module` 是这层脚手架的 Taskfile 包装：stanza 在后续轮次接入并转调本脚本（预期接线见脚本 `--help` 的 epilog），在那之前直接运行上面的 `python3` 命令。同理的 `task new:npm-package` 也尚未实现——仓库还没有 web/ 工作区与 npm 包模板，脚本的 `--category npm` 目前直接拒绝。这是脚手架项目对自己的"脚手架化"——如果我们自己都嫌新增模块麻烦，说明模板设计有问题。
+`task new:module` 是这层脚手架的 Taskfile 包装，已接线转调本脚本（接线契约见脚本 `--help` 的 epilog）：
+
+```
+task new:module NAME=<name> DESCRIPTION='...' DESIGN_DOC=docs/internal/NN-<name>.md
+```
+
+直接运行上面的 `python3` 命令效果相同。同理的 `task new:npm-package` 也尚未实现——仓库还没有 web/ 工作区与 npm 包模板，脚本的 `--category npm` 目前直接拒绝。这是脚手架项目对自己的"脚手架化"——如果我们自己都嫌新增模块麻烦，说明模板设计有问题。
 
 ## 分支与合并策略
 
