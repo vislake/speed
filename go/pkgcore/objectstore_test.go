@@ -376,6 +376,76 @@ func TestLocalObjectStore_PrefixClash_IsRefused(t *testing.T) {
 	}
 }
 
+// TestLocalObjectStore_PutAfterDeepDelete_ReclaimsTheEmptyTraces pins the
+// complement of the prefix-clash rule. Deleting a deep key leaves the
+// directories that led to it behind, empty once the object is gone, and an
+// empty directory is only a trace: no object any longer claims the tree below
+// the key, so storing the key itself or a shorter prefix of the deleted key is
+// legal and must succeed, the traces clearing as the put lands. Until they
+// did, such a put failed against the leftover directory while the S3 backend
+// accepted the same call sequence, so the two implementations diverged on a
+// legal one.
+func TestLocalObjectStore_PutAfterDeepDelete_ReclaimsTheEmptyTraces(t *testing.T) {
+	root, store := newRootStore(t)
+
+	// A deep key, then its deletion: only the empty directory traces "a" and
+	// "a/b" remain below the root.
+	putObject(t, store, "a/b/c", "deep")
+	if err := store.DeleteObject(context.Background(), "a/b/c"); err != nil {
+		t.Fatalf("DeleteObject() error = %v, want nil", err)
+	}
+
+	// Storing the deleted key's shallowest prefix lands where its trace was:
+	// the empty directories give way to the object.
+	putObject(t, store, "a", "the trace became a leaf")
+	if got := getObject(t, store, "a"); got != "the trace became a leaf" {
+		t.Errorf("the object over the reclaimed trace reads %q, want %q", got, "the trace became a leaf")
+	}
+	// The trace is gone, so nothing of the deleted key is left to read.
+	if _, err := store.GetObject(context.Background(), "a/b/c"); !errors.Is(err, ErrObjectNotFound) {
+		t.Errorf("GetObject() below the reclaimed trace error = %v, want ErrObjectNotFound", err)
+	}
+
+	// The same reclamation one level down, where the put descends into the
+	// surviving trace "x" before landing on the trace "x/y".
+	putObject(t, store, "x/y/z", "deep again")
+	if err := store.DeleteObject(context.Background(), "x/y/z"); err != nil {
+		t.Fatalf("DeleteObject() error = %v, want nil", err)
+	}
+	putObject(t, store, "x/y", "a middle leaf")
+	if got := getObject(t, store, "x/y"); got != "a middle leaf" {
+		t.Errorf("the object over the deeper reclaimed trace reads %q, want %q", got, "a middle leaf")
+	}
+	if _, err := store.GetObject(context.Background(), "x"); !errors.Is(err, ErrObjectNotFound) {
+		t.Errorf("GetObject(%q) error = %v, want ErrObjectNotFound", "x", err)
+	}
+
+	// The file system below the root holds exactly the two objects: the "a"
+	// file and the "x" directory that the "x/y" object lives in, and no trace
+	// of the deleted keys.
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Errorf("the store root holds %v after the reclaimed puts, want the two objects' entries only", entries)
+	}
+	for _, entry := range entries {
+		switch entry.Name() {
+		case "a":
+			if entry.IsDir() {
+				t.Error("the reclaimed key \"a\" is still a directory trace, want the object file")
+			}
+		case "x":
+			if !entry.IsDir() {
+				t.Error("the surviving directory \"x\" became a file, want the directory holding \"x/y\"")
+			}
+		default:
+			t.Errorf("the store root holds an unexpected entry %q", entry.Name())
+		}
+	}
+}
+
 // TestLocalObjectStore_SymlinksAreNeverFollowed pins the local backend's
 // integrity rule: a symbolic link anywhere on a key's path is treated as a
 // breach of the store's root rather than as routing. Getting through one is

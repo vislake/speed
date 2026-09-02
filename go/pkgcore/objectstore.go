@@ -314,15 +314,80 @@ func (s *localObjectStore) PutObject(ctx context.Context, key string, r io.Reade
 		return fmt.Errorf("pkgcore: local object store: %w", err)
 	}
 
-	// Rename replaces whatever sits at the final path, whether that is the
-	// previous object or nothing, and does so atomically; it never follows a
-	// symbolic link at the final path, so a link planted there is replaced,
-	// not written through.
-	if err := os.Rename(temporary.Name(), filepath.Join(dir, segments[len(segments)-1])); err != nil {
-		return fmt.Errorf("pkgcore: local object store: %w", err)
+	// Rename replaces whatever sits at the final path -- the previous object,
+	// a symbolic link (replaced, never written through), or nothing -- and
+	// does so atomically; it never follows a symbolic link at the final path,
+	// so a link planted there is replaced, not written through. One thing
+	// rename cannot replace is a directory. A directory at the final path is
+	// the trace of longer keys: deleting a deep key removes its object file
+	// but leaves the directories that led to it behind, empty once the object
+	// is gone. Storing a key only such empty traces stand in the way of is
+	// legal -- no object any longer claims the tree below the key -- so the
+	// traces are cleared and the rename retried once. The clearing decides
+	// whether the put may proceed at all: only empty directories can be
+	// removed, so a subtree that still holds a stored object anywhere below
+	// it survives and the put is refused as the prefix clash it would be.
+	// A trace can also vanish between the failed rename and the clearing (a
+	// concurrent delete removing it), which is the same "retry the rename"
+	// outcome, and a concurrent put can refill a trace during the clearing,
+	// which surfaces as the refusal or the retried rename's error: the two
+	// puts race for keys that cannot coexist, so one of them failing is a
+	// legal outcome, exactly as it is on the other clash points. File systems
+	// disagree on which error a file-to-directory rename is -- EEXIST here,
+	// EISDIR on Linux -- so both are treated as the same "a directory sits
+	// there" signal.
+	finalPath := filepath.Join(dir, segments[len(segments)-1])
+	publishErr := os.Rename(temporary.Name(), finalPath)
+	if errors.Is(publishErr, syscall.EEXIST) || errors.Is(publishErr, syscall.EISDIR) {
+		if err := s.removeEmptyTraces(finalPath); err != nil {
+			return err
+		}
+		publishErr = os.Rename(temporary.Name(), finalPath)
+	}
+	if publishErr != nil {
+		return fmt.Errorf("pkgcore: local object store: %w", publishErr)
 	}
 	cleanedUp = true
 	return nil
+}
+
+// removeEmptyTraces removes directory and the empty-directory traces below
+// it, the remnants a deep key's deletion left behind, so that a later put of
+// the directory's key can rename its object file onto the cleared path. The
+// whole subtree must consist of directories: the clearing runs only because
+// no object may be stored under the key being put, so a subtree holding a
+// stored object, a symbolic link or a foreign entry anywhere below is
+// refused untouched. Entries are judged by their directory-entry type, never
+// by opening them, and every removal is an rmdir, which removes nothing but
+// an empty directory: an object that a concurrent put lands mid-clearing is
+// never deleted, and the refusal names the directory the put's key would
+// become a proper prefix of. A directory that vanishes mid-clearing (a
+// concurrent delete removing the same trace) is treated as already cleared,
+// DeleteObject's own empty-directory race tolerance.
+func (s *localObjectStore) removeEmptyTraces(path string) error {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("pkgcore: local object store: %w", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			return fmt.Errorf("pkgcore: local object store: the path at %q is a directory that still holds objects stored under longer keys, and a key must not be a proper prefix of a stored key", path)
+		}
+		if err := s.removeEmptyTraces(filepath.Join(path, entry.Name())); err != nil {
+			return err
+		}
+	}
+	err = syscall.Rmdir(path)
+	if err == nil || errors.Is(err, syscall.ENOENT) {
+		return nil
+	}
+	if errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) || errors.Is(err, syscall.ENOTDIR) {
+		return fmt.Errorf("pkgcore: local object store: the path at %q is a directory that still holds objects stored under longer keys, and a key must not be a proper prefix of a stored key", path)
+	}
+	return fmt.Errorf("pkgcore: local object store: %w", err)
 }
 
 // GetObject implements ObjectStore.GetObject by opening the object's file
