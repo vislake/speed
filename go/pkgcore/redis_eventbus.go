@@ -148,6 +148,10 @@ func NewRedisEventBus(client *redis.Client) *RedisEventBus {
 	if client == nil {
 		panic("pkgcore: NewRedisEventBus requires a non-nil *redis.Client")
 	}
+	//nolint:gosec // G118 would have this cancel deferred, but the bus's
+	// lifetime outlives this constructor: the cancel is stored on the bus and
+	// called exactly once by Close (see b.cancel under the once guard), which
+	// is what stops the reader goroutines.
 	ctx, cancel := context.WithCancel(context.Background())
 	return &RedisEventBus{
 		client:     client,

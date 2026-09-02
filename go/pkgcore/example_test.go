@@ -431,6 +431,10 @@ func ExampleNewSMTPMailer() {
 		Password: "s3cret",
 		TLSMode:  pkgcore.SMTPTLSModeAuto,
 	})
+	//nolint:staticcheck // QF1011: the assertion doubles as written doc that
+	// this constructor satisfies the Mailer interface -- the console-mailer
+	// counterpart of ExampleNewConsoleMailer -- so it is kept rather than
+	// inlined, which would leave the value unused.
 	var _ pkgcore.Mailer = mailer // drop-in for the console mailer of ExampleNewConsoleMailer
 
 	fmt.Println("mailer wired; the first Send dials the relay")
@@ -603,6 +607,10 @@ func ExampleNewS3ObjectStore() {
 		Region:    "us-east-1",
 		UseSSL:    true, // HTTPS: the setting for anything beyond a local MinIO
 	})
+	//nolint:staticcheck // QF1011: the assertion doubles as written doc that
+	// this constructor satisfies the ObjectStore interface -- the local-store
+	// counterpart of ExampleNewLocalObjectStore -- so it is kept rather than
+	// inlined, which would leave the value unused.
 	var _ pkgcore.ObjectStore = store // drop-in for the local store of ExampleNewLocalObjectStore
 
 	fmt.Println("store wired; the first operation contacts the service")

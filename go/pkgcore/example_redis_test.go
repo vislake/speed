@@ -14,6 +14,7 @@ import (
 	"fmt"
 
 	"github.com/redis/go-redis/v9"
+
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -29,6 +30,9 @@ func ExampleNewRedisKVStore() {
 	defer client.Close()
 
 	kv := pkgcore.NewRedisKVStore(client)
+	//nolint:staticcheck // QF1011: the assertion doubles as written doc that
+	// this constructor satisfies the KVStore interface -- the memory-store
+	// counterpart of ExampleKVStore -- so it is kept rather than inlined.
 	var _ pkgcore.KVStore = kv // drop-in for the memory store of ExampleKVStore
 
 	fmt.Println("store wired; its first operation dials the server")
