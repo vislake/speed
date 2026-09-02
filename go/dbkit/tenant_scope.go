@@ -339,12 +339,12 @@ func isTenantScopedValue(v interface{}) bool {
 	}
 
 	t := reflect.TypeOf(v)
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.Kind() == reflect.Slice || t.Kind() == reflect.Array {
 		elem := t.Elem()
-		for elem.Kind() == reflect.Ptr {
+		for elem.Kind() == reflect.Pointer {
 			elem = elem.Elem()
 		}
 		t = elem
@@ -406,7 +406,7 @@ func updatePayloadTenantID(stmt *gorm.Statement) (value string, present bool) {
 	}
 
 	destValue := reflect.ValueOf(stmt.Dest)
-	for destValue.Kind() == reflect.Ptr {
+	for destValue.Kind() == reflect.Pointer {
 		if destValue.IsNil() {
 			return "", false
 		}
