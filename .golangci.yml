@@ -1,8 +1,10 @@
 # golangci-lint configuration for the speed monorepo.
 # Schema: golangci-lint v2 (see docs/internal/20-quality-and-security.md).
 #
-# This file establishes the standard now, while the modules are still stubs, so
-# that linting is not retrofitted later. It is not yet invoked by Taskfile.yml.
+# This file establishes the standard early, so linting is never retrofitted
+# after the fact. Taskfile.yml's lint task invokes it (from each module
+# directory in turn, once golangci-lint is on PATH -- see the lint task's
+# comment for why it cannot run from the go.work workspace root).
 version: "2"
 
 run:

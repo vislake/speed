@@ -9,9 +9,39 @@ version: '3'
 #   pattern ./...: directory prefix . does not contain modules listed in go.work
 # Anything that must span every module therefore uses the import-path pattern
 # github.com/vislake/speed/go/... instead of ./... .
+#
+# The commands planned in docs/internal/19-dev-workflow.md and the root
+# CLAUDE.md are either implemented honestly or present as an explicit
+# "not implemented yet" stub that exits non-zero; nothing here promises
+# behaviour the repository cannot yet deliver. The three discipline checkers in
+# tools/ (scan_cjk.py, check_i18n_keys.py, check_repo_isolation.py) are
+# intentionally wired into no task: docs/internal/18-cicd.md's discipline table
+# assigns them to CI workflows, which land in a later round. Until then they
+# run directly, exactly as tools/README.md documents.
+#
+# NOTE ON RUNNING IN ANOTHER DIRECTORY
+# Commands that must run from a module directory rather than the workspace
+# root use `cd "..." && ...` inside the command string. The per-command `dir:`
+# option of the Taskfile schema is NOT used: task 3.53.1 (the version verified
+# against this file) silently ignores it and runs the command from the
+# taskfile's own directory -- which, for a pattern like ./..., is exactly the
+# go.work-root failure this file's NOTE ON PACKAGE PATTERNS describes. Task-
+# level `dir:` works, but these tasks interleave root-level and module-level
+# legs, so the shell cd is the honest form.
 
 vars:
   ALL_PKGS: github.com/vislake/speed/go/...
+  # examples/reference-app is its own module with its own go.mod. It is listed
+  # in go.work but lives outside go/, so patterns over {{.ALL_PKGS}} never
+  # reach it: tasks that must exercise it run a dir-scoped command from
+  # {{.APP_DIR}} instead.
+  APP_DIR: examples/reference-app
+  # Modules with a Docker-backed integration tier under integration_test/
+  # (go test -tags=integration ./... from the module directory): PostgreSQL via
+  # testcontainers for dbkit and tenancy (including tenancy's tenancytest
+  # subpackage), Redis for jobs. Keep in step with the modules' actual
+  # integration_test directories.
+  INTEGRATION_DIRS: go/dbkit go/tenancy go/jobs
 
 tasks:
   default:
@@ -22,53 +52,164 @@ tasks:
 
   setup:
     desc: Sync the Go workspace so every module agrees on shared dependency versions.
+    # docs/internal/19-dev-workflow.md promises more for setup -- toolchain
+    # installation (mise) and database initialization. Neither can be wired
+    # yet: the repo has no mise config or lefthook file (toolchain pinning and
+    # pre-commit hooks are a later round), and standalone mode has nothing to
+    # initialize -- the reference app opens its own SQLite file and runs its
+    # migrations at server start. What setup does today is the part that
+    # exists: resolve and record the workspace's shared dependency graph.
+    #
+    # When the sync moves a module's go.mod/go.sum (a dependency bumped by the
+    # workspace union, or a require relabeled), run `go mod tidy` from inside
+    # that module and commit both together: sync writes what the workspace
+    # needs, and the module's own standalone guard test (go/pkgcore and
+    # go/tenancy standalone_build_test.go, which build with GOWORK=off) fails
+    # until the module's go.sum also carries the standalone graph entries.
     cmds:
       - go work sync
 
   test:
-    desc: Run unit tests with the race detector and coverage.
-    # go/pkgcore, go/dbkit, go/tenancy, go/observability and go/jobs now have
-    # real code and tests; every other module under go/ is still a stub with
-    # no test files. This still only runs pkgcore's -- widen to {{.ALL_PKGS}}
-    # to pick up dbkit, tenancy, observability and jobs too, and once more
-    # modules land. examples/reference-app is a separate module outside go/
-    # (its own go.mod), so {{.ALL_PKGS}} would not reach it even after
-    # widening; it needs its own `go test ./...` run from
-    # examples/reference-app, e.g. a dedicated task once this one is widened.
+    desc: Run the unit suite of every real module (workspace and reference app).
+    # Deliberately no -race/-cover: this is the fast local loop behind
+    # docs/internal/19-dev-workflow.md's "task test" (run the affected
+    # modules' tests). The race detector and coverage live in test:full,
+    # which also adds the Docker-backed integration tiers.
     cmds:
-      - go test ./go/pkgcore/... -race -cover
+      - go test {{.ALL_PKGS}}
+      - cd "{{.APP_DIR}}" && go test ./...
+
+  test:full:
+    desc: Full matrix -- unit suite under -race with coverage, then the Docker-backed integration tiers (PostgreSQL, Redis). Requires Docker.
+    # docs/internal/19-dev-workflow.md's full matrix will eventually mean dual
+    # deployment mode x dual dialect across every module. Until the
+    # distributed mode and a second dialect's integration tiers exist, the
+    # honest full form is: the whole unit suite under the race detector with
+    # coverage, plus every Docker-backed integration tier that exists today
+    # (see {{.INTEGRATION_DIRS}}). Each tier must be run from its own module
+    # directory -- the integration build tag is what keeps a plain
+    # `go test ./...` from ever touching them.
+    cmds:
+      - go test -race -cover {{.ALL_PKGS}}
+      - cd "{{.APP_DIR}}" && go test -race -cover ./...
+      - |
+        for d in {{.INTEGRATION_DIRS}}; do
+          echo "== go test -race -tags=integration ./... ($d)"
+          (cd "$d" && go test -race -tags=integration ./...) || exit 1
+        done
 
   lint:
-    desc: Vet every module. golangci-lint is the project standard but is not wired in yet.
+    desc: Vet every module (workspace and reference app), then run golangci-lint per module when it is installed.
+    # go vet over the import-path pattern covers every module under go/ in one
+    # workspace-wide pass; the reference app is a separate module outside go/
+    # and gets its own dir-scoped vet.
+    #
+    # golangci-lint is the project standard (docs/internal/20-quality-and-
+    # security.md; .golangci.yml at the repo root, v2 schema). It cannot run
+    # from the workspace root, though: with go.work in effect, golangci-lint
+    # v2 silently lints nothing there (logs "typechecking error ... directory
+    # prefix . does not contain modules listed in go.work", reports 0 issues,
+    # and exits 0). It must run from inside a module directory, so when it is
+    # installed this task loops over the use entries of go.work -- which keeps
+    # newly scaffolded modules and the reference app covered automatically --
+    # and runs it once per module.
     cmds:
       - go vet {{.ALL_PKGS}}
+      - cd "{{.APP_DIR}}" && go vet ./...
       - |
         if command -v golangci-lint >/dev/null 2>&1; then
-          echo "note: golangci-lint is installed and .golangci.yml is present, but this task"
-          echo "      deliberately does not invoke it yet -- the modules are still stubs."
-          echo "      Run 'golangci-lint run' manually. See docs/internal/20-quality-and-security.md."
+          for d in $(awk 'NF && $1 ~ /^\.\// { gsub(/^"|"$/, "", $1); print $1 }' go.work); do
+            echo "== golangci-lint run ./... ($d)"
+            (cd "$d" && golangci-lint run ./...) || exit 1
+          done
         else
-          echo "note: golangci-lint is NOT installed. It is required for full linting per"
-          echo "      docs/internal/20-quality-and-security.md, and it is not yet wired"
-          echo "      into this Taskfile. Only 'go vet' ran above."
+          echo "note: golangci-lint is not on PATH, so only the go vet legs ran above. It"
+          echo "      is the project standard (docs/internal/20-quality-and-security.md,"
+          echo "      .golangci.yml at the repo root) and this task runs it per module once"
+          echo "      it is installed -- mise will pin it when the toolchain round lands"
+          echo "      (docs/internal/19-dev-workflow.md). Run it manually from any module"
+          echo "      directory:  golangci-lint run ./..."
         fi
 
   dev:
-    desc: Not implemented -- this task does not yet wire up a standalone-mode run.
+    desc: Not implemented -- the planned standalone-mode dev loop (backend + frontend, hot reload) does not exist yet.
     cmds:
       - |
         echo "dev: not implemented yet."
         echo
-        echo "go/pkgcore, go/dbkit, go/tenancy, go/observability and go/jobs have"
-        echo "real implementations now, and"
-        echo "examples/reference-app/cmd/server is a real, runnable standalone-mode server"
-        echo "built on them -- see examples/reference-app/README.md. Run it directly:"
+        echo "What IS runnable today: the reference-app server in standalone deployment"
+        echo "mode (single process, SQLite, zero external dependencies), built on the"
+        echo "real modules -- pkgcore, dbkit, tenancy, observability (and, once its"
+        echo "round lands, the rest). See examples/reference-app/README.md. Run it"
+        echo "directly:"
         echo "    cd examples/reference-app && go run ./cmd/server"
+        echo "It listens on :8080 (override with PORT) and stores to ./reference-app.db"
+        echo "(override with SPEED_DB_PATH)."
         echo
-        echo "This task itself does not run that yet: it has no hot reload and no"
-        echo "frontend, so it is not the 'backend + frontend in standalone deployment mode with hot"
-        echo "reload' target the root CLAUDE.md's Planned Commands describe. Every other"
-        echo "module under go/ is still a stub (go.mod + doc.go + AGENTS.md)."
-        echo
-        echo "See docs/internal/15-roadmap.md for the delivery order."
+        echo "This task itself does not run that: the 'task dev' target promises backend"
+        echo "+ frontend in standalone deployment mode with hot reload. There is no"
+        echo "web/ frontend workspace, no hot-reload runner, and no composed dev loop"
+        echo "in this repository yet (docs/internal/19-dev-workflow.md,"
+        echo "docs/internal/15-roadmap.md) -- those land in later rounds."
         exit 1
+
+  api:gen:
+    desc: Not implemented -- the API contract toolchain (spec merge, backend interface and frontend sdk generation) does not exist yet.
+    cmds:
+      - |
+        echo "api:gen: not implemented yet."
+        echo
+        echo "The planned command merges the module OpenAPI spec fragments and generates"
+        echo "the backend server interfaces (oapi-codegen) and the frontend sdk (orval)"
+        echo "-- see docs/internal/21-api-contract.md and the contract-change flow in"
+        echo "docs/internal/19-dev-workflow.md. None of that toolchain exists in this"
+        echo "repository yet: there is no api/ tree, no merged spec, no @speed/api-sdk,"
+        echo "and no web/ frontend workspace. The toolchain round (docs/internal/"
+        echo "15-roadmap.md's API-contract items) delivers it; until then there is"
+        echo "nothing for this task to run."
+        exit 1
+
+  docs:serve:
+    desc: Not implemented -- the docs site does not exist yet.
+    cmds:
+      - |
+        echo "docs:serve: not implemented yet."
+        echo
+        echo "The planned command previews the docs site locally. There is no docs site"
+        echo "in this repository yet (no docs/site/ tree, no site tooling) -- the"
+        echo "documentation-engineering round per docs/internal/15-roadmap.md and"
+        echo "docs/internal/13-documentation-standards.md will deliver the skeleton."
+        echo "Until then, preview the design docs directly as markdown:"
+        echo "    open docs/internal/00-overview.md"
+        exit 1
+
+  seed:
+    desc: Not implemented -- no demo-data seeding path exists in the reference app yet.
+    cmds:
+      - |
+        echo "seed: not implemented yet."
+        echo
+        echo "docs/internal/19-dev-workflow.md plans 'task seed' to generate demo data"
+        echo "(two tenants, a multi-level org tree, users and roles, sample plans and"
+        echo "subscriptions) that reference-app demos and local debugging depend on."
+        echo "The reference app has no seeding path today: cmd/server/server.go only"
+        echo "hard-codes two demo Host-to-tenant mappings (acme/globex), and every"
+        echo "table starts empty at boot. A real demo-data loader lands with the"
+        echo "modules it needs (authn, org, billing -- see examples/reference-app/"
+        echo "README.md and docs/internal/14-reference-app.md)."
+        echo
+        echo "For a manual demo today, run the server and drive it with curl, exactly"
+        echo "as examples/reference-app/README.md's 'Try it' section shows."
+        exit 1
+
+  new:module:
+    desc: Scaffold a new Go module stub under go/<name> and print its registration checklist.
+    # Wraps tools/new_module.py; the generator contract is documented in the
+    # script's --help epilog and in docs/internal/19-dev-workflow.md's
+    # module-generator section. Pass the arguments as CLI vars:
+    #   task new:module NAME=sharing DESCRIPTION='...' DESIGN_DOC=docs/internal/NN-name.md
+    # The script prints a registration checklist (go.work use entry, CI matrix
+    # row, lockstep release tag, roadmap and navigation rows) for the human to
+    # perform -- it never rewrites shared repository files itself.
+    cmds:
+      - python3 tools/new_module.py {{.NAME}} --description '{{.DESCRIPTION}}' --design-doc {{.DESIGN_DOC}}
