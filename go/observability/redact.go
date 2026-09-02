@@ -336,9 +336,14 @@ var secretShapePatterns = []secretShapePattern{
 	{
 		// JSON Web Tokens: the base64url header of a real JWT always
 		// starts with "eyJ" ({"...), which is a far more precise anchor
-		// than any generic "three dot-separated segments" rule.
+		// than any generic "dot-separated segments" rule. JOSE compact
+		// tokens carry three (JWS) or five (JWE) dot-separated segments,
+		// so the shape consumes the whole run of segments after the
+		// header -- at least two of them, and any number more -- rather
+		// than stopping at the first three, which would leave a JWE's
+		// ciphertext and tag segments in plaintext behind the marker.
 		gate: func(s string) bool { return strings.Contains(s, "eyJ") },
-		re:   regexp.MustCompile(`\beyJ[a-zA-Z0-9_-]{6,}\.[a-zA-Z0-9_-]{6,}\.[a-zA-Z0-9_-]{6,}`),
+		re:   regexp.MustCompile(`\beyJ[a-zA-Z0-9_-]{6,}(?:\.[a-zA-Z0-9_-]{6,}){2,}`),
 		repl: RedactedValue,
 	},
 	{

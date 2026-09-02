@@ -22,6 +22,16 @@ const (
 	testSecret = "sup3r-s3cr3t-v4lue-9876543210"
 	testBearer = "Bearer abcDEFgh1234567890XYZmnopQRSTuvWX"
 	testJWT    = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.abcdefghijklmnopqrstuvwxyzABCDEFGHIJ"
+	// testJWE is a five-segment JOSE compact token (JWE:
+	// header.encrypted_key.iv.ciphertext.tag): testJWT's three segments
+	// plus the two trailing segments a JWE carries for ciphertext and
+	// authentication tag. testJWETail names those trailing segments on
+	// their own, so a test can assert that no fragment of them survives
+	// masking -- the leak a shape rule stopping at three segments leaves
+	// in plaintext after the redaction marker.
+	testJWETail = ".abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab" +
+		".abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789cd"
+	testJWE = testJWT + testJWETail
 )
 
 // logThrough logs msg with args through a FromContext logger bound to buf
@@ -237,9 +247,24 @@ func TestRedact_SecretShapesInValues(t *testing.T) {
 			wantMask: []string{obs.RedactedValue},
 		},
 		{
-			name:   "jwt as whole value",
-			value:  testJWT,
-			secret: testJWT,
+			name:     "jwt as whole value",
+			value:    testJWT,
+			secret:   testJWT,
+			wantMask: []string{obs.RedactedValue},
+		},
+		{
+			// A JWE has five dot-separated segments; the trailing
+			// ciphertext and tag segments must not survive masking.
+			name:     "jwe five segments as whole value",
+			value:    testJWE,
+			secret:   testJWETail,
+			wantMask: []string{obs.RedactedValue},
+		},
+		{
+			name:     "jwe five segments embedded in text",
+			value:    "inbound " + testJWE + " rejected by policy",
+			secret:   testJWETail,
+			wantKeep: []string{"inbound ", " rejected by policy"},
 			wantMask: []string{obs.RedactedValue},
 		},
 		{
