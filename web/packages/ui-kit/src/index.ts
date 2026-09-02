@@ -11,3 +11,8 @@
  */
 
 export { UI_KIT_NAMESPACE, uiKitResources } from './resources.js'
+export { createAppTheme, type AppTheme } from './theme/createAppTheme.js'
+export {
+  AppThemeProvider,
+  type AppThemeProviderProps,
+} from './theme/AppThemeProvider.js'

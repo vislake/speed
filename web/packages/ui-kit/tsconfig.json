@@ -2,6 +2,10 @@
   "extends": "../../tsconfig.base.json",
   "include": ["src", "test-utils"],
   "compilerOptions": {
+    // ui-kit is the first DOM-rendering package: JSX compiles through the
+    // automatic runtime (react-jsx). The shared base stays JSX-free so the
+    // data-only packages keep their plain setting.
+    "jsx": "react-jsx",
     // ui-kit is the first package that imports workspace siblings
     // (@speed/tokens, @speed/i18n) at runtime. The siblings' published
     // "types" point into their dist/, which is never committed and not yet

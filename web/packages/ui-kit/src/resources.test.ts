@@ -6,11 +6,18 @@
  * registerNamespace, so this test proves the bundle by registering it on
  * a fresh instance. A key added to one language file and forgotten in the
  * other fails here before any component can ship it.
+ *
+ * Language text is asserted against the shipped JSON bundles (the
+ * repo-authorized home of CJK), never inline: a rendering test compares
+ * t() output to the bundle value, which keeps sources and tests
+ * CJK-free while proving the registered bundle is what renders.
  */
 
 import { describe, expect, it } from 'vitest'
 import { createI18n, registerNamespace } from '@speed/i18n'
 import { UI_KIT_NAMESPACE, uiKitResources } from './resources.js'
+import zhCN from './locales/zh-CN.json' with { type: 'json' }
+import enUS from './locales/en-US.json' with { type: 'json' }
 
 function newInstance(): ReturnType<typeof createI18n> {
   return createI18n({
@@ -37,31 +44,41 @@ describe('ui-kit resources', () => {
     expect(sections).toEqual(['confirmDialog', 'dataTable', 'emptyState', 'form'])
   })
 
-  it('render real zh-CN text through the registered namespace', () => {
+  it('render the zh-CN bundle verbatim through the registered namespace', () => {
     const i18n = newInstance()
     registerNamespace(i18n, UI_KIT_NAMESPACE, uiKitResources)
-    expect(i18n.t('emptyState.empty.title', { ns: UI_KIT_NAMESPACE })).toBe('暂无数据')
-    expect(i18n.t('confirmDialog.confirmLabel', { ns: UI_KIT_NAMESPACE })).toBe('确认')
+    expect(i18n.t('emptyState.empty.title', { ns: UI_KIT_NAMESPACE })).toBe(
+      zhCN.emptyState.empty.title,
+    )
+    expect(i18n.t('confirmDialog.confirmLabel', { ns: UI_KIT_NAMESPACE })).toBe(
+      zhCN.confirmDialog.confirmLabel,
+    )
   })
 
-  it('render real en-US text through the registered namespace after a language switch', async () => {
+  it('render the en-US bundle verbatim after a language switch', async () => {
     const i18n = newInstance()
     registerNamespace(i18n, UI_KIT_NAMESPACE, uiKitResources)
     await i18n.changeLanguage('en-US')
-    expect(i18n.t('emptyState.empty.title', { ns: UI_KIT_NAMESPACE })).toBe('No data yet')
-    expect(i18n.t('dataTable.loading', { ns: UI_KIT_NAMESPACE })).toBe('Loading')
+    expect(i18n.t('emptyState.empty.title', { ns: UI_KIT_NAMESPACE })).toBe(
+      enUS.emptyState.empty.title,
+    )
+    expect(i18n.t('dataTable.loading', { ns: UI_KIT_NAMESPACE })).toBe(
+      enUS.dataTable.loading,
+    )
   })
 
-  it('interpolate the dataTable pagination summary in both languages', async () => {
+  it('interpolate the pagination summary from each bundle template', async () => {
     const i18n = newInstance()
     registerNamespace(i18n, UI_KIT_NAMESPACE, uiKitResources)
     const ns = UI_KIT_NAMESPACE
-    expect(
-      i18n.t('dataTable.displayedRows', { ns, from: 1, to: 5, count: 30 }),
-    ).toBe('第 1–5 条，共 30 条')
+    const render = (template: string) =>
+      template.replace('{{from}}', '1').replace('{{to}}', '5').replace('{{count}}', '30')
+    expect(i18n.t('dataTable.displayedRows', { ns, from: 1, to: 5, count: 30 })).toBe(
+      render(zhCN.dataTable.displayedRows),
+    )
     await i18n.changeLanguage('en-US')
     expect(i18n.t('dataTable.displayedRows', { ns, from: 1, to: 5, count: 30 })).toBe(
-      '1–5 of 30',
+      render(enUS.dataTable.displayedRows),
     )
   })
 

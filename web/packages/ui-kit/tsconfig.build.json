@@ -15,6 +15,7 @@
     // type-checks against are never stale.
     "module": "nodenext",
     "moduleResolution": "nodenext",
+    "jsx": "react-jsx",
     "noEmit": false,
     "declaration": true,
     "outDir": "dist",
