@@ -115,8 +115,12 @@ func NormalizeEmail(raw string) (string, error) {
 // "+1(555)0100", "+1.555.0100" and "+15550100" all normalize to the same
 // "+15550100".
 //
-// Anything that is not an E.164-form number is an error rather than a
-// best-effort guess:
+// The checks below are syntactic, not semantic: anything failing them is an
+// error rather than a best-effort guess, while anything passing them
+// normalizes consistently on both sides of a lookup — whether the digits
+// actually form a real, dialable E.164 number (a plausible country code and
+// subscriber number) is the caller's input-quality problem, exactly the
+// division of labor NormalizeEmail documents for addresses:
 //
 //   - No leading "+" is an error. A bare national number ("15550100")
 //     cannot be normalized to E.164 without knowing its country, and this
@@ -124,10 +128,12 @@ func NormalizeEmail(raw string) (string, error) {
 //     guessing one would compute a different index than a write that stored
 //     the full E.164 form, and lookups would fail. Inputs must carry the
 //     country code before they reach this normalizer.
-//   - More than 15 digits is an error (the E.164 limit).
+//   - More than 15 digits after the "+" is an error (the E.164 limit).
 //   - Any other character — dialing extensions, letters, a second "+" — is
 //     an error, so such input surfaces immediately instead of quietly
 //     producing an index that never matches anything.
+//   - No digits at all after the "+" is an error: a bare "+" has no
+//     number to index.
 //
 // Normalized input passes through unchanged, making the function
 // deterministic and idempotent. It returns an error for an input that is
