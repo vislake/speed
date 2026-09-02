@@ -36,14 +36,17 @@ name: pr-check
 #     (depguard rules etc.), so go vet is the lint leg today -- mirror of
 #     the Taskfile lint task, whose golangci-lint leg runs only when the
 #     binary is installed.
-#   * semgrep rules, ESLint rules, i18n-key parity wiring, spec/API
-#     toolchain, oasdiff, redocly, Playwright e2e -- none of that tooling
-#     exists yet (see the gated pipeline stubs pr-full/e2e/security/
-#     docs-check/api-contract/scaffold-verify/release/nightly in this
-#     directory for where each wires in).
-#   * Docker-backed integration tiers (-tags=integration): 18-cicd's
-#     layered-triggering rule assigns them to pr-full, the pre-merge full
-#     matrix, not to the fast per-PR check.
+#   * semgrep rules, ESLint rules, spec/API toolchain, oasdiff, redocly,
+#     Playwright e2e -- none of that tooling exists yet (see the gated
+#     pipeline stubs e2e/security/api-contract/scaffold-verify/release/
+#     nightly in this directory for where each wires in). i18n
+#     key-parity wiring exists and runs in docs-check on doc/i18n-touching
+#     PRs -- deliberately not here, so this fast per-PR check stays under
+#     its 8-minute budget.
+#   * Docker-backed integration tiers (-tags=integration): wired, but in
+#     pr-full -- 18-cicd's layered-triggering rule assigns them to the
+#     pre-merge full matrix (PRs labeled full-ci), not to the fast per-PR
+#     check.
 #   * dorny/paths-filter path filtering: the module set is small enough that
 #     every PR runs every real module; when the set grows, adopt paths-
 #     filter with the downstream-dependency derivation of 18-cicd's cost-

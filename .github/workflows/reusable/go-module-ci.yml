@@ -1,7 +1,7 @@
 name: go-module-ci
 
 # Reusable per-module Go CI, called by the pipeline orchestrators (pr-check
-# today; pr-full and nightly when they land). docs/internal/18-cicd.md's
+# and pr-full today; nightly when it lands). docs/internal/18-cicd.md's
 # reusable-workflow design section is the governing spec: callers enumerate
 # one matrix row per module, so adding a module means adding one row to a
 # caller's matrix -- never copying this file's legs into a workflow.
@@ -24,8 +24,10 @@ name: go-module-ci
 #                                  table land together).
 #   2. go test -race ./...         unit suite under the race detector. The
 #                                  Docker-backed integration tiers
-#                                  (-tags=integration, PostgreSQL for dbkit
-#                                  and tenancy, Redis for pkgcore and jobs)
+#                                  (-tags=integration: PostgreSQL for dbkit
+#                                  and tenancy, Redis for jobs, and Redis
+#                                  plus MinIO/S3 for pkgcore -- its
+#                                  integration_test/ runs both tiers)
 #                                  intentionally do NOT run here: 18-cicd's
 #                                  layered-triggering rule puts them in the
 #                                  pre-merge full matrix (pr-full), not in

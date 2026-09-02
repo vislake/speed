@@ -15,8 +15,10 @@ description: Install the pinned Go toolchain and prime the Go module cache for C
 # `go build github.com/vislake/speed/go/...` compiles every go/ module's
 # packages, the fifteen stubs included. The same load-time check covers
 # examples/reference-app too -- go.work lists it, so its go.mod is
-# validated even though no live job builds its packages (its Go suite is
-# pr-full's to run, and pr-full is still a gated stub). (Today the six
+# validated on every pr-check run even though no every-PR job builds its
+# packages (its unit suite is pr-full's reference-app job to run -- live
+# since the second CI layer -- so its packages are built and tested there,
+# on full-ci-labeled PRs). (Today the six
 # real modules -- go/dbkit, go/jobs, go/observability, go/pkgcore,
 # go/ratelimit, go/tenancy -- declare `go 1.25.0`, as does
 # examples/reference-app; the fifteen stub modules still say `go 1.23`,
