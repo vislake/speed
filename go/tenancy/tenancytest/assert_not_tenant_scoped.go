@@ -146,7 +146,7 @@ func implementsTenantScoped(model any) bool {
 	}
 
 	t := reflect.TypeOf(model)
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	return t.Implements(tenantScopedType) || reflect.PointerTo(t).Implements(tenantScopedType)
