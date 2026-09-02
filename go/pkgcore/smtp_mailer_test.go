@@ -482,8 +482,10 @@ func TestSMTPMailer_RefusesAuthOverAPlaintextConnection(t *testing.T) {
 		t.Fatalf("smtp.NewClient: %v", err)
 	}
 	defer client.Close()
-	if err := client.Hello("smtp.example.com"); err != nil {
-		t.Fatalf("client.Hello: %v", err)
+	// helloErr: the NewClient error above stays live for the authenticate
+	// check below, which reassigns err.
+	if helloErr := client.Hello("smtp.example.com"); helloErr != nil {
+		t.Fatalf("client.Hello: %v", helloErr)
 	}
 
 	m := &smtpMailer{cfg: SMTPConfig{

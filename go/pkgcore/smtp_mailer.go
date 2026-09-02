@@ -106,7 +106,11 @@ func NewSMTPMailer(cfg SMTPConfig) Mailer {
 // whether the mailer dials it by hostname or by IP address.
 func (m *smtpMailer) tlsConfig() *tls.Config {
 	return &tls.Config{
-		ServerName:         m.cfg.Host,
+		ServerName: m.cfg.Host,
+		//nolint:gosec // G402: a deliberate, documented configuration knob --
+		// SMTPConfig.InsecureSkipVerify exists for relays on self-signed
+		// certificates, and its doc warns it must never be enabled for a relay
+		// that is not fully trusted.
 		InsecureSkipVerify: m.cfg.InsecureSkipVerify,
 	}
 }
@@ -124,11 +128,13 @@ func (m *smtpMailer) tlsConfig() *tls.Config {
 // context carrying neither leaves a hung relay hanging the Send for good, so
 // hosts that cannot tolerate that must carry a deadline.
 func (m *smtpMailer) Send(ctx context.Context, mail Mail) (err error) {
-	if err := ctx.Err(); err != nil {
-		return err
+	// ctxErr and mailErr: if-init names that do not shadow the named return
+	// err the wrap-defer below reads.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
 	}
-	if err := validateMail(mail); err != nil {
-		return err
+	if mailErr := validateMail(mail); mailErr != nil {
+		return mailErr
 	}
 
 	addr := net.JoinHostPort(m.cfg.Host, strconv.Itoa(m.cfg.Port))
@@ -142,7 +148,12 @@ func (m *smtpMailer) Send(ctx context.Context, mail Mail) (err error) {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() {
+		// Best-effort: the error this Send is about to return is the failure
+		// that matters, and a relay that stopped answering was already
+		// interrupted by the watcher's close, which makes this one a no-op.
+		_ = conn.Close()
+	}()
 
 	// A relay that stops answering mid-transaction is interrupted when the
 	// Send's context ends. The deadline a context carries was applied to the
@@ -150,14 +161,15 @@ func (m *smtpMailer) Send(ctx context.Context, mail Mail) (err error) {
 	// net/smtp's commands would otherwise never notice: every read below
 	// (EHLO, MAIL, RCPT, DATA, QUIT) is a blocking call that only a closed
 	// connection or a deadline can break. Closing conn unblocks whichever
-	// command is in flight, and the deferred Close makes the second close a
-	// no-op.
+	// command is in flight, and the deferred Close above makes the second
+	// close a no-op.
 	watchStopped := make(chan struct{})
 	defer close(watchStopped)
 	go func() {
 		select {
 		case <-ctx.Done():
-			conn.Close()
+			// Best-effort: nothing can act on a close failure from here.
+			_ = conn.Close()
 		case <-watchStopped:
 		}
 	}()
@@ -166,26 +178,31 @@ func (m *smtpMailer) Send(ctx context.Context, mail Mail) (err error) {
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer func() {
+		// Best-effort close, like the connection's above.
+		_ = client.Close()
+	}()
 
 	// Hello both announces us and loads the relay's extensions, which the TLS
-	// upgrade and the AUTH step below both depend on.
-	if err := client.Hello(m.cfg.Host); err != nil {
-		return err
+	// upgrade and the AUTH step below both depend on. Every step's error gets
+	// its own if-init name below, so none shadows the named return err that
+	// stays live for the wrap-defer on the way out.
+	if helloErr := client.Hello(m.cfg.Host); helloErr != nil {
+		return helloErr
 	}
-	if err := m.upgradeToTLS(client); err != nil {
-		return err
+	if upgradeErr := m.upgradeToTLS(client); upgradeErr != nil {
+		return upgradeErr
 	}
-	if err := m.authenticate(client); err != nil {
-		return err
+	if authErr := m.authenticate(client); authErr != nil {
+		return authErr
 	}
 
-	if err := client.Mail(mail.From); err != nil {
-		return err
+	if fromErr := client.Mail(mail.From); fromErr != nil {
+		return fromErr
 	}
 	for _, recipient := range mail.To {
-		if err := client.Rcpt(recipient); err != nil {
-			return err
+		if rcptErr := client.Rcpt(recipient); rcptErr != nil {
+			return rcptErr
 		}
 	}
 
@@ -220,7 +237,8 @@ func (m *smtpMailer) dial(ctx context.Context, addr string) (net.Conn, error) {
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {
-			conn.Close()
+			// Best-effort close of the connection the failed dial already owns.
+			_ = conn.Close()
 			return nil, err
 		}
 	}
@@ -228,7 +246,8 @@ func (m *smtpMailer) dial(ctx context.Context, addr string) (net.Conn, error) {
 	if m.tlsFromFirstByte() {
 		tlsConn := tls.Client(conn, m.tlsConfig())
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
-			conn.Close()
+			// Best-effort close of the connection the failed handshake owns.
+			_ = conn.Close()
 			return nil, err
 		}
 		return tlsConn, nil
@@ -328,7 +347,12 @@ func renderBody(mail Mail) (contentType, body string) {
 				// satisfy the Writer interface.
 				panic(fmt.Sprintf("pkgcore: multipart body write failed: %v", err))
 			}
-			part.Write([]byte(normalize(content)))
+			if _, err := part.Write([]byte(normalize(content))); err != nil {
+				// The part's writes land in the same bytes.Buffer as
+				// CreatePart's, so the same never-fails reasoning applies;
+				// checked anyway, mirroring the panic above.
+				panic(fmt.Sprintf("pkgcore: multipart body write failed: %v", err))
+			}
 		}
 		writePart("text/plain; charset=utf-8", mail.Text)
 		writePart("text/html; charset=utf-8", mail.HTML)
