@@ -10,6 +10,19 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
+// fixtureRunningRecord is fixtureRecord (store_test.go) plus the one
+// override every test below needs: execute's own doc comment says it runs
+// "exactly one Handle attempt for rec (already StatusRunning in the
+// database)" -- completeSucceeded/completeRetrying/completeDeadLetter all
+// guard their update with `WHERE status = 'running'`, so calling execute
+// directly against a row fixtureRecord left StatusPending would silently
+// no-op every one of those writes instead of exercising them.
+func fixtureRunningRecord(tenant pkgcore.TenantID, jobType string) *jobRecord {
+	rec := fixtureRecord(tenant, jobType)
+	rec.Status = string(StatusRunning)
+	return rec
+}
+
 // TestJobContext_ProducesTenantScopedContext is the positive half of "the
 // tenant context trap": jobContext(tenant) must produce a context from
 // which the Job's own tenant is recoverable, exactly what a worker hands
@@ -149,5 +162,187 @@ func TestTenantSlotReservation_ConcurrentAccessIsRaceFree(t *testing.T) {
 	q.tenantMu.Unlock()
 	if remaining != 0 {
 		t.Errorf("runningPerTenant[tenant] = %d, want 0 once every goroutine released what it reserved", remaining)
+	}
+}
+
+// TestExecute_EmptyTenantID_FailsClosedWithoutCallingHandle is the
+// regression test for the review finding that execute called
+// handler.Handle for a jobRecord whose TenantID column was empty, instead
+// of refusing the attempt the way AsynqQueue's processTaskUncancelled
+// already does for the identical case (errAsynqTaskMissingTenant,
+// asynq_worker.go). Task.validate blocks Enqueue itself from ever creating
+// such a row, so the corrupted row here is seeded directly through q.db --
+// simulating a row written by anything other than Enqueue: a migration
+// bug, a manual SQL fixup, or a future writer that bypasses this package's
+// own API. See errDemoJobMissingTenant's own doc comment (worker.go) for
+// why this matters even though it is not reachable through the public API
+// today.
+func TestExecute_EmptyTenantID_FailsClosedWithoutCallingHandle(t *testing.T) {
+	q := NewDemoQueue(newTestDB(t))
+	handleInvoked := false
+	h := NewHandlerFunc("corrupt.tenant", func(context.Context, *Job, ProgressFn) (Result, error) {
+		handleInvoked = true
+		return Result{}, nil
+	})
+	if err := q.RegisterHandler(h); err != nil {
+		t.Fatalf("RegisterHandler() error = %v", err)
+	}
+
+	rec := fixtureRunningRecord("", "corrupt.tenant") // TenantID deliberately empty
+	if err := q.db.Create(rec).Error; err != nil {
+		t.Fatalf("seed corrupted record: %v", err)
+	}
+
+	q.execute(*rec)
+
+	if handleInvoked {
+		t.Error("execute() invoked Handle for a jobRecord with an empty TenantID; want it to fail closed without ever calling Handle")
+	}
+
+	// A Job owned by no tenant is unreachable through any ordinary tenant
+	// context (pkgcore.WithTenant(ctx, "") is never reported as a usable
+	// tenant -- see pkgcore.TenantFromContext) -- exactly the "only a
+	// system context or a raw table scan would ever reveal it ran"
+	// property the review flagged, so a system context is the only way
+	// this test can read the outcome back.
+	pkgcore.RegisterSystemPurpose(testSystemPurpose)
+	sysCtx, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{
+		Actor: "test", Purpose: testSystemPurpose, Ticket: "TEST-1",
+	})
+	if err != nil {
+		t.Fatalf("WithSystemContext() error = %v", err)
+	}
+	got, err := q.Get(sysCtx, JobID(rec.ID))
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.Status == StatusSucceeded {
+		t.Fatal("Status = StatusSucceeded: a Job with an empty TenantID must never be allowed to succeed")
+	}
+	if got.Status != StatusRetrying && got.Status != StatusDeadLetter {
+		t.Errorf("Status = %v, want StatusRetrying or StatusDeadLetter (an ordinary Handle failure)", got.Status)
+	}
+	if got.Error != errDemoJobMissingTenant.Code {
+		t.Errorf("Error = %q, want %q", got.Error, errDemoJobMissingTenant.Code)
+	}
+}
+
+// panickingHandler always panics from Handle, simulating a Handler
+// implementation bug: a nil dereference, an out-of-range slice index
+// against a malformed Job.Payload, a failed type assertion, a panicking
+// third-party dependency.
+type panickingHandler struct{}
+
+func (panickingHandler) Type() string { return "panics.always" }
+
+func (panickingHandler) Handle(context.Context, *Job, ProgressFn) (Result, error) {
+	panic("adversarial: simulated bug in a Handler")
+}
+
+var _ Handler = panickingHandler{}
+
+// TestExecute_HandlerPanic_RecoversInsteadOfCrashingProcess is the
+// regression test for the review finding that execute had no recover() of
+// its own around handler.Handle, unlike asynq's own processor.perform,
+// which protects the equivalent call for AsynqQueue for free. Before the
+// fix, this test crashes the ENTIRE test binary rather than merely failing
+// one assertion -- exactly as an unrecovered panic crashes the entire
+// worker-pool process in production, taking every OTHER tenant's in-flight
+// and queued Jobs down with it (root CLAUDE.md: speed's modules "compile
+// into one binary"). The outer defer/recover below exists only to turn
+// that crash into a well-labeled t.Fatal instead of a bare process exit,
+// should this ever regress -- it does not run today, since invokeHandle
+// (worker.go) already recovers the panic before it reaches this test.
+func TestExecute_HandlerPanic_RecoversInsteadOfCrashingProcess(t *testing.T) {
+	q := NewDemoQueue(newTestDB(t))
+	if err := q.RegisterHandler(panickingHandler{}); err != nil {
+		t.Fatalf("RegisterHandler() error = %v", err)
+	}
+
+	rec := fixtureRunningRecord("tenant-a", "panics.always")
+	if err := q.db.Create(rec).Error; err != nil {
+		t.Fatalf("seed running record: %v", err)
+	}
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("execute() let the Handler's panic escape instead of recovering it: %v", r)
+			}
+		}()
+		q.execute(*rec)
+	}()
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	got, err := q.Get(ctx, JobID(rec.ID))
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.Status != StatusRetrying && got.Status != StatusDeadLetter {
+		t.Errorf("Status = %v, want StatusRetrying or StatusDeadLetter -- a panic must be handled as an ordinary Handle failure", got.Status)
+	}
+	if got.Error == "" {
+		t.Error(`Error = "", want a non-empty message recording the panic`)
+	}
+}
+
+// panickingFailureHook always fails Handle (so a Job exhausts retries and
+// dead-letters) and panics from OnFailure once invoked, simulating a
+// business-module bug inside failure compensation itself -- a
+// credit-refund call against a malformed Job.Payload, for example.
+type panickingFailureHook struct{}
+
+func (panickingFailureHook) Type() string { return "panics.on_failure" }
+
+func (panickingFailureHook) Handle(context.Context, *Job, ProgressFn) (Result, error) {
+	return Result{}, errors.New("permanent failure")
+}
+
+func (panickingFailureHook) OnFailure(context.Context, *Job, error) {
+	panic("adversarial: simulated bug in OnFailure")
+}
+
+var (
+	_ Handler     = panickingFailureHook{}
+	_ FailureHook = panickingFailureHook{}
+)
+
+// TestExecute_FailureHookPanic_RecoversInsteadOfCrashingProcess is the
+// FailureHook.OnFailure half of the same panic-recovery gap: the review's
+// suggested fix direction explicitly calls out OnFailure alongside Handle
+// ("if it can also panic"), since it is exactly as much a
+// business-module-authored callback and just as capable of panicking. Same
+// crash-before/recovers-after shape as
+// TestExecute_HandlerPanic_RecoversInsteadOfCrashingProcess, exercised
+// through the dead-letter path instead of the ordinary-retry path.
+func TestExecute_FailureHookPanic_RecoversInsteadOfCrashingProcess(t *testing.T) {
+	q := NewDemoQueue(newTestDB(t))
+	if err := q.RegisterHandler(panickingFailureHook{}); err != nil {
+		t.Fatalf("RegisterHandler() error = %v", err)
+	}
+
+	rec := fixtureRunningRecord("tenant-a", "panics.on_failure")
+	rec.MaxRetries = 0 // exhausted on the very first attempt
+	rec.Attempts = 1   // matches what claimOne would have set for a first attempt
+	if err := q.db.Create(rec).Error; err != nil {
+		t.Fatalf("seed running record: %v", err)
+	}
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("execute() let OnFailure's panic escape instead of recovering it: %v", r)
+			}
+		}()
+		q.execute(*rec)
+	}()
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	got, err := q.Get(ctx, JobID(rec.ID))
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.Status != StatusDeadLetter {
+		t.Errorf("Status = %v, want StatusDeadLetter", got.Status)
 	}
 }

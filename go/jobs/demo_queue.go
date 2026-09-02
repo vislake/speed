@@ -21,6 +21,23 @@ import (
 // same purpose.
 const instrumentationName = "github.com/vislake/speed/go/jobs"
 
+// Metric instrument names DemoQueue registers under instrumentationName,
+// beyond "jobs.queue.depth" (registerQueueDepthGauge's own literal, kept
+// inline there since it has no other reference site): the execution-
+// duration-percentiles, failure-rate/retry-count and dead-letter-count
+// rows docs/internal/09-observability.md's must-instrument table requires
+// for the task-queue domain, on top of the queue-backlog-depth row that
+// gauge already covers. See registerJobMetrics for how these are wired,
+// and worker.go's recordJobMetrics/recordDeadLetter for where they are
+// recorded -- mirroring observability.Middleware's own named-constants-
+// plus-Counter/Histogram pattern for the HTTP row of the same table
+// (go/observability/middleware.go's requestCountName/requestDurationName).
+const (
+	jobDurationMetricName   = "jobs.job.duration"
+	jobAttemptsMetricName   = "jobs.job.attempts"
+	jobDeadLetterMetricName = "jobs.job.dead_letter"
+)
+
 // Defaults for DemoQueue's construction Options, applied when the
 // corresponding With* option is not given. Named package-level constants
 // per the backend coding standard §10. Unlike dbkit's connection-pool
@@ -31,11 +48,29 @@ const instrumentationName = "github.com/vislake/speed/go/jobs"
 // them as Options instead of hard-coding them the way dbkit.Options does
 // for its own pool limits.
 const (
-	DefaultWorkerCount            = 4
+	// DefaultWorkerCount is how many Jobs a DemoQueue executes
+	// concurrently across all tenants combined, unless overridden by
+	// WithWorkerCount.
+	DefaultWorkerCount = 4
+
+	// DefaultTenantConcurrencyLimit is how many Jobs belonging to any one
+	// tenant a DemoQueue runs at once, unless overridden by
+	// WithTenantConcurrencyLimit -- see that option's own doc comment for
+	// why this cap exists at all.
 	DefaultTenantConcurrencyLimit = 2
-	DefaultPollInterval           = 200 * time.Millisecond
-	DefaultBackoffBase            = 1 * time.Second
-	DefaultBackoffMax             = 5 * time.Minute
+
+	// DefaultPollInterval is how often a DemoQueue's dispatcher checks
+	// for newly-eligible Jobs, unless overridden by WithPollInterval.
+	DefaultPollInterval = 200 * time.Millisecond
+
+	// DefaultBackoffBase is the base of the exponential retry backoff a
+	// DemoQueue applies between failed attempts, unless overridden by
+	// WithBackoff. See backoffDelay for the exact formula this seeds.
+	DefaultBackoffBase = 1 * time.Second
+
+	// DefaultBackoffMax caps the exponential retry backoff WithBackoff
+	// would otherwise grow without bound.
+	DefaultBackoffMax = 5 * time.Minute
 )
 
 // ErrDuplicateHandlerType is returned by RegisterHandler when a Handler
@@ -107,6 +142,18 @@ type DemoQueue struct {
 	tenantMu         sync.Mutex
 	runningPerTenant map[pkgcore.TenantID]int
 
+	// jobDuration, jobAttempts and jobDeadLetter back the
+	// "jobs.job.duration"/"jobs.job.attempts"/"jobs.job.dead_letter"
+	// instruments registerJobMetrics wires from Start. Left at their zero
+	// value (nil) until then; worker.go's recordJobMetrics/
+	// recordDeadLetter guard against that, mirroring
+	// registerQueueDepthGauge's own fail-open contract -- a metrics
+	// wiring failure must not prevent the queue itself from running, nor
+	// panic a later job execution.
+	jobDuration   metric.Float64Histogram
+	jobAttempts   metric.Int64Counter
+	jobDeadLetter metric.Int64Counter
+
 	stopCh    chan struct{}
 	closeOnce sync.Once
 	wg        sync.WaitGroup
@@ -164,8 +211,9 @@ func (q *DemoQueue) handler(jobType string) Handler {
 
 // Start creates the persistence schema if it does not already exist,
 // recovers any Job left StatusRunning by an unclean previous exit back to
-// StatusPending, wires the "jobs.queue.depth" metric, then launches the
-// dispatcher and worker goroutines. It is safe to call only once per
+// StatusPending, wires the "jobs.queue.depth", "jobs.job.duration",
+// "jobs.job.attempts" and "jobs.job.dead_letter" metrics, then launches
+// the dispatcher and worker goroutines. It is safe to call only once per
 // DemoQueue; later calls are a no-op.
 func (q *DemoQueue) Start(ctx context.Context) error {
 	var startErr error
@@ -184,6 +232,10 @@ func (q *DemoQueue) Start(ctx context.Context) error {
 			// ensureJobsSchema/resetInterruptedRecords failures abort
 			// Start.
 			obs.FromContext(ctx).Warn("jobs: registering queue depth gauge failed", "error", err)
+		}
+		if err := q.registerJobMetrics(); err != nil {
+			// Same fail-open contract as registerQueueDepthGauge above.
+			obs.FromContext(ctx).Warn("jobs: registering job metrics failed", "error", err)
 		}
 
 		dispatch := make(chan jobRecord)
@@ -236,7 +288,20 @@ func (q *DemoQueue) Enqueue(ctx context.Context, task Task, opts ...EnqueueOptio
 		return "", err
 	}
 
-	obs.FromContext(ctx).Info("job enqueued", "job_id", id, "job_type", task.Type, "tenant_id", string(task.TenantID))
+	// Rebuild the logger's context from task.TenantID -- the Job's own
+	// owning tenant -- rather than adding an explicit "tenant_id" kv on
+	// top of whatever obs.FromContext(ctx) would already auto-attach from
+	// ctx's own ambient tenant. Enqueue is legitimately called from
+	// contexts whose ambient tenant differs from task.TenantID (see
+	// AGENTS.md's "platform-level scheduler enqueuing one cleanup Task
+	// per tenant in a loop" example) or carries none at all; either way,
+	// a caller-supplied literal here would either duplicate ctx's own
+	// value or silently disagree with it, and it is task.TenantID -- not
+	// ctx's ambient tenant -- that this log line must attribute the job
+	// to. Deriving from ctx (not context.Background(), unlike worker.go's
+	// unrelated jobContext) keeps this Enqueue call's own trace_id/
+	// span_id intact.
+	obs.FromContext(pkgcore.WithTenant(ctx, task.TenantID)).Info("job enqueued", "job_id", id, "job_type", task.Type)
 	return JobID(id), nil
 }
 
@@ -329,6 +394,58 @@ func (q *DemoQueue) registerQueueDepthGauge() error {
 		}),
 	)
 	return err
+}
+
+// registerJobMetrics wires the "jobs.job.duration" Histogram and
+// "jobs.job.attempts"/"jobs.job.dead_letter" Counters
+// docs/internal/09-observability.md's must-instrument table requires for
+// the task-queue domain beyond queue backlog depth: execution-duration
+// percentiles ("jobs.job.duration"), and failure rate and retry count
+// (both derivable from "jobs.job.attempts", sliced by its "status"
+// attribute -- one of StatusSucceeded/StatusRetrying/StatusDeadLetter,
+// the exact three outcomes execute (worker.go) can reach) and
+// dead-letter count ("jobs.job.dead_letter", a dedicated counter since
+// that is the one outcome operators alert on directly). Labeled by
+// job_type and status only -- deliberately never tenant_id, for the
+// identical cardinality reason registerQueueDepthGauge's own doc comment
+// gives. Unlike registerQueueDepthGauge, these three are synchronous
+// instruments recorded imperatively at the point each attempt concludes
+// (worker.go's recordJobMetrics/recordDeadLetter), not an
+// ObservableGauge callback, since "how long did this attempt take" and
+// "did this attempt fail" are events, not a value that can be sampled on
+// demand from q.db.
+func (q *DemoQueue) registerJobMetrics() error {
+	meter := otel.Meter(instrumentationName)
+
+	duration, err := meter.Float64Histogram(
+		jobDurationMetricName,
+		metric.WithDescription("Duration of one job Handle attempt, in seconds, by job type and resulting status."),
+		metric.WithUnit("s"),
+	)
+	if err != nil {
+		return err
+	}
+
+	attempts, err := meter.Int64Counter(
+		jobAttemptsMetricName,
+		metric.WithDescription("Number of job Handle attempts completed, by job type and resulting status (succeeded, retrying or dead_letter). Failure rate and retry count are both derivable from this by status."),
+		metric.WithUnit("{attempt}"),
+	)
+	if err != nil {
+		return err
+	}
+
+	deadLetter, err := meter.Int64Counter(
+		jobDeadLetterMetricName,
+		metric.WithDescription("Number of jobs moved to the dead letter status, by job type."),
+		metric.WithUnit("{job}"),
+	)
+	if err != nil {
+		return err
+	}
+
+	q.jobDuration, q.jobAttempts, q.jobDeadLetter = duration, attempts, deadLetter
+	return nil
 }
 
 // compile-time check that *DemoQueue satisfies Queue.

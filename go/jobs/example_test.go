@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/hibiken/asynq"
+
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
@@ -164,4 +166,67 @@ func ExampleNewHandlerFunc() {
 
 	// Output:
 	// result: ping
+}
+
+// ExampleNewAsynqQueue shows the production-profile shape of the same
+// Example above -- register a Handler, Enqueue a Task under a tenant, poll
+// Get until it completes -- against AsynqQueue instead of DemoQueue. Every
+// other line of Queue-facing code (Task, EnqueueOption, waitForTerminal)
+// is identical to Example's; only construction changes, exactly as
+// queue.go's own doc comment promises ("RegisterHandler, Start and Close...
+// a production, Redis/asynq-backed implementation is expected to need a
+// different setup shape of its own").
+//
+// Deliberately has no "// Output:" comment, so go test compiles and
+// type-checks this exactly like every other example here (catching a
+// signature drift immediately, per root CLAUDE.md's "compiled and run by
+// CI" documentation rule) WITHOUT executing it -- Example and
+// ExampleNewHandlerFunc above need no real infrastructure (DemoQueue is
+// SQLite-backed), but this one needs a real Redis, which the default,
+// non-integration test tier this file belongs to must not require (see
+// AGENTS.md's Testing section and integration_test/'s own package comment).
+// The exact same shape, actually run end to end against a real Redis via
+// testcontainers-go, is integration_test/enqueue_execute_test.go's
+// TestRedisQueue_EnqueueExecuteRoundTrip.
+func ExampleNewAsynqQueue() {
+	ctx := context.Background()
+
+	redisOpt := asynq.RedisClientOpt{Addr: "127.0.0.1:6379"}
+	queue := jobs.NewAsynqQueue(redisOpt,
+		jobs.WithAsynqConcurrency(8),
+		jobs.WithAsynqTenantConcurrencyLimit(2),
+	)
+	if err := queue.RegisterHandler(exampleGreeter{}); err != nil {
+		fmt.Println("register handler:", err)
+		return
+	}
+	if err := queue.Start(ctx); err != nil {
+		fmt.Println("start:", err)
+		return
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		_ = queue.Close(shutdownCtx)
+	}()
+
+	id, err := queue.Enqueue(ctx, jobs.Task{
+		Type:     "greet",
+		TenantID: pkgcore.TenantID("acme"),
+		Payload:  []byte("speed"),
+	})
+	if err != nil {
+		fmt.Println("enqueue:", err)
+		return
+	}
+
+	tenantCtx := pkgcore.WithTenant(ctx, "acme")
+	job, err := waitForTerminal(tenantCtx, queue, id, time.Now().Add(30*time.Second))
+	if err != nil {
+		fmt.Println("get:", err)
+		return
+	}
+
+	fmt.Println("status:", job.Status)
+	fmt.Println("result:", string(job.Result.Data))
 }

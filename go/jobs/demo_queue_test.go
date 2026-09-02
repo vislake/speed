@@ -1,15 +1,24 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
+	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
@@ -662,5 +671,262 @@ func TestRegisterQueueDepthGauge_Smoke(t *testing.T) {
 	q := NewDemoQueue(db)
 	if err := q.registerQueueDepthGauge(); err != nil {
 		t.Errorf("registerQueueDepthGauge() error = %v, want nil", err)
+	}
+}
+
+// TestEnqueue_LogsSingleCorrectTenantID_EvenWhenCtxTenantDiffers is the
+// regression proof for the "job enqueued" log line carrying two
+// conflicting tenant_id attributes whenever Enqueue's caller context
+// carries a different tenant than Task.TenantID -- AGENTS.md's own
+// "platform-level scheduler enqueuing one cleanup Task per tenant in a
+// loop" example is exactly this shape (see "Why Task carries its own
+// TenantID instead of Enqueue resolving it from ctx"). Before the fix,
+// obs.FromContext(ctx) auto-attached ctx's own ambient tenant AND Enqueue
+// additionally logged an explicit "tenant_id" kv for task.TenantID, so
+// the rendered line carried the ctx tenant (wrong for this log line) and
+// the Job's own tenant (right) side by side -- slog.TextHandler does not
+// deduplicate repeated attribute keys, so both survived verbatim.
+func TestEnqueue_LogsSingleCorrectTenantID_EvenWhenCtxTenantDiffers(t *testing.T) {
+	q := newTestQueue(t)
+
+	// ctx's own ambient tenant deliberately differs from the Task being
+	// enqueued, mirroring a platform scheduler that itself runs under one
+	// context while looping over many tenants' own Tasks.
+	ctx := pkgcore.WithTenant(context.Background(), "scheduler-tenant")
+	var buf bytes.Buffer
+	ctx = obs.WithLogger(ctx, slog.New(slog.NewTextHandler(&buf, nil)))
+
+	if _, err := q.Enqueue(ctx, Task{Type: "cleanup", TenantID: "tenant-b"}); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+
+	out := buf.String()
+	if n := strings.Count(out, "tenant_id="); n != 1 {
+		t.Fatalf("log line has %d tenant_id attributes, want exactly 1; got: %s", n, out)
+	}
+	if want := "tenant_id=tenant-b"; !strings.Contains(out, want) {
+		t.Errorf("log line missing %q (the Job's own owning tenant); got: %s", want, out)
+	}
+	if strings.Contains(out, "tenant_id=scheduler-tenant") {
+		t.Errorf("log line leaked ctx's ambient tenant instead of task.TenantID; got: %s", out)
+	}
+}
+
+// setupTestMeterProvider installs, as OTel's global MeterProvider for the
+// duration of the test, a real SDK MeterProvider backed by a ManualReader
+// (never a Prometheus/OTLP exporter -- this file only needs to read back
+// exactly what was recorded, not translate it), mirroring
+// go/observability/middleware_test.go's own setupMeterProvider in spirit
+// (a real SDK provider, not a mock) with a lighter-weight reader since
+// there is no Prometheus-naming translation to verify here. Returns the
+// reader to Collect from.
+func setupTestMeterProvider(t *testing.T) *sdkmetric.ManualReader {
+	t.Helper()
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	otel.SetMeterProvider(mp)
+	return reader
+}
+
+// collectMetric runs a fresh Collect and returns the single metric named
+// name, failing the test if it is missing -- name is always one of the
+// jobDurationMetricName/jobAttemptsMetricName/jobDeadLetterMetricName
+// literals demo_queue.go defines.
+//
+// A Collect() error is deliberately NOT fatal here: this test process
+// runs every test in package jobs in one binary sharing one process-wide
+// OTel global MeterProvider, and go.opentelemetry.io/otel's global
+// package queues every otel.Meter(instrumentationName) call made before
+// the first-ever otel.SetMeterProvider (every OTHER lifecycle test in
+// this file that calls Start, none of which install a real provider of
+// their own) and replays them onto whatever provider IS eventually
+// installed -- this test's own setupTestMeterProvider, if it runs first.
+// Those replayed callbacks close over long-finished tests' own *gorm.DB
+// (closed by dbtest.NewSQLite's own t.Cleanup), so collecting this
+// process's full metric set can legitimately return a combined error
+// (sdk/metric joins per-callback errors) alongside an otherwise-complete
+// rm -- see the SDK's own ManualReader.Collect doc comment ("gathers all
+// metric data... and stores the result in rm", independent of the
+// returned error). This test only asserts on its OWN job types (flaky /
+// always-fails, unique to it), so a stale, unrelated queue-depth
+// callback's failure elsewhere must not fail it.
+func collectMetric(t *testing.T, reader *sdkmetric.ManualReader, name string) metricdata.Metrics {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Logf("Collect() returned a non-fatal error (see this helper's own doc comment): %v", err)
+	}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name == name {
+				return m
+			}
+		}
+	}
+	var got []string
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			got = append(got, m.Name)
+		}
+	}
+	t.Fatalf("metric %q not found; metrics present: %v", name, got)
+	return metricdata.Metrics{}
+}
+
+// attrString reads key out of attrs as a plain string, for comparing
+// against a metric data point's own Attributes.
+func attrString(attrs attribute.Set, key string) string {
+	v, _ := attrs.Value(attribute.Key(key))
+	return v.AsString()
+}
+
+// counterValue returns the int64 Sum value of m's data point labeled
+// exactly by jobType and status (status ignored when empty), failing the
+// test if m is not a Sum[int64] or no matching data point exists. Use
+// this when the data point is expected to exist; a Counter never
+// incremented for a given label combination emits no data point at all
+// (there is no proactive zero-valued row), so an EXPECTED-ABSENT check
+// must use counterValueOrZero instead, not this function.
+func counterValue(t *testing.T, m metricdata.Metrics, jobType, status string) int64 {
+	t.Helper()
+	v, ok := counterValueOrZero(t, m, jobType, status)
+	if !ok {
+		t.Fatalf("metric %q has no data point for job_type=%q status=%q", m.Name, jobType, status)
+	}
+	return v
+}
+
+// counterValueOrZero is counterValue's non-fatal counterpart: it reports
+// (0, false) instead of failing the test when no data point matches, for
+// asserting a label combination was deliberately never recorded.
+func counterValueOrZero(t *testing.T, m metricdata.Metrics, jobType, status string) (int64, bool) {
+	t.Helper()
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	if !ok {
+		t.Fatalf("metric %q Data = %T, want metricdata.Sum[int64]", m.Name, m.Data)
+	}
+	for _, dp := range sum.DataPoints {
+		if attrString(dp.Attributes, "job_type") != jobType {
+			continue
+		}
+		if status != "" && attrString(dp.Attributes, "status") != status {
+			continue
+		}
+		return dp.Value, true
+	}
+	return 0, false
+}
+
+// histogramCount returns the observation Count of m's data point labeled
+// exactly by jobType/status, failing the test if m is not a
+// Histogram[float64] or no matching data point exists.
+func histogramCount(t *testing.T, m metricdata.Metrics, jobType, status string) uint64 {
+	t.Helper()
+	hist, ok := m.Data.(metricdata.Histogram[float64])
+	if !ok {
+		t.Fatalf("metric %q Data = %T, want metricdata.Histogram[float64]", m.Name, m.Data)
+	}
+	for _, dp := range hist.DataPoints {
+		if attrString(dp.Attributes, "job_type") == jobType && attrString(dp.Attributes, "status") == status {
+			return dp.Count
+		}
+	}
+	t.Fatalf("metric %q has no data point for job_type=%q status=%q; data points: %+v", m.Name, jobType, status, hist.DataPoints)
+	return 0
+}
+
+// TestDemoQueue_JobMetrics_RecordsDurationAttemptsAndDeadLetter is the
+// regression proof that DemoQueue actually emits the four
+// docs/internal/09-observability.md must-instrument rows beyond queue
+// backlog depth -- execution duration percentiles, failure rate, retry
+// count and dead-letter count -- rather than only the "jobs.queue.depth"
+// gauge. Before registerJobMetrics/recordJobMetrics/recordDeadLetter
+// existed, none of the three assertions below had any instrument to read
+// back at all: collectMetric itself would fail with "metric ... not
+// found", which is the negative control this test relies on (there is no
+// separate "before" build to run it against, since the instruments
+// literally did not exist).
+//
+// One flaky-then-succeeds Job and one always-fails Job together exercise
+// all three Status outcomes execute (worker.go) can reach:
+// StatusRetrying (the flaky Job's first failed attempt), StatusSucceeded
+// (its eventual success) and StatusDeadLetter (the always-fails Job,
+// once MaxRetries is exhausted).
+func TestDemoQueue_JobMetrics_RecordsDurationAttemptsAndDeadLetter(t *testing.T) {
+	reader := setupTestMeterProvider(t)
+	q := newTestQueue(t)
+
+	flaky := &flakyHandler{failuresBefore: 1}
+	if err := q.RegisterHandler(flaky); err != nil {
+		t.Fatalf("RegisterHandler(flaky) error = %v", err)
+	}
+	alwaysFails := &countingFailureHandler{onFailureCh: make(chan *Job, 1)}
+	if err := q.RegisterHandler(alwaysFails); err != nil {
+		t.Fatalf("RegisterHandler(alwaysFails) error = %v", err)
+	}
+	startQueue(t, q)
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	flakyID, err := q.Enqueue(context.Background(), Task{Type: "flaky", TenantID: "tenant-a"}, WithMaxRetries(5))
+	if err != nil {
+		t.Fatalf("Enqueue(flaky) error = %v", err)
+	}
+	if job := waitTerminal(t, q, ctx, flakyID); job.Status != StatusSucceeded {
+		t.Fatalf("flaky job Status = %v, want %v (job: %+v)", job.Status, StatusSucceeded, job)
+	}
+
+	deadID, err := q.Enqueue(context.Background(), Task{Type: "always-fails", TenantID: "tenant-a"}, WithMaxRetries(0))
+	if err != nil {
+		t.Fatalf("Enqueue(always-fails) error = %v", err)
+	}
+	if job := waitTerminal(t, q, ctx, deadID); job.Status != StatusDeadLetter {
+		t.Fatalf("always-fails job Status = %v, want %v (job: %+v)", job.Status, StatusDeadLetter, job)
+	}
+
+	attempts := collectMetric(t, reader, jobAttemptsMetricName)
+	if got := counterValue(t, attempts, "flaky", string(StatusRetrying)); got != 1 {
+		t.Errorf("%s{job_type=flaky,status=retrying} = %d, want 1 (retry count)", jobAttemptsMetricName, got)
+	}
+	if got := counterValue(t, attempts, "flaky", string(StatusSucceeded)); got != 1 {
+		t.Errorf("%s{job_type=flaky,status=succeeded} = %d, want 1", jobAttemptsMetricName, got)
+	}
+	if got := counterValue(t, attempts, "always-fails", string(StatusDeadLetter)); got != 1 {
+		t.Errorf("%s{job_type=always-fails,status=dead_letter} = %d, want 1 (failure rate numerator)", jobAttemptsMetricName, got)
+	}
+
+	deadLetter := collectMetric(t, reader, jobDeadLetterMetricName)
+	if got := counterValue(t, deadLetter, "always-fails", ""); got != 1 {
+		t.Errorf("%s{job_type=always-fails} = %d, want 1", jobDeadLetterMetricName, got)
+	}
+	// Negative control: a Job that eventually succeeds must never be
+	// counted as dead-lettered. counterValueOrZero, not counterValue: a
+	// Counter never Add()-ed for job_type=flaky legitimately has no data
+	// point at all, which IS the passing state here, not a test bug.
+	if got, found := counterValueOrZero(t, deadLetter, "flaky", ""); found && got != 0 {
+		t.Errorf("%s{job_type=flaky} = %d, want 0 (or no data point)", jobDeadLetterMetricName, got)
+	}
+
+	duration := collectMetric(t, reader, jobDurationMetricName)
+	if got := histogramCount(t, duration, "flaky", string(StatusSucceeded)); got != 1 {
+		t.Errorf("%s{job_type=flaky,status=succeeded} count = %d, want 1", jobDurationMetricName, got)
+	}
+	if got := histogramCount(t, duration, "always-fails", string(StatusDeadLetter)); got != 1 {
+		t.Errorf("%s{job_type=always-fails,status=dead_letter} count = %d, want 1", jobDurationMetricName, got)
+	}
+}
+
+// TestRegisterJobMetrics_Smoke is registerJobMetrics's own equivalent of
+// TestRegisterQueueDepthGauge_Smoke immediately above: registration alone
+// (no job ever executed) must not error.
+func TestRegisterJobMetrics_Smoke(t *testing.T) {
+	db := dbtest.NewSQLite(t)
+	if err := ensureJobsSchema(context.Background(), db); err != nil {
+		t.Fatalf("ensureJobsSchema() error = %v", err)
+	}
+	q := NewDemoQueue(db)
+	if err := q.registerJobMetrics(); err != nil {
+		t.Errorf("registerJobMetrics() error = %v, want nil", err)
 	}
 }

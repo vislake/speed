@@ -67,9 +67,15 @@ func (s Status) Terminal() bool {
 type Priority int
 
 const (
-	PriorityLow    Priority = 0
+	// PriorityLow is the lowest defined Priority value.
+	PriorityLow Priority = 0
+
+	// PriorityNormal is the default Priority: Enqueue uses it whenever a
+	// Task is enqueued without the WithPriority option (see queue.go).
 	PriorityNormal Priority = 5
-	PriorityHigh   Priority = 10
+
+	// PriorityHigh is the highest defined Priority value.
+	PriorityHigh Priority = 10
 )
 
 // Result is the opaque output of a successfully completed Job, recorded on

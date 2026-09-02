@@ -2,7 +2,13 @@ package jobs
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
+	"runtime/debug"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
@@ -17,6 +23,35 @@ import (
 // operator attention, in which case the Job dead-letters and shows up in
 // DemoQueue.DeadLetterJobs.
 var ErrHandlerNotRegistered = apperr.Internal("jobs.handler_not_registered")
+
+// errDemoJobMissingTenant is execute's defensive response to a jobRecord
+// whose TenantID column is empty. This should never happen for a Job this
+// package's own Enqueue created — Task.validate rejects an empty TenantID
+// before Enqueue ever inserts a row — the only realistic cause is a row
+// that reached the jobs table by some path other than Enqueue: a migration
+// bug, a manual SQL fixup, or a future writer that bypasses this package's
+// own API. Checked before calling Handle, exactly mirroring
+// errAsynqTaskMissingTenant's identical defense for AsynqQueue
+// (asynq_worker.go's processTaskUncancelled) — without this guard, Handle
+// would run on a context reporting no usable tenant at all
+// (pkgcore.TenantFromContext returning ok=false), and only a Handler
+// implementation that routes every tenant-sensitive operation through
+// dbkit.Repository[T] would fail closed on its own; anything else (an
+// outbound webhook call keyed by job.TenantID as a plain string, a billing
+// charge, a notification dispatch, even just a log line) would silently
+// run under a blank tenant identity instead of being refused. Deliberately
+// its own sentinel rather than a reuse of ErrHandlerNotRegistered, for the
+// same reason errAsynqTaskMissingTenant's own doc comment gives: the two
+// causes are operationally distinct and would send an operator chasing the
+// wrong fix.
+var errDemoJobMissingTenant = apperr.Internal("jobs.demo_job_missing_tenant")
+
+// errDemoHandlerPanicked is invokeHandle's response when a Handler's
+// Handle panics instead of returning normally, so the failure still flows
+// through execute's ordinary retry/dead-letter accounting instead of an
+// unrecovered panic reaching runWorker's goroutine. See invokeHandle's own
+// doc comment for why recovering it matters.
+var errDemoHandlerPanicked = apperr.Internal("jobs.demo_handler_panicked")
 
 // claimBatchSize bounds how many candidate rows one dispatch tick reads
 // before applying per-tenant concurrency gating in Go. It is a package
@@ -157,13 +192,108 @@ func (q *DemoQueue) runWorker(dispatch <-chan jobRecord) {
 	}
 }
 
+// invokeHandle calls handler.Handle for job, recovering a panic raised
+// inside it into an ordinary error instead of letting it propagate out of
+// the worker goroutine that called execute. asynq's own processor.perform
+// (github.com/hibiken/asynq) already wraps the equivalent call in its own
+// defer/recover, which is what protects AsynqQueue for free; DemoQueue
+// hand-rolls its own worker loop (runWorker, this file), so it must do the
+// same here. Without this, a bug in any ONE tenant's Handler implementation
+// — a nil dereference, an out-of-range slice index against a malformed
+// job.Payload, a failed type assertion, a panicking third-party dependency
+// — crashes the entire worker-pool process, taking every OTHER tenant's
+// and every OTHER module's in-flight and queued Jobs down with it (root
+// CLAUDE.md: speed's modules "compile into one binary"). The resulting
+// error is handled identically to any other Handle failure by execute:
+// retried while attempts remain, then dead-lettered.
+//
+// The panic value becomes errDemoHandlerPanicked's cause, so job.Error
+// stays a short, operator-readable line exactly like every other failure
+// this package records; the full stack trace is only logged, never
+// persisted — backend coding standard §6.2 forbids letting a stack trace
+// reach a response body, and Job.Error is operator-facing text a caller
+// can read back through Get/DeadLetterJobs.
+func invokeHandle(ctx context.Context, handler Handler, job *Job, progress ProgressFn, log *slog.Logger) (result Result, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("jobs: handler panicked",
+				"job_id", string(job.ID), "job_type", job.Type,
+				"panic", r, "stack", string(debug.Stack()))
+			err = errDemoHandlerPanicked.WithParam("type", job.Type).WithParam("job_id", string(job.ID)).
+				WithCause(fmt.Errorf("%v", r))
+		}
+	}()
+	return handler.Handle(ctx, job, progress)
+}
+
+// invokeOnFailure calls hook.OnFailure for job, recovering a panic the same
+// way invokeHandle does for Handle — see its doc comment for why this
+// matters: OnFailure is exactly as much a business-module-authored callback
+// as Handle is, and just as capable of panicking (a refund call against a
+// malformed job.Payload, for example). OnFailure returns nothing, so
+// recovering here only prevents a process crash; there is no result to
+// hand back, matching OnFailure's own "not retried or otherwise observed
+// by the queue" contract (handler.go).
+func invokeOnFailure(ctx context.Context, hook FailureHook, job *Job, cause error, log *slog.Logger) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("jobs: failure hook panicked",
+				"job_id", string(job.ID), "job_type", job.Type,
+				"panic", r, "stack", string(debug.Stack()))
+		}
+	}()
+	hook.OnFailure(ctx, job, cause)
+}
+
+// recordJobMetrics records one completed Handle attempt on the
+// "jobs.job.duration" Histogram and "jobs.job.attempts" Counter
+// registerJobMetrics wires (demo_queue.go), labeled by jobType and status
+// -- status is always one of StatusSucceeded/StatusRetrying/
+// StatusDeadLetter, the exact three outcomes execute can reach. Both
+// instruments share one attribute set, computed once. A nil q.jobDuration
+// (registerJobMetrics never ran, or failed) is the guard: registration
+// always sets both fields together, so checking one stands for both --
+// see the struct field's own doc comment for why this must never panic a
+// job execution.
+func (q *DemoQueue) recordJobMetrics(jobType string, status Status, duration time.Duration) {
+	if q.jobDuration == nil {
+		return
+	}
+	attrs := metric.WithAttributes(
+		attribute.String("job_type", jobType),
+		attribute.String("status", string(status)),
+	)
+	q.jobDuration.Record(context.Background(), duration.Seconds(), attrs)
+	q.jobAttempts.Add(context.Background(), 1, attrs)
+}
+
+// recordDeadLetter records one job moving to StatusDeadLetter on the
+// "jobs.job.dead_letter" Counter registerJobMetrics wires, labeled by
+// jobType only. See recordJobMetrics's own doc comment for the nil-guard
+// rationale, which applies identically here.
+func (q *DemoQueue) recordDeadLetter(jobType string) {
+	if q.jobDeadLetter == nil {
+		return
+	}
+	q.jobDeadLetter.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String("job_type", jobType),
+	))
+}
+
 // execute runs exactly one Handle attempt for rec (already StatusRunning
-// in the database) and persists its outcome. Every persistence write in
-// this method uses a context.Background()-rooted context, deliberately
-// independent of handleCtx: a bookkeeping write (recording success,
-// retry or dead-letter) must not itself fail merely because the Job's own
-// per-attempt timeout happened to elapse at the exact moment Handle
-// returned.
+// in the database) and persists its outcome. Handle is never called when
+// handler is nil (ErrHandlerNotRegistered) or when rec.TenantID is empty
+// (errDemoJobMissingTenant — defense in depth against a row that reached
+// this table by some path other than Enqueue); both are treated as an
+// ordinary Handle failure instead. A panic raised inside Handle, or inside
+// a FailureHook.OnFailure this method calls after a dead-letter, is
+// recovered by invokeHandle/invokeOnFailure rather than left to crash the
+// worker-pool process — see their own doc comments. Every persistence
+// write in this method uses a context.Background()-rooted context,
+// deliberately independent of handleCtx: a bookkeeping write (recording
+// success, retry or dead-letter) must not itself fail merely because the
+// Job's own per-attempt timeout happened to elapse at the exact moment
+// Handle returned.
 func (q *DemoQueue) execute(rec jobRecord) {
 	tenant := pkgcore.TenantID(rec.TenantID)
 	baseCtx := jobContext(tenant)
@@ -184,22 +314,32 @@ func (q *DemoQueue) execute(rec jobRecord) {
 		err    error
 	)
 	attemptStart := time.Now()
-	if handler == nil {
+	switch {
+	case handler == nil:
 		err = ErrHandlerNotRegistered.WithParam("type", rec.Type)
-	} else {
+	case rec.TenantID == "":
+		// Defense in depth: Task.validate blocks an empty TenantID from
+		// ever reaching Enqueue, so this is not reachable through the
+		// public API today — but a row that reached this table by some
+		// other path must still never run Handle with no usable tenant.
+		// See errDemoJobMissingTenant's own doc comment.
+		err = errDemoJobMissingTenant.WithParam("type", rec.Type).WithParam("job_id", rec.ID)
+	default:
 		progress := func(pct int, msg string) {
 			if perr := updateProgress(handleCtx, q.db, rec.ID, pct, msg); perr != nil {
 				log.Warn("jobs: persisting progress failed", "job_id", rec.ID, "error", perr)
 			}
 		}
-		result, err = handler.Handle(handleCtx, job, progress)
+		result, err = invokeHandle(handleCtx, handler, job, progress, log)
 	}
-	durationMS := time.Since(attemptStart).Milliseconds()
+	duration := time.Since(attemptStart)
+	durationMS := duration.Milliseconds()
 
 	now := time.Now()
 	bg := context.Background()
 	if err == nil {
 		log.Info("job succeeded", "job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS)
+		q.recordJobMetrics(rec.Type, StatusSucceeded, duration)
 		if werr := completeSucceeded(bg, q.db, rec.ID, result, now); werr != nil {
 			log.Error("jobs: persisting success failed", "job_id", rec.ID, "error", werr)
 		}
@@ -209,6 +349,8 @@ func (q *DemoQueue) execute(rec jobRecord) {
 	if rec.Attempts > rec.MaxRetries {
 		log.Error("job exhausted retries, moving to dead letter",
 			"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS, "error", err)
+		q.recordJobMetrics(rec.Type, StatusDeadLetter, duration)
+		q.recordDeadLetter(rec.Type)
 		if werr := completeDeadLetter(bg, q.db, rec.ID, err.Error(), now); werr != nil {
 			log.Error("jobs: persisting dead letter failed", "job_id", rec.ID, "error", werr)
 			return
@@ -217,7 +359,7 @@ func (q *DemoQueue) execute(rec jobRecord) {
 			job.Status = StatusDeadLetter
 			job.Error = err.Error()
 			hookCtx, hookCancel := context.WithTimeout(jobContext(tenant), timeout)
-			hook.OnFailure(hookCtx, job, err)
+			invokeOnFailure(hookCtx, hook, job, err, log)
 			hookCancel()
 		}
 		return
@@ -227,6 +369,7 @@ func (q *DemoQueue) execute(rec jobRecord) {
 	log.Warn("job attempt failed, scheduling retry",
 		"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS,
 		"retry_in_ms", delay.Milliseconds(), "error", err)
+	q.recordJobMetrics(rec.Type, StatusRetrying, duration)
 	if werr := completeRetrying(bg, q.db, rec.ID, err.Error(), now.Add(delay), now); werr != nil {
 		log.Error("jobs: persisting retry failed", "job_id", rec.ID, "error", werr)
 	}
