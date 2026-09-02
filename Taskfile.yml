@@ -111,20 +111,22 @@ tasks:
         done
 
   lint:
-    desc: Vet every module (workspace and reference app), then run golangci-lint per module when it is installed.
+    desc: Vet every module (workspace and reference app), then run golangci-lint per module.
     # go vet over the import-path pattern covers every module under go/ in one
     # workspace-wide pass; the reference app is a separate module outside go/
     # and gets its own dir-scoped vet.
     #
     # golangci-lint is the project standard (docs/internal/20-quality-and-
-    # security.md; .golangci.yml at the repo root, v2 schema). It cannot run
+    # security.md; .golangci.yml at the repo root, v2 schema) and CI enforces
+    # it on every pull request (the reusable go-module-ci workflow's
+    # golangci-lint leg; the reference app lints in pr-full). It cannot run
     # from the workspace root, though: with go.work in effect, golangci-lint
     # v2 silently lints nothing there (logs "typechecking error ... directory
     # prefix . does not contain modules listed in go.work", reports 0 issues,
-    # and exits 0). It must run from inside a module directory, so when it is
-    # installed this task loops over the use entries of go.work -- which keeps
-    # newly scaffolded modules and the reference app covered automatically --
-    # and runs it once per module.
+    # and exits 0). It must run from inside a module directory, so this task
+    # loops over the use entries of go.work -- which keeps newly scaffolded
+    # modules and the reference app covered automatically -- and runs it once
+    # per module.
     cmds:
       - go vet {{.ALL_PKGS}}
       - cd "{{.APP_DIR}}" && go vet ./...
@@ -135,12 +137,13 @@ tasks:
             (cd "$d" && golangci-lint run ./...) || exit 1
           done
         else
-          echo "note: golangci-lint is not on PATH, so only the go vet legs ran above. It"
-          echo "      is the project standard (docs/internal/20-quality-and-security.md,"
-          echo "      .golangci.yml at the repo root) and this task runs it per module once"
-          echo "      it is installed -- mise will pin it when the toolchain round lands"
-          echo "      (docs/internal/19-dev-workflow.md). Run it manually from any module"
-          echo "      directory:  golangci-lint run ./..."
+          echo "warning: golangci-lint is not on PATH, so the golangci legs above were"
+          echo "         skipped -- CI runs them on every pull request, so a local run that"
+          echo "         skips them can be green while the PR fails. Install it pinned"
+          echo "         (brew install golangci-lint, or the release tarball from"
+          echo "         github.com/golangci/golangci-lint) and re-run; mise will pin it"
+          echo "         when the toolchain round lands (docs/internal/19-dev-workflow.md)."
+          echo "         Run it manually from any module directory:  golangci-lint run ./..."
         fi
 
   dev:
