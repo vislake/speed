@@ -13,6 +13,7 @@ graph BT
     dbkit["dbkit<br/>双方言DB/迁移聚合/Repository[T]/字段级加密"]
     obs["observability<br/>OTel初始化/中间件/结构化日志"]
     tenancy["tenancy<br/>租户解析中间件/GORM插件/隔离测试套件"]
+    ratelimit["ratelimit<br/>限流原语/滑动窗口计数器/基于KVStore"]
     cfg["config<br/>动态配置/租户级覆盖/功能开关"]
     jobs["jobs<br/>异步任务队列/重试/进度/定时任务"]
     storage["storage<br/>对象存储/媒体处理/预签名直传"]
@@ -33,6 +34,7 @@ graph BT
     obs --> pkgcore
     tenancy --> pkgcore
     tenancy --> dbkit
+    ratelimit --> pkgcore
     cfg --> tenancy
     jobs --> tenancy
     jobs --> obs
@@ -43,6 +45,7 @@ graph BT
     notify --> jobs
     authn --> tenancy
     authn --> notify
+    authn --> ratelimit
     rbac --> tenancy
     metering --> tenancy
     metering --> cfg
@@ -56,10 +59,13 @@ graph BT
     ai --> storage
     ai --> billing
     ai --> cfg
+    ai --> ratelimit
     sharing --> tenancy
     sharing --> storage
+    sharing --> ratelimit
     integ --> jobs
     integ --> authn
+    integ --> ratelimit
     comp --> tenancy
     comp --> jobs
     comp --> storage
