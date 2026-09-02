@@ -13,7 +13,7 @@ Earlier drafts of the design (`docs/internal/04-data-and-tenancy.md`'s code samp
 - `tenancy --> dbkit` (the `tenancy` module depends on `dbkit`, for its GORM tenant-isolation plugin)
 - `tenancy --> pkgcore`
 
-`docs/internal/04-data-and-tenancy.md` itself specifies that `dbkit.Repository[T]`, on every read, must resolve the current tenant from context and fail closed if none is present ("读取时拿不到 tenant 直接 fail-closed 报错" — "on read, if the tenant cannot be obtained, fail closed immediately"). This means `dbkit` needs direct access to the tenant-context read/write functions. If those functions lived in package `tenancy`, `dbkit` would have to import `tenancy` to use them — but `tenancy` already imports `dbkit`. That is a two-package import cycle: `dbkit -> tenancy -> dbkit`. This does not compile.
+`docs/internal/04-data-and-tenancy.md` itself specifies that `dbkit.Repository[T]`, on every read, must resolve the current tenant from context and fail closed if none is present (the doc states, in Chinese: "on read, if the tenant cannot be obtained, fail closed immediately"). This means `dbkit` needs direct access to the tenant-context read/write functions. If those functions lived in package `tenancy`, `dbkit` would have to import `tenancy` to use them — but `tenancy` already imports `dbkit`. That is a two-package import cycle: `dbkit -> tenancy -> dbkit`. This does not compile.
 
 ## Decision
 

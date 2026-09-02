@@ -14,7 +14,7 @@ Migrations() dbkit.MigrationSet
 
 `docs/internal/01-architecture.md`'s own dependency graph states `dbkit --> pkgcore` (dbkit depends on pkgcore, not the reverse). The `Module` interface is defined in package `pkgcore` — it is the wiring contract every module, including business modules that never touch `dbkit` directly, implements. If `Migrations()` returned a type defined in `dbkit`, package `pkgcore` would have to import `dbkit` to reference that type in the interface signature. Since `dbkit` already imports `pkgcore` (for the tenant-context primitives and the `Module`/`Registry` contract itself), this would create a two-package import cycle: `pkgcore -> dbkit -> pkgcore`. Go does not allow import cycles; this would not compile.
 
-The inconsistency was actually already visible within the original document: the comment directly above the field read "资产声明（全部用 embed.FS，与模块代码同版本）" ("asset declarations, all using embed.FS, versioned with the module's code") while the type on the very next line contradicted that comment.
+The inconsistency was actually already visible within the original document itself: in the code sample that defines the `Module` interface in `docs/internal/01-architecture.md` — the one place that file declares `type Module interface` — the comment directly above the `Migrations()` field, written in Chinese there, reads roughly "asset declarations, all using embed.FS, versioned with the module's code", while the type on the very next line contradicted that comment.
 
 ## Decision
 
