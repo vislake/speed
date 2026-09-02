@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/dbkit"
+	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/tenancy"
 
@@ -43,6 +44,13 @@ const (
 	// healthzPath is the one route exempted from tenant resolution -- see
 	// buildServer's use of tenancy.WithAllowlist.
 	healthzPath = "/healthz"
+
+	// metricsPath is the demo profile's Prometheus scrape endpoint,
+	// exempted from tenant resolution for exactly the same reason
+	// healthzPath is: a scraper (or a human's browser, per
+	// docs/internal/09-observability.md's own description of the demo
+	// profile) has no demo Host to send and must not depend on one.
+	metricsPath = "/metrics"
 )
 
 // demoHostTenants is a hard-coded, obviously-temporary Host -> TenantID
@@ -204,6 +212,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(http.MethodGet+" "+healthzPath, healthzHandler)
+	mux.HandleFunc(http.MethodGet+" "+metricsPath, metricsHandler)
 	mountModuleRoutes(mux, reg)
 
 	// strictHostResolver -- not tenancy.DomainResolver -- gates the mux:
@@ -240,6 +249,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	handler := tenancy.Middleware(resolver,
 		tenancy.WithAllowlist(http.MethodGet, healthzPath),
 		tenancy.WithAllowlist(http.MethodHead, healthzPath),
+		tenancy.WithAllowlist(http.MethodGet, metricsPath),
+		tenancy.WithAllowlist(http.MethodHead, metricsPath),
 	)(mux)
 	return handler, cleanup, nil
 }
@@ -272,4 +283,19 @@ func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry) {
 func healthzHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok"))
+}
+
+// metricsHandler serves whatever obs.MetricsHandler() currently returns --
+// a real Prometheus scrape endpoint once main.go's run has called
+// obs.Init, or a 404 explaining why before that (see MetricsHandler's own
+// doc comment). It is fetched fresh on every request rather than captured
+// once when buildServer constructs the mux, so this route's behavior does
+// not depend on Init having already run by mount time: run() does call
+// Init first (see main.go), but this indirection keeps that an
+// implementation detail of main.go rather than a hidden requirement on
+// buildServer's caller, and lets server_test.go's tests -- which call
+// buildServer directly and never call obs.Init at all -- mount the route
+// without needing to care what it serves.
+func metricsHandler(w http.ResponseWriter, r *http.Request) {
+	obs.MetricsHandler().ServeHTTP(w, r)
 }

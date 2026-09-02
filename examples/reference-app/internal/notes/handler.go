@@ -3,7 +3,6 @@ package notes
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
@@ -152,6 +152,14 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errInternal.WithCause(err))
 		return
 	}
+	// The tenant is now known on ctx, and this handler runs downstream of
+	// tenancy.Middleware -- and, per main.go's own wiring comment, further
+	// downstream of obs.Middleware, which already started this request's
+	// span before tenancy.Middleware ever ran. AnnotateTenant is what
+	// actually attaches tenant_id to that span from here: see its own doc
+	// comment in go/observability/middleware.go for why obs.Middleware
+	// itself cannot do this at its own layer.
+	obs.AnnotateTenant(ctx)
 
 	var req createNoteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -177,15 +185,12 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 
 	h.publishNoteCreated(ctx, tenant, note)
 
-	// slog.Default() here (and in publishNoteCreated below) stands in for
-	// the backend coding standard's §11 rule of always taking the logger
-	// from the context (obs.FromContext(ctx)): the observability module is
-	// still a stub at this stage (root CLAUDE.md's M0 status;
-	// go/observability/AGENTS.md literally says "Not yet implemented"), so
-	// there is no obs.FromContext to call yet. Message and key-value shape
-	// otherwise already follow §11; switch both call sites to
-	// obs.FromContext(ctx) once that module lands.
-	slog.Default().Info("note created", "tenant_id", string(tenant), "note_id", note.ID)
+	// obs.FromContext(ctx) attaches tenant_id (and trace_id/span_id, once
+	// this request's span carries an active one) automatically -- see
+	// backend-coding-standards.md §11's "logger from context, not a fresh
+	// one" rule -- so it is not repeated as an explicit key-value pair
+	// here the way it would have to be with a bare slog.Default() call.
+	obs.FromContext(ctx).Info("note created", "note_id", note.ID)
 
 	w.Header().Set("Content-Type", jsonContentType)
 	w.WriteHeader(http.StatusCreated)
@@ -216,9 +221,11 @@ func (h *Handler) publishNoteCreated(ctx context.Context, tenant pkgcore.TenantI
 		},
 	}
 	if err := h.bus.Publish(ctx, evt); err != nil {
-		// slog.Default() M0 stopgap -- see create's comment above.
-		slog.Default().Error("notes.note.created event publish failed",
-			"tenant_id", string(tenant), "note_id", note.ID, "error", err)
+		// See create's comment above on why tenant_id is not repeated
+		// here as an explicit key-value pair: obs.FromContext(ctx)
+		// already attaches it.
+		obs.FromContext(ctx).Error("notes.note.created event publish failed",
+			"note_id", note.ID, "error", err)
 	}
 }
 
