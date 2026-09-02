@@ -188,7 +188,7 @@ func TestNewBlindIndexer_Validation(t *testing.T) {
 	}{
 		{name: "valid", column: "email_index", key: key, normalize: NormalizeEmail},
 		{name: "empty column", column: "", key: key, normalize: NormalizeEmail},
-		{name: "nil key", column: "email_index", normalize: NormalizeEmail},
+		{name: "nil key", column: "email_index", normalize: NormalizeEmail, wantErrIs: ErrInvalidKeySize},
 		{name: "short key", column: "email_index", key: make([]byte, 31), normalize: NormalizeEmail, wantErrIs: ErrInvalidKeySize},
 		{name: "long key", column: "email_index", key: make([]byte, 33), normalize: NormalizeEmail, wantErrIs: ErrInvalidKeySize},
 		{name: "nil normalizer", column: "email_index", key: key},
