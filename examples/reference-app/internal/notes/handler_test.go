@@ -195,9 +195,10 @@ func TestHandler_Create_TextAtExactlyMaxLength_ReturnsCreated(t *testing.T) {
 
 // TestHandler_Create_MultiByteTextAtExactlyMaxLength_ReturnsCreated pins
 // down that create's length check counts Unicode code points
-// (utf8.RuneCountInString), not UTF-8 bytes (len(text)): "笔" ("note",
-// fittingly) is a 3-byte rune, so maxTextLength copies of it sit exactly at
-// the character-count limit -- matching openapi.yaml's JSON-Schema
+// (utf8.RuneCountInString), not UTF-8 bytes (len(text)): a CJK ideograph
+// (U+7B14, meaning "pen" -- fittingly, the instrument a note is written
+// with) is a 3-byte rune, so maxTextLength copies of it sit exactly at the
+// character-count limit -- matching openapi.yaml's JSON-Schema
 // "maxLength: 4000" (itself defined in Unicode code points) and
 // PostgreSQL's VARCHAR(4000) (itself a character count, not a byte count)
 // -- while being 3x over the limit in bytes. A byte-counting
