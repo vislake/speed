@@ -370,6 +370,16 @@ func (c *Catalog) Lookup(locale, code string, params map[string]any) (string, er
 // through params, so the example above is rendered with
 // LookupPlural(locale, code, n, map[string]any{"Count": n}).
 //
+// LookupPlural is for plural messages only: a count whose category the
+// message does not define is a loud render error, never a fallback to
+// another form. A single-form message -- a plain string value, which
+// defines only the other form -- must therefore be rendered with Lookup,
+// which carries no count: in en-US, LookupPlural on one fails for a count
+// of 1 (the "one" category) while every other count renders its other
+// form, and in zh-CN, whose sole category is other, every count renders.
+// A message whose template carries a count is a plural message; define
+// every category its counts can fall into, or render it with Lookup.
+//
 // Like Lookup, LookupPlural fails loudly on an unknown locale or code
 // rather than falling back to another language.
 func (c *Catalog) LookupPlural(locale, code string, count int64, params map[string]any) (string, error) {

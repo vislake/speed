@@ -816,6 +816,35 @@ func TestPluralMessageMissingCategoryFailsAtRenderTime(t *testing.T) {
 	}
 }
 
+func TestSingleFormMessageMissingCategoryFailsAtRenderTime(t *testing.T) {
+	// The mirror case of the test above: a single-form message defines only
+	// the other form, so LookupPlural on it must fail loudly for a count
+	// that falls into a category it does not define -- count 1 in en-US is
+	// "one" -- while counts that fall into other render its text, and in
+	// zh-CN, whose sole category is other, every count renders. Single-form
+	// messages are rendered with Lookup, which carries no count.
+	c := notesCatalog(t) // notes.text_required is single-form in both locales
+	if _, err := c.LookupPlural(LocaleENUS, "notes.text_required", 1, nil); err == nil {
+		t.Fatal("LookupPlural count=1 on a single-form message succeeded, want a render error")
+	}
+	for _, count := range []int64{2, 0} {
+		got, err := c.LookupPlural(LocaleENUS, "notes.text_required", count, nil)
+		if err != nil {
+			t.Fatalf("LookupPlural count=%d (other form) = %v", count, err)
+		}
+		if got != "Note text must not be empty." {
+			t.Errorf("LookupPlural count=%d = %q", count, got)
+		}
+	}
+	zh, err := c.LookupPlural(LocaleZHCN, "notes.text_required", 1, nil)
+	if err != nil {
+		t.Fatalf("zh-CN LookupPlural count=1 = %v (zh-CN's sole category is other)", err)
+	}
+	if zh != "备注内容不能为空。" {
+		t.Errorf("zh-CN LookupPlural count=1 = %q", zh)
+	}
+}
+
 func TestCatalogConcurrentLookups(t *testing.T) {
 	// A built Catalog is immutable and lock-free; run this under -race to
 	// prove it. Mixed Lookup and LookupPlural traffic across both locales.
