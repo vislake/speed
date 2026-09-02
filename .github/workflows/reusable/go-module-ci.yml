@@ -70,6 +70,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Set up pinned Go toolchain, golangci-lint and caches
         uses: ./.github/actions/setup-go-env
+        with:
+          # The golangci-lint leg below needs the binary; the install is
+          # opt-in so the non-linting setup-go-env callers (pr-check's
+          # repo-checks job, pr-full's integration-tiers rows) do not pay
+          # for a download and cache round-trip they never use.
+          install-golangci: true
       - name: golangci-lint
         working-directory: ${{ inputs.module }}
         run: golangci-lint run ./...

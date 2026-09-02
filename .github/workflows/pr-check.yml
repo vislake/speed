@@ -92,7 +92,11 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Set up pinned Go toolchain, golangci-lint and caches
+      # golangci-lint is deliberately not installed here (setup-go-env's
+      # install-golangci input, default false): this job never lints, and
+      # an unconditional install would mean a ~20 MB download and an
+      # analysis-cache round-trip on every run for nothing.
+      - name: Set up pinned Go toolchain and caches
         uses: ./.github/actions/setup-go-env
       - name: CJK discipline scan (Language Rule)
         run: python3 tools/scan_cjk.py
