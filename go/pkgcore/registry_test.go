@@ -1495,7 +1495,7 @@ func TestWithEventBus_NilBusKeepsTheDeploymentModeDefault(t *testing.T) {
 		t.Fatalf("Bootstrap() error = %v, want nil", err)
 	}
 	if reg.EventBus() == nil {
-		t.Error("EventBus() is nil, want the demo default")
+		t.Error("EventBus() is nil, want the standalone deployment mode's default")
 	}
 }
 
@@ -1507,7 +1507,7 @@ func TestWithKVStore_NilStoreKeepsTheDeploymentModeDefault(t *testing.T) {
 		t.Fatalf("Bootstrap() error = %v, want nil", err)
 	}
 	if reg.KVStore() == nil {
-		t.Error("KVStore() is nil, want the demo default")
+		t.Error("KVStore() is nil, want the standalone deployment mode's default")
 	}
 }
 

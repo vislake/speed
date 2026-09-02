@@ -31,8 +31,8 @@ type EventHandler func(ctx context.Context, evt Event) error
 
 // EventBus decouples modules by letting them exchange domain events instead of
 // calling each other directly. Implementations differ in delivery semantics:
-// the in-memory bus is synchronous and single-process, while a production bus
-// backed by a broker delivers asynchronously.
+// the in-memory bus is synchronous and single-process, while the distributed
+// deployment mode's bus, backed by a broker, delivers asynchronously.
 type EventBus interface {
 	// Publish delivers evt to every handler subscribed to evt.Type and reports
 	// the handler failures, if any.

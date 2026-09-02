@@ -226,7 +226,7 @@ func TestMemoryKVStore_DoesNotAliasCallerSlices(t *testing.T) {
 	}
 
 	// A Redis-backed store copies the bytes onto the wire, so a caller reusing
-	// its buffer after Set cannot corrupt what was stored. The demo store has to
+	// its buffer after Set cannot corrupt what was stored. The standalone-mode store has to
 	// behave identically or the two deployment modes diverge.
 	value[0] = 'X'
 	if got, _ := kvGet(t, store, kvTestKey); got != "original" {
