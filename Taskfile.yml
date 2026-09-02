@@ -39,9 +39,12 @@ vars:
   # Modules with a Docker-backed integration tier under integration_test/
   # (go test -tags=integration ./... from the module directory): PostgreSQL via
   # testcontainers for dbkit and tenancy (including tenancy's tenancytest
-  # subpackage), Redis for jobs. Keep in step with the modules' actual
-  # integration_test directories.
-  INTEGRATION_DIRS: go/dbkit go/tenancy go/jobs
+  # subpackage), Redis via testcontainers for pkgcore and jobs. This list is
+  # the enumeration of the modules' integration_test/ directories: one entry
+  # per module that carries one. A module shipping a tier without an entry
+  # here silently drops out of test:full, so keep the two in step -- verify by
+  # listing the integration_test/ directories under go/.
+  INTEGRATION_DIRS: go/dbkit go/tenancy go/jobs go/pkgcore
 
 tasks:
   default:
@@ -85,10 +88,12 @@ tasks:
     # deployment mode x dual dialect across every module. Until the
     # distributed mode and a second dialect's integration tiers exist, the
     # honest full form is: the whole unit suite under the race detector with
-    # coverage, plus every Docker-backed integration tier that exists today
-    # (see {{.INTEGRATION_DIRS}}). Each tier must be run from its own module
-    # directory -- the integration build tag is what keeps a plain
-    # `go test ./...` from ever touching them.
+    # coverage, plus the Docker-backed integration tiers. {{.INTEGRATION_DIRS}}
+    # carries one entry per module with an integration_test/ directory, so the
+    # enumeration cannot drift from the modules that actually ship a tier --
+    # adding a tier means adding its module to that list. Each tier must be
+    # run from its own module directory -- the integration build tag is what
+    # keeps a plain `go test ./...` from ever touching them.
     cmds:
       - go test -race -cover {{.ALL_PKGS}}
       - cd "{{.APP_DIR}}" && go test -race -cover ./...
