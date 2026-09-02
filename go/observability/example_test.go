@@ -171,6 +171,48 @@ func ExampleFromContext() {
 	// true
 }
 
+// ExampleRedactedValue shows the redaction layer in action on the log
+// channel -- RedactedValue is exactly the marker a sink sees where a
+// sensitive attribute used to be. Two distinct mechanisms are demonstrated,
+// mirroring redact.go's doc comment: key-based redaction replaces the whole
+// value of an attribute whose key is secret-shaped (access_token below),
+// and value-shaped redaction masks a credential embedded inside an
+// otherwise-benign attribute's text (the bearer token inside the error
+// message below), while correlation fields and benign content pass through
+// untouched. Redaction is on by default for every logger FromContext
+// returns, with no per-call way to disable it.
+func ExampleRedactedValue() {
+	var buf bytes.Buffer
+	ctx := observability.WithLogger(context.Background(), slog.New(slog.NewTextHandler(&buf, nil)))
+
+	// Key-based: the access_token attribute's value never reaches the sink.
+	observability.FromContext(ctx).Info("outgoing request",
+		"url", "https://api.example.com/v1/charge",
+		"access_token", "sup3r-s3cr3t-v4lue-9876543210")
+
+	// Value-shaped: a bearer credential embedded in an error message is
+	// masked in place -- the error survives, its secret does not.
+	observability.FromContext(ctx).Info("provider auth failed",
+		"err", errors.New("provider auth failed: got 401 from https://idp.example.com with Bearer abcDEFgh1234567890XYZmnopQRSTuvWX"))
+
+	// Benign content passes through untouched.
+	observability.FromContext(ctx).Info("note created", "note_id", "n-1")
+
+	out := buf.String()
+	fmt.Println("key-redacted:", strings.Contains(out, "access_token="+observability.RedactedValue))
+	fmt.Println("no plaintext token:", !strings.Contains(out, "sup3r-s3cr3t-v4lue-9876543210"))
+	fmt.Println("masked in error text:", strings.Contains(out, "Bearer "+observability.RedactedValue))
+	fmt.Println("benign attr survives:", strings.Contains(out, "note_id=n-1"))
+	fmt.Println("msg survives:", strings.Contains(out, `msg="note created"`))
+
+	// Output:
+	// key-redacted: true
+	// no plaintext token: true
+	// masked in error text: true
+	// benign attr survives: true
+	// msg survives: true
+}
+
 // ExampleMiddleware shows the package's single most important behavioral
 // guarantee, executed and checked, not just described in prose: two
 // different tenants calling the exact same route must collapse into ONE

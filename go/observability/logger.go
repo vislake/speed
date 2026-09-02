@@ -33,7 +33,14 @@ type loggerCtxKey struct{}
 // WithLogger returns a copy of ctx carrying logger, so that a later
 // FromContext call on ctx (or on any context derived from it) returns
 // logger -- enriched with whatever trace/tenant fields that later call's
-// own context carries -- instead of falling back to slog.Default().
+// own context carries, and wrapped in the redaction layer (see redact.go) --
+// instead of falling back to slog.Default().
+//
+// logger is used as a plain sink base: build it as slog.New(handler), with
+// no With-attached attributes. Attributes pre-attached to it live in the
+// handler's own state and would be rendered by the sink without passing
+// through FromContext's redactor; static attributes belong on the logger
+// FromContext returns instead (logger.With(...) on that one IS redacted).
 //
 // This is the one legitimate place a *slog.Logger gets constructed by
 // hand, per backend-coding-standards.md §11: process startup, before any
@@ -88,6 +95,28 @@ func baseLogger(ctx context.Context) *slog.Logger {
 // as it is from deep inside a fully-scoped request: the fields that do not
 // apply are simply left off, never replaced with a placeholder or an
 // error.
+//
+// # Redaction
+//
+// Every logger FromContext returns is wrapped in the redaction layer
+// described in redact.go: sensitive attributes are replaced before the
+// record reaches the sink handler -- on by default, with no per-call way
+// to disable it, and identically for every sink a host plugs in. The key
+// set, the value shapes detected, and the deliberate boundaries are all in
+// redact.go's doc comment.
+//
+// Two contract points follow from the wrap:
+//
+//   - FromContext does not return the exact *slog.Logger WithLogger
+//     attached: it returns a logger that shares the attached one's sink
+//     handler with the redaction layer in between. When ctx carries no
+//     enrichment, the returned logger is still redacted, and two calls
+//     return distinct *slog.Logger values that write identically.
+//   - The redaction guarantee holds for everything logged through this
+//     API. A *slog.Logger a host constructs by hand and logs through
+//     directly -- outside FromContext -- does not pass through the
+//     redactor; that construction site is the deliberate escape, and root
+//     CLAUDE.md's logging rule already confines it to process startup.
 func FromContext(ctx context.Context) *slog.Logger {
 	logger := baseLogger(ctx)
 
@@ -99,8 +128,20 @@ func FromContext(ctx context.Context) *slog.Logger {
 		attrs = append(attrs, TenantIDKey, string(tenant))
 	}
 
-	if len(attrs) == 0 {
+	return redactedLogger(logger).With(attrs...)
+}
+
+// redactedLogger returns logger with its handler wrapped in the redaction
+// layer, or logger itself when its handler is already wrapped. It is the
+// single funnel through which the loggers this package hands out become
+// redaction-guaranteed: wrapping happens here, once, and every record any
+// derived logger emits (its own log calls and anything attached to it via
+// With, whose attributes this layer redacts when they are attached) passes
+// through the redactor before the sink sees it. See redact.go for the
+// full mechanism.
+func redactedLogger(logger *slog.Logger) *slog.Logger {
+	if _, ok := logger.Handler().(*redactHandler); ok {
 		return logger
 	}
-	return logger.With(attrs...)
+	return slog.New(&redactHandler{next: logger.Handler()})
 }

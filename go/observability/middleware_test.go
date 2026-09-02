@@ -556,6 +556,84 @@ func TestMiddleware_StartsSpanNamedAfterMethodAndPath(t *testing.T) {
 	}
 }
 
+// TestMiddleware_QueryStringSecrets_NeverReachSpanAttributes is the
+// span-channel half of the redaction guarantee whose log-channel half lives
+// in redact_test.go. An HTTP request's query string is where credentials
+// ride (?access_token=..., ?signature=..., ?api_key=...), so the promise
+// "no secret this middleware's instrumentation emits reaches the exported
+// span" rests entirely on the query never becoming a span name or a span
+// attribute. Today that is guaranteed by two mechanisms: otelhttp's own
+// semconv deliberately omits url.query and url.full from the SERVER span
+// attributes it attaches, and Middleware's span name formatter and its
+// http.route attribute use (*http.Request).URL.Path, which net/http has
+// already split from the query before this package ever sees the request.
+// Both are exclusions-by-default rather than anything this module actively
+// redacts, so they are pinned here by a negative control instead of trusted
+// by assumption: if a future otelhttp upgrade starts attaching url.full, or
+// a future edit names a span from r.RequestURI or URL.String(), this test
+// fails and forces a deliberate decision (redact the span channel in
+// redact.go, or accept the regression) rather than leaking silently.
+//
+// The request below carries a query whose parameter name AND value are both
+// secret-shaped -- access_token=<34-char credential> -- plus a benign
+// sibling parameter, so a naive "drop the sensitive parameter" filter would
+// still have to know the name to drop it; the assertion here is stronger:
+// NOTHING about the query, not even its benign parameter, may appear in the
+// span. The positive controls alongside it (tenant_id intact, http.route
+// intact) confirm the test is looking at a real, fully-populated span and
+// not passing vacuously on an empty attribute set.
+func TestMiddleware_QueryStringSecrets_NeverReachSpanAttributes(t *testing.T) {
+	exp := setupTracerProvider(t)
+	setupMeterProvider(t) // Middleware always records metrics too; give it a live provider.
+
+	const credential = "abcDEFgh1234567890XYZmnopQRSTuvWX"
+	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	handler.ServeHTTP(httptest.NewRecorder(),
+		newTestRequest(http.MethodGet, "/api/v1/notes?access_token="+credential+"&expand=charge", "acme"))
+
+	spans := exp.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("expected exactly 1 span, got %d", len(spans))
+	}
+	span := spans[0]
+
+	if want := "GET /api/v1/notes"; span.Name != want {
+		t.Errorf("span name = %q, want %q: the query string must not leak into the span name", span.Name, want)
+	}
+
+	// The sensitive stems mirroring redact.go's key-based rule: a span
+	// attribute KEY carrying any of them would be a secret-shaped field
+	// reaching the exporter regardless of its value.
+	sensitiveStems := []string{
+		"token", "secret", "password", "passwd", "pwd",
+		"authorization", "cookie", "credential", "key",
+	}
+	for _, kv := range span.Attributes {
+		key, val := string(kv.Key), kv.Value.AsString()
+		lowerKey := strings.ToLower(key)
+		for _, stem := range sensitiveStems {
+			if strings.Contains(lowerKey, stem) {
+				t.Errorf("span attribute key %q contains sensitive stem %q: no secret-shaped field may reach span attributes", key, stem)
+			}
+		}
+		if strings.Contains(val, credential) || strings.Contains(val, "access_token") || strings.Contains(val, "expand=charge") {
+			t.Errorf("span attribute %q carries query-string material (value %q): the query string must never reach span attributes", key, val)
+		}
+	}
+
+	// Positive controls: the same request's legitimate span signal survives
+	// -- the tenant correlation field untouched, and http.route carrying the
+	// path half of the request the way Middleware documents.
+	if got, ok := findAttr(span.Attributes, obs.TenantIDKey); !ok || got.AsString() != "acme" {
+		t.Errorf("expected tenant_id=acme to survive on the span, got attributes: %v", span.Attributes)
+	}
+	if got, ok := findAttr(span.Attributes, "http.route"); !ok || got.AsString() != "/api/v1/notes" {
+		t.Errorf("expected http.route=/api/v1/notes to survive on the span, got attributes: %v", span.Attributes)
+	}
+}
+
 // TestMiddleware_ServerError_SetsSpanErrorStatus confirms a 5xx response
 // is reflected as an error span status, not just as a metric label.
 func TestMiddleware_ServerError_SetsSpanErrorStatus(t *testing.T) {

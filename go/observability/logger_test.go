@@ -129,12 +129,40 @@ func TestFromContext_FallsBackToSlogDefault(t *testing.T) {
 	}
 }
 
-func TestWithLogger_ReturnsExactLoggerWhenNoEnrichment(t *testing.T) {
-	custom := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
+// TestFromContext_NoEnrichment_WritesThroughAttachedSink pins down what
+// FromContext returns when ctx carries nothing to enrich: no longer the
+// exact *slog.Logger WithLogger attached -- the redaction layer sits
+// between the logger and the sink now -- but a logger that writes through
+// the very same sink handler, so the attached sink's output (formatting,
+// level filter, destination) is preserved bit for bit.
+func TestFromContext_NoEnrichment_WritesThroughAttachedSink(t *testing.T) {
+	var buf bytes.Buffer
+	custom := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	ctx := obs.WithLogger(context.Background(), custom)
 
-	if got := obs.FromContext(ctx); got != custom {
-		t.Error("expected FromContext to return the exact *slog.Logger WithLogger attached when there is nothing to enrich it with")
+	logger := obs.FromContext(ctx)
+	if logger == custom {
+		t.Error("expected FromContext to return a wrapped logger, not the exact attached one: redaction must sit between the logger and the sink even when there is nothing to enrich")
+	}
+
+	// The sink's own filtering still applies to the wrapped logger...
+	logger.Info("dropped")
+	logger.Warn("kept")
+	// ...and the redaction layer is active even with zero enrichment attrs.
+	logger.Warn("sink shared", "token", "plaintext-token-value")
+
+	out := buf.String()
+	if strings.Contains(out, "dropped") {
+		t.Errorf("expected the attached sink's level filter to still apply to the wrapped logger; got: %s", out)
+	}
+	if !strings.Contains(out, "kept") {
+		t.Errorf("expected the wrapped logger to write through the attached sink; got: %s", out)
+	}
+	if strings.Contains(out, "plaintext-token-value") {
+		t.Errorf("redaction must apply even when FromContext has nothing to enrich: token value reached the sink; got: %s", out)
+	}
+	if !strings.Contains(out, obs.RedactedValue) {
+		t.Errorf("expected the token value to be replaced by %q; got: %s", obs.RedactedValue, out)
 	}
 }
 

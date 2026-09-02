@@ -5,7 +5,8 @@
 //
 // This is the foundational layer only: dual-deployment-mode OTel
 // initialization (Init), a context-aware structured logger (FromContext /
-// WithLogger), and generic HTTP instrumentation (Middleware). The full
+// WithLogger) with default-on secret-attribute redaction, and generic HTTP
+// instrumentation (Middleware). The full
 // per-domain metrics catalog docs/internal/09-observability.md's
 // must-instrument-metrics table describes (queue depth, metering outbox
 // lag, notification delivery rate, payment callback success, ...) belongs
@@ -46,6 +47,27 @@
 //     context, for code that runs before any request or trace exists.
 //   - Middleware(next) wraps an http.Handler to start a request span (via
 //     otelhttp) and record request-count and request-duration metrics.
+//
+// # Redaction on by default
+//
+// Every log attribute recorded through the FromContext API passes through a
+// redaction layer (redact.go) before the record reaches the sink handler:
+// attributes whose key -- or any segment of their group-nested key path --
+// is secret-shaped have their whole value replaced by RedactedValue, and
+// secret-shaped text embedded in otherwise-benign string and error values is
+// masked in place. Redaction is on by default and cannot be disabled from
+// any call site (docs/internal/09-observability.md), and it holds
+// identically for every sink a host plugs in. The correlation fields
+// trace_id, span_id, tenant_id, user_id and job_id are never redacted. The
+// span attributes this package's instrumentation emits are kept secret-free
+// by construction rather than by a second pass: Middleware assembles only
+// method/route/status/tenant attributes, and the request's query string --
+// where credentials ride -- never becomes a span name or attribute. See
+// redact.go's doc comment for the full contract: the key set, the value
+// shapes, the deliberate boundaries (log messages are not scanned; API
+// responses, audit logs and dbkit encryption are separate mechanisms), and
+// the one documented escape (a hand-built *slog.Logger logged through
+// directly, outside FromContext).
 //
 // # The one rule that matters most: tenant_id is not a metric label
 //
