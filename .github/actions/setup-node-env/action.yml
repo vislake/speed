@@ -1,37 +1,80 @@
 name: setup-node-env
-description: Install the pinned Node.js toolchain for npm-package CI jobs.
+description: >-
+  Install the pinned Node.js and pnpm toolchain for npm-package CI jobs,
+  and restore the pnpm store cache.
 
-# Shared Node.js toolchain setup for CI jobs that run npm/pnpm commands.
-# The one consumer is workflows/reusable/npm-package-ci.yml, which calls
-# this action directly; no orchestrator workflow invokes that reusable yet,
-# because no npm package exists in the repository (roadmap M0 web-workspace
-# item).
+# Shared Node.js toolchain setup for every CI job that runs pnpm commands.
+# The consumers are the reusable workflows that check npm packages
+# (workflows/reusable/npm-package-ci.yml today, pr-full/release/nightly
+# when they grow npm legs).
 #
-# VERSION SOURCE -- PROVISIONAL PIN
-# There is no Node version source to read today: no web/ workspace, no
-# package.json, no .nvmrc, no .tool-versions. Node 24 (active LTS as of
-# September 2026) is therefore pinned explicitly below. When the frontend
-# and toolchain rounds land (roadmap M0 engineering: pnpm workspace +
-# changesets, mise toolchain), switch to the node-version-file input of
-# actions/setup-node pointing at the shared version file; the pnpm version
-# itself will then travel in the root package.json `packageManager` field
-# (installed by corepack), and the pnpm store cache (keyed on
-# pnpm-lock.yaml) is enabled at the same time. Until a lockfile exists,
-# declaring cache: pnpm would only produce a cache-miss warning.
+# VERSION SOURCES -- single sites, identical locally and in CI
+#   * Node: web/.nvmrc, read through actions/setup-node's node-version-file
+#     input. This is the one file CI reads; a local nvm/mise setup pointed
+#     at the same file cannot drift from it.
+#   * pnpm: the "packageManager" field of web/package.json (pnpm@11.1.2),
+#     parsed and installed as an exact version below. The field is the one
+#     source; CI never guesses a pnpm version.
+# The Node major is 24 because that is what CI runners provide; the engines
+# range of web/package.json accepts newer Node locally.
 #
-# Callers must run actions/checkout first if any file-based resolution is
-# added later.
-
-inputs:
-  node-version:
-    description: Node.js version to install (LTS).
-    required: false
-    default: "24"
+# WHY npm install -g INSTEAD OF COREPACK
+# corepack is gone from Node 25+ and its first-run download adds a
+# signature-check indirection that has broken runners before; `npm install
+# -g pnpm@<exact>` ships with every Node CI image, needs no extra
+# configuration and installs byte-identical to the pinned version. The
+# version assertion below makes a stale parse fail loudly.
+#
+# CACHE
+# The pnpm store is pointed at a literal path ($HOME/.cache/pnpm-store)
+# and cached with actions/cache under a key on the workspace lockfile hash
+# (18-cicd cost-control rule 3: caches keyed on lockfile hashes) -- when
+# web/pnpm-lock.yaml changes, the store cache misses and saves fresh. The
+# restore-keys prefix keeps a job whose lockfile changed mid-flight able to
+# reuse the previous store instead of starting cold. pnpm's own installs
+# never write outside the store path (install dirs are per-job temp), so
+# the cached path stays coherent.
+#
+# Callers must run actions/checkout first: web/.nvmrc and web/package.json
+# are resolved from the checked-out tree.
 
 runs:
   using: composite
   steps:
-    - name: Install pinned Node.js toolchain
+    - name: Install pinned Node.js from web/.nvmrc
       uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
       with:
-        node-version: ${{ inputs.node-version }}
+        node-version-file: web/.nvmrc
+
+    - name: Install the exact pnpm version web/package.json pins
+      shell: bash
+      run: |
+        set -euo pipefail
+        package_manager="$(node -p "require('./web/package.json').packageManager")"
+        version="$(printf '%s' "${package_manager}" | sed -n 's/^pnpm@\([0-9][0-9.]*\).*/\1/p')"
+        if [ -z "${version}" ]; then
+          echo "error: could not parse a pnpm version from packageManager"
+          echo "field ${package_manager} in web/package.json."
+          exit 1
+        fi
+        npm install --global "pnpm@${version}"
+        installed="$(pnpm --version)"
+        if [ "${installed}" != "${version}" ]; then
+          echo "error: expected pnpm ${version} (web/package.json packageManager),"
+          echo "but pnpm --version reports ${installed}."
+          exit 1
+        fi
+
+    - name: Point the pnpm store at the cached directory
+      shell: bash
+      run: |
+        set -euo pipefail
+        pnpm config set --location global store-dir "${HOME}/.cache/pnpm-store"
+
+    - name: Restore pnpm store cache
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+      with:
+        path: ~/.cache/pnpm-store
+        key: pnpm-store-${{ runner.os }}-v3-${{ hashFiles('web/pnpm-lock.yaml') }}
+        restore-keys: |
+          pnpm-store-${{ runner.os }}-v3-

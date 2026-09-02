@@ -16,8 +16,18 @@ name: pr-check
 #     modules (a go.mod + doc.go only) are deliberately absent: they have no
 #     code to check, and listing them would imply coverage that does not
 #     exist. Adding a module to this matrix is the whole cost of adding it
-#     to CI. npm-package-ci is not called: no npm package exists yet
-#     (roadmap M0 web-workspace item).
+#     to CI.
+#   * npm-packages job: the npm packages with real, tested implementation
+#     (@speed/tokens, @speed/i18n -- root CLAUDE.md, Repository Status)
+#     each run through the reusable npm-package-ci workflow: a
+#     frozen-lockfile workspace install from the web/ root, then lint
+#     (the flat-config ESLint at web/, no-explicit-any enforced),
+#     strict typecheck, the vitest unit suite and the dist/ build. Node
+#     and pnpm versions come from setup-node-env's single sources
+#     (web/.nvmrc, web/package.json's packageManager field); the pnpm
+#     store cache is keyed on the lockfile hash (18-cicd cost-control
+#     rule 3). Adding a package to this matrix is the whole cost of
+#     adding it to CI.
 #   * repo-checks job, repository-level, all existing today:
 #       - tools/scan_cjk.py -- the CJK discipline scanner enforcing the root
 #         CLAUDE.md Language Rule (18-cicd discipline table row). Scans the
@@ -33,20 +43,23 @@ name: pr-check
 # DELIBERATELY NOT WIRED HERE (18-cicd discipline table rows whose tooling
 # does not exist in the repository yet; each lands with its tooling round --
 # wiring them now would be fake checks):
-#   * semgrep rules, ESLint rules, spec merging, redocly rules, oasdiff,
-#     Playwright e2e -- none of that tooling exists yet (see the gated
-#     pipeline stubs e2e/security/scaffold-verify/release/nightly in this
-#     directory for where each wires in). The API-contract toolchain's
-#     backend half is real but lives in its own path-filtered pipeline,
-#     api-contract.yml, so it is not wired into this check: on PRs
-#     touching the notes module's spec fragment or the generator side it
-#     regenerates the fragment's API surface, diffs the committed
-#     artifact, and builds the reference app so a spec that outgrew its
-#     handler fails compilation without needing a full-ci label. The
-#     frontend sdk (orval) awaits the web/ workspace. i18n
-#     key-parity wiring exists and runs in docs-check on doc/i18n-touching
-#     PRs -- deliberately not here, so this fast per-PR check stays under
-#     its 8-minute budget.
+#   * semgrep rules, spec merging, redocly rules, oasdiff, Playwright e2e
+#     -- none of that tooling exists yet (see the gated pipeline stubs
+#     e2e/security/scaffold-verify/release/nightly in this directory for
+#     where each wires in). The ESLint foundation now exists and runs on
+#     the npm packages above, but the discipline rules that need JSX or
+#     the api-sdk consumer surface (no bare text nodes, no hand-written
+#     backend calls) land with the first React package round. The
+#     API-contract toolchain's backend half is real but lives in its own
+#     path-filtered pipeline, api-contract.yml, so it is not wired into
+#     this check: on PRs touching the notes module's spec fragment or the
+#     generator side it regenerates the fragment's API surface, diffs the
+#     committed artifact, and builds the reference app so a spec that
+#     outgrew its handler fails compilation without needing a full-ci
+#     label. The frontend sdk (orval) is a later web/ workspace round
+#     (api-client/api-sdk). i18n key-parity wiring exists and runs in
+#     docs-check on doc/i18n-touching PRs -- deliberately not here, so
+#     this fast per-PR check stays under its 8-minute budget.
 #   * reference-app lint and unit suite: the reference app runs its
 #     golangci-lint leg and unit suite in pr-full's reference-app job
 #     (full-ci-labeled PRs), keeping this per-PR check on its budget; the
@@ -91,6 +104,20 @@ jobs:
     uses: ./.github/workflows/reusable/go-module-ci.yml
     with:
       module: ${{ matrix.module }}
+
+  npm-packages:
+    name: npm-package-ci (${{ matrix.package }})
+    # Timeout and runner live in the reusable workflow; the callee's
+    # timeout-minutes bounds each call (caller jobs may not set their own).
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - web/packages/tokens
+          - web/packages/i18n
+    uses: ./.github/workflows/reusable/npm-package-ci.yml
+    with:
+      package: ${{ matrix.package }}
 
   repo-checks:
     name: repository-level checks

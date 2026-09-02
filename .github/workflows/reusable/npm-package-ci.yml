@@ -1,30 +1,67 @@
 name: npm-package-ci
 
-# Reusable per-package frontend CI -- a wiring-ready shape, not a runnable
-# check. No workflow calls it yet, and the guard step below makes any
-# premature invocation fail loudly instead of passing silently.
+# Reusable per-package npm CI, called by the pipeline orchestrators
+# (pr-check today; pr-full, nightly and release when they grow npm legs).
+# docs/internal/18-cicd.md's reusable-workflow design section is the
+# governing spec: callers enumerate one matrix row per package, so adding a
+# package means adding one row to a caller's matrix -- never copying this
+# file's legs into a workflow.
 #
-# docs/internal/18-cicd.md's reusable-workflow design section pairs this with
-# go-module-ci: a package becomes one matrix row in the calling orchestrator
-# (pr-check once frontend packages exist, and later pr-full/release/nightly).
-# The pipeline-overview table's npm duties are lint + typecheck + unit tests
-# + build per package, layered the same way Go modules are layered.
+# INPUT
+# `package` is the package's directory relative to the repository root
+# (e.g. web/packages/tokens). All toolchain versions come from
+# setup-node-env, whose single sources are web/.nvmrc (Node) and
+# web/package.json's packageManager field (pnpm) -- CI never states a
+# version of its own, so the local workflow and CI cannot drift.
 #
-# INTENDED LEGS (to be filled in by the round that creates the workspace):
-#   1. actions/checkout
-#   2. ./.github/actions/setup-node-env  (version source moves to the shared
-#      version file then; pnpm store cache keyed on pnpm-lock.yaml is enabled
-#      in the same round, per 18-cicd's cost-control caching rule)
-#   3. pnpm install --frozen-lockfile     (workspace root)
-#   4. per-package: lint / typecheck / test / build -- the exact commands
-#      depend on the tooling the workspace round chooses; the discipline
-#      rows of 18-cicd's discipline table (ESLint rules: no bare text nodes,
-#      no hand-written backend calls, i18n key parity via
-#      tools/check_i18n_keys.py) land with the packages that need them.
+# LEGS
+#   0. pnpm install --frozen-lockfile from the web/ workspace root. The
+#      committed web/pnpm-lock.yaml must satisfy every package manifest
+#      exactly; a stale lockfile fails the install, which is how a new
+#      dependency forces its lockfile update into the same commit. The
+#      pnpm store is cached by setup-node-env under a lockfile-hash key
+#      (18-cicd cost-control rule 3).
+#   1..4 run from inside the package directory, matching the local
+#      workflow of web/AGENTS.md: the scripts resolve against the
+#      package's own dependencies while ESLint and tsconfig walk up to the
+#      workspace-level files in web/.
+#   1. pnpm lint     the project-standard lint leg: flat config at web/
+#                    (eslint.config.mjs -- typescript-eslint recommended
+#                    plus '@typescript-eslint/no-explicit-any' as an
+#                    error); the eslint/typescript-eslint versions are
+#                    pinned in the shared web/package.json devDependencies.
+#   2. pnpm typecheck
+#                    tsc --noEmit under the strict web/tsconfig.base.json
+#                    settings (each package's tsconfig extends it).
+#   3. pnpm test      the package's vitest unit suite. No e2e or
+#                    component-preview legs exist until that tooling
+#                    lands (see DELIBERATELY NOT WIRED below); a package's
+#                    tests are its only runtime checks today.
+#   4. pnpm build     emits dist/ via each package's project build. The
+#                    package.json exports map to those emitted files, so a
+#                    build that stops compiling fails here before any
+#                    consumer resolves the exports at runtime.
 #
-# GATE: roadmap M0 engineering -- the pnpm workspace + changesets item. There
-# is no web/ tree, no package.json, no lockfile and no @speed/* package in
-# the repository today, so nothing here can run yet.
+# DELIBERATELY NOT WIRED HERE (18-cicd discipline-table rows whose tooling
+# does not exist in the repository yet; each lands with the round that
+# introduces it -- wiring them now would be fake checks):
+#   * ESLint rules that need JSX and a React consumer surface -- no bare
+#     text nodes, no hand-written backend calls -- land with the first
+#     React-bearing package round (ui-kit), where the react plugins and
+#     the api-sdk types to check against exist.
+#   * Repo-level i18n key parity over package locale files
+#     (tools/check_i18n_keys.py's web JSON extension) lands with the first
+#     package that ships production locale resources. Until then, parity
+#     is enforced in code: @speed/i18n's registerNamespace validates
+#     per-language coverage and identical key sets at registration, and
+#     its test suite pins that.
+#   * Storybook component previews: with ui-kit.
+#   * publint publish-shape validation and changesets wiring: with the
+#     web release-machinery round -- no @speed/* package is published yet,
+#     and the release pipeline stub is gated until that round.
+#
+# jobs.timeout-minutes bounds every run (18-cicd cost control); the caller
+# additionally cancels stale runs via concurrency.
 
 on:
   workflow_call:
@@ -32,7 +69,7 @@ on:
       package:
         description: >-
           Package directory relative to the repository root, e.g.
-          web/packages/tokens. Final shape is settled by the workspace round.
+          web/packages/tokens.
         required: true
         type: string
 
@@ -47,14 +84,20 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Set up pinned Node toolchain
+      - name: Set up pinned Node.js, pnpm and the pnpm store cache
         uses: ./.github/actions/setup-node-env
-      - name: Guard -- the npm workspace does not exist yet
-        run: |
-          echo "error: npm-package-ci is a wiring-ready shape, not a runnable"
-          echo "check. The repository has no pnpm workspace (no"
-          echo "pnpm-workspace.yaml, no packages, no lockfile) -- the roadmap"
-          echo "M0 pnpm-workspace round builds it. Wire the real legs (install /"
-          echo "lint / typecheck / test / build) in that same round, then remove"
-          echo "this guard step."
-          exit 1
+      - name: Install workspace dependencies (frozen lockfile)
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        working-directory: ${{ inputs.package }}
+        run: pnpm lint
+      - name: Typecheck
+        working-directory: ${{ inputs.package }}
+        run: pnpm typecheck
+      - name: Test
+        working-directory: ${{ inputs.package }}
+        run: pnpm test
+      - name: Build
+        working-directory: ${{ inputs.package }}
+        run: pnpm build
