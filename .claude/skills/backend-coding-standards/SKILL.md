@@ -1,6 +1,6 @@
 ---
 name: backend-coding-standards
-description: speed Backend Coding Standards — Mandatory module boundaries, multi-tenant isolation, dual runtime profiles, error handling, API, logging and testing rules for writing, editing and reviewing all Go code under go/
+description: speed Backend Coding Standards — Mandatory module boundaries, multi-tenant isolation, dual deployment modes, error handling, API, logging and testing rules for writing, editing and reviewing all Go code under go/
 triggers:
   - writing backend code
   - editing backend code
@@ -124,9 +124,9 @@ ctx, err = pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
 - Keep the scope as narrow as possible — **DO NOT** enable it "conveniently" in middleware.
 - It bypasses tenant filtering only. **It never bypasses RBAC.**
 
-## 4. Dual Runtime Profiles
+## 4. Dual Deployment Modes
 
-The same business code must run correctly under both demo (single process / SQLite / in-memory implementations) and production (PostgreSQL / Redis).
+The same business code must run correctly under both the standalone (single process / SQLite / in-memory implementations) and distributed (PostgreSQL / Redis) deployment modes.
 
 ```go
 // Correct: depend on the interface
@@ -134,10 +134,10 @@ type Service struct { kv pkgcore.KVStore }
 
 // Wrong
 import "github.com/redis/go-redis/v9"
-if profile == "demo" { ... } // profile branches belong only in kernel wiring
+if mode == "standalone" { ... } // deployment-mode branches belong only in kernel wiring
 ```
 
-- **DO NOT** branch on the profile inside business logic.
+- **DO NOT** branch on the deployment mode inside business logic.
 - **DO NOT** expose capabilities on an interface that only one implementation can satisfy (such as Redis Lua scripting). When atomicity is required, define semantics both sides can honour, like `IncrByFloat` or `CompareAndSwap`.
 - Any new infrastructure dependency **must ship both implementations**. One implementation is not "done".
 
@@ -155,7 +155,7 @@ type Subscription struct {
 func (Subscription) GetTenantID() pkgcore.TenantID { return ... } // implements TenantScoped
 ```
 
-**Dual-dialect hard constraints** (PostgreSQL in production, SQLite in development — both must pass):
+**Dual-dialect hard constraints** (PostgreSQL in the distributed deployment mode, SQLite in the standalone deployment mode — both must pass):
 - Generate IDs in the application (ULID/UUID). **DO NOT** use `gen_random_uuid()`.
 - Use `datatypes.JSON`. **DO NOT** rely on JSONB operators for filtering.
 - **DO NOT** use native PostgreSQL arrays — use JSON or a join table.
@@ -289,7 +289,7 @@ log.Info("subscription activated",
 
 | Tier | Dependencies | When |
 |---|---|---|
-| Unit | None (the demo-profile in-memory implementations act as test doubles) | Every commit |
+| Unit | None (the standalone deployment mode's in-memory implementations act as test doubles) | Every commit |
 | Integration | testcontainers for PostgreSQL / Redis | Before merge |
 | Contract | None | Every commit |
 
@@ -308,7 +308,7 @@ This is a hard convention, not a preference, because it is what makes `go test .
 
 **Mandatory suites:**
 - `tenancytest.AssertIsolated` / `AssertNotTenantScoped` — every Repository.
-- Dual-profile consistency — the same cases must produce identical results under demo and production.
+- Deployment-mode consistency — the same cases must produce identical results under standalone and distributed deployment modes.
 - Dual-dialect matrix — `dbtest.NewPostgres(t)` and `dbtest.NewSQLite(t)`.
 
 **Requirements:**
@@ -331,7 +331,7 @@ This is a hard convention, not a preference, because it is what makes `go test .
 - [ ] Dependency direction respected; no cross-module struct imports
 - [ ] Repository embeds `dbkit.Repository[T]`; no hand-written tenant filters
 - [ ] New tables assigned to the correct data domain with the matching isolation assertion
-- [ ] New infrastructure dependency ships both demo and production implementations
+- [ ] New infrastructure dependency ships both standalone and distributed implementations
 - [ ] API change started from the spec; generated artifacts committed together
 - [ ] New user-facing text present in both zh-CN and en-US
 - [ ] New public API has docs, a compilable example, and an `AGENTS.md` entry

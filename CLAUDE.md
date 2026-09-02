@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Status
 
-**Milestone M0 is in progress** (see `docs/internal/15-roadmap.md`). `go.work` lists all 20 planned Go modules; 16 are still placeholder stubs (`go.mod` + a one-line `doc.go` + an `AGENTS.md` pointing at the relevant design doc — nothing to build against yet). Four modules have real, tested implementation: `go/pkgcore`, the dependency floor every other module sits on (the `Module`/`Registry`/`Kernel` wiring contract, tenant-context primitives, an in-memory `KVStore` and `EventBus`, `apperr`, and the bootstrap `config` loader); `go/dbkit` (the dual-dialect `*gorm.DB` wrapper, the mandatory generic `Repository[T]`, `MigrationRegistry`, and field-level encryption); `go/tenancy` (the tenant-resolution `Middleware`, the audited `WithSystemContext` escape hatch, and the `tenancytest.AssertIsolated` / `AssertNotTenantScoped` suites every other module's repositories are required to run); and `go/observability` (dual-profile OpenTelemetry initialization via `Init`, the context-aware `FromContext` structured logger, and an HTTP `Middleware` recording request-count/duration metrics behind a cardinality-bounded route label — `tenant_id` never becomes a metric label, per this file's own Security rule).
+**Milestone M0 is in progress** (see `docs/internal/15-roadmap.md`). `go.work` lists all 20 planned Go modules; 16 are still placeholder stubs (`go.mod` + a one-line `doc.go` + an `AGENTS.md` pointing at the relevant design doc — nothing to build against yet). Four modules have real, tested implementation: `go/pkgcore`, the dependency floor every other module sits on (the `Module`/`Registry`/`Kernel` wiring contract, tenant-context primitives, an in-memory `KVStore` and `EventBus`, `apperr`, and the bootstrap `config` loader); `go/dbkit` (the dual-dialect `*gorm.DB` wrapper, the mandatory generic `Repository[T]`, `MigrationRegistry`, and field-level encryption); `go/tenancy` (the tenant-resolution `Middleware`, the audited `WithSystemContext` escape hatch, and the `tenancytest.AssertIsolated` / `AssertNotTenantScoped` suites every other module's repositories are required to run); and `go/observability` (OpenTelemetry initialization via `Init` for both deployment modes, the context-aware `FromContext` structured logger, and an HTTP `Middleware` recording request-count/duration metrics behind a cardinality-bounded route label — `tenant_id` never becomes a metric label, per this file's own Security rule).
 
-This matters for how you work here: **`go build github.com/vislake/speed/go/...`, `go vet`, and `go test ./... -race` genuinely run and pass today for `go/pkgcore`, `go/dbkit`, `go/tenancy`, and `go/observability`** (run them from inside each module's own directory for the vet/test forms — the repo root is a `go.work` workspace, not a module, so a bare `./...` from the root only works with the full import-path form). `go/dbkit` and `go/tenancy` also have a real integration tier (`go test -tags=integration ./...`) that starts real PostgreSQL via testcontainers — Docker must be running for that form, though not for the plain unit-test form; `go/observability` has no such tier by design, not by gap — its production-profile OTLP path is proven in-process against a real generated gRPC collector server instead (see `go/observability/AGENTS.md`'s Testing section), needing no Docker. Do not assume this claim is stale without checking; conversely, do not assume any *other* module has real code behind it just because its directory exists — check for more than a `doc.go` stub before relying on one. `Taskfile.yml` exists and its underlying commands work, but the `task` CLI binary itself is not installed in this environment as of this writing — run the commands it wraps directly (`go test ./...`, `go vet ./...`, `golangci-lint run ./...`) rather than assuming `task test` works until you've confirmed `task` is on PATH.
+This matters for how you work here: **`go build github.com/vislake/speed/go/...`, `go vet`, and `go test ./... -race` genuinely run and pass today for `go/pkgcore`, `go/dbkit`, `go/tenancy`, and `go/observability`** (run them from inside each module's own directory for the vet/test forms — the repo root is a `go.work` workspace, not a module, so a bare `./...` from the root only works with the full import-path form). `go/dbkit` and `go/tenancy` also have a real integration tier (`go test -tags=integration ./...`) that starts real PostgreSQL via testcontainers — Docker must be running for that form, though not for the plain unit-test form; `go/observability` has no such tier by design, not by gap — its OTLP path for the distributed deployment mode is proven in-process against a real generated gRPC collector server instead (see `go/observability/AGENTS.md`'s Testing section), needing no Docker. Do not assume this claim is stale without checking; conversely, do not assume any *other* module has real code behind it just because its directory exists — check for more than a `doc.go` stub before relying on one. `Taskfile.yml` exists and its underlying commands work, but the `task` CLI binary itself is not installed in this environment as of this writing — run the commands it wraps directly (`go test ./...`, `go vet ./...`, `golangci-lint run ./...`) rather than assuming `task test` works until you've confirmed `task` is on PATH.
 
 ## Language Rule (read this first)
 
@@ -22,16 +22,16 @@ Defined in `docs/internal/19-dev-workflow.md`. Task runner is Taskfile; toolchai
 
 ```
 task setup        # install toolchain, fetch deps, initialize the database
-task dev          # run backend + frontend in demo profile with hot reload
+task dev          # run backend + frontend in standalone deployment mode with hot reload
 task test         # test the affected modules
-task test:full    # full matrix (dual profile x dual dialect)
+task test:full    # full matrix (dual deployment mode x dual dialect)
 task lint         # lint everything
 task api:gen      # merge specs, generate backend interfaces and frontend sdk
 task docs:serve   # preview the docs site locally
 task new:module   # scaffold a new module (also registers CI matrix + release entries)
 ```
 
-`task dev` must work in the **demo profile** — single process, SQLite, zero external dependencies. Local development does not require `docker compose`.
+`task dev` must work in **standalone deployment mode** — single process, SQLite, zero external dependencies. Local development does not require `docker compose`.
 
 ## Architecture
 
@@ -59,18 +59,18 @@ pkgcore -> dbkit / observability -> tenancy -> config / jobs -> storage / notifi
 
 Every module implements `pkgcore.Module` and registers everything through a single `Register(reg *Registry)` call — routes, config schema, feature flags, permissions, job handlers, notification types, events, audit actions. The `Registry` struct exists so that adding a new cross-cutting mechanism does not change the `Module` interface, which under lockstep versioning would break all 20 modules at once.
 
-### Dual runtime profiles
+### Dual deployment modes
 
-Every infrastructure dependency is an interface in `pkgcore` with **two implementations**, selected by `SPEED_PROFILE=demo|production` during kernel wiring:
+Every infrastructure dependency is an interface in `pkgcore` with **two implementations**, selected by `SPEED_DEPLOYMENT_MODE=standalone|distributed` during kernel wiring:
 
-- **demo** — single process, SQLite, in-memory KV / event bus / queue, console mailer, mock payment, zero external dependencies, starts in seconds.
-- **production** — PostgreSQL, Redis, S3-compatible storage, real providers, the LGTM observability stack.
+- **standalone** — single process, SQLite, in-memory KV / event bus / queue, console mailer, mock payment, zero external dependencies, starts in seconds.
+- **distributed** — PostgreSQL, Redis, S3-compatible storage, real providers, the LGTM observability stack.
 
-A side benefit worth knowing: the demo implementations double as test doubles, so most unit tests need no testcontainers.
+A side benefit worth knowing: the standalone implementations double as test doubles, so most unit tests need no testcontainers.
 
 ### Multi-tenancy
 
-Shared database with `tenant_id` isolation, guarded three ways: a GORM plugin that auto-injects the filter, a mandatory generic `dbkit.Repository[T]` base, and PostgreSQL RLS in production. Tables fall into four data domains (tenant / identity / platform / link) — `users` is deliberately **not** tenant-scoped, since a person can belong to several tenants; `memberships` bridges them.
+Shared database with `tenant_id` isolation, guarded three ways: a GORM plugin that auto-injects the filter, a mandatory generic `dbkit.Repository[T]` base, and PostgreSQL RLS in distributed deployment mode. Tables fall into four data domains (tenant / identity / platform / link) — `users` is deliberately **not** tenant-scoped, since a person can belong to several tenants; `memberships` bridges them.
 
 ### API contract
 
@@ -89,7 +89,7 @@ Every rule below is enforced by CI and code review — **these are not style sug
 - **Do not let `rbac` depend on `authn`.** Authorization only knows `Subject{TenantID, UserID}`; the authenticating side assembles the Subject and calls authorization.
 - **Do not import another business module's structs for database relations.** Use ID references plus domain events — `authn` publishes `UserCreated`, `org` subscribes to create the default workspace; `org` never imports `authn.User`.
 - **Do not import concrete infrastructure implementations in business code.** Depend on the `pkgcore` interfaces (`KVStore`, `EventBus`, `ObjectStore`, `Mailer`), never on `go-redis`, an S3 SDK, and so on.
-- **Do not expose a capability on an interface that only one implementation can satisfy.** Interfaces are designed against the weaker side, which is the demo profile.
+- **Do not expose a capability on an interface that only one implementation can satisfy.** Interfaces are designed against the weaker side, which is the standalone deployment mode.
 
 ### API contract
 
@@ -113,10 +113,10 @@ Every rule below is enforced by CI and code review — **these are not style sug
 - **Do not put business compensation in the queue layer.** The queue offers an `OnFailure` hook; refunding credits and similar compensation belongs to the business module.
 - Long-running operations **must** go through the `jobs` queue and report progress; never run them synchronously inside an HTTP request.
 
-### Runtime profiles
+### Deployment modes
 
-- **Do not branch on `if profile == "demo"` in business logic.** Profile differences belong exclusively to kernel wiring.
-- Any new infrastructure dependency **must** ship both a demo implementation (zero external dependencies) and a production one.
+- **Do not branch on `if mode == "standalone"` in business logic.** Deployment-mode differences belong exclusively to kernel wiring.
+- Any new infrastructure dependency **must** ship both a standalone implementation (zero external dependencies) and a distributed one.
 
 ### Logging
 
