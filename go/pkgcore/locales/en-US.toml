@@ -1,0 +1,16 @@
+# pkgcore's seed message bundle, American English.
+#
+# pkgcore renders no user-facing content in M0; these three messages exist
+# to exercise the catalog machinery through real embedded files. See the
+# package doc in fs.go. File contract: every entry is one flat top-level
+# message, the id is the whole quoted key prefixed with the module name
+# ("pkgcore."), and zh-CN.toml must carry exactly the same id set.
+
+"pkgcore.seed.plain" = "A single-form seed message rendered by pkgcore's message catalog."
+
+"pkgcore.seed.params" = "A parameterized seed message rendered by pkgcore's message catalog, interpolating {{.Name}}."
+
+["pkgcore.seed.plural"]
+description = "Exercises CLDR plural selection in the catalog."
+one = "pkgcore's message catalog renders {{.Count}} seed message."
+other = "pkgcore's message catalog renders {{.Count}} seed messages."

@@ -12,6 +12,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/go/pkgcore/i18n"
+	"github.com/vislake/speed/go/pkgcore/locales"
 )
 
 // regTestModule is a minimal Module used to drive Bootstrap without pulling in
@@ -1856,5 +1859,76 @@ func TestRegistry_ConcurrentRegistration_IsRaceFree(t *testing.T) {
 	}
 	if err := ValidateFeatureGraph(reg); err != nil {
 		t.Errorf("ValidateFeatureGraph() error = %v, want nil", err)
+	}
+}
+
+// localeBundleModule is a Module that ships a real Locales() bundle, so a
+// bootstrap test can drive the catalog merge against actual files instead of
+// the empty embed.FS every other test double returns.
+type localeBundleModule struct {
+	name string
+}
+
+func (m localeBundleModule) Name() string         { return m.name }
+func (m localeBundleModule) DependsOn() []string  { return nil }
+func (m localeBundleModule) Migrations() embed.FS { return embed.FS{} }
+func (m localeBundleModule) Locales() embed.FS    { return locales.FS }
+func (m localeBundleModule) OpenAPISpec() []byte  { return nil }
+
+func (m localeBundleModule) Register(*Registry) error { return nil }
+
+// localeBundleModule.Locales returns the pkgcore seed bundle through its own
+// locales package, so this merge test consumes the same bytes the package
+// ships to consumers.
+func TestBootstrap_AssemblesCatalogFromModuleLocaleFiles(t *testing.T) {
+	reg, err := NewKernel(DeploymentModeStandalone).Bootstrap(context.Background(),
+		localeBundleModule{name: "pkgcore"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := reg.Locales()
+	if catalog == nil {
+		t.Fatal("reg.Locales() = nil after Bootstrap, want the merged catalog")
+	}
+	text, err := catalog.Lookup(i18n.LocaleENUS, "pkgcore.seed.params",
+		map[string]any{"Name": "bootstrap"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text, "bootstrap") {
+		t.Errorf("en-US seed.params through the bootstrapped registry = %q", text)
+	}
+	zhText, err := catalog.LookupPlural(i18n.LocaleZHCN, "pkgcore.seed.plural", 3,
+		map[string]any{"Count": 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zhText == "" || zhText == text {
+		t.Errorf("zh-CN seed.plural = %q, want a real zh-CN rendering", zhText)
+	}
+}
+
+func TestBootstrap_EmptyLocaleFilesYieldEmptyCatalog_HandBuiltRegistryStaysNil(t *testing.T) {
+	// Every other test double ships an empty Locales() embed.FS, which
+	// contributes no messages: Bootstrap still succeeds, and the registry it
+	// produces carries an empty catalog -- one that renders nothing, but is
+	// still a catalog, because Bootstrap always installs the frozen merge.
+	// A hand-built Registry, by contrast, never has a catalog at all: the
+	// seam is installed by Bootstrap alone, exactly like ObjectStore.
+	reg, err := NewKernel(DeploymentModeStandalone).Bootstrap(context.Background(),
+		regTestModule{name: "empty"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := reg.Locales()
+	if catalog == nil {
+		t.Fatal("reg.Locales() = nil after Bootstrap, want an empty catalog")
+	}
+	if got := catalog.Locales(); len(got) != 0 {
+		t.Errorf("catalog.Locales() = %v after a bootstrap with no locale files, want none", got)
+	}
+	handBuilt := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+	if catalog := handBuilt.Locales(); catalog != nil {
+		t.Errorf("hand-built Registry.Locales() = %v, want nil", catalog)
 	}
 }

@@ -6,7 +6,11 @@
 # they return the structured code plus parameters, and a client resolves
 # the code through its own i18n catalog, of which this file is notes' own
 # contribution.
-[errors]
+#
+# File contract (see go/pkgcore/i18n): every entry is one flat top-level
+# message -- no [errors]-style grouping sections, which go-i18n would fold
+# into the message ids -- and zh-CN.toml must carry exactly the same id set.
+
 "notes.text_required" = "Note text must not be empty."
 "notes.text_too_long" = "Note text must not exceed 4000 characters."
 "notes.invalid_request_body" = "The request body is not valid JSON."

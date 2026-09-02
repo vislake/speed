@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/vislake/speed/go/pkgcore/i18n"
 )
 
 // ErrDuplicateConfigKey is returned when two modules register the same configuration key.
@@ -101,7 +103,13 @@ type Module interface {
 	// subdirectory per SQL dialect.
 	Migrations() embed.FS
 
-	// Locales returns the module's zh-CN and en-US translation resources.
+	// Locales returns the module's zh-CN and en-US translation resources,
+	// embedded flat under the locale file contract documented in the i18n
+	// package. Kernel.Bootstrap feeds it to i18n.Builder.AddModule while it
+	// assembles the merged message catalog, so a module that renders no
+	// content returns an empty embed.FS and a module that ships files must
+	// ship the full pair, prefix its ids with its Name and keep the two
+	// languages' id sets identical.
 	Locales() embed.FS
 
 	// OpenAPISpec returns the module's OpenAPI contract fragment, which the
@@ -328,6 +336,14 @@ type Registry struct {
 	// so Bootstrap installs the store it resolved after NewRegistry returns,
 	// and a registry built directly with NewRegistry has none.
 	objectStore ObjectStore
+
+	// locales is the merged message catalog Bootstrap assembled from every
+	// registered module's Locales() embed.FS, built like objectStore by
+	// post-dating NewRegistry's three-argument signature rather than joining
+	// it. It is unexported so that Locales() is the only way to reach it,
+	// and it is nil on a registry built directly with NewRegistry, exactly
+	// like objectStore is.
+	locales *i18n.Catalog
 }
 
 // NewRegistry returns a Registry whose registrars are the in-memory default
@@ -417,6 +433,20 @@ func (r *Registry) Mailer() Mailer {
 // hand-built one: calling a method on a nil ObjectStore panics.
 func (r *Registry) ObjectStore() ObjectStore {
 	return r.objectStore
+}
+
+// Locales returns the merged message catalog Bootstrap assembled from every
+// registered module's Locales() embed.FS, the catalog a module queries to
+// render the backend-generated content it sends to a recipient in that
+// recipient's locale. Like ObjectStore it is not a NewRegistry parameter --
+// the i18n seam post-dates that constructor, whose three-argument signature
+// is frozen -- so it returns nil for a Registry built directly with
+// NewRegistry and only ever carries a catalog once Bootstrap has merged
+// every module's locale files. A module that needs the catalog must
+// therefore be exercised through a bootstrapped Registry, never through a
+// hand-built one: calling a method on a nil *i18n.Catalog panics.
+func (r *Registry) Locales() *i18n.Catalog {
+	return r.locales
 }
 
 // checkUnique reports whether any key produced by keyOf is already in
@@ -865,14 +895,26 @@ func (k *Kernel) Bootstrap(ctx context.Context, modules ...Module) (*Registry, e
 	// signature, so the resolved store is installed here, before any module
 	// registers and can reach it.
 	reg.objectStore = objectStore
+
+	// The message catalog is assembled alongside registration: each module's
+	// locale resources are validated and merged before the module itself
+	// registers, so a malformed or parity-broken locale pair fails the
+	// bootstrap at the module that owns it, and the frozen catalog is
+	// installed before ValidateFeatureGraph runs, when every module can
+	// already reach it through reg.
+	localesBuilder := i18n.NewBuilder()
 	for _, module := range ordered {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("pkgcore: bootstrap stopped before registering module %q: %w", module.Name(), err)
+		}
+		if err := localesBuilder.AddModule(module.Name(), module.Locales()); err != nil {
+			return nil, fmt.Errorf("pkgcore: module %q has invalid locale resources: %w", module.Name(), err)
 		}
 		if err := module.Register(reg); err != nil {
 			return nil, fmt.Errorf("pkgcore: module %q failed to register: %w", module.Name(), err)
 		}
 	}
+	reg.locales = localesBuilder.Build()
 
 	if err := ValidateFeatureGraph(reg); err != nil {
 		return nil, err

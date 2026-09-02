@@ -16,15 +16,36 @@ not the other. Exit code is nonzero on any mismatch, missing pair member,
 or unparsable file.
 
 Message-id semantics (must stay in step with how the repository names
-keys): a message id is the key of a key/value pair whose value is not
-itself a table -- the leaf key. Quoted keys are TOML-native single keys, so
-a quoted dotted key like "notes.text_required" stays whole and *is* the
-message id, exactly as handler code references it. Section headers such as
-[errors] are organizational grouping, not part of the id; a flat file and a
-section-grouped file with the same leaf keys therefore match. Defensive
-rule: if one file defines the same leaf id under two different paths (two
-sections both containing a key of the same name), pairing across languages
-is ambiguous, so that file is reported as an error rather than compared.
+keys, and with the locale file contract of go/pkgcore/i18n): a message id
+is a key whose value is not a grouping table. Two kinds of values make a
+message id:
+
+  - any non-table value (the plain single-form message), and
+  - a table whose keys are all message keys -- zero, one, two, few, many,
+    other (the CLDR plural categories), translation, description, id,
+    hash, leftdelim and rightdelim, matched case-insensitively, the set
+    go-i18n reserves. Such a table is ONE plural message: its categories
+    and metadata are forms of that message, not separate ids, and the
+    table's own key is the message id. A quoted header such as
+    ["notes.over_quota"] with one/other entries and an inline
+    "notes.over_quota" = { one = "...", other = "..." } both declare the
+    single id notes.over_quota.
+
+Quoted keys are TOML-native single keys, so a quoted dotted key like
+"notes.text_required" stays whole and *is* the message id, exactly as
+handler code references it. A table with any key outside the message set
+is a grouping table ([errors], or an unquoted [notes.over_quota] section
+carrying other tables); its message ids are its leaf keys, compared
+leaf-wise, so a flat file and a grouped file declaring the same messages
+match. Note that go/pkgcore/i18n's AddModule is deliberately stricter than
+this script -- it rejects grouping sections outright with
+ErrUnsupportedShape and enforces the "<module>." id prefix -- so repository
+files must follow the flat contract; the script keeps leaf-level grouping
+tolerance only so its id semantics stay stable across both shapes.
+Defensive rule: if one file defines the same leaf id under two different
+paths (two sections both containing a key of the same name), pairing
+across languages is ambiguous, so that file is reported as an error rather
+than compared.
 
 Discovery: a locale directory is any directory that contains a file named
 zh-CN.toml or en-US.toml; --root itself is searched first, then the tree
@@ -57,20 +78,54 @@ PAIR = ("zh-CN.toml", "en-US.toml")
 PAIR_STEMS = frozenset(fn[:-5] for fn in PAIR)  # "zh-CN.toml" -> "zh-CN"
 PRUNED_DIR_NAMES = frozenset({".git", "node_modules", "vendor"})
 
+# The message keys go-i18n reserves on a plural message table, lower-cased
+# to match case-insensitively: the CLDR plural categories zero/one/two/few/
+# many/other, the v1 "translation" synonym for other, and the metadata keys
+# description, id, hash, leftdelim and rightdelim. A table whose keys all
+# fall in this set is one message (its key is the id); any table with a key
+# outside it is grouping.
+RESERVED_MESSAGE_KEYS = frozenset({
+    "zero", "one", "two", "few", "many", "other", "translation",
+    "description", "id", "hash", "leftdelim", "rightdelim",
+})
+
+
+def is_message_table(value: Any) -> bool:
+    """Whether value is a plural message table, not a grouping table.
+
+    A non-empty table whose keys all belong to RESERVED_MESSAGE_KEYS (case-
+    insensitively) declares one message whose categories are its forms;
+    every other table -- including one with a non-reserved key -- is
+    grouping. Key membership alone decides: value types are go/pkgcore/i18n's
+    AddModule concern (ErrUnsupportedShape), not a key-parity one.
+    """
+    return (
+        isinstance(value, dict)
+        and bool(value)
+        and all(str(key).lower() in RESERVED_MESSAGE_KEYS for key in value)
+    )
+
 
 def extract_message_ids(table: dict[str, Any]) -> tuple[set[str], dict[str, list[str]]]:
-    """Return (leaf message ids, leaf id -> full dotted paths).
+    """Return (message ids, id -> full dotted paths).
 
-    Only non-table values produce message ids (the leaf key). A leaf defined
-    under several different paths (e.g. two sections both carrying a key of
-    the same name) makes the id ambiguous across languages; the caller
-    treats that as an error. Full paths are kept purely to report such
-    collisions precisely.
+    Every key whose value is not a grouping table produces a message id --
+    both the plain non-table form and a plural message table (whose own key
+    is the id, e.g. "notes.over_quota" from ["notes.over_quota"] with
+    one/other forms). Grouping tables are descended into and only their
+    leaf ids count, so a flat file and a grouped file declaring the same
+    messages compare equal. A leaf defined under several different paths
+    (e.g. two sections both carrying a key of the same name) makes the id
+    ambiguous across languages; the caller treats that as an error. Full
+    paths are kept purely to report such collisions precisely.
     """
     ids: set[str] = set()
     id_paths: dict[str, list[str]] = {}
     for key, value in table.items():
-        if isinstance(value, dict):
+        if is_message_table(value):
+            ids.add(key)
+            id_paths.setdefault(key, []).append(key)
+        elif isinstance(value, dict):
             nested, nested_paths = extract_message_ids(value)
             ids |= nested
             for leaf, paths in nested_paths.items():

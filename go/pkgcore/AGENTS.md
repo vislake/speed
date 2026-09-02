@@ -2,16 +2,17 @@
 
 The dependency floor of the monorepo. Every other Go module imports it; it imports no other speed module.
 
-It owns four things and nothing else:
+It owns five things and nothing else:
 
 | Concern | Where |
 |---|---|
 | The `Module` / `Registry` / `Kernel` wiring contract | `registry.go` |
 | Tenant context and the audited escape hatch from tenant filtering | `tenant.go` |
 | Dual-deployment-mode infrastructure interfaces (`KVStore`, `EventBus`, `Mailer`, `ObjectStore`) plus each one's standalone implementation and the Redis-, SMTP- or S3-backed distributed one | `kv.go`, `eventbus.go`, `mailer.go`, `objectstore.go`, `redis_kv.go`, `redis_eventbus.go`, `smtp_mailer.go`, `s3_objectstore.go` |
+| The merged backend message catalog, assembled by `Bootstrap` from every module's `Locales()` embed.FS | `i18n/` (+ `locales/`, pkgcore's own seed message files) |
 | The `DeploymentMode` enumeration | `deployment_mode.go` |
 
-Two subpackages: `apperr` (the structured application error every module returns) and `config` (the bootstrap configuration loader, run once at process startup).
+Three subpackages: `apperr` (the structured application error every module returns), `config` (the bootstrap configuration loader, run once at process startup) and `i18n` (the message catalog backend-generated content is rendered through, on nicksnyder/go-i18n). `locales/` is the seed bundle `i18n` needs to load pkgcore's own messages.
 
 **Out of scope.** Database access (`dbkit`), tenant enforcement in SQL (`tenancy`), logging and tracing (`observability`), runtime and tenant-overridable configuration (the `config` *module*, not this `config` package), job execution (`jobs`). pkgcore declares contracts; it does not implement business behaviour.
 
@@ -30,6 +31,7 @@ Two subpackages: `apperr` (the structured application error every module returns
 | `func (*Registry) KVStore() KVStore` | The key-value store the registry was built with |
 | `func (*Registry) Mailer() Mailer` | The mailer the registry was built with |
 | `func (*Registry) ObjectStore() ObjectStore` | The object store the registry was wired to. Not a `NewRegistry` parameter — the seam post-dates that frozen three-argument signature — so a hand-built registry has none until `Bootstrap` installs one, and only a bootstrapped `Registry` may be used for the store |
+| `func (*Registry) Locales() *i18n.Catalog` | The merged message catalog `Bootstrap` assembled from every module's `Locales()` embed.FS. Like `ObjectStore`, not a `NewRegistry` parameter; nil on a hand-built registry, installed by `Bootstrap` after the register loop |
 | `func NewKernel(mode DeploymentMode, opts ...KernelOption) *Kernel` | A kernel that assembles modules for one deployment mode |
 | `func WithEventBus(bus EventBus) KernelOption` | Inject the host's `EventBus`. Required for `DeploymentModeDistributed`, which has no built-in one |
 | `func WithKVStore(store KVStore) KernelOption` | Inject the host's `KVStore`. Required for `DeploymentModeDistributed`, which has no built-in one |
@@ -102,6 +104,16 @@ Constructors and the status each suggests: `Invalid` 400, `Unauthorized` 401, `F
 
 Priority, highest first: command-line flags, environment variables, config file, the defaults already on the target struct. `Database.DSN` maps to key `database.dsn` (segments joined by `KeyDelimiter`), flag `--database.dsn`, variable `SPEED_DATABASE__DSN` (`EnvPrefix` + `EnvSeparator`). Per-field options come from the `TagName` struct tag: `config:"required"`, `config:"-"`.
 
+### `pkgcore/i18n`
+
+The merged message catalog. `func NewBuilder() *Builder`; `func (*Builder) AddModule(module string, fsys fs.FS) error`; `func (*Builder) Build() *Catalog`. `func (*Catalog) Lookup(locale, code string, params map[string]any) (string, error)`; `func (*Catalog) LookupPlural(locale, code string, count int64, params map[string]any) (string, error)`; `func (*Catalog) Locales() []string`. Locale constants `LocaleZHCN` / `LocaleENUS`; sentinel errors `ErrEmptyModuleName`, `ErrDuplicateModule`, `ErrMissingLocaleFile`, `ErrUnsupportedLocale`, `ErrUnsupportedShape`, `ErrParityMismatch`, `ErrUnknownLocale`, `ErrUnknownCode`.
+
+What it is for, and the file contract, live in the package doc; the summary that must survive into consuming modules: API responses are never translated on the backend — handlers return an `apperr` code plus params, the client resolves them — and the catalog renders the content the backend generates itself (emails, invoices, webhook text, audit descriptions), in the *recipient's* locale. `Kernel.Bootstrap` feeds every module's `Locales()` embed.FS to one `Builder` per bootstrap (mirroring dbkit's `MigrationRegistry` aggregation) and installs the frozen `Catalog` on the registry; a module reaches it through `Registry.Locales()`, nil on a hand-built registry. A built `Catalog` is read-only and safe for concurrent use. Rendering fails loudly: unknown locale or code is an error, never a silent English fallback; template syntax errors surface at render time. Plural categories follow CLDR (zh-CN has only `other`; en-US has `one`/`other`); `count` selects the category while the template reads it from `params`.
+
+### `pkgcore/locales`
+
+pkgcore's own seed message bundle (`zh-CN.toml` + `en-US.toml`, embedded as `locales.FS`): one message per catalog shape (plain, parameterized, plural), phrased as real sentences about pkgcore. pkgcore renders no user-facing content in M0 — the seed set is the honest stand-in that exercises the machinery end to end and templates every module's own bundle; drop the seeds when pkgcore ships real messages.
+
 ## Typical integration
 
 Implementing a module:
@@ -157,7 +169,7 @@ Returning an error:
 return apperr.NotFound("billing.subscription_not_found").WithParam("id", id)
 ```
 
-Full runnable versions of all of the above live in `example_test.go` (the shared wiring and standalone-mode examples, the object stores' constructors, and the SMTP mailer's construction) and `example_redis_test.go` (the Redis-backed distributed-mode ones), plus `apperr/example_test.go` and `config/example_test.go`, and are executed by CI.
+Full runnable versions of all of the above live in `example_test.go` (the shared wiring and standalone-mode examples, the object stores' constructors, and the SMTP mailer's construction) and `example_redis_test.go` (the Redis-backed distributed-mode ones), plus `apperr/example_test.go`, `config/example_test.go` and `i18n/example_test.go`, and are executed by CI.
 
 ## Rules
 
@@ -201,6 +213,15 @@ Full runnable versions of all of the above live in `example_test.go` (the shared
 - Do not resolve runtime or tenant-overridable settings through `config.Loader`. It handles bootstrap values only: how to reach infrastructure, and which deployment mode is running.
 - Do not hand-write the configuration reference. It is generated from the `ConfigItem` declarations.
 
+**Internationalization**
+
+- Do not translate API responses with `i18n`. Handlers return codes; the catalog renders backend-generated content only, in the recipient's locale — never the operator's.
+- Do not add a language by widening a module's files. M0 catalogs ship exactly zh-CN/en-US; another language is a change to `pkgcore/i18n`, never per-module code.
+- Do not ship a grouping section (`[errors]`) or an unquoted dotted header in a locale file. go-i18n folds the section name into the id; the contract is one flat top-level entry per message, id quoted and prefixed with the module's `Name` plus a dot.
+- Do not let one locale drift from the other. The two id sets must stay identical; `Builder.AddModule` fails with `ErrParityMismatch` and `tools/check_i18n_keys.py` enforces the same rule over the raw files in CI.
+- Do not render a missing message in a fallback language. An unknown locale or code must surface as an error; the catalog never falls back silently.
+- Do not add a third-party dependency to the root package for i18n. The one new dependency, nicksnyder/go-i18n, lives in the `i18n` subpackage and was adopted by `docs/internal/11-cross-cutting.md` before it entered the code.
+
 **Documentation**
 
 - Do not add an exported identifier without a doc comment, an `Example` in the matching `example_test.go`, and an entry in the tables above, in the same pull request.
@@ -231,5 +252,13 @@ Full runnable versions of all of the above live in `example_test.go` (the shared
 | `config.ErrInvalidValue` | A supplied value not applicable to its field | The error names the offending key and its source |
 | `config.ErrSourceUnreadable` | An unparseable config file or malformed flag | Fix the source; startup aborts |
 | `config.ErrInvalidTarget` | `Load` given a non-struct-pointer or a bad `config` tag | Programming error; fix the target type |
+| `i18n.ErrEmptyModuleName` | `Builder.AddModule` with an empty module name | Programming error; every module has a `Name()` |
+| `i18n.ErrDuplicateModule` | `Builder.AddModule` with a module already added | Register each module's locales exactly once |
+| `i18n.ErrMissingLocaleFile` | A module shipping only one of the two mandatory files | Add the missing locale; a module must contribute both or neither |
+| `i18n.ErrUnsupportedLocale` | A locale file outside zh-CN/en-US | M0 catalogs ship exactly two languages; extending them is a change to `pkgcore/i18n` |
+| `i18n.ErrUnsupportedShape` | A file violating the flat contract: unquoted or dotted headers, a grouping section such as `[errors]`, reserved-key misuse, a table carrying both `translation` and a plural category, or a plural table with no translation | The error names the file and the entry; fix the TOML shape |
+| `i18n.ErrParityMismatch` | The zh-CN and en-US id sets of one module differing | The error names the locale and the missing ids; `tools/check_i18n_keys.py` enforces the same parity over the raw files in CI |
+| `i18n.ErrUnknownLocale` | `Lookup`/`LookupPlural` for a locale no module ships | Programming error; the catalog never falls back to a default language |
+| `i18n.ErrUnknownCode` | `Lookup`/`LookupPlural` for a code no module contributed | Programming error; the catalog never falls back to a default language |
 
-Design rationale lives in `docs/internal/01-architecture.md` (module graph and the `Registry` decision), `03-deployment-modes.md` (dual deployment modes) and `04-data-and-tenancy.md` (tenant isolation).
+Design rationale lives in `docs/internal/01-architecture.md` (module graph and the `Registry` decision), `03-deployment-modes.md` (dual deployment modes), `04-data-and-tenancy.md` (tenant isolation) and `11-cross-cutting.md` (the message-catalog mechanism and the adoption of go-i18n).

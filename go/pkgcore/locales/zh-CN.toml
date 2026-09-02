@@ -1,0 +1,14 @@
+# pkgcore 的种子消息包,简体中文。
+#
+# pkgcore 在 M0 阶段不渲染任何面向用户的内容;这三条消息用于通过真实的
+# 内嵌文件驱动消息目录机制。文件契约:每条消息是扁平的一条顶层条目,id
+# 是带引号的完整键并以模块名("pkgcore.")为前缀,zh-CN.toml 与 en-US.toml
+# 必须携带完全相同的 id 集合。
+
+"pkgcore.seed.plain" = "pkgcore 消息目录渲染的一条无参数种子消息。"
+
+"pkgcore.seed.params" = "pkgcore 消息目录渲染的一条参数化种子消息,插值 {{.Name}}。"
+
+["pkgcore.seed.plural"]
+description = "用于验证目录中的 CLDR 复数选择。"
+other = "pkgcore 消息目录渲染了 {{.Count}} 条种子消息。"
