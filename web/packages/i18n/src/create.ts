@@ -58,9 +58,10 @@ export interface CreateI18nOptions {
   readonly defaultLanguage?: string
   /**
    * URL parameter carrying an explicit language override. Defaults to
-   * "lang". Pass null (not undefined) to disable reading the URL. When
-   * searchParams is not injected, the current location's query string is
-   * read through a guarded access, so absence of a DOM never throws.
+   * "lang". Pass null or an empty string (not undefined) to disable
+   * reading the URL. When searchParams is not injected, the current
+   * location's query string is read through a guarded access, so absence
+   * of a DOM never throws.
    */
   readonly urlParameterName?: string | null
   /** Injected URL parameters (tests, non-browser hosts). */
@@ -167,17 +168,27 @@ export function createI18n(options: CreateI18nOptions = {}): I18nInstance {
         'member of the supported set.',
     )
   }
-  const urlParameterName = options.urlParameterName ?? 'lang'
   const storage =
     options.storage === undefined ? readGlobalLocalStorage() : options.storage
   const storageKey = options.storageKey ?? SPEED_LOCALE_STORAGE_KEY
   const storedLanguage =
     storage === null ? null : storage.getItem(storageKey)
 
+  // undefined means the default parameter name "lang"; null or an empty
+  // string opts the URL source out of the negotiation chain entirely. The
+  // opt-out must not be coalesced onto "lang" (the ?? would turn
+  // urlParameterName: null into an active ?lang= reader), and it must not
+  // reach readUrlLanguage either -- URLSearchParams.get() coerces its
+  // argument, so a raw null would honor a literal ?null=... parameter.
+  const urlLanguage =
+    options.urlParameterName === null || options.urlParameterName === ''
+      ? null
+      : readUrlLanguage(options.urlParameterName ?? 'lang', options.searchParams)
+
   const detected = detectLanguage({
     supportedLanguages,
     defaultLanguage: defaultMatched,
-    urlLanguage: readUrlLanguage(urlParameterName, options.searchParams),
+    urlLanguage,
     storedLanguage,
     profileLanguage: options.profileLanguage ?? null,
     navigatorLanguages: options.navigatorLanguages ?? readGlobalNavigatorLanguages(),

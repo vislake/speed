@@ -98,6 +98,44 @@ describe('createI18n negotiation', () => {
     expect(withUrl.language).toBe(instance.language)
   })
 
+  it('skips the URL source entirely when urlParameterName is null', () => {
+    // urlParameterName: null is the documented opt-out; it must not be
+    // coalesced onto the default parameter name, or a ?lang= override on
+    // the real URL would still outrank storage and the navigator.
+    const storage = new MemoryStorage()
+    storage.setItem(SPEED_LOCALE_STORAGE_KEY, 'en-US')
+    const instance = createI18n({
+      storage,
+      urlParameterName: null,
+      navigatorLanguages: ['en-US'],
+      searchParams: new URLSearchParams('lang=zh-CN'),
+    })
+    expect(instance.language).toBe('en-US')
+  })
+
+  it('never honors a "null"-named or empty-named parameter when the URL source is opted out', () => {
+    // URLSearchParams.get() coerces its argument and an empty name is a
+    // legal (if pathological) parameter, so ?null=en-US and ?=en-US must
+    // both stay inert once detection is disabled -- neither may select a
+    // language the negotiation chain would otherwise not pick.
+    for (const search of ['?null=en-US', '?=en-US']) {
+      const instance = createI18n({
+        storage: new MemoryStorage(),
+        urlParameterName: null,
+        navigatorLanguages: [],
+        searchParams: new URLSearchParams(search),
+      })
+      expect(instance.language, search).toBe('zh-CN')
+    }
+    const emptyName = createI18n({
+      storage: new MemoryStorage(),
+      urlParameterName: '',
+      navigatorLanguages: [],
+      searchParams: new URLSearchParams('?=en-US'),
+    })
+    expect(emptyName.language).toBe('zh-CN')
+  })
+
   it('supports a custom supported-language set (defaultLanguage stays a member)', () => {
     const instance = createI18n({
       supportedLanguages: ['zh-CN', 'en-US', 'fr-FR'],
