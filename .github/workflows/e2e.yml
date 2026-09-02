@@ -5,9 +5,10 @@ name: e2e
 #
 # PIPELINE (docs/internal/18-cicd.md pipeline table, e2e row): reference-app
 # end-to-end tests with Playwright, run on merge to main and daily. Target
-# under 20 minutes. The root CLAUDE.md Reference-App section states the CI
-# suite runs with recorded/replayed AI responses; real provider calls happen
-# only during milestone acceptance and demos.
+# under 20 minutes. The root CLAUDE.md Reference-App section states the
+# reference-app suite is planned to run in CI with recorded/replayed AI
+# responses; real provider calls happen only during milestone acceptance
+# and demos.
 #
 # DESIGN-TABLE TRIGGER: push to main plus a daily schedule; both are enabled
 # by the implementing round (a scheduled stub would only produce daily
