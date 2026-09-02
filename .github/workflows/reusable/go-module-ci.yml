@@ -18,8 +18,8 @@ name: go-module-ci
 #                                at the repo root, v2 schema; 18-cicd
 #                                discipline-table rows that have golangci
 #                                tooling today -- errcheck, gosec, govet's
-#                                shadow check, depguard's pkgcore-root rule
-#                                and module-boundary rules). The binary comes
+#                                shadow check, depguard's pkgcore-root
+#                                module-boundary rule). The binary comes
 #                                from setup-go-env, pinned and checksummed.
 #   2. go vet ./...              static analysis, kept as its own leg: vet is
 #                                the go-version-coupled check that runs on
