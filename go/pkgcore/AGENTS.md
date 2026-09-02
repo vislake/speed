@@ -8,7 +8,7 @@ It owns four things and nothing else:
 |---|---|
 | The `Module` / `Registry` / `Kernel` wiring contract | `registry.go` |
 | Tenant context and the audited escape hatch from tenant filtering | `tenant.go` |
-| Dual-deployment-mode infrastructure interfaces (`KVStore`, `EventBus`) plus their in-memory implementations | `kv.go`, `eventbus.go` |
+| Dual-deployment-mode infrastructure interfaces (`KVStore`, `EventBus`, `Mailer`) plus each one's standalone implementation and the Redis- or SMTP-backed distributed one | `kv.go`, `eventbus.go`, `mailer.go`, `redis_kv.go`, `redis_eventbus.go`, `smtp_mailer.go` |
 | The `DeploymentMode` enumeration | `deployment_mode.go` |
 
 Two subpackages: `apperr` (the structured application error every module returns) and `config` (the bootstrap configuration loader, run once at process startup).
@@ -25,12 +25,14 @@ Two subpackages: `apperr` (the structured application error every module returns
 |---|---|
 | `type Module interface { Name() string; DependsOn() []string; Migrations() embed.FS; Locales() embed.FS; OpenAPISpec() []byte; Register(*Registry) error }` | The contract every module implements |
 | `type Registry struct { Routes; Config; Features; Permissions; Jobs; Notifications; Events; AuditActions }` | Everything a module can contribute, one field per mechanism |
-| `func NewRegistry(bus EventBus, kv KVStore) *Registry` | A registry wired to the in-memory registrars, to `bus` and to `kv`. A nil bus or a nil kv panics |
+| `func NewRegistry(bus EventBus, kv KVStore, mailer Mailer) *Registry` | A registry wired to the in-memory registrars, to `bus`, `kv` and `mailer`. A nil argument panics |
 | `func (*Registry) EventBus() EventBus` | The bus behind `Registry.Events`, so the host publishes into what modules subscribed to |
 | `func (*Registry) KVStore() KVStore` | The key-value store the registry was built with |
+| `func (*Registry) Mailer() Mailer` | The mailer the registry was built with |
 | `func NewKernel(mode DeploymentMode, opts ...KernelOption) *Kernel` | A kernel that assembles modules for one deployment mode |
 | `func WithEventBus(bus EventBus) KernelOption` | Inject the host's `EventBus`. Required for `DeploymentModeDistributed`, which has no built-in one |
 | `func WithKVStore(store KVStore) KernelOption` | Inject the host's `KVStore`. Required for `DeploymentModeDistributed`, which has no built-in one |
+| `func WithMailer(mailer Mailer) KernelOption` | Inject the host's `Mailer`. Required for `DeploymentModeDistributed`, which has no built-in one |
 | `func (*Kernel) DeploymentMode() DeploymentMode` | The deployment mode the kernel assembles for |
 | `func (*Kernel) Bootstrap(ctx context.Context, modules ...Module) (*Registry, error)` | Dependency-sort, register each module, validate the feature graph |
 | `func ValidateFeatureGraph(reg *Registry) error` | Reports feature flags depending on flags nobody registered |
@@ -69,9 +71,15 @@ Declaration types:
 |---|---|
 | `type KVStore interface { Get; Set; Delete; IncrByFloat; CompareAndSwap }` | Key-value contract, designed against the weakest backend |
 | `func NewMemoryKVStore() KVStore` | Standalone-mode implementation, and the test double |
+| `func NewRedisKVStore(client *redis.Client) KVStore` | Distributed-mode implementation on Redis, preserving the in-memory store's observable semantics: TTL expiry, a non-positive ttl clearing an existing expiry, `IncrByFloat` keeping a live key's expiry, `CompareAndSwap` never changing one. The host owns the client and closes it |
 | `type EventBus interface { Publish(ctx, Event) error; Subscribe(string, EventHandler) }` | Domain event exchange between modules |
 | `func NewMemoryEventBus() EventBus` | Standalone-mode implementation: synchronous, in registration order. Single-process, so it is not a distributed-mode bus |
+| `func NewRedisEventBus(client *redis.Client) *RedisEventBus` | Distributed-mode implementation on Redis Streams — one stream per event type, one consumer group per bus instance. Local handlers run synchronously with the original payload, exactly as on the in-memory bus; handlers on other instances sharing the client run once, asynchronously, on the bus's reader goroutines, receiving the JSON shape of the payload (never the concrete type), and their failures are not observable to any publisher. There is no catch-up: a group starts at the live end of its stream, and a replica disconnected longer than the stream's trim window loses what scrolled out. Close stops the readers. The delivery-semantics note on the type spells the full contract out |
 | `type Event struct { Type string; TenantID TenantID; Payload any }` | One domain fact |
+| `type Mail struct { From string; To []string; Subject, Text, HTML string }` | One rendered outbound message; Text and HTML are the two renderings of one body, at least one non-empty |
+| `type Mailer interface { Send(ctx, Mail) error }` | Outbound-mail contract, designed against the weakest backend: Send takes one already-rendered Mail and reports success or failure. Rendering, consent checks and retry policy are the caller's business |
+| `func NewConsoleMailer() Mailer` | Standalone-mode implementation: prints every message to stdout as one self-delimiting, greppable record. Doubles as the test double |
+| `func NewSMTPMailer(cfg SMTPConfig) Mailer` | Distributed-mode implementation speaking SMTP directly over `net/smtp` from the standard library. Lazy: the relay is dialed on the first Send. An unusable cfg (empty Host, Port outside 1..65535, unknown TLSMode) panics at construction. `SMTPConfig{Host, Port, Username, Password, TLSMode, InsecureSkipVerify}`; `SMTPTLSModeAuto` (port 465 = TLS from the first byte, otherwise STARTTLS when advertised) / `StartTLS` / `ImplicitTLS`. Credentials only ever go over TLS |
 
 ### `pkgcore/apperr`
 
@@ -121,12 +129,16 @@ Booting a host:
 mode, err := pkgcore.ParseDeploymentMode(os.Getenv("SPEED_DEPLOYMENT_MODE"))
 
 // DeploymentModeStandalone needs no options; DeploymentModeDistributed must
-// be given a bus and a key-value store.
+// be given a bus, a key-value store and a mailer. A real host wires the
+// broker/Redis/SMTP-backed implementations here; the in-memory and console
+// constructors of the API tables are the standalone-mode counterparts and the
+// test doubles.
 var opts []pkgcore.KernelOption
 if mode == pkgcore.DeploymentModeDistributed {
 	opts = append(opts,
 		pkgcore.WithEventBus(broker.NewEventBus(cfg)),
-		pkgcore.WithKVStore(redis.NewKVStore(cfg)))
+		pkgcore.WithKVStore(redis.NewKVStore(cfg)),
+		pkgcore.WithMailer(smtp.NewMailer(cfg)))
 }
 reg, err := pkgcore.NewKernel(mode, opts...).Bootstrap(ctx, tenancy.New(), billing.New())
 ```
@@ -137,21 +149,22 @@ Returning an error:
 return apperr.NotFound("billing.subscription_not_found").WithParam("id", id)
 ```
 
-Full runnable versions of all of the above live in `example_test.go`, `apperr/example_test.go` and `config/example_test.go`, and are executed by CI.
+Full runnable versions of all of the above live in `example_test.go` (the shared wiring and standalone-mode examples) and `example_redis_test.go` (the Redis-backed distributed-mode ones), plus `apperr/example_test.go` and `config/example_test.go`, and are executed by CI.
 
 ## Rules
 
 **Dependencies**
 
 - Do not import any other speed module here, `dbkit` included. pkgcore is the floor; an import from above is a cycle. That is why `Module.Migrations` returns a plain `embed.FS` rather than a `dbkit` type.
-- Do not add a third-party dependency to the root package. It lands in every consumer's `go.sum`. The `config` subpackage carries koanf and is the only place a new one may even be argued for.
+- Do not add a third-party dependency to the root package without arguing for it in the pull request: it lands in every consumer's `go.sum`. Two are in today, and both earned their place the same way — a deployment-mode implementation cannot be written against a weaker third party: koanf in the `config` subpackage, and go-redis v9 in the root package itself, where it backs the distributed-mode `KVStore` and `EventBus`.
 
 **Interfaces and deployment modes**
 
 - Do not expose a capability on an infrastructure interface that only one implementation can satisfy. Design against the weaker side, which is the standalone deployment mode: no server-side scripting, no pub/sub, no pipelines on `KVStore`.
 - Do not branch on `DeploymentMode` outside kernel wiring. Business logic must not contain `if mode == DeploymentModeStandalone`.
-- Do not write a mock for `KVStore` or `EventBus`. `NewMemoryKVStore` and `NewMemoryEventBus` are the test doubles.
-- Do not use `NewMemoryEventBus` or `NewMemoryKVStore` as a distributed-mode fallback. Both are single-process, so every replica would get a private instance; `DeploymentModeDistributed` fails assembly instead, and the host injects real ones with `WithEventBus` and `WithKVStore`.
+- Do not write a mock for `KVStore`, `EventBus` or `Mailer`. `NewMemoryKVStore`, `NewMemoryEventBus` and `NewConsoleMailer` are the test doubles.
+- Do not use `NewMemoryEventBus`, `NewMemoryKVStore` or `NewConsoleMailer` as a distributed-mode fallback. All three are single-process, so every replica would get a private instance (and a console mailer prints where nobody reads); `DeploymentModeDistributed` fails assembly instead, and the host injects real ones with `WithEventBus`, `WithKVStore` and `WithMailer`.
+- Do not silently change an interface's semantics when adding an implementation. `NewRedisKVStore` preserves the in-memory store's observable behaviour; where a Redis-backed bus cannot (asynchronous cross-process delivery, JSON payload shape, failures of remote handlers unobservable, no catch-up), the difference is documented on the constructor and spelled out to consumers before they choose it.
 - Do not build a read-modify-write cycle out of `Get` + `Set`. Use `IncrByFloat` or `CompareAndSwap`; they are the only operations every backend can make atomic.
 - Do not retain or hand out a caller's byte slice in a `KVStore` implementation, and do not perform an operation on a cancelled context — return the context error instead.
 
@@ -193,6 +206,7 @@ Full runnable versions of all of the above live in `example_test.go`, `apperr/ex
 | `ErrSystemActorRequired` | `WithSystemContext` with an empty `Actor` | Name the actor; the bypass is audited |
 | `ErrSystemPurposeNotRegistered` | `WithSystemContext` with an undeclared purpose | Declare it with `RegisterSystemPurpose` |
 | `ErrNotNumeric` | `IncrByFloat` on a key holding a non-number | The key is not a counter; the stored value is left untouched |
+| `ErrInvalidMail` | `Mailer.Send` on a message with an empty From, no recipients, an empty recipient, a line break in a header, or no body | Validate the message; nothing reached the wire |
 | `ErrDuplicateModuleName` | Two modules reporting the same `Name()` | Rename one; nothing was registered |
 | `ErrDependencyCycle` | `DependsOn` forming a cycle | The error names the cycle; break it |
 | `ErrMissingDependency` | Depending on a module absent from the bootstrap set | Add the module, or drop the dependency |
@@ -200,6 +214,8 @@ Full runnable versions of all of the above live in `example_test.go`, `apperr/ex
 | `ErrUnresolvedFeatureDependency` | A flag depending on a flag nobody registered | Register the flag, or drop the dependency |
 | `ErrMissingDistributedEventBus` | `Bootstrap` on `DeploymentModeDistributed` with no bus wired | Inject the host's bus with `WithEventBus` |
 | `ErrMissingDistributedKVStore` | `Bootstrap` on `DeploymentModeDistributed` with no store wired | Inject the host's store with `WithKVStore` |
+| `ErrMissingDistributedMailer` | `Bootstrap` on `DeploymentModeDistributed` with no mailer wired | Inject the host's mailer with `WithMailer` |
+| `ErrEventBusClosed` | `Publish` on a `RedisEventBus` after `Close` | Wiring error: a closed bus is out of the deployment; build a fresh one |
 | `config.ErrMissingValue` | A `config:"required"` field left zero | The error names the key and every source consulted |
 | `config.ErrInvalidValue` | A supplied value not applicable to its field | The error names the offending key and its source |
 | `config.ErrSourceUnreadable` | An unparseable config file or malformed flag | Fix the source; startup aborts |
