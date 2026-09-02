@@ -96,3 +96,15 @@ ApiError:
 6. 同一个 PR 提交 spec、实现、生成物
 
 **先改实现再补 spec 是被禁止的**——那等于回到 code-first，失去了编译期约束的全部价值。
+
+---
+
+> **实现状态注记（2026-09-03，M0：后端一半已落地）——本注记不是设计正文，设计正文保持原样；完整工具链仍是本文的设计目标，当前实现状态以 [19 开发工作流](19-dev-workflow.md) 的当前状态注记与根目录 CLAUDE.md 的 Repository Status 为准。**
+>
+> 后端一半已在 reference-app 的 notes 模块落地作为示范：
+>
+> - **"规范的组织与合并"惯例的第一个实例**：`examples/reference-app/internal/notes/api/openapi.yaml` 片段，同目录携带生成器配置 `oapi-codegen.yaml`（钉定 oapi-codegen v2.8.0）与生成物 `notes-server.gen.go`——对应上文 `<module>/api/openapi.yaml` 的模块资产布局，只是落在 reference-app 而非 go/ 模块下。
+> - **上文"契约变更的正确顺序"第 2 步真实生效**：notes 的 handler 实现生成的 `api.ServerInterface`（`internal/notes/handler.go` 的 `var _` 编译期断言 + `api.HandlerFromMux` 从片段注册路由），`task api:gen` 执行重新生成；spec 加了 operation 而 handler 没跟上时编译直接失败。
+> - **"与发布流程的绑定"第 3 条（生成物一致性检查）的后端一半已接线**：`.github/workflows/api-contract.yml` 在改动片段 / 生成器配置 / `Taskfile.yml` / 流水线自身的 PR 上触发，重新生成后 `git diff --exit-code` 比对生成物，再 `go build` reference-app 兜底 handler 编译。
+>
+> 仍未实现（继续以本文为设计目标）：多片段合并成 `build/openapi/speed.yaml`（目前仅 notes 一个片段，没有合并对象）、redocly 规范 lint、orval 前端 sdk 生成（无 web/ 工作区与 `@speed/api-sdk`）、oasdiff 破坏性变更闸门——它们随 API 契约工具链轮次（[15 roadmap](15-roadmap.md)）交付。

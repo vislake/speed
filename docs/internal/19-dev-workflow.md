@@ -99,7 +99,14 @@ PR 模板包含一份 checklist，对应仓库根 [CLAUDE.md](../../CLAUDE.md) �
 
 `task api:gen` 一键完成"合并 spec + 生成后端 interface + 生成前端 sdk"。PR 中 spec 与生成物必须同时存在，CI 会重新生成并比对。
 
-**当前状态：尚未实现。** 仓库里还没有这套自动生成工具链——没有 `api/` 目录与合并后的 spec，没有 oapi-codegen / orval 生成器，也没有 `@speed/api-sdk` 与 web/ 前端工作区（见 [21 API 契约](21-api-contract.md)）。因此 Taskfile 里的 `task api:gen` 是 not-implemented stub：打印上述计划与缺失项、指向本文与 roadmap 后退出非零。上面"先改 spec → 重新生成"的顺序约束不随工具链落地而改变，但"重新生成、编译失败暴露待改点、CI 比对生成物"目前还无法真正执行，要等 API 契约工具链轮次（[15 roadmap](15-roadmap.md)）交付。
+**当前状态：后端一半已落地（M0，以 reference-app 的 notes 模块为示范），其余待工具链轮次交付。** 仓库现在有了第一套真实运转的 spec-first 闭环：
+
+- **模块自持 spec 片段**：`examples/reference-app/internal/notes/api/openapi.yaml`——[21 API 契约](21-api-contract.md)"规范的组织与合并"里 `<module>/api/openapi.yaml` 惯例的第一个实例（落在 reference-app 而非 go/ 模块下），生成器配置与生成物同目录：`oapi-codegen.yaml`（钉定 oapi-codegen v2.8.0）生成 `notes-server.gen.go`。
+- **`task api:gen` 已从 not-implemented stub 变为真实任务**：在上述 api/ 目录内执行 `go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 -config oapi-codegen.yaml openapi.yaml`，重新生成生成物。
+- **"编译失败暴露待改点"真实生效**：`internal/notes/handler.go` 以 `var _ api.ServerInterface = (*Handler)(nil)` 编译期断言实现生成的 interface，并以 `api.HandlerFromMux` 让路由从片段本身推导——往片段加一个 operation 后重新生成，handler 不补实现就编译不过（本轮的编译失败演示即验证此路径）。
+- **CI 兜底已接线**：`.github/workflows/api-contract.yml` 在改动 spec 片段 / 生成器配置 / `Taskfile.yml` / 流水线自身的 PR 上触发（路径过滤），重新生成后 `git diff --exit-code` 比对生成物，并 `go build` reference-app 保证 handler 跟上 spec——这是 [18 CI/CD](18-cicd.md) 管道表 api-contract 行所规划"生成物一致性 diff"的后端一半。
+
+仍未实现——上面计划句描述的仍是完整目标：合并各模块片段成 `build/openapi/speed.yaml`（目前只有 notes 一个片段，没有合并对象）、redocly 规范 lint、orval 前端 sdk 与 `@speed/api-sdk`（仓库还没有 web/ 前端工作区）、oasdiff 破坏性变更闸门。这些随 API 契约工具链轮次（[15 roadmap](15-roadmap.md)）交付，届时 `task api:gen` 与 api-contract.yml 在现有骨架上扩展；详见 [21 API 契约](21-api-contract.md) 末尾的实现状态注记。
 
 **先写实现再补 spec 是被禁止的**——那等于回到 code-first，失去编译期约束的全部意义。
 
