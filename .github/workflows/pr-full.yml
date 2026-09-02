@@ -1,61 +1,132 @@
 name: pr-full
 
-# STUB -- not implemented. Triggered runs fail loudly at the guard step
-# below; nothing in this pipeline can pass silently.
-#
-# PIPELINE (docs/internal/18-cicd.md pipeline table, pr-full row): the
-# pre-merge FULL MATRIX, target under 25 minutes -- every module through the
-# unit suite with -race and coverage, plus the Docker-backed integration
-# tiers, and eventually the dual deployment mode x dual dialect matrix. This
-# is 18-cicd's layered-triggering layer 2: integration runs live here, NOT
-# in the fast per-PR check (pr-check).
+# Pre-merge FULL MATRIX pipeline -- docs/internal/18-cicd.md's pipeline
+# table, pr-full row: every module through the unit suite under the race
+# detector, plus the Docker-backed integration tiers and the reference-app
+# suite. This is 18-cicd's layered-triggering layer 2: integration runs live
+# here, NOT in the fast per-PR check (pr-check). Target duration under 25
+# minutes; every job carries a timeout and stale runs are cancelled via
+# concurrency (18-cicd cost-control rules 4 and 5).
 #
 # DESIGN-TABLE TRIGGER: a PR labeled `full-ci`, and before every merge
-# (merge gating itself is branch protection -- 18-cicd branch-protection
-# section -- which is configured on GitHub, not in this file). Those triggers
-# are enabled by the implementing round: until real legs exist, a labeled PR
-# must not be sprayed with failing stub runs.
+# (merge gating itself is branch protection -- 18-cicd's branch-protection
+# section -- configured on GitHub, not in this file). Label-only events do
+# not re-run on later pushes, so the pull_request types cover the
+# opened/synchronize/reopened flow (re-run on every push while the label is
+# present) plus labeled (first run on labeling), and every job gates itself
+# on the label: an unlabeled PR never runs, a labeled PR re-runs on each
+# push. workflow_dispatch (kept from the stub) runs the same jobs bypassing
+# the label gate, for manual full-matrix runs.
 #
-# WHAT WIRES WHEN THIS IS IMPLEMENTED -- content that exists TODAY:
-#   * one matrix row per real module through reusable go-module-ci
-#     (.github/workflows/reusable/go-module-ci.yml), i.e. the pr-check
-#     matrix plus -race -cover;
-#   * the Docker-backed integration tiers, one leg per module with an
-#     integration_test/ directory, run from inside the module:
-#     go test -race -tags=integration ./...
-#     PostgreSQL via testcontainers: go/dbkit, go/tenancy
-#     Redis via testcontainers: go/jobs; Redis + MinIO/S3 via testcontainers:
-#     go/pkgcore (its integration_test/ runs both tiers)
-#     (exact mirror of Taskfile test:full's INTEGRATION_DIRS loop; Docker is
-#     preinstalled on ubuntu-latest runners);
-#   * the reference-app module unit suite (examples/reference-app: its own
-#     module, listed in go.work but outside go/ -- covered by neither the
-#     pr-check module matrix nor the go/... import-path build, so run it
-#     dir-scoped from inside the module, as Taskfile's APP_DIR legs do).
+# COVERAGE -- what genuinely runs today
+#   * go-modules job: the same six-module matrix as pr-check through the
+#     reusable go-module-ci workflow (go vet, unit tests under -race, a
+#     workspace-context build and a GOWORK=off standalone build) -- the full
+#     matrix runs the unit tier too. Per 18-cicd's reusable-workflow design
+#     rule, this file adds one matrix row per module and copies no legs.
+#   * integration-tiers job: the Docker-backed integration tiers
+#     (-tags=integration), one matrix row per module that ships a tier, run
+#     from inside the module: go test -race -tags=integration ./... -- the
+#     exact command shape and module enumeration of Taskfile test:full's
+#     INTEGRATION_DIRS loop (the source of truth for which modules carry an
+#     integration_test/ directory). Docker is preinstalled on ubuntu-latest
+#     runners; testcontainers pulls images per leg on first use:
+#       go/dbkit     PostgreSQL
+#       go/tenancy   PostgreSQL (its tier lives under
+#                    tenancytest/integration_test/; ./... covers it)
+#       go/jobs      Redis
+#       go/pkgcore   Redis and MinIO/S3 -- its integration_test/ runs both
+#                    tiers (redis_kv_test.go/redis_eventbus_test.go against
+#                    Redis, minio_container_test.go/s3_objectstore_test.go
+#                    against MinIO/S3)
+#   * reference-app job: examples/reference-app's unit suite under -race,
+#     dir-scoped from inside the module -- reference-app is its own module,
+#     listed in go.work but outside go/, so neither the module matrix above
+#     nor the go/... import-path build of pr-check covers it (Taskfile's
+#     APP_DIR legs are the local mirror).
 #
-# GATE: the roadmap M0 full-matrix acceptance (dual deployment mode x dual
-# dialect across every module). The integration-tier legs above are real
-# today, so this workflow may also be enabled earlier, as soon as the team
-# wants pre-merge integration runs -- the change is flipping the guard off
-# and adding the legs.
+# NOT YET -- listed honestly, roadmap M0:
+#   * the dual deployment mode x dual dialect full-matrix acceptance across
+#     every module. What runs above is the real part of the matrix that
+#     exists today: the standalone-mode unit suites plus the PostgreSQL /
+#     Redis / MinIO-S3 integration tiers. No distributed-mode or second-
+#     dialect tier exists to run yet.
+#   * coverage reporting: Taskfile test:full passes -cover, but CI has no
+#     collector for coverage output, so -cover is deliberately not passed
+#     on the legs above (and the go-module-ci legs are shared with pr-check
+#     unchanged -- zero regression risk on the every-PR workflow).
 
 on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
+
+concurrency:
+  group: pr-full-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  full-matrix:
-    name: full matrix (stub guard -- not implemented yet)
+  go-modules:
+    name: go-module-ci (${{ matrix.module }})
+    # Label gate: pull_request runs only while the full-ci label is on the
+    # PR (unlabeled runs skip every job -- reported neutral, never blocking
+    # a merge); workflow_dispatch runs always.
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'full-ci')
+    # Timeout and runner live in the reusable workflow; the callee's
+    # timeout-minutes bounds each call (caller jobs may not set their own).
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - go/pkgcore
+          - go/dbkit
+          - go/tenancy
+          - go/observability
+          - go/jobs
+          - go/ratelimit
+    uses: ./.github/workflows/reusable/go-module-ci.yml
+    with:
+      module: ${{ matrix.module }}
+
+  integration-tiers:
+    name: integration tier (${{ matrix.module }})
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'full-ci')
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Per-leg cap. Rows run in parallel with each other and with the unit
+    # matrix and the reference-app job, so wall-clock stays the slowest leg
+    # -- a cold testcontainers image pull plus a -race suite fits this cap
+    # with room to spare under the 25-minute pipeline budget.
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - go/dbkit
+          - go/tenancy
+          - go/jobs
+          - go/pkgcore
     steps:
-      - name: Stub guard
-        run: |
-          echo "error: pr-full is not implemented. This failing run is its"
-          echo "stub guard, so the pipeline can never pass silently. Wire the"
-          echo "full matrix per the file header (go-module-ci matrix +"
-          echo "-tags=integration tiers + reference-app suite) when the"
-          echo "roadmap M0 full-matrix acceptance lands."
-          exit 1
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Set up pinned Go toolchain and module cache
+        uses: ./.github/actions/setup-go-env
+      - name: Integration tier under the race detector (testcontainers)
+        working-directory: ${{ matrix.module }}
+        run: go test -race -tags=integration ./...
+
+  reference-app:
+    name: reference-app unit suite (-race)
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'full-ci')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Set up pinned Go toolchain and module cache
+        uses: ./.github/actions/setup-go-env
+      - name: Unit tests under the race detector
+        working-directory: examples/reference-app
+        run: go test -race ./...
