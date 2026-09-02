@@ -231,12 +231,17 @@ future Taskfile task.
 
 Guardrails: an existing `go/<name>` is never overwritten (exit 2); the
 name must be lowercase letters, digits and single hyphens starting with a
-letter (no underscores — every directory in the repo is named this way);
-`--description` must be a single ASCII line (the Language Rule would flag
-anything else in `doc.go`); `--category npm` is refused because no npm
-package template exists in the repository yet — `docs/internal/19-dev-workflow.md`
-only names the future `task new:npm-package`; `--dry-run` prints the plan
-without writing anything.
+letter, with no underscores (go module names are hyphen-convention — the
+repo's only underscore-named directories are the deliberate
+`go/*/integration_test` test tiers, which are test packages rather than
+module names) and must not be a Go keyword (`doc.go` carries
+`package <name with hyphens removed>`, and `package type` cannot compile,
+so a scaffolded stub must always build); `--description` must be a single
+ASCII line (the Language Rule would flag anything else in `doc.go`);
+`--category npm` is refused because no npm package template exists in the
+repository yet — `docs/internal/19-dev-workflow.md` only names the future
+`task new:npm-package`; `--dry-run` prints the plan without writing
+anything.
 
 ## Running in CI and locally
 

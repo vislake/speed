@@ -39,9 +39,14 @@ Refusals and guardrails:
   * An existing directory or file at go/<name> is never overwritten -- the
     run fails instead (exit 2).
   * The module name must be lowercase letters, digits and single hyphens,
-    start with a letter, contain no underscore (root CLAUDE.md module
-    naming: directory-safe, no underscores anywhere in the tree), and not
-    be "." or ".." (validated before any filesystem access).
+    start with a letter, contain no underscore (go module directory names
+    are hyphen-convention; the repo's only underscore-named directories,
+    the go/*/integration_test test tiers, are test packages rather than
+    module names), and not be a Go keyword: doc.go reads "package <name
+    with hyphens removed>" and "package type" cannot compile, so a
+    keyword-named module would violate the canonical-stub contract that
+    every scaffolded module builds. "." and ".." are refused too. All of
+    this is validated before any filesystem access.
   * Nothing is ever written outside --target-dir: the scaffold only ever
     creates <target-dir>/go/<name>/{go.mod,doc.go,AGENTS.md}.
   * --category npm is refused with an explanation: docs/internal/
@@ -107,10 +112,26 @@ DESIGN_DOC_PATTERN = re.compile(r"^docs/internal/\d{2}-[a-z0-9-]+\.md$")
 
 # Module directory names: lowercase letter first, then lowercase letters,
 # digits and single hyphens. Underscores are rejected outright -- every
-# directory in the tree (go.work use entries, CI matrices, release tag
-# paths go/<name>/<version>) is built from this name and none of them want
-# underscores; the repo has no underscore-named directory anywhere.
+# name downstream (go.work use entry, CI matrix row, release tag path
+# go/<name>/<version>) is built verbatim from this one and none of them
+# want underscores. The repo's own underscore-named directories (the
+# go/*/integration_test test tiers that root CLAUDE.md's testing rule
+# physically separates) are test packages, never module names.
 NAME_PATTERN = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
+
+# The 25 Go keywords. None of them can name a package clause ("package
+# type" does not compile), and doc.go's clause is "package <module name
+# with hyphens removed>", so a module whose name is a keyword -- or
+# strips to one, like "t-ype" -- would scaffold a doc.go that can never
+# build, breaking the canonical-stub contract. Predeclared identifiers
+# (nil, error, string, true, ...) are deliberately not on the list: they
+# are ordinary identifiers and "package error" compiles fine.
+GO_KEYWORDS = frozenset({
+    "break", "case", "chan", "const", "continue", "default", "defer",
+    "else", "fallthrough", "for", "func", "go", "goto", "if", "import",
+    "interface", "map", "package", "range", "return", "select", "struct",
+    "switch", "type", "var",
+})
 
 
 def validate_name(name: str) -> str | None:
@@ -123,7 +144,14 @@ def validate_name(name: str) -> str | None:
         return (
             f"module name {name!r} is not valid: use lowercase letters, "
             f"digits and single hyphens, starting with a letter; no "
-            f"underscores (the repo names every directory this way)"
+            f"underscores (go module directory names are hyphen-convention)"
+        )
+    pkg_name = name.replace("-", "")
+    if pkg_name in GO_KEYWORDS:
+        return (
+            f"module name {name!r} is a Go keyword: doc.go would carry "
+            f"'package {pkg_name}', which cannot compile; pick a name "
+            f"that is not a reserved word"
         )
     return None
 
@@ -215,7 +243,8 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("name", help="module directory name under go/ "
-                        "(lowercase letters, digits, single hyphens; no underscores)")
+                        "(lowercase letters, digits, single hyphens; no "
+                        "underscores; not a Go keyword)")
     parser.add_argument("--description", required=True,
                         help="one-line English package doc for doc.go (single "
                         "sentence; ASCII only -- CJK would fail the repo's "
