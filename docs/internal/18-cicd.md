@@ -9,21 +9,21 @@
 | 流水线 | 触发 | 职责 | 目标时长 |
 |---|---|---|---|
 | `pr-check` | PR 打开/更新 | 受影响模块的 lint + 类型检查 + 单元测试 + 构建 | < 8 分钟 |
-| `pr-full` | PR 打 `full-ci` 标签 / 合入前 | 全量矩阵：双形态 × 双方言、集成测试 | < 25 分钟 |
+| `pr-full` | PR 打 `full-ci` 标签 / 合入前 | 全量矩阵：双部署模式 × 双方言、集成测试 | < 25 分钟 |
 | `e2e` | 合入 main / 每日 | reference-app 端到端（Playwright） | < 20 分钟 |
 | `security` | PR + 每日 | 依赖漏洞、密钥扫描、SAST、镜像扫描、许可证检查 | < 10 分钟 |
 | `docs-check` | 涉及文档或公开 API 的 PR | 文档示例编译运行、链接检查、i18n key 一致性、配置清单漂移 | < 5 分钟 |
 | `api-contract` | 涉及 `api/openapi.yaml` 或 handler 的 PR | spec lint、合并冲突检查、**生成物一致性 diff**、**oasdiff 破坏性变更检测** | < 5 分钟 |
-| `scaffold-verify` | 每日 + 发布后 | CLI 生成全新项目 → 构建 → 两种形态各启动一次 → 冒烟 | < 15 分钟 |
+| `scaffold-verify` | 每日 + 发布后 | CLI 生成全新项目 → 构建 → 两种部署模式各启动一次 → 冒烟 | < 15 分钟 |
 | `release` | 手动触发（指定版本号） | lockstep 全量发布：Go tag ×19 + npm ×13 + 镜像 + CLI 二进制 | < 30 分钟 |
 | `nightly` | 每日 | 全量矩阵 + 性能基准回归 + flaky test 检测 | 不限 |
 
 ## 成本控制：不是每个 PR 都跑全量
 
-19 个模块 × 2 形态 × 2 方言 = 76 种组合，每个 PR 全跑既慢又贵。策略：
+19 个模块 × 2 种部署模式 × 2 方言 = 76 种组合，每个 PR 全跑既慢又贵。策略：
 
 1. **路径过滤**（`dorny/paths-filter`）：只跑改动模块及其**下游依赖**模块。依赖关系从 `go.work` 与 workspace 配置自动推导，不手工维护映射表。
-2. **分层触发**：PR 阶段跑快速检查（demo 形态 + SQLite，无需容器）；合入前跑全量矩阵。这利用了 demo 形态的一个副产品优势——大部分测试不需要 testcontainers 就能跑。
+2. **分层触发**：PR 阶段跑快速检查（单进程部署模式 + SQLite，无需容器）；合入前跑全量矩阵。这利用了单进程部署模式的一个副产品优势——大部分测试不需要 testcontainers 就能跑。
 3. **缓存**：Go module cache、pnpm store、Docker layer、golangci-lint cache 全部启用，按 lockfile 哈希做 key。
 4. **并发控制**：同一 PR 的新推送自动取消旧运行（`concurrency` + `cancel-in-progress`）。
 5. **超时**：每个 job 设 timeout，防止挂死消耗额度。
@@ -54,7 +54,7 @@
 | 纪律 | 检查手段 |
 |---|---|
 | 禁止绕过 `Repository[T]` 直接用 `db.Table/Model/Raw` | `semgrep` 自定义规则 |
-| 业务逻辑中禁止 `if profile == "demo"` 分支 | `semgrep` 规则（仅放行 kernel 装配包） |
+| 业务逻辑中禁止 `if mode == "standalone"` 分支 | `semgrep` 规则（仅放行 kernel 装配包） |
 | 业务模块间禁止跨模块 import struct | `go-arch-lint` 或 `depguard`（golangci-lint 插件） |
 | `rbac` 不得依赖 `authn` | `depguard` 依赖白名单 |
 | 业务代码不得 import 具体基础设施 SDK | `depguard`（禁止 `go-redis`、S3 SDK 等出现在业务模块） |

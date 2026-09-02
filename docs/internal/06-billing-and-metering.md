@@ -63,9 +63,9 @@ type Decision struct {
 
 ## 计量计费：同一管道，两套后端
 
-采集接口在两种形态下完全一致，业务代码只调 `metering.Recorder.Record(ctx, UsageEvent{...})`：进程内有界 channel 缓冲 + 后台 goroutine 批量 flush，`IdempotencyKey` 防重试重复计量。差异只在 flush 之后：
+采集接口在两种部署模式下完全一致，业务代码只调 `metering.Recorder.Record(ctx, UsageEvent{...})`：进程内有界 channel 缓冲 + 后台 goroutine 批量 flush，`IdempotencyKey` 防重试重复计量。差异只在 flush 之后：
 
-| 环节 | demo 形态 | production 形态 |
+| 环节 | 单进程部署模式 | 分布式部署模式 |
 |---|---|---|
 | 缓冲与投递 | 内存 channel 直接进聚合器 | Redis Streams（消费者组，至少一次投递） |
 | 聚合器部署 | 同进程 goroutine | 同进程 goroutine（MVP）→ 量大后拆独立容器 |
@@ -73,9 +73,9 @@ type Decision struct {
 | 汇总存储 | SQLite `usage_*_summary` 表 | Postgres `usage_*_summary` 表 |
 | 原始明细 | 默认关闭 | 可选开启，TimescaleDB hypertable + 保留策略 |
 
-- 不引入 Kafka：Compose 小集群下 Kafka 的运维复杂度与团队规模严重不匹配，而 Redis 在 production 形态本就要用于 session/缓存/限流，复用它不新增基础设施种类。
-- TimescaleDB 是 Postgres 扩展（换镜像即可），不新增数据库引擎；demo 形态下 SQLite 无此扩展，因此原始明细默认关闭，只保留汇总表——这正是"能力按形态降级"原则的体现。
-- 实时配额不查汇总表（有聚合延迟），走计数器；production 下定期用聚合结果对账修正计数器，防长期漂移。
+- 不引入 Kafka：Compose 小集群下 Kafka 的运维复杂度与团队规模严重不匹配，而 Redis 在分布式部署模式下本就要用于 session/缓存/限流，复用它不新增基础设施种类。
+- TimescaleDB 是 Postgres 扩展（换镜像即可），不新增数据库引擎；单进程部署模式下 SQLite 无此扩展，因此原始明细默认关闭，只保留汇总表——这正是"能力按部署模式降级"原则的体现。
+- 实时配额不查汇总表（有聚合延迟），走计数器；分布式部署模式下定期用聚合结果对账修正计数器，防长期漂移。
 - **超额策略**：Plan 的 `OverageMode` 决定 Block / Allow&Bill / Notify；阈值事件经事件总线发出，由通知模块订阅。
 
 ### 可靠性分级：不是所有计量都能 fail-open

@@ -71,7 +71,7 @@ type ExternalIdentity struct {
 }
 ```
 
-**v1.0 内置渠道**：Google、GitHub（标准 OAuth2，覆盖海外与开发者场景）+ 微信开放平台、企业微信、钉钉、飞书（覆盖国内 to C 与 to B 场景）。QQ、微博、支付宝作为二期按需补充。**手机号 + 短信验证码**在国内几乎是刚需，作为独立的 `Authenticator` 实现（不是 social provider）一并纳入，短信网关同样做接口抽象（demo 形态打印到控制台）。
+**v1.0 内置渠道**：Google、GitHub（标准 OAuth2，覆盖海外与开发者场景）+ 微信开放平台、企业微信、钉钉、飞书（覆盖国内 to C 与 to B 场景）。QQ、微博、支付宝作为二期按需补充。**手机号 + 短信验证码**在国内几乎是刚需，作为独立的 `Authenticator` 实现（不是 social provider）一并纳入，短信网关同样做接口抽象（单进程部署模式下打印到控制台）。
 
 **账号关联模型**：`user_identities` 表（`user_id`, `provider`, `external_id`, `unique(provider, external_id)`），一个用户可绑定多个外部身份，也可同时保留密码登录。
 

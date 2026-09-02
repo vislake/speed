@@ -6,12 +6,12 @@
 
 | 层次 | 范围 | 依赖 | 何时跑 |
 |---|---|---|---|
-| 单元 | 单个包内的逻辑 | 无外部依赖（用 demo 形态的内存实现作 test double） | 每次提交 |
+| 单元 | 单个包内的逻辑 | 无外部依赖（用单进程部署模式的内存实现作 test double） | 每次提交 |
 | 集成 | 模块与真实基础设施 | testcontainers 拉 PostgreSQL / Redis | PR 合入前 |
 | 契约 | OpenAPI 规范与实现、前后端类型（见 [21 API 契约](21-api-contract.md)） | 无 | 每次提交 |
 | 端到端 | reference-app 完整业务链路 | 完整 compose 环境 | 合入 main / 每日 |
 
-**demo 形态的内存实现同时就是 test double**，不需要为测试再造一套 mock。这是双形态设计的第二个正收益（第一个是演示轻量），也是为什么大部分单元测试能在 CI 上秒级跑完。
+**单进程部署模式的内存实现同时就是 test double**，不需要为测试再造一套 mock。这是双部署模式设计的第二个正收益（第一个是演示轻量），也是为什么大部分单元测试能在 CI 上秒级跑完。
 
 ### 前端测试
 Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包的每个公开组件需有 Storybook story（同时充当文档与视觉回归基线）。
@@ -29,7 +29,7 @@ Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包�
 这几项在 [16 验证方式](16-verification.md) 中有详细验收标准，工程上要求它们是**可复用的测试套件**而非散落的用例：
 
 - `tenancytest.AssertIsolated` —— 租户隔离，所有 Repository 必跑
-- 双形态一致性 —— 同一组用例在 demo 与 production 下结果必须一致
+- 双部署模式一致性 —— 同一组用例在单进程与分布式下结果必须一致
 - 双方言矩阵 —— 每个模块在 PostgreSQL 与 SQLite 上各跑一遍
 - 迁移测试 —— 从零迁移到最新版本，双方言各验证一次
 

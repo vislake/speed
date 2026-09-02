@@ -9,7 +9,7 @@
 
 ```
 task setup          # 安装工具链、拉依赖、初始化数据库
-task dev            # demo 形态启动后端 + 前端（热重载）
+task dev            # 单进程部署模式启动后端 + 前端（热重载）
 task test           # 跑受影响模块的测试
 task test:full      # 全量矩阵
 task lint           # 全部 lint
@@ -18,7 +18,7 @@ task docs:serve     # 本地预览文档站
 task new:module     # 脚手架自身的模块生成器（见下）
 ```
 
-`task dev` 必须在 **demo 形态**下工作：单进程、SQLite、零外部依赖。这是 demo 形态给开发体验带来的直接收益——本地开发不需要 `docker compose up` 拉起一堆容器。
+`task dev` 必须在 **单进程部署模式**下工作：单进程、SQLite、零外部依赖。这是单进程部署模式给开发体验带来的直接收益——本地开发不需要 `docker compose up` 拉起一堆容器。
 
 ### 工具链版本统一
 用 **mise**（或 asdf）锁定 Go、Node、pnpm、golangci-lint 等版本，配置文件入库。CI 与本地读同一份配置，杜绝"我本地是好的"。
@@ -62,7 +62,7 @@ chore(ci): 缓存 golangci-lint 结果
 PR 模板包含一份 checklist，对应仓库根 [CLAUDE.md](../../CLAUDE.md) 「Architecture Discipline」的纪律：
 
 - [ ] 新增 Repository 已跑 `tenancytest.AssertIsolated`
-- [ ] 新增基础设施依赖已提供 demo 与 production 两套实现
+- [ ] 新增基础设施依赖已提供单进程与分布式两套实现
 - [ ] 新增用户可见文案已补齐中英双语
 - [ ] 新增公开 API 已附使用文档 + 可编译示例 + `AGENTS.md` 条目
 - [ ] 接口变更已先改 OpenAPI spec，前后端生成物已一并提交
