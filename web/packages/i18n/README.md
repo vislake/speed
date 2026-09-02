@@ -152,7 +152,7 @@ production lookup must degrade visibly, not crash).
 ## Development
 
 From `web/packages/i18n`: `pnpm lint`, `pnpm typecheck`, `pnpm test`
-(63 tests), `pnpm build`. Bilingual fixtures live under
+(64 tests), `pnpm build`. Bilingual fixtures live under
 `test-utils/locales/` (repo CJK-scanner exemption); sources and tests
 assert against imported fixtures. `test-utils/` is test-only and never
 emitted into `dist/`.

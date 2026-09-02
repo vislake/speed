@@ -43,8 +43,11 @@ this file adds what is specific to the npm side.
 - Environment-dependent globals (navigator, localStorage, location) are
   never relied on implicitly: inject deterministic stand-ins or guard the
   reads, or the suite breaks under Node and CI.
-- Vitest runs from the package directory; no per-package vitest config is
-  needed (Node environment, no jsdom by default).
+- Vitest runs from the package directory; pure packages need no vitest
+  config (Node environment). A DOM-rendering package declares its own
+  small config instead -- ui-kit's `vitest.config.ts` sets the jsdom
+  environment and its setup file -- and keeps jsdom, Testing Library and
+  friends in its own devDependencies, never the shared root.
 - CI runs `pnpm install --frozen-lockfile` from `web/`, then
   lint/typecheck/test/build per package with the root-provided toolchain.
 
@@ -60,10 +63,20 @@ base to accommodate new code; adjust the code.
 
 One flat config at `web/eslint.config.mjs` serves the whole workspace
 (discovered by ascending from each package). It enforces
-`typescript-eslint` recommended plus `no-explicit-any` as an error today.
-Deferred rule families (JSX hygiene, bare text, generated-client-only API
-calls) are tracked in the CI workflow headers with their owning rounds --
-do not half-enable them.
+`typescript-eslint` recommended plus `no-explicit-any` as an error, and
+carries the workspace's own rules behind the `speed/` plugin namespace:
+`speed/no-literal-text` (implementation and rule tests in
+`web/eslint-rules/`) errors on user-facing text written inline in
+package `src` -- package tests and `test-utils/` are exempt by config,
+because fixture strings are data. Rule tests run from the workspace
+root (`pnpm exec vitest run eslint-rules/no-literal-text.test.mjs`), not
+from a package directory.
+
+Still deferred, tracked in the CI workflow headers with their owning
+rounds -- do not half-enable either: the generated-client-only API rule
+(no hand-written backend calls) needs the generated `api-sdk` consumer
+surface and lands with api-client/api-sdk; the `react-hooks` plugin
+awaits a stateful-components round.
 
 ## CJK scanner exemption
 
@@ -72,6 +85,8 @@ The repo's `tools/scan_cjk.py` full-text-scans everything outside
 {`locales`, `locale`, `i18n`, `translations`} and files in
 {`.git`, `.idea`, `.vscode`, `node_modules`, `vendor`}. Concretely for this
 workspace: bilingual test fixtures live under
-`packages/<name>/test-utils/locales/<namespace>/<lang>.json`; `.ts` and
-`.md` files assert or describe content by importing those fixtures, never
-by embedding language text.
+`packages/<name>/test-utils/locales/<namespace>/<lang>.json` -- or,
+when the fixtures ARE the shipped resources, under the package's
+`src/locales/` (ui-kit's zh-CN/en-US bundles); `.ts` and `.md` files
+assert or describe content by importing those fixtures, never by
+embedding language text.

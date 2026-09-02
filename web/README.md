@@ -46,6 +46,7 @@ web/
   packages/
     tokens/             @speed/tokens  -- design tokens, zero dependencies
     i18n/               @speed/i18n    -- react-i18next wrapper + namespace registry
+    ui-kit/             @speed/ui-kit   -- theme factory + six controlled components
 ```
 
 Root `package.json` holds only what every package shares (typescript,
@@ -93,7 +94,7 @@ build`, ...) or with `pnpm --filter @speed/<name> <script>` from `web/`.
 
 ## What is not here yet
 
-`ui-kit`, `api-client`, `api-sdk`, Storybook, Playwright, changesets and the
+`api-client`, `api-sdk`, Storybook, Playwright, changesets and the
 release tooling, and the web side of the app shell are all planned; see the
 repo roadmap (`docs/internal/15-roadmap.md`) and the CI workflow headers
 for what each round delivers.
