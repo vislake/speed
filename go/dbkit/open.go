@@ -14,7 +14,8 @@ import (
 
 // Dialect identifies which SQL dialect a connection speaks. dbkit supports
 // exactly two, matching the project's dual-dialect requirement: PostgreSQL
-// for production and SQLite for the demo profile and local development.
+// for the distributed deployment mode and SQLite for the standalone
+// deployment mode and local development.
 type Dialect string
 
 const (

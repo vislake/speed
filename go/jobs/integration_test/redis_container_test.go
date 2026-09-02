@@ -1,8 +1,8 @@
 //go:build integration
 
 // Package jobs_test holds go/jobs's integration tier: tests that exercise a
-// real Redis instead of the demo profile's in-process SQLite-backed worker
-// pool. It is physically separate from go/jobs's unit tests (all of which
+// real Redis instead of the standalone deployment mode's in-process
+// SQLite-backed worker pool. It is physically separate from go/jobs's unit tests (all of which
 // live in package jobs itself, one file per source file, per the backend
 // coding standard's testing layout rule (§13)) and carries the
 // "integration" build tag: a plain "go test ./..." never compiles or runs

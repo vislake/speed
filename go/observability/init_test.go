@@ -24,29 +24,30 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-func TestInit_InvalidProfile_ReturnsError(t *testing.T) {
-	_, err := obs.Init(context.Background(), pkgcore.Profile("staging"))
-	if !errors.Is(err, pkgcore.ErrInvalidProfile) {
-		t.Errorf("Init with an unrecognized profile: got %v, want an error wrapping pkgcore.ErrInvalidProfile", err)
+func TestInit_InvalidDeploymentMode_ReturnsError(t *testing.T) {
+	_, err := obs.Init(context.Background(), pkgcore.DeploymentMode("staging"))
+	if !errors.Is(err, pkgcore.ErrInvalidDeploymentMode) {
+		t.Errorf("Init with an unrecognized deployment mode: got %v, want an error wrapping pkgcore.ErrInvalidDeploymentMode", err)
 	}
 }
 
-func TestInit_Production_RequiresOTLPEndpoint(t *testing.T) {
-	_, err := obs.Init(context.Background(), pkgcore.ProfileProduction)
+func TestInit_Distributed_RequiresOTLPEndpoint(t *testing.T) {
+	_, err := obs.Init(context.Background(), pkgcore.DeploymentModeDistributed)
 	if !errors.Is(err, obs.ErrMissingOTLPEndpoint) {
-		t.Errorf("Init(ProfileProduction) with no endpoint: got %v, want an error wrapping ErrMissingOTLPEndpoint", err)
+		t.Errorf("Init(DeploymentModeDistributed) with no endpoint: got %v, want an error wrapping ErrMissingOTLPEndpoint", err)
 	}
 }
 
-// TestInit_Demo_ProducesWorkingExporters is the task's own acceptance
-// bar for the demo profile: hit MetricsHandler and confirm real
-// Prometheus-format output appears after a recorded request, using
-// nothing but Init and Middleware exactly as a real host would wire them.
-func TestInit_Demo_ProducesWorkingExporters(t *testing.T) {
+// TestInit_Standalone_ProducesWorkingExporters is the task's own
+// acceptance bar for the standalone deployment mode: hit MetricsHandler
+// and confirm real Prometheus-format output appears after a recorded
+// request, using nothing but Init and Middleware exactly as a real host
+// would wire them.
+func TestInit_Standalone_ProducesWorkingExporters(t *testing.T) {
 	ctx := context.Background()
-	shutdown, err := obs.Init(ctx, pkgcore.ProfileDemo)
+	shutdown, err := obs.Init(ctx, pkgcore.DeploymentModeStandalone)
 	if err != nil {
-		t.Fatalf("Init(ProfileDemo): %v", err)
+		t.Fatalf("Init(DeploymentModeStandalone): %v", err)
 	}
 	t.Cleanup(func() {
 		if shutdownErr := shutdown(context.Background()); shutdownErr != nil {
@@ -83,18 +84,18 @@ func TestInit_Demo_ProducesWorkingExporters(t *testing.T) {
 	}
 }
 
-// TestInit_Demo_MetricsHandlerIsIsolatedAcrossCalls proves the fresh-
-// registry-per-Init design actually holds: a second Init(ProfileDemo)
-// call in the same process (exactly what happens across this file's own
-// tests) must not panic with Prometheus's "duplicate metrics collector
-// registration" and must not carry over the previous call's recorded
-// data into the new registry.
-func TestInit_Demo_MetricsHandlerIsIsolatedAcrossCalls(t *testing.T) {
+// TestInit_Standalone_MetricsHandlerIsIsolatedAcrossCalls proves the
+// fresh-registry-per-Init design actually holds: a second
+// Init(DeploymentModeStandalone) call in the same process (exactly what
+// happens across this file's own tests) must not panic with Prometheus's
+// "duplicate metrics collector registration" and must not carry over the
+// previous call's recorded data into the new registry.
+func TestInit_Standalone_MetricsHandlerIsIsolatedAcrossCalls(t *testing.T) {
 	ctx := context.Background()
 
-	shutdown1, err := obs.Init(ctx, pkgcore.ProfileDemo)
+	shutdown1, err := obs.Init(ctx, pkgcore.DeploymentModeStandalone)
 	if err != nil {
-		t.Fatalf("first Init(ProfileDemo): %v", err)
+		t.Fatalf("first Init(DeploymentModeStandalone): %v", err)
 	}
 	obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -105,9 +106,9 @@ func TestInit_Demo_MetricsHandlerIsIsolatedAcrossCalls(t *testing.T) {
 
 	// A second Init call is exactly what this test is for: it must not
 	// panic on re-registering the same Prometheus collector names.
-	shutdown2, err := obs.Init(ctx, pkgcore.ProfileDemo)
+	shutdown2, err := obs.Init(ctx, pkgcore.DeploymentModeStandalone)
 	if err != nil {
-		t.Fatalf("second Init(ProfileDemo): %v", err)
+		t.Fatalf("second Init(DeploymentModeStandalone): %v", err)
 	}
 	t.Cleanup(func() { _ = shutdown2(context.Background()) })
 
@@ -122,7 +123,7 @@ func TestInit_Demo_MetricsHandlerIsIsolatedAcrossCalls(t *testing.T) {
 	}
 }
 
-func TestMetricsHandler_ProductionProfile_ReturnsNotFound(t *testing.T) {
+func TestMetricsHandler_DistributedMode_ReturnsNotFound(t *testing.T) {
 	lis, srv := startFakeCollector(t)
 	// Deliberately plain defer statements, not t.Cleanup, and in this
 	// exact order: t.Cleanup callbacks all run strictly after the test
@@ -135,23 +136,23 @@ func TestMetricsHandler_ProductionProfile_ReturnsNotFound(t *testing.T) {
 	// needs the fake server still listening to flush against) run first.
 	defer stopFakeCollector(t, lis, srv)
 
-	shutdown, err := obs.Init(context.Background(), pkgcore.ProfileProduction,
+	shutdown, err := obs.Init(context.Background(), pkgcore.DeploymentModeDistributed,
 		obs.WithOTLPEndpoint(lis.Addr().String()),
 		obs.WithOTLPInsecure(true),
 	)
 	if err != nil {
-		t.Fatalf("Init(ProfileProduction): %v", err)
+		t.Fatalf("Init(DeploymentModeDistributed): %v", err)
 	}
 	defer func() { _ = shutdown(context.Background()) }()
 
 	rr := httptest.NewRecorder()
 	obs.MetricsHandler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if rr.Code != http.StatusNotFound {
-		t.Errorf("MetricsHandler() under ProfileProduction: status = %d, want 404 (metrics are pushed via OTLP, not pulled locally)", rr.Code)
+		t.Errorf("MetricsHandler() under DeploymentModeDistributed: status = %d, want 404 (metrics are pushed via OTLP, not pulled locally)", rr.Code)
 	}
 }
 
-// TestInit_Production_ExportsRealSpansAndMetricsOverOTLP is this
+// TestInit_Distributed_ExportsRealSpansAndMetricsOverOTLP is this
 // package's substitute for a testcontainers-based OTel Collector
 // integration test. No dedicated testcontainers-go module exists for the
 // OTel Collector, and hand-rolling one (a generic container plus a
@@ -161,31 +162,31 @@ func TestMetricsHandler_ProductionProfile_ReturnsNotFound(t *testing.T) {
 // test stands up a real gRPC server implementing the actual generated
 // OTLP collector service interfaces (go.opentelemetry.io/proto/otlp; not
 // a mock of this package's own code) and proves Init(...,
-// ProfileProduction, ...) genuinely serializes and transmits a real span
-// and a real metric to it, deterministically and in-process. Because it
-// needs no external process or Docker, it stays in the regular unit-test
-// set rather than integration_test/ -- see
+// DeploymentModeDistributed, ...) genuinely serializes and transmits a
+// real span and a real metric to it, deterministically and in-process.
+// Because it needs no external process or Docker, it stays in the
+// regular unit-test set rather than integration_test/ -- see
 // backend-coding-standards.md §13's own reasoning for why
 // integration_test/ is reserved specifically for tests that need a real
 // external dependency such as testcontainers' PostgreSQL or Redis.
-func TestInit_Production_ExportsRealSpansAndMetricsOverOTLP(t *testing.T) {
+func TestInit_Distributed_ExportsRealSpansAndMetricsOverOTLP(t *testing.T) {
 	lis, srv := startFakeCollector(t)
 	traces, metrics := srv.traces, srv.metrics
 	defer stopFakeCollector(t, lis, srv)
 
 	ctx := context.Background()
-	shutdown, err := obs.Init(ctx, pkgcore.ProfileProduction,
+	shutdown, err := obs.Init(ctx, pkgcore.DeploymentModeDistributed,
 		obs.WithOTLPEndpoint(lis.Addr().String()),
 		obs.WithOTLPInsecure(true),
 		obs.WithServiceName("observability-init-test"),
 	)
 	if err != nil {
-		t.Fatalf("Init(ProfileProduction): %v", err)
+		t.Fatalf("Init(DeploymentModeDistributed): %v", err)
 	}
 	// Plain defer, not t.Cleanup, registered here -- immediately after
 	// the error check, and (crucially) *after* stopFakeCollector's own
 	// defer above so it runs first, LIFO -- for exactly the reason
-	// TestMetricsHandler_ProductionProfile_ReturnsNotFound's comment
+	// TestMetricsHandler_DistributedMode_ReturnsNotFound's comment
 	// spells out: t.Cleanup callbacks all run strictly after this
 	// function (and its own defers) return, so a t.Cleanup registered
 	// here would run shutdown AFTER stopFakeCollector has already torn
@@ -196,7 +197,7 @@ func TestInit_Production_ExportsRealSpansAndMetricsOverOTLP(t *testing.T) {
 	// TracerProvider's batch-span-processor goroutine and the
 	// MeterProvider's periodic-reader goroutine for the rest of the test
 	// binary's process life -- see
-	// TestInit_Production_EarlyExitLeaksGoroutinesWithoutAnImmediateDefer
+	// TestInit_Distributed_EarlyExitLeaksGoroutinesWithoutAnImmediateDefer
 	// below for a reproduction. The manual call below still runs first
 	// on the happy path, since it must: the trace/metric-count
 	// assertions need the data flushed before they run. This defer then
@@ -232,18 +233,18 @@ func TestInit_Production_ExportsRealSpansAndMetricsOverOTLP(t *testing.T) {
 	}
 }
 
-// TestInit_Production_EarlyExitLeaksGoroutinesWithoutAnImmediateDefer is a
-// regression test for a goroutine-leak bug found in
-// TestInit_Production_ExportsRealSpansAndMetricsOverOTLP: that test used
+// TestInit_Distributed_EarlyExitLeaksGoroutinesWithoutAnImmediateDefer is
+// a regression test for a goroutine-leak bug found in
+// TestInit_Distributed_ExportsRealSpansAndMetricsOverOTLP: that test used
 // to call shutdown(ctx) only once, near the end of its happy path, with no
 // defer or t.Cleanup registered right after Init succeeded. Any assertion
 // firing between Init succeeding and that manual call would exit the test
 // via t.Fatal's runtime.Goexit() without ever invoking shutdown, leaking
-// the production TracerProvider's batch-span-processor goroutine and the
-// MeterProvider's periodic-reader goroutine for the rest of the test
-// binary's process life. The fix is a defer registered immediately after
-// Init's error check, matching the pattern
-// TestMetricsHandler_ProductionProfile_ReturnsNotFound already
+// the distributed-mode TracerProvider's batch-span-processor goroutine
+// and the MeterProvider's periodic-reader goroutine for the rest of the
+// test binary's process life. The fix is a defer registered immediately
+// after Init's error check, matching the pattern
+// TestMetricsHandler_DistributedMode_ReturnsNotFound already
 // established (see that test's own comment for why it must be a plain
 // defer, not t.Cleanup).
 //
@@ -258,9 +259,9 @@ func TestInit_Production_ExportsRealSpansAndMetricsOverOTLP(t *testing.T) {
 //     stop them), this test would no longer be proving anything, so
 //     the leak is asserted explicitly rather than assumed.
 //   - with a defer registered right after Init's error check -- the
-//     fixed shape, and what every Init(ProfileProduction, ...) call in
-//     this file now uses -- they do not.
-func TestInit_Production_EarlyExitLeaksGoroutinesWithoutAnImmediateDefer(t *testing.T) {
+//     fixed shape, and what every Init(DeploymentModeDistributed, ...)
+//     call in this file now uses -- they do not.
+func TestInit_Distributed_EarlyExitLeaksGoroutinesWithoutAnImmediateDefer(t *testing.T) {
 	lis, srv := startFakeCollector(t)
 	defer stopFakeCollector(t, lis, srv)
 
@@ -282,7 +283,7 @@ func TestInit_Production_EarlyExitLeaksGoroutinesWithoutAnImmediateDefer(t *test
 		go func() {
 			defer close(done)
 			var err error
-			shutdown, err = obs.Init(context.Background(), pkgcore.ProfileProduction,
+			shutdown, err = obs.Init(context.Background(), pkgcore.DeploymentModeDistributed,
 				obs.WithOTLPEndpoint(lis.Addr().String()),
 				obs.WithOTLPInsecure(true),
 			)
@@ -416,7 +417,7 @@ type fakeCollectorServer struct {
 
 // startFakeCollector starts a real gRPC server, on an OS-assigned
 // loopback port, implementing the OTLP collector's trace and metrics
-// services. See TestInit_Production_ExportsRealSpansAndMetricsOverOTLP's
+// services. See TestInit_Distributed_ExportsRealSpansAndMetricsOverOTLP's
 // doc comment for why this substitutes for a testcontainers-based
 // integration test against a real otel/opentelemetry-collector image.
 func startFakeCollector(t *testing.T) (net.Listener, *fakeCollectorServer) {

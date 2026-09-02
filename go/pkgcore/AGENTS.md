@@ -8,8 +8,8 @@ It owns four things and nothing else:
 |---|---|
 | The `Module` / `Registry` / `Kernel` wiring contract | `registry.go` |
 | Tenant context and the audited escape hatch from tenant filtering | `tenant.go` |
-| Dual-profile infrastructure interfaces (`KVStore`, `EventBus`) plus their in-memory implementations | `kv.go`, `eventbus.go` |
-| The runtime `Profile` enumeration | `profile.go` |
+| Dual-deployment-mode infrastructure interfaces (`KVStore`, `EventBus`) plus their in-memory implementations | `kv.go`, `eventbus.go` |
+| The `DeploymentMode` enumeration | `deployment_mode.go` |
 
 Two subpackages: `apperr` (the structured application error every module returns) and `config` (the bootstrap configuration loader, run once at process startup).
 
@@ -28,10 +28,10 @@ Two subpackages: `apperr` (the structured application error every module returns
 | `func NewRegistry(bus EventBus, kv KVStore) *Registry` | A registry wired to the in-memory registrars, to `bus` and to `kv`. A nil bus or a nil kv panics |
 | `func (*Registry) EventBus() EventBus` | The bus behind `Registry.Events`, so the host publishes into what modules subscribed to |
 | `func (*Registry) KVStore() KVStore` | The key-value store the registry was built with |
-| `func NewKernel(profile Profile, opts ...KernelOption) *Kernel` | A kernel that assembles modules for one profile |
-| `func WithEventBus(bus EventBus) KernelOption` | Inject the host's `EventBus`. Required for `ProfileProduction`, which has no built-in one |
-| `func WithKVStore(store KVStore) KernelOption` | Inject the host's `KVStore`. Required for `ProfileProduction`, which has no built-in one |
-| `func (*Kernel) Profile() Profile` | The profile the kernel assembles for |
+| `func NewKernel(mode DeploymentMode, opts ...KernelOption) *Kernel` | A kernel that assembles modules for one deployment mode |
+| `func WithEventBus(bus EventBus) KernelOption` | Inject the host's `EventBus`. Required for `DeploymentModeDistributed`, which has no built-in one |
+| `func WithKVStore(store KVStore) KernelOption` | Inject the host's `KVStore`. Required for `DeploymentModeDistributed`, which has no built-in one |
+| `func (*Kernel) DeploymentMode() DeploymentMode` | The deployment mode the kernel assembles for |
 | `func (*Kernel) Bootstrap(ctx context.Context, modules ...Module) (*Registry, error)` | Dependency-sort, register each module, validate the feature graph |
 | `func ValidateFeatureGraph(reg *Registry) error` | Reports feature flags depending on flags nobody registered |
 
@@ -48,9 +48,9 @@ Declaration types:
 | `EventDecl` | `Type`, `PayloadType`, `Description` |
 
 
-**Profile**
+**Deployment mode**
 
-`type Profile string`, constants `ProfileDemo` / `ProfileProduction`, `func ParseProfile(string) (Profile, error)` (trims and lowercases), `func (Profile) Valid() bool` (exact match, so `"Demo"` is not valid).
+`type DeploymentMode string`, constants `DeploymentModeStandalone` / `DeploymentModeDistributed`, `func ParseDeploymentMode(string) (DeploymentMode, error)` (trims and lowercases), `func (DeploymentMode) Valid() bool` (exact match, so `"Standalone"` is not valid).
 
 **Tenant context**
 
@@ -68,9 +68,9 @@ Declaration types:
 | Signature | Purpose |
 |---|---|
 | `type KVStore interface { Get; Set; Delete; IncrByFloat; CompareAndSwap }` | Key-value contract, designed against the weakest backend |
-| `func NewMemoryKVStore() KVStore` | Demo-profile implementation, and the test double |
+| `func NewMemoryKVStore() KVStore` | Standalone-mode implementation, and the test double |
 | `type EventBus interface { Publish(ctx, Event) error; Subscribe(string, EventHandler) }` | Domain event exchange between modules |
-| `func NewMemoryEventBus() EventBus` | Demo-profile implementation: synchronous, in registration order. Single-process, so it is not a production bus |
+| `func NewMemoryEventBus() EventBus` | Standalone-mode implementation: synchronous, in registration order. Single-process, so it is not a distributed-mode bus |
 | `type Event struct { Type string; TenantID TenantID; Payload any }` | One domain fact |
 
 ### `pkgcore/apperr`
@@ -118,17 +118,17 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 Booting a host:
 
 ```go
-profile, err := pkgcore.ParseProfile(os.Getenv("SPEED_PROFILE"))
+mode, err := pkgcore.ParseDeploymentMode(os.Getenv("SPEED_DEPLOYMENT_MODE"))
 
-// ProfileDemo needs no options; ProfileProduction must be given a bus and a
-// key-value store.
+// DeploymentModeStandalone needs no options; DeploymentModeDistributed must
+// be given a bus and a key-value store.
 var opts []pkgcore.KernelOption
-if profile == pkgcore.ProfileProduction {
+if mode == pkgcore.DeploymentModeDistributed {
 	opts = append(opts,
 		pkgcore.WithEventBus(broker.NewEventBus(cfg)),
 		pkgcore.WithKVStore(redis.NewKVStore(cfg)))
 }
-reg, err := pkgcore.NewKernel(profile, opts...).Bootstrap(ctx, tenancy.New(), billing.New())
+reg, err := pkgcore.NewKernel(mode, opts...).Bootstrap(ctx, tenancy.New(), billing.New())
 ```
 
 Returning an error:
@@ -146,12 +146,12 @@ Full runnable versions of all of the above live in `example_test.go`, `apperr/ex
 - Do not import any other speed module here, `dbkit` included. pkgcore is the floor; an import from above is a cycle. That is why `Module.Migrations` returns a plain `embed.FS` rather than a `dbkit` type.
 - Do not add a third-party dependency to the root package. It lands in every consumer's `go.sum`. The `config` subpackage carries koanf and is the only place a new one may even be argued for.
 
-**Interfaces and profiles**
+**Interfaces and deployment modes**
 
-- Do not expose a capability on an infrastructure interface that only one implementation can satisfy. Design against the weaker side, which is the demo profile: no server-side scripting, no pub/sub, no pipelines on `KVStore`.
-- Do not branch on `Profile` outside kernel wiring. Business logic must not contain `if profile == ProfileDemo`.
+- Do not expose a capability on an infrastructure interface that only one implementation can satisfy. Design against the weaker side, which is the standalone deployment mode: no server-side scripting, no pub/sub, no pipelines on `KVStore`.
+- Do not branch on `DeploymentMode` outside kernel wiring. Business logic must not contain `if mode == DeploymentModeStandalone`.
 - Do not write a mock for `KVStore` or `EventBus`. `NewMemoryKVStore` and `NewMemoryEventBus` are the test doubles.
-- Do not use `NewMemoryEventBus` or `NewMemoryKVStore` as a production fallback. Both are single-process, so every replica would get a private instance; `ProfileProduction` fails assembly instead, and the host injects real ones with `WithEventBus` and `WithKVStore`.
+- Do not use `NewMemoryEventBus` or `NewMemoryKVStore` as a distributed-mode fallback. Both are single-process, so every replica would get a private instance; `DeploymentModeDistributed` fails assembly instead, and the host injects real ones with `WithEventBus` and `WithKVStore`.
 - Do not build a read-modify-write cycle out of `Get` + `Set`. Use `IncrByFloat` or `CompareAndSwap`; they are the only operations every backend can make atomic.
 - Do not retain or hand out a caller's byte slice in a `KVStore` implementation, and do not perform an operation on a cancelled context — return the context error instead.
 
@@ -177,7 +177,7 @@ Full runnable versions of all of the above live in `example_test.go`, `apperr/ex
 - Do not put human-readable text in an `apperr` code. The code is machine-readable and stable; the client resolves it through its own i18n catalog.
 - Do not change or reuse a released `apperr` code. It is part of the public API contract.
 - Do not surface a wrapped cause in an API response. `WithCause` is for logs and `errors.Is`.
-- Do not resolve runtime or tenant-overridable settings through `config.Loader`. It handles bootstrap values only: how to reach infrastructure, and which profile is running.
+- Do not resolve runtime or tenant-overridable settings through `config.Loader`. It handles bootstrap values only: how to reach infrastructure, and which deployment mode is running.
 - Do not hand-write the configuration reference. It is generated from the `ConfigItem` declarations.
 
 **Documentation**
@@ -188,7 +188,7 @@ Full runnable versions of all of the above live in `example_test.go`, `apperr/ex
 
 | Sentinel | Triggered by | Handling |
 |---|---|---|
-| `ErrInvalidProfile` | `ParseProfile` on anything but demo/production | Abort startup; the profile is misconfigured |
+| `ErrInvalidDeploymentMode` | `ParseDeploymentMode` on anything but standalone/distributed | Abort startup; the deployment mode is misconfigured |
 | `ErrNoTenant` | `MustTenantFromContext` on an unscoped context | Fail closed. In a worker, rebuild the context with `WithTenant` |
 | `ErrSystemActorRequired` | `WithSystemContext` with an empty `Actor` | Name the actor; the bypass is audited |
 | `ErrSystemPurposeNotRegistered` | `WithSystemContext` with an undeclared purpose | Declare it with `RegisterSystemPurpose` |
@@ -198,11 +198,11 @@ Full runnable versions of all of the above live in `example_test.go`, `apperr/ex
 | `ErrMissingDependency` | Depending on a module absent from the bootstrap set | Add the module, or drop the dependency |
 | `ErrDuplicateConfigKey` / `ErrDuplicateFeatureFlag` / `ErrDuplicatePermission` / `ErrDuplicateJobType` / `ErrDuplicateNotificationType` / `ErrDuplicateEventType` / `ErrDuplicateAuditAction` | The same key registered twice | Two modules own one key; decide which does |
 | `ErrUnresolvedFeatureDependency` | A flag depending on a flag nobody registered | Register the flag, or drop the dependency |
-| `ErrMissingProductionEventBus` | `Bootstrap` on `ProfileProduction` with no bus wired | Inject the host's bus with `WithEventBus` |
-| `ErrMissingProductionKVStore` | `Bootstrap` on `ProfileProduction` with no store wired | Inject the host's store with `WithKVStore` |
+| `ErrMissingDistributedEventBus` | `Bootstrap` on `DeploymentModeDistributed` with no bus wired | Inject the host's bus with `WithEventBus` |
+| `ErrMissingDistributedKVStore` | `Bootstrap` on `DeploymentModeDistributed` with no store wired | Inject the host's store with `WithKVStore` |
 | `config.ErrMissingValue` | A `config:"required"` field left zero | The error names the key and every source consulted |
 | `config.ErrInvalidValue` | A supplied value not applicable to its field | The error names the offending key and its source |
 | `config.ErrSourceUnreadable` | An unparseable config file or malformed flag | Fix the source; startup aborts |
 | `config.ErrInvalidTarget` | `Load` given a non-struct-pointer or a bad `config` tag | Programming error; fix the target type |
 
-Design rationale lives in `docs/internal/01-architecture.md` (module graph and the `Registry` decision), `03-runtime-profiles.md` (dual profiles) and `04-data-and-tenancy.md` (tenant isolation).
+Design rationale lives in `docs/internal/01-architecture.md` (module graph and the `Registry` decision), `03-deployment-modes.md` (dual deployment modes) and `04-data-and-tenancy.md` (tenant isolation).

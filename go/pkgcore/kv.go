@@ -34,9 +34,9 @@ const (
 	kvFloatBitSize = 64
 )
 
-// KVStore is the key-value contract shared by every runtime profile: an
-// in-memory map in the demo profile, Redis or an equivalent server in
-// production.
+// KVStore is the key-value contract shared by every deployment mode: an
+// in-memory map in the standalone deployment mode, Redis or an equivalent
+// server in the distributed deployment mode.
 //
 // The interface is deliberately designed against the weakest backend it must
 // support, so it exposes no server-side scripting, pipelines, pub/sub or data
@@ -99,18 +99,19 @@ func (e kvEntry) expired(now time.Time) bool {
 	return !e.expiresAt.IsZero() && !now.Before(e.expiresAt)
 }
 
-// memoryKVStore is the demo-profile KVStore: a mutex-guarded map that lives and
-// dies with the process. Expired entries are dropped lazily, when an operation
-// next touches the key.
+// memoryKVStore is the standalone deployment mode's KVStore: a mutex-guarded
+// map that lives and dies with the process. Expired entries are dropped
+// lazily, when an operation next touches the key.
 type memoryKVStore struct {
 	mu      sync.Mutex
 	entries map[string]kvEntry
 }
 
 // NewMemoryKVStore returns a KVStore backed by an in-memory map, with no
-// external dependencies. It is the demo-profile implementation, and doubles as
-// a test double for unit tests of code written against KVStore. Nothing it
-// holds survives the process, and nothing is shared between two stores.
+// external dependencies. It is the standalone deployment mode's
+// implementation, and doubles as a test double for unit tests of code written
+// against KVStore. Nothing it holds survives the process, and nothing is
+// shared between two stores.
 func NewMemoryKVStore() KVStore {
 	return &memoryKVStore{entries: make(map[string]kvEntry)}
 }

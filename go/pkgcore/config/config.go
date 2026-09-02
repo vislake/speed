@@ -3,9 +3,10 @@
 // anything else is wired.
 //
 // Bootstrap configuration is deliberately narrow. It answers "how do I reach my
-// infrastructure and which profile am I running?" and nothing else. Values that
-// operations needs to tune at runtime, and values a tenant may override, belong
-// to the separate dynamic configuration module; they are not resolved here.
+// infrastructure and which deployment mode am I running?" and nothing else.
+// Values that operations needs to tune at runtime, and values a tenant may
+// override, belong to the separate dynamic configuration module; they are not
+// resolved here.
 //
 // # Sources
 //

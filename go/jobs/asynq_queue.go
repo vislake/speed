@@ -17,9 +17,9 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// AsynqQueue is the production-profile Queue implementation: backed by
-// Redis via github.com/hibiken/asynq, per docs/internal/07-platform-
-// services.md's jobs section ("production = Redis (hibiken/asynq, mature
+// AsynqQueue is the distributed deployment mode's Queue implementation:
+// backed by Redis via github.com/hibiken/asynq, per docs/internal/07-
+// platform-services.md's jobs section ("production = Redis (hibiken/asynq, mature
 // and ships its own retry/delay/scheduling/Web UI, not worth reimplementing
 // ourselves)"). It implements the exact same Queue interface DemoQueue
 // does (queue.go) -- see AGENTS.md's "Production: AsynqQueue" section for
@@ -66,11 +66,12 @@ type AsynqQueue struct {
 // corresponding With* option is not given. Named package-level constants
 // per the backend coding standard's configuration rule (§10), mirroring
 // DemoQueue's own Default* constants immediately above in spirit (kept in
-// this file, not demo_queue.go, since they are asynq-profile-specific).
+// this file, not demo_queue.go, since they are specific to the
+// distributed deployment mode).
 const (
 	// DefaultAsynqTenantConcurrencyLimit matches DemoQueue's own
 	// DefaultTenantConcurrencyLimit -- see AGENTS.md for why the SAME
-	// default is used despite the two profiles enforcing it at different
+	// default is used despite the two deployment modes enforcing it at different
 	// points in the pipeline.
 	DefaultAsynqTenantConcurrencyLimit = 2
 

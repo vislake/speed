@@ -33,7 +33,7 @@ func (h *progressHandler) Handle(_ context.Context, _ *jobs.Job, progress jobs.P
 // a Handler running under a real asynq.Server reach a caller polling Get()
 // against real Redis -- this package's mapping of progress reporting onto
 // asynq.Task.ResultWriter (AGENTS.md's "Progress reporting" section), the
-// production-profile counterpart of demo_queue_test.go's
+// distributed deployment mode's counterpart of demo_queue_test.go's
 // TestProgressReporting. Unlike that unit-tier-adjacent test (DemoQueue's
 // dispatcher is in-process), this proves the write actually round-trips
 // through Redis: ResultWriter.Write on one goroutine (asynq's worker) and

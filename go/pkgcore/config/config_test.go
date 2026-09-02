@@ -11,10 +11,10 @@ import (
 
 // Struct defaults used as the lowest-priority source throughout these tests.
 const (
-	defaultProfile = "demo"
-	defaultDSN     = "dsn-from-struct-default"
-	defaultPort    = 5432
-	defaultTimeout = 30 * time.Second
+	defaultDeploymentMode = "standalone"
+	defaultDSN            = "dsn-from-struct-default"
+	defaultPort           = 5432
+	defaultTimeout        = 30 * time.Second
 )
 
 // Values each source contributes, chosen so that the winner is unambiguous.
@@ -47,19 +47,19 @@ type CommonConfig struct {
 
 type testConfig struct {
 	CommonConfig
-	Profile  string
-	Debug    bool
-	Timeout  time.Duration
-	Database databaseConfig
-	Cache    *cacheConfig
-	Labels   map[string]string
-	Runtime  string `config:"-"`
+	DeploymentMode string
+	Debug          bool
+	Timeout        time.Duration
+	Database       databaseConfig
+	Cache          *cacheConfig
+	Labels         map[string]string
+	Runtime        string `config:"-"`
 }
 
 func newTestConfig() *testConfig {
 	return &testConfig{
-		Profile: defaultProfile,
-		Timeout: defaultTimeout,
+		DeploymentMode: defaultDeploymentMode,
+		Timeout:        defaultTimeout,
 		Database: databaseConfig{
 			DSN:  defaultDSN,
 			Port: defaultPort,
@@ -84,8 +84,8 @@ func TestLoad_NoSources_KeepsStructDefaults(t *testing.T) {
 		t.Fatalf("Load returned an unexpected error: %v", err)
 	}
 
-	if cfg.Profile != defaultProfile {
-		t.Errorf("Profile = %q, want the struct default %q", cfg.Profile, defaultProfile)
+	if cfg.DeploymentMode != defaultDeploymentMode {
+		t.Errorf("DeploymentMode = %q, want the struct default %q", cfg.DeploymentMode, defaultDeploymentMode)
 	}
 	if cfg.Timeout != defaultTimeout {
 		t.Errorf("Timeout = %v, want the struct default %v", cfg.Timeout, defaultTimeout)

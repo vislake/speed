@@ -5,13 +5,14 @@ import (
 	"time"
 )
 
-// Queue is the contract every runtime profile implements: submit a Task,
+// Queue is the contract every deployment mode implements: submit a Task,
 // poll a Job's status, ask for cancellation. This is the ONLY portable
 // surface a caller outside this package should depend on — DemoQueue
-// (this package's demo-profile implementation) exposes additional methods
-// (RegisterHandler, Start, Close) that configure and run it, which
-// deliberately do not appear here, because a Redis/asynq-backed production
-// implementation is expected to need a different setup shape of its own.
+// (this package's implementation for the standalone deployment mode)
+// exposes additional methods (RegisterHandler, Start, Close) that
+// configure and run it, which deliberately do not appear here, because a
+// Redis/asynq-backed production implementation is expected to need a
+// different setup shape of its own.
 //
 // ctx is never the source of a new Job's own tenant — that is
 // Task.TenantID's job, since Enqueue is legitimately called from a context

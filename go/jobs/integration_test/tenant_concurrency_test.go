@@ -28,8 +28,8 @@ func (h *blockingHandler) Handle(_ context.Context, job *jobs.Job, _ jobs.Progre
 	return jobs.Result{}, nil
 }
 
-// TestRedisQueue_PerTenantConcurrencyLimiting is the production-profile
-// counterpart of demo_queue_test.go's TestPerTenantConcurrencyLimiting:
+// TestRedisQueue_PerTenantConcurrencyLimiting is the distributed
+// deployment mode's counterpart of demo_queue_test.go's TestPerTenantConcurrencyLimiting:
 // proof that one tenant's backlog cannot starve another tenant's Jobs, and
 // that AsynqQueue's own admission gate (asynq_worker.go's
 // tryReserveTenantSlot, layered on top of asynq -- see AGENTS.md's

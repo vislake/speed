@@ -27,8 +27,8 @@ const (
 
 	// defaultSQLitePath is used when SPEED_DB_PATH is unset. It is a
 	// relative path so `go run ./cmd/server` works with zero setup, per
-	// root CLAUDE.md's "task dev must work in the demo profile" rule
-	// applied to this example's own entry point.
+	// root CLAUDE.md's "task dev must work in standalone deployment
+	// mode" rule applied to this example's own entry point.
 	defaultSQLitePath = "reference-app.db"
 
 	// shutdownTimeout bounds how long graceful shutdown waits for
@@ -45,11 +45,11 @@ const (
 	// buildServer's use of tenancy.WithAllowlist.
 	healthzPath = "/healthz"
 
-	// metricsPath is the demo profile's Prometheus scrape endpoint,
-	// exempted from tenant resolution for exactly the same reason
-	// healthzPath is: a scraper (or a human's browser, per
-	// docs/internal/09-observability.md's own description of the demo
-	// profile) has no demo Host to send and must not depend on one.
+	// metricsPath is the standalone deployment mode's Prometheus scrape
+	// endpoint, exempted from tenant resolution for exactly the same
+	// reason healthzPath is: a scraper (or a human's browser, per
+	// docs/internal/09-observability.md's own description of the standalone
+	// deployment mode) has no demo Host to send and must not depend on one.
 	metricsPath = "/metrics"
 )
 
@@ -127,21 +127,21 @@ var _ tenancy.Resolver = strictHostResolver{}
 // minimal starter skeleton, never a business module, so it never goes
 // through Module.Register either.
 type serverConfig struct {
-	Profile     pkgcore.Profile
-	Port        string
-	SQLitePath  string
-	HostTenants map[string]pkgcore.TenantID
+	DeploymentMode pkgcore.DeploymentMode
+	Port           string
+	SQLitePath     string
+	HostTenants    map[string]pkgcore.TenantID
 }
 
 // configFromEnv reads serverConfig from the environment, defaulting to the
-// demo profile on SQLite so `go run ./cmd/server` genuinely starts a
-// working server with zero external dependencies.
+// standalone deployment mode on SQLite so `go run ./cmd/server` genuinely
+// starts a working server with zero external dependencies.
 func configFromEnv() (serverConfig, error) {
-	profileStr := os.Getenv("SPEED_PROFILE")
-	if profileStr == "" {
-		profileStr = string(pkgcore.ProfileDemo)
+	deploymentModeStr := os.Getenv("SPEED_DEPLOYMENT_MODE")
+	if deploymentModeStr == "" {
+		deploymentModeStr = string(pkgcore.DeploymentModeStandalone)
 	}
-	profile, err := pkgcore.ParseProfile(profileStr)
+	deploymentMode, err := pkgcore.ParseDeploymentMode(deploymentModeStr)
 	if err != nil {
 		return serverConfig{}, err
 	}
@@ -157,10 +157,10 @@ func configFromEnv() (serverConfig, error) {
 	}
 
 	return serverConfig{
-		Profile:     profile,
-		Port:        port,
-		SQLitePath:  dbPath,
-		HostTenants: demoHostTenants,
+		DeploymentMode: deploymentMode,
+		Port:           port,
+		SQLitePath:     dbPath,
+		HostTenants:    demoHostTenants,
 	}, nil
 }
 
@@ -174,10 +174,10 @@ func configFromEnv() (serverConfig, error) {
 // underlying database connection; the caller must call cleanup once done
 // with the handler.
 func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() error, error) {
-	if cfg.Profile != pkgcore.ProfileDemo {
+	if cfg.DeploymentMode != pkgcore.DeploymentModeStandalone {
 		return nil, nil, fmt.Errorf(
-			"reference-app: profile %q is not wired in this example yet; only %q is supported until production infrastructure (PostgreSQL, Redis, ...) lands",
-			cfg.Profile, pkgcore.ProfileDemo)
+			"reference-app: deployment mode %q is not wired in this example yet; only %q is supported until distributed infrastructure (PostgreSQL, Redis, ...) lands",
+			cfg.DeploymentMode, pkgcore.DeploymentModeStandalone)
 	}
 
 	db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: cfg.SQLitePath})
@@ -204,7 +204,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return nil, nil, fmt.Errorf("reference-app: apply migrations: %w", applyErr)
 	}
 
-	reg, err := pkgcore.NewKernel(cfg.Profile).Bootstrap(ctx, notesModule)
+	reg, err := pkgcore.NewKernel(cfg.DeploymentMode).Bootstrap(ctx, notesModule)
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: bootstrap kernel: %w", err)

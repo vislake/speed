@@ -43,14 +43,16 @@ var ErrTextRequired = apperr.Invalid("notes.text_required")
 // not a byte count), model.go's Text gorm "size:4000" tag, and the
 // VARCHAR(4000) column in both migrations/{postgres,sqlite}/
 // 0001_create_notes.sql (PostgreSQL's VARCHAR(n) is itself a character
-// count, not a byte count, so this check matches production too).
+// count, not a byte count, so this check matches the distributed
+// deployment mode too).
 //
-// This check exists because SQLite -- the demo profile's only backend --
-// does not enforce a VARCHAR length limit at all under its type-affinity
-// system: without an application-level check here, a request exceeding
-// this limit is silently accepted and stored in full in the demo
-// profile, where the documented spec and a real production PostgreSQL
-// column would both reject it.
+// This check exists because SQLite -- the standalone deployment mode's
+// only backend -- does not enforce a VARCHAR length limit at all under
+// its type-affinity system: without an application-level check here, a
+// request exceeding this limit is silently accepted and stored in full
+// in the standalone deployment mode, where the documented spec and a
+// real PostgreSQL column under the distributed deployment mode would
+// both reject it.
 const maxTextLength = 4000
 
 // ErrTextTooLong is returned when a create-note request's text exceeds

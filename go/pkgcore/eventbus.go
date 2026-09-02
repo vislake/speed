@@ -42,19 +42,20 @@ type EventBus interface {
 	Subscribe(eventType string, h EventHandler)
 }
 
-// memoryEventBus is the demo-profile EventBus: an in-process, synchronous
-// fan-out registry. It is safe for concurrent use by multiple goroutines.
+// memoryEventBus is the standalone deployment mode's EventBus: an in-process,
+// synchronous fan-out registry. It is safe for concurrent use by multiple
+// goroutines.
 type memoryEventBus struct {
 	mu       sync.RWMutex
 	handlers map[string][]EventHandler
 }
 
-// NewMemoryEventBus returns an in-memory EventBus for the single-process demo
-// profile. Publish invokes the subscribed handlers synchronously, in
-// registration order, on the calling goroutine, so a published event is fully
-// handled by the time Publish returns. The returned bus is safe for concurrent
-// Subscribe and Publish calls, and handlers may themselves call Subscribe or
-// Publish without deadlocking.
+// NewMemoryEventBus returns an in-memory EventBus for the single-process
+// standalone deployment mode. Publish invokes the subscribed handlers
+// synchronously, in registration order, on the calling goroutine, so a
+// published event is fully handled by the time Publish returns. The returned
+// bus is safe for concurrent Subscribe and Publish calls, and handlers may
+// themselves call Subscribe or Publish without deadlocking.
 func NewMemoryEventBus() EventBus {
 	return &memoryEventBus{handlers: make(map[string][]EventHandler)}
 }

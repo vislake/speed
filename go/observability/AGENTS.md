@@ -1,6 +1,6 @@
 # observability
 
-The foundational layer only: dual-profile OTel initialization, a
+The foundational layer only: dual-deployment-mode OTel initialization, a
 context-aware structured logger, and generic HTTP instrumentation. See
 `docs/internal/09-observability.md` for the full design intent — including
 the per-domain "must-instrument metrics" table (queue depth, metering
@@ -12,7 +12,7 @@ speculatively build instrumentation for them.
 
 | Concern | Where |
 |---|---|
-| `Init` (dual-profile TracerProvider/MeterProvider wiring, global install, shutdown) + `MetricsHandler` (the demo profile's `/metrics` handler) | `init.go` |
+| `Init` (dual-deployment-mode TracerProvider/MeterProvider wiring, global install, shutdown) + `MetricsHandler` (the standalone deployment mode's `/metrics` handler) | `init.go` |
 | `FromContext` / `WithLogger` (the context-aware `*slog.Logger`) | `logger.go` |
 | `Middleware` (per-request span + request-count/duration metrics) + `AnnotateTenant` | `middleware.go` |
 
@@ -22,14 +22,14 @@ speculatively build instrumentation for them.
 
 | Signature | Purpose |
 |---|---|
-| `func Init(ctx context.Context, profile pkgcore.Profile, opts ...Option) (func(context.Context) error, error)` | Wires a `TracerProvider` and `MeterProvider` for `profile` and installs them as OTel's **global** providers (`otel.SetTracerProvider` / `otel.SetMeterProvider`), so `Middleware`, `FromContext`'s span lookup, and any future module's own `otel.Tracer`/`otel.Meter` calls all reach them with no provider threaded through every call site. Returns a shutdown function the caller must invoke during graceful process shutdown |
+| `func Init(ctx context.Context, mode pkgcore.DeploymentMode, opts ...Option) (func(context.Context) error, error)` | Wires a `TracerProvider` and `MeterProvider` for `mode` and installs them as OTel's **global** providers (`otel.SetTracerProvider` / `otel.SetMeterProvider`), so `Middleware`, `FromContext`'s span lookup, and any future module's own `otel.Tracer`/`otel.Meter` calls all reach them with no provider threaded through every call site. Returns a shutdown function the caller must invoke during graceful process shutdown |
 | `type Config struct { ServiceName, OTLPEndpoint string; OTLPInsecure bool }` + `Option` / `WithServiceName` / `WithOTLPEndpoint` / `WithOTLPInsecure` | `Init`'s tunables. `OTLPEndpoint` is deliberately **not** read from the environment by this package — see `Config.OTLPEndpoint`'s own doc comment for why (the seam a real host wires up, either directly or once `pkgcore/config`'s bootstrap loader is wired in) |
-| `var ErrMissingOTLPEndpoint` | Returned by `Init` when `profile` is `ProfileProduction` and no endpoint was supplied |
-| `func MetricsHandler() http.Handler` | The `/metrics` handler the most recent `Init` call wired up: a real Prometheus scrape endpoint for `ProfileDemo`, a 404 explaining metrics are pushed via OTLP for `ProfileProduction` (or before `Init` has run at all) |
+| `var ErrMissingOTLPEndpoint` | Returned by `Init` when `mode` is `DeploymentModeDistributed` and no endpoint was supplied |
+| `func MetricsHandler() http.Handler` | The `/metrics` handler the most recent `Init` call wired up: a real Prometheus scrape endpoint for `DeploymentModeStandalone`, a 404 explaining metrics are pushed via OTLP for `DeploymentModeDistributed` (or before `Init` has run at all) |
 
-**`ProfileDemo` needs zero external dependencies.** Traces go to stdout (`stdouttrace`, synchronous — no batching delay). Metrics go to stdout too (`stdoutmetric`, periodic, for a developer tailing the process) **and** to an in-process Prometheus registry exposed via `MetricsHandler` — a fresh `prometheus.NewRegistry()` per `Init` call, never `prometheus.DefaultRegisterer`, so a second `Init` call in the same process (every test in this package that exercises `ProfileDemo` does exactly this) never panics with "duplicate metrics collector registration".
+**`DeploymentModeStandalone` needs zero external dependencies.** Traces go to stdout (`stdouttrace`, synchronous — no batching delay). Metrics go to stdout too (`stdoutmetric`, periodic, for a developer tailing the process) **and** to an in-process Prometheus registry exposed via `MetricsHandler` — a fresh `prometheus.NewRegistry()` per `Init` call, never `prometheus.DefaultRegisterer`, so a second `Init` call in the same process (every test in this package that exercises `DeploymentModeStandalone` does exactly this) never panics with "duplicate metrics collector registration".
 
-**`ProfileProduction` pushes both signals over OTLP/gRPC** (`otlptracegrpc` batched, `otlpmetricgrpc` periodic) to `Config.OTLPEndpoint`.
+**`DeploymentModeDistributed` pushes both signals over OTLP/gRPC** (`otlptracegrpc` batched, `otlpmetricgrpc` periodic) to `Config.OTLPEndpoint`.
 
 ### `logger.go`
 
@@ -58,4 +58,4 @@ speculatively build instrumentation for them.
 
 Full runnable versions of `Init`, `FromContext`/`WithLogger` and `Middleware`/`AnnotateTenant` live in `example_test.go` (package `observability_test`, matching `pkgcore`'s and `dbkit`'s own `example_test.go` convention), each with an `// Output:` comment asserted against the real printed output — compiled **and executed** by CI, not just described in prose. `ExampleMiddleware` in particular is a second, independent negative-control proof (alongside `middleware_test.go`'s own) that two tenants calling the same route collapse into one metric series with no `tenant_id` label.
 
-`init_test.go`'s `TestInit_Production_ExportsRealSpansAndMetricsOverOTLP` substitutes for a testcontainers-based OTel Collector integration test: no dedicated testcontainers-go module exists for the Collector, so it instead stands up a real gRPC server implementing the actual generated OTLP collector service interfaces (`go.opentelemetry.io/proto/otlp`) in-process, and proves `Init(..., ProfileProduction, ...)` genuinely serializes and transmits a real span and a real metric to it — no Docker required, so it stays in the regular unit-test set.
+`init_test.go`'s `TestInit_Distributed_ExportsRealSpansAndMetricsOverOTLP` substitutes for a testcontainers-based OTel Collector integration test: no dedicated testcontainers-go module exists for the Collector, so it instead stands up a real gRPC server implementing the actual generated OTLP collector service interfaces (`go.opentelemetry.io/proto/otlp`) in-process, and proves `Init(..., DeploymentModeDistributed, ...)` genuinely serializes and transmits a real span and a real metric to it — no Docker required, so it stays in the regular unit-test set.

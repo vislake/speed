@@ -15,7 +15,7 @@ import (
 // dispatched Job both marks it StatusCancelled (Get()'s authoritative,
 // guaranteed effect -- AGENTS.md's Cancel section) and actually removes it
 // from asynq's own pending set (Inspector.DeleteTask), so it is never
-// handed to Handle at all -- the production-profile counterpart of
+// handed to Handle at all -- the distributed deployment mode's counterpart of
 // demo_queue_test.go's TestCancel_TenantIsolation_And_Idempotency.
 func TestRedisQueue_Cancel_PendingJobNeverRuns(t *testing.T) {
 	ctx := context.Background()

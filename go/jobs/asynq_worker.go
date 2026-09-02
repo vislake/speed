@@ -33,7 +33,7 @@ var errAsynqTaskMissingTenant = apperr.Internal("jobs.asynq_task_missing_tenant"
 // This file is AsynqQueue's counterpart to worker.go: where worker.go's
 // jobContext/execute close "the tenant context trap" and decide
 // retry/backoff/dead-letter for DemoQueue, processTask (below) does the same
-// job for the asynq-backed profile -- registered as the single asynq.
+// job for the distributed deployment mode -- registered as the single asynq.
 // HandlerFunc AsynqQueue.Start hands to asynq.Server.Start, deliberately
 // NOT wrapped in an asynq.ServeMux (see its own doc comment for why).
 
@@ -228,7 +228,7 @@ func (q *AsynqQueue) processTaskUncancelled(ctx context.Context, t *asynq.Task, 
 		// dead-lettered -- mirroring worker.go's identical handling of
 		// ErrHandlerNotRegistered for DemoQueue. Reusing the exact same
 		// sentinel (not a new asynq-specific one) keeps this one error
-		// identical across both profiles.
+		// identical across both deployment modes.
 		return ErrHandlerNotRegistered.WithParam("type", t.Type())
 	}
 

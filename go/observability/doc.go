@@ -3,40 +3,41 @@
 //
 // # Scope of this package today
 //
-// This is the foundational layer only: dual-profile OTel initialization
-// (Init), a context-aware structured logger (FromContext / WithLogger), and
-// generic HTTP instrumentation (Middleware). The full per-domain metrics
-// catalog docs/internal/09-observability.md's must-instrument-metrics table
-// describes (queue depth, metering outbox lag, notification delivery rate,
-// payment callback success, ...) belongs to the modules that own those
-// domains (jobs, metering, notification, billing-gateway, ai-gateway), none
-// of which exist yet (root CLAUDE.md's M0 status) -- this package does not
-// speculatively build instrumentation for them.
+// This is the foundational layer only: dual-deployment-mode OTel
+// initialization (Init), a context-aware structured logger (FromContext /
+// WithLogger), and generic HTTP instrumentation (Middleware). The full
+// per-domain metrics catalog docs/internal/09-observability.md's
+// must-instrument-metrics table describes (queue depth, metering outbox
+// lag, notification delivery rate, payment callback success, ...) belongs
+// to the modules that own those domains (jobs, metering, notification,
+// billing-gateway, ai-gateway), none of which exist yet (root CLAUDE.md's
+// M0 status) -- this package does not speculatively build instrumentation
+// for them.
 //
-// # Dual runtime profiles
+// # Deployment modes
 //
 // Like every other infrastructure dependency in speed, the export target is
 // selected once, at startup, by Init, and never branched on again by
-// business code (root CLAUDE.md's "do not branch on profile" rule applies
-// here exactly as it does to KVStore or EventBus):
+// business code (root CLAUDE.md's "do not branch on deployment mode" rule
+// applies here exactly as it does to KVStore or EventBus):
 //
-//   - ProfileDemo exports traces to stdout (stdouttrace) and metrics both to
-//     stdout (stdoutmetric, for a developer tailing the process) and to an
-//     in-process Prometheus handler (MetricsHandler) the host mounts at
-//     /metrics -- zero external dependencies, matching every other demo
-//     implementation in this repository.
-//   - ProfileProduction exports both signals over OTLP/gRPC to a collector,
-//     whose endpoint is supplied by the host via WithOTLPEndpoint (see
-//     Init's doc comment for why this package does not read it from the
-//     environment itself).
+//   - DeploymentModeStandalone exports traces to stdout (stdouttrace) and
+//     metrics both to stdout (stdoutmetric, for a developer tailing the
+//     process) and to an in-process Prometheus handler (MetricsHandler) the
+//     host mounts at /metrics -- zero external dependencies, matching every
+//     other standalone-mode implementation in this repository.
+//   - DeploymentModeDistributed exports both signals over OTLP/gRPC to a
+//     collector, whose endpoint is supplied by the host via
+//     WithOTLPEndpoint (see Init's doc comment for why this package does
+//     not read it from the environment itself).
 //
 // # The three seams
 //
-//   - Init(ctx, profile, opts...) wires the TracerProvider and MeterProvider
-//     for the given profile and installs them as OpenTelemetry's global
-//     providers, so that everything below can reach them without a provider
-//     threaded through 20 modules' worth of call sites. It returns a
-//     shutdown function for graceful process shutdown.
+//   - Init(ctx, mode, opts...) wires the TracerProvider and MeterProvider
+//     for the given deployment mode and installs them as OpenTelemetry's
+//     global providers, so that everything below can reach them without a
+//     provider threaded through 20 modules' worth of call sites. It returns
+//     a shutdown function for graceful process shutdown.
 //   - FromContext(ctx) returns the *slog.Logger every module must log
 //     through (root CLAUDE.md's "logger from context, not a fresh one"
 //     rule): it automatically attaches trace_id and span_id when ctx

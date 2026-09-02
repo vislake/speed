@@ -12,7 +12,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// jobsTable is the demo-profile persistence table name.
+// jobsTable is the standalone deployment mode's persistence table name.
 const jobsTable = "jobs"
 
 // jobRecord is DemoQueue's persisted row shape. It deliberately does NOT
@@ -69,18 +69,21 @@ func (jobRecord) TableName() string { return jobsTable }
 // itself uses for its own schema_migrations table (see
 // go/dbkit/migrations.go's createSchemaMigrationsTableSQL) — not for the
 // same chicken-and-egg reason (this table has no bootstrapping problem),
-// but because this table is a demo-profile-only implementation detail with
-// no other consumer: production's Queue implementation (a separate, later
+// but because this table is an implementation detail specific to the
+// standalone deployment mode, with no other consumer:
+// production's Queue implementation (a separate, later
 // task) is Redis/asynq-backed and never creates this table at all, so
 // routing it through dbkit.MigrationRegistry's cross-module,
 // Atlas-generated, versioned migration machinery — built for schema that
-// ships and evolves across both profiles — would be disproportionate. The
-// statement is written to be portable across both dbkit dialects anyway
+// ships and evolves across both deployment modes — would be
+// disproportionate. The statement is written to be portable across
+// both dbkit dialects anyway
 // (VARCHAR/TEXT/INTEGER/TIMESTAMP, application-generated ids, no
 // PostgreSQL- or SQLite-specific syntax), matching the backend coding
 // standard's dual-dialect rule, even though only SQLite is exercised in
-// the demo profile — see AGENTS.md's Known limitations for why this
-// module's own tests do not also run this against dbtest.NewPostgres.
+// the standalone deployment mode — see AGENTS.md's Known
+// limitations for why this module's own tests do not also run this
+// against dbtest.NewPostgres.
 const createJobsTableSQL = `CREATE TABLE IF NOT EXISTS ` + jobsTable + ` (
 	id              VARCHAR(36) NOT NULL PRIMARY KEY,
 	type            VARCHAR(255) NOT NULL,

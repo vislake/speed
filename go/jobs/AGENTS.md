@@ -1,6 +1,6 @@
 # jobs
 
-jobs is speed's asynchronous task queue: the `Queue`/`Task`/`Job`/`Handler` contract every runtime profile implements, `DemoQueue` (the demo profile's implementation — an in-process worker pool backed by a SQLite-persisted task table), and `AsynqQueue` (the production profile's implementation — Redis via `github.com/hibiken/asynq`). It sits above `tenancy` and `observability` in the module dependency graph (`pkgcore -> dbkit / observability -> tenancy -> config / jobs -> ...`) and is itself a dependency of every module that needs to run something asynchronously: `storage` (derivative generation), `notification` (delivery + retry), `billing` (invoice generation), `ai-gateway` (generation jobs), `integration` (webhook delivery), `compliance` (retention/export jobs). See `docs/internal/07-platform-services.md`'s jobs section for the full design intent this module implements.
+jobs is speed's asynchronous task queue: the `Queue`/`Task`/`Job`/`Handler` contract every deployment mode implements, `DemoQueue` (the standalone deployment mode's implementation — an in-process worker pool backed by a SQLite-persisted task table), and `AsynqQueue` (the distributed deployment mode's implementation — Redis via `github.com/hibiken/asynq`). It sits above `tenancy` and `observability` in the module dependency graph (`pkgcore -> dbkit / observability -> tenancy -> config / jobs -> ...`) and is itself a dependency of every module that needs to run something asynchronously: `storage` (derivative generation), `notification` (delivery + retry), `billing` (invoice generation), `ai-gateway` (generation jobs), `integration` (webhook delivery), `compliance` (retention/export jobs). See `docs/internal/07-platform-services.md`'s jobs section for the full design intent this module implements.
 
 **Three dependencies, used for different reasons.** `observability` is used throughout (`obs.FromContext` for every log line this package emits, `otel.Meter` for the queue-depth gauge) — see `worker.go`, `demo_queue.go`, `asynq_worker.go` and `asynq_queue.go`. `dbkit` is used only through the `*gorm.DB` a caller passes into `NewDemoQueue`: this package never calls `dbkit.Open` itself, and never imports `dbkit.Repository[T]` at all — see "The persistence model is platform data, not tenant data" below for why. This has no analog in `AsynqQueue` at all: it holds no `*gorm.DB` and creates no schema — its entire persistence is Redis, reached exclusively through `asynq`'s own client/server/inspector types plus this package's own thin `redis.UniversalClient`-backed cancellation-marker bookkeeping (`asynq_queue.go`). `tenancy` is a dependency only because this package's own tests use `tenancy/tenancytest.AssertNotTenantScoped`; no non-test `.go` file in this package imports it.
 
@@ -8,7 +8,7 @@ jobs is speed's asynchronous task queue: the `Queue`/`Task`/`Job`/`Handler` cont
 
 | Concern | Where |
 |---|---|
-| Portable types every profile shares: `JobID`, `Status`, `Priority`, `Result`, `Job` | `job.go` |
+| Portable types every deployment mode shares: `JobID`, `Status`, `Priority`, `Result`, `Job` | `job.go` |
 | `Task`, the Enqueue input shape | `task.go` |
 | `Handler`, `ProgressFn`, `FailureHook`, the `NewHandlerFunc` adapter | `handler.go` |
 | `Queue` interface, `EnqueueOption`s and their defaults | `queue.go` |
@@ -54,7 +54,7 @@ jobs is speed's asynchronous task queue: the `Queue`/`Task`/`Job`/`Handler` cont
 
 | Signature | Purpose |
 |---|---|
-| `type Queue interface { Enqueue(ctx, Task, ...EnqueueOption) (JobID, error); Get(ctx, JobID) (*Job, error); Cancel(ctx, JobID) error }` | The portable, profile-independent contract. Both `DemoQueue` and `AsynqQueue` implement it identically — see either type's own section for why its extra methods (`RegisterHandler`, `Start`, `Close`) live outside this interface |
+| `type Queue interface { Enqueue(ctx, Task, ...EnqueueOption) (JobID, error); Get(ctx, JobID) (*Job, error); Cancel(ctx, JobID) error }` | The portable, deployment-mode-independent contract. Both `DemoQueue` and `AsynqQueue` implement it identically — see either type's own section for why its extra methods (`RegisterHandler`, `Start`, `Close`) live outside this interface |
 | `const DefaultMaxRetries = 3` / `const DefaultTimeout = 5 * time.Minute` | Applied when the matching `EnqueueOption` is omitted, by both implementations |
 | `type EnqueueOption func(*enqueueOptions)` + `WithPriority` / `WithDelay` / `WithScheduledAt` / `WithMaxRetries` / `WithTimeout` | Per-`Enqueue`-call configuration, shared verbatim by both implementations (`resolveEnqueueOptions` is called by both `DemoQueue.Enqueue` and `AsynqQueue.Enqueue`). `WithDelay`/`WithScheduledAt` are mutually exclusive — whichever is passed last to `Enqueue` wins. A negative `WithMaxRetries` clamps to 0; a non-positive `WithTimeout` is ignored (falls back to the configured default) rather than honored literally |
 
@@ -110,7 +110,7 @@ Not part of this package's public API, but load-bearing enough to name here: `pr
 **Proof, not just a promise:**
 - `worker_test.go`'s `TestJobContext_*` trio proves `DemoQueue`'s mechanism at the unit level (see their own doc comments).
 - `demo_queue_test.go`'s `TestDemoQueue_RebuildsTenantContext_HandlerUsesOnlyJobTenant` proves the same guarantee end to end for `DemoQueue`, through a real `dbkit.Repository[T]` call.
-- `integration_test/tenant_context_test.go`'s `TestRedisQueue_RebuildsTenantContext` proves the identical guarantee end to end for `AsynqQueue`, against a **real asynq.Server dequeuing from a real Redis** (via testcontainers-go) — the same real `dbkit.Repository[T]`-based technique, so both profiles are held to the exact same, non-tautological standard: the `Task` is enqueued from a context carrying no tenant at all, so a passing test can only be explained by the worker's own rebuild, never by anything leaking through from the call site.
+- `integration_test/tenant_context_test.go`'s `TestRedisQueue_RebuildsTenantContext` proves the identical guarantee end to end for `AsynqQueue`, against a **real asynq.Server dequeuing from a real Redis** (via testcontainers-go) — the same real `dbkit.Repository[T]`-based technique, so both deployment modes are held to the exact same, non-tautological standard: the `Task` is enqueued from a context carrying no tenant at all, so a passing test can only be explained by the worker's own rebuild, never by anything leaking through from the call site.
 
 **Why `Task` carries its own `TenantID` instead of `Enqueue` resolving it from `ctx`.** Unlike an HTTP request handler, `Enqueue` is legitimately called from places with no single ambient tenant — a platform-level scheduler enqueuing one cleanup `Task` per tenant in a loop, for example (`docs/internal/07-platform-services.md`'s sharing-link expiry case). This mirrors `pkgcore.Event.TenantID`'s identical design for the same reason, and is exactly as true for `AsynqQueue.Enqueue` as it is for `DemoQueue.Enqueue`. `Task.TenantID` is required non-empty (`ErrInvalidTask`) — every `Job` must be attributable to a tenant, unlike `Event`, which supports a zero-value tenant for genuinely system-wide facts.
 
@@ -124,7 +124,7 @@ Per root `CLAUDE.md`'s "Asynchronous work" discipline: *"the queue offers an `On
 
 Every log line this package emits goes through `obs.FromContext(ctx)` (never a package-level or hand-built logger), with a constant message and `snake_case` key-value attributes — `job_id`, `job_type`, `tenant_id` (via `ctx`'s own tenant, attached automatically by `obs.FromContext` per `observability.AGENTS.md`), `attempts`, `duration_ms`, `retry_in_ms`, `error`. See `worker.go`'s `execute`, `demo_queue.go`'s `Enqueue`, and `asynq_worker.go`'s `processTaskUncancelled`/`handleErrorAttempt`.
 
-**`jobs.queue.depth`** is the queue-backlog gauge `docs/internal/09-observability.md`'s must-instrument table names for this module, wired by both `DemoQueue.Start` and `AsynqQueue.Start` via the shared `instrumentationName` constant (`demo_queue.go`) — but with **different label sets**, and deliberately so. `DemoQueue.registerQueueDepthGauge` groups its SQL query by `(job_type, status)`, since a SQL `GROUP BY` can do that cheaply. `AsynqQueue.registerQueueDepthGauge` instead reports `(queue, status)`, where `queue` is one of the three fixed priority tiers (`critical`/`default`/`low`): asynq's own `Inspector.GetQueueInfo` aggregates backlog **per queue**, not per job type, and listing every pending/retry task just to count them by type on every metrics-collector scrape would be disproportionate. Both label sets are low-cardinality and neither ever includes `tenant_id`, per root `CLAUDE.md`'s Prometheus-cardinality rule — a specific tenant's backlog is still a job for structured logs and trace attributes, on both profiles.
+**`jobs.queue.depth`** is the queue-backlog gauge `docs/internal/09-observability.md`'s must-instrument table names for this module, wired by both `DemoQueue.Start` and `AsynqQueue.Start` via the shared `instrumentationName` constant (`demo_queue.go`) — but with **different label sets**, and deliberately so. `DemoQueue.registerQueueDepthGauge` groups its SQL query by `(job_type, status)`, since a SQL `GROUP BY` can do that cheaply. `AsynqQueue.registerQueueDepthGauge` instead reports `(queue, status)`, where `queue` is one of the three fixed priority tiers (`critical`/`default`/`low`): asynq's own `Inspector.GetQueueInfo` aggregates backlog **per queue**, not per job type, and listing every pending/retry task just to count them by type on every metrics-collector scrape would be disproportionate. Both label sets are low-cardinality and neither ever includes `tenant_id`, per root `CLAUDE.md`'s Prometheus-cardinality rule — a specific tenant's backlog is still a job for structured logs and trace attributes, on both deployment modes.
 
 **`jobs.job.duration` / `jobs.job.attempts` / `jobs.job.dead_letter`** cover the must-instrument table's remaining task-queue rows beyond backlog depth — execution duration percentiles, failure rate, retry count and dead-letter count — on `DemoQueue` today: `demo_queue.go`'s `registerJobMetrics` wires a `Float64Histogram` and two `Int64Counter`s (mirroring `observability.Middleware`'s own Counter/Histogram pattern for the HTTP row of the same table), recorded by `worker.go`'s `recordJobMetrics`/`recordDeadLetter` at the exact three points `execute` already logs "job succeeded" / "job attempt failed, scheduling retry" / "job exhausted retries, moving to dead letter". All three are labeled `(job_type, status)` (`jobs.job.dead_letter` by `job_type` alone), `status` being one of `StatusSucceeded`/`StatusRetrying`/`StatusDeadLetter` — never `tenant_id`, for the identical cardinality reason `jobs.queue.depth` gives above. Failure rate and retry count are both derived from `jobs.job.attempts` by slicing on `status` rather than each getting a dedicated instrument. **`AsynqQueue` does not yet wire these three** — see Known limitations.
 
@@ -134,7 +134,7 @@ This section is `DemoQueue`-specific; `AsynqQueue` has no GORM model, no `dbkit.
 
 `jobRecord` (`store.go`) deliberately does **not** implement `dbkit.TenantScoped` — no `GetTenantID` method, no embedded `dbkit.TenantModel`. Per `docs/internal/04-data-and-tenancy.md`'s data-domain table and `dbkit/AGENTS.md`'s "Known limitations", this makes it platform data: the dispatcher's claim query scans eligible `Job`s **across every tenant at once**, in priority order, to decide what to run next and to enforce per-tenant concurrency limits — an access pattern `dbkit.Repository[T]` cannot serve, and whose generic constraint would not even compile against a model like this. `tenant_id` is still a real, indexed column — read explicitly by the per-tenant concurrency gate and by `Queue.Get`/`Cancel`'s own access check (`callerMayAccess`, shared verbatim by `AsynqQueue`) — it is simply never auto-injected as a query filter. `store_test.go`'s `TestJobRecord_NotTenantScoped` (`tenancytest.AssertNotTenantScoped`) is the standing, CI-enforced proof of this property.
 
-The `jobs` table itself is created imperatively (`store.go`'s `createJobsTableSQL`) rather than through `dbkit.MigrationRegistry` — a demo-profile-only implementation detail with no other consumer, since `AsynqQueue` creates no schema at all (asynq manages its own Redis key layout internally). The SQL is still written to be portable across both dbkit dialects, even though only SQLite is exercised — see Known limitations.
+The `jobs` table itself is created imperatively (`store.go`'s `createJobsTableSQL`) rather than through `dbkit.MigrationRegistry` — an implementation detail specific to the standalone deployment mode, with no other consumer, since `AsynqQueue` creates no schema at all (asynq manages its own Redis key layout internally). The SQL is still written to be portable across both dbkit dialects, even though only SQLite is exercised — see Known limitations.
 
 ## Production: AsynqQueue
 
@@ -161,7 +161,7 @@ This section is the mapping table root `CLAUDE.md`'s "prefer configuring/wrappin
 
 **Always-set `asynq.Retention` on every `Enqueue` call.** This is not optional tuning — it is required for `Get()` to work at all for a succeeded `Job`. Left unset, asynq deletes a completed task's entire record the instant it succeeds; `Get()` immediately after success would then report `ErrJobNotFound` instead of `StatusSucceeded`, silently breaking the single most basic use of this package. `DefaultAsynqCompletedRetention` (24h, overridable via `WithAsynqCompletedRetention`) is how long a succeeded `Job` stays visible to `Get()` — unlike `DemoQueue`'s SQLite row, which is never deleted. See Known limitations.
 
-**Why no `asynq.ServeMux`.** asynq ships a `ServeMux` for longest-prefix routing of task types to handlers — a real feature, but one this package does not need: `Task.Type` is always matched **exactly** against a registered `Handler.Type()`, mirroring `DemoQueue`'s own `map[string]Handler` exactly. `AsynqQueue` registers a single `asynq.HandlerFunc` (`processTask`) directly with `asynq.Server.Start`, doing its own exact-match lookup via the same `handlers` map/mutex shape `DemoQueue` uses (duplicated, not shared — see `tryReserveTenantSlot`'s own doc comment for why touching `DemoQueue`'s fields was avoided). One concrete benefit: a claimed `Job` with no registered `Handler` reports the **exact same** `ErrHandlerNotRegistered` sentinel on both profiles, rather than `AsynqQueue` surfacing `ServeMux`'s own `asynq.ErrHandlerNotFound` text instead (which `ServeMux`'s fixed, non-overridable `NotFoundHandler()` would have forced).
+**Why no `asynq.ServeMux`.** asynq ships a `ServeMux` for longest-prefix routing of task types to handlers — a real feature, but one this package does not need: `Task.Type` is always matched **exactly** against a registered `Handler.Type()`, mirroring `DemoQueue`'s own `map[string]Handler` exactly. `AsynqQueue` registers a single `asynq.HandlerFunc` (`processTask`) directly with `asynq.Server.Start`, doing its own exact-match lookup via the same `handlers` map/mutex shape `DemoQueue` uses (duplicated, not shared — see `tryReserveTenantSlot`'s own doc comment for why touching `DemoQueue`'s fields was avoided). One concrete benefit: a claimed `Job` with no registered `Handler` reports the **exact same** `ErrHandlerNotRegistered` sentinel on both deployment modes, rather than `AsynqQueue` surfacing `ServeMux`'s own `asynq.ErrHandlerNotFound` text instead (which `ServeMux`'s fixed, non-overridable `NotFoundHandler()` would have forced).
 
 ### Priority → queue mapping
 
@@ -173,7 +173,7 @@ asynq's native priority mechanism is **named, weighted queues** (`Config.Queues 
 
 `Task.IdempotencyKey`, when non-empty, becomes part of a **deterministic asynq TaskID**: `"idem:" + tenantID + ":" + idempotencyKey` (`AsynqQueue.Enqueue`). asynq's own client already refuses to enqueue a second task under a `TaskID` that still exists in any state (`asynq.ErrTaskIDConflict`) — this package's idempotency contract ("a second `Enqueue` call for the same (`TenantID`, `IdempotencyKey`) pair returns the first call's `JobID`") maps onto that native mechanism directly: on conflict, `Enqueue` looks the existing task up (`findTaskInfo`) and returns *its* ID, exactly like `DemoQueue`'s own unique-index-based `insertRecord` does for SQLite. Proven under genuine Redis-level concurrency (ten simultaneous `Enqueue` calls for the same key racing against real asynq/Redis, not a mock) by `integration_test/enqueue_execute_test.go`'s `TestRedisQueue_Idempotency`.
 
-**One real difference from `DemoQueue`, worth stating plainly: idempotency is not permanent in the production profile.** `DemoQueue`'s SQLite unique index holds forever (the row is never deleted, "regardless of what that first Job's outcome was" — `Task.IdempotencyKey`'s own doc comment). asynq's `TaskID`-conflict check only holds for as long as asynq itself still has a live record under that ID: indefinitely while Pending/Scheduled/Retry/Active, until `completedRetention` elapses once succeeded, or until evicted from asynq's own bounded-size archive once dead-lettered. A duplicate `Enqueue` call arriving after either window closes creates a **new**, independent `Job` rather than returning the original's id. See Known limitations.
+**One real difference from `DemoQueue`, worth stating plainly: idempotency is not permanent in the distributed deployment mode.** `DemoQueue`'s SQLite unique index holds forever (the row is never deleted, "regardless of what that first Job's outcome was" — `Task.IdempotencyKey`'s own doc comment). asynq's `TaskID`-conflict check only holds for as long as asynq itself still has a live record under that ID: indefinitely while Pending/Scheduled/Retry/Active, until `completedRetention` elapses once succeeded, or until evicted from asynq's own bounded-size archive once dead-lettered. A duplicate `Enqueue` call arriving after either window closes creates a **new**, independent `Job` rather than returning the original's id. See Known limitations.
 
 ### Progress reporting
 
@@ -233,7 +233,7 @@ Cancelling an `Active` Job is proven by `integration_test/cancel_test.go`'s `Tes
 
 **AsynqQueue.** The identical `Attempts`/`MaxRetries` arithmetic holds (see the mapping table's `attemptsFromTaskInfo` entry above and its own doc comment for the exact per-state formula), but the retry/archive **decision and the backoff delay itself are asynq's own**, not this package's: `asynq.MaxRetry` (set from `resolved.maxRetries` on every `Enqueue`) is what asynq compares its own `Retried` counter against, and `Config.RetryDelayFunc` (defaulting to `asynq.DefaultRetryDelayFunc`, an exponential Sidekiq-style formula — overridable via `WithAsynqRetryDelayFunc`) computes the delay, for every failure that is not a tenant-concurrency bounce (see "Per-tenant concurrency limiting" above). This package's own `backoffDelay`/`WithBackoff` (`worker.go`/`demo_queue.go`) have no `AsynqQueue` equivalent by design — asynq already has a configurable backoff formula, and `WithAsynqRetryDelayFunc` is that same tuning knob shifted to asynq's own extension point rather than reimplemented.
 
-A claimed `Job` whose `Type` has no registered `Handler` (`ErrHandlerNotRegistered`, the exact same sentinel on both profiles) is treated exactly like any other `Handle` failure on both — retried, then dead-lettered — rather than dropped or looped forever, so a startup-ordering mistake can resolve itself, and a genuine mismatch surfaces in `DeadLetterJobs` instead of vanishing silently.
+A claimed `Job` whose `Type` has no registered `Handler` (`ErrHandlerNotRegistered`, the exact same sentinel on both deployment modes) is treated exactly like any other `Handle` failure on both — retried, then dead-lettered — rather than dropped or looped forever, so a startup-ordering mistake can resolve itself, and a genuine mismatch surfaces in `DeadLetterJobs` instead of vanishing silently.
 
 ## Typical integration
 
@@ -258,7 +258,7 @@ id, err := queue.Enqueue(ctx, jobs.Task{
 }, jobs.WithPriority(jobs.PriorityHigh), jobs.WithMaxRetries(2))
 ```
 
-The production equivalent — same `Task`/`EnqueueOption`s, same `Handler`, different construction (per `SPEED_PROFILE`, wired once at kernel startup, never branched on in business code — root `CLAUDE.md`'s "Runtime profiles" discipline):
+The distributed deployment mode's equivalent — same `Task`/`EnqueueOption`s, same `Handler`, different construction (per `SPEED_DEPLOYMENT_MODE`, wired once at kernel startup, never branched on in business code — root `CLAUDE.md`'s "Deployment modes" discipline):
 
 ```go
 redisOpt := asynq.RedisClientOpt{Addr: cfg.RedisAddr, Password: cfg.RedisPassword}
@@ -274,14 +274,14 @@ defer queue.Close(shutdownCtx)
 id, err := queue.Enqueue(ctx, jobs.Task{ /* identical to above */ }, jobs.WithPriority(jobs.PriorityHigh), jobs.WithMaxRetries(2))
 ```
 
-A `Handler` implementation is identical on both profiles — it never knows which one it is running under:
+A `Handler` implementation is identical on both deployment modes — it never knows which one it is running under:
 
 ```go
 func (h *ImageGenHandler) Type() string { return "ai.generate_smile" }
 
 func (h *ImageGenHandler) Handle(ctx context.Context, job *jobs.Job, progress jobs.ProgressFn) (jobs.Result, error) {
     // ctx already carries job.TenantID -- a dbkit.Repository[T] call here
-    // needs no extra tenant plumbing of its own, on either profile.
+    // needs no extra tenant plumbing of its own, on either deployment mode.
     progress(10, "starting")
     out, err := h.svc.Generate(ctx, job.Payload)
     if err != nil {
@@ -291,7 +291,7 @@ func (h *ImageGenHandler) Handle(ctx context.Context, job *jobs.Job, progress jo
     return jobs.Result{Data: out}, nil
 }
 
-// OnFailure runs once, only after every retry is exhausted, on either profile.
+// OnFailure runs once, only after every retry is exhausted, on either deployment mode.
 func (h *ImageGenHandler) OnFailure(ctx context.Context, job *jobs.Job, cause error) {
     h.credits.Refund(ctx, job.TenantID, job.IdempotencyKey) // business compensation lives here, not in jobs
 }
@@ -314,7 +314,7 @@ See `example_test.go`'s `Example`/`ExampleNewHandlerFunc` (compiled and run, `De
 ## Rules
 
 - **Never call a `Handler`'s `Handle` or `OnFailure` with any context other than one carrying exactly `job.TenantID` via `pkgcore.WithTenant`.** For `DemoQueue` this means `jobContext(job.TenantID)` (`worker.go`'s `execute`); for `AsynqQueue` this means `pkgcore.WithTenant(ctx, tenantID)` built from `t.Headers()[headerTenantID]` (`asynq_worker.go`'s `processTaskUncancelled`/`handleErrorAttempt`). Do not "simplify" either by threading some other ambient context through instead, and do not assume any context available at a call site already carries the right tenant.
-- **Do not add business-specific logic to this package**, on either profile. `FailureHook` is the queue's entire failure-compensation surface — see "Failure compensation stays out of this layer".
+- **Do not add business-specific logic to this package**, on either deployment mode. `FailureHook` is the queue's entire failure-compensation surface — see "Failure compensation stays out of this layer".
 - **Do not give `jobRecord` a `GetTenantID` method or embed `dbkit.TenantModel` into it** (`DemoQueue` only — see "The persistence model is platform data, not tenant data").
 - **Do not use `dbkit.Repository[T]` for `jobRecord`** (`DemoQueue` only, same reasoning).
 - **Do not persist a `context.Context`, or store one in `DemoQueue`'s or `AsynqQueue`'s own fields.** Each `Handle`/`OnFailure` call's context is built fresh, independent of the queue's own `Start`/`Close` lifecycle either way — see "Close vs Shutdown" for `AsynqQueue`'s version of this, and `DemoQueue.Close`'s own doc comment for the original.
@@ -324,15 +324,15 @@ See `example_test.go`'s `Example`/`ExampleNewHandlerFunc` (compiled and run, `De
 - **Do not call `Inspector.DeleteTask` from `AsynqQueue.Cancel`.** This looks like the obvious way to stop asynq from processing a not-yet-run Job, and is wrong — see "Cancel"'s own section above for the `Get()`-breaking bug this was and the marker-plus-`processTask`-early-exit design that replaced it.
 - **Do not enqueue an asynq task without `asynq.Retention` set.** Omitting it deletes a succeeded task's record immediately, breaking `Get()` for the success path — see "Task / Job / EnqueueOption → asynq primitives" above.
 - **Do not let a per-tenant-concurrency bounce (`errTenantAtCapacity`) increment asynq's own retry counter.** `Config.IsFailure` reporting `false` for it is what makes an unbounded number of bounces safe — see "Per-tenant concurrency limiting" above; removing or bypassing that would reintroduce the "dead-lettered purely from contention" bug it exists to prevent.
-- **Do not use `asynq.ServeMux` for handler dispatch.** This package's own exact-match `map[string]Handler` (mirroring `DemoQueue`'s) is what keeps `ErrHandlerNotRegistered` identical across both profiles — see "Why no `asynq.ServeMux`" above.
+- **Do not use `asynq.ServeMux` for handler dispatch.** This package's own exact-match `map[string]Handler` (mirroring `DemoQueue`'s) is what keeps `ErrHandlerNotRegistered` identical across both deployment modes — see "Why no `asynq.ServeMux`" above.
 - **Do not call `handler.Handle` or `hook.OnFailure` directly from `DemoQueue.execute`.** Always go through `worker.go`'s `invokeHandle`/`invokeOnFailure`, which recover a panic raised inside either call into an ordinary `Handle` failure instead of letting it crash the whole worker-pool process — every tenant's in-flight and queued Jobs, not just the one that panicked. `AsynqQueue` needs no equivalent: asynq's own `processor.perform` already recovers the same call for free.
 - **Do not let `DemoQueue.execute` call `Handle` for a `jobRecord` whose `tenant_id` column is empty.** `execute`'s dispatch `switch` checks `rec.TenantID == ""` (`errDemoJobMissingTenant`) as its own case, before the `default` case that calls `invokeHandle` — mirror that same shape if this is ever refactored, the way it already mirrors `AsynqQueue.processTaskUncancelled`'s `errAsynqTaskMissingTenant` check.
 
 ## Known limitations
 
-**Shared by both profiles:**
-- **No queue-wide, cross-`Handler` observability of `DeadLetterJobs` beyond a plain list.** No requeue-from-dead-letter API on either profile, and no *caller-facing* pagination (`AsynqQueue.DeadLetterJobs` paginates internally against asynq's own `Inspector`, but still returns one flat slice).
-- **`Enqueue`'s idempotency is scoped per tenant, not globally**, on both profiles — deliberate, not a gap (idempotency keys are business-operation identifiers meaningful within one tenant's own operations).
+**Shared by both deployment modes:**
+- **No queue-wide, cross-`Handler` observability of `DeadLetterJobs` beyond a plain list.** No requeue-from-dead-letter API on either deployment mode, and no *caller-facing* pagination (`AsynqQueue.DeadLetterJobs` paginates internally against asynq's own `Inspector`, but still returns one flat slice).
+- **`Enqueue`'s idempotency is scoped per tenant, not globally**, on both deployment modes — deliberate, not a gap (idempotency keys are business-operation identifiers meaningful within one tenant's own operations).
 
 **`DemoQueue`-specific** (unchanged by this implementation):
 - **`Cancel` does not preempt an in-flight `Handle` call.** See "Rules" above for the contrast with `AsynqQueue`.
@@ -340,7 +340,7 @@ See `example_test.go`'s `Example`/`ExampleNewHandlerFunc` (compiled and run, `De
 - **The dispatcher is a single goroutine.**
 
 **`AsynqQueue`-specific:**
-- **Only `jobs.queue.depth` is wired; `jobs.job.duration`/`jobs.job.attempts`/`jobs.job.dead_letter` (see "Observability" above) are not.** `docs/internal/09-observability.md`'s must-instrument table requires execution-duration percentiles, failure rate, retry count and dead-letter count for the task-queue domain on every profile, and today only `DemoQueue` produces them (`worker.go`'s `recordJobMetrics`/`recordDeadLetter`); `AsynqQueue`'s `asynq_worker.go` (`processTaskUncancelled`/`handleErrorAttempt`) only logs the equivalent events structurally. This is a real, tracked gap, not a deliberate design choice — the fix is the same Counter/Histogram pattern `DemoQueue` now uses, recorded at the same points asynq_worker.go already logs `attempts`/`duration_ms`/`error`, and is the intended fast-follow.
+- **Only `jobs.queue.depth` is wired; `jobs.job.duration`/`jobs.job.attempts`/`jobs.job.dead_letter` (see "Observability" above) are not.** `docs/internal/09-observability.md`'s must-instrument table requires execution-duration percentiles, failure rate, retry count and dead-letter count for the task-queue domain on every deployment mode, and today only `DemoQueue` produces them (`worker.go`'s `recordJobMetrics`/`recordDeadLetter`); `AsynqQueue`'s `asynq_worker.go` (`processTaskUncancelled`/`handleErrorAttempt`) only logs the equivalent events structurally. This is a real, tracked gap, not a deliberate design choice — the fix is the same Counter/Histogram pattern `DemoQueue` now uses, recorded at the same points asynq_worker.go already logs `attempts`/`duration_ms`/`error`, and is the intended fast-follow.
 - **Idempotency is bounded by asynq's own retention windows, not permanent** — see "Idempotency" above for exactly which windows and why.
 - **A succeeded Job's visibility to `Get()` is bounded by `completedRetention` (default 24h), and a cancelled Job's by `cancelledRetention` (default 30 days)** — unlike `DemoQueue`'s SQLite rows, which are kept forever. Both are configurable (`WithAsynqCompletedRetention`/`WithAsynqCancelledRetention`) but neither can be made literally infinite without unbounded Redis growth becoming the operator's problem instead.
 - **`Priority` is collapsed onto three fixed queues, not a continuous ordering** — see "Priority → queue mapping" above. `WithAsynqQueueWeights` retunes the three; it cannot add a fourth.

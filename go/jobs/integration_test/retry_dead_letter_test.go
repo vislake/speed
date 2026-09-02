@@ -36,8 +36,8 @@ func (h *flakyHandler) Handle(context.Context, *jobs.Job, jobs.ProgressFn) (jobs
 // TestRedisQueue_RetryOnFailure proves a genuine Handler failure is
 // retried by asynq's own machinery (asynq.MaxRetry + the configured
 // RetryDelayFunc) rather than dead-lettering immediately, and that Attempts
-// / Error are reported correctly across the retry -- the production-profile
-// counterpart of demo_queue_test.go's TestRetry_SucceedsAfterTransientFailures,
+// / Error are reported correctly across the retry -- the distributed
+// deployment mode's counterpart of demo_queue_test.go's TestRetry_SucceedsAfterTransientFailures,
 // run here against a real asynq.Server actually re-delivering the task
 // through real Redis.
 func TestRedisQueue_RetryOnFailure(t *testing.T) {
@@ -92,7 +92,7 @@ func (h *countingFailureHandler) OnFailure(_ context.Context, job *jobs.Job, _ e
 // archived-task mechanism, AGENTS.md's dead-letter mapping section) and
 // that FailureHook.OnFailure fires exactly once, built from AsynqQueue's own
 // Config.ErrorHandler replicating asynq's archive-boundary decision -- the
-// production-profile counterpart of demo_queue_test.go's
+// distributed deployment mode's counterpart of demo_queue_test.go's
 // TestDeadLetter_ExhaustsRetries_And_InvokesFailureHook.
 func TestRedisQueue_DeadLetterAndFailureHook(t *testing.T) {
 	ctx := context.Background()

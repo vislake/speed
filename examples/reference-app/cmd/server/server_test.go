@@ -22,10 +22,10 @@ import (
 func testConfig(t *testing.T) serverConfig {
 	t.Helper()
 	return serverConfig{
-		Profile:     pkgcore.ProfileDemo,
-		Port:        "0",
-		SQLitePath:  filepath.Join(t.TempDir(), "reference-app-test.db"),
-		HostTenants: demoHostTenants,
+		DeploymentMode: pkgcore.DeploymentModeStandalone,
+		Port:           "0",
+		SQLitePath:     filepath.Join(t.TempDir(), "reference-app-test.db"),
+		HostTenants:    demoHostTenants,
 	}
 }
 
@@ -362,20 +362,21 @@ func TestBuildServer_Metrics_NoTenantRequired(t *testing.T) {
 // the other route buildServer allowlists.
 //
 // Unlike TestBuildServer_Metrics_NoTenantRequired above, this test calls
-// obs.Init(ProfileDemo) itself first, so metricsHandler answers with a real
-// Prometheus scrape (200) here, exactly as main.go's run() arranges before
-// serving any production traffic (see main.go's run) -- reproducing, as a
-// permanent automated test, exactly what manual verification of this gap
-// found: with Init having actually run, both GET and HEAD /metrics return
-// 200 regardless of Host/resolution outcome. Init's returned shutdown is
-// registered via t.Cleanup so the package-level handler
-// obs.MetricsHandler() returns is restored to its unavailable-by-default
-// state before any other test in this binary runs -- the same discipline
-// go/observability's own tests use to keep repeated Init calls independent.
+// obs.Init(DeploymentModeStandalone) itself first, so metricsHandler
+// answers with a real Prometheus scrape (200) here, exactly as main.go's
+// run() arranges before serving any production traffic (see main.go's
+// run) -- reproducing, as a permanent automated test, exactly what manual
+// verification of this gap found: with Init having actually run, both GET
+// and HEAD /metrics return 200 regardless of Host/resolution outcome.
+// Init's returned shutdown is registered via t.Cleanup so the
+// package-level handler obs.MetricsHandler() returns is restored to its
+// unavailable-by-default state before any other test in this binary runs
+// -- the same discipline go/observability's own tests use to keep
+// repeated Init calls independent.
 func TestMetricsAllowlist_ResolutionFailure_StillReturns200(t *testing.T) {
-	shutdown, err := obs.Init(context.Background(), pkgcore.ProfileDemo)
+	shutdown, err := obs.Init(context.Background(), pkgcore.DeploymentModeStandalone)
 	if err != nil {
-		t.Fatalf("obs.Init(ProfileDemo): %v", err)
+		t.Fatalf("obs.Init(DeploymentModeStandalone): %v", err)
 	}
 	t.Cleanup(func() {
 		if shutdownErr := shutdown(context.Background()); shutdownErr != nil {
@@ -448,18 +449,19 @@ func TestMetricsAllowlist_GETOnlyAllowlist_LeavesHEADExposed(t *testing.T) {
 	}
 }
 
-// TestBuildServer_ProductionProfile_ReturnsClearError documents this
-// example's current, honest limitation: only the demo profile is wired up
-// here today (see buildServer's own doc comment and root CLAUDE.md's M0
-// status) -- requesting production must fail loudly, never silently fall
-// back to SQLite under a "production" label.
-func TestBuildServer_ProductionProfile_ReturnsClearError(t *testing.T) {
+// TestBuildServer_DistributedDeploymentMode_ReturnsClearError documents
+// this example's current, honest limitation: only the standalone
+// deployment mode is wired up here today (see buildServer's own doc
+// comment and root CLAUDE.md's M0 status) -- requesting distributed must
+// fail loudly, never silently fall back to SQLite under a "distributed"
+// label.
+func TestBuildServer_DistributedDeploymentMode_ReturnsClearError(t *testing.T) {
 	cfg := testConfig(t)
-	cfg.Profile = pkgcore.ProfileProduction
+	cfg.DeploymentMode = pkgcore.DeploymentModeDistributed
 
 	_, _, err := buildServer(context.Background(), cfg)
 	if err == nil {
-		t.Fatal("buildServer with ProfileProduction: want error, got nil")
+		t.Fatal("buildServer with DeploymentModeDistributed: want error, got nil")
 	}
 }
 
@@ -580,7 +582,7 @@ func TestBuildServer_UnrecognizedHost_FailsClosed(t *testing.T) {
 // wrong reason) outside a clean shell. t.Setenv also restores the previous
 // value automatically once the test finishes.
 func TestConfigFromEnv_Defaults(t *testing.T) {
-	t.Setenv("SPEED_PROFILE", "")
+	t.Setenv("SPEED_DEPLOYMENT_MODE", "")
 	t.Setenv("PORT", "")
 	t.Setenv("SPEED_DB_PATH", "")
 
@@ -588,8 +590,8 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("configFromEnv: %v", err)
 	}
-	if cfg.Profile != pkgcore.ProfileDemo {
-		t.Fatalf("Profile = %q, want %q", cfg.Profile, pkgcore.ProfileDemo)
+	if cfg.DeploymentMode != pkgcore.DeploymentModeStandalone {
+		t.Fatalf("DeploymentMode = %q, want %q", cfg.DeploymentMode, pkgcore.DeploymentModeStandalone)
 	}
 	if cfg.Port != defaultPort {
 		t.Fatalf("Port = %q, want %q", cfg.Port, defaultPort)
@@ -602,7 +604,7 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 // TestConfigFromEnv_ReadsOverrides verifies each environment variable
 // configFromEnv reads is actually honored.
 func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
-	t.Setenv("SPEED_PROFILE", string(pkgcore.ProfileProduction))
+	t.Setenv("SPEED_DEPLOYMENT_MODE", string(pkgcore.DeploymentModeDistributed))
 	t.Setenv("PORT", "9999")
 	t.Setenv("SPEED_DB_PATH", "/tmp/reference-app-configfromenv-test.db")
 
@@ -610,8 +612,8 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("configFromEnv: %v", err)
 	}
-	if cfg.Profile != pkgcore.ProfileProduction {
-		t.Fatalf("Profile = %q, want %q", cfg.Profile, pkgcore.ProfileProduction)
+	if cfg.DeploymentMode != pkgcore.DeploymentModeDistributed {
+		t.Fatalf("DeploymentMode = %q, want %q", cfg.DeploymentMode, pkgcore.DeploymentModeDistributed)
 	}
 	if cfg.Port != "9999" {
 		t.Fatalf("Port = %q, want %q", cfg.Port, "9999")
@@ -621,22 +623,22 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	}
 }
 
-// TestConfigFromEnv_InvalidProfile_ReturnsError proves the
-// pkgcore.ParseProfile error path actually propagates out of
-// configFromEnv: an invalid SPEED_PROFILE value must fail configuration
-// loading -- and therefore run() in main.go -- rather than silently fall
-// back to the demo default or panic.
-func TestConfigFromEnv_InvalidProfile_ReturnsError(t *testing.T) {
-	t.Setenv("SPEED_PROFILE", "not-a-real-profile")
+// TestConfigFromEnv_InvalidDeploymentMode_ReturnsError proves the
+// pkgcore.ParseDeploymentMode error path actually propagates out of
+// configFromEnv: an invalid SPEED_DEPLOYMENT_MODE value must fail
+// configuration loading -- and therefore run() in main.go -- rather than
+// silently fall back to the standalone default or panic.
+func TestConfigFromEnv_InvalidDeploymentMode_ReturnsError(t *testing.T) {
+	t.Setenv("SPEED_DEPLOYMENT_MODE", "not-a-real-deployment-mode")
 	t.Setenv("PORT", "")
 	t.Setenv("SPEED_DB_PATH", "")
 
 	_, err := configFromEnv()
 	if err == nil {
-		t.Fatal("configFromEnv with SPEED_PROFILE=not-a-real-profile: want error, got nil")
+		t.Fatal("configFromEnv with SPEED_DEPLOYMENT_MODE=not-a-real-deployment-mode: want error, got nil")
 	}
-	if !errors.Is(err, pkgcore.ErrInvalidProfile) {
-		t.Fatalf("configFromEnv error = %v, want it to wrap %v", err, pkgcore.ErrInvalidProfile)
+	if !errors.Is(err, pkgcore.ErrInvalidDeploymentMode) {
+		t.Fatalf("configFromEnv error = %v, want it to wrap %v", err, pkgcore.ErrInvalidDeploymentMode)
 	}
 }
 

@@ -18,7 +18,7 @@ cd examples/reference-app
 go run ./cmd/server
 ```
 
-This starts a server on `:8080` (override with `PORT`), backed by a SQLite file `reference-app.db` in the current directory (override with `SPEED_DB_PATH`), running in the demo profile (`SPEED_PROFILE=demo`, the default — `production` is not wired up in this example yet and fails fast with a clear error, since no PostgreSQL/Redis wiring exists here).
+This starts a server on `:8080` (override with `PORT`), backed by a SQLite file `reference-app.db` in the current directory (override with `SPEED_DB_PATH`), running in the standalone deployment mode (`SPEED_DEPLOYMENT_MODE=standalone`, the default — `distributed` is not wired up in this example yet and fails fast with a clear error, since no PostgreSQL/Redis wiring exists here).
 
 ### Tenants, for now
 

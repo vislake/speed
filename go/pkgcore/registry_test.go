@@ -52,9 +52,9 @@ type regTestHandler struct{ id string }
 
 func (regTestHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
 
-// regTestBus stands in for a production, broker-backed EventBus. It is a
-// distinct type from the demo in-memory bus on purpose, so that a test can
-// assert which bus a registry or kernel actually ended up wired to.
+// regTestBus stands in for a distributed, broker-backed EventBus. It is a
+// distinct type from the standalone in-memory bus on purpose, so that a test
+// can assert which bus a registry or kernel actually ended up wired to.
 type regTestBus struct {
 	mu         sync.Mutex
 	subscribed []string
@@ -82,11 +82,12 @@ func (b *regTestBus) subscriptions() []string {
 	return slices.Clone(b.subscribed)
 }
 
-// regTestKVStore stands in for a production, Redis-backed KVStore. Like
-// regTestBus, it is a distinct type from the demo in-memory store on purpose,
-// so a test can assert which store a registry or kernel actually ended up
-// wired to. Only Set is exercised by the tests below, so the remaining
-// KVStore methods are trivial stubs rather than a full fake implementation.
+// regTestKVStore stands in for a distributed, Redis-backed KVStore. Like
+// regTestBus, it is a distinct type from the standalone in-memory store on
+// purpose, so a test can assert which store a registry or kernel actually
+// ended up wired to. Only Set is exercised by the tests below, so the
+// remaining KVStore methods are trivial stubs rather than a full fake
+// implementation.
 type regTestKVStore struct {
 	mu   sync.Mutex
 	sets []string
@@ -546,7 +547,7 @@ func TestBootstrap_DuplicateFeatureFlagAcrossModules_ReturnsError(t *testing.T) 
 		},
 	}
 
-	reg, err := NewKernel(ProfileDemo).Bootstrap(context.Background(), org, billing)
+	reg, err := NewKernel(DeploymentModeStandalone).Bootstrap(context.Background(), org, billing)
 	if !errors.Is(err, ErrDuplicateFeatureFlag) {
 		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrDuplicateFeatureFlag", err)
 	}
@@ -661,10 +662,10 @@ func TestEventRegistrar_Publishes_DuplicateTypeReturnsError(t *testing.T) {
 func TestRegistry_EventBus_FollowsTheEventsRegistrar(t *testing.T) {
 	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
 
-	production := newRegTestBus()
-	reg.Events = &memoryEventRegistrar{bus: production, types: make(map[string]struct{})}
+	distributed := newRegTestBus()
+	reg.Events = &memoryEventRegistrar{bus: distributed, types: make(map[string]struct{})}
 
-	if reg.EventBus() != production {
+	if reg.EventBus() != distributed {
 		t.Fatalf("EventBus() = %v, want the substituted registrar's bus", reg.EventBus())
 	}
 
@@ -859,7 +860,7 @@ func TestBootstrap_ValidChain_RegistersInDependencyOrder(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var order []string
-			kernel := NewKernel(ProfileDemo)
+			kernel := NewKernel(DeploymentModeStandalone)
 
 			reg, err := kernel.Bootstrap(context.Background(), tt.modules(&order)...)
 			if err != nil {
@@ -1013,7 +1014,7 @@ func TestBootstrap_DependencyChainsLongerThanOneHop(t *testing.T) {
 				modules = append(modules, depChainMod(name, tt.deps[name], &order))
 			}
 
-			reg, err := NewKernel(ProfileDemo).Bootstrap(context.Background(), modules...)
+			reg, err := NewKernel(DeploymentModeStandalone).Bootstrap(context.Background(), modules...)
 			if err != nil {
 				t.Fatalf("Bootstrap returned an error: %v", err)
 			}
@@ -1062,7 +1063,7 @@ func TestBootstrap_DependencyCycle_ErrorNamesTheCycle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			kernel := NewKernel(ProfileDemo)
+			kernel := NewKernel(DeploymentModeStandalone)
 
 			reg, err := kernel.Bootstrap(context.Background(), tt.modules...)
 			if !errors.Is(err, ErrDependencyCycle) {
@@ -1081,7 +1082,7 @@ func TestBootstrap_DependencyCycle_ErrorNamesTheCycle(t *testing.T) {
 }
 
 func TestBootstrap_DependencyNotInModuleList_ErrorNamesBothModules(t *testing.T) {
-	kernel := NewKernel(ProfileDemo)
+	kernel := NewKernel(DeploymentModeStandalone)
 
 	reg, err := kernel.Bootstrap(context.Background(),
 		regTestModule{name: "billing", deps: []string{"metering"}},
@@ -1116,7 +1117,7 @@ func TestBootstrap_DeepChainMissingTailIsReported(t *testing.T) {
 		depChainMod("d", []string{"e"}, &order),
 	}
 
-	reg, err := NewKernel(ProfileDemo).Bootstrap(context.Background(), modules...)
+	reg, err := NewKernel(DeploymentModeStandalone).Bootstrap(context.Background(), modules...)
 	if err == nil {
 		t.Fatal("Bootstrap succeeded, want an error naming the missing dependency")
 	}
@@ -1129,7 +1130,7 @@ func TestBootstrap_DeepChainMissingTailIsReported(t *testing.T) {
 }
 
 func TestBootstrap_DuplicateModuleName_ReturnsError(t *testing.T) {
-	kernel := NewKernel(ProfileDemo)
+	kernel := NewKernel(DeploymentModeStandalone)
 
 	_, err := kernel.Bootstrap(context.Background(),
 		regTestModule{name: "billing"},
@@ -1158,7 +1159,7 @@ func TestBootstrap_RegisterFails_WrapsModuleNameAndStops(t *testing.T) {
 	// "org" depends on "billing", so it registers strictly after the failure.
 	later := regTestRecorder("org", []string{"billing"}, &order)
 
-	kernel := NewKernel(ProfileDemo)
+	kernel := NewKernel(DeploymentModeStandalone)
 	reg, err := kernel.Bootstrap(context.Background(), later, failing)
 
 	if !errors.Is(err, failure) {
@@ -1194,7 +1195,7 @@ func TestBootstrap_UnresolvedFeatureDependency_ReturnsError(t *testing.T) {
 		},
 	}
 
-	kernel := NewKernel(ProfileDemo)
+	kernel := NewKernel(DeploymentModeStandalone)
 	reg, err := kernel.Bootstrap(context.Background(), billing, org)
 
 	if !errors.Is(err, ErrUnresolvedFeatureDependency) {
@@ -1235,7 +1236,7 @@ func TestBootstrap_SharesOneRegistryAcrossModules(t *testing.T) {
 		},
 	}
 
-	kernel := NewKernel(ProfileDemo)
+	kernel := NewKernel(DeploymentModeStandalone)
 	reg, err := kernel.Bootstrap(context.Background(), org, billing)
 	if err != nil {
 		t.Fatalf("Bootstrap() error = %v, want nil", err)
@@ -1257,9 +1258,10 @@ func TestBootstrap_CancelledContext_StopsBeforeRegistering(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	// KVStore is wired too, with the demo default: production requires both,
-	// and this test's subject is the context-cancellation check, not wiring.
-	kernel := NewKernel(ProfileProduction, WithEventBus(newRegTestBus()), WithKVStore(NewMemoryKVStore()))
+	// KVStore is wired too, with the standalone default: the distributed mode
+	// requires both, and this test's subject is the context-cancellation
+	// check, not wiring.
+	kernel := NewKernel(DeploymentModeDistributed, WithEventBus(newRegTestBus()), WithKVStore(NewMemoryKVStore()))
 	reg, err := kernel.Bootstrap(ctx, regTestRecorder("billing", nil, &order))
 
 	if !errors.Is(err, context.Canceled) {
@@ -1273,25 +1275,26 @@ func TestBootstrap_CancelledContext_StopsBeforeRegistering(t *testing.T) {
 	}
 }
 
-func TestKernel_Profile_ReportsTheConfiguredProfile(t *testing.T) {
-	for _, want := range []Profile{ProfileDemo, ProfileProduction} {
-		if got := NewKernel(want).Profile(); got != want {
-			t.Errorf("Profile() = %q, want %q", got, want)
+func TestKernel_DeploymentMode_ReportsTheConfiguredDeploymentMode(t *testing.T) {
+	for _, want := range []DeploymentMode{DeploymentModeStandalone, DeploymentModeDistributed} {
+		if got := NewKernel(want).DeploymentMode(); got != want {
+			t.Errorf("DeploymentMode() = %q, want %q", got, want)
 		}
 	}
 }
 
-// TestBootstrap_ProductionProfileWithoutEventBus_FailsFast pins the fail-fast
-// rule from docs/internal/03-runtime-profiles.md: the demo in-memory bus is
-// single-process, so a production kernel that has none wired in must refuse to
-// assemble instead of handing every module a bus its replicas cannot share.
-func TestBootstrap_ProductionProfileWithoutEventBus_FailsFast(t *testing.T) {
+// TestBootstrap_DistributedModeWithoutEventBus_FailsFast pins the fail-fast
+// rule from docs/internal/03-deployment-modes.md: the standalone in-memory
+// bus is single-process, so a distributed-mode kernel that has none wired in
+// must refuse to assemble instead of handing every module a bus its replicas
+// cannot share.
+func TestBootstrap_DistributedModeWithoutEventBus_FailsFast(t *testing.T) {
 	var order []string
 
-	reg, err := NewKernel(ProfileProduction).Bootstrap(context.Background(), regTestRecorder("billing", nil, &order))
+	reg, err := NewKernel(DeploymentModeDistributed).Bootstrap(context.Background(), regTestRecorder("billing", nil, &order))
 
-	if !errors.Is(err, ErrMissingProductionEventBus) {
-		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrMissingProductionEventBus", err)
+	if !errors.Is(err, ErrMissingDistributedEventBus) {
+		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrMissingDistributedEventBus", err)
 	}
 	if reg != nil {
 		t.Error("Bootstrap() returned a registry alongside the error, want nil")
@@ -1301,21 +1304,21 @@ func TestBootstrap_ProductionProfileWithoutEventBus_FailsFast(t *testing.T) {
 	}
 }
 
-// TestBootstrap_ProductionProfileWithoutKVStore_FailsFast mirrors
-// TestBootstrap_ProductionProfileWithoutEventBus_FailsFast for the KVStore
-// seam: the demo in-memory store is single-process, so a production kernel
-// with none wired in must refuse to assemble instead of handing every module
-// a store its replicas cannot share. The bus is wired here so the bus check
-// inside Bootstrap, which runs first, passes and the failure actually
-// exercises the KVStore check instead of masking it.
-func TestBootstrap_ProductionProfileWithoutKVStore_FailsFast(t *testing.T) {
+// TestBootstrap_DistributedModeWithoutKVStore_FailsFast mirrors
+// TestBootstrap_DistributedModeWithoutEventBus_FailsFast for the KVStore
+// seam: the standalone in-memory store is single-process, so a
+// distributed-mode kernel with none wired in must refuse to assemble instead
+// of handing every module a store its replicas cannot share. The bus is
+// wired here so the bus check inside Bootstrap, which runs first, passes and
+// the failure actually exercises the KVStore check instead of masking it.
+func TestBootstrap_DistributedModeWithoutKVStore_FailsFast(t *testing.T) {
 	var order []string
 
-	kernel := NewKernel(ProfileProduction, WithEventBus(NewMemoryEventBus()))
+	kernel := NewKernel(DeploymentModeDistributed, WithEventBus(NewMemoryEventBus()))
 	reg, err := kernel.Bootstrap(context.Background(), regTestRecorder("billing", nil, &order))
 
-	if !errors.Is(err, ErrMissingProductionKVStore) {
-		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrMissingProductionKVStore", err)
+	if !errors.Is(err, ErrMissingDistributedKVStore) {
+		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrMissingDistributedKVStore", err)
 	}
 	if reg != nil {
 		t.Error("Bootstrap() returned a registry alongside the error, want nil")
@@ -1325,31 +1328,32 @@ func TestBootstrap_ProductionProfileWithoutKVStore_FailsFast(t *testing.T) {
 	}
 }
 
-func TestBootstrap_WiresTheProfileEventBusIntoTheRegistry(t *testing.T) {
+func TestBootstrap_WiresTheDeploymentModeEventBusIntoTheRegistry(t *testing.T) {
 	tests := []struct {
 		name string
-		// kernel receives the injectable stand-in for a production bus, and
+		// kernel receives the injectable stand-in for a distributed bus, and
 		// reports whether the assembled registry must end up wired to it.
 		kernel       func(injected EventBus) *Kernel
 		wantInjected bool
 	}{
 		{
-			name:   "the demo profile falls back to the in-memory bus",
-			kernel: func(EventBus) *Kernel { return NewKernel(ProfileDemo) },
+			name:   "the standalone deployment mode falls back to the in-memory bus",
+			kernel: func(EventBus) *Kernel { return NewKernel(DeploymentModeStandalone) },
 		},
 		{
-			name:         "an injected bus replaces the demo default",
-			kernel:       func(injected EventBus) *Kernel { return NewKernel(ProfileDemo, WithEventBus(injected)) },
+			name:         "an injected bus replaces the standalone default",
+			kernel:       func(injected EventBus) *Kernel { return NewKernel(DeploymentModeStandalone, WithEventBus(injected)) },
 			wantInjected: true,
 		},
 		{
-			name: "the production profile uses the injected bus",
+			name: "the distributed deployment mode uses the injected bus",
 			kernel: func(injected EventBus) *Kernel {
-				// KVStore is wired too, with the demo default: this table
-				// exercises the EventBus seam specifically, and production
-				// also requires a KVStore, so leaving it unwired would fail
-				// Bootstrap before the EventBus wiring under test even runs.
-				return NewKernel(ProfileProduction, WithEventBus(injected), WithKVStore(NewMemoryKVStore()))
+				// KVStore is wired too, with the standalone default: this
+				// table exercises the EventBus seam specifically, and the
+				// distributed mode also requires a KVStore, so leaving it
+				// unwired would fail Bootstrap before the EventBus wiring
+				// under test even runs.
+				return NewKernel(DeploymentModeDistributed, WithEventBus(injected), WithKVStore(NewMemoryKVStore()))
 			},
 			wantInjected: true,
 		},
@@ -1394,34 +1398,35 @@ func TestBootstrap_WiresTheProfileEventBusIntoTheRegistry(t *testing.T) {
 	}
 }
 
-// TestBootstrap_WiresTheProfileKVStoreIntoTheRegistry mirrors
-// TestBootstrap_WiresTheProfileEventBusIntoTheRegistry for the KVStore seam:
-// the same three scenarios (demo default, an injected override on the demo
-// profile, and production, which has no default of its own). The bus is
-// wired unconditionally in the production case here, for the same reason the
-// bus table wires KVStore in its own production case: this table exercises
-// KVStore specifically, and production requires both.
-func TestBootstrap_WiresTheProfileKVStoreIntoTheRegistry(t *testing.T) {
+// TestBootstrap_WiresTheDeploymentModeKVStoreIntoTheRegistry mirrors
+// TestBootstrap_WiresTheDeploymentModeEventBusIntoTheRegistry for the KVStore
+// seam: the same three scenarios (standalone default, an injected override on
+// the standalone deployment mode, and the distributed mode, which has no
+// default of its own). The bus is wired unconditionally in the distributed
+// case here, for the same reason the bus table wires KVStore in its own
+// distributed case: this table exercises KVStore specifically, and the
+// distributed mode requires both.
+func TestBootstrap_WiresTheDeploymentModeKVStoreIntoTheRegistry(t *testing.T) {
 	tests := []struct {
 		name string
-		// kernel receives the injectable stand-in for a production store, and
-		// reports whether the assembled registry must end up wired to it.
+		// kernel receives the injectable stand-in for a distributed store,
+		// and reports whether the assembled registry must end up wired to it.
 		kernel       func(injected KVStore) *Kernel
 		wantInjected bool
 	}{
 		{
-			name:   "the demo profile falls back to the in-memory store",
-			kernel: func(KVStore) *Kernel { return NewKernel(ProfileDemo) },
+			name:   "the standalone deployment mode falls back to the in-memory store",
+			kernel: func(KVStore) *Kernel { return NewKernel(DeploymentModeStandalone) },
 		},
 		{
-			name:         "an injected store replaces the demo default",
-			kernel:       func(injected KVStore) *Kernel { return NewKernel(ProfileDemo, WithKVStore(injected)) },
+			name:         "an injected store replaces the standalone default",
+			kernel:       func(injected KVStore) *Kernel { return NewKernel(DeploymentModeStandalone, WithKVStore(injected)) },
 			wantInjected: true,
 		},
 		{
-			name: "the production profile uses the injected store",
+			name: "the distributed deployment mode uses the injected store",
 			kernel: func(injected KVStore) *Kernel {
-				return NewKernel(ProfileProduction, WithEventBus(NewMemoryEventBus()), WithKVStore(injected))
+				return NewKernel(DeploymentModeDistributed, WithEventBus(NewMemoryEventBus()), WithKVStore(injected))
 			},
 			wantInjected: true,
 		},
@@ -1465,27 +1470,27 @@ func TestBootstrap_WiresTheProfileKVStoreIntoTheRegistry(t *testing.T) {
 	}
 }
 
-func TestBootstrap_UnknownProfile_ReturnsError(t *testing.T) {
+func TestBootstrap_UnknownDeploymentMode_ReturnsError(t *testing.T) {
 	var order []string
 
-	reg, err := NewKernel(Profile("staging")).Bootstrap(context.Background(), regTestRecorder("billing", nil, &order))
+	reg, err := NewKernel(DeploymentMode("staging")).Bootstrap(context.Background(), regTestRecorder("billing", nil, &order))
 
-	if !errors.Is(err, ErrInvalidProfile) {
-		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrInvalidProfile", err)
+	if !errors.Is(err, ErrInvalidDeploymentMode) {
+		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrInvalidDeploymentMode", err)
 	}
 	if reg != nil {
 		t.Error("Bootstrap() returned a registry alongside the error, want nil")
 	}
 	if !strings.Contains(err.Error(), "staging") {
-		t.Errorf("error = %q, want it to name the unknown profile", err)
+		t.Errorf("error = %q, want it to name the unknown deployment mode", err)
 	}
 	if len(order) != 0 {
 		t.Errorf("modules registered = %v, want none", order)
 	}
 }
 
-func TestWithEventBus_NilBusKeepsTheProfileDefault(t *testing.T) {
-	reg, err := NewKernel(ProfileDemo, WithEventBus(nil)).Bootstrap(context.Background())
+func TestWithEventBus_NilBusKeepsTheDeploymentModeDefault(t *testing.T) {
+	reg, err := NewKernel(DeploymentModeStandalone, WithEventBus(nil)).Bootstrap(context.Background())
 	if err != nil {
 		t.Fatalf("Bootstrap() error = %v, want nil", err)
 	}
@@ -1494,10 +1499,10 @@ func TestWithEventBus_NilBusKeepsTheProfileDefault(t *testing.T) {
 	}
 }
 
-// TestWithKVStore_NilStoreKeepsTheProfileDefault mirrors
-// TestWithEventBus_NilBusKeepsTheProfileDefault for the key-value seam.
-func TestWithKVStore_NilStoreKeepsTheProfileDefault(t *testing.T) {
-	reg, err := NewKernel(ProfileDemo, WithKVStore(nil)).Bootstrap(context.Background())
+// TestWithKVStore_NilStoreKeepsTheDeploymentModeDefault mirrors
+// TestWithEventBus_NilBusKeepsTheDeploymentModeDefault for the key-value seam.
+func TestWithKVStore_NilStoreKeepsTheDeploymentModeDefault(t *testing.T) {
+	reg, err := NewKernel(DeploymentModeStandalone, WithKVStore(nil)).Bootstrap(context.Background())
 	if err != nil {
 		t.Fatalf("Bootstrap() error = %v, want nil", err)
 	}

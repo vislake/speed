@@ -46,17 +46,19 @@ var ErrMissingDependency = errors.New("pkgcore: missing module dependency")
 // ErrUnresolvedFeatureDependency is returned when a feature flag depends on a flag nobody registered.
 var ErrUnresolvedFeatureDependency = errors.New("pkgcore: unresolved feature flag dependency")
 
-// ErrMissingProductionEventBus is returned by Bootstrap when a Kernel assembled
-// for ProfileProduction has no EventBus wired in. There is no production
-// implementation to fall back on, and falling back to the in-memory bus would
-// give every replica a private bus, so assembly fails instead.
-var ErrMissingProductionEventBus = errors.New("pkgcore: production profile requires an explicit event bus")
+// ErrMissingDistributedEventBus is returned by Bootstrap when a Kernel assembled
+// for DeploymentModeDistributed has no EventBus wired in. There is no
+// distributed implementation to fall back on, and falling back to the
+// in-memory bus would give every replica a private bus, so assembly fails
+// instead.
+var ErrMissingDistributedEventBus = errors.New("pkgcore: distributed deployment mode requires an explicit event bus")
 
-// ErrMissingProductionKVStore is returned by Bootstrap when a Kernel assembled
-// for ProfileProduction has no KVStore wired in. There is no production
-// implementation to fall back on, and falling back to the in-memory store
-// would give every replica a private store, so assembly fails instead.
-var ErrMissingProductionKVStore = errors.New("pkgcore: production profile requires an explicit key-value store")
+// ErrMissingDistributedKVStore is returned by Bootstrap when a Kernel assembled
+// for DeploymentModeDistributed has no KVStore wired in. There is no
+// distributed implementation to fall back on, and falling back to the
+// in-memory store would give every replica a private store, so assembly
+// fails instead.
+var ErrMissingDistributedKVStore = errors.New("pkgcore: distributed deployment mode requires an explicit key-value store")
 
 // errNilFeatureRegistrar guards ValidateFeatureGraph against an unwired registry.
 var errNilFeatureRegistrar = errors.New("pkgcore: registry has no feature registrar")
@@ -301,14 +303,14 @@ type Registry struct {
 // NewRegistry returns a Registry whose registrars are the in-memory default
 // implementations, whose event seam is bus, and whose key-value seam is kv.
 // The defaults are complete enough to run and to test against right now, and
-// they double as the demo-profile implementations, so no separate test double
-// is needed.
+// they double as the standalone deployment mode's implementations, so no
+// separate test double is needed.
 //
 // bus and kv are parameters rather than a built-in default because they are
-// the two registration surfaces with a real production implementation: the
+// the two registration surfaces with a real distributed implementation: the
 // caller decides which bus the modules subscribe to and which store they read
 // and write. Kernel.Bootstrap is the normal way to build a Registry, because
-// it picks the implementations that match the runtime profile. A nil bus or a
+// it picks the implementations that match the deployment mode. A nil bus or a
 // nil kv panics: each is an unrecoverable wiring error at startup. The
 // alternative for bus is a registry that accepts every subscription and
 // silently drops every event; the alternative for kv is a registry whose
@@ -579,26 +581,28 @@ func (r *memoryAuditActionRegistrar) Actions() []string {
 	return slices.Sorted(maps.Keys(r.actions))
 }
 
-// Kernel assembles modules into a running application for one runtime profile.
-// The profile selects the infrastructure implementations the assembled Registry
-// is wired to; kernel assembly is the only place allowed to branch on it, which
-// is why the implementations are injected here rather than chosen by a module.
+// Kernel assembles modules into a running application for one deployment mode.
+// The deployment mode selects the infrastructure implementations the assembled
+// Registry is wired to; kernel assembly is the only place allowed to branch on
+// it, which is why the implementations are injected here rather than chosen by
+// a module.
 type Kernel struct {
-	profile Profile
-	bus     EventBus
-	kv      KVStore
+	deploymentMode DeploymentMode
+	bus            EventBus
+	kv             KVStore
 }
 
 // KernelOption injects an infrastructure implementation into a Kernel.
-// Production implementations are supplied this way because pkgcore is the
+// Distributed implementations are supplied this way because pkgcore is the
 // dependency floor of the monorepo and cannot import the brokers and drivers
 // they are built on.
 type KernelOption func(*Kernel)
 
 // WithEventBus wires bus into every Registry the kernel bootstraps, in place of
-// the profile default. It is the seam a production host uses to supply its
-// broker-backed EventBus: ProfileProduction has no built-in implementation, so
-// Bootstrap fails without it. A nil bus leaves the profile default in place.
+// the deployment mode's default. It is the seam a distributed-mode host uses
+// to supply its broker-backed EventBus: DeploymentModeDistributed has no
+// built-in implementation, so Bootstrap fails without it. A nil bus leaves
+// the deployment mode's default in place.
 func WithEventBus(bus EventBus) KernelOption {
 	return func(k *Kernel) {
 		if bus == nil {
@@ -609,9 +613,10 @@ func WithEventBus(bus EventBus) KernelOption {
 }
 
 // WithKVStore wires store into every Registry the kernel bootstraps, in place
-// of the profile default. It is the seam a production host uses to supply its
-// Redis-backed KVStore: ProfileProduction has no built-in implementation, so
-// Bootstrap fails without it. A nil store leaves the profile default in place.
+// of the deployment mode's default. It is the seam a distributed-mode host
+// uses to supply its Redis-backed KVStore: DeploymentModeDistributed has no
+// built-in implementation, so Bootstrap fails without it. A nil store leaves
+// the deployment mode's default in place.
 func WithKVStore(store KVStore) KernelOption {
 	return func(k *Kernel) {
 		if store == nil {
@@ -621,12 +626,12 @@ func WithKVStore(store KVStore) KernelOption {
 	}
 }
 
-// NewKernel returns a Kernel that assembles modules for the given runtime
-// profile, with opts supplying the implementations the profile itself cannot
-// build. An unknown profile is reported by Bootstrap rather than here, because
-// that is where the wiring which depends on it happens.
-func NewKernel(profile Profile, opts ...KernelOption) *Kernel {
-	k := &Kernel{profile: profile}
+// NewKernel returns a Kernel that assembles modules for the given deployment
+// mode, with opts supplying the implementations the deployment mode itself
+// cannot build. An unknown deployment mode is reported by Bootstrap rather
+// than here, because that is where the wiring which depends on it happens.
+func NewKernel(mode DeploymentMode, opts ...KernelOption) *Kernel {
+	k := &Kernel{deploymentMode: mode}
 	for _, opt := range opts {
 		opt(k)
 	}
@@ -635,56 +640,59 @@ func NewKernel(profile Profile, opts ...KernelOption) *Kernel {
 
 // eventBus returns the EventBus the assembled Registry is wired to: the
 // injected one when the host supplied it, and the in-memory bus for
-// ProfileDemo, which is single-process by design. ProfileProduction reports an
-// error instead of falling back, because the in-memory bus would give every
-// replica a private bus and split event delivery silently.
+// DeploymentModeStandalone, which is single-process by design.
+// DeploymentModeDistributed reports an error instead of falling back, because
+// the in-memory bus would give every replica a private bus and split event
+// delivery silently.
 func (k *Kernel) eventBus() (EventBus, error) {
 	if k.bus != nil {
 		return k.bus, nil
 	}
-	switch k.profile {
-	case ProfileDemo:
+	switch k.deploymentMode {
+	case DeploymentModeStandalone:
 		return NewMemoryEventBus(), nil
-	case ProfileProduction:
-		return nil, fmt.Errorf("%w: wire one with WithEventBus", ErrMissingProductionEventBus)
+	case DeploymentModeDistributed:
+		return nil, fmt.Errorf("%w: wire one with WithEventBus", ErrMissingDistributedEventBus)
 	default:
-		return nil, fmt.Errorf("%w: %q", ErrInvalidProfile, k.profile)
+		return nil, fmt.Errorf("%w: %q", ErrInvalidDeploymentMode, k.deploymentMode)
 	}
 }
 
 // kvStore returns the KVStore the assembled Registry is wired to: the
 // injected one when the host supplied it, and the in-memory store for
-// ProfileDemo, which is single-process by design. ProfileProduction reports an
-// error instead of falling back, because the in-memory store would give every
-// replica a private store and split state silently.
+// DeploymentModeStandalone, which is single-process by design.
+// DeploymentModeDistributed reports an error instead of falling back, because
+// the in-memory store would give every replica a private store and split
+// state silently.
 func (k *Kernel) kvStore() (KVStore, error) {
 	if k.kv != nil {
 		return k.kv, nil
 	}
-	switch k.profile {
-	case ProfileDemo:
+	switch k.deploymentMode {
+	case DeploymentModeStandalone:
 		return NewMemoryKVStore(), nil
-	case ProfileProduction:
-		return nil, fmt.Errorf("%w: wire one with WithKVStore", ErrMissingProductionKVStore)
+	case DeploymentModeDistributed:
+		return nil, fmt.Errorf("%w: wire one with WithKVStore", ErrMissingDistributedKVStore)
 	default:
-		return nil, fmt.Errorf("%w: %q", ErrInvalidProfile, k.profile)
+		return nil, fmt.Errorf("%w: %q", ErrInvalidDeploymentMode, k.deploymentMode)
 	}
 }
 
-// Profile returns the runtime profile the kernel assembles modules for.
-func (k *Kernel) Profile() Profile { return k.profile }
+// DeploymentMode returns the deployment mode the kernel assembles modules for.
+func (k *Kernel) DeploymentMode() DeploymentMode { return k.deploymentMode }
 
 // Bootstrap sorts modules into dependency order, registers each of them into
 // one shared Registry, and validates the resulting feature flag graph.
 //
-// It fails, without registering anything further, on a runtime profile whose
+// It fails, without registering anything further, on a deployment mode whose
 // infrastructure implementations are not wired in, on a dependency cycle, on a
 // dependency that is not part of modules, on a duplicate module name, on the
 // first Register error, and on an unresolved feature flag dependency. ctx must
 // be non-nil; cancelling it stops the bootstrap between modules.
 func (k *Kernel) Bootstrap(ctx context.Context, modules ...Module) (*Registry, error) {
-	// The profile wiring is resolved first so that a misconfigured production
-	// host fails at startup rather than after a partial assembly.
+	// The deployment mode's wiring is resolved first so that a misconfigured
+	// distributed-mode host fails at startup rather than after a partial
+	// assembly.
 	bus, err := k.eventBus()
 	if err != nil {
 		return nil, err

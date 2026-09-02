@@ -112,11 +112,11 @@ func WithBackoff(base, max time.Duration) Option {
 	return func(q *DemoQueue) { q.backoffBase, q.backoffMax = base, max }
 }
 
-// DemoQueue is the demo-profile Queue implementation: an in-process worker
-// pool backed by a SQLite-persisted task table (survives a process
-// restart, per docs/internal/07-platform-services.md — task loss matters
-// more than a briefly miscounted quota). See AGENTS.md for the full design
-// and its documented known limitations.
+// DemoQueue is the standalone deployment mode's Queue implementation: an
+// in-process worker pool backed by a SQLite-persisted task table (survives a
+// process restart, per docs/internal/07-platform-services.md — task loss
+// matters more than a briefly miscounted quota). See AGENTS.md for the full
+// design and its documented known limitations.
 //
 // DemoQueue is returned as its own concrete exported type, not the
 // narrower Queue interface (compare pkgcore.NewMemoryKVStore, which
@@ -333,7 +333,7 @@ func (q *DemoQueue) Cancel(ctx context.Context, id JobID) error {
 // access — the tenant in ctx, or every tenant under a system context (see
 // callerMayAccess). It is not part of the Queue interface: a convenience
 // for operating this one implementation, not a portable contract every
-// profile need offer identically.
+// deployment mode need offer identically.
 func (q *DemoQueue) DeadLetterJobs(ctx context.Context) ([]*Job, error) {
 	recs, err := deadLetterRecords(ctx, q.db)
 	if err != nil {

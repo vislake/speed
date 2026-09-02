@@ -18,9 +18,9 @@ import (
 // to keys, lowercased and dotted, so Database.DSN is the key "database.dsn",
 // the flag --database.dsn and the variable SPEED_DATABASE__DSN.
 type exampleConfig struct {
-	Profile  string `config:"required"`
-	Database exampleDatabaseConfig
-	Timeout  time.Duration
+	DeploymentMode string `config:"required"`
+	Database       exampleDatabaseConfig
+	Timeout        time.Duration
 
 	// A field tagged "-" is never populated from any source; this one is
 	// filled in later from the secret store.
@@ -41,9 +41,9 @@ func ExampleLoader_Load() {
 	}
 
 	loader := config.New(
-		config.WithArgs([]string{"--profile=production"}),
+		config.WithArgs([]string{"--deploymentmode=distributed"}),
 		config.WithEnviron([]string{
-			"SPEED_PROFILE=demo", // outranked by the flag above
+			"SPEED_DEPLOYMENTMODE=standalone", // outranked by the flag above
 			"SPEED_DATABASE__DSN=postgres://localhost/speed",
 			"SPEED_DATABASE__POOL=16",
 		}),
@@ -53,10 +53,10 @@ func ExampleLoader_Load() {
 		return
 	}
 
-	fmt.Println(cfg.Profile, cfg.Database.DSN, cfg.Database.Pool, cfg.Timeout)
+	fmt.Println(cfg.DeploymentMode, cfg.Database.DSN, cfg.Database.Pool, cfg.Timeout)
 
 	// Output:
-	// production postgres://localhost/speed 16 5s
+	// distributed postgres://localhost/speed 16 5s
 }
 
 // ExampleLoader_Load_missingRequired shows the fail-fast behaviour. A required
@@ -84,7 +84,7 @@ func ExampleWithConfigFile() {
 	defer os.RemoveAll(dir)
 
 	path := filepath.Join(dir, "speed.yaml")
-	contents := "profile: demo\ndatabase:\n  dsn: file:speed.db\n  pool: 4\n"
+	contents := "deploymentmode: standalone\ndatabase:\n  dsn: file:speed.db\n  pool: 4\n"
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		fmt.Println("write:", err)
 		return
@@ -102,8 +102,8 @@ func ExampleWithConfigFile() {
 		return
 	}
 
-	fmt.Println(cfg.Profile, cfg.Database.DSN, cfg.Database.Pool)
+	fmt.Println(cfg.DeploymentMode, cfg.Database.DSN, cfg.Database.Pool)
 
 	// Output:
-	// demo file:speed.db 32
+	// standalone file:speed.db 32
 }

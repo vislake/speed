@@ -41,7 +41,7 @@ const createWidgetFixtureTableSQL = `CREATE TABLE widget_fixtures (
 // tenant-context-rebuild trap applies identically here: a worker consuming
 // from Redis must reconstruct pkgcore.WithTenant from the persisted task
 // payload before calling Handle" (this task's own instructions) -- the
-// production-profile counterpart of demo_queue_test.go's
+// distributed deployment mode's counterpart of demo_queue_test.go's
 // TestDemoQueue_RebuildsTenantContext_HandlerUsesOnlyJobTenant, run here
 // against a REAL asynq.Server/worker goroutine dequeuing from REAL Redis,
 // not DemoQueue's in-process dispatcher.

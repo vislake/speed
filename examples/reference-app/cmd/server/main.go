@@ -63,16 +63,17 @@ func run(baseCtx context.Context) error {
 		return fmt.Errorf("reference-app: load configuration: %w", err)
 	}
 
-	// buildServer runs, and can reject an unsupported profile, before
-	// obs.Init: buildServer's own error ("profile %q is not wired in this
-	// example yet") is the clearer, more specific diagnostic for this
-	// example's actual limitation (root CLAUDE.md's M0 status -- only the
-	// demo profile has business wiring at all), and it would be
-	// confusing for a misconfigured SPEED_PROFILE=production to instead
-	// surface obs.Init's "requires an OTLP endpoint" first, which reads
-	// like a fixable configuration gap rather than "this example does not
-	// support that profile yet". Since nothing starts listening until
-	// after both calls below succeed, deferring obs.Init to second costs
+	// buildServer runs, and can reject an unsupported deployment mode,
+	// before obs.Init: buildServer's own error ("deployment mode %q is
+	// not wired in this example yet") is the clearer, more specific
+	// diagnostic for this example's actual limitation (root CLAUDE.md's
+	// M0 status -- only the standalone deployment mode has business
+	// wiring at all), and it would be confusing for a misconfigured
+	// SPEED_DEPLOYMENT_MODE=distributed to instead surface obs.Init's
+	// "requires an OTLP endpoint" first, which reads like a fixable
+	// configuration gap rather than "this example does not support that
+	// deployment mode yet". Since nothing starts listening until after
+	// both calls below succeed, deferring obs.Init to second costs
 	// nothing.
 	handler, cleanup, err := buildServer(ctx, cfg)
 	if err != nil {
@@ -88,7 +89,7 @@ func run(baseCtx context.Context) error {
 	// spans and metrics are flushed rather than dropped when the process
 	// exits -- the same reason srv.Shutdown below is given a bounded
 	// context instead of just letting the process die.
-	obsShutdown, err := obs.Init(ctx, cfg.Profile, obs.WithServiceName("reference-app"))
+	obsShutdown, err := obs.Init(ctx, cfg.DeploymentMode, obs.WithServiceName("reference-app"))
 	if err != nil {
 		return fmt.Errorf("reference-app: init observability: %w", err)
 	}
@@ -133,7 +134,7 @@ func run(baseCtx context.Context) error {
 
 	serveErr := make(chan error, 1)
 	go func() {
-		obs.FromContext(ctx).Info("reference-app server listening", "addr", srv.Addr, "profile", string(cfg.Profile))
+		obs.FromContext(ctx).Info("reference-app server listening", "addr", srv.Addr, "deployment_mode", string(cfg.DeploymentMode))
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serveErr <- err
 			return

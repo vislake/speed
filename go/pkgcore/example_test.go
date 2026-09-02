@@ -15,17 +15,18 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// ExampleParseProfile shows how a host turns the SPEED_PROFILE configuration
-// value into a Profile, and how an unknown value is classified.
-func ExampleParseProfile() {
-	profile, err := pkgcore.ParseProfile(" Production\n")
-	fmt.Println(profile, err)
+// ExampleParseDeploymentMode shows how a host turns the SPEED_DEPLOYMENT_MODE
+// configuration value into a DeploymentMode, and how an unknown value is
+// classified.
+func ExampleParseDeploymentMode() {
+	mode, err := pkgcore.ParseDeploymentMode(" Distributed\n")
+	fmt.Println(mode, err)
 
-	_, err = pkgcore.ParseProfile("staging")
-	fmt.Println(errors.Is(err, pkgcore.ErrInvalidProfile))
+	_, err = pkgcore.ParseDeploymentMode("staging")
+	fmt.Println(errors.Is(err, pkgcore.ErrInvalidDeploymentMode))
 
 	// Output:
-	// production <nil>
+	// distributed <nil>
 	// true
 }
 
@@ -86,8 +87,8 @@ func ExampleWithSystemContext() {
 }
 
 // ExampleKVStore shows the four operations every KVStore backend supports.
-// NewMemoryKVStore is the demo-profile implementation and doubles as the test
-// double for code written against the interface.
+// NewMemoryKVStore is the standalone-mode implementation and doubles as the
+// test double for code written against the interface.
 func ExampleKVStore() {
 	ctx := context.Background()
 	kv := pkgcore.NewMemoryKVStore()
@@ -217,7 +218,7 @@ func (exampleBillingModule) Register(reg *pkgcore.Registry) error {
 // ExampleKernel_Bootstrap shows the host side of module wiring: hand the
 // kernel every module, get one Registry back with everything they contributed.
 func ExampleKernel_Bootstrap() {
-	kernel := pkgcore.NewKernel(pkgcore.ProfileDemo)
+	kernel := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone)
 
 	// Modules may be listed in any order. Bootstrap sorts them so that each one
 	// registers after the modules it depends on.
@@ -227,7 +228,7 @@ func ExampleKernel_Bootstrap() {
 		return
 	}
 
-	fmt.Println("profile:", kernel.Profile())
+	fmt.Println("deployment mode:", kernel.DeploymentMode())
 	for _, route := range reg.Routes.Routes() {
 		fmt.Println("route:", route.Path)
 	}
@@ -246,7 +247,7 @@ func ExampleKernel_Bootstrap() {
 	}
 
 	// Output:
-	// profile: demo
+	// deployment mode: standalone
 	// route: /api/v1/billing
 	// permissions: [billing:read billing:write tenant:read]
 	// audit actions: [billing.subscription_cancelled]
@@ -277,21 +278,22 @@ func ExampleValidateFeatureGraph() {
 	// pkgcore: unresolved feature flag dependency: "billing.dunning" depends on unregistered flag "billing.invoicing"
 }
 
-// ExampleWithEventBus shows the production wiring seam. ProfileProduction has
-// no built-in EventBus, because falling back to the in-memory one would give
-// every replica a private bus, so the host injects its own.
+// ExampleWithEventBus shows the distributed-mode wiring seam.
+// DeploymentModeDistributed has no built-in EventBus, because falling back to
+// the in-memory one would give every replica a private bus, so the host
+// injects its own.
 func ExampleWithEventBus() {
-	// Assembling a production kernel without a bus fails at startup. A real
-	// production host would also need WithKVStore, but that check runs after
-	// the EventBus check, so leaving it out here still isolates this example
-	// to the EventBus failure.
-	_, err := pkgcore.NewKernel(pkgcore.ProfileProduction).Bootstrap(context.Background())
-	fmt.Println(errors.Is(err, pkgcore.ErrMissingProductionEventBus))
+	// Assembling a distributed-mode kernel without a bus fails at startup. A
+	// real distributed-mode host would also need WithKVStore, but that check
+	// runs after the EventBus check, so leaving it out here still isolates
+	// this example to the EventBus failure.
+	_, err := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed).Bootstrap(context.Background())
+	fmt.Println(errors.Is(err, pkgcore.ErrMissingDistributedEventBus))
 
 	// A real host passes its broker-backed bus here; the in-memory one stands
-	// in for it in this example. ProfileProduction requires a KVStore too, so
-	// it is wired alongside the bus with its own in-memory stand-in.
-	kernel := pkgcore.NewKernel(pkgcore.ProfileProduction,
+	// in for it in this example. DeploymentModeDistributed requires a KVStore
+	// too, so it is wired alongside the bus with its own in-memory stand-in.
+	kernel := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed,
 		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus()),
 		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore()))
 	reg, err := kernel.Bootstrap(context.Background(), exampleTenancyModule{})
@@ -302,21 +304,21 @@ func ExampleWithEventBus() {
 	// <nil> true
 }
 
-// ExampleWithKVStore shows the production wiring seam for the key-value seam,
-// mirroring ExampleWithEventBus. ProfileProduction has no built-in KVStore,
-// because falling back to the in-memory one would give every replica a
-// private store, so the host injects its own.
+// ExampleWithKVStore shows the distributed-mode wiring seam for the
+// key-value seam, mirroring ExampleWithEventBus. DeploymentModeDistributed
+// has no built-in KVStore, because falling back to the in-memory one would
+// give every replica a private store, so the host injects its own.
 func ExampleWithKVStore() {
-	// Assembling a production kernel without a store fails at startup, once
-	// the bus is wired: the bus check runs first, so it is wired here too, to
-	// isolate the failure this example is about to the KVStore check.
-	_, err := pkgcore.NewKernel(pkgcore.ProfileProduction, pkgcore.WithEventBus(pkgcore.NewMemoryEventBus())).
+	// Assembling a distributed-mode kernel without a store fails at startup,
+	// once the bus is wired: the bus check runs first, so it is wired here
+	// too, to isolate the failure this example is about to the KVStore check.
+	_, err := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed, pkgcore.WithEventBus(pkgcore.NewMemoryEventBus())).
 		Bootstrap(context.Background())
-	fmt.Println(errors.Is(err, pkgcore.ErrMissingProductionKVStore))
+	fmt.Println(errors.Is(err, pkgcore.ErrMissingDistributedKVStore))
 
 	// A real host passes its Redis-backed store here; the in-memory one
 	// stands in for it in this example.
-	kernel := pkgcore.NewKernel(pkgcore.ProfileProduction,
+	kernel := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed,
 		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus()),
 		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore()))
 	reg, err := kernel.Bootstrap(context.Background(), exampleTenancyModule{})

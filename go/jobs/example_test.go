@@ -168,8 +168,9 @@ func ExampleNewHandlerFunc() {
 	// result: ping
 }
 
-// ExampleNewAsynqQueue shows the production-profile shape of the same
-// Example above -- register a Handler, Enqueue a Task under a tenant, poll
+// ExampleNewAsynqQueue shows the distributed deployment mode's shape of
+// the same Example above -- register a Handler, Enqueue a Task under a
+// tenant, poll
 // Get until it completes -- against AsynqQueue instead of DemoQueue. Every
 // other line of Queue-facing code (Task, EnqueueOption, waitForTerminal)
 // is identical to Example's; only construction changes, exactly as

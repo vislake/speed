@@ -67,11 +67,11 @@ const (
 	kvStressMaxReportedFailures = 10
 )
 
-// kvInternalStore unwraps the interface to the concrete demo store, so a case
-// can assert on the expiry bookkeeping that the KVStore surface deliberately
-// hides. Timing-free assertions about expiry need it: whether an expiry was
-// preserved or silently refreshed is invisible from the outside until it is too
-// late to test without sleeping.
+// kvInternalStore unwraps the interface to the concrete standalone store, so
+// a case can assert on the expiry bookkeeping that the KVStore surface
+// deliberately hides. Timing-free assertions about expiry need it: whether an
+// expiry was preserved or silently refreshed is invisible from the outside
+// until it is too late to test without sleeping.
 func kvInternalStore(t *testing.T, store KVStore) *memoryKVStore {
 	t.Helper()
 	mem, ok := store.(*memoryKVStore)
@@ -227,7 +227,7 @@ func TestMemoryKVStore_DoesNotAliasCallerSlices(t *testing.T) {
 
 	// A Redis-backed store copies the bytes onto the wire, so a caller reusing
 	// its buffer after Set cannot corrupt what was stored. The demo store has to
-	// behave identically or the two profiles diverge.
+	// behave identically or the two deployment modes diverge.
 	value[0] = 'X'
 	if got, _ := kvGet(t, store, kvTestKey); got != "original" {
 		t.Errorf("mutating the caller's buffer changed the stored value: got %q, want %q", got, "original")
