@@ -9,7 +9,8 @@ package pkgcore_test
 // one, overwrites replace the object whole, DeleteObject is idempotent -- plus
 // the properties only a shared service can exercise: a multi-megabyte object
 // streaming through the multipart machinery intact, a mid-upload cancellation
-// leaving no object behind, and a prefix-overlapping pair of keys -- accepted
+// leaving no object behind, a cancellation cutting an open reader's stream
+// with the context's error, and a prefix-overlapping pair of keys -- accepted
 // by the service where the local store refuses the clash -- showing that
 // deleting the shorter key can take the longer key's object with it.
 // Everything the tests assert is observable through the ObjectStore interface
@@ -166,6 +167,51 @@ func TestS3ObjectStore_CancelledMidUpload_LeavesNoObjectBehind(t *testing.T) {
 	}
 	if content := readObject(t, store, ctx, key); string(content) != "the retried upload" {
 		t.Errorf("GetObject() = %q, want the retried upload's bytes", content)
+	}
+}
+
+func TestS3ObjectStore_ReaderFailsItsReadsOnceTheContextIsCancelled(t *testing.T) {
+	// The interface promises that a GetObject reader whose context is
+	// cancelled fails its reads with the context's error, the property the
+	// local store pins by checking its context before every file read.
+	// minio-go keeps the same promise through the context captured when the
+	// request began: a Read issued once that context is done fails up front
+	// with the context's error, without touching the service again.
+	ctx := context.Background()
+	store := startMinioObjectStore(t, ctx)
+
+	const key = "exports/streaming/cancel-this-read.bin"
+	payload := strings.Repeat("0123456789abcdef", 256) // 4 KiB, far from exhausted by the reads below
+	if err := store.PutObject(ctx, key, strings.NewReader(payload)); err != nil {
+		t.Fatalf("PutObject(%q) error = %v, want nil", key, err)
+	}
+
+	readCtx, cancel := context.WithCancel(ctx)
+	reader, err := store.GetObject(readCtx, key)
+	if err != nil {
+		t.Fatalf("GetObject() error = %v, want nil", err)
+	}
+	defer reader.Close()
+
+	// The stream is live: a read while the context lives yields the object's
+	// first bytes, so the failure that follows is the cancellation, not a
+	// reader that never worked.
+	buffer := make([]byte, 32)
+	if n, err := reader.Read(buffer); err != nil || n == 0 {
+		t.Fatalf("Read() before cancellation = (%d, %v), want bytes and no error", n, err)
+	}
+
+	// Cancelling the context kills the stream: the next read fails with the
+	// context's error, exactly as the local store's reader does.
+	cancel()
+	if n, err := reader.Read(buffer); n != 0 || !errors.Is(err, context.Canceled) {
+		t.Errorf("Read() after cancellation = (%d, %v), want (0, context.Canceled)", n, err)
+	}
+
+	// The cancelled read does not disturb the object: a fresh request with a
+	// live context reads it whole.
+	if content := readObject(t, store, ctx, key); string(content) != payload {
+		t.Errorf("GetObject() = %d bytes, want the %d stored bytes back verbatim", len(content), len(payload))
 	}
 }
 
