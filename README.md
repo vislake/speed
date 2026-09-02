@@ -6,7 +6,7 @@ New SaaS projects pull in the capabilities they need via `go get` / `npm install
 
 ## Status
 
-**Milestone M0, in progress.** The design is complete; implementation is underway module by module, following [the roadmap](docs/internal/15-roadmap.md). Four Go modules are implemented and tested (`go build`/`go vet`/`go test -race` all pass): `go/pkgcore` — the dependency floor every other module builds on; `go/dbkit` — the dual-dialect data-access layer with the mandatory generic `Repository[T]`; `go/tenancy` — tenant resolution, the audited system-context escape hatch, and the isolation-assertion test suite; and `go/observability` — OpenTelemetry initialization for both deployment modes, a context-aware structured logger, and HTTP request metrics with a cardinality-bounded route label. The other 16 planned Go modules and all 16 npm packages are still placeholder stubs.
+**Milestone M0, in progress.** The design is complete; implementation is underway module by module, following [the roadmap](docs/internal/15-roadmap.md). Six Go modules are implemented and tested (`go build`/`go vet`/`go test -race` all pass): `go/pkgcore` — the dependency floor every other module builds on; `go/dbkit` — the dual-dialect data-access layer with the mandatory generic `Repository[T]`; `go/tenancy` — tenant resolution, the audited system-context escape hatch, and the isolation-assertion test suite; `go/observability` — OpenTelemetry initialization for both deployment modes, a context-aware structured logger, and HTTP request metrics with a cardinality-bounded route label; `go/jobs` — the asynchronous job queue, with a standalone SQLite-backed worker pool and a distributed Redis-backed (Asynq) implementation behind the same `Queue`/`Task`/`Handler` contract; and `go/ratelimit` — a `KVStore`-backed rate limiter shared by modules that need to limit how often something happens, one dimension per call with multi-dimension composition left to the caller. The other 15 planned Go modules and all 16 npm packages are still placeholder stubs.
 
 - 📐 [Design overview](docs/internal/00-overview.md) ← **start here**
 - 🗺️ [Roadmap and milestones](docs/internal/15-roadmap.md)
@@ -30,7 +30,7 @@ New SaaS projects pull in the capabilities they need via `go get` / `npm install
 
 ```
 speed/
-  go/          20 Go modules (pkgcore / tenancy / authn / rbac / billing / jobs / ...)
+  go/          21 Go modules (pkgcore / tenancy / authn / rbac / billing / jobs / ...)
   web/         16 npm packages (ui-kit / auth-core / api-sdk / layout-kit / ...)
   templates/   minimal starter skeletons produced by the CLIs
   examples/    reference-app: the AI smile simulation platform

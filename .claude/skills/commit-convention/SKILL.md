@@ -28,7 +28,7 @@ Follows [Conventional Commits](https://www.conventionalcommits.org/), enforced b
 
 - **Header** is required and must be a single line.
 - **Keep the header short — aim for 72 characters or less.** This is a guideline, not a hard limit: a header that needs a few more characters to stay clear is better than a truncated one. Do not sacrifice meaning for the count.
-- **Scope is required.** This monorepo holds 20 Go modules (19 importable plus `saasctl`) and 16 npm packages (15 importable plus `create-saas-app`); without a scope there is no way to tell what a commit touched.
+- **Scope is required.** This monorepo holds 21 Go modules (20 importable plus `saasctl`) and 16 npm packages (15 importable plus `create-saas-app`); without a scope there is no way to tell what a commit touched.
 - **Description** uses the imperative mood, lowercase, no trailing period: "add subdomain tenant resolution", not "added ..." or "adds ...".
 - **Body** explains *why*, not *what* — the diff already shows what changed.
 - **Footer** carries breaking-change notices (`BREAKING CHANGE:`) and issue references (`Closes #123`).
@@ -52,7 +52,7 @@ Follows [Conventional Commits](https://www.conventionalcommits.org/), enforced b
 
 ### Backend Go modules (`go/<scope>/`)
 
-`pkgcore`, `dbkit`, `observability`, `tenancy`, `config`, `jobs`, `storage`, `notification`, `authn`, `rbac`, `org`, `metering`, `billing`, `billing-gateway`, `ai-gateway`, `sharing`, `integration`, `compliance`, `admin`, `saasctl`
+`pkgcore`, `dbkit`, `observability`, `tenancy`, `ratelimit`, `config`, `jobs`, `storage`, `notification`, `authn`, `rbac`, `org`, `metering`, `billing`, `billing-gateway`, `ai-gateway`, `sharing`, `integration`, `compliance`, `admin`, `saasctl`
 
 ### Frontend npm packages (`web/packages/<scope>/`)
 
