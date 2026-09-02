@@ -22,6 +22,16 @@ import (
 // store reaches for server-side scripting; the KVStore interface itself still
 // exposes nothing beyond the plain operations, so callers are never tied to
 // it.
+//
+// One boundary the script accepts: PTTL answers in whole milliseconds, so a
+// live key with less than a millisecond of life left reports 0, and the swap
+// stores the new value with no expiry -- where the in-memory store's
+// expiresAt would let it die a fraction of a millisecond later. The race is
+// inherent to the round trip and cannot be closed from the caller's side, so
+// the divergence is documented instead of "fixed": it only ever lands on a
+// key that was expiring within the same instant the swap arrived, and a
+// caller that depends on a swap not outliving its key cannot do so reliably
+// against any backend.
 var casScript = redis.NewScript(`
 local current = redis.call('GET', KEYS[1])
 local matched = false
@@ -153,6 +163,14 @@ func (s *redisKVStore) IncrByFloat(ctx context.Context, key string, delta float6
 	// number, so both map to the interface's ErrNotNumeric, returned bare --
 	// like the in-memory store, the offending value stays out of the error
 	// text, and a wrapped error would add nothing the interface promises.
+	//
+	// The detection is a substring match on the server's error wording,
+	// because go-redis exposes no structured error code to key on. That makes
+	// this a coupling to Redis's own copy: a server that rewords either
+	// message makes the ErrNotNumeric errors.Is checks in every consumer
+	// fail loudly -- the integration suite exercises this path against a real
+	// server -- rather than silently misclassify, which is what keeps the
+	// coupling acceptable.
 	if strings.Contains(err.Error(), "value is not a valid float") || strings.Contains(err.Error(), "WRONGTYPE") {
 		return 0, ErrNotNumeric
 	}
