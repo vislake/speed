@@ -8,19 +8,19 @@
  * localization helper lives at @speed/i18n/mui-locale.
  */
 
-export { createI18n, switchLanguage } from './create'
-export { registerNamespace } from './register'
+export { createI18n, switchLanguage } from './create.js'
+export { registerNamespace } from './register.js'
 export {
   DEFAULT_LANGUAGE,
   DEFAULT_SUPPORTED_LANGUAGES,
   normalizeLanguageTag,
   matchSupportedLanguage,
-} from './languages'
-export { SPEED_LOCALE_STORAGE_KEY, type StorageLike } from './storage'
+} from './languages.js'
+export { SPEED_LOCALE_STORAGE_KEY, type StorageLike } from './storage.js'
 export {
   defaultMissingKeyHandler,
   type MissingKeyDetails,
-} from './missing-key'
-export type { CreateI18nOptions } from './create'
-export type { ResourceBundle } from './register'
+} from './missing-key.js'
+export type { CreateI18nOptions } from './create.js'
+export type { ResourceBundle } from './register.js'
 export type { i18n as I18nInstance } from 'i18next'

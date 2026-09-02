@@ -7,14 +7,14 @@
  * canonical override path; see README.md.
  */
 
-import type { SpeedTokens } from './types'
-import { breakpointTokens } from './breakpoints'
-import { colorTokens } from './color'
-import { shadowTokens } from './shadows'
-import { shapeTokens } from './shape'
-import { spacingTokens } from './spacing'
-import { typographyTokens } from './typography'
-import { zIndexTokens } from './z-index'
+import type { SpeedTokens } from './types.js'
+import { breakpointTokens } from './breakpoints.js'
+import { colorTokens } from './color.js'
+import { shadowTokens } from './shadows.js'
+import { shapeTokens } from './shape.js'
+import { spacingTokens } from './spacing.js'
+import { typographyTokens } from './typography.js'
+import { zIndexTokens } from './z-index.js'
 
 export const defaultTokens: SpeedTokens = {
   color: colorTokens,

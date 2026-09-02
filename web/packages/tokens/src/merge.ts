@@ -9,7 +9,7 @@
  * it merges.
  */
 
-import type { DeepPartial } from './types'
+import type { DeepPartial } from './types.js'
 
 /**
  * Merge `overrides` into a copy of `base`, recursively, and return the copy.

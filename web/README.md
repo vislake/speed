@@ -78,6 +78,10 @@ build`, ...) or with `pnpm --filter @speed/<name> <script>` from `web/`.
 - `tsconfig.json` (typecheck) extends `../../tsconfig.base.json` with
   `noEmit`; `tsconfig.build.json` emits declarations into `dist/` with
   `rootDir: src` so tests and `test-utils/` never leak into the artifact.
+- The build runs under `module`/`moduleResolution: nodenext`, which emits
+  relative imports verbatim: **sources write explicit `.js` extensions on
+  every relative import** (TS2835 otherwise), so the shipped `dist/` is
+  loadable by Node ESM and typecheckable by NodeNext consumers as-is.
 - Sources: one domain per file, tests colocated (`x.ts` -> `x.test.ts`),
   shared test helpers under the package's `test-utils/`, never duplicated.
 - Repository language rule: everything here is English; CJK-bearing

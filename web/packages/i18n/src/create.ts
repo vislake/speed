@@ -30,14 +30,14 @@ import {
   detectLanguage,
   matchSupportedLanguage,
   readSupportedLanguages,
-} from './languages'
+} from './languages.js'
 import {
   SPEED_LOCALE_STORAGE_KEY,
   bindInstanceStorage,
   boundInstanceStorage,
   type StorageLike,
-} from './storage'
-import { missingKeyHandlerFactory, type MissingKeyDetails } from './missing-key'
+} from './storage.js'
+import { missingKeyHandlerFactory, type MissingKeyDetails } from './missing-key.js'
 
 /** Customize the language the instance starts with, or how it is decided. */
 export interface CreateI18nOptions {

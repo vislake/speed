@@ -22,7 +22,7 @@
  */
 
 import type { i18n as I18nInstance } from 'i18next'
-import { readSupportedLanguages } from './languages'
+import { readSupportedLanguages } from './languages.js'
 
 /** A translation bundle: nested string leaves under plain records. */
 export interface ResourceBundle {

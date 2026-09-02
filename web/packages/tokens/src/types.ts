@@ -7,13 +7,13 @@
  * hand a TokensOverride to deepMerge.
  */
 
-import type { BreakpointTokens } from './breakpoints'
-import type { ColorTokens } from './color'
-import type { ShadowTokens } from './shadows'
-import type { ShapeTokens } from './shape'
-import type { SpacingTokens } from './spacing'
-import type { TypographyTokens } from './typography'
-import type { ZIndexTokens } from './z-index'
+import type { BreakpointTokens } from './breakpoints.js'
+import type { ColorTokens } from './color.js'
+import type { ShadowTokens } from './shadows.js'
+import type { ShapeTokens } from './shape.js'
+import type { SpacingTokens } from './spacing.js'
+import type { TypographyTokens } from './typography.js'
+import type { ZIndexTokens } from './z-index.js'
 
 /** The complete token tree a theme is built from. */
 export interface SpeedTokens {
