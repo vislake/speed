@@ -9,13 +9,15 @@ name: pr-check
 # COVERAGE -- what genuinely runs today
 #   * go-modules job: the six modules with real, tested implementation
 #     (root CLAUDE.md, Repository Status) each run through the reusable
-#     go-module-ci workflow: go vet, unit tests under -race, a workspace-
-#     context build and a GOWORK=off standalone build. Stub modules (a
-#     go.mod + doc.go only) are deliberately absent: they have no code to
-#     check, and listing them would imply coverage that does not exist.
-#     Adding a module to this matrix is the whole cost of adding it to CI.
-#     npm-package-ci is not called: no npm package exists yet (roadmap M0
-#     web-workspace item).
+#     go-module-ci workflow: golangci-lint (the project-standard lint leg,
+#     .golangci.yml at the repo root -- pinned, checksummed binary and
+#     analysis cache from setup-go-env), go vet, unit tests under -race, a
+#     workspace-context build and a GOWORK=off standalone build. Stub
+#     modules (a go.mod + doc.go only) are deliberately absent: they have no
+#     code to check, and listing them would imply coverage that does not
+#     exist. Adding a module to this matrix is the whole cost of adding it
+#     to CI. npm-package-ci is not called: no npm package exists yet
+#     (roadmap M0 web-workspace item).
 #   * repo-checks job, repository-level, all existing today:
 #       - tools/scan_cjk.py -- the CJK discipline scanner enforcing the root
 #         CLAUDE.md Language Rule (18-cicd discipline table row). Scans the
@@ -31,11 +33,6 @@ name: pr-check
 # DELIBERATELY NOT WIRED HERE (18-cicd discipline table rows whose tooling
 # does not exist in the repository yet; each lands with its tooling round --
 # wiring them now would be fake checks):
-#   * golangci-lint per module: the root .golangci.yml (v2 schema) is the
-#     project standard but its CI legs land with the lint-tooling round
-#     (depguard rules etc.), so go vet is the lint leg today -- mirror of
-#     the Taskfile lint task, whose golangci-lint leg runs only when the
-#     binary is installed.
 #   * semgrep rules, ESLint rules, spec/API toolchain, oasdiff, redocly,
 #     Playwright e2e -- none of that tooling exists yet (see the gated
 #     pipeline stubs e2e/security/api-contract/scaffold-verify/release/
@@ -43,6 +40,11 @@ name: pr-check
 #     key-parity wiring exists and runs in docs-check on doc/i18n-touching
 #     PRs -- deliberately not here, so this fast per-PR check stays under
 #     its 8-minute budget.
+#   * reference-app lint and unit suite: the reference app runs its
+#     golangci-lint leg and unit suite in pr-full's reference-app job
+#     (full-ci-labeled PRs), keeping this per-PR check on its budget; the
+#     app's go.mod is still validated here, by repo-checks' workspace-wide
+#     build.
 #   * Docker-backed integration tiers (-tags=integration): wired, but in
 #     pr-full -- 18-cicd's layered-triggering rule assigns them to the
 #     pre-merge full matrix (PRs labeled full-ci), not to the fast per-PR
@@ -90,7 +92,7 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Set up pinned Go toolchain and module cache
+      - name: Set up pinned Go toolchain, golangci-lint and caches
         uses: ./.github/actions/setup-go-env
       - name: CJK discipline scan (Language Rule)
         run: python3 tools/scan_cjk.py

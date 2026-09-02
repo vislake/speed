@@ -14,33 +14,36 @@ name: go-module-ci
 # patterns note).
 #
 # LEGS -- unit tier only, container-free by design:
-#   1. go vet ./...                static analysis (the lint leg today; the
-#                                  Taskfile lint task mirrors it -- its
-#                                  golangci-lint leg runs only when that
-#                                  binary is installed locally, and CI wiring
-#                                  for golangci-lint is deferred to the lint-
-#                                  tooling round so the discipline rules of
-#                                  docs/internal/18-cicd.md's discipline
-#                                  table land together).
-#   2. go test -race ./...         unit suite under the race detector. The
-#                                  Docker-backed integration tiers
-#                                  (-tags=integration: PostgreSQL for dbkit
-#                                  and tenancy, Redis for jobs, and Redis
-#                                  plus MinIO/S3 for pkgcore -- its
-#                                  integration_test/ runs both tiers)
-#                                  intentionally do NOT run here: 18-cicd's
-#                                  layered-triggering rule puts them in the
-#                                  pre-merge full matrix (pr-full), not in
-#                                  the fast per-PR check.
-#   3. go build ./...              module build in workspace context.
-#   4. GOWORK=off go build ./...   standalone build proving the module's
-#                                  go.mod/go.sum suffice outside the
-#                                  workspace. This is the CI replacement for
-#                                  the interim standalone_build_test.go
-#                                  guards (go/pkgcore, go/tenancy), per the
-#                                  last row of 18-cicd's discipline table;
-#                                  those tests stay for local runs and still
-#                                  execute under leg 2 on CI.
+#   1. golangci-lint run ./...   the project-standard lint leg (.golangci.yml
+#                                at the repo root, v2 schema; 18-cicd
+#                                discipline-table rows that have golangci
+#                                tooling today -- errcheck, gosec, govet's
+#                                shadow check, depguard's pkgcore-root rule
+#                                and module-boundary rules). The binary comes
+#                                from setup-go-env, pinned and checksummed.
+#   2. go vet ./...              static analysis, kept as its own leg: vet is
+#                                the go-version-coupled check that runs on
+#                                every module, while golangci-lint carries the
+#                                discipline rules on top.
+#   3. go test -race ./...       unit suite under the race detector. The
+#                                Docker-backed integration tiers
+#                                (-tags=integration: PostgreSQL for dbkit
+#                                and tenancy, Redis for jobs, and Redis
+#                                plus MinIO/S3 for pkgcore -- its
+#                                integration_test/ runs both tiers)
+#                                intentionally do NOT run here: 18-cicd's
+#                                layered-triggering rule puts them in the
+#                                pre-merge full matrix (pr-full), not in
+#                                the fast per-PR check.
+#   4. go build ./...            module build in workspace context.
+#   5. GOWORK=off go build ./... standalone build proving the module's
+#                                go.mod/go.sum suffice outside the
+#                                workspace. This is the CI replacement for
+#                                the interim standalone_build_test.go
+#                                guards (go/pkgcore, go/tenancy), per the
+#                                last row of 18-cicd's discipline table;
+#                                those tests stay for local runs and still
+#                                execute under leg 3 on CI.
 #
 # jobs.timeout-minutes bounds every run (18-cicd cost control); the caller
 # additionally cancels stale runs via concurrency.
@@ -65,8 +68,11 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Set up pinned Go toolchain and module cache
+      - name: Set up pinned Go toolchain, golangci-lint and caches
         uses: ./.github/actions/setup-go-env
+      - name: golangci-lint
+        working-directory: ${{ inputs.module }}
+        run: golangci-lint run ./...
       - name: go vet
         working-directory: ${{ inputs.module }}
         run: go vet ./...

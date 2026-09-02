@@ -1,5 +1,5 @@
 name: setup-go-env
-description: Install the pinned Go toolchain and prime the Go module cache for CI jobs.
+description: Install the pinned Go toolchain and golangci-lint and prime their caches for CI jobs.
 
 # Shared Go toolchain setup for every CI job that runs Go commands.
 #
@@ -32,12 +32,29 @@ description: Install the pinned Go toolchain and prime the Go module cache for C
 # file and cannot drift. When that round lands, repoint the go-version-file
 # input below at the shared version file, in this single place.
 #
+# GOLANGCI-LINT
+# This action also installs golangci-lint, pinned to an exact version and
+# verified against the release's own checksums file, and restores its cache.
+# Every leg that lints (the reusable go-module-ci workflow's golangci-lint
+# leg; the reference-app job of pr-full) relies on the binary being present
+# here, so there is exactly one install site. The version and the tarball
+# sha256 below must be bumped together, and the hash updated from the
+# release's golangci-lint-<version>-checksums.txt asset.
+#
 # CACHE
 # actions/setup-go's cache: true restores and saves the Go module cache,
 # keyed on the hashes of the dependency files listed in
 # cache-dependency-path: the workspace sum file plus every module's go.sum.
 # The **/go.sum glob picks newly added modules up automatically, so adding a
 # module to a CI matrix extends the cache key without touching this file.
+#
+# golangci-lint's analysis cache is restored the same way, keyed on the same
+# lockfile hashes plus the linter version (18-cicd cost-control rule 3:
+# caches keyed on lockfile hashes): dependency changes invalidate the
+# analysis results the cache holds. The binary itself is not cached -- at
+# roughly 20 MB per job it is cheaper to re-download and re-verify the pinned
+# artifact than to store it, and the checksum check runs on every job instead
+# of only on cache misses.
 #
 # Callers must run actions/checkout first: go.work and the go.sum files are
 # resolved from the checked-out tree.
@@ -53,3 +70,29 @@ runs:
         cache-dependency-path: |
           go.work.sum
           **/go.sum
+    - name: Restore golangci-lint cache
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+      with:
+        path: ~/.cache/golangci-lint
+        key: golangci-lint-cache-${{ runner.os }}-2.11.4-${{ hashFiles('go.work.sum', '**/go.sum') }}
+        restore-keys: |
+          golangci-lint-cache-${{ runner.os }}-2.11.4-
+    - name: Install pinned golangci-lint
+      shell: bash
+      env:
+        GOLANGCI_VERSION: "2.11.4"
+        # sha256 of golangci-lint-2.11.4-linux-amd64.tar.gz from the release's
+        # own golangci-lint-2.11.4-checksums.txt, pinned so a tampered
+        # artifact cannot reach CI. Bump version and hash together.
+        GOLANGCI_TARBALL_SHA256: "200c5b7503f67b59a6743ccf32133026c174e272b930ee79aa2aa6f37aca7ef1"
+      run: |
+        set -euo pipefail
+        install_dir="$RUNNER_TOOL_CACHE/golangci-lint/${GOLANGCI_VERSION}"
+        if [ ! -x "$install_dir/golangci-lint" ]; then
+          tmp="$RUNNER_TEMP/golangci-lint.tar.gz"
+          curl -fsSL "https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_VERSION}/golangci-lint-${GOLANGCI_VERSION}-linux-amd64.tar.gz" -o "$tmp"
+          echo "${GOLANGCI_TARBALL_SHA256}  $tmp" | sha256sum -c -
+          mkdir -p "$install_dir"
+          tar -xzf "$tmp" -C "$install_dir" --strip-components=1
+        fi
+        echo "$install_dir" >> "$GITHUB_PATH"
