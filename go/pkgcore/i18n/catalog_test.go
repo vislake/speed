@@ -7,6 +7,8 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/BurntSushi/toml"
+
 	"github.com/vislake/speed/go/pkgcore/locales"
 )
 
@@ -407,6 +409,28 @@ func TestAddModuleRejectsMalformedLocaleFiles(t *testing.T) {
 				t.Fatalf("error text %q does not contain %q", err.Error(), tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestAddModuleWrapsTheTomlParseError(t *testing.T) {
+	// The parse failure behind ErrUnsupportedShape is wrapped with %w, so a
+	// caller can reach the parser's own error through errors.As instead of
+	// re-parsing the file to learn why it failed. The error chain must carry
+	// the toml.ParseError itself, not just a textual echo of it.
+	b := NewBuilder()
+	err := b.AddModule("notes", localeFS(map[string]string{
+		"zh-CN.toml": "\"notes.x\" = \n",
+		"en-US.toml": "\"notes.x\" = \"text\"\n",
+	}))
+	if err == nil {
+		t.Fatal("AddModule succeeded on invalid TOML, want ErrUnsupportedShape")
+	}
+	if !errors.Is(err, ErrUnsupportedShape) {
+		t.Fatalf("errors.Is(err, ErrUnsupportedShape) = false; err = %v", err)
+	}
+	var parseErr toml.ParseError
+	if !errors.As(err, &parseErr) {
+		t.Fatalf("errors.As(err, &toml.ParseError) = false; err = %v", err)
 	}
 }
 

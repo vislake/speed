@@ -353,7 +353,7 @@ func tomlFiles(fsys fs.FS) ([]string, error) {
 func parseLocaleFile(module, fileName string, data []byte) ([]*goi18n.Message, error) {
 	raw := make(map[string]any)
 	if err := toml.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("%w: %s: not valid TOML: %v", ErrUnsupportedShape, fileName, err)
+		return nil, fmt.Errorf("%w: %s: not valid TOML: %w", ErrUnsupportedShape, fileName, err)
 	}
 
 	prefix := module + "."
