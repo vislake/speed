@@ -56,5 +56,5 @@ docker-compose.dev-tools.yml     # 可选：MinIO、MailHog、支付沙箱代理
 
 ## 对可测试性的额外收益
 
-单进程部署模式的这套内存实现同时就是单元测试的 test double，不需要为测试再造一套 mock，也让 CI 无需拉起 testcontainers 就能跑绝大多数测试（只有双方言 SQL 兼容性测试才需要真实 Postgres）。这是这套设计除"单进程部署轻量"之外的第二个正收益，值得为它多付出接口抽象的成本。
+单进程部署模式的这套内存实现同时就是单元测试的 test double，不需要为测试再造一套 mock，也让 CI 无需拉起 testcontainers 就能跑绝大多数测试（只有双方言 SQL 兼容性测试、以及 `jobs` 与 `pkgcore` 需要真实 Redis 的集成测试，才需要拉起 testcontainers）。这是这套设计除"单进程部署轻量"之外的第二个正收益，值得为它多付出接口抽象的成本。
 

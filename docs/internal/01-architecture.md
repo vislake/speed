@@ -3,13 +3,13 @@
 > 模块划分、依赖方向、以及模块如何被装配进一个应用。前端包的分层见 [12 前端架构](12-frontend.md)。
 
 ## 架构风格：Modular Monolith
-各能力是独立发布的 Go module，但在具体产品里编译进**同一个二进制**，模块间是进程内接口调用。不引入服务发现、服务网格等 K8s 风格设施——与 Docker Compose 小规模部署的约束匹配。异步解耦统一走事件总线（MVP 用内存实现，接口预留 Redis Streams 实现）。
+各能力是独立发布的 Go module，但在具体产品里编译进**同一个二进制**，模块间是进程内接口调用。不引入服务发现、服务网格等 K8s 风格设施——与 Docker Compose 小规模部署的约束匹配。异步解耦统一走事件总线（单进程部署模式用内存实现，分布式部署模式用 Redis Streams 消费组实现——两者都是常驻实现，不是 MVP 占位）。
 
 ## 后端模块依赖图
 
 ```mermaid
 graph BT
-    pkgcore["pkgcore<br/>配置/日志/错误/事件总线/tenantctx/crypto/Module契约"]
+    pkgcore["pkgcore<br/>配置/错误/事件总线/KVStore/Mailer/tenantctx/Module契约"]
     dbkit["dbkit<br/>双方言DB/迁移聚合/Repository[T]/字段级加密"]
     obs["observability<br/>OTel初始化/中间件/结构化日志"]
     tenancy["tenancy<br/>租户解析中间件/GORM插件/隔离测试套件"]
