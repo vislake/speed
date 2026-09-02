@@ -54,19 +54,19 @@ tasks:
         fi
 
   dev:
-    desc: Not implemented -- this task does not yet wire up a demo-profile run.
+    desc: Not implemented -- this task does not yet wire up a standalone-mode run.
     cmds:
       - |
         echo "dev: not implemented yet."
         echo
         echo "go/pkgcore, go/dbkit, go/tenancy, go/observability and go/jobs have"
         echo "real implementations now, and"
-        echo "examples/reference-app/cmd/server is a real, runnable demo-profile server"
+        echo "examples/reference-app/cmd/server is a real, runnable standalone-mode server"
         echo "built on them -- see examples/reference-app/README.md. Run it directly:"
         echo "    cd examples/reference-app && go run ./cmd/server"
         echo
         echo "This task itself does not run that yet: it has no hot reload and no"
-        echo "frontend, so it is not the 'backend + frontend in demo profile with hot"
+        echo "frontend, so it is not the 'backend + frontend in standalone deployment mode with hot"
         echo "reload' target the root CLAUDE.md's Planned Commands describe. Every other"
         echo "module under go/ is still a stub (go.mod + doc.go + AGENTS.md)."
         echo

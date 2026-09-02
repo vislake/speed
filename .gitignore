@@ -27,7 +27,7 @@ dist/
 /build/
 /tmp/
 
-# Local data (demo profile)
+# Local data (standalone deployment mode)
 *.db
 *.db-journal
 *.sqlite
