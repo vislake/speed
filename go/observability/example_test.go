@@ -132,9 +132,9 @@ func ExampleInit() {
 // whatever WithLogger attached with trace_id/span_id (when ctx carries an
 // active OTel span) and tenant_id (when ctx carries one), so callers never
 // build those key-value pairs by hand. See
-// examples/reference-app/internal/notes/handler.go's create method for a
-// live call site (obs.FromContext(ctx).Info("note created", "note_id",
-// note.ID)) that relies on exactly this enrichment.
+// examples/reference-app/internal/notes/handler.go's NotesCreateNote
+// method for a live call site (obs.FromContext(ctx).Info("note created",
+// "note_id", note.ID)) that relies on exactly this enrichment.
 //
 // The exact trace_id/span_id values are random per run, so this example
 // only checks that the fields are present, never their value -- the same
@@ -292,11 +292,12 @@ func ExampleMiddleware() {
 // function separate from Middleware: a trace Span is a shared mutable
 // object that survives every context fork downstream of where it was
 // created, so code that later resolves a tenant -- a business handler,
-// per examples/reference-app/internal/notes/handler.go's create method --
-// can still enrich the exact span Middleware started earlier in the
-// chain, at a point where Middleware itself could not yet see one. It is
-// a no-op with no tenant on ctx, which is Middleware's own expectation at
-// its documented mounting point (see its own doc comment).
+// per examples/reference-app/internal/notes/handler.go's NotesCreateNote
+// method -- can still enrich the exact span Middleware started earlier
+// in the chain, at a point where Middleware itself could not yet see
+// one. It is a no-op with no tenant on ctx, which is Middleware's own
+// expectation at its documented mounting point (see its own doc
+// comment).
 func ExampleAnnotateTenant() {
 	exp := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp))

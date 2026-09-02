@@ -333,10 +333,10 @@ func Middleware(next http.Handler) http.Handler {
 //
 // Call it once tenant resolution has actually run: from a business
 // handler that already reads the tenant for its own purposes (see
-// examples/reference-app/internal/notes/handler.go's create method for a
-// live example), or from downstream middleware such as a future
-// authn.Middleware / rbac.RequirePermission. Unlike a Prometheus metric
-// label, a span attribute is exactly where tenant_id belongs per
+// examples/reference-app/internal/notes/handler.go's NotesCreateNote
+// method for a live example), or from downstream middleware such as a
+// future authn.Middleware / rbac.RequirePermission. Unlike a Prometheus
+// metric label, a span attribute is exactly where tenant_id belongs per
 // docs/internal/09-observability.md: Tempo, unlike Prometheus, tolerates
 // high-cardinality dimensions.
 func AnnotateTenant(ctx context.Context) {
