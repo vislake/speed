@@ -51,9 +51,11 @@ web/
 Root `package.json` holds only what every package shares (typescript,
 vitest, eslint, typescript-eslint) plus the workspace scripts; a package's
 own `package.json` holds its dependencies, peers and its `exports` map.
-There is deliberately **no React, no MUI, no test framework** at the root —
-each package declares what it actually uses, so `pnpm -r` never installs a
-framework a package does not need.
+There is deliberately **no React, no MUI, no DOM/component test framework**
+at the root — vitest itself is shared (every package unit-tests with it),
+but nothing DOM-shaped such as jsdom or Testing Library, and no component
+rendering, lives there; each package declares what it actually uses, so
+`pnpm -r` never installs a framework a package does not need.
 
 ## Commands (run from web/)
 
