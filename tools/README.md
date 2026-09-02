@@ -1,18 +1,24 @@
-# tools/ — repo-discipline checkers
+# tools/ — repo scripts
 
 Plain, dependency-free Python scripts (standard library only, Python >= 3.11
-for `tomllib`) that enforce two of the repository's cross-cutting
-disciplines locally. They are the local-run counterparts of the CI
-discipline checks scheduled in `docs/internal/18-cicd.md` (the table rows
-for banning CJK outside `docs/internal/` and for requiring identical
-zh-CN/en-US message-key sets, both marked there as self-written scripts);
-CI workflows mount them under `tools/`. Neither script needs anything beyond
-`python3`, and both print hit paths relative to their `--root`.
+for `tomllib`) that back the repository's cross-cutting disciplines: three
+discipline checkers and one scaffold generator. The checkers are the
+local-run counterparts of the CI discipline checks scheduled in
+`docs/internal/18-cicd.md` (the table rows for banning CJK outside
+`docs/internal/`, for requiring identical zh-CN/en-US message-key sets, and
+for making every tenant-scoped Repository run the tenancytest isolation
+suite, all marked there as self-written scripts); CI workflows mount them
+under `tools/`. The generator is the backend of the `task new:module`
+promised by `docs/internal/19-dev-workflow.md`. Nothing here needs anything
+beyond `python3`, and the checkers print hit paths relative to their
+`--root`.
 
-| Script | Enforces | Exit codes |
-|---|---|---|
-| `scan_cjk.py` | Root `CLAUDE.md` Language Rule: English everywhere outside `docs/internal/` | 0 clean / 1 violations / 2 error |
-| `check_i18n_keys.py` | Root `CLAUDE.md` internationalization rule: zh-CN and en-US key sets identical | 0 clean / 1 mismatch or parse error / 2 error |
+| Script | Kind | Enforces / does | Exit codes |
+|---|---|---|---|
+| `scan_cjk.py` | Checker | Root `CLAUDE.md` Language Rule: English everywhere outside `docs/internal/` | 0 clean / 1 violations / 2 error |
+| `check_i18n_keys.py` | Checker | Root `CLAUDE.md` internationalization rule: zh-CN and en-US key sets identical | 0 clean / 1 mismatch or parse error / 2 error |
+| `check_repo_isolation.py` | Checker | Multi-tenant isolation discipline: every Repository type (a struct embedding `dbkit.Repository[T]`) is covered by `tenancytest.AssertIsolated` in its package's tests | 0 all covered / 1 uncovered repository / 2 error |
+| `new_module.py` | Generator | Scaffolds the canonical stub of a new Go module under `go/<name>` and prints its registration checklist; never modifies shared repository files | 0 scaffolded / 2 refusal or validation error |
 
 ## scan_cjk.py — CJK scanner
 
@@ -121,14 +127,129 @@ informational note only: the repository's pair discipline is exactly
 zh-CN/en-US, and additional languages should extend the script's pair table
 rather than slip past the check silently.
 
+## check_repo_isolation.py — tenant-isolation coverage checker
+
+Checks the multi-tenant isolation testing discipline against the actual
+Repository implementations. Root `CLAUDE.md` makes `dbkit.Repository[T]` the
+mandatory base for tenant-data repositories (never a raw `*gorm.DB`), and
+the tenancytest suite (`go/tenancy/tenancytest`) is the mandatory
+isolation-assertion every module must run against each of its own
+`dbkit.Repository[T]` usages. The script scans every Go module under
+`--root` for struct types that anonymously embed the base — `type Repository
+struct { *dbkit.Repository[Note] }`, value or pointer, in standalone or
+grouped `type ( ... )` declarations — and checks that each type's package
+tests call `tenancytest.AssertIsolated`.
+
+Usage:
+
+```
+python3 tools/check_repo_isolation.py --root /path/to/repo
+python3 tools/check_repo_isolation.py    # --root defaults to the current directory
+```
+
+Per-repository output is one grep-friendly line naming the declaring file
+and line, the embed shape, and either the covering call
+(`-- covered by tenancytest.AssertIsolated at <file>:<line>`) or the
+failure. The exit code is 1 whenever any repository is uncovered.
+
+### Coverage attribution (textual heuristics)
+
+The script is a scanner, not a Go type checker; the attribution rules it
+applies are chosen so that a compiling test file satisfies them
+automatically:
+
+- A package with exactly one Repository-embedding type is covered by any
+  `AssertIsolated` call in its tests — with one repository, a compiling
+  call can only be about it.
+- A package with several embedding types is covered per type: a type is
+  covered when a call's text mentions the type's own name or any
+  identifier inside its embedding's type arguments (`dbkit.Repository[Note]`
+  mentions `Note`). The `newRecord` argument naturally satisfies this —
+  `func(tenant pkgcore.TenantID) *Note { ... }` — and an explicit
+  instantiation (`AssertIsolated[Note](...)`) counts too. A call naming
+  neither leaves the type reported, with the found calls listed so an
+  author can see why.
+- A package's tests are its `_test.go` files plus the `_test.go` files
+  under its physically separated `integration_test/` directory (root
+  `CLAUDE.md` testing rule), so integration-tier assertions count as
+  coverage of the package they live under. Build tags are ignored: the
+  check is textual.
+
+### Deliberate exclusions
+
+- Embeddings in `_test.go` files (test doubles, Example code such as
+  `go/dbkit/example_test.go`'s demonstration) are never candidates — the
+  discipline covers shipped repositories. They print as informational
+  notes.
+- The identity-data / platform-data half of the tenancytest pair
+  (`AssertNotTenantScoped`) is reported as a note, never required: those
+  models never embed `dbkit.Repository[T]` (its generic constraint
+  requires `TenantScoped`, which identity and platform data must not
+  implement), so nothing in production code statically marks them for
+  enumeration.
+- dbkit's own module cannot call tenancytest at all (that would be a
+  module cycle: tenancy requires dbkit), and it has no embeddings outside
+  its Example code — its own repository tests are the mechanism's proof.
+- Documented scanner limitations: top-level declarations only, import
+  aliases honoured but dot imports of dbkit not tracked, alias types of
+  `dbkit.Repository` embedded under their own name not seen, and field
+  boundaries hidden inside multi-line block comments not seen. None of
+  these shapes occur in the repository today; the module docstring of the
+  script is the authority when one appears.
+
+## new_module.py — Go module stub generator
+
+Scaffolds the canonical stub of a future module, exactly the three files
+every not-yet-implemented module under `go/` already carries (`go/sharing`,
+`go/notification`, ...): `go.mod` (`module github.com/vislake/speed/go/<name>`
+plus the stub convention's bare `go 1.23` — the `go 1.25.0` directive and
+require/replace blocks appear when an implementation round adds the first
+dependency), `doc.go` (one-line English package doc; the package name is
+the module name with hyphens removed, per the `go/ai-gateway` ->
+`aigateway` precedent), and `AGENTS.md` (the one-liner stub form pointing
+at the design doc). It is the generator behind the `task new:module`
+promised by `docs/internal/19-dev-workflow.md`; the Taskfile task itself is
+wired in a later round, and the intended wiring is documented in the
+script's `--help` epilog.
+
+Usage:
+
+```
+python3 tools/new_module.py NAME --description '...' --design-doc docs/internal/XX-name.md
+python3 tools/new_module.py NAME --description '...' --design-doc docs/internal/XX-name.md --dry-run
+```
+
+`--target-dir` defaults to the repository root, detected as the nearest
+ancestor containing `go.work`; the scaffold always lands at
+`<target>/go/<name>` and nothing is ever written outside it. After
+scaffolding, a registration checklist prints (go.work `use` entry, CI
+matrix row, lockstep release tag list, roadmap and navigation rows) as
+reminders — the script never edits those shared files itself, because a
+scaffolder that silently rewrites `go.work` and CI matrices makes review
+diffs unreadable; the checklist is the contract for the human or for the
+future Taskfile task.
+
+Guardrails: an existing `go/<name>` is never overwritten (exit 2); the
+name must be lowercase letters, digits and single hyphens starting with a
+letter (no underscores — every directory in the repo is named this way);
+`--description` must be a single ASCII line (the Language Rule would flag
+anything else in `doc.go`); `--category npm` is refused because no npm
+package template exists in the repository yet — `docs/internal/19-dev-workflow.md`
+only names the future `task new:npm-package`; `--dry-run` prints the plan
+without writing anything.
+
 ## Running in CI and locally
 
-CI workflows mount these scripts directly (`python3 tools/scan_cjk.py
---root "$REPO"` and `python3 tools/check_i18n_keys.py --root "$REPO"`) and
+CI workflows mount the checkers directly (`python3 tools/scan_cjk.py
+--root "$REPO"`, `python3 tools/check_i18n_keys.py --root "$REPO"`, and the
+isolation checker the same way once its row lands in the CI matrix) and
 fail the build on a nonzero exit. Locally, run them from the repository
 root — the default `--root` is the current directory, so plain
 `python3 tools/scan_cjk.py` also works there. All output paths are relative
-to `--root`. Both scripts are plain executables with no third-party
+to `--root`. All scripts are plain executables with no third-party
 dependencies and no module metadata of their own; they live here precisely
 so a CI image never needs a Go toolchain or a package install to enforce
-these two rules.
+these disciplines. The generator is a developer-time tool: run it when a
+roadmap item assigns a module a milestone, commit the three scaffolded
+files with the design doc, and perform the printed registrations in the
+same change.
