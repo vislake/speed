@@ -30,11 +30,11 @@ const jsonContentType = "application/json; charset=utf-8"
 var ErrTextRequired = apperr.Invalid("notes.text_required")
 
 // maxTextLength is the maximum number of characters -- Unicode code
-// points, not bytes -- a note's text may contain. create enforces it
-// below with utf8.RuneCountInString, deliberately not len(text): len
-// counts UTF-8 bytes, which would wrongly reject in-bounds multi-byte
-// text (see handler_test.go's multi-byte-text cases) and drift from what
-// this constant is actually meant to bound.
+// points, not bytes -- a note's text may contain. NotesCreateNote
+// enforces it below with utf8.RuneCountInString, deliberately not
+// len(text): len counts UTF-8 bytes, which would wrongly reject
+// in-bounds multi-byte text (see handler_test.go's multi-byte-text
+// cases) and drift from what this constant is actually meant to bound.
 //
 // This value must match three other independent representations of the
 // same limit that cannot themselves reference a Go constant: this
@@ -87,8 +87,8 @@ type Handler struct {
 
 // NewHandler returns a Handler serving repo's notes and publishing
 // EventNoteCreated on bus whenever a note is created. bus may be nil, in
-// which case create still succeeds but publishes nothing -- see the
-// NotesCreateNote method.
+// which case creating the note still succeeds but nothing is published
+// -- see the NotesCreateNote method.
 //
 // The returned Handler's routing is registered by the generated
 // api.HandlerFromMux helper: it derives this module's method+path
@@ -209,9 +209,9 @@ func (h *Handler) publishNoteCreated(ctx context.Context, tenant pkgcore.TenantI
 		},
 	}
 	if err := h.bus.Publish(ctx, evt); err != nil {
-		// See create's comment above on why tenant_id is not repeated
-		// here as an explicit key-value pair: obs.FromContext(ctx)
-		// already attaches it.
+		// See NotesCreateNote's comment above on why tenant_id is not
+		// repeated here as an explicit key-value pair:
+		// obs.FromContext(ctx) already attaches it.
 		obs.FromContext(ctx).Error("notes.note.created event publish failed",
 			"note_id", note.ID, "error", err)
 	}
@@ -247,14 +247,15 @@ func (h *Handler) NotesListNotes(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// This handler runs downstream of tenancy.Middleware exactly like
-	// create above, so ctx already carries the same resolved tenant by
-	// the time this runs -- see create's identical call above for why
-	// AnnotateTenant is what actually attaches tenant_id to this
-	// request's span from here, rather than at obs.Middleware's own
-	// layer. It is a no-op when ctx carries no tenant (see
-	// AnnotateTenant's own doc comment), which is exactly the case
-	// handler_test.go's TestHandler_List_NoTenantInContext_ReturnsInternalError
-	// case exercises: h.repo.List still fails closed on that same missing
+	// NotesCreateNote above, so ctx already carries the same resolved
+	// tenant by the time this runs -- see NotesCreateNote's identical
+	// call above for why AnnotateTenant is what actually attaches
+	// tenant_id to this request's span from here, rather than at
+	// obs.Middleware's own layer. It is a no-op when ctx carries no
+	// tenant (see AnnotateTenant's own doc comment), which is exactly the
+	// case handler_test.go's
+	// TestHandler_List_NoTenantInContext_ReturnsInternalError case
+	// exercises: h.repo.List still fails closed on that same missing
 	// tenant one line down, unaffected by this call.
 	obs.AnnotateTenant(ctx)
 
@@ -277,9 +278,9 @@ func (h *Handler) NotesListNotes(w http.ResponseWriter, r *http.Request) {
 
 	// obs.FromContext(ctx) attaches tenant_id (and trace_id/span_id, once
 	// this request's span carries an active one) automatically -- see
-	// create's identical comment above -- so a GET request now leaves
-	// behind the same kind of tenant_id-bearing log line a POST already
-	// did, instead of none at all.
+	// NotesCreateNote's identical comment above -- so a GET request now
+	// leaves behind the same kind of tenant_id-bearing log line a POST
+	// already did, instead of none at all.
 	obs.FromContext(ctx).Info("notes listed", "note_count", len(items))
 
 	w.Header().Set("Content-Type", jsonContentType)

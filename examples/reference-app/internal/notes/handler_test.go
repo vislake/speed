@@ -110,7 +110,7 @@ func TestHandler_Create_EmptyText_ReturnsTextRequiredError(t *testing.T) {
 		// not valid unescaped inside a JSON string, and building the body
 		// by hand would send malformed JSON instead of the whitespace-only
 		// text this case means to test -- exercising the wrong branch of
-		// Handler.create (notes.invalid_request_body, not
+		// Handler.NotesCreateNote (notes.invalid_request_body, not
 		// notes.text_required) for a reason that has nothing to do with
 		// what this test is actually about. The request type is the
 		// spec-generated one (api.NotesCreateNoteRequest), so the body
@@ -144,10 +144,10 @@ func TestHandler_Create_EmptyText_ReturnsTextRequiredError(t *testing.T) {
 // "maxLength: 4000" on NotesCreateNoteRequest.text and both
 // migrations/{postgres,sqlite}/0001_create_notes.sql declare the column
 // VARCHAR(4000) -- SQLite's type-affinity system does not itself enforce
-// that length, and create used to check only for empty/whitespace-only
-// text, never a maximum. This test fails against that unfixed handler
-// (status would be 201, not 400) and passes once create enforces
-// maxTextLength.
+// that length, and NotesCreateNote used to check only for
+// empty/whitespace-only text, never a maximum. This test fails against
+// that unfixed handler (status would be 201, not 400) and passes once
+// NotesCreateNote enforces maxTextLength.
 func TestHandler_Create_TextExceedsMaxLength_ReturnsTextTooLongError(t *testing.T) {
 	h, _ := newTestHandler(t)
 
@@ -206,7 +206,7 @@ func TestHandler_Create_TextAtExactlyMaxLength_ReturnsCreated(t *testing.T) {
 }
 
 // TestHandler_Create_MultiByteTextAtExactlyMaxLength_ReturnsCreated pins
-// down that create's length check counts Unicode code points
+// down that NotesCreateNote's length check counts Unicode code points
 // (utf8.RuneCountInString), not UTF-8 bytes (len(text)): a CJK ideograph
 // (U+7B14, meaning "pen" -- fittingly, the instrument a note is written
 // with) is a 3-byte rune, so maxTextLength copies of it sit exactly at the
@@ -380,17 +380,18 @@ func TestHandler_ServeHTTP_UnsupportedMethod_ReturnsMethodNotAllowed(t *testing.
 }
 
 // TestHandler_List_AnnotatesSpanWithTenant reproduces the round-4
-// reference-app retrofit finding: list runs downstream of the identical
-// tenancy.Middleware as create -- both read an equally-resolved tenant off
-// ctx -- yet only create called obs.AnnotateTenant, so a GET
-// /api/v1/notes span carried no tenant_id while a POST /api/v1/notes one
-// did. This starts a real span the same way
-// go/observability/middleware_test.go's own AnnotateTenant tests do, puts
-// a tenant on that same context, calls Handler.list through ServeHTTP, and
-// asserts the exported span carries a tenant_id attribute. It fails
-// against the unfixed list (no tenant_id attribute at all, since
-// AnnotateTenant is never called) and passes once list calls
-// obs.AnnotateTenant like create does.
+// reference-app retrofit finding: NotesListNotes runs downstream of the
+// identical tenancy.Middleware as NotesCreateNote -- both read an
+// equally-resolved tenant off ctx -- yet only NotesCreateNote called
+// obs.AnnotateTenant, so a GET /api/v1/notes span carried no tenant_id
+// while a POST /api/v1/notes one did. This starts a real span the same
+// way go/observability/middleware_test.go's own AnnotateTenant tests do,
+// puts a tenant on that same context, calls Handler.NotesListNotes
+// through ServeHTTP, and asserts the exported span carries a tenant_id
+// attribute. It fails against the unfixed NotesListNotes (no tenant_id
+// attribute at all, since AnnotateTenant is never called) and passes
+// once NotesListNotes calls obs.AnnotateTenant like NotesCreateNote
+// does.
 func TestHandler_List_AnnotatesSpanWithTenant(t *testing.T) {
 	h, _ := newTestHandler(t)
 
@@ -423,7 +424,7 @@ func TestHandler_List_AnnotatesSpanWithTenant(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("expected span to carry a %s attribute (matching create's behavior); attributes: %v",
+		t.Fatalf("expected span to carry a %s attribute (matching NotesCreateNote's behavior); attributes: %v",
 			obs.TenantIDKey, spans[0].Attributes)
 	}
 	if tenantAttr != "tenant-acme" {
@@ -432,16 +433,17 @@ func TestHandler_List_AnnotatesSpanWithTenant(t *testing.T) {
 }
 
 // TestHandler_List_LogsWithTenantID reproduces the round-4 reference-app
-// retrofit finding's medium-severity half: list never logged anything at
-// all, so a GET /api/v1/notes request left behind zero tenant_id-bearing
-// log lines, unlike create's "note created" line (obs.FromContext(ctx).
-// Info in handler.go's create). This injects a text-handler logger via
-// obs.WithLogger -- the same technique go/observability/logger_test.go
-// uses to assert on FromContext's attached fields -- calls Handler.list
-// through ServeHTTP, and asserts a "notes listed" log line was written
-// carrying the caller's tenant_id. It fails against the unfixed list (no
-// log line captured at all) and passes once list logs through
-// obs.FromContext(ctx) like create does.
+// retrofit finding's medium-severity half: NotesListNotes never logged
+// anything at all, so a GET /api/v1/notes request left behind zero
+// tenant_id-bearing log lines, unlike NotesCreateNote's "note created"
+// line (obs.FromContext(ctx).Info in handler.go's NotesCreateNote). This
+// injects a text-handler logger via obs.WithLogger -- the same technique
+// go/observability/logger_test.go uses to assert on FromContext's
+// attached fields -- calls Handler.NotesListNotes through ServeHTTP, and
+// asserts a "notes listed" log line was written carrying the caller's
+// tenant_id. It fails against the unfixed NotesListNotes (no log line
+// captured at all) and passes once NotesListNotes logs through
+// obs.FromContext(ctx) like NotesCreateNote does.
 func TestHandler_List_LogsWithTenantID(t *testing.T) {
 	h, _ := newTestHandler(t)
 
@@ -462,7 +464,7 @@ func TestHandler_List_LogsWithTenantID(t *testing.T) {
 		t.Fatalf("expected a %q log line for the GET request; captured log output: %s", "notes listed", out)
 	}
 	if want := obs.TenantIDKey + "=tenant-acme"; !strings.Contains(out, want) {
-		t.Errorf("log line missing %q (matching create's behavior); got: %s", want, out)
+		t.Errorf("log line missing %q (matching NotesCreateNote's behavior); got: %s", want, out)
 	}
 	if want := "note_count=0"; !strings.Contains(out, want) {
 		t.Errorf("log line missing %q for an empty tenant; got: %s", want, out)

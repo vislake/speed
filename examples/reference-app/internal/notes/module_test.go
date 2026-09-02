@@ -59,14 +59,14 @@ func TestModule_Locales_ContainsBothLanguages(t *testing.T) {
 // TestModule_Locales_ContainsBothLanguages cannot see: that test only
 // proves the zh-CN and en-US key *sets* match each other, so it stays green
 // even when both files are equally incomplete relative to what Handler
-// actually returns. handler.go's create and list can return four distinct
-// apperr codes -- ErrTextRequired, ErrTextTooLong, errInternal, and the
-// apperr.Invalid("notes.invalid_request_body") call inlined in create
-// (kept as a literal here, not a named var, because handler.go itself
-// never names it either) -- and each one must resolve to real text in both
-// locale files, per root CLAUDE.md's internationalization rule ("New text
-// must ship with both zh-CN and en-US resources") and backend coding
-// standard §12.
+// actually returns. handler.go's NotesCreateNote and NotesListNotes can
+// return four distinct apperr codes -- ErrTextRequired, ErrTextTooLong,
+// errInternal, and the apperr.Invalid("notes.invalid_request_body") call
+// inlined in NotesCreateNote (kept as a literal here, not a named var,
+// because handler.go itself never names it either) -- and each one must
+// resolve to real text in both locale files, per root CLAUDE.md's
+// internationalization rule ("New text must ship with both zh-CN and en-US
+// resources") and backend coding standard §12.
 func TestModule_Locales_ContainsEveryHandlerErrorCode(t *testing.T) {
 	m := NewModule(nil)
 	localesFS := m.Locales()

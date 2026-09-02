@@ -46,8 +46,8 @@ const (
 	// EventNoteCreated is the domain event type published whenever a note
 	// is created, following the "<module>.<entity>.<action>" convention
 	// (backend coding standard §8; go/pkgcore/registry.go's
-	// EventDecl.Type doc comment). Handler.create is the one place that
-	// actually calls EventBus.Publish for it -- see handler.go.
+	// EventDecl.Type doc comment). Handler.NotesCreateNote is the one
+	// place that actually calls EventBus.Publish for it -- see handler.go.
 	EventNoteCreated = "notes.note.created"
 
 	// eventNoteCreatedPayloadType names NoteCreatedPayload for
@@ -131,7 +131,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // reg.EventBus() returns) -- obtaining that reference is not itself an I/O
 // operation, it is just reading a field off reg. The bus is not actually
 // called (no Publish) until a real HTTP request creates a note; see
-// handler.go's create method.
+// handler.go's NotesCreateNote method.
 func (m *Module) Register(reg *pkgcore.Registry) error {
 	m.handler = NewHandler(m.repo, reg.EventBus())
 	reg.Routes.Mount(apiPath, m.handler)
