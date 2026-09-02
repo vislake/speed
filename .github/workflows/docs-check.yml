@@ -1,55 +1,83 @@
 name: docs-check
 
-# STUB -- not implemented. Triggered runs fail loudly at the guard step
-# below; nothing in this pipeline can pass silently.
-#
-# PIPELINE (docs/internal/18-cicd.md pipeline table, docs-check row):
-# documentation and public-API discipline -- documentation code examples
+# Documentation and public-API discipline pipeline -- docs/internal/
+# 18-cicd.md's pipeline table, docs-check row: documentation code examples
 # compile and run, link checks, zh-CN/en-US i18n key-set parity, and config-
 # reference drift detection. Target under 5 minutes. This pipeline is also a
 # branch-protection required check at 18-cicd's branch-protection section
-# (alongside pr-check and security).
+# (alongside pr-check and security); runs skipped by the path filter report
+# neutral and never block a merge.
 #
 # DESIGN-TABLE TRIGGER: PRs touching documentation or a public API, via
-# path filtering (dorny/paths-filter); enabled by the implementing round.
+# GitHub-native path filtering on the pull_request event -- zero third-party
+# actions (dorny/paths-filter stays future work for the module set, per
+# 18-cicd's cost-control section; with a single-job pipeline the event's own
+# path filter is the whole gate). The path set below is deliberately not
+# "everything": code-only PRs are already covered by pr-check's module
+# matrix and must not fire this pipeline, while locale and i18n-contract
+# changes must never slip through it.
 #
-# WHAT WIRES WHEN THIS IS IMPLEMENTED -- content that exists TODAY:
-#   * tools/check_i18n_keys.py -- the real, runnable zh-CN/en-US key-parity
-#     checker (one locale pair exists today:
-#     examples/reference-app/internal/notes/locales); it is wired into no
-#     workflow yet (tools/README.md) and belongs to this pipeline;
-#   * a documentation-example compile/run harness: the root CLAUDE.md
-#     Documentation rules make examples part of the build, and Go example
-#     tests already compile and run inside the per-module unit suites
-#     (go-module-ci); a dedicated harness for prose-embedded samples and
-#     docs/site content does not exist yet.
+# COVERAGE -- what genuinely runs today
+#   * i18n key-set parity (the pipeline's one existing tool): python3
+#     tools/check_i18n_keys.py from the repository root, discovering every
+#     locale directory below it (today examples/reference-app/internal/
+#     notes/locales and go/pkgcore/locales, pkgcore's seed bundle) and
+#     failing on any zh-CN/en-US key-set drift -- the raw-file half of the
+#     i18n discipline, complementing the compiled half (pkgcore/i18n's
+#     ErrParityMismatch check inside the module unit suites). The checker
+#     is dependency-free (tools/README.md): plain python3 -- no Go
+#     toolchain, no package install -- so this job needs no setup step.
+#     ubuntu-latest ships the Python >= 3.11 the checker needs (tomllib).
 #
-# NOT YET: link checking, config-reference generation drift (the reference
-# is generated from the pkgcore/config schema, generation not in CI), the
-# docs site itself -- all roadmap M0 docs-engineering items.
+# DELIBERATELY NOT WIRED HERE -- roadmap M0 docs-engineering items whose
+# tooling does not exist yet (wiring them now would be fake checks):
+#   * link checking (broken anchors/URLs across docs/ and, later, the site).
+#   * config-reference generation drift: the reference is generated from
+#     the pkgcore/config schema; generation is not in CI.
+#   * the docs site itself (no docs/site/ tree yet).
+#   * a dedicated harness for prose-embedded documentation examples. Go
+#     example tests already compile and run inside the go-module-ci unit
+#     suites (pr-check/pr-full); what does not exist is a harness for
+#     examples embedded in docs prose and AGENTS.md files.
 #
-# GATE: the roadmap M0 docs-engineering items (docs templates, AGENTS.md
-# standards, example-compile checks, docs-site skeleton) and the i18n
-# registration round; the check_i18n_keys leg above can be enabled as soon
-# as this pipeline is implemented, independently of the docs site.
+# PATH SET -- documentation or i18n/public-API changes only:
+#   docs/**                     the design docs this pipeline guards
+#   .claude/**                  skill handbooks (standards documentation)
+#   **/AGENTS.md                per-module discipline docs (consumer-facing)
+#   **/locales/**               i18n resources -- the check's direct subject
+#   go/pkgcore/i18n/**          the catalog contract the checker mirrors
+#   tools/check_i18n_keys.py    the checker itself (self-test on change)
+#   CLAUDE.md, README.md        root docs stating the rules and CI claims
+#   Taskfile.yml                dev-workflow docs of the checker commands
 
 on:
+  pull_request:
+    paths:
+      - docs/**
+      - .claude/**
+      - "**/AGENTS.md"
+      - "**/locales/**"
+      - go/pkgcore/i18n/**
+      - tools/check_i18n_keys.py
+      - CLAUDE.md
+      - README.md
+      - Taskfile.yml
   workflow_dispatch:
+
+concurrency:
+  group: docs-check-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  docs-check:
-    name: docs checks (stub guard -- not implemented yet)
+  docs-checks:
+    name: docs discipline checks
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Stub guard
-        run: |
-          echo "error: the docs-check pipeline is not implemented. This"
-          echo "failing run is its stub guard, so the pipeline can never pass"
-          echo "silently. Wire the checks named in the file header"
-          echo "(tools/check_i18n_keys.py, example-compile harness) when the"
-          echo "roadmap M0 docs-engineering items land."
-          exit 1
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: i18n key-set parity (zh-CN vs en-US)
+        run: python3 tools/check_i18n_keys.py
