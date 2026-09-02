@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
@@ -524,5 +525,39 @@ func TestRedact_ConcurrentLogging(t *testing.T) {
 	}
 	if got := strings.Count(out, "note_id=n-1"); got != goroutines*linesEach {
 		t.Errorf("expected %d intact benign attributes, found %d", goroutines*linesEach, got)
+	}
+}
+
+// TestRedact_NoPerAttributeAllocationOnBenignRecord pins the documented
+// fast path of redactHandler.Handle (see redact.go): a record with nothing
+// sensitive is forwarded after a single streaming scan, with no allocation
+// per attribute. The shared correlation and module attribute keys are
+// dot-free, and segmenting a dot-free key must not allocate -- before the
+// dot-free fast path existed, every attribute's key went through
+// strings.Split, one heap allocation per attribute, so a benign record's
+// allocation count scaled 1:1 with its attribute count (1 attribute = 1
+// alloc, 6 = 7). The test measures allocation counts with
+// testing.AllocsPerRun and asserts the count does not scale: a six-
+// attribute record must cost the same as a one-attribute one, within the
+// small record-level noise (slog's own attribute-storage allocation, which
+// can differ by one between record sizes). This test fails on the
+// per-attribute-split code and passes on the dot-free fast path.
+func TestRedact_NoPerAttributeAllocationOnBenignRecord(t *testing.T) {
+	ctx := obs.WithLogger(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	logger := obs.FromContext(ctx)
+
+	logWith := func(attrs int) func() {
+		args := make([]any, 0, 2*attrs)
+		for i := 0; i < attrs; i++ {
+			args = append(args, "metric_id", "m-42")
+		}
+		return func() { logger.Info("benign event", args...) }
+	}
+
+	one := testing.AllocsPerRun(200, logWith(1))
+	six := testing.AllocsPerRun(200, logWith(6))
+
+	if extra := six - one; extra > 2 {
+		t.Errorf("allocation count scales with attribute count: 1 benign attribute cost %.0f allocs, 6 cost %.0f (expected within 2)", one, six)
 	}
 }

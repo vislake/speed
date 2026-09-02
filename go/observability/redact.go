@@ -160,25 +160,63 @@ func redactAttr(groups []string, a slog.Attr) (slog.Attr, bool) {
 	if a.Key == "" {
 		return a, false
 	}
+
+	// The overwhelmingly common attribute key is a single segment: the
+	// correlation fields and every module's shared snake_case attribute
+	// names carry no dot. Segmenting such a key must not allocate --
+	// strings.Split always heap-allocates the segment slice it returns, and
+	// one allocation per attribute is exactly what redactHandler.Handle's
+	// zero-allocation forwarding of unchanged records (documented on the
+	// handler below) rules out. A dot-free key IS its one segment: the
+	// neverRedactKeys lookup keys on the whole key, the sensitivity check
+	// scans the key directly, and no segment slice is ever built. Only a
+	// genuinely dotted key (config-style names such as
+	// "billing.stripe_secret_key") pays for Split.
+	if strings.IndexByte(a.Key, '.') < 0 {
+		if _, exempt := neverRedactKeys[a.Key]; exempt {
+			return a, false
+		}
+		if pathSensitive(groups) || segmentSensitive(a.Key) {
+			return redactAttrWhole(a)
+		}
+		return redactAttrValue(a, groups, nil)
+	}
+
 	segs := strings.Split(a.Key, ".")
 	if _, exempt := neverRedactKeys[segs[len(segs)-1]]; exempt {
 		return a, false
 	}
-
 	if pathSensitive(groups) || pathSensitive(segs) {
-		// Key- (or group-)named as a secret: replace the whole value,
-		// whatever its type. A group whose own name is sensitive is
-		// collapsed in its entirety -- the bucket is the secret.
-		return slog.Attr{Key: a.Key, Value: slog.StringValue(RedactedValue)}, true
+		return redactAttrWhole(a)
 	}
+	return redactAttrValue(a, groups, segs)
+}
 
-	childPath := appendPath(groups, segs)
+// redactAttrWhole returns a replaced wholesale by the deterministic
+// RedactedValue marker, reporting that it changed. The attribute's key --
+// or any group name above it -- names a secret, so none of its value may
+// reach the sink whatever the value's kind; a group whose own name is
+// sensitive collapses in its entirety, because the bucket is the secret.
+func redactAttrWhole(a slog.Attr) (slog.Attr, bool) {
+	return slog.Attr{Key: a.Key, Value: slog.StringValue(RedactedValue)}, true
+}
+
+// redactAttrValue applies the value-kind rules to an attribute whose key
+// has already passed the exemption and sensitivity checks. keySegments
+// holds the dot-separated segments of a.Key, or nil when the key is
+// dot-free -- its single segment is the key itself, which is then appended
+// when a group value's children inherit this attribute's key path.
+func redactAttrValue(a slog.Attr, groups, keySegments []string) (slog.Attr, bool) {
 	switch v := a.Value.Resolve(); v.Kind() {
 	case slog.KindGroup:
 		children := v.Group()
 		if len(children) == 0 {
 			return a, false
 		}
+		if keySegments == nil {
+			keySegments = []string{a.Key}
+		}
+		childPath := appendPath(groups, keySegments)
 		out := make([]slog.Attr, 0, len(children))
 		changed := false
 		for _, child := range children {
