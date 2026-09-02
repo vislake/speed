@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -53,6 +54,35 @@ const (
 	httpMethodKey     = attribute.Key("http.request.method")
 	httpStatusCodeKey = attribute.Key("http.response.status_code")
 )
+
+// MaxRouteLabelValues bounds how many distinct http.route metric label
+// values a single Middleware instance will ever emit before it starts
+// collapsing new ones into RouteLabelOverflowValue -- see Middleware's own
+// "Route label caveat" doc comment for the live, unauthenticated exploit
+// this defends against, and middleware_test.go's
+// TestMiddleware_UnboundedRoutePaths_CardinalityIsBounded for the
+// negative-control proof. Exported so that proof (and any consumer
+// auditing this behavior) checks the actual enforced value rather than a
+// hardcoded guess that could silently drift out of sync with it.
+//
+// 256 is comfortably above the number of distinct literal routes any real
+// module in this repository registers today (a handful per module; see
+// mountModuleRoutes in examples/reference-app/cmd/server/server.go), even
+// summed across all 20 planned modules, while still bounding worst-case
+// series growth to a small, fixed number instead of the unbounded growth
+// an attacker-supplied path previously produced. If a legitimate route
+// count ever approaches this, that is a signal to build the route-capture
+// mechanism the "Route label caveat" section below already anticipates,
+// not to raise this constant.
+const MaxRouteLabelValues = 256
+
+// RouteLabelOverflowValue replaces the http.route metric label once
+// MaxRouteLabelValues distinct values have already been recorded. It
+// cannot collide with a real route: every route registered anywhere in
+// this repository is an absolute path starting with "/" (see
+// pkgcore.MountedRoute's own doc comment), and this value deliberately is
+// not one.
+const RouteLabelOverflowValue = "{overflow}"
 
 // Middleware wraps next to start a trace span per request (via otelhttp,
 // which also extracts/injects W3C trace-context propagation headers) and
@@ -106,22 +136,55 @@ const (
 //
 // # Route label caveat
 //
-// The route label is (*http.Request).URL.Path, not the lower-cardinality
-// (*http.Request).Pattern net/http.ServeMux populates once Go 1.22+
-// matches a request: Pattern suffers the exact same fork-visibility
-// problem as the tenant above (tenancy.Middleware's fork sits between this
-// middleware and any mux), so it is not reliably set on the request this
-// middleware observes either. Using the raw path is safe today because
-// every route registered anywhere in this repository (examples/reference-app's
-// /healthz and /api/v1/notes) is a literal path with no parameters -- so
-// URL.Path and Pattern agree. A future module that mounts a parameterized
-// route (for example "/api/v1/billing/subscriptions/{id}") downstream of
-// tenancy.Middleware would regress this into one metric series per ID,
-// which is exactly the cardinality failure mode this package exists to
-// prevent for tenant_id; solving it generally needs a route-capture
-// mechanism (mirroring AnnotateTenant, but for the matched pattern) that
-// this foundational round does not build. Flag this explicitly before
-// adding a parameterized route anywhere downstream of this middleware.
+// The route label is derived from (*http.Request).URL.Path, not the
+// lower-cardinality (*http.Request).Pattern net/http.ServeMux populates
+// once Go 1.22+ matches a request: Pattern suffers the exact same
+// fork-visibility problem as the tenant above (tenancy.Middleware's fork
+// sits between this middleware and any mux), so it is not reliably set on
+// the request this middleware observes either.
+//
+// Using the raw path is not merely a "future parameterized route" risk: it
+// is exploitable today, by any unauthenticated caller, against this
+// repository's current, unmodified route set. Neither a mux 404 (no
+// registered pattern matches -- including a request under a registered
+// subtree such as examples/reference-app's "/api/v1/notes/", which the
+// outer mux dispatches as a match even though the notes Handler's own
+// inner mux then 404s an unrecognized sub-path) nor tenancy.Middleware's
+// own pre-mux 403 (an unrecognized Host, rejected before the mux ever
+// runs) requires a valid tenant, a valid route, or any credential -- and
+// both still reach this middleware's metric-recording code with
+// (*http.Request).URL.Path exactly as the caller sent it. Left unbounded,
+// an attacker can grow this metric's series count without limit simply by
+// requesting distinct nonexistent URLs, no code change or new route
+// required anywhere in the app -- the same cardinality-explosion failure
+// mode CLAUDE.md's tenant_id rule targets, just via a different
+// attacker-controlled input.
+//
+// The metric attrs below are therefore built from routeLabels.label(...),
+// not the raw path directly: routeLabelLimiter (see its own doc comment)
+// caps the number of distinct http.route METRIC label values this
+// Middleware instance will ever emit at MaxRouteLabelValues, collapsing
+// every value beyond that into the fixed RouteLabelOverflowValue. This
+// does not require knowing an application's real route set in advance --
+// it just stops minting new distinct values once comfortably past what
+// any real, bounded route table could produce. The SPAN attributes are
+// deliberately NOT run through this limiter: a trace is not a Prometheus
+// series, so it does not share the metric instruments' cardinality
+// problem, matching how AnnotateTenant treats tenant_id (span attribute,
+// never a metric label) for exactly the same reason.
+//
+// This bound is a circuit breaker, not a precision fix: a legitimate,
+// low-cardinality parameterized route (for example
+// "/api/v1/billing/subscriptions/{id}") mounted downstream of
+// tenancy.Middleware would still record one distinct value per ID up to
+// the cap, silently losing per-route granularity once past it, rather
+// than collapsing cleanly to the route template the way a real
+// route-capture mechanism (mirroring AnnotateTenant, but for the matched
+// pattern) would. Building that mechanism remains future work this
+// foundational round does not do; this limiter exists so the interim
+// state is "bounded but occasionally imprecise" instead of "unbounded and
+// exploitable today." Flag this explicitly before adding a parameterized
+// route anywhere downstream of this middleware.
 func Middleware(next http.Handler) http.Handler {
 	meter := otel.Meter(instrumentationName)
 	requestCount, _ := meter.Int64Counter(
@@ -134,6 +197,7 @@ func Middleware(next http.Handler) http.Handler {
 		metric.WithDescription("Duration of HTTP requests handled, labeled by method, route and status code."),
 		metric.WithUnit(requestDurationUnit),
 	)
+	routeLabels := newRouteLabelLimiter(MaxRouteLabelValues)
 
 	instrumented := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -149,18 +213,34 @@ func Middleware(next http.Handler) http.Handler {
 		next.ServeHTTP(rec, r)
 
 		duration := time.Since(start).Seconds()
-		attrs := []attribute.KeyValue{
+		ctx := r.Context()
+
+		// Metric attrs use routeLabels.label(...), NOT the raw path
+		// directly -- see the "Route label caveat" section above for the
+		// live, unauthenticated exploit this closes. tenant_id is, and
+		// must remain, absent from this slice entirely: see
+		// middleware_test.go's TestMiddleware_MetricsExcludeTenant_NoPerTenantSeries
+		// for the negative control.
+		metricAttrs := []attribute.KeyValue{
+			httpMethodKey.String(r.Method),
+			httpRouteKey.String(routeLabels.label(r.URL.Path)),
+			httpStatusCodeKey.Int(rec.status),
+		}
+		requestCount.Add(ctx, 1, metric.WithAttributes(metricAttrs...))
+		requestDuration.Record(ctx, duration, metric.WithAttributes(metricAttrs...))
+
+		// The span, unlike the metrics above, always carries the exact
+		// raw path, never routeLabels' bounded one: a trace is not a
+		// Prometheus series, so it does not share the metric instruments'
+		// cardinality problem -- see the "Route label caveat" section
+		// above, and docs/internal/09-observability.md for why Tempo
+		// tolerates high-cardinality dimensions that Prometheus cannot.
+		span := trace.SpanFromContext(ctx)
+		span.SetAttributes(
 			httpMethodKey.String(r.Method),
 			httpRouteKey.String(r.URL.Path),
 			httpStatusCodeKey.Int(rec.status),
-		}
-
-		ctx := r.Context()
-		requestCount.Add(ctx, 1, metric.WithAttributes(attrs...))
-		requestDuration.Record(ctx, duration, metric.WithAttributes(attrs...))
-
-		span := trace.SpanFromContext(ctx)
-		span.SetAttributes(attrs...)
+		)
 		if rec.status >= http.StatusInternalServerError {
 			span.SetStatus(codes.Error, http.StatusText(rec.status))
 		}
@@ -220,6 +300,54 @@ func AnnotateTenant(ctx context.Context) {
 		return
 	}
 	trace.SpanFromContext(ctx).SetAttributes(attribute.String(TenantIDKey, string(tenant)))
+}
+
+// routeLabelLimiter bounds the number of distinct http.route metric label
+// values a single Middleware instance will ever emit to MaxRouteLabelValues,
+// collapsing every value seen after that into RouteLabelOverflowValue. See
+// Middleware's own "Route label caveat" doc comment for the live,
+// unauthenticated exploit this exists to close: without it, an attacker
+// can create one new, permanent Prometheus/OTel metric series per distinct
+// URL path they send, whether or not it matches a real route.
+//
+// It is created once per Middleware call and shared, via the closure
+// Middleware returns, across every concurrent request that handler serves
+// -- the same lifetime and sharing pattern requestCount and
+// requestDuration (the metric instruments themselves) already have, so
+// its internal mutex sees exactly the concurrency a live server's request
+// goroutines already produce. middleware_test.go's
+// TestMiddleware_UnboundedRoutePaths_CardinalityIsBounded drives it
+// concurrently, under -race, for exactly this reason.
+type routeLabelLimiter struct {
+	mu    sync.Mutex
+	seen  map[string]struct{}
+	limit int
+}
+
+// newRouteLabelLimiter returns a routeLabelLimiter that lets up to limit
+// distinct values through unchanged before it starts returning
+// RouteLabelOverflowValue for anything new.
+func newRouteLabelLimiter(limit int) *routeLabelLimiter {
+	return &routeLabelLimiter{seen: make(map[string]struct{}, limit), limit: limit}
+}
+
+// label returns path unchanged if it has already been recorded, or if
+// fewer than limit distinct values have been recorded so far (in which
+// case path itself is now recorded); otherwise it returns
+// RouteLabelOverflowValue without recording path, so the number of
+// distinct values label can ever return stays fixed at limit+1 for the
+// lifetime of l.
+func (l *routeLabelLimiter) label(path string) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if _, ok := l.seen[path]; ok {
+		return path
+	}
+	if len(l.seen) >= l.limit {
+		return RouteLabelOverflowValue
+	}
+	l.seen[path] = struct{}{}
+	return path
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the status code

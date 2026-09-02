@@ -4,11 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
+	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -292,5 +297,95 @@ func TestHandler_ServeHTTP_UnsupportedMethod_ReturnsMethodNotAllowed(t *testing.
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d (net/http ServeMux's automatic response for a method with no registered pattern)",
 			rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+// TestHandler_List_AnnotatesSpanWithTenant reproduces the round-4
+// reference-app retrofit finding: list runs downstream of the identical
+// tenancy.Middleware as create -- both read an equally-resolved tenant off
+// ctx -- yet only create called obs.AnnotateTenant, so a GET
+// /api/v1/notes span carried no tenant_id while a POST /api/v1/notes one
+// did. This starts a real span the same way
+// go/observability/middleware_test.go's own AnnotateTenant tests do, puts
+// a tenant on that same context, calls Handler.list through ServeHTTP, and
+// asserts the exported span carries a tenant_id attribute. It fails
+// against the unfixed list (no tenant_id attribute at all, since
+// AnnotateTenant is never called) and passes once list calls
+// obs.AnnotateTenant like create does.
+func TestHandler_List_AnnotatesSpanWithTenant(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	exp := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+
+	ctx, span := tp.Tracer("notes_test").Start(context.Background(), "GET /api/v1/notes")
+	ctx = pkgcore.WithTenant(ctx, "tenant-acme")
+
+	req := httptest.NewRequest(http.MethodGet, apiPath, nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	span.End()
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	spans := exp.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("expected exactly 1 exported span, got %d", len(spans))
+	}
+	var tenantAttr string
+	var found bool
+	for _, a := range spans[0].Attributes {
+		if string(a.Key) == obs.TenantIDKey {
+			tenantAttr = a.Value.AsString()
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected span to carry a %s attribute (matching create's behavior); attributes: %v",
+			obs.TenantIDKey, spans[0].Attributes)
+	}
+	if tenantAttr != "tenant-acme" {
+		t.Errorf("%s attribute = %q, want %q", obs.TenantIDKey, tenantAttr, "tenant-acme")
+	}
+}
+
+// TestHandler_List_LogsWithTenantID reproduces the round-4 reference-app
+// retrofit finding's medium-severity half: list never logged anything at
+// all, so a GET /api/v1/notes request left behind zero tenant_id-bearing
+// log lines, unlike create's "note created" line (obs.FromContext(ctx).
+// Info in handler.go's create). This injects a text-handler logger via
+// obs.WithLogger -- the same technique go/observability/logger_test.go
+// uses to assert on FromContext's attached fields -- calls Handler.list
+// through ServeHTTP, and asserts a "notes listed" log line was written
+// carrying the caller's tenant_id. It fails against the unfixed list (no
+// log line captured at all) and passes once list logs through
+// obs.FromContext(ctx) like create does.
+func TestHandler_List_LogsWithTenantID(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	ctx := obs.WithLogger(pkgcore.WithTenant(context.Background(), "tenant-acme"), logger)
+
+	req := httptest.NewRequest(http.MethodGet, apiPath, nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, `msg="notes listed"`) {
+		t.Fatalf("expected a %q log line for the GET request; captured log output: %s", "notes listed", out)
+	}
+	if want := obs.TenantIDKey + "=tenant-acme"; !strings.Contains(out, want) {
+		t.Errorf("log line missing %q (matching create's behavior); got: %s", want, out)
+	}
+	if want := "note_count=0"; !strings.Contains(out, want) {
+		t.Errorf("log line missing %q for an empty tenant; got: %s", want, out)
 	}
 }

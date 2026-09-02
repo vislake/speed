@@ -2,8 +2,10 @@ package observability_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	dto "github.com/prometheus/client_model/go"
@@ -229,6 +231,77 @@ func TestMiddleware_DifferentRouteOrStatus_ProducesSeparateSeries(t *testing.T) 
 	counter := findFamily(t, families, promRequestCountFamily)
 	if got := len(counter.GetMetric()); got != 2 {
 		t.Fatalf("expected 2 distinct series for 2 distinct (route, status) pairs, got %d: %v", got, counter.GetMetric())
+	}
+}
+
+// TestMiddleware_UnboundedRoutePaths_CardinalityIsBounded is the negative
+// control for the live, unauthenticated exploit described in Middleware's
+// "Route label caveat" doc comment: neither a mux 404 nor
+// tenancy.Middleware's pre-mux 403 requires a valid route or credential, so
+// without a bound an attacker can create one new, permanent metric series
+// per distinct URL path they send. This drives the handler well past
+// obs.MaxRouteLabelValues distinct paths (concurrently, to also exercise
+// routeLabelLimiter's mutex under -race) and asserts the resulting series
+// count stays fixed at MaxRouteLabelValues+1 -- the tracked values plus the
+// one overflow bucket -- rather than growing with the number of distinct
+// paths sent.
+func TestMiddleware_UnboundedRoutePaths_CardinalityIsBounded(t *testing.T) {
+	reg := setupMeterProvider(t)
+	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// A real mux would 404 an unregistered path; the exact status is
+		// irrelevant to what this test checks (route-label cardinality),
+		// so a fixed 404 stands in for it.
+		w.WriteHeader(http.StatusNotFound)
+	}))
+
+	const attackerRequests = obs.MaxRouteLabelValues + 20
+	var wg sync.WaitGroup
+	for i := 0; i < attackerRequests; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			path := fmt.Sprintf("/attacker-garbage-path-%d", i)
+			handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, path, ""))
+		}(i)
+	}
+	wg.Wait()
+
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	assertNoTenantLabelAnywhere(t, families)
+
+	counter := findFamily(t, families, promRequestCountFamily)
+	metrics := counter.GetMetric()
+	wantSeries := obs.MaxRouteLabelValues + 1
+	if got := len(metrics); got != wantSeries {
+		t.Fatalf("got %d distinct http_route series for %d distinct attacker paths, want exactly %d (%d tracked + 1 overflow bucket): route-label cardinality is not bounded",
+			got, attackerRequests, wantSeries, obs.MaxRouteLabelValues)
+	}
+
+	var overflowFound bool
+	var totalRecorded float64
+	for _, m := range metrics {
+		v := m.GetCounter().GetValue()
+		totalRecorded += v
+		if labelMap(m)["http_route"] == obs.RouteLabelOverflowValue {
+			overflowFound = true
+			if want := float64(attackerRequests - obs.MaxRouteLabelValues); v != want {
+				t.Errorf("overflow bucket (http_route=%q) recorded %v requests, want %v (%d total attacker requests - %d tracked distinct paths)",
+					obs.RouteLabelOverflowValue, v, want, attackerRequests, obs.MaxRouteLabelValues)
+			}
+			continue
+		}
+		if v != 1 {
+			t.Errorf("tracked route %q recorded %v requests, want exactly 1 (each attacker path in this test was requested once)", labelMap(m)["http_route"], v)
+		}
+	}
+	if !overflowFound {
+		t.Fatalf("expected one series labeled http_route=%q (the overflow bucket) among the %d gathered series, found none", obs.RouteLabelOverflowValue, len(metrics))
+	}
+	if totalRecorded != float64(attackerRequests) {
+		t.Errorf("sum of all recorded requests = %v, want %v (total attacker requests actually sent): a request was lost or double-counted", totalRecorded, attackerRequests)
 	}
 }
 

@@ -243,6 +243,18 @@ func toNoteResponse(note *Note) noteResponse {
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	// This handler runs downstream of tenancy.Middleware exactly like
+	// create above, so ctx already carries the same resolved tenant by
+	// the time this runs -- see create's identical call above for why
+	// AnnotateTenant is what actually attaches tenant_id to this
+	// request's span from here, rather than at obs.Middleware's own
+	// layer. It is a no-op when ctx carries no tenant (see
+	// AnnotateTenant's own doc comment), which is exactly the case
+	// handler_test.go's TestHandler_List_NoTenantInContext_ReturnsInternalError
+	// case exercises: h.repo.List still fails closed on that same missing
+	// tenant one line down, unaffected by this call.
+	obs.AnnotateTenant(ctx)
+
 	notes, err := h.repo.List(ctx)
 	if err != nil {
 		writeError(w, err)
@@ -253,6 +265,13 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	for i := range notes {
 		resp.Notes = append(resp.Notes, toNoteResponse(&notes[i]))
 	}
+
+	// obs.FromContext(ctx) attaches tenant_id (and trace_id/span_id, once
+	// this request's span carries an active one) automatically -- see
+	// create's identical comment above -- so a GET request now leaves
+	// behind the same kind of tenant_id-bearing log line a POST already
+	// did, instead of none at all.
+	obs.FromContext(ctx).Info("notes listed", "note_count", len(resp.Notes))
 
 	w.Header().Set("Content-Type", jsonContentType)
 	w.WriteHeader(http.StatusOK)

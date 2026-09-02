@@ -7,9 +7,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -180,6 +182,28 @@ func TestInit_Production_ExportsRealSpansAndMetricsOverOTLP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init(ProfileProduction): %v", err)
 	}
+	// Plain defer, not t.Cleanup, registered here -- immediately after
+	// the error check, and (crucially) *after* stopFakeCollector's own
+	// defer above so it runs first, LIFO -- for exactly the reason
+	// TestMetricsHandler_ProductionProfile_ReturnsNotFound's comment
+	// spells out: t.Cleanup callbacks all run strictly after this
+	// function (and its own defers) return, so a t.Cleanup registered
+	// here would run shutdown AFTER stopFakeCollector has already torn
+	// down the fake server. Without this defer, any assertion firing
+	// between here and the manual shutdown call below (e.g. the
+	// counter-construction check just after) would exit via
+	// runtime.Goexit() without ever calling shutdown, leaking the
+	// TracerProvider's batch-span-processor goroutine and the
+	// MeterProvider's periodic-reader goroutine for the rest of the test
+	// binary's process life -- see
+	// TestInit_Production_EarlyExitLeaksGoroutinesWithoutAnImmediateDefer
+	// below for a reproduction. The manual call below still runs first
+	// on the happy path, since it must: the trace/metric-count
+	// assertions need the data flushed before they run. This defer then
+	// runs a second time while the fake collector is still up (its own
+	// defer has not run yet), which is safe because OTel SDK Shutdown is
+	// idempotent.
+	defer func() { _ = shutdown(context.Background()) }()
 
 	_, span := otel.Tracer("observability_test").Start(ctx, "op")
 	span.End()
@@ -206,6 +230,135 @@ func TestInit_Production_ExportsRealSpansAndMetricsOverOTLP(t *testing.T) {
 	if got := metrics.count(); got == 0 {
 		t.Errorf("fake collector received %d metric export requests, want at least 1", got)
 	}
+}
+
+// TestInit_Production_EarlyExitLeaksGoroutinesWithoutAnImmediateDefer is a
+// regression test for a goroutine-leak bug found in
+// TestInit_Production_ExportsRealSpansAndMetricsOverOTLP: that test used
+// to call shutdown(ctx) only once, near the end of its happy path, with no
+// defer or t.Cleanup registered right after Init succeeded. Any assertion
+// firing between Init succeeding and that manual call would exit the test
+// via t.Fatal's runtime.Goexit() without ever invoking shutdown, leaking
+// the production TracerProvider's batch-span-processor goroutine and the
+// MeterProvider's periodic-reader goroutine for the rest of the test
+// binary's process life. The fix is a defer registered immediately after
+// Init's error check, matching the pattern
+// TestMetricsHandler_ProductionProfile_ReturnsNotFound already
+// established (see that test's own comment for why it must be a plain
+// defer, not t.Cleanup).
+//
+// This proves both directions of that fix with a real negative control,
+// using t.Fatal's own exit mechanism -- runtime.Goexit -- inside a
+// throwaway goroutine so it can reproduce an early test failure without
+// actually failing this test:
+//   - without a defer registered before the early exit (the pre-fix
+//     shape), Init's background goroutines measurably leak. If this
+//     stopped being true (e.g. a future OTel SDK version started
+//     lazily starting these goroutines, or stopped needing Shutdown to
+//     stop them), this test would no longer be proving anything, so
+//     the leak is asserted explicitly rather than assumed.
+//   - with a defer registered right after Init's error check -- the
+//     fixed shape, and what every Init(ProfileProduction, ...) call in
+//     this file now uses -- they do not.
+func TestInit_Production_EarlyExitLeaksGoroutinesWithoutAnImmediateDefer(t *testing.T) {
+	lis, srv := startFakeCollector(t)
+	defer stopFakeCollector(t, lis, srv)
+
+	// runInitThenExitEarly reproduces "Init succeeds, then something
+	// fails before any cleanup runs" inside its own goroutine, exiting
+	// it via runtime.Goexit -- exactly the mechanism t.Fatal uses -- so
+	// that, for the deferShutdown=false case, omitting a defer before
+	// the exit reproduces the original leak without failing this test
+	// itself. t.Fatal/t.Errorf are deliberately never called from inside
+	// the goroutine (only the main test goroutine may call them safely);
+	// it reports failure to the caller by returning a nil shutdown. It
+	// always returns whatever shutdown func Init produced so the caller
+	// can reclaim it afterward, whether or not the goroutine itself
+	// deferred it.
+	runInitThenExitEarly := func(t *testing.T, deferShutdown bool) func(context.Context) error {
+		t.Helper()
+		var shutdown func(context.Context) error
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			var err error
+			shutdown, err = obs.Init(context.Background(), pkgcore.ProfileProduction,
+				obs.WithOTLPEndpoint(lis.Addr().String()),
+				obs.WithOTLPInsecure(true),
+			)
+			if err != nil {
+				shutdown = nil
+				return
+			}
+			if deferShutdown {
+				defer func() { _ = shutdown(context.Background()) }()
+			}
+			// Stand in for any assertion firing between Init succeeding
+			// and a later manual shutdown call -- exactly the window
+			// the original bug lived in.
+			runtime.Goexit()
+		}()
+		<-done
+		if shutdown == nil {
+			t.Fatal("Init did not succeed inside the simulated test goroutine")
+		}
+		return shutdown
+	}
+
+	baseline := settledGoroutineCount(t)
+
+	// Negative control: the pre-fix shape (no defer before the early
+	// exit) must actually leak, or the rest of this test proves nothing.
+	leakedShutdown := runInitThenExitEarly(t, false)
+	if got := settledGoroutineCount(t); got <= baseline {
+		t.Fatalf("negative control did not reproduce the leak: goroutine count = %d after an undeferred early exit, want > baseline %d -- has OTel SDK's shutdown-less behavior changed?", got, baseline)
+	}
+	// Reclaim what was deliberately leaked, both so it doesn't outlive
+	// this test retrying exports against the fake collector this
+	// function's own defer is about to tear down, and to confirm the
+	// leaked goroutines really were Init's own (they go away once its
+	// shutdown runs) rather than unrelated noise.
+	if err := leakedShutdown(context.Background()); err != nil {
+		t.Errorf("reclaiming the deliberately leaked shutdown: %v", err)
+	}
+	if got := settledGoroutineCount(t); got > baseline {
+		t.Fatalf("goroutine count = %d after reclaiming the negative control's leak, want <= baseline %d", got, baseline)
+	}
+
+	// Fixed shape: a defer registered right after Init's error check
+	// must not leak, even on the same early-exit path.
+	_ = runInitThenExitEarly(t, true)
+	if got := settledGoroutineCount(t); got > baseline {
+		t.Errorf("goroutine count = %d after an early exit with shutdown deferred immediately after Init, want <= baseline %d -- the fix should have let both background goroutines exit", got, baseline)
+	}
+}
+
+// settledGoroutineCount returns runtime.NumGoroutine() after giving
+// recently-exited goroutines a chance to actually unwind: a goroutine's
+// exit is not instantaneous relative to the statement that lets it exit
+// (closing a gRPC connection, or an OTel SDK Shutdown call returning), so
+// a bare single read taken immediately afterward is inherently racy. It
+// polls until the count stops falling for a short stability window or a
+// generous deadline elapses, and is meant only to be compared against
+// another call captured the same way -- never as an exact expected value.
+func settledGoroutineCount(t *testing.T) int {
+	t.Helper()
+	runtime.GC()
+	lowest := runtime.NumGoroutine()
+	deadline := time.Now().Add(3 * time.Second)
+	stableSince := time.Now()
+	for time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+		if n := runtime.NumGoroutine(); n < lowest {
+			lowest = n
+			stableSince = time.Now()
+			continue
+		}
+		if time.Since(stableSince) >= 200*time.Millisecond {
+			break
+		}
+	}
+	return lowest
 }
 
 // fakeTraceServer and fakeMetricServer implement the real, generated OTLP

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/tenancy"
 )
@@ -302,6 +303,148 @@ func TestHealthzAllowlist_GETOnlyAllowlist_LeavesHEADExposed(t *testing.T) {
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("HEAD %s with only GET allowlisted and a failing resolver: status = %d, want 403", healthzPath, rec.Code)
+	}
+}
+
+// TestBuildServer_Metrics_NoTenantRequired proves /metrics responds through
+// the real composed server regardless of Host -- including a Host
+// strictHostResolver cannot match to any configured tenant -- mirroring
+// TestBuildServer_Healthz_NoTenantRequired above for the other route
+// buildServer allowlists (see server.go's metricsPath doc comment: a
+// scraper, like a liveness probe, has no demo Host to send and must not
+// depend on one).
+//
+// Unlike the healthz version, this does not assert on a literal 200:
+// metricsHandler (server.go) serves whatever obs.MetricsHandler() currently
+// returns, and -- like every other test that drives buildServer directly in
+// this file -- this test never calls obs.Init, so metricsHandler answers
+// its documented "before Init has run" 404 here, not a real scrape (see
+// MetricsHandler's own doc comment in go/observability/init.go). The
+// property this test level can honestly verify is narrower, but is the one
+// actually in question here: tenancy.Middleware's allowlist let the
+// request through to metricsHandler at all, for every Host, instead of
+// rejecting it with 403 -- ErrTenantUnresolved is the ONLY status
+// Middleware itself ever produces (go/tenancy/middleware.go), so "not 403"
+// is a precise proof of "no tenant required" at this level.
+// TestMetricsAllowlist_ResolutionFailure_StillReturns200 below additionally
+// proves the stronger "really answers 200" property the manual
+// verification that found this gap relied on, in isolation from whatever
+// obs.Init state this process happens to be in, by calling obs.Init itself.
+func TestBuildServer_Metrics_NoTenantRequired(t *testing.T) {
+	srv := buildTestServer(t)
+
+	for _, host := range []string{"acme.demo.localhost", "totally-unrecognized-host.example"} {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			req, err := http.NewRequest(method, srv.URL+metricsPath, nil)
+			if err != nil {
+				t.Fatalf("build request: %v", err)
+			}
+			req.Host = host
+
+			resp, err := srv.Client().Do(req)
+			if err != nil {
+				t.Fatalf("%s %s (Host=%q): %v", method, metricsPath, host, err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode == http.StatusForbidden {
+				t.Fatalf("%s %s (Host=%q) status = %d, want anything but 403 (tenant resolution must not be required for this route)",
+					method, metricsPath, host, resp.StatusCode)
+			}
+		}
+	}
+}
+
+// TestMetricsAllowlist_ResolutionFailure_StillReturns200 is metricsPath's
+// counterpart to TestHealthzAllowlist_ResolutionFailure_StillReturns200
+// above, proving the same property tenancy.WithAllowlist gives /healthz --
+// the route stays reachable even when the Resolver fails outright -- for
+// the other route buildServer allowlists.
+//
+// Unlike TestBuildServer_Metrics_NoTenantRequired above, this test calls
+// obs.Init(ProfileDemo) itself first, so metricsHandler answers with a real
+// Prometheus scrape (200) here, exactly as main.go's run() arranges before
+// serving any production traffic (see main.go's run) -- reproducing, as a
+// permanent automated test, exactly what manual verification of this gap
+// found: with Init having actually run, both GET and HEAD /metrics return
+// 200 regardless of Host/resolution outcome. Init's returned shutdown is
+// registered via t.Cleanup so the package-level handler
+// obs.MetricsHandler() returns is restored to its unavailable-by-default
+// state before any other test in this binary runs -- the same discipline
+// go/observability's own tests use to keep repeated Init calls independent.
+func TestMetricsAllowlist_ResolutionFailure_StillReturns200(t *testing.T) {
+	shutdown, err := obs.Init(context.Background(), pkgcore.ProfileDemo)
+	if err != nil {
+		t.Fatalf("obs.Init(ProfileDemo): %v", err)
+	}
+	t.Cleanup(func() {
+		if shutdownErr := shutdown(context.Background()); shutdownErr != nil {
+			t.Errorf("obs.Init shutdown: %v", shutdownErr)
+		}
+	})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(http.MethodGet+" "+metricsPath, metricsHandler)
+
+	// The same construction buildServer uses: tenancy.Middleware wrapping
+	// the mux, allowlisting both GET and HEAD for metricsPath -- see
+	// server.go's own comment on why HEAD needs its own entry too.
+	handler := tenancy.Middleware(failingResolver{},
+		tenancy.WithAllowlist(http.MethodGet, metricsPath),
+		tenancy.WithAllowlist(http.MethodHead, metricsPath),
+	)(mux)
+
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		req := httptest.NewRequest(method, metricsPath, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s %s with a failing resolver: status = %d, want 200 (body: %s)", method, metricsPath, rec.Code, rec.Body.String())
+		}
+	}
+
+	// Sanity check, proving the allowlist -- not general leniency in
+	// metricsHandler or the mux -- is what let the requests above through:
+	// the identical failing resolver still fails closed (403) for a path
+	// that was never allowlisted.
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/notes", nil)
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusForbidden {
+		t.Fatalf("GET /api/v1/notes with a failing resolver and no allowlist entry: status = %d, want 403 (body: %s)",
+			rec2.Code, rec2.Body.String())
+	}
+}
+
+// TestMetricsAllowlist_GETOnlyAllowlist_LeavesHEADExposed is metricsPath's
+// counterpart to TestHealthzAllowlist_GETOnlyAllowlist_LeavesHEADExposed
+// above. buildServer allowlists metricsPath the same two-calls-one-per-
+// method way it allowlists healthzPath (server.go), so it carries the exact
+// same regression risk: net/http's ServeMux auto-serves HEAD from the
+// registered "GET "+metricsPath pattern, but tenancy.Middleware does not
+// extend WithAllowlist's exemption from GET to HEAD automatically (its own
+// doc comment says so explicitly) -- so forgetting, or later deleting, the
+// tenancy.WithAllowlist(http.MethodHead, metricsPath) call in buildServer
+// would silently leave HEAD /metrics one resolver failure away from a 403.
+//
+// This test reproduces that gap deliberately (GET allowlisted only) as a
+// permanent canary: if it ever starts failing -- HEAD suddenly returning
+// 200 -- either net/http's or tenancy.Middleware's GET/HEAD behavior
+// changed, or buildServer may no longer need its explicit HEAD allowlist
+// entry for metricsPath.
+func TestMetricsAllowlist_GETOnlyAllowlist_LeavesHEADExposed(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc(http.MethodGet+" "+metricsPath, metricsHandler)
+
+	handler := tenancy.Middleware(failingResolver{}, tenancy.WithAllowlist(http.MethodGet, metricsPath))(mux)
+
+	req := httptest.NewRequest(http.MethodHead, metricsPath, nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("HEAD %s with only GET allowlisted and a failing resolver: status = %d, want 403", metricsPath, rec.Code)
 	}
 }
 

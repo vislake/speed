@@ -293,9 +293,14 @@ func healthzHandler(w http.ResponseWriter, r *http.Request) {
 // not depend on Init having already run by mount time: run() does call
 // Init first (see main.go), but this indirection keeps that an
 // implementation detail of main.go rather than a hidden requirement on
-// buildServer's caller, and lets server_test.go's tests -- which call
-// buildServer directly and never call obs.Init at all -- mount the route
-// without needing to care what it serves.
+// buildServer's caller: a test that calls buildServer directly (as
+// server_test.go's TestBuildServer_Metrics_NoTenantRequired does) can mount
+// the route and assert on it without needing to care whether obs.Init has
+// run yet in this process, or ever will -- see that test's own doc comment
+// for exactly which weaker property it falls back to proving as a result.
+// A test that instead builds its own mux around this same handler, as
+// TestMetricsAllowlist_ResolutionFailure_StillReturns200 does, is free to
+// call obs.Init itself first for a deterministic answer.
 func metricsHandler(w http.ResponseWriter, r *http.Request) {
 	obs.MetricsHandler().ServeHTTP(w, r)
 }

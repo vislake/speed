@@ -59,12 +59,19 @@ type Config struct {
 	// itself. go/pkgcore/config's bootstrap loader is the natural home
 	// for a value like this once a host wires that loader in; until then
 	// a host resolves it exactly how it resolves its other bootstrap
-	// settings and passes it here via WithOTLPEndpoint -- see
-	// examples/reference-app/cmd/server/main.go's configFromEnv for this
-	// package's own reference wiring (a plain SPEED_OTLP_ENDPOINT
-	// environment variable, matching pkgcore/config's SPEED_ prefix
-	// convention even though the loader itself is not invoked yet). This
-	// field is the seam a real host wires up.
+	// settings and passes it here via WithOTLPEndpoint. This field is
+	// the seam a real host wires up.
+	//
+	// examples/reference-app does not yet demonstrate that wiring:
+	// cmd/server/server.go's configFromEnv reads only SPEED_PROFILE,
+	// PORT and SPEED_DB_PATH, and cmd/server/main.go's run calls Init
+	// with no WithOTLPEndpoint option. buildServer rejects every
+	// profile except pkgcore.ProfileDemo before Init ever runs, so
+	// that example never reaches the ProfileProduction path this
+	// field configures, and there is no SPEED_OTLP_ENDPOINT (or
+	// equivalent) anywhere in this repository today. A host wiring
+	// real production OTLP export starts this field's resolution
+	// from scratch, not from an existing example to copy.
 	OTLPEndpoint string
 
 	// OTLPInsecure disables gRPC transport security for the OTLP
