@@ -87,7 +87,9 @@ describe('registerNamespace', () => {
 
   it('refuses invalid namespace names', () => {
     const instance = instanceWithSupported(['zh-CN'])
-    for (const name of ['1welcome', 'welcome space', 'weiß']) {
+    // Scoped npm names ('@speed/tokens') are not namespaces: a package
+    // registers under its base name, and the pattern admits no '@' or '/'.
+    for (const name of ['1welcome', 'welcome space', 'weiß', '@speed/tokens']) {
       expect(
         () => registerNamespace(instance, name, { 'zh-CN': { a: 'x' } }),
         name,

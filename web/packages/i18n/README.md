@@ -41,10 +41,14 @@ await switchLanguage(i18n, 'en-US') // persists the canonical choice
 
 ## Namespaces and registration
 
-One namespace per package, named `@scope/package` style (`welcome`,
-`@speed/tokens`... anything matching `[A-Za-z][A-Za-z0-9_-]*`). Resources
-map canonical language tags to bundles; registration is atomic and
-validated before anything lands:
+One namespace per package, in bare, unscoped form: a name matches
+`[A-Za-z][A-Za-z0-9_-]*` (`welcome`, `auth`...). Scoped npm-style names
+are not namespaces: `registerNamespace` refuses `@speed/tokens` -- the
+pattern allows no `@` or `/`, because a namespace is a short key hosts
+write in `useTranslation('...')` and override, not a package identifier.
+A package that ships locale resources registers under its base name.
+Resources map canonical language tags to bundles; registration is atomic
+and validated before anything lands:
 
 - every language key must be a supported language, **every supported
   language must be present** (a namespace speaking fewer languages than the
@@ -127,7 +131,7 @@ production lookup must degrade visibly, not crash).
 ## Development
 
 From `web/packages/i18n`: `pnpm lint`, `pnpm typecheck`, `pnpm test`
-(61 tests), `pnpm build`. Bilingual fixtures live under
+(63 tests), `pnpm build`. Bilingual fixtures live under
 `test-utils/locales/` (repo CJK-scanner exemption); sources and tests
 assert against imported fixtures. `test-utils/` is test-only and never
 emitted into `dist/`.
