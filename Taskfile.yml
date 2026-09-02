@@ -152,6 +152,12 @@ tasks:
         echo "in this repository yet (docs/internal/19-dev-workflow.md,"
         echo "docs/internal/15-roadmap.md) -- those land in later rounds."
         exit 1
+    # Without silent, task echoes the whole script block above back as the
+    # command line (task: [dev] | ...) before running it, doubling every
+    # line. A not-implemented stub exists to print this message, so silent
+    # keeps the message the only output; the exit-1 contract is unaffected.
+    # Same for api:gen, docs:serve and seed below.
+    silent: true
 
   api:gen:
     desc: Not implemented -- the API contract toolchain (spec merge, backend interface and frontend sdk generation) does not exist yet.
@@ -168,6 +174,7 @@ tasks:
         echo "15-roadmap.md's API-contract items) delivers it; until then there is"
         echo "nothing for this task to run."
         exit 1
+    silent: true
 
   docs:serve:
     desc: Not implemented -- the docs site does not exist yet.
@@ -182,6 +189,7 @@ tasks:
         echo "Until then, preview the design docs directly as markdown:"
         echo "    open docs/internal/00-overview.md"
         exit 1
+    silent: true
 
   seed:
     desc: Not implemented -- no demo-data seeding path exists in the reference app yet.
@@ -201,6 +209,7 @@ tasks:
         echo "For a manual demo today, run the server and drive it with curl, exactly"
         echo "as examples/reference-app/README.md's 'Try it' section shows."
         exit 1
+    silent: true
 
   new:module:
     desc: Scaffold a new Go module stub under go/<name> and print its registration checklist.
@@ -212,4 +221,8 @@ tasks:
     # row, lockstep release tag, roadmap and navigation rows) for the human to
     # perform -- it never rewrites shared repository files itself.
     cmds:
-      - python3 tools/new_module.py {{.NAME}} --description '{{.DESCRIPTION}}' --design-doc {{.DESIGN_DOC}}
+      # Every variable is quoted: an unquoted {{.NAME}} or {{.DESIGN_DOC}}
+      # would let the shell split a value on spaces before the script's own
+      # validation sees it. Quoted, a malformed value reaches the script
+      # whole and fails there with its own message (exit 2, nothing written).
+      - python3 tools/new_module.py '{{.NAME}}' --description '{{.DESCRIPTION}}' --design-doc '{{.DESIGN_DOC}}'
