@@ -40,6 +40,13 @@ name: pr-check
 #         sum files must be canonical. This repo has been bitten by a stale
 #         go.work.sum before; the fix discipline (Taskfile setup) is to
 #         commit the sync result together with dependency changes.
+#       - the no-literal-text rule's own unit tests -- vitest over
+#         web/eslint-rules/no-literal-text.test.mjs from the web/ root.
+#         The rule and its tests live outside every package, so no
+#         per-package suite picks them up; running them here, once per
+#         PR, is what keeps a future rule change honest. Node/pnpm come
+#         from setup-node-env's single sources and the frozen-lockfile
+#         workspace install (steps at the end of this job).
 #
 # DELIBERATELY NOT WIRED HERE (18-cicd discipline table rows whose tooling
 # does not exist in the repository yet; each lands with its tooling round --
@@ -47,12 +54,14 @@ name: pr-check
 #   * semgrep rules, spec merging, redocly rules, oasdiff, Playwright e2e
 #     -- none of that tooling exists yet (see the gated pipeline stubs
 #     e2e/security/scaffold-verify/release/nightly in this directory for
-#     where each wires in). The ESLint foundation now exists and runs on
-#     the npm packages above: the workspace's speed/no-literal-text rule
-#     (eslint.config.mjs + web/eslint-rules/, rule tests under vitest
-#     there) enforces i18n-sourced text over React package src. The
-#     remaining JSX-era rule (no hand-written backend calls) needs the
-#     generated api-sdk consumer surface and lands with the
+#     where each wires in). The ESLint foundation is wired, not
+#     deferred: the workspace's speed/no-literal-text rule
+#     (eslint.config.mjs + web/eslint-rules/) enforces i18n-sourced text
+#     over React package src in every npm-packages lint leg, and its own
+#     unit tests run in the repo-checks job described above -- the rule
+#     lives outside any package, so only a repo-level run exercises them.
+#     The remaining JSX-era rule (no hand-written backend calls) needs
+#     the generated api-sdk consumer surface and lands with the
 #     api-client/api-sdk round; the react-hooks plugin awaits a
 #     stateful-components round. The
 #     API-contract toolchain's backend half is real but lives in its own
@@ -151,3 +160,15 @@ jobs:
             echo "(go.work.sum / go.mod / go.sum), see Taskfile setup."
             exit 1
           }
+      # The no-literal-text rule's own unit tests (web/eslint-rules/) live
+      # outside every package, so no npm-package-ci leg picks them up;
+      # they run here, once per PR, against the same frozen-lockfile
+      # install and Node/pnpm single sources the npm-packages job uses.
+      - name: Set up pinned Node.js, pnpm and the pnpm store cache
+        uses: ./.github/actions/setup-node-env
+      - name: Install workspace dependencies (frozen lockfile)
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+      - name: ESLint workspace rule unit tests (vitest)
+        working-directory: web
+        run: pnpm exec vitest run eslint-rules/no-literal-text.test.mjs

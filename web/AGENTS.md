@@ -68,9 +68,12 @@ carries the workspace's own rules behind the `speed/` plugin namespace:
 `speed/no-literal-text` (implementation and rule tests in
 `web/eslint-rules/`) errors on user-facing text written inline in
 package `src` -- package tests and `test-utils/` are exempt by config,
-because fixture strings are data. Rule tests run from the workspace
-root (`pnpm exec vitest run eslint-rules/no-literal-text.test.mjs`), not
-from a package directory.
+because fixture strings are data. The rule's unit tests run from the
+workspace root, not from a package directory (the rule lives outside
+every package, so no per-package suite picks them up): locally via
+`pnpm exec vitest run eslint-rules/no-literal-text.test.mjs` from
+`web/`, and in CI by pr-check's `repo-checks` job, which runs that same
+command once per PR.
 
 Still deferred, tracked in the CI workflow headers with their owning
 rounds -- do not half-enable either: the generated-client-only API rule

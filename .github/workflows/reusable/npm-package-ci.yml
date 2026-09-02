@@ -32,10 +32,13 @@ name: npm-package-ci
 #                    pinned in the shared web/package.json
 #                    devDependencies. The workspace's own rules live
 #                    behind the speed/ plugin namespace: no-literal-text
-#                    (web/eslint-rules/, rule tests there) errors on
-#                    user-facing text written inline in package src --
-#                    package tests and test-utils are exempt by config
-#                    (fixture strings are data).
+#                    (implementation and rule tests in web/eslint-rules/)
+#                    errors on user-facing text written inline in package
+#                    src -- package tests and test-utils are exempt by
+#                    config (fixture strings are data). The rule's unit
+#                    tests live outside every package; pr-check runs them
+#                    once per PR in its repo-checks job, not in these
+#                    per-package legs.
 #   2. pnpm typecheck
 #                    tsc --noEmit under the strict web/tsconfig.base.json
 #                    settings (each package's tsconfig extends it).
