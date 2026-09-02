@@ -21,10 +21,10 @@ import (
 // retries are exhausted — since the situation can resolve itself (the
 // correct Handler registers before retries run out) or genuinely needs
 // operator attention, in which case the Job dead-letters and shows up in
-// DemoQueue.DeadLetterJobs.
+// StandaloneQueue.DeadLetterJobs.
 var ErrHandlerNotRegistered = apperr.Internal("jobs.handler_not_registered")
 
-// errDemoJobMissingTenant is execute's defensive response to a jobRecord
+// errStandaloneJobMissingTenant is execute's defensive response to a jobRecord
 // whose TenantID column is empty. This should never happen for a Job this
 // package's own Enqueue created — Task.validate rejects an empty TenantID
 // before Enqueue ever inserts a row — the only realistic cause is a row
@@ -44,14 +44,14 @@ var ErrHandlerNotRegistered = apperr.Internal("jobs.handler_not_registered")
 // same reason errAsynqTaskMissingTenant's own doc comment gives: the two
 // causes are operationally distinct and would send an operator chasing the
 // wrong fix.
-var errDemoJobMissingTenant = apperr.Internal("jobs.demo_job_missing_tenant")
+var errStandaloneJobMissingTenant = apperr.Internal("jobs.standalone_job_missing_tenant")
 
-// errDemoHandlerPanicked is invokeHandle's response when a Handler's
+// errStandaloneHandlerPanicked is invokeHandle's response when a Handler's
 // Handle panics instead of returning normally, so the failure still flows
 // through execute's ordinary retry/dead-letter accounting instead of an
 // unrecovered panic reaching runWorker's goroutine. See invokeHandle's own
 // doc comment for why recovering it matters.
-var errDemoHandlerPanicked = apperr.Internal("jobs.demo_handler_panicked")
+var errStandaloneHandlerPanicked = apperr.Internal("jobs.standalone_handler_panicked")
 
 // claimBatchSize bounds how many candidate rows one dispatch tick reads
 // before applying per-tenant concurrency gating in Go. It is a package
@@ -66,9 +66,9 @@ const claimBatchSize = 100
 // freshly detached context.Background(). This is deliberately NOT derived
 // from whatever context the original Queue.Enqueue call ran in — that
 // context no longer exists by the time a worker claims the row back out of
-// SQLite — and NOT derived from DemoQueue's own internal dispatcher/worker
+// SQLite — and NOT derived from StandaloneQueue's own internal dispatcher/worker
 // -loop lifecycle context either, so that closing the queue does not
-// abruptly cancel a Handle call already in flight (see DemoQueue.Close's
+// abruptly cancel a Handle call already in flight (see StandaloneQueue.Close's
 // own doc comment).
 //
 // This is the one function responsible for closing "the tenant context
@@ -88,7 +88,7 @@ func jobContext(tenant pkgcore.TenantID) context.Context {
 // is the one goroutine that writes runningPerTenant increments;
 // runWorker's decrements run concurrently with it by construction, so both
 // sides go through q.tenantMu.
-func (q *DemoQueue) runDispatcher(dispatch chan<- jobRecord) {
+func (q *StandaloneQueue) runDispatcher(dispatch chan<- jobRecord) {
 	defer q.wg.Done()
 	defer close(dispatch)
 
@@ -111,7 +111,7 @@ func (q *DemoQueue) runDispatcher(dispatch chan<- jobRecord) {
 // q.tenantConcurrency — moving on to the next candidate (which may belong
 // to a different tenant) rather than stalling on the first one, which is
 // what makes one tenant's backlog unable to starve another's.
-func (q *DemoQueue) dispatchOnce(dispatch chan<- jobRecord) {
+func (q *StandaloneQueue) dispatchOnce(dispatch chan<- jobRecord) {
 	ctx := context.Background()
 	candidates, err := claimCandidates(ctx, q.db, time.Now(), claimBatchSize)
 	if err != nil {
@@ -154,7 +154,7 @@ func (q *DemoQueue) dispatchOnce(dispatch chan<- jobRecord) {
 
 // tryReserveTenantSlot reports whether tenant is under q.tenantConcurrency,
 // reserving a slot (incrementing its running count) if so.
-func (q *DemoQueue) tryReserveTenantSlot(tenant pkgcore.TenantID) bool {
+func (q *StandaloneQueue) tryReserveTenantSlot(tenant pkgcore.TenantID) bool {
 	q.tenantMu.Lock()
 	defer q.tenantMu.Unlock()
 	if q.runningPerTenant[tenant] >= q.tenantConcurrency {
@@ -165,7 +165,7 @@ func (q *DemoQueue) tryReserveTenantSlot(tenant pkgcore.TenantID) bool {
 }
 
 // releaseTenantSlot releases a slot reserved by tryReserveTenantSlot.
-func (q *DemoQueue) releaseTenantSlot(tenant pkgcore.TenantID) {
+func (q *StandaloneQueue) releaseTenantSlot(tenant pkgcore.TenantID) {
 	q.tenantMu.Lock()
 	defer q.tenantMu.Unlock()
 	q.runningPerTenant[tenant]--
@@ -176,7 +176,7 @@ func (q *DemoQueue) releaseTenantSlot(tenant pkgcore.TenantID) {
 
 // runWorker receives claimed Jobs from dispatch and executes them one at a
 // time until dispatch is closed or q.stopCh fires.
-func (q *DemoQueue) runWorker(dispatch <-chan jobRecord) {
+func (q *StandaloneQueue) runWorker(dispatch <-chan jobRecord) {
 	defer q.wg.Done()
 	for {
 		select {
@@ -196,7 +196,7 @@ func (q *DemoQueue) runWorker(dispatch <-chan jobRecord) {
 // inside it into an ordinary error instead of letting it propagate out of
 // the worker goroutine that called execute. asynq's own processor.perform
 // (github.com/hibiken/asynq) already wraps the equivalent call in its own
-// defer/recover, which is what protects AsynqQueue for free; DemoQueue
+// defer/recover, which is what protects AsynqQueue for free; StandaloneQueue
 // hand-rolls its own worker loop (runWorker, this file), so it must do the
 // same here. Without this, a bug in any ONE tenant's Handler implementation
 // — a nil dereference, an out-of-range slice index against a malformed
@@ -207,7 +207,7 @@ func (q *DemoQueue) runWorker(dispatch <-chan jobRecord) {
 // error is handled identically to any other Handle failure by execute:
 // retried while attempts remain, then dead-lettered.
 //
-// The panic value becomes errDemoHandlerPanicked's cause, so job.Error
+// The panic value becomes errStandaloneHandlerPanicked's cause, so job.Error
 // stays a short, operator-readable line exactly like every other failure
 // this package records; the full stack trace is only logged, never
 // persisted — backend coding standard §6.2 forbids letting a stack trace
@@ -219,7 +219,7 @@ func invokeHandle(ctx context.Context, handler Handler, job *Job, progress Progr
 			log.Error("jobs: handler panicked",
 				"job_id", string(job.ID), "job_type", job.Type,
 				"panic", r, "stack", string(debug.Stack()))
-			err = errDemoHandlerPanicked.WithParam("type", job.Type).WithParam("job_id", string(job.ID)).
+			err = errStandaloneHandlerPanicked.WithParam("type", job.Type).WithParam("job_id", string(job.ID)).
 				WithCause(fmt.Errorf("%v", r))
 		}
 	}()
@@ -247,7 +247,7 @@ func invokeOnFailure(ctx context.Context, hook FailureHook, job *Job, cause erro
 
 // recordJobMetrics records one completed Handle attempt on the
 // "jobs.job.duration" Histogram and "jobs.job.attempts" Counter
-// registerJobMetrics wires (demo_queue.go), labeled by jobType and status
+// registerJobMetrics wires (standalone_queue.go), labeled by jobType and status
 // -- status is always one of StatusSucceeded/StatusRetrying/
 // StatusDeadLetter, the exact three outcomes execute can reach. Both
 // instruments share one attribute set, computed once. A nil q.jobDuration
@@ -255,7 +255,7 @@ func invokeOnFailure(ctx context.Context, hook FailureHook, job *Job, cause erro
 // always sets both fields together, so checking one stands for both --
 // see the struct field's own doc comment for why this must never panic a
 // job execution.
-func (q *DemoQueue) recordJobMetrics(jobType string, status Status, duration time.Duration) {
+func (q *StandaloneQueue) recordJobMetrics(jobType string, status Status, duration time.Duration) {
 	if q.jobDuration == nil {
 		return
 	}
@@ -271,7 +271,7 @@ func (q *DemoQueue) recordJobMetrics(jobType string, status Status, duration tim
 // "jobs.job.dead_letter" Counter registerJobMetrics wires, labeled by
 // jobType only. See recordJobMetrics's own doc comment for the nil-guard
 // rationale, which applies identically here.
-func (q *DemoQueue) recordDeadLetter(jobType string) {
+func (q *StandaloneQueue) recordDeadLetter(jobType string) {
 	if q.jobDeadLetter == nil {
 		return
 	}
@@ -283,7 +283,7 @@ func (q *DemoQueue) recordDeadLetter(jobType string) {
 // execute runs exactly one Handle attempt for rec (already StatusRunning
 // in the database) and persists its outcome. Handle is never called when
 // handler is nil (ErrHandlerNotRegistered) or when rec.TenantID is empty
-// (errDemoJobMissingTenant — defense in depth against a row that reached
+// (errStandaloneJobMissingTenant — defense in depth against a row that reached
 // this table by some path other than Enqueue); both are treated as an
 // ordinary Handle failure instead. A panic raised inside Handle, or inside
 // a FailureHook.OnFailure this method calls after a dead-letter, is
@@ -294,7 +294,7 @@ func (q *DemoQueue) recordDeadLetter(jobType string) {
 // success, retry or dead-letter) must not itself fail merely because the
 // Job's own per-attempt timeout happened to elapse at the exact moment
 // Handle returned.
-func (q *DemoQueue) execute(rec jobRecord) {
+func (q *StandaloneQueue) execute(rec jobRecord) {
 	tenant := pkgcore.TenantID(rec.TenantID)
 	baseCtx := jobContext(tenant)
 
@@ -322,8 +322,8 @@ func (q *DemoQueue) execute(rec jobRecord) {
 		// ever reaching Enqueue, so this is not reachable through the
 		// public API today — but a row that reached this table by some
 		// other path must still never run Handle with no usable tenant.
-		// See errDemoJobMissingTenant's own doc comment.
-		err = errDemoJobMissingTenant.WithParam("type", rec.Type).WithParam("job_id", rec.ID)
+		// See errStandaloneJobMissingTenant's own doc comment.
+		err = errStandaloneJobMissingTenant.WithParam("type", rec.Type).WithParam("job_id", rec.ID)
 	default:
 		progress := func(pct int, msg string) {
 			if perr := updateProgress(handleCtx, q.db, rec.ID, pct, msg); perr != nil {
@@ -378,7 +378,7 @@ func (q *DemoQueue) execute(rec jobRecord) {
 // backoffDelay computes the exponential backoff before the next attempt,
 // given that the attempts-th one has just failed: q.backoffBase *
 // 2^(attempts-1), capped at q.backoffMax. attempts below 1 is treated as 1.
-func (q *DemoQueue) backoffDelay(attempts int) time.Duration {
+func (q *StandaloneQueue) backoffDelay(attempts int) time.Duration {
 	if attempts < 1 {
 		attempts = 1
 	}

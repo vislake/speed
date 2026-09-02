@@ -27,14 +27,14 @@ import (
 // exercising the pkgcore.WithSystemContext branch of callerMayAccess.
 const testSystemPurpose = pkgcore.SystemPurpose("jobs.test_system_access")
 
-// newTestQueue returns a DemoQueue backed by a private, per-test temp-file
+// newTestQueue returns a StandaloneQueue backed by a private, per-test temp-file
 // SQLite database with the jobs schema already applied -- but NOT started:
 // callers that need Enqueue calls to land before the dispatcher's first
 // poll tick (TestPriorityOrdering, in particular) construct with this,
 // finish every Enqueue call they need, and only then call startQueue.
 // Poll interval and backoff are both set short so tests observe outcomes
 // quickly; every value remains overridable via opts.
-func newTestQueue(t *testing.T, opts ...Option) *DemoQueue {
+func newTestQueue(t *testing.T, opts ...Option) *StandaloneQueue {
 	t.Helper()
 	db := dbtest.NewSQLite(t)
 	if err := ensureJobsSchema(context.Background(), db); err != nil {
@@ -44,11 +44,11 @@ func newTestQueue(t *testing.T, opts ...Option) *DemoQueue {
 		WithPollInterval(15 * time.Millisecond),
 		WithBackoff(20*time.Millisecond, 200*time.Millisecond),
 	}
-	return NewDemoQueue(db, append(defaults, opts...)...)
+	return NewStandaloneQueue(db, append(defaults, opts...)...)
 }
 
 // startQueue starts q and registers a bounded Close via t.Cleanup.
-func startQueue(t *testing.T, q *DemoQueue) {
+func startQueue(t *testing.T, q *StandaloneQueue) {
 	t.Helper()
 	if err := q.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -61,7 +61,7 @@ func startQueue(t *testing.T, q *DemoQueue) {
 }
 
 // pollJob polls Get until done reports true or timeout elapses.
-func pollJob(t *testing.T, q *DemoQueue, ctx context.Context, id JobID, timeout time.Duration, done func(*Job) bool) *Job {
+func pollJob(t *testing.T, q *StandaloneQueue, ctx context.Context, id JobID, timeout time.Duration, done func(*Job) bool) *Job {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	var last *Job
@@ -82,12 +82,12 @@ func pollJob(t *testing.T, q *DemoQueue, ctx context.Context, id JobID, timeout 
 }
 
 // waitTerminal polls until id reaches a terminal Status.
-func waitTerminal(t *testing.T, q *DemoQueue, ctx context.Context, id JobID) *Job {
+func waitTerminal(t *testing.T, q *StandaloneQueue, ctx context.Context, id JobID) *Job {
 	t.Helper()
 	return pollJob(t, q, ctx, id, 3*time.Second, func(j *Job) bool { return j.Status.Terminal() })
 }
 
-func TestDemoQueue_StartAndClose_Lifecycle(t *testing.T) {
+func TestStandaloneQueue_StartAndClose_Lifecycle(t *testing.T) {
 	q := newTestQueue(t)
 
 	if err := q.Start(context.Background()); err != nil {
@@ -108,7 +108,7 @@ func TestDemoQueue_StartAndClose_Lifecycle(t *testing.T) {
 }
 
 func TestRegisterHandler_DuplicateType_Errors(t *testing.T) {
-	q := NewDemoQueue(nil)
+	q := NewStandaloneQueue(nil)
 	h := NewHandlerFunc("widgets.resize", func(context.Context, *Job, ProgressFn) (Result, error) {
 		return Result{}, nil
 	})
@@ -579,7 +579,7 @@ func TestProgressReporting(t *testing.T) {
 }
 
 // widgetFixture is a minimal tenant-scoped fixture used only to prove
-// TestDemoQueue_RebuildsTenantContext_HandlerUsesOnlyJobTenant against a
+// TestStandaloneQueue_RebuildsTenantContext_HandlerUsesOnlyJobTenant against a
 // real dbkit.Repository[T], following the same "define a small fixture
 // directly" precedent go/tenancy/tenancytest's own sprocket fixture doc
 // comment establishes (dbkit's own tenant-scoped test fixture lives in an
@@ -602,7 +602,7 @@ const createWidgetFixtureTableSQL = `CREATE TABLE widget_fixtures (
 	PRIMARY KEY (tenant_id, id)
 )`
 
-// TestDemoQueue_RebuildsTenantContext_HandlerUsesOnlyJobTenant is this
+// TestStandaloneQueue_RebuildsTenantContext_HandlerUsesOnlyJobTenant is this
 // package's end-to-end proof of AGENTS.md's central guarantee, exercised
 // through the REAL worker pool (contrast worker_test.go's
 // TestJobContext_* pair, which proves the same mechanism at the unit
@@ -615,7 +615,7 @@ const createWidgetFixtureTableSQL = `CREATE TABLE widget_fixtures (
 // Repository[T] call would fail closed with pkgcore.ErrNoTenant instead of
 // finding the seeded row, and this test would fail with that error
 // surfacing as the Job's own Error field.
-func TestDemoQueue_RebuildsTenantContext_HandlerUsesOnlyJobTenant(t *testing.T) {
+func TestStandaloneQueue_RebuildsTenantContext_HandlerUsesOnlyJobTenant(t *testing.T) {
 	db := dbtest.NewSQLite(t)
 	if err := db.Exec(createWidgetFixtureTableSQL).Error; err != nil {
 		t.Fatalf("create widget_fixtures table: %v", err)
@@ -628,7 +628,7 @@ func TestDemoQueue_RebuildsTenantContext_HandlerUsesOnlyJobTenant(t *testing.T) 
 		t.Fatalf("seed widget: %v", err)
 	}
 
-	q := NewDemoQueue(db, WithPollInterval(15*time.Millisecond))
+	q := NewStandaloneQueue(db, WithPollInterval(15*time.Millisecond))
 	if err := q.RegisterHandler(NewHandlerFunc("widget.lookup", func(ctx context.Context, _ *Job, _ ProgressFn) (Result, error) {
 		// ctx here comes ONLY from the worker's rebuild (see worker.go's
 		// jobContext and execute) -- Repository[T].FindByID fails closed
@@ -668,7 +668,7 @@ func TestRegisterQueueDepthGauge_Smoke(t *testing.T) {
 	if err := ensureJobsSchema(context.Background(), db); err != nil {
 		t.Fatalf("ensureJobsSchema() error = %v", err)
 	}
-	q := NewDemoQueue(db)
+	q := NewStandaloneQueue(db)
 	if err := q.registerQueueDepthGauge(); err != nil {
 		t.Errorf("registerQueueDepthGauge() error = %v, want nil", err)
 	}
@@ -732,7 +732,7 @@ func setupTestMeterProvider(t *testing.T) *sdkmetric.ManualReader {
 // collectMetric runs a fresh Collect and returns the single metric named
 // name, failing the test if it is missing -- name is always one of the
 // jobDurationMetricName/jobAttemptsMetricName/jobDeadLetterMetricName
-// literals demo_queue.go defines.
+// literals standalone_queue.go defines.
 //
 // A Collect() error is deliberately NOT fatal here: this test process
 // runs every test in package jobs in one binary sharing one process-wide
@@ -836,8 +836,8 @@ func histogramCount(t *testing.T, m metricdata.Metrics, jobType, status string) 
 	return 0
 }
 
-// TestDemoQueue_JobMetrics_RecordsDurationAttemptsAndDeadLetter is the
-// regression proof that DemoQueue actually emits the four
+// TestStandaloneQueue_JobMetrics_RecordsDurationAttemptsAndDeadLetter is the
+// regression proof that StandaloneQueue actually emits the four
 // docs/internal/09-observability.md must-instrument rows beyond queue
 // backlog depth -- execution duration percentiles, failure rate, retry
 // count and dead-letter count -- rather than only the "jobs.queue.depth"
@@ -853,7 +853,7 @@ func histogramCount(t *testing.T, m metricdata.Metrics, jobType, status string) 
 // StatusRetrying (the flaky Job's first failed attempt), StatusSucceeded
 // (its eventual success) and StatusDeadLetter (the always-fails Job,
 // once MaxRetries is exhausted).
-func TestDemoQueue_JobMetrics_RecordsDurationAttemptsAndDeadLetter(t *testing.T) {
+func TestStandaloneQueue_JobMetrics_RecordsDurationAttemptsAndDeadLetter(t *testing.T) {
 	reader := setupTestMeterProvider(t)
 	q := newTestQueue(t)
 
@@ -925,7 +925,7 @@ func TestRegisterJobMetrics_Smoke(t *testing.T) {
 	if err := ensureJobsSchema(context.Background(), db); err != nil {
 		t.Fatalf("ensureJobsSchema() error = %v", err)
 	}
-	q := NewDemoQueue(db)
+	q := NewStandaloneQueue(db)
 	if err := q.registerJobMetrics(); err != nil {
 		t.Errorf("registerJobMetrics() error = %v, want nil", err)
 	}

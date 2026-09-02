@@ -7,12 +7,12 @@ import (
 
 // Queue is the contract every deployment mode implements: submit a Task,
 // poll a Job's status, ask for cancellation. This is the ONLY portable
-// surface a caller outside this package should depend on — DemoQueue
+// surface a caller outside this package should depend on — StandaloneQueue
 // (this package's implementation for the standalone deployment mode)
 // exposes additional methods (RegisterHandler, Start, Close) that
-// configure and run it, which deliberately do not appear here, because a
-// Redis/asynq-backed production implementation is expected to need a
-// different setup shape of its own.
+// configure and run it, which deliberately do not appear here, because
+// the distributed deployment mode's Redis/asynq-backed implementation is
+// expected to need a different setup shape of its own.
 //
 // ctx is never the source of a new Job's own tenant — that is
 // Task.TenantID's job, since Enqueue is legitimately called from a context
@@ -63,7 +63,7 @@ const (
 
 	// DefaultTimeout bounds a single Handle call when Enqueue is called
 	// with no WithTimeout option and the Queue itself was not configured
-	// with a different default (DemoQueue's WithJobTimeout).
+	// with a different default (StandaloneQueue's WithJobTimeout).
 	DefaultTimeout = 5 * time.Minute
 )
 
@@ -127,7 +127,7 @@ func WithTimeout(d time.Duration) EnqueueOption {
 }
 
 // resolveEnqueueOptions applies opts over a set of defaults seeded from
-// fallbackTimeout (DemoQueue's configured default, itself falling back to
+// fallbackTimeout (StandaloneQueue's configured default, itself falling back to
 // DefaultTimeout), clamps out-of-range values, and computes the Job's
 // initial ScheduledAt from whichever of delay/scheduledAt was given,
 // relative to now.

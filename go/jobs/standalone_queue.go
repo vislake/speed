@@ -16,12 +16,12 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
-// instrumentationName identifies DemoQueue's own tracer/meter, mirroring
+// instrumentationName identifies StandaloneQueue's own tracer/meter, mirroring
 // observability.Middleware's identical use of its own package path for the
 // same purpose.
 const instrumentationName = "github.com/vislake/speed/go/jobs"
 
-// Metric instrument names DemoQueue registers under instrumentationName,
+// Metric instrument names StandaloneQueue registers under instrumentationName,
 // beyond "jobs.queue.depth" (registerQueueDepthGauge's own literal, kept
 // inline there since it has no other reference site): the execution-
 // duration-percentiles, failure-rate/retry-count and dead-letter-count
@@ -38,33 +38,33 @@ const (
 	jobDeadLetterMetricName = "jobs.job.dead_letter"
 )
 
-// Defaults for DemoQueue's construction Options, applied when the
+// Defaults for StandaloneQueue's construction Options, applied when the
 // corresponding With* option is not given. Named package-level constants
 // per the backend coding standard §10. Unlike dbkit's connection-pool
 // limits (deliberately fixed, "so there is exactly one place to
 // reconsider them"), worker-pool sizing and per-tenant concurrency really
-// are deployment-dependent — a small demo box and a beefier one
-// legitimately want different values — which is why this package exposes
+// are deployment-dependent — a small standalone deployment and a beefier
+// one legitimately want different values — which is why this package exposes
 // them as Options instead of hard-coding them the way dbkit.Options does
 // for its own pool limits.
 const (
-	// DefaultWorkerCount is how many Jobs a DemoQueue executes
+	// DefaultWorkerCount is how many Jobs a StandaloneQueue executes
 	// concurrently across all tenants combined, unless overridden by
 	// WithWorkerCount.
 	DefaultWorkerCount = 4
 
 	// DefaultTenantConcurrencyLimit is how many Jobs belonging to any one
-	// tenant a DemoQueue runs at once, unless overridden by
+	// tenant a StandaloneQueue runs at once, unless overridden by
 	// WithTenantConcurrencyLimit -- see that option's own doc comment for
 	// why this cap exists at all.
 	DefaultTenantConcurrencyLimit = 2
 
-	// DefaultPollInterval is how often a DemoQueue's dispatcher checks
+	// DefaultPollInterval is how often a StandaloneQueue's dispatcher checks
 	// for newly-eligible Jobs, unless overridden by WithPollInterval.
 	DefaultPollInterval = 200 * time.Millisecond
 
 	// DefaultBackoffBase is the base of the exponential retry backoff a
-	// DemoQueue applies between failed attempts, unless overridden by
+	// StandaloneQueue applies between failed attempts, unless overridden by
 	// WithBackoff. See backoffDelay for the exact formula this seeds.
 	DefaultBackoffBase = 1 * time.Second
 
@@ -74,16 +74,16 @@ const (
 )
 
 // ErrDuplicateHandlerType is returned by RegisterHandler when a Handler
-// for the same Type is already registered on this DemoQueue.
+// for the same Type is already registered on this StandaloneQueue.
 var ErrDuplicateHandlerType = apperr.Invalid("jobs.duplicate_handler_type")
 
-// Option configures a DemoQueue at construction time.
-type Option func(*DemoQueue)
+// Option configures a StandaloneQueue at construction time.
+type Option func(*StandaloneQueue)
 
-// WithWorkerCount sets how many Jobs DemoQueue executes concurrently
+// WithWorkerCount sets how many Jobs StandaloneQueue executes concurrently
 // across all tenants combined. Defaults to DefaultWorkerCount.
 func WithWorkerCount(n int) Option {
-	return func(q *DemoQueue) { q.workerCount = n }
+	return func(q *StandaloneQueue) { q.workerCount = n }
 }
 
 // WithTenantConcurrencyLimit caps how many Jobs belonging to any one
@@ -91,42 +91,42 @@ func WithWorkerCount(n int) Option {
 // starve every worker (docs/internal/07-platform-services.md). Defaults to
 // DefaultTenantConcurrencyLimit.
 func WithTenantConcurrencyLimit(n int) Option {
-	return func(q *DemoQueue) { q.tenantConcurrency = n }
+	return func(q *StandaloneQueue) { q.tenantConcurrency = n }
 }
 
 // WithPollInterval sets how often the dispatcher checks for newly-eligible
 // Jobs. Defaults to DefaultPollInterval.
 func WithPollInterval(d time.Duration) Option {
-	return func(q *DemoQueue) { q.pollInterval = d }
+	return func(q *StandaloneQueue) { q.pollInterval = d }
 }
 
 // WithJobTimeout sets the per-attempt timeout applied to an Enqueue call
 // that does not use WithTimeout. Defaults to DefaultTimeout.
 func WithJobTimeout(d time.Duration) Option {
-	return func(q *DemoQueue) { q.defaultTimeout = d }
+	return func(q *StandaloneQueue) { q.defaultTimeout = d }
 }
 
 // WithBackoff sets the exponential retry backoff's base and cap. Defaults
 // to DefaultBackoffBase and DefaultBackoffMax.
 func WithBackoff(base, max time.Duration) Option {
-	return func(q *DemoQueue) { q.backoffBase, q.backoffMax = base, max }
+	return func(q *StandaloneQueue) { q.backoffBase, q.backoffMax = base, max }
 }
 
-// DemoQueue is the standalone deployment mode's Queue implementation: an
+// StandaloneQueue is the standalone deployment mode's Queue implementation: an
 // in-process worker pool backed by a SQLite-persisted task table (survives a
 // process restart, per docs/internal/07-platform-services.md — task loss
 // matters more than a briefly miscounted quota). See AGENTS.md for the full
 // design and its documented known limitations.
 //
-// DemoQueue is returned as its own concrete exported type, not the
+// StandaloneQueue is returned as its own concrete exported type, not the
 // narrower Queue interface (compare pkgcore.NewMemoryKVStore, which
 // returns KVStore): a caller needs RegisterHandler, Start and Close to
 // actually configure and run it, and none of those belong on Queue's
-// portable surface — a production, Redis/asynq-backed implementation is
-// expected to need a different setup shape of its own. Code that only
-// needs the portable surface should still depend on the Queue interface,
+// portable surface — the distributed deployment mode's Redis/asynq-backed
+// implementation is expected to need a different setup shape of its own.
+// Code that only needs the portable surface should still depend on the Queue interface,
 // not this type; see the compile-time assertion below.
-type DemoQueue struct {
+type StandaloneQueue struct {
 	db *gorm.DB
 
 	workerCount       int
@@ -161,15 +161,15 @@ type DemoQueue struct {
 	startOnce sync.Once
 }
 
-// NewDemoQueue returns a DemoQueue backed by db, which must come from
+// NewStandaloneQueue returns a StandaloneQueue backed by db, which must come from
 // dbkit.Open (directly, or through dbkit/dbtest) — see AGENTS.md for why a
 // bare gorm.Open connection is not sufficient (Enqueue's idempotency check
 // relies on dbkit.Open's TranslateError:true, and dbkit.Open's
 // tenant-scoping plugin, though a no-op for jobRecord specifically, is the
 // only sanctioned way to obtain a *gorm.DB anywhere in this codebase).
-// NewDemoQueue performs no I/O; Start does.
-func NewDemoQueue(db *gorm.DB, opts ...Option) *DemoQueue {
-	q := &DemoQueue{
+// NewStandaloneQueue performs no I/O; Start does.
+func NewStandaloneQueue(db *gorm.DB, opts ...Option) *StandaloneQueue {
+	q := &StandaloneQueue{
 		db:                db,
 		workerCount:       DefaultWorkerCount,
 		tenantConcurrency: DefaultTenantConcurrencyLimit,
@@ -187,12 +187,12 @@ func NewDemoQueue(db *gorm.DB, opts ...Option) *DemoQueue {
 	return q
 }
 
-// RegisterHandler adds h to the set this DemoQueue dispatches to, keyed by
+// RegisterHandler adds h to the set this StandaloneQueue dispatches to, keyed by
 // h.Type(). Register every Handler before calling Start. RegisterHandler
 // remains safe to call after Start too (it is mutex-guarded), but a Job
 // already claimed before a late registration will not retroactively use
 // it — see ErrHandlerNotRegistered.
-func (q *DemoQueue) RegisterHandler(h Handler) error {
+func (q *StandaloneQueue) RegisterHandler(h Handler) error {
 	q.handlersMu.Lock()
 	defer q.handlersMu.Unlock()
 	if _, exists := q.handlers[h.Type()]; exists {
@@ -203,7 +203,7 @@ func (q *DemoQueue) RegisterHandler(h Handler) error {
 }
 
 // handler returns the Handler registered for jobType, or nil.
-func (q *DemoQueue) handler(jobType string) Handler {
+func (q *StandaloneQueue) handler(jobType string) Handler {
 	q.handlersMu.RLock()
 	defer q.handlersMu.RUnlock()
 	return q.handlers[jobType]
@@ -214,8 +214,8 @@ func (q *DemoQueue) handler(jobType string) Handler {
 // StatusPending, wires the "jobs.queue.depth", "jobs.job.duration",
 // "jobs.job.attempts" and "jobs.job.dead_letter" metrics, then launches
 // the dispatcher and worker goroutines. It is safe to call only once per
-// DemoQueue; later calls are a no-op.
-func (q *DemoQueue) Start(ctx context.Context) error {
+// StandaloneQueue; later calls are a no-op.
+func (q *StandaloneQueue) Start(ctx context.Context) error {
 	var startErr error
 	q.startOnce.Do(func() {
 		if err := ensureJobsSchema(ctx, q.db); err != nil {
@@ -252,11 +252,11 @@ func (q *DemoQueue) Start(ctx context.Context) error {
 // Close stops the dispatcher and waits for in-flight Jobs to reach their
 // own natural completion or timeout, up to ctx's deadline. It does not
 // itself cancel an in-flight Handle call: each one runs on a context
-// rooted independently of DemoQueue's own lifecycle (see jobContext and
+// rooted independently of StandaloneQueue's own lifecycle (see jobContext and
 // execute), so that closing the queue never abruptly truncates a business
 // operation already underway. Close is idempotent and safe to call more
 // than once, or without a prior Start.
-func (q *DemoQueue) Close(ctx context.Context) error {
+func (q *StandaloneQueue) Close(ctx context.Context) error {
 	q.closeOnce.Do(func() { close(q.stopCh) })
 
 	done := make(chan struct{})
@@ -274,7 +274,7 @@ func (q *DemoQueue) Close(ctx context.Context) error {
 }
 
 // Enqueue implements Queue.
-func (q *DemoQueue) Enqueue(ctx context.Context, task Task, opts ...EnqueueOption) (JobID, error) {
+func (q *StandaloneQueue) Enqueue(ctx context.Context, task Task, opts ...EnqueueOption) (JobID, error) {
 	if err := task.validate(); err != nil {
 		return "", err
 	}
@@ -306,7 +306,7 @@ func (q *DemoQueue) Enqueue(ctx context.Context, task Task, opts ...EnqueueOptio
 }
 
 // Get implements Queue.
-func (q *DemoQueue) Get(ctx context.Context, id JobID) (*Job, error) {
+func (q *StandaloneQueue) Get(ctx context.Context, id JobID) (*Job, error) {
 	rec, err := findByID(ctx, q.db, id)
 	if err != nil {
 		return nil, err
@@ -318,7 +318,7 @@ func (q *DemoQueue) Get(ctx context.Context, id JobID) (*Job, error) {
 }
 
 // Cancel implements Queue.
-func (q *DemoQueue) Cancel(ctx context.Context, id JobID) error {
+func (q *StandaloneQueue) Cancel(ctx context.Context, id JobID) error {
 	rec, err := findByID(ctx, q.db, id)
 	if err != nil {
 		return err
@@ -334,7 +334,7 @@ func (q *DemoQueue) Cancel(ctx context.Context, id JobID) error {
 // callerMayAccess). It is not part of the Queue interface: a convenience
 // for operating this one implementation, not a portable contract every
 // deployment mode need offer identically.
-func (q *DemoQueue) DeadLetterJobs(ctx context.Context) ([]*Job, error) {
+func (q *StandaloneQueue) DeadLetterJobs(ctx context.Context) ([]*Job, error) {
 	recs, err := deadLetterRecords(ctx, q.db)
 	if err != nil {
 		return nil, err
@@ -373,7 +373,7 @@ func callerMayAccess(ctx context.Context, owner pkgcore.TenantID) bool {
 // tenant_id via obs.FromContext), exactly mirroring
 // observability.Middleware's own documented split between metric labels
 // and span/log attributes.
-func (q *DemoQueue) registerQueueDepthGauge() error {
+func (q *StandaloneQueue) registerQueueDepthGauge() error {
 	meter := otel.Meter(instrumentationName)
 	_, err := meter.Int64ObservableGauge(
 		"jobs.queue.depth",
@@ -414,7 +414,7 @@ func (q *DemoQueue) registerQueueDepthGauge() error {
 // ObservableGauge callback, since "how long did this attempt take" and
 // "did this attempt fail" are events, not a value that can be sampled on
 // demand from q.db.
-func (q *DemoQueue) registerJobMetrics() error {
+func (q *StandaloneQueue) registerJobMetrics() error {
 	meter := otel.Meter(instrumentationName)
 
 	duration, err := meter.Float64Histogram(
@@ -448,5 +448,5 @@ func (q *DemoQueue) registerJobMetrics() error {
 	return nil
 }
 
-// compile-time check that *DemoQueue satisfies Queue.
-var _ Queue = (*DemoQueue)(nil)
+// compile-time check that *StandaloneQueue satisfies Queue.
+var _ Queue = (*StandaloneQueue)(nil)

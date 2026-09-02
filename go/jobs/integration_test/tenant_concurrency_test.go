@@ -12,7 +12,7 @@ import (
 )
 
 // blockingHandler signals startedCh with its Job's id, then blocks until
-// the test sends on releaseCh -- mirrors demo_queue_test.go's
+// the test sends on releaseCh -- mirrors standalone_queue_test.go's
 // identically-named type in the parent package.
 type blockingHandler struct {
 	jobType   string
@@ -29,7 +29,7 @@ func (h *blockingHandler) Handle(_ context.Context, job *jobs.Job, _ jobs.Progre
 }
 
 // TestRedisQueue_PerTenantConcurrencyLimiting is the distributed
-// deployment mode's counterpart of demo_queue_test.go's TestPerTenantConcurrencyLimiting:
+// deployment mode's counterpart of standalone_queue_test.go's TestPerTenantConcurrencyLimiting:
 // proof that one tenant's backlog cannot starve another tenant's Jobs, and
 // that AsynqQueue's own admission gate (asynq_worker.go's
 // tryReserveTenantSlot, layered on top of asynq -- see AGENTS.md's
@@ -38,8 +38,9 @@ func (h *blockingHandler) Handle(_ context.Context, job *jobs.Job, _ jobs.Progre
 // dequeuing from real Redis, not merely documented.
 //
 // Concurrency is deliberately small (2) relative to the flood size (3) so
-// that, exactly as in the demo proof, more than one of tenant-a's jobs is
-// available to be dequeued at once -- the scenario that would starve
+// that, exactly as in the standalone deployment mode's own proof, more
+// than one of tenant-a's jobs is available to be dequeued at once -- the
+// scenario that would starve
 // tenant-b if AsynqQueue bounced an over-limit job by blocking inside
 // processTask instead of returning errTenantAtCapacity immediately (see
 // errTenantAtCapacity's own doc comment).

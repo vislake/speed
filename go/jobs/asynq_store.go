@@ -55,7 +55,7 @@ var asynqPriorityQueues = [3]string{asynqQueueCritical, asynqQueueDefault, asynq
 
 // queueForPriority maps a Priority to one of asynqPriorityQueues.
 // Intermediate values collapse to "default" -- see AGENTS.md's documented
-// difference from DemoQueue's fully continuous ScheduledAt/Priority
+// difference from StandaloneQueue's fully continuous ScheduledAt/Priority
 // ordering (asynq's own priority model is three weighted queues, not a
 // per-job numeric sort key; see docs/internal/07-platform-services.md and
 // server.go's Config.Queues doc comment for the weighted-queue design this
@@ -78,7 +78,7 @@ func queueForPriority(p Priority) string {
 // only recover the REPRESENTATIVE value for each bucket, not necessarily the
 // exact int originally passed to WithPriority -- e.g. Priority(7) is
 // enqueued into "default" and reported back as PriorityNormal (5), not 7.
-// This is the same "coarser than demo" trade-off documented on
+// This is the same "coarser than StandaloneQueue" trade-off documented on
 // queueForPriority; see AGENTS.md.
 func priorityForQueue(queue string) Priority {
 	switch queue {
@@ -176,7 +176,7 @@ func decodeResultEnvelope(data []byte) asynqResultEnvelope {
 //
 //   - Pending / Scheduled / Aggregating: never dequeued yet, Retried is
 //     always 0 and no attempt has been made -- Attempts = 0, matching a
-//     freshly-created DemoQueue Job's Attempts=0 before its first claim.
+//     freshly-created StandaloneQueue Job's Attempts=0 before its first claim.
 //   - Active: Retried reflects every PRIOR failed attempt (it does not
 //     count the one now in flight) -- Attempts = Retried+1.
 //   - Retry: Retried was just incremented by the failure that produced this
@@ -204,7 +204,7 @@ func attemptsFromTaskInfo(info *asynq.TaskInfo) int {
 // true, wins unconditionally regardless of state -- Cancel's own semantics
 // (see Queue.Cancel's doc comment and AGENTS.md's asynq mapping) make
 // StatusCancelled override whatever the underlying asynq state naturally
-// evolves to, exactly mirroring DemoQueue's completeSucceeded/
+// evolves to, exactly mirroring StandaloneQueue's completeSucceeded/
 // completeRetrying/completeDeadLetter's own "WHERE status = running" guard
 // that discards a still-in-flight attempt's outcome once Cancel has already
 // won the race.

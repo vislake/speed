@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestAsynqQueue_RegisterHandler_DuplicateType_Errors mirrors demo_queue_test.go's
+// TestAsynqQueue_RegisterHandler_DuplicateType_Errors mirrors standalone_queue_test.go's
 // TestRegisterHandler_DuplicateType_Errors: RegisterHandler's duplicate-type
 // check is pure map logic with no Redis involved, so it is unit-tested
 // directly here rather than only incidentally exercised as setup in

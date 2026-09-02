@@ -14,7 +14,7 @@ import (
 )
 
 // flakyHandler fails its first failuresBefore attempts, then succeeds --
-// the same shape as go/jobs's own demo_queue_test.go flakyHandler (parent
+// the same shape as go/jobs's own standalone_queue_test.go flakyHandler (parent
 // package, unexported, redefined here since test doubles are never part of
 // a package's importable surface).
 type flakyHandler struct {
@@ -37,7 +37,7 @@ func (h *flakyHandler) Handle(context.Context, *jobs.Job, jobs.ProgressFn) (jobs
 // retried by asynq's own machinery (asynq.MaxRetry + the configured
 // RetryDelayFunc) rather than dead-lettering immediately, and that Attempts
 // / Error are reported correctly across the retry -- the distributed
-// deployment mode's counterpart of demo_queue_test.go's TestRetry_SucceedsAfterTransientFailures,
+// deployment mode's counterpart of standalone_queue_test.go's TestRetry_SucceedsAfterTransientFailures,
 // run here against a real asynq.Server actually re-delivering the task
 // through real Redis.
 func TestRedisQueue_RetryOnFailure(t *testing.T) {
@@ -69,7 +69,7 @@ func TestRedisQueue_RetryOnFailure(t *testing.T) {
 }
 
 // countingFailureHandler always fails, and records every OnFailure call it
-// receives on onFailureCh -- mirrors demo_queue_test.go's identically-named
+// receives on onFailureCh -- mirrors standalone_queue_test.go's identically-named
 // type in the parent package.
 type countingFailureHandler struct {
 	jobType     string
@@ -88,11 +88,11 @@ func (h *countingFailureHandler) OnFailure(_ context.Context, job *jobs.Job, _ e
 
 // TestRedisQueue_DeadLetterAndFailureHook proves a Job that exhausts its
 // retries is archived by asynq (Inspector.ListArchivedTasks / DeadLetterJobs
-// -- this package's mapping of DemoQueue.DeadLetterJobs onto asynq's own
+// -- this package's mapping of StandaloneQueue.DeadLetterJobs onto asynq's own
 // archived-task mechanism, AGENTS.md's dead-letter mapping section) and
 // that FailureHook.OnFailure fires exactly once, built from AsynqQueue's own
 // Config.ErrorHandler replicating asynq's archive-boundary decision -- the
-// distributed deployment mode's counterpart of demo_queue_test.go's
+// distributed deployment mode's counterpart of standalone_queue_test.go's
 // TestDeadLetter_ExhaustsRetries_And_InvokesFailureHook.
 func TestRedisQueue_DeadLetterAndFailureHook(t *testing.T) {
 	ctx := context.Background()

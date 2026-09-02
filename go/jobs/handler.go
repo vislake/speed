@@ -6,7 +6,7 @@ import "context"
 // a caller-defined percentage (0-100 is the expected convention, though
 // this package does not enforce the range) and msg is a short,
 // human-readable status string. Each call overwrites the Job's previously
-// reported progress — see DemoQueue's own doc comment for how it persists
+// reported progress — see StandaloneQueue's own doc comment for how it persists
 // this, so a caller polling Queue.Get observes it.
 type ProgressFn func(pct int, msg string)
 
@@ -14,7 +14,7 @@ type ProgressFn func(pct int, msg string)
 type Handler interface {
 	// Type identifies which Task.Type this Handler processes. It must be
 	// stable for the lifetime of the Handler and unique within one Queue —
-	// see DemoQueue.RegisterHandler.
+	// see StandaloneQueue.RegisterHandler.
 	Type() string
 
 	// Handle runs one attempt of job. ctx already carries job.TenantID via

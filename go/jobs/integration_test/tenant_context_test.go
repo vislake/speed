@@ -16,7 +16,7 @@ import (
 // widgetFixture is a minimal tenant-scoped fixture used only to prove
 // TestRedisQueue_RebuildsTenantContext against a real dbkit.Repository[T] --
 // the same "define a small fixture directly" precedent go/jobs's own
-// demo_queue_test.go (parent package) and go/tenancy/tenancytest's sprocket
+// standalone_queue_test.go (parent package) and go/tenancy/tenancytest's sprocket
 // fixture both establish (dbkit's own tenant-scoped test fixture lives in
 // an unexported internal package this module cannot reach).
 type widgetFixture struct {
@@ -41,12 +41,12 @@ const createWidgetFixtureTableSQL = `CREATE TABLE widget_fixtures (
 // tenant-context-rebuild trap applies identically here: a worker consuming
 // from Redis must reconstruct pkgcore.WithTenant from the persisted task
 // payload before calling Handle" (this task's own instructions) -- the
-// distributed deployment mode's counterpart of demo_queue_test.go's
-// TestDemoQueue_RebuildsTenantContext_HandlerUsesOnlyJobTenant, run here
+// distributed deployment mode's counterpart of standalone_queue_test.go's
+// TestStandaloneQueue_RebuildsTenantContext_HandlerUsesOnlyJobTenant, run here
 // against a REAL asynq.Server/worker goroutine dequeuing from REAL Redis,
-// not DemoQueue's in-process dispatcher.
+// not StandaloneQueue's in-process dispatcher.
 //
-// Like its DemoQueue counterpart, the Handler performs a genuine
+// Like its StandaloneQueue counterpart, the Handler performs a genuine
 // tenant-scoped dbkit.Repository[T] call, and the Task is enqueued from a
 // context.Background() carrying NO tenant at all: if AsynqQueue's worker
 // ever regressed to calling Handle with asynq's own bare per-task context
@@ -54,7 +54,7 @@ const createWidgetFixtureTableSQL = `CREATE TABLE widget_fixtures (
 // stored tenant_id header (asynq_worker.go's processTask), this
 // Repository[T] call would fail closed with pkgcore.ErrNoTenant instead of
 // finding the seeded row, and this test would fail with that error
-// surfacing as the Job's own Error field -- exactly like the DemoQueue
+// surfacing as the Job's own Error field -- exactly like the StandaloneQueue
 // proof, just through a completely different, Redis-backed pipeline.
 func TestRedisQueue_RebuildsTenantContext(t *testing.T) {
 	ctx := context.Background()

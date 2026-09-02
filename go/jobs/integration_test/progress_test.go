@@ -12,7 +12,7 @@ import (
 )
 
 // progressHandler reports 30% then blocks until the test lets it continue,
-// then reports 90% and succeeds -- mirrors demo_queue_test.go's
+// then reports 90% and succeeds -- mirrors standalone_queue_test.go's
 // identically-named type and scenario shape in the parent package.
 type progressHandler struct {
 	afterFirstReport chan struct{}
@@ -33,8 +33,8 @@ func (h *progressHandler) Handle(_ context.Context, _ *jobs.Job, progress jobs.P
 // a Handler running under a real asynq.Server reach a caller polling Get()
 // against real Redis -- this package's mapping of progress reporting onto
 // asynq.Task.ResultWriter (AGENTS.md's "Progress reporting" section), the
-// distributed deployment mode's counterpart of demo_queue_test.go's
-// TestProgressReporting. Unlike that unit-tier-adjacent test (DemoQueue's
+// distributed deployment mode's counterpart of standalone_queue_test.go's
+// TestProgressReporting. Unlike that unit-tier-adjacent test (StandaloneQueue's
 // dispatcher is in-process), this proves the write actually round-trips
 // through Redis: ResultWriter.Write on one goroutine (asynq's worker) and
 // Inspector.GetTaskInfo on another (this test's own polling), the real

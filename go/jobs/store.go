@@ -15,7 +15,7 @@ import (
 // jobsTable is the standalone deployment mode's persistence table name.
 const jobsTable = "jobs"
 
-// jobRecord is DemoQueue's persisted row shape. It deliberately does NOT
+// jobRecord is StandaloneQueue's persisted row shape. It deliberately does NOT
 // implement dbkit.TenantScoped — no GetTenantID method, and no embedded
 // dbkit.TenantModel, which would add one by promotion. Per
 // docs/internal/04-data-and-tenancy.md's data-domain table and
@@ -70,9 +70,9 @@ func (jobRecord) TableName() string { return jobsTable }
 // go/dbkit/migrations.go's createSchemaMigrationsTableSQL) — not for the
 // same chicken-and-egg reason (this table has no bootstrapping problem),
 // but because this table is an implementation detail specific to the
-// standalone deployment mode, with no other consumer:
-// production's Queue implementation (a separate, later
-// task) is Redis/asynq-backed and never creates this table at all, so
+// standalone deployment mode, with no other consumer: the distributed
+// deployment mode's Queue implementation (AsynqQueue) is Redis/asynq-backed
+// and never creates this table at all, so
 // routing it through dbkit.MigrationRegistry's cross-module,
 // Atlas-generated, versioned migration machinery — built for schema that
 // ships and evolves across both deployment modes — would be
@@ -247,8 +247,8 @@ func claimCandidates(ctx context.Context, db *gorm.DB, now time.Time, limit int)
 // false, with no error, when another operation already moved the row out
 // of that status first — the observed-status guard in the WHERE clause
 // turns a lost race into a no-op instead of a double execution, which
-// matters if this demo implementation is ever driven by more than the one
-// dispatcher goroutine it ships with today.
+// matters if the standalone deployment mode's implementation is ever
+// driven by more than the one dispatcher goroutine it ships with today.
 func claimOne(ctx context.Context, db *gorm.DB, rec jobRecord, now time.Time) (bool, error) {
 	result := db.WithContext(ctx).Model(&jobRecord{}).
 		Where("id = ? AND status = ?", rec.ID, rec.Status).
@@ -359,7 +359,7 @@ func resetInterruptedRecords(ctx context.Context, db *gorm.DB, now time.Time) er
 }
 
 // deadLetterRecords returns every StatusDeadLetter record, across every
-// tenant — callers (DemoQueue.DeadLetterJobs) apply their own access
+// tenant — callers (StandaloneQueue.DeadLetterJobs) apply their own access
 // decision per record, exactly as findByID's callers do.
 func deadLetterRecords(ctx context.Context, db *gorm.DB) ([]jobRecord, error) {
 	var recs []jobRecord

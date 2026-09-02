@@ -16,7 +16,7 @@ import (
 // just handed to an in-process channel), dequeued and executed by a real
 // asynq.Server/worker goroutine, and its outcome (status, attempts,
 // progress, result) is observable through AsynqQueue.Get -- the same
-// contract go/jobs's own example_test.go proves for DemoQueue, exercised
+// contract go/jobs's own example_test.go proves for StandaloneQueue, exercised
 // here against a real backend per this task's own testing instructions.
 func TestRedisQueue_EnqueueExecuteRoundTrip(t *testing.T) {
 	ctx := context.Background()

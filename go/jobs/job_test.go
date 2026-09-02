@@ -13,7 +13,7 @@ import (
 // ErrJobNotFound with WithParam/WithCause (which derives a new *apperr.Error
 // instance, per apperr's own doc comment) does not silently break every
 // test asserting this error across the package's test files -- store_test.go
-// and demo_queue_test.go both use this, which is why it lives here rather
+// and standalone_queue_test.go both use this, which is why it lives here rather
 // than duplicated in each.
 func isJobNotFound(err error) bool {
 	appErr, ok := apperr.As(err)

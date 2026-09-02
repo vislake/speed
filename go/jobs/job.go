@@ -42,8 +42,9 @@ const (
 
 	// StatusCancelled is terminal: Queue.Cancel was called. A Job already
 	// StatusRunning when cancelled is allowed to keep executing to its own
-	// completion or timeout (this package's demo implementation does not
-	// preempt a running Handler goroutine — see AGENTS.md's Known
+	// completion or timeout (the standalone deployment mode's
+	// implementation in this package does not preempt a running Handler
+	// goroutine — see AGENTS.md's Known
 	// limitations), but whatever outcome it eventually reaches is
 	// discarded in favor of StatusCancelled, which is never overwritten
 	// once set.

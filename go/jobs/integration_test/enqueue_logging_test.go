@@ -16,7 +16,7 @@ import (
 
 // TestRedisQueue_Enqueue_LogsSingleCorrectTenantID is AsynqQueue's half of
 // the "job enqueued" duplicate/conflicting tenant_id regression: the same
-// bug DemoQueue had (see go/jobs's own demo_queue_test.go
+// bug StandaloneQueue had (see go/jobs's own standalone_queue_test.go
 // TestEnqueue_LogsSingleCorrectTenantID_EvenWhenCtxTenantDiffers, in the
 // parent package and so not importable from here) also existed in
 // AsynqQueue.Enqueue's own, separate obs.FromContext(ctx).Info("job
@@ -25,13 +25,13 @@ import (
 // auto-attaches from ctx's own ambient tenant. AGENTS.md documents the
 // "platform-level scheduler enqueuing one cleanup Task per tenant in a
 // loop" pattern as equally legitimate for AsynqQueue.Enqueue and
-// DemoQueue.Enqueue alike, so whenever ctx's ambient tenant differs from
+// StandaloneQueue.Enqueue alike, so whenever ctx's ambient tenant differs from
 // task.TenantID, the pre-fix line carried both side by side --
 // slog.TextHandler does not deduplicate repeated attribute keys.
 //
-// Run against a real Redis-backed AsynqQueue (not DemoQueue) because the
+// Run against a real Redis-backed AsynqQueue (not StandaloneQueue) because the
 // fix lives in AsynqQueue's own Enqueue method, with its own independent
-// call to obs.FromContext -- fixing DemoQueue's copy does not, by itself,
+// call to obs.FromContext -- fixing StandaloneQueue's copy does not, by itself,
 // prove anything about this one.
 func TestRedisQueue_Enqueue_LogsSingleCorrectTenantID(t *testing.T) {
 	ctx := context.Background()

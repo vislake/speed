@@ -1,5 +1,5 @@
 // Package jobs provides speed's asynchronous task queue: the Queue / Task /
-// Job / Handler contract every deployment mode implements, and DemoQueue,
+// Job / Handler contract every deployment mode implements, and StandaloneQueue,
 // the standalone deployment mode's in-process worker pool backed by a
 // SQLite-persisted task table.
 //

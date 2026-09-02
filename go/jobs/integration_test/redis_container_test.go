@@ -66,7 +66,7 @@ func startRedisContainer(t *testing.T, ctx context.Context) asynq.RedisConnOpt {
 // asynq's own multi-second defaults (TaskCheckInterval defaults to 1s,
 // DelayedTaskCheckInterval to 5s) -- the same "short intervals for fast,
 // deterministic tests" convention go/jobs's own newTestQueue helper
-// (demo_queue_test.go, parent package) applies to DemoQueue's
+// (standalone_queue_test.go, parent package) applies to StandaloneQueue's
 // WithPollInterval/WithBackoff. Registers handlers and calls Start; Close
 // is registered via t.Cleanup, bounded so a stuck test cannot hang forever.
 func newTestAsynqQueue(t *testing.T, ctx context.Context, opts ...jobs.AsynqOption) *jobs.AsynqQueue {
@@ -80,7 +80,7 @@ func newTestAsynqQueue(t *testing.T, ctx context.Context, opts ...jobs.AsynqOpti
 		// asynq.DefaultRetryDelayFunc is tuned for real production traffic
 		// (its first-retry delay alone is 15-44 SECONDS -- see
 		// server.go's DefaultRetryDelayFunc: n=0 gives
-		// 0 + 15 + rand.IntN(30)), the same reason DemoQueue's own tests
+		// 0 + 15 + rand.IntN(30)), the same reason StandaloneQueue's own tests
 		// override WithBackoff instead of using DefaultBackoffBase/
 		// DefaultBackoffMax. Every test in this package that exercises a
 		// genuine retry needs this fast instead, or it would spend most
@@ -102,7 +102,7 @@ func newTestAsynqQueue(t *testing.T, ctx context.Context, opts ...jobs.AsynqOpti
 }
 
 // startTestAsynqQueue is newTestAsynqQueue plus Start, for the common case
-// where a test has no need to Enqueue before Start the way DemoQueue's own
+// where a test has no need to Enqueue before Start the way StandaloneQueue's own
 // TestPriorityOrdering does (asynq's own task-check-interval polling means
 // there is no equivalent "before the dispatcher's first tick" race to avoid
 // here).
@@ -117,7 +117,7 @@ func startTestAsynqQueue(t *testing.T, ctx context.Context, opts ...jobs.AsynqOp
 
 // waitForTerminal polls Get until id's Job reaches a terminal Status or
 // deadline passes, failing the test on timeout -- the same shape as
-// go/jobs's own demo_queue_test.go waitTerminal helper (parent package,
+// go/jobs's own standalone_queue_test.go waitTerminal helper (parent package,
 // unexported, not importable from here), redefined for this package since
 // go test helpers are never part of a package's importable API regardless
 // of which package they live in.

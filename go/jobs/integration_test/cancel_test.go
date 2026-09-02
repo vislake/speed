@@ -16,7 +16,7 @@ import (
 // guaranteed effect -- AGENTS.md's Cancel section) and actually removes it
 // from asynq's own pending set (Inspector.DeleteTask), so it is never
 // handed to Handle at all -- the distributed deployment mode's counterpart of
-// demo_queue_test.go's TestCancel_TenantIsolation_And_Idempotency.
+// standalone_queue_test.go's TestCancel_TenantIsolation_And_Idempotency.
 func TestRedisQueue_Cancel_PendingJobNeverRuns(t *testing.T) {
 	ctx := context.Background()
 	q := startTestAsynqQueue(t, ctx)
@@ -68,7 +68,7 @@ func TestRedisQueue_Cancel_PendingJobNeverRuns(t *testing.T) {
 // marks it StatusCancelled immediately -- without waiting for the
 // in-flight Handle call to return -- and best-effort signals asynq's own
 // Inspector.CancelProcessing, matching AGENTS.md's documented
-// strictly-better-than-DemoQueue's-own-"does not preempt" limitation
+// strictly-better-than-StandaloneQueue's-own-"does not preempt" limitation
 // (Queue.Cancel's doc comment only ever promises a running Job "is allowed
 // to" keep executing, never that it is guaranteed to).
 func TestRedisQueue_Cancel_RunningJob(t *testing.T) {

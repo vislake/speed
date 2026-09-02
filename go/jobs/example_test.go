@@ -8,7 +8,7 @@ package jobs_test
 // CLAUDE.md's Documentation section; this package's own AGENTS.md).
 //
 // Both examples poll Queue.Get in a tight loop bounded by a short deadline
-// rather than sleeping a fixed duration: DemoQueue's dispatch/execute cycle
+// rather than sleeping a fixed duration: StandaloneQueue's dispatch/execute cycle
 // is asynchronous by design (see AGENTS.md), so a fixed sleep would either
 // make this file's own test run needlessly slow or be a source of
 // flakiness under load -- polling is both fast and deterministic here
@@ -66,7 +66,7 @@ func Example() {
 		return
 	}
 
-	queue := jobs.NewDemoQueue(db, jobs.WithPollInterval(5*time.Millisecond))
+	queue := jobs.NewStandaloneQueue(db, jobs.WithPollInterval(5*time.Millisecond))
 	err = queue.RegisterHandler(exampleGreeter{})
 	if err != nil {
 		fmt.Println("register handler:", err)
@@ -125,7 +125,7 @@ func ExampleNewHandlerFunc() {
 		return
 	}
 
-	queue := jobs.NewDemoQueue(db, jobs.WithPollInterval(5*time.Millisecond))
+	queue := jobs.NewStandaloneQueue(db, jobs.WithPollInterval(5*time.Millisecond))
 	echo := jobs.NewHandlerFunc("echo", func(_ context.Context, job *jobs.Job, _ jobs.ProgressFn) (jobs.Result, error) {
 		return jobs.Result{Data: job.Payload}, nil
 	})
@@ -171,18 +171,18 @@ func ExampleNewHandlerFunc() {
 // ExampleNewAsynqQueue shows the distributed deployment mode's shape of
 // the same Example above -- register a Handler, Enqueue a Task under a
 // tenant, poll
-// Get until it completes -- against AsynqQueue instead of DemoQueue. Every
+// Get until it completes -- against AsynqQueue instead of StandaloneQueue. Every
 // other line of Queue-facing code (Task, EnqueueOption, waitForTerminal)
 // is identical to Example's; only construction changes, exactly as
 // queue.go's own doc comment promises ("RegisterHandler, Start and Close...
-// a production, Redis/asynq-backed implementation is expected to need a
-// different setup shape of its own").
+// the distributed deployment mode's Redis/asynq-backed implementation is
+// expected to need a different setup shape of its own").
 //
 // Deliberately has no "// Output:" comment, so go test compiles and
 // type-checks this exactly like every other example here (catching a
 // signature drift immediately, per root CLAUDE.md's "compiled and run by
 // CI" documentation rule) WITHOUT executing it -- Example and
-// ExampleNewHandlerFunc above need no real infrastructure (DemoQueue is
+// ExampleNewHandlerFunc above need no real infrastructure (StandaloneQueue is
 // SQLite-backed), but this one needs a real Redis, which the default,
 // non-integration test tier this file belongs to must not require (see
 // AGENTS.md's Testing section and integration_test/'s own package comment).

@@ -32,7 +32,7 @@ var errAsynqTaskMissingTenant = apperr.Internal("jobs.asynq_task_missing_tenant"
 
 // This file is AsynqQueue's counterpart to worker.go: where worker.go's
 // jobContext/execute close "the tenant context trap" and decide
-// retry/backoff/dead-letter for DemoQueue, processTask (below) does the same
+// retry/backoff/dead-letter for StandaloneQueue, processTask (below) does the same
 // job for the distributed deployment mode -- registered as the single asynq.
 // HandlerFunc AsynqQueue.Start hands to asynq.Server.Start, deliberately
 // NOT wrapped in an asynq.ServeMux (see its own doc comment for why).
@@ -51,13 +51,14 @@ var errAsynqTaskMissingTenant = apperr.Internal("jobs.asynq_task_missing_tenant"
 var errTenantAtCapacity = errors.New("jobs: tenant is at its concurrency limit")
 
 // tryReserveTenantSlot and releaseTenantSlot are AsynqQueue's own admission
-// gate -- structurally the same map+mutex shape as DemoQueue's
+// gate -- structurally the same map+mutex shape as StandaloneQueue's
 // tryReserveTenantSlot/releaseTenantSlot (worker.go), but deliberately a
 // separate, independent copy rather than a shared helper type: extracting
-// one would mean touching DemoQueue's own fields/methods, and this task's
-// own instructions require the demo implementation and its tests to come
-// out completely unaffected. See AGENTS.md for why WHERE this gate applies
-// differs from DemoQueue's (a fast bounce-and-redeliver inside the Handler
+// one would mean touching StandaloneQueue's own fields/methods, and this task's
+// own instructions require the standalone deployment mode's
+// implementation and its tests to come out completely unaffected. See
+// AGENTS.md for why WHERE this gate applies
+// differs from StandaloneQueue's (a fast bounce-and-redeliver inside the Handler
 // call, not a pre-dequeue skip -- asynq gives us no way to peek at a task's
 // tenant before dequeuing it off Redis).
 func (q *AsynqQueue) tryReserveTenantSlot(tenant pkgcore.TenantID) bool {
@@ -85,7 +86,7 @@ func (q *AsynqQueue) releaseTenantSlot(tenant pkgcore.TenantID) {
 // errTenantAtCapacity's own doc comment for why a throttle bounce never
 // advances it) and defers to q.businessRetryDelayFunc (asynq.
 // DefaultRetryDelayFunc unless overridden by WithAsynqRetryDelayFunc) for
-// every real Handler failure, exactly matching DemoQueue's own backoffDelay
+// every real Handler failure, exactly matching StandaloneQueue's own backoffDelay
 // role but implemented on top of asynq's own extension point instead of a
 // hand-rolled formula.
 func (q *AsynqQueue) retryDelay(n int, err error, t *asynq.Task) time.Duration {
@@ -165,10 +166,10 @@ func (q *AsynqQueue) handleErrorAttempt(t *asynq.Task, err error, retried, maxRe
 
 	// A fresh context, not ctx (which belongs to the attempt that just
 	// failed and may already be at or past its own deadline) -- exactly
-	// DemoQueue.execute's own choice for the same call, and for the same
+	// StandaloneQueue.execute's own choice for the same call, and for the same
 	// reason: OnFailure runs real business compensation (refunding
 	// credits, e.g.) that must not inherit a context already on its way
-	// out. q.defaultTimeout approximates the per-job timeout DemoQueue
+	// out. q.defaultTimeout approximates the per-job timeout StandaloneQueue
 	// uses here exactly; asynq's context accessors expose TaskID/
 	// RetryCount/MaxRetry/QueueName but not a task's own Timeout/Deadline
 	// (context.go), so recovering the exact value would cost an extra
@@ -181,7 +182,7 @@ func (q *AsynqQueue) handleErrorAttempt(t *asynq.Task, err error, retried, maxRe
 
 // processTask is the single asynq.HandlerFunc AsynqQueue.Start registers.
 // It closes the tenant-context trap exactly like worker.go's execute does
-// for DemoQueue (pkgcore.WithTenant from the Job's own stored tenant --
+// for StandaloneQueue (pkgcore.WithTenant from the Job's own stored tenant --
 // here read back from Task.Headers, never from any ambient context), and
 // implements per-tenant concurrency gating, progress reporting, and the
 // StartedAt bookkeeping AGENTS.md documents. See asynq_queue.go's Start for
@@ -226,7 +227,7 @@ func (q *AsynqQueue) processTaskUncancelled(ctx context.Context, t *asynq.Task, 
 	if h == nil {
 		// Treated exactly like any other Handle failure -- retried, then
 		// dead-lettered -- mirroring worker.go's identical handling of
-		// ErrHandlerNotRegistered for DemoQueue. Reusing the exact same
+		// ErrHandlerNotRegistered for StandaloneQueue. Reusing the exact same
 		// sentinel (not a new asynq-specific one) keeps this one error
 		// identical across both deployment modes.
 		return ErrHandlerNotRegistered.WithParam("type", t.Type())
@@ -257,11 +258,11 @@ func (q *AsynqQueue) processTaskUncancelled(ctx context.Context, t *asynq.Task, 
 		}
 	}
 	// Marks this attempt's start immediately, before Handle runs -- read
-	// back by Get() as StartedAt, exactly mirroring DemoQueue's claimOne
+	// back by Get() as StartedAt, exactly mirroring StandaloneQueue's claimOne
 	// setting started_at at claim time. Progress starts at zero for this
 	// attempt rather than carrying forward a previous attempt's stale
 	// value; see AGENTS.md for why this is a deliberate, documented,
-	// low-stakes difference from DemoQueue (which does carry it forward,
+	// low-stakes difference from StandaloneQueue (which does carry it forward,
 	// simply because nothing ever resets it).
 	writeEnvelope(asynqResultEnvelope{})
 
@@ -295,7 +296,7 @@ func (q *AsynqQueue) processTaskUncancelled(ctx context.Context, t *asynq.Task, 
 	// the original Enqueue call happened to run in (see queue.go's Enqueue
 	// doc comment: that context is long gone by the time a worker picks
 	// this up). It is built ON TOP of ctx (asynq's own per-task context),
-	// not a fresh context.Background() the way DemoQueue's jobContext is --
+	// not a fresh context.Background() the way StandaloneQueue's jobContext is --
 	// see AGENTS.md's "The tenant context trap, asynq edition" for why
 	// adopting asynq's own ctx here (rather than discarding it) is the
 	// correct choice, not a shortcut: it is what makes asynq's own Timeout/

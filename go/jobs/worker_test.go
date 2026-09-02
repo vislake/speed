@@ -68,8 +68,8 @@ func TestJobContext_IgnoresAmbientTenant(t *testing.T) {
 // If a future change to execute/runWorker ever stops routing through
 // jobContext, THIS is the test that must start failing -- with this exact,
 // well-labeled name -- rather than some unrelated Handler mysteriously
-// erroring in production months later. See demo_queue_test.go's
-// TestDemoQueue_RebuildsTenantContext_HandlerUsesOnlyJobTenant for the
+// erroring in production months later. See standalone_queue_test.go's
+// TestStandaloneQueue_RebuildsTenantContext_HandlerUsesOnlyJobTenant for the
 // same guarantee proved end to end through a real worker and a real
 // dbkit.Repository[T] call.
 func TestJobContext_ContrastWithoutRebuild_FailsClosedWithErrNoTenant(t *testing.T) {
@@ -89,7 +89,7 @@ func TestJobContext_ContrastWithoutRebuild_FailsClosedWithErrNoTenant(t *testing
 }
 
 func TestBackoffDelay(t *testing.T) {
-	q := NewDemoQueue(nil, WithBackoff(1*time.Second, 10*time.Second))
+	q := NewStandaloneQueue(nil, WithBackoff(1*time.Second, 10*time.Second))
 
 	tests := []struct {
 		attempts int
@@ -111,7 +111,7 @@ func TestBackoffDelay(t *testing.T) {
 }
 
 func TestTenantSlotReservation(t *testing.T) {
-	q := NewDemoQueue(nil, WithTenantConcurrencyLimit(2))
+	q := NewStandaloneQueue(nil, WithTenantConcurrencyLimit(2))
 	tenant := pkgcore.TenantID("tenant-a")
 
 	if !q.tryReserveTenantSlot(tenant) {
@@ -142,7 +142,7 @@ func TestTenantSlotReservation(t *testing.T) {
 // package's concurrency hot spot the backend coding standard §13 requires
 // a -race test for.
 func TestTenantSlotReservation_ConcurrentAccessIsRaceFree(t *testing.T) {
-	q := NewDemoQueue(nil, WithTenantConcurrencyLimit(3))
+	q := NewStandaloneQueue(nil, WithTenantConcurrencyLimit(3))
 	tenant := pkgcore.TenantID("tenant-a")
 
 	var wg sync.WaitGroup
@@ -174,11 +174,11 @@ func TestTenantSlotReservation_ConcurrentAccessIsRaceFree(t *testing.T) {
 // such a row, so the corrupted row here is seeded directly through q.db --
 // simulating a row written by anything other than Enqueue: a migration
 // bug, a manual SQL fixup, or a future writer that bypasses this package's
-// own API. See errDemoJobMissingTenant's own doc comment (worker.go) for
+// own API. See errStandaloneJobMissingTenant's own doc comment (worker.go) for
 // why this matters even though it is not reachable through the public API
 // today.
 func TestExecute_EmptyTenantID_FailsClosedWithoutCallingHandle(t *testing.T) {
-	q := NewDemoQueue(newTestDB(t))
+	q := NewStandaloneQueue(newTestDB(t))
 	handleInvoked := false
 	h := NewHandlerFunc("corrupt.tenant", func(context.Context, *Job, ProgressFn) (Result, error) {
 		handleInvoked = true
@@ -222,8 +222,8 @@ func TestExecute_EmptyTenantID_FailsClosedWithoutCallingHandle(t *testing.T) {
 	if got.Status != StatusRetrying && got.Status != StatusDeadLetter {
 		t.Errorf("Status = %v, want StatusRetrying or StatusDeadLetter (an ordinary Handle failure)", got.Status)
 	}
-	if got.Error != errDemoJobMissingTenant.Code {
-		t.Errorf("Error = %q, want %q", got.Error, errDemoJobMissingTenant.Code)
+	if got.Error != errStandaloneJobMissingTenant.Code {
+		t.Errorf("Error = %q, want %q", got.Error, errStandaloneJobMissingTenant.Code)
 	}
 }
 
@@ -254,7 +254,7 @@ var _ Handler = panickingHandler{}
 // should this ever regress -- it does not run today, since invokeHandle
 // (worker.go) already recovers the panic before it reaches this test.
 func TestExecute_HandlerPanic_RecoversInsteadOfCrashingProcess(t *testing.T) {
-	q := NewDemoQueue(newTestDB(t))
+	q := NewStandaloneQueue(newTestDB(t))
 	if err := q.RegisterHandler(panickingHandler{}); err != nil {
 		t.Fatalf("RegisterHandler() error = %v", err)
 	}
@@ -316,7 +316,7 @@ var (
 // TestExecute_HandlerPanic_RecoversInsteadOfCrashingProcess, exercised
 // through the dead-letter path instead of the ordinary-retry path.
 func TestExecute_FailureHookPanic_RecoversInsteadOfCrashingProcess(t *testing.T) {
-	q := NewDemoQueue(newTestDB(t))
+	q := NewStandaloneQueue(newTestDB(t))
 	if err := q.RegisterHandler(panickingFailureHook{}); err != nil {
 		t.Fatalf("RegisterHandler() error = %v", err)
 	}
