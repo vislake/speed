@@ -8,14 +8,21 @@ sets match"). docs/internal/18-cicd.md schedules this as a self-written
 discipline check diffing the key sets of the two resources; this script is
 its local-run counterpart.
 
-What it does: for every locale directory under --root, it parses zh-CN.toml
-and en-US.toml (TOML in the go-i18n style used by the repository, e.g.
-examples/reference-app/internal/notes/locales/), extracts each file's
-message-id set with tomllib, and reports every id present in one file but
-not the other. Exit code is nonzero on any mismatch, missing pair member,
-or unparsable file.
+What it does: for every locale directory under --root, it parses the zh-CN
+and en-US pair members it finds and reports every id present in one file
+but not the other. Two resource formats are checked:
 
-Message-id semantics (must stay in step with how the repository names
+  - zh-CN.toml and en-US.toml (TOML in the go-i18n style used by the Go
+    modules, e.g. examples/reference-app/internal/notes/locales/), whose
+    ids are extracted with tomllib, and
+  - zh-CN.json and en-US.json (the nested JSON bundles used by the web
+    @speed/i18n packages, e.g. web/packages/ui-kit/src/locales/), whose
+    ids are extracted with the standard json module.
+
+Exit code is nonzero on any mismatch, missing pair member, or unparsable
+file.
+
+TOML message-id semantics (must stay in step with how the repository names
 keys, and with the locale file contract of go/pkgcore/i18n): a message id
 is a key whose value is not a grouping table. Two kinds of values make a
 message id:
@@ -47,13 +54,26 @@ paths (two sections both containing a key of the same name), pairing
 across languages is ambiguous, so that file is reported as an error rather
 than compared.
 
-Discovery: a locale directory is any directory that contains a file named
-zh-CN.toml or en-US.toml; --root itself is searched first, then the tree
-below it is walked (skipping .git, node_modules and vendor). Both zh-CN.toml
-and en-US.toml must exist in every locale directory; any other *.toml in
-the same directory is reported as informational only -- the repository's
-pair discipline is exactly zh-CN/en-US, and additional languages, when they
-appear, should extend this script's pair table rather than slip past it.
+JSON message-id semantics: a bundle is a plain record tree whose leaves
+are strings (exactly the ResourceBundle shape @speed/i18n's
+registerNamespace accepts -- anything else is an error, mirroring its
+validation). A message id is the full dotted path from the bundle root to
+a leaf, e.g. dataTable.loading for {"dataTable": {"loading": "..."}}:
+that is the key t() references and the leaf path
+registerNamespace's collectLeafPaths compares across languages. The JSON
+shape is singular -- nesting is the only structure -- so the full path is
+always unambiguous and no leaf-name ambiguity check applies.
+
+Discovery: a locale directory is any directory that contains a zh-CN or
+en-US file in either format (zh-CN.toml, en-US.toml, zh-CN.json or
+en-US.json); --root itself is searched first, then the tree below it is
+walked (skipping .git, node_modules, vendor and dist). A directory that
+holds a pair member must hold its complete pair -- both zh-CN.toml and
+en-US.toml for a TOML pair, both zh-CN.json and en-US.json for a JSON
+pair. Any other *.toml/*.json in the same directory is reported as
+informational only -- the repository's pair discipline is exactly
+zh-CN/en-US, and additional languages, when they appear, should extend
+this script's pair table rather than slip past it.
 
 Usage:
     python3 tools/check_i18n_keys.py [--root PATH]
@@ -69,14 +89,16 @@ directory). Standard library only; requires Python >= 3.11 (tomllib).
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import tomllib
-from typing import Any
+from typing import Any, Callable
 
-PAIR = ("zh-CN.toml", "en-US.toml")
-PAIR_STEMS = frozenset(fn[:-5] for fn in PAIR)  # "zh-CN.toml" -> "zh-CN"
-PRUNED_DIR_NAMES = frozenset({".git", "node_modules", "vendor"})
+TOML_PAIR = ("zh-CN.toml", "en-US.toml")
+JSON_PAIR = ("zh-CN.json", "en-US.json")
+ALL_PAIR_FILES = TOML_PAIR + JSON_PAIR
+PRUNED_DIR_NAMES = frozenset({".git", "node_modules", "vendor", "dist"})
 
 # The message keys go-i18n reserves on a plural message table, lower-cased
 # to match case-insensitively: the CLDR plural categories zero/one/two/few/
@@ -107,7 +129,7 @@ def is_message_table(value: Any) -> bool:
 
 
 def extract_message_ids(table: dict[str, Any]) -> tuple[set[str], dict[str, list[str]]]:
-    """Return (message ids, id -> full dotted paths).
+    """Return (message ids, id -> full dotted paths) for a TOML document.
 
     Every key whose value is not a grouping table produces a message id --
     both the plain non-table form and a plural message table (whose own key
@@ -138,94 +160,185 @@ def extract_message_ids(table: dict[str, Any]) -> tuple[set[str], dict[str, list
     return ids, id_paths
 
 
-def load_ids(path: str) -> tuple[set[str], dict[str, list[str]], str | None]:
-    """Parse path with tomllib. Returns (ids, id_paths, error_message)."""
+def load_toml_ids(path: str) -> tuple[set[str], str | None]:
+    """Parse path with tomllib. Returns (ids, error_message)."""
     try:
         with open(path, "rb") as fh:
             data = tomllib.load(fh)
     except OSError as exc:
-        return set(), {}, f"cannot read: {exc}"
+        return set(), f"cannot read: {exc}"
     except tomllib.TOMLDecodeError as exc:
-        return set(), {}, f"invalid TOML: {exc}"
-    ids, id_paths = extract_message_ids(data)
-    return ids, id_paths, None
+        return set(), f"invalid TOML: {exc}"
+    ids, _ = extract_message_ids(data)
+    return ids, None
 
 
-def check_locale_dir(dir_path: str, rel_dir: str) -> tuple[list[str], list[str]]:
-    """Check one locale directory.
+def collect_json_leaves(
+    value: dict[str, Any],
+    prefix: str,
+    leaves: set[str],
+    problems: list[str],
+) -> None:
+    """Add full dotted leaf paths of a JSON bundle to leaves.
 
-    Returns (problems, notes): problems make the run fail, notes are
-    informational (success line, unpaired extra files). Both are printed in
-    order so per-directory output stays readable.
+    Mirrors @speed/i18n registerNamespace's collectLeafPaths: leaves must
+    be strings and nesting must be plain records; a non-string leaf or an
+    array value is an error in that runtime validation, so it is one here
+    too -- parity with the enforcement the packages themselves run.
+    Problems carry no file prefix; the caller labels them per file.
+    """
+    for key, child in value.items():
+        path = key if prefix == "" else f"{prefix}.{key}"
+        if isinstance(child, str):
+            leaves.add(path)
+        elif isinstance(child, dict):
+            collect_json_leaves(child, path, leaves, problems)
+        elif isinstance(child, bool):
+            problems.append(
+                f"leaf '{path}' is a boolean; JSON bundle leaves must be strings"
+            )
+        elif isinstance(child, (int, float)):
+            problems.append(
+                f"leaf '{path}' is a number; JSON bundle leaves must be strings"
+            )
+        elif child is None:
+            problems.append(
+                f"leaf '{path}' is null; JSON bundle leaves must be strings"
+            )
+        else:
+            problems.append(
+                f"leaf '{path}' is an array; JSON bundle leaves must be strings"
+            )
+
+
+def load_json_ids(path: str) -> tuple[set[str], list[str]]:
+    """Parse path with the json module. Returns (ids, problems)."""
+    try:
+        with open(path, "rb") as fh:
+            data = json.load(fh)
+    except OSError as exc:
+        return set(), [f"cannot read: {exc}"]
+    except json.JSONDecodeError as exc:
+        return set(), [f"invalid JSON: {exc}"]
+    if not isinstance(data, dict):
+        return set(), ["the document is not a JSON object"]
+    leaves: set[str] = set()
+    problems: list[str] = []
+    collect_json_leaves(data, "", leaves, problems)
+    return leaves, problems
+
+
+def check_one_pair(
+    dir_path: str,
+    rel_dir: str,
+    pair: tuple[str, str],
+    load: Callable[[str], tuple[set[str], list[str]]],
+) -> tuple[list[str], list[str]]:
+    """Check one zh-CN/en-US pair inside a locale directory.
+
+    pair names the two file names (TOML or JSON); load parses one file
+    into its message-id set plus per-file problems. Returns (problems,
+    notes) with the same contract as check_locale_dir.
     """
     problems: list[str] = []
     notes: list[str] = []
-    missing = [fn for fn in PAIR if not os.path.exists(os.path.join(dir_path, fn))]
+    zh_fn, en_fn = pair
+    missing = [fn for fn in pair if not os.path.exists(os.path.join(dir_path, fn))]
     if missing:
         problems.append(
             f"{rel_dir}: missing required locale file(s): {', '.join(missing)}"
         )
         return problems, notes
-    extras = sorted(
-        fn for fn in os.listdir(dir_path)
-        if fn.endswith(".toml") and fn not in PAIR
-    )
-    for fn in extras:
-        notes.append(
-            f"{rel_dir}: note: {fn} is not part of the zh-CN/en-US pair and "
-            f"is not checked (only zh-CN.toml vs en-US.toml key sets are)"
-        )
-    zh_path = os.path.join(dir_path, PAIR[0])
-    en_path = os.path.join(dir_path, PAIR[1])
-    per_file: dict[str, tuple[set[str], dict[str, list[str]], str | None]] = {}
-    for fn, path in zip(PAIR, (zh_path, en_path)):
-        per_file[fn] = load_ids(path)
-    for fn in PAIR:
-        _, _, err = per_file[fn]
-        if err:
-            problems.append(f"{os.path.join(rel_dir, fn)}: {err}")
-            return problems, notes
-    for fn in PAIR:
-        _, id_paths, _ = per_file[fn]
-        for leaf in sorted(id_paths):
-            paths = sorted(id_paths[leaf])
-            if len(paths) > 1:
-                problems.append(
-                    f"{os.path.join(rel_dir, fn)}: message id '{leaf}' is "
-                    f"defined under multiple paths: {', '.join(paths)}"
-                )
+    files = (os.path.join(dir_path, zh_fn), os.path.join(dir_path, en_fn))
+    per_file: list[tuple[set[str], list[str]]] = []
+    for path in files:
+        ids, file_problems = load(path)
+        per_file.append((ids, file_problems))
+        for problem in file_problems:
+            problems.append(f"{os.path.relpath(path, dir_path)}: {problem}")
     if problems:
         return problems, notes
-    zh_ids = per_file[PAIR[0]][0]
-    en_ids = per_file[PAIR[1]][0]
+    zh_ids, en_ids = per_file[0][0], per_file[1][0]
     only_zh = sorted(zh_ids - en_ids)
     only_en = sorted(en_ids - zh_ids)
+    # The file names already say which format a pair is, so the prose
+    # stays format-neutral and the long-standing TOML wording is intact.
     if only_zh or only_en:
-        problems.append(f"{rel_dir}: zh-CN.toml and en-US.toml key sets differ")
+        problems.append(
+            f"{rel_dir}: {zh_fn} and {en_fn} key sets differ"
+        )
         if only_en:
-            problems.append("  only in en-US.toml (missing zh-CN translation):")
+            problems.append(
+                f"  only in {en_fn} (missing zh-CN translation):"
+            )
             problems.extend(f"    - {k}" for k in only_en)
         if only_zh:
-            problems.append("  only in zh-CN.toml (missing en-US translation):")
+            problems.append(
+                f"  only in {zh_fn} (missing en-US translation):"
+            )
             problems.extend(f"    - {k}" for k in only_zh)
     else:
         notes.append(f"{rel_dir}: key sets match ({len(en_ids)} key(s))")
     return problems, notes
 
 
+def check_locale_dir(dir_path: str, rel_dir: str) -> tuple[list[str], list[str]]:
+    """Check one locale directory for every pair format it participates in.
+
+    A directory participates in the TOML pair when it contains either
+    TOML member, and in the JSON pair when it contains either JSON member
+    -- a directory could in principle ship both formats (Go and web
+    resources never share a directory today, but each pair is checked
+    independently so the script does not depend on that). Returns
+    (problems, notes): problems make the run fail, notes are informational
+    (success lines, unpaired extra files).
+    """
+    problems: list[str] = []
+    notes: list[str] = []
+    present = set(os.listdir(dir_path))
+    for pair in (TOML_PAIR, JSON_PAIR):
+        if not any(fn in present for fn in pair):
+            continue
+        pair_problems, pair_notes = check_one_pair(dir_path, rel_dir, pair, load_ids_for(pair))
+        problems.extend(pair_problems)
+        notes.extend(pair_notes)
+        extension = pair[0].rsplit(".", 1)[1]
+        extras = sorted(
+            fn for fn in present
+            if fn.endswith(f".{extension}") and fn not in pair
+        )
+        for fn in extras:
+            notes.append(
+                f"{rel_dir}: note: {fn} is not part of the zh-CN/en-US pair and "
+                f"is not checked (only {pair[0]} vs {pair[1]} key sets are)"
+            )
+    return problems, notes
+
+
+def load_ids_for(pair: tuple[str, str]) -> Callable[[str], tuple[set[str], list[str]]]:
+    """The right loader for a pair: tomllib for TOML, json for JSON."""
+    if pair == TOML_PAIR:
+        def load_toml(path: str) -> tuple[set[str], list[str]]:
+            ids, err = load_toml_ids(path)
+            return ids, ([err] if err is not None else [])
+
+        return load_toml
+    return load_json_ids
+
+
 def discover_locale_dirs(root: str) -> list[str]:
     """Return repo-relative paths of directories containing a pair member.
 
     --root itself is a candidate; everything below it is walked for
-    directories containing zh-CN.toml or en-US.toml, skipping VCS, vendored
-    dependency and node_modules trees.
+    directories containing a zh-CN or en-US file in either format,
+    skipping VCS, vendored dependency, node_modules and dist trees.
     """
     found: list[str] = []
     for dir_path, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(
             d for d in dirnames if d not in PRUNED_DIR_NAMES
         )
-        if any(fn in PAIR for fn in filenames):
+        if any(fn in ALL_PAIR_FILES for fn in filenames):
             found.append(os.path.relpath(dir_path, root))
     return sorted(found)
 
@@ -233,10 +346,10 @@ def discover_locale_dirs(root: str) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Check that zh-CN.toml and en-US.toml in every locale directory "
-            "carry identical message-key sets, per root CLAUDE.md's "
-            "internationalization rule. Locale directories are discovered "
-            "below --root by the presence of either pair member."
+            "Check that zh-CN.toml/en-US.toml and zh-CN.json/en-US.json in "
+            "every locale directory carry identical message-key sets, per "
+            "root CLAUDE.md's internationalization rule. Locale directories "
+            "are discovered below --root by the presence of any pair member."
         )
     )
     parser.add_argument(
@@ -253,17 +366,20 @@ def main(argv: list[str] | None = None) -> int:
 
     locale_dirs = discover_locale_dirs(root)
     if not locale_dirs:
-        print("no locale directories found (no zh-CN.toml/en-US.toml pair "
-              "under the given root)")
+        print("no locale directories found (no zh-CN/en-US pair file under "
+              "the given root)")
         return 0
 
     all_lines: list[str] = []
     bad_pairs = 0
+    pair_count = 0
     for rel_dir in locale_dirs:
         dir_path = os.path.join(root, rel_dir)
         problems, notes = check_locale_dir(dir_path, rel_dir)
         if problems:
             bad_pairs += 1
+        else:
+            pair_count += 1
         all_lines.extend(notes)
         all_lines.extend(problems)
 
@@ -276,7 +392,7 @@ def main(argv: list[str] | None = None) -> int:
             f"and en-US resources with identical key sets"
         )
         return 1
-    print(f"OK: all {len(locale_dirs)} locale pair(s) checked, key sets match")
+    print(f"OK: {pair_count} locale pair(s) checked, key sets match")
     return 0
 
 
