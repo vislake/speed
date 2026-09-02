@@ -34,6 +34,9 @@ Carve-outs (a whole subtree is exempt, matching CLAUDE.md's exceptions):
                           basename set is a module constant below; extend it
                           when a new i18n directory convention appears.
   vendor/, node_modules/, .git/   vendored dependencies and VCS metadata
+  .idea/, .vscode/                IDE-local directories holding developer
+                                  machine state (UI strings etc.); they are
+                                  gitignored, never exist in CI
 
 CJK means Han script, classified by the same rune ranges Go's unicode.Han
 covers (unicode.Is(unicode.Han, r) in the language_test.go precedent); the
@@ -69,8 +72,10 @@ import sys
 # exempt from the scan.
 LOCALE_DIR_NAMES = frozenset({"locales", "locale", "i18n", "translations"})
 
-# Directories never scanned regardless of content.
-NON_SCANNED_DIR_NAMES = frozenset({".git", "node_modules", "vendor"})
+# Directories never scanned regardless of content: VCS metadata, vendored
+# dependencies, and IDE-local directories that live only on developer
+# machines (GoLand writes Chinese UI strings into .idea/, for instance).
+NON_SCANNED_DIR_NAMES = frozenset({".git", ".idea", ".vscode", "node_modules", "vendor"})
 
 # docs/internal/** and the future docs/site/** are exempt wholesale. The
 # entries are repo-relative directory paths whose whole subtree is skipped;
