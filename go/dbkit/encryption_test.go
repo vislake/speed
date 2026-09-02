@@ -211,62 +211,6 @@ func TestCipher_Decrypt_AfterKeyRotation_OldCiphertextStillDecrypts(t *testing.T
 	}
 }
 
-func TestBlindIndex_Deterministic(t *testing.T) {
-	key := testKey("blind-index-deterministic")
-
-	tests := []struct {
-		name       string
-		normalized string
-	}{
-		{name: "e164 phone number", normalized: "+15550100001"},
-		{name: "lowercased email", normalized: "user@example.com"},
-		{name: "empty string", normalized: ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			want := BlindIndex(key, tt.normalized)
-			for i := 0; i < 5; i++ {
-				if got := BlindIndex(key, tt.normalized); got != want {
-					t.Fatalf("BlindIndex() call %d = %q, want %q (must be deterministic for the same key and input)", i, got, want)
-				}
-			}
-		})
-	}
-}
-
-// TestBlindIndex_DistinctInputs_NoCollisions checks a reasonably sized
-// sample of distinct normalized inputs under one key and requires every
-// index to be unique, guarding against a trivially broken implementation
-// (e.g. one that truncates its input or its output).
-func TestBlindIndex_DistinctInputs_NoCollisions(t *testing.T) {
-	key := testKey("blind-index-collisions")
-
-	const sampleSize = 500
-	seen := make(map[string]string, sampleSize)
-	for i := 0; i < sampleSize; i++ {
-		normalized := fmt.Sprintf("+1555%07d", i)
-		index := BlindIndex(key, normalized)
-		if prior, exists := seen[index]; exists {
-			t.Fatalf("BlindIndex collision: %q and %q both produced index %q", prior, normalized, index)
-		}
-		seen[index] = normalized
-	}
-}
-
-// TestBlindIndex_DifferentKeys_ProduceDifferentOutputs proves the key
-// parameter is actually mixed into the computation, not ignored.
-func TestBlindIndex_DifferentKeys_ProduceDifferentOutputs(t *testing.T) {
-	const normalized = "+15550100999"
-
-	indexA := BlindIndex(testKey("blind-index-key-a"), normalized)
-	indexB := BlindIndex(testKey("blind-index-key-b"), normalized)
-
-	if indexA == indexB {
-		t.Fatalf("BlindIndex() with two different keys produced the same index %q for the same input; the key is not being used", indexA)
-	}
-}
-
 // encryptedFieldModel is a throwaway GORM model used only by
 // TestRegisterEncryptedSerializer_GORMIntegration, to exercise
 // RegisterEncryptedSerializer end-to-end against a real SQLite database. Its

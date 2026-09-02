@@ -13,6 +13,7 @@ package dbkit_test
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 
 	"gorm.io/gorm"
@@ -115,4 +116,137 @@ func Example() {
 
 	// Output:
 	// plan_pro active
+}
+
+// exampleBlindAccount is the encrypted-field-plus-blind-index model shape:
+// Email holds the sensitive value, encrypted at rest through the serializer
+// named by its tag, and EmailIndex is the plain indexed column declared
+// right next to it, storing nothing but 64 hex characters of HMAC — never
+// anything derived by GORM, always written explicitly by the application
+// from (*dbkit.BlindIndexer).Index (see the BlindIndexer doc comment).
+type exampleBlindAccount struct {
+	ID         uint   `gorm:"primaryKey"`
+	Email      string `gorm:"column:email;serializer:example_blind_email_enc"`
+	EmailIndex string `gorm:"column:email_index;size:64;not null"`
+}
+
+// TableName pins exampleBlindAccount's table name explicitly, independent
+// of GORM's pluralization rules, matching the raw CREATE TABLE Example
+// applies below.
+func (exampleBlindAccount) TableName() string { return "example_blind_index_accounts" }
+
+// exampleRandomKey returns a fresh 32-byte secret — the one key shape
+// dbkit.NewCipher and dbkit.NewBlindIndexer both require. A real deployment
+// reads its secrets from the secret manager instead; this stands in for that
+// injection point so the example stays self-contained.
+func exampleRandomKey() ([]byte, error) {
+	key := make([]byte, 32)
+	_, err := rand.Read(key)
+	return key, err
+}
+
+// ExampleBlindIndexer demonstrates the field-level-encryption companion
+// documented on dbkit.BlindIndexer: an email address stored encrypted gets a
+// plain, indexed HMAC column next to it, so exact-match lookups can find the
+// row without decrypting every record — with the write side (Index) and the
+// query side (Equal) both funneling the caller's raw input through the same
+// per-column normalization.
+func ExampleBlindIndexer() {
+	ctx := context.Background()
+
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:dbkit_blind_index_example?mode=memory&cache=shared",
+	})
+	if err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+
+	// A real module applies its own versioned migrations through
+	// dbkit.MigrationRegistry (see migrations.go); a plain Exec stands in
+	// for that here to keep this example self-contained.
+	if err = db.Exec(`CREATE TABLE example_blind_index_accounts (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		email       BLOB NOT NULL,
+		email_index VARCHAR(64) NOT NULL
+	)`).Error; err != nil {
+		fmt.Println("migrate:", err)
+		return
+	}
+
+	// Bootstrap, where secrets are injected: the encryption key and the
+	// blind-index key are two separate secrets — see dbkit.NewCipher's
+	// key-separation warning for why they must never be the same bytes —
+	// and both obey the same 32-byte policy NewCipher enforces with
+	// dbkit.ErrInvalidKeySize.
+	emailKey, err := exampleRandomKey()
+	if err != nil {
+		fmt.Println("keys:", err)
+		return
+	}
+	indexKey, err := exampleRandomKey()
+	if err != nil {
+		fmt.Println("keys:", err)
+		return
+	}
+
+	cipher, err := dbkit.NewCipher(emailKey)
+	if err != nil {
+		fmt.Println("cipher:", err)
+		return
+	}
+	dbkit.RegisterEncryptedSerializer("example_blind_email_enc", cipher)
+
+	// The BlindIndexer binds the index column's name, its HMAC key, and its
+	// canonical form into one object, so the write side and the query side
+	// cannot drift apart: both always normalize through the same function
+	// before hashing.
+	emailIndex, err := dbkit.NewBlindIndexer("email_index", indexKey, dbkit.NormalizeEmail)
+	if err != nil {
+		fmt.Println("indexer:", err)
+		return
+	}
+
+	// Write: the serializer encrypts Email into the column, and the index
+	// column holds Index of the same plaintext — normalized on the way in,
+	// so a value typed with odd casing still indexes canonically.
+	indexValue, err := emailIndex.Index("User@Example.COM")
+	if err != nil {
+		fmt.Println("index:", err)
+		return
+	}
+	account := exampleBlindAccount{Email: "User@Example.COM", EmailIndex: indexValue}
+	if err = db.Create(&account).Error; err != nil {
+		fmt.Println("create:", err)
+		return
+	}
+
+	// Query: Equal takes the raw input the caller actually has — possibly
+	// with whitespace and different case than the write — normalizes it
+	// exactly as Index did, and yields a WHERE condition for the column.
+	cond, err := emailIndex.Equal(" user@example.com ")
+	if err != nil {
+		fmt.Println("equal:", err)
+		return
+	}
+	var got exampleBlindAccount
+	if err = db.Where(cond).First(&got).Error; err != nil {
+		fmt.Println("find:", err)
+		return
+	}
+	// Email decrypts back to exactly what was stored — the variant casing of
+	// the query input never touches the encrypted plaintext.
+	fmt.Println("found:", got.Email)
+
+	// Input with no canonical form is rejected on the query side just as on
+	// the write side — the mechanism never silently hashes a value it cannot
+	// normalize, which is what would turn a lookup into a mysterious miss.
+	if _, err = emailIndex.Equal(""); err != nil {
+		fmt.Println("rejected:", err)
+	}
+
+	// Output:
+	// found: User@Example.COM
+	// rejected: dbkit: blind index column "email_index": dbkit: email normalization: input is empty
 }

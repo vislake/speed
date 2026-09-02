@@ -9,7 +9,8 @@ dbkit is speed's dual-dialect (PostgreSQL and SQLite) data-access layer: a safet
 | The generic tenant-scoped `Repository[T]` base (isolation layer 2) | `repository.go` |
 | PostgreSQL row-level-security session wiring (isolation layer 3): `WithTenantSession`, which every `Repository[T]` method now routes through | `tenant_session.go` |
 | Aggregating and applying every registered `pkgcore.Module`'s versioned SQL migrations | `migrations.go` |
-| Field-level AES-256-GCM encryption (`Cipher`) and HMAC blind indexes for encrypted columns | `encryption.go` |
+| Field-level AES-256-GCM encryption (`Cipher`) and its GORM serializer wiring | `encryption.go` |
+| The HMAC blind-index mechanism for exact-match lookups on encrypted columns (`BlindIndexer`, raw `BlindIndex`, `NormalizeEmail`, `NormalizePhoneE164`) | `blind_index.go` |
 | The dual-dialect test-database helpers every module's tests use (backend coding standard §13's mandatory suite) — a publicly importable package, unlike `internal/testutil` | `dbtest/` |
 
 **One dependency, and why there is only one.** dbkit imports exactly one other speed module: `pkgcore` — its root package, for `pkgcore.TenantID` / `pkgcore.WithTenant` / `pkgcore.MustTenantFromContext` and the `pkgcore.Module` interface `MigrationRegistry` aggregates over, plus `pkgcore/apperr` for every error dbkit returns. (`internal/testutil`, used only by dbkit's own tests, also imports `pkgcore`, so its `Widget` fixture can implement `GetTenantID`.) This is architectural, not incidental minimalism:
@@ -83,7 +84,7 @@ The database-side mechanism itself is proven in `integration_test/postgres_rls_t
 
 A module's `Migrations()` embed.FS must expose `postgres/*.sql` and `sqlite/*.sql` at its own root. Because a `//go:embed` directive's patterns resolve relative to the directory of the `.go` file that carries it, the embedding file must itself live in the one directory where `postgres/` and `sqlite/` are its immediate children — see `internal/migrationfixture/basemodule/fs.go` and `.../derivedmodule/fs.go` for the pattern every real module's own migration package should copy.
 
-### Encryption and blind indexes — `encryption.go`
+### Encryption — `encryption.go`
 
 | Signature | Purpose |
 |---|---|
@@ -92,8 +93,47 @@ A module's `Migrations()` embed.FS must expose `postgres/*.sql` and `sqlite/*.sq
 | `func (c *Cipher) Encrypt(plaintext []byte) ([]byte, error)` | Seals under the active key with a freshly generated random nonce every call — nonce reuse under AES-GCM is a confidentiality break, not a cosmetic property, which is why the nonce is never a parameter a caller could get wrong |
 | `func (c *Cipher) Decrypt(ciphertext []byte) ([]byte, error)` | Tries the active key, then each retired key in the order given to `NewCipher`. `ErrDecryptionFailed` if none authenticate — deliberately indistinguishable between "wrong/missing key" and "corrupted or tampered ciphertext" |
 | `func RegisterEncryptedSerializer(name string, cipher *Cipher)` | Wires `cipher` into GORM's process-global serializer registry under `name`, so any field tagged `` `gorm:"serializer:<name>"` `` is transparently encrypted on write and decrypted on read. Call once per name at bootstrap (alongside other `Module.Register`-time wiring), never inside a request path; calling it again with the same name replaces the active cipher for every model using it — how a completed key rotation switches the active key for new writes |
-| `func BlindIndex(key []byte, normalized string) string` | Deterministic HMAC-SHA256 index (hex-encoded) for exact-match lookups on an encrypted column. `normalized` must already be in canonical form — `BlindIndex` performs no normalization of its own. `key` must be a secret never reused as a `NewCipher` key |
-| `var ErrInvalidKeySize`, `ErrDecryptionFailed` | Plain `errors.New` sentinels |
+| `var ErrInvalidKeySize`, `ErrDecryptionFailed` | Plain `errors.New` sentinels. `ErrInvalidKeySize` is shared: both `NewCipher` and `NewBlindIndexer` (blind_index.go) return it — wrapped — for a key that is not exactly 32 bytes |
+
+### Blind indexes — `blind_index.go`
+
+The companion mechanism for a queryable encrypted field: when a column's values are encrypted at rest (above), the only way to find a row by that value without decrypting the whole table is a deterministic, keyed index of it stored in a separate plain column — `HMAC(secret, normalize(plaintext))` per `docs/internal/10-compliance-and-audit.md`. Equality-only by construction: a deterministic index supports exact matches and nothing else (no prefix, partial, or fuzzy search — building that would leak the structure the encryption exists to hide), and key rotation has no retired-key fallback because a column holds one index per row (unlike `Decrypt`'s chain); both limits are deliberate.
+
+| Signature | Purpose |
+|---|---|
+| `func BlindIndex(key []byte, normalized string) string` | The raw primitive: deterministic HMAC-SHA256 of `normalized` under `key`, hex-encoded. `normalized` must already be in the column's canonical form — `BlindIndex` performs no normalization of its own, on purpose. Prefer a `BlindIndexer` (below), which bundles normalization, key, and column so the two sides of a lookup cannot drift apart |
+| `type NormalizeFunc func(raw string) (string, error)` | A column's canonical form: caller input in, the exact string the index is computed over out, or an error when the input has no canonical form. Must be deterministic and idempotent; erroring — never best-effort "fixing up" — is what keeps a bad value from silently indexing into a value no lookup will ever match. The two built-ins implement the canonical forms the design promises; a different form supplies its own function and documents it next to the model's column declaration |
+| `func NormalizeEmail(raw string) (string, error)` | Trims surrounding whitespace and lowercases (`" User@Example.COM "` → `"user@example.com"`). Errors on empty or whitespace-only input: an absent value has no canonical form and must not be indexed — leave the index column NULL |
+| `func NormalizePhoneE164(raw string) (string, error)` | Drops the separators space, `-`, `(`, `)`, `.` (`"+1 555-0100"` → `"+15550100"`). Requires a leading `+` and at most 15 digits — E.164's limit — and errors on a bare national number (no default country is ever assumed), extensions, letters, or anything else that cannot be canonicalized |
+| `type BlindIndexer struct { ... }` | The per-column contract: one SQL column, its HMAC key, and its `NormalizeFunc` bound together, so write and query sides of a lookup cannot drift apart by accident. No key accessor (mirrors `Cipher`); zero value not usable; safe for concurrent use. Tenancy is deliberately outside it: the column sits in the same (shared) table as the encrypted field and the surrounding data-access layer's tenant scoping applies to queries on it exactly as to any other column |
+| `func NewBlindIndexer(column string, key []byte, normalize NormalizeFunc) (*BlindIndexer, error)` | `column` is the index column's exact SQL name (the model field's `column:` tag); `key` must be exactly 32 bytes — `ErrInvalidKeySize`, the sentinel `NewCipher` shares, so both secrets keep one key shape in the secret manager — and is copied at construction. Empty `column` or nil `normalize` is an error. Construct at bootstrap, next to `RegisterEncryptedSerializer`, where secrets are injected |
+| `func (b *BlindIndexer) Index(raw string) (string, error)` | The write side: normalizes `raw` under the column's normalizer and returns the 64-hex value to store in the index column — computed over the same plaintext the serializer encrypts, never over ciphertext. Errors on input with no canonical form; it never yields an empty or best-effort index, so an index column holding `""` is always a write-path bug |
+| `func (b *BlindIndexer) Equal(raw string) (clause.Eq, error)` | The query side: normalizes `raw` exactly as `Index` did and returns the column's equality condition, composable straight into `db.Where(...)`. Takes raw input, never a precomputed index value, so a filter under different normalization is impossible except through a second, deliberately constructed `BlindIndexer` on the same column (visible in bootstrap code, not an accident of a call site). The returned clause carries no tenant filter — whatever `WHERE tenant_id = ?` the plugin or `Repository[T]` appends applies as usual |
+
+The model declares the index column explicitly, as an ordinary — never a serializer — indexed column next to the encrypted field (a serializer on it would re-encrypt the index; a blind index column holds plain 64-hex text, and the schema must stay visible to the gorm structs versioned migrations are generated from):
+
+```go
+type Account struct {
+	Email      string `gorm:"serializer:email_enc"`             // encrypted at rest
+	EmailIndex string `gorm:"column:email_index;size:64;index"` // blind index
+}
+```
+
+Both sides of the lookup funnel through the same `BlindIndexer`, constructed at bootstrap where the secrets are injected — write side via `Index` (store its result in `EmailIndex` when creating or updating, alongside the plaintext being encrypted), query side via `Equal`:
+
+```go
+emailIndex, err := dbkit.NewBlindIndexer("email_index", blindKey, dbkit.NormalizeEmail)
+if err != nil {
+	return err // key misconfiguration: fail the bootstrap, never start with a mechanism that would silently write unusable indexes
+}
+
+indexValue, err := emailIndex.Index(form.Email) // normalize, then HMAC — the same value the serializer encrypts
+account := Account{Email: form.Email, EmailIndex: indexValue}
+
+cond, err := emailIndex.Equal(form.Email) // normalize identically at query time
+var got Account
+if err := db.Where(cond).First(&got).Error; err != nil { ... }
+```
 
 ### RLS session state — `tenant_session.go`
 
@@ -127,7 +167,7 @@ Every model passed to `Repository[T]`, embedded under `TenantModel`, or otherwis
 - Full-text search goes through a `SearchProvider` interface at the business-module layer (tsvector on PostgreSQL, `LIKE` fallback on SQLite) — dbkit itself provides no full-text search primitive.
 - `tenant_id` is the leftmost column of every composite index, and a tenant-scoped table's primary key should be `(tenant_id, id)`. `TenantModel`'s own tag does not declare `primaryKey` and cannot safely be made to (see its doc comment) — when the composite key matters to you, skip embedding `TenantModel` and declare `TenantID` directly instead, with the tag you need (as `internal/testutil.Widget` does).
 - dbkit adds one convention of its own on top of the standard's list: `T` must have exported `ID` and `TenantID` string fields by those exact Go names (declared directly, or promoted from an embedded `TenantModel`), because `Repository[T].Create`/`Update` read and write them through reflection — `TenantScoped` cannot express this in the type system, since it requires only the `GetTenantID()` accessor.
-- Sensitive fields (national ID numbers, phone numbers, health-related free text, …) use `` gorm:"serializer:<name>" `` after `RegisterEncryptedSerializer(name, cipher)`, plus a separate, non-encrypted, indexed blind-index column populated with `BlindIndex` whenever equality lookup is needed. Normalize before both encrypting and indexing (E.164 for phone numbers, lowercase for emails) — see `encryption.go`.
+- Sensitive fields (national ID numbers, phone numbers, health-related free text, …) use `` gorm:"serializer:<name>" `` after `RegisterEncryptedSerializer(name, cipher)`, plus a separate, non-encrypted, indexed blind-index column (`` `gorm:"column:<field>_index;size:64;index"` ``, declared next to the encrypted field — never a serializer itself) whenever equality lookup is needed. Both sides of the lookup go through one `BlindIndexer` bound to that column — `Index(plaintext)` on write, `Equal(raw input)` on query — so the column's canonical form (E.164 for phone numbers, lowercase for emails) is applied identically every time; see the "Blind indexes" section above.
 
 ## Typical integration
 
@@ -254,6 +294,12 @@ func OverdueSubscriptions(ctx context.Context, db *gorm.DB, tenant pkgcore.Tenan
 
 **`pkgcore.WithSystemContext` does not interact with tenant-scoped models at all.** Neither the plugin nor `Repository[T]` special-cases a system context. `WithSystemContext` and `WithTenant` are orthogonal (per `pkgcore/tenant.go`'s own doc comment: "a system context is orthogonal to a tenant context: it sets no tenant"), so a query against a `TenantScoped` model carrying only a `SystemReason` and no tenant fails closed exactly the same way a request with neither would. A system-context caller that needs a specific tenant's data still supplies it with `pkgcore.WithTenant`; a genuinely cross-tenant admin read (e.g. "search every tenant for X") has no path through dbkit today — it would need either per-tenant iteration through `Repository[T]` or a raw, admin-role-driven query outside it.
 
+**The blind index column is populated by the writer, explicitly — nothing in dbkit fills it for you.** GORM serializers are per-field and cannot write a second column, and the index cannot be derived from the encrypted field's tag, so a model's blind-index column starts NULL/empty on every insert unless the creating code computes `Index(plaintext)` and stores the result itself (see the "Blind indexes" section's example). Missing that step is invisible in the row's own ciphertext and surfaces only as an equality lookup that returns nothing. A full-population or backfill path is deliberately not built into dbkit — it belongs to each module's create/update code paths (where the plaintext already exists) — and bulk recomputation after a blind-index key rotation is a separate `jobs` batch task by design (see below), not something this package triggers.
+
+**A blind-index key rotation has no retired-key fallback, and dbkit does not run the recompute for you.** `Cipher` keeps retired keys so old ciphertext keeps decrypting across a rotation; a blind-index column cannot — a single equality comparison matches exactly one index value per row, so once the column holds values under the old key, nothing matches under the new one. Rotating therefore means recomputing every row's index as a jobs batch task (per `docs/internal/10-compliance-and-audit.md`, rotation of a blind-index secret is planned as exactly that). The operator-facing ordering — whether the deployment tolerates a transient mismatch window between "column rewritten under the new key" and "lookups switched to the new key", or carries a second column through the migration — is that jobs task's design decision, not dbkit's, and no dual-key machinery exists here to make either ordering seamless.
+
+**The mechanism is equality-only, and per-column normalization is a caller contract.** A deterministic HMAC index supports exact matches and nothing else: there is no prefix, partial, or fuzzy search over a blind-index column, by design (building one would leak exactly the structure the encryption hides), and no lower-precision variant of the built-in normalizers. The two canonical forms dbkit ships are the ones the design docs promise — E.164 phone numbers, lowercased emails; a column whose data needs any other canonical form supplies its own `NormalizeFunc` and documents the form next to the model declaration, because the index is only as consistent as the normalization both sides of every lookup share.
+
 ## Rules
 
 **Dependencies**
@@ -291,11 +337,15 @@ func OverdueSubscriptions(ctx context.Context, db *gorm.DB, tenant pkgcore.Tenan
 - Do not put a module's `//go:embed postgres sqlite` directive anywhere but the one file living in the directory where `postgres/` and `sqlite/` are its immediate children — `//go:embed` patterns resolve relative to that file's own directory.
 - Do not assume `Register` validates `DependsOn`. A missing or cyclic dependency is reported only by `Apply`, once the full registered module set is known.
 
-**Encryption**
-- Do not reuse an encryption key passed to `NewCipher` as a `BlindIndex` key, or vice versa. Mixing an AES-GCM key and an HMAC blind-index key is a real cryptographic weakness, not a style nitpick.
-- Do not skip normalization before `BlindIndex`. It performs none itself; normalize identically at write time and query time or equality lookups silently stop matching.
-- Do not call `RegisterEncryptedSerializer` from a request path. GORM's serializer registry is process-global; register once per name at bootstrap, alongside other `Module.Register`-time wiring.
-- Do not expect `Decrypt` or a `BlindIndex` mismatch to tell you *why* it failed. `ErrDecryptionFailed` covers both a wrong/missing key and a tampered ciphertext by design; a `BlindIndex` rotation has no retired-key fallback and needs every row's index recomputed as a `jobs` batch task.
+**Encryption and blind indexes**
+- Do not reuse an encryption key passed to `NewCipher` as a blind-index key, or vice versa. Mixing an AES-GCM key and an HMAC blind-index key is a real cryptographic weakness, not a style nitpick; keep them as separate entries in the secret manager and inject them separately.
+- Do not call `RegisterEncryptedSerializer` from a request path. GORM's serializer registry is process-global; register once per name at bootstrap, alongside other `Module.Register`-time wiring and the matching `NewBlindIndexer` calls.
+- Do not skip the column's normalizer on either side of a lookup. Route every write through `(*BlindIndexer).Index` and every query through `(*BlindIndexer).Equal` on the *same* indexer, so both sides apply the column's canonical form automatically; a value stored under one normalization can never be looked up under another. Code calling raw `BlindIndex` directly is responsible for normalizing to canonical form itself, identically at write and query time — `BlindIndex` performs no normalization of its own, deliberately.
+- Do not declare a blind-index column as a serializer field, and do not expect the index to be derived from the encrypted field's tag (GORM serializers are per-field and cannot write a second column). Declare it as a plain, indexed column — `` `gorm:"column:<field>_index;size:64;index"` `` — next to the encrypted field, and populate it explicitly on every create/update of that field via `Index(plaintext)`, computed over the same value being encrypted.
+- Do not filter on a precomputed index value, and never on one computed under different normalization. `Equal` exists precisely so the query path cannot accept a hand-computed value; hand-building the condition defeats the mechanism and silently returns zero rows for values that are present.
+- Do not index an empty or unnormalizable value. `Index` and `Equal` return an error for input their normalizer cannot canonicalize — propagate it, and leave the column NULL for a genuinely absent value; never store `""` or a best-effort guess.
+- Do not expect `Decrypt` or an index mismatch to tell you *why* it failed. `ErrDecryptionFailed` covers both a wrong/missing key and a tampered ciphertext by design; a blind-index key rotation has no retired-key fallback and needs every row's index recomputed as a `jobs` batch task (see Known limitations).
+- Do not use a blind-index column for anything but exact matches. The mechanism is equality-only by construction; prefix, partial, or fuzzy search over the column would leak the structure the encryption exists to hide.
 
 **Documentation**
 - Do not add an exported identifier to this package without a doc comment and an entry in the tables above, in the same pull request (backend coding standard, Documentation section) — and, for a new public entry point into the package (not every incidental exported type or constant), a compiling `Example` alongside the existing ones in `example_test.go`.
@@ -314,8 +364,8 @@ func OverdueSubscriptions(ctx context.Context, db *gorm.DB, tenant pkgcore.Tenan
 | `ErrNilModule` / `ErrEmptyModuleName` / `ErrDuplicateModule` | `MigrationRegistry.Register` given a nil module, an empty `Name()`, or a `Name()` already registered | Fix the registration call; plain `errors.New` sentinels, safe to match with `errors.Is` directly |
 | `ErrDependencyCycle` / `ErrMissingDependency` | `MigrationRegistry.Apply`: the registered modules' `DependsOn` graph has a cycle, or names a module never registered | Fix the module's `DependsOn`, or the bootstrap module set; the error names every module involved |
 | `ErrUnknownDialect` | `MigrationRegistry.Apply` given a `Dialect` that is neither `DialectPostgres` nor `DialectSQLite` | Same fix as `dbkit.invalid_dialect` above |
-| `ErrInvalidKeySize` | `NewCipher` given a key that is not exactly 32 bytes | Configuration error — AES-256 has no shorter/longer key; fix the key material |
+| `ErrInvalidKeySize` | `NewCipher` or `NewBlindIndexer` given a key that is not exactly 32 bytes | Configuration error — AES-256-GCM encryption keys and blind-index HMAC keys are both 256-bit secrets; fix the key material |
 | `ErrDecryptionFailed` | `Cipher.Decrypt` when no key, active or retired, authenticates the ciphertext | Wrong/missing key or tampered data, indistinguishable by design; never guess which in a caller-facing message |
 | `pkgcore.ErrNoTenant` | `Repository[T]`'s methods and `WithTenantSession`, called on a context with no tenant (returned unmodified in both — see `repository.go`'s and `tenant_session.go`'s doc comments) | Fail closed. In a worker, rebuild the context with `pkgcore.WithTenant`; see `pkgcore/AGENTS.md`'s own error index |
 
-Design rationale for the isolation model — internally titled "multi-tenant isolation: triple protection" — lives in `docs/internal/04-data-and-tenancy.md`; the module dependency graph is in `docs/internal/01-architecture.md`.
+Design rationale for the isolation model — internally titled "multi-tenant isolation: triple protection" — lives in `docs/internal/04-data-and-tenancy.md`; the module dependency graph is in `docs/internal/01-architecture.md`. Field-level encryption and blind-index rationale — the canonical forms, the equality-only promise, and blind-index secret rotation as a planned jobs task — lives in `docs/internal/10-compliance-and-audit.md`.

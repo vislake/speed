@@ -4,10 +4,7 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"reflect"
@@ -19,11 +16,12 @@ import (
 // bits.
 const encryptionKeySize = 32
 
-// ErrInvalidKeySize is returned by NewCipher when a key is not exactly
-// encryptionKeySize bytes long. AES-256 has no shorter or longer key, so
-// there is no lenient fallback: a key of the wrong length is always a
-// configuration mistake, never silently downgraded to a weaker cipher.
-var ErrInvalidKeySize = errors.New("dbkit: encryption key must be exactly 32 bytes for AES-256-GCM")
+// ErrInvalidKeySize is returned by NewCipher and NewBlindIndexer when a key
+// is not exactly encryptionKeySize bytes long. AES-256 has no shorter or
+// longer key, and the blind-index HMAC keys share the same 32-byte policy,
+// so there is no lenient fallback for either: a key of the wrong length is
+// always a configuration mistake, never silently downgraded.
+var ErrInvalidKeySize = errors.New("dbkit: key must be exactly 32 bytes (AES-256-GCM encryption keys and blind-index HMAC keys are 256-bit secrets)")
 
 // ErrDecryptionFailed is returned by (*Cipher).Decrypt when ciphertext cannot
 // be authenticated and opened under the active key or any retired key.
@@ -259,44 +257,4 @@ func (s encryptedSerializer) Value(ctx context.Context, field *schema.Field, dst
 // Cipher when different fields must rotate independently of one another.
 func RegisterEncryptedSerializer(name string, cipher *Cipher) {
 	schema.RegisterSerializer(name, encryptedSerializer{cipher: cipher})
-}
-
-// BlindIndex computes a deterministic HMAC-SHA256 index for normalized under
-// key, hex-encoded. Store it in an indexed, non-encrypted column alongside an
-// encrypted field to support exact-match lookups — a phone number used as a
-// login identifier is the motivating case — without decrypting every row to
-// find the one that matches.
-//
-// It is deterministic on purpose: the same key and the same normalized input
-// always produce the same index, which is what lets "WHERE phone_index = ?"
-// work at all against encrypted data. That determinism is also its limit —
-// BlindIndex supports only exact-match lookups, never partial or fuzzy
-// search (e.g. "last four digits of a phone number"); building that would
-// mean leaking exactly the structure the encryption exists to hide, and is
-// out of scope by design.
-//
-// normalized must already be in the caller's canonical form — E.164 for
-// phone numbers, lowercased for email addresses, and so on. BlindIndex
-// performs no normalization of its own, deliberately: guessing at a format
-// here would silently compute two different indexes for what the caller
-// considers the same value (e.g. "+1 555-0100" vs "+15550100"), which then
-// surfaces as a login that mysteriously stops matching rather than as a
-// visible error. Normalize identically at write time and at query time.
-//
-// key must be a secret held completely separately from any key passed to
-// NewCipher — see the key-separation warning on NewCipher for why mixing an
-// encryption key and a blind-index key is a real cryptographic weakness
-// rather than a style preference. Using HMAC rather than a bare hash is what
-// keeps the index resistant to offline dictionary/rainbow-table attacks
-// against the (typically low-entropy) plaintext space of things like phone
-// numbers; a bare SHA-256 of the normalized value would not.
-//
-// Rotating key requires recomputing the index for every existing row, run as
-// a jobs batch task: unlike Cipher.Decrypt, there is no "retired key"
-// fallback here, because a single equality comparison can only ever match
-// one index value per row.
-func BlindIndex(key []byte, normalized string) string {
-	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte(normalized))
-	return hex.EncodeToString(mac.Sum(nil))
 }
