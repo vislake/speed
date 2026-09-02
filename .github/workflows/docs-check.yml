@@ -21,10 +21,14 @@ name: docs-check
 #   * i18n key-set parity (the pipeline's one existing tool): python3
 #     tools/check_i18n_keys.py from the repository root, discovering every
 #     locale directory below it (today examples/reference-app/internal/
-#     notes/locales and go/pkgcore/locales, pkgcore's seed bundle) and
-#     failing on any zh-CN/en-US key-set drift -- the raw-file half of the
-#     i18n discipline, complementing the compiled half (pkgcore/i18n's
-#     ErrParityMismatch check inside the module unit suites). The checker
+#     notes/locales and go/pkgcore/locales, pkgcore's seed bundle -- TOML
+#     pairs -- plus the web JSON bundles under web/packages/i18n/
+#     test-utils/locales and web/packages/ui-kit/src/locales) and failing
+#     on any zh-CN/en-US key-set drift -- the raw-file half of the i18n
+#     discipline, complementing the compiled halves (pkgcore/i18n's
+#     ErrParityMismatch check inside the Go module unit suites and
+#     @speed/i18n's registerNamespace validation on the web side). The
+#     checker
 #     is dependency-free (tools/README.md): plain python3 -- no Go
 #     toolchain, no package install -- so this job needs no setup step.
 #     ubuntu-latest ships the Python >= 3.11 the checker needs (tomllib).

@@ -18,16 +18,17 @@ name: pr-check
 #     exist. Adding a module to this matrix is the whole cost of adding it
 #     to CI.
 #   * npm-packages job: the npm packages with real, tested implementation
-#     (@speed/tokens, @speed/i18n -- root CLAUDE.md, Repository Status)
-#     each run through the reusable npm-package-ci workflow: a
-#     frozen-lockfile workspace install from the web/ root, then lint
-#     (the flat-config ESLint at web/, no-explicit-any enforced),
-#     strict typecheck, the vitest unit suite and the dist/ build. Node
-#     and pnpm versions come from setup-node-env's single sources
-#     (web/.nvmrc, web/package.json's packageManager field); the pnpm
-#     store cache is keyed on the lockfile hash (18-cicd cost-control
-#     rule 3). Adding a package to this matrix is the whole cost of
-#     adding it to CI.
+#     (@speed/tokens, @speed/i18n, @speed/ui-kit -- root CLAUDE.md,
+#     Repository Status) each run through the reusable npm-package-ci
+#     workflow: a frozen-lockfile workspace install from the web/ root,
+#     then lint (the flat-config ESLint at web/ -- typescript-eslint
+#     recommended, no-explicit-any, plus the workspace speed/no-literal-
+#     text rule over package src), strict typecheck, the vitest unit
+#     suite and the dist/ build. Node and pnpm versions come from
+#     setup-node-env's single sources (web/.nvmrc, web/package.json's
+#     packageManager field); the pnpm store cache is keyed on the
+#     lockfile hash (18-cicd cost-control rule 3). Adding a package to
+#     this matrix is the whole cost of adding it to CI.
 #   * repo-checks job, repository-level, all existing today:
 #       - tools/scan_cjk.py -- the CJK discipline scanner enforcing the root
 #         CLAUDE.md Language Rule (18-cicd discipline table row). Scans the
@@ -47,9 +48,13 @@ name: pr-check
 #     -- none of that tooling exists yet (see the gated pipeline stubs
 #     e2e/security/scaffold-verify/release/nightly in this directory for
 #     where each wires in). The ESLint foundation now exists and runs on
-#     the npm packages above, but the discipline rules that need JSX or
-#     the api-sdk consumer surface (no bare text nodes, no hand-written
-#     backend calls) land with the first React package round. The
+#     the npm packages above: the workspace's speed/no-literal-text rule
+#     (eslint.config.mjs + web/eslint-rules/, rule tests under vitest
+#     there) enforces i18n-sourced text over React package src. The
+#     remaining JSX-era rule (no hand-written backend calls) needs the
+#     generated api-sdk consumer surface and lands with the
+#     api-client/api-sdk round; the react-hooks plugin awaits a
+#     stateful-components round. The
 #     API-contract toolchain's backend half is real but lives in its own
 #     path-filtered pipeline, api-contract.yml, so it is not wired into
 #     this check: on PRs touching the notes module's spec fragment or the
@@ -115,6 +120,7 @@ jobs:
         package:
           - web/packages/tokens
           - web/packages/i18n
+          - web/packages/ui-kit
     uses: ./.github/workflows/reusable/npm-package-ci.yml
     with:
       package: ${{ matrix.package }}

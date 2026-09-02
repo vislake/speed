@@ -29,7 +29,13 @@ name: npm-package-ci
 #                    (eslint.config.mjs -- typescript-eslint recommended
 #                    plus '@typescript-eslint/no-explicit-any' as an
 #                    error); the eslint/typescript-eslint versions are
-#                    pinned in the shared web/package.json devDependencies.
+#                    pinned in the shared web/package.json
+#                    devDependencies. The workspace's own rules live
+#                    behind the speed/ plugin namespace: no-literal-text
+#                    (web/eslint-rules/, rule tests there) errors on
+#                    user-facing text written inline in package src --
+#                    package tests and test-utils are exempt by config
+#                    (fixture strings are data).
 #   2. pnpm typecheck
 #                    tsc --noEmit under the strict web/tsconfig.base.json
 #                    settings (each package's tsconfig extends it).
@@ -45,17 +51,19 @@ name: npm-package-ci
 # DELIBERATELY NOT WIRED HERE (18-cicd discipline-table rows whose tooling
 # does not exist in the repository yet; each lands with the round that
 # introduces it -- wiring them now would be fake checks):
-#   * ESLint rules that need JSX and a React consumer surface -- no bare
-#     text nodes, no hand-written backend calls -- land with the first
-#     React-bearing package round (ui-kit), where the react plugins and
-#     the api-sdk types to check against exist.
+#   * ESLint rules that need the generated api-sdk consumer surface --
+#     no hand-written backend calls -- land with the api-client/api-sdk
+#     round, where the types to check against exist. (The no-bare-text
+#     half of the JSX family is wired: speed/no-literal-text covers
+#     React package src from the shared flat config; see leg 1.)
 #   * Repo-level i18n key parity over package locale files
-#     (tools/check_i18n_keys.py's web JSON extension) lands with the first
-#     package that ships production locale resources. Until then, parity
-#     is enforced in code: @speed/i18n's registerNamespace validates
-#     per-language coverage and identical key sets at registration, and
-#     its test suite pins that.
-#   * Storybook component previews: with ui-kit.
+#     (tools/check_i18n_keys.py's web JSON extension) is wired in the
+#     repo-level docs-check pipeline, whose path filter already covers
+#     **/locales/**; the parity runtime half stays in code (@speed/i18n's
+#     registerNamespace validates coverage and identical key sets at
+#     registration).
+#   * Storybook component previews: ui-kit shipped without a preview
+#     harness; the round that introduces one wires it here.
 #   * publint publish-shape validation and changesets wiring: with the
 #     web release-machinery round -- no @speed/* package is published yet,
 #     and the release pipeline stub is gated until that round.
