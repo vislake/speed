@@ -2,14 +2,14 @@
 
 speed's mandatory first consumer (root `CLAUDE.md`'s "Reference App" section): every module API this app does not actually use is not considered done. This is the **M0-stage skeleton** of it — see `docs/internal/15-roadmap.md` for the milestone plan and `docs/internal/14-reference-app.md` for the full, eventual scope (an AI dental smile-simulation platform).
 
-Today this app demonstrates real, end-to-end usage of the three modules that exist so far with real implementations (`pkgcore`, `dbkit`, `tenancy`) through one small, intentionally generic placeholder business module, `internal/notes` — **not** dental/business-specific content. It stands in for the real modules later milestones will add once `authn`, `org`, `storage`, `ai-gateway`, `billing` and the rest exist.
+Today this app demonstrates real, end-to-end usage of `pkgcore`, `dbkit`, `tenancy`, and `observability` through one small, intentionally generic placeholder business module, `internal/notes` — **not** dental/business-specific content. It stands in for the real modules later milestones will add once `authn`, `org`, `storage`, `ai-gateway`, `billing` and the rest exist.
 
 ## What's here
 
 | Path | What it is |
 |---|---|
 | `internal/notes/` | A complete `pkgcore.Module`: a tenant-scoped "Note" resource (`id`, `tenant_id`, `text`, `created_at`) with real SQL migrations (both dialects), a `dbkit.Repository[Note]`-based store, HTTP handlers, a real zh-CN/en-US locale pair, an OpenAPI fragment, and permission/event/audit-action declarations. |
-| `cmd/server/` | The runnable entry point: wires the notes `Module` into a `pkgcore.Kernel`, opens SQLite, runs migrations, and serves HTTP behind `tenancy.Middleware`. |
+| `cmd/server/` | The runnable entry point: initializes `observability` and serves its `/metrics` Prometheus endpoint, wires the notes `Module` into a `pkgcore.Kernel`, opens SQLite, runs migrations, and serves HTTP behind `tenancy.Middleware`. |
 
 ## Running it
 
