@@ -28,7 +28,7 @@
 
 ## 一句话概括
 
-`speed` 是一套面向 Golang + React 的 SaaS 底座：**20 个 Go module（19 个可独立引入 + `saasctl` CLI）、16 个 npm 包（15 个可独立引入 + `create-saas-app` CLI）**。业务项目通过 `go get` / `npm install` 引入能力，而不是 fork 整个仓库。
+`speed` 是一套面向 Golang + React 的 SaaS 底座：**21 个 Go module（20 个可独立引入 + `saasctl` CLI）、16 个 npm 包（15 个可独立引入 + `create-saas-app` CLI）**。业务项目通过 `go get` / `npm install` 引入能力，而不是 fork 整个仓库。
 
 ## 文档导航
 

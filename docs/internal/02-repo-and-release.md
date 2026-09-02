@@ -57,13 +57,13 @@ speed/
 - 某个模块没有任何改动时也会跟着发一个新版本（changelog 里标注 "no changes"），这是可接受的噪音。
 - 破坏性变更集中在大版本，配 `docs/upgrade/vX-to-vY.md` 升级指南。
 
-**Go 多模块发布**：module path 形如 `github.com/<org>/speed/go/tenancy`，版本 tag 必须用子目录前缀格式 `go/tenancy/v0.1.0`（Go 官方多模块仓库规范）。统一版本意味着一次发布要为 20 个 Go module 目录各打一个同版本号的 tag——**必须脚本化**，手工打 tag 一定会出错。
+**Go 多模块发布**：module path 形如 `github.com/<org>/speed/go/tenancy`，版本 tag 必须用子目录前缀格式 `go/tenancy/v0.1.0`（Go 官方多模块仓库规范）。统一版本意味着一次发布要为 21 个 Go module 目录各打一个同版本号的 tag——**必须脚本化**，手工打 tag 一定会出错。
 
 > **首次发布前的过渡状态**（Round 2 实现 `dbkit` 依赖 `pkgcore` 时确认）：在第一次 lockstep 发布、也就是 `pkgcore` 还没有任何 git tag 之前，`go build`/`go test` 能通过 `go.work` 的隐式本地路径解析直接工作，但 `go mod tidy` 不认这个——它按"脱离 workspace 也要能独立解析出一个可下载版本"的语义处理新增依赖，找不到 tag 会直接报错。过渡期做法是在依赖方的 `go.mod` 里加一行：
 > ```
 > replace github.com/vislake/speed/go/pkgcore => ../pkgcore
 > ```
-> 这条 `replace` 只是让 `go mod tidy` 满意，不影响 `go build`/`go test`（它们本来就用 `go.work` 解析，会忽略这条 replace）。**首次 lockstep 发布打完全部 20 个 tag 后，必须清理掉所有这类临时 `replace` 行**，改为要求方 `go.mod` 里的真实版本号——发布脚本需要包含这一步，不能只顾打 tag 不管清理跨模块依赖引用。每个新增"依赖仓内另一个尚未发布模块"的模块都会遇到同样的情况，不是 `dbkit` 独有的问题。
+> 这条 `replace` 只是让 `go mod tidy` 满意，不影响 `go build`/`go test`（它们本来就用 `go.work` 解析，会忽略这条 replace）。**首次 lockstep 发布打完全部 21 个 tag 后，必须清理掉所有这类临时 `replace` 行**，改为要求方 `go.mod` 里的真实版本号——发布脚本需要包含这一步，不能只顾打 tag 不管清理跨模块依赖引用。每个新增"依赖仓内另一个尚未发布模块"的模块都会遇到同样的情况，不是 `dbkit` 独有的问题。
 
 **npm 发布**：changesets 配置为 fixed 版本组（所有包锁在一起同步升版），与 Go 侧共用同一版本号。`react`/`react-dom`/`@mui/material`/`@emotion/*` 一律声明为 peerDependencies，避免下游出现多份 React/MUI 实例。
 
