@@ -27,8 +27,13 @@ tasks:
 
   test:
     desc: Run unit tests with the race detector and coverage.
-    # Only go/pkgcore has real code right now; every other module is a stub with
-    # no test files. Widen this to {{.ALL_PKGS}} as dbkit, tenancy and the rest land.
+    # go/pkgcore, go/dbkit and go/tenancy now have real code and tests; every
+    # other module under go/ is still a stub with no test files. This still
+    # only runs pkgcore's -- widen to {{.ALL_PKGS}} to pick up dbkit and
+    # tenancy too, and once more modules land. examples/reference-app is a
+    # separate module outside go/ (its own go.mod), so {{.ALL_PKGS}} would not
+    # reach it even after widening; it needs its own `go test ./...` run from
+    # examples/reference-app, e.g. a dedicated task once this one is widened.
     cmds:
       - go test ./go/pkgcore/... -race -cover
 
@@ -48,14 +53,20 @@ tasks:
         fi
 
   dev:
-    desc: Not implemented -- there is no runnable server in this repository yet.
+    desc: Not implemented -- this task does not yet wire up a demo-profile run.
     cmds:
       - |
         echo "dev: not implemented yet."
         echo
-        echo "There is no runnable server here. Every module under go/ is currently a stub"
-        echo "(go.mod + doc.go + AGENTS.md); only go/pkgcore has external dependencies wired,"
-        echo "and it has no implementation files yet either."
+        echo "go/pkgcore, go/dbkit and go/tenancy have real implementations now, and"
+        echo "examples/reference-app/cmd/server is a real, runnable demo-profile server"
+        echo "built on them -- see examples/reference-app/README.md. Run it directly:"
+        echo "    cd examples/reference-app && go run ./cmd/server"
+        echo
+        echo "This task itself does not run that yet: it has no hot reload and no"
+        echo "frontend, so it is not the 'backend + frontend in demo profile with hot"
+        echo "reload' target the root CLAUDE.md's Planned Commands describe. Every other"
+        echo "module under go/ is still a stub (go.mod + doc.go + AGENTS.md)."
         echo
         echo "See docs/internal/15-roadmap.md for the delivery order."
         exit 1
