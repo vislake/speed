@@ -16,12 +16,13 @@ version: '3'
 # behaviour the repository cannot yet deliver. The discipline checkers in
 # tools/ are intentionally wired into no task: docs/internal/18-cicd.md's
 # discipline table assigns them to CI workflows, and they run directly,
-# exactly as tools/README.md documents. Of the three, tools/scan_cjk.py is
-# wired today -- pr-check's repo-checks job runs it
-# (.github/workflows/pr-check.yml); tools/check_i18n_keys.py and
-# tools/check_repo_isolation.py are still wired into no workflow (the
-# docs-check pipeline that will run the former is a gated stub, per
-# docs/internal/18-cicd.md), so those two keep running directly.
+# exactly as tools/README.md documents. Two of the three are wired today:
+# tools/scan_cjk.py runs in pr-check's repo-checks job
+# (.github/workflows/pr-check.yml) and tools/check_i18n_keys.py runs in
+# the docs-check pipeline (.github/workflows/docs-check.yml), which fires
+# on doc/i18n-touching PRs; only tools/check_repo_isolation.py is still
+# wired into no workflow, so it keeps running directly until its row lands
+# in a future round.
 #
 # NOTE ON RUNNING IN ANOTHER DIRECTORY
 # Commands that must run from a module directory rather than the workspace

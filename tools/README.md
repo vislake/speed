@@ -263,11 +263,15 @@ anything.
 
 ## Running in CI and locally
 
-CI workflows mount the checkers directly (`python3 tools/scan_cjk.py
---root "$REPO"`, `python3 tools/check_i18n_keys.py --root "$REPO"`, and the
-isolation checker the same way once its row lands in the CI matrix) and
-fail the build on a nonzero exit. Locally, run them from the repository
-root — the default `--root` is the current directory, so plain
+CI workflows mount the checkers directly, from the repository root, and
+fail the build on a nonzero exit: `python3 tools/scan_cjk.py` runs in
+pr-check's repo-checks job (every pull request,
+`.github/workflows/pr-check.yml`), and `python3 tools/check_i18n_keys.py`
+runs in the docs-check pipeline (`.github/workflows/docs-check.yml`),
+whose pull_request path filter fires on PRs touching documentation or
+i18n resources. `tools/check_repo_isolation.py` is wired into no workflow
+yet; its row lands with a future CI round. Locally, run them from the
+repository root — the default `--root` is the current directory, so plain
 `python3 tools/scan_cjk.py` also works there. All output paths are relative
 to `--root`. All scripts are plain executables with no third-party
 dependencies and no module metadata of their own; they live here precisely
