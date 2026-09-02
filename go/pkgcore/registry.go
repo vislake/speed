@@ -899,9 +899,13 @@ func (k *Kernel) Bootstrap(ctx context.Context, modules ...Module) (*Registry, e
 	// The message catalog is assembled alongside registration: each module's
 	// locale resources are validated and merged before the module itself
 	// registers, so a malformed or parity-broken locale pair fails the
-	// bootstrap at the module that owns it, and the frozen catalog is
-	// installed before ValidateFeatureGraph runs, when every module can
-	// already reach it through reg.
+	// bootstrap at the module that owns it. The frozen catalog is installed
+	// only after every module has registered, so reg.Locales() is still nil
+	// inside Register, and calling a method on that nil catalog panics. The
+	// catalog becomes reachable through reg only once registration
+	// completes: a module that renders catalog content must read it at
+	// runtime, from the handlers or jobs it registered, never from Register
+	// itself.
 	localesBuilder := i18n.NewBuilder()
 	for _, module := range ordered {
 		if err := ctx.Err(); err != nil {
