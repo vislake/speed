@@ -50,7 +50,12 @@ var ErrInvalidObjectKey = errors.New("pkgcore: invalid object key")
 // streams of bytes with no metadata, no attributes and no server-side
 // operations, because the local backend has none of those. There is no
 // listing, no stat, no copy and no presigned access on the interface: a store
-// carries bytes, and callers that need a catalog keep it themselves.
+// carries bytes, and callers that need a catalog keep it themselves. Those
+// omissions are the seam's boundary, not a gap to close later -- presigned
+// access, object metadata and lifecycle handling are capabilities only the
+// S3-backed backend could satisfy, so they belong to the M2 storage module
+// that will be built on top of this contract and is its first consumer, never
+// on the interface itself.
 //
 // The keyspace is a single tree. A key must not be a proper prefix of another
 // stored key (one "/"-separated path cannot hold both a file and a
