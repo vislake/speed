@@ -17,7 +17,8 @@
     "title": "Confirm this action",
     "message": "This action takes effect immediately and cannot be undone from the interface. Continue only if you are sure.",
     "confirmLabel": "Confirm",
-    "cancelLabel": "Cancel"
+    "cancelLabel": "Cancel",
+    "confirmAgainLabel": "Click again to confirm"
   },
   "form": {
     "required": "This field is required.",

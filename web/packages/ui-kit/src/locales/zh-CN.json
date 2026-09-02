@@ -17,7 +17,8 @@
     "title": "请确认此操作",
     "message": "此操作会立即生效，且无法在界面上撤销。请确认后继续。",
     "confirmLabel": "确认",
-    "cancelLabel": "取消"
+    "cancelLabel": "取消",
+    "confirmAgainLabel": "再次点击确认"
   },
   "form": {
     "required": "此字段为必填项。",
