@@ -227,9 +227,9 @@ func (b *Builder) Build() *Catalog {
 		locals[locale] = goi18n.NewLocalizer(b.bundle, locale)
 	}
 	return &Catalog{
-		bundle:  b.bundle,
-		locals:  locals,
-		codes:   b.localeCodes,
+		bundle: b.bundle,
+		locals: locals,
+		codes:  b.localeCodes,
 	}
 }
 

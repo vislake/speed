@@ -43,7 +43,9 @@
 //   - Every top-level key is a message id; the id is the whole key,
 //     written quoted so the dots stay literal, for example
 //     "notes.text_required" = "Note text must not be empty."
+//
 //   - A plain string value is a single-form message.
+//
 //   - A table whose keys are message keys -- zero, one, two, few, many,
 //     other (case-insensitive), plus description, hash, leftdelim,
 //     rightdelim and id -- is a plural message:
@@ -60,11 +62,13 @@
 //     top level. The reference-app notes files were converted to this
 //     shape when pkgcore/i18n landed; the old grouped shape fails loading
 //     with ErrUnsupportedShape.
+//
 //   - Every message id must start with "<module>." -- the module's own
 //     Name plus a dot. This keeps each module's id space disjoint, which is
 //     what makes a merge unambiguous: two modules can never own the same
 //     message id, so "overlap" is a bug reported at AddModule time, never a
 //     silent override.
+//
 //   - zh-CN and en-US must carry the same id set, per module, or
 //     AddModule fails with ErrParityMismatch. Parity is enforced as each
 //     module is added, which makes every catalog that builds well-formed by
