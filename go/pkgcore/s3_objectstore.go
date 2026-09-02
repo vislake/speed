@@ -123,8 +123,10 @@ func (s *s3ObjectStore) GetObject(ctx context.Context, key string) (io.ReadClose
 	if _, err := object.Stat(); err != nil {
 		// Close releases the request the failed Stat started; without it the
 		// reader goroutine minio-go spun up for this object would keep
-		// waiting for reads that will never come.
-		object.Close()
+		// waiting for reads that will never come. The close is best-effort:
+		// the Stat error is the failure this call reports, and nothing
+		// downstream can act on a Close failure here.
+		_ = object.Close()
 		if isObjectNotFound(err) {
 			return nil, ErrObjectNotFound
 		}

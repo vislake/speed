@@ -187,8 +187,16 @@ func NewLocalObjectStore(directory string) ObjectStore {
 	if err != nil {
 		panic(fmt.Sprintf("pkgcore: NewLocalObjectStore: %v", err))
 	}
-	if err := os.MkdirAll(absolute, 0o755); err != nil {
-		panic(fmt.Sprintf("pkgcore: NewLocalObjectStore: %v", err))
+	// Newly created store directories are 0o750 (owner and group), tighter
+	// than the 0o755 umask default that gosec's G301 calls out: the store is
+	// process-private -- nothing outside the owning process reads its tree,
+	// and it may hold PII objects. A host-injected directory is never
+	// affected, because MkdirAll leaves an existing tree's permissions alone.
+	// mkdirErr so the filepath.Abs error above is not shadowed: the error
+	// variables of the Abs/EvalSymlinks/Stat chain below are reassignments
+	// of the same err, and govet's shadow check flags an if-init err here.
+	if mkdirErr := os.MkdirAll(absolute, 0o750); mkdirErr != nil {
+		panic(fmt.Sprintf("pkgcore: NewLocalObjectStore: %v", mkdirErr))
 	}
 	resolved, err := filepath.EvalSymlinks(absolute)
 	if err != nil {
@@ -202,13 +210,6 @@ func NewLocalObjectStore(directory string) ObjectStore {
 		panic(fmt.Sprintf("pkgcore: NewLocalObjectStore: %q is not a directory", directory))
 	}
 	return &localObjectStore{root: resolved}
-}
-
-// newLocalObjectStore returns a local store rooted at an already-resolved
-// directory. It is the unexported twin of NewLocalObjectStore, for tests that
-// want a store without the construction-time panics getting in the way.
-func newLocalObjectStore(root string) *localObjectStore {
-	return &localObjectStore{root: root}
 }
 
 // PutObject implements ObjectStore.PutObject by streaming r into a temporary
@@ -255,7 +256,8 @@ func (s *localObjectStore) PutObject(ctx context.Context, key string, r io.Reade
 			if !os.IsNotExist(err) {
 				return fmt.Errorf("pkgcore: local object store: %w", err)
 			}
-			mkdirErr := os.Mkdir(child, 0o755)
+			// 0o750 like the store root (see NewLocalObjectStore).
+			mkdirErr := os.Mkdir(child, 0o750)
 			if mkdirErr == nil {
 				dir = child
 				break
@@ -275,8 +277,11 @@ func (s *localObjectStore) PutObject(ctx context.Context, key string, r io.Reade
 	cleanedUp := false
 	defer func() {
 		if !cleanedUp {
-			temporary.Close()
-			os.Remove(temporary.Name())
+			// Best-effort cleanup on the error paths: the error the function
+			// is about to return is the failure that matters, and there is
+			// no caller left to report a cleanup failure to.
+			_ = temporary.Close()
+			_ = os.Remove(temporary.Name())
 		}
 	}()
 	// CreateTemp creates with mode 0600. Objects are stored as ordinary
@@ -376,8 +381,10 @@ func (s *localObjectStore) removeEmptyTraces(path string) error {
 		if !entry.IsDir() {
 			return fmt.Errorf("pkgcore: local object store: the path at %q is a directory that still holds objects stored under longer keys, and a key must not be a proper prefix of a stored key", path)
 		}
-		if err := s.removeEmptyTraces(filepath.Join(path, entry.Name())); err != nil {
-			return err
+		// Named for the govet shadow check: the ReadDir error above stays
+		// live below, for the rmdir of the path itself.
+		if subErr := s.removeEmptyTraces(filepath.Join(path, entry.Name())); subErr != nil {
+			return subErr
 		}
 	}
 	err = syscall.Rmdir(path)
@@ -437,6 +444,9 @@ func (s *localObjectStore) GetObject(ctx context.Context, key string) (io.ReadCl
 	// O_NOFOLLOW refuses to open the path if it became a symbolic link after
 	// the Lstat above looked at it, so the file the reader ends up streaming
 	// is the regular file that was just inspected.
+	//nolint:gosec // G304: the path is an Lstat-verified regular file under the store root
+	// (validateObjectKey rejects traversal), and O_NOFOLLOW makes the open
+	// refuse exactly the symlink swap gosec worries about.
 	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -496,21 +506,25 @@ func (s *localObjectStore) DeleteObject(ctx context.Context, key string) error {
 		return nil
 	}
 	if info.IsDir() {
-		entries, err := os.ReadDir(path)
-		if err != nil {
-			if os.IsNotExist(err) {
+		// dirErr: the Lstat error above stays live below, where the final
+		// os.Remove reuses it.
+		entries, dirErr := os.ReadDir(path)
+		if dirErr != nil {
+			if os.IsNotExist(dirErr) {
 				return nil
 			}
-			return fmt.Errorf("pkgcore: local object store: %w", err)
+			return fmt.Errorf("pkgcore: local object store: %w", dirErr)
 		}
 		if len(entries) == 0 {
 			// A concurrent PutObject may have just filled the directory. An
 			// empty-directory remove that loses that race is still a success:
 			// the key being deleted never was an object, so nothing about the
 			// outcome of this DeleteObject changes.
-			if err := os.Remove(path); err != nil && !os.IsNotExist(err) &&
-				!errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, syscall.EEXIST) {
-				return fmt.Errorf("pkgcore: local object store: %w", err)
+			// rmErr: the Lstat error above stays live below, where the final
+			// os.Remove reuses it.
+			if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) &&
+				!errors.Is(rmErr, syscall.ENOTEMPTY) && !errors.Is(rmErr, syscall.EEXIST) {
+				return fmt.Errorf("pkgcore: local object store: %w", rmErr)
 			}
 		}
 		return nil

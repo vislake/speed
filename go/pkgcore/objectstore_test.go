@@ -21,6 +21,24 @@ func newRootStore(t *testing.T) (string, ObjectStore) {
 	return root, NewLocalObjectStore(root)
 }
 
+// TestLocalObjectStore_CreatesItsRootWithoutWorldAccess pins the permission
+// of a root directory the store creates itself: NewLocalObjectStore must not
+// fall back to the 0o755 MkdirAll default, because the tree may hold PII
+// objects and nothing outside the owning process should read it. A stricter
+// umask may only remove bits, so the assert is one-sided.
+func TestLocalObjectStore_CreatesItsRootWithoutWorldAccess(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "store")
+	NewLocalObjectStore(root)
+
+	info, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm&0o007 != 0 {
+		t.Errorf("store root permissions are %#o, want no access for other users", perm)
+	}
+}
+
 // putObject stores body under key, failing the test on any error.
 func putObject(t *testing.T, store ObjectStore, key, body string) {
 	t.Helper()
@@ -311,8 +329,10 @@ func TestLocalObjectStore_PutObject_FailureLeavesNoTrace(t *testing.T) {
 	if !errors.Is(err, sourceErr) {
 		t.Fatalf("PutObject() error = %v, want it to wrap the source's error", err)
 	}
-	if _, err := store.GetObject(context.Background(), "a/b/c"); !errors.Is(err, ErrObjectNotFound) {
-		t.Errorf("GetObject() after a failed put error = %v, want ErrObjectNotFound", err)
+	// getErr: the PutObject error above stays live for the directory-listing
+	// check below, which reuses err.
+	if _, getErr := store.GetObject(context.Background(), "a/b/c"); !errors.Is(getErr, ErrObjectNotFound) {
+		t.Errorf("GetObject() after a failed put error = %v, want ErrObjectNotFound", getErr)
 	}
 	// The failed upload's temporary file was cleaned up, and no partial
 	// object file was published.

@@ -1754,9 +1754,11 @@ func TestBootstrap_WiresTheDeploymentModeObjectStoreIntoTheRegistry(t *testing.T
 		t.Run(tt.name, func(t *testing.T) {
 			injected := NewLocalObjectStore(t.TempDir())
 
-			reg, err := tt.kernel(injected).Bootstrap(context.Background())
-			if err != nil {
-				t.Fatalf("Bootstrap() error = %v, want nil", err)
+			// bootstrapErr: the many inner if-init errs below must not shadow
+			// an outer one, so the outer name steps aside.
+			reg, bootstrapErr := tt.kernel(injected).Bootstrap(context.Background())
+			if bootstrapErr != nil {
+				t.Fatalf("Bootstrap() error = %v, want nil", bootstrapErr)
 			}
 			if reg.ObjectStore() == nil {
 				t.Fatal("ObjectStore() is nil")
