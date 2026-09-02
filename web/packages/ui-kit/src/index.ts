@@ -34,3 +34,12 @@ export {
   type FormFieldRenderState,
 } from './components/FormField.js'
 export { FormLayout, type FormLayoutProps } from './components/FormLayout.js'
+export {
+  DataTable,
+  type DataTableColumn,
+  type DataTableFilter,
+  type DataTablePagination,
+  type DataTableProps,
+  type DataTableSort,
+  type DataTableSortDirection,
+} from './components/DataTable.js'

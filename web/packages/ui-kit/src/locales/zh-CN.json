@@ -31,6 +31,7 @@
     "displayedRows": "第 {{from}}–{{to}} 条，共 {{count}} 条",
     "displayedRowsUnknown": "第 {{from}}–{{to}} 条",
     "selectAllRows": "全选",
-    "selectRow": "选择此行"
+    "selectRow": "选择第 {{row}} 行",
+    "filterLabel": "筛选"
   }
 }
