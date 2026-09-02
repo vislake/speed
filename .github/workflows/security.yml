@@ -13,21 +13,25 @@ name: security
 # TOOL POSTURE (docs/internal/20-quality-and-security.md, supply-chain and
 # license-compliance sections): govulncheck for Go dependencies; pnpm audit
 # + Renovate for npm -- the premise now holds: web/ ships a pnpm lockfile
-# (devDependencies-only so far), but the audit wiring itself is deferred to
-# the M0 implementing round of this pipeline; gitleaks (pre-commit hook AND
-# CI) for secret leakage; GitHub CodeQL for static analysis; trivy for
-# container images once images exist; and a license scan that BANS GPL/AGPL
-# dependencies -- this repo scaffolds commercial deliveries, so dependency
-# licenses transmit to customer projects, and MPL/LGPL needs a recorded ADR.
+# (the root package declares devDependencies only; @speed/i18n already
+# carries i18next/react-i18next as runtime dependencies), but the audit
+# wiring itself is deferred to the M0 implementing round of this pipeline;
+# gitleaks (pre-commit hook AND CI) for secret leakage; GitHub CodeQL for
+# static analysis; trivy for container images once images exist; and a
+# license scan that BANS GPL/AGPL dependencies -- this repo scaffolds
+# commercial deliveries, so dependency licenses transmit to customer
+# projects, and MPL/LGPL needs a recorded ADR.
 #
 # WHAT EXISTS TODAY: none of the scanning tooling is wired yet -- no
 # govulncheck invocation or config, no gitleaks config, no CodeQL setup, no
-# images to scan, no npm audit invocation (web/'s pnpm lockfile exists but
-# is devDependencies-only; audit wiring is deferred to this pipeline's
+# images to scan, and no npm audit invocation or config anywhere: the root
+# package declares devDependencies only, but @speed/i18n already carries
+# i18next/react-i18next as runtime dependencies, so an audit would scan a
+# real dependency graph (audit wiring is deferred to this pipeline's
 # implementing round). Nothing is wired here on purpose: half-wired scans
-# would be fake checks. The repo holds no real credentials
-# of any kind and must never acquire any (20-quality-and-security.md secret
-# management); CI secrets belong to GitHub Environments.
+# would be fake checks. The repo holds no real credentials of any kind and
+# must never acquire any (20-quality-and-security.md secret management);
+# CI secrets belong to GitHub Environments.
 #
 # GATE: the roadmap M0 engineering item "security and license scanning"
 # (semgrep/depguard discipline rules land in the same round per the roadmap,
