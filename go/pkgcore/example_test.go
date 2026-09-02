@@ -259,7 +259,7 @@ func ExampleKernel_Bootstrap() {
 // has registered: a flag may depend on a flag owned by a module that registers
 // later, so the graph is only resolvable at the end.
 func ExampleValidateFeatureGraph() {
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore())
+	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
 	if err := reg.Features.Add(pkgcore.FeatureFlag{
 		Key:         "billing.dunning",
 		Description: "Chase failed payments on a retry schedule.",
@@ -284,18 +284,20 @@ func ExampleValidateFeatureGraph() {
 // injects its own.
 func ExampleWithEventBus() {
 	// Assembling a distributed-mode kernel without a bus fails at startup. A
-	// real distributed-mode host would also need WithKVStore, but that check
-	// runs after the EventBus check, so leaving it out here still isolates
-	// this example to the EventBus failure.
+	// real distributed-mode host would also need WithKVStore and WithMailer,
+	// but their checks run after the EventBus check, so leaving them out here
+	// still isolates this example to the EventBus failure.
 	_, err := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed).Bootstrap(context.Background())
 	fmt.Println(errors.Is(err, pkgcore.ErrMissingDistributedEventBus))
 
 	// A real host passes its broker-backed bus here; the in-memory one stands
 	// in for it in this example. DeploymentModeDistributed requires a KVStore
-	// too, so it is wired alongside the bus with its own in-memory stand-in.
+	// and a Mailer too, so both are wired alongside the bus with their own
+	// in-memory stand-ins.
 	kernel := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed,
 		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus()),
-		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore()))
+		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore()),
+		pkgcore.WithMailer(pkgcore.NewConsoleMailer()))
 	reg, err := kernel.Bootstrap(context.Background(), exampleTenancyModule{})
 	fmt.Println(err, reg.EventBus() != nil)
 
@@ -317,14 +319,82 @@ func ExampleWithKVStore() {
 	fmt.Println(errors.Is(err, pkgcore.ErrMissingDistributedKVStore))
 
 	// A real host passes its Redis-backed store here; the in-memory one
-	// stands in for it in this example.
+	// stands in for it in this example. The Mailer seam is wired too, because
+	// its check runs after the KVStore one and this kernel will succeed.
 	kernel := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed,
 		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus()),
-		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore()))
+		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore()),
+		pkgcore.WithMailer(pkgcore.NewConsoleMailer()))
 	reg, err := kernel.Bootstrap(context.Background(), exampleTenancyModule{})
 	fmt.Println(err, reg.KVStore() != nil)
 
 	// Output:
 	// true
 	// <nil> true
+}
+
+// ExampleWithMailer shows the distributed-mode wiring seam for the mail
+// seam, mirroring ExampleWithEventBus and ExampleWithKVStore.
+// DeploymentModeDistributed has no built-in Mailer, because falling back to
+// the console mailer would print every message to a replica's stdout where
+// nobody reads it, so the host injects its own.
+func ExampleWithMailer() {
+	// Assembling a distributed-mode kernel without a mailer fails at startup,
+	// once the bus and the store are wired: their checks run first, so both
+	// are wired here too, to isolate the failure this example is about to the
+	// Mailer check.
+	_, err := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed,
+		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus()),
+		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore())).
+		Bootstrap(context.Background())
+	fmt.Println(errors.Is(err, pkgcore.ErrMissingDistributedMailer))
+
+	// A real host passes its SMTP-backed mailer here; the console one stands
+	// in for it in this example.
+	kernel := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed,
+		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus()),
+		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore()),
+		pkgcore.WithMailer(pkgcore.NewConsoleMailer()))
+	reg, err := kernel.Bootstrap(context.Background(), exampleTenancyModule{})
+	fmt.Println(err, reg.Mailer() != nil)
+
+	// Output:
+	// true
+	// <nil> true
+}
+
+// ExampleNewConsoleMailer shows the standalone deployment mode's mailer: it
+// prints every message to standard output as one greppable, self-delimiting
+// record, instead of delivering it. A module that sends mail through the
+// registry's mail seam is exercised identically in tests and in the
+// standalone deployment mode.
+func ExampleNewConsoleMailer() {
+	mailer := pkgcore.NewConsoleMailer()
+	err := mailer.Send(context.Background(), pkgcore.Mail{
+		From:    "ops@example.com",
+		To:      []string{"ada@example.com"},
+		Subject: "Your invoice #1042 is ready",
+		Text:    "Hello Ada, your invoice is ready to view.",
+	})
+	fmt.Println(err)
+
+	// A message that fails the shared validity rules is rejected with
+	// ErrInvalidMail before anything is printed, so the record above is the
+	// whole of this mailer's output.
+	err = mailer.Send(context.Background(), pkgcore.Mail{
+		From:    "ops@example.com",
+		Subject: "no recipients",
+		Text:    "this must never print",
+	})
+	fmt.Println(errors.Is(err, pkgcore.ErrInvalidMail))
+
+	// Output:
+	// [mail] from: ops@example.com
+	// [mail] to: ada@example.com
+	// [mail] subject: Your invoice #1042 is ready
+	// [mail] text/plain:
+	// Hello Ada, your invoice is ready to view.
+	// [mail] end
+	// <nil>
+	// true
 }

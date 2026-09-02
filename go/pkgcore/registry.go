@@ -60,6 +60,13 @@ var ErrMissingDistributedEventBus = errors.New("pkgcore: distributed deployment 
 // fails instead.
 var ErrMissingDistributedKVStore = errors.New("pkgcore: distributed deployment mode requires an explicit key-value store")
 
+// ErrMissingDistributedMailer is returned by Bootstrap when a Kernel assembled
+// for DeploymentModeDistributed has no Mailer wired in. There is no
+// distributed implementation to fall back on, and falling back to the console
+// mailer would print every message to a replica's stdout where nobody reads
+// it, so assembly fails instead.
+var ErrMissingDistributedMailer = errors.New("pkgcore: distributed deployment mode requires an explicit mailer")
+
 // errNilFeatureRegistrar guards ValidateFeatureGraph against an unwired registry.
 var errNilFeatureRegistrar = errors.New("pkgcore: registry has no feature registrar")
 
@@ -298,29 +305,40 @@ type Registry struct {
 	// only way to reach it, mirroring the read-only role EventBus() plays for
 	// bus.
 	kv KVStore
+
+	// mailer is the Mailer the registry was built with. It is kept directly on
+	// Registry for the same reason kv is: nothing in Registry installs
+	// anything onto a Mailer, so no registrar would have anything to hold. It
+	// is unexported so that Mailer() is the only way to reach it.
+	mailer Mailer
 }
 
 // NewRegistry returns a Registry whose registrars are the in-memory default
-// implementations, whose event seam is bus, and whose key-value seam is kv.
-// The defaults are complete enough to run and to test against right now, and
-// they double as the standalone deployment mode's implementations, so no
-// separate test double is needed.
+// implementations, whose event seam is bus, whose key-value seam is kv, and
+// whose mail seam is mailer. The defaults are complete enough to run and to
+// test against right now, and they double as the standalone deployment mode's
+// implementations, so no separate test double is needed.
 //
-// bus and kv are parameters rather than a built-in default because they are
-// the two registration surfaces with a real distributed implementation: the
-// caller decides which bus the modules subscribe to and which store they read
-// and write. Kernel.Bootstrap is the normal way to build a Registry, because
-// it picks the implementations that match the deployment mode. A nil bus or a
-// nil kv panics: each is an unrecoverable wiring error at startup. The
-// alternative for bus is a registry that accepts every subscription and
-// silently drops every event; the alternative for kv is a registry whose
-// KVStore() looks wired but panics the first caller that actually uses it.
-func NewRegistry(bus EventBus, kv KVStore) *Registry {
+// bus, kv and mailer are parameters rather than built-in defaults because
+// they are the seams with a real distributed implementation: the caller
+// decides which bus the modules subscribe to, which store they read and
+// write, and which transport their emails leave through. Kernel.Bootstrap is
+// the normal way to build a Registry, because it picks the implementations
+// that match the deployment mode. A nil bus, a nil kv or a nil mailer
+// panics: each is an unrecoverable wiring error at startup. The alternative
+// for bus is a registry that accepts every subscription and silently drops
+// every event; the alternative for kv is a registry whose KVStore() looks
+// wired but panics the first caller that actually uses it; the alternative
+// for mailer is a registry whose Mailer() sends nothing and reports success.
+func NewRegistry(bus EventBus, kv KVStore, mailer Mailer) *Registry {
 	if bus == nil {
 		panic("pkgcore: NewRegistry requires a non-nil EventBus")
 	}
 	if kv == nil {
 		panic("pkgcore: NewRegistry requires a non-nil KVStore")
+	}
+	if mailer == nil {
+		panic("pkgcore: NewRegistry requires a non-nil Mailer")
 	}
 	return &Registry{
 		Routes:        &memoryRouteRegistrar{},
@@ -332,6 +350,7 @@ func NewRegistry(bus EventBus, kv KVStore) *Registry {
 		Events:        &memoryEventRegistrar{bus: bus, types: make(map[string]struct{})},
 		AuditActions:  &memoryAuditActionRegistrar{actions: make(map[string]struct{})},
 		kv:            kv,
+		mailer:        mailer,
 	}
 }
 
@@ -357,6 +376,14 @@ func (r *Registry) EventBus() EventBus {
 // construct.
 func (r *Registry) KVStore() KVStore {
 	return r.kv
+}
+
+// Mailer returns the mailer the registry was built with, the transport the
+// modules' outgoing email leaves through. Like KVStore, it is stored directly
+// on the struct because no registrar installs anything onto it. It returns
+// nil for a zero-value Registry, which only tests construct.
+func (r *Registry) Mailer() Mailer {
+	return r.mailer
 }
 
 // checkUnique reports whether any key produced by keyOf is already in
@@ -590,12 +617,15 @@ type Kernel struct {
 	deploymentMode DeploymentMode
 	bus            EventBus
 	kv             KVStore
+	mailer         Mailer
 }
 
 // KernelOption injects an infrastructure implementation into a Kernel.
-// Distributed implementations are supplied this way because pkgcore is the
-// dependency floor of the monorepo and cannot import the brokers and drivers
-// they are built on.
+// Distributed implementations are supplied this way because the kernel would
+// otherwise have to construct them from deployment configuration it does not
+// carry: a broker address, credentials, a registry of hosts. The host, which
+// reads its own configuration, builds the implementation and injects it; the
+// kernel stays the only place that picks the standalone defaults.
 type KernelOption func(*Kernel)
 
 // WithEventBus wires bus into every Registry the kernel bootstraps, in place of
@@ -623,6 +653,20 @@ func WithKVStore(store KVStore) KernelOption {
 			return
 		}
 		k.kv = store
+	}
+}
+
+// WithMailer wires mailer into every Registry the kernel bootstraps, in place
+// of the deployment mode's default. It is the seam a distributed-mode host
+// uses to supply its SMTP-backed Mailer: DeploymentModeDistributed has no
+// built-in implementation, so Bootstrap fails without it. A nil mailer leaves
+// the deployment mode's default in place.
+func WithMailer(mailer Mailer) KernelOption {
+	return func(k *Kernel) {
+		if mailer == nil {
+			return
+		}
+		k.mailer = mailer
 	}
 }
 
@@ -678,6 +722,27 @@ func (k *Kernel) kvStore() (KVStore, error) {
 	}
 }
 
+// resolveMailer returns the Mailer the assembled Registry is wired to: the
+// injected one when the host supplied it, and the console mailer for
+// DeploymentModeStandalone, which has no real transport by design.
+// DeploymentModeDistributed reports an error instead of falling back, because
+// the console mailer would print every message to a replica's stdout where
+// nobody reads it. It parallels eventBus and kvStore; the field it resolves
+// is named mailer, which a method of the same name could not be.
+func (k *Kernel) resolveMailer() (Mailer, error) {
+	if k.mailer != nil {
+		return k.mailer, nil
+	}
+	switch k.deploymentMode {
+	case DeploymentModeStandalone:
+		return NewConsoleMailer(), nil
+	case DeploymentModeDistributed:
+		return nil, fmt.Errorf("%w: wire one with WithMailer", ErrMissingDistributedMailer)
+	default:
+		return nil, fmt.Errorf("%w: %q", ErrInvalidDeploymentMode, k.deploymentMode)
+	}
+}
+
 // DeploymentMode returns the deployment mode the kernel assembles modules for.
 func (k *Kernel) DeploymentMode() DeploymentMode { return k.deploymentMode }
 
@@ -701,13 +766,17 @@ func (k *Kernel) Bootstrap(ctx context.Context, modules ...Module) (*Registry, e
 	if err != nil {
 		return nil, err
 	}
+	mailer, err := k.resolveMailer()
+	if err != nil {
+		return nil, err
+	}
 
 	ordered, err := sortModulesByDependency(modules)
 	if err != nil {
 		return nil, err
 	}
 
-	reg := NewRegistry(bus, kv)
+	reg := NewRegistry(bus, kv, mailer)
 	for _, module := range ordered {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("pkgcore: bootstrap stopped before registering module %q: %w", module.Name(), err)

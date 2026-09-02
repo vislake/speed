@@ -1,6 +1,7 @@
 package pkgcore
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"errors"
@@ -125,7 +126,7 @@ func (s *regTestKVStore) setKeys() []string {
 func TestNewRegistry_WiresEveryRegistrar(t *testing.T) {
 	bus := NewMemoryEventBus()
 	kv := NewMemoryKVStore()
-	reg := NewRegistry(bus, kv)
+	reg := NewRegistry(bus, kv, NewConsoleMailer())
 
 	if reg.Routes == nil {
 		t.Error("Routes registrar is nil")
@@ -160,7 +161,7 @@ func TestNewRegistry_WiresEveryRegistrar(t *testing.T) {
 }
 
 func TestRouteRegistrar_Mount_RecordsRoutesInOrder(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 
 	billing := regTestHandler{id: "billing"}
 	org := regTestHandler{id: "org"}
@@ -187,7 +188,7 @@ func TestRouteRegistrar_Mount_RecordsRoutesInOrder(t *testing.T) {
 }
 
 func TestRouteRegistrar_Routes_ReturnsCopy(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 	reg.Routes.Mount("/api/v1/billing", regTestHandler{id: "billing"})
 
 	mutated := reg.Routes.Routes()
@@ -233,7 +234,7 @@ func TestConfigRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
+			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 			if len(tt.first) > 0 {
 				if err := reg.Config.Add(tt.first...); err != nil {
 					t.Fatalf("first Add() error = %v, want nil", err)
@@ -265,7 +266,7 @@ func TestConfigRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 }
 
 func TestConfigRegistrar_Items_PreservesDeclaration(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 	want := ConfigItem{
 		Key:         "billing.api_key",
 		Type:        "string",
@@ -288,7 +289,7 @@ func TestConfigRegistrar_Items_PreservesDeclaration(t *testing.T) {
 }
 
 func TestPermissionRegistrar_Add_DuplicateAcrossModulesReturnsError(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 
 	// Two modules register through the same shared Registry, as Bootstrap does.
 	billing := regTestModule{
@@ -332,7 +333,7 @@ func TestPermissionRegistrar_Add_DuplicateAcrossModulesReturnsError(t *testing.T
 }
 
 func TestPermissionRegistrar_Permissions_IsSorted(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 	if err := reg.Permissions.Add("org:read", "billing:manage", "admin:impersonate"); err != nil {
 		t.Fatalf("Add() error = %v, want nil", err)
 	}
@@ -350,7 +351,7 @@ func TestPermissionRegistrar_Permissions_IsSorted(t *testing.T) {
 }
 
 func TestJobRegistrar_Handle_DuplicateJobTypeReturnsError(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 	first := regTestHandler{id: "first"}
 	second := regTestHandler{id: "second"}
 
@@ -374,7 +375,7 @@ func TestJobRegistrar_Handle_DuplicateJobTypeReturnsError(t *testing.T) {
 }
 
 func TestNotificationRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 	paid := NotificationType{
 		Key:             "billing.invoice_paid",
 		Group:           "billing",
@@ -401,7 +402,7 @@ func TestNotificationRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 }
 
 func TestAuditActionRegistrar_Add_DuplicateReturnsErrorAndSorts(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 	if err := reg.AuditActions.Add("org.member.removed", "billing.plan.changed"); err != nil {
 		t.Fatalf("Add() error = %v, want nil", err)
 	}
@@ -423,7 +424,7 @@ func TestAuditActionRegistrar_Add_DuplicateReturnsErrorAndSorts(t *testing.T) {
 }
 
 func TestEventRegistrar_Subscribe_IsBackedByTheRegistryEventBus(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 
 	var mu sync.Mutex
 	var received []Event
@@ -498,7 +499,7 @@ func TestFeatureRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
+			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 			if len(tt.first) > 0 {
 				if err := reg.Features.Add(tt.first...); err != nil {
 					t.Fatalf("first Add() error = %v, want nil", err)
@@ -560,7 +561,7 @@ func TestBootstrap_DuplicateFeatureFlagAcrossModules_ReturnsError(t *testing.T) 
 }
 
 func TestEventRegistrar_Publishes_RecordsTheDeclaredCatalog(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 
 	want := []EventDecl{
 		{Type: "billing.invoice.paid", PayloadType: "billing.InvoicePaid", Description: "An invoice was paid in full."},
@@ -625,7 +626,7 @@ func TestEventRegistrar_Publishes_DuplicateTypeReturnsError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
+			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 			if len(tt.first) > 0 {
 				if err := reg.Events.Publishes(tt.first...); err != nil {
 					t.Fatalf("first Publishes() error = %v, want nil", err)
@@ -660,7 +661,7 @@ func TestEventRegistrar_Publishes_DuplicateTypeReturnsError(t *testing.T) {
 // separately, replacing Events left EventBus() pointing at the old bus, so
 // publishers and subscribers ended up on different buses with no error.
 func TestRegistry_EventBus_FollowsTheEventsRegistrar(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 
 	distributed := newRegTestBus()
 	reg.Events = &memoryEventRegistrar{bus: distributed, types: make(map[string]struct{})}
@@ -693,6 +694,16 @@ func TestRegistry_KVStore_ZeroValueRegistryReturnsNil(t *testing.T) {
 	}
 }
 
+// TestRegistry_Mailer_ZeroValueRegistryReturnsNil mirrors
+// TestRegistry_KVStore_ZeroValueRegistryReturnsNil for the mail seam: mailer
+// is a plain field for the same reason kv is, so the zero-value Registry
+// answers nil the same way.
+func TestRegistry_Mailer_ZeroValueRegistryReturnsNil(t *testing.T) {
+	if mailer := (&Registry{}).Mailer(); mailer != nil {
+		t.Errorf("Mailer() = %v, want nil for a registry with no mailer wired in", mailer)
+	}
+}
+
 func TestNewRegistry_NilBus_Panics(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -700,7 +711,7 @@ func TestNewRegistry_NilBus_Panics(t *testing.T) {
 		}
 	}()
 
-	NewRegistry(nil, NewMemoryKVStore())
+	NewRegistry(nil, NewMemoryKVStore(), NewConsoleMailer())
 }
 
 // TestNewRegistry_NilKVStore_Panics mirrors TestNewRegistry_NilBus_Panics for
@@ -712,7 +723,19 @@ func TestNewRegistry_NilKVStore_Panics(t *testing.T) {
 		}
 	}()
 
-	NewRegistry(NewMemoryEventBus(), nil)
+	NewRegistry(NewMemoryEventBus(), nil, NewConsoleMailer())
+}
+
+// TestNewRegistry_NilMailer_Panics mirrors TestNewRegistry_NilBus_Panics and
+// TestNewRegistry_NilKVStore_Panics for the mail seam.
+func TestNewRegistry_NilMailer_Panics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("NewRegistry(nil) did not panic, want a panic rather than a registry whose Mailer() accepts every mail and sends nothing")
+		}
+	}()
+
+	NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), nil)
 }
 
 func TestValidateFeatureGraph(t *testing.T) {
@@ -772,7 +795,7 @@ func TestValidateFeatureGraph(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
+			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 			if err := reg.Features.Add(tt.flags...); err != nil {
 				t.Fatalf("Features.Add() error = %v, want nil", err)
 			}
@@ -1258,10 +1281,10 @@ func TestBootstrap_CancelledContext_StopsBeforeRegistering(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	// KVStore is wired too, with the standalone default: the distributed mode
-	// requires both, and this test's subject is the context-cancellation
-	// check, not wiring.
-	kernel := NewKernel(DeploymentModeDistributed, WithEventBus(newRegTestBus()), WithKVStore(NewMemoryKVStore()))
+	// KVStore and Mailer are wired too, with the standalone defaults: the
+	// distributed mode requires all three seams, and this test's subject is
+	// the context-cancellation check, not wiring.
+	kernel := NewKernel(DeploymentModeDistributed, WithEventBus(newRegTestBus()), WithKVStore(NewMemoryKVStore()), WithMailer(NewConsoleMailer()))
 	reg, err := kernel.Bootstrap(ctx, regTestRecorder("billing", nil, &order))
 
 	if !errors.Is(err, context.Canceled) {
@@ -1314,7 +1337,7 @@ func TestBootstrap_DistributedModeWithoutEventBus_FailsFast(t *testing.T) {
 func TestBootstrap_DistributedModeWithoutKVStore_FailsFast(t *testing.T) {
 	var order []string
 
-	kernel := NewKernel(DeploymentModeDistributed, WithEventBus(NewMemoryEventBus()))
+	kernel := NewKernel(DeploymentModeDistributed, WithEventBus(NewMemoryEventBus()), WithMailer(NewConsoleMailer()))
 	reg, err := kernel.Bootstrap(context.Background(), regTestRecorder("billing", nil, &order))
 
 	if !errors.Is(err, ErrMissingDistributedKVStore) {
@@ -1353,7 +1376,7 @@ func TestBootstrap_WiresTheDeploymentModeEventBusIntoTheRegistry(t *testing.T) {
 				// distributed mode also requires a KVStore, so leaving it
 				// unwired would fail Bootstrap before the EventBus wiring
 				// under test even runs.
-				return NewKernel(DeploymentModeDistributed, WithEventBus(injected), WithKVStore(NewMemoryKVStore()))
+				return NewKernel(DeploymentModeDistributed, WithEventBus(injected), WithKVStore(NewMemoryKVStore()), WithMailer(NewConsoleMailer()))
 			},
 			wantInjected: true,
 		},
@@ -1426,7 +1449,7 @@ func TestBootstrap_WiresTheDeploymentModeKVStoreIntoTheRegistry(t *testing.T) {
 		{
 			name: "the distributed deployment mode uses the injected store",
 			kernel: func(injected KVStore) *Kernel {
-				return NewKernel(DeploymentModeDistributed, WithEventBus(NewMemoryEventBus()), WithKVStore(injected))
+				return NewKernel(DeploymentModeDistributed, WithEventBus(NewMemoryEventBus()), WithKVStore(injected), WithMailer(NewConsoleMailer()))
 			},
 			wantInjected: true,
 		},
@@ -1511,10 +1534,121 @@ func TestWithKVStore_NilStoreKeepsTheDeploymentModeDefault(t *testing.T) {
 	}
 }
 
+// TestBootstrap_DistributedModeWithoutMailer_FailsFast mirrors
+// TestBootstrap_DistributedModeWithoutEventBus_FailsFast and its KVStore
+// counterpart for the mail seam: the standalone console mailer prints to a
+// process's stdout, so a distributed-mode kernel with none wired in must
+// refuse to assemble instead of handing every module a mailer whose output
+// nobody reads. Bus and KVStore are wired here so their checks inside
+// Bootstrap, which run first, pass and the failure actually exercises the
+// Mailer check instead of masking it.
+func TestBootstrap_DistributedModeWithoutMailer_FailsFast(t *testing.T) {
+	var order []string
+
+	kernel := NewKernel(DeploymentModeDistributed, WithEventBus(NewMemoryEventBus()), WithKVStore(NewMemoryKVStore()))
+	reg, err := kernel.Bootstrap(context.Background(), regTestRecorder("billing", nil, &order))
+
+	if !errors.Is(err, ErrMissingDistributedMailer) {
+		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrMissingDistributedMailer", err)
+	}
+	if reg != nil {
+		t.Error("Bootstrap() returned a registry alongside the error, want nil")
+	}
+	if len(order) != 0 {
+		t.Errorf("modules registered = %v, want none before the wiring was validated", order)
+	}
+}
+
+// TestBootstrap_WiresTheDeploymentModeMailerIntoTheRegistry mirrors
+// TestBootstrap_WiresTheDeploymentModeEventBusIntoTheRegistry and its KVStore
+// counterpart for the mail seam: the same three scenarios (standalone
+// default, an injected override on the standalone deployment mode, and the
+// distributed mode, which has no default of its own). Bus and KVStore are
+// wired unconditionally in the distributed case here, for the same reason the
+// other tables wire their seams: this table exercises Mailer specifically,
+// and the distributed mode requires all of them.
+func TestBootstrap_WiresTheDeploymentModeMailerIntoTheRegistry(t *testing.T) {
+	tests := []struct {
+		name string
+		// kernel receives the injectable stand-in for a distributed mailer,
+		// and reports whether the assembled registry must end up wired to it.
+		kernel       func(injected Mailer) *Kernel
+		wantInjected bool
+	}{
+		{
+			name:   "the standalone deployment mode falls back to the console mailer",
+			kernel: func(Mailer) *Kernel { return NewKernel(DeploymentModeStandalone) },
+		},
+		{
+			name:         "an injected mailer replaces the standalone default",
+			kernel:       func(injected Mailer) *Kernel { return NewKernel(DeploymentModeStandalone, WithMailer(injected)) },
+			wantInjected: true,
+		},
+		{
+			name: "the distributed deployment mode uses the injected mailer",
+			kernel: func(injected Mailer) *Kernel {
+				return NewKernel(DeploymentModeDistributed, WithEventBus(NewMemoryEventBus()), WithKVStore(NewMemoryKVStore()), WithMailer(injected))
+			},
+			wantInjected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			injected := newConsoleMailer(&out)
+
+			reg, err := tt.kernel(injected).Bootstrap(context.Background())
+			if err != nil {
+				t.Fatalf("Bootstrap() error = %v, want nil", err)
+			}
+			if reg.Mailer() == nil {
+				t.Fatal("Mailer() is nil")
+			}
+			if !tt.wantInjected {
+				if reg.Mailer() == Mailer(injected) {
+					t.Error("Mailer() returned the mailer that was never wired in")
+				}
+				return
+			}
+			if reg.Mailer() != Mailer(injected) {
+				t.Fatalf("Mailer() = %v, want the mailer wired into the kernel", reg.Mailer())
+			}
+			// The registry hands out the kernel's mailer, so sending through
+			// it must reach the writer of the mailer the host wired in.
+			err = reg.Mailer().Send(context.Background(), Mail{
+				From:    "ops@example.com",
+				To:      []string{"ada@example.com"},
+				Subject: "wiring check",
+				Text:    "the injected mailer was reached",
+			})
+			if err != nil {
+				t.Fatalf("Send() error = %v, want nil", err)
+			}
+			if got := out.String(); !strings.Contains(got, "[mail] from: ops@example.com") {
+				t.Errorf("wired mailer output = %q, want it to carry the sent message", got)
+			}
+		})
+	}
+}
+
+// TestWithMailer_NilMailerKeepsTheDeploymentModeDefault mirrors
+// TestWithEventBus_NilBusKeepsTheDeploymentModeDefault and its KVStore
+// counterpart for the mail seam.
+func TestWithMailer_NilMailerKeepsTheDeploymentModeDefault(t *testing.T) {
+	reg, err := NewKernel(DeploymentModeStandalone, WithMailer(nil)).Bootstrap(context.Background())
+	if err != nil {
+		t.Fatalf("Bootstrap() error = %v, want nil", err)
+	}
+	if reg.Mailer() == nil {
+		t.Error("Mailer() is nil, want the standalone deployment mode's default")
+	}
+}
+
 func TestRegistry_ConcurrentRegistration_IsRaceFree(t *testing.T) {
 	const goroutines = 8
 
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore())
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
 
