@@ -715,9 +715,11 @@ func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
 	}
 
 	// Attempt 3: "tenant_id" smuggled into the JSON create body. It must
-	// be silently ignored -- createNoteRequest (handler.go) carries no
-	// tenant_id field to decode it into -- and the created note must land
-	// under globex (Host's tenant), never acme.
+	// be silently ignored -- the handler decodes into the spec-generated
+	// api.NotesCreateNoteRequest (internal/notes/api, derived from the
+	// module's api/openapi.yaml fragment), which carries no tenant_id
+	// field to decode it into -- and the created note must land under
+	// globex (Host's tenant), never acme.
 	forgeBody, err := json.Marshal(map[string]string{"text": "globex-body-forge-probe", "tenant_id": "tenant-acme"})
 	if err != nil {
 		t.Fatalf("marshal request body: %v", err)

@@ -8,9 +8,13 @@ info:
     that land in later milestones; see the module's own doc.go. This
     fragment follows the operationId (<module>_<action><Resource>) and
     schema-name (<Module><Type>) conventions from
-    .claude/skills/backend-coding-standards/SKILL.md §6.1, ready for a
-    future task api:gen to merge into the application-wide specification
-    once that tool exists (see root CLAUDE.md's M0 status).
+    .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
+    regenerates notes-server.gen.go (in this directory) from this file,
+    with oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
+    .github/workflows/api-contract.yml. Merging this fragment into an
+    application-wide build/openapi/speed.yaml stays future work until
+    other modules ship fragments and the merge tooling lands (see
+    docs/internal/21-api-contract.md's implementation-status note).
   version: 0.0.0
 paths:
   /api/v1/notes:

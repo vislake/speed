@@ -11,7 +11,7 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/notes/migrations"
 )
 
-//go:embed openapi.yaml
+//go:embed api/openapi.yaml
 var openAPISpecYAML []byte
 
 const (
@@ -19,10 +19,20 @@ const (
 	// name dbkit.MigrationRegistry.Register keys its dependency graph on.
 	moduleName = "notes"
 
-	// apiPath is the single literal path this module mounts (see
-	// Register below) and the one Handler's internal router dispatches
-	// methods on (see handler.go) -- both must agree on the exact same
-	// absolute path.
+	// apiPath is the path this module's single route is mounted at (see
+	// Register below). It must agree with the path declared in this
+	// module's own OpenAPI fragment (api/openapi.yaml), which is the
+	// module-asset convention of docs/internal/21-api-contract.md: the
+	// fragment's "paths:" keys are what oapi-codegen turns into the
+	// method+path patterns of the generated registration helpers (see
+	// api/notes-server.gen.go's HandlerWithOptions) and into the
+	// api.ServerInterface method set Handler implements. A request can
+	// only reach Handler through a route mounted at apiPath, and Handler's
+	// generated inner router only serves the fragment's own paths, so
+	// apiPath and the fragment must name the same path -- changing one
+	// without the other leaves the endpoint dead, and only a test that
+	// exercises the composed stack (cmd/server's end-to-end suite) sees
+	// it.
 	apiPath = "/api/v1/notes"
 
 	// PermissionRead and PermissionWrite are notes' resource:action
@@ -105,7 +115,13 @@ func (m *Module) Migrations() embed.FS { return migrations.FS }
 // Locales implements pkgcore.Module.
 func (m *Module) Locales() embed.FS { return locales.FS }
 
-// OpenAPISpec implements pkgcore.Module.
+// OpenAPISpec implements pkgcore.Module: it returns the module's own
+// OpenAPI fragment, embedded from api/openapi.yaml. That fragment is the
+// single source of this module's API surface -- the api package's
+// generated types and ServerInterface (api/notes-server.gen.go, regenerated
+// by task api:gen) derive from it, and Handler implements that interface
+// (see handler.go) -- per docs/internal/21-api-contract.md's spec-first
+// decision.
 func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 
 // Register implements pkgcore.Module. Per the interface's own doc comment

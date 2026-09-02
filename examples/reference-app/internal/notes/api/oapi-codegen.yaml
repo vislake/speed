@@ -1,0 +1,38 @@
+# Generator configuration for the notes module's OpenAPI fragment
+# (openapi.yaml in this directory, per docs/internal/21-api-contract.md's
+# module-asset convention: every module keeps its spec at <module>/api/
+# openapi.yaml).
+#
+# The module's generated surface is regenerated with oapi-codegen v2.8.0,
+# pinned at exactly that version in three places that must move together:
+# this file's generate/output keys, Taskfile.yml's api:gen task command,
+# and .github/workflows/api-contract.yml's regeneration step -- all three
+# run the same `go run .../cmd/oapi-codegen@v2.8.0 -config oapi-codegen.yaml
+# openapi.yaml` from this directory.
+#
+# generate.std-http-server emits the pure net/http ServerInterface -- plain
+# (w http.ResponseWriter, r *http.Request) method signatures -- which is
+# what the reference app's ServeMux-based wiring implements, plus the
+# Handler/HandlerFromMux/HandlerWithOptions registration helpers whose
+# method+path patterns are derived from the spec fragment itself. The
+# strict-server and client targets are deliberately not generated: no
+# request-binding or client code exists to consume them yet.
+#
+# output-options.name-normalizer: the default normalizer would name a spec
+# property "id" as the Go field Id; ToCamelCaseWithInitialisms applies the
+# standard Go initialism list (ID among them) so generated field names match
+# this repository's naming (Note.ID, payload.NoteID in the notes package).
+#
+# Optional spec properties stay optional in Go as pointers (the generator
+# default): the handler sets every pointer it responds with, so presence on
+# the wire is always explicit -- e.g. NotesListNotesResponse.Notes is a
+# non-nil *[]NotesNote even for an empty list, which is what keeps a GET on
+# an empty tenant emitting "notes":[] exactly as the hand-written mirror
+# types did.
+package: api
+generate:
+  models: true
+  std-http-server: true
+output-options:
+  name-normalizer: ToCamelCaseWithInitialisms
+output: notes-server.gen.go

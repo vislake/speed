@@ -7,12 +7,15 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
+	"github.com/vislake/speed/examples/reference-app/internal/notes/api"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 )
@@ -59,18 +62,25 @@ func TestHandler_Create_ValidText_ReturnsCreatedNoteAndPublishesEvent(t *testing
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusCreated, rec.Body.String())
 	}
 
-	var resp noteResponse
+	var resp api.NotesNote
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v; body = %s", err, rec.Body.String())
 	}
-	if resp.ID == "" {
+	// Generated types make optional spec properties pointers; the response
+	// assertions below follow the pointers and require them non-nil --
+	// the handler always sets every field of NotesNote, so a nil pointer
+	// would be the regression signal.
+	if resp.ID == nil {
+		t.Fatal("response ID is missing (want a set pointer)")
+	}
+	if *resp.ID == "" {
 		t.Fatal("response ID is empty")
 	}
-	if resp.Text != "buy milk" {
-		t.Fatalf("response Text = %q, want %q", resp.Text, "buy milk")
+	if resp.Text == nil || *resp.Text != "buy milk" {
+		t.Fatalf("response Text = %v, want %q", resp.Text, "buy milk")
 	}
-	if resp.CreatedAt == "" {
-		t.Fatal("response CreatedAt is empty")
+	if resp.CreatedAt == nil {
+		t.Fatal("response CreatedAt is missing (want a set pointer)")
 	}
 
 	if len(published) != 1 {
@@ -83,8 +93,8 @@ func TestHandler_Create_ValidText_ReturnsCreatedNoteAndPublishesEvent(t *testing
 	if !ok {
 		t.Fatalf("published event Payload = %#v, want NoteCreatedPayload", published[0].Payload)
 	}
-	if payload.NoteID != resp.ID {
-		t.Fatalf("published event NoteID = %q, want %q", payload.NoteID, resp.ID)
+	if payload.NoteID != *resp.ID {
+		t.Fatalf("published event NoteID = %q, want %q", payload.NoteID, *resp.ID)
 	}
 	if payload.TenantID != "tenant-acme" {
 		t.Fatalf("published event TenantID = %q, want %q", payload.TenantID, "tenant-acme")
@@ -102,8 +112,10 @@ func TestHandler_Create_EmptyText_ReturnsTextRequiredError(t *testing.T) {
 		// text this case means to test -- exercising the wrong branch of
 		// Handler.create (notes.invalid_request_body, not
 		// notes.text_required) for a reason that has nothing to do with
-		// what this test is actually about.
-		encoded, err := json.Marshal(createNoteRequest{Text: text})
+		// what this test is actually about. The request type is the
+		// spec-generated one (api.NotesCreateNoteRequest), so the body
+		// this sends is exactly what the module's own contract declares.
+		encoded, err := json.Marshal(api.NotesCreateNoteRequest{Text: text})
 		if err != nil {
 			t.Fatalf("marshal request body: %v", err)
 		}
@@ -114,12 +126,12 @@ func TestHandler_Create_EmptyText_ReturnsTextRequiredError(t *testing.T) {
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("text=%q: status = %d, want %d", text, rec.Code, http.StatusBadRequest)
 		}
-		var got errorBody
+		var got api.NotesError
 		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 			t.Fatalf("decode error body: %v", err)
 		}
-		if got.Code != ErrTextRequired.Code {
-			t.Fatalf("text=%q: error code = %q, want %q", text, got.Code, ErrTextRequired.Code)
+		if got.Code == nil || *got.Code != ErrTextRequired.Code {
+			t.Fatalf("text=%q: error code = %v, want %q", text, got.Code, ErrTextRequired.Code)
 		}
 	}
 }
@@ -128,8 +140,8 @@ func TestHandler_Create_EmptyText_ReturnsTextRequiredError(t *testing.T) {
 // the round-3 kernel bootstrap smoke test finding directly against Handler:
 // curling POST /api/v1/notes with a 10,000-character text value returned
 // HTTP 201 Created and stored the full string verbatim (confirmed by
-// reading it back via GET), even though openapi.yaml declares "maxLength:
-// 4000" on NotesCreateNoteRequest.text and both
+// reading it back via GET), even though api/openapi.yaml declares
+// "maxLength: 4000" on NotesCreateNoteRequest.text and both
 // migrations/{postgres,sqlite}/0001_create_notes.sql declare the column
 // VARCHAR(4000) -- SQLite's type-affinity system does not itself enforce
 // that length, and create used to check only for empty/whitespace-only
@@ -139,7 +151,7 @@ func TestHandler_Create_EmptyText_ReturnsTextRequiredError(t *testing.T) {
 func TestHandler_Create_TextExceedsMaxLength_ReturnsTextTooLongError(t *testing.T) {
 	h, _ := newTestHandler(t)
 
-	encoded, err := json.Marshal(createNoteRequest{Text: strings.Repeat("a", maxTextLength+1)})
+	encoded, err := json.Marshal(api.NotesCreateNoteRequest{Text: strings.Repeat("a", maxTextLength+1)})
 	if err != nil {
 		t.Fatalf("marshal request body: %v", err)
 	}
@@ -149,12 +161,12 @@ func TestHandler_Create_TextExceedsMaxLength_ReturnsTextTooLongError(t *testing.
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
-	var got errorBody
+	var got api.NotesError
 	if err = json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode error body: %v", err)
 	}
-	if got.Code != ErrTextTooLong.Code {
-		t.Fatalf("error code = %q, want %q", got.Code, ErrTextTooLong.Code)
+	if got.Code == nil || *got.Code != ErrTextTooLong.Code {
+		t.Fatalf("error code = %v, want %q", got.Code, ErrTextTooLong.Code)
 	}
 
 	// Negative control matching the reported bug precisely: the failure was
@@ -173,15 +185,15 @@ func TestHandler_Create_TextExceedsMaxLength_ReturnsTextTooLongError(t *testing.
 }
 
 // TestHandler_Create_TextAtExactlyMaxLength_ReturnsCreated is the boundary
-// negative control for the test above: openapi.yaml's "maxLength: 4000"
-// makes exactly 4000 characters valid, so a correct fix must accept
+// negative control for the test above: api/openapi.yaml's "maxLength:
+// 4000" makes exactly 4000 characters valid, so a correct fix must accept
 // maxTextLength and reject only maxTextLength+1 -- proving the check added
 // for the test above is not off-by-one against a request this module must
 // keep accepting.
 func TestHandler_Create_TextAtExactlyMaxLength_ReturnsCreated(t *testing.T) {
 	h, _ := newTestHandler(t)
 
-	encoded, err := json.Marshal(createNoteRequest{Text: strings.Repeat("a", maxTextLength)})
+	encoded, err := json.Marshal(api.NotesCreateNoteRequest{Text: strings.Repeat("a", maxTextLength)})
 	if err != nil {
 		t.Fatalf("marshal request body: %v", err)
 	}
@@ -198,7 +210,7 @@ func TestHandler_Create_TextAtExactlyMaxLength_ReturnsCreated(t *testing.T) {
 // (utf8.RuneCountInString), not UTF-8 bytes (len(text)): a CJK ideograph
 // (U+7B14, meaning "pen" -- fittingly, the instrument a note is written
 // with) is a 3-byte rune, so maxTextLength copies of it sit exactly at the
-// character-count limit -- matching openapi.yaml's JSON-Schema
+// character-count limit -- matching api/openapi.yaml's JSON-Schema
 // "maxLength: 4000" (itself defined in Unicode code points) and
 // PostgreSQL's VARCHAR(4000) (itself a character count, not a byte count)
 // -- while being 3x over the limit in bytes. A byte-counting
@@ -207,7 +219,7 @@ func TestHandler_Create_TextAtExactlyMaxLength_ReturnsCreated(t *testing.T) {
 func TestHandler_Create_MultiByteTextAtExactlyMaxLength_ReturnsCreated(t *testing.T) {
 	h, _ := newTestHandler(t)
 
-	encoded, err := json.Marshal(createNoteRequest{Text: strings.Repeat("笔", maxTextLength)})
+	encoded, err := json.Marshal(api.NotesCreateNoteRequest{Text: strings.Repeat("笔", maxTextLength)})
 	if err != nil {
 		t.Fatalf("marshal request body: %v", err)
 	}
@@ -228,12 +240,75 @@ func TestHandler_Create_InvalidJSON_ReturnsInvalidRequestBodyError(t *testing.T)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
-	var got errorBody
+	var got api.NotesError
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode error body: %v", err)
 	}
-	if got.Code != "notes.invalid_request_body" {
-		t.Fatalf("error code = %q, want %q", got.Code, "notes.invalid_request_body")
+	if got.Code == nil || *got.Code != "notes.invalid_request_body" {
+		t.Fatalf("error code = %v, want %q", got.Code, "notes.invalid_request_body")
+	}
+}
+
+// TestHandler_Create_ResponseCreatedAt_IsWholeSeconds pins the created_at
+// wire format to the shape the hand-written noteResponse used to emit.
+// The generated NotesNote.CreatedAt is a time.Time (api/openapi.yaml
+// declares "format: date-time"), and encoding/json renders a time.Time
+// with RFC3339Nano -- byte-identical to the RFC3339 the old code
+// formatted by hand whenever the fractional second is zero. Handler's
+// toNoteResponse truncates to the whole second before encoding (see its
+// doc comment in handler.go); this test fails against a response that
+// carries a fractional second (or any non-RFC3339 layout), even though a
+// plain JSON decode into time.Time would accept one.
+func TestHandler_Create_ResponseCreatedAt_IsWholeSeconds(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodPost, apiPath, strings.NewReader(`{"text":"buy milk"}`))
+	rec := doRequest(h, req, "tenant-acme")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	var raw struct {
+		CreatedAt string `json:"created_at"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode response: %v; body = %s", err, rec.Body.String())
+	}
+	wholeSeconds := regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$`)
+	if !wholeSeconds.MatchString(raw.CreatedAt) {
+		t.Fatalf("created_at = %q, want a whole-second RFC3339 timestamp (date + T + HH:MM:SS + Z or numeric offset, no fractional part)", raw.CreatedAt)
+	}
+	// The string must still name a real instant -- the regex above could
+	// in principle match an invented date, and the wire value must be
+	// parseable by any RFC3339 client.
+	if _, err := time.Parse(time.RFC3339, raw.CreatedAt); err != nil {
+		t.Fatalf("created_at = %q does not parse as RFC3339: %v", raw.CreatedAt, err)
+	}
+}
+
+// TestHandler_List_EmptyTenant_ReturnsNotesEmptyArrayOnWire pins the wire
+// shape of an empty list. NotesListNotesResponse.notes is optional in
+// api/openapi.yaml, so the generated field is a *[]NotesNote carrying an
+// omitempty tag: a nil pointer would drop the "notes" key from the
+// response entirely, and a pointer to a nil slice would emit "notes":
+// null. Handler's NotesListNotes always allocates the slice (see its doc
+// comment in handler.go), so an empty tenant's list must come back as
+// {"notes":[]} -- byte-for-byte the same as the hand-written
+// listNotesResponse emitted, whose notes field had no omitempty.
+func TestHandler_List_EmptyTenant_ReturnsNotesEmptyArrayOnWire(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodGet, apiPath, nil)
+	rec := doRequest(h, req, "tenant-acme")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	// Encoder.Encode emits the object plus a trailing newline; the exact
+	// match pins the empty-array form -- anything else (a missing key,
+	// "notes": null, whitespace between tokens) fails here.
+	if body := rec.Body.String(); body != "{\"notes\":[]}\n" {
+		t.Fatalf("empty list body = %q, want %q", body, "{\"notes\":[]}\n")
 	}
 }
 
@@ -257,15 +332,18 @@ func TestHandler_List_ReturnsOnlyCallersTenantNotes(t *testing.T) {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 
-	var resp listNotesResponse
+	var resp api.NotesListNotesResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(resp.Notes) != 2 {
-		t.Fatalf("got %d notes for tenant-acme, want 2 (response: %+v)", len(resp.Notes), resp)
+	if resp.Notes == nil {
+		t.Fatal("response Notes is missing (want a set pointer)")
 	}
-	for _, n := range resp.Notes {
-		if n.Text == "globex note 1" {
+	if len(*resp.Notes) != 2 {
+		t.Fatalf("got %d notes for tenant-acme, want 2 (response: %+v)", len(*resp.Notes), resp)
+	}
+	for _, n := range *resp.Notes {
+		if n.Text != nil && *n.Text == "globex note 1" {
 			t.Fatalf("tenant-acme's list leaked another tenant's note: %+v", n)
 		}
 	}
@@ -280,12 +358,12 @@ func TestHandler_List_NoTenantInContext_ReturnsInternalError(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
 	}
-	var got errorBody
+	var got api.NotesError
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode error body: %v", err)
 	}
-	if got.Code != errInternal.Code {
-		t.Fatalf("error code = %q, want %q", got.Code, errInternal.Code)
+	if got.Code == nil || *got.Code != errInternal.Code {
+		t.Fatalf("error code = %v, want %q", got.Code, errInternal.Code)
 	}
 }
 
