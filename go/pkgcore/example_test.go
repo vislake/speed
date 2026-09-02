@@ -398,3 +398,25 @@ func ExampleNewConsoleMailer() {
 	// <nil>
 	// true
 }
+
+// ExampleNewSMTPMailer shows the distributed deployment mode's mailer: an
+// SMTP client delivering through the relay in SMTPConfig, the counterpart of
+// the console mailer of ExampleNewConsoleMailer. Nothing is dialed at
+// construction -- the relay is contacted on the first Send -- so a host can
+// wire the mailer at startup whether or not the relay is reachable, and an
+// unusable configuration (an empty host, a port outside 1..65535, an unknown
+// TLS mode) panics there instead, where the wiring error is visible.
+func ExampleNewSMTPMailer() {
+	mailer := pkgcore.NewSMTPMailer(pkgcore.SMTPConfig{
+		Host:     "smtp.example.com",
+		Port:     587, // the submission port: plaintext first, STARTTLS when advertised
+		Username: "relay@example.com",
+		Password: "s3cret",
+		TLSMode:  pkgcore.SMTPTLSModeAuto,
+	})
+	var _ pkgcore.Mailer = mailer // drop-in for the console mailer of ExampleNewConsoleMailer
+
+	fmt.Println("mailer wired; the first Send dials the relay")
+	// Output:
+	// mailer wired; the first Send dials the relay
+}

@@ -46,10 +46,13 @@ type Mail struct {
 // carries bytes, it does not decide who may be written to or what they are
 // told.
 //
-// Send must honour a cancelled context by returning its error instead of
-// sending, must not retain the mail after returning, and implementations must
-// be safe for concurrent use by multiple goroutines. A message that fails the
-// shared rules above is rejected with ErrInvalidMail before anything is sent.
+// Send must honour a cancelled context by returning its context's error
+// instead of sending: a Send that begins on an already-cancelled context
+// sends nothing, and a cancellation that lands mid-delivery interrupts the
+// send as soon as the transport can notice it. Send must not retain the mail
+// after returning, and implementations must be safe for concurrent use by
+// multiple goroutines. A message that fails the shared rules above is
+// rejected with ErrInvalidMail before anything is sent.
 type Mailer interface {
 	// Send delivers mail to every recipient in mail.To.
 	Send(ctx context.Context, mail Mail) error

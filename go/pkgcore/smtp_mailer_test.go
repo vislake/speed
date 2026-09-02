@@ -559,6 +559,47 @@ func TestSMTPMailer_Send_DeadlineBreaksAHungRelay(t *testing.T) {
 	}
 }
 
+// TestSMTPMailer_Send_CancellationBreaksAHungRelay pins the cancellation
+// path a deadline cannot cover: the relay hangs, the Send's context is
+// cancelled instead of carrying a deadline, and the watcher's close of the
+// connection is what interrupts the hung transaction. Without the watcher,
+// net/smtp's blocking reads would never notice the cancellation and the Send
+// would hang on the relay forever.
+func TestSMTPMailer_Send_CancellationBreaksAHungRelay(t *testing.T) {
+	t.Parallel()
+
+	server := startFakeSMTPServer(t, fakeSMTPOptions{hang: true})
+	mailer := mailerFor(t, server, SMTPTLSModeAuto, "", "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- mailer.Send(ctx, Mail{
+			From: "ops@example.com", To: []string{"ada@example.com"},
+			Subject: "never delivered", Text: "the relay never answers",
+		})
+	}()
+
+	// Let the Send reach the hung relay first, so the cancellation lands
+	// mid-transaction where only the watcher can act on it.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Send() error = nil, want the cancellation to fail the hung transaction")
+		}
+		if !strings.Contains(err.Error(), "send mail via smtp") {
+			t.Errorf("Send() error = %v, want it to carry the relay address context", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Send() did not return within 5s of a cancellation: the watcher did not close the connection")
+	}
+}
+
 // TestSMTPMailer_Send_RejectsInvalidMailWithoutTouchingTheWire pins the rule
 // that validation runs before any dial: the invalid message fails with
 // ErrInvalidMail against an address nothing listens on, where a mailer that

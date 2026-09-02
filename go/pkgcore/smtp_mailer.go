@@ -32,7 +32,8 @@ const (
 	// relay advertises it, regardless of port. A relay that does not advertise
 	// STARTTLS is used in plaintext, like net/smtp.SendMail does: production
 	// relays all offer it, and SMTP AUTH refuses to send credentials over a
-	// connection that never became TLS, so secrets are still protected.
+	// connection that never became TLS -- a loopback relay host excepted, see
+	// SMTPConfig -- so secrets are still protected.
 	SMTPTLSModeStartTLS
 
 	// SMTPTLSModeImplicitTLS wraps the connection in TLS before the first
@@ -48,9 +49,13 @@ type SMTPConfig struct {
 	Port int
 
 	// Username and Password enable SMTP AUTH when Username is non-empty.
-	// Credentials are only ever sent over TLS: PlainAuth refuses a plaintext
-	// connection, so an auth-enabled mailer silently uses no credentials on a
-	// relay that offers no STARTTLS rather than leaking them.
+	// Credentials are sent only over TLS -- with one exception: net/smtp's
+	// PLAIN mechanism also authenticates in the clear towards a relay whose
+	// host is a loopback name (localhost, 127.0.0.1), the local-relay case
+	// like MailHog where nothing crosses a wire that leaves the machine. On
+	// any other plaintext relay -- one that offers no STARTTLS -- PLAIN
+	// refuses the connection and the Send fails outright: an auth-enabled
+	// mailer never silently falls back to sending without credentials.
 	Username string
 	Password string
 
@@ -67,8 +72,11 @@ type SMTPConfig struct {
 
 // smtpMailer is the distributed deployment mode's Mailer: an SMTP client
 // speaking the protocol directly over net/smtp from the standard library.
-// Every connection and command honours the context of the Send that started
-// it.
+// The context of the Send that started it bounds the whole transaction: the
+// dial and the TLS handshake run on it, a deadline it carries is applied to
+// the connection, and a watcher closes the connection when the context ends,
+// so a cancelled or timed-out Send interrupts a relay that stopped answering
+// mid-transaction.
 type smtpMailer struct {
 	cfg SMTPConfig
 }
@@ -109,10 +117,12 @@ func (m *smtpMailer) tlsConfig() *tls.Config {
 // before the next one is sent. Failures at any step abort the transaction and
 // close the connection.
 //
-// ctx is honoured throughout: a cancelled context fails the Send, and a
-// context with a deadline bounds the whole transaction. A context without a
-// deadline leaves the transaction unbounded, so hosts that cannot tolerate a
-// hung relay must carry a deadline.
+// ctx is honoured throughout: a cancelled context fails the Send, whether the
+// cancellation lands before the dial or mid-transaction -- closing the
+// connection is what interrupts a relay that stopped answering -- and a
+// context with a deadline additionally bounds the whole transaction. A
+// context carrying neither leaves a hung relay hanging the Send for good, so
+// hosts that cannot tolerate that must carry a deadline.
 func (m *smtpMailer) Send(ctx context.Context, mail Mail) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -133,6 +143,24 @@ func (m *smtpMailer) Send(ctx context.Context, mail Mail) (err error) {
 		return err
 	}
 	defer conn.Close()
+
+	// A relay that stops answering mid-transaction is interrupted when the
+	// Send's context ends. The deadline a context carries was applied to the
+	// connection by dial; the watcher covers pure cancellation, which
+	// net/smtp's commands would otherwise never notice: every read below
+	// (EHLO, MAIL, RCPT, DATA, QUIT) is a blocking call that only a closed
+	// connection or a deadline can break. Closing conn unblocks whichever
+	// command is in flight, and the deferred Close makes the second close a
+	// no-op.
+	watchStopped := make(chan struct{})
+	defer close(watchStopped)
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-watchStopped:
+		}
+	}()
 
 	client, err := smtp.NewClient(conn, m.cfg.Host)
 	if err != nil {
@@ -180,9 +208,10 @@ func (m *smtpMailer) Send(ctx context.Context, mail Mail) (err error) {
 
 // dial opens the TCP connection to the relay, wrapping it in TLS first when
 // the TLS mode dials TLS from the first byte. The context of the Send that
-// started it cancels the dial, and a context deadline is applied to the whole
-// connection, which is what lets a cancelled or timed-out Send interrupt a
-// relay that stops answering mid-transaction.
+// started it drives the dial and the TLS handshake, and a deadline the
+// context carries is applied to the connection so that every read and write
+// that follows is bounded by it. Pure cancellation arriving after this point
+// is handled by the watcher Send starts on the returned connection.
 func (m *smtpMailer) dial(ctx context.Context, addr string) (net.Conn, error) {
 	dialer := &net.Dialer{}
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
@@ -237,9 +266,10 @@ func (m *smtpMailer) upgradeToTLS(client *smtp.Client) error {
 }
 
 // authenticate performs SMTP AUTH when the configuration carries credentials.
-// PlainAuth is deliberately refused by net/smtp on a connection that never
-// became TLS, so a plaintext relay silently receives no credentials rather
-// than a leak.
+// net/smtp's PLAIN mechanism refuses a connection that never became TLS,
+// towards a loopback relay host excepted (see SMTPConfig), so an auth-enabled
+// Send either authenticates or fails outright -- it never goes out
+// anonymously, and the only plaintext credentials are the loopback case.
 func (m *smtpMailer) authenticate(client *smtp.Client) error {
 	if m.cfg.Username == "" {
 		return nil
