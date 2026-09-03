@@ -30,21 +30,30 @@ name: api-contract
 #     21-api-contract.md generated-artifact consistency check for the
 #     backend half, catching a spec edit committed without its regenerated
 #     artifact.
-#   * Compile enforcement: `go build ./...` of examples/reference-app.
-#     This is what makes "spec changed, handler not updated" fail here:
-#     the regenerated api.ServerInterface grows and Handler's compile-time
-#     assertion (internal/notes/handler.go) stops compiling. Without this
-#     leg a spec+artifact PR whose handler lagged would pass both this
-#     pipeline and pr-check (which does not build the reference app).
-#     Precise only for a parameter-free operation, though: an operation
-#     carrying a path or query parameter makes the generated file import
-#     github.com/oapi-codegen/runtime, which the app's go.mod does not
-#     require (nothing parameterized ships yet), so the first such spec
-#     change fails earlier -- on the missing module -- rather than on the
-#     assertion. Both are hard build failures; only the diagnostic
-#     differs, and it resolves itself the moment a real parameterized
-#     operation lands with its handler. Pre-adding the require would not
-#     help: `go mod tidy` drops an unused dependency.
+#   * The same regeneration-consistency check runs a second time for org's
+#     fragment (go/org/api/openapi.yaml -> go/org/api/org-server.gen.go),
+#     the second module to carry one -- same pinned oapi-codegen invocation,
+#     same git diff --exit-code gate, its own step so either fragment's
+#     failure is unambiguous in the job log.
+#   * Compile enforcement: `go build ./...` of examples/reference-app. This
+#     is what makes "spec changed, handler not updated" fail here for
+#     EITHER fragment: examples/reference-app imports go/org (root
+#     CLAUDE.md's mandatory-first-consumer rule), so a regenerated
+#     api.ServerInterface that outgrows either Handler's compile-time
+#     assertion (internal/notes/handler.go, go/org/handler.go) fails this
+#     one build step, transitively, with no separate step needed for org's
+#     own module build. Without this leg a spec+artifact PR whose handler
+#     lagged would pass both this pipeline and pr-check (which does not
+#     build the reference app). Precise only for a parameter-free
+#     operation, though: an operation carrying a path or query parameter
+#     makes the generated file import github.com/oapi-codegen/runtime,
+#     which the app's go.mod does not require unless something parameterized
+#     already ships, so the first such spec change fails earlier -- on the
+#     missing module -- rather than on the assertion. Both are hard build
+#     failures; only the diagnostic differs, and it resolves itself the
+#     moment a real parameterized operation lands with its handler.
+#     Pre-adding the require would not help: `go mod tidy` drops an unused
+#     dependency.
 #   * Frontend-sdk regeneration consistency: the pinned orval (8.17.0 --
 #     the exact same `pnpm dlx orval` + nodenext-fixup pair as Taskfile's
 #     api:gen frontend leg, run from web/) regenerates @speed/api-sdk's
@@ -79,6 +88,11 @@ name: api-contract
 #                                                  the generated file
 #                                                  triggers the consistency
 #                                                  diff)
+#   go/org/api/**                                  org's fragment, its
+#                                                  generator config and its
+#                                                  own backend generated
+#                                                  artifact -- same reasoning
+#                                                  as the notes row above
 #   web/orval.config.ts, web/scripts/**            the frontend generator
 #                                                  config and the fixup
 #                                                  script behind the regen
@@ -94,6 +108,7 @@ on:
   pull_request:
     paths:
       - examples/reference-app/internal/notes/api/**
+      - go/org/api/**
       - web/orval.config.ts
       - web/scripts/**
       - web/packages/api-sdk/**
@@ -138,6 +153,27 @@ jobs:
             echo "dirty. The checked-in api/notes-server.gen.go is not what"
             echo "api/openapi.yaml generates -- did you change the spec"
             echo "without running 'task api:gen' and committing the result?"
+            echo "Per docs/internal/21-api-contract.md, spec + generated"
+            echo "artifact + implementation ship in the same PR."
+            exit 1
+          }
+      - name: Regenerate org's API surface (pinned oapi-codegen v2.8.0)
+        # The same command as Taskfile.yml's api:gen task's org leg -- keep
+        # the two in lockstep (both pin the generator at v2.8.0). Run from
+        # the fragment's own directory, where oapi-codegen.yaml's paths are
+        # relative, mirroring the notes step above exactly.
+        run: |
+          cd go/org/api
+          go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
+            -config oapi-codegen.yaml openapi.yaml
+      - name: Org's generated artifact must match the committed spec
+        run: |
+          git diff --exit-code || {
+            echo "error: regenerating from the committed spec left the tree"
+            echo "dirty. The checked-in go/org/api/org-server.gen.go is not"
+            echo "what go/org/api/openapi.yaml generates -- did you change"
+            echo "the spec without running 'task api:gen' and committing"
+            echo "the result?"
             echo "Per docs/internal/21-api-contract.md, spec + generated"
             echo "artifact + implementation ship in the same PR."
             exit 1

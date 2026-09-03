@@ -46,14 +46,17 @@ vars:
   # testcontainers for dbkit and tenancy (including tenancy's tenancytest
   # subpackage), Redis via testcontainers for jobs, Redis plus MinIO/S3
   # via testcontainers for pkgcore (its integration_test/ carries both
-  # tiers), and PostgreSQL plus Redis via testcontainers for config and for
-  # rbac (each of their integration_test/ directories carries both legs).
-  # This list is the enumeration of
+  # tiers), PostgreSQL plus Redis via testcontainers for config and for
+  # rbac (each of their integration_test/ directories carries both legs),
+  # and PostgreSQL via testcontainers for org (its integration_test/
+  # re-runs the A1 materialized-path dialect-identity proof and the
+  # tenant-scoped repositories' AssertIsolated suite against a real
+  # server). This list is the enumeration of
   # the modules' integration_test/ directories: one entry per module that
   # carries one. A module shipping a tier without an entry here silently
   # drops out of test:full, so keep the two in step -- verify by listing the
   # integration_test/ directories under go/.
-  INTEGRATION_DIRS: go/dbkit go/tenancy go/jobs go/pkgcore go/config go/rbac
+  INTEGRATION_DIRS: go/dbkit go/tenancy go/jobs go/pkgcore go/config go/rbac go/org
 
 tasks:
   default:
@@ -202,36 +205,44 @@ tasks:
     silent: true
 
   api:gen:
-    desc: Regenerate the notes module's generated API surface -- backend (oapi-codegen types + ServerInterface) and frontend SDK (orval -> @speed/api-sdk) -- from its OpenAPI fragment.
+    desc: Regenerate the generated API surface of every module that ships an OpenAPI fragment -- backend (oapi-codegen types + ServerInterface) for notes and org, plus notes' frontend SDK (orval -> @speed/api-sdk) -- from their fragments.
     # The backend half of the contract-change flow (docs/internal/
     # 21-api-contract.md's order: edit the spec, regenerate, compile
-    # failures reveal every handler to fix) is now real for the one module
-    # that ships a fragment: this task runs oapi-codegen, pinned at v2.8.0,
-    # over examples/reference-app/internal/notes/api/openapi.yaml with that
-    # directory's oapi-codegen.yaml, rewriting api/notes-server.gen.go -- the
-    # generated api.ServerInterface's growth is what makes an un-updated
-    # handler stop compiling (its compile-time assertion lives in
-    # internal/notes/handler.go).
+    # failures reveal every handler to fix) is real for both modules that
+    # ship a fragment: this task runs oapi-codegen, pinned at v2.8.0, over
+    # each module's own api/openapi.yaml with that directory's own
+    # oapi-codegen.yaml -- rewriting
+    # examples/reference-app/internal/notes/api/notes-server.gen.go and
+    # go/org/api/org-server.gen.go respectively. Each generated
+    # ServerInterface's growth is what makes an un-updated handler stop
+    # compiling (the compile-time assertions live in
+    # internal/notes/handler.go and go/org/handler.go).
     #
-    # The frontend half of the api:gen promise is live too: the notes
+    # The frontend half of the api:gen promise is live for notes only: its
     # fragment drives the @speed/api-sdk package through orval, pinned at
     # 8.17.0 and run from web/ via pnpm dlx (orval is never a workspace
-    # dependency), followed by web/scripts/orval-nodenext-fixup.mjs --
-    # see that package's AGENTS.md for the seam and the fixup's why.
-    # Still deferred with reasons: no other module ships a spec fragment
-    # yet, so the redocly merge of fragments into a
-    # build/openapi/speed.yaml waits for the second fragment (M1), and
-    # breaking-change detection (oasdiff) waits for the first release
-    # baseline (M4) -- docs/internal/21-api-contract.md.
+    # dependency), followed by web/scripts/orval-nodenext-fixup.mjs -- see
+    # that package's AGENTS.md for the seam and the fixup's why. org's
+    # fragment does not feed orval yet: the frontend generation targets a
+    # single spec source today, and no org consumer shell exists to
+    # type-check the generated hooks against -- deferred to the M1
+    # org-web / consumer-shell round (go/org/AGENTS.md's deferrals table).
+    # The redocly merge of every fragment into a build/openapi/speed.yaml,
+    # and breaking-change detection (oasdiff) once a release baseline
+    # exists, stay deferred the same way -- docs/internal/21-api-contract.md.
     #
     # Keep the commands in lockstep with
     # .github/workflows/api-contract.yml's regeneration steps: the same
-    # go run from the same directory, and the same pnpm dlx orval +
+    # go run from the same two directories, and the same pnpm dlx orval +
     # fixup pair from web/, then a git diff there fails any PR whose
     # spec change was not committed with its regenerated artifact.
     cmds:
       - |
         cd "{{.APP_DIR}}/internal/notes/api" && \
+        go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
+          -config oapi-codegen.yaml openapi.yaml
+      - |
+        cd go/org/api && \
         go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
           -config oapi-codegen.yaml openapi.yaml
       - |

@@ -19,7 +19,7 @@ name: pr-full
 # the label gate, for manual full-matrix runs.
 #
 # COVERAGE -- what genuinely runs today
-#   * go-modules job: the same seven-module matrix as pr-check through the
+#   * go-modules job: the same eight-module matrix as pr-check through the
 #     reusable go-module-ci workflow (golangci-lint, go vet, unit tests
 #     under -race, a workspace-context build and a GOWORK=off standalone
 #     build) -- the full matrix runs the unit tier too. Per 18-cicd's
@@ -49,6 +49,11 @@ name: pr-full
 #                    dialect's migrations and AssertIsolated,
 #                    redis_leg_test.go for the cross-replica cache
 #                    invalidation a revoke depends on)
+#       go/org       PostgreSQL -- its integration_test/ re-runs the A1
+#                    materialized-path dialect-identity proof
+#                    (postgres_tree_test.go) and the three tenant-scoped
+#                    repositories' AssertIsolated suite
+#                    (postgres_isolation_test.go) against a real server
 #   * reference-app job: examples/reference-app's golangci-lint leg and unit
 #     suite under -race, dir-scoped from inside the module -- reference-app
 #     is its own module, listed in go.work but outside go/, so neither the
@@ -102,6 +107,7 @@ jobs:
           - go/jobs
           - go/ratelimit
           - go/rbac
+          - go/org
     uses: ./.github/workflows/reusable/go-module-ci.yml
     with:
       module: ${{ matrix.module }}
@@ -125,6 +131,7 @@ jobs:
           - go/pkgcore
           - go/config
           - go/rbac
+          - go/org
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
