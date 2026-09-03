@@ -100,7 +100,7 @@ from `web/` with `pnpm -r`:
 pnpm lint        # eslint; the speed/no-direct-http whitelist covers this package
 pnpm typecheck   # strict; relative imports in src/ carry .js extensions (nodenext)
 pnpm test        # vitest; colocated unit tests plus test-utils/ helpers
-pnpm build       # tsup dual entry; dist/ is gitignored build output
+pnpm build       # tsc ESM build (nodenext); dist/ is gitignored build output
 ```
 
 Test layout: one file per source file (`errors.ts` -> `errors.test.ts`)
