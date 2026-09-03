@@ -33,11 +33,12 @@ import (
 // thumbnail derivation on is the same jobs.Queue Module.Register requires
 // (WithQueue).
 //
-// What ObjectService deliberately does NOT yet do: mount an HTTP surface
-// (the api/ fragment is the HTTP round's, spec-first). Thumbnail derivation
-// is enqueued here and claimed by DeriveService (derive.go); deletion and
-// expiry sweeping live in LifecycleService (cleanup.go). This file stops at
-// the transfer lifecycle and says so.
+// What this file deliberately does not do: mount an HTTP surface (that is
+// Handler's, built in handler.go from the api/ fragment and mounted by
+// Register; the methods here are its service half), derive thumbnails
+// (enqueued here, claimed by DeriveService in derive.go), or end object
+// life (deletion and expiry sweeping live in LifecycleService in
+// cleanup.go). This file stops at the transfer lifecycle and says so.
 
 // ObjectService drives uploads through their lifecycle: Create validates a
 // declaration and reserves the object's id and store key, Upload streams

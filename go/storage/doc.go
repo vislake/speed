@@ -38,15 +38,20 @@
 // the versioned, dual-dialect migrations under migrations/ create the two
 // tables from zero on SQLite and PostgreSQL alike.
 //
-// This round ships that metadata plane only. What it does not ship yet,
-// in the order the roadmap's storage round delivers: the object service
-// that drives uploads through their lifecycle states (declaring a
-// completed upload, enforcing the policy bounds the With* options carry,
-// moving rows to their finalized or expired states), the spec-first HTTP
-// surface under api/ with the handler behind it (OpenAPISpec() returns
-// nil until then, and Register mounts no routes), and the queue task that
-// finalizes upload bytes and generates derivatives on the wired queue.
-// Until those land, a host can store, list, read and delete object and
-// derivative metadata rows, and can rely on the isolation, key and error
-// contracts they were built on.
+// The module ships the runtime that drives those rows through their
+// lifecycle, not the metadata plane alone. ObjectService (object.go)
+// drives uploads through their states: Create declares an upload and opens
+// its window, Upload streams the bytes into the host's ObjectStore,
+// Complete runs the revalidation pipeline over them and finalizes the row,
+// and Get, OpenContent and List serve completed objects -- all enforcing
+// the policy bounds the With* options carry. DeriveService (derive.go)
+// turns a completed image object's bytes into its thumbnail derivative:
+// the queued work Complete enqueues and the handler Register registers
+// claims from the host's queue. LifecycleService (cleanup.go) ends object
+// life: Delete removes an object and everything it names, Sweep runs one
+// tenant's periodic cleanup, EnqueueExpirySweep schedules it. And Register
+// mounts the module's HTTP surface: the spec-first api/ fragment's seven
+// operations, served by the generated Handler at /api/v1/storage, with
+// OpenAPISpec returning the fragment itself, embedded in the module
+// binary.
 package storage
