@@ -9,10 +9,13 @@ file is the discipline that ships with the module to consuming projects.
 > and dual-dialect migrations, password authentication, access-token issue and
 > verification, refresh rotation with replay detection, sessions and tenant
 > switching, the middleware chain, module registration, OIDC federation (an
-> enterprise relying party plus five social channels) and account-binding
-> management. SMS, TOTP and recovery codes, rate limiting and the HTTP surface
-> land in later blocks of the same round and extend this file rather than
-> replacing it. Judge what exists by the tree, not by this note.
+> enterprise relying party plus five social channels), account-binding
+> management, phone-plus-SMS-code sign-in, TOTP second-factor enrollment with
+> recovery codes and step-up re-verification, and progressive/sliding-window
+> rate limiting on every login, registration, code-send, code-verify and
+> step-up path. The HTTP surface lands in a later block of the same round and
+> extends this file rather than replacing it. Judge what exists by the tree,
+> not by this note.
 
 ---
 
@@ -27,6 +30,9 @@ file is the discipline that ships with the module to consuming projects.
 | Tenant switching within one session | Memberships, the organization tree (`org`) |
 | Social login (Google, GitHub, WeChat, DingTalk, Feishu) and enterprise OIDC single sign-on | SAML (deferred, optional subpackage), WebAuthn/passkeys (deferred, post-v1.0) |
 | Account-binding management (list, bind, unbind) | QQ / Weibo / Alipay and other phase-two providers |
+| Phone-plus-SMS-code sign-in on the existing blind index | Real SMS carrier adapters (Aliyun, Tencent Cloud, Twilio) — the shipped `SMSSender` transports are console (standalone) and a generic HTTP gateway (distributed) |
+| TOTP enrollment, confirmation, recovery codes, step-up re-verification | WebAuthn/passkeys (the `SecondFactor` shape is reserved, not implemented — post-v1.0) |
+| Sliding-window plus progressive-lockout rate limiting on login/register/code-send/code-verify/step-up | Anomalous-login detection (new device/region), which needs GeoIP first (`notification`, M2) |
 
 **`rbac` must never import this package.** Authorization takes a tenant and a
 user, assembled by whoever authenticated. The dependency runs one way, and an
@@ -46,6 +52,7 @@ import in the other direction is a merge blocker rather than a style note.
 | `WithSigningKeys`, `WithBlindIndexKey` | **Required.** No safe default exists for either. |
 | `WithMembershipReader` | The seam through which membership is asked. Absent means "refuse", not "allow". |
 | `WithClock`, `WithIssuer`, `WithAccessTokenTTL`, `WithRefreshTokenTTL`, `WithSessionTTL`, `WithRevocationMode`, `WithPasswordParams`, `WithPasswordPolicy` | Everything else. A nil or non-positive value leaves the default in place. |
+| `WithSMSSender`, `WithDeploymentMode`, `WithSMSCodeTTL`, `WithSMSCodeMaxAttempts` | The phone-login transport and its lifetime/attempt budget. See "A distributed deployment must wire an `SMSSender`" below for what `WithDeploymentMode` is for. |
 
 ### Authentication
 
@@ -86,6 +93,26 @@ import in the other direction is a merge blocker rather than a style note.
 | `TenantSSOConfig`, `SSOConfigRepository` | The one tenant-domain table this module owns. |
 | `RedirectAllowlist`, `NewRedirectAllowlist` | Exact-match redirect URI validation. |
 | `PermissionSSOManage` | The one permission this module declares, for writing a tenant's SSO configuration. |
+
+### Phone-plus-SMS-code sign-in
+
+| Symbol | Purpose |
+|---|---|
+| `SMS`, `SMSSender` | The message and the delivery seam. Authn's own — it is not a `pkgcore` primitive, since not every module needs it. |
+| `NewConsoleSMSSender(w)`, `NewHTTPSMSSender(endpoint, opts...)` | The standalone (writes to `w`) and distributed (SSRF-guarded JSON POST) transports — the dual-implementation rule applied to this module's own seam. |
+| `Service.RequestSMSCode`, `Service.LoginWithSMSCode` | Issue-and-deliver, then verify-and-sign-in. Both never disclose whether a phone number is registered. |
+| `ErrMissingDistributedSMSSender` | What `NewModule`/`NewService` fail with when `WithDeploymentMode(pkgcore.DeploymentModeDistributed)` was given and no `SMSSender` was wired. |
+
+### TOTP, recovery codes, step-up
+
+| Symbol | Purpose |
+|---|---|
+| `Service.EnrollTOTP`, `Service.ConfirmTOTP` | Start enrollment (returns a secret and an `otpauth://` provisioning URI); confirm with a real code (returns ten recovery codes, shown once). |
+| `Service.VerifyStepUp` | Re-verifies the CURRENT session with a TOTP code or a recovery code and mints a freshly enriched access token, reusing the existing refresh token. |
+| `Service.RegenerateRecoveryCodes` | Replaces a user's whole recovery-code batch; requires an active TOTP factor. |
+| `RequireStepUp(next)` | Per-route enforcement, `RequireAuthenticated`'s stricter sibling: refuses unless the calling `Principal.AMR` already carries a second factor. |
+| `MethodMFATOTP`, `MethodMFARecoveryCode` | The two AMR values a completed step-up can carry. |
+| `internal/totp` (`GenerateSecret`, `Code`, `Validate`, `ProvisioningURI`) | RFC 6238 on the standard library only — SHA-1/6-digit/30-second, the one convention every mainstream authenticator app assumes. Not part of this module's public API; `mfa.go` is the only caller. |
 
 ---
 
@@ -308,6 +335,83 @@ The parameters travel *inside* each stored hash, so raising the cost is a
 configuration change rather than a migration: existing hashes keep verifying, and
 `Login` upgrades one on its owner's next successful sign-in.
 
+### A distributed deployment must wire an `SMSSender`
+
+`WithDeploymentMode(pkgcore.DeploymentModeDistributed)` is how a host tells
+`NewModule`/`NewService` which deployment mode it is being wired for, solely
+so construction can enforce that a distributed deployment supplies an
+explicit `SMSSender` (`WithSMSSender`) rather than silently defaulting to
+`NewConsoleSMSSender`, which prints to a writer nobody in a distributed
+replica pool is reading. This mirrors `pkgcore.ErrMissingDistributedMailer`
+exactly, and it is the ONE piece of deployment-mode awareness this module
+carries. It lives entirely in `newOptions`' validation — never in `Service`'s
+business logic — for the same reason `pkgcore.Kernel`'s own `resolveMailer`
+and `resolveObjectStore` live in kernel wiring: the root CLAUDE.md's "do not
+branch on deployment mode in business logic" governs behavior selection
+inside a request, not a once-at-construction-time checked precondition.
+Omitting `WithDeploymentMode` (every call site that predates this option, and
+every standalone deployment) is equivalent to standalone and keeps working
+with the console default.
+
+### Verification codes and recovery codes are hashed, not argon2id'd
+
+`VerificationCode.CodeHash` and `UserRecoveryCode.CodeHash` are plain
+SHA-256 digests, the same choice `RefreshToken.TokenHash` already makes and
+for the identical reason: the plaintext is drawn by the SERVER with full
+entropy over a space small enough (six digits) or large enough (recovery
+codes) that there is no offline dictionary attack a slow hash would need to
+defend against. Brute-force resistance comes from the attempt counter plus
+lockout (`VerificationCode.Attempts`/`MaxAttempts`) and the `go/ratelimit`
+guards in `ratelimit.go`, not from hashing cost. Do not "upgrade" either to
+argon2id — it would only slow down the legitimate verify path.
+
+### A phone-login code, once consumed, cannot be replayed — and neither can a TOTP code
+
+Both `VerificationCodeRepository.Consume` and `RefreshTokenRepository.Consume`
+share the identical compare-and-swap shape (`WHERE id = ? AND status =
+'active'`, then `Updates`): two concurrent verifications of the same code
+must produce exactly one winner, decided by the database, never by a read
+followed by a write. `MFAFactorRepository.UpdateLastUsedStep` and
+`RecoveryCodeRepository.MarkUsed` are the same pattern applied to TOTP's
+`last_used_step` counter and to a recovery code's `used_at IS NULL` check,
+respectively. Do not "simplify" any of these four into a plain read-then-branch — that reopens exactly the race replay detection exists to close.
+
+### Step-up elevation is NOT persisted to the session — that is what bounds it
+
+`VerifyStepUp` mints a fresh access token whose AMR gained `mfa:totp` or
+`mfa:recovery_code`, but it never writes that back to `sessions.amr`. The
+elevation therefore lives only as long as that ONE access token
+(`ConfigKeyAccessTokenTTL`, 15 minutes by default): a subsequent natural
+`Refresh` mints from `session.AMRList()` — the session's ORIGINAL
+authentication methods — which is what makes step-up a periodic re-proof
+rather than a permanent unlock for the rest of the session, with no separate
+expiry timer needed. Do not add one. Do not make `VerifyStepUp` persist the
+enriched AMR onto the session row "for convenience" — that removes the
+property entirely.
+
+### `RequireStepUp` has no password-re-entry fallback for an account with no MFA
+
+An account with no second factor enrolled has nothing to step up WITH, so
+`RequireStepUp` blocks a sensitive action unconditionally for it rather than
+falling back to, say, re-entering a password. This is a stated, deliberate
+gap, not an oversight — see Known limitations.
+
+### Rate limiting is two layers, and they answer different questions
+
+`go/ratelimit`'s `Limiter.Allow` gives the raw sliding-window counters
+(`rateGuard.allow` in `ratelimit.go`) — it deliberately understands nothing
+about "account", "progressive" or "lockout" (see its own AGENTS.md). This
+module's `rateGuard` adds the one thing `go/ratelimit` does not: a
+progressive login-failure delay (`RecordLoginFailure`/`RecordLoginSuccess`)
+that grows exponentially from `loginLockoutBase` and saturates at
+`loginLockoutMax`, which is what turns "delay" into an effective, bounded
+"lockout" with no separate threshold constant to keep in sync. Every check —
+the plain sliding window AND the progressive lockout — fails CLOSED on a
+`KVStore` error: an unanswerable rate-limit question is a refusal, the same
+policy `resolveTenant` and the revocation check already apply to theirs.
+Every code-send and code-verify endpoint, plus login, registration and
+step-up, goes through `rateGuard`; do not add a new endpoint that skips it.
+
 ---
 
 ## Testing
@@ -337,6 +441,23 @@ every test; `internal/safehttp/safehttp_test.go` separately proves the
 production default client actually refuses loopback and every other
 non-public range, including under a DNS-rebinding resolver stub.
 
+`internal/totp/totp_test.go` pins the generic HOTP/TOTP core directly against
+the OFFICIAL RFC 4226 Appendix D and RFC 6238 Appendix B test vectors — SHA-1,
+SHA-256 and SHA-512, exactly as published — not merely against a round trip
+through this package's own `Code`/`Validate`. A round trip alone cannot catch
+a truncation or modulus bug that is wrong in a way consistent with itself;
+the official vectors can.
+
+A time-based test that generates a code and immediately validates it is
+inherently sensitive to which 30-second step the wall clock is in at each of
+those two moments — `mfa_test.go`'s step-up tests account for this
+explicitly (see their own comments) rather than assume `time.Now()` called
+twice in a row always lands in the same step. `internal/totp`'s public
+`Code`/`Validate` intentionally take no injectable clock (see that package's
+own doc comment for why); tests that need to avoid the ambiguity generate a
+code for `time.Now().Add(totp.Period)` and rely on `totpSkewSteps`' tolerance
+rather than trying to synchronize on the exact step boundary.
+
 ---
 
 ## Known limitations
@@ -349,3 +470,7 @@ non-public range, including under a DNS-rebinding resolver stub.
 | `Module.OpenAPISpec()` returns nil. | The HTTP surface is spec-first: the fragment appears together with the generated server interface and the handler that implements it. Returning a fragment before those exist would advertise endpoints nothing serves. |
 | A brand-new account provisioned by an unmatched, trusted external identity (social or enterprise SSO) cannot sign in until something makes it an active member of the requested tenant. | Membership is `org`'s data and this module fails closed on it by design (see "Fail closed on membership"). The account and its identity are provisioned regardless — only the session is refused — so a later membership grant (or an `org`-round subscriber reacting to `authn.user.created`) lets the same sign-in succeed with no further action here. |
 | Real SMS carrier adapters (Aliyun, Tencent Cloud, Twilio), QQ/Weibo/Alipay social providers, SAML, and WebAuthn/passkeys are not implemented. | Each needs credentials, a live account, or is explicitly deferred by `docs/internal/05-identity-and-access.md`. See this round's plan for the owning milestone of each. |
+| `RequireStepUp` has no fallback for an account with no MFA factor enrolled — it blocks the sensitive action unconditionally rather than, say, accepting a re-entered password. | A password-re-entry fallback needs its own design decision (how long that proof stays valid, whether it composes with MFA) that this block did not make. |
+| MFA (TOTP) is not enforced at LOGIN time — only `RequireStepUp`-gated sensitive actions require it. A password or SMS sign-in for an account WITH an enrolled factor still succeeds on the first factor alone. | Full second-factor-at-login is a larger design question (an interactive "enter your code now" challenge mid-flow) this block's scope did not include; the round's plan scoped MFA to enrollment, recovery and step-up. |
+| Phone-login and TOTP/recovery-code lifetimes (`ConfigKeySMSCodeTTL`, `ConfigKeySMSCodeMaxAttempts`) are declared as dynamic-config schema but, like every other dynamic-config item in this module, are not yet read back at runtime — values are injected through options with matching defaults. | Same read-through gap `NewService`'s existing options already carry; the binding lands with whichever block wires this module to the live `config` module. |
+| The `otpauth://` provisioning URI is rendered as a plain string; no QR image is generated server-side. | Deliberate — see `internal/totp`'s own doc comment. QR rendering is display logic and belongs on the frontend, which already owns every other rendering decision in this codebase. A QR-generation dependency was weighed and rejected for the same reason `pquerna/otp` was: every dependency added here lands in every consumer's build. |
