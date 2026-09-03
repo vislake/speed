@@ -4,7 +4,7 @@
   "description": "Speed auth UI: the sign-in component family (password, SMS code, social channels, registration and the social callback handler) over an @speed/auth-core session, with every built-in string in the bilingual auth-ui namespace",
   "type": "module",
   "sideEffects": false,
-  "files": ["dist"],
+  "files": ["dist", "README.md", "AGENTS.md"],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -19,6 +19,7 @@
     "build": "pnpm --filter @speed/auth-core --filter @speed/ui-kit build && tsc -p tsconfig.build.json"
   },
   "dependencies": {
+    "@speed/api-sdk": "workspace:*",
     "@speed/auth-core": "workspace:*",
     "@speed/i18n": "workspace:*",
     "@speed/ui-kit": "workspace:*"

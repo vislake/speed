@@ -103,6 +103,9 @@ importers:
 
   packages/auth-ui:
     dependencies:
+      '@speed/api-sdk':
+        specifier: workspace:*
+        version: link:../api-sdk
       '@speed/auth-core':
         specifier: workspace:*
         version: link:../auth-core
@@ -125,9 +128,6 @@ importers:
       '@speed/api-client':
         specifier: workspace:*
         version: link:../api-client
-      '@speed/api-sdk':
-        specifier: workspace:*
-        version: link:../api-sdk
       '@testing-library/jest-dom':
         specifier: ^7.0.1
         version: 7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.11(@types/node@26.4.1)(jsdom@30.0.1)(vite@8.2.2(@types/node@26.4.1)))
