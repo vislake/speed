@@ -113,6 +113,31 @@ Deferred with reasons:
 - Real `refreshAccessToken` hooks -- M1 authn work (the seam
   `refreshAccessToken?: () => Promise<boolean>` is the contract).
 
+## Known limitations
+
+- **go/config's error responses do not carry `traceId`, so their real
+  module code never reaches an `ApiError`.** `client.ts`'s
+  `parseEnvelope` treats a body as a trustworthy envelope only when
+  both `code` and `traceId` are strings (matching the API contract's
+  required-fields schema, `docs/internal/21-api-contract.md`); a body
+  missing either falls back to a synthetic `client.http.<status>` code.
+  go/config's `errorEnvelope` (`go/config/http.go`) only ever encodes
+  `{code, params}` -- it has no `traceId` field, and neither does
+  `apperr` (no `TraceID` concept exists there), so every genuine
+  `fetchPublicConfig` / `fetchSystemFeatures` failure against go/config
+  degrades its real `config.*` code to `client.http.<status>` today.
+  `config-fetcher.test.ts`'s two "actual go/config error shape" tests
+  pin this behavior with a traceId-less mock so it stays visible rather
+  than only ever exercised against a fabricated, spec-compliant body.
+  This is a pre-existing gap in go/config (and the reference app's
+  notes handler, which has the same omission), not something this
+  package can fix on its own -- the correct fix is on the Go side
+  (either `errorEnvelope` starts emitting a real `traceId`, sourced from
+  request tracing, or the contract schema is revisited for hand-kept
+  endpoints outside the spec-first flow). Deferred to a future backend
+  round; tracked here so it is not mistaken for `client.ts` silently
+  losing data it was handed.
+
 ## Public surface
 
 The sixteen runtime exports are pinned by `src/index.test.ts`
