@@ -1,12 +1,16 @@
 package authn_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"time"
 
 	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/authn/internal/totp"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
@@ -268,7 +272,7 @@ func ExampleNewModule() {
 
 	// Output:
 	// module: authn
-	// published events: 8
+	// published events: 10
 	// service wired: true
 }
 
@@ -296,3 +300,111 @@ func (exampleMemberships) TenantsOf(context.Context, string) ([]pkgcore.TenantID
 
 // compile-time check that the example's stand-in satisfies the real seam.
 var _ authn.MembershipReader = exampleMemberships{}
+
+// ExampleNewConsoleSMSSender delivers a verification code to the standalone
+// deployment mode's transport, which -- unlike a real gateway -- writes to
+// whatever io.Writer it is given, which is what makes it usable here.
+func ExampleNewConsoleSMSSender() {
+	var out bytes.Buffer
+	sender := authn.NewConsoleSMSSender(&out)
+
+	err := sender.Send(context.Background(), authn.SMS{
+		To:   "+8613800000000",
+		Text: "your verification code is 123456",
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Print(out.String())
+	// Output:
+	// SMS to +8613800000000: your verification code is 123456
+}
+
+// exampleModule builds a fully registered Module over a fresh in-memory
+// database, for the examples below that need a working Service rather than
+// just NewModule's own return value.
+func exampleModule(ctx context.Context) (*authn.Module, *pkgcore.Registry) {
+	cipher, err := dbkit.NewCipher(make([]byte, 32))
+	if err != nil {
+		panic(err)
+	}
+	if regErr := authn.RegisterPIISerializer(cipher); regErr != nil {
+		panic(regErr)
+	}
+	db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: "file::memory:?cache=shared"})
+	if err != nil {
+		panic(err)
+	}
+
+	keys, err := authn.NewKeySet(mustKey("example-mfa"))
+	if err != nil {
+		panic(err)
+	}
+
+	var sms bytes.Buffer
+	module, err := authn.NewModule(db,
+		authn.WithSigningKeys(keys),
+		authn.WithBlindIndexKey(exampleBlindIndexKey()),
+		authn.WithMembershipReader(exampleMemberships{}),
+		authn.WithPasswordParams(exampleParams),
+		authn.WithSMSSender(authn.NewConsoleSMSSender(&sms)),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	// A real host applies every bootstrapped module's migrations before
+	// opening it for business. This example needs only authn's own
+	// tables, so registering just this one Module is enough.
+	migrations := dbkit.NewMigrationRegistry()
+	if err := migrations.Register(module); err != nil {
+		panic(err)
+	}
+	if err := migrations.Apply(ctx, db, dbkit.DialectSQLite); err != nil {
+		panic(err)
+	}
+
+	registry := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	if err := module.Register(registry); err != nil {
+		panic(err)
+	}
+	return module, registry
+}
+
+// ExampleService_EnrollTOTP walks the full second-factor lifecycle: enroll,
+// confirm with a real code from the provisioned secret, and use that same
+// factor to complete a step-up verification.
+func ExampleService_EnrollTOTP() {
+	ctx := context.Background()
+	module, _ := exampleModule(ctx)
+	svc := module.Service()
+
+	user, err := svc.Register(ctx, authn.RegisterInput{
+		Email: "mfa-demo@example.com", Password: "a perfectly fine passphrase",
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	enrolled, err := svc.EnrollTOTP(ctx, user.ID)
+	if err != nil {
+		panic(err)
+	}
+
+	code, err := totp.Code(enrolled.Secret, time.Now())
+	if err != nil {
+		panic(err)
+	}
+	recoveryCodes, err := svc.ConfirmTOTP(ctx, user.ID, code)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println("provisioning URI has otpauth scheme:", strings.HasPrefix(enrolled.ProvisioningURI, "otpauth://totp/"))
+	fmt.Println("recovery codes issued:", len(recoveryCodes))
+
+	// Output:
+	// provisioning URI has otpauth scheme: true
+	// recovery codes issued: 10
+}

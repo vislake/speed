@@ -24,13 +24,22 @@ const (
 type serviceFixture struct {
 	svc     *Service
 	db      *gorm.DB
+	kv      pkgcore.KVStore
 	clock   *testutil.Clock
 	members *testutil.Memberships
 	events  *testutil.EventRecorder
 	keys    *KeySet
 }
 
+// newServiceFixture builds a fixture over a fresh in-memory KVStore. Tests
+// that need to observe or replace the KVStore itself (ratelimit_test.go's
+// fail-closed case) use newServiceFixtureWithKV instead.
 func newServiceFixture(t *testing.T, extra ...Option) *serviceFixture {
+	t.Helper()
+	return newServiceFixtureWithKV(t, pkgcore.NewMemoryKVStore(), extra...)
+}
+
+func newServiceFixtureWithKV(t *testing.T, kv pkgcore.KVStore, extra ...Option) *serviceFixture {
 	t.Helper()
 
 	db := testutil.NewDB(t)
@@ -50,7 +59,7 @@ func newServiceFixture(t *testing.T, extra ...Option) *serviceFixture {
 	events := testutil.NewEventRecorder()
 	events.Subscribe(bus, EventUserCreated, EventUserLoggedIn, EventLoginFailed,
 		EventSessionRevoked, EventSessionReplayDetected, EventTenantSwitched,
-		EventIdentityBound, EventIdentityUnbound)
+		EventIdentityBound, EventIdentityUnbound, EventMFAEnrolled, EventMFARecoveryCodesRegenerated)
 
 	opts := append([]Option{
 		WithSigningKeys(keys),
@@ -60,11 +69,11 @@ func newServiceFixture(t *testing.T, extra ...Option) *serviceFixture {
 		WithPasswordParams(testParams()),
 	}, extra...)
 
-	svc, err := NewService(db, bus, pkgcore.NewMemoryKVStore(), opts...)
+	svc, err := NewService(db, bus, kv, opts...)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	return &serviceFixture{svc: svc, db: db, clock: clock, members: members, events: events, keys: keys}
+	return &serviceFixture{svc: svc, db: db, kv: kv, clock: clock, members: members, events: events, keys: keys}
 }
 
 // registerUser creates an account and records its membership of tenants.
