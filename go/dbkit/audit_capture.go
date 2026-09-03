@@ -79,11 +79,14 @@ type WriteCapturedEvent struct {
 	// Select list, or an Omit list; Repository[T]'s soft-delete and Restore
 	// writes are the canonical two-column-SELECT shape — After carries
 	// exactly the columns the statement assigned, never a value for a
-	// column the write did not touch: a column-restricted update's payload
-	// holds only the restricted columns, so capturing the payload whole
-	// would fabricate zero values for untouched columns whose real row
-	// values are still in place (see scopeAfterToWrittenColumns). For an
-	// unrestricted full-record Update, After is the whole row.
+	// column the write did not touch: a Select-restricted update's payload
+	// holds only the restricted columns, while an Omit-restricted struct
+	// update's payload can carry values for columns the zero-value skip
+	// leaves unwritten — either way, capturing the payload whole would
+	// fabricate values for untouched columns whose real row values are
+	// still in place (scopeAfterToWrittenColumns mirrors GORM's own
+	// assignment decisions). For an unrestricted full-record Update, After
+	// is the whole row.
 	After map[string]any
 	// OccurredAt is when the write was captured.
 	OccurredAt time.Time
@@ -330,13 +333,16 @@ func fieldValuesMap(stmt *gorm.Statement) map[string]any {
 // scopeAfterToWrittenColumns trims after — the full-payload capture
 // fieldValuesMap produced — down to the columns the executed statement's
 // SQL actually assigned, for an Update statement that restricted its
-// columns. It exists because a column-restricted update's payload holds
-// only the restricted columns: every other field is zero on the payload,
-// so capturing the payload whole would fabricate zero values for columns
-// the write never touched, values that contradict the real row (still in
-// the database with its pre-write state intact on those columns). After is
-// documented as the row's column values *following the write* — it must
-// never claim a value for a column the write did not assign.
+// columns. It exists because a column-restricted update's payload cannot
+// be trusted as the written set: a Select-restricted payload holds only
+// the restricted columns and zeroes for every other, while an
+// Omit-restricted struct payload can carry real values for columns the
+// zero-value skip left unwritten — either way, capturing the payload
+// whole would fabricate values for columns the write never touched,
+// values that contradict the real row (still in the database with its
+// pre-write state intact on those columns). After is documented as the
+// row's column values *following the write* — it must never claim a value
+// for a column the write did not assign.
 //
 // GORM deletes its SET clause from db.Statement.Clauses before after-*
 // callbacks run (callbacks/update.go), so the written set cannot be read
@@ -347,14 +353,47 @@ func fieldValuesMap(stmt *gorm.Statement) map[string]any {
 //   - No Select list and no Omit list — or a Select("*") with no Omit
 //     list: an unrestricted, full-record write, where the payload is the
 //     whole row. after is returned unchanged.
+//
 //   - An explicit Select list (Repository[T]'s soft-delete and Restore
 //     writes are the canonical shape: Select("DeletedAt", "DeletedBy") on
 //     a freshly built struct): the write assigned exactly the resolved
 //     select columns plus every auto-update-time column GORM force-adds
 //     (field.AutoUpdateTime > 0, hooks not skipped via stmt.SkipHooks),
 //     minus the resolved Omit list.
-//   - An Omit list without a Select list: every column but the omitted
-//     ones.
+//
+//   - An Omit list without a Select list — GORM's "update the whole record
+//     except the omitted columns" shape. Which columns the statement
+//     actually assigned depends on the payload kind, so the written set
+//     mirrors ConvertToAssignments' own per-payload decisions rather than
+//     assuming the whole schema minus the omitted columns (which would
+//     over-claim: see below).
+//
+//     map[string]any payload: exactly the map's own keys, minus the
+//     omitted ones — a map update assigns its keys with no zero-value
+//     skip, so a zero map value really is written and stays captured —
+//     plus every auto-update-time column GORM force-adds when hooks run
+//     and the map carries that column under neither its Go field name nor
+//     its DB name.
+//
+//     struct payload: Updates with a struct and no Select list is GORM's
+//     classic "only non-zero fields" update, so the written set is every
+//     schema column that is not omitted and that GORM's own assignment
+//     test judged written — updatable (field.Updatable), non-zero on the
+//     payload under schema.Field.ValueOf (the same zero test GORM itself
+//     applies), and not a primary key in the canonical Model == Dest
+//     shape, where the payload's primary-key values select the row
+//     instead of entering the SET — plus every auto-update-time column
+//     GORM force-writes when hooks run (field.AutoUpdateTime > 0 and
+//     !stmt.SkipHooks), zero payload or not.
+//
+//     This mirror is exact for the canonical Model == Dest shape, which is
+//     the shape every Repository[T] write uses. When Model and Dest
+//     differ, after describes the Model's fields (SetupUpdateReflectValue
+//     resets ReflectValue to the Model), which may not be the payload the
+//     assignments came from — the known limitation the Select shape above
+//     already carries (see go/dbkit/AGENTS.md's Model == Dest discussion);
+//     the written set is computed against those same Model fields, and
+//     scoping it is no less truthful than before this branch existed.
 //
 // Select/Omit entries are resolved the way GORM itself resolves them
 // (LookUpField, statement.go's SelectAndOmitColumns): a Go field name like
@@ -363,10 +402,12 @@ func fieldValuesMap(stmt *gorm.Statement) map[string]any {
 // entry that names no column selects nothing). Values for the columns that
 // survive the scope are truthful, which is what makes this a fix rather
 // than a loss: GORM writes each assignment's final value back into the
-// statement's ReflectValue before capture runs (callbacks/update.go's
-// SetupUpdateReflectValue), so fieldValuesMap already read the real written
-// values — the scope only drops the fabricated zeroes for untouched
-// columns.
+// statement's ReflectValue before capture runs (callbacks/update.go —
+// SetupUpdateReflectValue keeps ReflectValue on the payload in the
+// canonical Model == Dest shape, and ConvertToAssignments' assignValue
+// writes every assignment into it via field.Set), so fieldValuesMap
+// already read the real written values — the scope only drops what the
+// statement never wrote.
 func scopeAfterToWrittenColumns(stmt *gorm.Statement, after map[string]any) map[string]any {
 	if stmt.Schema == nil || len(after) == 0 {
 		return after
@@ -381,7 +422,9 @@ func scopeAfterToWrittenColumns(stmt *gorm.Statement, after map[string]any) map[
 
 	written := make(map[string]bool, len(stmt.Schema.Fields))
 	all := false
+	hasSelect := false
 	for _, name := range stmt.Selects {
+		hasSelect = true
 		switch resolved := resolve(name); resolved {
 		case "*":
 			all = true
@@ -395,25 +438,87 @@ func scopeAfterToWrittenColumns(stmt *gorm.Statement, after map[string]any) map[
 		omitted[resolve(name)] = true
 	}
 
-	if len(written) == 0 && len(omitted) == 0 {
+	switch {
+	case !hasSelect && len(omitted) == 0:
+		// No Select list and no Omit list: an unrestricted, full-record
+		// write, where the payload is the whole row.
 		return after
-	}
-	if all {
-		// Select("*") is an unrestricted write: every column was assigned.
+
+	case all:
+		// Select("*") is an unrestricted write: every column was
+		// assigned.
 		if len(omitted) == 0 {
 			return after
 		}
 		for _, field := range stmt.Schema.Fields {
 			written[field.DBName] = true
 		}
-	} else if !stmt.SkipHooks {
-		// GORM force-adds auto-update-time columns to a restricted
-		// struct-update's assignments whenever hooks run — mirror that
-		// here, or an UpdatedAt a model has but did not list would be
-		// dropped from After despite the SQL really having written it.
-		for _, field := range stmt.Schema.Fields {
-			if field.AutoUpdateTime > 0 && !field.PrimaryKey && field.Updatable {
-				written[field.DBName] = true
+
+	case hasSelect:
+		// An explicit Select list: GORM force-adds auto-update-time
+		// columns to a restricted struct-update's assignments whenever
+		// hooks run — mirror that here, or an UpdatedAt a model has but
+		// did not list would be dropped from After despite the SQL really
+		// having written it.
+		if !stmt.SkipHooks {
+			for _, field := range stmt.Schema.Fields {
+				if field.AutoUpdateTime > 0 && !field.PrimaryKey && field.Updatable {
+					written[field.DBName] = true
+				}
+			}
+		}
+
+	default:
+		// An Omit list without a Select list — see the doc comment above
+		// for the per-payload-kind rules this mirrors.
+		dest := reflect.ValueOf(stmt.Dest)
+		for dest.IsValid() && dest.Kind() == reflect.Pointer && !dest.IsNil() {
+			dest = dest.Elem()
+		}
+		switch {
+		case dest.IsValid() && dest.Kind() == reflect.Map:
+			if m, ok := dest.Interface().(map[string]any); ok {
+				for key := range m {
+					written[resolve(key)] = true
+				}
+				if !stmt.SkipHooks {
+					for _, field := range stmt.Schema.Fields {
+						if field.AutoUpdateTime > 0 && !field.PrimaryKey && field.Updatable {
+							if _, hasGoName := m[field.Name]; !hasGoName {
+								if _, hasDBName := m[field.DBName]; !hasDBName {
+									written[field.DBName] = true
+								}
+							}
+						}
+					}
+				}
+			}
+		case dest.IsValid() && dest.Kind() == reflect.Struct:
+			payload := stmt.ReflectValue
+			for payload.IsValid() && payload.Kind() == reflect.Pointer {
+				payload = payload.Elem()
+			}
+			if !payload.IsValid() || payload.Kind() != reflect.Struct {
+				// after was non-empty, so fieldValuesMap must already
+				// have unwrapped ReflectValue to a struct; nothing to
+				// scope against otherwise.
+				break
+			}
+			primaryKeysSelectTheRow := dest.CanAddr() && stmt.Dest == stmt.Model
+			for _, field := range stmt.Schema.Fields {
+				if field.DBName == "" || omitted[field.DBName] || !field.Updatable {
+					continue
+				}
+				if field.PrimaryKey && primaryKeysSelectTheRow {
+					continue
+				}
+				if !stmt.SkipHooks && field.AutoUpdateTime > 0 {
+					written[field.DBName] = true
+					continue
+				}
+				if _, zero := field.ValueOf(stmt.Context, payload); !zero {
+					written[field.DBName] = true
+				}
 			}
 		}
 	}

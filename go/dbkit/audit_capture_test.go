@@ -697,3 +697,174 @@ func TestAuditCapturePlugin_DeleteMatchingNoRows_PublishesNothing(t *testing.T) 
 		t.Errorf("captured %d events, want exactly 1 (the seed create) -- a Delete that matched no row must publish nothing", len(events))
 	}
 }
+
+// auditCaptureOmitWidget is the fixture for the Omit-only scoping tests
+// below: a Widget-shaped, tenant-scoped, auditable model with one extra
+// data column (Label). testutil.Widget itself cannot host the shape those
+// tests need — a payload that at once carries an omitted column, a written
+// column, and an unwritten zero-valued column — because with only Name and
+// Value there is no way to keep one data column zero while writing the
+// other; the extra column makes the zero-value-skip half of the scoping
+// rule testable against real row state. It is deliberately local to this
+// file (the precedent nonAuditableFlag and auditCaptureSecretWidget
+// already set): only the two tests below use it.
+type auditCaptureOmitWidget struct {
+	ID       string `gorm:"primaryKey;size:26"`
+	TenantID string `gorm:"primaryKey;size:26;not null"`
+	Name     string `gorm:"size:255;not null"`
+	Value    int    `gorm:"not null;default:0"`
+	Label    string `gorm:"size:255;not null"`
+}
+
+func (w auditCaptureOmitWidget) GetTenantID() pkgcore.TenantID {
+	return pkgcore.TenantID(w.TenantID)
+}
+
+func (w auditCaptureOmitWidget) AuditResourceType() string { return "audit_capture_omit_widget" }
+
+// auditCaptureOmitWidgetTableSQL creates the audit_capture_omit_widgets
+// table backing auditCaptureOmitWidget, hand-mirrored from the widgets
+// DDL (createWidgetsTable above) plus the extra label column.
+const auditCaptureOmitWidgetTableSQL = `CREATE TABLE audit_capture_omit_widgets (
+	id        VARCHAR(26)  NOT NULL,
+	tenant_id VARCHAR(26)  NOT NULL,
+	name      VARCHAR(255) NOT NULL,
+	value     INTEGER      NOT NULL DEFAULT 0,
+	label     VARCHAR(255) NOT NULL,
+	PRIMARY KEY (tenant_id, id)
+)`
+
+// rawAuditCaptureOmitWidgetRow reads id's raw name/value/label columns
+// directly through db.Raw, bypassing every GORM callback — the "what
+// actually landed in the database" ground truth the Omit-only scoping
+// tests cross-check their captured After against, twin of
+// rawSoftDeletableWidgetRow. found is false when no row with id exists.
+func rawAuditCaptureOmitWidgetRow(t *testing.T, db *gorm.DB, id string) (found bool, name string, value int, label string) {
+	t.Helper()
+	row := db.Raw(`SELECT name, value, label FROM audit_capture_omit_widgets WHERE id = ?`, id).Row()
+	if err := row.Scan(&name, &value, &label); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, "", 0, ""
+		}
+		t.Fatalf("raw audit_capture_omit_widgets lookup for id %q: %v", id, err)
+	}
+	return true, name, value, label
+}
+
+func TestAuditCapturePlugin_OmitOnlyStructUpdate_CapturesOnlyTheColumnsItWrites(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	if err := db.Exec(auditCaptureOmitWidgetTableSQL).Error; err != nil {
+		t.Fatalf("create audit_capture_omit_widgets table: %v", err)
+	}
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	seed := &auditCaptureOmitWidget{ID: "ow1", TenantID: "tenant-a", Name: "gadget", Value: 1, Label: "old"}
+	if err := db.WithContext(ctx).Create(seed).Error; err != nil {
+		t.Fatalf("seed Create() error = %v", err)
+	}
+
+	// An Omit list with no Select list is GORM's "update the whole record
+	// except the omitted columns" shape — but an Updates(struct) with no
+	// Select list assigns only the payload's non-zero fields (GORM's
+	// classic zero-value skip), and in this canonical Model == Dest shape
+	// the primary keys never enter the SET: their payload values select
+	// the row instead. The payload below exercises all three faces at
+	// once: Name is non-zero but omitted, Value is zero and not omitted,
+	// Label is non-zero and not omitted. The UPDATE must assign exactly
+	// Label — so After must be exactly {label: "new"}, never a fabricated
+	// claim about Name (payload says "renamed", the row still says
+	// "gadget"), Value (payload says 0, the row still says 1), or the
+	// primary keys.
+	payload := &auditCaptureOmitWidget{ID: "ow1", TenantID: "tenant-a", Name: "renamed", Value: 0, Label: "new"}
+	if err := db.WithContext(ctx).Model(payload).Omit("name").Where("id = ?", "ow1").Where("tenant_id = ?", "tenant-a").Updates(payload).Error; err != nil {
+		t.Fatalf("Omit-only Updates() error = %v", err)
+	}
+
+	events := bus.captured()
+	if len(events) != 2 {
+		t.Fatalf("captured %d events, want 2 (create then update)", len(events))
+	}
+	got := events[1]
+	if got.Operation != "update" {
+		t.Errorf("Operation = %q, want %q", got.Operation, "update")
+	}
+	if len(got.After) != 1 || got.After["label"] != "new" {
+		t.Errorf("After = %+v, want exactly {label: %q} -- the Omit-only UPDATE assigned only Label: Name was omitted, Value was zero on the payload (so never assigned), and the primary keys select the row instead of entering the SET", got.After, "new")
+	}
+
+	// Ground-truth cross-check: the row must agree with the captured After
+	// on every captured column, and the columns After deliberately does
+	// not carry must still hold their pre-write values — proving they were
+	// really not written, not merely not claimed.
+	rowFound, rowName, rowValue, rowLabel := rawAuditCaptureOmitWidgetRow(t, db, "ow1")
+	if !rowFound {
+		t.Fatal("row ow1 missing after the update")
+	}
+	if rowName != "gadget" {
+		t.Errorf("row name = %q, want %q -- the omitted column must not have been written even though the payload carried %q", rowName, "gadget", "renamed")
+	}
+	if rowValue != 1 {
+		t.Errorf("row value = %d, want 1 -- a zero-valued payload column is never assigned by an Omit-only struct update, so the row must keep its prior value", rowValue)
+	}
+	if rowLabel != "new" {
+		t.Errorf("row label = %q, want %q (the one column the update did write)", rowLabel, "new")
+	}
+}
+
+func TestAuditCapturePlugin_OmitOnlyMapUpdate_CapturesOnlyTheColumnsItWrites(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	if err := db.Exec(auditCaptureOmitWidgetTableSQL).Error; err != nil {
+		t.Fatalf("create audit_capture_omit_widgets table: %v", err)
+	}
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	seed := &auditCaptureOmitWidget{ID: "ow2", TenantID: "tenant-a", Name: "gadget", Value: 1, Label: "old"}
+	if err := db.WithContext(ctx).Create(seed).Error; err != nil {
+		t.Fatalf("seed Create() error = %v", err)
+	}
+
+	// A map payload has no zero-value skip — GORM assigns exactly the
+	// map's keys, minus the omitted ones. The map below carries a
+	// deliberately-renamed and omitted Name alongside a zero Value and a
+	// changed Label: the UPDATE must assign exactly Value and Label, and
+	// After must say so — value: 0 included, since unlike a struct
+	// payload, a zero map value really is written.
+	m := map[string]any{"name": "renamed", "value": 0, "label": "mapped"}
+	if err := db.WithContext(ctx).Model(&auditCaptureOmitWidget{ID: "ow2", TenantID: "tenant-a"}).Omit("name").Where("id = ?", "ow2").Where("tenant_id = ?", "tenant-a").Updates(m).Error; err != nil {
+		t.Fatalf("Omit-only map Updates() error = %v", err)
+	}
+
+	events := bus.captured()
+	if len(events) != 2 {
+		t.Fatalf("captured %d events, want 2 (create then update)", len(events))
+	}
+	got := events[1]
+	if got.Operation != "update" {
+		t.Errorf("Operation = %q, want %q", got.Operation, "update")
+	}
+	if len(got.After) != 2 {
+		t.Fatalf("After = %+v, want exactly the 2 map keys the UPDATE wrote (value, label) -- the omitted name key must not appear even though the map carried it", got.After)
+	}
+	if afterValue, ok := got.After["value"]; !ok || afterValue != 0 {
+		t.Errorf("After[\"value\"] = %v (ok=%v), want 0 -- a zero map value really is written (a map payload has no zero-value skip) and must be captured", afterValue, ok)
+	}
+	if got.After["label"] != "mapped" {
+		t.Errorf("After[\"label\"] = %v, want %q", got.After["label"], "mapped")
+	}
+
+	rowFound, rowName, rowValue, rowLabel := rawAuditCaptureOmitWidgetRow(t, db, "ow2")
+	if !rowFound {
+		t.Fatal("row ow2 missing after the update")
+	}
+	if rowName != "gadget" {
+		t.Errorf("row name = %q, want %q -- the omitted column must not have been written even though the map carried %q", rowName, "gadget", "renamed")
+	}
+	if rowValue != 0 {
+		t.Errorf("row value = %d, want 0 (the zero map value really was written)", rowValue)
+	}
+	if rowLabel != "mapped" {
+		t.Errorf("row label = %q, want %q", rowLabel, "mapped")
+	}
+}
