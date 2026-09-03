@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "dependencies": [
+    {"ecosystem": "go", "name": "a.example/alpha", "version": "v1.0.0", "license": "MIT", "used_by": ["go/m1"], "evidence": "fixture"},
+    {"ecosystem": "go", "name": "b.example/beta", "version": "v1.2.0", "license": "MPL-2.0", "adr": "docs/adr/0001-mpl-adoption.md", "used_by": ["go/m1"], "evidence": "fixture"},
+    {"ecosystem": "npm", "name": "c.example/gamma", "version": "3.1.0", "license": "MIT", "used_by": ["web/packages/p1"], "evidence": "fixture"},
+    {"ecosystem": "npm", "name": "d.example/delta", "version": "1.4.2", "license": "BSD-3-Clause", "used_by": ["web/packages/p1"], "evidence": "fixture"}
+  ]
+}

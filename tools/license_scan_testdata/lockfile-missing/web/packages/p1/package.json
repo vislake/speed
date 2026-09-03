@@ -1,0 +1,11 @@
+{
+  "name": "@example/p1",
+  "version": "1.0.0",
+  "dependencies": {
+    "c.example/gamma": "^3.0.0",
+    "h.example/eta": "^4.0.0"
+  },
+  "peerDependencies": {
+    "d.example/delta": "^1.0.0"
+  }
+}

@@ -1,0 +1,437 @@
+{
+  "dependencies": [
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/BurntSushi/toml@v1.6.0/COPYING",
+      "license": "MIT",
+      "name": "github.com/BurntSushi/toml",
+      "used_by": [
+        "go/pkgcore"
+      ],
+      "version": "v1.6.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/glebarez/sqlite@v1.11.0/License",
+      "license": "MIT",
+      "name": "github.com/glebarez/sqlite",
+      "used_by": [
+        "go/dbkit"
+      ],
+      "version": "v1.11.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/google/uuid@v1.6.0/LICENSE",
+      "license": "BSD-3-Clause",
+      "name": "github.com/google/uuid",
+      "used_by": [
+        "go/jobs"
+      ],
+      "version": "v1.6.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/hibiken/asynq@v0.26.0/LICENSE",
+      "license": "MIT",
+      "name": "github.com/hibiken/asynq",
+      "used_by": [
+        "go/jobs"
+      ],
+      "version": "v0.26.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/jackc/pgx/v5@v5.10.0/LICENSE",
+      "license": "MIT",
+      "name": "github.com/jackc/pgx/v5",
+      "used_by": [
+        "go/dbkit"
+      ],
+      "version": "v5.10.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/knadh/koanf/parsers/yaml@v1.1.1/LICENSE",
+      "license": "MIT",
+      "name": "github.com/knadh/koanf/parsers/yaml",
+      "used_by": [
+        "go/pkgcore"
+      ],
+      "version": "v1.1.1"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/knadh/koanf/providers/env/v2@v2.0.1/LICENSE",
+      "license": "MIT",
+      "name": "github.com/knadh/koanf/providers/env/v2",
+      "used_by": [
+        "go/pkgcore"
+      ],
+      "version": "v2.0.1"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/knadh/koanf/providers/file@v1.2.1/LICENSE",
+      "license": "MIT",
+      "name": "github.com/knadh/koanf/providers/file",
+      "used_by": [
+        "go/pkgcore"
+      ],
+      "version": "v1.2.1"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/knadh/koanf/v2@v2.3.6/LICENSE",
+      "license": "MIT",
+      "name": "github.com/knadh/koanf/v2",
+      "used_by": [
+        "go/pkgcore"
+      ],
+      "version": "v2.3.6"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/minio/minio-go/v7@v7.3.0/LICENSE",
+      "license": "Apache-2.0",
+      "name": "github.com/minio/minio-go/v7",
+      "used_by": [
+        "go/pkgcore"
+      ],
+      "version": "v7.3.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/nicksnyder/go-i18n/v2@v2.6.1/LICENSE",
+      "license": "MIT",
+      "name": "github.com/nicksnyder/go-i18n/v2",
+      "used_by": [
+        "go/pkgcore"
+      ],
+      "version": "v2.6.1"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/prometheus/client_golang@v1.23.2/LICENSE",
+      "license": "Apache-2.0",
+      "name": "github.com/prometheus/client_golang",
+      "used_by": [
+        "go/observability"
+      ],
+      "version": "v1.23.2"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/prometheus/client_model@v0.6.2/LICENSE",
+      "license": "Apache-2.0",
+      "name": "github.com/prometheus/client_model",
+      "used_by": [
+        "go/observability"
+      ],
+      "version": "v0.6.2"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/redis/go-redis/v9@v9.14.1/LICENSE",
+      "license": "BSD-2-Clause",
+      "name": "github.com/redis/go-redis/v9",
+      "used_by": [
+        "go/jobs",
+        "go/pkgcore"
+      ],
+      "version": "v9.14.1"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/testcontainers/testcontainers-go@v0.44.0/LICENSE",
+      "license": "MIT",
+      "name": "github.com/testcontainers/testcontainers-go",
+      "used_by": [
+        "go/dbkit",
+        "go/jobs",
+        "go/pkgcore"
+      ],
+      "version": "v0.44.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/testcontainers/testcontainers-go/modules/minio@v0.44.0/LICENSE",
+      "license": "MIT",
+      "name": "github.com/testcontainers/testcontainers-go/modules/minio",
+      "used_by": [
+        "go/pkgcore"
+      ],
+      "version": "v0.44.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/testcontainers/testcontainers-go/modules/postgres@v0.44.0/LICENSE",
+      "license": "MIT",
+      "name": "github.com/testcontainers/testcontainers-go/modules/postgres",
+      "used_by": [
+        "go/dbkit"
+      ],
+      "version": "v0.44.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/testcontainers/testcontainers-go/modules/redis@v0.44.0/LICENSE",
+      "license": "MIT",
+      "name": "github.com/testcontainers/testcontainers-go/modules/redis",
+      "used_by": [
+        "go/jobs",
+        "go/pkgcore"
+      ],
+      "version": "v0.44.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp@v0.69.0/LICENSE",
+      "license": "Apache-2.0",
+      "name": "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp",
+      "used_by": [
+        "go/observability"
+      ],
+      "version": "v0.69.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: go.opentelemetry.io/otel@v1.44.0/LICENSE",
+      "license": "Apache-2.0",
+      "name": "go.opentelemetry.io/otel",
+      "used_by": [
+        "go/jobs",
+        "go/observability"
+      ],
+      "version": "v1.44.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc@v1.44.0/LICENSE",
+      "license": "Apache-2.0",
+      "name": "go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc",
+      "used_by": [
+        "go/observability"
+      ],
+      "version": "v1.44.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc@v1.44.0/LICENSE",
+      "license": "Apache-2.0",
+      "name": "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc",
+      "used_by": [
+        "go/observability"
+      ],
+      "version": "v1.44.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: go.opentelemetry.io/otel/exporters/prometheus@v0.66.0/LICENSE",
+      "license": "Apache-2.0",
+      "name": "go.opentelemetry.io/otel/exporters/prometheus",
+      "used_by": [
+        "go/observability"
+      ],
+      "version": "v0.66.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: go.opentelemetry.io/otel/exporters/stdout/stdoutmetric@v1.44.0/LICENSE",
+      "license": "Apache-2.0",
+      "name": "go.opentelemetry.io/otel/exporters/stdout/stdoutmetric",
+      "used_by": [
+        "go/observability"
+      ],
+      "version": "v1.44.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: go.opentelemetry.io/otel/exporters/stdout/stdouttrace@v1.44.0/LICENSE",
+      "license": "Apache-2.0",
+      "name": "go.opentelemetry.io/otel/exporters/stdout/stdouttrace",
+      "used_by": [
+        "go/observability"
+      ],
+      "version": "v1.44.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: go.opentelemetry.io/otel/metric@v1.44.0/LICENSE",
+      "license": "Apache-2.0",
+      "name": "go.opentelemetry.io/otel/metric",
+      "used_by": [
+        "go/jobs",
+        "go/observability"
+      ],
+      "version": "v1.44.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: go.opentelemetry.io/otel/sdk@v1.44.0/LICENSE",
+      "license": "Apache-2.0",
+      "name": "go.opentelemetry.io/otel/sdk",
+      "used_by": [
+        "go/observability"
+      ],
+      "version": "v1.44.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: go.opentelemetry.io/otel/sdk/metric@v1.44.0/LICENSE",
+      "license": "Apache-2.0",
+      "name": "go.opentelemetry.io/otel/sdk/metric",
+      "used_by": [
+        "go/jobs",
+        "go/observability"
+      ],
+      "version": "v1.44.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: go.opentelemetry.io/otel/trace@v1.44.0/LICENSE",
+      "license": "Apache-2.0",
+      "name": "go.opentelemetry.io/otel/trace",
+      "used_by": [
+        "go/observability"
+      ],
+      "version": "v1.44.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: go.opentelemetry.io/proto/otlp@v1.10.0/LICENSE",
+      "license": "Apache-2.0",
+      "name": "go.opentelemetry.io/proto/otlp",
+      "used_by": [
+        "go/observability"
+      ],
+      "version": "v1.10.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: golang.org/x/text@v0.41.0/LICENSE",
+      "license": "BSD-3-Clause",
+      "name": "golang.org/x/text",
+      "used_by": [
+        "go/pkgcore"
+      ],
+      "version": "v0.41.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: google.golang.org/grpc@v1.81.1/LICENSE",
+      "license": "Apache-2.0",
+      "name": "google.golang.org/grpc",
+      "used_by": [
+        "go/observability"
+      ],
+      "version": "v1.81.1"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: gorm.io/driver/postgres@v1.6.2/License",
+      "license": "MIT",
+      "name": "gorm.io/driver/postgres",
+      "used_by": [
+        "go/dbkit"
+      ],
+      "version": "v1.6.2"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: gorm.io/gorm@v1.31.2/LICENSE",
+      "license": "MIT",
+      "name": "gorm.io/gorm",
+      "used_by": [
+        "go/dbkit",
+        "go/jobs",
+        "go/tenancy"
+      ],
+      "version": "v1.31.2"
+    },
+    {
+      "ecosystem": "npm",
+      "evidence": "web workspace pnpm install (frozen, pnpm-lock.yaml): node_modules/.pnpm/i18next@26.4.1*/node_modules/i18next/package.json license field + LICENSE",
+      "license": "MIT",
+      "name": "i18next",
+      "used_by": [
+        "web/packages/i18n"
+      ],
+      "version": "26.4.1"
+    },
+    {
+      "ecosystem": "npm",
+      "evidence": "web workspace pnpm install (frozen, pnpm-lock.yaml): node_modules/.pnpm/react-i18next@17.0.13*/node_modules/react-i18next/package.json license field + LICENSE",
+      "license": "MIT",
+      "name": "react-i18next",
+      "used_by": [
+        "web/packages/i18n"
+      ],
+      "version": "17.0.13"
+    },
+    {
+      "ecosystem": "npm",
+      "evidence": "web workspace pnpm install (frozen, pnpm-lock.yaml): node_modules/.pnpm/@mui+material@9.4.0*/node_modules/@mui/material/package.json license field + LICENSE",
+      "license": "MIT",
+      "name": "@mui/material",
+      "used_by": [
+        "web/packages/i18n",
+        "web/packages/ui-kit"
+      ],
+      "version": "9.4.0"
+    },
+    {
+      "ecosystem": "npm",
+      "evidence": "web workspace pnpm install (frozen, pnpm-lock.yaml): node_modules/.pnpm/react@19.2.8*/node_modules/react/package.json license field + LICENSE",
+      "license": "MIT",
+      "name": "react",
+      "used_by": [
+        "web/packages/i18n",
+        "web/packages/ui-kit"
+      ],
+      "version": "19.2.8"
+    },
+    {
+      "ecosystem": "npm",
+      "evidence": "web workspace pnpm install (frozen, pnpm-lock.yaml): node_modules/.pnpm/react-dom@19.2.8*/node_modules/react-dom/package.json license field + LICENSE",
+      "license": "MIT",
+      "name": "react-dom",
+      "used_by": [
+        "web/packages/ui-kit"
+      ],
+      "version": "19.2.8"
+    },
+    {
+      "ecosystem": "npm",
+      "evidence": "web workspace pnpm install (frozen, pnpm-lock.yaml): node_modules/.pnpm/@emotion+react@11.14.0*/node_modules/@emotion/react/package.json license field + LICENSE",
+      "license": "MIT",
+      "name": "@emotion/react",
+      "used_by": [
+        "web/packages/ui-kit"
+      ],
+      "version": "11.14.0"
+    },
+    {
+      "ecosystem": "npm",
+      "evidence": "web workspace pnpm install (frozen, pnpm-lock.yaml): node_modules/.pnpm/@emotion+styled@11.14.1*/node_modules/@emotion/styled/package.json license field + LICENSE",
+      "license": "MIT",
+      "name": "@emotion/styled",
+      "used_by": [
+        "web/packages/ui-kit"
+      ],
+      "version": "11.14.1"
+    },
+    {
+      "ecosystem": "npm",
+      "evidence": "web workspace pnpm install (frozen, pnpm-lock.yaml): node_modules/.pnpm/react-hook-form@7.87.0*/node_modules/react-hook-form/package.json license field + LICENSE",
+      "license": "MIT",
+      "name": "react-hook-form",
+      "used_by": [
+        "web/packages/ui-kit"
+      ],
+      "version": "7.87.0"
+    }
+  ],
+  "schema": 1,
+  "scope": "Direct third-party dependencies of the implemented Go modules (every go/*/go.mod direct require -- no '// indirect' marker) and the npm packages under web/packages (package.json dependencies plus peerDependencies -- what a consumer installs because of a package; devDependencies are dev tooling, never shipped, and excluded). Workspace-internal modules (@speed/*, github.com/vislake/speed/go/*) are not external dependencies and carry no license entry. Policies applied here, mirroring docs/internal/20-quality-and-security.md: strong copyleft (GPL/AGPL) is banned; weak copyleft (MPL/LGPL) passes only with an ADR recording the adjudication (none exists today); anything not recognized fails with an adjudication message. Licenses were identified from the license file each release ships (see per-entry evidence); the license_scan.py --check run re-derives the expected dependency set from the tree and fails on any drift: a new or removed direct dependency, a version or used_by change, or an entry whose license violates policy."
+}
