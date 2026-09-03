@@ -1,0 +1,44 @@
+# Generator configuration for authn's OpenAPI fragment (openapi.yaml in this
+# directory, per docs/internal/21-api-contract.md's module-asset convention:
+# every module keeps its spec at <module>/api/openapi.yaml -- this one lives
+# under go/authn/api rather than under examples/reference-app because authn
+# is a real speed module, unlike notes, which stands in for a reference-app
+# business module).
+#
+# The module's generated surface is regenerated with oapi-codegen v2.8.0,
+# pinned at exactly that version in the two commands that must move
+# together: Taskfile.yml's api:gen task command and
+# .github/workflows/api-contract.yml's regeneration step -- both run the
+# same `go run .../cmd/oapi-codegen@v2.8.0 -config oapi-codegen.yaml
+# openapi.yaml` from this directory, passing this file as their config. The
+# generate/output keys below carry no version: they only shape what the two
+# commands produce. The generated file's header records the generator
+# version, so any regeneration with a different tool version shows up as
+# drift in CI's regenerate-then-diff check.
+#
+# generate.std-http-server emits the pure net/http ServerInterface -- plain
+# (w http.ResponseWriter, r *http.Request) method signatures -- which is
+# what handler.go's Handler implements via the generated
+# HandlerFromMux/HandlerWithOptions registration helpers. The strict-server
+# and client targets are deliberately not generated: no request-binding or
+# client code exists to consume them yet (the frontend orval leg is
+# deferred -- see go/authn/AGENTS.md).
+#
+# output-options.name-normalizer: the default normalizer would name a spec
+# property "id" as the Go field Id; ToCamelCaseWithInitialisms applies the
+# standard Go initialism list (ID among them) so generated field names match
+# this repository's naming, exactly as notes' identical config comment
+# explains.
+#
+# Optional spec properties stay optional in Go as pointers (the generator
+# default): handler.go sets every pointer field it actually has a value
+# for, so an absent field (a tenant switch's refresh_token, an unenrolled
+# user's identities) is genuinely absent on the wire rather than present as
+# a zero value.
+package: api
+generate:
+  models: true
+  std-http-server: true
+output-options:
+  name-normalizer: ToCamelCaseWithInitialisms
+output: authn-server.gen.go

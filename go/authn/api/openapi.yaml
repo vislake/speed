@@ -1,0 +1,828 @@
+openapi: 3.0.3
+info:
+  title: authn
+  description: >-
+    authn's HTTP surface: registration, password and phone-SMS sign-in,
+    token refresh and sign-out, social and enterprise single sign-on,
+    two-factor enrollment and step-up, and the self-service
+    device/session/login-history endpoints (docs/internal/05-identity-and-access.md).
+    This fragment follows the operationId (<module>_<action><Resource>) and
+    schema-name (<Module><Type>) conventions from
+    .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
+    regenerates authn-server.gen.go (in this directory) from this file, with
+    oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
+    .github/workflows/api-contract.yml.
+
+    There is deliberately no tenant_id field anywhere on any request in this
+    file (root CLAUDE.md's multi-tenant isolation rule): where a request
+    NAMES a tenant at all (login, phone-SMS login, social callback, tenant
+    switch) it is a REQUEST for that tenant's first access token, never a
+    grant -- go/authn/service.go's resolveTenant re-verifies membership
+    through the injected MembershipReader every time, and the field is
+    always optional, empty meaning "the caller's first tenant".
+
+    Every protected operation below (tagged "authn (authenticated)" in its
+    summary) requires the Principal go/authn/middleware.go's Middleware
+    puts in the request context; go/authn/handler.go wraps each one in
+    RequireAuthenticated, which answers a missing Principal with
+    authn.authentication_required before the operation body ever runs, so
+    that refusal is not spelled out again on every single operation below.
+  version: 0.0.0
+paths:
+  /api/v1/authn/register:
+    post:
+      operationId: authn_register
+      tags: [authn]
+      summary: Register a new account.
+      description: >-
+        At least one of email and phone must be present. The response is
+        the created account with no password field, ever.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthnRegisterRequest'
+      responses:
+        '201':
+          description: The account was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnUser'
+        '400':
+          description: >-
+            Neither email nor phone was supplied, or the password failed
+            policy (authn.identifier_required, authn.password_too_short,
+            authn.password_too_long, authn.password_too_weak).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
+        '409':
+          description: >-
+            The email or phone already belongs to an account
+            (authn.email_already_registered, authn.phone_already_registered).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
+        '429':
+          description: The per-IP registration rate limit was exceeded (authn.rate_limited).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
+  /api/v1/authn/login/password:
+    post:
+      operationId: authn_loginWithPassword
+      tags: [authn]
+      summary: Sign in with an email or phone identifier and a password.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthnLoginWithPasswordRequest'
+      responses:
+        '200':
+          description: A new session's token pair.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnTokenPair'
+        '401':
+          description: >-
+            The identifier or password did not match any account
+            (authn.invalid_credentials -- one answer for every failure
+            reason, by design; see go/authn/errors.go).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
+        '403':
+          description: >-
+            The account authenticated but is not an active member of the
+            requested tenant (authn.tenant_membership_required).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
+        '429':
+          description: >-
+            The account or IP is rate-limited or locked out
+            (authn.rate_limited, authn.account_locked). The response
+            carries a Retry-After header.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
+  /api/v1/authn/login/sms/request:
+    post:
+      operationId: authn_requestSMSCode
+      tags: [authn]
+      summary: Request a one-time SMS sign-in code for a phone number.
+      description: >-
+        Always answers 202 whether or not the phone number belongs to an
+        account -- go/authn/verification.go's RequestSMSCode never discloses
+        registration status. There is nothing here for a legitimate caller
+        to branch on either way.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthnRequestSMSCodeRequest'
+      responses:
+        '202':
+          description: The request was accepted (a code was sent, or silently was not).
+        '429':
+          description: >-
+            The phone number or IP is rate-limited
+            (authn.rate_limited). The response carries a Retry-After
+            header.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
+  /api/v1/authn/login/sms:
+    post:
+      operationId: authn_loginWithSMSCode
+      tags: [authn]
+      summary: Sign in with a phone number and the SMS code sent to it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthnLoginWithSMSCodeRequest'
+      responses:
+        '200':
+          description: A new session's token pair.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnTokenPair'
+        '401':
+          description: >-
+            The code was missing, wrong, expired, locked or already used
+            (authn.verification_code_invalid -- one answer for every
+            reason).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
+        '429':
+          description: The phone number or IP is rate-limited (authn.rate_limited).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
+  /api/v1/authn/token/refresh:
+    post:
+      operationId: authn_refreshToken
+      tags: [authn]
+      summary: Rotate a refresh token for a new access token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthnRefreshTokenRequest'
+      responses:
+        '200':
+          description: A new access token, and a new refresh token replacing the presented one.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnTokenPair'
+        '401':
+          description: >-
+            The refresh token is unknown, expired, or was already
+            consumed (authn.refresh_token_invalid,
+            authn.refresh_token_reused -- the latter revokes the whole
+            token family and the session as a side effect).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
+  /api/v1/authn/logout:
+    post:
+      operationId: authn_logout
+      tags: [authn (authenticated)]
+      summary: Sign out the calling session.
+      description: >-
+        Revokes the session the caller's own access token belongs to. Every
+        other device's session is untouched -- see revoke-others for that.
+      responses:
+        '204':
+          description: The session was revoked (or already was).
+  /api/v1/authn/social/{provider}/authorize:
+    get:
+      operationId: authn_socialAuthorize
+      tags: [authn]
+      summary: Build the authorization URL for a social sign-in channel.
+      description: >-
+        Signed in and calling this with a valid Principal turns the flow
+        into BINDING a new identity to the caller's own account instead of
+        signing in -- see the callback operation's response.
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+          example: google
+        - name: redirect_uri
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The URL to send the browser to.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnSocialAuthorizeResponse'
+        '400':
+          description: >-
+            The channel is unknown, or the redirect URI is not on the
+            deployment's allowlist (authn.provider_unknown,
+            authn.redirect_uri_not_allowed).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
+  /api/v1/authn/social/{provider}/callback:
+    post:
+      operationId: authn_socialCallback
+      tags: [authn]
+      summary: Complete a social sign-in or account-binding authorization flow.
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthnSocialCallbackRequest'
+      responses:
+        '200':
+          description: >-
+            The completed flow: a new session (tokens set) for a sign-in,
+            or the bound identity alone (tokens unset) for an
+            already-signed-in caller binding a new channel.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnSocialLoginResponse'
+        '401':
+          description: >-
+            The state was invalid, expired or already used, or the
+            provider refused the code (authn.oauth_state_invalid,
+            authn.social_exchange_failed).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
+        '409':
+          description: >-
+            The verified email belongs to an existing account this
+            channel is not trusted to auto-link to
+            (authn.identity_requires_binding), or the external identity
+            is already bound to a different account
+            (authn.identity_already_bound).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
+  /api/v1/authn/identities:
+    get:
+      operationId: authn_listIdentities
+      tags: [authn (authenticated)]
+      summary: List the caller's own bound external identities.
+      responses:
+        '200':
+          description: The caller's bound identities.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnListIdentitiesResponse'
+  /api/v1/authn/identities/{identityId}:
+    delete:
+      operationId: authn_unbindIdentity
+      tags: [authn (authenticated)]
+      summary: Unbind one of the caller's own external identities.
+      parameters:
+        - name: identityId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: The identity was unbound.
+        '404':
+          description: >-
+            No such identity, or it does not belong to the caller
+            (authn.identity_not_found -- the same answer either way, so
+            the endpoint never confirms another account's binding).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
+        '409':
+          description: >-
+            Unbinding would leave the account with no way to sign in at
+            all (authn.last_login_method).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
+  /api/v1/authn/mfa/totp/enroll:
+    post:
+      operationId: authn_enrollTOTP
+      tags: [authn (authenticated)]
+      summary: Start TOTP enrollment for the caller's account.
+      description: >-
+        Replaces any existing TOTP factor (pending or active) with a fresh
+        pending one, which must be confirmed with authn_confirmTOTP before
+        it can satisfy a step-up.
+      responses:
+        '200':
+          description: The shared secret and its otpauth:// provisioning URI.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnEnrollTOTPResponse'
+  /api/v1/authn/mfa/totp/confirm:
+    post:
+      operationId: authn_confirmTOTP
+      tags: [authn (authenticated)]
+      summary: Confirm a pending TOTP enrollment.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthnConfirmTOTPRequest'
+      responses:
+        '200':
+          description: >-
+            The factor is now active. The response carries ten recovery
+            codes in PLAINTEXT -- the only time they are ever available in
+            that form; the caller must show them to the user immediately.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnRecoveryCodesResponse'
+        '400':
+          description: >-
+            No pending enrollment exists, one is already active, or the
+            code did not validate (authn.mfa_not_enrolled,
+            authn.mfa_already_enrolled, authn.mfa_invalid_code).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
+  /api/v1/authn/mfa/recovery-codes/regenerate:
+    post:
+      operationId: authn_regenerateRecoveryCodes
+      tags: [authn (authenticated)]
+      summary: Discard the caller's recovery codes and issue a fresh batch.
+      description: Requires an ACTIVE TOTP factor; every previous code stops working at once.
+      responses:
+        '200':
+          description: The new recovery codes, in plaintext, shown once.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnRecoveryCodesResponse'
+        '400':
+          description: No active TOTP factor exists (authn.mfa_not_enrolled).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
+  /api/v1/authn/mfa/step-up:
+    post:
+      operationId: authn_verifyStepUp
+      tags: [authn (authenticated)]
+      summary: Re-prove a second factor for the caller's CURRENT session.
+      description: >-
+        Mints a fresh access token whose amr carries the factor just
+        verified, without otherwise changing the session (the refresh
+        token is untouched). The elevation lives only in that access
+        token's own lifetime -- a later natural refresh reverts to the
+        session's original amr.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthnVerifyStepUpRequest'
+      responses:
+        '200':
+          description: A freshly minted access token carrying the enriched amr.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnTokenPair'
+        '401':
+          description: >-
+            The code was wrong, replayed, or an unknown or already-used
+            recovery code (authn.mfa_invalid_code).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
+        '429':
+          description: The step-up rate limit was exceeded (authn.rate_limited).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
+  /api/v1/authn/tenant/switch:
+    post:
+      operationId: authn_switchTenant
+      tags: [authn (authenticated)]
+      summary: Reissue an access token for a different tenant, reusing the session.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthnSwitchTenantRequest'
+      responses:
+        '200':
+          description: A freshly minted access token for the target tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnTokenPair'
+        '403':
+          description: >-
+            The caller is not an active member of the target tenant
+            (authn.tenant_membership_required).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
+  /api/v1/authn/me:
+    get:
+      operationId: authn_getMe
+      tags: [authn (authenticated)]
+      summary: Return the caller's own authenticated identity.
+      responses:
+        '200':
+          description: The calling Principal.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnPrincipal'
+  /api/v1/authn/sessions:
+    get:
+      operationId: authn_listSessions
+      tags: [authn (authenticated)]
+      summary: List every one of the caller's own sessions (their device list).
+      description: >-
+        Includes revoked sessions -- Status tells them apart -- so the
+        owner can see which device they signed out and when. is_current
+        marks the session the request's own access token belongs to.
+      responses:
+        '200':
+          description: The caller's sessions, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnListSessionsResponse'
+  /api/v1/authn/sessions/{sessionId}:
+    delete:
+      operationId: authn_revokeSession
+      tags: [authn (authenticated)]
+      summary: Sign out one of the caller's own devices.
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: The session was revoked.
+        '404':
+          description: >-
+            No such session, or it does not belong to the caller
+            (authn.session_not_found -- the same answer either way, so the
+            endpoint never confirms another account's session id).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnError'
+  /api/v1/authn/sessions/revoke-others:
+    post:
+      operationId: authn_revokeOtherSessions
+      tags: [authn (authenticated)]
+      summary: Sign out every one of the caller's sessions except the current one.
+      responses:
+        '200':
+          description: How many sessions were revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnRevokeOtherSessionsResponse'
+  /api/v1/authn/login-history:
+    get:
+      operationId: authn_listLoginHistory
+      tags: [authn (authenticated)]
+      summary: List the caller's own recent login attempts, successful or not.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+      responses:
+        '200':
+          description: The caller's login history, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthnListLoginHistoryResponse'
+components:
+  schemas:
+    AuthnRegisterRequest:
+      type: object
+      required: [password]
+      properties:
+        email:
+          type: string
+        phone:
+          type: string
+        password:
+          type: string
+        display_name:
+          type: string
+        locale:
+          type: string
+    AuthnUser:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        display_name:
+          type: string
+        locale:
+          type: string
+        email_verified:
+          type: boolean
+        phone_verified:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    AuthnLoginWithPasswordRequest:
+      type: object
+      required: [identifier, password]
+      properties:
+        identifier:
+          type: string
+          description: An email address or phone number.
+        password:
+          type: string
+        tenant_id:
+          type: string
+          description: Requests this tenant's first access token; empty means the caller's first tenant. A request, never a grant.
+        device:
+          type: string
+    AuthnRequestSMSCodeRequest:
+      type: object
+      required: [phone]
+      properties:
+        phone:
+          type: string
+    AuthnLoginWithSMSCodeRequest:
+      type: object
+      required: [phone, code]
+      properties:
+        phone:
+          type: string
+        code:
+          type: string
+        tenant_id:
+          type: string
+        device:
+          type: string
+    AuthnRefreshTokenRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+    AuthnTokenPair:
+      type: object
+      properties:
+        access_token:
+          type: string
+        access_expires_at:
+          type: string
+          format: date-time
+        refresh_token:
+          type: string
+          description: Absent when this response did not mint a new refresh token (a tenant switch or a step-up, both of which reuse the caller's existing one).
+        refresh_expires_at:
+          type: string
+          format: date-time
+        principal:
+          $ref: '#/components/schemas/AuthnPrincipal'
+    AuthnPrincipal:
+      type: object
+      properties:
+        user_id:
+          type: string
+        tenant_id:
+          type: string
+        session_id:
+          type: string
+        email:
+          type: string
+        amr:
+          type: array
+          items:
+            type: string
+    AuthnSocialAuthorizeResponse:
+      type: object
+      properties:
+        authorize_url:
+          type: string
+    AuthnSocialCallbackRequest:
+      type: object
+      required: [code, state]
+      properties:
+        code:
+          type: string
+        state:
+          type: string
+        tenant_id:
+          type: string
+    AuthnSocialLoginResponse:
+      type: object
+      properties:
+        user:
+          $ref: '#/components/schemas/AuthnUser'
+        identity:
+          $ref: '#/components/schemas/AuthnIdentity'
+        tokens:
+          $ref: '#/components/schemas/AuthnTokenPair'
+        created:
+          type: boolean
+        bound:
+          type: boolean
+        auto_linked:
+          type: boolean
+    AuthnIdentity:
+      type: object
+      properties:
+        id:
+          type: string
+        provider:
+          type: string
+        email:
+          type: string
+        display_name:
+          type: string
+        avatar_url:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_login_at:
+          type: string
+          format: date-time
+    AuthnListIdentitiesResponse:
+      type: object
+      properties:
+        identities:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuthnIdentity'
+    AuthnEnrollTOTPResponse:
+      type: object
+      properties:
+        secret:
+          type: string
+        provisioning_uri:
+          type: string
+    AuthnConfirmTOTPRequest:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+    AuthnRecoveryCodesResponse:
+      type: object
+      properties:
+        recovery_codes:
+          type: array
+          items:
+            type: string
+    AuthnVerifyStepUpRequest:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+    AuthnSwitchTenantRequest:
+      type: object
+      required: [tenant_id]
+      properties:
+        tenant_id:
+          type: string
+    AuthnSession:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+        device:
+          type: string
+        user_agent:
+          type: string
+        ip:
+          type: string
+        amr:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+        is_current:
+          type: boolean
+    AuthnListSessionsResponse:
+      type: object
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuthnSession'
+    AuthnRevokeOtherSessionsResponse:
+      type: object
+      properties:
+        revoked_count:
+          type: integer
+    AuthnLoginAttempt:
+      type: object
+      properties:
+        id:
+          type: string
+        method:
+          type: string
+        result:
+          type: string
+        failure_reason:
+          type: string
+        ip:
+          type: string
+        user_agent:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    AuthnListLoginHistoryResponse:
+      type: object
+      properties:
+        attempts:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuthnLoginAttempt'
+    AuthnError:
+      type: object
+      description: >-
+        The structured {code, params} error envelope every speed API
+        returns instead of localized text (backend coding standard §6.2) --
+        a client resolves code through its own i18n catalog, populated
+        from this module's Locales() resources for the codes documented on
+        each operation above.
+      properties:
+        code:
+          type: string
+          example: authn.invalid_credentials
+        params:
+          type: object
+          additionalProperties: true

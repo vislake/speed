@@ -1,6 +1,7 @@
 package authn
 
 import (
+	"bytes"
 	"errors"
 	"io/fs"
 	"slices"
@@ -50,8 +51,12 @@ func TestModule_Identity(t *testing.T) {
 	if got := module.DependsOn(); len(got) != 0 {
 		t.Errorf("DependsOn() = %v, want none", got)
 	}
-	if got := module.OpenAPISpec(); got != nil {
-		t.Errorf("OpenAPISpec() = %q, want nil until the spec fragment and its generated interface land together", got)
+	spec := module.OpenAPISpec()
+	if len(spec) == 0 {
+		t.Fatal("OpenAPISpec() is empty, want the embedded api/openapi.yaml fragment")
+	}
+	if !bytes.Contains(spec, []byte("/api/v1/authn/")) {
+		t.Errorf("OpenAPISpec() does not mention the %q path prefix apiPath mounts at", "/api/v1/authn/")
 	}
 }
 
