@@ -250,6 +250,15 @@ var (
 	// ErrStepUpRequired is returned by RequireStepUp when the calling
 	// Principal's access token carries no recent second-factor proof.
 	ErrStepUpRequired = apperr.Forbidden("authn.step_up_required")
+
+	// ErrSessionNotFound is returned by the session/device-management
+	// endpoints (history.go) for a session id that either does not exist
+	// or does not belong to the calling user. Those two cases are
+	// deliberately the same answer, for the same no-existence-disclosure
+	// reason ErrIdentityNotFound is: a caller must never be able to learn
+	// that a session id belongs to somebody else by getting a different
+	// error for "not found" than for "not yours".
+	ErrSessionNotFound = apperr.NotFound("authn.session_not_found")
 )
 
 // errorCodes lists every code this module can return, in catalog order. It
@@ -296,4 +305,5 @@ var errorCodes = []string{
 	ErrMFAAlreadyEnrolled.Code,
 	ErrMFAInvalidCode.Code,
 	ErrStepUpRequired.Code,
+	ErrSessionNotFound.Code,
 }

@@ -52,4 +52,5 @@
 "authn.mfa_already_enrolled" = "Two-factor authentication is already enabled."
 "authn.mfa_invalid_code" = "That code is incorrect."
 "authn.step_up_required" = "This action requires verifying two-factor authentication again."
+"authn.session_not_found" = "No such session."
 "authn.sms.verification_code" = "Your verification code is {{.code}}. It is valid for {{.minutes}} minutes. Do not share it with anyone."

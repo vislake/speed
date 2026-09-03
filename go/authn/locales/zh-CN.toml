@@ -50,4 +50,5 @@
 "authn.mfa_already_enrolled" = "两步验证已经启用。"
 "authn.mfa_invalid_code" = "验证码错误。"
 "authn.step_up_required" = "该操作需要再次完成两步验证。"
+"authn.session_not_found" = "会话不存在。"
 "authn.sms.verification_code" = "您的验证码是 {{.code}}，{{.minutes}} 分钟内有效，请勿告知他人。"
