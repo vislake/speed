@@ -128,6 +128,38 @@ func ExampleNewKeySet() {
 	// a token signed before the rotation still verifies for user-1 in tenant-a
 }
 
+// ExampleNewProviderRegistry wires the social channels a deployment offers
+// and shows how a channel is looked up by its Provider* name -- the same
+// lookup Service.SocialAuthorizeURL performs when a caller names a channel.
+//
+// Each provider constructor also takes ProviderOption values (a base URL
+// override, an injected *http.Client), which is what lets every provider's
+// own tests run against an httptest server with no network call; production
+// code passes none and gets the channel's real endpoints and a
+// safehttp-guarded client.
+func ExampleNewProviderRegistry() {
+	registry, err := authn.NewProviderRegistry(
+		authn.NewGitHubProvider("github-client-id", "github-client-secret"),
+		authn.NewGoogleProvider("google-client-id", "google-client-secret"),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println("wired channels:", registry.Names())
+	if _, ok := registry.Get(authn.ProviderGoogle); ok {
+		fmt.Println("google is wired")
+	}
+	if _, ok := registry.Get(authn.ProviderWeChat); !ok {
+		fmt.Println("wechat is not wired")
+	}
+
+	// Output:
+	// wired channels: [github google]
+	// google is wired
+	// wechat is not wired
+}
+
 // ExampleNewPrincipalResolver wires the middleware chain a host installs.
 //
 // authn.Middleware runs FIRST and verifies the token once; tenancy.Middleware
@@ -236,7 +268,7 @@ func ExampleNewModule() {
 
 	// Output:
 	// module: authn
-	// published events: 6
+	// published events: 8
 	// service wired: true
 }
 

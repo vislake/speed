@@ -8,9 +8,10 @@ file is the discipline that ships with the module to consuming projects.
 > **Scope note.** This file currently documents what has landed: identity models
 > and dual-dialect migrations, password authentication, access-token issue and
 > verification, refresh rotation with replay detection, sessions and tenant
-> switching, the middleware chain, and module registration. Enterprise SSO, the
-> five social providers, SMS, TOTP and recovery codes, rate limiting and the HTTP
-> surface land in later blocks of the same round and extend this file rather than
+> switching, the middleware chain, module registration, OIDC federation (an
+> enterprise relying party plus five social channels) and account-binding
+> management. SMS, TOTP and recovery codes, rate limiting and the HTTP surface
+> land in later blocks of the same round and extend this file rather than
 > replacing it. Judge what exists by the tree, not by this note.
 
 ---
@@ -23,7 +24,9 @@ file is the discipline that ships with the module to consuming projects.
 | Password storage and verification (argon2id) | Memberships, the organization tree (`org`) |
 | Access-token issue and verification (Ed25519 JWT) | Sending notifications (`notification` subscribes to this module's events) |
 | Refresh rotation, replay detection, session revocation | Authorization decisions of any kind |
-| Tenant switching within one session | |
+| Tenant switching within one session | Memberships, the organization tree (`org`) |
+| Social login (Google, GitHub, WeChat, DingTalk, Feishu) and enterprise OIDC single sign-on | SAML (deferred, optional subpackage), WebAuthn/passkeys (deferred, post-v1.0) |
+| Account-binding management (list, bind, unbind) | QQ / Weibo / Alipay and other phase-two providers |
 
 **`rbac` must never import this package.** Authorization takes a tenant and a
 user, assembled by whoever authenticated. The dependency runs one way, and an
@@ -69,6 +72,20 @@ import in the other direction is a merge blocker rather than a style note.
 | `NewPrincipalResolver()` | Adapts the verified `Principal` to `tenancy.Resolver`. |
 | `PrincipalFromContext`, `WithPrincipal` | Context access. |
 | `RevocationChecker`, `WithRevocationChecker` | The immediate-revocation enforcement point. |
+
+### Federation
+
+| Symbol | Purpose |
+|---|---|
+| `SocialProvider`, `ExternalIdentity` | The channel interface and what a channel reports about the person who authorized. Every field of `ExternalIdentity` is untrusted third-party input. |
+| `NewGoogleProvider`, `NewGitHubProvider`, `NewWeChatProvider`, `NewDingTalkProvider`, `NewFeishuProvider` | The five shipped channels. Each takes injectable base URLs and an injectable `*http.Client`, defaulting to the channel's production hosts and a `safehttp`-guarded client. |
+| `WithSocialProviders`, `WithTrustedProviders`, `WithRedirectAllowlist`, `WithOAuthStateTTL`, `WithFederationHTTPClient` | `NewService`/`NewModule` options wiring the channels a deployment offers, which of them may auto-link, where a flow may return to, and (enterprise SSO only) the HTTP client the relying party uses. |
+| `Service.SocialAuthorizeURL`, `Service.SocialCallback` | The social sign-in and account-binding flow. |
+| `Service.Identities`, `Service.ListIdentities`, `Service.UnbindIdentity` | Binding management. |
+| `Service.SSO()` `*SSOService` | The enterprise relying party: `SaveConfig`, `AuthorizeURL`, `Callback`, `Configs()`. |
+| `TenantSSOConfig`, `SSOConfigRepository` | The one tenant-domain table this module owns. |
+| `RedirectAllowlist`, `NewRedirectAllowlist` | Exact-match redirect URI validation. |
+| `PermissionSSOManage` | The one permission this module declares, for writing a tenant's SSO configuration. |
 
 ---
 
@@ -195,6 +212,90 @@ No permission claim either: a permission list inside a token freezes for the
 token's whole lifetime, so a permission revoked at 10:00 would keep working until
 it expired.
 
+### Auto-link an existing account only when verified AND trusted
+
+`resolveSocialAccount` (social channels) and `SSOService.resolveAccount`
+(enterprise SSO) both implement the same rule from
+`docs/internal/05-identity-and-access.md`: an unrecognised external identity
+whose email address already belongs to an account here may be linked to that
+account automatically **only when the provider asserts the address is
+verified AND the channel is on the platform's trusted-provider list**
+(`ConfigKeyTrustedProviders`, default empty). Anything else — verified but
+untrusted, trusted but unverified — is refused with
+`ErrIdentityRequiresBinding`, never linked. This is the classic social-login
+account-takeover: a provider that will hand out an account carrying somebody
+else's address, verified or not, hands out that person's account here too if
+this module trusts it blindly. The refused path's answer to the caller is
+"sign in the way you already can, then bind this identity from your settings
+page" — never a hint about which condition failed.
+
+Enterprise SSO adds a **third** condition on top: the existing account must
+already be an **active member of the tenant that configured the identity
+provider** (`MembershipReader.ActiveMembership`). Without it, a tenant
+administrator — who configures the issuer and the allowed email domains, and
+may run the identity provider themselves — could allowlist a public domain
+and sign straight into any platform user's account at that domain. With it,
+the worst they can reach is an account already inside their own tenant, which
+they already administer.
+
+A channel that reports **no email at all** (WeChat) can never satisfy either
+rule's first condition, so it never auto-links. It is not an error path: with
+no address to match against, the safe and correct behaviour is to provision a
+brand new account, which is what happens.
+
+### The WeChat unionid trap
+
+WeChat's OAuth2 answers with both an `openid` (scoped to the calling
+application) and a `unionid` (stable across every application under one WeChat
+Open Platform account). `WeChatProvider.Exchange` returns `unionid` as
+`ExternalIdentity.ExternalID` and **refuses** with
+`ErrSocialIdentityIncomplete` if the response carries no `unionid` at all — it
+never falls back to `openid`. Keying on `openid` would silently split one
+person into a different `user_identities` row per application that calls this
+code, which is invisible until someone asks "why did I have to bind WeChat
+twice".
+
+### Unbinding cannot leave an account with no way in
+
+`UnbindIdentity` refuses (`ErrLastLoginMethod`) when removing the identity
+would leave `LoginMethodCount` at zero. There is no self-service recovery from
+a locked account with no password, no verified phone and no remaining
+identity, so the operation is refused rather than confirmed. A password
+counts once; a **verified** phone counts once (an unverified one enables no
+sign-in method, so it does not count); every bound identity counts once. An
+identity that belongs to someone else answers exactly like one that does not
+exist (`ErrIdentityNotFound`) — the endpoint never confirms that a binding is
+real.
+
+### `state` is single-use, tenant-scoped for SSO, and checked before the code is exchanged
+
+`StateStore.Consume` uses `KVStore.CompareAndSwap` rather than a read followed
+by a delete, so two callbacks racing on the same `state` produce exactly one
+winner rather than two credited sign-ins. A social flow's `state` is bound to
+`(provider, sessionBinding)`; an enterprise flow's channel name is
+`"oidc:" + tenantID` (`SSOChannelName`), so a `state` issued for one tenant's
+identity provider cannot be redeemed against a different tenant's callback —
+the tenant is folded into the channel identity `Consume` checks, not passed as
+a trusted parameter. `SocialCallback` and `SSOService.Callback` both consume
+the state **before** exchanging the code, so a forged or replayed callback
+never reaches the third party at all.
+
+### `tenant_sso_configs` has no database-level "one row per tenant" constraint
+
+`docs/internal/05` specifies exactly one SSO configuration per tenant, and
+`SaveConfig` enforces it in the normal path by reading `Current` first and
+updating the existing row rather than creating a second one. There is
+deliberately **no** `UNIQUE` index on `tenant_id` alone backing that up: such
+a constraint would reject the second of the two rows per tenant that the
+**mandatory** `tenancytest.AssertIsolated` suite creates to prove `List`
+actually filters by tenant (a single-row list cannot distinguish "correctly
+scoped" from "returned everything"). `Current` resolves the residual — a rare
+race between two concurrent first-time `SaveConfig` calls could momentarily
+leave two rows — deterministically, by most-recently-updated row with ID as
+the tie-break, so every reader agrees and the next `SaveConfig` collapses back
+to one row by updating whichever row `Current` returned. See
+`TenantSSOConfig.TenantID` and `SSOConfigRepository.Current` in `oidc.go`.
+
 ### Cost parameters are bootstrap config; policy is dynamic config
 
 `PasswordParams` (argon2id memory, iterations, parallelism) depends on the
@@ -226,6 +327,16 @@ Concurrency is not optional to test here. The single-winner property of
 `RefreshTokenRepository.Consume` is what replay detection rests on, and it is
 exercised under `-race` by twenty goroutines racing one token.
 
+Every federation test runs offline. `testutil.OIDCServer` is a complete local
+identity provider — discovery document, JWKS, authorization and token
+endpoints, backed by a freshly generated RSA key — so the Google channel and
+the enterprise relying party are proven against a real signed, real-verified
+ID token with no network call. The five social channels each get injectable
+base URLs and an injectable `*http.Client`, pointed at `httptest.NewServer` in
+every test; `internal/safehttp/safehttp_test.go` separately proves the
+production default client actually refuses loopback and every other
+non-public range, including under a DNS-rebinding resolver stub.
+
 ---
 
 ## Known limitations
@@ -236,4 +347,5 @@ exercised under `-race` by twenty goroutines racing one token.
 | `sessions.ip_region` and `login_attempts.ip_region` ship empty. | Resolving an IP to a region needs a local GeoIP database whose licence has to clear the licence scanner first (`docs/internal/05-identity-and-access.md` says so explicitly). The columns exist now so no later table migration is needed. |
 | The declared dynamic-config items are not yet read back at runtime; the values are injected through options with the same defaults. | The schema is declared, which is what a module owes the config module. The read-through binding lands with the block that needs a live value. |
 | `Module.OpenAPISpec()` returns nil. | The HTTP surface is spec-first: the fragment appears together with the generated server interface and the handler that implements it. Returning a fragment before those exist would advertise endpoints nothing serves. |
-| No permissions are declared. | Every endpoint this module will serve is self-service. The tenant-scoped SSO administration that does need one lands with the federation work. |
+| A brand-new account provisioned by an unmatched, trusted external identity (social or enterprise SSO) cannot sign in until something makes it an active member of the requested tenant. | Membership is `org`'s data and this module fails closed on it by design (see "Fail closed on membership"). The account and its identity are provisioned regardless — only the session is refused — so a later membership grant (or an `org`-round subscriber reacting to `authn.user.created`) lets the same sign-in succeed with no further action here. |
+| Real SMS carrier adapters (Aliyun, Tencent Cloud, Twilio), QQ/Weibo/Alipay social providers, SAML, and WebAuthn/passkeys are not implemented. | Each needs credentials, a live account, or is explicitly deferred by `docs/internal/05-identity-and-access.md`. See this round's plan for the owning milestone of each. |
