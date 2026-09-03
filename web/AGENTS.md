@@ -67,19 +67,22 @@ One flat config at `web/eslint.config.mjs` serves the whole workspace
 carries the workspace's own rules behind the `speed/` plugin namespace:
 `speed/no-literal-text` (implementation and rule tests in
 `web/eslint-rules/`) errors on user-facing text written inline in
-package `src` -- package tests and `test-utils/` are exempt by config,
-because fixture strings are data. The rule's unit tests run from the
-workspace root, not from a package directory (the rule lives outside
-every package, so no per-package suite picks them up): locally via
-`pnpm exec vitest run eslint-rules/no-literal-text.test.mjs` from
-`web/`, and in CI by pr-check's `repo-checks` job, which runs that same
-command once per PR.
+package `src`, and `speed/no-direct-http` errors on hand-written HTTP
+(fetch/XMLHttpRequest/axios/node-fetch) anywhere but `@speed/api-client`,
+the rule's single config-level whitelist -- every request must route
+through the api-client request function (see CLAUDE.md's API contract
+section). Package tests and `test-utils/` are exempt by config for
+both rules, because fixture strings and scripted stand-ins are data.
+The rules' unit tests run from the workspace root, not from a package
+directory (the rules live outside every package, so no per-package
+suite picks them up): locally via
+`pnpm exec vitest run eslint-rules/no-literal-text.test.mjs eslint-rules/no-direct-http.test.mjs`
+from `web/`, and in CI by pr-check's `repo-checks` job, which runs that
+same command once per PR.
 
 Still deferred, tracked in the CI workflow headers with their owning
-rounds -- do not half-enable either: the generated-client-only API rule
-(no hand-written backend calls) needs the generated `api-sdk` consumer
-surface and lands with api-client/api-sdk; the `react-hooks` plugin
-awaits a stateful-components round.
+rounds -- do not half-enable: the `react-hooks` plugin awaits a
+stateful-components round.
 
 ## CJK scanner exemption
 
