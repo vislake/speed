@@ -1,18 +1,25 @@
-// Package audit is the M1 audit-infrastructure round's persistence half:
-// the AuditEvent model, its dual-dialect migrations, and Repository, the
-// append-only accessor that stores and reads it back.
+// Package audit is the M1 audit-infrastructure round's persistence and
+// declarative-collection home: the AuditEvent model, its dual-dialect
+// migrations, Repository (the append-only accessor that stores and reads
+// events back), Emit (the explicit collection mechanism), and Module (the
+// pkgcore.Module persister that turns published events into stored rows).
+// The complementary automatic-collection mechanism -- the GORM
+// write-capture plugin -- lives one level up, in go/dbkit itself
+// (audit_capture.go), since it has to be wired into dbkit.Open.
 //
 // Scope of this package, as of this milestone (docs/internal/15-roadmap.md's
 // M1 audit-infrastructure item; docs/internal/10-compliance-and-audit.md's
 // full design):
 //
 //   - Shipped here: AuditEvent (model.go), its migrations (migrations/),
-//     and Repository's Insert/Get/ListByTenant (repository.go).
-//   - Shipped elsewhere in this same round, once landed: automatic
-//     write-capture and explicit Emit (the collection mechanisms), and the
-//     pkgcore.Module persister that subscribes to their published events
-//     and calls Repository.Insert -- both layer directly on the types this
-//     package exports and add no new table of their own.
+//     Repository's Insert/Get/ListByTenant (repository.go), the explicit
+//     collection mechanism Emit (emit.go), and the pkgcore.Module
+//     persister (module.go) that subscribes to both collection
+//     mechanisms' events -- dbkit's own automatic GORM write-capture
+//     plugin (go/dbkit/audit_capture.go, one level up) and this package's
+//     own Emit -- plus tenancy's already-shipped
+//     EventSystemContextEntered, normalizing each into an AuditEvent and
+//     calling Repository.Insert.
 //   - Deferred to M4 (go/compliance, per docs/internal/10-compliance-and-
 //     audit.md's own delivery-phase correction): immutability enforcement
 //     at the database-role level, the optional hash chain,

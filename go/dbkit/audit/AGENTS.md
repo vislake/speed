@@ -1,6 +1,6 @@
 # dbkit/audit
 
-`audit` is the M1 audit-infrastructure round's persistence half (docs/internal/10-compliance-and-audit.md; docs/internal/15-roadmap.md's M1 row): the `AuditEvent` model, its dual-dialect migrations, and `Repository`, the append-only accessor that stores and reads it back.
+`audit` is the M1 audit-infrastructure round's persistence and declarative-collection home (docs/internal/10-compliance-and-audit.md; docs/internal/15-roadmap.md's M1 row): the `AuditEvent` model, its dual-dialect migrations, `Repository` (the append-only accessor that stores and reads events back), `Emit` (doc 10's declarative-secondary collection mechanism), and `Module`, the `pkgcore.Module` persister that subscribes to every collection mechanism's published events and calls `Repository.Insert`. The complementary automatic-collection mechanism — the GORM write-capture plugin — lives one level up, in `go/dbkit` itself (`audit_capture.go`), since it has to be wired into `dbkit.Open`; see `go/dbkit/AGENTS.md`'s own "Audit trail persistence" section for that half.
 
 ## Module home
 
@@ -38,15 +38,37 @@ An audit event is neither purely tenant data nor purely platform data — docs/i
 
 `Repository` exposes no `Update` or `Delete` method at all — append-only for M1 is enforced by that absence (`repository_test.go`'s `TestRepository_HasNoUpdateOrDeleteMethod`, a reflection-based proof), not a runtime guard. The database-role/trigger backstop against a determined operator with raw database access, and the optional hash chain, are both explicitly M4.
 
+### Collection — `emit.go`, `module.go`
+
+| Signature | Purpose |
+|---|---|
+| `type Input struct { Action string; Resource Resource; Result Result; Changes *Diff }` (`emit.go`) | What a caller passes to `Emit`; identity is read from `ctx`, not `Input`, so every caller populates it the same way |
+| `type Diff struct { Before, After map[string]any }` | An optional before/after change set for `Input.Changes`. Deliberately no `json` struct tags — every event payload type in this package and in `dbkit` relies on `encoding/json`'s default per-field-name behavior, so `module.go`'s wire-decode helpers can look every field up under one consistent capitalized key regardless of type |
+| `func Emit(ctx, bus pkgcore.EventBus, actions pkgcore.AuditActionRegistrar, in Input) error` | Validates `in.Action` against `actions.Actions()` first — `ErrActionNotRegistered` for an undeclared action, closing the loop `go/config`'s own `AuditActionConfigSet` declaration left open — then reads `Actor`/`OnBehalfOf`/`TenantID` off `ctx` (identically to the automatic capture plugin) and publishes `EventRecorded`. A publish failure is returned to the caller, never swallowed |
+| `const EventRecorded = "audit.event.recorded"`, `type RecordedEvent struct { ... }` | `Emit`'s own event type and payload, embedding `Actor`/`OnBehalfOf`/`TenantID` as plain fields — never left for a subscriber to re-derive from `ctx` — because the distributed deployment mode's `EventBus` delivers across a real network hop |
+| `var ErrActionNotRegistered` | `Emit`'s rejection sentinel, matched with `errors.Is` |
+| `func New(db *gorm.DB) *Module` (`module.go`) | Returns the persister `pkgcore.Module`. `db` must come from `dbkit.Open`, with `migrations.FS` already applied — identical contract to `config.NewModule` |
+| `func (*Module) Register(reg *pkgcore.Registry) error` | Declares `dbkit.EventWriteCaptured` and `EventRecorded` on `reg.Events` (on `dbkit`'s behalf for the former, since `dbkit` itself is not a `pkgcore.Module`), declares `AuditActionSystemContextEntered` on `reg.AuditActions` (on `go/tenancy`'s behalf — see "Subscribing to `tenancy.system_context.entered`" below), and subscribes to all three event types |
+| `const AuditActionSystemContextEntered` | The audit action `Module.Register` declares for `tenancy.EventSystemContextEntered`, since `go/tenancy` has no `pkgcore.Module` of its own to declare it |
+
+### Subscribing to `tenancy.system_context.entered`
+
+`Module` persists `go/tenancy`'s already-shipped `EventSystemContextEntered` (`tenancy.system_context.entered`) as an `AuditEvent`, closing doc 10's requirement that every use of the system context is itself an audit event. It does this **without importing package `tenancy`**: `go/tenancy`'s `go.mod` requires `go/dbkit` (`tenancy` sits above `dbkit` in the module dependency graph — `pkgcore -> dbkit -> tenancy -> config/jobs -> ...`), and this package is a subpackage of `dbkit` itself, so importing `tenancy` from here would make `dbkit` depend on `tenancy` — the same module-cycle conflict `model_test.go` already documents for `tenancytest.AssertNotTenantScoped`. `module.go`'s `tenancySystemContextEnteredEventType` constant duplicates the event-type string by hand instead, and `decodeSystemContextEntered` reads the payload structurally (by field name, via reflection for the concrete struct the standalone in-memory bus delivers, or via a `map[string]any` for the distributed bus's JSON shape) rather than type-asserting to `tenancy.SystemContextEnteredEvent`. This round's scope-freeze report left the exact wiring open (whether `tenancy` should instead gain its own minimal `pkgcore.Module` to declare this on its own behalf) — this is that decision, made in the implementing round; a future round can still give `tenancy` its own `Module` without changing this package.
+
 ## What this package does not (yet) do
 
-- No collection mechanism. Nothing calls `Repository.Insert` yet — the automatic GORM write-capture plugin, the explicit `Emit` function, and the `pkgcore.Module` persister that subscribes to their published events land alongside this same round, layered directly on the types above.
 - No query/report API beyond `ListByTenant`. The actor/resource/action/time-range/result search doc 10 describes, and its admin-console surface, are M4 (`go/compliance`) scope.
 - No immutability enforcement beyond the application layer (no mutating method exists). Database-role revocation and the optional hash chain are M4.
 - No retention/archival.
+- No reference-app consumer yet, and no proof test driving a real HTTP handler end to end — both are the next block in this round (B3).
 
 ## Testing
 
 - `model_test.go` — `AuditEvent`'s flattening helpers, table name, and the not-tenant-scoped proof (see above).
 - `repository_test.go` — `Repository`'s CRUD-minus-UD surface, including the reflection-based "no mutating method" proof; also carries `fakeAuditModule` and `openAuditTestDB`, the shared test-DB helper used by every test file in this package (both live here rather than duplicated per file).
 - `migrations_test.go` — a real `dbkit.MigrationRegistry.Apply` round trip against SQLite (always) and, opportunistically, a local PostgreSQL instance if one is reachable at the conventional local dev endpoint (skipped, not failed, otherwise — mirroring `go/dbkit`'s own `migrations_test.go` precedent).
+- `emit_test.go` — action-not-registered rejection, dual-identity and tenant population from `ctx`, the zero-value case when `ctx` carries none, and publish-failure propagation.
+- `module_test.go` — `Register`'s declarations; a subscriber round trip for each of the three event types (`dbkit.EventWriteCaptured`, `EventRecorded`, `tenancy.system_context.entered`), including the JSON-`map[string]any` shape a real distributed-bus round trip produces (via an actual `encoding/json` marshal/unmarshal, not a hand-built map) for both `dbkit.WriteCapturedEvent` and the system-context payload; and an undecodable-payload case per handler, proving it is dropped rather than failing the handler chain.
+- `example_test.go` — `Example` (direct `Repository` use) and `ExampleEmit` (the full collection path: register an action, wire `Module` into a `Registry`, call `Emit`, read the persisted row back through `Repository.ListByTenant`).
+
+See `go/dbkit/AGENTS.md`'s "Audit trail persistence" section and its own `audit_capture_test.go` for the automatic-collection mechanism's tests (a real `dbkit.Open` with `AuditBus` set, an `Auditable` model write, a non-`Auditable` model proving the plugin leaves it alone, and the publish-failure-fails-the-write-loudly proof).
