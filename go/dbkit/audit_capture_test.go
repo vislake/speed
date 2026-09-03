@@ -2,6 +2,8 @@ package dbkit_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -281,5 +283,105 @@ func TestAuditCapturePlugin_PublishFailure_FailsTheWriteLoudly(t *testing.T) {
 	}
 	if !errors.Is(err, publishErr) {
 		t.Errorf("Create() error = %v, want it to wrap the bus's own publish error", err)
+	}
+}
+
+// auditCaptureSecretWidget is a throwaway Auditable model carrying one
+// GORM-serializer field (dbkit's own encrypted-field mechanism), used only
+// by TestAuditCapturePlugin_SerializerField_RedactsRatherThanCrashOrLeak to
+// reproduce the write-capture plugin's handling of a serializer field --
+// mirroring encryption_test.go's own encryptedFieldModel fixture, which
+// this package cannot reuse directly since it lives in the internal
+// dbkit package and this file is dbkit_test.
+type auditCaptureSecretWidget struct {
+	ID       string `gorm:"primaryKey;size:26"`
+	TenantID string `gorm:"primaryKey;size:26;not null"`
+	Phone    string `gorm:"column:phone;serializer:dbkit_audit_capture_test_phone_encrypted"`
+}
+
+// TableName pins the table name so it does not depend on GORM's
+// pluralization of an unexported type name.
+func (auditCaptureSecretWidget) TableName() string { return "audit_capture_secret_widgets" }
+
+// GetTenantID satisfies dbkit's tenant-scoping contract, which
+// dbkit.Open's plugin chain requires of every model it processes.
+func (w auditCaptureSecretWidget) GetTenantID() pkgcore.TenantID {
+	return pkgcore.TenantID(w.TenantID)
+}
+
+// AuditResourceType satisfies dbkit.Auditable.
+func (auditCaptureSecretWidget) AuditResourceType() string { return "secret_widget" }
+
+// TestAuditCapturePlugin_SerializerField_RedactsRatherThanCrashOrLeak
+// reproduces the bug recorded in go/dbkit/AGENTS.md's "Audit trail
+// collection" section: before the fix, fieldValuesMap called
+// field.ValueOf on a GORM-serializer field (dbkit's own
+// RegisterEncryptedSerializer mechanism, used for any encrypted PII
+// column) and got back GORM's internal *schema.serializer wrapper --
+// which embeds a self-referential *schema.Field and so cannot be
+// json.Marshal'd (distributed mode's RedisEventBus.Publish and
+// standalone mode's audit.changesJSON both marshal it, and both would
+// fail: distributed mode fails the triggering write itself via
+// db.AddError, standalone mode silently drops the diff).
+//
+// This test proves the fixed behavior: the write succeeds, the captured
+// event's After map holds a redacted marker rather than GORM's unmarshalable
+// wrapper *and* rather than the phone number's plaintext (writing the
+// plaintext into the audit trail would itself violate the "no plaintext
+// PII in logs/traces/API responses" security rule -- redacting is the only
+// safe capture here), and the captured value round-trips through
+// json.Marshal exactly as audit.changesJSON needs it to.
+func TestAuditCapturePlugin_SerializerField_RedactsRatherThanCrashOrLeak(t *testing.T) {
+	key := sha256.Sum256([]byte("audit-capture-serializer-field-test-key"))
+	cipher, err := dbkit.NewCipher(key[:])
+	if err != nil {
+		t.Fatalf("dbkit.NewCipher() error = %v", err)
+	}
+	dbkit.RegisterEncryptedSerializer("dbkit_audit_capture_test_phone_encrypted", cipher)
+
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	if err := db.Exec(`CREATE TABLE audit_capture_secret_widgets (
+		id        VARCHAR(26) NOT NULL,
+		tenant_id VARCHAR(26) NOT NULL,
+		phone     BLOB        NOT NULL,
+		PRIMARY KEY (tenant_id, id)
+	)`).Error; err != nil {
+		t.Fatalf("create audit_capture_secret_widgets table: %v", err)
+	}
+
+	const plaintext = "+15550100777"
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	w := &auditCaptureSecretWidget{ID: "w1", TenantID: "tenant-a", Phone: plaintext}
+	if err := db.WithContext(ctx).Create(w).Error; err != nil {
+		t.Fatalf("Create() error = %v, want the write to succeed for a model with a serializer field", err)
+	}
+
+	events := bus.captured()
+	if len(events) != 1 {
+		t.Fatalf("captured %d events, want exactly 1", len(events))
+	}
+	got, ok := events[0].After["phone"]
+	if !ok {
+		t.Fatalf("After = %+v, want a \"phone\" key", events[0].After)
+	}
+	gotStr, ok := got.(string)
+	if !ok {
+		t.Fatalf("After[\"phone\"] = %#v (%T), want a plain redacted string, not GORM's internal serializer wrapper", got, got)
+	}
+	if gotStr != "[redacted]" {
+		t.Errorf("After[\"phone\"] = %q, want the redacted marker \"[redacted]\" (must never be the plaintext phone number)", gotStr)
+	}
+	if gotStr == plaintext {
+		t.Fatalf("After[\"phone\"] leaked the plaintext phone number into the audit trail")
+	}
+
+	// The concrete regression: audit.changesJSON (go/dbkit/audit/module.go)
+	// and RedisEventBus.Publish both json.Marshal this map before the fix
+	// existed, this failed with "json: unsupported value: encountered a
+	// cycle via *schema.Field" because After["phone"] held GORM's
+	// self-referential *schema.serializer wrapper instead of a plain value.
+	if _, err := json.Marshal(events[0].After); err != nil {
+		t.Fatalf("json.Marshal(After) error = %v, want captured field values to always be JSON-marshalable", err)
 	}
 }

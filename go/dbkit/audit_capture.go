@@ -237,12 +237,39 @@ func auditableOf(stmt *gorm.Statement) (Auditable, bool) {
 	return nil, false
 }
 
+// auditRedactedFieldValue replaces the captured value of any GORM
+// serializer field — dbkit's own encrypted-field mechanism
+// (RegisterEncryptedSerializer, `gorm:"serializer:<name>"`) included — in a
+// WriteCapturedEvent's Before/After maps, mirroring go/config's identical
+// "[redacted]" convention for its own Sensitive item change events.
+//
+// Two independent problems make this necessary, not just desirable. First,
+// field.ValueOf on a serializer field does not return the field's plain
+// value at all: GORM wraps it in a *schema.serializer that embeds a
+// self-referential *schema.Field (function-typed ValueOf/Set/ReflectValueOf
+// fields), which json.Marshal cannot encode ("encountered a cycle via
+// *schema.Field") — fatal to both onward paths, RedisEventBus.Publish's
+// whole-payload marshal in distributed mode and audit.changesJSON's
+// Diff marshal in standalone mode. Second, even if it could be unwrapped,
+// the raw pre-serialization struct value is the *plaintext* — the very
+// thing dbkit's encrypted serializer exists to keep off disk — so writing
+// it into the audit trail unencrypted would be a PII leak this repository's
+// own "do not write plaintext PII into logs, traces or API responses" rule
+// forbids. Redacting is therefore the only capture this plugin may take of
+// a serializer field on its own, with no cipher key of its own to decrypt
+// or re-derive anything from.
+const auditRedactedFieldValue = "[redacted]"
+
 // fieldValuesMap returns every schema field of stmt's ReflectValue, keyed
 // by DB column name. It returns nil when stmt carries no schema or its
 // ReflectValue is not (or does not unwrap to) a single struct — in
 // particular, a slice destination (a batch write) yields nil here, which
 // is consistent with auditableOf never matching a slice element in the
 // first place.
+//
+// A field carrying a GORM Serializer (see auditRedactedFieldValue's doc
+// comment for why) is captured as auditRedactedFieldValue instead of its
+// real value.
 func fieldValuesMap(stmt *gorm.Statement) map[string]any {
 	if stmt.Schema == nil {
 		return nil
@@ -260,6 +287,10 @@ func fieldValuesMap(stmt *gorm.Statement) map[string]any {
 
 	out := make(map[string]any, len(stmt.Schema.Fields))
 	for _, field := range stmt.Schema.Fields {
+		if field.Serializer != nil {
+			out[field.DBName] = auditRedactedFieldValue
+			continue
+		}
 		value, _ := field.ValueOf(stmt.Context, v)
 		out[field.DBName] = value
 	}
