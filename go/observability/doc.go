@@ -3,10 +3,11 @@
 //
 // # Scope of this package today
 //
-// This is the foundational layer only: dual-deployment-mode OTel
-// initialization (Init), a context-aware structured logger (FromContext /
-// WithLogger) with default-on secret-attribute redaction, and generic HTTP
-// instrumentation (Middleware). The full
+// This is the foundational layer only: OTel initialization (Init) whose
+// exporter wiring is chosen by the caller's options, never by a deployment
+// mode, a context-aware structured logger (FromContext / WithLogger) with
+// default-on secret-attribute redaction, and generic HTTP instrumentation
+// (Middleware). The full
 // per-domain metrics catalog docs/internal/09-observability.md's
 // must-instrument-metrics table describes (queue depth, metering outbox
 // lag, notification delivery rate, payment callback success, ...) belongs
@@ -15,30 +16,40 @@
 // M0 status) -- this package does not speculatively build instrumentation
 // for them.
 //
-// # Deployment modes
+// # Exporter selection, not deployment modes
 //
-// Like every other infrastructure dependency in speed, the export target is
-// selected once, at startup, by Init, and never branched on again by
-// business code (root CLAUDE.md's "do not branch on deployment mode" rule
-// applies here exactly as it does to KVStore or EventBus):
+// Init takes no deployment mode and branches on none
+// (docs/internal/03-deployment-modes.md: mode and implementation
+// composition are two orthogonal axes, and exporter choice is an
+// implementation-composition question). Like every other infrastructure
+// dependency in speed, the export target is selected once, at startup, by
+// the host, and never branched on again by business code (root CLAUDE.md's
+// "do not branch on deployment mode" rule applies here exactly as it does
+// to KVStore or EventBus). Whether a process runs one replica or many
+// decides nothing here; whether the caller supplied an OTLP endpoint
+// decides everything:
 //
-//   - DeploymentModeStandalone exports traces to stdout (stdouttrace) and
-//     metrics both to stdout (stdoutmetric, for a developer tailing the
-//     process) and to an in-process Prometheus handler (MetricsHandler) the
-//     host mounts at /metrics -- zero external dependencies, matching every
-//     other standalone-mode implementation in this repository.
-//   - DeploymentModeDistributed exports both signals over OTLP/gRPC to a
-//     collector, whose endpoint is supplied by the host via
-//     WithOTLPEndpoint (see Init's doc comment for why this package does
-//     not read it from the environment itself).
+//   - Without WithOTLPEndpoint, Init wires the local exporters: traces to
+//     stdout (stdouttrace, synchronous -- zero-delay visibility for a
+//     developer tailing the process) and metrics both to stdout
+//     (stdoutmetric, periodic) and to an in-process Prometheus handler
+//     (MetricsHandler) the host mounts at /metrics -- zero external
+//     dependencies.
+//   - With a non-empty endpoint via WithOTLPEndpoint, Init wires the
+//     OTLP/gRPC exporters instead: both signals are pushed to that
+//     collector (see Init's doc comment for why this package does not read
+//     the endpoint from the environment itself), and MetricsHandler
+//     reports 404, since there is no local registry to scrape.
 //
 // # The three seams
 //
-//   - Init(ctx, mode, opts...) wires the TracerProvider and MeterProvider
-//     for the given deployment mode and installs them as OpenTelemetry's
-//     global providers, so that everything below can reach them without a
-//     provider threaded through every module's call sites. It returns
-//     a shutdown function for graceful process shutdown.
+//   - Init(ctx, opts...) wires the TracerProvider and MeterProvider and
+//     installs them as OpenTelemetry's global providers, so that
+//     everything below can reach them without a provider threaded through
+//     every module's call sites. Which exporters get wired is decided by
+//     whether the caller supplied WithOTLPEndpoint, nothing else (see the
+//     "Exporter selection, not deployment modes" section above). It
+//     returns a shutdown function for graceful process shutdown.
 //   - FromContext(ctx) returns the *slog.Logger every module must log
 //     through (root CLAUDE.md's "logger from context, not a fresh one"
 //     rule): it automatically attaches trace_id and span_id when ctx
