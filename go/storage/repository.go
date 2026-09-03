@@ -241,24 +241,34 @@ func (r *ObjectRepository) finalizeUpload(ctx context.Context, row *Object, now 
 // uses this after its own state checks, and a row another protocol run
 // already removed simply reads as nothing left to do.
 //
+// The returned bool is whether this call removed the object row itself.
+// It answers the protocol's one remaining question -- "did the deletion
+// commit here?" -- because only the run whose row removal commits may
+// announce the deletion: two protocol runs racing over one object both
+// survive to this step, but exactly one of them sees a row to remove, so
+// exactly one deleted event is published. A run that removed nothing (the
+// row vanished between its mark and here) announces nothing.
+//
 // The two Deletes run through the isolation plugin like every statement in
 // this file: WHERE tenant_id = ? is injected from the context, so the
 // object row and each derivative row can only be removed by their own
 // tenant.
-func (r *ObjectRepository) deleteObjectRows(ctx context.Context, objectID string) error {
-	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+func (r *ObjectRepository) deleteObjectRows(ctx context.Context, objectID string) (removed bool, err error) {
+	err = dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
 		if err := tx.Where("object_id = ?", objectID).Delete(&ObjectDerivative{}).Error; err != nil {
-			return ErrInternal.WithCause(err)
+			return err
 		}
-		if err := tx.Where("id = ?", objectID).Delete(&Object{}).Error; err != nil {
-			return ErrInternal.WithCause(err)
+		res := tx.Where("id = ?", objectID).Delete(&Object{})
+		if res.Error != nil {
+			return res.Error
 		}
+		removed = res.RowsAffected > 0
 		return nil
 	})
 	if err != nil {
-		return ErrInternal.WithCause(err)
+		return false, ErrInternal.WithCause(err)
 	}
-	return nil
+	return removed, nil
 }
 
 // listStateRows returns every object row of the caller's tenant in one

@@ -489,7 +489,7 @@ func TestDeriveService_DeriveThumbnail_DropsItsBytesWhenTheObjectDisappears(t *t
 				if _, err := svc.objects.markDeleting(ctx, objectID); err != nil {
 					t.Fatalf("markDeleting(%s): %v", objectID, err)
 				}
-				if err := svc.objects.deleteObjectRows(ctx, objectID); err != nil {
+				if _, err := svc.objects.deleteObjectRows(ctx, objectID); err != nil {
 					t.Fatalf("deleteObjectRows(%s): %v", objectID, err)
 				}
 			},
@@ -616,7 +616,7 @@ func TestDeriveHandler_Handle_ConvergesWhenTheObjectIsDeletedBeforeTheRun(t *tes
 	if _, err := svc.objects.markDeleting(ctx, row.ID); err != nil {
 		t.Fatalf("markDeleting(%s): %v", row.ID, err)
 	}
-	if err := svc.objects.deleteObjectRows(ctx, row.ID); err != nil {
+	if _, err := svc.objects.deleteObjectRows(ctx, row.ID); err != nil {
 		t.Fatalf("deleteObjectRows(%s): %v", row.ID, err)
 	}
 	if err := store.DeleteObject(ctx, row.Key); err != nil {

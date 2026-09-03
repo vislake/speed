@@ -983,7 +983,7 @@ func TestObjectService_Complete_RefusesWhenTheRowsVanishMidPipeline(t *testing.T
 		if err := hooked.DeleteObject(ctx, row.Key); err != nil {
 			t.Errorf("DeleteObject(%s): %v", row.Key, err)
 		}
-		if err := svc.objects.deleteObjectRows(ctx, row.ID); err != nil {
+		if _, err := svc.objects.deleteObjectRows(ctx, row.ID); err != nil {
 			t.Errorf("deleteObjectRows(%s): %v", row.ID, err)
 		}
 	}

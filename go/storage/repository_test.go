@@ -876,8 +876,12 @@ func TestObjectRepository_DeleteObjectRows_RemovesTheRows(t *testing.T) {
 	// derivative a completed object carries, whatever its kind.
 	seedDerivative(t, derivatives, ctx, newDerivative(t, "deriv-2", "obj-1", "webp", "tenant-a", base.Add(2*time.Minute)))
 
-	if err := objects.deleteObjectRows(ctx, "obj-1"); err != nil {
+	removed, err := objects.deleteObjectRows(ctx, "obj-1")
+	if err != nil {
 		t.Fatalf("deleteObjectRows: %v", err)
+	}
+	if !removed {
+		t.Errorf("deleteObjectRows removed = false on an existing row, want true")
 	}
 
 	if _, err := objects.FindByID(ctx, "obj-1"); !hasCode(err, dbkit.ErrRecordNotFound.Code) {
@@ -899,8 +903,12 @@ func TestObjectRepository_DeleteObjectRows_RemovesTheRows(t *testing.T) {
 func TestObjectRepository_DeleteObjectRows_DoesNothingForAnUnknownObject(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
 
-	if err := repo.deleteObjectRows(tenantCtx("tenant-a"), "obj-99"); err != nil {
+	removed, err := repo.deleteObjectRows(tenantCtx("tenant-a"), "obj-99")
+	if err != nil {
 		t.Fatalf("deleteObjectRows on an unknown object: %v", err)
+	}
+	if removed {
+		t.Errorf("deleteObjectRows removed = true for a row that never existed, want false")
 	}
 }
 
@@ -914,8 +922,12 @@ func TestObjectRepository_DeleteObjectRows_IsTenantScoped(t *testing.T) {
 	ctxB := tenantCtx(pkgcore.TenantID("tenant-b"))
 	seedObject(t, repo, ctxA, newCompleted("obj-1", "tenant-a", time.Now()))
 
-	if err := repo.deleteObjectRows(ctxB, "obj-1"); err != nil {
+	removed, err := repo.deleteObjectRows(ctxB, "obj-1")
+	if err != nil {
 		t.Fatalf("deleteObjectRows across tenants: %v", err)
+	}
+	if removed {
+		t.Errorf("deleteObjectRows removed = true across tenants, want false")
 	}
 	if _, err := repo.FindByID(ctxA, "obj-1"); err != nil {
 		t.Errorf("FindByID under the owning tenant after a foreign delete: %v", err)
