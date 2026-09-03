@@ -934,6 +934,7 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	t.Setenv("PORT", "")
 	t.Setenv("SPEED_DB_PATH", "")
 	t.Setenv("SPEED_REDIS_ADDR", "")
+	t.Setenv("SPEED_DEMO_USERS_PASSWORD", "")
 
 	cfg, err := configFromEnv()
 	if err != nil {
@@ -954,6 +955,9 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	if cfg.RedisAddr != "" {
 		t.Fatalf("RedisAddr = %q, want the empty default (in-process bus)", cfg.RedisAddr)
 	}
+	if cfg.DemoUsersPassword != "" {
+		t.Fatalf("DemoUsersPassword = %q, want the empty default (demo-user seed skipped)", cfg.DemoUsersPassword)
+	}
 }
 
 // TestConfigFromEnv_ReadsOverrides verifies each environment variable
@@ -964,6 +968,7 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	t.Setenv("SPEED_DB_PATH", "/tmp/reference-app-configfromenv-test.db")
 	t.Setenv("SPEED_CONFIG_KEY", "0f0e0d0c0b0a090807060504030201001f1e1d1c1b1a19181716151413121110")
 	t.Setenv("SPEED_REDIS_ADDR", "127.0.0.1:6380")
+	t.Setenv("SPEED_DEMO_USERS_PASSWORD", "env demo seed passphrase")
 
 	cfg, err := configFromEnv()
 	if err != nil {
@@ -980,6 +985,9 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	}
 	if cfg.RedisAddr != "127.0.0.1:6380" {
 		t.Fatalf("RedisAddr = %q, want %q", cfg.RedisAddr, "127.0.0.1:6380")
+	}
+	if cfg.DemoUsersPassword != "env demo seed passphrase" {
+		t.Fatalf("DemoUsersPassword = %q, want the SPEED_DEMO_USERS_PASSWORD value", cfg.DemoUsersPassword)
 	}
 	wantKey := []byte{
 		0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09, 0x08,

@@ -224,19 +224,28 @@ var demoHostTenants = map[string]pkgcore.TenantID{
 // organizations table. Root CLAUDE.md's "org / rbac rounds" deferral is why
 // there is no real one to wire yet.
 //
-// It starts empty. Root CLAUDE.md's release notes record that seed accounts
-// wait for authn+org+billing together, so a freshly registered demo account
-// has NO tenant membership until something grants it one -- exactly the
-// fail-closed behavior go/authn/service.go's resolveTenant documents (a
-// nil, or here an unseeded, MembershipReader answer refuses rather than
-// allows). authn_e2e_test.go grants membership explicitly after registering
-// a demo user through the real HTTP surface; production wiring (run() in
-// main.go) constructs the same type with nothing pre-granted, which is an
-// honest description of this example's current limitation, not a bug:
-// task dev's authn wiring compiles, serves every operation and enforces
-// every rule correctly, but nothing can actually sign in to a tenant until
-// a later round supplies real memberships (Taskfile.yml's `seed` task
-// stub says the same thing).
+// It starts empty, and who fills it depends on the boot:
+//
+//   - Every boot seeds the fixed demo header actors' rbac grants
+//     (seedDemoGrants) but NO memberships: those actors have no database
+//     row, so nothing can sign in as them.
+//   - A boot with SPEED_DEMO_USERS_PASSWORD set additionally registers the
+//     three demo accounts of demo_users.go through the real register route
+//     and records their memberships here -- which is what makes those real
+//     sign-ins succeed (authn's resolveTenant refuses an account with no
+//     membership: go/authn/service.go's nil-or-unseeded MembershipReader
+//     answer refuses rather than allows, and this store is exactly that
+//     unseeded case on a boot that skipped the seed).
+//   - Tests grant membership explicitly after registering an account
+//     through the real HTTP surface (registerAndAuthenticate in
+//     server_test.go, authn_e2e_test.go), keeping a reference to the same
+//     store buildServer itself wires.
+//
+// Because this store is in-process, a membership never survives a restart:
+// an account registered by an earlier boot answers "not a member" on the
+// next one and sign-in fails closed -- the honest state for an account
+// whose seed cannot be replayed (demo_users.go documents why), not a bug
+// to paper over.
 type demoMemberships struct {
 	mu      sync.Mutex
 	tenants map[string][]pkgcore.TenantID
@@ -384,6 +393,17 @@ type serverConfig struct {
 	// internals.
 	Memberships *demoMemberships
 
+	// DemoUsersPassword, when non-empty, makes buildServer seed the three
+	// demo accounts of demo_users.go at the end of its composition --
+	// register each through the composed handler, then grant the
+	// membership and role its actor model declares -- so a browser visitor
+	// can sign in as demo-owner@example.com and friends with a real
+	// account, real membership and real rbac grants, and no demo header.
+	// configFromEnv fills it from SPEED_DEMO_USERS_PASSWORD; the empty
+	// default (the zero-external-dependency `go run ./cmd/server`
+	// experience) skips the seed entirely.
+	DemoUsersPassword string
+
 	// SMSOutput is where authn's console SMS sender (the standalone
 	// deployment mode's transport, go/authn/sms.go) writes delivered
 	// messages. Nil defaults to os.Stdout.
@@ -479,6 +499,9 @@ func configFromEnv() (serverConfig, error) {
 		OrgIndexKey:    orgIndexKey,
 		RedisAddr:      redisAddr,
 		HostTenants:    demoHostTenants,
+		// Empty when unset: the demo-user seed is opt-in (its own doc
+		// comment in demo_users.go says why the default skips it).
+		DemoUsersPassword: os.Getenv(demoUsersPasswordEnv),
 	}, nil
 }
 
@@ -992,6 +1015,17 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			tenancy.WithAllowlist(http.MethodHead, config.PathSystemFeatures),
 		}, authnPreAuthAllowlist()...)...)(mux),
 	)
+	// The demo-user seed runs last, once the composed handler exists: it
+	// registers the demo accounts through the same register route a browser
+	// would use, which needs the whole chain above it. It is opt-in
+	// (SPEED_DEMO_USERS_PASSWORD, see configFromEnv); an empty password
+	// leaves everything above exactly as it was.
+	if cfg.DemoUsersPassword != "" {
+		if seedErr := seedDemoUsers(ctx, handler, memberships, rbacService, cfg.HostTenants, cfg.DemoUsersPassword); seedErr != nil {
+			_ = cleanup()
+			return nil, nil, seedErr
+		}
+	}
 	return handler, cleanup, nil
 }
 

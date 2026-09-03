@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
@@ -18,25 +19,40 @@ import (
 // This file holds everything this example needs to demonstrate rbac end to
 // end: where a Subject comes from, which permission gates which route, and
 // the demo grants seeded at startup. It is deliberately a file of its own
-// rather than more of server.go, because every line in it is scaffolding
-// that authn deletes when it lands.
+// rather than more of server.go.
+//
+// The "where a Subject comes from" half changed when authn landed: a
+// request whose access token verified is now resolved from its Principal,
+// the identity the authenticating side proved. demoUserHeader survives as
+// the affordance the pre-auth flows were built around -- its own comment
+// says exactly how the two sources share the resolver -- and demo_users.go
+// seeds real accounts whose grants reach this same gate through the
+// principal path, which is the shape this file settles into once the
+// header goes away.
 
 // demoUserHeader names the request header this example reads an acting
 // user id from.
 //
 // THIS IS NOT AUTHENTICATION, and it is not a pattern to copy. An
 // unauthenticated header is a claim, not an identity: anyone who can reach
-// the server can set it to any value and become that user. It exists for
-// exactly the same reason demoHostTenants exists -- so this reference app
-// can demonstrate real authorization behavior end to end before authn
-// exists -- and it carries the same warning demoHostTenants and
-// strictHostResolver carry in server.go.
+// the server can set it to any value and become that user. It carries the
+// same warning demoHostTenants and strictHostResolver carry in server.go.
 //
-// What replaces it is already decided and needs no change here: authn will
-// verify an access token and assemble the rbac.Subject from its claims,
-// and buildServer will pass authn's resolver to rbac.WithSubjectResolver
-// in place of demoSubjectResolver below. The seam does not move; only what
-// is plugged into it does.
+// It predates authn: before access tokens existed it was the only way a
+// request could name a user at all, and the flows that grew up around it
+// (the permission-gate and isolation tests, the actor model
+// seedDemoGrants below seeds) still use it to say which seeded demo actor
+// is acting. demoSubjectResolver therefore still reads it first, so those
+// flows keep meaning exactly what they always meant. What authn actually
+// replaced is everything else: a request carrying no demo header is now
+// resolved from the verified Principal authn.Middleware put in the request
+// context -- which is how the real accounts demo_users.go seeds reach the
+// same gate from a browser with no header at all.
+//
+// The header's remaining days are numbered: once the pre-auth flows move
+// onto those real accounts nothing needs it, and it goes away together
+// with the resolver's fallback. The consumer-shell plan records that
+// removal as deferred to the org-web round.
 const demoUserHeader = "X-Demo-User"
 
 // The demo users seeded into every configured tenant. Two of them, because
@@ -218,8 +234,8 @@ func splitDemoPermission(permission string) (resource, action string, ok bool) {
 // rbac.WithSubjectResolver: the seam through which the authenticating side
 // hands rbac an identity, without either module importing the other.
 //
-// The two halves come from deliberately different places, and the
-// difference is the point:
+// The parts come from deliberately different places, and the differences
+// are the point:
 //
 //   - The TENANT comes from the request context, where tenancy.Middleware
 //     put it after resolving it server-side. It is never read from the
@@ -227,21 +243,43 @@ func splitDemoPermission(permission string) (resource, action string, ok bool) {
 //     accepting a caller-supplied tenant_id is the single most common
 //     horizontal-privilege-escalation bug in multi-tenant systems, and
 //     root CLAUDE.md forbids it outright.
-//   - The USER comes from demoUserHeader, which is a placeholder and is
-//     documented as one on that constant. In production it comes from the
-//     same verified claims the tenant does.
+//   - The USER comes from one of two sources. demoUserHeader comes first,
+//     and that order is deliberate: the header is the affordance the
+//     pre-auth demo flows were built around (it names which seeded demo
+//     actor is acting -- its own comment spells out the history), and
+//     those flows send it alongside tokens whose accounts hold no rbac
+//     grants, so the header must keep deciding exactly as it always did
+//     or every one of them changes meaning.
+//   - Only when no demo header is present does the resolver read the
+//     request context's verified Principal -- the user authn's access
+//     token proved, which is where a real client's identity comes from.
+//     This is the branch that lets the accounts demo_users.go seeds (real
+//     users, real memberships, real grants) act from a browser that never
+//     sends the header.
 //
-// It fails closed: no tenant, no user, or an incomplete pair reports
-// (Subject{}, false), and rbac's gate turns that into a 403.
+// The header's precedence over the Principal is the remaining scaffold:
+// it is still an unauthenticated claim, and it still overrides a proven
+// identity when both are present. It is only a demo affordance, and its
+// removal is the org-web round's deferred work (see demoUserHeader).
+//
+// It fails closed: no tenant, no user (from either source), or an
+// incomplete pair reports (Subject{}, false), and rbac's gate turns that
+// into a 403.
 func demoSubjectResolver(r *http.Request) (rbac.Subject, bool) {
 	tenantID, ok := pkgcore.TenantFromContext(r.Context())
 	if !ok || tenantID == "" {
 		return rbac.Subject{}, false
 	}
+
 	userID := r.Header.Get(demoUserHeader)
 	if userID == "" {
-		return rbac.Subject{}, false
+		principal, ok := authn.PrincipalFromContext(r.Context())
+		if !ok {
+			return rbac.Subject{}, false
+		}
+		userID = principal.UserID
 	}
+
 	sub := rbac.Subject{TenantID: tenantID, UserID: userID}
 	if !sub.Valid() {
 		return rbac.Subject{}, false
@@ -289,7 +327,7 @@ func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler) (ht
 }
 
 // seedDemoGrants gives every configured tenant its built-in roles and the
-// two demo users their grants, so `go run ./cmd/server` demonstrates a
+// demo users their grants, so `go run ./cmd/server` demonstrates a
 // working gate with no setup at all.
 //
 // It runs once per boot and is idempotent in both halves:
@@ -298,10 +336,12 @@ func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler) (ht
 // OWN tenant context -- roles and bindings are tenant data, and nothing
 // here reads or writes across a tenant boundary.
 //
-// A real deployment does not do this. Roles are seeded when a tenant is
-// created and grants are made by an administrator through the admin
-// console; seeding fixed demo users at every boot is a property of an
-// example that has no sign-up flow yet.
+// The demo users seeded here are the fixed header ids of demoUserHeader,
+// with no database row behind them -- which is exactly why they cannot
+// sign in, and why demo_users.go additionally registers real accounts
+// whose memberships and grants mirror this same model. A real deployment
+// does neither: roles are seeded when a tenant is created and grants are
+// made by an administrator through the admin console.
 func seedDemoGrants(ctx context.Context, svc *rbac.Service, tenants map[string]pkgcore.TenantID) error {
 	seeded := make(map[pkgcore.TenantID]struct{}, len(tenants))
 	for _, tenantID := range tenants {

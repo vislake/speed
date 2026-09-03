@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/rbac"
@@ -71,6 +72,65 @@ func TestDemoSubjectResolver_FailsClosed(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDemoSubjectResolver_HeaderPrecedenceAndPrincipalFallback pins the
+// two-source semantics demoUserHeader's own comment describes. The demo
+// header, when present, still names the acting user exactly as it always
+// did -- the pre-auth flows send both a token and a header, and the header
+// is what they mean, so it must keep winning; only without a header does a
+// verified Principal in the request context supply the user, which is the
+// path the real accounts demo_users.go seeds take.
+func TestDemoSubjectResolver_HeaderPrecedenceAndPrincipalFallback(t *testing.T) {
+	principal := authn.Principal{UserID: "real-seeded-user", TenantID: "tenant-acme", SessionID: "session-1"}
+
+	t.Run("the demo header wins when both are present", func(t *testing.T) {
+		r := requestInTenant(http.MethodGet, "tenant-acme")
+		r = r.WithContext(authn.WithPrincipal(r.Context(), principal))
+		r.Header.Set(demoUserHeader, demoReaderUserID)
+
+		sub, ok := demoSubjectResolver(r)
+		if !ok {
+			t.Fatal("no subject for a request with a tenant, a verified principal and a demo header")
+		}
+		if sub.UserID != demoReaderUserID {
+			t.Fatalf("subject user = %q, want the header's %q -- the header names who acts", sub.UserID, demoReaderUserID)
+		}
+	})
+
+	t.Run("without a header the verified principal supplies the user", func(t *testing.T) {
+		r := requestInTenant(http.MethodGet, "tenant-acme")
+		r = r.WithContext(authn.WithPrincipal(r.Context(), principal))
+
+		sub, ok := demoSubjectResolver(r)
+		if !ok {
+			t.Fatal("no subject for a request with a tenant and a verified principal")
+		}
+		if sub.UserID != principal.UserID {
+			t.Fatalf("subject user = %q, want the principal's %q", sub.UserID, principal.UserID)
+		}
+		if sub.TenantID != "tenant-acme" {
+			t.Fatalf("subject tenant = %q, want %q", sub.TenantID, "tenant-acme")
+		}
+	})
+
+	t.Run("the principal's own tenant claim never steers the subject", func(t *testing.T) {
+		// The tenant comes from the request context, where tenancy.Middleware
+		// put it -- never from the Principal, which is what the resolver
+		// consumes user identity from only.
+		r := requestInTenant(http.MethodGet, "tenant-acme")
+		r = r.WithContext(authn.WithPrincipal(r.Context(), authn.Principal{
+			UserID: "real-seeded-user", TenantID: "tenant-globex", SessionID: "session-1",
+		}))
+
+		sub, ok := demoSubjectResolver(r)
+		if !ok {
+			t.Fatal("no subject for a request with a tenant and a verified principal")
+		}
+		if sub.TenantID != "tenant-acme" {
+			t.Fatalf("subject tenant = %q, want the context's %q -- never the principal's claim", sub.TenantID, "tenant-acme")
+		}
+	})
 }
 
 // TestDemoPermissionFor_DependsOnlyOnTheMethod pins the read/write split
