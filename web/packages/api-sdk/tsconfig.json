@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "paths": {
+      "@speed/api-client": ["../api-client/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}
