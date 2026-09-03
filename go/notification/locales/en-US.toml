@@ -1,0 +1,15 @@
+# notification's message bundle, American English.
+#
+# One flat top-level entry per error code go/notification/errors.go declares;
+# the id is the whole quoted code. zh-CN.toml must carry exactly the same id
+# set.
+#
+# This file currently declares no entries: notification's error codes arrive
+# with their producers (see go/notification/errors.go's doc comment), and
+# this block's migration and repository operations fail only through dbkit's
+# own vocabulary, which needs no re-declaration here.
+#
+# Interpolated names are the error's own apperr parameter keys, verbatim and
+# snake_case ("max_depth", not "MaxDepth"): the message is rendered from the
+# structured parameters the API returned, so a mismatch between the two would
+# render an empty slot rather than a value.

@@ -1,0 +1,12 @@
+# notification 的消息包,简体中文。
+#
+# 每条 go/notification/errors.go 声明的错误码对应一条扁平的顶层条目,id 就是带引号的
+# 完整错误码。en-US.toml 必须携带完全相同的 id 集合。
+#
+# 本文件当前没有任何条目:notification 的错误码与其生产者一同抵达(见
+# go/notification/errors.go 的文档注释),本块的迁移与仓储操作只经由 dbkit 自身的
+# 词表报错,无需在此声明。
+#
+# 插值名直接使用错误自身的 apperr 参数键,原样保留 snake_case
+# (是 "max_depth" 而不是 "MaxDepth"):消息由 API 返回的结构化参数渲染,
+# 两边对不上就会渲染出一个空位而不是真实值。
