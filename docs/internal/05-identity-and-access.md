@@ -7,6 +7,26 @@
 ## 认证与授权：Casbin 自建 RBAC + OIDC RP
 不自建 IdP（范围蔓延+安全责任重），不强依赖 Auth0/Ory（给每个交付项目强加付费第三方依赖，且用户身份脱离自己库表，破坏 tenant 关联与审计一致性）。
 
+> **实现落地更正**（rbac 轮次实现本节 RBAC 时确认）：**`rbac` 模块最终没有采用 Casbin**，而是在三张受 `dbkit` 托管的 `TenantScoped` 表（`rbac_roles` / `rbac_role_permissions` / `rbac_role_bindings`）上自建判定引擎。**本节约定的语义全部保留**——domain 即 tenant、`resource:action` 命名、`"system"` 伪租户承载平台运营授权、物化路径前缀匹配的子树范围、必备的策略缓存——变的只是存储与判定的实现载体。
+>
+> 换掉 Casbin 的直接原因是它与本仓库三条 CI 强制纪律无法调和：
+>
+> 1. `casbin_rule` 表**没有 `tenant_id` 列**，租户藏在策略的 `v0`（domain）值里。这意味着全产品最安全敏感的一张表，会同时退出[04 数据与多租户](04-data-and-tenancy.md)的**三层隔离**：GORM 插件注入不到过滤条件、用不了 `Repository[T]`、Postgres RLS 也无从下手（RLS 策略以 `tenant_id` 列为准）。`tenancytest.AssertIsolated` 对它根本跑不起来，隔离保证退化成"调用方传对了 domain 字符串"。
+> 2. `gorm-adapter` 自己持有 `*gorm.DB` 并自行发查询，正是 §3.2 与 `tools/semgrep_rules/raw-gorm-bypass.yml` 要禁止的形态。
+> 3. `gorm-adapter` 默认 `AutoMigrate`（有 `TurnOffAutoMigrate` 可关，这条尚可绕过，前两条不能）。
+>
+> 而 Casbin 真正的价值（可插拔 model.conf、ABAC、RESTful matcher）在这里全部用不上：判定链就是 `subject → bindings → role → permissions` 加一次物化路径前缀判断。在"以库的形式分发的模块化单体"这个前提下，为此往每个交付项目的 `go.sum` 里塞两个第三方依赖，不成立。
+>
+> 落地实现同时明确了本节几处留白，均记录在 `go/rbac/AGENTS.md` 的 deferral 清单里：
+>
+> - **不做角色到角色的继承**（Casbin 的 `g` 分组）。本节"权限沿树继承"说的是**组织树**继承——绑定在 `/g1` 的授权覆盖 `/g1/r2/s7`——这一条已实现；角色层级本节从未要求，不臆测实现。
+> - **节点物化路径在判定时解析，绝不快照到绑定行上**。绑定表只存 `node_id`。[16 验证](16-verification.md)要求"成员在树中移动后权限即时随之变化"，一旦把路径反规范化到绑定行，恰恰在这个场景上失效。
+> - **`rbac` 不 import `authn`，也不 import `org`**，这是模块的定义性属性。它对两个邻居的全部认知就是两个在 `rbac` 内声明、由宿主实现的接口：`SubtreeResolver`（node id → 物化路径，`org` 建成后由它实现）和中间件的 `WithSubjectResolver`（认证方组装 `Subject{TenantID, UserID}` 传入）。任一 node 解析不出来时**拒绝**该条绑定，绝不回退成租户级授权。
+> - **权限通配符（`billing:*`）不做**。通配符语法是一个安全面，需要专门的设计决策，不是实现时随手猜一个。当前判定是 `resource:action` 精确匹配。
+> - **`Repository[T].WithinSubtree(nodeID)`（本节末尾承诺的）延后到 `org` 落地后再进 `dbkit`**。真实查询形态在组织树存在之前是未知的，`dbkit` 明确反对无消费者的推测性泛型扩展。`rbac` 先提供 `DataScope` 与 `PathWithinSubtree`，由消费方自行套用。
+> - **`rbac` 不暴露任何 HTTP 端点**（`OpenAPISpec()` 返回 nil）：角色管理属于 M3 管理后台，`/me` 的扁平权限列表属于 `authn`（由它调 `ListPermissions`）。`rbac` 对 HTTP 层的贡献只有[01 架构](01-architecture.md)固定中间件链里的那道权限闸门。
+> - [17 风险](17-risks.md)与[16 验证](16-verification.md)要求的"千级节点前缀匹配压测"仍然有效，但**归属 `org` 轮次**：`rbac` 造不出千级节点的组织树。前缀匹配的**正确性**（含 `/g1/r2` 不得匹配 `/g1/r20` 这个经典陷阱）已在 `rbac` 单元测试中锁死。
+
 - **RBAC**：Casbin `RBAC with domains` 模型，domain = tenant_id，天然支持"同一用户在租户 A 是 admin、在租户 B 是普通成员"。策略存储用 `casbin/gorm-adapter`。权限命名统一 `resource:action`（`billing:manage`、`org:invite_member`）。平台运营权限复用同一引擎，用 `domain="system"` 伪租户表示，不为运营后台另造一套鉴权。
 - **SSO**：`coreos/go-oidc` + `oauth2` 实现标准 OIDC Relying Party，覆盖 Okta/Azure AD/Google Workspace。每租户一条 `TenantSSOConfig`（issuer/client_id/secret/allowed_domains）存库，客户可自助配置 SSO 无需改代码；回调后 claims → Principal 映射，支持 JIT 建用户。
 - **SAML** 作为可选子包延后，OIDC 已覆盖多数企业场景，不把 SAML 依赖强加给所有消费方。
@@ -109,7 +129,7 @@ type Membership struct {
 ```
 
 - 从"Organization → Workspace"两级扩展为**任意层级的组织树**（如 集团 → 区域 → 门店），用 `parent_id` + 物化路径（materialized path）实现，兼顾查询效率与实现复杂度。
-- **权限沿树继承**：上级角色可下探管辖下级。具体到 Casbin 模型——domain 仍是租户根，**被管辖节点的物化路径作为策略的一个维度**参与判定：
+- **权限沿树继承**：上级角色可下探管辖下级。以下按当初的 Casbin 方案描述（实际实现见本文档开头的「实现落地更正」：语义一致，载体换成了自建引擎）——domain 仍是租户根，**被管辖节点的物化路径作为策略的一个维度**参与判定：
 
   ```
   p, role:store_manager, tenant_42, /group1/region2/store7/*, order:read

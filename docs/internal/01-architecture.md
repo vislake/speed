@@ -19,7 +19,7 @@ graph BT
     storage["storage<br/>对象存储/媒体处理/预签名直传"]
     notify["notification<br/>邮件/短信/站内信/模板/双语"]
     authn["authn<br/>密码+JWT+OIDC RP+社交登录+手机号"]
-    rbac["rbac<br/>Casbin RBAC with domains"]
+    rbac["rbac<br/>自建RBAC/domain=租户/子树范围"]
     metering["metering<br/>用量采集/聚合/配额"]
     org["org<br/>组织树(多层级)/工作空间/成员/邀请"]
     billing["billing<br/>订阅/账单/信用点(credits)"]
