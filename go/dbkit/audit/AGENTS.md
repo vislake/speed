@@ -60,7 +60,12 @@ An audit event is neither purely tenant data nor purely platform data — docs/i
 - No query/report API beyond `ListByTenant`. The actor/resource/action/time-range/result search doc 10 describes, and its admin-console surface, are M4 (`go/compliance`) scope.
 - No immutability enforcement beyond the application layer (no mutating method exists). Database-role revocation and the optional hash chain are M4.
 - No retention/archival.
-- No reference-app consumer yet, and no proof test driving a real HTTP handler end to end — both are the next block in this round (B3).
+
+## Reference-app consumer
+
+`examples/reference-app` is this package's mandatory first consumer (root `CLAUDE.md`'s "a module API it does not use is not done" rule): `internal/notes/handler.go`'s `NotesCreateNote` calls `Emit` explicitly (`recordNoteCreatedAudit`) after a note is created, under the already-declared `notes.note.create` audit action; `cmd/server/server.go` wires `audit.New(db)` into the app's `Kernel.Bootstrap` module set, sharing the notes module's own database connection — no new infra dependency. `cmd/server/server_test.go`'s `TestBuildServer_NoteCreate_PersistsAuditEvent` is the end-to-end proof: a real POST `/api/v1/notes` through the composed HTTP stack, then a second `dbkit.Open` connection to the same SQLite file reading the row back through a real `Repository.ListByTenant` call — not a mock, and not merely an in-memory event assertion (that narrower claim is `internal/notes/handler_test.go`'s `TestHandler_Create_ValidText_RecordsAuditEvent`).
+
+`notes.Note` also implements `dbkit.Auditable` (`AuditResourceType() string { return "note" }`), but the reference app's own `db` deliberately does **not** set `dbkit.Options.AuditBus` on it — see `go/dbkit/AGENTS.md`'s "Audit trail collection" section, "Known limitation", for the same-SQLite-file deadlock this discovered, and `server.go`'s own doc comment on its `dbkit.Open` call for the app-specific write-up. The declarative `Emit` path above is what this app actually relies on for persistence; `Auditable` stays declared for when that mechanism is fixed or a host wires a dedicated audit connection.
 
 ## Testing
 
