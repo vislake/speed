@@ -67,10 +67,13 @@ func run(baseCtx context.Context) error {
 	// deployment mode, the optional Redis-backed EventBus SPEED_REDIS_ADDR
 	// requests, every other seam from the Preset -- and Bootstrap's
 	// capability validation of that composition runs inside it, so it is
-	// the one place a misconfigured one surfaces (its ErrCapabilityUnsatisfied
-	// error, e.g. "distributed" with no SPEED_REDIS_ADDR, or a Redis bus
-	// that fails to connect, names the seam and the shortfall). It must
-	// run before obs.Init because Init takes no deployment mode and
+	// the one place a misconfigured one surfaces: its ErrCapabilityUnsatisfied
+	// error (e.g. "distributed" with no SPEED_REDIS_ADDR) names the seam
+	// and the shortfall. Network-class faults are the one thing assembly
+	// cannot catch -- RedisEventBus starts no goroutine and touches no
+	// network until the first Subscribe, so an unreachable SPEED_REDIS_ADDR
+	// passes Bootstrap and fails loudly at first use instead. buildServer
+	// must run before obs.Init because Init takes no deployment mode and
 	// therefore refuses none: after the retrofit removed the old hard
 	// refusal, this ordering is the only place a bad composition fails
 	// before telemetry starts, and its error is the accurate one. Since
