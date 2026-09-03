@@ -41,8 +41,8 @@ go 1.25.0
 	for _, key := range bootstrapEnvKeys {
 		value, present := os.LookupEnv(key)
 		saved[key] = envEntry{value: value, present: present}
-		if err := os.Unsetenv(key); err != nil {
-			fmt.Println(err)
+		if unsetErr := os.Unsetenv(key); unsetErr != nil {
+			fmt.Println(unsetErr)
 			return
 		}
 	}

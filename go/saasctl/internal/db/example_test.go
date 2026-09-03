@@ -42,8 +42,8 @@ require github.com/vislake/speed/go/config v0.0.0-00010101000000-000000000000
 	for _, key := range bootstrapEnvKeys {
 		value, present := os.LookupEnv(key)
 		saved[key] = envEntry{value: value, present: present}
-		if err := os.Unsetenv(key); err != nil {
-			fmt.Println(err)
+		if unsetErr := os.Unsetenv(key); unsetErr != nil {
+			fmt.Println(unsetErr)
 			return
 		}
 	}

@@ -301,7 +301,7 @@ func migrate(modPath string) (string, error) {
 		return "", fmt.Errorf("open %s: %w", dbPath, err)
 	}
 	defer func() {
-		if sqlDB, err := gdb.DB(); err == nil {
+		if sqlDB, closeErr := gdb.DB(); closeErr == nil {
 			_ = sqlDB.Close()
 		}
 	}()
@@ -322,16 +322,16 @@ func migrate(modPath string) (string, error) {
 
 	registry := dbkit.NewMigrationRegistry()
 	for _, mod := range selected {
-		m, err := mod.construct(gdb)
-		if err != nil {
-			return "", fmt.Errorf("construct the %s module: %w", mod.name, err)
+		m, modErr := mod.construct(gdb)
+		if modErr != nil {
+			return "", fmt.Errorf("construct the %s module: %w", mod.name, modErr)
 		}
-		if err := registry.Register(m); err != nil {
-			return "", fmt.Errorf("register the %s module: %w", mod.name, err)
+		if regErr := registry.Register(m); regErr != nil {
+			return "", fmt.Errorf("register the %s module: %w", mod.name, regErr)
 		}
 	}
-	if err := registry.Apply(ctx, gdb, dbkit.DialectSQLite); err != nil {
-		return "", fmt.Errorf("apply %s's migrations: %w", dbPath, err)
+	if applyErr := registry.Apply(ctx, gdb, dbkit.DialectSQLite); applyErr != nil {
+		return "", fmt.Errorf("apply %s's migrations: %w", dbPath, applyErr)
 	}
 	post, err := readLedger(gdb)
 	if err != nil {
