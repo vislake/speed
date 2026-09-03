@@ -1,0 +1,6 @@
+{
+  "$schema": "https://unpkg.com/@changesets/config@4.0.0/schema.json",
+  "fixed": [["@speed/i18n", "@speed/tokens", "@speed/ui-kit"]],
+  "access": "public",
+  "baseBranch": "main"
+}
