@@ -14,7 +14,10 @@ replace github.com/vislake/speed/go/jobs => ../jobs
 
 require (
 	github.com/google/uuid v1.6.0
+	github.com/minio/minio-go/v7 v7.3.0
 	github.com/oapi-codegen/runtime v1.7.0
+	github.com/testcontainers/testcontainers-go v0.44.0
+	github.com/testcontainers/testcontainers-go/modules/minio v0.44.0
 	github.com/vislake/speed/go/dbkit v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/jobs v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000
@@ -67,7 +70,6 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/minio/crc64nvme v1.1.1 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
-	github.com/minio/minio-go/v7 v7.3.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/go-archive v0.2.0 // indirect
 	github.com/moby/moby/api v1.55.0 // indirect
@@ -97,7 +99,6 @@ require (
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
-	github.com/testcontainers/testcontainers-go v0.44.0 // indirect
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
