@@ -83,7 +83,12 @@ func tokenFromMail(t *testing.T, mail pkgcore.Mail) string {
 // for the deployment mode's default console mailer: org's invitation flow
 // needs to observe the sent message to recover the token that never appears
 // on any HTTP response (see capturingMailer's own doc comment above).
-func buildOrgTestServer(t *testing.T) (*httptest.Server, *capturingMailer) {
+//
+// It returns the serverConfig alongside the server and mailer, for the same
+// reason buildTestServer does: org's flow test authenticates its callers as
+// real authn users, and registerAndAuthenticate reaches cfg.Memberships to
+// grant each one membership in the tenant its token must select.
+func buildOrgTestServer(t *testing.T) (*httptest.Server, serverConfig, *capturingMailer) {
 	t.Helper()
 
 	cfg := testConfig(t)
@@ -102,7 +107,7 @@ func buildOrgTestServer(t *testing.T) (*httptest.Server, *capturingMailer) {
 
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	return srv, mailer
+	return srv, cfg, mailer
 }
 
 // orgNode is the subset of org's OrgNode response this test reads, decoded
@@ -133,12 +138,26 @@ type orgListMembersResponse struct {
 	Members []orgMembership `json:"members"`
 }
 
-// orgRequest issues method against srv.URL+path with the given Host and demo
-// subject header (subjectUserID empty omits the header entirely, exercising
-// the unauthenticated path), JSON-encoding body when non-nil. It fails the
-// test outright on anything outside 2xx, and otherwise decodes the response
-// into out (nil to skip decoding, for 204 No Content responses).
-func orgRequest(t *testing.T, srv *httptest.Server, method, path, host, subjectUserID string, body, out any) {
+// orgRequest issues method against srv.URL+path, authenticated as token --
+// the bearer access token is the ONLY thing that selects the tenant an org
+// operation runs in: org's routes sit behind tenancy.Middleware
+// (authn.NewPrincipalResolver) like every other protected route in this app,
+// and Host plays no part in resolving their tenant (see server.go's
+// middleware-chain doc comment). token empty omits the Authorization header
+// entirely.
+//
+// subjectUserID is a separate thing from the token, the same split
+// createNoteAs's own doc comment (server_test.go) explains for notes: it is
+// the X-Demo-User-Id header org's own SubjectResolver (demoOrgSubjectResolver
+// in server.go) reads to name WHO is acting, for the two operations that
+// resolve a caller identity (creating and accepting an invitation). Empty
+// omits the header entirely, which the operations that resolve no caller
+// identity must do (org_createNode).
+//
+// It fails the test outright on anything outside 2xx, and otherwise decodes
+// the response into out (nil to skip decoding, for 204 No Content
+// responses).
+func orgRequest(t *testing.T, srv *httptest.Server, method, path, token, subjectUserID string, body, out any) {
 	t.Helper()
 
 	var reader io.Reader
@@ -154,7 +173,9 @@ func orgRequest(t *testing.T, srv *httptest.Server, method, path, host, subjectU
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	req.Host = host
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	if reader != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -164,18 +185,18 @@ func orgRequest(t *testing.T, srv *httptest.Server, method, path, host, subjectU
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {
-		t.Fatalf("%s %s (Host=%s): %v", method, path, host, err)
+		t.Fatalf("%s %s: %v", method, path, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
-		t.Fatalf("%s %s (Host=%s) status = %d, want 2xx; body = %s",
-			method, path, host, resp.StatusCode, respBody)
+		t.Fatalf("%s %s status = %d, want 2xx; body = %s",
+			method, path, resp.StatusCode, respBody)
 	}
 	if out != nil {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-			t.Fatalf("decode response for %s %s (Host=%s): %v", method, path, host, err)
+			t.Fatalf("decode response for %s %s: %v", method, path, err)
 		}
 	}
 }
@@ -183,10 +204,10 @@ func orgRequest(t *testing.T, srv *httptest.Server, method, path, host, subjectU
 // TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd is
 // the round's own acceptance criterion (see the frozen plan's B3 block): the
 // roadmap M1 exit path, driven end to end through the real composed HTTP
-// stack this app serves -- tenancy.Middleware, org's real Handler, and real
-// dbkit.Repository-backed SQLite storage, none of it mocked -- proving org is
-// a genuine consumed dependency of the reference app, not merely a module
-// that compiles alongside it.
+// stack this app serves -- the authn+tenancy middleware chain, org's real
+// Handler, and real dbkit.Repository-backed SQLite storage, none of it
+// mocked -- proving org is a genuine consumed dependency of the reference
+// app, not merely a module that compiles alongside it.
 //
 // The shape mirrors docs/internal/14's dental-SaaS DSO scenario: a group
 // with two stores beneath it. A member invited into one store must be
@@ -200,19 +221,32 @@ func orgRequest(t *testing.T, srv *httptest.Server, method, path, host, subjectU
 // config, proven the same way by TestSystemFeatures_EnabledFlagChain_ResolvesDependencies
 // in public_config_test.go.
 func TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd(t *testing.T) {
-	srv, mailer := buildOrgTestServer(t)
+	srv, cfg, mailer := buildOrgTestServer(t)
 
-	const host = "acme.demo.localhost"
+	// The whole flow runs in one tenant, tenant-acme -- the tenant the demo
+	// host "acme.demo.localhost" used to select before authn landed. The
+	// bearer token registerAndAuthenticate returns is what selects that
+	// tenant now: org's routes sit behind the authn+tenancy middleware
+	// chain like every other route this app protects, and Host no longer
+	// resolves a tenant for them (see server.go's middleware-chain doc
+	// comment). The invitee authenticates as a DIFFERENT account than the
+	// inviter, exactly as a real acceptance would be: the person accepting
+	// is never the same HTTP caller who sent the invite. The two accounts'
+	// emails are authn-internal placeholders -- only the invitation's own
+	// email (inviteeEmail below) is what org's token binds to.
 	const inviterUserID = "user-owner-1"
 	const inviteeUserID = "user-new-hire-1"
 	const inviteeEmail = "new-hire@example.com"
+
+	inviterToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "org-owner")
+	inviteeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "org-invitee")
 
 	// Step 1: create the tenant's root -- the DSO's top-level group. No
 	// subject header: org_createNode never resolves a caller identity (only
 	// invitation create/accept do -- see handler.go), so this must succeed
 	// with none set.
 	var root orgNode
-	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", host, "",
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", inviterToken, "",
 		map[string]string{"name": "Acme Dental Group", "kind": "group"}, &root)
 	if root.ID == "" || root.ParentID != "" {
 		t.Fatalf("created root = %+v, want a non-empty id and empty parentId", root)
@@ -221,9 +255,9 @@ func TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd(t *
 	// Step 2: two stores beneath the group -- the "multi-level" shape the
 	// round's acceptance criterion names explicitly.
 	var storeA, storeB orgNode
-	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", host, "",
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", inviterToken, "",
 		map[string]string{"name": "Downtown Store", "kind": "store", "parentId": root.ID}, &storeA)
-	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", host, "",
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", inviterToken, "",
 		map[string]string{"name": "Uptown Store", "kind": "store", "parentId": root.ID}, &storeB)
 	if storeA.ID == "" || storeB.ID == "" || storeA.ID == storeB.ID {
 		t.Fatalf("stores = %+v, %+v, want two distinct non-empty ids", storeA, storeB)
@@ -233,7 +267,7 @@ func TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd(t *
 	// caller org_createInvitation resolves through SubjectResolver (the demo
 	// header here), never a value the request body could forge.
 	var invitation orgInvitation
-	orgRequest(t, srv, http.MethodPost, "/api/v1/org/invitations", host, inviterUserID,
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/invitations", inviterToken, inviterUserID,
 		map[string]string{"email": inviteeEmail, "nodeId": storeA.ID}, &invitation)
 	if invitation.NodeID != storeA.ID || invitation.Status != "pending" {
 		t.Fatalf("invitation = %+v, want nodeId %q and status \"pending\"", invitation, storeA.ID)
@@ -258,7 +292,7 @@ func TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd(t *
 	// would be: the person accepting is never the same HTTP caller who sent
 	// the invite.
 	var membership orgMembership
-	orgRequest(t, srv, http.MethodPost, "/api/v1/org/invitations/accept", host, inviteeUserID,
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/invitations/accept", inviteeToken, inviteeUserID,
 		map[string]string{"token": token}, &membership)
 	if membership.UserID != inviteeUserID || membership.NodeID != storeA.ID || membership.Status != "active" {
 		t.Fatalf("membership after accept = %+v, want userId %q, nodeId %q, status \"active\"",
@@ -270,7 +304,7 @@ func TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd(t *
 	// visible from the root.
 	var fromRoot orgListMembersResponse
 	orgRequest(t, srv, http.MethodGet,
-		fmt.Sprintf("/api/v1/org/members?nodeId=%s", url.QueryEscape(root.ID)), host, "", nil, &fromRoot)
+		fmt.Sprintf("/api/v1/org/members?nodeId=%s", url.QueryEscape(root.ID)), inviterToken, "", nil, &fromRoot)
 	if !containsUserID(fromRoot.Members, inviteeUserID) {
 		t.Fatalf("members listed from the group root = %+v, want it to include %q", fromRoot.Members, inviteeUserID)
 	}
@@ -280,7 +314,7 @@ func TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd(t *
 	// that still contains them.
 	var fromStoreA orgListMembersResponse
 	orgRequest(t, srv, http.MethodGet,
-		fmt.Sprintf("/api/v1/org/members?nodeId=%s", url.QueryEscape(storeA.ID)), host, "", nil, &fromStoreA)
+		fmt.Sprintf("/api/v1/org/members?nodeId=%s", url.QueryEscape(storeA.ID)), inviterToken, "", nil, &fromStoreA)
 	if len(fromStoreA.Members) != 1 || !containsUserID(fromStoreA.Members, inviteeUserID) {
 		t.Fatalf("members listed from storeA = %+v, want exactly one member, %q", fromStoreA.Members, inviteeUserID)
 	}
@@ -292,7 +326,7 @@ func TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd(t *
 	// listing path rather than a direct unit call.
 	var fromStoreB orgListMembersResponse
 	orgRequest(t, srv, http.MethodGet,
-		fmt.Sprintf("/api/v1/org/members?nodeId=%s", url.QueryEscape(storeB.ID)), host, "", nil, &fromStoreB)
+		fmt.Sprintf("/api/v1/org/members?nodeId=%s", url.QueryEscape(storeB.ID)), inviterToken, "", nil, &fromStoreB)
 	if len(fromStoreB.Members) != 0 {
 		t.Fatalf("members listed from the sibling storeB = %+v, want none -- "+
 			"a member bound to storeA must never leak into a sibling subtree's roster", fromStoreB.Members)

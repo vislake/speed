@@ -8,8 +8,9 @@ package main
 // server_test.go; these tests cover the other half of buildServer's wiring
 // -- the pre-auth display surface, where the tenancy rules are the inverse
 // of the CRUD side (unmatched hosts must still render platform defaults,
-// never 403), which is exactly what the strictHostResolver fail-closed
-// behavior that protects the notes API must NOT do here.
+// never 403), which is exactly what the fail-closed behavior that
+// protects the notes API (an unauthenticated caller, server_test.go's
+// TestBuildServer_Unauthenticated_FailsClosed) must NOT do here.
 
 import (
 	"context"
@@ -17,6 +18,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -32,9 +34,10 @@ import (
 // features endpoints report them, both on by default (org.WithFeatureGate
 // wires *config.Service, so their effective state is dependency-resolved
 // through the same config machinery as notes' own ai.* flags): every
-// platform-default assertion below must include them now that org is a
-// bootstrapped module, or these tests would silently stop covering org's
-// contribution to the merged feature set.
+// platform-default assertion below passes them through withAuthnDefaults(),
+// so the expected lists carry org's contribution alongside authn's two
+// default-on flags -- dropping either module's flags would silently stop
+// covering its contribution to the merged feature set.
 var orgDefaultFlags = []string{org.FeatureInvitationEmail, org.FeatureInvitations}
 
 // configSeed is one row to insert into the configs table behind a test
@@ -63,7 +66,7 @@ type configSeed struct {
 // has already cached the same (key, scope, tenant) triple would not be
 // seen until the 30s anti-loss poller swept them in. Every test here seeds
 // before its first request, so the cache starts cold.
-func buildSeededTestServer(t *testing.T, seeds ...configSeed) *httptest.Server {
+func buildSeededTestServer(t *testing.T, seeds ...configSeed) (*httptest.Server, serverConfig) {
 	t.Helper()
 
 	cfg := testConfig(t)
@@ -83,7 +86,7 @@ func buildSeededTestServer(t *testing.T, seeds ...configSeed) *httptest.Server {
 
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, cfg
 }
 
 // seedConfigRows inserts seeds through a second dbkit.Open connection to
@@ -159,6 +162,24 @@ func doAs(t *testing.T, srv *httptest.Server, method, path, host string, body io
 	return resp, respBody
 }
 
+// authnDefaultFeatures is the feature-flag pair authn.Module.Register
+// declares ON by default (FeatureFlagPasswordLogin, FeatureFlagSMSLogin --
+// go/authn/module.go's featureFlags) -- every social/SSO channel defaults
+// OFF, but these two need no third-party credentials to work, so they
+// appear in every features response below regardless of tenant or seeded
+// overrides. Declared once here so every assertion below stays correct if
+// authn ever changes which flags default on.
+var authnDefaultFeatures = []string{"authn.password_login", "authn.sms_login"}
+
+// withAuthnDefaults returns extra plus authnDefaultFeatures, re-sorted
+// ascending -- the order config.PathPublic and config.PathSystemFeatures
+// both return flags in.
+func withAuthnDefaults(extra ...string) []string {
+	got := append(append([]string{}, extra...), authnDefaultFeatures...)
+	sort.Strings(got)
+	return got
+}
+
 // requirePublicSnapshot asserts the common shape every successful
 // /api/config/public response carries: exactly the one Public item this
 // app's notes module registers (brand.site_name), at the given value; the
@@ -216,15 +237,18 @@ func requireFeatures(t *testing.T, body []byte, want []string) {
 
 // TestPublicConfig_UnmatchedHost_ServesPlatformDefaults pins the heart of
 // the config endpoints' tenancy rule: a Host no tenant maps to -- which
-// strictHostResolver would 403 for the notes API -- must still get 200 and
+// gets an unauthenticated caller 403 on the notes API (server_test.go's
+// TestBuildServer_Unauthenticated_FailsClosed) -- must still get 200 and
 // the platform defaults (the schema defaults the notes module declared:
 // brand.site_name "Smile Studio"), never an error. It also pins the shape
-// of that default snapshot: no Sensitive key anywhere, and no feature
+// of that default snapshot: no Sensitive key anywhere, and no ai.* feature
 // enabled -- ai.premium_upsell declares a dependency on ai.smile_preview,
 // whose platform default is false, so the dependency chain must resolve
-// the upsell flag off even though its own default is true.
+// the upsell flag off even though its own default is true (authn's own two
+// default-on flags, withAuthnDefaults(), are unaffected by that chain and
+// appear regardless).
 func TestPublicConfig_UnmatchedHost_ServesPlatformDefaults(t *testing.T) {
-	srv := buildSeededTestServer(t)
+	srv, _ := buildSeededTestServer(t)
 
 	const unmatchedHost = "totally-unrecognized-host.example"
 	resp, body := doAs(t, srv, http.MethodGet, config.PathPublic, unmatchedHost, nil)
@@ -232,31 +256,32 @@ func TestPublicConfig_UnmatchedHost_ServesPlatformDefaults(t *testing.T) {
 		t.Fatalf("GET %s (Host=%s) status = %d, want %d; body = %s",
 			config.PathPublic, unmatchedHost, resp.StatusCode, http.StatusOK, body)
 	}
-	requirePublicSnapshot(t, body, "Smile Studio", orgDefaultFlags)
+	requirePublicSnapshot(t, body, "Smile Studio", withAuthnDefaults(orgDefaultFlags...))
 
 	// The features endpoint answers the same way for the same host: 200,
-	// platform defaults, org's two flags (both default-on) and nothing
-	// else -- see orgDefaultFlags' own doc comment.
+	// platform defaults, with the two modules' default-on flags -- org's
+	// pair plus authn's pair (see orgDefaultFlags' and
+	// authnDefaultFeatures' own doc comments).
 	resp2, body2 := doAs(t, srv, http.MethodGet, config.PathSystemFeatures, unmatchedHost, nil)
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("GET %s (Host=%s) status = %d, want %d; body = %s",
 			config.PathSystemFeatures, unmatchedHost, resp2.StatusCode, http.StatusOK, body2)
 	}
-	requireFeatures(t, body2, orgDefaultFlags)
+	requireFeatures(t, body2, withAuthnDefaults(orgDefaultFlags...))
 }
 
 // TestPublicConfig_MatchedHost_ServesTenantOverrides proves the tenant
 // tier of the config resolution end to end: a seeded override for
 // tenant-acme's brand.site_name is served to the acme host, while the
 // globex host and an unmatched host both keep falling back to the platform
-// default -- the same row the strictHostResolver-side tests in
-// server_test.go prove for notes data, here through the config module's
-// own read path.
+// default -- the same tenant-isolation shape
+// TestBuildServer_MultiTenantIsolation_EndToEnd in server_test.go proves
+// for notes data, here through the config module's own read path.
 func TestPublicConfig_MatchedHost_ServesTenantOverrides(t *testing.T) {
 	const acmeHost = "acme.demo.localhost"
 	const globexHost = "globex.demo.localhost"
 
-	srv := buildSeededTestServer(t, configSeed{
+	srv, _ := buildSeededTestServer(t, configSeed{
 		key:      notes.ConfigKeyBrandSiteName,
 		scope:    config.ScopeTenant,
 		tenantID: "tenant-acme",
@@ -268,16 +293,16 @@ func TestPublicConfig_MatchedHost_ServesTenantOverrides(t *testing.T) {
 		t.Fatalf("GET %s (Host=%s) status = %d, want %d; body = %s",
 			config.PathPublic, acmeHost, resp.StatusCode, http.StatusOK, body)
 	}
-	requirePublicSnapshot(t, body, "Acme Studio", orgDefaultFlags)
+	requirePublicSnapshot(t, body, "Acme Studio", withAuthnDefaults(orgDefaultFlags...))
 
 	// tenant-globex has no override row: it must fall back to the platform
 	// default, not to acme's override -- and the unmatched host likewise.
 	_, globexBody := doAs(t, srv, http.MethodGet, config.PathPublic, globexHost, nil)
-	requirePublicSnapshot(t, globexBody, "Smile Studio", orgDefaultFlags)
+	requirePublicSnapshot(t, globexBody, "Smile Studio", withAuthnDefaults(orgDefaultFlags...))
 
 	const unmatchedHost = "totally-unrecognized-host.example"
 	_, unmatchedBody := doAs(t, srv, http.MethodGet, config.PathPublic, unmatchedHost, nil)
-	requirePublicSnapshot(t, unmatchedBody, "Smile Studio", orgDefaultFlags)
+	requirePublicSnapshot(t, unmatchedBody, "Smile Studio", withAuthnDefaults(orgDefaultFlags...))
 }
 
 // TestSystemFeatures_EnabledFlagChain_ResolvesDependencies proves the
@@ -290,7 +315,7 @@ func TestSystemFeatures_EnabledFlagChain_ResolvesDependencies(t *testing.T) {
 	const acmeHost = "acme.demo.localhost"
 	const globexHost = "globex.demo.localhost"
 
-	srv := buildSeededTestServer(t, configSeed{
+	srv, _ := buildSeededTestServer(t, configSeed{
 		key:      notes.FeatureFlagSmilePreview,
 		scope:    config.ScopeTenant,
 		tenantID: "tenant-acme",
@@ -302,16 +327,18 @@ func TestSystemFeatures_EnabledFlagChain_ResolvesDependencies(t *testing.T) {
 		t.Fatalf("GET %s (Host=%s) status = %d, want %d; body = %s",
 			config.PathSystemFeatures, acmeHost, resp.StatusCode, http.StatusOK, body)
 	}
-	// Sorted ascending across both modules' flags: "ai." sorts before
-	// "org." lexically, so the notes pair comes first, then org's own two
-	// (both default-on regardless of the ai.* seed -- see orgDefaultFlags).
-	requireFeatures(t, body, []string{
+	// Sorted ascending across the modules' flags: "ai." sorts before
+	// "authn." before "org." lexically, so the notes pair comes first,
+	// then authn's two default-on flags, then org's own two (both
+	// default-on regardless of the ai.* seed -- see orgDefaultFlags and
+	// authnDefaultFeatures).
+	requireFeatures(t, body, withAuthnDefaults(
 		notes.FeatureFlagPremiumUpsell, notes.FeatureFlagSmilePreview,
 		org.FeatureInvitationEmail, org.FeatureInvitations,
-	})
+	))
 
 	_, globexBody := doAs(t, srv, http.MethodGet, config.PathSystemFeatures, globexHost, nil)
-	requireFeatures(t, globexBody, orgDefaultFlags)
+	requireFeatures(t, globexBody, withAuthnDefaults(orgDefaultFlags...))
 }
 
 // TestPublicConfigEndpoints_Head_Returns200WithoutBody proves the HEAD
@@ -322,7 +349,7 @@ func TestSystemFeatures_EnabledFlagChain_ResolvesDependencies(t *testing.T) {
 // GET and HEAD for both config paths, so both must answer 200 with an
 // empty body.
 func TestPublicConfigEndpoints_Head_Returns200WithoutBody(t *testing.T) {
-	srv := buildSeededTestServer(t)
+	srv, _ := buildSeededTestServer(t)
 	const acmeHost = "acme.demo.localhost"
 
 	for _, path := range []string{config.PathPublic, config.PathSystemFeatures} {
@@ -337,32 +364,60 @@ func TestPublicConfigEndpoints_Head_Returns200WithoutBody(t *testing.T) {
 }
 
 // TestPublicConfigEndpoints_NonGetMethod_FailsClosed proves the method
-// contract of both config endpoints: only GET and HEAD are allowlisted
-// through tenancy.Middleware, so a POST with a resolvable Host reaches the
-// config handler and gets its 405 with the Allow header, while a POST with
-// an unresolvable Host is stopped by strictHostResolver's 403 before the
-// handler is ever consulted. The allowlist exemption is scoped to exactly
-// the read methods a pre-auth display surface needs -- everything else
-// stays fail-closed behind the same resolver that guards the notes API.
+// contract of both config endpoints, exercising it on both sides of the
+// outer tenancy.Middleware's allowlist: only GET and HEAD are allowlisted
+// for config.PathPublic/PathSystemFeatures, so
+//
+//   - an UNAUTHENTICATED POST (no Authorization header at all) never
+//     reaches the config handler: tenancy.Middleware's own resolver
+//     (authn.NewPrincipalResolver) fails with no Principal to read a
+//     tenant from, POST is not on the allowlist, so it is refused 403
+//     before the config handler is ever consulted -- the same fail-closed
+//     default that protects the notes API (server_test.go's
+//     TestBuildServer_Unauthenticated_FailsClosed).
+//   - an AUTHENTICATED POST (a valid access token, so tenancy.Middleware's
+//     resolution SUCCEEDS and the allowlist becomes irrelevant -- see
+//     tenancy.Middleware's own doc comment: the allowlist only matters
+//     when resolution fails) reaches the config module's own handler,
+//     which registers GET only and answers 405 with an Allow header. This
+//     is the case an unauthenticated caller can never reach.
 func TestPublicConfigEndpoints_NonGetMethod_FailsClosed(t *testing.T) {
-	srv := buildSeededTestServer(t)
-	const acmeHost = "acme.demo.localhost"
-	const unmatchedHost = "totally-unrecognized-host.example"
+	srv, cfg := buildSeededTestServer(t)
+	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "config-method-check")
 
 	for _, path := range []string{config.PathPublic, config.PathSystemFeatures} {
-		resp, body := doAs(t, srv, http.MethodPost, path, acmeHost, nil)
+		req, err := http.NewRequest(http.MethodPost, srv.URL+path, nil)
+		if err != nil {
+			t.Fatalf("build POST %s request: %v", path, err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatalf("POST %s (authenticated): %v", path, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		if resp.StatusCode != http.StatusMethodNotAllowed {
-			t.Fatalf("POST %s (Host=%s) status = %d, want %d; body = %s",
-				path, acmeHost, resp.StatusCode, http.StatusMethodNotAllowed, body)
+			t.Fatalf("POST %s (authenticated) status = %d, want %d; body = %s",
+				path, resp.StatusCode, http.StatusMethodNotAllowed, body)
 		}
 		if allow := resp.Header.Get("Allow"); allow != "GET, HEAD" {
-			t.Errorf("POST %s Allow header = %q, want %q", path, allow, "GET, HEAD")
+			t.Errorf("POST %s (authenticated) Allow header = %q, want %q", path, allow, "GET, HEAD")
 		}
 
-		resp2, body2 := doAs(t, srv, http.MethodPost, path, unmatchedHost, nil)
-		if resp2.StatusCode != http.StatusForbidden {
-			t.Fatalf("POST %s (Host=%s) status = %d, want %d (strictHostResolver must fail closed before the config handler); body = %s",
-				path, unmatchedHost, resp2.StatusCode, http.StatusForbidden, body2)
+		unauthReq, err := http.NewRequest(http.MethodPost, srv.URL+path, nil)
+		if err != nil {
+			t.Fatalf("build unauthenticated POST %s request: %v", path, err)
+		}
+		unauthResp, err := srv.Client().Do(unauthReq)
+		if err != nil {
+			t.Fatalf("POST %s (no Authorization): %v", path, err)
+		}
+		unauthBody, _ := io.ReadAll(unauthResp.Body)
+		unauthResp.Body.Close()
+		if unauthResp.StatusCode != http.StatusForbidden {
+			t.Fatalf("POST %s (no Authorization) status = %d, want %d (tenancy.Middleware must fail closed before the config handler); body = %s",
+				path, unauthResp.StatusCode, http.StatusForbidden, unauthBody)
 		}
 	}
 }

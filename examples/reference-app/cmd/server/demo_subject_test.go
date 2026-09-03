@@ -14,7 +14,9 @@ import (
 )
 
 // requestInTenant returns a request whose context carries tenantID the way
-// tenancy.Middleware leaves it after resolving the Host.
+// tenancy.Middleware leaves it after resolving the tenant from the caller's
+// verified access token (see server.go's middleware-chain doc comment on
+// authn.NewPrincipalResolver).
 func requestInTenant(method string, tenantID pkgcore.TenantID) *http.Request {
 	r := httptest.NewRequest(method, "/api/v1/notes", nil)
 	if tenantID == "" {

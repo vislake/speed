@@ -7,14 +7,19 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
@@ -120,73 +125,147 @@ var devOrgIndexKey = []byte{
 	0xe7, 0xe6, 0xe5, 0xe4, 0xe3, 0xe2, 0xe1, 0xe0,
 }
 
+// devSigningKeySeed, devBlindIndexKey and devPIICipherKey are authn's own
+// committed-key placeholders, the same documented trade-off as devConfigKey
+// immediately above -- a real deployment must replace every one of them
+// with real secret-manager material, never commit real keys the way this
+// demo commits these.
+//
+// Each protects something different and each MUST stay stable across
+// restarts for a different reason: authn.WithSigningKeys has no safe
+// generated-at-startup default (a fresh key on every restart invalidates
+// every outstanding session); authn.WithBlindIndexKey's key must stay
+// IDENTICAL across restarts or every already-stored email/phone blind index
+// becomes unfindable; and devPIICipherKey seals authn's encrypted PII
+// columns (email, phone, TOTP secrets) via authn.RegisterPIISerializer,
+// deliberately a DIFFERENT key from devConfigKey -- dbkit's own
+// key-separation rule (never let one key double as two different AEAD
+// constructions) applies across modules, not only within one.
+var (
+	devSigningKeySeed = []byte{
+		0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+		0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
+		0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
+		0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f,
+	}
+	devBlindIndexKey = []byte{
+		0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47,
+		0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f,
+		0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57,
+		0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f,
+	}
+	devPIICipherKey = []byte{
+		0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67,
+		0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e, 0x6f,
+		0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77,
+		0x78, 0x79, 0x7a, 0x7b, 0x7c, 0x7d, 0x7e, 0x7f,
+	}
+)
+
+// devSigningKeySet derives a stable Ed25519 signing key from
+// devSigningKeySeed. It builds the TokenKey by hand (ed25519.NewKeyFromSeed)
+// rather than through authn.GenerateTokenKey, which always draws from
+// crypto/rand and so could never be reproducible across restarts the way
+// this demo default needs to be.
+func devSigningKeySet() (*authn.KeySet, error) {
+	priv := ed25519.NewKeyFromSeed(devSigningKeySeed)
+	pub, ok := priv.Public().(ed25519.PublicKey)
+	if !ok {
+		return nil, errors.New("reference-app: derive the dev signing key's public half")
+	}
+	return authn.NewKeySet(authn.TokenKey{ID: "reference-app-dev", Private: priv, Public: pub})
+}
+
 // demoHostTenants is a hard-coded, obviously-temporary Host -> TenantID
-// lookup standing in for the Resolver authn will eventually supply for
-// authenticated requests -- see go/tenancy/AGENTS.md's "Why there is no
-// JWTResolver here". It exists only so this reference app has *some* way
-// to demonstrate real multi-tenant behavior end to end before authn
-// exists.
+// lookup. It exists only so this reference app has *some* way to render a
+// tenant-specific brand on the config module's pre-auth display endpoints
+// (configModule's tenancy.NewDomainResolver wiring in buildServer below,
+// go/tenancy/AGENTS.md's "Why there is no JWTResolver here") without a real
+// custom-domain table.
 //
 // This is a placeholder, not a pattern to copy into a real deployment: a
 // real Resolver must derive the tenant from a source the server itself
-// controls (a verified token's claims, a database-backed custom-domain
-// table) -- never an unauthenticated, static Host map like this one, which
-// anyone can trigger just by setting the Host header on an HTTP request.
-// See go/tenancy/resolver.go's own Resolver doc comment for the same rule
-// stated as a hard requirement on every implementation.
+// controls -- never an unauthenticated, static Host map like this one,
+// which anyone can trigger just by setting the Host header on an HTTP
+// request. See go/tenancy/resolver.go's own Resolver doc comment for the
+// same rule stated as a hard requirement on every implementation.
 //
-// An unrecognized Host deliberately has no entry here: strictHostResolver
-// below (not tenancy.DomainResolver) is what buildServer wires up in front
-// of this app's real routes, and it fails the request rather than invent a
-// tenant for a Host that is missing from this map -- see
-// strictHostResolver's own doc comment for why.
+// Host does NOT select the tenant for anything else in this app. The notes
+// API, and every other route this app protects, resolve their tenant from
+// the caller's ACCESS TOKEN instead (authn.NewPrincipalResolver, wired
+// below) -- an unauthenticated caller cannot choose a tenant just by
+// setting Host, which a Host-keyed lookup like this one would otherwise
+// allow. See buildServer's middleware-chain doc comment for the full
+// reasoning and go/authn/AGENTS.md's "The middleware chain is authn, then tenancy" section for
+// why the chain runs authn.Middleware before tenancy.Middleware at all.
 var demoHostTenants = map[string]pkgcore.TenantID{
 	"acme.demo.localhost":   "tenant-acme",
 	"globex.demo.localhost": "tenant-globex",
 }
 
-// strictHostResolver resolves a request's tenant from its Host header
-// against a fixed lookup table, failing the request (a non-nil error,
-// which tenancy.Middleware turns into 403 Forbidden) when the Host does
-// not match any configured tenant.
+// demoMemberships is this app's small, in-process stand-in for the org
+// module's real membership store -- authn's MembershipReader seam
+// (go/authn/service.go), seeded by hand rather than backed by a real
+// organizations table. Root CLAUDE.md's "org / rbac rounds" deferral is why
+// there is no real one to wire yet.
 //
-// buildServer wires this, not tenancy.DomainResolver, in front of the
-// notes Module's real routes -- on purpose. DomainResolver's own doc
-// comment scopes its fallback-to-a-default-tenant behavior to
-// UNAUTHENTICATED, pre-auth display decisions only ("rendering the right
-// brand on a login page... it grants no data access"), and
-// go/tenancy/AGENTS.md's "Rules" section says the same thing as a hard
-// requirement on every other Resolver: "Do not copy DomainResolver's
-// empty-Host-falls-back-to-default behavior into a general pattern...
-// Every other Resolver should return a non-nil error rather than invent or
-// default a tenant." This app's notes API is real, persisted CRUD data,
-// not a pre-auth display decision, and this app has no login page or
-// other pre-auth route that would need DomainResolver's leniency --
-// /healthz needs no tenant at all, resolved or not, which is exactly what
-// its WithAllowlist entry below is for. So an unrecognized Host must fail
-// closed here exactly like every other resolution failure, instead of
-// landing in a shared, unauthenticated bucket that any anonymous caller
-// could read from and write to just by setting an arbitrary Host header.
-//
-// strictHostResolver stands in for the Resolver authn will eventually
-// supply from a verified access token (see demoHostTenants' own doc
-// comment); unlike tenancy.DomainResolver, it is the closer approximation
-// of the two, since authn's resolver will also fail closed on a caller it
-// cannot identify rather than default them into a shared tenant.
-type strictHostResolver struct {
-	hostTenants map[string]pkgcore.TenantID
+// It starts empty. Root CLAUDE.md's release notes record that seed accounts
+// wait for authn+org+billing together, so a freshly registered demo account
+// has NO tenant membership until something grants it one -- exactly the
+// fail-closed behavior go/authn/service.go's resolveTenant documents (a
+// nil, or here an unseeded, MembershipReader answer refuses rather than
+// allows). authn_e2e_test.go grants membership explicitly after registering
+// a demo user through the real HTTP surface; production wiring (run() in
+// main.go) constructs the same type with nothing pre-granted, which is an
+// honest description of this example's current limitation, not a bug:
+// task dev's authn wiring compiles, serves every operation and enforces
+// every rule correctly, but nothing can actually sign in to a tenant until
+// a later round supplies real memberships (Taskfile.yml's `seed` task
+// stub says the same thing).
+type demoMemberships struct {
+	mu      sync.Mutex
+	tenants map[string][]pkgcore.TenantID
 }
 
-// Resolve implements tenancy.Resolver.
-func (s strictHostResolver) Resolve(r *http.Request) (pkgcore.TenantID, error) {
-	if tid, ok := s.hostTenants[r.Host]; ok && tid != "" {
-		return tid, nil
+// newDemoMemberships returns an empty membership store.
+func newDemoMemberships() *demoMemberships {
+	return &demoMemberships{tenants: make(map[string][]pkgcore.TenantID)}
+}
+
+// Grant records userID as an active member of tenant. It is idempotent:
+// granting the same pair twice does not duplicate the entry.
+func (m *demoMemberships) Grant(userID string, tenant pkgcore.TenantID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.tenants[userID] {
+		if existing == tenant {
+			return
+		}
 	}
-	return "", fmt.Errorf("reference-app: no tenant configured for host %q", r.Host)
+	m.tenants[userID] = append(m.tenants[userID], tenant)
 }
 
-// compile-time check that strictHostResolver satisfies tenancy.Resolver.
-var _ tenancy.Resolver = strictHostResolver{}
+// ActiveMembership implements authn.MembershipReader.
+func (m *demoMemberships) ActiveMembership(_ context.Context, userID string, tenant pkgcore.TenantID) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.tenants[userID] {
+		if existing == tenant {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// TenantsOf implements authn.MembershipReader.
+func (m *demoMemberships) TenantsOf(_ context.Context, userID string) ([]pkgcore.TenantID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]pkgcore.TenantID(nil), m.tenants[userID]...), nil
+}
+
+// compile-time check that *demoMemberships satisfies authn.MembershipReader.
+var _ authn.MembershipReader = (*demoMemberships)(nil)
 
 // demoOrgUserHeader is the header demoOrgSubjectResolver reads to identify the
 // HTTP caller: a placeholder for the verified access-token claims authn
@@ -277,6 +356,31 @@ type serverConfig struct {
 	// mail back in-process to extract the invitation token rather than
 	// parsing it out of console output.
 	Mailer pkgcore.Mailer
+
+	// Memberships is the seam authn asks tenant-membership questions
+	// through. Nil defaults to a fresh, empty demoMemberships in
+	// buildServer; a test that needs to seed membership after registering
+	// a demo user keeps its own reference by setting this field before
+	// calling buildServer, rather than reaching into buildServer's
+	// internals.
+	Memberships *demoMemberships
+
+	// SMSOutput is where authn's console SMS sender (the standalone
+	// deployment mode's transport, go/authn/sms.go) writes delivered
+	// messages. Nil defaults to os.Stdout.
+	SMSOutput io.Writer
+
+	// SocialProviders, RedirectAllowlist and TrustedProviders wire authn's
+	// social sign-in channels. All three default to empty/zero, the safe
+	// nothing-enabled state this app ships with today: no real OAuth app
+	// credentials are configured for this example (dynamic-config
+	// read-through for the per-provider credential items authn registers
+	// is a documented deferral -- go/authn/AGENTS.md). authn_e2e_test.go
+	// supplies a channel pointed at a local httptest server here, to prove
+	// the social sign-in flow end to end without a live provider.
+	SocialProviders   []authn.SocialProvider
+	RedirectAllowlist authn.RedirectAllowlist
+	TrustedProviders  []string
 }
 
 // configFromEnv reads serverConfig from the environment, defaulting to the
@@ -352,11 +456,12 @@ func configFromEnv() (serverConfig, error) {
 	}, nil
 }
 
-// buildServer wires the reference app's Kernel, the notes Module, its
-// migrations, and tenancy's middleware into a single http.Handler. It is
-// the one place that wiring logic lives -- both main() and
-// server_test.go's end-to-end test call it, so the two can never drift
-// into testing a different wiring than the one that actually runs.
+// buildServer wires the reference app's Kernel, the authn and notes
+// Modules, their migrations, and the authn+tenancy middleware chain into a
+// single http.Handler. It is the one place that wiring logic lives -- both
+// main() and server_test.go's/authn_e2e_test.go's end-to-end tests call it,
+// so the two can never drift into testing a different wiring than the one
+// that actually runs.
 //
 // It returns the composed handler and a cleanup function that closes the
 // underlying database connection; the caller must call cleanup once done
@@ -390,6 +495,20 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// -- after h.repo.Create has already returned, i.e. after that
 	// transaction has committed, which is exactly why Emit's call site
 	// never hits the same hazard.
+	//
+	// authn's own PII columns (email, phone, TOTP secrets) must have their
+	// serializer registered BEFORE dbkit.Open: GORM resolves a model's
+	// serializer while it parses the schema, and this module's registry is
+	// process-global (authn.RegisterPIISerializer's own doc comment; trap
+	// #9 of this round's frozen plan).
+	piiCipher, err := dbkit.NewCipher(devPIICipherKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reference-app: build authn's PII cipher: %w", err)
+	}
+	if regErr := authn.RegisterPIISerializer(piiCipher); regErr != nil {
+		return nil, nil, fmt.Errorf("reference-app: register authn's PII serializer: %w", regErr)
+	}
+
 	db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: cfg.SQLitePath})
 	if err != nil {
 		return nil, nil, fmt.Errorf("reference-app: open database: %w", err)
@@ -487,6 +606,36 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		}),
 	)
 
+	signingKeys, err := devSigningKeySet()
+	if err != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: build authn's signing key set: %w", err)
+	}
+
+	memberships := cfg.Memberships
+	if memberships == nil {
+		memberships = newDemoMemberships()
+	}
+	smsOutput := cfg.SMSOutput
+	if smsOutput == nil {
+		smsOutput = os.Stdout
+	}
+
+	authnModule, err := authn.NewModule(db,
+		authn.WithSigningKeys(signingKeys),
+		authn.WithBlindIndexKey(devBlindIndexKey),
+		authn.WithMembershipReader(memberships),
+		authn.WithSMSSender(authn.NewConsoleSMSSender(smsOutput)),
+		authn.WithDeploymentMode(cfg.DeploymentMode),
+		authn.WithSocialProviders(cfg.SocialProviders...),
+		authn.WithRedirectAllowlist(cfg.RedirectAllowlist),
+		authn.WithTrustedProviders(cfg.TrustedProviders...),
+	)
+	if err != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: build the authn module: %w", err)
+	}
+
 	notesModule := notes.NewModule(db)
 
 	// auditModule is go/dbkit/audit's persister. It shares notesModule's
@@ -505,18 +654,18 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// resolver, and the default anti-loss poller cadence.
 	//
 	// The resolver is tenancy.NewDomainResolver -- deliberately NOT the
-	// strictHostResolver gating the notes API -- and its default tenant is
-	// deliberately empty. config's public endpoints are pre-auth display
-	// decisions, the one case go/tenancy's DomainResolver doc comment
-	// blesses with unmatched-host leniency; an empty default tenant maps
-	// that leniency onto the endpoint's own "platform defaults" tier (a
-	// host that resolves to no tenant reads system-scope rows, never an
-	// error), which is exactly the login-page rule of
+	// authn-derived resolver that gates the notes API below -- and its
+	// default tenant is deliberately empty. config's public endpoints are
+	// pre-auth display decisions, the one case go/tenancy's DomainResolver
+	// doc comment blesses with unmatched-host leniency; an empty default
+	// tenant maps that leniency onto the endpoint's own "platform
+	// defaults" tier (a host that resolves to no tenant reads system-scope
+	// rows, never an error), which is exactly the login-page rule of
 	// docs/internal/11-cross-cutting.md's dynamic-config section applied
-	// to this app's brand snapshot. strictHostResolver would defeat the
-	// purpose: its fail-closed 403 is right for real CRUD data (see its
-	// own doc comment) and wrong for a request that must render a brand no
-	// matter whose it is.
+	// to this app's brand snapshot. config's own internal resolver runs
+	// entirely independently of the outer tenancy.Middleware wired at the
+	// bottom of this function -- see this function's own middleware-chain
+	// comment below for why both coexist.
 	configModule := config.NewModule(db,
 		config.WithCipher(cipher),
 		config.WithResolver(tenancy.NewDomainResolver(
@@ -537,7 +686,15 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// therefore tenant-wide.
 	rbacModule := rbac.NewModule(db)
 
+	// authn's migrations register first: it depends on nothing, and the
+	// frozen plan for this round asks that its tables exist before notes'
+	// and config's Apply runs, matching the order Bootstrap uses just
+	// below.
 	migrationRegistry := dbkit.NewMigrationRegistry()
+	if regErr := migrationRegistry.Register(authnModule); regErr != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	}
 	if regErr := migrationRegistry.Register(rbacModule); regErr != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
@@ -563,22 +720,24 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return nil, nil, fmt.Errorf("reference-app: apply migrations: %w", applyErr)
 	}
 
-	// Bootstrap registers all five modules in argument order -- notes and
-	// org before config, so the configuration items and feature flags their
-	// Register calls declare (notes' own, and org's read-only reliance on
-	// the org.invitations / org.invitation_email flags it declares itself)
-	// are in the registry before the config module's own Register runs,
-	// and then Attach freezes the schema snapshot those declarations fold
-	// into, exactly the sequence config's Attach doc comment prescribes
-	// ("after Kernel.Bootstrap has returned"). rbac comes next so its own
-	// Attach -- which snapshots every permission every module declared
-	// during Register -- runs against a Registry that has already seen
-	// every module's declarations. audit last is not load-bearing order --
-	// its Module.DependsOn is nil, and its subscriptions are valid to
-	// install before or after any publisher registers (see audit's
-	// Module.DependsOn doc comment) -- it simply reads naturally as "the
-	// business-facing modules, then the cross-cutting persister watching
-	// them."
+	// Bootstrap registers all six modules in argument order -- authn first
+	// of all, so its Register-time declarations (its config items, its
+	// permissions, its events) precede the modules that lean on them, then
+	// notes and org before config, so the configuration items and feature
+	// flags their Register calls declare (notes' own, and org's read-only
+	// reliance on the org.invitations / org.invitation_email flags it
+	// declares itself) are in the registry before the config module's own
+	// Register runs, and then Attach freezes the schema snapshot those
+	// declarations fold into, exactly the sequence config's Attach doc
+	// comment prescribes ("after Kernel.Bootstrap has returned"). rbac
+	// comes next so its own Attach -- which snapshots every permission
+	// every module declared during Register -- runs against a Registry
+	// that has already seen every module's declarations. audit last is not
+	// load-bearing order -- its Module.DependsOn is nil, and its
+	// subscriptions are valid to install before or after any publisher
+	// registers (see audit's Module.DependsOn doc comment) -- it simply
+	// reads naturally as "the business-facing modules, then the
+	// cross-cutting persister watching them."
 	//
 	// A single Registry -- and so a single EventBus, reg.EventBus() --
 	// serves every module Bootstrap registers here, which is what lets
@@ -586,11 +745,11 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// actually receive the audit.EventRecorded event notesModule's
 	// handler publishes through audit.Emit (see NewHandler's wiring
 	// below), and what lets orgModule's own subscriptions receive
-	// authn's UserCreated event once the authn module registers on the
-	// same bus: no separate bus construction is needed the way it would be
-	// if this app wired dbkit.Options.AuditBus (see db's own doc comment
-	// above for why it deliberately does not).
-	reg, err := pkgcore.NewKernel(cfg.DeploymentMode, pkgcore.WithMailer(cfg.Mailer)).Bootstrap(ctx, notesModule, orgModule, configModule, rbacModule, auditModule)
+	// authn's UserCreated event on that same bus: no separate bus
+	// construction is needed the way it would be if this app wired
+	// dbkit.Options.AuditBus (see db's own doc comment above for why it
+	// deliberately does not).
+	reg, err := pkgcore.NewKernel(cfg.DeploymentMode, pkgcore.WithMailer(cfg.Mailer)).Bootstrap(ctx, authnModule, notesModule, orgModule, configModule, rbacModule, auditModule)
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: bootstrap kernel: %w", err)
@@ -623,69 +782,97 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return nil, nil, mountErr
 	}
 
-	// strictHostResolver -- not tenancy.DomainResolver -- gates the mux:
-	// see its own doc comment above for why an unrecognized Host must fail
-	// closed here instead of falling back to a shared default tenant.
-	resolver := strictHostResolver{hostTenants: cfg.HostTenants}
-
-	// The entire mux -- including /healthz -- runs behind
-	// tenancy.Middleware; tenancy.WithAllowlist is what lets /healthz work
-	// with no tenant resolved at all, rather than assembling a second,
-	// unprotected mux by hand alongside it. Every route a real module
-	// mounts stays fail-closed by default; only the one route named here
-	// is exempt.
+	// The middleware chain: authn.Middleware(verifier) FIRST, then
+	// tenancy.Middleware(authn.NewPrincipalResolver()) -- the deliberate
+	// deviation from docs/internal/01-architecture.md's originally
+	// documented order (tenancy before authn), recorded there and in
+	// go/authn/AGENTS.md's "The middleware chain is authn, then tenancy" section: a
+	// tenancy.Resolver's signature (Resolve(*http.Request)
+	// (pkgcore.TenantID, error)) cannot hand a verified JWT's claims to
+	// anything downstream, so running tenancy first would force verifying
+	// every token twice over two code paths free to drift. Running
+	// authn.Middleware first verifies once; NewPrincipalResolver then just
+	// reads the already-verified Principal out of the request context.
 	//
-	// This allowlist is not a theoretical safeguard here: strictHostResolver
-	// genuinely fails resolution for any Host that is not
-	// acme.demo.localhost or globex.demo.localhost -- including the Host a
-	// plain `curl localhost:8080/healthz` sends, and a request with no Host
-	// header at all -- so /healthz depends on this allowlist, in real
-	// production wiring, to return 200 for exactly the orchestrators and
-	// humans most likely to probe it without ever setting a demo Host.
+	// The consequence that matters here: authn.Middleware is OPTIONAL
+	// auth (a missing token proceeds with no Principal; an invalid one
+	// 401s immediately), so tenancy.Middleware's own fail-closed default
+	// -- refuse a request whose (method, path) is not on the allowlist AND
+	// whose resolver failed -- is what makes EVERY route this app mounts
+	// require a valid Principal by default, with NO extra wrapping needed
+	// per route: an unauthenticated request to the notes API now gets 403
+	// (tenant unresolved, because there is no Principal to read a tenant
+	// from) exactly the way an unrecognized Host used to. The routes
+	// listed in the allowlist below are the ONLY ones that work with no
+	// Principal at all -- healthz, metrics, config's two pre-auth display
+	// endpoints (still gated by their own internal DomainResolver, see
+	// configModule's wiring above -- entirely independent of this outer
+	// middleware), and authn's own pre-auth operations (register, sign-in,
+	// token refresh, social authorize/callback), which Handler itself
+	// (go/authn/handler.go) additionally decides whether to require a
+	// Principal for, operation by operation.
 	//
-	// Both GET and HEAD are allowlisted for it, not GET alone: net/http's
-	// ServeMux automatically serves HEAD /healthz from the "GET
-	// "+healthzPath pattern registered above (Go's long-standing
-	// GET-implies-HEAD convenience), but tenancy.Middleware does NOT apply
-	// that same convenience to WithAllowlist -- its own doc comment says
-	// so explicitly: "allowlist http.MethodHead explicitly if a health
-	// check needs it too." Allowlisting GET alone would leave HEAD
-	// /healthz 403ing under this exact resolver the moment anything (a
-	// load balancer, a script) probes it with HEAD instead of GET --
-	// exactly the class of bug this allowlist exists to prevent, just on
-	// the one method easy to forget because the mux layer papers over it.
-	//
-	// The config module's two endpoints are allowlisted for the same
-	// reason the health and metrics endpoints are -- but with a
-	// difference: config's paths are named through the module's exported
-	// constants (config.PathPublic, config.PathSystemFeatures) rather
-	// than hand-written strings, because the module owns the paths and a
-	// host that re-types them could drift. They are pre-auth display
-	// surfaces by design (see go/config/http.go's doc comments): the
-	// request must reach the config module's own handler so ITS resolver
-	// -- tenancy.NewDomainResolver, see its wiring above -- can map the
-	// Host onto the tenant whose brand to render, or onto platform
-	// defaults when the Host matches nothing. strictHostResolver must not
-	// 403 those requests first: a browser pointed at an unknown Host
-	// still deserves a login page and its brand -- docs/internal/
-	// 11-cross-cutting.md's dynamic-config section says an unmatched host
-	// must resolve to platform defaults and never error, because an
-	// unrenderable login page is the worst possible failure mode.
-	// Allowlisting here is safe for exactly the reason the endpoints
-	// exist: they serve only what the design marks public (display
-	// decisions), never tenant data -- the notes API stays behind
-	// strictHostResolver, fail-closed as before.
-	handler := tenancy.Middleware(resolver,
-		tenancy.WithAllowlist(http.MethodGet, healthzPath),
-		tenancy.WithAllowlist(http.MethodHead, healthzPath),
-		tenancy.WithAllowlist(http.MethodGet, metricsPath),
-		tenancy.WithAllowlist(http.MethodHead, metricsPath),
-		tenancy.WithAllowlist(http.MethodGet, config.PathPublic),
-		tenancy.WithAllowlist(http.MethodHead, config.PathPublic),
-		tenancy.WithAllowlist(http.MethodGet, config.PathSystemFeatures),
-		tenancy.WithAllowlist(http.MethodHead, config.PathSystemFeatures),
-	)(mux)
+	// Both GET and HEAD are allowlisted for healthz/metrics, not GET
+	// alone: net/http's ServeMux automatically serves HEAD from a
+	// registered "GET "+path pattern (Go's long-standing GET-implies-HEAD
+	// convenience), but tenancy.Middleware does NOT extend WithAllowlist's
+	// exemption the same way -- its own doc comment says so explicitly.
+	// Allowlisting GET alone would leave HEAD one middleware change away
+	// from a 403 the moment anything probes it with HEAD instead of GET.
+	handler := authn.Middleware(authnModule.Service().Verifier())(
+		tenancy.Middleware(authn.NewPrincipalResolver(), append([]tenancy.MiddlewareOption{
+			tenancy.WithAllowlist(http.MethodGet, healthzPath),
+			tenancy.WithAllowlist(http.MethodHead, healthzPath),
+			tenancy.WithAllowlist(http.MethodGet, metricsPath),
+			tenancy.WithAllowlist(http.MethodHead, metricsPath),
+			tenancy.WithAllowlist(http.MethodGet, config.PathPublic),
+			tenancy.WithAllowlist(http.MethodHead, config.PathPublic),
+			tenancy.WithAllowlist(http.MethodGet, config.PathSystemFeatures),
+			tenancy.WithAllowlist(http.MethodHead, config.PathSystemFeatures),
+		}, authnPreAuthAllowlist()...)...)(mux),
+	)
 	return handler, cleanup, nil
+}
+
+// authnAPIPath is authn's own HTTP mount point -- duplicated from
+// go/authn/module.go's private apiPath constant of the same value, because
+// this app's wiring, not authn's package, is what needs to name individual
+// routes under it: the module owns and mounts the routes, this file owns
+// which of them a caller may reach before proving who they are.
+const authnAPIPath = "/api/v1/authn"
+
+// authnPreAuthAllowlist lists every (method, path) pair under authnAPIPath
+// that must work with no Principal at all -- registration, every sign-in
+// entry point, token refresh, and the social authorize/callback pair (see
+// go/authn/api/openapi.yaml's own path table for the exact literals, and
+// go/authn/handler.go for which operations skip requirePrincipal).
+//
+// tenancy.WithAllowlist matches (method, path) exactly, with no prefix or
+// wildcard (see its own doc comment), so the social channel's {provider}
+// path parameter cannot be allowlisted generically: every channel this
+// module ships gets its own two entries here, even though none is wired
+// with real credentials in this example today (serverConfig.SocialProviders'
+// own doc comment) -- otherwise enabling one later would silently need a
+// code change here too, exactly the kind of drift this round's frozen plan
+// warns about.
+func authnPreAuthAllowlist() []tenancy.MiddlewareOption {
+	opts := []tenancy.MiddlewareOption{
+		tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/register"),
+		tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/login/password"),
+		tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/login/sms/request"),
+		tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/login/sms"),
+		tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/token/refresh"),
+	}
+	for _, provider := range []string{
+		authn.ProviderGoogle, authn.ProviderGitHub, authn.ProviderWeChat,
+		authn.ProviderDingTalk, authn.ProviderFeishu,
+	} {
+		opts = append(opts,
+			tenancy.WithAllowlist(http.MethodGet, authnAPIPath+"/social/"+provider+"/authorize"),
+			tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/social/"+provider+"/callback"),
+		)
+	}
+	return opts
 }
 
 // mountModuleRoutes copies every route reg's modules mounted onto mux.

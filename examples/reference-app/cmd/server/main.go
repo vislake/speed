@@ -99,20 +99,29 @@ func run(baseCtx context.Context) error {
 		}
 	}()
 
-	// obs.Middleware wraps OUTSIDE buildServer's own tenancy.Middleware
-	// wiring, per docs/internal/01-architecture.md's fixed middleware
-	// chain order (recover -> request-id/log-context -> observability ->
+	// obs.Middleware wraps OUTSIDE buildServer's own authn+tenancy
+	// middleware wiring.
+	//
+	// docs/internal/01-architecture.md's originally documented chain order
+	// is recover -> request-id/log-context -> observability ->
 	// tenancy.Middleware -> authn.Middleware -> rbac.RequirePermission ->
-	// handler) -- tenancy.Middleware's own doc comment
-	// (go/tenancy/middleware.go) says nothing about tracing middleware
-	// specifically, so that fixed, documented order is the tie-breaker.
-	// See obs.Middleware's own doc comment for why this position is worth
-	// its one real cost (a tenant is not yet known this far out -- see
-	// obs.AnnotateTenant, called from notes.Handler once tenancy.Middleware
-	// has resolved one, for how tenant_id still reaches the span from
-	// there): every request gets a span and is counted here, including
-	// ones tenancy.Middleware itself goes on to reject with 403, which
-	// matters for spotting a flood of them.
+	// handler. buildServer (server.go) deliberately runs authn.Middleware
+	// BEFORE tenancy.Middleware instead -- see its own doc comment on the
+	// handler chain, go/authn/AGENTS.md's "The middleware chain is authn, then tenancy" section,
+	// and docs/internal/01-architecture.md's own implementation-status
+	// note for the full reasoning (a tenancy.Resolver cannot carry a
+	// verified JWT's claims to anything downstream, so the documented
+	// order would force verifying every token twice). obs.Middleware's own
+	// position relative to that pair is unaffected: tenancy.Middleware's
+	// doc comment (go/tenancy/middleware.go) says nothing about tracing
+	// middleware specifically, so it wraps outermost regardless of which
+	// of authn/tenancy runs first inside it. See obs.Middleware's own doc
+	// comment for why this position is worth its one real cost (a tenant
+	// is not yet known this far out -- see obs.AnnotateTenant, called from
+	// notes.Handler once tenancy.Middleware has resolved one, for how
+	// tenant_id still reaches the span from there): every request gets a
+	// span and is counted here, including ones the inner chain goes on to
+	// reject with 401/403, which matters for spotting a flood of them.
 	instrumented := obs.Middleware(handler)
 
 	srv := &http.Server{

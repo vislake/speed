@@ -20,9 +20,20 @@ import (
 	"github.com/vislake/speed/go/tenancy"
 )
 
+// testPassword is the demo password every account registerAndAuthenticate
+// creates uses. It exists as a named constant, not a repeated literal,
+// purely so every test in this file that registers a demo account agrees on
+// what "a perfectly fine passphrase" means -- go/authn's own password
+// policy default (go/authn/password.go) accepts it.
+const testPassword = "a perfectly fine passphrase"
+
 // testConfig returns a serverConfig backed by a fresh, per-test temp-file
 // SQLite database, so tests never share state and never touch a real file
-// outside t.TempDir().
+// outside t.TempDir(). Memberships is always a fresh, empty demoMemberships
+// -- tests that need a demo account to actually reach a tenant grant it
+// explicitly via registerAndAuthenticate below, keeping the same reference
+// buildServer itself wires so a test's grant is visible to the running
+// server.
 func testConfig(t *testing.T) serverConfig {
 	t.Helper()
 	return serverConfig{
@@ -32,17 +43,22 @@ func testConfig(t *testing.T) serverConfig {
 		ConfigKey:      devConfigKey,
 		OrgIndexKey:    devOrgIndexKey,
 		HostTenants:    demoHostTenants,
+		Memberships:    newDemoMemberships(),
 	}
 }
 
 // buildTestServer wires up buildServer's real output behind an
 // httptest.Server, so tests exercise the exact composed handler main.go
-// itself serves -- tenancy.Middleware, the notes Module's real handler,
-// and a real (if temp-file) SQLite database -- not a mock of any of them.
-func buildTestServer(t *testing.T) *httptest.Server {
+// itself serves -- the authn+tenancy middleware chain, the notes Module's
+// real handler, and a real (if temp-file) SQLite database -- not a mock of
+// any of them. It returns the serverConfig alongside the server so a
+// caller can reach cfg.Memberships to grant a demo account tenant
+// membership after registering it (registerAndAuthenticate does this).
+func buildTestServer(t *testing.T) (*httptest.Server, serverConfig) {
 	t.Helper()
 
-	handler, cleanup, err := buildServer(context.Background(), testConfig(t))
+	cfg := testConfig(t)
+	handler, cleanup, err := buildServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("buildServer: %v", err)
 	}
@@ -54,7 +70,81 @@ func buildTestServer(t *testing.T) *httptest.Server {
 
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, cfg
+}
+
+// registerAndAuthenticate registers a fresh demo account through authn's
+// real HTTP surface (POST /api/v1/authn/register), grants it membership in
+// tenant via cfg.Memberships (the seam buildServer itself wires authn's
+// MembershipReader to -- see demoMemberships' own doc comment in
+// server.go), signs it in with a tenant_id request naming tenant, and
+// returns the resulting bearer access token.
+//
+// That token is now the ONLY thing that selects a tenant for a protected
+// route in this app: with authn.Middleware running ahead of
+// tenancy.Middleware(authn.NewPrincipalResolver()), Host plays no part in
+// resolving the notes API's tenant at all (see server.go's middleware-chain
+// doc comment) -- every test in this file that used to vary Host to reach a
+// different tenant now varies the token it authenticates with instead.
+func registerAndAuthenticate(t *testing.T, srv *httptest.Server, cfg serverConfig, tenant pkgcore.TenantID, emailLocalPart string) string {
+	t.Helper()
+
+	email := emailLocalPart + "@example.com"
+	registerBody, err := json.Marshal(map[string]string{"email": email, "password": testPassword})
+	if err != nil {
+		t.Fatalf("marshal register body: %v", err)
+	}
+	registerResp, err := srv.Client().Post(srv.URL+"/api/v1/authn/register", "application/json", bytes.NewReader(registerBody))
+	if err != nil {
+		t.Fatalf("register %s: %v", email, err)
+	}
+	defer registerResp.Body.Close()
+	if registerResp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(registerResp.Body)
+		t.Fatalf("register %s status = %d, want %d; body = %s", email, registerResp.StatusCode, http.StatusCreated, body)
+	}
+	var user struct {
+		ID string `json:"id"`
+	}
+	if decodeErr := json.NewDecoder(registerResp.Body).Decode(&user); decodeErr != nil {
+		t.Fatalf("decode register response for %s: %v", email, decodeErr)
+	}
+	if user.ID == "" {
+		t.Fatalf("register %s: response carried no id", email)
+	}
+
+	if cfg.Memberships == nil {
+		t.Fatal("registerAndAuthenticate: cfg.Memberships is nil -- testConfig always sets it, was a different serverConfig passed?")
+	}
+	cfg.Memberships.Grant(user.ID, tenant)
+
+	loginBody, err := json.Marshal(map[string]string{
+		"identifier": email,
+		"password":   testPassword,
+		"tenant_id":  string(tenant),
+	})
+	if err != nil {
+		t.Fatalf("marshal login body: %v", err)
+	}
+	loginResp, err := srv.Client().Post(srv.URL+"/api/v1/authn/login/password", "application/json", bytes.NewReader(loginBody))
+	if err != nil {
+		t.Fatalf("login %s: %v", email, err)
+	}
+	defer loginResp.Body.Close()
+	if loginResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(loginResp.Body)
+		t.Fatalf("login %s status = %d, want %d; body = %s", email, loginResp.StatusCode, http.StatusOK, body)
+	}
+	var pair struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(loginResp.Body).Decode(&pair); err != nil {
+		t.Fatalf("decode login response for %s: %v", email, err)
+	}
+	if pair.AccessToken == "" {
+		t.Fatalf("login %s: response carried no access_token", email)
+	}
+	return pair.AccessToken
 }
 
 type testNote struct {
@@ -66,18 +156,17 @@ type testListNotesResponse struct {
 	Notes []testNote `json:"notes"`
 }
 
-// createNoteAs POSTs a note with the given text to srv, as the tenant that
-// host resolves to -- Host is the ONLY thing that selects the tenant, set
-// on the request exactly as a real client's would be, never a header or
-// body field the server would have to trust.
+// createNoteAs POSTs a note with the given text to srv, authenticated as
+// token -- the bearer access token is the ONLY thing that selects the
+// tenant a note is created under (registerAndAuthenticate's own doc
+// comment explains why Host does not).
 //
 // The demo user header is a different thing entirely and must not be
-// confused with it: it names WHO is acting, which the rbac gate needs, and
-// it is a placeholder for authn (see demo_subject.go's demoUserHeader).
-// demoOwnerUserID holds every permission, so these two helpers exercise
-// the happy path; the tests that exercise the gate itself send other
-// users, or none.
-func createNoteAs(t *testing.T, srv *httptest.Server, host, text string) {
+// confused with the token: it names WHO is acting, which the rbac gate
+// needs (see demo_subject.go's demoUserHeader). demoOwnerUserID holds
+// every permission, so these two helpers exercise the happy path; the
+// tests that exercise the gate itself send other users, or none.
+func createNoteAs(t *testing.T, srv *httptest.Server, token, text string) {
 	t.Helper()
 
 	body, err := json.Marshal(map[string]string{"text": text})
@@ -89,60 +178,62 @@ func createNoteAs(t *testing.T, srv *httptest.Server, host, text string) {
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	req.Host = host
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(demoUserHeader, demoOwnerUserID)
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {
-		t.Fatalf("POST /api/v1/notes (Host=%s): %v", host, err)
+		t.Fatalf("POST /api/v1/notes: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
 		respBody, _ := io.ReadAll(resp.Body)
-		t.Fatalf("POST /api/v1/notes (Host=%s) status = %d, want %d; body = %s",
-			host, resp.StatusCode, http.StatusCreated, respBody)
+		t.Fatalf("POST /api/v1/notes status = %d, want %d; body = %s",
+			resp.StatusCode, http.StatusCreated, respBody)
 	}
 }
 
-// listNotesAs GETs the notes visible to the tenant host resolves to.
-func listNotesAs(t *testing.T, srv *httptest.Server, host string) []testNote {
+// listNotesAs GETs the notes visible to the tenant token authenticates for.
+func listNotesAs(t *testing.T, srv *httptest.Server, token string) []testNote {
 	t.Helper()
 
 	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/notes", nil)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	req.Host = host
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set(demoUserHeader, demoOwnerUserID)
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {
-		t.Fatalf("GET /api/v1/notes (Host=%s): %v", host, err)
+		t.Fatalf("GET /api/v1/notes: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		t.Fatalf("GET /api/v1/notes (Host=%s) status = %d, want %d; body = %s",
-			host, resp.StatusCode, http.StatusOK, respBody)
+		t.Fatalf("GET /api/v1/notes status = %d, want %d; body = %s",
+			resp.StatusCode, http.StatusOK, respBody)
 	}
 
 	var out testListNotesResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatalf("decode response (Host=%s): %v", host, err)
+		t.Fatalf("decode response: %v", err)
 	}
 	return out.Notes
 }
 
 // TestBuildServer_MultiTenantIsolation_EndToEnd is the genuine, automated,
-// executable proof the root task asked for: two different demo hostnames,
-// mapped to two different tenants by the real strictHostResolver this
-// app wires up, creating notes under each and asserting each tenant's list
-// contains only its own notes -- through the real middleware + handler +
+// executable proof the root task asked for: two different demo accounts,
+// each granted membership in a different tenant and each signed in for it,
+// creating notes under each and asserting each tenant's list contains only
+// its own notes -- through the real middleware + handler +
 // dbkit.Repository[Note] stack this app actually serves, not a mocked
-// shortcut at any layer.
+// shortcut at any layer. The tenant comes from each account's own access
+// token, never from a request header the caller controls -- see
+// registerAndAuthenticate's own doc comment.
 //
 // Scope boundary: this only exercises Create and List, the only two
 // operations notes' HTTP API exposes. List's isolation comes from the SQL
@@ -158,16 +249,16 @@ func listNotesAs(t *testing.T, srv *httptest.Server, host string) []testNote {
 // FindByID/Update/Delete's isolation guarantees. The two tests are
 // complementary, not redundant: neither can substitute for the other.
 func TestBuildServer_MultiTenantIsolation_EndToEnd(t *testing.T) {
-	srv := buildTestServer(t)
+	srv, cfg := buildTestServer(t)
 
-	const acmeHost = "acme.demo.localhost"
-	const globexHost = "globex.demo.localhost"
+	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "acme-isolation")
+	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "globex-isolation")
 
-	createNoteAs(t, srv, acmeHost, "acme secret 1")
-	createNoteAs(t, srv, acmeHost, "acme secret 2")
-	createNoteAs(t, srv, globexHost, "globex secret 1")
+	createNoteAs(t, srv, acmeToken, "acme secret 1")
+	createNoteAs(t, srv, acmeToken, "acme secret 2")
+	createNoteAs(t, srv, globexToken, "globex secret 1")
 
-	acmeNotes := listNotesAs(t, srv, acmeHost)
+	acmeNotes := listNotesAs(t, srv, acmeToken)
 	if len(acmeNotes) != 2 {
 		t.Fatalf("tenant-acme sees %d notes, want 2 (%+v)", len(acmeNotes), acmeNotes)
 	}
@@ -177,7 +268,7 @@ func TestBuildServer_MultiTenantIsolation_EndToEnd(t *testing.T) {
 		}
 	}
 
-	globexNotes := listNotesAs(t, srv, globexHost)
+	globexNotes := listNotesAs(t, srv, globexToken)
 	if len(globexNotes) != 1 {
 		t.Fatalf("tenant-globex sees %d notes, want 1 (%+v)", len(globexNotes), globexNotes)
 	}
@@ -191,18 +282,21 @@ func TestBuildServer_MultiTenantIsolation_EndToEnd(t *testing.T) {
 	}
 }
 
-// notesRequestAs issues method against /api/v1/notes with the given Host
-// and acting user, returning the raw response for the caller to assert on.
-// An empty user sends no demo user header at all, which is how an
-// unauthenticated request is expressed.
-func notesRequestAs(t *testing.T, srv *httptest.Server, method, host, user string, body io.Reader) *http.Response {
+// notesRequestAs issues method against /api/v1/notes with the given bearer
+// token (empty means no Authorization header at all) and acting user,
+// returning the raw response for the caller to assert on. An empty user
+// sends no demo user header at all, which is how a request with a
+// resolvable tenant (the token) but no identity is expressed.
+func notesRequestAs(t *testing.T, srv *httptest.Server, method, token, user string, body io.Reader) *http.Response {
 	t.Helper()
 
 	req, err := http.NewRequest(method, srv.URL+"/api/v1/notes", body)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	req.Host = host
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	if user != "" {
 		req.Header.Set(demoUserHeader, user)
 	}
@@ -212,7 +306,7 @@ func notesRequestAs(t *testing.T, srv *httptest.Server, method, host, user strin
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {
-		t.Fatalf("%s /api/v1/notes (Host=%s, user=%q): %v", method, host, user, err)
+		t.Fatalf("%s /api/v1/notes (user=%q): %v", method, user, err)
 	}
 	return resp
 }
@@ -259,11 +353,14 @@ func assertPermissionDenied(t *testing.T, resp *http.Response, what string) {
 //   - an unknown user is authenticated as far as this demo goes and holds
 //     no grant at all, so it is refused both ways.
 func TestBuildServer_PermissionGate_EnforcesTheNotesPermissions(t *testing.T) {
-	srv := buildTestServer(t)
-	const acmeHost = "acme.demo.localhost"
+	srv, cfg := buildTestServer(t)
+	// The token signs a real account into tenant-acme; the demo user header
+	// then names which seeded demo grant the gate decides the request
+	// against (demo_subject.go's seedDemoGrants).
+	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "pg-owner")
 
 	// The owner may write.
-	resp := notesRequestAs(t, srv, http.MethodPost, acmeHost, demoOwnerUserID,
+	resp := notesRequestAs(t, srv, http.MethodPost, acmeToken, demoOwnerUserID,
 		strings.NewReader(`{"text":"owner note"}`))
 	func() {
 		defer resp.Body.Close()
@@ -274,7 +371,7 @@ func TestBuildServer_PermissionGate_EnforcesTheNotesPermissions(t *testing.T) {
 	}()
 
 	// The reader may list...
-	resp = notesRequestAs(t, srv, http.MethodGet, acmeHost, demoReaderUserID, nil)
+	resp = notesRequestAs(t, srv, http.MethodGet, acmeToken, demoReaderUserID, nil)
 	func() {
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
@@ -285,15 +382,15 @@ func TestBuildServer_PermissionGate_EnforcesTheNotesPermissions(t *testing.T) {
 
 	// ...and may not create. This is the whole point of the gate.
 	assertPermissionDenied(t,
-		notesRequestAs(t, srv, http.MethodPost, acmeHost, demoReaderUserID, strings.NewReader(`{"text":"reader note"}`)),
+		notesRequestAs(t, srv, http.MethodPost, acmeToken, demoReaderUserID, strings.NewReader(`{"text":"reader note"}`)),
 		"POST as the read-only demo user")
 
 	// A user with no grant at all is refused in both directions.
 	assertPermissionDenied(t,
-		notesRequestAs(t, srv, http.MethodGet, acmeHost, "nobody", nil),
+		notesRequestAs(t, srv, http.MethodGet, acmeToken, "nobody", nil),
 		"GET as an ungranted user")
 	assertPermissionDenied(t,
-		notesRequestAs(t, srv, http.MethodPost, acmeHost, "nobody", strings.NewReader(`{"text":"nope"}`)),
+		notesRequestAs(t, srv, http.MethodPost, acmeToken, "nobody", strings.NewReader(`{"text":"nope"}`)),
 		"POST as an ungranted user")
 }
 
@@ -303,13 +400,16 @@ func TestBuildServer_PermissionGate_EnforcesTheNotesPermissions(t *testing.T) {
 // fail-closed 403, which is why the assertion is on rbac's code rather
 // than on the status alone.
 func TestBuildServer_PermissionGate_NoSubject_IsRefused(t *testing.T) {
-	srv := buildTestServer(t)
+	srv, cfg := buildTestServer(t)
+	// The token resolves the tenant; no demo user header means no Subject
+	// for the rbac gate to decide for.
+	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "pg-nosubject")
 
 	assertPermissionDenied(t,
-		notesRequestAs(t, srv, http.MethodGet, "acme.demo.localhost", "", nil),
+		notesRequestAs(t, srv, http.MethodGet, acmeToken, "", nil),
 		"GET with no demo user header")
 	assertPermissionDenied(t,
-		notesRequestAs(t, srv, http.MethodPost, "acme.demo.localhost", "", strings.NewReader(`{"text":"anon"}`)),
+		notesRequestAs(t, srv, http.MethodPost, acmeToken, "", strings.NewReader(`{"text":"anon"}`)),
 		"POST with no demo user header")
 }
 
@@ -320,14 +420,16 @@ func TestBuildServer_PermissionGate_NoSubject_IsRefused(t *testing.T) {
 // Both demo tenants seed most of the same user ids, so a test using one of
 // those would pass even against an engine keyed on the user alone. The
 // sharp case is demoSingleTenantUserID, which is granted in tenant-acme
-// and nowhere else: acting under the other demo host, the identical user
-// id must be refused. The tenant it is decided in comes from the resolved
-// Host, never from anything the caller sent -- the header only names WHO
-// is acting.
+// and nowhere else: the identical user id, acting through a token that
+// signs into tenant-globex, must be refused. The tenant the decision is
+// made in comes from the bearer token, never from anything the caller
+// sent -- the header only names WHO is acting.
 func TestBuildServer_PermissionGate_GrantsDoNotCrossTenants(t *testing.T) {
-	srv := buildTestServer(t)
+	srv, cfg := buildTestServer(t)
+	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "pg-acme")
+	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "pg-globex")
 
-	resp := notesRequestAs(t, srv, http.MethodGet, "acme.demo.localhost", demoSingleTenantUserID, nil)
+	resp := notesRequestAs(t, srv, http.MethodGet, acmeToken, demoSingleTenantUserID, nil)
 	func() {
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
@@ -338,12 +440,12 @@ func TestBuildServer_PermissionGate_GrantsDoNotCrossTenants(t *testing.T) {
 	}()
 
 	assertPermissionDenied(t,
-		notesRequestAs(t, srv, http.MethodGet, "globex.demo.localhost", demoSingleTenantUserID, nil),
+		notesRequestAs(t, srv, http.MethodGet, globexToken, demoSingleTenantUserID, nil),
 		"GET as the same user id in the tenant that never granted it")
 
 	// And the refusal is genuinely about the tenant rather than the user
-	// being unknown: the SAME host grants the same role to demo-reader.
-	resp = notesRequestAs(t, srv, http.MethodGet, "globex.demo.localhost", demoReaderUserID, nil)
+	// being unknown: the SAME tenant grants the same role to demo-reader.
+	resp = notesRequestAs(t, srv, http.MethodGet, globexToken, demoReaderUserID, nil)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -357,7 +459,7 @@ func TestBuildServer_PermissionGate_GrantsDoNotCrossTenants(t *testing.T) {
 // pre-auth endpoints must keep answering with no identity whatsoever, or a
 // login page could never render its own brand.
 func TestBuildServer_PublicConfigEndpoints_StayUngated(t *testing.T) {
-	srv := buildTestServer(t)
+	srv, _ := buildTestServer(t)
 
 	for _, path := range []string{config.PathPublic, config.PathSystemFeatures} {
 		t.Run(path, func(t *testing.T) {
@@ -383,13 +485,12 @@ func TestBuildServer_PublicConfigEndpoints_StayUngated(t *testing.T) {
 }
 
 // TestBuildServer_Healthz_NoTenantRequired proves /healthz responds 200
-// through the real composed server regardless of Host -- including a Host
-// strictHostResolver cannot match to any configured tenant, which now
-// genuinely fails resolution (see strictHostResolver's own doc comment in
-// server.go) -- so a liveness probe never depends on tenant-specific
-// resolution succeeding.
+// through the real composed server regardless of Host -- Host plays no
+// part in resolving anything on this route (it is allowlisted outright),
+// so a liveness probe never depends on tenant-specific resolution
+// succeeding, an authenticated caller, or any particular Host at all.
 func TestBuildServer_Healthz_NoTenantRequired(t *testing.T) {
-	srv := buildTestServer(t)
+	srv, _ := buildTestServer(t)
 
 	for _, host := range []string{"acme.demo.localhost", "totally-unrecognized-host.example"} {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
@@ -413,14 +514,11 @@ func TestBuildServer_Healthz_NoTenantRequired(t *testing.T) {
 }
 
 // failingResolver deliberately fails every resolution, standing in for any
-// Resolver's failure mode in general -- an unrecognized Host under
-// strictHostResolver today (see server.go's own doc comment on it), an
-// invalid or missing bearer token once authn supplies an authenticated
-// Resolver tomorrow. Using a resolver that always fails, rather than
-// driving buildServer's real strictHostResolver with an unrecognized Host,
-// keeps this test about the allowlist mechanism in isolation, and keeps it
-// valid unchanged once authn's Resolver replaces strictHostResolver here,
-// since its failure conditions will look nothing like "Host not in a map".
+// Resolver's failure mode in general -- an invalid or missing bearer token
+// under authn.NewPrincipalResolver today (server.go's middleware-chain doc
+// comment). Using a resolver that always fails, rather than driving
+// buildServer's real composed chain with a missing/invalid token, keeps
+// this test about the allowlist mechanism in isolation.
 type failingResolver struct{}
 
 func (failingResolver) Resolve(r *http.Request) (pkgcore.TenantID, error) {
@@ -483,14 +581,11 @@ func TestHealthzAllowlist_ResolutionFailure_StillReturns200(t *testing.T) {
 // but tenancy.Middleware does NOT extend WithAllowlist's (method, path)
 // exemption the same way -- its own doc comment says so explicitly:
 // "allowlist http.MethodHead explicitly if a health check needs it too."
-// Allowlisting GET alone therefore looked fine under
-// tenancy.NewDomainResolver, the Resolver this app wired up at the time
-// (which never failed at all), while silently leaving HEAD one resolver
-// swap away from a 403. buildServer now wires strictHostResolver instead
-// (see its own doc comment in server.go), which genuinely does fail for
-// an unrecognized Host -- exactly the swap this comment originally warned
-// about -- so this canary matters for real production wiring today, not
-// just hypothetically for a future authn-supplied Resolver.
+// Allowlisting GET alone therefore looks fine under a resolver that never
+// fails, while silently leaving HEAD one resolver failure away from a 403
+// -- exactly the swap this comment originally warned about, and exactly
+// what authn.NewPrincipalResolver genuinely does fail with today whenever
+// no Principal is present (server.go's middleware-chain doc comment).
 //
 // This test reproduces exactly that gap (deliberately allowlisting GET
 // only, unlike buildServer's real wiring) as a permanent canary: if it
@@ -513,8 +608,7 @@ func TestHealthzAllowlist_GETOnlyAllowlist_LeavesHEADExposed(t *testing.T) {
 }
 
 // TestBuildServer_Metrics_NoTenantRequired proves /metrics responds through
-// the real composed server regardless of Host -- including a Host
-// strictHostResolver cannot match to any configured tenant -- mirroring
+// the real composed server regardless of Host, mirroring
 // TestBuildServer_Healthz_NoTenantRequired above for the other route
 // buildServer allowlists (see server.go's metricsPath doc comment: a
 // scraper, like a liveness probe, has no demo Host to send and must not
@@ -537,7 +631,7 @@ func TestHealthzAllowlist_GETOnlyAllowlist_LeavesHEADExposed(t *testing.T) {
 // verification that found this gap relied on, in isolation from whatever
 // obs.Init state this process happens to be in, by calling obs.Init itself.
 func TestBuildServer_Metrics_NoTenantRequired(t *testing.T) {
-	srv := buildTestServer(t)
+	srv, _ := buildTestServer(t)
 
 	for _, host := range []string{"acme.demo.localhost", "totally-unrecognized-host.example"} {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
@@ -671,18 +765,21 @@ func TestBuildServer_DistributedDeploymentMode_ReturnsClearError(t *testing.T) {
 	}
 }
 
-// notesRequest issues method against /api/v1/notes with the given Host and
-// optional body, returning the raw response for the caller to assert on --
-// unlike createNoteAs/listNotesAs above, which assert success internally,
-// this is for tests that expect the request to be rejected.
-func notesRequest(t *testing.T, srv *httptest.Server, method, host string, body io.Reader) *http.Response {
+// notesRequest issues method against /api/v1/notes with the given bearer
+// token (empty means no Authorization header at all) and optional body,
+// returning the raw response for the caller to assert on -- unlike
+// createNoteAs/listNotesAs above, which assert success internally, this is
+// for tests that expect the request to be rejected.
+func notesRequest(t *testing.T, srv *httptest.Server, method, token string, body io.Reader) *http.Response {
 	t.Helper()
 
 	req, err := http.NewRequest(method, srv.URL+"/api/v1/notes", body)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	req.Host = host
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	req.Header.Set(demoUserHeader, demoOwnerUserID)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -690,89 +787,82 @@ func notesRequest(t *testing.T, srv *httptest.Server, method, host string, body 
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {
-		t.Fatalf("%s /api/v1/notes (Host=%s): %v", method, host, err)
+		t.Fatalf("%s /api/v1/notes: %v", method, err)
 	}
 	return resp
 }
 
-// TestBuildServer_UnrecognizedHost_FailsClosed is the regression test for
-// the medium-severity gap round 3's smoke test found by live attack
-// against a real, running `go run ./cmd/server`: an unrecognized (or
-// entirely absent) Host resolved to a shared demoDefaultTenant bucket that
-// any anonymous caller could read from and write to, instead of failing
-// the request. tenancy.DomainResolver's own doc comment scopes its
-// default-tenant fallback to unauthenticated, pre-auth display decisions
-// ("rendering the right brand on a login page... it grants no data
-// access"); this app's notes API is real, persisted CRUD data, so
-// buildServer must fail closed on an unrecognized Host instead -- see
-// strictHostResolver's doc comment in server.go.
+// TestBuildServer_Unauthenticated_FailsClosed is the token-based
+// counterpart of what was, before this round, a Host-based regression
+// test: an unrecognized Host used to resolve to a shared demoDefaultTenant
+// bucket any anonymous caller could read from and write to. That bucket no
+// longer exists at all -- Host plays no part in the notes API's tenant
+// resolution any more (server.go's middleware-chain doc comment) -- but
+// the SAME fail-closed property has a new, equally real way to matter: a
+// request carrying no credential, and one carrying a credential that does
+// not verify, must both be refused rather than served from any shared or
+// default state.
 //
-// Before the fix this test failed exactly as the live attack did: step 1
-// (GET) returned 200 with an empty list and step 2 (POST) returned 201,
-// both served out of the shared demoDefaultTenant bucket. Step 3 is the
-// negative control the live attack also ran: a second, different
-// unrecognized Host must be rejected too, not see whatever step 2 would
-// have planted -- proving there is no shared bucket left at all, not just
-// that this one caller happened to be turned away.
-func TestBuildServer_UnrecognizedHost_FailsClosed(t *testing.T) {
-	srv := buildTestServer(t)
+// Step 1 and 2 prove no Authorization header at all is refused (403 --
+// tenancy.Middleware's ErrTenantUnresolved, because authn.NewPrincipalResolver
+// has no Principal to read a tenant from). Step 3 proves a garbage bearer
+// token is refused differently: authn.Middleware treats an unparseable
+// credential as a FAILED assertion of identity, not an absence of one, and
+// answers 401 immediately (before tenancy.Middleware ever runs) -- see
+// go/authn/middleware.go's own doc comment on why those two failure modes
+// are deliberately not the same status. Step 4 is the negative control the
+// original live attack also ran: a second unauthenticated caller sees
+// nothing the first one might have planted, proving there is no shared
+// bucket left at all.
+func TestBuildServer_Unauthenticated_FailsClosed(t *testing.T) {
+	srv, _ := buildTestServer(t)
 
-	const attackerHostA = "totally-unknown-attacker-host.example"
-	const attackerHostB = "another-completely-different-unknown-host.example"
-
-	// Step 1: GET must not succeed against an implicit shared tenant.
-	getResp := notesRequest(t, srv, http.MethodGet, attackerHostA, nil)
+	// Step 1: GET with no Authorization header must not succeed against an
+	// implicit shared tenant.
+	getResp := notesRequest(t, srv, http.MethodGet, "", nil)
 	defer getResp.Body.Close()
 	if getResp.StatusCode != http.StatusForbidden {
 		respBody, _ := io.ReadAll(getResp.Body)
-		t.Fatalf("GET /api/v1/notes (Host=%s) status = %d, want %d; body = %s",
-			attackerHostA, getResp.StatusCode, http.StatusForbidden, respBody)
+		t.Fatalf("GET /api/v1/notes (no Authorization) status = %d, want %d; body = %s",
+			getResp.StatusCode, http.StatusForbidden, respBody)
 	}
 
-	// Step 2: POST must not plant a note in a shared bucket either.
-	createBody, err := json.Marshal(map[string]string{"text": "planted via unrecognized host A"})
+	// Step 2: POST with no Authorization header must not plant a note in a
+	// shared bucket either.
+	createBody, err := json.Marshal(map[string]string{"text": "planted with no credential at all"})
 	if err != nil {
 		t.Fatalf("marshal request body: %v", err)
 	}
-	postResp := notesRequest(t, srv, http.MethodPost, attackerHostA, strings.NewReader(string(createBody)))
+	postResp := notesRequest(t, srv, http.MethodPost, "", strings.NewReader(string(createBody)))
 	defer postResp.Body.Close()
 	if postResp.StatusCode != http.StatusForbidden {
 		respBody, _ := io.ReadAll(postResp.Body)
-		t.Fatalf("POST /api/v1/notes (Host=%s) status = %d, want %d; body = %s",
-			attackerHostA, postResp.StatusCode, http.StatusForbidden, respBody)
+		t.Fatalf("POST /api/v1/notes (no Authorization) status = %d, want %d; body = %s",
+			postResp.StatusCode, http.StatusForbidden, respBody)
 	}
 
-	// Step 3 (negative control): a completely different unrecognized Host
-	// is independently rejected too -- there is no shared bucket left for
-	// one anonymous caller to plant data into and another to read back,
-	// which is exactly what made the original gap a real leak rather than
-	// a per-caller-isolated 200.
-	getResp2 := notesRequest(t, srv, http.MethodGet, attackerHostB, nil)
+	// Step 3: a garbage bearer token is a FAILED assertion of identity,
+	// answered 401 by authn.Middleware itself, before tenancy.Middleware
+	// (and its 403) ever runs.
+	garbageResp := notesRequest(t, srv, http.MethodGet, "not-a-real-token", nil)
+	defer garbageResp.Body.Close()
+	if garbageResp.StatusCode != http.StatusUnauthorized {
+		respBody, _ := io.ReadAll(garbageResp.Body)
+		t.Fatalf("GET /api/v1/notes (garbage bearer token) status = %d, want %d; body = %s",
+			garbageResp.StatusCode, http.StatusUnauthorized, respBody)
+	}
+
+	// Step 4 (negative control): a second, completely independent
+	// unauthenticated caller is refused too -- there is no shared bucket
+	// for one anonymous caller to plant data into and another to read
+	// back, which is exactly what made the original gap a real leak
+	// rather than a per-caller-isolated refusal.
+	getResp2 := notesRequest(t, srv, http.MethodGet, "", nil)
 	defer getResp2.Body.Close()
 	if getResp2.StatusCode != http.StatusForbidden {
 		respBody, _ := io.ReadAll(getResp2.Body)
-		t.Fatalf("GET /api/v1/notes (Host=%s) status = %d, want %d; body = %s",
-			attackerHostB, getResp2.StatusCode, http.StatusForbidden, respBody)
-	}
-
-	// The live attack additionally confirmed a request with NO Host header
-	// at all (a raw HTTP/1.0 request omitting it entirely) shares the same
-	// fate. srv.Client() can't reproduce a genuinely absent Host -- the
-	// real transport falls back to the request URL's host whenever
-	// (*http.Request).Host is empty -- so this drives buildServer's real
-	// composed handler directly instead, the same way
-	// TestHealthzAllowlist_ResolutionFailure_StillReturns200 drives a
-	// handler directly for its own synthetic resolver. httptest.NewRequest
-	// defaults Host to "example.com" when none is given; clearing it back
-	// to "" here reproduces a request that arrived with no Host header at
-	// all, exactly as a raw HTTP/1.0 request can.
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/notes", nil)
-	req.Host = ""
-	rec := httptest.NewRecorder()
-	srv.Config.Handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("GET /api/v1/notes with no Host header at all: status = %d, want %d (body: %s)",
-			rec.Code, http.StatusForbidden, rec.Body.String())
+		t.Fatalf("GET /api/v1/notes (second unauthenticated caller) status = %d, want %d; body = %s",
+			getResp2.StatusCode, http.StatusForbidden, respBody)
 	}
 }
 
@@ -887,41 +977,40 @@ func TestConfigFromEnv_InvalidDeploymentMode_ReturnsError(t *testing.T) {
 }
 
 // TestBuildServer_ClientSuppliedTenantHints_Ignored is the automated,
-// permanent counterpart to round 3's smoke test, which additionally
-// attacked the real running server (`go run -race ./cmd/server`) with a
-// forged "X-Tenant-ID" header, a "?tenant_id=" query parameter, and a
-// "tenant_id" field smuggled into the JSON create body -- every one set
-// alongside a Host that legitimately resolves to a DIFFERENT tenant than
-// the one being forged -- and reported PASS: every attempt was silently
-// ignored, confirmed under single requests and under 400 concurrent
-// racing create/list pairs with the race detector attached.
+// permanent proof that nothing a caller sends alongside a valid access
+// token can override the tenant that token itself names: a forged
+// "X-Tenant-ID" header, a "?tenant_id=" query parameter, and a "tenant_id"
+// field smuggled into the JSON create body, every one claiming
+// tenant-acme while authenticated with a token scoped to tenant-globex,
+// must all be silently ignored.
 //
 // go/tenancy/middleware_test.go's
 // TestMiddleware_IgnoresClientSuppliedTenantHints already proves the same
 // property at the unit level, against a stub Resolver with no real
-// Host-based lookup or persistence behind it. This test proves it again
-// through the actual composed stack this app serves -- strictHostResolver,
-// the notes Handler, and a real dbkit.Repository[Note] backed by SQLite --
-// which is the level round 3's live attack actually targeted. Host,
-// resolved by strictHostResolver, is the only tenant source the composed
-// server ever trusts: see strictHostResolver's own doc comment in server.go
-// and go/tenancy/resolver.go's Resolver doc comment for the same rule
-// stated as a hard requirement on every implementation.
+// authentication or persistence behind it. This test proves it again
+// through the actual composed stack this app serves -- authn.Middleware,
+// authn.NewPrincipalResolver, the notes Handler, and a real
+// dbkit.Repository[Note] backed by SQLite. The access token's own "tid"
+// claim is the only tenant source the composed server ever trusts: see
+// go/authn/middleware.go's PrincipalResolver doc comment and
+// go/tenancy/resolver.go's Resolver doc comment for the same rule stated
+// as a hard requirement on every implementation.
 func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
-	srv := buildTestServer(t)
+	srv, cfg := buildTestServer(t)
 
-	const acmeHost = "acme.demo.localhost"
-	const globexHost = "globex.demo.localhost"
+	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "acme-forgery-target")
+	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "globex-forgery-attacker")
 
-	createNoteAs(t, srv, acmeHost, "ACME-SECRET-forgery-target")
+	createNoteAs(t, srv, acmeToken, "ACME-SECRET-forgery-target")
 
 	// Attempt 1: a forged X-Tenant-ID header claiming tenant-acme, sent
-	// alongside Host=globex, must not surface acme's note.
+	// alongside a token scoped to tenant-globex, must not surface acme's
+	// note.
 	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/notes", nil)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	req.Host = globexHost
+	req.Header.Set("Authorization", "Bearer "+globexToken)
 	req.Header.Set(demoUserHeader, demoOwnerUserID)
 	req.Header.Set("X-Tenant-ID", "tenant-acme")
 	resp, err := srv.Client().Do(req)
@@ -934,8 +1023,8 @@ func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 	if len(headerAttempt.Notes) != 0 {
-		t.Fatalf("GET (Host=%s, forged header X-Tenant-ID: tenant-acme) leaked %d note(s): %+v",
-			globexHost, len(headerAttempt.Notes), headerAttempt.Notes)
+		t.Fatalf("GET (globex token, forged header X-Tenant-ID: tenant-acme) leaked %d note(s): %+v",
+			len(headerAttempt.Notes), headerAttempt.Notes)
 	}
 
 	// Attempt 2: the same forged tenant, this time as a "?tenant_id="
@@ -944,7 +1033,7 @@ func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	req2.Host = globexHost
+	req2.Header.Set("Authorization", "Bearer "+globexToken)
 	req2.Header.Set(demoUserHeader, demoOwnerUserID)
 	resp2, err := srv.Client().Do(req2)
 	if err != nil {
@@ -956,8 +1045,8 @@ func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 	if len(queryAttempt.Notes) != 0 {
-		t.Fatalf("GET (Host=%s, ?tenant_id=tenant-acme) leaked %d note(s): %+v",
-			globexHost, len(queryAttempt.Notes), queryAttempt.Notes)
+		t.Fatalf("GET (globex token, ?tenant_id=tenant-acme) leaked %d note(s): %+v",
+			len(queryAttempt.Notes), queryAttempt.Notes)
 	}
 
 	// Attempt 3: "tenant_id" smuggled into the JSON create body. It must
@@ -965,31 +1054,31 @@ func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
 	// api.NotesCreateNoteRequest (internal/notes/api, derived from the
 	// module's api/openapi.yaml fragment), which carries no tenant_id
 	// field to decode it into -- and the created note must land under
-	// globex (Host's tenant), never acme.
+	// globex (the token's tenant), never acme.
 	forgeBody, err := json.Marshal(map[string]string{"text": "globex-body-forge-probe", "tenant_id": "tenant-acme"})
 	if err != nil {
 		t.Fatalf("marshal request body: %v", err)
 	}
-	postResp := notesRequest(t, srv, http.MethodPost, globexHost, strings.NewReader(string(forgeBody)))
+	postResp := notesRequest(t, srv, http.MethodPost, globexToken, strings.NewReader(string(forgeBody)))
 	defer postResp.Body.Close()
 	if postResp.StatusCode != http.StatusCreated {
 		respBody, _ := io.ReadAll(postResp.Body)
-		t.Fatalf("POST (Host=%s, tenant_id forged in body) status = %d, want %d; body = %s",
-			globexHost, postResp.StatusCode, http.StatusCreated, respBody)
+		t.Fatalf("POST (globex token, tenant_id forged in body) status = %d, want %d; body = %s",
+			postResp.StatusCode, http.StatusCreated, respBody)
 	}
 
 	// Negative control, symmetric with TestBuildServer_MultiTenantIsolation_EndToEnd
 	// above: acme must still see exactly its own note (none of the three
-	// forgery attempts sourced from Host=globex ever reached it), and
+	// forgery attempts authenticated as globex ever reached it), and
 	// globex must see exactly the note attempt 3 planted under globex --
 	// proving attempt 3 actually ran, not merely that it returned 201 --
 	// with neither tenant's list containing the other's data.
-	acmeNotes := listNotesAs(t, srv, acmeHost)
+	acmeNotes := listNotesAs(t, srv, acmeToken)
 	if len(acmeNotes) != 1 || acmeNotes[0].Text != "ACME-SECRET-forgery-target" {
 		t.Fatalf("acme notes after all forgery attempts = %+v, want exactly one note with text %q",
 			acmeNotes, "ACME-SECRET-forgery-target")
 	}
-	globexNotes := listNotesAs(t, srv, globexHost)
+	globexNotes := listNotesAs(t, srv, globexToken)
 	if len(globexNotes) != 1 || globexNotes[0].Text != "globex-body-forge-probe" {
 		t.Fatalf("globex notes after all forgery attempts = %+v, want exactly one note with text %q",
 			globexNotes, "globex-body-forge-probe")
@@ -1026,10 +1115,11 @@ func TestBuildServer_NoteCreate_PersistsAuditEvent(t *testing.T) {
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	const host = "acme.demo.localhost"
 	const tenantID = "tenant-acme"
-	createNoteAs(t, srv, host, "buy milk")
-	notes := listNotesAs(t, srv, host)
+	acmeToken := registerAndAuthenticate(t, srv, cfg, tenantID, "audit-creator")
+
+	createNoteAs(t, srv, acmeToken, "buy milk")
+	notes := listNotesAs(t, srv, acmeToken)
 	if len(notes) != 1 {
 		t.Fatalf("notes after create = %+v, want exactly 1", notes)
 	}
