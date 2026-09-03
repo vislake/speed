@@ -2,8 +2,13 @@ package authn
 
 import (
 	"testing"
+	"time"
 
+	"gorm.io/gorm"
+
+	"github.com/vislake/speed/go/authn/internal/testutil"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
 // testRedirectURI is the one redirect URI every fixture in this file
@@ -449,4 +454,31 @@ func TestLoginMethodCount(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestUserIdentityModel_IsNotTenantScoped is the mandatory isolation
+// assertion for user_identities: an external identity belongs to the
+// person, who may act inside several tenants, so it must stay visible
+// whatever tenant happens to be in the calling context.
+//
+// This closes a gap the federation round's own doc comment (identity.go's
+// UserIdentityRepository) claimed was already covered here and was not:
+// repository.go's file comment states every identity-domain repository is
+// compensated by exactly this suite, and until now user_identities was the
+// one table in this module that carried no such test at all.
+func TestUserIdentityModel_IsNotTenantScoped(t *testing.T) {
+	t.Parallel()
+
+	db := testutil.NewDB(t)
+	now := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+
+	tenancytest.AssertNotTenantScoped(t, db, UserIdentity{},
+		func(db *gorm.DB) error {
+			return db.Create(&UserIdentity{
+				ID: newID(), UserID: newID(), Provider: ProviderGoogle, ExternalID: newID(),
+				CreatedAt: now, UpdatedAt: now,
+			}).Error
+		},
+		countOf[UserIdentity],
+	)
 }
