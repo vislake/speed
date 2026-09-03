@@ -62,7 +62,7 @@ import type { ReactElement } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createClient, createMemoryAccessTokenStore } from '@speed/api-client'
 import { bindRequestFn } from '@speed/api-sdk/runtime'
-import type { AuthSession } from '@speed/auth-core'
+import { createAuthSession, type AuthSession } from '@speed/auth-core'
 import { createI18n, I18nextProvider, registerNamespace } from '@speed/i18n'
 import { AppThemeProvider, UI_KIT_NAMESPACE, uiKitResources } from '@speed/ui-kit'
 import {
