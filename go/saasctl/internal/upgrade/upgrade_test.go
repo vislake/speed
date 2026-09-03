@@ -2,6 +2,7 @@ package upgrade
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -439,6 +440,69 @@ func TestRunRewritesFile(t *testing.T) {
 		if p, ver, ok := requireVersion(line); ok && !strings.HasPrefix(p, modulePrefix) && ver == relVersion {
 			t.Errorf("non-speed require %s rewritten to %s", p, ver)
 		}
+	}
+}
+
+// TestRunRewriteIsAnAtomicReplacement drives a real rewrite and proves the
+// file was replaced wholesale, never rewritten in place: an observer that
+// opened the go.mod before the run still reads the pre-rewrite bytes from
+// its descriptor afterwards -- a rename-based replacement leaves the old
+// file intact for whoever holds it open, while an in-place truncate-and-
+// write would feed the observer the new bytes through the same descriptor.
+// That property is the crash-safety contract: an interrupted write (crash,
+// kill, full disk) must leave either the old or the new go.mod on disk,
+// never a truncated file. The run must also leave no temporary file behind.
+func TestRunRewriteIsAnAtomicReplacement(t *testing.T) {
+	orig := readFixture(t, "consumer.go.mod")
+	path := writeTempFile(t, "go.mod", orig)
+
+	// An observer holds the old file open across the rewrite.
+	observer, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer observer.Close()
+
+	code, stdout, stderr := runUpgrade("--version", target, path)
+	if code != 0 {
+		t.Fatalf("code = %d, want 0; stderr: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "Rewrote 9 github.com/vislake/speed/go/* require lines to "+target) {
+		t.Errorf("stdout %q does not report the rewrite", stdout)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+
+	// The file itself carries the rewritten bytes...
+	onDisk, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read rewritten file: %v", err)
+	}
+	if bytes.Equal(onDisk, orig) {
+		t.Error("file on disk is unchanged after the rewrite")
+	}
+
+	// ...but the held descriptor still sees the original document.
+	held, err := io.ReadAll(observer)
+	if err != nil {
+		t.Fatalf("read through the held descriptor: %v", err)
+	}
+	if !bytes.Equal(held, orig) {
+		t.Errorf("held descriptor read %d bytes after the rewrite; an atomic replacement keeps the pre-rewrite file readable to its open holders, an in-place truncate-and-write shows them the new bytes:\n%s", len(held), held)
+	}
+
+	// No temporary file survives in the go.mod's directory.
+	dirEntries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatalf("read the go.mod directory: %v", err)
+	}
+	if len(dirEntries) != 1 || dirEntries[0].Name() != "go.mod" {
+		names := make([]string, 0, len(dirEntries))
+		for _, e := range dirEntries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("directory holds %v after the run, want exactly [go.mod] (no leftover temporary file)", names)
 	}
 }
 

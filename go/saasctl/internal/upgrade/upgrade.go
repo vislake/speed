@@ -36,6 +36,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -218,11 +219,45 @@ func rewriteFile(path, target string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("stat %s: %w", path, err)
 	}
-	if err := os.WriteFile(path, out, info.Mode().Perm()); err != nil { //nolint:gosec // G703: same rationale as the read above
+	if err := writeFileAtomically(path, out, info.Mode().Perm()); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	_, _ = fmt.Fprintf(stdout, "Rewrote %d github.com/vislake/speed/go/* require lines to %s in %s\n", changed, target, path)
 	return nil
+}
+
+// writeFileAtomically replaces the file at path with data, preserving its
+// mode. The bytes land in a temporary file in the same directory first and
+// are renamed over the target, so the replacement is atomic on the local
+// filesystem: an interrupted write -- a crash, a kill, a full disk -- leaves
+// either the old go.mod or the new one behind, never a truncated file, and
+// whatever holds the old file open keeps reading it. The temporary file is
+// removed again on any failure before the rename completes. A rename within
+// one directory cannot cross filesystems, which is why the temporary file is
+// created next to the target rather than in the system temp directory.
+func writeFileAtomically(path string, data []byte, mode os.FileMode) (err error) {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // hasSpeedRequire reports whether any require in f names a speed module.
