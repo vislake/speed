@@ -56,6 +56,19 @@ this one may issue HTTP requests itself.
   catalogs.
 - **The `speed/no-direct-http` rule whitelists this package.** New
   HTTP-touching code belongs here; keep the whitelist single.
+- **React exists only behind the `./react` subpath.** `src/react.ts`
+  is the one file in this package that may `import` from `react`; the
+  main entry (`src/index.ts`) stays dependency-free, mirroring
+  `@speed/i18n`'s `./mui-locale` isolation. Do not import `react` from
+  any file reachable from the main entry, and do not add a second
+  React-touching file outside `react.ts`.
+- **The `usePublicConfig`/`useFeature` cache is keyed by `RequestFn`
+  identity, not by component lifetime.** A fetch started by the first
+  mounted consumer of a given `api` is shared (and, if still in
+  flight, awaited-in-place) by every other instance backed by the same
+  `api` -- including ones that mount after the fetch settles. Passing a
+  fresh `RequestFn` on every render defeats the sharing; hosts must
+  construct `api` once and reuse the reference.
 
 ## In this round vs. deferred
 
@@ -68,15 +81,30 @@ other package HTTP through it. Also landed (config-web round, B1):
 above. Both path constants are hand-kept in sync with the Go side
 (`go/config/AGENTS.md`'s Known limitations: no OpenAPI fragment exists
 for these endpoints). Neither function accepts a tenant argument --
-both endpoints resolve tenant server-side from the request host.
+both endpoints resolve tenant server-side from the request host. Also
+landed (config-web round, B2): `usePublicConfig` / `useFeature` in
+`src/react.ts`, exported from the isolated `./react` subpath (`react`
+is a required `peerDependency` of that subpath only -- the main entry
+stays dependency-free). Both hooks share one cache keyed by `RequestFn`
+identity via `useSyncExternalStore`: the first mounted consumer of a
+given `api` starts the one fetch, every other instance backed by the
+same `api` reads and re-renders off that shared state, and `refresh()`
+republishes a forced refetch to all of them. `useFeature` composes on
+`usePublicConfig`'s cache rather than calling `/api/system/features`
+itself, and returns `false` (never throws) while loading or on error.
+Neither hook does fallback-to-defaults detection, tenant-switch
+revalidation, or auto-polling -- see `src/react.ts`'s header comment
+for why each is a deliberate non-feature, not a gap.
 
 Deferred with reasons:
 
-- `useFeature` / `usePublicConfig` React hooks -- the fetchers they will
-  wrap now exist (`fetchPublicConfig` / `fetchSystemFeatures` above);
-  the hooks themselves (shared single-flight cache, `refresh()`) land in
-  a follow-up block behind an isolated `./react` subpath export, so this
-  package's main entry keeps zero runtime dependencies.
+- The hooks' own README Quick-start section and a real reference-app
+  consumer -- the hooks themselves have landed (`src/react.ts`, above);
+  the runnable doc example and the reference-app wiring land with this
+  round's docs block. No frontend shell exists in `examples/reference-app`
+  yet to wire into (it is backend-only today); the first M1 frontend-shell
+  round is the natural consumer, per `docs/internal/11-cross-cutting.md`'s
+  `NavItem`'s `requiredFeature` field.
 - Uploads and SSE transports -- outside this package's scope
   (`docs/internal/21-api-contract.md`).
 - A real first consumer -- `@speed/api-sdk` has landed and consumes this
@@ -103,6 +131,11 @@ public-surface table for semantics. Removing or renaming an export
 breaks the pin tests and the typecheck; extend the surface
 deliberately, with the README table updated in the same commit.
 
+The `./react` subpath exports `usePublicConfig`, `useFeature` and the
+`UsePublicConfigResult` type from `src/react.ts` -- not pinned by
+`src/index.test.ts` (that file covers only the main entry); `src/react.test.ts`
+exercises both hooks' behavior directly instead.
+
 ## Development
 
 From this directory (`web/packages/api-client/`), or workspace-wide
@@ -120,4 +153,9 @@ plus behavior files (`usage-example.test.ts` executes the README Quick
 start against a stubbed global fetch). Shared helpers live in
 `test-utils/` (`fetch-standin.ts` scripted responders, abort-aware the
 way real fetch is; `memory-reporter.ts` capture sinks). Tests never
-require Docker or a network.
+require Docker or a network. `src/react.test.ts` opts into the `jsdom`
+environment via a per-file `// @vitest-environment jsdom` docblock
+(vitest 4's built-in mechanism) rather than a package-wide
+`vitest.config.ts` -- every other test file in this package keeps the
+faster default `node` environment, since renderHook's DOM mounting is
+the only thing here that needs one.

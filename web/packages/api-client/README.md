@@ -131,14 +131,18 @@ export async function loadNotes(): Promise<Note[]> {
 | `fetchSystemFeatures(api, options?)` | function | GETs `SYSTEM_FEATURES_PATH` (go/config's `PathSystemFeatures`); resolves `SystemFeaturesResponse`. |
 | `CONFIG_PUBLIC_PATH` / `SYSTEM_FEATURES_PATH` | const | The two path strings, hand-kept in sync with go/config (no spec fragment exists yet). |
 | `PublicConfigResponse` / `SystemFeaturesResponse` / `ConfigFetchOptions` | type | Wire shapes for the two fetchers above; no tenant field anywhere -- both endpoints resolve tenant server-side from the request host. |
+| `usePublicConfig(api)` *(`@speed/api-client/react`)* | hook | Fetches once per `api` identity and shares the result -- loading/error/data plus a `refresh()` -- with every other instance backed by the same `api`. See the package `AGENTS.md` for the caching contract; a full quick-start lands with the round's docs block. |
+| `useFeature(api, key)` *(`@speed/api-client/react`)* | hook | `boolean`, composed on `usePublicConfig`'s cache -- `false` while loading and on error, never throws. |
+| `UsePublicConfigResult` *(`@speed/api-client/react`)* | type | `{ data, error, isLoading, refresh }` -- `usePublicConfig`'s return shape. |
 
 ## What is deliberately not here
 
-- **`useFeature` / `usePublicConfig` hooks** -- the typed fetchers above
-  now exist (`fetchPublicConfig` / `fetchSystemFeatures`); the React
-  hooks that cache and share them across a tree land in a follow-up
-  block, behind an isolated `./react` subpath export so this package's
-  main entry stays dependency-free of React.
+- **A dedicated Quick start for the hooks** -- `usePublicConfig` /
+  `useFeature` have landed (`@speed/api-client/react`, see the Public
+  surface table above), but the runnable README example for them --
+  mirroring the Quick start above, executed for real by a test the way
+  `usage-example.test.ts` does for the main entry -- lands with this
+  round's docs block, alongside a real reference-app consumer.
 - **Uploads and SSE** -- outside this package's scope
   (docs/internal/21-api-contract.md).
 - **A real first consumer** -- `@speed/api-sdk`, the orval-generated
