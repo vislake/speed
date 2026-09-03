@@ -156,7 +156,7 @@ compiled and executed by the package suite (`src/usage-example.test.tsx`)
 over a real `@speed/api-client`: its fetch stand-in answers with
 genuine `Response` objects, and the journey drives a password sign-in
 (the store holds the issued access token), a protected request refused
-with `authn.session_expired` that the client silently refreshes (the
+with `authn.token_expired` that the client silently refreshes (the
 refresh travels credential-less by declaration, the retried request
 carries the fresh token), and a server-side session death whose own
 refused refresh converges the snapshot to anonymous -- the gate's

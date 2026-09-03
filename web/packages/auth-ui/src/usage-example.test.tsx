@@ -12,10 +12,12 @@
  * seam a host's generated calls use), attachSession, and the host gate
  * that switches between the sign-in surface and the app on the auth-core
  * hooks. The journey then scripts a password sign-in, a protected
- * request refused with authn.session_expired, a silent credential-less
- * refresh, and a later refusal whose own refresh is refused -- the
- * api-client machinery converging the session to the "ended" state its
- * host observes.
+ * request refused with authn.token_expired (a stale access token)
+ * that the client silently refreshes -- the refresh travels
+ * credential-less, by declaration -- and a later refusal: the session
+ * died server-side (authn.session_revoked), so the refresh itself is
+ * refused and the api-client machinery converges the session to the
+ * "ended" state its host observes.
  *
  * Why this file runs the real client while @speed/auth-core's own
  * usage-example drives its flows through the scripted harness: auth-core
@@ -123,10 +125,11 @@ describe('the README quick start, exercised over a real api-client', () => {
     // refusal leg is asserted behaviour, not test noise.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    // The scripted server: the /me endpoint refuses the first and third
-    // attempts (stale access-1, then a server-side session death) and
-    // the refresh endpoint rotates the pair once and refuses the second
-    // refresh -- the two legs of the journey, in order.
+    // The scripted server: the /me endpoint refuses the first and
+    // third attempts -- the stale access-1 with authn.token_expired,
+    // the dead session with authn.session_revoked -- and the refresh
+    // endpoint rotates the pair once and refuses the second refresh
+    // (authn.refresh_token_invalid): the two legs of the journey.
     let meAttempts = 0
     let refreshAttempts = 0
     const rig = makeRealClientRig((call) => {
@@ -147,10 +150,17 @@ describe('the README quick start, exercised over a real api-client', () => {
           return errorResponse(401, 'authn.refresh_token_invalid')
         case ME:
           meAttempts += 1
+          if (meAttempts === 1) {
+            // The stale access-1 is refused: its token expired -- the
+            // leg the client's silent refresh covers.
+            return errorResponse(401, 'authn.token_expired')
+          }
           if (meAttempts === 2) {
             return jsonResponse(200, makePair().principal)
           }
-          return errorResponse(401, 'authn.session_expired')
+          // The session died server-side after the refresh, so the
+          // last /me refusal is a revoked session (authn.session_revoked).
+          return errorResponse(401, 'authn.session_revoked')
       }
       throw new Error(`no scripted answer for ${call.method} ${call.path}`)
     })
@@ -197,7 +207,7 @@ describe('the README quick start, exercised over a real api-client', () => {
     expect(rig.store.get()).toBe('access-1')
     expect(screen.queryByText(SESSION_ENDED_TITLE_ZH)).not.toBeInTheDocument()
 
-    // First check: the stale access-1 is refused (authn.session_expired);
+    // First check: the stale access-1 is refused (authn.token_expired);
     // the api-client silently refreshes -- the refresh request travels
     // credential-less, by declaration -- rotates the pair in the store
     // and retries the request once with the fresh token.
@@ -215,10 +225,11 @@ describe('the README quick start, exercised over a real api-client', () => {
     expect(screen.getByRole('button', { name: 'Check session' }))
       .toBeInTheDocument()
 
-    // Second check: the session died server-side, so the refresh itself
-    // is refused (authn.refresh_token_invalid). refresh() resolves false
-    // and signs the session out; the gate's anonymous snapshot at the
-    // app view is the session-ended screen.
+    // Second check: the session died server-side -- the /me refusal is
+    // authn.session_revoked -- so the refresh itself is refused
+    // (authn.refresh_token_invalid). refresh() resolves false and signs
+    // the session out; the gate's anonymous snapshot at the app view is
+    // the session-ended screen.
     await user.click(screen.getByRole('button', { name: 'Check session' }))
     expect(await screen.findByText(SESSION_ENDED_TITLE_ZH))
       .toBeInTheDocument()
@@ -228,11 +239,14 @@ describe('the README quick start, exercised over a real api-client', () => {
     expect(meCalls).toHaveLength(3)
     expect(meCalls[2]?.authorization).toBe('Bearer access-2')
     expect(refreshCalls).toHaveLength(2)
+    // The reporter carries the refused original request's envelope --
+    // the dead-session /me answer, authn.session_revoked, never the
+    // refresh's own refusal code.
     expect(
       warn,
     ).toHaveBeenCalledWith(
       'access token refresh failed',
-      expect.objectContaining({ status: 401, code: 'authn.session_expired' }),
+      expect.objectContaining({ status: 401, code: 'authn.session_revoked' }),
     )
 
     // The whole exchange, in order -- including that the refused check
