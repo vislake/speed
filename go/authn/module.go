@@ -213,6 +213,10 @@ type options struct {
 	deploymentMode     pkgcore.DeploymentMode
 	smsCodeTTL         time.Duration
 	smsCodeMaxAttempts int
+
+	// secureCookies forces the Secure attribute on the pre-authentication
+	// OAuth cookie regardless of what r.TLS says. See WithSecureCookies.
+	secureCookies bool
 }
 
 // Option configures the authn module and the service inside it.
@@ -360,6 +364,24 @@ func WithOAuthStateTTL(d time.Duration) Option {
 			o.oauthStateTTL = d
 		}
 	}
+}
+
+// WithSecureCookies forces the Secure attribute onto the pre-authentication
+// OAuth cookie (ensurePreAuthCookie) regardless of what the inbound
+// request's r.TLS says.
+//
+// r.TLS is nil for every request in the most common production topology --
+// TLS terminated at a load balancer or reverse proxy, with the Go process
+// itself only ever seeing plaintext HTTP on its own listener -- so relying
+// on it alone silently drops Secure in exactly the deployment shape most
+// hosts run. This is bootstrap configuration (root CLAUDE.md's "values that
+// vary by environment"), set once by the host at startup from its own
+// knowledge of its topology (e.g. an SPEED_TLS_TERMINATED env var), rather
+// than inferred per request from a client-controlled header the way
+// X-Forwarded-For is deliberately NOT trusted by handler.go's clientIP: a
+// host that is not actually behind TLS anywhere must never pass true here.
+func WithSecureCookies(secure bool) Option {
+	return func(o *options) { o.secureCookies = secure }
 }
 
 // WithFederationHTTPClient replaces the HTTP client the ENTERPRISE single

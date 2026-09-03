@@ -135,6 +135,11 @@ type Service struct {
 	mfaFactors         *MFAFactorRepository
 	recoveryCodes      *RecoveryCodeRepository
 	issuer             string
+
+	// secureCookies is WithSecureCookies' value: whether Handler must
+	// force Secure on the pre-authentication OAuth cookie regardless of
+	// r.TLS. See that option's doc comment.
+	secureCookies bool
 }
 
 // NewService assembles a Service over db, using bus and kv -- the pkgcore
@@ -257,6 +262,7 @@ func NewService(db *gorm.DB, bus pkgcore.EventBus, kv pkgcore.KVStore, opts ...O
 		mfaFactors:         mfaFactors,
 		recoveryCodes:      recoveryCodes,
 		issuer:             cfg.issuer,
+		secureCookies:      cfg.secureCookies,
 	}
 
 	sso, err := newSSOService(svc, db, cfg)

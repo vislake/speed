@@ -131,7 +131,17 @@ func str(s string) *string {
 // SocialCallback only ever see BindingFromCookie(value), its SHA-256 digest,
 // which is what a forged or replayed callback cannot reproduce without
 // having read this exact cookie from this exact browser.
-func ensurePreAuthCookie(w http.ResponseWriter, r *http.Request) (string, error) {
+//
+// The Secure attribute is set when the request arrived over TLS (r.TLS) OR
+// the host assembled the Service WithSecureCookies(true): r.TLS is nil for
+// every request in the most common production topology -- TLS terminated at
+// a reverse proxy, with this process only ever seeing plaintext HTTP on its
+// own listener -- so the host, who knows its own topology, forces it through
+// that option rather than this handler trusting any client-supplied signal
+// (the same reasoning clientIP's doc comment gives for never reading
+// X-Forwarded-For). A host not actually serving over HTTPS anywhere must
+// never pass it.
+func (h *Handler) ensurePreAuthCookie(w http.ResponseWriter, r *http.Request) (string, error) {
 	if cookie, err := r.Cookie(preAuthCookieName); err == nil && cookie.Value != "" {
 		return cookie.Value, nil
 	}
@@ -147,7 +157,7 @@ func ensurePreAuthCookie(w http.ResponseWriter, r *http.Request) (string, error)
 		Path:     "/api/v1/authn/social",
 		MaxAge:   int(DefaultOAuthStateTTL.Seconds()),
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   h.svc.secureCookies || r.TLS != nil,
 		SameSite: http.SameSiteLaxMode,
 	})
 	return value, nil
@@ -308,7 +318,7 @@ func (h *Handler) AuthnGetMe(w http.ResponseWriter, r *http.Request) {
 // doc comment. Calling it unauthenticated (no Authorization header at all)
 // is the ordinary sign-in flow's first step.
 func (h *Handler) AuthnSocialAuthorize(w http.ResponseWriter, r *http.Request, provider string, params api.AuthnSocialAuthorizeParams) {
-	binding, err := ensurePreAuthCookie(w, r)
+	binding, err := h.ensurePreAuthCookie(w, r)
 	if err != nil {
 		writeAppError(w, err)
 		return

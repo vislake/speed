@@ -494,6 +494,16 @@ cookie jar, say) must derive `SessionBinding` some other way, but it must
 still be something the callback request could not have without having seen
 the authorize response.
 
+The cookie is `HttpOnly` and carries `Secure` when the request arrived over
+TLS (`r.TLS`) OR the host assembled the service with `WithSecureCookies(true)`.
+The option exists because `r.TLS` is nil for every request in the most common
+production topology — TLS terminated at a load balancer or reverse proxy, the
+Go process itself only ever seeing plaintext HTTP — so a host serving HTTPS
+externally must pass it (it knows its own topology; the handler deliberately
+never infers the scheme from a client-supplied header, the same reasoning
+`clientIP`'s doc comment gives for ignoring `X-Forwarded-For`). A host not
+actually serving over HTTPS anywhere must not pass it.
+
 ### `RevokeSession` on someone else's session answers 404, never 403
 
 `ErrSessionNotFound` is deliberately the same answer for "no such session"

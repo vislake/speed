@@ -2,6 +2,7 @@ package authn
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -701,6 +702,63 @@ func TestHandler_EnrollTOTP_ReplacingActiveFactor_RequiresStepUp(t *testing.T) {
 	if reEnrollResp.Secret == nil || *reEnrollResp.Secret == *enrollResp.Secret {
 		t.Errorf("re-enroll (with step-up) secret = %v, want a fresh one distinct from %q", reEnrollResp.Secret, *enrollResp.Secret)
 	}
+}
+
+// TestHandler_PreAuthCookie_SecureAttribute pins the Secure flag on the
+// pre-authentication cookie across the three topologies that matter.
+//
+// r.TLS is nil for every request in the most common production topology --
+// TLS terminated at a reverse proxy, the Go process only ever seeing
+// plaintext HTTP -- so a cookie whose Secure flag follows r.TLS alone ships
+// without the attribute exactly there (the reported gap). The host knows its
+// own topology and forces the attribute through WithSecureCookies; a request
+// that did arrive over direct TLS still gets it without the option, and a
+// plaintext listener (local development) with no option keeps issuing an
+// insecure cookie as before.
+func TestHandler_PreAuthCookie_SecureAttribute(t *testing.T) {
+	t.Parallel()
+
+	// issue mints a fresh pre-auth cookie from a Handler whose Service was
+	// assembled with opts, over a request whose TLS state is tlsState, and
+	// returns the cookie the response set. A nil r.TLS is the shape of
+	// every request behind a TLS-terminating proxy.
+	issue := func(t *testing.T, opts []Option, tlsState *tls.ConnectionState) *http.Cookie {
+		t.Helper()
+		h, _ := newTestHandler(t, opts...)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/authn/social/google/authorize", nil)
+		req.TLS = tlsState
+		rec := httptest.NewRecorder()
+		if _, err := h.ensurePreAuthCookie(rec, req); err != nil {
+			t.Fatalf("ensurePreAuthCookie() error = %v", err)
+		}
+		cookies := rec.Result().Cookies()
+		if len(cookies) != 1 {
+			t.Fatalf("Set-Cookie count = %d, want exactly 1; headers = %v", len(cookies), rec.Header())
+		}
+		return cookies[0]
+	}
+
+	t.Run("plaintext behind a TLS-terminating proxy, host opted in", func(t *testing.T) {
+		t.Parallel()
+		cookie := issue(t, []Option{WithSecureCookies(true)}, nil)
+		if !cookie.Secure {
+			t.Error("cookie Secure = false, want true: behind a TLS-terminating proxy r.TLS is nil, so WithSecureCookies(true) is the only thing that can set it")
+		}
+	})
+	t.Run("direct TLS without the option", func(t *testing.T) {
+		t.Parallel()
+		cookie := issue(t, nil, &tls.ConnectionState{})
+		if !cookie.Secure {
+			t.Error("cookie Secure = false, want true for a request that did arrive over TLS")
+		}
+	})
+	t.Run("plaintext without the option", func(t *testing.T) {
+		t.Parallel()
+		cookie := issue(t, nil, nil)
+		if cookie.Secure {
+			t.Error("cookie Secure = true, want false for a plaintext request with no WithSecureCookies: local development runs over http")
+		}
+	})
 }
 
 func TestHandler_SwitchTenant_ActiveMember_ReissuesAccessToken(t *testing.T) {
