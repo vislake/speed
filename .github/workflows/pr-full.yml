@@ -19,7 +19,7 @@ name: pr-full
 # the label gate, for manual full-matrix runs.
 #
 # COVERAGE -- what genuinely runs today
-#   * go-modules job: the same eleven-module matrix as pr-check through the
+#   * go-modules job: the same twelve-module matrix as pr-check through the
 #     reusable go-module-ci workflow (golangci-lint, go vet, unit tests
 #     under -race, a workspace-context build and a GOWORK=off standalone
 #     build) -- the full matrix runs the unit tier too. Per 18-cicd's
@@ -61,6 +61,12 @@ name: pr-full
 #                    tier: authn touches KVStore only through ratelimit and
 #                    the revocation list, both already covered by their own
 #                    owning module's tier -- go/authn/AGENTS.md)
+#       go/storage   PostgreSQL and MinIO/S3 -- its integration_test/ runs
+#                    both legs (postgres_leg_test.go for the module's
+#                    migrations applied from zero on the second dialect and
+#                    the tenant-scoped repositories' AssertIsolated suite,
+#                    minio_leg_test.go for object-store round-trips against
+#                    MinIO through pkgcore.NewS3ObjectStore)
 #   * reference-app job: examples/reference-app's golangci-lint leg, unit
 #     suite under -race, and its Docker-backed integration tier
 #     (-tags=integration -- testcontainers Redis) -- reference-app is its
@@ -124,6 +130,7 @@ jobs:
           - go/org
           - go/authn
           - go/saasctl
+          - go/storage
     uses: ./.github/workflows/reusable/go-module-ci.yml
     with:
       module: ${{ matrix.module }}
@@ -149,6 +156,7 @@ jobs:
           - go/rbac
           - go/org
           - go/authn
+          - go/storage
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
