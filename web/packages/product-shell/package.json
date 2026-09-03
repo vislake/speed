@@ -1,0 +1,51 @@
+{
+  "name": "@speed/product-shell",
+  "version": "0.0.0",
+  "description": "Speed product shell: the tenant-facing assembly shell -- ProductShell composes layout-kit's AppShell frame, auth-ui's sign-in family and auth-core's session hooks into one three-branch view machine (sign-in view, authenticated app frame, session-ended screen), with every view host-suppliable and zero text of its own",
+  "type": "module",
+  "sideEffects": false,
+  "files": ["dist", "README.md", "AGENTS.md"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "pnpm --filter @speed/auth-core --filter @speed/auth-ui --filter @speed/layout-kit build && tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@speed/auth-core": "workspace:*",
+    "@speed/auth-ui": "workspace:*",
+    "@speed/layout-kit": "workspace:*"
+  },
+  "peerDependencies": {
+    "@emotion/react": "^11.5.0",
+    "@emotion/styled": "^11.3.0",
+    "@mui/material": "^9.0.0",
+    "react": "^18.0.0 || ^19.0.0",
+    "react-dom": "^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/material": "^9.4.0",
+    "@speed/api-client": "workspace:*",
+    "@speed/api-sdk": "workspace:*",
+    "@speed/i18n": "workspace:*",
+    "@speed/ui-kit": "workspace:*",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "axe-core": "^4.13.0",
+    "jsdom": "^30.0.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": ["src", "test-utils"],
+  "compilerOptions": {
+    // product-shell is a DOM-rendering package: JSX compiles through the
+    // automatic runtime (react-jsx), same as ui-kit, layout-kit, auth-ui
+    // and tenancy-ui.
+    //
+    // src/ renders layout-kit's AppShell and auth-ui's SessionEndedScreen
+    // over auth-core's session hooks; test-utils/ registers the three
+    // sibling namespaces (ui-kit's providers included) and drives
+    // sessions through the api-client/api-sdk seam. Every sibling this
+    // program pulls into its graph resolves to the sibling's source via
+    // the paths below -- same pattern every DOM-rendering package uses;
+    // the siblings' published "types" point into their dist/, which is
+    // never committed and not yet built in a fresh checkout. Emitted
+    // dist/ keeps the bare specifiers, which consumers resolve against
+    // the real published packages. Keep this in lockstep with what src/
+    // and test-utils/ import. List order matters: "@speed/api-sdk/runtime"
+    // must be tried before its "@speed/api-sdk" prefix, and
+    // "@speed/i18n/mui-locale" before "@speed/i18n" (first match wins in
+    // paths).
+    "jsx": "react-jsx",
+    "paths": {
+      "@speed/auth-core": ["../auth-core/src/index.ts"],
+      "@speed/auth-ui": ["../auth-ui/src/index.ts"],
+      "@speed/layout-kit": ["../layout-kit/src/index.ts"],
+      "@speed/i18n": ["../i18n/src/index.ts"],
+      "@speed/i18n/mui-locale": ["../i18n/src/mui-locale.ts"],
+      "@speed/tokens": ["../tokens/src/index.ts"],
+      "@speed/ui-kit": ["../ui-kit/src/index.ts"],
+      "@speed/api-client": ["../api-client/src/index.ts"],
+      "@speed/api-sdk/runtime": ["../api-sdk/src/runtime.ts"],
+      "@speed/api-sdk": ["../api-sdk/src/index.ts"]
+    }
+  }
+}
