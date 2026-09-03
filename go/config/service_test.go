@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -865,4 +866,74 @@ func eventually(t *testing.T, timeout time.Duration, probe func() bool) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatalf("condition was never met within %v", timeout)
+}
+
+func TestService_RemoteDelivery_InvalidatesFromTheWireMap(t *testing.T) {
+	// Regression test for the cross-replica delivery path: pkgcore's
+	// distributed bus reconstructs a remote event's payload as the JSON
+	// decoded map (encoding/json into interface{}), never as the concrete
+	// ItemChangedEvent. The subscriber must read that shape -- before the
+	// fix it dropped it, and a replica with a warm cache would serve the
+	// stale value until the anti-loss poller happened to sweep it, making
+	// the event path dead in the very deployment mode it was designed for.
+	svc := attachDefaultServiceForTest(t)
+	if err := svc.Set(tenantA(), ScopeTenant, "brand.site_name", Value{Data: "Studio A"}, "alice"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	// Warm the cache, then write the new value behind the service's back --
+	// the way another replica's Set lands on the shared table.
+	if name, err := GetTyped[string](svc, tenantA(), "brand.site_name"); err != nil || name != "Studio A" {
+		t.Fatalf("warm read = %q, %v", name, err)
+	}
+	now := time.Now().Truncate(time.Second).UTC()
+	if err := svc.st.put(context.Background(), row{
+		Key: "brand.site_name", Scope: "tenant", TenantID: "tenant-a",
+		Value: "Studio A2", UpdatedBy: "carol", UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("direct store.put (the remote write): %v", err)
+	}
+
+	// Deliver the change exactly as the distributed bus would: the struct
+	// marshaled to JSON and decoded into any.
+	raw, err := json.Marshal(ItemChangedEvent{
+		Key: "brand.site_name", Scope: ScopeTenant, TenantID: "tenant-a",
+		Actor: "carol", OldValue: "Studio A", NewValue: "Studio A2",
+		ChangedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	var wire any
+	if err = json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("json.Unmarshal into any: %v", err)
+	}
+
+	delivered := make(chan Value, 1)
+	if err = svc.Watch("brand.site_name", func(v Value) { delivered <- v }); err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	if err = svc.onItemChanged(context.Background(), pkgcore.Event{
+		Type: EventConfigItemChanged, TenantID: "tenant-a", Payload: wire,
+	}); err != nil {
+		t.Fatalf("onItemChanged on a remote-shaped payload: %v", err)
+	}
+
+	// The cache entry the stale read warmed must be gone: the next read
+	// re-resolves the row and serves the remote write. (The store.put above
+	// wrote a canonical value directly; a GetTyped re-reads it fresh.)
+	name, err := GetTyped[string](svc, tenantA(), "brand.site_name")
+	if err != nil {
+		t.Fatalf("re-read after remote delivery: %v", err)
+	}
+	if name != "Studio A2" {
+		t.Fatalf("re-read after remote delivery = %q, want %q -- the remote event did not invalidate the cache", name, "Studio A2")
+	}
+	select {
+	case v := <-delivered:
+		if v.Data != "Studio A2" || v.Scope != ScopeTenant {
+			t.Fatalf("remote watch delivery = %+v, want the remote change value", v)
+		}
+	default:
+		t.Fatal("no watch delivery from the remote-shaped event")
+	}
 }

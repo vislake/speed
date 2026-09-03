@@ -591,15 +591,21 @@ func (s *Service) startPoller() {
 // synchronously inside the publishing Set, so watchers fire before Set
 // returns; on the distributed bus it runs on delivery.
 //
+// The payload is recovered with itemChangedFromWire: the in-memory bus
+// delivers the concrete ItemChangedEvent, while a remote delivery from
+// pkgcore's distributed bus arrives as the JSON-decoded map whose shape
+// itemChangedFromJSONMap reads (without it, every cross-replica change
+// would be dropped here and the anti-loss poller would be the only thing
+// keeping replicas converged -- the event path is the primary one).
+//
 // The handler never returns an error on purpose: a returning error would
 // bubble into the publisher's Publish call and misreport a remote Set as
 // failed (ErrAuditPublishFailed) when the only problem was this process's
 // own payload handling. The cache invalidation -- the part that must not
-// fail -- happens before anything can. A payload of the wrong type is
-// impossible from this module's own publisher and is ignored by
-// construction, with the invalidation already done.
+// fail -- happens before anything can. A payload of neither shape is
+// ignored by construction, with the invalidation already done.
 func (s *Service) onItemChanged(_ context.Context, evt pkgcore.Event) error {
-	payload, ok := evt.Payload.(ItemChangedEvent)
+	payload, ok := itemChangedFromWire(evt.Payload)
 	if !ok {
 		return nil
 	}

@@ -107,6 +107,67 @@ func redactIf(sensitive bool, canonical string) string {
 	return canonical
 }
 
+// itemChangedFromWire recovers an ItemChangedEvent from whatever an
+// EventBus delivered. The standalone mode's in-memory bus hands the
+// concrete struct through unchanged, but pkgcore's distributed bus
+// reconstructs remote payloads with encoding/json into plain maps (see
+// pkgcore's RedisEventBus reader: the payload envelope travels as JSON and
+// decodes into interface{}), so an event that crossed a replica boundary
+// arrives as map[string]any whose keys are the struct's Go field names.
+// Hot-update invalidation must work in the distributed deployment mode --
+// the mode it was designed for -- so both shapes are accepted, and a
+// payload that is neither is not this event: the caller (the service's
+// subscriber) drops it without failing the handler chain.
+func itemChangedFromWire(payload any) (ItemChangedEvent, bool) {
+	switch p := payload.(type) {
+	case ItemChangedEvent:
+		return p, true
+	case map[string]any:
+		return itemChangedFromJSONMap(p)
+	default:
+		return ItemChangedEvent{}, false
+	}
+}
+
+// itemChangedFromJSONMap reads the wire-shaped map a remote event decodes
+// to. Only Key and Scope are mandatory -- an event without them cannot
+// address a cache entry or a watcher; every other field degrades to its
+// zero value, because invalidation does not depend on it and a changed-at
+// instant that fails to parse (a non-time.Time JSON value) is not worth
+// dropping the event over. Values decoded by encoding/json from the
+// publisher's struct are strings and a bool; time.Time arrives as an
+// RFC3339 string.
+func itemChangedFromJSONMap(m map[string]any) (ItemChangedEvent, bool) {
+	key, ok := m["Key"].(string)
+	if !ok {
+		return ItemChangedEvent{}, false
+	}
+	scope, ok := m["Scope"].(string)
+	if !ok {
+		return ItemChangedEvent{}, false
+	}
+	evt := ItemChangedEvent{
+		Key:       key,
+		Scope:     Scope(scope),
+		TenantID:  stringOf(m["TenantID"]),
+		Actor:     stringOf(m["Actor"]),
+		OldValue:  stringOf(m["OldValue"]),
+		NewValue:  stringOf(m["NewValue"]),
+		Sensitive: m["Sensitive"] == true,
+	}
+	if raw, ok := m["ChangedAt"].(string); ok {
+		evt.ChangedAt, _ = time.Parse(time.RFC3339Nano, raw)
+	}
+	return evt, true
+}
+
+// stringOf returns s when the map held a string, "" otherwise. It keeps
+// itemChangedFromJSONMap's optional-field reads one line each.
+func stringOf(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
 // eventDecl is the declaration this module registers for its one event
 // type. It lives here next to the payload so the type string, the payload
 // type name and the description cannot drift apart.
