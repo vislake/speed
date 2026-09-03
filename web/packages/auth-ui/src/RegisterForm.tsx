@@ -6,9 +6,11 @@
  * email/phone shape, never a single ambiguous identifier field). The
  * optional display name is trimmed and omitted when blank; the locale the
  * request declares is the session's current UI language, read at submit
- * time so a mid-flight language switch is honoured. Password policy
- * lives on the backend, whose code-level answers (authn.password_too_short
- * and friends) render through the one InlineError banner.
+ * time so a mid-flight language switch is honoured. Password policy and
+ * identifier canonical form live on the backend, whose code-level
+ * answers -- authn.password_too_short and friends, and the
+ * identifier-format refusals authn.invalid_email / authn.invalid_phone --
+ * render through the one InlineError banner.
  *
  * Registration never signs in (register is not a session operation): the
  * created user is handed to onRegistered -- the host navigates to its

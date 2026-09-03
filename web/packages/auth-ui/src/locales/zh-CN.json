@@ -56,6 +56,8 @@
       "email_already_registered": "该邮箱已被注册。",
       "phone_already_registered": "该手机号已被注册。",
       "identifier_required": "请输入邮箱或手机号。",
+      "invalid_email": "邮箱格式不正确。",
+      "invalid_phone": "手机号格式不正确，请输入以 + 开头、带国家区号的完整号码，如 +8613800138000。",
       "password_too_short": "密码太短。",
       "password_too_long": "密码太长。",
       "password_too_weak": "密码强度不足，请使用更复杂的密码。",

@@ -4,9 +4,11 @@
  * with the display name trimmed and omitted when blank; the locale the
  * request declares follows the active UI language, re-read at submit time
  * so a mid-flight switch is honoured. Registration never signs in: an
- * email-already-registered answer renders its code text in one alert, and
- * a created user goes to onRegistered or -- without a callback -- renders
- * the success panel in place of the form. An empty submit never reaches
+ * email-already-registered answer or an identifier-format refusal
+ * (authn.invalid_email from the email slot's canonical-form gate,
+ * authn.invalid_phone for a phone number with no E.164 form) renders its
+ * code text in one alert, and a created user goes to onRegistered or --
+ * without a callback -- renders the success panel in place of the form. An empty submit never reaches
  * the network, the en-US bundle renders on an English-starting instance,
  * and the tree passes axe. Text expectations read the bundle values,
  * never inline language.
@@ -165,6 +167,49 @@ describe('RegisterForm', () => {
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent(
         zhCN.errors.authn.email_already_registered,
+      ),
+    )
+    expect(harness.store.get()).toBeNull()
+    // Still on the form, retry possible.
+    expect(
+      screen.getByLabelText(zhCN.register.identifierLabel),
+    ).toBeInTheDocument()
+  })
+
+  it('render an invalid-phone answer for a phone identifier and keep the form up', async () => {
+    const harness = makeHarness({
+      [REGISTER]: () => {
+        throw apiError(400, 'authn.invalid_phone')
+      },
+    })
+    renderWithProviders(<RegisterForm session={harness.session} />)
+    // No '@': the identifier goes into the phone slot, and a number
+    // without the E.164 '+' prefix and country code is what the
+    // backend's canonical-form gate refuses.
+    await fillAndSubmit('13800138000', 's3cret-pass', ZH_LABELS)
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        zhCN.errors.authn.invalid_phone,
+      ),
+    )
+    expect(harness.store.get()).toBeNull()
+    // Still on the form, retry possible.
+    expect(
+      screen.getByLabelText(zhCN.register.identifierLabel),
+    ).toBeInTheDocument()
+  })
+
+  it('render an invalid-email answer for an email identifier and keep the form up', async () => {
+    const harness = makeHarness({
+      [REGISTER]: () => {
+        throw apiError(400, 'authn.invalid_email')
+      },
+    })
+    renderWithProviders(<RegisterForm session={harness.session} />)
+    await fillAndSubmit('bad@example', 's3cret-pass', ZH_LABELS)
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        zhCN.errors.authn.invalid_email,
       ),
     )
     expect(harness.store.get()).toBeNull()

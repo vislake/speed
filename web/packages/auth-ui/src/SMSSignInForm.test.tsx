@@ -4,9 +4,10 @@
  * logs in with the number the code was sent to -- and each scripted
  * request is asserted on method, path and body. Resend repeats the
  * request against the same number without leaving the code step; editing
- * the phone returns to the first step. A rate-limited code request
- * renders its code text in one alert and stays on the phone step; a bad
- * code answer does the same on the code step and signs nothing in. Both
+ * the phone returns to the first step. A refused code request (rate
+ * limited, or a number with no E.164 form) renders its code text in one
+ * alert and stays on the phone step; a bad code answer does the same on
+ * the code step and signs nothing in. Both
  * steps' buttons disable for their flight, empty submits never reach the
  * network, the en-US bundle renders on an English-starting instance, and
  * the tree passes axe. Text expectations read the bundle values, never
@@ -151,6 +152,28 @@ describe('SMSSignInForm', () => {
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent(
         zhCN.errors.authn.rate_limited,
+      ),
+    )
+    // Still on the phone step: no notice, no code field, nothing sent.
+    expect(screen.getByLabelText(zhCN.smsSignIn.phoneLabel)).toBeInTheDocument()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(harness.store.get()).toBeNull()
+    expect(harness.calls).toHaveLength(1)
+  })
+
+  it('render an invalid-phone answer text and stay on the phone step', async () => {
+    const harness = makeHarness({
+      [REQUEST_SMS_CODE]: () => {
+        throw apiError(400, 'authn.invalid_phone')
+      },
+    })
+    renderWithProviders(<SMSSignInForm session={harness.session} />)
+    // A domestic-style number without the E.164 '+' prefix and country
+    // code is exactly what the backend's canonical-form gate refuses.
+    await requestCode('13800138000')
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        zhCN.errors.authn.invalid_phone,
       ),
     )
     // Still on the phone step: no notice, no code field, nothing sent.

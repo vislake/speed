@@ -50,6 +50,24 @@ describe('InlineError', () => {
     },
   )
 
+  // The register and SMS request paths answer with the identifier-format
+  // codes -- authn.invalid_phone for a number with no E.164 form, and
+  // authn.invalid_email from the register email slot's canonical-form
+  // gate -- each with its own bundle text, so a whitelist or locale typo
+  // in either fails here too.
+  const identifierCodes = [
+    ['authn.invalid_email', zhCN.errors.authn.invalid_email],
+    ['authn.invalid_phone', zhCN.errors.authn.invalid_phone],
+  ] as const
+
+  it.each(identifierCodes)(
+    'render the %s identifier-format code with its own text',
+    (code, text) => {
+      renderWithProviders(<InlineError code={code} />)
+      expect(screen.getByRole('alert')).toHaveTextContent(text)
+    },
+  )
+
   it('render the unknown fallback for a code outside the whitelist', () => {
     renderWithProviders(<InlineError code="authn.future_code" />)
     expect(screen.getByRole('alert')).toHaveTextContent(zhCN.errors.unknown)

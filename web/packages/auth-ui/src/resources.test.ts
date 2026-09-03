@@ -103,6 +103,8 @@ describe('auth-ui resources', () => {
     for (const key of [
       'errors.authn.invalid_credentials',
       'errors.authn.email_already_registered',
+      'errors.authn.invalid_email',
+      'errors.authn.invalid_phone',
       'errors.authn.identity_already_bound',
       'errors.authn.session_revoked',
       'errors.authn.token_expired',

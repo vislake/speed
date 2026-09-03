@@ -7,9 +7,11 @@
  * phone step's terminal state), then the code step completes the sign-in
  * with loginWithSMSCode. The sent notice announces the receiving number;
  * resend repeats the request against the same number, and changing the
- * phone returns to the first step. The request step answers the code the
- * server accepts or does not: authn.rate_limited is its only code-shaped
- * failure, and every failure renders through the one InlineError banner.
+ * phone returns to the first step. The request step renders the code the
+ * server answers: authn.invalid_phone when the number has no E.164 form
+ * (no leading '+' and country code) and authn.rate_limited when the
+ * attempt trips the send policy, each through the one InlineError
+ * banner.
  *
  * Busy states: the code-request button disables for the request's flight,
  * the code step's submit disables while the login commits (RHF's
