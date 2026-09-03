@@ -20,6 +20,15 @@
 #     record by (tenant_id, idempotency_key) on the platform-data table;
 #     legitimately written by hand, per the store.go file-header comment
 #     and docs/internal/17-risks.md row 46.
+#   * go/config/store.go     -- the configs-table accessor's exact
+#     (scope, tenant_id, key) lookups and upserts on platform data
+#     (docs/internal/04-data-and-tenancy.md's platform domain lists
+#     system-level configuration there; the model deliberately implements
+#     no TenantScoped, per model.go's doc comment, so the tenant-scoping
+#     plugin injects no filter for this table, and ScopeSystem rows carry
+#     an empty tenant_id). Same shape as jobs' store.go above: tenant_id
+#     is one column of a primary-key triple, not a bypass of an injected
+#     guard.
 #
 # Residual gap: only the first-argument literal form is matched -- a
 # clause assembled dynamically (fmt.Sprintf into the clause, or a
@@ -54,3 +63,4 @@ rules:
         # Allowlist (see header).
         - "**/go/dbkit/**"
         - "**/go/jobs/store.go"
+        - "**/go/config/store.go"
