@@ -62,6 +62,14 @@
 - **未登录时如何知道是哪个租户的配置**：白标场景下品牌、可用登录方式都是租户级的，但此刻还没有登录态。解析顺序为 **自定义域名 → 子域名 → 默认租户**（单租户部署时即平台默认值）。这份映射由 `tenancy` 的 `Resolver` 统一提供，登录前后用的是同一套解析逻辑，避免出现"登录页是 A 品牌、登录后变 B 品牌"。未匹配到任何租户时返回平台默认品牌，绝不报错——登录页打不开是最糟糕的失败模式。
 - **前端运行时配置**：提供 `/api/config/public` 下发前端可见的公开配置（品牌信息、功能开关、可用支付渠道、可选语言），前端在启动时拉取。这样改品牌色、开关功能不需要重新构建前端。`@speed/api-client` 提供 `usePublicConfig()` hook。
 
+  > **实现落地更正**（实现 `config` 模块时确认）：本节动态配置部分已按下列实际形态落地，个别表述与设计不同：
+  > - **声明与冻结分离**：各模块在 `Register` 阶段只通过 `pkgcore` 的 `ConfigSchemaRegistrar`/`FeatureRegistrar` **声明**自己的配置项与功能开关；运行期 schema 要到 `Bootstrap` 走完、所有模块注册完毕才完整，因此宿主在 `Bootstrap` 返回后调用一次 `config.NewModule(...)` 的 `Attach(reg)` 冻结 schema 并取回 `Service`。声明与冻结之间的请求窗口返回 `ErrServiceNotAttached` 而不是带病服务；含 `Sensitive` 项却未注入 cipher 时拒绝启动（`ErrCipherRequired`）；重复 `Attach` 报 `ErrAlreadyAttached`。
+  > - **事件名与防丢**：变更事件名实现为 `config.item.changed`（本节写的是 `config.changed`），经共享总线广播让各实例失效本地缓存；防丢兜底是后台轮询器定期重读近期更新的行（不是 TTL）。
+  > - **敏感项**：加密存储、读取时解密、日志与响应脱敏均按设计落地；变更事件同样不携带明文——payload 的两个取值槽位都放 `[redacted]` 标记，明文不跨出模块。
+  > - **作用域**：`system` 与 `tenant` 两层已落地（system 行以空字符串 `tenant_id` 为哨兵），读取从租户覆盖回退到 system 行再到 schema 默认值；`user` 层按"未来可扩展"预留但刻意未实现，任何写入返回 `ErrUserScopeUnavailable`。
+  > - **审计**："变更审计" bullet 的落地形态是 `configs` 表行级 `updated_by`/`updated_at` 留痕 + 经共享总线发布的变更事件；专门的审计记录与 `compliance` 消费者随 `compliance` 模块的 round 落地（届时订阅 `config.item.changed` 即可，本模块不依赖审计方）。
+  > - **端点**：`/api/config/public`（公开项生效值 + 依赖解析后的启用功能开关列表）与 `/api/system/features`（启用功能开关列表）都已上线：未登录可访问、只接受 GET/HEAD（其它方法 405 + `Allow: GET, HEAD`），租户经宿主注入的 `tenancy.Resolver` 逐请求解析，未匹配时回退平台默认值、绝不报错——与上面"登录页" bullet 的规则一致。`usePublicConfig()` hook 与这两份响应里的"可用支付渠道、可选语言"等条目属前端 `@speed/api-client` 的 round（由它在启动时消费这两个端点；支付渠道/语言等条目还要等对应模块注册相应公开配置项后才会出现）。
+
 **分层缓存**：动态配置读取路径在热路径上（每次权限判断、每次计量都可能读），必须走进程内缓存 + 变更失效，不能每次查库。
 
 ## 功能开关：三个层次，不要混为一谈
