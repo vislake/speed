@@ -41,6 +41,8 @@ var errorCatalog = []struct {
 	{"ErrImageUnreadable", ErrImageUnreadable, "storage.image_unreadable", http.StatusBadRequest},
 	{"ErrInvalidExpiry", ErrInvalidExpiry, "storage.invalid_expiry", http.StatusBadRequest},
 	{"ErrInvalidSize", ErrInvalidSize, "storage.invalid_size", http.StatusBadRequest},
+	{"ErrInvalidRequestBody", ErrInvalidRequestBody, "storage.invalid_request_body", http.StatusBadRequest},
+	{"ErrInvalidLimit", ErrInvalidLimit, "storage.invalid_limit", http.StatusBadRequest},
 
 	{"ErrStoreUnavailable", ErrStoreUnavailable, "storage.store_unavailable", http.StatusInternalServerError},
 	{"ErrStoreError", ErrStoreError, "storage.store_error", http.StatusInternalServerError},

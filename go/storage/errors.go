@@ -151,3 +151,25 @@ var (
 	// and silently degrading every completion, Register refuses to boot.
 	ErrQueueRequired = apperr.Internal("storage.queue_required")
 )
+
+// The HTTP-transport half of the storage error index: codes the handlers
+// serving the api/ fragment own, which no service method can return. They
+// follow the same <module>.<reason> convention and carry the same locale
+// entries as the codes above -- errors_test.go's errorCatalog extends over
+// both var blocks, and its source-parsing completeness test spans this file
+// as a whole.
+var (
+	// ErrInvalidRequestBody reports a request body the transport could not
+	// decode as the operation's spec-generated JSON type -- the body was
+	// absent, was not JSON, or did not have the shape the schema describes.
+	// It is org's same-named error, and it carries no parameters: the schema
+	// itself is the message, and no single field can be blamed for a body
+	// that never parsed.
+	ErrInvalidRequestBody = apperr.Invalid("storage.invalid_request_body")
+
+	// ErrInvalidLimit reports a list request whose limit query parameter
+	// falls outside the 1-200 bound the module's surface promises. The
+	// parameters carry the offending value and the bound, so the rendered
+	// message names all three.
+	ErrInvalidLimit = apperr.Invalid("storage.invalid_limit")
+)

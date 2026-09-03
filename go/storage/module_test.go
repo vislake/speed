@@ -18,10 +18,11 @@ import (
 )
 
 // TestModule_Identity pins the module's identity and, in particular, its
-// honest OpenAPISpec answer this round: nil. The module's HTTP surface --
-// the api/ fragment, the generated handler and the apiPath prefix -- is
-// owned by the HTTP round, which ships the spec first (spec-first is not
-// negotiable) and mounts the routes only once that fragment exists.
+// OpenAPISpec answer: the api/ fragment committed under api/, embedded.
+// A module whose routes Register mounts on the host's router at apiPath
+// must present the spec those routes implement -- OpenAPISpec returning
+// empty would break every tool that merges or audits the application's API
+// surface, and would drift from the mounted routes.
 func TestModule_Identity(t *testing.T) {
 	m := NewModule(nil)
 
@@ -31,8 +32,8 @@ func TestModule_Identity(t *testing.T) {
 	if got := m.DependsOn(); got != nil {
 		t.Errorf("DependsOn() = %v, want nil -- storage depends on no other pkgcore.Module; the queue it needs is a host-wired seam, not a bootstrap dependency", got)
 	}
-	if got := m.OpenAPISpec(); got != nil {
-		t.Errorf("OpenAPISpec() is non-nil (%d bytes); the HTTP round owns the api/ fragment, and this round must not ship one it cannot mount", len(got))
+	if got := m.OpenAPISpec(); len(got) == 0 {
+		t.Error("OpenAPISpec() is empty, want the embedded api/openapi.yaml fragment")
 	}
 }
 
@@ -131,12 +132,20 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 		}
 	})
 
-	t.Run("no routes are mounted", func(t *testing.T) {
-		// The absence is asserted, not left implicit: until the HTTP round
-		// ships the spec and the apiPath constant, mounting anything would
-		// be a route with no spec-generated handler behind it.
-		if routes := reg.Routes.Routes(); len(routes) != 0 {
-			t.Errorf("Register mounted %d route(s); the HTTP round owns route mounting, this round ships no api/ fragment", len(routes))
+	t.Run("the HTTP surface is mounted at apiPath", func(t *testing.T) {
+		// The one mounted route is the module's own surface, at exactly the
+		// apiPath the fragment's paths already promise -- a drift between
+		// the two would hand the host's outer mux a prefix that serves
+		// nothing (or routes that nothing forwards).
+		routes := reg.Routes.Routes()
+		if len(routes) != 1 {
+			t.Fatalf("Register mounted %d route(s), want exactly 1 (apiPath)", len(routes))
+		}
+		if routes[0].Path != apiPath {
+			t.Errorf("mounted route path = %q, want %q", routes[0].Path, apiPath)
+		}
+		if routes[0].Handler == nil {
+			t.Error("the mounted route carries a nil handler")
 		}
 	})
 

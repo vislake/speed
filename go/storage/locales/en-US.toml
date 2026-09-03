@@ -46,3 +46,7 @@
 "storage.internal_error" = "An internal error occurred. Try again later."
 
 "storage.queue_required" = "The module is missing its required queue wiring."
+
+"storage.invalid_request_body" = "The request body could not be parsed. Please check it and try again."
+
+"storage.invalid_limit" = "The page size {{.limit}} is invalid. It must be between {{.min}} and {{.max}}."
