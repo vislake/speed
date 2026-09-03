@@ -380,6 +380,46 @@ func TestService_RevokeRole_NothingToRevoke_IsReported(t *testing.T) {
 	}
 }
 
+func TestService_RevokeRole_ConcurrentIdenticalRevoke_ReportsBindingNotFound(t *testing.T) {
+	// The LOW review finding on RevokeRole: Find and Delete are not atomic
+	// either, so two concurrent identical RevokeRole calls can both pass
+	// Find before either has deleted the row. Reproduced deterministically
+	// via the beforeBindingDelete test hook, firing after THIS call's own
+	// Find already succeeded but before its Delete runs: inside it, a
+	// second call's Find-then-Delete is simulated, removing the row first.
+	// This call's own Delete then affects zero rows, which
+	// dbkit.Repository[T].Delete reports as dbkit.ErrRecordNotFound -- the
+	// same "nothing to revoke" fact Find's own not-found path reports, so
+	// it must classify identically as ErrBindingNotFound, not the generic
+	// ErrStorage a caller could not distinguish from an actual database
+	// failure.
+	svc := newTestService(t)
+	ctx := tenantCtx("tenant-a")
+	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
+	grant(t, svc, sub, "reader", Scope{}, "notes:read")
+
+	role, err := svc.roles.ByKey(ctx, "reader")
+	if err != nil {
+		t.Fatalf("ByKey: %v", err)
+	}
+
+	svc.beforeBindingDelete = func() {
+		svc.beforeBindingDelete = nil // run exactly once
+		binding, findErr := svc.bindings.Find(ctx, sub.UserID, role.ID, "")
+		if findErr != nil {
+			t.Fatalf("simulated concurrent RevokeRole's Find: %v", findErr)
+		}
+		if deleteErr := svc.bindings.Delete(ctx, binding.ID); deleteErr != nil {
+			t.Fatalf("simulated concurrent RevokeRole's Delete: %v", deleteErr)
+		}
+	}
+
+	revokeErr := svc.RevokeRole(ctx, sub, "reader", Scope{})
+	if !hasCode(revokeErr, ErrBindingNotFound.Code) {
+		t.Fatalf("RevokeRole racing a concurrent identical revoke error = %v, want %s (not a generic storage error)", revokeErr, ErrBindingNotFound.Code)
+	}
+}
+
 func TestService_RevokeRole_WrongScope_DoesNotSilentlySucceed(t *testing.T) {
 	// THE failure this strictness exists for. The grant is node-scoped;
 	// the administrator revokes tenant-wide. If that reported success, the

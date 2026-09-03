@@ -81,6 +81,11 @@ type Service struct {
 	// scheduling to reproduce the race. Nil, and therefore a no-op, in
 	// production.
 	beforeBindingCreate func()
+
+	// beforeBindingDelete is beforeBindingCreate's counterpart for
+	// RevokeRole: it runs synchronously right after RevokeRole's Find
+	// succeeds and right before its Delete, for the identical reason.
+	beforeBindingDelete func()
 }
 
 // Close releases the Service's background resources: it stops the decision

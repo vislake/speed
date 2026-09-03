@@ -7,6 +7,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -186,7 +187,24 @@ func (s *Service) RevokeRole(ctx context.Context, sub Subject, role string, scop
 	if err != nil {
 		return err
 	}
+	if s.beforeBindingDelete != nil {
+		s.beforeBindingDelete()
+	}
 	if err := s.bindings.Delete(writeCtx, binding.ID); err != nil {
+		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+			// Find above and this Delete are not atomic either: two
+			// concurrent RevokeRole calls for the same binding can both
+			// pass Find, and the loser's Delete then finds zero rows
+			// affected, which dbkit.Repository[T].Delete reports as
+			// ErrRecordNotFound. That is the identical "nothing to revoke"
+			// fact Find's own not-found path reports, so it is classified
+			// the same way here rather than surfacing as an opaque storage
+			// error -- a caller retrying a revoke under contention gets the
+			// same ErrBindingNotFound either way.
+			return ErrBindingNotFound.
+				WithParam("role_id", def.ID).
+				WithParam("node_id", scope.NodeID)
+		}
 		return ErrStorage.WithCause(err)
 	}
 	return s.publishBindingChanged(ctx, EventRoleBindingRevoked, sub, def, scope)
