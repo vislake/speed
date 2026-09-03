@@ -448,7 +448,7 @@ describe('401 and the refresh hook', () => {
     expect(standin.calls).toHaveLength(2)
   })
 
-  it('surfaces the 401 and reports when the refresh fails', async () => {
+  it('surfaces the 401 and reports the refresh failure with the envelope attrs', async () => {
     const memory = createMemoryReporter()
     const standin = scriptedStandin(jsonResponse(401, { ...SESSION_EXPIRED }))
     const api = createClient({
@@ -461,8 +461,38 @@ describe('401 and the refresh hook', () => {
     const error = await expectApiError(api<{ ok: boolean }>('/notes'))
     expect(error.auth).toBe(true)
     expect(error.code).toBe('authn.session_expired')
+    expect(error.traceId).toBe('trace-1')
     expect(error.attempts).toBe(1)
     expect(standin.calls).toHaveLength(1)
+    // The warning reuses the same 401 body as the ApiError: it carries
+    // the envelope's code and traceId so it can be correlated to
+    // server logs.
+    expect(memory.warns).toEqual([
+      {
+        message: 'access token refresh failed',
+        attrs: {
+          status: 401,
+          code: 'authn.session_expired',
+          traceId: 'trace-1',
+        },
+      },
+    ])
+  })
+
+  it('reports a bare-401 refresh failure without envelope attrs', async () => {
+    const memory = createMemoryReporter()
+    const standin = scriptedStandin(jsonResponse(401, { error: 'no envelope' }))
+    const api = createClient({
+      baseUrl: BASE_URL,
+      fetch: standin.fetch,
+      accessTokenStore: createMemoryAccessTokenStore(),
+      refreshAccessToken: async () => false,
+      reporter: memory.reporter,
+    })
+    const error = await expectApiError(api<{ ok: boolean }>('/notes'))
+    expect(error.auth).toBe(true)
+    expect(error.code).toBe('client.http.401')
+    expect(error.traceId).toBeUndefined()
     expect(memory.warns).toEqual([
       { message: 'access token refresh failed', attrs: { status: 401 } },
     ])

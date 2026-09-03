@@ -287,19 +287,31 @@ function retryDelayFor(
   return retryDelayMs(retryIndex, policy)
 }
 
-/** The final ApiError for an HTTP failure: the envelope when the body
- * carries one, client.http.<status> otherwise. */
-async function httpError(
+/** Reads and structurally checks the error envelope from an HTTP
+ * failure's body; undefined when the body is empty, unreadable or
+ * carries no valid envelope. A response body is single-read, so callers
+ * that need the envelope twice (a report and the ApiError) read once
+ * and reuse it. */
+async function readEnvelope(
   outcome: HttpOutcome,
-  attempts: number,
-): Promise<ApiError> {
+): Promise<Envelope | undefined> {
   let text: string | null
   try {
     text = await outcome.response.text()
   } catch {
     text = null
   }
-  const envelope = parseEnvelope(text)
+  return parseEnvelope(text)
+}
+
+/** The final ApiError for an HTTP failure from an envelope that was
+ * already read: the envelope error when one is present,
+ * client.http.<status> otherwise. */
+function envelopeError(
+  outcome: HttpOutcome,
+  envelope: Envelope | undefined,
+  attempts: number,
+): ApiError {
   if (envelope !== undefined) {
     return new ApiError({
       status: outcome.status,
@@ -316,6 +328,14 @@ async function httpError(
     code: httpErrorCode(outcome.status),
     attempts,
   })
+}
+
+/** The final ApiError for an HTTP failure (reads the body once). */
+async function httpError(
+  outcome: HttpOutcome,
+  attempts: number,
+): Promise<ApiError> {
+  return envelopeError(outcome, await readEnvelope(outcome), attempts)
 }
 
 /** The final ApiError for a transport-class failure. */
@@ -572,12 +592,23 @@ export function createClient(options: ClientOptions): RequestFn {
             // budget and to method idempotency.
             continue
           }
+          // Refresh failed: read the 401 body once and reuse it for
+          // the report and the error, so the warning carries the
+          // envelope's code and traceId -- correlating it to server
+          // logs -- instead of firing blind.
+          const envelope = await readEnvelope(outcome)
+          // An abort during that read wins over the auth error.
+          throwIfAborted(signal)
           reporter.warn('access token refresh failed', {
             status: outcome.status,
+            ...(envelope === undefined
+              ? {}
+              : { code: envelope.code, traceId: envelope.traceId }),
           })
+          throw envelopeError(outcome, envelope, attempts)
         }
-        // No hook, refresh failed, or the retried request was refused
-        // again: the session is over, surface the auth error.
+        // No hook, or the retried request was refused again: the
+        // session is over, surface the auth error.
         throw await httpError(outcome, attempts)
       }
 
