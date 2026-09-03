@@ -425,6 +425,18 @@ invocation pr-full.yml's integration-tiers job runs for this module:
   is validated at create and enforced at sweep time, and a host that schedules
   no sweeps retains everything. The per-tenant idempotency key keeps the
   sweeps that do run from racing each other.
+- **Upload and Complete serialize per object only inside one process.** The
+  service's `objectLocks` (object.go) keep a completed row's finalized
+  metadata honest within a single process: a second Upload of the same object
+  can no longer land between Complete's read of the bytes and its finalize,
+  which is the interleaving that would leave a completed row describing bytes
+  the key no longer holds. The lock map is process-local, though, so two
+  replicas of a distributed deployment — which share the ObjectStore but not
+  the map — can still interleave an Upload on one replica with a Complete on
+  another. Closing that residue needs a store-level compare-and-swap the
+  ObjectStore seam could carry in a later round; until then, the standalone
+  shape (one process, one store) is airtight and the multi-replica one is not,
+  recorded here rather than pretended away.
 
 ## Deferred and not shipped (with reasons)
 

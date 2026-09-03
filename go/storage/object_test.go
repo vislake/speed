@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1193,5 +1194,142 @@ func TestObjectService_FailsClosedWithoutAnAttachedHost(t *testing.T) {
 	assertCode(t, err, ErrStoreUnavailable.Code)
 	if rc != nil {
 		t.Fatal("OpenContent returned a reader with its store_unavailable error")
+	}
+}
+
+// gatedStore wraps a fakeStore whose GetObject returns a reader that serves
+// the stored bytes and then parks at Close until the test opens gate -- the
+// pause point that holds a Complete between its ReadAll and its finalize
+// while the test drives a concurrent second Upload. The fakeStore is
+// embedded by value: its map header copies the reference, so the original
+// *fakeStore keeps observing the same bytes for the final assertion.
+type gatedStore struct {
+	fakeStore
+	entered chan struct{} // closed when a gated reader reaches its Close
+	gate    chan struct{} // opening it releases the parked reader
+}
+
+func (s *gatedStore) GetObject(ctx context.Context, key string) (io.ReadCloser, error) {
+	rc, err := s.fakeStore.GetObject(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	return &parkingReadCloser{ReadCloser: rc, entered: s.entered, gate: s.gate}, nil
+}
+
+var _ pkgcore.ObjectStore = (*gatedStore)(nil)
+
+// parkingReadCloser reads through the wrapped reader and parks its Close: it
+// closes entered exactly once (so the test knows the reader's bytes have
+// been consumed and the Close is what holds the pipeline), then blocks until
+// gate closes.
+type parkingReadCloser struct {
+	io.ReadCloser
+	entered chan struct{}
+	gate    chan struct{}
+	once    sync.Once
+}
+
+func (p *parkingReadCloser) Close() error {
+	p.once.Do(func() { close(p.entered) })
+	<-p.gate
+	return p.ReadCloser.Close()
+}
+
+// TestObjectService_Complete_SecondUploadCannotReplaceTheFinalizedBytes pins
+// the per-object serialization of Upload and Complete (the service's locks
+// field). It stages the exact interleaving that would leave a completed
+// row's metadata lying about the store's contents: a Complete parked between
+// its read of the stored bytes and its finalize -- the gated store holds the
+// reader at Close -- while a second Upload of the same object streams
+// same-length, unvalidated replacement bytes into the store. Serialized, the
+// second Upload cannot run until the Complete is done; by then the row is
+// completed, so the upload is refused with storage.object_not_uploading and
+// the finalized metadata still describes the bytes under the key.
+// Unserialized (the pre-fix behaviour), the second upload's PutObject lands
+// between the read and the finalize, and the row completes describing bytes
+// the key no longer holds -- which is exactly what the final assertion
+// (stored bytes still equal the bytes the row's digest describes) catches.
+func TestObjectService_Complete_SecondUploadCannotReplaceTheFinalizedBytes(t *testing.T) {
+	ctx := serviceCtx("tenant-a")
+	svc, store, _, bus := newTestService(t, nil)
+	original := testutil.JPEG(t, 48, 32)
+	row := createAndUpload(t, svc, ctx, original, "image/jpeg")
+
+	// Park the completion at its read's Close -- bytes read into memory,
+	// finalize not yet run -- then race a second Upload against it.
+	gated := &gatedStore{
+		fakeStore: *store,
+		entered:   make(chan struct{}),
+		gate:      make(chan struct{}),
+	}
+	svc.host = &fakeHost{store: gated, bus: bus}
+
+	type completeResult struct {
+		obj Object
+		err error
+	}
+	complete := make(chan completeResult, 1)
+	go func() {
+		obj, err := svc.Complete(ctx, row.ID)
+		complete <- completeResult{obj: obj, err: err}
+	}()
+
+	// Only once Complete holds the original bytes in memory and is parked do
+	// we start the second Upload, so the write it performs can never precede
+	// the read that (pre-fix) its own write would then contradict.
+	<-gated.entered
+	second := bytes.Repeat([]byte{0xAB}, len(original))
+	uploadErr := make(chan error, 1)
+	go func() {
+		uploadErr <- svc.Upload(ctx, row.ID, nil, bytes.NewReader(second))
+	}()
+
+	// Serialized, the upload blocks on the per-object lock until Complete
+	// releases it; unserialized, it finishes almost immediately. Wait a
+	// generous bound for whichever happens, then release the parked
+	// Complete and let the store tell which story the row's metadata tells.
+	var uploadFinished bool
+	var secondUploadErr error
+	select {
+	case secondUploadErr = <-uploadErr:
+		uploadFinished = true
+	case <-time.After(time.Second):
+	}
+	close(gated.gate)
+
+	res := <-complete
+	if res.err != nil {
+		t.Fatalf("Complete: %v", res.err)
+	}
+	if res.obj.State != ObjectStateCompleted {
+		t.Fatalf("completed row state = %q, want %q", res.obj.State, ObjectStateCompleted)
+	}
+	if !uploadFinished {
+		// The upload outlived the bound: it was holding the per-object lock
+		// (post-fix), so it finishes only once Complete's release lets it
+		// run -- and by then the row is completed, which refuses the upload.
+		secondUploadErr = <-uploadErr
+	}
+
+	// Each shape asserts its own half of the contract: an upload that ran to
+	// completion before the finalize (the pre-fix interleaving) should have
+	// succeeded -- the bytes it left are what the final assertion catches --
+	// and one that waited out the lock (post-fix) must have been refused by
+	// the completed row, never silently written over it.
+	if uploadFinished && secondUploadErr != nil {
+		t.Fatalf("second Upload finished early with %v, want nil (the pre-fix shape) or the lock to hold it", secondUploadErr)
+	}
+	if !uploadFinished && !hasCode(secondUploadErr, ErrObjectNotUploading.Code) {
+		t.Fatalf("second Upload after the serialized Complete = %v, want %s: a completed row refuses another upload", secondUploadErr, ErrObjectNotUploading.Code)
+	}
+
+	stored, ok := store.bytes(row.Key)
+	if !ok {
+		t.Fatalf("no bytes under %s after a successful Complete", row.Key)
+	}
+	if !bytes.Equal(stored, original) {
+		t.Fatalf("bytes under %s no longer match the row's finalized metadata (digest %s): a concurrent second Upload replaced them before the finalize committed",
+			row.Key, *res.obj.ChecksumSHA256)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -69,6 +70,13 @@ type ObjectService struct {
 	// with ErrStoreUnavailable before then.
 	serviceHost
 
+	// locks serializes Upload and Complete per object id, the two writers
+	// of one object's store bytes, so they never interleave inside this
+	// process and a completed row's metadata always describes the bytes
+	// actually under its key (see objectLocks below). Its zero value is
+	// ready to use.
+	locks objectLocks
+
 	// cfg is the frozen policy the service enforces, resolved from the
 	// Module's With* options at construction (see newObjectService).
 	cfg serviceConfig
@@ -110,6 +118,71 @@ func newObjectService(objects *ObjectRepository, queue jobs.Queue, cfg serviceCo
 		cfg.allowedTypes = append([]string(nil), defaultAllowedTypes...)
 	}
 	return &ObjectService{objects: objects, queue: queue, cfg: cfg}
+}
+
+// objectLocks hands out one mutex per object id, shared only while held, so
+// the two writers of one object's store bytes -- Upload, streaming the
+// bytes in, and Complete, re-reading them and possibly writing sanitized
+// bytes back -- never interleave inside this process. The lock is per
+// object, not per service: an upload and a completion of different objects
+// never block each other, and an object no one is writing needs nothing but
+// one absent map entry.
+//
+// The lock is what keeps a completed row's metadata honest. Without it, a
+// second Upload could land bytes after Complete's finalize read them, and
+// the finalized Size and ChecksumSHA256 would describe bytes the key no
+// longer holds -- a completed object whose served content disagrees with
+// the metadata every read path serves alongside it. Serializing the two
+// writers per object closes that interleaving inside one process; two
+// replicas of a distributed deployment share the ObjectStore but not this
+// map, and that residue is recorded in AGENTS.md's Known limitations.
+//
+// Sweep's reclamation and Delete's protocol deliberately do not take the
+// lock: both remove rows and bytes only after the row's own state and
+// window make the removal legitimate, and the expiry sweep racing an
+// in-flight transfer is handled by the transfer's own post-write re-checks
+// (see Upload and Complete), not by mutual exclusion with the sweep.
+type objectLocks struct {
+	mu sync.Mutex
+	m  map[string]*objectLock
+}
+
+// objectLock is one object's held-or-waited lock: the mutex itself plus the
+// count of goroutines that have acquired (or are waiting to acquire) it,
+// which keeps the map entry alive until every acquirer has released -- a
+// releaser may delete the entry only when no later acquirer can still be
+// waiting on it.
+type objectLock struct {
+	mu sync.Mutex
+	n  int
+}
+
+// acquire takes the lock for objectID, returning the release function. The
+// map bookkeeping runs under its own mutex; the returned release deletes
+// the entry when this goroutine was its last user.
+func (l *objectLocks) acquire(objectID string) func() {
+	l.mu.Lock()
+	if l.m == nil {
+		l.m = make(map[string]*objectLock)
+	}
+	e := l.m[objectID]
+	if e == nil {
+		e = &objectLock{}
+		l.m[objectID] = e
+	}
+	e.n++
+	l.mu.Unlock()
+
+	e.mu.Lock()
+	return func() {
+		l.mu.Lock()
+		e.n--
+		if e.n == 0 {
+			delete(l.m, objectID)
+		}
+		l.mu.Unlock()
+		e.mu.Unlock()
+	}
 }
 
 // defaultListPageSize is the page size List serves a caller that asks for
@@ -243,7 +316,17 @@ func (s *ObjectService) Create(ctx context.Context, params CreateParams) (Object
 // pipeline. Callers that observed no body bytes at all may pass a nil body;
 // it streams as an empty body and fails the size reconciliation like any
 // other short body.
+//
+// Upload and Complete are serialized per object by the service's objectLocks,
+// so a Complete never reads one generation of bytes while an Upload of the
+// next is in flight: whichever of the two runs first finishes before the
+// other starts, and the metadata a Complete finalizes always describes the
+// bytes actually stored under the key. The serialization covers this process
+// only (see objectLocks below).
 func (s *ObjectService) Upload(ctx context.Context, objectID string, contentLength *int64, body io.Reader) error {
+	release := s.locks.acquire(objectID)
+	defer release()
+
 	row, err := s.findByID(ctx, objectID)
 	if err != nil {
 		return err
@@ -345,8 +428,17 @@ func (s *ObjectService) Upload(ctx context.Context, objectID string, contentLeng
 // use the request context, so tenant correlation survives into the queue
 // task and the event.
 //
+// Complete and Upload are serialized per object by the service's objectLocks:
+// the pipeline never reads one generation of bytes while a concurrent Upload
+// of the next is in flight, so the finalized metadata always describes the
+// bytes actually stored under the key. The serialization covers this process
+// only (see objectLocks below).
+//
 // The returned Object is the completed row.
 func (s *ObjectService) Complete(ctx context.Context, objectID string) (Object, error) {
+	release := s.locks.acquire(objectID)
+	defer release()
+
 	row, err := s.findByID(ctx, objectID)
 	if err != nil {
 		return Object{}, err
