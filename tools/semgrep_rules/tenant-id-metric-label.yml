@@ -1,7 +1,7 @@
 # tenant_id as a Prometheus / OpenTelemetry metric label
 #
 # Discipline row: docs/internal/18-cicd.md architecture-discipline table,
-# "`tenant_id` 不得作为 Prometheus label" (semgrep rule + runtime
+# "tenant_id as a metric label" row (semgrep rule + runtime
 # assertion test), the matching row in docs/internal/17-risks.md, and the
 # root CLAUDE.md "Security" rule: never use tenant_id as a Prometheus
 # metric label -- high cardinality takes Prometheus down; tenant

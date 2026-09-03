@@ -1,7 +1,7 @@
 # Non-constant log message into the structured logger
 #
 # Discipline row: docs/internal/18-cicd.md architecture-discipline table,
-# "日志消息必须是常量字符串" (semgrep rule against
+# "non-constant log message" row (semgrep rule against
 # `log.*(fmt.Sprintf(...))` and string concatenation as the message), and
 # the root CLAUDE.md bullets under "Logging": use structured logging only
 # and never build log messages by concatenation or fmt.Sprintf -- the

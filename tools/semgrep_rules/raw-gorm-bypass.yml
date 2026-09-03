@@ -1,7 +1,7 @@
 # Raw-GORM bypass of dbkit.Repository[T]
 #
 # Discipline row: docs/internal/18-cicd.md architecture-discipline table,
-# "禁止绕过 `Repository[T]` 直接用 `db.Table/Model/Raw`" (semgrep custom
+# "raw-GORM bypass around the Repository" row (semgrep custom
 # rule), and the root CLAUDE.md bullets under "Multi-tenant isolation":
 # business repositories for tenant-owned data must embed
 # dbkit.Repository[T], and db.Table / db.Model / db.Raw must not be used

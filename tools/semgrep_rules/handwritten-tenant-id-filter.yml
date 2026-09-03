@@ -1,7 +1,7 @@
 # Hand-written WHERE tenant_id = ? filters
 #
 # Discipline row: docs/internal/18-cicd.md architecture-discipline table,
-# "禁止手写 `WHERE tenant_id = ?`" (semgrep rule: tenant filtering is
+# "hand-written tenant_id filter" row (semgrep: tenant filtering is
 # injected only by the GORM plugin and the Repository), and the root
 # CLAUDE.md "Multi-tenant isolation" bullet: never hand-write
 # WHERE tenant_id = ? -- writing it by hand means bypassing the guard

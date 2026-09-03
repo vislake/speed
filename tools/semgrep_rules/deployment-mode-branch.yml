@@ -1,7 +1,7 @@
 # Deployment-mode branching outside kernel wiring
 #
 # Discipline row: docs/internal/18-cicd.md architecture-discipline table,
-# "业务逻辑中禁止 `if mode == \"standalone\"` 分支" (semgrep rule, only the
+# "deployment-mode branching outside kernel wiring" row (semgrep: only the
 # kernel-wiring packages are allowed), and the root CLAUDE.md Architecture
 # Discipline bullet "Deployment modes: do not branch on
 # `if mode == \"standalone\"` in business logic".
