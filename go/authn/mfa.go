@@ -255,18 +255,44 @@ type EnrollTOTPResult struct {
 	ProvisioningURI string
 }
 
-// EnrollTOTP starts TOTP enrollment for userID, replacing any existing TOTP
-// factor (pending or active) with a fresh pending one.
+// EnrollTOTP starts TOTP enrollment for the user principal identifies,
+// replacing any existing TOTP factor (pending or active) with a fresh
+// pending one.
+//
+// Replacing an ALREADY ACTIVE factor requires principal.AMR to carry a
+// completed second-factor step-up (docs/internal/05 line 127: changing MFA
+// settings needs re-proof, not merely an existing session) -- without this,
+// a bare access token could silently seize an established factor by
+// deleting it and enrolling an attacker-known secret in its place. The
+// check is enforced HERE rather than by wrapping the route in RequireStepUp
+// because whether step-up is even required depends on whether an ACTIVE
+// factor already exists to protect, information only this method has: a
+// brand-new enrollment (turning MFA on for the first time, docs/internal/05
+// line 125) has nothing to step up FROM, so it proceeds exactly as before
+// regardless of AMR.
 //
 // The returned secret must be confirmed with ConfirmTOTP before it can
 // verify anything: a pending factor cannot satisfy VerifyStepUp.
-func (s *Service) EnrollTOTP(ctx context.Context, userID string) (*EnrollTOTPResult, error) {
+func (s *Service) EnrollTOTP(ctx context.Context, principal Principal) (*EnrollTOTPResult, error) {
+	userID := principal.UserID
 	if userID == "" {
 		return nil, ErrAuthenticationRequired
 	}
 	user, err := s.users.FindByID(ctx, userID)
 	if err != nil {
 		return nil, err
+	}
+
+	switch existing, findErr := s.mfaFactors.FindByUserAndType(ctx, userID, MFATypeTOTP); {
+	case findErr == nil:
+		if existing.Status == MFAFactorStatusActive && !hasSecondFactor(principal.AMR) {
+			return nil, ErrStepUpRequired
+		}
+	case errors.Is(findErr, ErrNotFound):
+		// Nothing enrolled yet: first-time setup has no existing factor
+		// to step up from.
+	default:
+		return nil, findErr
 	}
 
 	if delErr := s.mfaFactors.DeleteByUserAndType(ctx, userID, MFATypeTOTP); delErr != nil {

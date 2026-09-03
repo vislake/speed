@@ -407,7 +407,11 @@ func (h *Handler) AuthnEnrollTOTP(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	result, err := h.svc.EnrollTOTP(r.Context(), principal.UserID)
+	// Service.EnrollTOTP itself decides whether principal.AMR needs to
+	// carry a step-up: that decision depends on whether an ACTIVE factor
+	// already exists to replace, which only the service can see without
+	// an extra round trip. See its doc comment.
+	result, err := h.svc.EnrollTOTP(r.Context(), principal)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -438,17 +442,25 @@ func (h *Handler) AuthnConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // AuthnRegenerateRecoveryCodes implements api.ServerInterface.
+//
+// Unlike AuthnEnrollTOTP, this operation only ever acts on an ALREADY
+// ACTIVE factor (RegenerateRecoveryCodes' own precondition), so there is no
+// first-time-setup case to carve out: every call is "changing MFA
+// settings" (docs/internal/05 line 127) and RequireStepUp's unconditional
+// gate applies directly, exactly as wired.
 func (h *Handler) AuthnRegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request) {
-	principal, ok := h.requirePrincipal(w, r)
-	if !ok {
-		return
-	}
-	codes, err := h.svc.RegenerateRecoveryCodes(r.Context(), principal.UserID)
-	if err != nil {
-		writeAppError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, api.AuthnRecoveryCodesResponse{RecoveryCodes: &codes})
+	RequireStepUp(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := h.requirePrincipal(w, r)
+		if !ok {
+			return
+		}
+		codes, err := h.svc.RegenerateRecoveryCodes(r.Context(), principal.UserID)
+		if err != nil {
+			writeAppError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, api.AuthnRecoveryCodesResponse{RecoveryCodes: &codes})
+	})).ServeHTTP(w, r)
 }
 
 // AuthnVerifyStepUp implements api.ServerInterface.

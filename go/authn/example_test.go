@@ -388,7 +388,7 @@ func ExampleService_EnrollTOTP() {
 		panic(err)
 	}
 
-	enrolled, err := svc.EnrollTOTP(ctx, user.ID)
+	enrolled, err := svc.EnrollTOTP(ctx, authn.Principal{UserID: user.ID})
 	if err != nil {
 		panic(err)
 	}

@@ -124,9 +124,9 @@ import in the other direction is a merge blocker rather than a style note.
 
 | Symbol | Purpose |
 |---|---|
-| `Service.EnrollTOTP`, `Service.ConfirmTOTP` | Start enrollment (returns a secret and an `otpauth://` provisioning URI); confirm with a real code (returns ten recovery codes, shown once). |
+| `Service.EnrollTOTP(ctx, principal)`, `Service.ConfirmTOTP` | Start enrollment (returns a secret and an `otpauth://` provisioning URI); confirm with a real code (returns ten recovery codes, shown once). `EnrollTOTP` takes the caller's whole `Principal`, not just a user id: replacing an ALREADY ACTIVE factor requires `principal.AMR` to already carry a completed step-up (`ErrStepUpRequired` otherwise) — a brand-new enrollment, with no active factor to replace, proceeds regardless of AMR. See "A bare access token cannot silently seize an already-active MFA factor" below. |
 | `Service.VerifyStepUp` | Re-verifies the CURRENT session with a TOTP code or a recovery code and mints a freshly enriched access token, reusing the existing refresh token. |
-| `Service.RegenerateRecoveryCodes` | Replaces a user's whole recovery-code batch; requires an active TOTP factor. |
+| `Service.RegenerateRecoveryCodes` | Replaces a user's whole recovery-code batch; requires an active TOTP factor. The HTTP handler additionally wraps this operation in `RequireStepUp` (unconditionally: every call acts on an already-active factor, so there is no first-time-setup case to carve out the way `EnrollTOTP` has). |
 | `RequireStepUp(next)` | Per-route enforcement, `RequireAuthenticated`'s stricter sibling: refuses unless the calling `Principal.AMR` already carries a second factor. |
 | `MethodMFATOTP`, `MethodMFARecoveryCode` | The two AMR values a completed step-up can carry. |
 | `internal/totp` (`GenerateSecret`, `Code`, `Validate`, `ProvisioningURI`) | RFC 6238 on the standard library only — SHA-1/6-digit/30-second, the one convention every mainstream authenticator app assumes. Not part of this module's public API; `mfa.go` is the only caller. |
@@ -405,6 +405,28 @@ rather than a permanent unlock for the rest of the session, with no separate
 expiry timer needed. Do not add one. Do not make `VerifyStepUp` persist the
 enriched AMR onto the session row "for convenience" — that removes the
 property entirely.
+
+### A bare access token cannot silently seize an already-active MFA factor
+
+`Service.EnrollTOTP` unconditionally deletes any existing factor (pending or
+active) before enrolling a fresh one (`UserMFAFactor`'s unique
+`(user_id, type)` index — see its own doc comment). Without a check, a bare,
+unelevated access token — the shape a stolen one has — could call
+`AuthnEnrollTOTP` then `AuthnConfirmTOTP` with a secret it chose itself,
+replacing a victim's active factor with no re-proof at all. `EnrollTOTP`
+therefore takes the caller's whole `Principal` and refuses with
+`ErrStepUpRequired` when an ACTIVE factor already exists and
+`principal.AMR` does not already carry one (`hasSecondFactor`) — this is
+enforced INSIDE the service rather than by wrapping the route in
+`RequireStepUp`, because whether step-up is even required depends on
+whether an active factor exists to protect, information only the service
+has without an extra round trip. A brand-new enrollment (nothing active to
+replace) proceeds exactly as before, regardless of AMR — see
+docs/internal/05-identity-and-access.md line 125 (turning MFA on for the
+first time) versus line 127 (changing it once it already exists): only the
+latter is a step-up case. `AuthnRegenerateRecoveryCodes` has no such
+first-time case (it requires an active factor as its own precondition), so
+its handler wraps the whole operation in `RequireStepUp` directly instead.
 
 ### `RequireStepUp` has no password-re-entry fallback for an account with no MFA
 

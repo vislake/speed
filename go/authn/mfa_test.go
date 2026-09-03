@@ -19,7 +19,7 @@ import (
 func enrollAndConfirmTOTP(t *testing.T, f *serviceFixture, userID string) (secret string, recoveryCodes []string) {
 	t.Helper()
 
-	result, err := f.svc.EnrollTOTP(t.Context(), userID)
+	result, err := f.svc.EnrollTOTP(t.Context(), Principal{UserID: userID})
 	if err != nil {
 		t.Fatalf("EnrollTOTP() error = %v", err)
 	}
@@ -49,11 +49,11 @@ func TestEnrollTOTP_ReplacesAnyExistingFactor(t *testing.T) {
 	f := newServiceFixture(t)
 	user := f.registerUser(t, "mfa-replace@example.com", testTenantA)
 
-	first, err := f.svc.EnrollTOTP(t.Context(), user.ID)
+	first, err := f.svc.EnrollTOTP(t.Context(), Principal{UserID: user.ID})
 	if err != nil {
 		t.Fatalf("first EnrollTOTP() error = %v", err)
 	}
-	second, err := f.svc.EnrollTOTP(t.Context(), user.ID)
+	second, err := f.svc.EnrollTOTP(t.Context(), Principal{UserID: user.ID})
 	if err != nil {
 		t.Fatalf("second EnrollTOTP() error = %v", err)
 	}
@@ -72,6 +72,50 @@ func TestEnrollTOTP_ReplacesAnyExistingFactor(t *testing.T) {
 	}
 }
 
+// TestEnrollTOTP_ReplacingActiveFactor_RequiresStepUp proves a bare,
+// unelevated session cannot replace an already ACTIVE TOTP factor: without
+// this check, a stolen access token could silently seize an account's
+// second factor by deleting it and enrolling an attacker-known secret in
+// its place (docs/internal/05 line 127's "changing MFA settings" case).
+func TestEnrollTOTP_ReplacingActiveFactor_RequiresStepUp(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	user := f.registerUser(t, "mfa-hijack@example.com", testTenantA)
+	secret, _ := enrollAndConfirmTOTP(t, f, user.ID)
+
+	// A bare session -- no completed step-up in its AMR, the shape a
+	// stolen access token would have -- must be refused.
+	if _, err := f.svc.EnrollTOTP(t.Context(), Principal{UserID: user.ID}); !hasCode(err, ErrStepUpRequired.Code) {
+		t.Fatalf("EnrollTOTP(no step-up, active factor exists) error = %v, want ErrStepUpRequired", err)
+	}
+
+	// The refused attempt must leave the ORIGINAL factor intact -- proven
+	// by successfully stepping up with the original secret's code, exactly
+	// as TestVerifyStepUp_TOTPCode_EnrichesAMR proves a fresh factor
+	// works. ConfirmTOTP already consumed the current time step's code, so
+	// this uses the next step, like that test does.
+	principal := loginPrincipal(t, f, user, testTenantA)
+	code, err := totp.Code(secret, time.Now().Add(totp.Period))
+	if err != nil {
+		t.Fatalf("totp.Code() error = %v", err)
+	}
+	if _, stepUpErr := f.svc.VerifyStepUp(t.Context(), principal, code, "203.0.113.15"); stepUpErr != nil {
+		t.Fatalf("VerifyStepUp(original secret after refused enroll) error = %v, want success", stepUpErr)
+	}
+
+	// A session whose AMR already carries a completed second-factor
+	// step-up IS allowed to replace the factor.
+	elevated := Principal{UserID: user.ID, AMR: []string{MethodPassword, MethodMFATOTP}}
+	result, err := f.svc.EnrollTOTP(t.Context(), elevated)
+	if err != nil {
+		t.Fatalf("EnrollTOTP(with step-up, active factor exists) error = %v, want success", err)
+	}
+	if result.Secret == secret {
+		t.Errorf("EnrollTOTP(with step-up) reused the original secret, want a fresh one")
+	}
+}
+
 // TestConfirmTOTP_WrongCode_Refused proves confirmation requires a real
 // code from the enrolled secret, not any six digits.
 func TestConfirmTOTP_WrongCode_Refused(t *testing.T) {
@@ -80,7 +124,7 @@ func TestConfirmTOTP_WrongCode_Refused(t *testing.T) {
 	f := newServiceFixture(t)
 	user := f.registerUser(t, "mfa-wrong@example.com", testTenantA)
 
-	if _, err := f.svc.EnrollTOTP(t.Context(), user.ID); err != nil {
+	if _, err := f.svc.EnrollTOTP(t.Context(), Principal{UserID: user.ID}); err != nil {
 		t.Fatalf("EnrollTOTP() error = %v", err)
 	}
 	if _, err := f.svc.ConfirmTOTP(t.Context(), user.ID, "000000"); !hasCode(err, ErrMFAInvalidCode.Code) {

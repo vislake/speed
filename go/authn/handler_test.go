@@ -605,13 +605,101 @@ func TestHandler_MFAEnrollConfirmStepUp_FullRoundTrip(t *testing.T) {
 		t.Error("step-up response carries a refresh token, want it absent (reuses the existing one)")
 	}
 
-	regen := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/mfa/recovery-codes/regenerate", nil, principal)
+	// A bare, un-stepped-up session (the shape a stolen access token has)
+	// must be refused: this is the gap that let a stolen bare token
+	// silently regenerate recovery codes for an already-active factor with
+	// no re-proof at all.
+	regenNoStepUp := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/mfa/recovery-codes/regenerate", nil, principal)
+	if regenNoStepUp.Code != http.StatusForbidden {
+		t.Fatalf("regenerate (no step-up) status = %d, want %d; body = %s", regenNoStepUp.Code, http.StatusForbidden, regenNoStepUp.Body.String())
+	}
+	if got := decodeAuthnError(t, regenNoStepUp).Code; got == nil || *got != ErrStepUpRequired.Code {
+		t.Errorf("regenerate (no step-up) error code = %v, want %q", got, ErrStepUpRequired.Code)
+	}
+
+	// The step-up response's own Principal -- carrying mfa:totp in its amr
+	// -- is what a legitimate caller would present next.
+	steppedUp := &Principal{
+		UserID:    deref(stepUpResp.Principal.UserID),
+		TenantID:  pkgcore.TenantID(deref(stepUpResp.Principal.TenantID)),
+		SessionID: deref(stepUpResp.Principal.SessionID),
+		AMR:       *stepUpResp.Principal.Amr,
+	}
+	regen := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/mfa/recovery-codes/regenerate", nil, steppedUp)
 	if regen.Code != http.StatusOK {
 		t.Fatalf("regenerate status = %d, want %d; body = %s", regen.Code, http.StatusOK, regen.Body.String())
 	}
 	regenResp := decodeBody[api.AuthnRecoveryCodesResponse](t, regen)
 	if regenResp.RecoveryCodes == nil || len(*regenResp.RecoveryCodes) != recoveryCodeCount {
 		t.Fatalf("regenerated RecoveryCodes = %v, want %d codes", regenResp.RecoveryCodes, recoveryCodeCount)
+	}
+}
+
+// TestHandler_EnrollTOTP_ReplacingActiveFactor_RequiresStepUp proves the
+// enroll endpoint itself refuses to replace an already-ACTIVE TOTP factor
+// for a bare, un-stepped-up principal -- the shape a stolen access token
+// has. Before the fix, a bare token could call this endpoint to delete the
+// victim's active factor and enroll an attacker-known secret in its place
+// with no re-proof at all.
+func TestHandler_EnrollTOTP_ReplacingActiveFactor_RequiresStepUp(t *testing.T) {
+	t.Parallel()
+	h, f := newTestHandler(t)
+	f.registerUser(t, "mfa-hijack@example.com", testTenantA)
+	pair, err := f.svc.Login(t.Context(), LoginInput{Identifier: "mfa-hijack@example.com", Password: testPassword, IP: "203.0.113.16"})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	principal := principalFor(pair)
+
+	enroll := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/mfa/totp/enroll", nil, principal)
+	if enroll.Code != http.StatusOK {
+		t.Fatalf("enroll status = %d, want %d; body = %s", enroll.Code, http.StatusOK, enroll.Body.String())
+	}
+	enrollResp := decodeBody[api.AuthnEnrollTOTPResponse](t, enroll)
+	code, err := totp.Code(*enrollResp.Secret, time.Now())
+	if err != nil {
+		t.Fatalf("compute a TOTP code: %v", err)
+	}
+	confirm := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/mfa/totp/confirm", api.AuthnConfirmTOTPRequest{Code: code}, principal)
+	if confirm.Code != http.StatusOK {
+		t.Fatalf("confirm status = %d, want %d; body = %s", confirm.Code, http.StatusOK, confirm.Body.String())
+	}
+
+	// The factor is now ACTIVE. A bare session enrolling again -- exactly
+	// the request an attacker holding a stolen access token would send --
+	// must be refused rather than silently replacing it.
+	reEnroll := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/mfa/totp/enroll", nil, principal)
+	if reEnroll.Code != http.StatusForbidden {
+		t.Fatalf("re-enroll (no step-up) status = %d, want %d; body = %s", reEnroll.Code, http.StatusForbidden, reEnroll.Body.String())
+	}
+	if got := decodeAuthnError(t, reEnroll).Code; got == nil || *got != ErrStepUpRequired.Code {
+		t.Errorf("re-enroll (no step-up) error code = %v, want %q", got, ErrStepUpRequired.Code)
+	}
+
+	// A caller that HAS completed step-up may still replace the factor
+	// (e.g. to switch authenticator apps).
+	stepUpCode, err := totp.Code(*enrollResp.Secret, time.Now().Add(totp.Period))
+	if err != nil {
+		t.Fatalf("compute a step-up TOTP code: %v", err)
+	}
+	stepUp := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/mfa/step-up", api.AuthnVerifyStepUpRequest{Code: stepUpCode}, principal)
+	if stepUp.Code != http.StatusOK {
+		t.Fatalf("step-up status = %d, want %d; body = %s", stepUp.Code, http.StatusOK, stepUp.Body.String())
+	}
+	stepUpResp := decodeBody[api.AuthnTokenPair](t, stepUp)
+	steppedUp := &Principal{
+		UserID:    deref(stepUpResp.Principal.UserID),
+		TenantID:  pkgcore.TenantID(deref(stepUpResp.Principal.TenantID)),
+		SessionID: deref(stepUpResp.Principal.SessionID),
+		AMR:       *stepUpResp.Principal.Amr,
+	}
+	reEnrollStepped := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/mfa/totp/enroll", nil, steppedUp)
+	if reEnrollStepped.Code != http.StatusOK {
+		t.Fatalf("re-enroll (with step-up) status = %d, want %d; body = %s", reEnrollStepped.Code, http.StatusOK, reEnrollStepped.Body.String())
+	}
+	reEnrollResp := decodeBody[api.AuthnEnrollTOTPResponse](t, reEnrollStepped)
+	if reEnrollResp.Secret == nil || *reEnrollResp.Secret == *enrollResp.Secret {
+		t.Errorf("re-enroll (with step-up) secret = %v, want a fresh one distinct from %q", reEnrollResp.Secret, *enrollResp.Secret)
 	}
 }
 
