@@ -41,7 +41,9 @@ name: api-contract
 #   * spec merging into build/openapi/speed.yaml (no other module ships a
 #     fragment; the notes fragment is generated from in place).
 #   * frontend sdk generation (orval) -- a later web/ workspace round
-#     (api-client/api-sdk): no @speed/api-sdk exists yet.
+#     (api-sdk): no @speed/api-sdk exists yet; the @speed/api-client runtime
+#     it would call into is a separate web/ package that landed with the M0
+#     api-client round, so only the generated sdk package itself remains.
 #   * spec linting (redocly rules) and breaking-change detection (oasdiff,
 #     the release-gate diff against the last release).
 #   * merge-conflict checks across fragments -- a single-fragment world has
