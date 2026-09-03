@@ -50,10 +50,12 @@ const (
 // They are declared here, in the module's single Register call, because
 // pkgcore.Registry is where the platform's event catalog is assembled --
 // observability, compliance and integration enumerate the declarations
-// without subscribing to any of them. Publishing itself arrives with the
-// service round that owns each transition; this round's Register only
-// declares the two types, so the catalog is already complete for the
-// subscribers that will listen for them.
+// without subscribing to any of them. Publishing arrived with the rounds
+// that own each transition: ObjectService.Complete publishes
+// EventObjectCompleted, and the deletion round's service publishes
+// EventObjectDeleted. Register declares both up front either way, so the
+// catalog is already complete for the subscribers that will listen for
+// them.
 var objectEventDecls = []pkgcore.EventDecl{
 	{
 		Type:        EventObjectCompleted,
@@ -86,13 +88,13 @@ type ObjectDeletedPayload struct {
 // derivatives -- the rows that describe media bytes living in the host's
 // ObjectStore under keys this module builds and never exposes.
 //
-// This round ships the model, the key grammar, the repositories and the
-// module wiring's data plane (errors, locales, migrations, the registry
-// declarations below). It deliberately does NOT yet ship the module's
-// runtime: the service round that drives uploads through their lifecycle
-// states, the HTTP round that mounts the OpenAPI fragment, and the queue
-// round that processes uploads asynchronously all land later. Register
-// stays honest about that scope (see its own doc comment).
+// ObjectService (m.svc) drives uploads through their lifecycle states:
+// Create declares an upload, Upload streams its bytes into the host's
+// ObjectStore, Complete runs the revalidation pipeline over them and
+// finalizes the row, and Get, OpenContent and List serve completed
+// objects. The HTTP round that mounts the OpenAPI fragment in front of
+// the service, and the processing round that claims the thumbnail-derive
+// task the service enqueues, both land later.
 type Module struct {
 	// db is the connection storage's tables live in. It is opened and
 	// migrated by the host before Register is ever called; the module
@@ -104,15 +106,26 @@ type Module struct {
 	objects     *ObjectRepository
 	derivatives *DerivativeRepository
 
-	// queue is the jobs.Queue the module's long-running work runs on
-	// (WithQueue). Register refuses to proceed without one.
+	// queue is the jobs.Queue the module's asynchronous work -- the
+	// thumbnail-derive task the completion pipeline enqueues, deletion's
+	// task in a later round -- runs on (WithQueue). Register refuses to
+	// proceed without one.
 	queue jobs.Queue
 
-	// The policy bounds the lifecycle and processing rounds enforce. They
-	// are defaults a host overrides through the With* options below; no
-	// value is read by this round's code, but the option plumbing is live
-	// and pinned by tests so the enforcing rounds find the configured
-	// values where their docs say they are.
+	// svc is the module's ObjectService, the runtime that drives the
+	// lifecycle. NewModule builds it from the policy fields below, after
+	// the With* options have been applied, and Register hands it the
+	// registry its host seams come from (attach). Hosts drive uploads
+	// through it via ObjectService().
+	svc *ObjectService
+
+	// The policy ObjectService enforces. They are defaults a host
+	// overrides through the With* options below, resolved into the
+	// service's config at construction: maxUploadBytes caps declared
+	// uploads, uploadTTL bounds the upload window, maxImagePixels caps
+	// image dimensions, maxObjectLifetime caps requested retentions, and
+	// allowedTypes (nil resolving to the module default) gates declared
+	// and probed media types alike.
 	maxUploadBytes    int64
 	maxImagePixels    int64
 	derivativeMaxEdge int
@@ -124,8 +137,14 @@ type Module struct {
 // Option configures a Module at construction time.
 type Option func(*Module)
 
-// WithQueue wires the jobs.Queue the module's asynchronous work -- upload
-// finalization, derivative generation, deletion -- is enqueued on.
+// WithQueue wires the jobs.Queue the module's asynchronous work runs on:
+// the thumbnail-derive task ObjectService.Complete enqueues for every
+// finalized image object, and deletion's task once the delete round lands.
+// Upload finalization itself is synchronous -- Complete runs the
+// revalidation pipeline in the caller's request before it returns -- so
+// the queue carries only the work that may follow a finalize, and the
+// pipeline warns when an enqueue fails rather than failing a finalize that
+// stands on its own.
 //
 // It is REQUIRED: Register returns ErrQueueRequired without one. A storage
 // module that accepts uploads it can never finish processing is worse than
@@ -186,15 +205,18 @@ func WithMaxObjectLifetime(lifetime time.Duration) Option {
 	}
 }
 
-// WithAllowedTypes restricts which declared media types an upload may
-// carry. Types are exact, lowercase media types such as "image/png" or
-// "application/pdf".
+// WithAllowedTypes restricts which media types storage accepts. Types are
+// exact, lowercase media types such as "image/png" or "application/pdf".
+// ObjectService enforces the restriction twice: at create time against the
+// declared type, and at complete time against the media type probed from
+// the stored bytes -- a type that never passes either gate cannot become a
+// completed object.
 //
-// The default -- nil -- is deliberately open: no restriction is enforced
-// until a host configures one. This round ships the model and the option;
-// the service round that enforces the policy reads the value from the same
-// module field this option writes, and a restriction declared before an
-// enforcer existed would only mislead. Each call replaces the whole set.
+// The default -- nil -- resolves to the module's own default allowlist of
+// image/jpeg and image/png (defaultAllowedTypes), so a host that
+// configures nothing gets a real restriction, never an open door. A host
+// that needs more types calls WithAllowedTypes with the full set it wants;
+// each call replaces the whole set.
 func WithAllowedTypes(types ...string) Option {
 	return func(m *Module) {
 		m.allowedTypes = append([]string(nil), types...)
@@ -219,6 +241,13 @@ func NewModule(db *gorm.DB, opts ...Option) *Module {
 	for _, opt := range opts {
 		opt(m)
 	}
+	m.svc = newObjectService(m.objects, m.queue, serviceConfig{
+		maxUploadBytes:    m.maxUploadBytes,
+		maxImagePixels:    m.maxImagePixels,
+		uploadTTL:         m.uploadTTL,
+		maxObjectLifetime: m.maxObjectLifetime,
+		allowedTypes:      m.allowedTypes,
+	})
 	return m
 }
 
@@ -241,11 +270,27 @@ const (
 	defaultMaxObjectLifetime = 90 * 24 * time.Hour
 )
 
+// defaultAllowedTypes is the module's default media-type allowlist,
+// applied when a host configures none (see WithAllowedTypes). JPEG and PNG
+// cover the reference-app class of uploads -- dental imagery -- and
+// nothing else; a host that needs wider types configures the set
+// explicitly.
+var defaultAllowedTypes = []string{"image/jpeg", "image/png"}
+
 // Objects returns the module's object-metadata repository, the sanctioned
-// way to read and write object rows. It is a repository, not a service:
-// lifecycle transitions and their policies belong to the service round
-// that lands on top of it.
+// way to read and write object rows directly -- for hosts that manage rows
+// outside the service lifecycle (seeding, migration tooling, inspection).
+// Lifecycle transitions and their policies belong to ObjectService, which
+// is what hosts drive uploads through.
 func (m *Module) Objects() *ObjectRepository { return m.objects }
+
+// ObjectService returns the module's upload-lifecycle runtime: Create,
+// Upload, Complete, Get, OpenContent and List. It is safe to call after
+// NewModule; the service resolves its policy at construction and its host
+// seams (object store, event bus) when Register attaches the registry --
+// before Register, its methods that need the store fail closed with
+// storage.store_unavailable.
+func (m *Module) ObjectService() *ObjectService { return m.svc }
 
 // Derivatives returns the module's derivative-metadata repository.
 func (m *Module) Derivatives() *DerivativeRepository { return m.derivatives }
@@ -290,11 +335,12 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // a queue, without which Register returns ErrQueueRequired (see
 // WithQueue's doc comment for the reasoning).
 //
-// What Register deliberately does NOT do yet: mount the module's routes,
-// declare the apiPath prefix or register the queue task type. All three
-// belong to later rounds -- the HTTP surface is spec-first, and the queue
-// task arrives with the processing round that implements it -- so this
-// round's registration stays honest about the surface it actually ships.
+// What Register deliberately does NOT do yet: mount the module's routes or
+// declare the apiPath prefix (the HTTP surface is the HTTP round's, spec
+// first), and register the thumbnail-derive task's handler (the service
+// enqueues the type this round, but only the processing round implements
+// the worker that claims it). The registration stays honest about the
+// surface it actually ships.
 func (m *Module) Register(reg *pkgcore.Registry) error {
 	if m.queue == nil {
 		return ErrQueueRequired
@@ -312,6 +358,10 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	if err := reg.Events.Publishes(objectEventDecls...); err != nil {
 		return err
 	}
+	// Hand the registry to the service: its ObjectStore and EventBus are
+	// the seams Complete, Upload and OpenContent read at call time. A plain
+	// assignment -- no I/O -- so Register's no-I/O contract stands.
+	m.svc.attach(reg)
 	return nil
 }
 

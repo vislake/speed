@@ -13,8 +13,10 @@ replace github.com/vislake/speed/go/observability => ../observability
 replace github.com/vislake/speed/go/jobs => ../jobs
 
 require (
+	github.com/google/uuid v1.6.0
 	github.com/vislake/speed/go/dbkit v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/jobs v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/tenancy v0.0.0-00010101000000-000000000000
 	gorm.io/gorm v1.31.2
@@ -47,7 +49,6 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/hibiken/asynq v0.26.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
@@ -99,7 +100,6 @@ require (
 	github.com/tinylib/msgp v1.6.4 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
-	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
