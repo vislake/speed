@@ -90,3 +90,104 @@ func ExampleInboxMessage() {
 	// read at: 2026-09-01 10:00:00
 	// other tenant: dbkit.record_not_found
 }
+
+// ExampleNotificationPreferences walks the preference matrix the way a host
+// assembles it: the business module declares its notification types on the
+// host registry, the notification module's Register attaches that registrar
+// to its preference service, and a recipient's stored choice then wins over
+// the declared defaults -- while a recipient with no stored choice receives
+// the type's default channels.
+//
+// The example doubles as the wiring proof: the module itself declares no
+// types; every type answered below was registered by the host before and
+// after the module's own Register call.
+func ExamplePreferenceService() {
+	ctx := context.Background()
+
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:notification_preferences_example?mode=memory&cache=shared",
+	})
+	if err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+
+	registry := dbkit.NewMigrationRegistry()
+	module := notification.NewModule(db)
+	if err = registry.Register(module); err != nil {
+		fmt.Println("register migrations:", err)
+		return
+	}
+	if err = registry.Apply(ctx, db, dbkit.DialectSQLite); err != nil {
+		fmt.Println("apply migrations:", err)
+		return
+	}
+
+	// A host assembles its own registry over the in-process seam
+	// implementations and declares its notification types on it -- the same
+	// shape Kernel.Bootstrap composes in a standalone deployment.
+	host := pkgcore.NewRegistry(
+		pkgcore.NewMemoryEventBus(),
+		pkgcore.NewMemoryKVStore(),
+		pkgcore.NewConsoleMailer(),
+	)
+	appointment := pkgcore.NotificationType{
+		Key:             "clinic.appointment_reminder",
+		Group:           "clinic",
+		DefaultChannels: []string{"in_app", "email", "sms"},
+		Unsubscribable:  true,
+	}
+	result := pkgcore.NotificationType{
+		Key:             "clinic.result_ready",
+		Group:           "clinic",
+		DefaultChannels: []string{"in_app", "email"},
+		Unsubscribable:  true,
+	}
+	if err = host.Notifications.Add(appointment, result); err != nil {
+		fmt.Println("add types:", err)
+		return
+	}
+	if err = module.Register(host); err != nil {
+		fmt.Println("register:", err)
+		return
+	}
+
+	prefs := module.Preferences()
+	ctx = pkgcore.WithTenant(ctx, "tenant-acme")
+
+	// The recipient opts out of email for result notifications; only channels
+	// inside the type's declared space (its defaults) are selectable, so the
+	// in_app channel alone survives as the stored choice.
+	if err = prefs.Set(ctx, "user-7", result.Key, []string{"in_app"}); err != nil {
+		fmt.Println("set:", err)
+		return
+	}
+	channels, err := prefs.ResolveChannels(ctx, "user-7", result.Key)
+	if err != nil {
+		fmt.Println("resolve:", err)
+		return
+	}
+	fmt.Println("result channels:", channels)
+
+	// No stored preference for the appointment reminder: the declared
+	// defaults govern.
+	channels, err = prefs.ResolveChannels(ctx, "user-7", appointment.Key)
+	if err != nil {
+		fmt.Println("resolve default:", err)
+		return
+	}
+	fmt.Println("appointment channels:", channels)
+
+	rows, err := prefs.ListForUser(ctx, "user-7")
+	if err != nil {
+		fmt.Println("list:", err)
+		return
+	}
+	fmt.Println("stored rows:", len(rows))
+
+	// Output:
+	// result channels: [in_app]
+	// appointment channels: [in_app email sms]
+	// stored rows: 1
+}
