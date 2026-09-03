@@ -501,17 +501,21 @@ the `speed/no-literal-text` rule enforces the namespace discipline over
   in through the sign-in surface the host navigates to (or, without an
   `onRegistered` callback, the form's success panel says so
   explicitly).
-- **Account binding, MFA and SSO surfaces are not shipped.**
-  `SocialCallbackHandler` treats the callback endpoint as a sign-in
-  surface: an exchange that answers with the bound-identity shape and
-  no tokens -- the server's answer to an already-authenticated caller
-  -- is refused with `client.protocol`, per auth-core's
-  `completeSocialLogin` contract. A binding flow (an authenticated
-  caller adding a channel to their account) needs its own handling of
-  that response and is planned with the account-management UI.
-  Step-up-gated actions (`RequireStepUp` on the server) have no UI
-  here, and enterprise OIDC/SSO has no section in this family -- its
-  discovery is per-tenant configuration.
+- **Account binding and step-up surfaces live in `@speed/account-ui`,
+  not here.** This family is the sign-in surface: `SocialCallbackHandler`
+  handles the callback of a sign-in exchange, and one answering with
+  the bound-identity shape and no tokens -- the server's answer to an
+  already-authenticated caller -- is refused with `client.protocol`,
+  per auth-core's `completeSocialLogin` contract. The authenticated
+  half of that answer is account management's own, and it shipped: an
+  already-signed-in caller linking another channel to the account
+  walks the add area of `@speed/account-ui`'s `SocialBindingsSection`
+  (the authorize URL reported upward, the provider redirect completed
+  by the package's `BindingCallbackHandler` at the host's callback
+  route), and step-up-gated actions (`RequireStepUp` on the server)
+  drive the challenge inside the package's `MfaSection`. Enterprise
+  OIDC/SSO has no section in either family -- its discovery is
+  per-tenant configuration.
 - **No channel discovery.** The server exposes no endpoint answering
   "which sign-in channels may this tenant's users use", so the family
   renders exactly the channels the host composes: `SignInScreen`
