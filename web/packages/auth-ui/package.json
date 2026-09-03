@@ -16,11 +16,12 @@
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "build": "pnpm --filter @speed/i18n --filter @speed/auth-core build && tsc -p tsconfig.build.json"
+    "build": "pnpm --filter @speed/auth-core --filter @speed/ui-kit build && tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@speed/auth-core": "workspace:*",
-    "@speed/i18n": "workspace:*"
+    "@speed/i18n": "workspace:*",
+    "@speed/ui-kit": "workspace:*"
   },
   "peerDependencies": {
     "@emotion/react": "^11.5.0",
@@ -36,7 +37,6 @@
     "@mui/material": "^9.4.0",
     "@speed/api-client": "workspace:*",
     "@speed/api-sdk": "workspace:*",
-    "@speed/ui-kit": "workspace:*",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",

@@ -2,9 +2,11 @@
  * Public entry of @speed/auth-ui.
  *
  * The sign-in component family over an @speed/auth-core session: the
- * password, SMS-code and registration channels, each driving its own
- * slice of the session contract and rendering every built-in string from
- * the bilingual auth-ui namespace (AUTH_UI_NAMESPACE + authUiResources,
+ * password, SMS-code and registration channels, the social sign-in
+ * section and its callback handler, and SignInScreen assembling the
+ * channels behind a tab strip -- each driving its own slice of the
+ * session contract and rendering every built-in string from the
+ * bilingual auth-ui namespace (AUTH_UI_NAMESPACE + authUiResources,
  * which the host registers alongside ui-kit's). Components are controlled:
  * the session comes in as a prop, a successful sign-in fires the
  * onSignedIn callback and the host navigates -- nothing here reads
@@ -23,3 +25,19 @@ export {
   type SMSSignInFormProps,
 } from './SMSSignInForm.js'
 export { RegisterForm, type RegisterFormProps } from './RegisterForm.js'
+export {
+  SocialSignInSection,
+  type SocialProvider,
+  type SocialProviderConfig,
+  type SocialSignInSectionProps,
+} from './SocialSignInSection.js'
+export {
+  SocialCallbackHandler,
+  type SocialCallbackHandlerProps,
+} from './SocialCallbackHandler.js'
+export {
+  SignInScreen,
+  type SignInChannel,
+  type SocialSignInOptions,
+  type SignInScreenProps,
+} from './SignInScreen.js'
