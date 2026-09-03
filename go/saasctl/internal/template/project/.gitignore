@@ -1,0 +1,9 @@
+# Local artifacts of the generated project skeleton.
+#
+# The standalone deployment mode's SQLite database defaults to a file at
+# the project root (cmd/server/config.go's defaultSQLitePath) and must
+# never be committed.
+*.db
+
+# Editors and operating systems.
+.DS_Store
