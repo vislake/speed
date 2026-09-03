@@ -348,13 +348,15 @@ type serverConfig struct {
 	OrgIndexKey    []byte
 	HostTenants    map[string]pkgcore.TenantID
 
-	// Mailer overrides the deployment mode's default Mailer
-	// (pkgcore.NewKernel's own resolveMailer) when set. configFromEnv never
-	// sets it -- production always takes the deployment mode's real default,
-	// the console mailer in standalone mode -- so this only exists for
-	// server_test.go's org invitation flow test, which needs the rendered
-	// mail back in-process to extract the invitation token rather than
-	// parsing it out of console output.
+	// Mailer overrides the console mailer the standalone Preset resolves
+	// for the "mailer" seam when set. configFromEnv never sets it --
+	// production always takes the Preset's real default -- so this only
+	// exists for server_test.go's org invitation flow test, which needs
+	// the rendered mail back in-process to extract the invitation token
+	// rather than parsing it out of console output; buildServer injects
+	// it with the pkgcore.Stateless declaration (see its kernel-options
+	// comment at the Bootstrap call below for why that is the honest
+	// capability for a throwaway test composition).
 	Mailer pkgcore.Mailer
 
 	// Memberships is the seam authn asks tenant-membership questions
@@ -749,7 +751,25 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// construction is needed the way it would be if this app wired
 	// dbkit.Options.AuditBus (see db's own doc comment above for why it
 	// deliberately does not).
-	reg, err := pkgcore.NewKernel(cfg.DeploymentMode, pkgcore.WithMailer(cfg.Mailer)).Bootstrap(ctx, authnModule, notesModule, orgModule, configModule, rbacModule, auditModule)
+	//
+	// WithDeploymentMode(cfg.DeploymentMode) is the mechanical translation
+	// of the old positional pkgcore.NewKernel(cfg.DeploymentMode,
+	// pkgcore.WithMailer(cfg.Mailer)) call: the refusal a few lines above
+	// this function's start still keeps cfg.DeploymentMode at
+	// DeploymentModeStandalone here, which resolves through the zero-value
+	// default Preset exactly as before this retrofit. The cfg.Mailer
+	// override survives the translation as a conditional option -- the
+	// retrofit's WithMailer takes the capability its value declares, and
+	// this app declares pkgcore.Stateless for an override that only
+	// server_test.go's in-process capture double ever sets, in a throwaway
+	// test composition where the durability banner would name no real loss
+	// (configFromEnv never sets it; production always takes the preset's
+	// console default).
+	kernelOptions := []pkgcore.KernelOption{pkgcore.WithDeploymentMode(cfg.DeploymentMode)}
+	if cfg.Mailer != nil {
+		kernelOptions = append(kernelOptions, pkgcore.WithMailer(cfg.Mailer, pkgcore.Stateless))
+	}
+	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, authnModule, notesModule, orgModule, configModule, rbacModule, auditModule)
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: bootstrap kernel: %w", err)
