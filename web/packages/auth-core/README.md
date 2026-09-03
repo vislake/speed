@@ -213,11 +213,13 @@ under.
   switch and step-up -- keep rotating the caller's existing one, per
   the authn spec. A `switchTenant` to a tenant the principal has no
   membership in is refused by the server and changes nothing locally.
-- **Social binding flows are not covered.** The callback endpoint
-  doubles as the binding surface for an already-authenticated caller:
-  its answer then carries the bound identity and no tokens, and
-  `completeSocialLogin` deliberately refuses that shape with
-  `client.protocol` -- this package's callback surface is a sign-in
-  surface. A binding flow (an authenticated caller adding a channel to
-  their account) needs its own handling of the bound-identity response
-  and is planned with the account-management UI.
+- **Binding flows do not live on this session surface.** The authn
+  callback endpoint does double duty for an already-authenticated
+  caller -- its answer then carries the bound identity and no tokens
+  -- and `completeSocialLogin` deliberately refuses that shape with
+  `client.protocol`: this package's callback surface is a sign-in
+  surface. Binding is not a login, and the callback exchange itself is
+  a plain generated call on the caller's own access token, never a
+  session operation -- which is exactly how `@speed/account-ui`'s
+  `BindingCallbackHandler` completes a binding at the host's callback
+  route (its `SocialBindingsSection` add area starts the flow).
