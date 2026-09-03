@@ -57,6 +57,10 @@
 
 "org.invitation_mail_required" = "邀请功能不可用:本次部署未配置邀请发件人。"
 
+"org.invalid_request_body" = "无法解析请求内容。"
+
+"org.subject_unresolved" = "无法确认你当前的登录身份。"
+
 # 邀请邮件正文。这是 org 唯一会发出的消息,并且按照**收件人**的语言渲染
 # ——即邀请记录上保存的 locale,而不是发起邀请的操作者的界面语言。
 #

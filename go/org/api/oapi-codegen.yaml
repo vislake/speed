@@ -1,0 +1,38 @@
+# Generator configuration for org's OpenAPI fragment (openapi.yaml in this
+# directory, per docs/internal/21-api-contract.md's module-asset
+# convention: every module keeps its spec at <module>/api/openapi.yaml).
+# Mirrors examples/reference-app/internal/notes/api/oapi-codegen.yaml
+# exactly in shape -- see that file's own comment for the full rationale;
+# this one records only what is org-specific.
+#
+# The module's generated surface is regenerated with oapi-codegen v2.8.0,
+# pinned at exactly that version in the two commands that must move
+# together: Taskfile.yml's api:gen task command and
+# .github/workflows/api-contract.yml's org regeneration step -- both run
+# `go run .../cmd/oapi-codegen@v2.8.0 -config oapi-codegen.yaml
+# openapi.yaml` from this directory. The generated file's header records
+# the generator version, so a regeneration with a different tool version
+# shows up as drift in CI's regenerate-then-diff check.
+#
+# generate.std-http-server emits the pure net/http ServerInterface --
+# plain (w http.ResponseWriter, r *http.Request) method signatures --
+# which is what Handler (handler.go) implements; the strict-server and
+# client targets are not generated, since nothing in this module consumes
+# them.
+#
+# output-options.name-normalizer: ToCamelCaseWithInitialisms applies the
+# standard Go initialism list (ID among them), so generated field and
+# parameter names match this repository's naming (OrgNode.ID,
+# params.NodeId's normalized form, and so on) instead of the default
+# normalizer's Id.
+#
+# Optional spec properties stay optional in Go as pointers (the generator
+# default): Handler sets every pointer it responds with, so presence on
+# the wire is always explicit, matching notes' handler convention.
+package: api
+generate:
+  models: true
+  std-http-server: true
+output-options:
+  name-normalizer: ToCamelCaseWithInitialisms
+output: org-server.gen.go

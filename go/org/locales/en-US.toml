@@ -58,6 +58,10 @@
 
 "org.invitation_mail_required" = "Invitations are not available: this deployment has no invitation sender configured."
 
+"org.invalid_request_body" = "The request body could not be read."
+
+"org.subject_unresolved" = "We could not tell who you are signed in as."
+
 # The invitation message itself. It is the one message org sends, and it
 # renders in the RECIPIENT's language -- the locale captured on the
 # invitation row -- never the inviting operator's UI language.

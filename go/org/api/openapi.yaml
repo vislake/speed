@@ -1,0 +1,565 @@
+openapi: 3.0.3
+info:
+  title: org
+  description: >-
+    A tenant's organization tree, the memberships bound to it, and the
+    invitations that create them (see the module's own doc.go and
+    AGENTS.md). This fragment follows the operationId
+    (org_<action><Resource>) and schema-name (Org<Type>) conventions from
+    .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
+    regenerates org-server.gen.go (in this directory) from this file, with
+    oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
+    .github/workflows/api-contract.yml.
+
+    There is deliberately no tenant_id anywhere on this surface, in any
+    path, query, header or request/response body: the tenant is always the
+    one tenancy.Middleware already resolved from the request
+    (docs/internal/04-data-and-tenancy.md; root CLAUDE.md's multi-tenant
+    isolation rule).
+
+    Merging this fragment into an application-wide build/openapi/speed.yaml
+    stays future work until the merge tooling lands (see
+    docs/internal/21-api-contract.md's implementation-status note) -- org
+    is the second module fragment, after notes.
+  version: 0.0.0
+paths:
+  /api/v1/org/nodes:
+    post:
+      operationId: org_createNode
+      summary: Create a node in the caller's tenant's organization tree.
+      description: >-
+        parentId absent or empty creates the tenant's single root node
+        (TreeService.CreateRoot); parentId present creates a child beneath
+        it (TreeService.CreateChild). A tenant may have at most one root.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrgCreateNodeRequest'
+      responses:
+        '201':
+          description: The node was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgNode'
+        '400':
+          description: >-
+            The request body was missing or malformed, the name was empty
+            or too long, or the depth bound would be exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+        '404':
+          description: parentId does not name a node of the caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+        '409':
+          description: >-
+            The tenant already has a root (creating a second one), or
+            another child of the same parent already has this name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+    get:
+      operationId: org_listNodes
+      summary: List nodes of the caller's tenant's organization tree.
+      description: >-
+        With parentId, returns that node's direct children
+        (TreeService.Children). Without it, returns the whole tree --
+        the root together with every node beneath it (TreeService.Subtree)
+        -- or an empty list when the tenant has no root yet.
+      parameters:
+        - name: parentId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The matching nodes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgListNodesResponse'
+        '404':
+          description: parentId does not name a node of the caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+  /api/v1/org/nodes/{nodeId}:
+    get:
+      operationId: org_getNode
+      summary: Get one node of the caller's tenant's organization tree.
+      parameters:
+        - $ref: '#/components/parameters/NodeID'
+      responses:
+        '200':
+          description: The node.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgNode'
+        '404':
+          description: nodeId does not name a node of the caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+    patch:
+      operationId: org_renameNode
+      summary: Rename a node.
+      parameters:
+        - $ref: '#/components/parameters/NodeID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrgRenameNodeRequest'
+      responses:
+        '200':
+          description: The renamed node.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgNode'
+        '400':
+          description: The name was empty or too long.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+        '404':
+          description: nodeId does not name a node of the caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+        '409':
+          description: Another sibling already has this name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+    delete:
+      operationId: org_deleteNode
+      summary: Delete a node.
+      description: >-
+        Deleting a node with children reports 409 unless cascade=true, in
+        which case the whole subtree is removed in one statement.
+        Re-parenting orphans to the grandparent is never done (it would
+        silently widen every affected member's data scope). The tenant
+        root can never be deleted, and neither can a node with members
+        bound to it or beneath it -- move them first.
+      parameters:
+        - $ref: '#/components/parameters/NodeID'
+        - name: cascade
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '204':
+          description: The node (and, with cascade, its subtree) was deleted.
+        '404':
+          description: nodeId does not name a node of the caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+        '409':
+          description: >-
+            The node has children and cascade was not set, the node is the
+            tenant root, or the node has members bound inside it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+  /api/v1/org/nodes/{nodeId}/move:
+    post:
+      operationId: org_moveNode
+      summary: Re-parent a node, carrying its whole subtree with it.
+      parameters:
+        - $ref: '#/components/parameters/NodeID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrgMoveNodeRequest'
+      responses:
+        '200':
+          description: The moved node, with its new path.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgNode'
+        '400':
+          description: The move would exceed the tree's depth bound.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+        '404':
+          description: nodeId or parentId does not name a node of the caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+        '409':
+          description: >-
+            The target is the node itself or one of its own descendants,
+            or a sibling of the target already has this node's name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+  /api/v1/org/members:
+    get:
+      operationId: org_listMembers
+      summary: List the members bound to a node's subtree.
+      description: >-
+        With nodeId, returns the members bound to that node or to anything
+        beneath it (MemberService.List) -- standing at a group node
+        returns every store's members beneath it, standing at one store
+        returns that store's alone. Without nodeId, returns the whole
+        tenant's roster (every member bound anywhere under the root), or an
+        empty list when the tenant has no root yet.
+      parameters:
+        - name: nodeId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The matching members.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgListMembersResponse'
+        '404':
+          description: nodeId does not name a node of the caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+  /api/v1/org/members/{userId}:
+    delete:
+      operationId: org_removeMember
+      summary: Remove a member from the caller's tenant.
+      description: >-
+        Refuses to remove the tenant's last active member (409): somebody
+        has to be able to invite the next person in, and there is no
+        privileged path back into an emptied tenant.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: The membership was removed.
+        '404':
+          description: userId is not a member of the caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+        '409':
+          description: userId is the tenant's last active member.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+  /api/v1/org/invitations:
+    post:
+      operationId: org_createInvitation
+      summary: Invite a person into the caller's tenant, at a node.
+      description: >-
+        The invitee's address is normalized, indexed and rate-limited (per
+        tenant and, separately, per recipient) before anything is stored;
+        an earlier pending invitation for the same address is revoked so
+        only the newest link works. The invitation email renders in the
+        RECIPIENT's locale (negotiated from Accept-Language, falling back
+        to the platform default), never the inviting operator's UI
+        language. The response never carries the invitation token: it is a
+        bearer credential handed to the invitee alone, through the message
+        this endpoint sends.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrgCreateInvitationRequest'
+      responses:
+        '201':
+          description: The invitation was created (and, unless disabled, sent).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgInvitation'
+        '400':
+          description: The address had no valid form.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+        '403':
+          description: Invitations are turned off for this tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+        '404':
+          description: nodeId does not name a node of the caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+        '429':
+          description: >-
+            The per-tenant or per-recipient invitation rate limit was
+            reached.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+    get:
+      operationId: org_listInvitations
+      summary: List the caller's tenant's pending invitations.
+      description: >-
+        Expiry is evaluated at acceptance time, not by a sweeper, so an
+        expired-but-unaccepted row is still listed here as pending;
+        expiresAt tells the caller it is stale.
+      responses:
+        '200':
+          description: The caller's tenant's pending invitations, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgListInvitationsResponse'
+  /api/v1/org/invitations/accept:
+    post:
+      operationId: org_acceptInvitation
+      summary: Accept an invitation, becoming a member of the caller's tenant.
+      description: >-
+        The invitation is resolved strictly inside the tenant the caller's
+        access token already names; the tenant is never read out of the
+        token, so an invitation minted for another tenant reports 404 and
+        reveals nothing about it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrgAcceptInvitationRequest'
+      responses:
+        '200':
+          description: The new (or already-held) membership.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgMembership'
+        '401':
+          description: The caller could not be identified.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+        '404':
+          description: The token matches no pending invitation of this tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+        '409':
+          description: The invitation was already accepted or was revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgError'
+components:
+  parameters:
+    NodeID:
+      name: nodeId
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    OrgNode:
+      type: object
+      description: One node of a tenant's organization tree.
+      properties:
+        id:
+          type: string
+          description: Application-generated UUID.
+        parentId:
+          type: string
+          description: The parent node's id, or "" on the tenant root.
+        path:
+          type: string
+          description: >-
+            The materialized path from the tenant root down to and
+            including this node (see go/org/path.go). Read-only.
+        depth:
+          type: integer
+          description: The number of ancestors; 0 on the tenant root.
+        name:
+          type: string
+        kind:
+          type: string
+          description: >-
+            The tenant's own business classification of the node (for
+            example "group", "region", "store"); org does not enumerate
+            legal values.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    OrgCreateNodeRequest:
+      type: object
+      required:
+        - name
+      properties:
+        parentId:
+          type: string
+          description: Absent or "" creates the tenant's root node instead of a child.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        kind:
+          type: string
+          default: ''
+    OrgRenameNodeRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+    OrgMoveNodeRequest:
+      type: object
+      required:
+        - parentId
+      properties:
+        parentId:
+          type: string
+          description: The new parent's id.
+    OrgListNodesResponse:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrgNode'
+    OrgMembership:
+      type: object
+      description: One person's binding to a node of a tenant's organization tree.
+      properties:
+        membershipId:
+          type: string
+        userId:
+          type: string
+          description: >-
+            An id in authn's users table, carried as an opaque string --
+            org stores no other identity data about the user (root
+            CLAUDE.md's module-boundary rule).
+        nodeId:
+          type: string
+        status:
+          type: string
+          description: One of "active", "invited", "suspended".
+        createdAt:
+          type: string
+          format: date-time
+    OrgListMembersResponse:
+      type: object
+      properties:
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrgMembership'
+    OrgCreateInvitationRequest:
+      type: object
+      required:
+        - email
+        - nodeId
+      properties:
+        email:
+          type: string
+          description: The invitee's address.
+        nodeId:
+          type: string
+          description: The node the invitee will be bound to on acceptance.
+    OrgAcceptInvitationRequest:
+      type: object
+      required:
+        - token
+      properties:
+        token:
+          type: string
+    OrgInvitation:
+      type: object
+      description: >-
+        A pending (or resolved) offer to join the tenant. The invitee's
+        address is deliberately absent from this schema: it is PII,
+        encrypted at rest, and org's own convention (see invite.go) is
+        never to echo it into anything that leaves the process boundary.
+        emailIndex is the address's HMAC blind index -- safe to display for
+        de-duplication purposes, and not reversible to the address without
+        the index key.
+      properties:
+        id:
+          type: string
+        nodeId:
+          type: string
+        emailIndex:
+          type: string
+        status:
+          type: string
+          description: One of "pending", "accepted", "revoked".
+        expiresAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+    OrgListInvitationsResponse:
+      type: object
+      properties:
+        invitations:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrgInvitation'
+    OrgError:
+      type: object
+      description: >-
+        The structured {code, params} error envelope every speed API
+        returns instead of localized text (backend coding standard §6.2;
+        docs/internal/11-cross-cutting.md) -- a client resolves code
+        through its own i18n catalog, populated from this module's
+        Locales() resources for the codes documented in AGENTS.md's error
+        index.
+      properties:
+        code:
+          type: string
+          example: org.node_not_found
+        params:
+          type: object
+          additionalProperties: true

@@ -193,6 +193,24 @@ var (
 	ErrInvitationMailRequired = apperr.Internal("org.invitation_mail_required")
 )
 
+// The HTTP-transport half of the error index: errors Handler itself returns
+// before ever calling into a service, rather than an error a service
+// reports. Same convention as the rest of this file: a package-level
+// *apperr.Error sentinel per code, matched with apperr.As and a Code
+// comparison, described in both locale files under the identical id.
+var (
+	// ErrInvalidRequestBody reports a request body Handler could not decode
+	// as the operation's spec-generated JSON type.
+	ErrInvalidRequestBody = apperr.Invalid("org.invalid_request_body")
+
+	// ErrSubjectUnresolved reports an endpoint that needs the caller's
+	// identity (creating or accepting an invitation) with no SubjectResolver
+	// wired, or one that could not identify the caller. See SubjectResolver's
+	// own doc comment: org fails closed here rather than inventing a default
+	// user.
+	ErrSubjectUnresolved = apperr.Unauthorized("org.subject_unresolved")
+)
+
 // rateLimited returns an *apperr.Error carrying HTTP 429, the status apperr
 // has no constructor for.
 func rateLimited(code string) *apperr.Error {

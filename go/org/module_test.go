@@ -20,8 +20,8 @@ func TestModule_Identity(t *testing.T) {
 	if got := m.DependsOn(); got != nil {
 		t.Errorf("DependsOn() = %v, want nil -- org depends on no other pkgcore.Module, authn least of all", got)
 	}
-	if got := m.OpenAPISpec(); got != nil {
-		t.Errorf("OpenAPISpec() = %q, want nil until the module's spec fragment lands", got)
+	if got := m.OpenAPISpec(); len(got) == 0 {
+		t.Error("OpenAPISpec() is empty, want the embedded api/openapi.yaml fragment")
 	}
 }
 
@@ -110,9 +110,16 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 		assertContainsAll(t, types, []string{EventNodeCreated, EventNodeMoved, EventNodeDeleted})
 	})
 
-	t.Run("no routes are mounted before the spec fragment lands", func(t *testing.T) {
-		if got := reg.Routes.Routes(); len(got) != 0 {
-			t.Errorf("Register mounted %d route(s); org's HTTP surface is spec-first and lands with its fragment", len(got))
+	t.Run("routes", func(t *testing.T) {
+		routes := reg.Routes.Routes()
+		if len(routes) != 1 {
+			t.Fatalf("Register mounted %d route(s), want exactly 1 (apiPath)", len(routes))
+		}
+		if routes[0].Path != apiPath {
+			t.Errorf("mounted route path = %q, want %q", routes[0].Path, apiPath)
+		}
+		if routes[0].Handler == nil {
+			t.Error("the mounted route carries a nil handler")
 		}
 	})
 

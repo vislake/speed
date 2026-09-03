@@ -48,6 +48,9 @@ var errorCatalog = []struct {
 	{"ErrInvitationsDisabled", ErrInvitationsDisabled, "org.invitations_disabled", http.StatusForbidden},
 	{"ErrEmailIndexerRequired", ErrEmailIndexerRequired, "org.email_indexer_required", http.StatusInternalServerError},
 	{"ErrInvitationMailRequired", ErrInvitationMailRequired, "org.invitation_mail_required", http.StatusInternalServerError},
+
+	{"ErrInvalidRequestBody", ErrInvalidRequestBody, "org.invalid_request_body", http.StatusBadRequest},
+	{"ErrSubjectUnresolved", ErrSubjectUnresolved, "org.subject_unresolved", http.StatusUnauthorized},
 }
 
 // TestErrorCatalog_IsComplete is what makes the promise at the top of
