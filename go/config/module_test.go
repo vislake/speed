@@ -158,7 +158,7 @@ func TestKernelBootstrap_FailsOnAnUnresolvedFlagDependency(t *testing.T) {
 		},
 	}
 
-	_, err := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).Bootstrap(context.Background(), configModule, host)
+	_, err := pkgcore.NewKernel().Bootstrap(context.Background(), configModule, host)
 	if err == nil {
 		t.Fatal("Bootstrap succeeded with an unresolved flag dependency; the graph must fail closed")
 	}
@@ -187,7 +187,7 @@ func TestKernelBootstrap_AttachServesTheAssembledHostSchema(t *testing.T) {
 		},
 	}
 
-	reg, err := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).Bootstrap(context.Background(), host, configModule)
+	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), host, configModule)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}

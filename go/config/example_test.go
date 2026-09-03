@@ -74,7 +74,7 @@ func Example() {
 	// Bootstrap walks the module graph, calling Register on each; Attach is
 	// called exactly once afterwards and freezes the union of everything
 	// declared into a schema the service serves.
-	reg, err := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).
+	reg, err := pkgcore.NewKernel().
 		Bootstrap(ctx, &brandModule{}, configModule)
 	if err != nil {
 		panic(err)
