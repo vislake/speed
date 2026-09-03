@@ -181,7 +181,7 @@ func TestModule_Register_DoesNotDeclareForeignEvents(t *testing.T) {
 // alongside a module that declares its own permissions, audit actions and
 // events -- the real host shape -- rather than only in isolation.
 func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
-	reg, err := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).
+	reg, err := pkgcore.NewKernel().
 		Bootstrap(context.Background(), newWiredModule(t, nil), neighbourModule{})
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
@@ -209,7 +209,7 @@ func TestModule_Register_PerformsNoIO(t *testing.T) {
 // queue to finish their processing refuses to boot at Register time, the
 // same shape org's indexer-required refusal takes.
 func TestModule_Register_RefusesAQueuelessBoot(t *testing.T) {
-	_, err := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).
+	_, err := pkgcore.NewKernel().
 		Bootstrap(context.Background(), NewModule(nil))
 	if !hasCode(err, ErrQueueRequired.Code) {
 		t.Fatalf("Bootstrap without a queue error = %v, want storage.queue_required", err)
@@ -396,7 +396,7 @@ func TestModule_Register_WiresTheServiceHostSeams(t *testing.T) {
 		t.Fatal("the services hold a registry before Register; they must fail closed until the module registers")
 	}
 
-	reg, err := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).Bootstrap(context.Background(), m)
+	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), m)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -458,7 +458,7 @@ func TestModule_Register_WiresTheServiceHostSeams(t *testing.T) {
 // module performs, which those service-side tests cannot see.
 func TestModule_Register_RegistersTheServicesJobHandlers(t *testing.T) {
 	m := newWiredModule(t, nil)
-	reg, err := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).Bootstrap(context.Background(), m)
+	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), m)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -569,7 +569,7 @@ func newWiredModule(t *testing.T, db *gorm.DB, opts ...Option) *Module {
 // proves they survive i18n.Builder.AddModule's parity validation.
 func bootstrapTestModule(t *testing.T, opts ...Option) *pkgcore.Registry {
 	t.Helper()
-	reg, err := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).
+	reg, err := pkgcore.NewKernel().
 		Bootstrap(context.Background(), newWiredModule(t, nil, opts...))
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)

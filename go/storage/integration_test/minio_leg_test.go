@@ -137,8 +137,8 @@ func TestObjectLifecycle_RoundTripsThroughS3(t *testing.T) {
 
 	db := testutil.NewSQLite(t, "storage", migrations.FS)
 	module := storage.NewModule(db, storage.WithQueue(noopQueue{}))
-	if _, err := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone,
-		pkgcore.WithObjectStore(store)).Bootstrap(ctx, module); err != nil {
+	if _, err := pkgcore.NewKernel(pkgcore.WithObjectStore(store,
+		pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart)).Bootstrap(ctx, module); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 

@@ -170,7 +170,7 @@ func ExampleObjectService() {
 	}
 	// Bootstrap resolves the registry's standalone object store and event bus
 	// and runs the module's Register, which hands the registry to the service.
-	if _, err = pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).Bootstrap(ctx, m); err != nil {
+	if _, err = pkgcore.NewKernel().Bootstrap(ctx, m); err != nil {
 		panic(err)
 	}
 
@@ -269,7 +269,7 @@ func ExampleLifecycleService() {
 	if err = registry.Apply(ctx, db, dbkit.DialectSQLite); err != nil {
 		panic(err)
 	}
-	if _, err = pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).Bootstrap(ctx, m); err != nil {
+	if _, err = pkgcore.NewKernel().Bootstrap(ctx, m); err != nil {
 		panic(err)
 	}
 	svc := m.ObjectService()
