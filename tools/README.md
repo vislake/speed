@@ -1,7 +1,8 @@
 # tools/ — repo scripts
 
 Plain, dependency-free Python scripts (standard library only, Python >= 3.11
-for `tomllib`) that back the repository's cross-cutting disciplines and its release machinery: three discipline checkers, one scaffold generator, and the lockstep release coordinator (a release tool, not a discipline checker — it follows the same convention, which is why it lives here). The checkers are the local-run counterparts of the CI discipline checks scheduled in `docs/internal/18-cicd.md` (the table rows for banning CJK outside `docs/internal/`, for requiring identical zh-CN/en-US message-key sets, and for making every tenant-scoped Repository run the tenancytest isolation suite, all marked there as self-written scripts); CI workflows mount them under `tools/`. Two further scripts are repo self-checks rather than 18-cicd discipline rows: `tools/check_toolchain.py` gates the tool versions the root `.mise.toml` pins — mirrors of the authoritative sources CI actually reads (Taskfile.yml header, `go.work`, `web/.nvmrc`, `web/package.json`, setup-go-env's `GOLANGCI_VERSION`) — proving the mirrors cannot drift, and pr-check's repo-checks job runs it; `tools/check_docs_site.py` validates the docs-site skeleton (required entry files, internal links, offline preview) and the docs-check pipeline runs it. The generator is the backend of the `task new:module` promised by `docs/internal/19-dev-workflow.md`. The release coordinator (`release/lockstep-release.py`) is the M0 deliverable for the roadmap's lockstep-release item (`docs/internal/02-repo-and-release.md`, `docs/internal/18-cicd.md`), an offline verification of the full one-version release plan, wrapped by the root Taskfile's `release:plan` task and mounted by `.github/workflows/release.yml`; its unittest suite and go.mod fixtures live beside it under `tools/release/`. Nothing here needs anything beyond `python3`, and the checkers print hit paths relative to their `--root`.
+for `tomllib`) that back the repository's cross-cutting disciplines and its release machinery: three discipline checkers, the dependency-license scanner with its committed manifest, one scaffold generator, the semgrep architecture-discipline ruleset under `tools/semgrep_rules/` with its planted-violation fixtures, and the lockstep release coordinator (a release tool, not a discipline checker — it follows the same convention, which is why it lives here). The checkers are the local-run counterparts of the CI discipline checks scheduled in `docs/internal/18-cicd.md` (the table rows for banning CJK outside `docs/internal/`, for requiring identical zh-CN/en-US message-key sets, and for making every tenant-scoped Repository run the tenancytest isolation suite, all marked there as self-written scripts); CI workflows mount them under `tools/`. Two further scripts are repo self-checks rather than 18-cicd discipline rows: `tools/check_toolchain.py` gates the tool versions the root `.mise.toml` pins — mirrors of the authoritative sources CI actually reads (Taskfile.yml header, `go.work`, `web/.nvmrc`, `web/package.json`, setup-go-env's `GOLANGCI_VERSION`) — proving the mirrors cannot drift, and pr-check's repo-checks job runs it; `tools/check_docs_site.py` validates the docs-site skeleton (required entry files, internal links, offline preview) and the docs-check pipeline runs it. The generator is the backend of the `task new:module` promised by `docs/internal/19-dev-workflow.md`. The release coordinator (`release/lockstep-release.py`) is the M0 deliverable for the roadmap's lockstep-release item (`docs/internal/02-repo-and-release.md`, `docs/internal/18-cicd.md`), an offline verification of the full one-version release plan, wrapped by the root Taskfile's `release:plan` task and mounted by `.github/workflows/release.yml`; its unittest suite and go.mod fixtures live beside it under `tools/release/`. Nothing here needs anything beyond `python3` except the semgrep ruleset, which needs a semgrep binary to run (see the ruleset section for the pinned local version and the CI shape), and the checkers print hit paths relative to their `--root`.
+
 | Script | Kind | Enforces / does | Exit codes |
 |---|---|---|---|
 | `scan_cjk.py` | Checker | Root `CLAUDE.md` Language Rule: English everywhere outside `docs/internal/` | 0 clean / 1 violations / 2 error |
@@ -9,6 +10,7 @@ for `tomllib`) that back the repository's cross-cutting disciplines and its rele
 | `check_repo_isolation.py` | Checker | Multi-tenant isolation discipline: every Repository type (a struct embedding `dbkit.Repository[T]`) is covered by `tenancytest.AssertIsolated` in its package's tests | 0 all covered / 1 uncovered repository / 2 error |
 | `check_toolchain.py` | Checker | Root `.mise.toml` tool versions mirror their authoritative sources (Taskfile.yml header, `go.work`, `web/.nvmrc`, `web/package.json`, setup-go-env's `GOLANGCI_VERSION`) | 0 all mirrors match / 1 drift / 2 error |
 | `check_docs_site.py` | Checker | `docs/site/` skeleton structure: required entry files present, internal links resolve inside the tree, offline preview serves (python3 stdlib HTTP server) | 0 clean / 1 violation / 2 error |
+| `license_scan.py` | Checker | Dependency-license compliance: every direct third-party dependency of the implemented Go modules and web packages is adjudicated and within policy in `dependency-licenses.json`, re-derived from the live tree on every run | 0 clean / 1 violation / 2 usage error |
 | `new_module.py` | Generator | Scaffolds the canonical stub of a new Go module under `go/<name>` and prints its registration checklist; never modifies shared repository files | 0 scaffolded / 2 refusal or validation error |
 | `release/lockstep-release.py` | Release verifier | Verifies the lockstep one-version release plan offline — derives the publishable set at runtime (go.work `use` entries under `go/` + `web/packages/*`) and checks version form, no duplicate tag, go.work-to-tree completeness both ways, uniform npm versions, changesets fixed-group coverage (`web/.changeset/config.json`); `--self-test` runs its unittest suite; `--apply` is a hard-gated local-tag mode (real publishing is M4's job) | 0 consistent plan / 1 inconsistent plan or self-test failure / 2 usage / 3 `--apply` refused |
 
@@ -322,6 +324,104 @@ repository yet — `docs/internal/19-dev-workflow.md` only names the future
 `task new:npm-package`; `--dry-run` prints the plan without writing
 anything.
 
+## Semgrep architecture-discipline ruleset (tools/semgrep_rules/)
+
+Six semgrep rules, one per architecture-discipline row of the
+`docs/internal/18-cicd.md` discipline table. Each rule file carries its own
+header: the discipline row it maps to, the exact shapes that fire, the
+path allowlist (every allowlisted site is a deliberate, documented
+mechanism, named and justified in the header), and the residual gaps the
+rule deliberately does not close (code review owns those evasions).
+
+| Rule file | Discipline row (18-cicd table / root CLAUDE.md) | What fires | Allowlist (paths.exclude) | Residual gap |
+|---|---|---|---|---|
+| `deployment-mode-branch.yml` | no `if mode == "standalone"` branching in business logic | mode-value comparisons (`==`/`!=`, both operand orders), `case` labels naming the mode values, `os.Getenv("SPEED_DEPLOYMENT_MODE")`; same-package literal-valued consts resolve before matching, so an alias const still fires | test files; `go/pkgcore/deployment_mode.go` + `registry.go`, `go/observability/init.go` (kernel wiring), the reference-app command entry (`cmd/server/server.go`, `main.go`) | an indirection neither text matching nor value propagation reaches -- a helper inside an allowlisted file, a cross-package alias constant, a runtime-computed decision |
+| `gorm-automigrate-ban.yml` | no `AutoMigrate` (migrations are versioned SQL) | any `.AutoMigrate(...)` call in shipped code. STATUS: future guard -- zero real call sites exist today | test files | none stated (the ban is total) |
+| `handwritten-tenant-id-filter.yml` | no hand-written `WHERE tenant_id = ?` | a `Where` / `Or` / `Not` / `Having` chain call whose FIRST argument is a string literal containing a `tenant_id = ?`-style clause | test files; `go/dbkit/**` (the scoping plugin builds the filter everyone else relies on); `go/jobs/store.go` (platform-data idempotency guard) | a clause assembled dynamically (fmt.Sprintf into the clause, a filter passed through a helper); only the first-argument literal form is matched |
+| `non-constant-log-message.yml` | log messages are constant strings (structured logging) | a call to the observability logger's `Info`/`Warn`/`Error`/`Debug` whose first argument is not a string literal (fmt.Sprintf output, concatenation, a variable) | test files | a raw-string (backtick) literal message is flagged although constant (none exists today); anything logged outside the shared structured logger is a separate discipline |
+| `raw-gorm-bypass.yml` | no `db.Table` / `db.Model` / `db.Raw` around the Repository | any call to the three bypass entry points on any receiver, in shipped code | test files; `go/dbkit/**` (dbkit owns the raw surface it provides); `go/jobs/store.go` (platform data whose dispatch query must scan every tenant) | a workaround through another `*gorm.DB` method (e.g. `Exec` with hand-written SQL) is not matched |
+| `tenant-id-metric-label.yml` | `tenant_id` never becomes a Prometheus/OTel metric label | the metric-label NAME carriers: `metric.WithAttributes(...)` and `[]attribute.KeyValue{...}` literals containing the text `tenant_id`, the four `prometheus.New*Vec` constructors and `prometheus.Labels{...}` literals | test files; span attributes and `.WithLabelValues(...)` value passes deliberately do NOT fire (spans are the tenant dimension's sanctioned home; the NAME is the cardinality hazard, fixed at vector construction) | a `tenant_id` label past the first variadic option / first composite-literal element; a label name introduced through a constant indirection (`attribute.String(obs.TenantIDKey, ...)`) -- the runtime assertion test and review cover those |
+
+The fixtures live under `tools/semgrep_rules/testdata/<rule>/`: each rule's
+`positive.go` must fire on every pattern shape the rule declares, and
+`negative.go` proves the flip side (the shapes that deliberately stay
+clean, including allowlisted behavior). The rules are proven against those
+fixtures and against the real tree before shipping.
+
+Running locally (the docker image is the pinned local version; CI instead
+pip-installs into a throwaway venv -- see below):
+
+```
+docker run --rm -v "$PWD:/repo:ro" -w /repo \
+  returntocorp/semgrep:1.176.0 semgrep scan --config tools/semgrep_rules \
+  --error --exclude tools/semgrep_rules go examples tools
+```
+
+Execution status, stated honestly:
+
+- The real-tree scan passes today: 0 findings across `go/` `examples/`
+  `tools/` (89 Go files, 6 rules), exit 0. Proven locally with the docker
+  image above on the round's final state.
+- Known parser limitation: semgrep always skips line 19 of
+  `examples/reference-app/internal/notes/repository.go` (the embedded
+  instantiated generic `*dbkit.Repository[Note]` raises a PartialParsing
+  exception; roughly 3.4% of that file's lines are never analyzed).
+  The skipped line is a struct-field declaration, which none of the six
+  rules' shapes targets, so no rule is blind-sided today -- but a rule
+  written later must know this file cannot be fully scanned.
+- Version posture: the CI step's `pip install semgrep` is deliberately
+  unpinned until the first green CI run pins it (the local proofs all ran
+  the pinned `returntocorp/semgrep:1.176.0` image); the docker run prints
+  a `safe.directory` warning because the host git path is unreachable
+  inside the container -- benign, the scan completes.
+
+## license_scan.py — dependency license compliance
+
+Verifies `tools/dependency-licenses.json` against the live tree. The
+manifest records the license adjudication for every direct third-party
+dependency of the implemented Go modules (all direct requires in
+`go/*/go.mod`) and npm packages (`web/packages/*/package.json`
+dependencies + peerDependencies, versions resolved from
+`web/pnpm-lock.yaml` -- what a frozen-lockfile CI install yields).
+Workspace-internal packages carry no entry.
+
+Policy (mirroring `docs/internal/20-quality-and-security.md`): strong
+copyleft (GPL family, AGPL) fails outright; weak copyleft (MPL, LGPL)
+fails unless the entry carries an `adr` field naming an existing `docs/`
+file that records the adjudication (none exists); any unrecognized license
+string fails closed with an adjudication message; the permissive set
+(0BSD, Apache-2.0, BSD-2/3-Clause, CC0-1.0, ISC, MIT, Unlicense) passes.
+Beyond the policy check, the scan re-derives the expected dependency set
+from the tree and fails on any drift: a newly required dependency, an
+orphan manifest entry, a version change, a `used_by` list that no longer
+matches, or an npm dependency `package.json` declares but the lockfile
+does not resolve (a real find -- the frozen-lockfile install would fail).
+
+Usage:
+
+```
+python3 tools/license_scan.py            # check the repository (exit 0/1)
+python3 tools/license_scan.py --selftest # planted-fixture suite under
+                                         # tools/license_scan_testdata/
+```
+
+The manifest's license ids were identified from the license file each
+release ships; the `evidence` field records where (go module cache paths
+are deterministic: `$GOMODCACHE/<module>@<version>/<file>`).
+
+Execution status, stated honestly: the planted-fixture suite
+(`tools/license_scan_testdata/`, one directory per case with an
+`expected_exit` file) passes 10/10, and the real-tree check passes ("42
+manifest entries match the tree, all licenses within policy"), both
+proven locally. Wired into the security pipeline's license job (selftest,
+then the real check) in `.github/workflows/security.yml`.
+
+When a dependency appears, a version changes, or a dependency goes away:
+adjudicate the license (read the license file the release ships, record
+it as `evidence`, set the SPDX id), add/update/remove the manifest entry
+with its `used_by` list, and run `python3 tools/license_scan.py` until it
+passes.
+
 ## lockstep-release.py — the lockstep release coordinator (M0)
 
 The repository's release rule (`docs/internal/02-repo-and-release.md`,
@@ -382,12 +482,15 @@ joins the tree.
 
 CI workflows mount the checkers directly, from the repository root, and
 fail the build on a nonzero exit: `python3 tools/scan_cjk.py` and
-`python3 tools/check_toolchain.py` run in pr-check's repo-checks job
-(every pull request, `.github/workflows/pr-check.yml`), and
+`python3 tools/check_toolchain.py` and the semgrep ruleset step
+(catalogued above) run in pr-check's repo-checks job (every pull
+request, `.github/workflows/pr-check.yml`);
 `python3 tools/check_i18n_keys.py` plus `python3 tools/check_docs_site.py`
 run in the docs-check pipeline (`.github/workflows/docs-check.yml`),
 whose pull_request path filter fires on PRs touching documentation or
-i18n resources.
+i18n resources; and the license scanner (`python3 tools/license_scan.py`,
+selftest first, then the real check) runs in the security pipeline's
+license job (`.github/workflows/security.yml`).
 `tools/check_repo_isolation.py` is wired into no workflow yet; its row
 lands with a future CI round. Locally, run them from the
 repository root — the default `--root` is the current directory, so plain
@@ -411,3 +514,11 @@ repository root, exactly like the checkers' `--root` default. Its
 `--self-test` suite needs nothing but the standard library and a `git`
 binary; the sandbox proof inside it touches only scratch repositories and
 asserts the live tree's tags are untouched.
+
+The secret-leakage half of the security pipeline scans with
+`.gitleaks.toml` at the repository root: it extends gitleaks' default
+rule set (no rule added or disabled) with exactly one path-scoped
+allowlist, for the go/observability redaction-test fixtures — secret-
+shaped stand-in values are the point of that test code, and the file's
+comment records the reasoning and the residual risk. Any further
+allowlist entry must arrive with its own justification in that file.
