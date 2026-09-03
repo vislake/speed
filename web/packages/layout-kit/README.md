@@ -8,9 +8,9 @@ tier as `@speed/ui-kit` -- no business, tenant, or auth-mechanism
 semantics live here. `RouteGuard` in particular takes its
 allow/deny/pending decision as a plain `status` value, never a
 callback it invokes and never a concrete authentication or routing
-import, so `product-shell` and `admin-shell` (planned, later rounds)
-can share this exact package while wiring in two different
-authorization sources. Every built-in string renders from the
+import, so `product-shell` (shipped -- this package's first consumer)
+and `admin-shell` (a later round) share this exact package while
+wiring in two different authorization sources. Every built-in string renders from the
 bilingual `layout-kit` namespace registered through `@speed/i18n`, the
 same discipline `ui-kit` established, and the workspace's
 `no-literal-text` ESLint rule refuses inline text in this package's
@@ -186,8 +186,15 @@ package -- see the AGENTS.md non-negotiable rules.
   source exists yet (a later, undispatched round). The prop shape
   needs no change once one lands: that round only computes a
   `RouteGuardStatus` and passes it in.
-- **`product-shell` / `admin-shell`**: out of scope here; this package
-  ships only the shared chrome those shells will later assemble.
+- **`admin-shell`**: out of scope here; this package ships only the
+  shared chrome the platform-staff shell will later assemble. The
+  tenant-facing half of that row is closed: `product-shell`, this
+  package's first consumer, composes `AppShell` as its authenticated
+  frame, and its gated-journey suite proves the `RouteGuard`
+  composition shape -- a stand-in host mounting the gate inside the
+  shell's children and feeding it a status it computes from the
+  role lists it attached, exactly the host-injected-status contract
+  this package's rules require.
 - **Reference-app consumer**: `examples/reference-app` has no frontend
   directory yet (Go-only today), so the consumer proof required by the
   root CLAUDE.md's Documentation rule is satisfied at the package

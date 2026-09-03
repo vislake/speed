@@ -8,9 +8,10 @@ Shared app chrome at the same architectural tier as `@speed/ui-kit`:
 status). Both are fully controlled and props-driven, carry no
 business or tenant semantics, and — the property that matters most for
 this package — carry no opinion about *how* a host authenticates or
-authorizes a user. `product-shell` and `admin-shell` (planned, later
-rounds) are meant to share this exact package while wiring in two
-different authorization sources; that only stays true if nothing here
+authorizes a user. `product-shell` (shipped, this package's first
+consumer) and `admin-shell` (a later round) share this exact package
+while wiring in two different authorization sources; that only stays
+true if nothing here
 ever imports a concrete one. Built-in user-facing strings live in the
 bilingual `layout-kit` namespace; the repo's text discipline (both
 languages, identical key sets, nothing inline) is enforced over this
@@ -26,7 +27,7 @@ rule. The public surface is `src/index.ts`; everything under
   re-renders with, never a callback (`() => boolean` or similar) that
   this package invokes. This is the single most important rule in the
   package: an `auth-core` or router import here, however small, would
-  force every future consumer shell onto one authorization mechanism
+  force every consumer shell onto one authorization mechanism
   and defeat the reason this package exists as a separate layer from
   `product-shell`/`admin-shell`. If a change looks like it needs one,
   stop and push the decision back onto the host's `status` computation
@@ -128,8 +129,14 @@ file changes with it.
 - **`auth-core` wiring**: no real authorization source exists yet (a
   later, undispatched round); the Quick start's `status` stub is
   deliberate and needs no change to this package once one lands.
-- **`product-shell` / `admin-shell`**: out of scope; this package ships
-  only the shared chrome those shells will later assemble.
+- **`admin-shell`**: out of scope; this package ships only the shared
+  chrome the platform-staff shell will later assemble. The tenant-facing
+  half of that row is closed: `product-shell` is this package's first
+  consumer, composing `AppShell` as its authenticated frame while
+  leaving `RouteGuard` to hosts -- its gated-journey suite composes the
+  gate inside the shell's children, fed a status the fixture host
+  computes from the role lists it attached, the exact host-injected
+  shape this package's non-negotiable rules require.
 - **Reference-app consumer**: `examples/reference-app` has no frontend
   directory yet (Go-only today); the required consumer proof is
   satisfied at the package level (`src/usage-example.test.tsx`), the
