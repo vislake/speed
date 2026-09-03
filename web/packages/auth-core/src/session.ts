@@ -1,7 +1,9 @@
 /**
  * The browser session state machine: createAuthSession wires the
  * generated authn surface of @speed/api-sdk (login, logout, tenant
- * switch, step-up, refresh -- real server round-trips through the
+ * switch, step-up, refresh, plus the pre-session operations the
+ * sign-up and social flows need -- sms-code request, register, social
+ * authorize and social callback; real server round-trips through the
  * host-bound client) into one memory-only session.
  *
  * What lives where:
@@ -19,7 +21,17 @@
  * The failure contract: every user operation (login, logout, tenant
  * switch, step-up) rejects with the raw ApiError from the request
  * (distinguishable with isApiError), and a failed operation leaves
- * both the store and the snapshot exactly as they were. refresh()
+ * both the store and the snapshot exactly as they were. The
+ * pre-session operations -- requestSMSCode, register,
+ * socialAuthorizeUrl -- run under the same contract and never change
+ * state even on success: a registration is not a session, an SMS
+ * request is an acceptance, and a built authorize URL has nothing to
+ * commit. completeSocialLogin is a login operation with the full login
+ * contract, plus one extra refusal: a sign-in flow answered with a
+ * binding-shaped response (user and identity, no tokens -- the
+ * server's answer to an already-authenticated caller binding a new
+ * identity) is a client.protocol violation, rejected before any state
+ * change. refresh()
  * never rejects for an invalid or expired refresh token -- that is the
  * silent path the client's refreshAccessToken hook calls; it returns
  * false and signs the session out locally (the server has already
@@ -82,6 +94,10 @@ import {
   authnLoginWithSMSCode,
   authnLogout,
   authnRefreshToken,
+  authnRegister,
+  authnRequestSMSCode,
+  authnSocialAuthorize,
+  authnSocialCallback,
   authnSwitchTenant,
   authnVerifyStepUp,
 } from '@speed/api-sdk'
@@ -89,7 +105,12 @@ import type {
   AuthnLoginWithPasswordRequest,
   AuthnLoginWithSMSCodeRequest,
   AuthnPrincipal,
+  AuthnRegisterRequest,
+  AuthnRequestSMSCodeRequest,
+  AuthnSocialAuthorizeParams,
+  AuthnSocialCallbackRequest,
   AuthnTokenPair,
+  AuthnUser,
 } from '@speed/api-sdk'
 
 /** The permission domain a host-attached permission set belongs to.
@@ -136,6 +157,50 @@ export interface AuthSession {
   ): Promise<AuthSnapshot>
   /** Signs in with a phone number and the SMS code sent to it. */
   loginWithSMSCode(request: AuthnLoginWithSMSCodeRequest): Promise<AuthSnapshot>
+  /** Requests a one-time SMS sign-in code for a phone number -- the
+   * 202 that precedes a loginWithSMSCode. The endpoint always answers
+   * 202 whether or not the phone number belongs to an account, and
+   * this method mirrors it: it resolves on acceptance and changes no
+   * state -- nothing is committed, nothing is notified. Rejects the
+   * raw ApiError on failure (authn.rate_limited, which carries
+   * Retry-After). */
+  requestSMSCode(request: AuthnRequestSMSCodeRequest): Promise<void>
+  /** Registers a new account. Deliberately not a session operation:
+   * the response is the created user, never a token pair, and no state
+   * changes here -- the host follows up with a login when the new
+   * account signs in. Rejects the raw ApiError on failure
+   * (authn.email_already_registered, authn.phone_already_registered,
+   * authn.rate_limited). */
+  register(request: AuthnRegisterRequest): Promise<AuthnUser>
+  /** Builds the authorization URL for one social sign-in channel. A
+   * pure request: no state changes, and nothing here ever navigates --
+   * the caller decides what the URL is for (the auth-ui layer reports
+   * it upward, never jumping the browser itself). A 2xx that carries
+   * no usable authorize_url rejects with a client.protocol ApiError,
+   * the same fail-closed answer a contract-violating token response
+   * gets. Rejects the raw ApiError on failure (authn.provider_unknown,
+   * authn.redirect_uri_not_allowed). */
+  socialAuthorizeUrl(
+    provider: string,
+    params: AuthnSocialAuthorizeParams,
+  ): Promise<string>
+  /** Completes a social sign-in flow: exchanges the provider's
+   * authorization response -- the code and state it redirected back --
+   * for a session, exactly like the other login operations: the token
+   * pair is validated, both host-attached permission domains clear,
+   * the store is written and subscribers are notified. The provider is
+   * a path segment of the callback endpoint and is threaded through
+   * verbatim. A sign-in flow answered with a binding-shaped response
+   * (user and identity but no tokens -- the server's answer to an
+   * already-authenticated caller binding a new identity) is refused
+   * with a client.protocol ApiError before any state change: this
+   * surface is a sign-in surface, its caller is anonymous by
+   * construction, and there is nothing to bind to. Binding semantics
+   * belong to a later round. */
+  completeSocialLogin(
+    provider: string,
+    request: AuthnSocialCallbackRequest,
+  ): Promise<AuthSnapshot>
   /** Ends the session: the server revokes it, the store empties and
    * the snapshot returns to anonymous. */
   logout(): Promise<void>
@@ -481,6 +546,57 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
       const opGeneration = generation
       const pair = await authnLoginWithSMSCode(request)
       return settleIssued(opGeneration, pair, true, true)
+    },
+
+    async requestSMSCode(
+      request: AuthnRequestSMSCodeRequest,
+    ): Promise<void> {
+      // 202 acceptance, never a state change: nothing to commit, no
+      // store write, no snapshot change and no notify.
+      await authnRequestSMSCode(request)
+    },
+
+    async register(request: AuthnRegisterRequest): Promise<AuthnUser> {
+      // The created user, never a token pair: registering is not
+      // signing in (see the interface docs), so the session stands
+      // exactly as it was on either outcome.
+      return authnRegister(request)
+    },
+
+    async socialAuthorizeUrl(
+      provider: string,
+      params: AuthnSocialAuthorizeParams,
+    ): Promise<string> {
+      const response = await authnSocialAuthorize(provider, params)
+      const authorizeUrl = response.authorize_url
+      if (typeof authorizeUrl !== 'string' || authorizeUrl === '') {
+        // A 2xx whose whole purpose is the URL answers without one: a
+        // protocol violation, not a successful authorize.
+        throw protocolViolation(
+          'social authorize 2xx carries no authorize_url string',
+        )
+      }
+      return authorizeUrl
+    },
+
+    async completeSocialLogin(
+      provider: string,
+      request: AuthnSocialCallbackRequest,
+    ): Promise<AuthSnapshot> {
+      const opGeneration = generation
+      const response = await authnSocialCallback(provider, request)
+      const tokens = response.tokens
+      if (typeof tokens !== 'object' || tokens === null) {
+        // The callback answered a binding-shaped response -- identity
+        // bound, no tokens minted -- which is the server's answer to
+        // an already-authenticated caller. This surface is a sign-in
+        // surface, so refuse before any state change rather than
+        // "commit" a session that carries no credentials.
+        throw protocolViolation(
+          'social callback 2xx carries no tokens for a sign-in flow',
+        )
+      }
+      return settleIssued(opGeneration, tokens, true, true)
     },
 
     async logout(): Promise<void> {

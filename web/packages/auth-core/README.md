@@ -3,12 +3,13 @@
 The browser session lifecycle as a headless, memory-only state machine
 over the generated authn surface of `@speed/api-sdk`. `createAuthSession`
 wires the generated operations -- password and SMS login, logout, tenant
-switch, step-up, refresh -- to one observable session with a single
-in-memory access-token store as the bridge into `@speed/api-client`:
-a host that built its client with this same store and
-`refreshAccessToken: () => session.refresh()` gets silent refresh for
-free -- an expired-token 401 on any request runs one refresh, and the
-retried request carries the fresh token.
+switch, step-up, refresh, plus the sms-code request, register and social
+operations that feed the sign-up and social sign-in flows -- to one
+observable session with a single in-memory access-token store as the
+bridge into `@speed/api-client`: a host that built its client with this
+same store and `refreshAccessToken: () => session.refresh()` gets silent
+refresh for free -- an expired-token 401 on any request runs one refresh,
+and the retried request carries the fresh token.
 
 No UI and no storage writes. The access token lives in the
 caller-supplied store (in memory by design -- see the access-token rules
@@ -80,6 +81,53 @@ request seam bound with the same `bindRequestFn` a host's real client
 uses; the real-client composition itself (`createClient` over a live
 fetch, silent-401 refresh included) is exercised in `session.test.ts`.
 
+## Registration and social flows
+
+The session also wraps the pre-session authn operations the sign-up and
+social sign-in flows need. None of them changes the session on success
+-- a registration is not a login -- except `completeSocialLogin`, which
+is a login operation like any other:
+
+```ts
+// Registering an account never changes the session: the response is
+// the created user, and the host follows up with a login when the new
+// account signs in.
+const user = await session.register({
+  email: 'ada@example.com',
+  password: 'pw',
+  display_name: 'Ada',
+  locale: 'zh-CN',
+})
+
+// A social channel's authorization URL is a pure request. The session
+// never navigates: an auth-ui component hands the URL upward and the
+// host's own navigation layer decides what happens next.
+const authorizeUrl = await session.socialAuthorizeUrl('google', {
+  redirect_uri: 'https://app.example.com/social/callback/google',
+})
+
+// Back from the provider with the code and state it redirected to, the
+// host completes the sign-in -- the full login contract applies: the
+// token pair is validated, both permission domains clear, the store is
+// written and subscribers are notified.
+const snapshot = await session.completeSocialLogin('google', {
+  code: '4/0AX4Xf...',
+  state: '...',
+})
+
+// One-time SMS codes are requested separately from the login that
+// consumes them. The request always answers 202 -- whether or not the
+// phone number belongs to an account -- and changes nothing.
+await session.requestSMSCode({ phone: '+8613800138000' })
+const snapshot = await session.loginWithSMSCode({
+  phone: '+8613800138000',
+  code: '123456',
+})
+```
+
+This flow is compiled and executed by the package suite alongside the
+quick start (`src/usage-example.test.tsx`).
+
 ## Permission checks are set lookup only
 
 `usePermission(domain, permission)` answers "is this string in the
@@ -107,16 +155,26 @@ under.
 
 ## The failure contract
 
-- Every user operation -- `loginWithPassword`, `loginWithSMSCode`,
-  `logout`, `switchTenant`, `verifyStepUp` -- rejects with the raw
-  `ApiError` from the request (tell it apart with `isApiError` from
-  `@speed/api-client`), and a failed operation changes nothing: the
-  store, the held refresh token and the snapshot are exactly what they
-  were before the attempt.
+- Every operation rejects with the raw `ApiError` from the request
+  (tell it apart with `isApiError` from `@speed/api-client`), and a
+  failed operation changes nothing: the store, the held refresh token
+  and the snapshot are exactly what they were before the attempt.
+  That covers the logins (`loginWithPassword`, `loginWithSMSCode`,
+  `completeSocialLogin`), the session-management operations (`logout`,
+  `switchTenant`, `verifyStepUp`) and the pre-session operations
+  (`requestSMSCode`, `register`, `socialAuthorizeUrl`) -- the last
+  three never change state even on success, since a registration is
+  not a session.
 - A token-issuing 2xx that violates the contract (missing tokens or
   principal, malformed fields) is a protocol violation, never a
   successful login: it rejects with an `ApiError` of
   `status: 200` and code `client.protocol`, again changing nothing.
+  The same fail-closed answer guards the two non-login 2xx responses
+  that must carry a payload: a `completeSocialLogin` answered with a
+  binding-shaped response (identity bound, no tokens -- the server's
+  answer to an already-authenticated caller) is refused before any
+  state change, and a `socialAuthorizeUrl` answered without an
+  `authorize_url` is refused outright.
 - `refresh()` is the silent path. It resolves `true` when a fresh pair
   was stored, `false` when there is nothing to refresh or the server
   refused the held token (the session is over and signs out locally --
@@ -155,3 +213,11 @@ under.
   switch and step-up -- keep rotating the caller's existing one, per
   the authn spec. A `switchTenant` to a tenant the principal has no
   membership in is refused by the server and changes nothing locally.
+- **Social binding flows are not covered.** The callback endpoint
+  doubles as the binding surface for an already-authenticated caller:
+  its answer then carries the bound identity and no tokens, and
+  `completeSocialLogin` deliberately refuses that shape with
+  `client.protocol` -- this package's callback surface is a sign-in
+  surface. A binding flow (an authenticated caller adding a channel to
+  their account) needs its own handling of the bound-identity response
+  and is planned with the account-management UI.

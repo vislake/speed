@@ -33,7 +33,11 @@ import {
   makePair,
   principal,
   REFRESH,
+  REGISTER,
+  REQUEST_SMS_CODE,
   snapshotLog,
+  SOCIAL_AUTHORIZE,
+  SOCIAL_CALLBACK,
   STEP_UP,
   SWITCH_TENANT,
 } from '../test-utils/session-harness'
@@ -1086,6 +1090,268 @@ describe('host-attached permission sets', () => {
       tenant: ['notes:read'],
       system: ['users:manage'],
     })
+  })
+})
+
+describe('request an sms code', () => {
+  it('resolves on acceptance, passes the phone through and changes nothing', async () => {
+    const harness = makeHarness({
+      [REQUEST_SMS_CODE]: (call) => {
+        expect(call.options?.body).toEqual({ phone: '+8613800138000' })
+      },
+    })
+    const seen = snapshotLog(harness.session)
+    await expect(
+      harness.session.requestSMSCode({ phone: '+8613800138000' }),
+    ).resolves.toBeUndefined()
+    expect(harness.calls).toHaveLength(1)
+    expect(harness.calls[0]?.path).toBe('/api/v1/authn/login/sms/request')
+    // An acceptance commits nothing: no store write, no snapshot
+    // change and no notification.
+    expect(harness.store.get()).toBeNull()
+    expect(harness.session.getSnapshot()).toEqual({
+      state: 'anonymous',
+      principal: null,
+      permissionSets: { tenant: null, system: null },
+    })
+    expect(seen).toHaveLength(0)
+  })
+
+  it('rejects the raw ApiError when the request is rate-limited', async () => {
+    const limited = apiError(429, 'authn.rate_limited')
+    const harness = makeHarness({
+      [REQUEST_SMS_CODE]: () => {
+        throw limited
+      },
+    })
+    const error = await captureRejection(
+      harness.session.requestSMSCode({ phone: '+8613800138000' }),
+    )
+    expect(error).toBe(limited)
+    expect(harness.store.get()).toBeNull()
+    expect(harness.session.getSnapshot().state).toBe('anonymous')
+  })
+})
+
+describe('register', () => {
+  const registration = {
+    email: 'ada@example.com',
+    password: 'pw',
+    display_name: 'Ada',
+    locale: 'zh-CN',
+  }
+
+  it('resolves the created user and changes nothing', async () => {
+    const created = { id: 'user-9', ...registration }
+    const harness = makeHarness({
+      [REGISTER]: (call) => {
+        expect(call.options?.body).toEqual(registration)
+        return created
+      },
+    })
+    const seen = snapshotLog(harness.session)
+    const user = await harness.session.register(registration)
+    expect(user).toEqual(created)
+    // A registration is not a session: no token, no snapshot change
+    // and no notification -- the host follows up with a login.
+    expect(harness.store.get()).toBeNull()
+    expect(harness.session.getSnapshot().state).toBe('anonymous')
+    expect(seen).toHaveLength(0)
+    expect(harness.calls).toHaveLength(1)
+    expect(harness.calls[0]?.path).toBe('/api/v1/authn/register')
+  })
+
+  it('rejects the raw ApiError and leaves an authenticated session as it was', async () => {
+    const taken = apiError(409, 'authn.email_already_registered')
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+      [REGISTER]: () => {
+        throw taken
+      },
+    })
+    await harness.session.loginWithPassword({
+      identifier: 'ada@example.com',
+      password: 'pw',
+    })
+    const error = await captureRejection(harness.session.register(registration))
+    expect(error).toBe(taken)
+    // Registering while signed in is still not a session operation:
+    // the existing session stands untouched.
+    expect(harness.store.get()).toBe('access-1')
+    expect(harness.session.getSnapshot().principal?.user_id).toBe('user-1')
+    expect(harness.calls).toHaveLength(2)
+  })
+})
+
+describe('social authorize url', () => {
+  const authorizeUrl =
+    'https://accounts.google.com/o/oauth2/v2/auth?redirect_uri=cb&scope=openid'
+  const redirectUri = 'https://app.example.com/social/callback/google'
+
+  it('resolves the url and passes provider and redirect_uri through', async () => {
+    const harness = makeHarness({
+      [SOCIAL_AUTHORIZE]: (call) => {
+        expect(call.options?.query).toEqual({ redirect_uri: redirectUri })
+        return { authorize_url: authorizeUrl }
+      },
+    })
+    const url = await harness.session.socialAuthorizeUrl('google', {
+      redirect_uri: redirectUri,
+    })
+    expect(url).toBe(authorizeUrl)
+    expect(harness.calls).toHaveLength(1)
+    expect(harness.calls[0]?.path).toBe(
+      '/api/v1/authn/social/google/authorize',
+    )
+    // A pure request: nothing about the session moved.
+    expect(harness.store.get()).toBeNull()
+    expect(harness.session.getSnapshot().state).toBe('anonymous')
+  })
+
+  it('threads an arbitrary provider into the endpoint path', async () => {
+    const harness = makeHarness({
+      'GET /api/v1/authn/social/feishu/authorize': () => ({
+        authorize_url: 'https://open.feishu.cn/open-apis/authen/v1/index',
+      }),
+    })
+    const url = await harness.session.socialAuthorizeUrl('feishu', {
+      redirect_uri: 'https://app.example.com/social/callback/feishu',
+    })
+    expect(url).toContain('open.feishu.cn')
+    expect(harness.calls[0]?.path).toBe(
+      '/api/v1/authn/social/feishu/authorize',
+    )
+  })
+
+  it('rejects the raw ApiError when the channel is unknown', async () => {
+    const unknown = apiError(400, 'authn.provider_unknown')
+    const harness = makeHarness({
+      [SOCIAL_AUTHORIZE]: () => {
+        throw unknown
+      },
+    })
+    const error = await captureRejection(
+      harness.session.socialAuthorizeUrl('google', {
+        redirect_uri: redirectUri,
+      }),
+    )
+    expect(error).toBe(unknown)
+    expect(harness.session.getSnapshot().state).toBe('anonymous')
+  })
+
+  it('rejects with client.protocol when the 2xx carries no authorize url', async () => {
+    const harness = makeHarness({
+      [SOCIAL_AUTHORIZE]: () => ({}),
+    })
+    await expectProtocolViolation(
+      harness.session.socialAuthorizeUrl('google', {
+        redirect_uri: redirectUri,
+      }),
+      harness,
+    )
+  })
+})
+
+describe('complete social login', () => {
+  const flow = { code: '4/0AX4XfF19S4Q2', state: 'state-1' }
+
+  it('commits the issued pair like any other login', async () => {
+    const harness = makeHarness({
+      [SOCIAL_CALLBACK]: (call) => {
+        expect(call.options?.body).toEqual(flow)
+        return { tokens: makePair() }
+      },
+      [REFRESH]: () => makePair({ access_token: 'access-2' }),
+    })
+    const seen = snapshotLog(harness.session)
+    const snapshot = await harness.session.completeSocialLogin('google', flow)
+    expect(snapshot.state).toBe('authenticated')
+    expect(harness.store.get()).toBe('access-1')
+    expect(harness.session.getSnapshot()).toEqual({
+      state: 'authenticated',
+      principal: principal(),
+      permissionSets: { tenant: null, system: null },
+    })
+    expect(harness.calls).toHaveLength(1)
+    expect(harness.calls[0]?.path).toBe(
+      '/api/v1/authn/social/google/callback',
+    )
+    expect(seen.map((s) => s.state)).toEqual(['authenticated'])
+    // The new session is a full login: the held refresh token is in
+    // place and rotates on the next refresh like any other login's.
+    await expect(harness.session.refresh()).resolves.toBe(true)
+    expect(harness.store.get()).toBe('access-2')
+  })
+
+  it('wipes host-attached permission sets like any other login', async () => {
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+      [SOCIAL_CALLBACK]: () => ({
+        tokens: makePair({ access_token: 'access-2' }),
+      }),
+    })
+    await harness.session.loginWithPassword({
+      identifier: 'ada@example.com',
+      password: 'pw',
+    })
+    harness.session.setPermissionSet('tenant', ['notes:write'])
+    harness.session.setPermissionSet('system', ['users:manage'])
+    await harness.session.completeSocialLogin('google', flow)
+    // Even the same user in the same tenant: a login starts a server
+    // session whose lists the host has not fetched yet.
+    expect(harness.session.getSnapshot().permissionSets).toEqual({
+      tenant: null,
+      system: null,
+    })
+    expect(harness.store.get()).toBe('access-2')
+  })
+
+  it('rejects the raw ApiError on failure and changes nothing', async () => {
+    const invalid = apiError(401, 'authn.oauth_state_invalid')
+    const harness = makeHarness({
+      [SOCIAL_CALLBACK]: () => {
+        throw invalid
+      },
+    })
+    const seen = snapshotLog(harness.session)
+    const error = await captureRejection(
+      harness.session.completeSocialLogin('google', {
+        code: 'stale',
+        state: 'stale',
+      }),
+    )
+    expect(error).toBe(invalid)
+    expect(harness.store.get()).toBeNull()
+    expect(harness.session.getSnapshot()).toEqual({
+      state: 'anonymous',
+      principal: null,
+      permissionSets: { tenant: null, system: null },
+    })
+    expect(seen).toHaveLength(0)
+  })
+
+  it('refuses a binding-shaped response before any state change', async () => {
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+      // A bound identity with no tokens -- the server's answer to an
+      // already-authenticated caller. This surface is a sign-in
+      // surface, so the flow must refuse it, not commit a session
+      // that carries no credentials.
+      [SOCIAL_CALLBACK]: () => ({ bound: true }),
+      [REFRESH]: () => makePair({ access_token: 'access-2' }),
+    })
+    await harness.session.loginWithPassword({
+      identifier: 'ada@example.com',
+      password: 'pw',
+    })
+    await expectProtocolViolation(
+      harness.session.completeSocialLogin('google', flow),
+      harness,
+    )
+    // The refused response consumed nothing: the pre-callback session
+    // stands and its held token family still refreshes.
+    await expect(harness.session.refresh()).resolves.toBe(true)
+    expect(harness.store.get()).toBe('access-2')
   })
 })
 

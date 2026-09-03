@@ -31,6 +31,16 @@ export const LOGOUT = 'POST /api/v1/authn/logout'
 export const REFRESH = 'POST /api/v1/authn/token/refresh'
 export const SWITCH_TENANT = 'POST /api/v1/authn/tenant/switch'
 export const STEP_UP = 'POST /api/v1/authn/mfa/step-up'
+export const REQUEST_SMS_CODE = 'POST /api/v1/authn/login/sms/request'
+export const REGISTER = 'POST /api/v1/authn/register'
+// The social endpoints embed the provider in the path, so the keys
+// below pin 'google' like the other constants pin their whole path.
+// A test that needs another provider writes its own literal key
+// (e.g. 'GET /api/v1/authn/social/feishu/authorize') -- the session
+// threads whatever provider string it is given through verbatim.
+export const SOCIAL_AUTHORIZE =
+  'GET /api/v1/authn/social/google/authorize'
+export const SOCIAL_CALLBACK = 'POST /api/v1/authn/social/google/callback'
 
 export function principal(
   userId = 'user-1',

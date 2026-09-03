@@ -10,9 +10,10 @@
  * through the same bindRequestFn seam a host's real client binds), and
  * a probe component renders the README's hook reads -- useAuthState,
  * useCurrentTenant, usePermission -- with login and logout called from
- * event handlers, exactly as the hooks' rules prescribe. The
- * real-client composition itself (silent-401 refresh through
- * createClient) is proven separately in session.test.ts.
+ * event handlers, exactly as the hooks' rules prescribe. The second
+ * journey below executes the README's registration-and-social code
+ * block verbatim. The real-client composition itself (silent-401
+ * refresh through createClient) is proven separately in session.test.ts.
  *
  * All strings are English fixtures standing in for a host's own
  * translations: data in a test file (exempt from the no-literal-text
@@ -35,10 +36,15 @@ import {
 } from './hooks'
 import {
   LOGIN_PASSWORD,
+  LOGIN_SMS,
   LOGOUT,
   makeHarness,
   makePair,
+  REGISTER,
+  REQUEST_SMS_CODE,
   snapshotLog,
+  SOCIAL_AUTHORIZE,
+  SOCIAL_CALLBACK,
 } from '../test-utils/session-harness'
 
 afterEach(() => {
@@ -153,6 +159,62 @@ describe('README usage example', () => {
       'authenticated',
       'authenticated',
       'anonymous',
+    ])
+  })
+
+  it('runs the README registration-and-social flow', async () => {
+    const harness = makeHarness({
+      [REGISTER]: () => ({
+        id: 'user-9',
+        email: 'ada@example.com',
+        display_name: 'Ada',
+      }),
+      [SOCIAL_AUTHORIZE]: () => ({
+        authorize_url: 'https://accounts.google.com/o/oauth2/v2/auth',
+      }),
+      [SOCIAL_CALLBACK]: () => ({ tokens: makePair() }),
+      [REQUEST_SMS_CODE]: () => undefined,
+      [LOGIN_SMS]: () => makePair({ access_token: 'access-2' }),
+    })
+    const transitions = snapshotLog(harness.session)
+
+    // Registering changes nothing: the response is the created user,
+    // and the host follows up with a login.
+    const user = await harness.session.register({
+      email: 'ada@example.com',
+      password: 'pw',
+      display_name: 'Ada',
+      locale: 'zh-CN',
+    })
+    expect(user.id).toBe('user-9')
+    expect(harness.store.get()).toBeNull()
+    expect(harness.session.getSnapshot().state).toBe('anonymous')
+
+    // The authorize URL is a pure request; the session never navigates.
+    const authorizeUrl = await harness.session.socialAuthorizeUrl('google', {
+      redirect_uri: 'https://app.example.com/social/callback/google',
+    })
+    expect(authorizeUrl).toContain('accounts.google.com')
+
+    // Completing the flow is a full login: store, snapshot, notify.
+    const socialSnapshot = await harness.session.completeSocialLogin(
+      'google',
+      { code: '4/0AX4Xf...', state: 'state-1' },
+    )
+    expect(socialSnapshot.state).toBe('authenticated')
+    expect(harness.store.get()).toBe('access-1')
+
+    // The SMS leg: request the code (202, no change), then sign in
+    // with it -- a second full login.
+    await harness.session.requestSMSCode({ phone: '+8613800138000' })
+    await harness.session.loginWithSMSCode({
+      phone: '+8613800138000',
+      code: '123456',
+    })
+    expect(harness.store.get()).toBe('access-2')
+    expect(transitions.map((snapshot) => snapshot.state)).toEqual([
+      'authenticated',
+      'authenticated',
     ])
   })
 })
