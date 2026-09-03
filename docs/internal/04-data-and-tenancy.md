@@ -30,6 +30,8 @@
 | **平台数据** | 全局共享，租户只读 | 否 | 平台级 Plan 定义、社交登录渠道配置、系统级配置、模块注册表 |
 | **关联数据** | 连接身份与租户的桥梁 | 是（按 tenant_id） | `memberships`（user_id × tenant_id × 角色） |
 
+> **实现状态注记（2026-09-03，M1 审计基础设施轮）**：`go/dbkit/audit` 的 `audit_events` 表是第三个"带真实 `tenant_id` 列、但不实现 `TenantScoped`"的平台数据表，与 `go/jobs` 的 `jobRecord`、`go/config` 的 `row` 同一模式——平台级事件用空字符串 sentinel 而非 NULL 表示"无租户"，租户级事件则写入真实 tenant_id；两者共存于同一张表，靠应用层区分，不靠 GORM 插件过滤。这正是本节开头"审计日志既有租户级也有平台级"的落地方式：该表既不能整体划入"租户数据"（会拒绝平台级记录），也不能整体划入"平台数据"（会丢失按租户检索的能力），所以采用"平台数据 + 真实 tenant_id 列"这一组合，用 `TestAuditEvent_DoesNotImplementTenantScoped` 类测试断言"不实现 `TenantScoped`"这一半，用 `ListByTenant` 的真实查询断言"tenant_id 列真实可用"这一半。
+
 **由此推导出的硬性规则：**
 
 1. **`users` 表不含 `tenant_id`**。用户与租户的关系由 `memberships` 表承载，这是一张标准的多对多桥表。任何"当前用户的租户"都要经 membership 解析，不能从 user 记录直接读。
