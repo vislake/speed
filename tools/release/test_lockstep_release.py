@@ -39,8 +39,9 @@ What the suite proves (M0 exit-condition evidence):
     before and after. The npm half of the proof reports which gate ran:
     the uniform-version JSON assertion always, and -- when pnpm is on
     PATH and web/node_modules exists in the live checkout -- a real
-    offline `pnpm pack` of every package proving the workspace:* rewrite
-    that publishing will need.
+    `pnpm pack` of every package proving the workspace:* rewrite that
+    publishing will need (no `--offline` flag: `pack` never touches the
+    network and pnpm 11 rejects the flag outright on that subcommand).
 """
 
 from __future__ import annotations
@@ -633,36 +634,47 @@ class SandboxProofTest(unittest.TestCase):
                 f"passed for {len(npm_packages)} packages "
                 f"(versions: {sorted(versions)})"
             )
-            packed = self._try_offline_pnpm_pack()
+            packed, reason = self._try_pnpm_pack()
             if packed is None:
                 print(
-                    "[self-test] npm gate: pnpm pack proof skipped -- pnpm "
-                    "not on PATH or web/node_modules absent in the live "
-                    "checkout; the uniform-version JSON assertion is the "
+                    f"[self-test] npm gate: pnpm pack proof skipped -- "
+                    f"{reason}; the uniform-version JSON assertion is the "
                     "M0 gate"
                 )
             else:
                 print(
-                    "[self-test] npm gate: offline pnpm pack proof ran for "
+                    f"[self-test] npm gate: pnpm pack proof ran for "
                     f"{packed} packages"
                 )
 
         # The live repository is untouched: same tag set as before.
         self.assertEqual(rel.list_existing_tags(LIVE_ROOT), self.live_tags_before)
 
-    def _try_offline_pnpm_pack(self) -> int | None:
-        """Pack every live web package offline; None when not possible."""
+    def _try_pnpm_pack(self) -> tuple[int | None, str]:
+        """Pack every live web package; (None, reason) when not possible.
+
+        No `--offline` flag: pnpm 11's `pack` subcommand does not accept
+        one at all ("Unknown option: 'offline'") -- it never touches the
+        network to begin with, since packing a workspace-local package
+        only reads files already on disk. An earlier version of this
+        helper passed `--offline` anyway, so every real invocation failed
+        and this proof silently downgraded to the weaker uniform-version
+        JSON assertion above on every run, while printing a skip reason
+        ("pnpm not on PATH or web/node_modules absent") that was false
+        whenever pnpm and node_modules were both present. The reason
+        string returned here is always the real one, not a guess.
+        """
         if shutil.which("pnpm") is None:
-            return None
+            return None, "pnpm not on PATH in the live checkout"
         if not os.path.isdir(os.path.join(LIVE_ROOT, "web", "node_modules")):
-            return None
+            return None, "web/node_modules absent in the live checkout"
         web_root = os.path.join(LIVE_ROOT, "web")
         packed = 0
         with tempfile.TemporaryDirectory() as dest:
             for name in ("@speed/i18n", "@speed/tokens", "@speed/ui-kit"):
                 proc = subprocess.run(
                     [
-                        "pnpm", "--offline", "--filter", name, "pack",
+                        "pnpm", "--filter", name, "pack",
                         "--pack-destination", dest,
                     ],
                     cwd=web_root,
@@ -671,13 +683,12 @@ class SandboxProofTest(unittest.TestCase):
                     check=False,
                 )
                 if proc.returncode != 0:
-                    print(
-                        f"[self-test] npm gate: pnpm pack of {name} failed "
-                        f"({proc.returncode}): {proc.stderr.strip()[:200]}"
+                    return None, (
+                        f"pnpm pack of {name} failed ({proc.returncode}): "
+                        f"{proc.stderr.strip()[:200]}"
                     )
-                    return None
                 packed += 1
-        return packed
+        return packed, f"pnpm pack succeeded for {packed} packages"
 
     def test_drift_negative_gate_exits_1(self) -> None:
         """A go/ module missing from go.work fails the CLI with exit 1."""
