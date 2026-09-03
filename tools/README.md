@@ -1,26 +1,7 @@
 # tools/ — repo scripts
 
 Plain, dependency-free Python scripts (standard library only, Python >= 3.11
-for `tomllib`) that back the repository's cross-cutting disciplines: five
-checkers and one scaffold generator. Three of the checkers are the
-local-run counterparts of the CI discipline checks scheduled in
-`docs/internal/18-cicd.md` (the table rows for banning CJK outside
-`docs/internal/`, for requiring identical zh-CN/en-US message-key sets, and
-for making every tenant-scoped Repository run the tenancytest isolation
-suite, all marked there as self-written scripts). The other two are repo
-self-checks rather than 18-cicd discipline rows: `tools/check_toolchain.py`
-gates the tool versions the root `.mise.toml` pins -- mirrors of the
-authoritative sources CI actually reads (Taskfile.yml header, `go.work`,
-`web/.nvmrc`, `web/package.json`, setup-go-env's `GOLANGCI_VERSION`) --
-proving the mirrors cannot drift, and pr-check's repo-checks job runs it;
-`tools/check_docs_site.py` validates the docs-site skeleton (required
-entry files, internal links, offline preview) and the docs-check pipeline
-runs it. CI workflows mount all of them under `tools/`. The generator is
-the backend of the `task new:module`
-promised by `docs/internal/19-dev-workflow.md`. Nothing here needs anything
-beyond `python3`, and the checkers print hit paths relative to their
-`--root`.
-
+for `tomllib`) that back the repository's cross-cutting disciplines and its release machinery: three discipline checkers, one scaffold generator, and the lockstep release coordinator (a release tool, not a discipline checker — it follows the same convention, which is why it lives here). The checkers are the local-run counterparts of the CI discipline checks scheduled in `docs/internal/18-cicd.md` (the table rows for banning CJK outside `docs/internal/`, for requiring identical zh-CN/en-US message-key sets, and for making every tenant-scoped Repository run the tenancytest isolation suite, all marked there as self-written scripts); CI workflows mount them under `tools/`. Two further scripts are repo self-checks rather than 18-cicd discipline rows: `tools/check_toolchain.py` gates the tool versions the root `.mise.toml` pins — mirrors of the authoritative sources CI actually reads (Taskfile.yml header, `go.work`, `web/.nvmrc`, `web/package.json`, setup-go-env's `GOLANGCI_VERSION`) — proving the mirrors cannot drift, and pr-check's repo-checks job runs it; `tools/check_docs_site.py` validates the docs-site skeleton (required entry files, internal links, offline preview) and the docs-check pipeline runs it. The generator is the backend of the `task new:module` promised by `docs/internal/19-dev-workflow.md`. The release coordinator (`release/lockstep-release.py`) is the M0 deliverable for the roadmap's lockstep-release item (`docs/internal/02-repo-and-release.md`, `docs/internal/18-cicd.md`), an offline verification of the full one-version release plan, wrapped by the root Taskfile's `release:plan` task and mounted by `.github/workflows/release.yml`; its unittest suite and go.mod fixtures live beside it under `tools/release/`. Nothing here needs anything beyond `python3`, and the checkers print hit paths relative to their `--root`.
 | Script | Kind | Enforces / does | Exit codes |
 |---|---|---|---|
 | `scan_cjk.py` | Checker | Root `CLAUDE.md` Language Rule: English everywhere outside `docs/internal/` | 0 clean / 1 violations / 2 error |
@@ -29,6 +10,7 @@ beyond `python3`, and the checkers print hit paths relative to their
 | `check_toolchain.py` | Checker | Root `.mise.toml` tool versions mirror their authoritative sources (Taskfile.yml header, `go.work`, `web/.nvmrc`, `web/package.json`, setup-go-env's `GOLANGCI_VERSION`) | 0 all mirrors match / 1 drift / 2 error |
 | `check_docs_site.py` | Checker | `docs/site/` skeleton structure: required entry files present, internal links resolve inside the tree, offline preview serves (python3 stdlib HTTP server) | 0 clean / 1 violation / 2 error |
 | `new_module.py` | Generator | Scaffolds the canonical stub of a new Go module under `go/<name>` and prints its registration checklist; never modifies shared repository files | 0 scaffolded / 2 refusal or validation error |
+| `release/lockstep-release.py` | Release verifier | Verifies the lockstep one-version release plan offline — derives the publishable set at runtime (go.work `use` entries under `go/` + `web/packages/*`) and checks version form, no duplicate tag, go.work-to-tree completeness both ways, uniform npm versions, changesets fixed-group coverage (`web/.changeset/config.json`); `--self-test` runs its unittest suite; `--apply` is a hard-gated local-tag mode (real publishing is M4's job) | 0 consistent plan / 1 inconsistent plan or self-test failure / 2 usage / 3 `--apply` refused |
 
 ## scan_cjk.py — CJK scanner
 
@@ -318,12 +300,13 @@ python3 tools/new_module.py NAME --description '...' --design-doc docs/internal/
 `--target-dir` defaults to the repository root, detected as the nearest
 ancestor containing `go.work`; the scaffold always lands at
 `<target>/go/<name>` and nothing is ever written outside it. After
-scaffolding, a registration checklist prints (go.work `use` entry, CI
-matrix row, lockstep release tag list, roadmap and navigation rows) as
-reminders — the script never edits those shared files itself, because a
-scaffolder that silently rewrites `go.work` and CI matrices makes review
-diffs unreadable; the checklist is the contract for the human or for the
-future Taskfile task.
+scaffolding, a registration checklist prints (go.work `use` entry — which
+is also the module's lockstep release registration, since the release
+coordinator derives its tag list from go.work at runtime — CI matrix row,
+roadmap and navigation rows) as reminders — the script never edits those
+shared files itself, because a scaffolder that silently rewrites `go.work`
+and CI matrices makes review diffs unreadable; the checklist is the
+contract for the human or for the future Taskfile task.
 
 Guardrails: an existing `go/<name>` is never overwritten (exit 2); the
 name must be lowercase letters, digits and single hyphens starting with a
@@ -338,6 +321,62 @@ ASCII line (the Language Rule would flag anything else in `doc.go`);
 repository yet — `docs/internal/19-dev-workflow.md` only names the future
 `task new:npm-package`; `--dry-run` prints the plan without writing
 anything.
+
+## lockstep-release.py — the lockstep release coordinator (M0)
+
+The repository's release rule (`docs/internal/02-repo-and-release.md`,
+`docs/internal/18-cicd.md`): every Go module and every npm package shares
+ONE version number and releases together — one tag per module under
+`go/`, `go/<module>/<version>` form — and the roadmap's M0 exit condition
+is that a single command can publish all of them at one version. This
+coordinator is that command's M0 deliverable, and the round is
+deliberately offline and verification-only:
+
+```
+python3 tools/release/lockstep-release.py v1.2.0   # print the one-version plan, verify consistency
+python3 tools/release/lockstep-release.py --self-test
+python3 -m unittest discover -s tools/release      # the same suite
+```
+
+The default mode derives the publishable set at runtime — the go.work
+`use` entries under `go/` for the Go half (a `use` entry IS a module's
+release registration; the checklist that `new_module.py` prints says so),
+`web/packages/*` for the npm half — and prints the full plan: every module
+with the tag it would get, every package with the version the
+`web/.changeset` fixed group would bump it to, closing with one aggregate
+line. Exit 0 only when the plan is consistent: the version has
+release-version form (`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`, the
+leading `v` required — the same pattern lives in the version-validation
+step of `.github/workflows/release.yml` and the two must stay in step), no
+tag exists for it yet, go.work and the `go/` tree are complete in both
+directions (a module missing from go.work, a `use` entry whose go.mod does
+not exist, or a stray module under `go/` not registered all fail loudly),
+the npm versions are uniform, and the changesets fixed group covers
+exactly the packages that exist. `examples/reference-app` is deliberately
+outside the publishable set — it is the repository's consumer module and
+keeps its `replace` lines; nothing under `go/` outside `go/` itself is
+published either.
+
+Exit codes: 0 plan consistent; 1 plan inconsistent or self-test failure;
+2 usage error (a version that is not of release form, unknown flags);
+3 `--apply` refused. `--apply` requires `--allow-local-tag-creation` and
+is refused otherwise: the gated mode creates LOCAL tags only (never
+pushed), and exists to exercise the tag-creation half of the machinery
+against a scratch git checkout. Real publishing — pushing tags, the
+changesets bump and `npm publish`, artifacts, the GitHub Release — is
+scheduled for the v1.0 release at M4, and `.github/workflows/release.yml`
+wires no publish credential, so no mode of the coordinator (or of that
+workflow) can publish for real.
+
+The coordinator also ships the first-release replace-cleanup engine
+(`first_release_replace_cleanup`, the rewrite of transitional
+`replace ... => ../<module>` lines into real versions that the first
+release performs) as pure functions exercised ONLY against the go.mod
+fixtures under `tools/release/testdata/`. Never run the engine against a
+live module go.mod: the tree keeps its transition state until M4.
+`tools/release/AGENTS.md` is the authority for this directory — its
+absolute prohibitions, and what must change when a module or package
+joins the tree.
 
 ## Running in CI and locally
 
@@ -360,3 +399,15 @@ these disciplines. The generator is a developer-time tool: run it when a
 roadmap item assigns a module a milestone, commit the three scaffolded
 files with the design doc, and perform the printed registrations in the
 same change.
+
+The release coordinator is wired the same way: `.github/workflows/
+release.yml` (a manual dispatch with a version number) validates the
+version form and then runs `python3 tools/release/lockstep-release.py
+"$VERSION"` followed by `--self-test`; locally, the root Taskfile's
+`task release:plan VERSION=v1.2.0` runs the verification form, or run the
+script directly from the repository root — the coordinator discovers the
+publishable set from the tree it runs in, so it must run at the
+repository root, exactly like the checkers' `--root` default. Its
+`--self-test` suite needs nothing but the standard library and a `git`
+binary; the sandbox proof inside it touches only scratch repositories and
+asserts the live tree's tags are untouched.

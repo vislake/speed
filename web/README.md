@@ -94,7 +94,19 @@ build`, ...) or with `pnpm --filter @speed/<name> <script>` from `web/`.
 
 ## What is not here yet
 
-`api-client`, `api-sdk`, Storybook, Playwright, changesets and the
-release tooling, and the web side of the app shell are all planned; see the
-repo roadmap (`docs/internal/15-roadmap.md`) and the CI workflow headers
-for what each round delivers.
+`api-client`, `api-sdk`, Storybook, Playwright and the web side of the
+app shell are all planned; see the repo roadmap
+(`docs/internal/15-roadmap.md`) and the CI workflow headers for what each
+round delivers.
+
+The lockstep release machinery exists in its M0, offline-verification
+form: the changesets bootstrap at `.changeset/` (the fixed version group
+over the three packages, `config.json` — no changesets entries or bump
+runs yet) and the release coordinator in `tools/release/`, which checks
+from the repository root that the fixed group covers exactly the
+packages that exist, that package versions are uniform, and that the Go
+half of the same one-version plan is consistent (`task release:plan
+VERSION=v1.2.0`; the `release` CI workflow runs the same verification on
+a manually dispatched version). Real publishing — changesets installed
+in `web/` with version and publish runs, npm packages actually released —
+is scheduled for the v1.0 release at M4.
