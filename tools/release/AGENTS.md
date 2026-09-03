@@ -68,12 +68,17 @@ The root `Taskfile.yml`'s `release:plan` task wraps the first form;
   `web/.changeset/config.json` in the same change — the coordinator's
   coverage check fails loudly otherwise.
 - **The module count changes:** nothing in this directory hard-codes it;
-  the closing aggregate line of the plan ("21 Go modules + 3 packages ->
+  the closing aggregate line of the plan ("21 Go modules + 5 packages ->
   v0.3.0") derives from the runtime discovery.
 - **A release-version rule changes:** the pattern
-  `^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$` lives in two places that
-  must stay in step: `VERSION_PATTERN` in `lockstep-release.py` and the
-  version-input validation step of `.github/workflows/release.yml`.
+  `^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$` is
+  contract language with two executable copies that must stay in step --
+  `VERSION_PATTERN` in `lockstep-release.py` and the version-input
+  validation step of `.github/workflows/release.yml` -- and five prose
+  copies that cite it verbatim: this file, `tools/README.md`, the
+  coordinator's own module docstring, `docs/internal/02-repo-and-release.md`
+  and `docs/internal/18-cicd.md`. Grep the pattern before changing it; a
+  stale copy is a false claim, not just drift.
 
 ## Adding a self-test
 

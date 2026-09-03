@@ -42,7 +42,7 @@ Modes:
   Prints the full plan -- every go/ module with the tag it would get,
   every npm package with the version the fixed group would bump it to --
   then the preflight results, and closes with one aggregated line
-  ("21 Go modules + 3 packages -> v0.3.0"). Exit 0 means the plan is
+  ("21 Go modules + 5 packages -> v0.3.0"). Exit 0 means the plan is
   consistent. Nothing is tagged, written, fetched or published.
 
   --self-test: runs this script's unittest suite offline (temp sandboxes
@@ -74,10 +74,13 @@ docs/internal/18-cicd.md, release.yml's header):
 Preflight checks (all must pass for exit 0):
 
   1. VERSION matches the release-version form
-     ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ -- the leading "v" is
-     required. This is the exact contract the CI workflow enforces on its
-     version input; the two copies must stay in step (both cite the
-     regex).
+     ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$
+     -- the leading "v" is required, and the pre-release part is a strict
+     semver subset: dot-separated identifiers that are each non-empty, so
+     forms git could never tag (v1.2.0-.., v1.2.0-x..y) are refused here
+     rather than at `git tag`. This is the exact contract the CI workflow
+     enforces on its version input; the two executable copies must stay
+     in step (both cite the regex).
   2. No tag for this version already exists (git tag -l, per module tag).
   3. The go/ tree is complete against go.work in both directions.
   4. web/ package versions are uniform and the changesets fixed group
@@ -98,14 +101,14 @@ Usage:
         --allow-local-tag-creation                          # LOCAL tags only
 
 Example, run from the repository root (output shape; the current tree
-carries 21 go/ modules and 3 web packages):
+carries 21 go/ modules and 5 web packages):
 
     $ python3 tools/release/lockstep-release.py v0.3.0
     Lockstep release plan for v0.3.0
     ================================
     ...
     [ok] ...
-    21 Go modules + 3 packages -> v0.3.0
+    21 Go modules + 5 packages -> v0.3.0
     $ echo $?
     0
 
@@ -132,7 +135,9 @@ import unittest
 # The release-version form: the leading "v" is required. Kept in step with
 # the version-input validation in .github/workflows/release.yml -- both
 # cite this exact pattern.
-VERSION_PATTERN = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$")
+VERSION_PATTERN = re.compile(
+    r"^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$"
+)
 
 # Module path prefix shared by every Go module in the monorepo, and the
 # prefix whose go.work entries are publishable (new_module.py names the
@@ -810,7 +815,10 @@ def main(argv: list[str] | None = None) -> int:
                      "release-version form (v prefix required), e.g. v1.2.0 "
                      "or v1.2.0-rc.1")
     version = args.version
-    if not VERSION_PATTERN.match(version):
+    # fullmatch, not match: re.match with a "$" anchor still accepts a
+    # trailing newline, so main() would have accepted a version the
+    # self-test (which has always used fullmatch) rejects.
+    if not VERSION_PATTERN.fullmatch(version):
         print(f"error: version {version!r} is not a release-version form: "
               "expected " + VERSION_PATTERN.pattern + " -- the leading 'v' "
               "is required (v1.2.0, v1.2.0-rc.1, ...)", file=sys.stderr)

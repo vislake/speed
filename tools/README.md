@@ -475,7 +475,7 @@ release registration; the checklist that `new_module.py` prints says so),
 with the tag it would get, every package with the version the
 `web/.changeset` fixed group would bump it to, closing with one aggregate
 line. Exit 0 only when the plan is consistent: the version has
-release-version form (`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`, the
+release-version form (`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`, the
 leading `v` required — the same pattern lives in the version-validation
 step of `.github/workflows/release.yml` and the two must stay in step), no
 tag exists for it yet, go.work and the `go/` tree are complete in both

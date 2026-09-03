@@ -139,6 +139,10 @@ class VersionPatternTest(unittest.TestCase):
             "v1.2.3_rc",      # underscore is not in the class
             "v1.2.3-rc@1",    # @ is not in the class
             "version-v1.2.3", # prefix junk
+            "v1.2.0-..",      # empty pre-release identifier; git rejects ".."
+            "v1.2.0-.",       # bare-dot pre-release; git rejects a trailing "."
+            "v1.2.0-x..y",    # empty identifier between two dots
+            "v1.2.3\n",       # trailing newline: main() must reject it too
             "",               # empty
         ]
         for version in invalid:
@@ -469,6 +473,18 @@ class CliGateTest(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("release-version form", err)
         self.assertIn("leading 'v'", err)
+
+    def test_version_with_a_trailing_newline_exits_2(self) -> None:
+        """main() validates with fullmatch, as the pattern tests do.
+
+        re.match with a "$" anchor accepts a trailing newline, so before
+        the fullmatch fix the CLI accepted a version the self-test's own
+        pattern assertions reject -- the two disagreed about the contract
+        they both claim to enforce.
+        """
+        rc, _, err = self._run_main("v1.2.3\n")
+        self.assertEqual(rc, 2)
+        self.assertIn("release-version form", err)
 
     def test_missing_version_exits_2(self) -> None:
         with self.assertRaises(SystemExit) as cm:

@@ -97,7 +97,7 @@
 
 **M0 状态注记（离线验证轮）：** 上面七步是完整目标。M0 发布脚本轮（roadmap M0 的"changesets / lockstep 发布脚本"条目）落地的是第一步的前置预检与第三步"脚本化打 tag"的离线半程，真实发布排到 v1.0（M4）：
 
-- **`.github/workflows/release.yml` 的现状 = 只验证、不发布**：手动触发、输入版本号（`workflow_dispatch` 的 `version` 输入承载版本号，第 1 步的"版本号未被占用"预检由协调器查重实现）。步骤为：校验版本号格式（正则 `^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`，v 必需；`workflow_dispatch` 输入不支持 pattern 校验，故用 grep 步骤）→ 跑发布协调器默认模式 → 跑协调器自测。工作流权限仅 `contents: read`，**不接任何发布凭据——它不可能真实发布，这是本轮的刻意设计**。
+- **`.github/workflows/release.yml` 的现状 = 只验证、不发布**：手动触发、输入版本号（`workflow_dispatch` 的 `version` 输入承载版本号，第 1 步的"版本号未被占用"预检由协调器查重实现）。步骤为：校验版本号格式（正则 `^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`，v 必需；`workflow_dispatch` 输入不支持 pattern 校验，故用 grep 步骤）→ 跑发布协调器默认模式 → 跑协调器自测。工作流权限仅 `contents: read`，**不接任何发布凭据——它不可能真实发布，这是本轮的刻意设计**。
 - **协调器 `tools/release/lockstep-release.py`**（默认模式 = 离线验证；`--self-test` = 自带 unittest 套件）：推导可发布集合（go.work `use` 条目 + `web/packages/*`），检查版本格式、查重（`git tag -l`——因此 checkout 必须 `fetch-depth: 0`，浅克隆看不到 tag 会静默废掉查重预检）、go.work↔`go/` 树双向完备、npm 版本统一、`web/.changeset/config.json` fixed 组恰好覆盖现存包，全绿后打印完整单版本发布计划（每模块 tag、每包 bump 后版本）。本地入口 `task release:plan VERSION=v1.2.0`。
 - **第 3 步（Go 发布）的两半**：打 tag 以硬闸本地模式存在于协调器（`--apply` 必须配 `--allow-local-tag-creation`，只创建本地、永不推送的 tag，仅用于在 scratch checkout 演练）；首次发布的 replace 清理以纯函数 + `tools/release/testdata/` 夹具交付，**严禁对真实 go.mod 运行**——树的过渡态保留到 v1.0（[02 仓库结构与发布](02-repo-and-release.md) 的 M0 注记）。
 - **第 2、4、5、6、7 步的接线逐一等待**：第 2 步等 pr-full 的全量编排成熟（当前 pr-full 只跑六模块 Docker 集成矩阵 + reference-app 单测）；第 4 步等 M4（changesets 未安装进 web/、仓库无 npm 凭据）；第 5 步等制品轮（goreleaser 配置、镜像构建、spec 合并工具均未落地）；第 6 步等 `scaffold-verify.yml` 脱离 gated stub（现状见根 CLAUDE.md）；第 7 步等 M4。预发布通道与回滚策略（见下）不变，随真实发布轮实现。
