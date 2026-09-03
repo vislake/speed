@@ -119,7 +119,7 @@ ctx, err = pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
 })
 ```
 
-- Callable only from `admin`, `compliance`, `jobs` and `authn`; enforced by depguard.
+- Callable only from `admin`, `compliance`, `jobs` and `authn` — plus `tenancy`'s audited wrapper `tenancy.WithSystemContext`, which business code should call instead of the raw primitive. The caller whitelist is enforced by code review / CODEOWNERS on `go/pkgcore` and `go/tenancy` plus the doc comments on both functions, NOT by depguard: depguard denies whole import paths per file and cannot single out one symbol (`WithSystemContext`) from the rest of an otherwise-needed package. `pkgcore`'s root package also holds `TenantID`/`WithTenant`/`apperr`, which `go/dbkit` — real code, not on the whitelist — legitimately imports; a draft rule shaped "only the whitelist may import `pkgcore`" flagged 23 of dbkit's pre-existing unrelated imports as collateral damage and was reverted. The full reasoning lives in the `.golangci.yml` depguard comment; making this checkable would mean moving `WithSystemContext` into its own `pkgcore` subpackage (a public API decision, not a lint-config side effect).
 - `Purpose` is an enum, not free text.
 - Keep the scope as narrow as possible — **DO NOT** enable it "conveniently" in middleware.
 - It bypasses tenant filtering only. **It never bypasses RBAC.**
