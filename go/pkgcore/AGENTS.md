@@ -2,7 +2,7 @@
 
 The dependency floor of the monorepo. Every other Go module imports it; it imports no other speed module.
 
-It owns five things and nothing else:
+It owns seven things and nothing else:
 
 | Concern | Where |
 |---|---|
@@ -12,8 +12,11 @@ It owns five things and nothing else:
 | The capability/registry/preset machinery `Kernel.Bootstrap` resolves and validates every seam through, and the eight built-in `Registration`s it pre-populates | `capability.go`, `seam_registry.go`, `preset.go`, `builtin_implementations.go` |
 | The merged backend message catalog, assembled by `Bootstrap` from every module's `Locales()` embed.FS | `i18n/` (+ `locales/`, pkgcore's own seed message files) |
 | The `DeploymentMode` enumeration (a topology declaration only -- see "Deployment mode and implementation composition" below) | `deployment_mode.go` |
+| The mandatory conformance suite for each seam, and the two conformance runs of every built-in implementation | `eventbustest/`, `kvstoretest/`, `mailertest/`, `objectstoretest/` (suites); `*_conformance_test.go` and `integration_test/` (runs) |
 
 Three subpackages: `apperr` (the structured application error every module returns), `config` (the bootstrap configuration loader, run once at process startup) and `i18n` (the message catalog backend-generated content is rendered through, on nicksnyder/go-i18n). `locales/` is the seed bundle `i18n` needs to load pkgcore's own messages.
+
+Four more subpackages, `eventbustest`, `kvstoretest`, `mailertest` and `objectstoretest`, hold one `AssertConforms` contract-test suite per infrastructure seam -- the mandatory conformance check every implementation of that seam, built-in or host-supplied, must pass. They play the same role for these four seams that `go/tenancy/tenancytest.AssertIsolated` plays for `dbkit.Repository[T]`: with N registered implementations per seam under the deployment-composition retrofit, drift between them is caught in one shared suite instead of pairwise. See "Contract tests" under Public API below.
 
 **Out of scope.** Database access (`dbkit`), tenant enforcement in SQL (`tenancy`), logging and tracing (`observability`), runtime and tenant-overridable configuration (the `config` *module*, not this `config` package), job execution (`jobs`). pkgcore declares contracts; it does not implement business behaviour.
 
@@ -146,6 +149,21 @@ What it is for, and the file contract, live in the package doc; the summary that
 
 pkgcore's own seed message bundle (`zh-CN.toml` + `en-US.toml`, embedded as `locales.FS`): one message per catalog shape (plain, parameterized, plural), phrased as real sentences about pkgcore. pkgcore renders no user-facing content in M0 — the seed set is the honest stand-in that exercises the machinery end to end and templates every module's own bundle; drop the seeds when pkgcore ships real messages.
 
+### Contract tests: `eventbustest`, `kvstoretest`, `mailertest`, `objectstoretest`
+
+| Signature | Purpose |
+|---|---|
+| `eventbustest.AssertConforms(t *testing.T, factory func() pkgcore.EventBus)` | A published event with no subscribers is a no-op; a single subscriber receives the exact `Event`; several handlers on the same type all run, in registration order; a handler on a different type is not invoked; a handler's error is reported by `Publish` without blocking the handlers after it |
+| `kvstoretest.AssertConforms(t *testing.T, factory func() pkgcore.KVStore)` | `Get` on a never-set key reports a miss, not an error; `Set`+`Get` round-trips the exact bytes; `Delete` removes a key and is a no-op on an absent one; a short-TTL key expires while a no-TTL key set at the same time survives the same wait; `IncrByFloat` starts a missing key at zero and accumulates, and fails with `pkgcore.ErrNotNumeric` on a non-numeric value without changing it; `CompareAndSwap` is set-if-absent on a missing key, swaps only on a matching old value, and leaves the value untouched on a mismatch; an already-cancelled context fails every operation with that context's error instead of performing it |
+| `mailertest.AssertConforms(t *testing.T, factory func() pkgcore.Mailer)` | Every rule `pkgcore.ErrInvalidMail` documents (empty From, no recipients, an empty recipient, a header line break, neither body set) is rejected before anything implementation-specific runs; an already-cancelled context fails `Send` instead of sending; a valid message reports success |
+| `objectstoretest.AssertConforms(t *testing.T, factory func() pkgcore.ObjectStore)` | `GetObject` on a never-put key reports `pkgcore.ErrObjectNotFound`; `PutObject`+`GetObject` round-trips the exact bytes unchanged, for a payload large enough to span multiple internal chunks; `PutObject`+`DeleteObject` makes a later `GetObject` report `ErrObjectNotFound` again; `DeleteObject` on a never-put key succeeds (idempotent delete); a second `PutObject` under the same key replaces the object whole |
+
+Each `AssertConforms` calls `t.Run` once per property it checks and calls `factory` once per subtest, so a factory whose backend is not reusable across calls (a fake relay wired to expect one connection, say) is safe to hand in, and a failure's subtest name says which property broke. `factory` is not required to return an empty-state instance -- every subtest derives its own key/event-type/message from the subtest name (or, for `mailertest`, uses fixed-shape messages that never collide), so several subtests can safely share one long-lived backend (a single Redis container, a single S3 bucket) without colliding, which is exactly what the Redis/MinIO integration legs below do.
+
+Every built-in implementation runs its matching suite: `eventbus_conformance_test.go`, `kv_conformance_test.go`, `mailer_conformance_test.go` and `objectstore_conformance_test.go` (package `pkgcore_test` -- an external test package, because each imports the seam's `*test` package, which itself imports `pkgcore`, and an internal `package pkgcore` test file importing that back would be an import cycle) run `NewMemoryEventBus`/`NewMemoryKVStore`/`NewConsoleMailer`+`NewSMTPMailer`/`NewLocalObjectStore` through `AssertConforms`; `integration_test/redis_eventbus_test.go`, `redis_kv_test.go` and `s3_objectstore_test.go` run the matching call against a real Redis/MinIO container (`-tags=integration`, Docker required). The SMTP leg needs no Docker: it scripts an in-process fake relay (`internal/testutil/fake_smtp_server.go`), so it lives in the plain unit tier alongside the other three memory/console/local legs. A host registering a new implementation on `EventBusRegistry`/`KVStoreRegistry`/`MailerRegistry`/`ObjectStoreRegistry`, or injecting one directly through `WithEventBus`/`WithKVStore`/`WithMailer`/`WithObjectStore`, is expected to run the matching `AssertConforms` against it the same way, per this file's own Rules section.
+
+`internal/testutil` holds `FakeSMTPServer`, the scripted SMTP relay `smtp_mailer_test.go`'s own wire-level tests and `mailer_conformance_test.go`'s SMTP leg both drive -- moved there once a second consumer needed it, rather than a second, drifting copy of the same fake, per the backend coding standard's shared-test-helper rule. It deliberately does not import `pkgcore` itself (only `pkgcore`'s own unexported-symbol tests, which are `package pkgcore`, need `SMTPConfig`/`NewSMTPMailer` to build a `pkgcore.Mailer` around a `FakeSMTPServer`, and `testutil` importing `pkgcore` back would make that an import cycle); each caller therefore builds its own few-line `pkgcore.Mailer` wrapper around `FakeSMTPServer.Addr()`.
+
 ## Typical integration
 
 Implementing a module:
@@ -226,6 +244,7 @@ Full runnable versions of all of the above live in `example_test.go` (the shared
 - Do not declare a `Capability` an implementation does not actually have, and do not add a new `Capability` bit without updating `String()`. `Kernel.Bootstrap`'s validation trusts the declaration, not the value: `WithEventBus(bus, pkgcore.MultiReplicaSafe)` on a bus that is not multi-replica-safe passes assembly and fails silently later, in production, under real replica count -- the one thing this whole mechanism exists to catch.
 - Do not expect `Kernel.Bootstrap` to fail an assembly for lacking `SurvivesRestart`. It logs a startup warning (via `log/slog`, since pkgcore cannot import `go/observability` -- see the dependency-direction rule below) and proceeds; losing state across a restart is a legitimate, deliberate choice for a throwaway or development composition, never a hard error.
 - Do not silently change an interface's semantics when adding an implementation. `NewRedisKVStore` preserves the in-memory store's observable behaviour; where a Redis-backed bus cannot (asynchronous cross-process delivery, JSON payload shape, failures of remote handlers unobservable, no catch-up), the difference is documented on the constructor and spelled out to consumers before they choose it.
+- Do not add a new implementation of `KVStore`, `EventBus`, `Mailer` or `ObjectStore` -- built-in or host-supplied -- without running that seam's `AssertConforms` against it. This is the mandatory conformance check the "Contract tests" section above documents; skipping it is how a new implementation quietly diverges from the contract the others honour.
 - Do not build a read-modify-write cycle out of `Get` + `Set`. Use `IncrByFloat` or `CompareAndSwap`; they are the only operations every backend can make atomic.
 - Do not retain or hand out a caller's byte slice in a `KVStore` implementation, and do not perform an operation on a cancelled context — return the context error instead.
 
