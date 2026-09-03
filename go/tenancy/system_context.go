@@ -75,16 +75,24 @@ var ErrAuditPublishFailed = apperr.Internal("tenancy.system_context_audit_publis
 // audited wrapper available and uses pkgcore's version directly. Any code
 // able to import tenancy should prefer this one.
 //
-// IMPORTANT -- what this does NOT do: granting a system context has no
-// effect on dbkit.Repository[T] (the sanctioned data-access path, backend
-// coding standard section 3.2) in either direction. Repository[T]'s
-// methods never consult pkgcore.SystemReasonFromContext at all, so
-// composing WithSystemContext with a Repository[T] call is currently
-// inert: it does not widen visibility beyond whatever tenant the context
-// already carries, and on a context with no tenant at all it does not
-// substitute for one either -- Repository[T] still fails closed with
-// pkgcore.ErrNoTenant exactly as if WithSystemContext had never been
-// called. This package's own tests prove it directly, not just assert
+// IMPORTANT -- what this does NOT do: granting a system context does not
+// widen what dbkit.Repository[T] (the sanctioned data-access path, backend
+// coding standard section 3.2) can see or touch. Repository[T] consults
+// pkgcore.SystemReasonFromContext in exactly one place, and only as a
+// refusal gate that demands the grant's presence, never as an amplifier
+// that widens a statement: dbkit's HardDelete (hard_delete.go, the
+// system-context-gated physical-delete path added after the mark-delete
+// round) refuses a plain tenant-scoped context with
+// dbkit.ErrHardDeleteRequiresSystemContext, and even with the gate passed
+// it operates strictly inside the ctx tenant's own rows. Every other
+// Repository[T] method never consults pkgcore.SystemReasonFromContext at
+// all, so composing WithSystemContext with one of them is inert: it does
+// not widen visibility beyond whatever tenant the context already carries,
+// and on a context with no tenant at all it does not substitute for one
+// either -- Repository[T] still fails closed with pkgcore.ErrNoTenant
+// exactly as if WithSystemContext had never been called (HardDelete fails
+// closed the same way when a system context is present but no tenant is).
+// This package's own tests prove it directly, not just assert
 // it: against a real dbkit.Repository[T], a system context granted on
 // top of an already tenant-scoped context never sees another tenant's
 // rows, and one granted on top of a context with no tenant at all still
@@ -96,9 +104,12 @@ var ErrAuditPublishFailed = apperr.Internal("tenancy.system_context_audit_publis
 // deliberately implements the cross-tenant escape hatch that dbkit's own
 // tenant_scope.go doc comment anticipates it will, WithSystemContext only
 // produces an audited record that the escape hatch was granted -- it does
-// not, by itself, unlock any cross-tenant Repository[T] read or write. A
-// genuine cross-tenant admin search or background job needs the raw-SQL
-// escape hatch (backend coding standards section 3.2) instead, today.
+// not, by itself, unlock any cross-tenant Repository[T] read or write.
+// HardDelete is not that escape hatch either: its gate is a who-may-ask
+// restriction on an operation that is tenant-scoped regardless, never a
+// route around tenant filtering. A genuine cross-tenant admin search or
+// background job needs the raw-SQL escape hatch (backend coding standards
+// section 3.2) instead, today.
 //
 // Two failure modes are handled differently:
 //
