@@ -486,18 +486,19 @@ func (s *hookedStore) GetObject(ctx context.Context, key string) (io.ReadCloser,
 }
 
 // TestDeriveService_DeriveThumbnail_DropsItsBytesWhenTheObjectDisappears
-// proves the convergence re-check: when the delete protocol removes the
-// object between this service's byte write and its row insert -- the full
-// protocol in one interleaving, or the mark alone in the other -- the
-// service drops the bytes it just wrote and converges on nil, leaving no
-// derivative row and no orphaned bytes behind for the sweep to find.
+// proves the convergence the insert gate provides: when the delete protocol
+// removes the object between this service's byte write and its row insert --
+// the full protocol in one interleaving, or the mark alone in the other --
+// insertDerivativeIfAbsent's object gate refuses the insert, and the service
+// drops the bytes it just wrote and converges on nil, leaving no derivative
+// row and no orphaned bytes behind for the sweep to find.
 func TestDeriveService_DeriveThumbnail_DropsItsBytesWhenTheObjectDisappears(t *testing.T) {
 	for _, tt := range []struct {
 		name  string
 		onPut func(t *testing.T, svc *ObjectService, ctx context.Context, objectID string)
 	}{
 		{
-			name: "the delete protocol finished before the re-check",
+			name: "the delete protocol finished before the row insert",
 			onPut: func(t *testing.T, svc *ObjectService, ctx context.Context, objectID string) {
 				t.Helper()
 				if _, err := svc.objects.markDeleting(ctx, objectID); err != nil {
@@ -509,7 +510,7 @@ func TestDeriveService_DeriveThumbnail_DropsItsBytesWhenTheObjectDisappears(t *t
 			},
 		},
 		{
-			name: "the object is marked deleting before the re-check",
+			name: "the object is marked deleting before the row insert",
 			onPut: func(t *testing.T, svc *ObjectService, ctx context.Context, objectID string) {
 				t.Helper()
 				if _, err := svc.objects.markDeleting(ctx, objectID); err != nil {

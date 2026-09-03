@@ -166,12 +166,16 @@ stored bytes before the full decode, so a worker never decodes an image the
 transfer pipeline already refused) — are errors, which is exactly what the
 jobs layer's retry policy exists for.
 
-The derive worker is the delete protocol's race partner, and the two converge
-as cleanup.go's header records: bytes the worker wrote after the delete's walk
-are dropped on the worker's own re-read, and the microsecond window the two
-still share is closed by the sweep, which treats a ghost derivative as an
-object's ordinary row and removes it — and the bytes it names — with the next
-resumed run (see "Known limitations").
+The derive worker is the delete protocol's race partner, and the derivative
+row's insert is where the two converge, as derive.go's and cleanup.go's
+headers record: the insert is gated in one transaction on the object's own
+row still existing and reading completed (repository.go's
+`insertDerivativeIfAbsent`), so a delete that removed the object first wins
+the gate — the insert is refused and the worker drops the bytes it just
+wrote, best effort — while a delete that races the gate blocks on the
+locked object row until the insert commits and its own row removal, object
+row first and derivative rows last, then removes what just landed. No
+window is left to close later.
 
 ## Ending object life: LifecycleService
 
@@ -353,15 +357,18 @@ plain unit suite under `-race`:
   through the kernel-resolved (real temp-dir) local store, not a fake;
 - `repository_test.go` — cursor listing plus `tenancytest.AssertIsolated` for
   both repositories, the delete protocol's row primitives (`markDeleting`,
-  `deleteObjectRows`, the state and expiry listings), and
+  `deleteObjectRows`, the state and expiry listings),
   `finalizeUpload`'s write-time deadline and guarded transition — the fix the
-  completion/sweep race needed, pinned from the repository side;
+  completion/sweep race needed, pinned from the repository side — and
+  `insertDerivativeIfAbsent`'s object-state gate (a refused insert lands no
+  row for an object that is gone, deleting or uploading — the close of the
+  delete/derive race, pinned from the repository side);
 - `derive_test.go` — the thumbnail pipeline: the exact-area-average downscaler
   (dimension math, alpha-weighted averaging), JPEG and PNG re-encoding at the
   configured edge, idempotent re-runs, logged skips on nothing-to-derive,
   store-failure errors, the pixel-ceiling re-check, the
-  object-disappears-mid-derive race (bytes dropped on re-read), and the
-  handler's task shape and payload refusal;
+  object-disappears-mid-derive race (the insert gate's refusal drops the
+  just-written bytes), and the handler's task shape and payload refusal;
 - `cleanup_test.go` — the delete protocol and the sweep: a full
   create→upload→complete→derive→delete journey whose `storage.object.deleted`
   lands exactly once (a second delete converges silently, cross-tenant runs see
@@ -420,15 +427,6 @@ invocation pr-full.yml's integration-tiers job runs for this module:
 - The completion event, the derive enqueue and the object-deleted publish all
   warn rather than fail their calls, by design; a host that needs delivery
   guarantees subscribes through the bus machinery those guarantees belong to.
-- **The delete/derive race keeps one microsecond window open.** The derive
-  worker drops its bytes when its re-read finds the object gone or deleting,
-  and the delete protocol removes every derivative row its walk lists — but a
-  derivative row inserted after that walk (its bytes written before the
-  deletion began) can still land behind the deletion. The gap is deliberately
-  not closed eagerly this round: the sweep treats such a ghost derivative as
-  an object's ordinary row and removes it, and the bytes it names, with the
-  next resumed run. derive.go's and cleanup.go's headers record the window so
-  a later round can decide whether eager reconciliation is worth it.
 - **Expiry is enforced by the sweep the host schedules, not by the module
   itself.** Nothing in the module runs a timer: expired uploads are reclaimed
   and expired objects deleted only when a host actually enqueues each tenant's
@@ -465,10 +463,6 @@ invocation pr-full.yml's integration-tiers job runs for this module:
   reclaimed`) but emit no audit rows. A host that needs rows now emits
   explicitly under the declared actions (the reference-app notes pattern);
   emission wiring is a later round of its own.
-- **Eager ghost-derivative reconciliation.** The microsecond delete/derive
-  window (see "Known limitations") is closed lazily by the sweep; an eager
-  reconciliation after a delete would shrink the window at the cost of another
-  protocol step and is deferred until a consumer reports the residue matters.
 - **Upload-credential and short-lived-read-URL machinery.** No presigner exists
   and none is imported: uploads stream through `Upload` and reads through
   `OpenContent` inside the server, which suits the standalone and small-replica

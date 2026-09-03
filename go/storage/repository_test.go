@@ -1094,17 +1094,26 @@ func idOf(rows []ObjectDerivative, i int) string {
 // a second insert of the same (object, kind) is a silent no-op -- the shape
 // a re-run after a crash between the byte write and the row insert takes --
 // and a different kind of the same object still inserts, because the skip
-// is per (object, kind), never per object.
+// is per (object, kind), never per object. The object the rows name is
+// seeded completed, the state the insert's object gate (below) requires.
 func TestDerivativeRepository_InsertDerivativeIfAbsent_InsertsOnce(t *testing.T) {
-	repo := NewDerivativeRepository(newTestDB(t))
+	db := newTestDB(t)
+	objRepo := NewObjectRepository(db)
+	repo := NewDerivativeRepository(db)
 	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	base := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
+	seedObject(t, objRepo, ctx, newCompleted("obj-1", "tenant-a", base))
 	row := newDerivative(t, "deriv-1", "obj-1", DerivativeKindThumbnail, "tenant-a", time.Now())
 
-	if err := repo.insertDerivativeIfAbsent(ctx, row); err != nil {
+	if refused, err := repo.insertDerivativeIfAbsent(ctx, row); err != nil {
 		t.Fatalf("first insertDerivativeIfAbsent: %v", err)
+	} else if refused {
+		t.Fatal("first insertDerivativeIfAbsent refused: the object is seeded completed")
 	}
-	if err := repo.insertDerivativeIfAbsent(ctx, row); err != nil {
+	if refused, err := repo.insertDerivativeIfAbsent(ctx, row); err != nil {
 		t.Fatalf("second insertDerivativeIfAbsent (the idempotent skip): %v", err)
+	} else if refused {
+		t.Fatal("second insertDerivativeIfAbsent refused: the object is still completed, the skip should answer")
 	}
 
 	rows, err := repo.listByObject(ctx, "obj-1")
@@ -1114,4 +1123,77 @@ func TestDerivativeRepository_InsertDerivativeIfAbsent_InsertsOnce(t *testing.T)
 	if len(rows) != 1 || rows[0].ID != "deriv-1" {
 		t.Errorf("listByObject returned %d rows, want exactly the one inserted (deriv-1)", len(rows))
 	}
+}
+
+// TestDerivativeRepository_InsertDerivativeIfAbsent_GatedOnTheObject pins
+// the object-state gate at the row layer: a derivative row may only be
+// inserted while the object's own row exists and reads completed at the
+// moment of the insert. The gate is what closes the delete/derive race --
+// an insert landing after the delete protocol's row removal ran (the object
+// row is gone) or while it is in flight (the object is marked deleting)
+// would be a ghost row no object row ever walks again, naming bytes the
+// protocol already removed or is about to remove. Each refused shape must
+// insert nothing; the completed shape is the one commit the derive pipeline
+// relies on.
+func TestDerivativeRepository_InsertDerivativeIfAbsent_GatedOnTheObject(t *testing.T) {
+	db := newTestDB(t)
+	objRepo := NewObjectRepository(db)
+	repo := NewDerivativeRepository(db)
+	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	base := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
+
+	assertRefused := func(t *testing.T, objectID, derivID string) {
+		t.Helper()
+		row := newDerivative(t, derivID, objectID, DerivativeKindThumbnail, "tenant-a", base)
+		refused, err := repo.insertDerivativeIfAbsent(ctx, row)
+		if err != nil {
+			t.Fatalf("insertDerivativeIfAbsent: %v", err)
+		}
+		if !refused {
+			t.Fatalf("insertDerivativeIfAbsent refused = false for object %q -- the gate let a ghost row through", objectID)
+		}
+		rows, err := repo.listByObject(ctx, objectID)
+		if err != nil {
+			t.Fatalf("listByObject: %v", err)
+		}
+		if len(rows) != 0 {
+			t.Fatalf("refused insert still landed %d row(s) for object %q (want 0)", len(rows), objectID)
+		}
+	}
+
+	t.Run("no object row", func(t *testing.T) {
+		assertRefused(t, "obj-missing", "deriv-missing")
+	})
+
+	t.Run("object marked deleting", func(t *testing.T) {
+		seedObject(t, objRepo, ctx, newCompleted("obj-deleting", "tenant-a", base))
+		if _, err := objRepo.markDeleting(ctx, "obj-deleting"); err != nil {
+			t.Fatalf("markDeleting: %v", err)
+		}
+		assertRefused(t, "obj-deleting", "deriv-deleting")
+	})
+
+	t.Run("object still uploading", func(t *testing.T) {
+		seedObject(t, objRepo, ctx, newUpload("obj-uploading", "tenant-a", base))
+		assertRefused(t, "obj-uploading", "deriv-uploading")
+	})
+
+	t.Run("completed object's insert commits", func(t *testing.T) {
+		seedObject(t, objRepo, ctx, newCompleted("obj-completed", "tenant-a", base))
+		row := newDerivative(t, "deriv-completed", "obj-completed", DerivativeKindThumbnail, "tenant-a", base)
+		refused, err := repo.insertDerivativeIfAbsent(ctx, row)
+		if err != nil {
+			t.Fatalf("insertDerivativeIfAbsent: %v", err)
+		}
+		if refused {
+			t.Fatal("insertDerivativeIfAbsent refused for a completed object")
+		}
+		rows, err := repo.listByObject(ctx, "obj-completed")
+		if err != nil {
+			t.Fatalf("listByObject: %v", err)
+		}
+		if len(rows) != 1 || rows[0].ID != "deriv-completed" {
+			t.Errorf("listByObject returned %d rows, want exactly deriv-completed", len(rows))
+		}
+	})
 }

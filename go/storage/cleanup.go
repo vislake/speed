@@ -18,14 +18,17 @@ package storage
 // interrupted at any step leaves work that the next run converges, not
 // duplicates.
 //
-// The protocol's race partner is the derive worker, and the two converge as
-// derive.go's header records: bytes the worker wrote after this protocol's
-// walk are dropped on its own re-read, and the microsecond window the two
-// still share is closed by the sweep, which treats a ghost derivative as an
-// object's ordinary row and removes it -- and the bytes it names -- with the
-// next resumed run. Sweep itself is what makes interrupted deletions
-// finish: deleting rows exist only because a Delete did not finish, and the
-// sweep's first phase re-runs the protocol over each of them.
+// The protocol's race partner is the derive worker, and the derivative
+// row's insert is where the two converge, as derive.go's header records:
+// the insert is gated in one transaction on the object's own row still
+// existing and completed, so a delete that removed the row first wins (the
+// gate refuses the insert and the worker drops its bytes), while a delete
+// that races the gate blocks on the locked object row until the insert
+// commits and its own row removal -- object row first, then derivative
+// rows -- then removes what just landed. No window is left to close later.
+// Sweep itself is what makes interrupted deletions finish: deleting rows
+// exist only because a Delete did not finish, and the sweep's first phase
+// re-runs the protocol over each of them.
 //
 // # The sweep's clock
 //
@@ -153,9 +156,13 @@ func newLifecycleService(objects *ObjectRepository, derivatives *DerivativeRepos
 //  3. The derivative rows are listed in the repository's deterministic
 //     order and each derivative's bytes are removed, stopping on the first
 //     store error for the same reason as step 2.
-//  4. deleteObjectRows removes the derivative rows and the object row in
+//  4. deleteObjectRows removes the object row and the derivative rows in
 //     one transaction -- the protocol's commit point, after which no row
-//     references the deleted bytes anywhere.
+//     references the deleted bytes anywhere. The object row goes first on
+//     purpose: it is the row a concurrent derive insert's gate locks, so
+//     deleting it first makes this transaction's derivative-row removal
+//     the race's last statement and removes whatever the gate admitted
+//     while this deletion was waiting (repository.go's deleteObjectRows).
 //
 // The run whose row removal commits -- exactly one, however many runs raced
 // over the object -- logs the deletion and publishes EventObjectDeleted.

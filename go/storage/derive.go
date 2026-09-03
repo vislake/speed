@@ -21,18 +21,25 @@ package storage
 // undecodable content, an over-limit pixel count) are errors, and those are
 // exactly what the jobs layer's retry policy exists for.
 //
-// Deriving is the delete protocol's race partner, and the two converge: the
-// object row this service read may be marked deleting and removed while the
-// bytes above are being produced. The protocol removes whatever derivative
-// rows exist when it walks the object; this service re-reads the row after
-// its own byte write and, when the object is gone or deleting by then, drops
-// the bytes it just wrote. A microsecond window remains -- the delete's row
-// walk and this service's insert can still interleave so a row lands after
-// the walk -- and is deliberately not closed further this round: the sweep
-// that resumes interrupted deletions treats a ghost derivative as an
-// object's ordinary row and removes it with the next resumed run, and the
-// bytes it names with it. The gap is recorded here so a later round can
-// decide whether it is worth reconciling eagerly.
+// Deriving is the delete protocol's race partner, and the derivative row's
+// insert is where the two converge: the object row this service read may be
+// marked deleting and removed while the bytes above are being produced, so
+// the insert is gated -- in the same transaction as the row write itself --
+// on the object's own row still existing and reading completed at the
+// moment of the insert (repository.go's insertDerivativeIfAbsent). A delete
+// that removes the object first wins the gate: the insert is refused, and
+// this service drops the bytes it just wrote (best effort) and converges on
+// nil, never leaving a derivative row no object row will ever walk, or
+// bytes nothing references. A delete that races the gate instead blocks on
+// the object row the gate locked until this insert commits, and its own row
+// removal -- deleteObjectRows deletes the object row first and the
+// derivative rows last -- then removes the row that just landed. There is
+// no separate post-write re-read to race anymore: the gate is atomic with
+// the insert where a re-read was not, so no interleaving can slip a
+// derivative row past a completed deletion. (The gate's row lock is a
+// genuine FOR UPDATE on PostgreSQL; the SQLite driver has no row locks and
+// the clause vanishes, SQLite's single-writer serialization answering a
+// racing writer with a busy error the queue's retry converges.)
 
 import (
 	"bytes"
@@ -243,29 +250,6 @@ func (s *DeriveService) DeriveThumbnail(ctx context.Context, objectID string) er
 		return ErrStoreError.WithCause(err)
 	}
 
-	// The convergence re-check: the delete protocol may have marked and
-	// removed this object while the bytes above were decoded and written. A
-	// derivative row inserted for an object whose own rows are gone would be
-	// a ghost the sweep only finds later, and the bytes this run just wrote
-	// would outlive every reference to them -- the protocol's byte walk only
-	// covers the rows it collected, and this run's row was not among them.
-	// So re-read the row before inserting: when the object is gone or
-	// deleting, drop the bytes this run wrote (best effort -- a failed drop
-	// leaves at worst orphaned bytes, never a row pointing at them) and
-	// converge on nil.
-	current, err := findObjectByID(ctx, s.objects, objectID)
-	if err != nil {
-		if hasCode(err, ErrObjectNotFound.Code) {
-			s.dropDerivativeBytes(ctx, st, objectID, derivKey)
-			return nil
-		}
-		return err
-	}
-	if current.State != ObjectStateCompleted {
-		s.dropDerivativeBytes(ctx, st, objectID, derivKey)
-		return nil
-	}
-
 	w, h := thumb.Bounds().Dx(), thumb.Bounds().Dy()
 	derivative := ObjectDerivative{
 		ID:          uuid.NewString(),
@@ -278,8 +262,25 @@ func (s *DeriveService) DeriveThumbnail(ctx context.Context, objectID string) er
 		Width:       &w,
 		Height:      &h,
 	}
-	if err := s.derivatives.insertDerivativeIfAbsent(ctx, derivative); err != nil {
+	// The insert is where this service converges with a delete that marked
+	// or removed the object while the bytes above were decoded and written:
+	// insertDerivativeIfAbsent's object-state gate (repository.go) refuses --
+	// in the same transaction as the insert -- when the object's own row is
+	// gone or no longer completed. That atomicity is what the re-read this
+	// service used to perform here after its byte write could not give: no
+	// interleaving can slip a row past a completed deletion anymore. A
+	// refused insert means the bytes this run just wrote have no row that
+	// can reference them, so they are dropped (best effort -- a failed drop
+	// leaves at worst orphaned bytes, never a row pointing at them) and the
+	// run converges on nil, no different from a derive that found nothing
+	// to do.
+	refused, err := s.derivatives.insertDerivativeIfAbsent(ctx, derivative)
+	if err != nil {
 		return err
+	}
+	if refused {
+		s.dropDerivativeBytes(ctx, st, objectID, derivKey)
+		return nil
 	}
 	observability.FromContext(ctx).Info("thumbnail derived",
 		"object_id", objectID, "kind", DerivativeKindThumbnail,

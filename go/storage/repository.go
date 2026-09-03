@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/vislake/speed/go/dbkit"
 )
@@ -233,8 +234,8 @@ func (r *ObjectRepository) finalizeUpload(ctx context.Context, row *Object, now 
 	return done, nil
 }
 
-// deleteObjectRows removes one object's rows -- its derivative rows and
-// then the object row itself -- in a single transaction, the protocol's
+// deleteObjectRows removes one object's rows -- the object row itself and
+// then its derivative rows -- in a single transaction, the protocol's
 // commit point: before it, every earlier step (mark, byte deletion) is
 // resumable by re-running the protocol; after it, no row references the
 // deleted bytes anywhere. Deleting zero rows is not an error: the caller
@@ -249,21 +250,37 @@ func (r *ObjectRepository) finalizeUpload(ctx context.Context, row *Object, now 
 // exactly one deleted event is published. A run that removed nothing (the
 // row vanished between its mark and here) announces nothing.
 //
+// The object row is deleted before the derivative rows on purpose: the
+// object row is the lock insertDerivativeIfAbsent's object-state gate
+// holds, and reaching for it first serializes this transaction against
+// every concurrent gate-holding insert at the transaction's first
+// statement. Deleting the derivative rows first would leave a window no
+// lock can close -- a derivative insert that committed while this
+// transaction waited on the object row would land after this
+// transaction's own derivative-row DELETE had already run, and would
+// survive it: a ghost row naming bytes the protocol is about to remove,
+// whose object row is gone and that nothing ever walks again. With the
+// object row first, the derivative-row DELETE is this transaction's last
+// statement, so an insert the gate admitted commits before it (the gate
+// holds the object row this transaction is waiting on) and is removed by
+// it, and an insert that arrives after this transaction commits is
+// refused by the gate.
+//
 // The two Deletes run through the isolation plugin like every statement in
 // this file: WHERE tenant_id = ? is injected from the context, so the
 // object row and each derivative row can only be removed by their own
 // tenant.
 func (r *ObjectRepository) deleteObjectRows(ctx context.Context, objectID string) (removed bool, err error) {
 	err = dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
-		delRes := tx.Where("object_id = ?", objectID).Delete(&ObjectDerivative{})
-		if delRes.Error != nil {
-			return delRes.Error
-		}
 		res := tx.Where("id = ?", objectID).Delete(&Object{})
 		if res.Error != nil {
 			return res.Error
 		}
 		removed = res.RowsAffected > 0
+		delRes := tx.Where("object_id = ?", objectID).Delete(&ObjectDerivative{})
+		if delRes.Error != nil {
+			return delRes.Error
+		}
 		return nil
 	})
 	if err != nil {
@@ -348,7 +365,8 @@ func (r *ObjectRepository) listExpiredCompleted(ctx context.Context, before time
 // promoted methods: listByObject, the "everything one object has" listing
 // the delete protocol walks before removing bytes, and
 // insertDerivativeIfAbsent, the idempotent write that makes re-running a
-// derive a no-op.
+// derive a no-op, its insert additionally gated on the object still being
+// completed so the delete/derive race closes at the row level.
 type DerivativeRepository struct {
 	*dbkit.Repository[ObjectDerivative]
 
@@ -397,21 +415,66 @@ func (r *DerivativeRepository) listByObject(ctx context.Context, objectID string
 // primary mechanism -- the pipeline never parses a dialect's unique-
 // violation text -- and the jobs layer's idempotency key already collapses
 // concurrent derives of one object into one task.)
-func (r *DerivativeRepository) insertDerivativeIfAbsent(ctx context.Context, row ObjectDerivative) error {
-	return dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+//
+// The insert is additionally gated on the object the row names: a
+// derivative row may only be committed while the object's own row still
+// exists and reads completed at the moment of the insert, checked inside
+// this same transaction as a locked read of the object row (clause.Locking
+// -- a genuine FOR UPDATE on PostgreSQL; the SQLite driver has no row
+// locks and drops the clause, its single-writer serialization answering a
+// concurrent writer with a busy error the caller's retry converges). The
+// returned bool is whether the gate refused: true when the object's row is
+// gone or not completed -- the delete protocol won the race, and the
+// caller drops the bytes it just wrote and converges on nil, never
+// committing a derivative row no object row will ever walk -- false when
+// the row was inserted or already existed.
+//
+// The gate precedes the existence check on purpose: the refused caller
+// discards its just-written bytes, and that discard is only safe while no
+// row can still reference them. Gate first makes refused imply the object
+// is not completed -- its rows belong to a delete protocol that is
+// removing, or has removed, the bytes it walks -- so the discard never
+// deletes content a live row names. An existence check that ran first
+// could answer "already derived" for an object the delete protocol was
+// mid-way through, leaving the caller's just-written bytes orphaned once
+// the protocol's own byte removal had already run.
+func (r *DerivativeRepository) insertDerivativeIfAbsent(ctx context.Context, row ObjectDerivative) (bool, error) {
+	refused := false
+	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		// The object-state gate: only a completed object whose row still
+		// exists may gain a derivative. The lock is what closes the
+		// delete/derive race -- a delete that reaches deleteObjectRows
+		// blocks on this row until this transaction commits, and its
+		// derivative-row removal runs after this insert in that case;
+		// a delete that commits first leaves no completed row to find.
+		var object Object
+		gateErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND state = ?", row.ObjectID, ObjectStateCompleted).
+			First(&object).Error
+		if errors.Is(gateErr, gorm.ErrRecordNotFound) {
+			refused = true
+			return nil
+		}
+		if gateErr != nil {
+			return gateErr
+		}
 		var existing ObjectDerivative
-		err := tx.Where("object_id = ? AND kind = ?", row.ObjectID, row.Kind).
+		findErr := tx.Where("object_id = ? AND kind = ?", row.ObjectID, row.Kind).
 			First(&existing).Error
-		if err == nil {
+		if findErr == nil {
 			// Already derived -- the idempotent skip.
 			return nil
 		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrInternal.WithCause(err)
+		if !errors.Is(findErr, gorm.ErrRecordNotFound) {
+			return findErr
 		}
-		if err := tx.Create(&row).Error; err != nil {
-			return ErrInternal.WithCause(err)
+		if createErr := tx.Create(&row).Error; createErr != nil {
+			return createErr
 		}
 		return nil
 	})
+	if err != nil {
+		return false, ErrInternal.WithCause(err)
+	}
+	return refused, nil
 }
