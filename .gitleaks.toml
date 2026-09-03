@@ -2,22 +2,25 @@
 #
 # The default rule set is extended (no rule is disabled or added): this
 # file exists only to carry the one allowlist the tree genuinely needs.
-# Findings in the go/observability test files below are planted fixtures,
+# Findings in the go/observability redaction tests are planted fixtures,
 # not leaks: the observability module's redaction layer is tested by
 # logging deliberately secret-shaped stand-in values and asserting they
 # never reach a sink in plaintext (see the file-header comment in
 # go/observability/redact_test.go -- "testSecret and friends are stand-in
 # secret values the tests below log and then assert never reach the sink
-# in plaintext"). Those literals are the point of the code, so the files
-# are exempted by path.
+# in plaintext"). Those literals are the point of the code, so the three
+# files are exempted by path -- the allowlists block at the bottom of
+# this file lists them.
 #
-# The exemption is scoped to exactly the three fixture files above; the
-# scan keeps firing on every other file in the tree and in history. Real
-# credentials must never enter these files either -- code review and the
-# files' own fixture-only comments guard that, and the repository holds
-# no real credentials anywhere (see the SECRETS note in
-# .github/workflows/security.yml). Any further allowlist need must arrive
-# with its own justification in this comment.
+# The exemption is scoped to exactly those three fixture files; the scan
+# keeps firing on every other file in the tree and in the commit history
+# (the security pipeline's secrets job checks out the full history -- see
+# .github/workflows/security.yml). Real credentials must never enter
+# these files either -- code review and the files' own fixture-only
+# comments guard that, and the repository holds no real credentials
+# anywhere (see the SECRETS note in .github/workflows/security.yml). Any
+# further allowlist need must arrive with its own justification in this
+# comment.
 
 title = "speed gitleaks config"
 
