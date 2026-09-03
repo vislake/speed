@@ -6,6 +6,7 @@ import (
 	"embed"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -1699,6 +1700,46 @@ func TestBootstrap_WiresTheDeploymentModeKVStoreIntoTheRegistry(t *testing.T) {
 				t.Errorf("uninjected store recorded %d sets, want 0", got)
 			}
 		})
+	}
+}
+
+// TestBootstrap_WarnsOncePerNonSurvivingStatefulSeam pins the startup banner
+// of docs/internal/03-deployment-modes.md's constraint 5 to the standalone
+// preset's actual shape: a resolved seam whose implementation keeps state
+// without declaring SurvivesRestart warns once, naming the seam, while a
+// Stateless implementation is skipped -- mailer.console hands each message
+// to its writer and keeps nothing, so a restart drops nothing it holds and a
+// banner over it would be vacuous. The default standalone bootstrap
+// therefore prints exactly three warnings (eventbus.memory, kv.memory,
+// objectstore.local) and never one for the mailer.
+//
+// The slog default logger is process-global, so the test swaps it for a
+// capture handler and restores it on the way out. It must not run in
+// parallel with another test that bootstraps a Kernel; the package's
+// t.Parallel tests only resume after every sequential test has finished, so
+// this one never overlaps them.
+func TestBootstrap_WarnsOncePerNonSurvivingStatefulSeam(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(previous)
+
+	reg, err := NewKernel().Bootstrap(context.Background())
+	if err != nil {
+		t.Fatalf("Bootstrap() error = %v, want nil", err)
+	}
+	if reg == nil {
+		t.Fatal("Bootstrap() returned a nil registry alongside a nil error")
+	}
+
+	out := buf.String()
+	for _, want := range []string{"eventbus.memory", "kv.memory", "objectstore.local"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("standalone bootstrap logged %q, want a restart warning naming %q", out, want)
+		}
+	}
+	if strings.Contains(out, "mailer.console") {
+		t.Errorf("standalone bootstrap logged %q, want no restart warning for the stateless mailer.console", out)
 	}
 }
 

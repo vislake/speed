@@ -895,15 +895,19 @@ func validateSeamCapability(res seamResolution, required Capability, mode Deploy
 		ErrCapabilityUnsatisfied, res.seamKey, res.implementation, missing, mode)
 }
 
-// warnIfNotDurable logs a startup warning when res does not declare
-// SurvivesRestart, per docs/internal/03-deployment-modes.md's rule that an
-// implementation whose state does not outlive the process must announce
-// itself at startup. This is a property of the resolved implementation, not
-// of the deployment mode -- DeploymentModeStandalone never requires
-// SurvivesRestart, but a standalone composition can still choose to be
-// warned about it -- so it runs for every seam, in every mode, never failing
-// the bootstrap: losing state across a restart is a legitimate, deliberate
-// choice for a development or throwaway composition.
+// warnIfNotDurable logs a startup warning when res keeps state of its own
+// without declaring SurvivesRestart, per docs/internal/03-deployment-modes.md's
+// rule that an implementation whose state does not outlive the process must
+// announce itself at startup. A Stateless implementation is skipped: it
+// holds nothing in the process for a restart to drop, so a banner over it
+// would name no loss -- the mailer.console warning every default standalone
+// bootstrap used to print was exactly that vacuous noise. This is a property
+// of the resolved implementation, not of the deployment mode --
+// DeploymentModeStandalone never requires SurvivesRestart, but a standalone
+// composition can still choose to be warned about it -- so it runs for every
+// seam, in every mode, never failing the bootstrap: losing state across a
+// restart is a legitimate, deliberate choice for a development or throwaway
+// composition.
 //
 // pkgcore is the dependency floor of the workspace and cannot import
 // go/observability (the reverse direction; see
@@ -913,7 +917,7 @@ func validateSeamCapability(res seamResolution, required Capability, mode Deploy
 // request path, so the absence of trace/tenant correlation this one call
 // site would otherwise lose is immaterial.
 func warnIfNotDurable(res seamResolution) {
-	if res.capabilities.Has(SurvivesRestart) {
+	if res.capabilities.Has(SurvivesRestart) || res.capabilities.Has(Stateless) {
 		return
 	}
 	slog.Default().Warn("pkgcore: seam implementation does not survive a process restart",

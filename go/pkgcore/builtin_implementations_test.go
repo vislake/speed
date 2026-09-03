@@ -67,8 +67,8 @@ func TestBuiltinMailerRegistry_ResolvesEveryDocumentedName(t *testing.T) {
 	if impl == nil {
 		t.Error("Build(\"mailer.console\") returned a nil Mailer")
 	}
-	if caps != 0 {
-		t.Errorf("Build(%q) capabilities = %v, want 0", "mailer.console", caps)
+	if caps != Stateless {
+		t.Errorf("Build(%q) capabilities = %v, want Stateless", "mailer.console", caps)
 	}
 
 	impl, caps, err = MailerRegistry.Build("mailer.smtp", Config{"host": "smtp.example.com"})

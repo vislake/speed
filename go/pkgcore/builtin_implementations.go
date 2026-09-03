@@ -91,8 +91,12 @@ func newBuiltinKVStoreRegistry() *SeamRegistry[KVStore] {
 func newBuiltinMailerRegistry() *SeamRegistry[Mailer] {
 	r := NewSeamRegistry[Mailer]()
 	mustRegister(r, Registration[Mailer]{
+		// Stateless: each Send writes the message to its writer and returns,
+		// so a restart drops nothing this implementation holds -- which is
+		// why Bootstrap must not print the non-survives-restart banner over
+		// it (see Stateless's own doc comment in capability.go).
 		Name:         "mailer.console",
-		Capabilities: 0,
+		Capabilities: Stateless,
 		New:          func(Config) (Mailer, error) { return NewConsoleMailer(), nil },
 	})
 	mustRegister(r, Registration[Mailer]{

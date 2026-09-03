@@ -13,10 +13,10 @@ import (
 // implementation, it only states which capabilities the composition it runs
 // must have, and Kernel.Bootstrap compares the two.
 //
-// The set is deliberately small today -- MultiReplicaSafe and SurvivesRestart
-// are the two properties docs/internal/03-deployment-modes.md's capability
-// table names -- and is meant to grow by adding a row to that table and a
-// bit here, never by adding a new kind of switch elsewhere.
+// The set is deliberately small today -- MultiReplicaSafe, SurvivesRestart
+// and Stateless are the three properties docs/internal/03-deployment-modes.md's
+// capability table names -- and is meant to grow by adding a row to that
+// table and a bit here, never by adding a new kind of switch elsewhere.
 type Capability uint8
 
 const (
@@ -41,6 +41,18 @@ const (
 	// over its absence; it logs a startup warning instead, naming the seam
 	// and the implementation, so the choice is visible rather than silent.
 	SurvivesRestart
+
+	// Stateless means the implementation keeps no state of its own in the
+	// process: it hands each unit of work straight to whatever lies outside
+	// it and keeps nothing back, so a restart drops nothing it holds.
+	// mailer.console is the built-in example -- each Send writes the message
+	// to its writer and returns, leaving no queue, buffer or connection
+	// behind. The bit exists so assembly can tell an implementation with
+	// nothing to lose from one that holds state but does not declare
+	// SurvivesRestart: Kernel.Bootstrap warns about the latter at startup
+	// and stays silent about the former, whose warning would name no loss at
+	// all (see warnIfNotDurable).
+	Stateless
 )
 
 // capabilityNames lists every named bit in declaration order, so String
@@ -52,6 +64,7 @@ var capabilityNames = []struct {
 }{
 	{MultiReplicaSafe, "MultiReplicaSafe"},
 	{SurvivesRestart, "SurvivesRestart"},
+	{Stateless, "Stateless"},
 }
 
 // Has reports whether c declares every bit set in want. An empty want (the
