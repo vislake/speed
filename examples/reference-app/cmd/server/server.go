@@ -25,10 +25,12 @@ import (
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
+	"github.com/vislake/speed/go/jobs"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/rbac"
+	"github.com/vislake/speed/go/storage"
 	"github.com/vislake/speed/go/tenancy"
 
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
@@ -480,12 +482,13 @@ func configFromEnv() (serverConfig, error) {
 	}, nil
 }
 
-// buildServer wires the reference app's Kernel, the authn and notes
-// Modules, their migrations, and the authn+tenancy middleware chain into a
-// single http.Handler. It is the one place that wiring logic lives -- both
-// main() and server_test.go's/authn_e2e_test.go's end-to-end tests call it,
-// so the two can never drift into testing a different wiring than the one
-// that actually runs.
+// buildServer wires the reference app's Kernel -- the authn, notes, org,
+// config, rbac, audit and storage Modules -- their migrations, the
+// storage queue, and the authn+tenancy middleware chain into a single
+// http.Handler. It is the one place that wiring logic lives -- main() and
+// the end-to-end tests (server_test.go, authn_e2e_test.go and
+// storage_flow_test.go) all call it, so the two can never drift into
+// testing a different wiring than the one that actually runs.
 //
 // It returns the composed handler and a cleanup function that closes
 // everything buildServer opened (the services, the injected Redis bus and
@@ -546,18 +549,25 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	}
 
 	// configService and rbacService are filled by their Attach calls below
-	// (nil until then); redisBus and redisClient are filled below when
-	// cfg.RedisAddr selects the injected Redis-backed composition (nil
-	// otherwise). cleanup closes the services first, then the injected bus
-	// -- stopping its readers so no remote event can still be delivered to
-	// a handler writing the database -- then the client this host owns
-	// (RedisEventBus never closes it), and the database last. Every close
-	// is attempted even when an earlier one failed; the first error wins.
+	// (nil until then), standaloneQueue by the storage module's wiring next
+	// to rbacModule (nil until then); redisBus and redisClient are filled
+	// below when cfg.RedisAddr selects the injected Redis-backed
+	// composition (nil otherwise). cleanup closes the services and the job
+	// queue first -- stopping config's anti-loss poller, rbac's cache
+	// janitor and the queue's workers so none of them drains a job or a
+	// poll against a connection that is being torn down -- then the
+	// injected bus, stopping its readers so no remote event can still be
+	// delivered to a handler writing the database, then the client this
+	// host owns (RedisEventBus never closes it), and the database last.
+	// Every close is attempted even when an earlier one failed; the first
+	// error wins.
 	var (
-		configService *config.Service
-		rbacService   *rbac.Service
-		redisBus      *pkgcore.RedisEventBus
-		redisClient   *redis.Client
+		configService   *config.Service
+		rbacService     *rbac.Service
+		standaloneQueue *jobs.StandaloneQueue
+		redisBus        *pkgcore.RedisEventBus
+		redisClient     *redis.Client
+	)
 	)
 
 	cleanup := func() error {
@@ -578,6 +588,15 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		}
 		if rbacService != nil {
 			keepErr(rbacService.Close())
+		}
+		if standaloneQueue != nil {
+			// StandaloneQueue.Close stops the dispatcher and waits for
+			// in-flight jobs to finish, bounded by the same timeout that
+			// bounds HTTP graceful shutdown. Close is idempotent, so an
+			// error path that runs before Start is ever called is safe.
+			queueCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+			keepErr(standaloneQueue.Close(queueCtx))
+			cancel()
 		}
 		if redisBus != nil {
 			redisBus.Close()
@@ -738,6 +757,20 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// frozen plan for this round asks that its tables exist before notes'
 	// and config's Apply runs, matching the order Bootstrap uses just
 	// below.
+	standaloneQueue = jobs.NewStandaloneQueue(db)
+
+	// storageModule is the reference app's first consumer of go/storage.
+	// Its asynchronous work -- the thumbnail-derive task every completed
+	// image object enqueues -- runs on a jobs.StandaloneQueue sharing this
+	// app's own database connection: the standalone mode's SQLite-backed
+	// worker pool, whose task table StandaloneQueue.Start creates for
+	// itself (no migration of this host's is involved). The queue is
+	// drained and started below, after Bootstrap, because storage's
+	// Register declares its task handlers on the registry and only the
+	// host can move them onto a concrete queue; cleanup's Close stops the
+	// pool before the shared database closes.
+	storageModule := storage.NewModule(db, storage.WithQueue(standaloneQueue))
+
 	migrationRegistry := dbkit.NewMigrationRegistry()
 	if regErr := migrationRegistry.Register(authnModule); regErr != nil {
 		_ = cleanup()
@@ -763,29 +796,37 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
+	if regErr := migrationRegistry.Register(storageModule); regErr != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	}
 	if applyErr := migrationRegistry.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: apply migrations: %w", applyErr)
 	}
 
-	// Bootstrap registers all six modules in argument order -- authn first
-	// of all, so its Register-time declarations (its config items, its
-	// permissions, its events) precede the modules that lean on them, then
-	// notes and org before config, so the configuration items and feature
-	// flags their Register calls declare (notes' own, and org's read-only
-	// reliance on the org.invitations / org.invitation_email flags it
-	// declares itself) are in the registry before the config module's own
-	// Register runs, and then Attach freezes the schema snapshot those
-	// declarations fold into, exactly the sequence config's Attach doc
-	// comment prescribes ("after Kernel.Bootstrap has returned"). rbac
-	// comes next so its own Attach -- which snapshots every permission
-	// every module declared during Register -- runs against a Registry
-	// that has already seen every module's declarations. audit last is not
-	// load-bearing order -- its Module.DependsOn is nil, and its
-	// subscriptions are valid to install before or after any publisher
-	// registers (see audit's Module.DependsOn doc comment) -- it simply
-	// reads naturally as "the business-facing modules, then the
-	// cross-cutting persister watching them."
+	// Bootstrap registers all seven modules in argument order -- authn
+	// first of all, so its Register-time declarations (its config items,
+	// its permissions, its events) precede the modules that lean on them,
+	// then notes and org before config, so the configuration items and
+	// feature flags their Register calls declare (notes' own, and org's
+	// read-only reliance on the org.invitations / org.invitation_email
+	// flags it declares itself) are in the registry before the config
+	// module's own Register runs, and then Attach freezes the schema
+	// snapshot those declarations fold into, exactly the sequence config's
+	// Attach doc comment prescribes ("after Kernel.Bootstrap has
+	// returned"). rbac comes next so its own Attach -- which snapshots
+	// every permission every module declared during Register -- runs
+	// against a Registry that has already seen every module's
+	// declarations. storage follows rbac simply because its own order is
+	// not load-bearing: its DependsOn is nil, the queue its Register
+	// validates is the host seam built above, and the permissions it
+	// declares are folded into rbac's Attach snapshot no matter where it
+	// sits. audit last is not load-bearing order -- its Module.DependsOn
+	// is nil, and its subscriptions are valid to install before or after
+	// any publisher registers (see audit's Module.DependsOn doc comment)
+	// -- it simply reads naturally as "the business-facing modules, then
+	// the cross-cutting persister watching them."
 	//
 	// A single Registry -- and so a single EventBus, reg.EventBus() --
 	// serves every module Bootstrap registers here, which is what lets
@@ -843,7 +884,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	if cfg.Mailer != nil {
 		kernelOptions = append(kernelOptions, pkgcore.WithMailer(cfg.Mailer, pkgcore.Stateless))
 	}
-	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, authnModule, notesModule, orgModule, configModule, rbacModule, auditModule)
+	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, authnModule, notesModule, orgModule, configModule, rbacModule, storageModule, auditModule)
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: bootstrap kernel: %w", err)
@@ -866,6 +907,33 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	if seedErr := seedDemoGrants(ctx, rbacService, cfg.HostTenants); seedErr != nil {
 		_ = cleanup()
 		return nil, nil, seedErr
+	}
+
+	// Drain the registry's job handlers onto the standalone queue and
+	// start the pool. Only now -- after Bootstrap -- can the handlers be
+	// moved: storage's Register declared them on the registry (their
+	// backing services attached its seams in the same call), and
+	// reg.Jobs.Handlers() is the map that declaration filled. Each entry
+	// must actually be a jobs.Handler; anything else is a wiring bug
+	// between a module and the queue contract, refused here rather than
+	// mis-typed into a worker at job-claim time. Start is non-blocking --
+	// it launches the dispatcher and worker goroutines and returns -- so
+	// the first enqueued job (a completed object's thumbnail derivation)
+	// waits only as long as a poll of the queue's own task table.
+	for jobType, handler := range reg.Jobs.Handlers() {
+		jobsHandler, ok := handler.(jobs.Handler)
+		if !ok {
+			_ = cleanup()
+			return nil, nil, fmt.Errorf("reference-app: registry job handler %q is not a jobs.Handler", jobType)
+		}
+		if err := standaloneQueue.RegisterHandler(jobsHandler); err != nil {
+			_ = cleanup()
+			return nil, nil, fmt.Errorf("reference-app: register job handler %q: %w", jobType, err)
+		}
+	}
+	if err := standaloneQueue.Start(ctx); err != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: start the job queue: %w", err)
 	}
 
 	mux := http.NewServeMux()

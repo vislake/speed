@@ -10,6 +10,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/rbac"
+	"github.com/vislake/speed/go/storage"
 
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
 )
@@ -98,6 +99,10 @@ const notesRoutePath = "/api/v1/notes"
 // unexported-path situation notesRoutePath's own comment explains.
 const orgRoutePath = "/api/v1/org"
 
+// storageRoutePath is where the storage module mounts its routes -- the
+// same unexported-path situation notesRoutePath's own comment explains.
+const storageRoutePath = "/api/v1/storage"
+
 // demoRouteGuards declares, for every path a module mounts, the resource
 // whose permissions gate it -- or routePublic when the path is
 // deliberately reachable without one.
@@ -135,9 +140,19 @@ const orgRoutePath = "/api/v1/org"
 // ungated surface. Gating the whole path on a coarse rbac permission would
 // refuse the sign-in flow this app exists to demonstrate; authn's own
 // per-operation requirePrincipal is where its gate lives.
+//
+// storage's path is gated like notes', because storage's handlers perform
+// no identity check of their own: the module declares its permissions and
+// leaves their enforcement to the host's authorization layer, and this
+// router gate is where the example enforces them. The demo grants seed
+// storage's permissions into no role but the built-in owner -- the demo
+// reader holds notes:read and nothing else -- which storage_flow_test.go
+// relies on to prove the gate closes on a user who holds another module's
+// permissions: a per-module permission is not a blanket role.
 var demoRouteGuards = map[string]string{
-	notesRoutePath: notesResource,
-	orgRoutePath:   routePublic,
+	notesRoutePath:   notesResource,
+	storageRoutePath: storageResource,
+	orgRoutePath:     routePublic,
 	// authn's path constant lives in server.go, which owns the pre-auth
 	// (method, path) allowlist under it; naming the path here through that
 	// same constant keeps the two in sync the way config's entries do.
@@ -153,6 +168,12 @@ var demoRouteGuards = map[string]string{
 // derived from the module's own exported constants rather than retyped, so
 // this example cannot drift from the permissions notes actually declares.
 var notesResource = mustResourceOf(notes.PermissionRead, notes.PermissionWrite)
+
+// storageResource is the resource half of storage's permission strings,
+// derived from its own exported constants the same way notesResource is
+// derived from notes' -- so this example cannot drift from the
+// permissions storage actually declares either.
+var storageResource = mustResourceOf(storage.PermissionRead, storage.PermissionWrite)
 
 // mustResourceOf returns the shared resource half of the given permission
 // strings, and panics when they do not agree on one.
