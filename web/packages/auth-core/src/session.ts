@@ -40,6 +40,17 @@
  * callers -- the api-client silent-401 hook and an application timer
  * -- share one in-flight request, because the authn server treats
  * parallel refreshes as token theft and rotates the whole family.
+ *
+ * Host-attached permission sets: the snapshot additionally carries
+ * setPermissionSet(domain, list) data -- lists the host attaches (the
+ * /me-derived permissions of the current tenant and, for platform
+ * staff, the tenant-independent system set). The session never
+ * evaluates a list; it only applies the survival rules when a
+ * principal change commits: same user and tenant (a silent refresh or
+ * a step-up) keeps both lists, a tenant switch drops the tenant-domain
+ * list and keeps the system-domain one, and a different user or an
+ * anonymous transition clears both domains. A failed operation
+ * changes nothing, lists included.
  */
 
 import {
@@ -63,12 +74,32 @@ import type {
   AuthnTokenPair,
 } from '@speed/api-sdk'
 
+/** The permission domain a host-attached permission set belongs to.
+ * 'tenant' names the permissions the principal holds inside its
+ * current tenant; 'system' names platform-staff permissions that are
+ * tenant-independent. */
+export type AuthDomain = 'tenant' | 'system'
+
+/** The host-attached permission lists per domain: pure data the host
+ * attaches through setPermissionSet. A null list means nothing is
+ * known for that domain (checks against it fail closed). The session
+ * never evaluates a list -- set membership is decided by the hooks
+ * and the shells, never here. */
+export interface AuthPermissionSets {
+  tenant: readonly string[] | null
+  system: readonly string[] | null
+}
+
 /** The observable session state. Immutable by convention: hosts read
  * it, they never mutate it. */
 export interface AuthSnapshot {
   state: 'anonymous' | 'authenticated'
   /** The authenticated principal, or null while anonymous. */
   principal: AuthnPrincipal | null
+  /** The host-attached permission lists per domain (see
+   * setPermissionSet). Always present; a null list means no set is
+   * known for that domain. Empty in both domains while anonymous. */
+  permissionSets: AuthPermissionSets
 }
 
 /** Receives the new snapshot on every state change. */
@@ -97,6 +128,14 @@ export interface AuthSession {
   /** Re-proves a second factor for the current session; the elevation
    * lives in the access token just minted. */
   verifyStepUp(code: string): Promise<AuthSnapshot>
+  /** Host-attached permission list for one domain: replaces the list
+   * the snapshot carries with a defensive copy (mutating the caller's
+   * array later changes nothing here); passing null clears the domain.
+   * Notifies subscribers like any other snapshot change. What the
+   * lists mean -- and which host attaches them -- is the host's
+   * business; the session only carries them and applies the survival
+   * rules in the file header when a principal change commits. */
+  setPermissionSet(domain: AuthDomain, perms: readonly string[] | null): void
   /** Silently refreshes the access token. Resolves true when a fresh
    * pair was stored, false when there is nothing to refresh or the
    * refresh token was refused (the session is over). Never throws for
@@ -170,6 +209,37 @@ function parseIssued(
   return { accessToken, refreshToken, principal }
 }
 
+/** The permission-set shape that carries nothing: every anonymous
+ * snapshot and every cross-user transition uses it. */
+const NO_PERMISSION_SETS: AuthPermissionSets = {
+  tenant: null,
+  system: null,
+}
+
+/** What survives from the previous snapshot's permission sets into
+ * the next authenticated one (see the file header). A silent refresh
+ * and a step-up keep the same user and tenant, so the host-attached
+ * lists stay -- an automatic refresh must not flash permissions away.
+ * A tenant switch keeps the user but changes the tenant: the
+ * tenant-domain list belonged to the old tenant and must not leak
+ * into the new one, while the tenant-independent system-domain list
+ * survives (platform-staff impersonation semantics). A different
+ * user -- or no previous principal at all -- clears both domains: a
+ * login never inherits another session's lists. */
+function nextPermissionSets(
+  previous: AuthSnapshot,
+  principal: AuthnPrincipal,
+): AuthPermissionSets {
+  const prevPrincipal = previous.principal
+  if (prevPrincipal === null || prevPrincipal.user_id !== principal.user_id) {
+    return NO_PERMISSION_SETS
+  }
+  if (prevPrincipal.tenant_id !== principal.tenant_id) {
+    return { tenant: null, system: previous.permissionSets.system }
+  }
+  return previous.permissionSets
+}
+
 /**
  * Creates the session over the caller's access-token store. The store
  * is the single bridge into @speed/api-client: a host that built its
@@ -179,7 +249,11 @@ function parseIssued(
  * the fresh token.
  */
 export function createAuthSession(store: AccessTokenStore): AuthSession {
-  let snapshot: AuthSnapshot = { state: 'anonymous', principal: null }
+  let snapshot: AuthSnapshot = {
+    state: 'anonymous',
+    principal: null,
+    permissionSets: NO_PERMISSION_SETS,
+  }
   // The held refresh token: closure-only, never stored, never exposed.
   let refreshToken: string | null = null
   // The generation guard (see the file header). User operations bump
@@ -204,7 +278,11 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
   function clearLocal(): void {
     store.set(null)
     refreshToken = null
-    snapshot = { state: 'anonymous', principal: null }
+    snapshot = {
+      state: 'anonymous',
+      principal: null,
+      permissionSets: NO_PERMISSION_SETS,
+    }
   }
 
   /** Applies a validated token-issuing response. */
@@ -213,7 +291,11 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
     if (issued.refreshToken !== null) {
       refreshToken = issued.refreshToken
     }
-    snapshot = { state: 'authenticated', principal: issued.principal }
+    snapshot = {
+      state: 'authenticated',
+      principal: issued.principal,
+      permissionSets: nextPermissionSets(snapshot, issued.principal),
+    }
   }
 
   /** The shared tail of every token-issuing user operation: the
@@ -359,6 +441,26 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
       const opGeneration = generation
       const pair = await authnVerifyStepUp({ code })
       return settleIssued(opGeneration, pair, false)
+    },
+
+    setPermissionSet(
+      domain: AuthDomain,
+      perms: readonly string[] | null,
+    ): void {
+      // The stored list is a defensive copy, never an alias of the
+      // caller's array: a host that reuses one array across calls (or
+      // mutates it after attaching) cannot change the snapshot.
+      const copy: readonly string[] | null =
+        perms === null ? null : [...perms]
+      const current = snapshot.permissionSets
+      snapshot = {
+        ...snapshot,
+        permissionSets:
+          domain === 'tenant'
+            ? { tenant: copy, system: current.system }
+            : { tenant: current.tenant, system: copy },
+      }
+      notify()
     },
 
     refresh(): Promise<boolean> {

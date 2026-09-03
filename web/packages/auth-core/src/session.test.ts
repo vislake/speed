@@ -10,117 +10,36 @@
  * Behaviour is asserted through the observable surface only: the
  * store's token, getSnapshot, subscriber notifications, the request
  * script's bodies and the raw ApiErrors a failed operation rejects.
+ * The scripted harness itself lives in test-utils/session-harness.ts,
+ * shared with src/hooks.test.ts.
  */
 
 import { describe, expect, it } from 'vitest'
 import {
-  ApiError,
   createClient,
   createMemoryAccessTokenStore,
   ERROR_CODE_PROTOCOL,
   isApiError,
 } from '@speed/api-client'
-import type { AccessTokenStore } from '@speed/api-client'
-import type { RequestFn, RequestOptions } from '@speed/api-client'
 import { bindRequestFn } from '@speed/api-sdk/runtime'
 import { authnGetMe } from '@speed/api-sdk'
-import type { AuthnPrincipal, AuthnTokenPair } from '@speed/api-sdk'
+import {
+  apiError,
+  captureRejection,
+  LOGIN_PASSWORD,
+  LOGIN_SMS,
+  LOGOUT,
+  makeHarness,
+  makePair,
+  principal,
+  REFRESH,
+  snapshotLog,
+  STEP_UP,
+  SWITCH_TENANT,
+} from '../test-utils/session-harness'
+import type { Harness } from '../test-utils/session-harness'
 import { createAuthSession } from './session'
-import type { AuthSession, AuthSnapshot } from './session'
-
-const LOGIN_PASSWORD = 'POST /api/v1/authn/login/password'
-const LOGIN_SMS = 'POST /api/v1/authn/login/sms'
-const LOGOUT = 'POST /api/v1/authn/logout'
-const REFRESH = 'POST /api/v1/authn/token/refresh'
-const SWITCH_TENANT = 'POST /api/v1/authn/tenant/switch'
-const STEP_UP = 'POST /api/v1/authn/mfa/step-up'
-
-function principal(
-  userId = 'user-1',
-  tenantId = 'tenant-1',
-): AuthnPrincipal {
-  return { user_id: userId, tenant_id: tenantId, session_id: 'session-1' }
-}
-
-function makePair(overrides: Partial<AuthnTokenPair> = {}): AuthnTokenPair {
-  return {
-    access_token: 'access-1',
-    refresh_token: 'refresh-1',
-    principal: principal(),
-    ...overrides,
-  }
-}
-
-function apiError(status: number, code: string): ApiError {
-  return new ApiError({ status, code, attempts: 1 })
-}
-
-/** The scripted call a fake request function receives. */
-interface ScriptedCall {
-  path: string
-  options?: RequestOptions
-}
-
-/** A fake endpoint: the handler's return value is the resolved
- * response body; throwing rejects the request with the thrown error
- * (tests throw ApiError to script HTTP failures). */
-type Script = Record<
-  string,
-  (call: ScriptedCall) => unknown
->
-
-interface Call {
-  method: string
-  path: string
-  options?: RequestOptions
-}
-
-interface Harness {
-  session: AuthSession
-  store: AccessTokenStore
-  calls: Call[]
-}
-
-/** Binds a scripted fake request function and creates the session over
- * a fresh memory store. Each call binds anew: the runtime seam is
- * last-bind-wins by contract. */
-function makeHarness(script: Script = {}): Harness {
-  const store = createMemoryAccessTokenStore()
-  const session = createAuthSession(store)
-  const calls: Call[] = []
-  const requestFn: RequestFn = (async <T>(
-    path: string,
-    options?: RequestOptions,
-  ): Promise<T> => {
-    const method = options?.method ?? 'GET'
-    const key = `${method} ${path}`
-    calls.push({ method, path, options })
-    const handler = script[key]
-    if (handler === undefined) {
-      throw new Error(`no scripted handler for ${key}`)
-    }
-    return (await handler({ path, options })) as T
-  }) as RequestFn
-  bindRequestFn(requestFn)
-  return { session, store, calls }
-}
-
-function snapshotLog(session: AuthSession): AuthSnapshot[] {
-  const seen: AuthSnapshot[] = []
-  session.subscribe((snapshot) => {
-    seen.push(snapshot)
-  })
-  return seen
-}
-
-async function captureRejection(promise: Promise<unknown>): Promise<unknown> {
-  try {
-    await promise
-  } catch (error) {
-    return error
-  }
-  throw new Error('expected the promise to reject')
-}
+import type { AuthSnapshot } from './session'
 
 async function expectProtocolViolation(
   promise: Promise<unknown>,
@@ -149,6 +68,7 @@ describe('initial state', () => {
     expect(session.getSnapshot()).toEqual({
       state: 'anonymous',
       principal: null,
+      permissionSets: { tenant: null, system: null },
     })
     expect(store.get()).toBeNull()
   })
@@ -178,6 +98,7 @@ describe('initial state', () => {
     expect(harness.session.getSnapshot()).toEqual({
       state: 'anonymous',
       principal: null,
+      permissionSets: { tenant: null, system: null },
     })
   })
 })
@@ -202,6 +123,7 @@ describe('login with password', () => {
     expect(harness.session.getSnapshot()).toEqual({
       state: 'authenticated',
       principal: principal(),
+      permissionSets: { tenant: null, system: null },
     })
     expect(harness.calls).toHaveLength(1)
   })
@@ -225,6 +147,7 @@ describe('login with password', () => {
     expect(harness.session.getSnapshot()).toEqual({
       state: 'anonymous',
       principal: null,
+      permissionSets: { tenant: null, system: null },
     })
     expect(seen).toHaveLength(0)
     // Nothing was rotated into the session by the failed attempt.
@@ -326,6 +249,7 @@ describe('logout', () => {
     expect(harness.session.getSnapshot()).toEqual({
       state: 'anonymous',
       principal: null,
+      permissionSets: { tenant: null, system: null },
     })
     await expect(harness.session.refresh()).resolves.toBe(false)
   })
@@ -564,6 +488,7 @@ describe('refresh', () => {
     expect(harness.session.getSnapshot()).toEqual({
       state: 'anonymous',
       principal: null,
+      permissionSets: { tenant: null, system: null },
     })
     expect(seen.map((snapshot) => snapshot.state)).toEqual([
       'authenticated',
@@ -687,6 +612,7 @@ describe('refresh', () => {
     expect(harness.session.getSnapshot()).toEqual({
       state: 'anonymous',
       principal: null,
+      permissionSets: { tenant: null, system: null },
     })
     expect(seen.map((snapshot) => snapshot.state)).toEqual([
       'authenticated',
@@ -768,6 +694,165 @@ describe('refresh', () => {
     await expect(refreshing).resolves.toBe(true)
     expect(harness.store.get()).toBe('access-2')
     expect(harness.session.getSnapshot().state).toBe('authenticated')
+  })
+})
+
+describe('host-attached permission sets', () => {
+  const credentials = {
+    identifier: 'ada@example.com',
+    password: 'pw',
+  }
+
+  it('replaces one domain, keeps the other, and notifies', async () => {
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+    })
+    await harness.session.loginWithPassword(credentials)
+    const seen = snapshotLog(harness.session)
+    harness.session.setPermissionSet('tenant', ['notes:read'])
+    harness.session.setPermissionSet('system', ['users:manage'])
+    harness.session.setPermissionSet('tenant', ['notes:read', 'notes:write'])
+    expect(harness.session.getSnapshot().permissionSets).toEqual({
+      tenant: ['notes:read', 'notes:write'],
+      system: ['users:manage'],
+    })
+    // Each call notifies subscribers, like any other snapshot change.
+    expect(seen).toHaveLength(3)
+    expect(harness.session.getSnapshot().state).toBe('authenticated')
+  })
+
+  it('stores a defensive copy and clears a domain on null', async () => {
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+    })
+    await harness.session.loginWithPassword(credentials)
+    const tenantPerms = ['notes:read']
+    harness.session.setPermissionSet('tenant', tenantPerms)
+    // The snapshot never aliases the caller's array: mutating it
+    // afterwards changes nothing here.
+    expect(harness.session.getSnapshot().permissionSets.tenant).not.toBe(
+      tenantPerms,
+    )
+    tenantPerms.push('notes:write')
+    expect(harness.session.getSnapshot().permissionSets.tenant).toEqual([
+      'notes:read',
+    ])
+    harness.session.setPermissionSet('tenant', null)
+    expect(harness.session.getSnapshot().permissionSets).toEqual({
+      tenant: null,
+      system: null,
+    })
+  })
+
+  it('wipes sets attached before a login: no session inherits another', async () => {
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+    })
+    harness.session.setPermissionSet('tenant', ['notes:read'])
+    harness.session.setPermissionSet('system', ['users:manage'])
+    await harness.session.loginWithPassword(credentials)
+    expect(harness.session.getSnapshot().permissionSets).toEqual({
+      tenant: null,
+      system: null,
+    })
+  })
+
+  it('wipes sets a login as a different user would otherwise inherit', async () => {
+    let loginCount = 0
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => {
+        loginCount += 1
+        if (loginCount === 2) {
+          return makePair({
+            principal: principal('user-2', 'tenant-2'),
+          })
+        }
+        return makePair()
+      },
+    })
+    await harness.session.loginWithPassword(credentials)
+    harness.session.setPermissionSet('tenant', ['notes:read'])
+    harness.session.setPermissionSet('system', ['users:manage'])
+    await harness.session.loginWithPassword({
+      identifier: 'betty@example.com',
+      password: 'pw2',
+    })
+    expect(harness.session.getSnapshot().principal?.user_id).toBe('user-2')
+    expect(harness.session.getSnapshot().permissionSets).toEqual({
+      tenant: null,
+      system: null,
+    })
+  })
+
+  it('a tenant switch drops the tenant set and keeps the system set', async () => {
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+      [SWITCH_TENANT]: () =>
+        makePair({
+          access_token: 'access-2',
+          principal: principal('user-1', 'tenant-2'),
+        }),
+    })
+    await harness.session.loginWithPassword(credentials)
+    harness.session.setPermissionSet('tenant', ['notes:read'])
+    harness.session.setPermissionSet('system', ['users:manage'])
+    await harness.session.switchTenant('tenant-2')
+    expect(harness.session.getSnapshot().principal?.tenant_id).toBe('tenant-2')
+    expect(harness.session.getSnapshot().permissionSets).toEqual({
+      tenant: null,
+      system: ['users:manage'],
+    })
+  })
+
+  it('a silent refresh keeps both sets', async () => {
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+      [REFRESH]: () => makePair({ access_token: 'access-2' }),
+    })
+    await harness.session.loginWithPassword(credentials)
+    harness.session.setPermissionSet('tenant', ['notes:read'])
+    harness.session.setPermissionSet('system', ['users:manage'])
+    await expect(harness.session.refresh()).resolves.toBe(true)
+    expect(harness.store.get()).toBe('access-2')
+    expect(harness.session.getSnapshot().permissionSets).toEqual({
+      tenant: ['notes:read'],
+      system: ['users:manage'],
+    })
+  })
+
+  it('logout clears both sets', async () => {
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+      [LOGOUT]: () => undefined,
+    })
+    await harness.session.loginWithPassword(credentials)
+    harness.session.setPermissionSet('tenant', ['notes:read'])
+    harness.session.setPermissionSet('system', ['users:manage'])
+    await harness.session.logout()
+    expect(harness.session.getSnapshot()).toEqual({
+      state: 'anonymous',
+      principal: null,
+      permissionSets: { tenant: null, system: null },
+    })
+  })
+
+  it('a failed operation leaves the sets untouched', async () => {
+    const refused = apiError(403, 'authn.not_a_member')
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+      [SWITCH_TENANT]: () => {
+        throw refused
+      },
+    })
+    await harness.session.loginWithPassword(credentials)
+    harness.session.setPermissionSet('tenant', ['notes:read'])
+    harness.session.setPermissionSet('system', ['users:manage'])
+    const error = await captureRejection(harness.session.switchTenant('tenant-9'))
+    expect(error).toBe(refused)
+    expect(harness.session.getSnapshot().permissionSets).toEqual({
+      tenant: ['notes:read'],
+      system: ['users:manage'],
+    })
   })
 })
 

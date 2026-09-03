@@ -11,10 +11,14 @@ The session lifecycle of a browser client: `createAuthSession(store)`
 in `src/session.ts` turns the generated authn operations of
 `@speed/api-sdk` (password/SMS login, logout, tenant switch, step-up,
 refresh) into one observable memory-only state machine. It is headless:
-no UI, no React, no DOM. It sits directly above `@speed/api-client`
-(the access-token store it receives is the same store that package
-reads on every send) and `@speed/api-sdk` (the generated operations it
-calls). Never import either of those from below this layer.
+no UI, no DOM. The React hooks in `src/hooks.ts` (`useAuthState`,
+`useCurrentTenant`, `usePermission`, plus the `attachSession` seam that
+binds them to one session, last bind wins) live on the same layer --
+react is a peer dependency, never a regular one. The package sits
+directly above `@speed/api-client` (the access-token store it receives
+is the same store that package reads on every send) and `@speed/api-sdk`
+(the generated operations it calls). Never import either of those from
+below this layer.
 
 ## Rules that are load-bearing here
 
@@ -42,6 +46,20 @@ calls). Never import either of those from below this layer.
   no longer holds. Do not "simplify" this into bump-on-entry or
   compare-free writes — the regression tests around concurrent
   login/refresh/logout pin the current semantics.
+- **The permission sets are host-attached data with survival rules,
+  never evaluation.** The session only carries the per-domain lists
+  (`setPermissionSet`) and applies the rules in its header when a
+  principal change commits (same user and tenant keeps both lists, a
+  tenant switch drops the tenant list and keeps the system one, a
+  different user or an anonymous transition clears both, a failed
+  operation changes nothing). Set membership is decided by the hooks
+  and the shells, never here — and never fetched from a server here
+  either: the /me-derived lists belong to the host to attach.
+- **The hooks read the attached session and never drive it.** A
+  component that must log in calls `session.loginWithPassword` from an
+  event handler; hooks never mutate state, never fetch, and fail
+  closed (anonymous snapshot, null tenant, `false` permissions) before
+  `attachSession` has been called.
 - **Refresh is single-flight per generation.** Concurrent callers
   share one in-flight request; a second parallel refresh reads as
   token theft to the authn server.
@@ -57,26 +75,36 @@ calls). Never import either of those from below this layer.
 
 ## Public surface
 
-`src/index.ts` exports exactly `createAuthSession` and the three types
-(`AuthSession`, `AuthSnapshot`, `AuthSessionListener`). Anything else
+`src/index.ts` exports `createAuthSession`, the session types
+(`AuthSession`, `AuthSnapshot`, `AuthSessionListener`, plus
+`AuthDomain` and `AuthPermissionSets`, the two names that parameterise
+the host-attached permission lists) and the hooks (`attachSession`,
+`useAuthState`, `useCurrentTenant`, `usePermission`). Anything else
 that grows here stays unexported until a consumer proves it needs to be
 public.
 
 ## Testing
 
-- `src/session.test.ts` is the one test file, run with vitest in a
-  plain node environment (no DOM). It scripts the generated operations
-  through `bindRequestFn` — tests never touch a real server and never
-  mock the session internals; they drive the exported API and assert
-  observable state (store contents, snapshots, notification order,
-  request bodies).
+- `src/session.test.ts` (the state machine, plain node environment, no
+  DOM) and `src/hooks.test.ts` (the React bindings, per-file jsdom
+  pragma, explicit `afterEach(cleanup)` — vitest runs without globals
+  here, which disables @testing-library/react's auto-cleanup) are the
+  two test files, run with vitest. Both drive sessions through the
+  shared scripted harness in `test-utils/session-harness.ts` — tests
+  never touch a real server and never mock package internals; they
+  drive the exported API and assert observable state (store contents,
+  snapshots, notification order, request bodies).
 - The failure contract, protocol violations, the generation guard
   (failed login leaves an in-flight refresh intact; logout cannot be
   resurrected; a newer login is never overwritten), single-flight
   refresh, store-clear/restore and the real-client composition
   (silent-401 refresh through `createClient`) each have dedicated
-  tests. A change to any of those behaviours must come with a test
-  that pins the new behaviour and fails on the old.
+  tests. The hooks' fail-closed reads before attach, the
+  tenant/permission selectors over a scripted session, domain
+  separation, the permission-set survival rules and the attach
+  rebinding semantics have theirs in both files. A change to any of
+  those behaviours must come with a test that pins the new behaviour
+  and fails on the old.
 - No test file may import from another package's `dist/`; the vitest
   aliases map the `@speed/*` specifiers onto sibling sources.
 
@@ -84,8 +112,6 @@ public.
 
 - No persistence across page loads and no `restore`: reloading starts
   anonymous. Planned for a later round.
-- No React hooks; consumers bridge `getSnapshot`/`subscribe` (for
-  example through `useSyncExternalStore`) themselves in their shells.
 - Token-issuing responses are validated structurally (presence and
   types of `access_token`, `refresh_token`, `principal`) — the access
   token's signature and claims are the server's domain, out of scope

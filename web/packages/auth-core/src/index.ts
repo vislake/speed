@@ -13,6 +13,14 @@
  * silent path -- false for a refused token (the session signs out),
  * a raw rethrow for a transport/server failure.
  *
+ * The hooks (hooks.ts) read one host-attached session: attachSession
+ * binds it once at bootstrap (last bind wins), useAuthState exposes
+ * the snapshot, useCurrentTenant the principal's tenant and
+ * usePermission a fail-closed set lookup over the host-attached
+ * per-domain permission lists (a UX affordance, never a security
+ * boundary). react is a peer dependency of the main entry: any host
+ * of the hooks already renders React.
+ *
  * No storage is written anywhere: an httpOnly cookie is the M1
  * server-side home of the refresh token, and persistence of the
  * session across page loads is out of scope here (see README's Known
@@ -20,7 +28,15 @@
  */
 
 export { createAuthSession } from './session.js'
+export {
+  attachSession,
+  useAuthState,
+  useCurrentTenant,
+  usePermission,
+} from './hooks.js'
 export type {
+  AuthDomain,
+  AuthPermissionSets,
   AuthSession,
   AuthSessionListener,
   AuthSnapshot,

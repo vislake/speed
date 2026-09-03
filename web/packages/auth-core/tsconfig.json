@@ -1,20 +1,24 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["src"],
+  "include": ["src", "test-utils"],
   "compilerOptions": {
-    // auth-core is pure TypeScript -- no JSX, no DOM rendering -- so the
-    // base config stands with only the sibling paths added. The package
-    // calls the generated authn operation functions (@speed/api-sdk) and
-    // the api-client error vocabulary (@speed/api-client); its tests bind
-    // a fake request function through the @speed/api-sdk/runtime seam, so
-    // that subpath resolves too. The published "types" of all three point
-    // into dist/, which is never committed and not yet built in a fresh
-    // checkout, so type resolution maps every workspace specifier straight
-    // onto the sibling's source -- same pattern layout-kit uses. Emitted
-    // dist/ keeps the bare specifiers, which consumers resolve against the
-    // real published packages. Keep this in lockstep with what src/
-    // imports. List order matters: "@speed/api-sdk/runtime" must be tried
-    // before its "@speed/api-sdk" prefix (first match wins in paths).
+    // auth-core is pure TypeScript -- no JSX (the hooks and their tests
+    // call React through functions, never through TSX), no DOM rendering
+    // in src -- so the base config stands with only the sibling paths
+    // added. The package calls the generated authn operation functions
+    // (@speed/api-sdk) and the api-client error vocabulary
+    // (@speed/api-client); its tests bind a fake request function
+    // through the @speed/api-sdk/runtime seam, so that subpath resolves
+    // too. test-utils/ (the shared session-scripting harness) sits
+    // outside src/ so the build's rootDir never emits it. The published
+    // "types" of all three point into dist/, which is never committed
+    // and not yet built in a fresh checkout, so type resolution maps
+    // every workspace specifier straight onto the sibling's source --
+    // same pattern layout-kit uses. Emitted dist/ keeps the bare
+    // specifiers, which consumers resolve against the real published
+    // packages. Keep this in lockstep with what src/ imports. List
+    // order matters: "@speed/api-sdk/runtime" must be tried before its
+    // "@speed/api-sdk" prefix (first match wins in paths).
     "paths": {
       "@speed/api-client": ["../api-client/src/index.ts"],
       "@speed/api-sdk/runtime": ["../api-sdk/src/runtime.ts"],

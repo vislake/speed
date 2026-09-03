@@ -10,17 +10,21 @@ a host that built its client with this same store and
 free -- an expired-token 401 on any request runs one refresh, and the
 retried request carries the fresh token.
 
-No UI, no React, no storage writes. The access token lives in the
+No UI and no storage writes. The access token lives in the
 caller-supplied store (in memory by design -- see the access-token rules
 in the workspace standards); the refresh token lives only inside the
 session closure and is never written anywhere; there is no `restore`
-(see Known limitations).
+(see Known limitations). React hooks (`useAuthState`,
+`useCurrentTenant`, `usePermission`) read one session the host attaches
+with `attachSession`; react is a peer dependency, so only a host that
+already renders React carries it.
 
 ## What ships
 
 | File | Exports |
 |---|---|
-| `session.ts` | `createAuthSession(store)`, `AuthSession`, `AuthSnapshot`, `AuthSessionListener` |
+| `session.ts` | `createAuthSession(store)`, `AuthSession`, `AuthSnapshot`, `AuthSessionListener`, `AuthDomain`, `AuthPermissionSets` |
+| `hooks.ts` | `attachSession(session)`, `useAuthState()`, `useCurrentTenant()`, `usePermission(domain, permission)` |
 
 `src/index.ts` re-exports these; everything else is internal.
 
@@ -47,7 +51,48 @@ session.subscribe((snapshot) => render(snapshot))
 
 // render paths read the current snapshot:
 const snapshot = session.getSnapshot() // { state: 'anonymous', principal: null }
+
+// React hosts bind the hooks to the session once, at bootstrap:
+import {
+  attachSession,
+  useAuthState,
+  useCurrentTenant,
+  usePermission,
+} from '@speed/auth-core'
+
+attachSession(session)
+
+// in a component (all re-render on every session transition):
+const snapshot = useAuthState()
+const currentTenant = useCurrentTenant() // { tenantId } -- null while anonymous
+const canCreateNotes = usePermission('tenant', 'notes:write')
 ```
+
+Before any session is attached -- and after a logout -- every hook
+fails closed: the anonymous snapshot, a null tenant, `false` for every
+permission. Attaching another session later rebinds (last bind wins);
+the previous session's transitions stop reaching the hooks.
+
+## Permission checks are set lookup only
+
+`usePermission(domain, permission)` answers "is this string in the
+host-attached list for that domain" -- the `tenant` domain for the
+permissions the principal holds inside its current tenant, `system`
+for platform-staff permissions that are tenant-independent. The host
+attaches the lists through the session; nothing here fetches or
+evaluates them, and a domain whose list is absent reads `false`.
+
+```ts
+session.setPermissionSet('tenant', ['notes:read', 'notes:write']) // after a /me fetch
+session.setPermissionSet('system', ['users:manage'])              // platform staff
+session.setPermissionSet('tenant', null)                          // clears a domain
+```
+
+The session applies the survival rules when a principal change commits:
+a silent refresh or a step-up keeps both lists, a tenant switch drops
+the tenant list and keeps the system one, and a different user or a
+logout clears both. These checks are a UX affordance, never a security
+boundary -- the server authorizes.
 
 ## The failure contract
 
