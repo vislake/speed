@@ -3,6 +3,9 @@ package jobs
 import (
 	"context"
 	"testing"
+
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 // TestAsynqQueue_RegisterHandler_DuplicateType_Errors mirrors standalone_queue_test.go's
@@ -43,5 +46,38 @@ func TestAsynqQueue_RegisterHandler_DistinctTypes_BothRegister(t *testing.T) {
 	}
 	if q.handler("no-such-type") != nil {
 		t.Error("handler(\"no-such-type\") should be nil")
+	}
+}
+
+// TestAsynqQueue_DepthGauge_StoppedQueueDoesNotQueryRedis is the AsynqQueue
+// half of the queue-depth gauge lifecycle regression
+// TestStandaloneQueue_DepthGauge_StopsQueryingAfterClose proves for
+// StandaloneQueue (same defect, same fix shape; see that test and both
+// registerQueueDepthGauge doc comments for the full story). A queue that
+// has been stopped must answer nil -- never touch its data source -- so the
+// harness simulates the stopped state with a bare *AsynqQueue whose stopCh
+// is closed and whose inspector is nil: any query would panic on the nil
+// *asynq.Inspector receiver, which is exactly the sharper version of the
+// error the unguarded callback produced. (Registering the real
+// NewAsynqQueue path and driving Close against a real Redis is the
+// integration tier's job, per this package's testing convention -- this
+// unit test pins the callback's stopped-answer contract alone.)
+func TestAsynqQueue_DepthGauge_StoppedQueueDoesNotQueryRedis(t *testing.T) {
+	q := &AsynqQueue{stopCh: make(chan struct{})}
+	close(q.stopCh) // the post-Close state: Close has signaled the stop
+
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	if err := q.registerQueueDepthGauge(mp.Meter(instrumentationName)); err != nil {
+		t.Fatalf("registerQueueDepthGauge() error = %v", err)
+	}
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect() error = %v, want nil; a stopped queue's gauge callback must not touch its data source", err)
+	}
+	if depth := metricByName(t, rm, "jobs.queue.depth"); depth != nil {
+		t.Errorf("Collect() reports %q for a stopped queue, want it to answer nothing", "jobs.queue.depth")
 	}
 }

@@ -62,6 +62,24 @@ type AsynqQueue struct {
 
 	startOnce    sync.Once
 	closeRDBOnce sync.Once
+
+	// stopCh is the queue-depth gauge callback's lifecycle signal: it is
+	// closed when Close releases the shared Redis client, under depthGaugeMu.
+	// Unlike StandaloneQueue, AsynqQueue has no dispatcher goroutines of its
+	// own to stop -- asynq.Server's Shutdown covers those -- so this channel
+	// exists solely for the gauge callback's stopped-answer contract (see
+	// registerQueueDepthGauge's doc comment). On Close's ctx.Done path the
+	// queue keeps running and the channel stays open, which is correct: the
+	// data source is still alive there, so the callback may keep answering.
+	stopCh chan struct{}
+
+	// depthGaugeMu orders the queue-depth gauge callback against Close,
+	// identically to StandaloneQueue's own field: the callback holds the
+	// read lock across its stopped-check and its Redis queries, and Close
+	// holds the write lock while closing stopCh and closing the shared
+	// Redis client, so once Close returns no callback can still be querying
+	// a closed client.
+	depthGaugeMu sync.RWMutex
 }
 
 // Defaults for AsynqQueue's construction Options, applied when the
@@ -239,6 +257,7 @@ func NewAsynqQueue(redisOpt asynq.RedisConnOpt, opts ...AsynqOption) *AsynqQueue
 		businessRetryDelayFunc: asynq.DefaultRetryDelayFunc,
 		handlers:               make(map[string]Handler),
 		runningPerTenant:       make(map[pkgcore.TenantID]int),
+		stopCh:                 make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(q)
@@ -301,7 +320,7 @@ func (q *AsynqQueue) handler(jobType string) Handler {
 func (q *AsynqQueue) Start(ctx context.Context) error {
 	var startErr error
 	q.startOnce.Do(func() {
-		if err := q.registerQueueDepthGauge(); err != nil {
+		if err := q.registerQueueDepthGauge(otel.Meter(instrumentationName)); err != nil {
 			obs.FromContext(ctx).Warn("jobs: registering queue depth gauge failed", "error", err)
 		}
 		startErr = q.server.Start(asynq.HandlerFunc(q.processTask))
@@ -324,6 +343,14 @@ func (q *AsynqQueue) Start(ctx context.Context) error {
 // before any Start (server.go's own state-machine check), and this
 // package's own addition -- closing the shared redis client -- is guarded
 // separately so a second call cannot double-close it.
+//
+// The done path also stops the queue-depth gauge, under the same lock that
+// orders it against the client close: stopCh is closed and the shared
+// client closed inside depthGaugeMu's write section, after which the gauge
+// callback answers nil instead of touching the closed client (see
+// registerQueueDepthGauge's doc comment). On the ctx.Done path neither
+// happens -- the queue is still running and its data source still open --
+// so the gauge keeps answering there.
 func (q *AsynqQueue) Close(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {
@@ -333,7 +360,12 @@ func (q *AsynqQueue) Close(ctx context.Context) error {
 
 	select {
 	case <-done:
-		q.closeRDBOnce.Do(func() { _ = q.rdb.Close() })
+		q.depthGaugeMu.Lock()
+		q.closeRDBOnce.Do(func() {
+			close(q.stopCh)
+			_ = q.rdb.Close()
+		})
+		q.depthGaugeMu.Unlock()
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -573,13 +605,30 @@ func (q *AsynqQueue) readCancelMarker(ctx context.Context, id string) (*time.Tim
 // can, so this gauge is labeled (queue, status) instead of (job_type,
 // status). Both label sets are low-cardinality and neither ever includes
 // tenant_id, per root CLAUDE.md's Prometheus-cardinality rule.
-func (q *AsynqQueue) registerQueueDepthGauge() error {
-	meter := otel.Meter(instrumentationName)
+//
+// The gauge's callback carries the same unregisterable-lifecycle contract
+// StandaloneQueue.registerQueueDepthGauge's own doc comment records: it
+// holds depthGaugeMu's read lock across its stopped-check AND its Redis
+// queries, and Close holds the write lock while closing stopCh and the
+// shared Redis client, so once Close returns no callback is mid-query and
+// every later callback answers nil. One nuance is AsynqQueue-specific:
+// Close's ctx.Done path stops nothing -- the server is still processing
+// and the Redis client is still open -- so the callback legitimately keeps
+// answering there; only the done path releases the data source and stops
+// the gauge.
+func (q *AsynqQueue) registerQueueDepthGauge(meter metric.Meter) error {
 	_, err := meter.Int64ObservableGauge(
 		"jobs.queue.depth",
 		metric.WithDescription("Number of jobs waiting to run (pending or retrying), by queue and status."),
 		metric.WithUnit("{job}"),
 		metric.WithInt64Callback(func(ctx context.Context, o metric.Int64Observer) error {
+			q.depthGaugeMu.RLock()
+			defer q.depthGaugeMu.RUnlock()
+			select {
+			case <-q.stopCh:
+				return nil
+			default:
+			}
 			for _, queueName := range asynqPriorityQueues {
 				info, err := q.inspector.GetQueueInfo(queueName)
 				if err != nil {

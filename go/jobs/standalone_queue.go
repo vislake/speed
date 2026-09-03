@@ -158,6 +158,15 @@ type StandaloneQueue struct {
 	closeOnce sync.Once
 	wg        sync.WaitGroup
 
+	// depthGaugeMu orders the queue-depth gauge callback against Close:
+	// the callback holds the read lock while it checks whether the queue
+	// is still running and queries the database, and Close holds the write
+	// lock while it signals shutdown and lets go of the data source, so
+	// once Close returns no callback can still be querying a closed
+	// database. See registerQueueDepthGauge's doc comment for the full
+	// lifecycle contract.
+	depthGaugeMu sync.RWMutex
+
 	startOnce sync.Once
 }
 
@@ -226,7 +235,7 @@ func (q *StandaloneQueue) Start(ctx context.Context) error {
 			startErr = fmt.Errorf("jobs: recover interrupted jobs: %w", err)
 			return
 		}
-		if err := q.registerQueueDepthGauge(); err != nil {
+		if err := q.registerQueueDepthGauge(otel.Meter(instrumentationName)); err != nil {
 			// A metrics wiring failure must not prevent the queue itself
 			// from running -- see this method's own doc comment; only
 			// ensureJobsSchema/resetInterruptedRecords failures abort
@@ -257,7 +266,9 @@ func (q *StandaloneQueue) Start(ctx context.Context) error {
 // operation already underway. Close is idempotent and safe to call more
 // than once, or without a prior Start.
 func (q *StandaloneQueue) Close(ctx context.Context) error {
+	q.depthGaugeMu.Lock()
 	q.closeOnce.Do(func() { close(q.stopCh) })
+	q.depthGaugeMu.Unlock()
 
 	done := make(chan struct{})
 	go func() {
@@ -373,13 +384,30 @@ func callerMayAccess(ctx context.Context, owner pkgcore.TenantID) bool {
 // tenant_id via obs.FromContext), exactly mirroring
 // observability.Middleware's own documented split between metric labels
 // and span/log attributes.
-func (q *StandaloneQueue) registerQueueDepthGauge() error {
-	meter := otel.Meter(instrumentationName)
+//
+// The gauge's callback cannot unregister itself -- the OTel API offers no
+// such operation -- so it lives for the whole process and is replayed onto
+// every MeterProvider the process ever installs (otel's global delegation,
+// once per process). The lifecycle contract that keeps that safe is the
+// pair of guarantees registered in Close's own doc comment: the callback
+// holds depthGaugeMu's read lock across its stopped-check AND its query,
+// and Close holds the write lock while closing stopCh, so once Close
+// returns no callback is mid-query, and every later callback answers nil
+// (selecting on the closed stopCh) rather than touching the queue's data
+// source -- which the host is free to close as soon as Close returns.
+func (q *StandaloneQueue) registerQueueDepthGauge(meter metric.Meter) error {
 	_, err := meter.Int64ObservableGauge(
 		"jobs.queue.depth",
 		metric.WithDescription("Number of jobs waiting to run (pending or retrying), by job type and status."),
 		metric.WithUnit("{job}"),
 		metric.WithInt64Callback(func(ctx context.Context, o metric.Int64Observer) error {
+			q.depthGaugeMu.RLock()
+			defer q.depthGaugeMu.RUnlock()
+			select {
+			case <-q.stopCh:
+				return nil
+			default:
+			}
 			counts, err := queueDepthByTypeAndStatus(ctx, q.db)
 			if err != nil {
 				return err

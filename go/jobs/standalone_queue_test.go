@@ -669,9 +669,111 @@ func TestRegisterQueueDepthGauge_Smoke(t *testing.T) {
 		t.Fatalf("ensureJobsSchema() error = %v", err)
 	}
 	q := NewStandaloneQueue(db)
-	if err := q.registerQueueDepthGauge(); err != nil {
+	// Register on a test-LOCAL MeterProvider, never the process-global one:
+	// the global provider can be installed only once per process (the SDK's
+	// first otel.SetMeterProvider wins), and job-metrics tests need that one
+	// install for themselves. A local provider exercises the identical
+	// registration path with none of the cross-test coupling.
+	mp := sdkmetric.NewMeterProvider()
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	if err := q.registerQueueDepthGauge(mp.Meter(instrumentationName)); err != nil {
 		t.Errorf("registerQueueDepthGauge() error = %v, want nil", err)
 	}
+}
+
+// TestStandaloneQueue_DepthGauge_StopsQueryingAfterClose is the regression
+// proof for the queue-depth gauge lifecycle defect the reference app's own
+// wiring surfaced (its obs.Init shutdown failed with "jobs: query queue
+// depth: sql: database is closed"): the "jobs.queue.depth" ObservableGauge
+// callback cannot be unregistered from the meter it was registered on -- the
+// OTel API has no such operation -- so it keeps running for the life of the
+// process, replayed onto every MeterProvider the process ever installs. A
+// queue that has been Close()d, and whose database the host has since closed,
+// must therefore answer nil rather than touch its closed data source. The
+// callback and Close are ordered by depthGaugeMu: the callback holds the
+// read lock across its stopped-check and its query, and Close holds the
+// write lock while signaling stopCh, so once Close returns no callback is
+// mid-query and any later callback sees the stopped queue. See
+// registerQueueDepthGauge's doc comment for the full lifecycle contract.
+//
+// Before the fix, the second Collect returned an error from the still-armed
+// callback querying q.db after the host had closed it.
+func TestStandaloneQueue_DepthGauge_StopsQueryingAfterClose(t *testing.T) {
+	db := dbtest.NewSQLite(t)
+	if err := ensureJobsSchema(context.Background(), db); err != nil {
+		t.Fatalf("ensureJobsSchema() error = %v", err)
+	}
+	q := NewStandaloneQueue(db)
+	if _, err := q.Enqueue(context.Background(), Task{Type: "gauge.probe", TenantID: "tenant-a"}); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	if err := q.registerQueueDepthGauge(mp.Meter(instrumentationName)); err != nil {
+		t.Fatalf("registerQueueDepthGauge() error = %v", err)
+	}
+
+	// Positive control: while the queue is alive and one job sits pending,
+	// a Collect must succeed and must report the backlog.
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect #1 (queue alive) error = %v, want nil", err)
+	}
+	if depth := metricByName(t, rm, "jobs.queue.depth"); depth == nil {
+		t.Fatalf("Collect #1 missing %q while a job is pending; metrics present: %v", "jobs.queue.depth", metricNames(rm))
+	} else if g, ok := depth.Data.(metricdata.Gauge[int64]); !ok || len(g.DataPoints) == 0 {
+		t.Fatalf("Collect #1 metric %q has no data points, want the pending-job backlog", "jobs.queue.depth")
+	}
+
+	// The host-side half of the Close contract: Close returns, THEN the
+	// host closes the data source. After both, a Collect must succeed and
+	// report nothing for this gauge -- a stopped queue answers nil, and
+	// never touches its closed database.
+	if err := q.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("db.DB() error = %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("closing the queue's database: %v", err)
+	}
+
+	rm = metricdata.ResourceMetrics{}
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect #2 (after Close) error = %v, want nil; a closed queue's gauge callback must not touch its closed database", err)
+	}
+	if depth := metricByName(t, rm, "jobs.queue.depth"); depth != nil {
+		t.Errorf("Collect #2 still reports %q after Close, want the stopped queue to answer nothing", "jobs.queue.depth")
+	}
+}
+
+// metricByName returns the metric named name within rm, or nil when rm
+// carries no such metric.
+func metricByName(t *testing.T, rm metricdata.ResourceMetrics, name string) *metricdata.Metrics {
+	t.Helper()
+	for _, sm := range rm.ScopeMetrics {
+		for i := range sm.Metrics {
+			if sm.Metrics[i].Name == name {
+				return &sm.Metrics[i]
+			}
+		}
+	}
+	return nil
+}
+
+// metricNames lists every metric name present in rm, for failure messages.
+func metricNames(rm metricdata.ResourceMetrics) []string {
+	var names []string
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			names = append(names, m.Name)
+		}
+	}
+	return names
 }
 
 // TestEnqueue_LogsSingleCorrectTenantID_EvenWhenCtxTenantDiffers is the
@@ -734,28 +836,27 @@ func setupTestMeterProvider(t *testing.T) *sdkmetric.ManualReader {
 // jobDurationMetricName/jobAttemptsMetricName/jobDeadLetterMetricName
 // literals standalone_queue.go defines.
 //
-// A Collect() error is deliberately NOT fatal here: this test process
-// runs every test in package jobs in one binary sharing one process-wide
-// OTel global MeterProvider, and go.opentelemetry.io/otel's global
-// package queues every otel.Meter(instrumentationName) call made before
-// the first-ever otel.SetMeterProvider (every OTHER lifecycle test in
-// this file that calls Start, none of which install a real provider of
+// A Collect() error is FATAL: the queue-depth gauge lifecycle fix (see
+// TestStandaloneQueue_DepthGauge_StopsQueryingAfterClose and both
+// registerQueueDepthGauge doc comments) made one impossible. This test
+// process runs every test in package jobs in one binary sharing one
+// process-wide OTel global MeterProvider, and go.opentelemetry.io/otel's
+// global package queues every otel.Meter(instrumentationName) call made
+// before the first-ever otel.SetMeterProvider (every OTHER lifecycle test
+// in this file that calls Start, none of which install a real provider of
 // their own) and replays them onto whatever provider IS eventually
 // installed -- this test's own setupTestMeterProvider, if it runs first.
-// Those replayed callbacks close over long-finished tests' own *gorm.DB
-// (closed by dbtest.NewSQLite's own t.Cleanup), so collecting this
-// process's full metric set can legitimately return a combined error
-// (sdk/metric joins per-callback errors) alongside an otherwise-complete
-// rm -- see the SDK's own ManualReader.Collect doc comment ("gathers all
-// metric data... and stores the result in rm", independent of the
-// returned error). This test only asserts on its OWN job types (flaky /
-// always-fails, unique to it), so a stale, unrelated queue-depth
-// callback's failure elsewhere must not fail it.
+// Those replayed queue-depth callbacks close over long-finished tests'
+// queues, but every such queue is Close()d before its database closes
+// (startQueue's t.Cleanup, and dbtest.NewSQLite's own LIFO cleanup
+// ordering), and a stopped queue's callback answers nil -- so collecting
+// this process's full metric set must never error, and a Collect error
+// here means the stopped-answer contract has regressed.
 func collectMetric(t *testing.T, reader *sdkmetric.ManualReader, name string) metricdata.Metrics {
 	t.Helper()
 	var rm metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &rm); err != nil {
-		t.Logf("Collect() returned a non-fatal error (see this helper's own doc comment): %v", err)
+		t.Fatalf("Collect() error = %v, want nil (see this helper's own doc comment for why an error is a regression)", err)
 	}
 	for _, sm := range rm.ScopeMetrics {
 		for _, m := range sm.Metrics {
