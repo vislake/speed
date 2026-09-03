@@ -124,6 +124,58 @@ describe('usePublicConfig', () => {
     // just the caller.
     expect(second.current.data?.features).toEqual(['flag_a', 'flag_b'])
   })
+
+  it('discards a stale fetch that resolves after a newer refresh, keeping the newer data', async () => {
+    // The two requests above never overlap: each `await waitFor(...)`
+    // fully settles one fetch before the next starts, so the
+    // `token !== fetchToken` no-op branches in react.ts's load() (the
+    // guard that exists specifically to stop a stale response from
+    // clobbering a newer one) are never hit by any other test in this
+    // file. Here both requests are held open with manually-controlled
+    // resolvers and settled out of order -- the newer one (refresh())
+    // first, the original mount second -- to prove the guard's no-op
+    // path actually fires and the store keeps the newer data rather
+    // than being overwritten by the stale response that arrives last.
+    const resolvers: Array<(response: Response) => void> = []
+    const standin = createStandinFetch(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolvers.push(resolve)
+        }),
+    )
+    const api: RequestFn = createClient({ baseUrl: '/api/v1', fetch: standin.fetch })
+
+    const { result } = renderHook(() => usePublicConfig(api))
+    await waitFor(() => expect(resolvers).toHaveLength(1))
+    expect(result.current.isLoading).toBe(true)
+
+    act(() => {
+      result.current.refresh()
+    })
+    await waitFor(() => expect(resolvers).toHaveLength(2))
+    expect(result.current.isLoading).toBe(true)
+
+    // Settle the newer request (index 1, from refresh()) first.
+    act(() => {
+      resolvers[1]?.(jsonResponse(200, { config: {}, features: ['flag_new'] }))
+    })
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    expect(result.current.data?.features).toEqual(['flag_new'])
+
+    // Now settle the stale request (index 0, from the original mount).
+    // Its resolution must be a no-op: the token it captured no longer
+    // matches the store's current fetchToken.
+    await act(async () => {
+      resolvers[0]?.(jsonResponse(200, { config: {}, features: ['flag_stale'] }))
+      // Let the stale .then() handler's microtask run before asserting.
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(result.current.isLoading).toBe(false)
+    expect(result.current.data?.features).toEqual(['flag_new'])
+    expect(standin.calls).toHaveLength(2)
+  })
 })
 
 describe('useFeature', () => {
