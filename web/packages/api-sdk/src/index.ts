@@ -48,6 +48,176 @@ export interface NotesError {
   params?: NotesErrorParams;
 }
 
+export interface AuthnRegisterRequest {
+  email?: string;
+  phone?: string;
+  password: string;
+  display_name?: string;
+  locale?: string;
+}
+
+export interface AuthnUser {
+  id?: string;
+  email?: string;
+  phone?: string;
+  display_name?: string;
+  locale?: string;
+  email_verified?: boolean;
+  phone_verified?: boolean;
+  created_at?: string;
+}
+
+export interface AuthnLoginWithPasswordRequest {
+  /** An email address or phone number. */
+  identifier: string;
+  password: string;
+  /** Requests this tenant's first access token; empty means the caller's first tenant. A request, never a grant. */
+  tenant_id?: string;
+  device?: string;
+}
+
+export interface AuthnRequestSMSCodeRequest {
+  phone: string;
+}
+
+export interface AuthnLoginWithSMSCodeRequest {
+  phone: string;
+  code: string;
+  tenant_id?: string;
+  device?: string;
+}
+
+export interface AuthnRefreshTokenRequest {
+  refresh_token: string;
+}
+
+export interface AuthnPrincipal {
+  user_id?: string;
+  tenant_id?: string;
+  session_id?: string;
+  email?: string;
+  amr?: string[];
+}
+
+export interface AuthnTokenPair {
+  access_token?: string;
+  access_expires_at?: string;
+  /** Absent when this response did not mint a new refresh token (a tenant switch or a step-up, both of which reuse the caller's existing one). */
+  refresh_token?: string;
+  refresh_expires_at?: string;
+  principal?: AuthnPrincipal;
+}
+
+export interface AuthnSocialAuthorizeResponse {
+  authorize_url?: string;
+}
+
+export interface AuthnSocialCallbackRequest {
+  code: string;
+  state: string;
+  tenant_id?: string;
+}
+
+export interface AuthnIdentity {
+  id?: string;
+  provider?: string;
+  email?: string;
+  display_name?: string;
+  avatar_url?: string;
+  created_at?: string;
+  last_login_at?: string;
+}
+
+export interface AuthnSocialLoginResponse {
+  user?: AuthnUser;
+  identity?: AuthnIdentity;
+  tokens?: AuthnTokenPair;
+  created?: boolean;
+  bound?: boolean;
+  auto_linked?: boolean;
+}
+
+export interface AuthnListIdentitiesResponse {
+  identities?: AuthnIdentity[];
+}
+
+export interface AuthnEnrollTOTPResponse {
+  secret?: string;
+  provisioning_uri?: string;
+}
+
+export interface AuthnConfirmTOTPRequest {
+  code: string;
+}
+
+export interface AuthnRecoveryCodesResponse {
+  recovery_codes?: string[];
+}
+
+export interface AuthnVerifyStepUpRequest {
+  code: string;
+}
+
+export interface AuthnSwitchTenantRequest {
+  tenant_id: string;
+}
+
+export interface AuthnSession {
+  id?: string;
+  status?: string;
+  device?: string;
+  user_agent?: string;
+  ip?: string;
+  amr?: string[];
+  created_at?: string;
+  last_seen_at?: string;
+  is_current?: boolean;
+}
+
+export interface AuthnListSessionsResponse {
+  sessions?: AuthnSession[];
+}
+
+export interface AuthnRevokeOtherSessionsResponse {
+  revoked_count?: number;
+}
+
+export interface AuthnLoginAttempt {
+  id?: string;
+  method?: string;
+  result?: string;
+  failure_reason?: string;
+  ip?: string;
+  user_agent?: string;
+  created_at?: string;
+}
+
+export interface AuthnListLoginHistoryResponse {
+  attempts?: AuthnLoginAttempt[];
+}
+
+export type AuthnErrorParams = { [key: string]: unknown };
+
+/**
+ * The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2) -- a client resolves code through its own i18n catalog, populated from this module's Locales() resources for the codes documented on each operation above.
+ */
+export interface AuthnError {
+  code?: string;
+  params?: AuthnErrorParams;
+}
+
+export type AuthnSocialAuthorizeParams = {
+redirect_uri: string;
+};
+
+export type AuthnListLoginHistoryParams = {
+/**
+ * @minimum 1
+ * @maximum 200
+ */
+limit?: number;
+};
+
 /**
  * The tenant is always the one tenancy.Middleware already resolved from the request; there is no tenant_id field anywhere on this request, by design (root CLAUDE.md's multi-tenant isolation rule).
  * @summary Create a note for the caller's tenant.
@@ -170,6 +340,1314 @@ export function useNotesListNotes<TData = Awaited<ReturnType<typeof notesListNot
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getNotesListNotesQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * At least one of email and phone must be present. The response is the created account with no password field, ever.
+ * @summary Register a new account.
+ */
+export const authnRegister = (
+    authnRegisterRequest: AuthnRegisterRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AuthnUser>(
+      {url: `/api/v1/authn/register`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: authnRegisterRequest, signal
+    },
+      );
+    }
+
+
+
+export const getAuthnRegisterMutationOptions = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnRegister>>, TError,{data: AuthnRegisterRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof authnRegister>>, TError,{data: AuthnRegisterRequest}, TContext> => {
+
+const mutationKey = ['authnRegister'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof authnRegister>>, {data: AuthnRegisterRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  authnRegister(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AuthnRegisterMutationResult = NonNullable<Awaited<ReturnType<typeof authnRegister>>>
+    export type AuthnRegisterMutationBody = AuthnRegisterRequest
+    export type AuthnRegisterMutationError = AuthnError
+
+    /**
+ * @summary Register a new account.
+ */
+export const useAuthnRegister = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnRegister>>, TError,{data: AuthnRegisterRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof authnRegister>>,
+        TError,
+        {data: AuthnRegisterRequest},
+        TContext
+      > => {
+      return useMutation(getAuthnRegisterMutationOptions(options));
+    }
+
+/**
+ * @summary Sign in with an email or phone identifier and a password.
+ */
+export const authnLoginWithPassword = (
+    authnLoginWithPasswordRequest: AuthnLoginWithPasswordRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AuthnTokenPair>(
+      {url: `/api/v1/authn/login/password`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: authnLoginWithPasswordRequest, signal
+    },
+      );
+    }
+
+
+
+export const getAuthnLoginWithPasswordMutationOptions = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnLoginWithPassword>>, TError,{data: AuthnLoginWithPasswordRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof authnLoginWithPassword>>, TError,{data: AuthnLoginWithPasswordRequest}, TContext> => {
+
+const mutationKey = ['authnLoginWithPassword'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof authnLoginWithPassword>>, {data: AuthnLoginWithPasswordRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  authnLoginWithPassword(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AuthnLoginWithPasswordMutationResult = NonNullable<Awaited<ReturnType<typeof authnLoginWithPassword>>>
+    export type AuthnLoginWithPasswordMutationBody = AuthnLoginWithPasswordRequest
+    export type AuthnLoginWithPasswordMutationError = AuthnError
+
+    /**
+ * @summary Sign in with an email or phone identifier and a password.
+ */
+export const useAuthnLoginWithPassword = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnLoginWithPassword>>, TError,{data: AuthnLoginWithPasswordRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof authnLoginWithPassword>>,
+        TError,
+        {data: AuthnLoginWithPasswordRequest},
+        TContext
+      > => {
+      return useMutation(getAuthnLoginWithPasswordMutationOptions(options));
+    }
+
+/**
+ * Always answers 202 whether or not the phone number belongs to an account -- go/authn/verification.go's RequestSMSCode never discloses registration status. There is nothing here for a legitimate caller to branch on either way.
+ * @summary Request a one-time SMS sign-in code for a phone number.
+ */
+export const authnRequestSMSCode = (
+    authnRequestSMSCodeRequest: AuthnRequestSMSCodeRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<void>(
+      {url: `/api/v1/authn/login/sms/request`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: authnRequestSMSCodeRequest, signal
+    },
+      );
+    }
+
+
+
+export const getAuthnRequestSMSCodeMutationOptions = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnRequestSMSCode>>, TError,{data: AuthnRequestSMSCodeRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof authnRequestSMSCode>>, TError,{data: AuthnRequestSMSCodeRequest}, TContext> => {
+
+const mutationKey = ['authnRequestSMSCode'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof authnRequestSMSCode>>, {data: AuthnRequestSMSCodeRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  authnRequestSMSCode(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AuthnRequestSMSCodeMutationResult = NonNullable<Awaited<ReturnType<typeof authnRequestSMSCode>>>
+    export type AuthnRequestSMSCodeMutationBody = AuthnRequestSMSCodeRequest
+    export type AuthnRequestSMSCodeMutationError = AuthnError
+
+    /**
+ * @summary Request a one-time SMS sign-in code for a phone number.
+ */
+export const useAuthnRequestSMSCode = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnRequestSMSCode>>, TError,{data: AuthnRequestSMSCodeRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof authnRequestSMSCode>>,
+        TError,
+        {data: AuthnRequestSMSCodeRequest},
+        TContext
+      > => {
+      return useMutation(getAuthnRequestSMSCodeMutationOptions(options));
+    }
+
+/**
+ * @summary Sign in with a phone number and the SMS code sent to it.
+ */
+export const authnLoginWithSMSCode = (
+    authnLoginWithSMSCodeRequest: AuthnLoginWithSMSCodeRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AuthnTokenPair>(
+      {url: `/api/v1/authn/login/sms`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: authnLoginWithSMSCodeRequest, signal
+    },
+      );
+    }
+
+
+
+export const getAuthnLoginWithSMSCodeMutationOptions = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnLoginWithSMSCode>>, TError,{data: AuthnLoginWithSMSCodeRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof authnLoginWithSMSCode>>, TError,{data: AuthnLoginWithSMSCodeRequest}, TContext> => {
+
+const mutationKey = ['authnLoginWithSMSCode'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof authnLoginWithSMSCode>>, {data: AuthnLoginWithSMSCodeRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  authnLoginWithSMSCode(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AuthnLoginWithSMSCodeMutationResult = NonNullable<Awaited<ReturnType<typeof authnLoginWithSMSCode>>>
+    export type AuthnLoginWithSMSCodeMutationBody = AuthnLoginWithSMSCodeRequest
+    export type AuthnLoginWithSMSCodeMutationError = AuthnError
+
+    /**
+ * @summary Sign in with a phone number and the SMS code sent to it.
+ */
+export const useAuthnLoginWithSMSCode = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnLoginWithSMSCode>>, TError,{data: AuthnLoginWithSMSCodeRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof authnLoginWithSMSCode>>,
+        TError,
+        {data: AuthnLoginWithSMSCodeRequest},
+        TContext
+      > => {
+      return useMutation(getAuthnLoginWithSMSCodeMutationOptions(options));
+    }
+
+/**
+ * @summary Rotate a refresh token for a new access token.
+ */
+export const authnRefreshToken = (
+    authnRefreshTokenRequest: AuthnRefreshTokenRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AuthnTokenPair>(
+      {url: `/api/v1/authn/token/refresh`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: authnRefreshTokenRequest, signal
+    },
+      );
+    }
+
+
+
+export const getAuthnRefreshTokenMutationOptions = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnRefreshToken>>, TError,{data: AuthnRefreshTokenRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof authnRefreshToken>>, TError,{data: AuthnRefreshTokenRequest}, TContext> => {
+
+const mutationKey = ['authnRefreshToken'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof authnRefreshToken>>, {data: AuthnRefreshTokenRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  authnRefreshToken(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AuthnRefreshTokenMutationResult = NonNullable<Awaited<ReturnType<typeof authnRefreshToken>>>
+    export type AuthnRefreshTokenMutationBody = AuthnRefreshTokenRequest
+    export type AuthnRefreshTokenMutationError = AuthnError
+
+    /**
+ * @summary Rotate a refresh token for a new access token.
+ */
+export const useAuthnRefreshToken = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnRefreshToken>>, TError,{data: AuthnRefreshTokenRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof authnRefreshToken>>,
+        TError,
+        {data: AuthnRefreshTokenRequest},
+        TContext
+      > => {
+      return useMutation(getAuthnRefreshTokenMutationOptions(options));
+    }
+
+/**
+ * Revokes the session the caller's own access token belongs to. Every other device's session is untouched -- see revoke-others for that.
+ * @summary Sign out the calling session.
+ */
+export const authnLogout = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<void>(
+      {url: `/api/v1/authn/logout`, method: 'POST', signal
+    },
+      );
+    }
+
+
+
+export const getAuthnLogoutMutationOptions = <TError = unknown,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnLogout>>, TError,void, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof authnLogout>>, TError,void, TContext> => {
+
+const mutationKey = ['authnLogout'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof authnLogout>>, void> = () => {
+
+
+          return  authnLogout()
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AuthnLogoutMutationResult = NonNullable<Awaited<ReturnType<typeof authnLogout>>>
+
+    export type AuthnLogoutMutationError = unknown
+
+    /**
+ * @summary Sign out the calling session.
+ */
+export const useAuthnLogout = <TError = unknown,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnLogout>>, TError,void, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof authnLogout>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getAuthnLogoutMutationOptions(options));
+    }
+
+/**
+ * Signed in and calling this with a valid Principal turns the flow into BINDING a new identity to the caller's own account instead of signing in -- see the callback operation's response.
+ * @summary Build the authorization URL for a social sign-in channel.
+ */
+export const authnSocialAuthorize = (
+    provider: string,
+    params: AuthnSocialAuthorizeParams,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AuthnSocialAuthorizeResponse>(
+      {url: `/api/v1/authn/social/${provider}/authorize`, method: 'GET',
+        params, signal
+    },
+      );
+    }
+
+
+
+
+export const getAuthnSocialAuthorizeQueryKey = (provider: string,
+    params?: AuthnSocialAuthorizeParams,) => {
+    return [
+    `/api/v1/authn/social/${provider}/authorize`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getAuthnSocialAuthorizeQueryOptions = <TData = Awaited<ReturnType<typeof authnSocialAuthorize>>, TError = AuthnError>(provider: string,
+    params: AuthnSocialAuthorizeParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof authnSocialAuthorize>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getAuthnSocialAuthorizeQueryKey(provider,params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof authnSocialAuthorize>>> = ({ signal }) => authnSocialAuthorize(provider,params, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: provider !== null && provider !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof authnSocialAuthorize>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type AuthnSocialAuthorizeQueryResult = NonNullable<Awaited<ReturnType<typeof authnSocialAuthorize>>>
+export type AuthnSocialAuthorizeQueryError = AuthnError
+
+
+/**
+ * @summary Build the authorization URL for a social sign-in channel.
+ */
+
+export function useAuthnSocialAuthorize<TData = Awaited<ReturnType<typeof authnSocialAuthorize>>, TError = AuthnError>(
+ provider: string,
+    params: AuthnSocialAuthorizeParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof authnSocialAuthorize>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getAuthnSocialAuthorizeQueryOptions(provider,params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * @summary Complete a social sign-in or account-binding authorization flow.
+ */
+export const authnSocialCallback = (
+    provider: string,
+    authnSocialCallbackRequest: AuthnSocialCallbackRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AuthnSocialLoginResponse>(
+      {url: `/api/v1/authn/social/${provider}/callback`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: authnSocialCallbackRequest, signal
+    },
+      );
+    }
+
+
+
+export const getAuthnSocialCallbackMutationOptions = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnSocialCallback>>, TError,{provider: string;data: AuthnSocialCallbackRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof authnSocialCallback>>, TError,{provider: string;data: AuthnSocialCallbackRequest}, TContext> => {
+
+const mutationKey = ['authnSocialCallback'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof authnSocialCallback>>, {provider: string;data: AuthnSocialCallbackRequest}> = (props) => {
+          const {provider,data} = props ?? {};
+
+          return  authnSocialCallback(provider,data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AuthnSocialCallbackMutationResult = NonNullable<Awaited<ReturnType<typeof authnSocialCallback>>>
+    export type AuthnSocialCallbackMutationBody = AuthnSocialCallbackRequest
+    export type AuthnSocialCallbackMutationError = AuthnError
+
+    /**
+ * @summary Complete a social sign-in or account-binding authorization flow.
+ */
+export const useAuthnSocialCallback = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnSocialCallback>>, TError,{provider: string;data: AuthnSocialCallbackRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof authnSocialCallback>>,
+        TError,
+        {provider: string;data: AuthnSocialCallbackRequest},
+        TContext
+      > => {
+      return useMutation(getAuthnSocialCallbackMutationOptions(options));
+    }
+
+/**
+ * @summary List the caller's own bound external identities.
+ */
+export const authnListIdentities = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AuthnListIdentitiesResponse>(
+      {url: `/api/v1/authn/identities`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getAuthnListIdentitiesQueryKey = () => {
+    return [
+    `/api/v1/authn/identities`
+    ] as const;
+    }
+
+
+export const getAuthnListIdentitiesQueryOptions = <TData = Awaited<ReturnType<typeof authnListIdentities>>, TError = unknown>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof authnListIdentities>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getAuthnListIdentitiesQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof authnListIdentities>>> = ({ signal }) => authnListIdentities(signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof authnListIdentities>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type AuthnListIdentitiesQueryResult = NonNullable<Awaited<ReturnType<typeof authnListIdentities>>>
+export type AuthnListIdentitiesQueryError = unknown
+
+
+/**
+ * @summary List the caller's own bound external identities.
+ */
+
+export function useAuthnListIdentities<TData = Awaited<ReturnType<typeof authnListIdentities>>, TError = unknown>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof authnListIdentities>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getAuthnListIdentitiesQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * @summary Unbind one of the caller's own external identities.
+ */
+export const authnUnbindIdentity = (
+    identityId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<void>(
+      {url: `/api/v1/authn/identities/${identityId}`, method: 'DELETE', signal
+    },
+      );
+    }
+
+
+
+export const getAuthnUnbindIdentityMutationOptions = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnUnbindIdentity>>, TError,{identityId: string}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof authnUnbindIdentity>>, TError,{identityId: string}, TContext> => {
+
+const mutationKey = ['authnUnbindIdentity'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof authnUnbindIdentity>>, {identityId: string}> = (props) => {
+          const {identityId} = props ?? {};
+
+          return  authnUnbindIdentity(identityId,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AuthnUnbindIdentityMutationResult = NonNullable<Awaited<ReturnType<typeof authnUnbindIdentity>>>
+
+    export type AuthnUnbindIdentityMutationError = AuthnError
+
+    /**
+ * @summary Unbind one of the caller's own external identities.
+ */
+export const useAuthnUnbindIdentity = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnUnbindIdentity>>, TError,{identityId: string}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof authnUnbindIdentity>>,
+        TError,
+        {identityId: string},
+        TContext
+      > => {
+      return useMutation(getAuthnUnbindIdentityMutationOptions(options));
+    }
+
+/**
+ * Replaces any existing TOTP factor (pending or active) with a fresh pending one, which must be confirmed with authn_confirmTOTP before it can satisfy a step-up.
+ * @summary Start TOTP enrollment for the caller's account.
+ */
+export const authnEnrollTOTP = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AuthnEnrollTOTPResponse>(
+      {url: `/api/v1/authn/mfa/totp/enroll`, method: 'POST', signal
+    },
+      );
+    }
+
+
+
+export const getAuthnEnrollTOTPMutationOptions = <TError = unknown,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnEnrollTOTP>>, TError,void, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof authnEnrollTOTP>>, TError,void, TContext> => {
+
+const mutationKey = ['authnEnrollTOTP'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof authnEnrollTOTP>>, void> = () => {
+
+
+          return  authnEnrollTOTP()
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AuthnEnrollTOTPMutationResult = NonNullable<Awaited<ReturnType<typeof authnEnrollTOTP>>>
+
+    export type AuthnEnrollTOTPMutationError = unknown
+
+    /**
+ * @summary Start TOTP enrollment for the caller's account.
+ */
+export const useAuthnEnrollTOTP = <TError = unknown,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnEnrollTOTP>>, TError,void, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof authnEnrollTOTP>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getAuthnEnrollTOTPMutationOptions(options));
+    }
+
+/**
+ * @summary Confirm a pending TOTP enrollment.
+ */
+export const authnConfirmTOTP = (
+    authnConfirmTOTPRequest: AuthnConfirmTOTPRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AuthnRecoveryCodesResponse>(
+      {url: `/api/v1/authn/mfa/totp/confirm`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: authnConfirmTOTPRequest, signal
+    },
+      );
+    }
+
+
+
+export const getAuthnConfirmTOTPMutationOptions = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnConfirmTOTP>>, TError,{data: AuthnConfirmTOTPRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof authnConfirmTOTP>>, TError,{data: AuthnConfirmTOTPRequest}, TContext> => {
+
+const mutationKey = ['authnConfirmTOTP'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof authnConfirmTOTP>>, {data: AuthnConfirmTOTPRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  authnConfirmTOTP(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AuthnConfirmTOTPMutationResult = NonNullable<Awaited<ReturnType<typeof authnConfirmTOTP>>>
+    export type AuthnConfirmTOTPMutationBody = AuthnConfirmTOTPRequest
+    export type AuthnConfirmTOTPMutationError = AuthnError
+
+    /**
+ * @summary Confirm a pending TOTP enrollment.
+ */
+export const useAuthnConfirmTOTP = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnConfirmTOTP>>, TError,{data: AuthnConfirmTOTPRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof authnConfirmTOTP>>,
+        TError,
+        {data: AuthnConfirmTOTPRequest},
+        TContext
+      > => {
+      return useMutation(getAuthnConfirmTOTPMutationOptions(options));
+    }
+
+/**
+ * Requires an ACTIVE TOTP factor; every previous code stops working at once.
+ * @summary Discard the caller's recovery codes and issue a fresh batch.
+ */
+export const authnRegenerateRecoveryCodes = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AuthnRecoveryCodesResponse>(
+      {url: `/api/v1/authn/mfa/recovery-codes/regenerate`, method: 'POST', signal
+    },
+      );
+    }
+
+
+
+export const getAuthnRegenerateRecoveryCodesMutationOptions = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnRegenerateRecoveryCodes>>, TError,void, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof authnRegenerateRecoveryCodes>>, TError,void, TContext> => {
+
+const mutationKey = ['authnRegenerateRecoveryCodes'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof authnRegenerateRecoveryCodes>>, void> = () => {
+
+
+          return  authnRegenerateRecoveryCodes()
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AuthnRegenerateRecoveryCodesMutationResult = NonNullable<Awaited<ReturnType<typeof authnRegenerateRecoveryCodes>>>
+
+    export type AuthnRegenerateRecoveryCodesMutationError = AuthnError
+
+    /**
+ * @summary Discard the caller's recovery codes and issue a fresh batch.
+ */
+export const useAuthnRegenerateRecoveryCodes = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnRegenerateRecoveryCodes>>, TError,void, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof authnRegenerateRecoveryCodes>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getAuthnRegenerateRecoveryCodesMutationOptions(options));
+    }
+
+/**
+ * Mints a fresh access token whose amr carries the factor just verified, without otherwise changing the session (the refresh token is untouched). The elevation lives only in that access token's own lifetime -- a later natural refresh reverts to the session's original amr.
+ * @summary Re-prove a second factor for the caller's CURRENT session.
+ */
+export const authnVerifyStepUp = (
+    authnVerifyStepUpRequest: AuthnVerifyStepUpRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AuthnTokenPair>(
+      {url: `/api/v1/authn/mfa/step-up`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: authnVerifyStepUpRequest, signal
+    },
+      );
+    }
+
+
+
+export const getAuthnVerifyStepUpMutationOptions = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnVerifyStepUp>>, TError,{data: AuthnVerifyStepUpRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof authnVerifyStepUp>>, TError,{data: AuthnVerifyStepUpRequest}, TContext> => {
+
+const mutationKey = ['authnVerifyStepUp'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof authnVerifyStepUp>>, {data: AuthnVerifyStepUpRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  authnVerifyStepUp(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AuthnVerifyStepUpMutationResult = NonNullable<Awaited<ReturnType<typeof authnVerifyStepUp>>>
+    export type AuthnVerifyStepUpMutationBody = AuthnVerifyStepUpRequest
+    export type AuthnVerifyStepUpMutationError = AuthnError
+
+    /**
+ * @summary Re-prove a second factor for the caller's CURRENT session.
+ */
+export const useAuthnVerifyStepUp = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnVerifyStepUp>>, TError,{data: AuthnVerifyStepUpRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof authnVerifyStepUp>>,
+        TError,
+        {data: AuthnVerifyStepUpRequest},
+        TContext
+      > => {
+      return useMutation(getAuthnVerifyStepUpMutationOptions(options));
+    }
+
+/**
+ * @summary Reissue an access token for a different tenant, reusing the session.
+ */
+export const authnSwitchTenant = (
+    authnSwitchTenantRequest: AuthnSwitchTenantRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AuthnTokenPair>(
+      {url: `/api/v1/authn/tenant/switch`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: authnSwitchTenantRequest, signal
+    },
+      );
+    }
+
+
+
+export const getAuthnSwitchTenantMutationOptions = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnSwitchTenant>>, TError,{data: AuthnSwitchTenantRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof authnSwitchTenant>>, TError,{data: AuthnSwitchTenantRequest}, TContext> => {
+
+const mutationKey = ['authnSwitchTenant'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof authnSwitchTenant>>, {data: AuthnSwitchTenantRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  authnSwitchTenant(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AuthnSwitchTenantMutationResult = NonNullable<Awaited<ReturnType<typeof authnSwitchTenant>>>
+    export type AuthnSwitchTenantMutationBody = AuthnSwitchTenantRequest
+    export type AuthnSwitchTenantMutationError = AuthnError
+
+    /**
+ * @summary Reissue an access token for a different tenant, reusing the session.
+ */
+export const useAuthnSwitchTenant = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnSwitchTenant>>, TError,{data: AuthnSwitchTenantRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof authnSwitchTenant>>,
+        TError,
+        {data: AuthnSwitchTenantRequest},
+        TContext
+      > => {
+      return useMutation(getAuthnSwitchTenantMutationOptions(options));
+    }
+
+/**
+ * @summary Return the caller's own authenticated identity.
+ */
+export const authnGetMe = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AuthnPrincipal>(
+      {url: `/api/v1/authn/me`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getAuthnGetMeQueryKey = () => {
+    return [
+    `/api/v1/authn/me`
+    ] as const;
+    }
+
+
+export const getAuthnGetMeQueryOptions = <TData = Awaited<ReturnType<typeof authnGetMe>>, TError = unknown>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof authnGetMe>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getAuthnGetMeQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof authnGetMe>>> = ({ signal }) => authnGetMe(signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof authnGetMe>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type AuthnGetMeQueryResult = NonNullable<Awaited<ReturnType<typeof authnGetMe>>>
+export type AuthnGetMeQueryError = unknown
+
+
+/**
+ * @summary Return the caller's own authenticated identity.
+ */
+
+export function useAuthnGetMe<TData = Awaited<ReturnType<typeof authnGetMe>>, TError = unknown>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof authnGetMe>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getAuthnGetMeQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * Includes revoked sessions -- Status tells them apart -- so the owner can see which device they signed out and when. is_current marks the session the request's own access token belongs to.
+ * @summary List every one of the caller's own sessions (their device list).
+ */
+export const authnListSessions = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AuthnListSessionsResponse>(
+      {url: `/api/v1/authn/sessions`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getAuthnListSessionsQueryKey = () => {
+    return [
+    `/api/v1/authn/sessions`
+    ] as const;
+    }
+
+
+export const getAuthnListSessionsQueryOptions = <TData = Awaited<ReturnType<typeof authnListSessions>>, TError = unknown>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof authnListSessions>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getAuthnListSessionsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof authnListSessions>>> = ({ signal }) => authnListSessions(signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof authnListSessions>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type AuthnListSessionsQueryResult = NonNullable<Awaited<ReturnType<typeof authnListSessions>>>
+export type AuthnListSessionsQueryError = unknown
+
+
+/**
+ * @summary List every one of the caller's own sessions (their device list).
+ */
+
+export function useAuthnListSessions<TData = Awaited<ReturnType<typeof authnListSessions>>, TError = unknown>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof authnListSessions>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getAuthnListSessionsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * @summary Sign out one of the caller's own devices.
+ */
+export const authnRevokeSession = (
+    sessionId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<void>(
+      {url: `/api/v1/authn/sessions/${sessionId}`, method: 'DELETE', signal
+    },
+      );
+    }
+
+
+
+export const getAuthnRevokeSessionMutationOptions = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnRevokeSession>>, TError,{sessionId: string}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof authnRevokeSession>>, TError,{sessionId: string}, TContext> => {
+
+const mutationKey = ['authnRevokeSession'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof authnRevokeSession>>, {sessionId: string}> = (props) => {
+          const {sessionId} = props ?? {};
+
+          return  authnRevokeSession(sessionId,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AuthnRevokeSessionMutationResult = NonNullable<Awaited<ReturnType<typeof authnRevokeSession>>>
+
+    export type AuthnRevokeSessionMutationError = AuthnError
+
+    /**
+ * @summary Sign out one of the caller's own devices.
+ */
+export const useAuthnRevokeSession = <TError = AuthnError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnRevokeSession>>, TError,{sessionId: string}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof authnRevokeSession>>,
+        TError,
+        {sessionId: string},
+        TContext
+      > => {
+      return useMutation(getAuthnRevokeSessionMutationOptions(options));
+    }
+
+/**
+ * @summary Sign out every one of the caller's sessions except the current one.
+ */
+export const authnRevokeOtherSessions = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AuthnRevokeOtherSessionsResponse>(
+      {url: `/api/v1/authn/sessions/revoke-others`, method: 'POST', signal
+    },
+      );
+    }
+
+
+
+export const getAuthnRevokeOtherSessionsMutationOptions = <TError = unknown,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnRevokeOtherSessions>>, TError,void, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof authnRevokeOtherSessions>>, TError,void, TContext> => {
+
+const mutationKey = ['authnRevokeOtherSessions'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof authnRevokeOtherSessions>>, void> = () => {
+
+
+          return  authnRevokeOtherSessions()
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AuthnRevokeOtherSessionsMutationResult = NonNullable<Awaited<ReturnType<typeof authnRevokeOtherSessions>>>
+
+    export type AuthnRevokeOtherSessionsMutationError = unknown
+
+    /**
+ * @summary Sign out every one of the caller's sessions except the current one.
+ */
+export const useAuthnRevokeOtherSessions = <TError = unknown,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof authnRevokeOtherSessions>>, TError,void, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof authnRevokeOtherSessions>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getAuthnRevokeOtherSessionsMutationOptions(options));
+    }
+
+/**
+ * @summary List the caller's own recent login attempts, successful or not.
+ */
+export const authnListLoginHistory = (
+    params?: AuthnListLoginHistoryParams,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<AuthnListLoginHistoryResponse>(
+      {url: `/api/v1/authn/login-history`, method: 'GET',
+        params, signal
+    },
+      );
+    }
+
+
+
+
+export const getAuthnListLoginHistoryQueryKey = (params?: AuthnListLoginHistoryParams,) => {
+    return [
+    `/api/v1/authn/login-history`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getAuthnListLoginHistoryQueryOptions = <TData = Awaited<ReturnType<typeof authnListLoginHistory>>, TError = unknown>(params?: AuthnListLoginHistoryParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof authnListLoginHistory>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getAuthnListLoginHistoryQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof authnListLoginHistory>>> = ({ signal }) => authnListLoginHistory(params, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof authnListLoginHistory>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type AuthnListLoginHistoryQueryResult = NonNullable<Awaited<ReturnType<typeof authnListLoginHistory>>>
+export type AuthnListLoginHistoryQueryError = unknown
+
+
+/**
+ * @summary List the caller's own recent login attempts, successful or not.
+ */
+
+export function useAuthnListLoginHistory<TData = Awaited<ReturnType<typeof authnListLoginHistory>>, TError = unknown>(
+ params?: AuthnListLoginHistoryParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof authnListLoginHistory>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getAuthnListLoginHistoryQueryOptions(params,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

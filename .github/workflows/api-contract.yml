@@ -3,8 +3,9 @@ name: api-contract
 # API-contract discipline pipeline -- docs/internal/18-cicd.md's pipeline
 # table, api-contract row: both halves implemented, backend
 # (oapi-codegen) and frontend (orval -> @speed/api-sdk), plus the
-# multi-fragment merge (redocly) now that a second fragment exists. Backs
-# the root
+# multi-fragment merge (redocly) now that a second fragment exists -- the
+# merged document doubles as orval's input, which is why this file's
+# steps run the merge before the frontend regeneration. Backs the root
 # CLAUDE.md API-contract discipline and docs/internal/21-api-contract.md's
 # spec-first order: edit api/openapi.yaml -> task api:gen -> compilation
 # failures reveal every handler to fix -> commit spec, generated artifacts
@@ -26,7 +27,7 @@ name: api-contract
 # pr-check run regardless of what changed, so its own compile enforcement
 # does not need to wait for full-ci the way the reference app's does).
 #
-# COVERAGE -- what genuinely runs today
+# COVERAGE -- what genuinely runs today (in step order)
 #   * Regeneration consistency (notes): the pinned oapi-codegen (v2.8.0,
 #     the exact same go run as Taskfile's api:gen task, run from the same
 #     directory) regenerates the notes module's api/notes-server.gen.go
@@ -40,14 +41,31 @@ name: api-contract
 #     the second module to carry one -- same pinned oapi-codegen invocation,
 #     same git diff --exit-code gate, its own step so either fragment's
 #     failure is unambiguous in the job log.
-#   * Frontend-sdk regeneration consistency (notes): the pinned orval
-#     (8.17.0 -- the exact same `pnpm dlx orval` + nodenext-fixup pair as
-#     Taskfile's api:gen frontend leg, run from web/) regenerates
-#     @speed/api-sdk's src/index.ts from the same notes fragment, then a
-#     second `git diff --exit-code` fails the job if the committed
-#     generated package is not what the spec generates -- the
-#     generated-artifact consistency check for the frontend half. orval
-#     itself is never a workspace dependency (pnpm dlx, no lockfile
+#   * Spec merge + naming-convention lint: the pinned redocly CLI (2.51.1,
+#     the same `pnpm --package=@redocly/cli@2.51.1 dlx redocly ...`
+#     invocation as Taskfile's api:merge task) `join`s both fragments into
+#     build/openapi/speed.yaml, then `lint`s the result against
+#     redocly.yaml's rules (operationId format, component schema-name
+#     format, tag format -- docs/internal/21-api-contract.md's naming
+#     conventions that avoid merge conflicts), then a
+#     `git diff --exit-code` fails the job if the committed
+#     build/openapi/speed.yaml is not what the two fragments merge to
+#     today -- the generated-artifact consistency check for the merged
+#     document, same shape as the two artifact checks above. These steps
+#     sit before the frontend regeneration below because the merged
+#     document is that leg's input: order-dependent gates must see the
+#     fresh merge first, not a merged document the job itself will
+#     overwrite later in the same run.
+#   * Frontend-sdk regeneration consistency (merged document): the pinned
+#     orval (8.17.0 -- the exact same `pnpm dlx orval` + nodenext-fixup
+#     pair as Taskfile's api:gen frontend leg, run from web/) regenerates
+#     @speed/api-sdk's src/index.ts from build/openapi/speed.yaml -- the
+#     document merged in the step above, covering the notes and authn
+#     fragments (org's fragment is deliberately not merged; see the
+#     api:merge note) -- then a `git diff --exit-code` fails the job if
+#     the committed generated package is not what the spec generates --
+#     the generated-artifact consistency check for the frontend half.
+#     orval itself is never a workspace dependency (pnpm dlx, no lockfile
 #     entry); a version bump is visible in the regenerated header and
 #     must land in Taskfile, web/orval.config.ts and this file together.
 #   * Compile enforcement (notes and org): `go build ./...` of
@@ -71,25 +89,16 @@ name: api-contract
 #     require would not help: `go mod tidy` drops an unused dependency.
 #   * Regeneration consistency (authn): the identical oapi-codegen v2.8.0
 #     invocation over go/authn/api/openapi.yaml, then its own
-#     `git diff --exit-code` on go/authn/api/authn-server.gen.go --
-#     authn's HTTP surface has no frontend orval leg yet (deferred to the
-#     auth-ui / consumer-shell round, go/authn/AGENTS.md), so this is the
-#     backend half only.
+#     `git diff --exit-code` on go/authn/api/authn-server.gen.go -- the
+#     backend half only. authn's frontend half needs no separate leg: it
+#     is generated together with notes' from the merged document above,
+#     and @speed/auth-core has compile-consumed the generated surface
+#     since the auth-core round (runtime consumption stays with the
+#     consumer shells).
 #   * Compile enforcement (authn): `go build ./...` of go/authn, the same
 #     "spec changed, handler not updated" guarantee notes' reference-app
 #     build gives, against go/authn/handler.go's own compile-time
 #     assertion.
-#   * Spec merge + naming-convention lint: the pinned redocly CLI (2.51.1,
-#     the same `pnpm --package=@redocly/cli@2.51.1 dlx redocly ...`
-#     invocation as Taskfile's api:merge task) `join`s both fragments into
-#     build/openapi/speed.yaml, then `lint`s the result against
-#     redocly.yaml's rules (operationId format, component schema-name
-#     format, tag format -- docs/internal/21-api-contract.md's naming
-#     conventions that avoid merge conflicts), then a third
-#     `git diff --exit-code` fails the
-#     job if the committed build/openapi/speed.yaml is not what the two
-#     fragments merge to today -- the generated-artifact consistency check
-#     for the merged document, same shape as the two artifact checks above.
 #
 # DELIBERATELY NOT WIRED HERE -- API-contract items whose tooling does
 # not exist yet (wiring them now would be fake checks):
@@ -103,7 +112,6 @@ name: api-contract
 #     merge of both fragments; see redocly.yaml's own trailing comment),
 #     so it stays a code-review concern rather than a rule that would not
 #     actually check what its name claims.
-#   * authn's frontend orval leg -- see the authn coverage bullet above.
 # Each lands with its tooling round; the stub headers of the other gated
 # pipelines stay until then.
 #
@@ -222,21 +230,60 @@ jobs:
         # Mirrors the npm CI jobs (reusable/npm-package-ci.yml): the same
         # composite action, the same single version sources (web/.nvmrc,
         # web/package.json's packageManager field) and the same pnpm store
-        # cache keyed on the lockfile hash.
+        # cache keyed on the lockfile hash. One call serves both Node-based
+        # legs of this job: the redocly merge/lint below (its pnpm dlx
+        # invocation needs no web/ workspace install) and the web install
+        # + orval frontend leg that follows it.
         uses: ./.github/actions/setup-node-env
+      - name: Merge every fragment into build/openapi/speed.yaml (pinned redocly 2.51.1)
+        # The same command as Taskfile.yml's api:merge task -- keep the two
+        # in lockstep (both pin redocly at 2.51.1). `join`, not `bundle`:
+        # these fragments are peers, each a complete document, not one root
+        # with $refs into the others. This step runs before the frontend
+        # regeneration below because build/openapi/speed.yaml is that
+        # leg's input: orval must consume the fresh merge, not a merged
+        # document this job will overwrite later in the same run.
+        run: |
+          mkdir -p build/openapi
+          pnpm --package=@redocly/cli@2.51.1 dlx redocly join \
+            examples/reference-app/internal/notes/api/openapi.yaml \
+            go/authn/api/openapi.yaml \
+            -o build/openapi/speed.yaml
+      - name: Lint the merged document against the naming-convention rules
+        # redocly.yaml's own header explains what each rule checks and why
+        # (operationId format, component schema-name format, tag format --
+        # docs/internal/21-api-contract.md's naming conventions that avoid
+        # merge conflicts
+        # table) and what is deliberately not checked yet.
+        run: pnpm --package=@redocly/cli@2.51.1 dlx redocly lint build/openapi/speed.yaml --config redocly.yaml
+      - name: Generated merged document must match the committed spec
+        run: |
+          git diff --exit-code || {
+            echo "error: merging both fragments left the tree dirty. The"
+            echo "checked-in build/openapi/speed.yaml is not what"
+            echo "examples/reference-app/internal/notes/api/openapi.yaml and"
+            echo "go/authn/api/openapi.yaml merge to today -- did a fragment"
+            echo "change without running 'task api:merge' and committing the"
+            echo "result? Per docs/internal/21-api-contract.md, spec +"
+            echo "generated artifact + implementation ship in the same PR."
+            exit 1
+          }
       - name: Install web workspace dependencies (frozen lockfile)
         # --frozen-lockfile doubles as the importer check: a PR that adds
         # or renames a web/ package without its pnpm-lock.yaml entry fails
         # here.
         working-directory: web
         run: pnpm install --frozen-lockfile
-      - name: Regenerate the frontend SDK from the notes fragment (pinned orval 8.17.0)
+      - name: Regenerate the frontend SDK from the merged document (pinned orval 8.17.0)
         # The same command pair as Taskfile.yml's api:gen frontend leg --
         # keep the two in lockstep (both pin orval at 8.17.0; orval is
         # never a workspace dependency, so the lockfile cannot pin it).
         # Run from web/ with the relative config path, then the
         # nodenext fixup rewrites the mutator import to its explicit .js
-        # form (why: @speed/api-sdk's AGENTS.md).
+        # form (why: @speed/api-sdk's AGENTS.md). The input is the merged
+        # document produced above -- notes + authn fragments; org's
+        # fragment is deliberately not part of it (see the api:merge task
+        # and docs/internal/21-api-contract.md's org note).
         run: |
           pnpm dlx orval@8.17.0 --config orval.config.ts
           node scripts/orval-nodenext-fixup.mjs
@@ -246,9 +293,9 @@ jobs:
           git diff --exit-code || {
             echo "error: regenerating from the committed spec left the tree"
             echo "dirty. The checked-in web/packages/api-sdk/src/index.ts is"
-            echo "not what the notes fragment generates -- did you change the"
-            echo "spec or web/orval.config.ts without running 'task api:gen'"
-            echo "and committing the result?"
+            echo "not what the merged document (notes + authn fragments)"
+            echo "generates -- did you change the spec or web/orval.config.ts"
+            echo "without running 'task api:gen' and committing the result?"
             echo "Per docs/internal/21-api-contract.md, spec + generated"
             echo "artifact + implementation ship in the same PR."
             exit 1
@@ -291,41 +338,3 @@ jobs:
         run: |
           cd go/authn
           go build ./...
-      - name: Set up pinned Node.js, pnpm and the pnpm store cache (redocly)
-        # Already set up once above for the notes frontend leg, but this
-        # step is independent of that one succeeding: redocly's pnpm dlx
-        # invocation below needs no web/ workspace install (unlike orval,
-        # which runs pnpm-workspace-aware from web/), so this is a
-        # standalone action call rather than a dependency on the earlier
-        # steps' pnpm store.
-        uses: ./.github/actions/setup-node-env
-      - name: Merge every fragment into build/openapi/speed.yaml (pinned redocly 2.51.1)
-        # The same command as Taskfile.yml's api:merge task -- keep the two
-        # in lockstep (both pin redocly at 2.51.1). `join`, not `bundle`:
-        # these fragments are peers, each a complete document, not one root
-        # with $refs into the others.
-        run: |
-          mkdir -p build/openapi
-          pnpm --package=@redocly/cli@2.51.1 dlx redocly join \
-            examples/reference-app/internal/notes/api/openapi.yaml \
-            go/authn/api/openapi.yaml \
-            -o build/openapi/speed.yaml
-      - name: Lint the merged document against the naming-convention rules
-        # redocly.yaml's own header explains what each rule checks and why
-        # (operationId format, component schema-name format, tag format --
-        # docs/internal/21-api-contract.md's naming conventions that avoid
-        # merge conflicts
-        # table) and what is deliberately not checked yet.
-        run: pnpm --package=@redocly/cli@2.51.1 dlx redocly lint build/openapi/speed.yaml --config redocly.yaml
-      - name: Generated merged document must match the committed spec
-        run: |
-          git diff --exit-code || {
-            echo "error: merging both fragments left the tree dirty. The"
-            echo "checked-in build/openapi/speed.yaml is not what"
-            echo "examples/reference-app/internal/notes/api/openapi.yaml and"
-            echo "go/authn/api/openapi.yaml merge to today -- did a fragment"
-            echo "change without running 'task api:merge' and committing the"
-            echo "result? Per docs/internal/21-api-contract.md, spec +"
-            echo "generated artifact + implementation ship in the same PR."
-            exit 1
-          }

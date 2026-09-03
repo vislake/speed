@@ -13,9 +13,13 @@
  * shows up as a diff in the regenerated header (which stamps the
  * version).
  *
- * Input is the notes module's openapi fragment only: redocly's
- * merge of the module fragments into speed.yaml is deferred to M1, when
- * the second fragment appears. Output covers types AND TanStack Query
+ * Input is the committed merged document, build/openapi/speed.yaml,
+ * produced by redocly's `join` of the module fragments (Taskfile's
+ * api:merge task -- `task api:gen` depends on it, so a fragment edit can
+ * never regenerate from a stale committed merge). The merge currently
+ * covers the notes and authn fragments; org's fragment is deliberately
+ * not part of it (docs/internal/21-api-contract.md's org note -- it
+ * predates the merge machinery). Output covers types AND TanStack Query
  * hooks (client: react-query), written to src/index.ts; generated
  * files carry the DO-NOT-EDIT header below.
  *
@@ -36,9 +40,9 @@
  */
 
 export default {
-  notes: {
+  speed: {
     input: {
-      target: '../examples/reference-app/internal/notes/api/openapi.yaml',
+      target: '../build/openapi/speed.yaml',
     },
     output: {
       target: './packages/api-sdk/src/index.ts',

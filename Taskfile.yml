@@ -221,7 +221,7 @@ tasks:
     silent: true
 
   api:gen:
-    desc: Regenerate the generated API surface of every module that ships an OpenAPI fragment -- backend (oapi-codegen types + ServerInterface) for notes, org and authn, plus notes' frontend SDK (orval -> @speed/api-sdk) -- from their fragments.
+    desc: Regenerate the generated API surface of every module that ships an OpenAPI fragment -- backend (oapi-codegen types + ServerInterface) for notes, org and authn, plus the frontend SDK for every fragment in the merged document (orval -> @speed/api-sdk, notes + authn).
     # The backend half of the contract-change flow (docs/internal/
     # 21-api-contract.md's order: edit the spec, regenerate, compile
     # failures reveal every handler to fix) is real for the three modules
@@ -235,32 +235,36 @@ tasks:
     # live in internal/notes/handler.go, go/org/handler.go and
     # go/authn/handler.go).
     #
-    # The frontend half of the api:gen promise is live for notes only: its
-    # fragment drives the @speed/api-sdk package through orval, pinned at
-    # 8.17.0 and run from web/ via pnpm dlx (orval is never a workspace
-    # dependency), followed by web/scripts/orval-nodenext-fixup.mjs -- see
-    # that package's AGENTS.md for the seam and the fixup's why. Neither
-    # org's nor authn's fragment feeds orval yet: the frontend generation
-    # targets a single spec source today, and no consumer shell exists to
-    # type-check the generated hooks against -- org's leg deferred to the
-    # M1 org-web / consumer-shell round (go/org/AGENTS.md's deferrals
-    # table), authn's to the auth-ui / consumer-shell round that actually
-    # imports it (go/authn/AGENTS.md) -- adding a web package/export/
-    # lockfile change for a fragment nothing on the web side consumes yet
-    # buys nothing today.
+    # The frontend half of the api:gen promise is live for every fragment
+    # in the merged document: the api:merge dependency below joins the
+    # notes and authn fragments into build/openapi/speed.yaml, and the
+    # orval leg below regenerates the @speed/api-sdk package from that
+    # merged document -- orval pinned at 8.17.0 and run from web/ via pnpm
+    # dlx (orval is never a workspace dependency), followed by
+    # web/scripts/orval-nodenext-fixup.mjs -- see that package's AGENTS.md
+    # for the seam and the fixup's why. org's fragment feeds neither the
+    # merge nor orval: it predates the merge machinery, and its frontend
+    # leg defers to the M1 org-web / consumer-shell round
+    # (go/org/AGENTS.md's deferrals table). authn's fragment, by contrast,
+    # has no "no consumer shell" deferral left: its generated surface has
+    # been compile-consumed by @speed/auth-core since the auth-core round.
     # The redocly merge of the fragments into build/openapi/speed.yaml, and
-    # its spec lint, are now live too -- see the api:merge task below, not
-    # this one: merging stays independent of each fragment's own generation,
-    # per docs/internal/21-api-contract.md's "spec organization and merging"
-    # section. Still
-    # deferred: breaking-change detection (oasdiff), which waits for the
-    # first release baseline (M4).
+    # its spec lint, live in the api:merge task below -- api:gen DEPENDS on
+    # api:merge (deps above), because the merged document is the frontend
+    # leg's input: a fragment edit must regenerate through a fresh merge,
+    # never through a stale committed speed.yaml. The backend legs stay
+    # independent of the merge, per docs/internal/21-api-contract.md's
+    # "spec organization and merging" section. Still deferred:
+    # breaking-change detection (oasdiff), which waits for the first
+    # release baseline (M4).
     #
     # Keep the commands in lockstep with
     # .github/workflows/api-contract.yml's regeneration steps: the same
     # go run from the same three directories, and the same pnpm dlx orval +
     # fixup pair from web/, then a git diff there fails any PR whose
     # spec change was not committed with its regenerated artifact.
+    deps:
+      - api:merge
     cmds:
       - |
         cd "{{.APP_DIR}}/internal/notes/api" && \
@@ -282,13 +286,15 @@ tasks:
   api:merge:
     desc: Merge every module's OpenAPI fragment into build/openapi/speed.yaml and lint the result against redocly.yaml's naming-convention rules.
     # docs/internal/21-api-contract.md's "spec organization and merging"
-    # section: each module
-    # fragment still generates its own backend/frontend artifacts
-    # independently (api:gen above never depends on this task, and vice
-    # versa), but the MERGED document is a real release artifact
-    # (build/openapi/speed.yaml, committed -- see .gitignore's carve-out) in
-    # its own right once two or more fragments exist, which happened when
-    # authn's fragment landed alongside notes'.
+    # section: each module fragment still generates its own backend
+    # artifacts independently, but the MERGED document is a real release
+    # artifact (build/openapi/speed.yaml, committed -- see .gitignore's
+    # carve-out) in its own right once two or more fragments exist (which
+    # happened when authn's fragment landed alongside notes'), and it is
+    # also the frontend leg's input: api:gen depends on this task (see
+    # above), so a fragment edit regenerates through a fresh merge rather
+    # than a stale committed speed.yaml. The merge itself stays
+    # independent -- api:merge never depends on api:gen.
     #
     # `join`, not `bundle`: bundle expects one root document with $refs into
     # the others; these fragments are peers, each a complete document with
