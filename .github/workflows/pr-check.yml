@@ -21,7 +21,9 @@ name: pr-check
 #     (@speed/tokens, @speed/i18n, @speed/ui-kit, @speed/api-client,
 #     @speed/api-sdk -- the last the generated frontend SDK, orval
 #     output from the notes fragment whose regenerated src/ must keep
-#     passing these same legs; root CLAUDE.md, Repository Status) each
+#     passing these same legs -- and @speed/layout-kit, the shared
+#     AppShell/RouteGuard app-chrome layer with no auth-mechanism
+#     opinion; root CLAUDE.md, Repository Status) each
 #     run through the reusable npm-package-ci workflow: a frozen-lockfile
 #     workspace install from the web/ root, then lint (the flat-config
 #     ESLint at web/ -- typescript-eslint recommended, no-explicit-any,
@@ -172,6 +174,7 @@ jobs:
           - web/packages/ui-kit
           - web/packages/api-client
           - web/packages/api-sdk
+          - web/packages/layout-kit
     uses: ./.github/workflows/reusable/npm-package-ci.yml
     with:
       package: ${{ matrix.package }}

@@ -50,6 +50,7 @@ web/
     api-client/         @speed/api-client  -- hand-written HTTP runtime; fetch, retry, ApiError
     api-sdk/            @speed/api-sdk    -- generated API surface (orval output from the
                                              notes fragment); calls api-client through a seam
+    layout-kit/         @speed/layout-kit -- AppShell/RouteGuard chrome, no auth opinion
 ```
 
 Root `package.json` holds only what every package shares (typescript,
