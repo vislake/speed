@@ -1,0 +1,56 @@
+# Hand-written WHERE tenant_id = ? filters
+#
+# Discipline row: docs/internal/18-cicd.md architecture-discipline table,
+# "禁止手写 `WHERE tenant_id = ?`" (semgrep rule: tenant filtering is
+# injected only by the GORM plugin and the Repository), and the root
+# CLAUDE.md "Multi-tenant isolation" bullet: never hand-write
+# WHERE tenant_id = ? -- writing it by hand means bypassing the guard
+# (and tenant_id must never be accepted from request parameters,
+# headers or bodies at the API layer either).
+#
+# What fires: a Where / Or / Not / Having chain call whose first argument
+# is a string literal containing a tenant_id = ? style filter clause.
+#
+# ALLOWLIST (paths.exclude below) -- the sites where the filter is the
+# deliberate, documented mechanism, not a bypass:
+#   * go/dbkit/**            -- the tenant-scoping plugin itself builds
+#     the tenant filter that everyone else is required to rely on; its
+#     own internals obviously carry the clause.
+#   * go/jobs/store.go       -- the jobRecord idempotency guard matches a
+#     record by (tenant_id, idempotency_key) on the platform-data table;
+#     legitimately written by hand, per the store.go file-header comment
+#     and docs/internal/17-risks.md row 46.
+#
+# Residual gap: only the first-argument literal form is matched -- a
+# clause assembled dynamically (fmt.Sprintf into the clause, or a
+# hand-written filter passed through a helper) is not caught; code review
+# still owns that evasion. Tests deliberately write the banned pattern to
+# prove the guards (tenancytest, dbkit's own suites) and are excluded
+# wholesale.
+rules:
+  - id: handwritten-tenant-id-filter
+    message: >-
+      hand-written tenant_id filter clause in a Where/Or/Not/Having call.
+      Tenant filtering is injected by the GORM plugin and the Repository;
+      writing WHERE tenant_id = ? by hand bypasses the guard. Legitimate
+      sites are allowlisted in the rule header (go/dbkit internals,
+      go/jobs/store.go).
+    languages:
+      - go
+    severity: WARNING
+    patterns:
+      - pattern-either:
+          - pattern: $RECV.Where($CLAUSE, ...)
+          - pattern: $RECV.Or($CLAUSE, ...)
+          - pattern: $RECV.Not($CLAUSE, ...)
+          - pattern: $RECV.Having($CLAUSE, ...)
+      - metavariable-regex:
+          metavariable: $CLAUSE
+          regex: '(?is).*tenant_id\s*=\s*\?.*'
+    paths:
+      exclude:
+        - "**/*_test.go"
+        - "**/integration_test/**"
+        # Allowlist (see header).
+        - "**/go/dbkit/**"
+        - "**/go/jobs/store.go"

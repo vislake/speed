@@ -44,6 +44,17 @@ name: pr-check
 #         -- actions/setup-go and setup-node cannot parse it -- so this
 #         gate is what proves a local `mise install` (Taskfile setup)
 #         installs exactly the toolchain CI runs with.
+#       - tools/semgrep_rules/ -- the architecture-discipline semgrep
+#         ruleset: six rules, each mapping to an 18-cicd discipline-table
+#         row (deployment-mode branching outside kernel wiring,
+#         non-constant log messages, raw-GORM bypasses, AutoMigrate,
+#         tenant_id metric labels, hand-written tenant filters), each with
+#         planted-violation fixtures under tools/semgrep_rules/testdata/.
+#         The step below pip-installs semgrep into a throwaway venv and
+#         scans go/ examples/ tools/ with the fixture subtree excluded at
+#         the CLI level; any finding fails the PR. Version deliberately
+#         unpinned until the first green CI run, then pinned (see
+#         tools/README.md, execution status).
 #       - go build github.com/vislake/speed/go/... -- every module compiles
 #         in workspace context from the go.work root.
 #       - go work sync + git diff --exit-code -- the checked-in workspace
@@ -62,8 +73,8 @@ name: pr-check
 # DELIBERATELY NOT WIRED HERE (18-cicd discipline table rows whose tooling
 # does not exist in the repository yet; each lands with its tooling round --
 # wiring them now would be fake checks):
-#   * semgrep rules, spec merging, redocly rules, oasdiff, Playwright e2e
-#     -- none of that tooling exists yet (see the gated pipeline stubs
+#   * spec merging, redocly rules, oasdiff, Playwright e2e -- none of
+#     that tooling exists yet (see the gated pipeline stubs
 #     e2e/security/scaffold-verify/release/nightly in this directory for
 #     where each wires in). The ESLint foundation is wired, not
 #     deferred: the workspace's speed/no-literal-text rule enforces
@@ -164,6 +175,22 @@ jobs:
         run: python3 tools/scan_cjk.py
       - name: Toolchain drift gate (.mise.toml mirrors)
         run: python3 tools/check_toolchain.py
+      # Semgrep into a throwaway venv: the runner has no pinned semgrep
+      # and this job's toolchain setup is the Go/Node actions only. The
+      # pip install is the deliberately-unpinned piece -- see the COVERAGE
+      # note and tools/README.md; it is pinned here once CI is green.
+      - name: Semgrep architecture-discipline rules (tools/semgrep_rules)
+        run: |
+          python3 -m venv /tmp/semgrep-venv
+          /tmp/semgrep-venv/bin/pip install --quiet semgrep
+          # Fixtures stay out of the scan: planted violations are the
+          # rules' proofs (exercised directly in the rules' own checks),
+          # not tree state -- so they are excluded at the CLI level, the
+          # same shape as the local proof runs.
+          /tmp/semgrep-venv/bin/semgrep scan \
+            --config tools/semgrep_rules --error \
+            --exclude tools/semgrep_rules \
+            go examples tools
       - name: Build every module in workspace context
         run: go build github.com/vislake/speed/go/...
       - name: Workspace integrity (go.work.sum must be canonical)

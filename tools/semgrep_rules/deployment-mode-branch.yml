@@ -1,0 +1,109 @@
+# Deployment-mode branching outside kernel wiring
+#
+# Discipline row: docs/internal/18-cicd.md architecture-discipline table,
+# "业务逻辑中禁止 `if mode == \"standalone\"` 分支" (semgrep rule, only the
+# kernel-wiring packages are allowed), and the root CLAUDE.md Architecture
+# Discipline bullet "Deployment modes: do not branch on
+# `if mode == \"standalone\"` in business logic".
+#
+# Deployment-mode differences belong exclusively to kernel wiring. Business
+# modules receive already-resolved infrastructure (a concrete Queue, a
+# concrete KVStore, ...) through the Registry; a module that inspects the
+# mode constant to change its own behavior has escaped the wiring contract.
+#
+# ALLOWLIST (paths.exclude below) -- the real kernel-wiring sites, every
+# one of them a mode decision at wiring time:
+#   * go/pkgcore/deployment_mode.go        -- the mode constants + parser
+#   * go/pkgcore/registry.go               -- NewKernel's wiring switch
+#   * go/observability/init.go             -- Init's exporter dispatch
+#   * examples/reference-app/cmd/server/server.go  -- command entry reads
+#     SPEED_DEPLOYMENT_MODE and picks the wiring (kernel assembly is the
+#     consumer binary's job, not a library module's)
+#   * examples/reference-app/cmd/server/main.go    -- same command entry
+#
+# The reference-app server.go is the one place the environment variable is
+# read (os.Getenv("SPEED_DEPLOYMENT_MODE")); it sits on the allowlist
+# because the command entry IS the kernel wiring for the consumer binary.
+#
+# What fires: string-literal and constant comparisons against the two mode
+# values (both operand orders, == and !=), case labels naming the mode
+# values (unqualified or through any qualifier), and reads of the
+# SPEED_DEPLOYMENT_MODE environment variable -- each is a mode decision.
+#
+# Constant propagation: semgrep resolves same-package literal-valued
+# consts before matching, so a mode decision smuggled through a local
+# `const modeAlias = "standalone"` still fires -- matching is by VALUE,
+# not by identifier name (the positive fixture's constEscaper proves it,
+# the negative fixture's sqliteFlavor / logLevelEnv consts prove the
+# flip side: consts holding other values stay clean).
+#
+# Residual gap: a module could still smuggle a mode decision behind an
+# indirection that neither a text match nor value propagation reaches --
+# e.g. a helper living inside an allowlisted file, a cross-package alias
+# constant, or a decision computed at runtime. The rule sees the
+# comparison sites, not the control flow that reaches them; review still
+# owns those evasions.
+rules:
+  - id: deployment-mode-branch-outside-kernel-wiring
+    message: >-
+      deployment-mode comparison or SPEED_DEPLOYMENT_MODE read outside the
+      kernel-wiring allowlist. Deployment mode is decided once, in kernel
+      wiring (pkgcore deployment_mode.go / registry.go, observability
+      Init, the reference-app command entry); business code receives
+      already-resolved infrastructure and must never branch on the mode.
+      See the rule header for the exact allowlist.
+    languages:
+      - go
+    severity: WARNING
+    patterns:
+      - pattern-either:
+          - pattern: $X == "standalone"
+          - pattern: '"standalone" == $X'
+          - pattern: $X != "standalone"
+          - pattern: '"standalone" != $X'
+          - pattern: $X == "distributed"
+          - pattern: '"distributed" == $X'
+          - pattern: $X != "distributed"
+          - pattern: '"distributed" != $X'
+          # A bare `case "standalone":` label is not a parseable Go
+          # statement, so the case forms are anchored inside the switch
+          # statement they belong to (the whole switch is the match).
+          - pattern: |
+              switch $X {
+              case "standalone":
+                  ...
+              }
+          - pattern: |
+              switch $X {
+              case "distributed":
+                  ...
+              }
+          - pattern: $OBJ.DeploymentModeStandalone == $X
+          - pattern: $X == $OBJ.DeploymentModeStandalone
+          - pattern: $OBJ.DeploymentModeStandalone != $X
+          - pattern: $X != $OBJ.DeploymentModeStandalone
+          - pattern: $OBJ.DeploymentModeDistributed == $X
+          - pattern: $X == $OBJ.DeploymentModeDistributed
+          - pattern: $OBJ.DeploymentModeDistributed != $X
+          - pattern: $X != $OBJ.DeploymentModeDistributed
+          - pattern: |
+              switch $X {
+              case $OBJ.DeploymentModeStandalone:
+                  ...
+              }
+          - pattern: |
+              switch $X {
+              case $OBJ.DeploymentModeDistributed:
+                  ...
+              }
+          - pattern: 'os.Getenv("SPEED_DEPLOYMENT_MODE")'
+    paths:
+      exclude:
+        - "**/*_test.go"
+        - "**/integration_test/**"
+        # Kernel-wiring allowlist (see header).
+        - "**/go/pkgcore/deployment_mode.go"
+        - "**/go/pkgcore/registry.go"
+        - "**/go/observability/init.go"
+        - "**/examples/reference-app/cmd/server/server.go"
+        - "**/examples/reference-app/cmd/server/main.go"

@@ -1,0 +1,53 @@
+# Raw-GORM bypass of dbkit.Repository[T]
+#
+# Discipline row: docs/internal/18-cicd.md architecture-discipline table,
+# "禁止绕过 `Repository[T]` 直接用 `db.Table/Model/Raw`" (semgrep custom
+# rule), and the root CLAUDE.md bullets under "Multi-tenant isolation":
+# business repositories for tenant-owned data must embed
+# dbkit.Repository[T], and db.Table / db.Model / db.Raw must not be used
+# to work around the Repository -- tenant filtering is injected by the
+# GORM plugin and the Repository, so bypassing them bypasses the guard.
+#
+# What fires: any call to the three bypass entry points -- .Table(...),
+# .Model(...), .Raw(...) -- on any receiver, in shipped (non-test) code.
+#
+# ALLOWLIST (paths.exclude below) -- the sites where the raw *gorm.DB
+# surface is the legitimate tool, all documented in the owning module:
+#   * go/dbkit/**            -- dbkit owns the *gorm.DB wrapper, the
+#     tenant-scoping plugin, the MigrationRegistry and Open(); it is the
+#     infrastructure the discipline is built on, not a consumer of it.
+#   * go/jobs/store.go       -- jobRecord is platform data whose dispatch
+#     query must scan candidate Jobs across every tenant at once (see
+#     docs/internal/17-risks.md row 46 and the store.go file-header
+#     comment); the plain *gorm.DB dbkit.Open returns is the documented
+#     pattern for that data domain.
+#
+# Residual gaps: only the three named entry points are matched -- a
+# workaround through another method on *gorm.DB (e.g. Exec with hand-
+# written SQL) is not caught here (Exec is separately shape-controlled by
+# the WHERE-tenant_id rule's review net and dbkit's own discipline), and
+# tests deliberately write banned patterns to prove the guards, which is
+# why test files are excluded wholesale rather than enumerated.
+rules:
+  - id: raw-gorm-bypass
+    message: >-
+      direct call to a raw-GORM bypass entry point (.Table/.Model/.Raw).
+      Tenant-owned data must be reached through dbkit.Repository[T],
+      whose tenant filter is injected by the plugin; a raw call bypasses
+      the guard. Legitimate sites are allowlisted in the rule header
+      (go/dbkit internals, go/jobs/store.go platform-data queries).
+    languages:
+      - go
+    severity: WARNING
+    patterns:
+      - pattern-either:
+          - pattern: $RECV.Table($ARGS, ...)
+          - pattern: $RECV.Model($ARGS, ...)
+          - pattern: $RECV.Raw($ARGS, ...)
+    paths:
+      exclude:
+        - "**/*_test.go"
+        - "**/integration_test/**"
+        # Allowlist (see header).
+        - "**/go/dbkit/**"
+        - "**/go/jobs/store.go"

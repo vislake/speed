@@ -1,0 +1,105 @@
+# tenant_id as a Prometheus / OpenTelemetry metric label
+#
+# Discipline row: docs/internal/18-cicd.md architecture-discipline table,
+# "`tenant_id` 不得作为 Prometheus label" (semgrep rule + runtime
+# assertion test), the matching row in docs/internal/17-risks.md, and the
+# root CLAUDE.md "Security" rule: never use tenant_id as a Prometheus
+# metric label -- high cardinality takes Prometheus down; tenant
+# dimensions belong in span attributes and log fields.
+#
+# What fires: the metric-label NAME carriers -- metric.WithAttributes
+# (OpenTelemetry) and attribute.KeyValue slice literals, the four
+# prometheus.New*Vec constructors and a prometheus.Labels literal
+# (Prometheus client) -- whose source text contains a literal `tenant_id`
+# occurrence. The cardinality hazard is the same for both ecosystems, so
+# both are matched.
+#
+# What deliberately does NOT fire:
+#   * Span attributes (attribute.Set, SetAttributes, AnnotateTenant) are
+#     the sanctioned home for the tenant dimension -- tenant_id as a span
+#     attribute is correct and stays out of scope.
+#   * .WithLabelValues(...) / a Vec's per-call counter: those pass label
+#     VALUES at record time. The label NAME -- the cardinality hazard --
+#     is fixed at vector construction (New*Vec, matched above); a call
+#     site hands over a tenant id variable whose text cannot carry the
+#     hazard, so the value dimension is not text-detectable and review
+#     owns it.
+#   * The observability HTTP middleware legitimately owns metrics (route
+#     label, method, status) and is where metric code naturally lives --
+#     it needs no carve-out because it never sets a tenant_id label; the
+#     route-label limiter (middleware.go "Route label caveat") is the
+#     cardinality guard for the metric side.
+#
+# Residual gaps:
+#   * Only the first variadic option / first composite-literal element is
+#     bound to the metavariable the regexp runs on, so a tenant_id label
+#     placed deeper in a WithAttributes(...) call or KeyValue slice is
+#     invisible to this rule.
+#   * The rule matches the *source text* of the carrier, so a tenant_id
+#     label introduced through an indirection -- e.g.
+#     attribute.String(obs.TenantIDKey, ...) where the constant's value is
+#     "tenant_id" -- is not caught by the text match. The runtime
+#     assertion test named in the 18-cicd row and code review cover that
+#     form.
+rules:
+  - id: tenant-id-metric-label
+    message: >-
+      tenant_id appears in a metric-label carrier. tenant_id must never
+      become a Prometheus/OTel metric label: high cardinality takes
+      Prometheus down. Tenant dimensions belong in span attributes and
+      log fields only (see the rule header for scope notes and the
+      residual gaps).
+    languages:
+      - go
+    severity: WARNING
+    patterns:
+      # Each carrier shape binds its own metavariable, so the regexp
+      # filter must sit inside that alternative -- a sibling-level filter
+      # would run against alternatives that never bind it.
+      - pattern-either:
+          # OpenTelemetry metric options: the tenant dimension must not
+          # ride on a metric; spans and logs are its home.
+          - patterns:
+              - pattern: metric.WithAttributes($ATTRS, ...)
+              - metavariable-regex:
+                  metavariable: $ATTRS
+                  regex: "(?s).*tenant_id.*"
+          - patterns:
+              - pattern: "[]attribute.KeyValue{$ELEMS, ...}"
+              - metavariable-regex:
+                  metavariable: $ELEMS
+                  regex: "(?s).*tenant_id.*"
+          # Prometheus vector constructors: the label NAME list is the
+          # cardinality decision. Full-identifier call names only -- a
+          # metavariable cannot form part of an identifier token
+          # (New$VEC is unparseable), so the four constructors are
+          # spelled out.
+          - patterns:
+              - pattern: prometheus.NewCounterVec($OPTS, $LABELS)
+              - metavariable-regex:
+                  metavariable: $LABELS
+                  regex: "(?s).*tenant_id.*"
+          - patterns:
+              - pattern: prometheus.NewGaugeVec($OPTS, $LABELS)
+              - metavariable-regex:
+                  metavariable: $LABELS
+                  regex: "(?s).*tenant_id.*"
+          - patterns:
+              - pattern: prometheus.NewHistogramVec($OPTS, $LABELS)
+              - metavariable-regex:
+                  metavariable: $LABELS
+                  regex: "(?s).*tenant_id.*"
+          - patterns:
+              - pattern: prometheus.NewSummaryVec($OPTS, $LABELS)
+              - metavariable-regex:
+                  metavariable: $LABELS
+                  regex: "(?s).*tenant_id.*"
+          - patterns:
+              - pattern: "prometheus.Labels{$PAIRS, ...}"
+              - metavariable-regex:
+                  metavariable: $PAIRS
+                  regex: "(?s).*tenant_id.*"
+    paths:
+      exclude:
+        - "**/*_test.go"
+        - "**/integration_test/**"

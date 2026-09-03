@@ -1,0 +1,61 @@
+# Non-constant log message into the structured logger
+#
+# Discipline row: docs/internal/18-cicd.md architecture-discipline table,
+# "日志消息必须是常量字符串" (semgrep rule against
+# `log.*(fmt.Sprintf(...))` and string concatenation as the message), and
+# the root CLAUDE.md bullets under "Logging": use structured logging only
+# and never build log messages by concatenation or fmt.Sprintf -- the
+# message is a constant string, everything variable goes into key-value
+# attributes.
+#
+# The targeted receivers are the four methods of the observability
+# structured logger returned by obs.FromContext(ctx) -- Info / Warn /
+# Error / Debug -- whose first argument is the message constant. The
+# logger is the shared stack logger; anything logged outside it (stdout,
+# a third-party logger) is a separate discipline problem the rule does not
+# chase.
+#
+# What fires: a call to one of those four methods whose first argument is
+# not a string literal -- fmt.Sprintf output, a concatenation, or a
+# variable holding a formatted string. Real-tree log calls (go/pkgcore,
+# go/observability, go/jobs) all pass constant strings today.
+#
+# Residual gaps, deliberately accepted:
+#   * A string literal message is still required to be a constant -- a
+#     raw-string (backtick) literal is not matched by the literal
+#     negation and would be flagged even though it is constant. No such
+#     message exists today.
+#   * http.Error(w, <non-literal>, status) in an HTTP handler is filtered
+#     by pattern-not below: it is a net/http stdlib function whose shape
+#     collides with the logger call syntax ($RECV=http, $M=Error) and it
+#     is not the structured logger.
+rules:
+  - id: non-constant-log-message
+    message: >-
+      structured-logger message argument is not a constant string. The log
+      message must be a constant (never fmt.Sprintf or concatenation);
+      everything variable goes into key-value attributes after the
+      message, so trace and tenant correlation survive. See the rule
+      header.
+    languages:
+      - go
+    severity: WARNING
+    patterns:
+      - pattern-either:
+          - pattern: $RECV.$M($MSG, ...)
+          - pattern: $RECV.$M($MSG)
+      - metavariable-regex:
+          metavariable: $M
+          regex: "^(Info|Warn|Error|Debug)$"
+      - metavariable-pattern:
+          metavariable: $MSG
+          patterns:
+            # A double-quoted string literal binds $ANY; matching means
+            # the message IS a literal constant, so this call is exempt.
+            - pattern-not: '"$ANY"'
+      # net/http stdlib helper, not the structured logger.
+      - pattern-not: http.Error(...)
+    paths:
+      exclude:
+        - "**/*_test.go"
+        - "**/integration_test/**"
