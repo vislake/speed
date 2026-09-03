@@ -923,8 +923,8 @@ func TestDelivery_ContactPermanentFailureMarksTheContactBounced(t *testing.T) {
 	}
 	env.host.mailer.failWith = fmt.Errorf("550 mailbox unavailable: %w", ErrTransportPermanent)
 
-	if err := env.dispatchAndAttempt(t, d); err != nil {
-		t.Fatalf("attempt with a permanent contact failure returned %v, want nil (stop, not retry)", err)
+	if attemptErr := env.dispatchAndAttempt(t, d); attemptErr != nil {
+		t.Fatalf("attempt with a permanent contact failure returned %v, want nil (stop, not retry)", attemptErr)
 	}
 
 	rec := env.sendRecordByChannel(t, ctx, d, ChannelEmail)
@@ -1021,8 +1021,8 @@ func TestDelivery_AnnounceFailureRetriesAndConverges(t *testing.T) {
 	if got := len(env.host.mailer.messages()); got != 1 {
 		t.Errorf("mailer sent %d messages, want the email delivery", got)
 	}
-	if rec := env.sendRecordByChannel(t, ctx, deliveryDispatch(), ChannelEmail); rec == nil || rec.Status != SendRecordStatusSucceeded {
-		t.Errorf("email record = %+v, want succeeded", rec)
+	if emailRec := env.sendRecordByChannel(t, ctx, deliveryDispatch(), ChannelEmail); emailRec == nil || emailRec.Status != SendRecordStatusSucceeded {
+		t.Errorf("email record = %+v, want succeeded", emailRec)
 	}
 
 	// The bus recovers; the queue retries the same job.

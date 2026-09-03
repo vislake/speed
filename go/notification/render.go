@@ -13,9 +13,9 @@ import (
 // a single text -- and delivery renders exactly the parts the destination
 // channel needs, never the union of all channels' copy.
 var channelRenderParts = map[string][]string{
-	ChannelInApp: []string{"title", "body"},
-	ChannelEmail: []string{"subject", "body_text"},
-	ChannelSMS:   []string{"text"},
+	ChannelInApp: {"title", "body"},
+	ChannelEmail: {"subject", "body_text"},
+	ChannelSMS:   {"text"},
 }
 
 // renderContent renders one notification type's message copy -- the parts
