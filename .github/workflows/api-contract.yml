@@ -1,10 +1,11 @@
 name: api-contract
 
 # API-contract discipline pipeline -- docs/internal/18-cicd.md's pipeline
-# table, api-contract row, backend half now implemented. Backs the root
+# table, api-contract row: both halves implemented, backend
+# (oapi-codegen) and frontend (orval -> @speed/api-sdk). Backs the root
 # CLAUDE.md API-contract discipline and docs/internal/21-api-contract.md's
 # spec-first order: edit api/openapi.yaml -> task api:gen -> compilation
-# failures reveal every handler to fix -> commit spec, generated artifact
+# failures reveal every handler to fix -> commit spec, generated artifacts
 # and implementation in the same PR. Target under 5 minutes; this job
 # carries a timeout and stale runs are cancelled via concurrency.
 #
@@ -35,17 +36,27 @@ name: api-contract
 #     assertion (internal/notes/handler.go) stops compiling. Without this
 #     leg a spec+artifact PR whose handler lagged would pass both this
 #     pipeline and pr-check (which does not build the reference app).
+#   * Frontend-sdk regeneration consistency: the pinned orval (8.17.0 --
+#     the exact same `pnpm dlx orval` + nodenext-fixup pair as Taskfile's
+#     api:gen frontend leg, run from web/) regenerates @speed/api-sdk's
+#     src/index.ts from the same notes fragment, then a second
+#     `git diff --exit-code` fails the job if the committed generated
+#     package is not what the spec generates -- the generated-artifact
+#     consistency check for the frontend half. orval itself is never a
+#     workspace dependency (pnpm dlx, no lockfile entry); a version bump
+#     is visible in the regenerated header and must land in Taskfile,
+#     web/orval.config.ts and this file together.
 #
-# DELIBERATELY NOT WIRED HERE -- roadmap M0 API-contract items whose
-# tooling does not exist yet (wiring them now would be fake checks):
-#   * spec merging into build/openapi/speed.yaml (no other module ships a
-#     fragment; the notes fragment is generated from in place).
-#   * frontend sdk generation (orval) -- a later web/ workspace round
-#     (api-sdk): no @speed/api-sdk exists yet; the @speed/api-client runtime
-#     it would call into is a separate web/ package that landed with the M0
-#     api-client round, so only the generated sdk package itself remains.
-#   * spec linting (redocly rules) and breaking-change detection (oasdiff,
-#     the release-gate diff against the last release).
+# DELIBERATELY NOT WIRED HERE -- API-contract items whose tooling does
+# not exist yet (wiring them now would be fake checks):
+#   * spec merging into build/openapi/speed.yaml -- no second module
+#     fragment exists yet; the notes fragment is generated from in place.
+#     The redocly merge waits for the second fragment (M1).
+#   * spec linting (redocly rules) -- lands with the merge above.
+#   * breaking-change detection (oasdiff, the release-gate diff against
+#     the last release) -- waits for the first release baseline (M4); a
+#     recorded mechanism decision, not a fake gate
+#     (docs/internal/21-api-contract.md).
 #   * merge-conflict checks across fragments -- a single-fragment world has
 #     nothing to conflict.
 # Each lands with its tooling round; the stub headers of the other gated
@@ -54,10 +65,18 @@ name: api-contract
 # PATH SET -- spec/generator-toolchain changes only:
 #   examples/reference-app/internal/notes/api/**   the notes fragment, its
 #                                                  generator config and the
-#                                                  generated artifact (a
-#                                                  hand-edit of the
-#                                                  generated file triggers
-#                                                  the consistency diff)
+#                                                  backend generated
+#                                                  artifact (a hand-edit of
+#                                                  the generated file
+#                                                  triggers the consistency
+#                                                  diff)
+#   web/orval.config.ts, web/scripts/**            the frontend generator
+#                                                  config and the fixup
+#                                                  script behind the regen
+#                                                  command
+#   web/packages/api-sdk/**                        the generated frontend
+#                                                  package (a hand-edit
+#                                                  triggers the diff)
 #   Taskfile.yml                                   api:gen task (the
 #                                                  regeneration command)
 #   .github/workflows/api-contract.yml             this workflow itself
@@ -66,6 +85,9 @@ on:
   pull_request:
     paths:
       - examples/reference-app/internal/notes/api/**
+      - web/orval.config.ts
+      - web/scripts/**
+      - web/packages/api-sdk/**
       - Taskfile.yml
       - .github/workflows/api-contract.yml
   workflow_dispatch:
@@ -107,6 +129,41 @@ jobs:
             echo "dirty. The checked-in api/notes-server.gen.go is not what"
             echo "api/openapi.yaml generates -- did you change the spec"
             echo "without running 'task api:gen' and committing the result?"
+            echo "Per docs/internal/21-api-contract.md, spec + generated"
+            echo "artifact + implementation ship in the same PR."
+            exit 1
+          }
+      - name: Set up pinned Node.js, pnpm and the pnpm store cache
+        # Mirrors the npm CI jobs (reusable/npm-package-ci.yml): the same
+        # composite action, the same single version sources (web/.nvmrc,
+        # web/package.json's packageManager field) and the same pnpm store
+        # cache keyed on the lockfile hash.
+        uses: ./.github/actions/setup-node-env
+      - name: Install web workspace dependencies (frozen lockfile)
+        # --frozen-lockfile doubles as the importer check: a PR that adds
+        # or renames a web/ package without its pnpm-lock.yaml entry fails
+        # here.
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+      - name: Regenerate the frontend SDK from the notes fragment (pinned orval 8.17.0)
+        # The same command pair as Taskfile.yml's api:gen frontend leg --
+        # keep the two in lockstep (both pin orval at 8.17.0; orval is
+        # never a workspace dependency, so the lockfile cannot pin it).
+        # Run from web/ with the relative config path, then the
+        # nodenext fixup rewrites the mutator import to its explicit .js
+        # form (why: @speed/api-sdk's AGENTS.md).
+        run: |
+          pnpm dlx orval@8.17.0 --config orval.config.ts
+          node scripts/orval-nodenext-fixup.mjs
+        working-directory: web
+      - name: Generated frontend SDK must match the committed spec
+        run: |
+          git diff --exit-code || {
+            echo "error: regenerating from the committed spec left the tree"
+            echo "dirty. The checked-in web/packages/api-sdk/src/index.ts is"
+            echo "not what the notes fragment generates -- did you change the"
+            echo "spec or web/orval.config.ts without running 'task api:gen'"
+            echo "and committing the result?"
             echo "Per docs/internal/21-api-contract.md, spec + generated"
             echo "artifact + implementation ship in the same PR."
             exit 1
