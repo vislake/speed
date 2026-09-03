@@ -19,7 +19,10 @@ name: go-module-ci
 #                                discipline-table rows that have golangci
 #                                tooling today -- errcheck, gosec, govet's
 #                                shadow check, depguard's pkgcore-root
-#                                module-boundary rule). The binary comes
+#                                module-boundary rule plus the concrete-
+#                                infrastructure import bans on redis /
+#                                minio / asynq outside their owning
+#                                modules). The binary comes
 #                                from setup-go-env, pinned and checksummed.
 #   2. go vet ./...              static analysis, kept as its own leg: vet is
 #                                the go-version-coupled check that runs on

@@ -75,8 +75,9 @@ name: pr-check
 # wiring them now would be fake checks):
 #   * spec merging, redocly rules, oasdiff, Playwright e2e -- none of
 #     that tooling exists yet (see the gated pipeline stubs
-#     e2e/security/scaffold-verify/release/nightly in this directory for
-#     where each wires in). The ESLint foundation is wired, not
+#     e2e/scaffold-verify/release/nightly in this directory for where
+#     each wires in; security.yml is no longer a stub -- its scans moved
+#     to the live security pipeline). The ESLint foundation is wired, not
 #     deferred: the workspace's speed/no-literal-text rule enforces
 #     i18n-sourced text over React package src, and speed/no-direct-http
 #     enforces the API-contract HTTP discipline (hand-written
