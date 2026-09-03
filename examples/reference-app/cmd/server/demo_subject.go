@@ -94,6 +94,10 @@ const routePublic = ""
 // path, never as a silently ungated route.
 const notesRoutePath = "/api/v1/notes"
 
+// orgRoutePath is where the org module mounts its routes -- the same
+// unexported-path situation notesRoutePath's own comment explains.
+const orgRoutePath = "/api/v1/org"
+
 // demoRouteGuards declares, for every path a module mounts, the resource
 // whose permissions gate it -- or routePublic when the path is
 // deliberately reachable without one.
@@ -108,8 +112,22 @@ const notesRoutePath = "/api/v1/notes"
 // display surfaces -- a login page's brand and feature flags -- that must
 // render before anyone has signed in, and they serve only what the design
 // marks public, never tenant data.
+//
+// org's path is routePublic for a different reason: org.Handler already
+// resolves and requires its own caller identity per operation through
+// SubjectResolver (demoOrgSubjectResolver in server.go) -- org_createNode
+// aside, which resolves none at all -- and org_flow_test.go's own demo
+// callers (an invitee accepting an invitation, most pointedly) are never
+// among the two users seedDemoGrants below seeds a role for, since a
+// person accepting their first invitation has by definition no rbac grant
+// yet. Gating this path on a coarse rbac permission on top of org's own
+// per-operation identity check would refuse exactly the flow org exists to
+// demonstrate. A real deployment layers a genuine permission check inside
+// org's own handlers (or wires org's Scope into rbac's DataScope, the
+// no-import seam org.md documents), not at this router gate.
 var demoRouteGuards = map[string]string{
 	notesRoutePath: notesResource,
+	orgRoutePath:   routePublic,
 	// The config module's two pre-auth endpoints, named through its own
 	// exported constants so a rename cannot drift into a silently ungated
 	// path here.

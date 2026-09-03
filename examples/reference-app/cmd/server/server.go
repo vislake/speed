@@ -188,16 +188,16 @@ func (s strictHostResolver) Resolve(r *http.Request) (pkgcore.TenantID, error) {
 // compile-time check that strictHostResolver satisfies tenancy.Resolver.
 var _ tenancy.Resolver = strictHostResolver{}
 
-// demoUserHeader is the header demoSubjectResolver reads to identify the
+// demoOrgUserHeader is the header demoOrgSubjectResolver reads to identify the
 // HTTP caller: a placeholder for the verified access-token claims authn
 // will eventually supply, in exactly the spirit of demoHostTenants' own
 // disclaimer above. A caller sets it to whatever user id it wants to act
 // as, with no verification whatsoever -- which is fine for this reference
 // app's own demonstration purposes and would be a critical vulnerability
 // in any real deployment.
-const demoUserHeader = "X-Demo-User-Id"
+const demoOrgUserHeader = "X-Demo-User-Id"
 
-// demoSubjectResolver stands in for the org.SubjectResolver authn will
+// demoOrgSubjectResolver stands in for the org.SubjectResolver authn will
 // eventually supply from a verified access token's claims. It exists only
 // so this reference app has *some* way to demonstrate org's two
 // caller-scoped endpoints (creating and accepting an invitation) end to
@@ -209,16 +209,16 @@ const demoUserHeader = "X-Demo-User-Id"
 // unauthenticated, client-supplied header like this one -- see
 // org.SubjectResolver's own doc comment for the same rule stated as a hard
 // requirement.
-type demoSubjectResolver struct{}
+type demoOrgSubjectResolver struct{}
 
 // Subject implements org.SubjectResolver.
-func (demoSubjectResolver) Subject(r *http.Request) (string, bool) {
-	userID := r.Header.Get(demoUserHeader)
+func (demoOrgSubjectResolver) Subject(r *http.Request) (string, bool) {
+	userID := r.Header.Get(demoOrgUserHeader)
 	return userID, userID != ""
 }
 
-// compile-time check that demoSubjectResolver satisfies org.SubjectResolver.
-var _ org.SubjectResolver = demoSubjectResolver{}
+// compile-time check that demoOrgSubjectResolver satisfies org.SubjectResolver.
+var _ org.SubjectResolver = demoOrgSubjectResolver{}
 
 // orgFeatureGate adapts a *config.Service that is filled in AFTER this
 // app's org.Module is constructed into org.FeatureGate, read lazily -- the
@@ -463,7 +463,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	orgModule := org.NewModule(db,
 		org.WithEmailIndexer(orgIndexer),
 		org.WithFeatureGate(orgFeatureGate{service: &configService}),
-		org.WithSubjectResolver(demoSubjectResolver{}),
+		org.WithSubjectResolver(demoOrgSubjectResolver{}),
 		org.WithMailFrom("invitations@reference-app.example"),
 		org.WithInvitationLinkBuilder(func(ctx context.Context, token string) (string, error) {
 			tenant, tenantErr := pkgcore.MustTenantFromContext(ctx)

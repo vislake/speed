@@ -159,7 +159,7 @@ func orgRequest(t *testing.T, srv *httptest.Server, method, path, host, subjectU
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if subjectUserID != "" {
-		req.Header.Set(demoUserHeader, subjectUserID)
+		req.Header.Set(demoOrgUserHeader, subjectUserID)
 	}
 
 	resp, err := srv.Client().Do(req)
