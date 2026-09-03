@@ -2,10 +2,13 @@
   "extends": "../../tsconfig.base.json",
   "include": ["src", "test-utils"],
   "compilerOptions": {
-    // auth-core is pure TypeScript -- no JSX (the hooks and their tests
-    // call React through functions, never through TSX), no DOM rendering
-    // in src -- so the base config stands with only the sibling paths
-    // added. The package calls the generated authn operation functions
+    // auth-core is TypeScript with exactly one TSX file: the README
+    // usage example (src/usage-example.test.tsx) renders a probe
+    // component to prove the documented hook flow, so JSX compiles
+    // through the automatic runtime (same as ui-kit and layout-kit);
+    // nothing else in src/ renders DOM -- so the base config stands
+    // with only the JSX switch and the sibling paths added. The
+    // package calls the generated authn operation functions
     // (@speed/api-sdk) and the api-client error vocabulary
     // (@speed/api-client); its tests bind a fake request function
     // through the @speed/api-sdk/runtime seam, so that subpath resolves
@@ -19,6 +22,7 @@
     // packages. Keep this in lockstep with what src/ imports. List
     // order matters: "@speed/api-sdk/runtime" must be tried before its
     // "@speed/api-sdk" prefix (first match wins in paths).
+    "jsx": "react-jsx",
     "paths": {
       "@speed/api-client": ["../api-client/src/index.ts"],
       "@speed/api-sdk/runtime": ["../api-sdk/src/runtime.ts"],

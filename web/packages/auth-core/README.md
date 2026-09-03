@@ -73,6 +73,13 @@ fails closed: the anonymous snapshot, a null tenant, `false` for every
 permission. Attaching another session later rebinds (last bind wins);
 the previous session's transitions stop reaching the hooks.
 
+This session-and-hooks flow is compiled and executed by the package
+suite (`src/usage-example.test.tsx`), so the documented usage cannot
+drift from the API. The suite drives the flow through the scripted
+request seam bound with the same `bindRequestFn` a host's real client
+uses; the real-client composition itself (`createClient` over a live
+fetch, silent-401 refresh included) is exercised in `session.test.ts`.
+
 ## Permission checks are set lookup only
 
 `usePermission(domain, permission)` answers "is this string in the
@@ -124,14 +131,16 @@ boundary -- the server authorizes.
 
 - **No persistence across page loads.** The session is memory-only and
   there is deliberately no `restore`: reloading the page starts
-  anonymous, and a reload mid-session relies on the refresh token's
-  httpOnly cookie (the M1 server contract) surviving in the browser
-  while the in-memory copy is gone. A persistence/restore layer is
-  planned for a later round, layered on top of this API.
-- **The refresh token is JavaScript-visible in memory** (the session
-  keeps its own copy because the refresh endpoint takes it in the
-  request body). The access token is likewise readable by any script
-  running in the page; no storage API exists here on purpose.
+  anonymous. The authn API returns the refresh token in the login
+  response body and sets no refresh cookie, so nothing outside the
+  session closure outlives the page -- a reload cannot re-establish
+  the session, and the user signs in again. A persistence/restore
+  layer is planned for a later round, layered on top of this API.
+- **The refresh token is JavaScript-visible in memory.** The authn API
+  sets no refresh cookie to hide it in, so the session must hold the
+  token its refresh endpoint takes in the request body. The access
+  token is likewise readable by any script running in the page; no
+  storage API exists here on purpose.
 - The two token-issuing operations that mint no refresh token -- tenant
   switch and step-up -- keep rotating the caller's existing one, per
   the authn spec. A `switchTenant` to a tenant the principal has no

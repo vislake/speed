@@ -1,7 +1,8 @@
 /**
- * auth-core test configuration: the plain node environment (the session
- * state machine is pure async logic -- no DOM), with the
- * workspace-sibling source aliases that mirror tsconfig.json's paths.
+ * auth-core test configuration: the plain node environment by default
+ * (the session state machine is pure async logic -- no DOM); the DOM
+ * suites opt in per file with the @vitest-environment jsdom pragma.
+ * The workspace-sibling source aliases mirror tsconfig.json's paths.
  *
  * The aliases point @speed/api-client and @speed/api-sdk specifiers at
  * the siblings' src entry files so tests run against live sources (a

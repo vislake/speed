@@ -9,10 +9,12 @@
  *   (the same store the host's @speed/api-client reads on every send,
  *   so a login here is immediately visible to every request);
  * - the refresh token lives in this closure only. It never enters the
- *   store and nothing here writes storage: the refresh token belongs
- *   to an httpOnly cookie in the M1 server contract, but the cookie is
- *   the browser's, not JavaScript's -- the session keeps its own copy
- *   because the refresh ENDPOINT takes it in the request body.
+ *   store and nothing here writes storage: the authn API returns the
+ *   refresh token in the token-issuing response bodies (no refresh
+ *   cookie exists -- the only HttpOnly cookie authn ever sets is the
+ *   social-binding pre-auth one), and the refresh ENDPOINT takes the
+ *   held token in the request body, which is why the session keeps
+ *   its own copy.
  *
  * The failure contract: every user operation (login, logout, tenant
  * switch, step-up) rejects with the raw ApiError from the request

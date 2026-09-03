@@ -89,10 +89,14 @@ public.
   DOM) and `src/hooks.test.ts` (the React bindings, per-file jsdom
   pragma, explicit `afterEach(cleanup)` — vitest runs without globals
   here, which disables @testing-library/react's auto-cleanup) are the
-  two test files, run with vitest. Both drive sessions through the
-  shared scripted harness in `test-utils/session-harness.ts` — tests
-  never touch a real server and never mock package internals; they
-  drive the exported API and assert observable state (store contents,
+  behaviour tests, run with vitest. `src/usage-example.test.tsx`
+  compiles and runs the README Quick start's session-and-hooks flow
+  through the same scripted harness (the real createClient composition
+  is proven in session.test.ts), so the documented usage cannot drift
+  from the API. All of them drive sessions through the shared scripted
+  harness in `test-utils/session-harness.ts` — tests never touch a
+  real server and never mock package internals; they drive the
+  exported API and assert observable state (store contents,
   snapshots, notification order, request bodies).
 - The failure contract, protocol violations, the generation guard
   (failed login leaves an in-flight refresh intact; logout cannot be

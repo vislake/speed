@@ -21,10 +21,11 @@
  * boundary). react is a peer dependency of the main entry: any host
  * of the hooks already renders React.
  *
- * No storage is written anywhere: an httpOnly cookie is the M1
- * server-side home of the refresh token, and persistence of the
- * session across page loads is out of scope here (see README's Known
- * limitations).
+ * No storage is written anywhere: the authn API returns the refresh
+ * token in the response body and sets no refresh cookie, so the held
+ * token survives only inside the session closure, and persistence of
+ * the session across page loads is out of scope here (see README's
+ * Known limitations).
  */
 
 export { createAuthSession } from './session.js'
