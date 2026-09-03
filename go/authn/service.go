@@ -290,6 +290,12 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (*User, error)
 func (s *Service) Login(ctx context.Context, in LoginInput) (*TokenPair, error) {
 	identifier := strings.TrimSpace(in.Identifier)
 	if identifier == "" {
+		// Recorded and announced like any other failure rather than
+		// returned early. An empty identifier is still an attempt from
+		// an IP address, and the per-IP dimension of the lockout logic
+		// has to be able to count it; skipping it here would leave a
+		// free, uncounted probe.
+		s.recordFailure(ctx, in, "", "", FailureReasonUnknownUser)
 		return nil, ErrInvalidCredentials
 	}
 
