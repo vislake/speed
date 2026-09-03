@@ -156,6 +156,22 @@ Both are thin wrappers around `Open`, so a caller gets dbkit's full mandatory wi
 
 `NewPostgres`'s Docker-availability check (`dockerAvailable` / `dockerHostAddress` in `dbtest/docker_probe.go`) is a small, self-contained probe, not a call into testcontainers-go's own provider/host-resolution machinery — that machinery caches its resolved host process-wide behind a `sync.Once`, which would make it unsafe to unit-test with a deliberately-wrong host (`dbtest/docker_probe_test.go` does exactly that) in the same binary as a happy-path test that needs the real daemon.
 
+### Audit trail persistence — `audit/`
+
+The M1 audit-infrastructure round's persistence half (docs/internal/10-compliance-and-audit.md; docs/internal/15-roadmap.md's M1 row): the `AuditEvent` model, its dual-dialect migrations, and `Repository`, the append-only accessor that stores and reads it back. Lives inside `dbkit` rather than as its own `go.work` module or inside `go/compliance` (a stub until M4) — see `audit/AGENTS.md` for the module-home rationale and the round's own scope-freeze report for the full evidence chain. The collection mechanisms (automatic GORM write-capture, explicit `Emit`, and the `pkgcore.Module` persister that subscribes to their events and calls `Repository.Insert`) land alongside this same round, layered directly on the types below.
+
+| Signature | Purpose |
+|---|---|
+| `type AuditEvent struct { ... }` | The append-only audit row: `ID` (application-generated UUID), the flattened `Actor`/`OnBehalfOf`/`Resource`/`Result` elements, `Action`, `Changes` (`datatypes.JSON`), and the `TenantID`/`IP`/`UserAgent`/`TraceID`/`OccurredAt` context fields. Deliberately does **not** implement `TenantScoped` — see the type's own doc comment and `audit/AGENTS.md`'s data-domain section |
+| `func (*AuditEvent) SetActor(pkgcore.Actor)` / `func (AuditEvent) Actor() pkgcore.Actor` | Read/write the three flattened `Actor*` columns together |
+| `func (*AuditEvent) SetOnBehalfOf(*pkgcore.Actor)` / `func (AuditEvent) OnBehalfOf() (pkgcore.Actor, bool)` | Read/write the three flattened, genuinely nullable `OnBehalfOf*` columns together; `nil` clears all three back to `NULL` (no impersonation), never an empty-string sentinel |
+| `type Resource struct { Type, ID, DisplayName string }`, `func (*AuditEvent) SetResource(Resource)` / `func (AuditEvent) Resource() Resource` | What the action was performed on |
+| `type Result struct { Success bool; FailureReason string }`, `func (*AuditEvent) SetResult(Result)` / `func (AuditEvent) Result() Result` | The action's outcome |
+| `func NewRepository(db *gorm.DB) *Repository` | `db` is expected to come from `Open`, with `audit/migrations.FS` already applied through a `MigrationRegistry` |
+| `func (*Repository) Insert(ctx, *AuditEvent) error` | Appends one event, generating `ID` when the caller leaves it empty. No `Update`/`Delete` method exists on `Repository` at all — append-only is enforced by the absence of the method, not a runtime guard |
+| `func (*Repository) Get(ctx, id string) (*AuditEvent, error)` | Returns `(nil, nil)` when no such row exists — the `go/config`-style convention for platform data, not `dbkit.Repository[T]`'s `ErrRecordNotFound` |
+| `func (*Repository) ListByTenant(ctx, tenantID string) ([]AuditEvent, error)` | The minimal read path this round's own tests need; the actor/resource/action/time-range/result query API is M4 (`go/compliance`) scope |
+
 ## Dual-dialect constraints for models used with dbkit
 
 Every model passed to `Repository[T]`, embedded under `TenantModel`, or otherwise written through a `*gorm.DB` obtained from `Open` is expected to run correctly against both PostgreSQL and SQLite, per the backend coding standard's dual-dialect rules (`.claude/skills/backend-coding-standards/SKILL.md` §5):
