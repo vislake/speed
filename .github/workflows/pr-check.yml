@@ -7,7 +7,7 @@ name: pr-check
 # cancelled via concurrency (18-cicd cost-control rules 4 and 5).
 #
 # COVERAGE -- what genuinely runs today
-#   * go-modules job: the ten modules with real, tested implementation
+#   * go-modules job: the eleven modules with real, tested implementation
 #     (root CLAUDE.md, Repository Status) each run through the reusable
 #     go-module-ci workflow: golangci-lint (the project-standard lint leg,
 #     .golangci.yml at the repo root -- pinned, checksummed binary and
@@ -167,6 +167,7 @@ jobs:
           - go/rbac
           - go/org
           - go/authn
+          - go/saasctl
     uses: ./.github/workflows/reusable/go-module-ci.yml
     with:
       module: ${{ matrix.module }}
