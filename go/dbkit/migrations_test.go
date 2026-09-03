@@ -153,10 +153,20 @@ func prepareMigrationsTestPostgresSchema(t *testing.T, db *gorm.DB) {
 // so it must stay fast and hermetic on a machine with no local Postgres,
 // which is the common case for a plain "go test ./...". When none is
 // reachable, the Postgres subtest reports itself skipped (not failed) and
-// says why; SQLite coverage above it still ran. The always-on, authoritative
-// Postgres check belongs to the separate integration_test/ tier (see
-// AGENTS.md and the testing standard's unit/integration split), not to this
-// unit-tier file.
+// says why; SQLite coverage above it still ran.
+//
+// Be careful what you infer from that skip: this package's own
+// integration_test/ tier carries no MigrationRegistry test at all -- its
+// Postgres files execute testutil.WidgetPostgresMigrationSQL by hand and
+// never call Apply. The always-on PostgreSQL exercise of Apply is
+// go/config/integration_test/postgres_leg_test.go's openConfigPostgres,
+// which registers a real module and applies its postgres/*.sql through
+// this very registry. So the engine does get real Postgres coverage, but
+// borrowed from a downstream module rather than owned here; adding a
+// dbkit-local Apply test to integration_test/ (via dbtest.NewPostgres)
+// would make it local. Either way it belongs to the integration tier, not
+// to this unit-tier file (AGENTS.md, and the testing standard's
+// unit/integration split).
 func runOnEachAvailableDialect(t *testing.T, test func(t *testing.T, dialect Dialect, db *gorm.DB)) {
 	t.Helper()
 

@@ -135,10 +135,11 @@ export async function loadNotes(): Promise<Note[]> {
   but consume the M1 config endpoints; they land with that round.
 - **Uploads and SSE** -- outside this package's scope
   (docs/internal/21-api-contract.md).
-- **`@speed/api-sdk`** -- the orval-generated typed surface lives in a
-  separate package. Until that round lands this package is exercised by
-  its own unit tests only (the reference app's mandatory first-consumer
-  status applies to the generated SDK round).
+- **A real first consumer** -- `@speed/api-sdk`, the orval-generated
+  typed surface, has landed and calls into this package through its
+  `src/runtime.ts` seam. Both are still test-consumed only: the reference
+  app's mandatory first-consumer status arrives with the M1 consumer
+  shells that import the generated SDK.
 - **i18n resources** -- error codes map to bilingual text in the
   consuming package's catalogs; nothing here emits user-facing text.
 

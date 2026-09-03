@@ -12,9 +12,9 @@ The one place in the web workspace where hand-written HTTP happens: a
 typed request function built by `createClient`, with injectable fetch,
 a memory-only access-token store, silent single-flight 401 refresh,
 timeout, conservative idempotent retry, and a structured reporter. The
-generated `@speed/api-sdk` (orval output of `task api:gen`, a later
-round) will call into this runtime; no package other than this one may
-issue HTTP requests itself.
+generated `@speed/api-sdk` (orval output of `task api:gen`) calls into
+this runtime through its `src/runtime.ts` seam; no package other than
+this one may issue HTTP requests itself.
 
 ## Invariants (code review enforces; do not weaken)
 
@@ -69,10 +69,10 @@ Deferred with reasons:
   -- they consume the M1 config endpoints (`docs/internal/12-frontend.md`).
 - Uploads and SSE transports -- outside this package's scope
   (`docs/internal/21-api-contract.md`).
-- `@speed/api-sdk` -- the orval-generated typed surface is a separate
-  package; until it lands, this package is exercised by its own unit
-  tests only (the reference app's mandatory first-consumer status
-  applies to the generated SDK round).
+- A real first consumer -- `@speed/api-sdk` has landed and consumes this
+  runtime through its `src/runtime.ts` seam, but both packages are still
+  test-consumed only: the reference app's mandatory first-consumer status
+  arrives with the M1 consumer shells that import the generated SDK.
 - Real `refreshAccessToken` hooks -- M1 authn work (the seam
   `refreshAccessToken?: () => Promise<boolean>` is the contract).
 
