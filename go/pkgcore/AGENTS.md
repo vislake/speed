@@ -48,10 +48,12 @@ Declaration types:
 | Type | Fields |
 |---|---|
 | `MountedRoute` | `Path`, `Handler` |
-| `ConfigItem` | `Key`, `Type`, `Default`, `Sensitive`, `Description` |
+| `ConfigItem` | `Key`, `Type`, `Default`, `Sensitive`, `Description`, `Group`, `Public`, `Min`, `Max` |
 | `FeatureFlag` | `Key`, `Default`, `Description`, `DependsOn` |
 | `NotificationType` | `Key`, `Group`, `DefaultChannels`, `Unsubscribable` |
 | `EventDecl` | `Type`, `PayloadType`, `Description` |
+
+`ConfigItem` declarations are validated when registered: `Type` must be one of `string` / `int` / `bool` / `duration`; a non-nil `Default` must be a Go value of that kind (`string`, `int` or `int64`, `bool`, `time.Duration`; nil is legal and means "no value until one is set"); `Min`/`Max` are declarative ranges defined for `int` and `duration` items only, must satisfy `Min <= Max`, and a non-nil `Default` must fall inside them; `Sensitive` and `Public` are mutually exclusive. A contradictory declaration fails the whole `Add` call with an error wrapping `ErrInvalidConfigItem` -- see the error index below.
 
 
 **Deployment mode**
@@ -241,6 +243,7 @@ Full runnable versions of all of the above live in `example_test.go` (the shared
 | `ErrDuplicateModuleName` | Two modules reporting the same `Name()` | Rename one; nothing was registered |
 | `ErrDependencyCycle` | `DependsOn` forming a cycle | The error names the cycle; break it |
 | `ErrMissingDependency` | Depending on a module absent from the bootstrap set | Add the module, or drop the dependency |
+| `ErrInvalidConfigItem` | An item whose fields contradict one another: an unknown `Type`, a `Default`/`Min`/`Max` of the wrong Go type, `Min`/`Max` on a `string`/`bool` item, `Min` above `Max`, a `Default` outside its declared range, or `Sensitive` with `Public` | Fix the declaration; nothing was registered (the message never prints a sensitive item's value) |
 | `ErrDuplicateConfigKey` / `ErrDuplicateFeatureFlag` / `ErrDuplicatePermission` / `ErrDuplicateJobType` / `ErrDuplicateNotificationType` / `ErrDuplicateEventType` / `ErrDuplicateAuditAction` | The same key registered twice | Two modules own one key; decide which does |
 | `ErrUnresolvedFeatureDependency` | A flag depending on a flag nobody registered | Register the flag, or drop the dependency |
 | `ErrMissingDistributedEventBus` | `Bootstrap` on `DeploymentModeDistributed` with no bus wired | Inject the host's bus with `WithEventBus` |

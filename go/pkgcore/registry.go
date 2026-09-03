@@ -18,6 +18,15 @@ import (
 // ErrDuplicateConfigKey is returned when two modules register the same configuration key.
 var ErrDuplicateConfigKey = errors.New("pkgcore: duplicate config key")
 
+// ErrInvalidConfigItem is returned when a registered configuration item's
+// fields contradict one another: an unknown Type, a Default, Min or Max of
+// the wrong Go type, Min or Max on a string or bool item, Min above Max, a
+// Default outside the item's declared range, or Sensitive and Public both
+// set. Such a declaration could never be stored or served coherently, so it
+// is rejected at registration rather than surfacing later as a runtime
+// failure. Nothing is registered when the call returns this error.
+var ErrInvalidConfigItem = errors.New("pkgcore: invalid config item")
+
 // ErrDuplicateFeatureFlag is returned when two modules register the same feature flag key.
 var ErrDuplicateFeatureFlag = errors.New("pkgcore: duplicate feature flag")
 
@@ -136,17 +145,47 @@ type MountedRoute struct {
 // ConfigItem describes a single configuration key contributed by a module.
 // The admin console form and the generated configuration reference are both
 // derived from these declarations, so Description is not optional in practice.
+//
+// Declarations are validated when they are registered (see
+// ConfigSchemaRegistrar.Add): the fields must describe one coherent value,
+// or the whole registration call is rejected. Min and Max interpret the
+// declared Type's ordering -- int and duration values are comparable, string
+// and bool values are not -- and a Default outside its declared range cannot
+// be registered.
 type ConfigItem struct {
 	// Key is the dotted configuration key, for example "billing.invoice_retry_limit".
 	Key string
-	// Type names the value type, for example "string", "int", "bool" or "duration".
+	// Type names the value type. The set is closed: "string", "int", "bool"
+	// or "duration".
 	Type string
-	// Default is the value used when neither the environment nor a tenant overrides the key.
+	// Default is the value used when neither the environment nor a tenant
+	// overrides the key. Nil is legal and means the module serves no value
+	// until one is set; when present, it must be a Go value of the declared
+	// Type's kind (string for "string", int or int64 for "int", bool for
+	// "bool", time.Duration for "duration").
 	Default any
-	// Sensitive marks secrets, which are redacted in logs, in the admin console and in the docs.
+	// Sensitive marks secrets, which are redacted in logs, in the admin
+	// console and in the docs. A sensitive item is never served on a public
+	// endpoint, so Sensitive and Public cannot both be true.
 	Sensitive bool
 	// Description is the English text shown in the admin console and the configuration reference.
 	Description string
+	// Group buckets related keys together in the admin console form and the
+	// configuration reference. Free-form; modules conventionally use their
+	// own name (for example "billing").
+	Group string
+	// Public marks values that the unauthenticated public configuration
+	// endpoint serves to a resolved tenant (brand name, login methods,
+	// announcement copy). Never set together with Sensitive.
+	Public bool
+	// Min is the smallest value a configuration write may set, interpreted
+	// per Type. Only int and duration items may declare it. Nil means no
+	// lower bound.
+	Min any
+	// Max is the largest value a configuration write may set, interpreted
+	// per Type. Only int and duration items may declare it. Nil means no
+	// upper bound.
+	Max any
 }
 
 // FeatureFlag describes a feature toggle contributed by a module.
@@ -203,10 +242,17 @@ type RouteRegistrar interface {
 
 // ConfigSchemaRegistrar collects the configuration schema modules declare.
 type ConfigSchemaRegistrar interface {
-	// Add registers configuration items. It returns an error wrapping
-	// ErrDuplicateConfigKey if a key was already registered, because two
-	// modules owning one key is a bug rather than a merge. Nothing is
-	// registered when the call returns an error.
+	// Add registers configuration items, validating every declaration
+	// first. An item whose fields contradict one another -- an unknown
+	// Type, a Default, Min or Max of the wrong Go type, Min or Max on a
+	// string or bool item, Min above Max, a Default outside the declared
+	// range, or Sensitive and Public both set -- is rejected with an error
+	// wrapping ErrInvalidConfigItem, because such a declaration could never
+	// be stored or served coherently. A key already registered (by an
+	// earlier call, or twice within this one) is rejected with an error
+	// wrapping ErrDuplicateConfigKey, because two modules owning one key is
+	// a bug rather than a merge. Nothing is registered when the call
+	// returns an error.
 	Add(items ...ConfigItem) error
 	// Items returns every configuration item registered so far, in registration order.
 	Items() []ConfigItem
@@ -498,6 +544,15 @@ type memoryConfigRegistrar struct {
 func (r *memoryConfigRegistrar) Add(items ...ConfigItem) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Validation comes before the duplicate check so a contradictory
+	// declaration reports itself as invalid rather than as a collision with
+	// whatever an earlier caller registered under the same key. Either way
+	// the whole call registers nothing.
+	for _, item := range items {
+		if err := validateConfigItem(item); err != nil {
+			return err
+		}
+	}
 	keyOf := func(item ConfigItem) string { return item.Key }
 	if err := checkUnique(r.keys, items, keyOf, ErrDuplicateConfigKey); err != nil {
 		return err

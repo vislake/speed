@@ -277,6 +277,7 @@ func TestConfigRegistrar_Items_PreservesDeclaration(t *testing.T) {
 		Default:     "",
 		Sensitive:   true,
 		Description: "Payment provider API key.",
+		Group:       "billing.secrets",
 	}
 
 	if err := reg.Config.Add(want); err != nil {
@@ -289,6 +290,165 @@ func TestConfigRegistrar_Items_PreservesDeclaration(t *testing.T) {
 	}
 	if items[0] != want {
 		t.Errorf("Items()[0] = %+v, want %+v", items[0], want)
+	}
+}
+
+func TestConfigRegistrar_Add_InvalidDeclarationReturnsError(t *testing.T) {
+	tests := []struct {
+		name    string
+		item    ConfigItem
+		wantSub string // substring the error message must carry
+	}{
+		{
+			name:    "item without a key",
+			item:    ConfigItem{Type: "int", Default: 1},
+			wantSub: "without a key",
+		},
+		{
+			name:    "unknown type",
+			item:    ConfigItem{Key: "billing.mode", Type: "banana", Default: 1},
+			wantSub: `type "banana"`,
+		},
+		{
+			name:    "int default of the wrong Go type",
+			item:    ConfigItem{Key: "billing.retry_limit", Type: "int", Default: "3"},
+			wantSub: "want int or int64",
+		},
+		{
+			name:    "bool default of the wrong Go type",
+			item:    ConfigItem{Key: "billing.dunning", Type: "bool", Default: 1},
+			wantSub: "want bool",
+		},
+		{
+			name:    "duration default of the wrong Go type",
+			item:    ConfigItem{Key: "jobs.timeout", Type: "duration", Default: 30},
+			wantSub: "want time.Duration",
+		},
+		{
+			name:    "int max of the wrong Go type",
+			item:    ConfigItem{Key: "billing.retry_limit", Type: "int", Default: 3, Max: "10"},
+			wantSub: "want int or int64",
+		},
+		{
+			name:    "string item with Min",
+			item:    ConfigItem{Key: "billing.currency", Type: "string", Default: "CNY", Min: "CNY"},
+			wantSub: "no ordering",
+		},
+		{
+			name:    "bool item with Max",
+			item:    ConfigItem{Key: "billing.dunning", Type: "bool", Default: false, Max: true},
+			wantSub: "no ordering",
+		},
+		{
+			name:    "Min above Max",
+			item:    ConfigItem{Key: "billing.retry_limit", Type: "int", Min: 10, Max: 1},
+			wantSub: "Min 10 above Max 1",
+		},
+		{
+			name:    "duration Min above Max",
+			item:    ConfigItem{Key: "jobs.timeout", Type: "duration", Min: time.Minute, Max: time.Second},
+			wantSub: "Min 1m0s above Max 1s",
+		},
+		{
+			name:    "default below Min",
+			item:    ConfigItem{Key: "billing.retry_limit", Type: "int", Default: 0, Min: 1},
+			wantSub: "default 0 falls below its declared Min 1",
+		},
+		{
+			name:    "default above Max",
+			item:    ConfigItem{Key: "billing.retry_limit", Type: "int", Default: 3, Max: 2},
+			wantSub: "default 3 exceeds its declared Max 2",
+		},
+		{
+			name:    "sensitive default out of range never prints the value",
+			item:    ConfigItem{Key: "billing.secret_margin", Type: "int", Sensitive: true, Default: 0, Min: 1},
+			wantSub: `key "billing.secret_margin" default falls below its declared Min 1`,
+		},
+		{
+			name:    "Sensitive and Public together",
+			item:    ConfigItem{Key: "billing.api_key", Type: "string", Sensitive: true, Public: true},
+			wantSub: "both Sensitive and Public",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+			err := reg.Config.Add(tt.item)
+			if !errors.Is(err, ErrInvalidConfigItem) {
+				t.Fatalf("Add() error = %v, want it to wrap ErrInvalidConfigItem", err)
+			}
+			if !strings.Contains(err.Error(), tt.wantSub) {
+				t.Errorf("Add() error = %q, want it to contain %q", err, tt.wantSub)
+			}
+			// A rejected call must register nothing from that call.
+			if got := len(reg.Config.Items()); got != 0 {
+				t.Errorf("after a rejected Add() there are %d items, want 0", got)
+			}
+		})
+	}
+}
+
+func TestConfigRegistrar_Add_RangeDeclarationRoundTrips(t *testing.T) {
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+	items := []ConfigItem{
+		{
+			Key:         "billing.retry_limit",
+			Type:        "int",
+			Default:     3,
+			Min:         1,
+			Max:         10,
+			Group:       "billing",
+			Description: "Retries before an invoice run is abandoned.",
+		},
+		// Bounds and defaults mix int and int64 freely; both live in the
+		// same int64 comparison domain.
+		{Key: "billing.retry_limit_wide", Type: "int", Default: int64(30), Min: int64(1), Max: int64(100)},
+		{Key: "jobs.timeout", Type: "duration", Default: 30 * time.Second, Min: time.Second, Max: time.Hour},
+		{Key: "billing.dunning", Type: "bool", Default: false, Public: true, Group: "billing"},
+		{Key: "billing.currency", Type: "string", Default: "CNY", Public: true},
+		// A nil Default is legal: the module serves no value until one is set.
+		{Key: "org.display_name", Type: "string", Public: true},
+		{Key: "billing.api_key", Type: "string", Sensitive: true, Group: "billing.secrets"},
+		{Key: "org.trial_days", Type: "int", Min: 0},
+	}
+
+	if err := reg.Config.Add(items...); err != nil {
+		t.Fatalf("Add() error = %v, want nil", err)
+	}
+
+	got := reg.Config.Items()
+	if len(got) != len(items) {
+		t.Fatalf("Items() returned %d items, want %d", len(got), len(items))
+	}
+	for i := range items {
+		if got[i] != items[i] {
+			t.Errorf("Items()[%d] = %+v, want %+v", i, got[i], items[i])
+		}
+	}
+}
+
+func TestConfigRegistrar_Add_RejectedCallRegistersNothing(t *testing.T) {
+	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+	valid := ConfigItem{Key: "billing.retry_limit", Type: "int", Default: 3}
+	invalid := ConfigItem{Key: "billing.retry_limit", Type: "int", Default: "3"}
+
+	err := reg.Config.Add(valid, invalid)
+	if !errors.Is(err, ErrInvalidConfigItem) {
+		t.Fatalf("Add() error = %v, want it to wrap ErrInvalidConfigItem", err)
+	}
+	// A rejected call registers nothing, not even the valid sibling.
+	if got := len(reg.Config.Items()); got != 0 {
+		t.Errorf("after a rejected Add() there are %d items, want 0", got)
+	}
+
+	// The valid sibling alone is registrable afterwards, proving the
+	// rejection left no partial state behind.
+	if err := reg.Config.Add(valid); err != nil {
+		t.Fatalf("Add(valid) error = %v, want nil", err)
+	}
+	if got := len(reg.Config.Items()); got != 1 {
+		t.Errorf("Items() returned %d items, want 1", got)
 	}
 }
 
