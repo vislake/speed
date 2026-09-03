@@ -3,13 +3,14 @@
  *
  * Two kinds of things ship here: the theme factory (createAppTheme,
  * AppThemeProvider) that turns @speed/tokens into a MUI v9 theme, and the
- * seven controlled core components (PageHeader, EmptyState, ConfirmDialog,
- * FormField, FormLayout, DataTable, FileUploader) with their
- * ui-kit-namespace translations (UI_KIT_NAMESPACE + uiKitResources) for
- * the host to register — FileUploader under the package's one
- * interaction-local carve-out, its upload transport host-injected.
- * Everything else stays internal: helpers shared between components live
- * in src/internal/ and are deliberately not exported.
+ * seven fully controlled core components (PageHeader, EmptyState,
+ * ConfirmDialog, FormField, FormLayout, DataTable, FileUploader) with
+ * their ui-kit-namespace translations (UI_KIT_NAMESPACE +
+ * uiKitResources) for the host to register — FileUploader renders the
+ * queue the host owns as `rows` props while uploads run in the host's
+ * own transport code. Everything else stays internal: helpers shared
+ * between components live in src/internal/ and are deliberately not
+ * exported.
  */
 
 export { UI_KIT_NAMESPACE, uiKitResources } from './resources.js'
@@ -51,8 +52,7 @@ export {
 } from './components/DataTable.js'
 export {
   FileUploader,
-  type FileUploadContext,
-  type FileUploadExecutor,
   type FileUploaderProps,
-  type FileUploadQueueSummary,
+  type FileUploaderRow,
+  type FileUploaderRowStatus,
 } from './components/FileUploader.js'

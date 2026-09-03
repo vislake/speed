@@ -1,531 +1,620 @@
 /**
- * FileUploader: foundation pins and queue behaviour.
+ * Suite for the fully controlled FileUploader.
  *
- * The foundation pins hold under the behaviour round: the trigger renders
- * its label from the bundles (asserted against the shipped JSON, never
- * inline), forwards multiple/accept to one native file input that stays
- * visually hidden but focusable inside the trigger label -- the control's
- * single tab stop -- and an empty queue renders no rows and no
- * announcements.
- *
- * The behaviour tests drive the controlled queue the contract pins: a
- * pick starts one parallel `execute` per file (fixture executors hold or
- * abort, never a real upload), each row runs the uploading/succeeded/
- * failed state machine with retry, cancel/remove and late-settle guards,
- * progress reports switch the bar from indeterminate to determinate, and
- * every settle is announced in the single polite live region. The drop
- * surface (allowDrop) and the en/zh language switch ride the same paths.
+ * Every queue shape is driven through the `rows` prop and every
+ * interaction is asserted on the callbacks it fires — the component holds
+ * no queue state of its own, so the tests render hosts that own it. The
+ * suite carries three real-browser regression tests jsdom would hide:
+ * the live-FileList snapshot (clearing an input empties any FileList
+ * captured before the clear), non-finite progress reaching MUI, and the
+ * live-region re-announcement rule (a retry must clear the standing
+ * announcement text, or an identical repeated failure is never
+ * re-announced because the region's text did not change).
  */
 
-import { act, fireEvent } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { useState } from 'react'
+import { act, fireEvent, within } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 import { switchLanguage } from '@speed/i18n'
 import zhCN from '../locales/zh-CN.json' with { type: 'json' }
 import enUS from '../locales/en-US.json' with { type: 'json' }
+import { FileUploader } from './FileUploader.js'
+import type { FileUploaderProps, FileUploaderRow } from './FileUploader.js'
 import { renderWithProviders } from '../../test-utils/render.js'
+import type { RenderWithProvidersResult } from '../../test-utils/render.js'
 import { expectNoAxeViolations } from '../../test-utils/axe.js'
 import { dropFiles, selectFiles } from '../../test-utils/file-input.js'
-import { FileUploader } from './FileUploader.js'
-import type { FileUploadContext, FileUploadExecutor } from './FileUploader.js'
-
-const noopExecute: FileUploadExecutor = async () => {}
 
 function makeFile(name: string): File {
   return new File(['x-ray bytes'], name, { type: 'application/octet-stream' })
 }
 
-function inputOf(container: HTMLElement): HTMLInputElement {
-  const input = container.querySelector('input[type="file"]')
-  if (input === null) {
-    throw new Error('FileUploader did not render its file input')
-  }
-  return input as HTMLInputElement
-}
+const uploadingRow = (id: string, name: string, progress?: number): FileUploaderRow => ({
+  id,
+  name,
+  status: 'uploading',
+  progress,
+})
+const succeededRow = (id: string, name: string): FileUploaderRow => ({
+  id,
+  name,
+  status: 'succeeded',
+})
+const failedRow = (id: string, name: string, error?: string): FileUploaderRow => ({
+  id,
+  name,
+  status: 'failed',
+  error,
+})
 
-interface HeldUpload {
-  readonly file: File
-  readonly context: FileUploadContext
-  readonly resolve: () => void
-  readonly reject: (reason?: unknown) => void
-}
+const uploadedAnnouncement = (name: string): string =>
+  zhCN.fileUploader.announceUploaded.replace('{{name}}', name)
+const failedAnnouncement = (name: string): string =>
+  zhCN.fileUploader.announceFailed.replace('{{name}}', name)
 
-/** An executor whose uploads stay in flight until the test settles them. */
-function createHeldExecutor(): { execute: FileUploadExecutor; uploads: HeldUpload[] } {
-  const uploads: HeldUpload[] = []
-  const execute: FileUploadExecutor = (file, context) =>
-    new Promise<void>((resolve, reject) => {
-      uploads.push({ file, context, resolve, reject })
-    })
-  return { execute, uploads }
-}
-
-/** An executor that rejects with an AbortError when its signal aborts. */
-function createAbortingExecutor(): {
-  execute: FileUploadExecutor
-  contexts: FileUploadContext[]
+/**
+ * Mount the component through a stateful host that owns `rows` — the way
+ * a host owning the queue would — and expose `setRows` for later
+ * commits. The host mounts exactly once and never re-renders from
+ * outside: RTL's own `rerender` cannot be used here, because
+ * `renderWithProviders` inlines the provider tree into the ui it mounts
+ * (it takes no wrapper option), so a rerender would replace the whole
+ * tree and remount FileUploader, losing the announcement effect's
+ * previous-rows ref along with the rest of its state.
+ */
+function renderHarness(
+  initial: FileUploaderProps,
+): RenderWithProvidersResult & {
+  setRows(rows: readonly FileUploaderRow[]): void
 } {
-  const contexts: FileUploadContext[] = []
-  const execute: FileUploadExecutor = (_file, context) => {
-    contexts.push(context)
-    return new Promise<void>((_resolve, reject) => {
-      const rejectAbort = (): void => {
-        reject(new DOMException('The upload was cancelled.', 'AbortError'))
-      }
-      if (context.signal.aborted) {
-        rejectAbort()
-      } else {
-        context.signal.addEventListener('abort', rejectAbort, { once: true })
-      }
-    })
+  const applyRowsRef: {
+    current: ((rows: readonly FileUploaderRow[]) => void) | null
+  } = { current: null }
+  function Harness() {
+    const [rows, setRows] = useState(initial.rows)
+    applyRowsRef.current = setRows
+    return <FileUploader {...initial} rows={rows} />
   }
-  return { execute, contexts }
+  const view = renderWithProviders(<Harness />)
+  return {
+    ...view,
+    setRows(rows: readonly FileUploaderRow[]): void {
+      act(() => {
+        if (applyRowsRef.current === null) {
+          throw new Error('renderHarness.setRows called before mount')
+        }
+        applyRowsRef.current(rows)
+      })
+    },
+  }
 }
+
+function fileInputOf(container: HTMLElement): HTMLInputElement {
+  const input = container.querySelector<HTMLInputElement>('input[type="file"]')
+  if (input === null) {
+    throw new Error('no file input rendered')
+  }
+  return input
+}
+
+const pickerLabel = zhCN.fileUploader.chooseFiles
+const dropHint = zhCN.fileUploader.dropHint
+const statusUploading = zhCN.fileUploader.statusUploading
+const statusSucceeded = zhCN.fileUploader.statusSucceeded
+const statusFailed = zhCN.fileUploader.statusFailed
+const actionRetry = zhCN.fileUploader.actionRetry
+const actionRemove = zhCN.fileUploader.actionRemove
+const actionCancel = zhCN.fileUploader.actionCancel
 
 type DragInit = Parameters<typeof fireEvent.dragEnter>[1]
-/** Drag events carry no meaningful payload here; jsdom has no DataTransfer. */
 const emptyDragInit = { dataTransfer: {} } as DragInit
 
 describe('FileUploader', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
-  it('renders the trigger with the built-in zh-CN label by default', () => {
-    const { getByText } = renderWithProviders(<FileUploader execute={noopExecute} />)
-    expect(getByText(zhCN.fileUploader.chooseFiles)).toBeInTheDocument()
-  })
-
-  it('switches the trigger label to the en-US bundle when the language changes', async () => {
-    const { i18n, getByText, queryByText } = renderWithProviders(
-      <FileUploader execute={noopExecute} />,
-    )
-    await act(async () => {
-      await switchLanguage(i18n, 'en-US')
+  describe('the picker trigger', () => {
+    it('renders the built-in bilingual label by default', () => {
+      const view = renderHarness({ rows: [], onSelectFiles: vi.fn() })
+      expect(view.getByText(pickerLabel)).toBeInTheDocument()
     })
-    expect(getByText(enUS.fileUploader.chooseFiles)).toBeInTheDocument()
-    expect(queryByText(zhCN.fileUploader.chooseFiles)).not.toBeInTheDocument()
+
+    it('follows the active language', async () => {
+      const view = renderHarness({ rows: [], onSelectFiles: vi.fn() })
+      expect(view.getByText(pickerLabel)).toBeInTheDocument()
+      await act(async () => {
+        await switchLanguage(view.i18n, 'en-US')
+      })
+      expect(view.getByText(enUS.fileUploader.chooseFiles)).toBeInTheDocument()
+      expect(view.queryByText(pickerLabel)).not.toBeInTheDocument()
+    })
+
+    it('renders the chooseFilesLabel override in place of the built-in text', () => {
+      const view = renderHarness({
+        rows: [],
+        onSelectFiles: vi.fn(),
+        chooseFilesLabel: 'Upload X-rays',
+      })
+      expect(view.getByText('Upload X-rays')).toBeInTheDocument()
+      expect(view.queryByText(pickerLabel)).not.toBeInTheDocument()
+    })
+
+    it('defaults to a single-file pick with no accept filter', () => {
+      const view = renderHarness({ rows: [], onSelectFiles: vi.fn() })
+      const input = fileInputOf(view.container)
+      expect(input.multiple).toBe(false)
+      expect(input.accept).toBe('')
+    })
+
+    it('forwards multiple and accept onto the hidden input', () => {
+      const view = renderHarness({
+        rows: [],
+        onSelectFiles: vi.fn(),
+        multiple: true,
+        accept: 'image/jpeg,image/png',
+      })
+      const input = fileInputOf(view.container)
+      expect(input.multiple).toBe(true)
+      expect(input.accept).toBe('image/jpeg,image/png')
+    })
+
+    it('is one tab stop: the input is focusable and the label is not a button', () => {
+      const view = renderHarness({ rows: [], onSelectFiles: vi.fn() })
+      const label = view.container.querySelector('label')
+      expect(label).not.toBeNull()
+      expect(label).not.toHaveAttribute('role')
+      expect(label).toHaveAttribute('tabindex', '-1')
+      const input = fileInputOf(view.container)
+      expect(input).not.toHaveAttribute('hidden')
+      expect(input).not.toHaveAttribute('aria-hidden')
+      expect(input.disabled).toBe(false)
+    })
+
+    it('renders no picker affordance when onSelectFiles is absent — a pure queue view', () => {
+      const view = renderHarness({
+        rows: [uploadingRow('r1', 'scan.jpg')],
+        allowDrop: true,
+      })
+      expect(view.container.querySelector('label')).toBeNull()
+      expect(view.container.querySelector('input')).toBeNull()
+      expect(view.queryByText(dropHint)).not.toBeInTheDocument()
+      expect(view.getByText('scan.jpg')).toBeInTheDocument()
+    })
+
+    it('renders an idle shape for an empty queue: no rows, no progress, no live region', () => {
+      const view = renderHarness({ rows: [], onSelectFiles: vi.fn() })
+      expect(view.queryAllByRole('listitem')).toHaveLength(0)
+      expect(view.queryByRole('progressbar')).not.toBeInTheDocument()
+      expect(view.queryByRole('status')).not.toBeInTheDocument()
+    })
+
+    it('is disabled as one control: inert label, disabled input, no drop surface', () => {
+      const view = renderHarness({
+        rows: [],
+        onSelectFiles: vi.fn(),
+        allowDrop: true,
+        disabled: true,
+      })
+      const label = view.container.querySelector('label')
+      expect(label).toHaveAttribute('aria-disabled', 'true')
+      expect(fileInputOf(view.container).disabled).toBe(true)
+      expect(view.queryByText(dropHint)).not.toBeInTheDocument()
+    })
   })
 
-  it('lets chooseFilesLabel override the built-in label', () => {
-    const { getByText, queryByText } = renderWithProviders(
-      <FileUploader execute={noopExecute} chooseFilesLabel="Upload a scan" />,
-    )
-    expect(getByText('Upload a scan')).toBeInTheDocument()
-    expect(queryByText(zhCN.fileUploader.chooseFiles)).not.toBeInTheDocument()
+  describe('picking', () => {
+    it('reports one pick as a single ordered call, files by identity', () => {
+      const onSelectFiles = vi.fn()
+      const view = renderHarness({ rows: [], onSelectFiles })
+      const xray = makeFile('closeup.jpg')
+      const bitewing = makeFile('bitewing.png')
+      selectFiles(fileInputOf(view.container), [xray, bitewing])
+      expect(onSelectFiles).toHaveBeenCalledTimes(1)
+      const reported = onSelectFiles.mock.calls[0]![0]
+      expect(reported).toHaveLength(2)
+      expect(reported[0]).toBe(xray)
+      expect(reported[1]).toBe(bitewing)
+    })
+
+    it('ignores an empty selection (the picker dialog was cancelled)', () => {
+      const onSelectFiles = vi.fn()
+      const view = renderHarness({ rows: [], onSelectFiles })
+      selectFiles(fileInputOf(view.container), [])
+      expect(onSelectFiles).not.toHaveBeenCalled()
+    })
+
+    it('is quiet while disabled, even when a change event reaches the input', () => {
+      const onSelectFiles = vi.fn()
+      const view = renderHarness({
+        rows: [],
+        onSelectFiles,
+        disabled: true,
+      })
+      selectFiles(fileInputOf(view.container), [makeFile('scan.jpg')])
+      expect(onSelectFiles).not.toHaveBeenCalled()
+    })
+
+    it('snapshots the selection before clearing the input — a live FileList dies with its input', () => {
+      const onSelectFiles = vi.fn()
+      const view = renderHarness({ rows: [], onSelectFiles })
+      const input = fileInputOf(view.container)
+      const file = makeFile('scan.jpg')
+
+      // A real browser's input.files is a *live* FileList: clearing the
+      // input's value — which FileUploader does after every pick so
+      // choosing the same file again re-fires change — empties any
+      // reference captured before the clear. jsdom hands out snapshot
+      // lists, so emulate the live semantics with instance accessors and
+      // dispatch a plain change with no target props (the test helpers'
+      // target would overwrite the accessors with own data properties).
+      let live: readonly File[] = [file]
+      Object.defineProperty(input, 'files', {
+        configurable: true,
+        get: () => live,
+      })
+      Object.defineProperty(input, 'value', {
+        configurable: true,
+        get: () => (live.length === 0 ? '' : 'C:\\fakepath\\scan.jpg'),
+        set: (next: string) => {
+          if (next === '') {
+            live = []
+          }
+        },
+      })
+
+      fireEvent.change(input)
+      expect(onSelectFiles).toHaveBeenCalledTimes(1)
+      expect(onSelectFiles.mock.calls[0]![0]![0]).toBe(file)
+      // The input was still reset for the next pick.
+      expect(input.value).toBe('')
+    })
   })
 
-  it('hosts a single native file input without multiple or accept by default', () => {
-    const { container } = renderWithProviders(<FileUploader execute={noopExecute} />)
-    const input = container.querySelector('input[type="file"]')
-    expect(input).not.toBeNull()
-    expect(input).not.toHaveAttribute('multiple')
-    expect(input).not.toHaveAttribute('accept')
+  describe('dropping', () => {
+    it('renders no drop surface by default, and a stray drop is ignored', () => {
+      const onSelectFiles = vi.fn()
+      const view = renderHarness({
+        rows: [],
+        onSelectFiles,
+      })
+      expect(view.queryByText(dropHint)).not.toBeInTheDocument()
+      dropFiles(view.container, [makeFile('scan.jpg')])
+      expect(onSelectFiles).not.toHaveBeenCalled()
+    })
+
+    it('renders the surface with allowDrop, arms it visually during a drag, and reports the drop', () => {
+      const onSelectFiles = vi.fn()
+      const view = renderHarness({
+        rows: [],
+        onSelectFiles,
+        allowDrop: true,
+      })
+      const surface = view.getByText(dropHint).closest('div')
+      expect(surface).not.toBeNull()
+      expect(surface).not.toHaveAttribute('data-drop-active')
+
+      fireEvent.dragEnter(surface!, emptyDragInit)
+      expect(surface).toHaveAttribute('data-drop-active', 'true')
+      // Enter/leave pairs fire per child crossing; one leave keeps the
+      // armed state true, the second disarms.
+      fireEvent.dragEnter(surface!, emptyDragInit)
+      fireEvent.dragLeave(surface!, emptyDragInit)
+      expect(surface).toHaveAttribute('data-drop-active', 'true')
+      fireEvent.dragLeave(surface!, emptyDragInit)
+      expect(surface).not.toHaveAttribute('data-drop-active')
+
+      const file = makeFile('scan.jpg')
+      dropFiles(surface!, [file])
+      expect(onSelectFiles).toHaveBeenCalledTimes(1)
+      expect(onSelectFiles.mock.calls[0]![0]![0]).toBe(file)
+      expect(surface).not.toHaveAttribute('data-drop-active')
+    })
   })
 
-  it('forwards multiple and accept onto the input', () => {
-    const { container } = renderWithProviders(
-      <FileUploader execute={noopExecute} multiple accept="image/*" />,
-    )
-    const input = container.querySelector('input[type="file"]')
-    expect(input).toHaveAttribute('multiple')
-    expect(input).toHaveAttribute('accept', 'image/*')
-  })
+  describe('queue rendering', () => {
+    it('renders one card per row with the row name verbatim', () => {
+      const view = renderHarness({
+        rows: [
+          uploadingRow('r1', 'closeup.jpg'),
+          succeededRow('r2', 'bitewing.png'),
+        ],
+      })
+      expect(view.getByText('closeup.jpg')).toBeInTheDocument()
+      expect(view.getByText('bitewing.png')).toBeInTheDocument()
+    })
 
-  it('keeps the input focusable inside the trigger label, the one tab stop', () => {
-    const { container } = renderWithProviders(<FileUploader execute={noopExecute} />)
-    const input = container.querySelector('input[type="file"]')
-    const label = input?.closest('label')
-    expect(label).not.toBeNull()
-    expect(label!.tagName).toBe('LABEL')
-    // The label does not masquerade as a button and is taken out of the
-    // tab order: the visually hidden (clip, never display:none or
-    // hidden) input inside it is the control's single tab stop.
-    expect(label).not.toHaveAttribute('role')
-    expect(label).toHaveAttribute('tabindex', '-1')
-    expect(input).not.toHaveAttribute('hidden')
-    expect(input).not.toHaveAttribute('aria-hidden')
-    expect(input).not.toBeDisabled()
-  })
-
-  it('renders no rows and no announcements while the queue is empty', () => {
-    const { queryByRole, queryByText } = renderWithProviders(
-      <FileUploader execute={noopExecute} />,
-    )
-    expect(queryByRole('status')).not.toBeInTheDocument()
-    expect(queryByRole('progressbar')).not.toBeInTheDocument()
-    expect(queryByText(zhCN.fileUploader.statusUploading)).not.toBeInTheDocument()
-    expect(queryByText(zhCN.fileUploader.statusSucceeded)).not.toBeInTheDocument()
-    expect(queryByText(zhCN.fileUploader.statusFailed)).not.toBeInTheDocument()
-  })
-
-  it('does not call execute while idle', () => {
-    const execute = vi.fn(noopExecute)
-    renderWithProviders(<FileUploader execute={execute} />)
-    expect(execute).not.toHaveBeenCalled()
-  })
-
-  it('passes axe over the idle picker', async () => {
-    renderWithProviders(<FileUploader execute={noopExecute} />)
-    await expectNoAxeViolations()
-  })
-
-  it('enqueues every picked file and starts one parallel upload per row', () => {
-    const held = createHeldExecutor()
-    const { container, getByRole, getAllByRole, getAllByText, getByText, queryByText } =
-      renderWithProviders(<FileUploader execute={held.execute} multiple />)
-    selectFiles(inputOf(container), [makeFile('panorama.png'), makeFile('closeup.jpg')])
-    // Both uploads started at once, each with its own live context.
-    expect(held.uploads).toHaveLength(2)
-    expect(held.uploads[0]!.file.name).toBe('panorama.png')
-    expect(held.uploads[1]!.file.name).toBe('closeup.jpg')
-    expect(held.uploads[0]!.context.signal.aborted).toBe(false)
-    expect(held.uploads[1]!.context.signal).not.toBe(held.uploads[0]!.context.signal)
-    // Two rows, each with an indeterminate bar, an uploading caption and
-    // a cancel action; no success/failure chrome yet.
-    expect(getByText('panorama.png')).toBeInTheDocument()
-    expect(getByText('closeup.jpg')).toBeInTheDocument()
-    const bars = getAllByRole('progressbar')
-    expect(bars).toHaveLength(2)
-    for (const bar of bars) {
+    it('shows an uploading row with an indeterminate bar until progress arrives, then determinate', () => {
+      const view = renderHarness({ rows: [uploadingRow('r1', 'scan.jpg')] })
+      const bar = view.getByRole('progressbar', { name: statusUploading })
       expect(bar).not.toHaveAttribute('aria-valuenow')
-    }
-    expect(getAllByText(zhCN.fileUploader.statusUploading)).toHaveLength(2)
-    expect(
-      getAllByRole('button', { name: zhCN.fileUploader.actionCancel }),
-    ).toHaveLength(2)
-    expect(queryByText(zhCN.fileUploader.statusSucceeded)).not.toBeInTheDocument()
-    expect(queryByText(zhCN.fileUploader.statusFailed)).not.toBeInTheDocument()
-    // The live region mounts with the queue but stays silent until a settle.
-    expect(getByRole('status').textContent).toBe('')
-  })
+      view.setRows([uploadingRow('r1', 'scan.jpg', 0.5)])
+      expect(view.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50')
+    })
 
-  it('shows an indeterminate bar until the first report, then the fraction', () => {
-    const held = createHeldExecutor()
-    const { container, getByRole } = renderWithProviders(
-      <FileUploader execute={held.execute} />,
-    )
-    selectFiles(inputOf(container), [makeFile('panorama.png')])
-    const bar = getByRole('progressbar')
-    expect(bar).not.toHaveAttribute('aria-valuenow')
-    act(() => {
-      held.uploads[0]!.context.onProgress(0.5)
+    it('renders the uploading status text', () => {
+      const view = renderHarness({ rows: [uploadingRow('r1', 'scan.jpg')] })
+      expect(view.getByText(statusUploading)).toBeInTheDocument()
     })
-    expect(bar).toHaveAttribute('aria-valuenow', '50')
-    // Out-of-range fractions fold into the bar's [0, 100] window instead
-    // of reaching MUI and triggering its dev-mode range error.
-    act(() => {
-      held.uploads[0]!.context.onProgress(7)
-    })
-    expect(bar).toHaveAttribute('aria-valuenow', '100')
-    act(() => {
-      held.uploads[0]!.context.onProgress(-0.5)
-    })
-    expect(bar).toHaveAttribute('aria-valuenow', '0')
-  })
 
-  it('settles a resolved upload as succeeded, keeping the row with its actions', async () => {
-    const held = createHeldExecutor()
-    const { container, getByRole, getByText, queryByRole, queryByText } =
-      renderWithProviders(<FileUploader execute={held.execute} />)
-    selectFiles(inputOf(container), [makeFile('panorama.png')])
-    await act(async () => {
-      held.uploads[0]!.resolve()
+    it('folds out-of-range progress into [0, 1]', () => {
+      const view = renderHarness({ rows: [uploadingRow('r1', 'scan.jpg', 7)] })
+      expect(view.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100')
+      view.setRows([uploadingRow('r1', 'scan.jpg', -0.5)])
+      expect(view.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0')
     })
-    // The row is retained with the success caption and a remove action;
-    // the transfer chrome is gone.
-    expect(getByText('panorama.png')).toBeInTheDocument()
-    expect(getByText(zhCN.fileUploader.statusSucceeded)).toBeInTheDocument()
-    expect(queryByText(zhCN.fileUploader.statusUploading)).not.toBeInTheDocument()
-    expect(queryByRole('progressbar')).not.toBeInTheDocument()
-    expect(
-      getByRole('button', { name: zhCN.fileUploader.actionRemove }),
-    ).toBeInTheDocument()
-    expect(
-      queryByRole('button', { name: zhCN.fileUploader.actionCancel }),
-    ).not.toBeInTheDocument()
-    // The settle is announced in the single polite live region.
-    const expected = zhCN.fileUploader.announceUploaded.replace('{{name}}', 'panorama.png')
-    expect(getByRole('status').textContent).toBe(expected)
-    await expectNoAxeViolations()
-  })
 
-  it('settles a rejected upload as failed, rendering the rejection message', async () => {
-    const held = createHeldExecutor()
-    const { container, getByRole, getByText, queryByRole } = renderWithProviders(
-      <FileUploader execute={held.execute} />,
-    )
-    selectFiles(inputOf(container), [makeFile('panorama.png')])
-    await act(async () => {
-      held.uploads[0]!.reject(new Error('File exceeds the 5 MB limit.'))
+    it('folds non-finite progress to 0 instead of handing MUI a NaN value', () => {
+      const view = renderHarness({ rows: [uploadingRow('r1', 'scan.jpg', Number.NaN)] })
+      expect(view.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0')
+      expect(view.container).not.toHaveTextContent('NaN')
     })
-    // The host-authored, host-translated rejection message renders as the
-    // row's error text next to the built-in failure caption.
-    expect(getByText(zhCN.fileUploader.statusFailed)).toBeInTheDocument()
-    expect(getByText('File exceeds the 5 MB limit.')).toBeInTheDocument()
-    expect(
-      getByRole('button', { name: zhCN.fileUploader.actionRetry }),
-    ).toBeInTheDocument()
-    expect(
-      getByRole('button', { name: zhCN.fileUploader.actionRemove }),
-    ).toBeInTheDocument()
-    expect(
-      queryByRole('button', { name: zhCN.fileUploader.actionCancel }),
-    ).not.toBeInTheDocument()
-    const expected = zhCN.fileUploader.announceFailed.replace('{{name}}', 'panorama.png')
-    expect(getByRole('status').textContent).toBe(expected)
-    await expectNoAxeViolations()
-  })
 
-  it('falls back to the built-in failure text when the rejection carries no message', async () => {
-    const held = createHeldExecutor()
-    const { container, getAllByText, queryByText } = renderWithProviders(
-      <FileUploader execute={held.execute} multiple />,
-    )
-    selectFiles(inputOf(container), [makeFile('blank.png'), makeFile('odd.bin')])
-    await act(async () => {
-      held.uploads[0]!.reject(new Error(''))
-      held.uploads[1]!.reject('boom') // not an Error: no message at all
+    it('marks a succeeded row with its caption and a failed row with its caption', () => {
+      const view = renderHarness({
+        rows: [succeededRow('r1', 'a.jpg'), failedRow('r2', 'b.jpg')],
+      })
+      expect(view.getByText(statusSucceeded)).toBeInTheDocument()
+      expect(view.getByText(statusFailed)).toBeInTheDocument()
     })
-    expect(getAllByText(zhCN.fileUploader.statusFailed)).toHaveLength(2)
-    expect(queryByText('boom')).not.toBeInTheDocument()
-    expect(container).not.toHaveTextContent(/undefined|\[object Object\]/)
-  })
 
-  it('retries the failed upload with the same file', async () => {
-    const attempts = new Map<string, number>()
-    const execute = vi.fn(async (file: File): Promise<void> => {
-      const attempt = (attempts.get(file.name) ?? 0) + 1
-      attempts.set(file.name, attempt)
-      if (file.name === 'fragile.jpg' && attempt === 1) {
-        throw new Error('temporary network glitch')
-      }
+    it('renders the failed row error text verbatim when present', () => {
+      const view = renderHarness({
+        rows: [failedRow('r1', 'b.jpg', 'The upload answered 503.')],
+      })
+      expect(view.getByText('The upload answered 503.')).toBeInTheDocument()
     })
-    const { container, getByRole, getByText, queryByText } = renderWithProviders(
-      <FileUploader execute={execute} />,
-    )
-    selectFiles(inputOf(container), [makeFile('fragile.jpg')])
-    await act(async () => {})
-    expect(getByText(zhCN.fileUploader.statusFailed)).toBeInTheDocument()
-    expect(getByText('temporary network glitch')).toBeInTheDocument()
-    const firstFile = execute.mock.calls[0]![0] as File
-    fireEvent.click(getByRole('button', { name: zhCN.fileUploader.actionRetry }))
-    // The same File object is handed back to the executor.
-    expect(execute).toHaveBeenCalledTimes(2)
-    expect(execute.mock.calls[1]![0]).toBe(firstFile)
-    // The row is uploading again, its error text cleared.
-    expect(getByText(zhCN.fileUploader.statusUploading)).toBeInTheDocument()
-    expect(queryByText('temporary network glitch')).not.toBeInTheDocument()
-    await act(async () => {})
-    expect(getByText(zhCN.fileUploader.statusSucceeded)).toBeInTheDocument()
-  })
 
-  it('cancel removes the row, aborts the signal and swallows the late settle', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const aborting = createAbortingExecutor()
-    const onQueueChange = vi.fn()
-    const { container, getByRole, queryByRole, queryByText } = renderWithProviders(
-      <FileUploader execute={aborting.execute} onQueueChange={onQueueChange} />,
-    )
-    selectFiles(inputOf(container), [makeFile('panorama.png')])
-    expect(onQueueChange).toHaveBeenCalledTimes(1)
-    fireEvent.click(getByRole('button', { name: zhCN.fileUploader.actionCancel }))
-    // The signal aborts and the row leaves with it; the queue is empty
-    // again, so the live region is gone.
-    expect(aborting.contexts[0]!.signal.aborted).toBe(true)
-    expect(queryByText('panorama.png')).not.toBeInTheDocument()
-    expect(queryByText(zhCN.fileUploader.statusUploading)).not.toBeInTheDocument()
-    expect(queryByRole('status')).not.toBeInTheDocument()
-    expect(
-      queryByRole('button', { name: zhCN.fileUploader.actionCancel }),
-    ).not.toBeInTheDocument()
-    expect(onQueueChange).toHaveBeenCalledTimes(2)
-    expect(onQueueChange.mock.calls[1]![0]).toEqual({
-      uploading: 0,
-      succeeded: 0,
-      failed: 0,
-      total: 0,
+    it('renders no error line and no raw junk when a failed row carries no message', () => {
+      const view = renderHarness({ rows: [failedRow('r1', 'b.jpg')] })
+      const card = view.getByText('b.jpg').closest('li')
+      expect(card).not.toBeNull()
+      expect(within(card!).queryByText(statusFailed)).toBeInTheDocument()
+      expect(card).not.toHaveTextContent(/undefined|\[object Object\]/)
     })
-    // The executor's AbortError settle lands after the row is gone: no
-    // resurrection, no further report, nothing on the console.
-    await act(async () => {})
-    expect(queryByText('panorama.png')).not.toBeInTheDocument()
-    expect(queryByRole('status')).not.toBeInTheDocument()
-    expect(onQueueChange).toHaveBeenCalledTimes(2)
-    expect(errorSpy).not.toHaveBeenCalled()
-  })
 
-  it('removing the last row returns the queue to its idle shape', async () => {
-    const held = createHeldExecutor()
-    const onQueueChange = vi.fn()
-    const { container, getByRole, getByText, queryByRole, queryByText } =
-      renderWithProviders(<FileUploader execute={held.execute} onQueueChange={onQueueChange} />)
-    selectFiles(inputOf(container), [makeFile('panorama.png')])
-    await act(async () => {
-      held.uploads[0]!.resolve()
+    it('keeps two same-named rows distinct, each acting on its own row id', () => {
+      const onRemove = vi.fn()
+      const view = renderHarness({
+        rows: [succeededRow('a', 'scan.jpg'), succeededRow('b', 'scan.jpg')],
+        onRemove,
+      })
+      expect(view.getAllByText('scan.jpg')).toHaveLength(2)
+      const cards = view.getAllByRole('listitem')
+      expect(cards).toHaveLength(2)
+      within(cards[0]!).getByRole('button', { name: actionRemove }).click()
+      expect(onRemove).toHaveBeenCalledWith('a')
+      within(cards[1]!).getByRole('button', { name: actionRemove }).click()
+      expect(onRemove).toHaveBeenCalledWith('b')
     })
-    expect(getByText(zhCN.fileUploader.statusSucceeded)).toBeInTheDocument()
-    fireEvent.click(getByRole('button', { name: zhCN.fileUploader.actionRemove }))
-    expect(queryByText('panorama.png')).not.toBeInTheDocument()
-    expect(queryByRole('status')).not.toBeInTheDocument()
-    expect(queryByRole('progressbar')).not.toBeInTheDocument()
-    expect(onQueueChange.mock.calls.map((call) => call[0])).toEqual([
-      { uploading: 1, succeeded: 0, failed: 0, total: 1 },
-      { uploading: 0, succeeded: 1, failed: 0, total: 1 },
-      { uploading: 0, succeeded: 0, failed: 0, total: 0 },
-    ])
-  })
 
-  it('aborts every in-flight upload on unmount and tolerates late settles', async () => {
-    const held = createHeldExecutor()
-    const { container, unmount } = renderWithProviders(
-      <FileUploader execute={held.execute} multiple />,
-    )
-    selectFiles(inputOf(container), [makeFile('panorama.png'), makeFile('closeup.jpg')])
-    unmount()
-    expect(held.uploads[0]!.context.signal.aborted).toBe(true)
-    expect(held.uploads[1]!.context.signal.aborted).toBe(true)
-    // A host that ignores the abort and settles long after unmount must
-    // be harmless: no crash, no warnings.
-    await act(async () => {
-      held.uploads[0]!.resolve()
-      held.uploads[1]!.reject(new Error('late failure'))
+    it('gives each row status its own action vocabulary', () => {
+      const view = renderHarness({
+        rows: [
+          uploadingRow('r1', 'up.jpg'),
+          failedRow('r2', 'bad.jpg', 'boom'),
+          succeededRow('r3', 'done.jpg'),
+        ],
+        onCancel: vi.fn(),
+        onRetry: vi.fn(),
+        onRemove: vi.fn(),
+      })
+      const cards = view.getAllByRole('listitem')
+      expect(cards).toHaveLength(3)
+      const uploading = cards[0]!
+      const failed = cards[1]!
+      const succeeded = cards[2]!
+
+      const uploadingActions = within(uploading).queryAllByRole('button')
+      expect(uploadingActions).toHaveLength(1)
+      expect(uploadingActions[0]).toHaveAccessibleName(actionCancel)
+
+      const failedActions = within(failed).queryAllByRole('button')
+      expect(failedActions.map((button) => button.getAttribute('aria-label') ?? button.textContent)).toEqual([
+        actionRetry,
+        actionRemove,
+      ])
+
+      const succeededActions = within(succeeded).queryAllByRole('button')
+      expect(succeededActions).toHaveLength(1)
+      expect(succeededActions[0]).toHaveTextContent(actionRemove)
+    })
+
+    it('omits each action whose callback is absent', () => {
+      const view = renderHarness({
+        rows: [
+          uploadingRow('r1', 'up.jpg'),
+          failedRow('r2', 'bad.jpg'),
+          succeededRow('r3', 'done.jpg'),
+        ],
+        onCancel: vi.fn(),
+        onRetry: vi.fn(),
+      })
+      const cards = view.getAllByRole('listitem')
+      expect(within(cards[0]!).queryByRole('button')).toBeInTheDocument()
+      expect(within(cards[1]!).getAllByRole('button')).toHaveLength(1)
+      expect(within(cards[2]!).queryByRole('button')).not.toBeInTheDocument()
+    })
+
+    it('reports cancel, retry and remove by row id through their callbacks', () => {
+      const onCancel = vi.fn()
+      const onRetry = vi.fn()
+      const onRemove = vi.fn()
+      const view = renderHarness({
+        rows: [
+          uploadingRow('r1', 'up.jpg'),
+          failedRow('r2', 'bad.jpg'),
+          succeededRow('r3', 'done.jpg'),
+        ],
+        onCancel,
+        onRetry,
+        onRemove,
+      })
+      const cards = view.getAllByRole('listitem')
+      within(cards[0]!).getByRole('button', { name: actionCancel }).click()
+      expect(onCancel).toHaveBeenCalledWith('r1')
+      within(cards[1]!).getByRole('button', { name: actionRetry }).click()
+      expect(onRetry).toHaveBeenCalledWith('r2')
+      within(cards[1]!).getByRole('button', { name: actionRemove }).click()
+      expect(onRemove).toHaveBeenCalledWith('r2')
+    })
+
+    it('returns to the idle shape when the last row leaves', () => {
+      const view = renderHarness({
+        rows: [succeededRow('r1', 'done.jpg')],
+        onRemove: vi.fn(),
+      })
+      view.setRows([])
+      expect(view.queryAllByRole('listitem')).toHaveLength(0)
+      expect(view.queryByRole('status')).not.toBeInTheDocument()
     })
   })
 
-  it('reports the queue summary once per transition across a full journey', async () => {
-    const held = createHeldExecutor()
-    const onQueueChange = vi.fn()
-    const { container, getByRole, getAllByRole, getByText } = renderWithProviders(
-      <FileUploader execute={held.execute} multiple onQueueChange={onQueueChange} />,
-    )
-    // No report while idle.
-    expect(onQueueChange).not.toHaveBeenCalled()
-    selectFiles(inputOf(container), [makeFile('panorama.png'), makeFile('fragile.jpg')])
-    expect(onQueueChange).toHaveBeenCalledTimes(1)
-    // First upload succeeds, second fails with a host message.
-    await act(async () => {
-      held.uploads[0]!.resolve()
+  describe('the live region', () => {
+    it('mounts with the queue and stays quiet for rows the host seeds', () => {
+      const view = renderHarness({
+        rows: [succeededRow('r1', 'done.jpg'), failedRow('r2', 'bad.jpg')],
+      })
+      const region = view.getByRole('status')
+      expect(region).toHaveTextContent('')
     })
-    await act(async () => {
-      held.uploads[1]!.reject(new Error('File exceeds the 5 MB limit.'))
+
+    it('announces a settle when a row leaves uploading', () => {
+      const view = renderHarness({
+        rows: [uploadingRow('r1', 'done.jpg')],
+      })
+      view.setRows([succeededRow('r1', 'done.jpg')])
+      expect(view.getByRole('status')).toHaveTextContent(uploadedAnnouncement('done.jpg'))
+
+      view.setRows([uploadingRow('r2', 'bad.jpg')])
+      view.setRows([failedRow('r2', 'bad.jpg')])
+      expect(view.getByRole('status')).toHaveTextContent(failedAnnouncement('bad.jpg'))
     })
-    expect(getByText('File exceeds the 5 MB limit.')).toBeInTheDocument()
-    // Retry the failed row: a fresh context starts for the same file.
-    fireEvent.click(getByRole('button', { name: zhCN.fileUploader.actionRetry }))
-    expect(held.uploads).toHaveLength(3)
-    expect(held.uploads[2]!.context.signal.aborted).toBe(false)
-    await act(async () => {
-      held.uploads[2]!.resolve()
+
+    it('announces once per settle; a re-render with no transition changes nothing', () => {
+      const view = renderHarness({
+        rows: [uploadingRow('r1', 'done.jpg')],
+      })
+      view.setRows([succeededRow('r1', 'done.jpg')])
+      view.setRows([succeededRow('r1', 'done.jpg')])
+      expect(view.getByRole('status')).toHaveTextContent(uploadedAnnouncement('done.jpg'))
     })
-    // Remove the two succeeded rows in DOM order.
-    const removeButtons = (): ReturnType<typeof getAllByRole> =>
-      getAllByRole('button', { name: zhCN.fileUploader.actionRemove })
-    fireEvent.click(removeButtons()[0]!)
-    fireEvent.click(removeButtons()[0]!)
-    expect(onQueueChange.mock.calls.map((call) => call[0])).toEqual([
-      { uploading: 2, succeeded: 0, failed: 0, total: 2 },
-      { uploading: 1, succeeded: 1, failed: 0, total: 2 },
-      { uploading: 0, succeeded: 1, failed: 1, total: 2 },
-      { uploading: 1, succeeded: 1, failed: 0, total: 2 },
-      { uploading: 0, succeeded: 2, failed: 0, total: 2 },
-      { uploading: 0, succeeded: 1, failed: 0, total: 1 },
-      { uploading: 0, succeeded: 0, failed: 0, total: 0 },
-    ])
+
+    it('announces a multi-settle commit once, the last row in list order winning', () => {
+      const view = renderHarness({
+        rows: [uploadingRow('r1', 'a.jpg'), uploadingRow('r2', 'b.jpg')],
+      })
+      view.setRows([succeededRow('r1', 'a.jpg'), failedRow('r2', 'b.jpg', 'boom')])
+      expect(view.getByRole('status')).toHaveTextContent(failedAnnouncement('b.jpg'))
+    })
+
+    it('stays quiet for progress-only commits', () => {
+      const view = renderHarness({
+        rows: [uploadingRow('r1', 'a.jpg')],
+      })
+      view.setRows([uploadingRow('r1', 'a.jpg', 0.25)])
+      expect(view.getByRole('status')).toHaveTextContent('')
+      view.setRows([uploadingRow('r1', 'a.jpg', 1)])
+      expect(view.getByRole('status')).toHaveTextContent('')
+    })
+
+    it('clears the region on a retry, so an identical repeated failure is re-announced', () => {
+      const view = renderHarness({
+        rows: [uploadingRow('r1', 'a.jpg')],
+      })
+      view.setRows([failedRow('r1', 'a.jpg', 'The upload answered 503.')])
+      expect(view.getByRole('status')).toHaveTextContent(failedAnnouncement('a.jpg'))
+      // The retry puts the row back on uploading; the region must empty,
+      // or the same failure text below would not re-announce (a live
+      // region speaks only when its text changes).
+      view.setRows([uploadingRow('r1', 'a.jpg')])
+      expect(view.getByRole('status')).toHaveTextContent('')
+      view.setRows([failedRow('r1', 'a.jpg', 'The upload answered 503.')])
+      expect(view.getByRole('status')).toHaveTextContent(failedAnnouncement('a.jpg'))
+    })
+
+    it('treats a host healing a failed row straight to succeeded as no transition', () => {
+      const view = renderHarness({
+        rows: [failedRow('r1', 'a.jpg', 'boom')],
+      })
+      expect(view.getByRole('status')).toHaveTextContent('')
+      view.setRows([succeededRow('r1', 'a.jpg')])
+      expect(view.getByRole('status')).toHaveTextContent('')
+    })
+
+    it('clears a standing announcement when the queue empties, and a later pick is quiet until its settle', () => {
+      const view = renderHarness({
+        rows: [uploadingRow('r1', 'a.jpg')],
+      })
+      view.setRows([succeededRow('r1', 'a.jpg')])
+      expect(view.getByRole('status')).toHaveTextContent(uploadedAnnouncement('a.jpg'))
+      view.setRows([])
+      expect(view.queryByRole('status')).not.toBeInTheDocument()
+      view.setRows([uploadingRow('r2', 'b.jpg')])
+      expect(view.getByRole('status')).toHaveTextContent('')
+      view.setRows([succeededRow('r2', 'b.jpg')])
+      expect(view.getByRole('status')).toHaveTextContent(uploadedAnnouncement('b.jpg'))
+    })
+
+    it('re-renders a standing announcement in the new language and announces settles after the switch in it', async () => {
+      const view = renderHarness({
+        rows: [uploadingRow('r1', 'a.jpg')],
+      })
+      view.setRows([succeededRow('r1', 'a.jpg'), uploadingRow('r2', 'b.jpg', 0.5)])
+      expect(view.getByRole('status')).toHaveTextContent(uploadedAnnouncement('a.jpg'))
+
+      await act(async () => {
+        await switchLanguage(view.i18n, 'en-US')
+      })
+      const enStatusSucceeded = enUS.fileUploader.statusSucceeded
+      const enStatusUploading = enUS.fileUploader.statusUploading
+      expect(view.getByText(enStatusSucceeded)).toBeInTheDocument()
+      expect(view.getByText(enStatusUploading)).toBeInTheDocument()
+      expect(view.getByRole('status')).toHaveTextContent(
+        enUS.fileUploader.announceUploaded.replace('{{name}}', 'a.jpg'),
+      )
+
+      view.setRows([succeededRow('r1', 'a.jpg'), failedRow('r2', 'b.jpg', 'boom')])
+      expect(view.getByRole('status')).toHaveTextContent(
+        enUS.fileUploader.announceFailed.replace('{{name}}', 'b.jpg'),
+      )
+    })
   })
 
-  it('keeps two same-named files as distinct rows', async () => {
-    const held = createHeldExecutor()
-    const { container, getByRole, getAllByRole, getAllByText } = renderWithProviders(
-      <FileUploader execute={held.execute} multiple />,
-    )
-    selectFiles(inputOf(container), [makeFile('scan.png'), makeFile('scan.png')])
-    expect(getAllByText('scan.png')).toHaveLength(2)
-    expect(held.uploads[0]!.file).not.toBe(held.uploads[1]!.file)
-    expect(getAllByRole('progressbar')).toHaveLength(2)
-    await act(async () => {
-      held.uploads[0]!.resolve()
-      held.uploads[1]!.resolve()
+  describe('accessibility', () => {
+    it('is axe-clean at idle', async () => {
+      renderHarness({
+        rows: [],
+        onSelectFiles: vi.fn(),
+        allowDrop: true,
+      })
+      await expectNoAxeViolations()
     })
-    expect(getAllByText(zhCN.fileUploader.statusSucceeded)).toHaveLength(2)
-    const expected = zhCN.fileUploader.announceUploaded.replace('{{name}}', 'scan.png')
-    expect(getByRole('status').textContent).toBe(expected)
-  })
 
-  it('renders no drop surface by default and ignores drop events', () => {
-    const held = createHeldExecutor()
-    const { container, queryByRole, queryByText } = renderWithProviders(
-      <FileUploader execute={held.execute} />,
-    )
-    expect(queryByText(zhCN.fileUploader.dropHint)).not.toBeInTheDocument()
-    const root = container.firstElementChild
-    expect(root).not.toBeNull()
-    dropFiles(root!, [makeFile('panorama.png')])
-    expect(held.uploads).toHaveLength(0)
-    expect(queryByText('panorama.png')).not.toBeInTheDocument()
-    expect(queryByRole('progressbar')).not.toBeInTheDocument()
-  })
+    it('is axe-clean across populated states', async () => {
+      renderHarness({
+        rows: [
+          uploadingRow('r1', 'up.jpg', 0.4),
+          failedRow('r2', 'bad.jpg', 'The upload answered 503.'),
+          succeededRow('r3', 'done.jpg'),
+        ],
+        onSelectFiles: vi.fn(),
+        allowDrop: true,
+        onCancel: vi.fn(),
+        onRetry: vi.fn(),
+        onRemove: vi.fn(),
+      })
+      await expectNoAxeViolations()
+    })
 
-  it('allowDrop: drags toggle the surface state and a drop enqueues like a pick', async () => {
-    const held = createHeldExecutor()
-    const { getByText, queryByText } = renderWithProviders(
-      <FileUploader execute={held.execute} allowDrop />,
-    )
-    const hint = getByText(zhCN.fileUploader.dropHint)
-    const zone = hint.parentElement
-    expect(zone).not.toBeNull()
-    // Enter arms the visual state; leaving clears it.
-    fireEvent.dragEnter(zone!, emptyDragInit)
-    expect(zone!.getAttribute('data-drop-active')).toBe('true')
-    await expectNoAxeViolations()
-    fireEvent.dragOver(zone!, emptyDragInit)
-    expect(zone!.getAttribute('data-drop-active')).toBe('true')
-    fireEvent.dragLeave(zone!, emptyDragInit)
-    expect(zone!.getAttribute('data-drop-active')).toBeNull()
-    // Drag back in and drop: the same enqueue path as picking.
-    fireEvent.dragEnter(zone!, emptyDragInit)
-    dropFiles(zone!, [makeFile('panorama.png')])
-    expect(zone!.getAttribute('data-drop-active')).toBeNull()
-    expect(held.uploads).toHaveLength(1)
-    expect(held.uploads[0]!.file.name).toBe('panorama.png')
-    expect(getByText('panorama.png')).toBeInTheDocument()
-    expect(queryByText(zhCN.fileUploader.statusUploading)).toBeInTheDocument()
-    await expectNoAxeViolations()
-  })
-
-  it('re-renders every queue state in the language switched to', async () => {
-    const held = createHeldExecutor()
-    const { i18n, container, getByRole, getByText, queryByText } = renderWithProviders(
-      <FileUploader execute={held.execute} multiple />,
-    )
-    selectFiles(inputOf(container), [makeFile('panorama.png'), makeFile('fragile.jpg')])
-    await act(async () => {
-      held.uploads[1]!.reject(new Error('host-authored message'))
+    it('is axe-clean as a queue-only view and when disabled', async () => {
+      renderHarness({
+        rows: [uploadingRow('r1', 'up.jpg'), succeededRow('r2', 'done.jpg')],
+      })
+      await expectNoAxeViolations()
+      renderHarness({
+        rows: [],
+        onSelectFiles: vi.fn(),
+        allowDrop: true,
+        disabled: true,
+      })
+      await expectNoAxeViolations()
     })
-    // An uploading row and a failed row coexist; switch the app language.
-    await act(async () => {
-      await switchLanguage(i18n, 'en-US')
-    })
-    expect(getByText(enUS.fileUploader.statusUploading)).toBeInTheDocument()
-    expect(getByText(enUS.fileUploader.statusFailed)).toBeInTheDocument()
-    expect(getByText('host-authored message')).toBeInTheDocument()
-    expect(
-      getByRole('button', { name: enUS.fileUploader.actionCancel }),
-    ).toBeInTheDocument()
-    expect(
-      getByRole('button', { name: enUS.fileUploader.actionRetry }),
-    ).toBeInTheDocument()
-    expect(
-      getByRole('button', { name: enUS.fileUploader.actionRemove }),
-    ).toBeInTheDocument()
-    // The announcement re-renders in the switched language too.
-    const expected = enUS.fileUploader.announceFailed.replace('{{name}}', 'fragile.jpg')
-    expect(getByRole('status').textContent).toBe(expected)
-    expect(queryByText(zhCN.fileUploader.statusUploading)).not.toBeInTheDocument()
-    // A settle after the switch announces in the switched language.
-    await act(async () => {
-      held.uploads[0]!.resolve()
-    })
-    const uploaded = enUS.fileUploader.announceUploaded.replace('{{name}}', 'panorama.png')
-    expect(getByRole('status').textContent).toBe(uploaded)
   })
 })

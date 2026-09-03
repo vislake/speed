@@ -5,8 +5,9 @@ The platform's first DOM-rendering package: the theme factory that turns
 `AppThemeProvider`), and seven controlled core components (`PageHeader`,
 `EmptyState`, `ConfirmDialog`, `FileUploader`, `FormField`,
 `FormLayout`, `DataTable`) that render only the state hosts give them --
-`FileUploader`'s resident upload queue is the one interaction-local
-carve-out, documented in its section below. Every built-in user-facing
+FileUploader renders the upload queue the host owns as `rows` props
+while the transfers themselves run in the host's own code. Every
+built-in user-facing
 string lives in the bilingual `ui-kit` namespace registered through
 `@speed/i18n` -- components never ship text in code, and the workspace's
 `no-literal-text` ESLint rule refuses it there.
@@ -20,7 +21,7 @@ string lives in the bilingual `ui-kit` namespace registered through
 | `components/PageHeader.tsx` | `PageHeader`, `PageHeaderProps`, `PageHeaderBreadcrumb` |
 | `components/EmptyState.tsx` | `EmptyState`, `EmptyStateProps`, `EmptyStateVariant` |
 | `components/ConfirmDialog.tsx` | `ConfirmDialog`, `ConfirmDialogProps`, `ConfirmDialogVariant` |
-| `components/FileUploader.tsx` | `FileUploader`, `FileUploaderProps`, `FileUploadContext`, `FileUploadExecutor`, `FileUploadQueueSummary` |
+| `components/FileUploader.tsx` | `FileUploader`, `FileUploaderProps`, `FileUploaderRow`, `FileUploaderRowStatus` |
 | `components/FormField.tsx` | `FormField`, `FormFieldProps`, `FormFieldRenderState`, `REQUIRED_ERROR_KEY` |
 | `components/FormLayout.tsx` | `FormLayout`, `FormLayoutProps` |
 | `components/DataTable.tsx` | `DataTable`, `DataTableColumn`, `DataTableSort`, `DataTableSortDirection`, `DataTableFilter`, `DataTablePagination`, `DataTableProps` |
@@ -65,51 +66,201 @@ the double-registration guard throws. This exact composition is
 compiled and executed by the package suite (`src/usage-example.test.tsx`),
 so the documented usage cannot drift from the API.
 
-An upload panel can share the same host screen. `FileUploader` is the
-family's execute-injected widget: picking files enqueues them and the
-widget calls the host-supplied `execute` once per file, in parallel,
-with an abort signal and a per-file `onProgress` reporter, while the
-queue and each row's transfer state live and die with the mount. The
-host owns everything transport-shaped -- its executor typically calls a
-generated api-sdk storage operation (the storage hooks publish in the
-consumer-shell round; see `go/storage/AGENTS.md`) -- and receives queue
-summaries to render or gate a submit on; the widget itself never
-fetches:
+An upload panel can share the same host screen under the same
+contract. `FileUploader` is fully controlled like every component in
+the family: the queue is host-owned `rows` state and every interaction
+reports up through a callback (`onSelectFiles` for a pick or drop,
+`onCancel` / `onRetry` / `onRemove` keyed by row id). The host below
+owns the Files it picked (a retry hands the same bytes back), owns one
+`AbortController` per transfer -- so cancelling a row or leaving the
+screen aborts the round trip -- and runs its own transport code: one
+logical POST per file to the host's storage endpoint, reporting
+progress slices and translating an unsuccessful answer into the row's
+error text. `FileUploader` never fetches, never holds a File past the
+event handler that reported it, and renders exactly the rows it is
+given:
 
 ```tsx
-import { useState } from 'react'
-import Typography from '@mui/material/Typography'
+import { useEffect, useRef, useState } from 'react'
 import { FileUploader } from '@speed/ui-kit'
-import type { FileUploadExecutor } from '@speed/ui-kit'
+import type { FileUploaderRow } from '@speed/ui-kit'
 
-function UploadPanel({ uploadFile }: { readonly uploadFile: FileUploadExecutor }) {
-  const [summary, setSummary] = useState({
-    uploading: 0,
-    succeeded: 0,
-    failed: 0,
-    total: 0,
+/**
+ * The upload endpoint the host's transport sends its one round trip
+ * per file to. A real host's upload code calls a generated api-sdk
+ * storage operation here -- storage hooks publish in the
+ * consumer-shell round (go/storage/AGENTS.md) -- so this is an
+ * explicitly labelled fixture placeholder: ui-kit ships no endpoint,
+ * and the suite pins the transport shape without pretending to know a
+ * wire protocol.
+ */
+const STORAGE_UPLOAD_URL = 'https://uploads.example.test/objects'
+
+/** True when the given rejection is an abort signal's AbortError. */
+function isAbortError(error: unknown): boolean {
+  if (error instanceof DOMException) {
+    return error.name === 'AbortError'
+  }
+  return error instanceof Error && error.name === 'AbortError'
+}
+
+/**
+ * The host's upload transport: one logical POST of the picked bytes per
+ * file to the host's storage endpoint, reporting progress slices around
+ * the round trip and translating an unsuccessful answer into the row's
+ * error text. The fetch is the host's own call -- FileUploader never
+ * sees a URL, a signal or a body.
+ */
+async function uploadToStorage(
+  file: File,
+  signal: AbortSignal,
+  onProgress: (fraction: number) => void,
+): Promise<void> {
+  onProgress(0.25)
+  const body = await file.arrayBuffer()
+  const response = await fetch(STORAGE_UPLOAD_URL, {
+    method: 'POST',
+    headers: { 'content-type': file.type },
+    body,
+    signal,
   })
+  if (!response.ok) {
+    throw new Error(`The upload answered ${response.status}.`)
+  }
+  onProgress(0.75)
+}
+
+/**
+ * The example upload panel: the host that owns the queue. `rows` is host
+ * state -- FileUploader renders exactly what this component writes --
+ * and each picked File stays in a host map, because a retry hands the
+ * same bytes back to the transport. One AbortController per transfer
+ * gives the host both cancellations (abort + drop the row) and the
+ * unmount abort; FileUploader itself contributes no state, no fetch and
+ * no transfer.
+ */
+function UploadPanel() {
+  const [rows, setRows] = useState<readonly FileUploaderRow[]>([])
+  const filesRef = useRef(new Map<string, File>())
+  const controllersRef = useRef(new Map<string, AbortController>())
+  const nextIdRef = useRef(1)
+
+  // Leaving the screen aborts every transfer this panel owns.
+  useEffect(() => {
+    const controllers = controllersRef.current
+    return () => {
+      for (const controller of controllers.values()) {
+        controller.abort()
+      }
+    }
+  }, [])
+
+  const patchRow = (id: string, patch: Partial<FileUploaderRow>): void => {
+    setRows((current) =>
+      current.map((row) => (row.id === id ? { ...row, ...patch } : row)),
+    )
+  }
+
+  const dropRow = (id: string): void => {
+    setRows((current) => current.filter((row) => row.id !== id))
+  }
+
+  const transfer = (
+    id: string,
+    file: File,
+    controller: AbortController,
+  ): void => {
+    uploadToStorage(file, controller.signal, (progress) =>
+      patchRow(id, { progress }),
+    )
+      .then(() => {
+        controllersRef.current.delete(id)
+        filesRef.current.delete(id)
+        patchRow(id, { status: 'succeeded' })
+      })
+      .catch((error: unknown) => {
+        controllersRef.current.delete(id)
+        if (isAbortError(error)) {
+          // Cancelled (its row was already dropped) or the panel
+          // unmounted: there is nothing left to render.
+          return
+        }
+        patchRow(id, {
+          status: 'failed',
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
+  }
+
+  const handleSelectFiles = (files: readonly File[]): void => {
+    for (const file of files) {
+      const id = `upload-${nextIdRef.current}`
+      nextIdRef.current += 1
+      filesRef.current.set(id, file)
+      const controller = new AbortController()
+      controllersRef.current.set(id, controller)
+      setRows((current) => [
+        ...current,
+        { id, name: file.name, status: 'uploading' },
+      ])
+      transfer(id, file, controller)
+    }
+  }
+
+  const handleCancel = (id: string): void => {
+    controllersRef.current.get(id)?.abort()
+    filesRef.current.delete(id)
+    dropRow(id)
+  }
+
+  const handleRetry = (id: string): void => {
+    const file = filesRef.current.get(id)
+    if (file === undefined) {
+      return
+    }
+    const controller = new AbortController()
+    controllersRef.current.set(id, controller)
+    patchRow(id, {
+      status: 'uploading',
+      progress: undefined,
+      error: undefined,
+    })
+    transfer(id, file, controller)
+  }
+
+  const handleRemove = (id: string): void => {
+    filesRef.current.delete(id)
+    dropRow(id)
+  }
+
   return (
-    <>
-      <FileUploader multiple execute={uploadFile} onQueueChange={setSummary} />
-      <Typography variant="caption" component="p" sx={{ m: 0 }}>
-        {summary.uploading} uploading, {summary.succeeded} succeeded, {summary.failed} failed
-      </Typography>
-    </>
+    <FileUploader
+      multiple
+      rows={rows}
+      onSelectFiles={handleSelectFiles}
+      onCancel={handleCancel}
+      onRetry={handleRetry}
+      onRemove={handleRemove}
+    />
   )
 }
 ```
 
-An executor that rejects before touching the network -- pre-flight
-validation (size, type, count) is its job -- puts the row into the
-failed state showing the rejection's message (host-written and
+A transport that rejects before touching the network -- pre-flight
+validation (size, type, count) is the host's job -- puts the row into
+the failed state showing the rejection's message (host-written and
 host-translated, the same contract as the form family's error text);
-the row's retry affordance hands the same `File` back to `execute` with
-a fresh context. This exact composition -- `UploadPanel` next to the
-members page the earlier example renders, its transport a scripted
-fetch stub answering one round trip per picked file in pick order -- is
-compiled and executed by the package suite, so the documented usage
-cannot drift from the API.
+the row's retry affordance reports up and the host hands the same
+`File` back to its transport with a fresh context. Settles announce
+once each in a single polite live region; a retry clears it first, so
+an identical later failure re-announces instead of sitting silent. This
+exact composition -- the `UploadPanel` above rendered beside the
+`MembersPage` of `src/usage-example.test.tsx` (a `DataTable` screen
+whose sorting, selection, filtering and pagination are all controlled
+from host state), the panel's transport a scripted fetch stub answering
+one genuine `Response` per round trip in the order the files were
+picked -- is compiled and executed by the package suite, so the
+documented usage cannot drift from the API.
 
 ## The theme factory
 
@@ -164,14 +315,15 @@ state is owned by the host and flows through props; a component echoes
 state back and fires change callbacks. Components never fetch, never
 mutate data, never keep business state -- so the same component works in
 a form, a modal and a server-rendered screen without surprises.
-`FileUploader` is the one deliberate exception, and what it keeps is
-interaction-local, not business state: picking files is an inherently
-multi-step gesture, so its queue and per-row transfer state are born and
-die with the mount (the same carve-out as ConfirmDialog's double-confirm
-arm). The host still owns the upload itself -- the widget calls the
-host-supplied `execute` per file and reports queue summaries up through
-`onQueueChange`; it never fetches, and nothing it holds outlives the
-mount.
+`FileUploader` follows the same contract: its queue renders from
+host-owned `rows` props, and every pick, cancel, retry and remove
+reports up through a callback -- an upload in flight is host state,
+running in the host's own transport code, and the component never holds
+a File past the event handler that received it. The one
+interaction-local detail anywhere in the family is ConfirmDialog's
+double-confirm arming (interaction state that resets whenever the
+dialog closes); nothing else is local, and no component fetches or
+keeps business state.
 
 ### PageHeader
 
@@ -316,49 +468,51 @@ props: `rowKey?`, `size?` ('small' | 'medium'), `sx?`.
 
 ### FileUploader
 
-The file picker with a resident transfer queue -- the interaction-local
-carve-out the Components intro names. Picking files enqueues them, and
-the widget calls the host-supplied `execute` once per file, in
-parallel; the queue and each row's transfer state are born and die with
-the mount and are never lifted into host state. The widget itself makes
-zero network calls, touches no storage and persists nothing; everything
-the host needs to know is reported up through `onQueueChange`
-(uploading / succeeded / failed counts plus the total), typically into
-a `useState` summary the host renders or gates a submit on.
+The file picker and transfer-queue view, fully controlled like every
+component in the family. `rows: readonly FileUploaderRow[]` is the
+queue the host wants shown right now -- one row per transfer, with the
+row's `status` ('uploading' | 'succeeded' | 'failed'), an optional
+`progress` fraction within [0, 1] (absent means an indeterminate bar;
+an out-of-range or non-finite fraction folds into [0, 1] at render
+time) and an optional `error` string rendered verbatim on failed rows.
+The component never fetches, never holds a File past the event handler
+that reported it and keeps no record of rows that are not in the
+current `rows` prop: an upload in flight is host state, executed by
+host code.
 
-`execute: FileUploadExecutor` is required and is the whole transport:
-`(file, { signal, onProgress }) => Promise<void>`. Resolving completes
-the row; rejecting puts it in the failed state, and the rejection's
-`message` -- when non-empty -- renders as the row's error text. That
+Every interaction reports up through a callback: `onSelectFiles` (a
+pick's or drop's files, in order, the presence of which also renders
+the picker trigger), `onCancel(rowId)` on uploading rows,
+`onRetry(rowId)` on failed rows and `onRemove(rowId)` on settled rows
+-- aborting is the host's own controller to perform, and a retry
+re-launches the host's transport with the same `File`. Without
+`onSelectFiles` the component is a pure queue view. Failed rows' error
 text is host-written and host-translated (the same contract as the form
-family's validation-error text); an empty message falls back to the
-built-in failure wording. Pre-flight validation (size, type, count) is
-the executor's job: reject early, before touching the network. A real
-executor typically calls a generated api-sdk storage operation (storage
-hooks publish in the consumer-shell round -- `go/storage/AGENTS.md`);
-ui-kit ships no endpoint, and the usage example's scripted fetch stub
-stands in for that call. The per-file `signal` aborts when the user
-cancels or removes the row, or the widget unmounts; `onProgress` takes
-fractions within [0, 1] -- the row's bar is indeterminate until the
-first report, determinate after. A settle applies only while the row
-still exists and still uploads, so an executor that resolves or rejects
-after a cancel, a remove or an unmount is ignored.
+family's validation-error text); pre-flight validation (size, type,
+count) is the host's job, done before its transport starts. A real
+host's transport typically calls a generated api-sdk storage operation
+(storage hooks publish in the consumer-shell round --
+`go/storage/AGENTS.md`); ui-kit ships no endpoint, and the usage
+example's scripted fetch stub stands in for that call.
 
 Other props: `multiple` (several files per selection; false by
 default), `accept` (forwarded to the picker; advisory only -- real
-validation is the executor's), `allowDrop` (adds a drop surface below
-the trigger; the keyboard path never depends on it), `chooseFilesLabel`
+validation is the host's upload code), `allowDrop` (adds a drop surface
+below the trigger reporting through the same `onSelectFiles`; the
+keyboard path never depends on it), `disabled` (renders the
+affordances inert and ignores picks and drops), `chooseFilesLabel`
 (picker label; the built-in bilingual text by default). The trigger is
 a button rendered as a label wrapping a visually hidden but focusable
 file input -- one tab stop for the whole control, focus shown through
-the label's `:focus-within` rule. Uploading rows show their progress
-bar and a cancel affordance (abort + remove); failed rows show the
-host's error text and a retry affordance (the same `File` handed back
-to `execute` with a fresh context); settled rows offer remove. Settles
-announce in a single polite live region (`role="status"`) that mounts
-with the queue, stored structurally and rendered in the language active
-at render time. Props: `execute` (required), `multiple?`, `accept?`,
-`allowDrop?`, `chooseFilesLabel?`, `onQueueChange?`, `sx?`.
+the label's `:focus-within` rule. Settles announce in a single polite
+live region (`role="status"`, rendered only while the queue has
+content), stored structurally and rendered in the language active at
+render time: only a row leaving `uploading` announces (a retry clears
+the region first, so an identical later failure re-announces), while
+rows the host seeds on mount and progress-only changes stay quiet.
+Props: `rows` (required), `onSelectFiles?`, `onCancel?`, `onRetry?`,
+`onRemove?`, `multiple?`, `accept?`, `allowDrop?`, `disabled?`,
+`chooseFilesLabel?`, `sx?`.
 
 ## Text and i18n
 
@@ -467,7 +621,7 @@ same rationale documented here.
 ## Development
 
 From `web/packages/ui-kit`: `pnpm lint`, `pnpm typecheck`, `pnpm test`
-(147 tests across 12 files), `pnpm build`. The test suite runs in jsdom
+(166 tests across 12 files), `pnpm build`. The test suite runs in jsdom
 (`vitest.config.ts`); shared helpers live in `test-utils/`
 (`renderWithProviders` builds the host tree -- fresh i18n instance per
 call, namespace registered -- and `expectNoAxeViolations` runs axe).
