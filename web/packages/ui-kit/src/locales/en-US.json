@@ -20,6 +20,18 @@
     "cancelLabel": "Cancel",
     "confirmAgainLabel": "Click again to confirm"
   },
+  "fileUploader": {
+    "chooseFiles": "Choose files",
+    "dropHint": "or drag files here",
+    "statusUploading": "Uploading…",
+    "statusSucceeded": "Uploaded",
+    "statusFailed": "Upload failed",
+    "actionRetry": "Retry",
+    "actionRemove": "Remove",
+    "actionCancel": "Cancel",
+    "announceUploaded": "{{name}} uploaded",
+    "announceFailed": "{{name}} failed to upload"
+  },
   "form": {
     "required": "This field is required.",
     "invalid": "Enter a valid value."

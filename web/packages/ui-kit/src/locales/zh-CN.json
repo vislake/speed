@@ -20,6 +20,18 @@
     "cancelLabel": "取消",
     "confirmAgainLabel": "再次点击确认"
   },
+  "fileUploader": {
+    "chooseFiles": "选择文件",
+    "dropHint": "或将文件拖到此处",
+    "statusUploading": "上传中…",
+    "statusSucceeded": "已上传",
+    "statusFailed": "上传失败",
+    "actionRetry": "重试",
+    "actionRemove": "移除",
+    "actionCancel": "取消",
+    "announceUploaded": "{{name}} 已上传",
+    "announceFailed": "{{name}} 上传失败"
+  },
   "form": {
     "required": "此字段为必填项。",
     "invalid": "请输入有效值。"

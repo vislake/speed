@@ -47,3 +47,10 @@ export {
   type DataTableSort,
   type DataTableSortDirection,
 } from './components/DataTable.js'
+export {
+  FileUploader,
+  type FileUploadContext,
+  type FileUploadExecutor,
+  type FileUploaderProps,
+  type FileUploadQueueSummary,
+} from './components/FileUploader.js'

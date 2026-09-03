@@ -45,6 +45,7 @@ describe('ui-kit resources', () => {
       'confirmDialog',
       'dataTable',
       'emptyState',
+      'fileUploader',
       'form',
       'pageHeader',
     ])
