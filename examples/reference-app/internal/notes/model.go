@@ -73,9 +73,18 @@ type Note struct {
 	// dbkit.Repository[Note] -- no code in this package's repository.go
 	// itself needed to change for that proof to hold. Notes does not
 	// expose a delete/restore HTTP endpoint yet (a good, named follow-up
-	// scope, not required for this proof) -- see this migration's own
+	// scope, not required for this proof), and the delete-semantics
+	// section's hard-delete half is proved at this same service level
+	// rather than over HTTP: repository_test.go's
+	// TestRepository_HardDelete_SoftDeletedNote_PhysicallyRemoved drives
+	// dbkit.Repository[Note].HardDelete -- promoted unchanged from the
+	// embedded base, exactly like Delete and Restore, with no code in
+	// this package's repository.go needed -- through this same real,
+	// migrated Repository. No migration change was needed or made for
+	// it: HardDelete issues the physical DELETE the pre-soft-delete
+	// schema already permitted, which is also why this migration's own
 	// doc comment (migrations/{postgres,sqlite}/0002_add_soft_delete.sql)
-	// for why HardDelete is out of scope here too.
+	// says it adds nothing for HardDelete.
 	DeletedAt *time.Time `gorm:"column:deleted_at"`
 	DeletedBy string     `gorm:"column:deleted_by;not null;default:''"`
 }
