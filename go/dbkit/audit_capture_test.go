@@ -39,6 +39,17 @@ func createWidgetsTable(t *testing.T, db *gorm.DB) {
 	}
 }
 
+// isRecordNotFound reports whether err is dbkit's ErrRecordNotFound — by
+// code, never by pointer identity, because apperr.WithParam always returns a
+// new *apperr.Error, so the pointer a Repository method returns is never the
+// package-level sentinel itself. It is this black-box file's twin of the
+// same-named helper in repository_test.go (which package dbkit cannot share
+// across the package boundary).
+func isRecordNotFound(err error) bool {
+	appErr, ok := apperr.As(err)
+	return ok && appErr.Code == dbkit.ErrRecordNotFound.Code
+}
+
 // rawSoftDeletableWidgetRow reads id's raw deleted_at/deleted_by columns
 // directly through db.Raw, bypassing every GORM callback (including the
 // soft-delete auto-scope plugin, which raw SQL never runs) — the "what
@@ -594,5 +605,95 @@ func TestAuditCapturePlugin_Restore_CapturesOnlyTheColumnsItWrites(t *testing.T)
 	}
 	if rowDeletedBy != "" {
 		t.Errorf("row deleted_by = %q after Restore(), want \"\"", rowDeletedBy)
+	}
+}
+
+// TestAuditCapturePlugin_SoftDelete_DoubleDelete_PublishesNothing pins the
+// RowsAffected == 0 guard in capture(): a second Repository.Delete against an
+// already-soft-deleted row matches no row (the row is hidden behind its own
+// deleted_at IS NOT NULL scope), and a write that matched nothing changed no
+// row state — publishing would fabricate a second, false deletion record
+// carrying a fresh deleted_at the real row does not have. The Repository
+// surfaces the same nothing-matched situation as ErrRecordNotFound, so
+// skipping the event loses no signal.
+func TestAuditCapturePlugin_SoftDelete_DoubleDelete_PublishesNothing(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	if err := db.Exec(testutil.SoftDeletableWidgetTableSQL).Error; err != nil {
+		t.Fatalf("create soft_deletable_widgets table: %v", err)
+	}
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1"})
+
+	repo := dbkit.NewRepository[testutil.SoftDeletableWidget](db)
+	w := &testutil.SoftDeletableWidget{ID: "sdw1", Name: "gadget"}
+	if err := repo.Create(ctx, w); err != nil {
+		t.Fatalf("seed Create() error = %v", err)
+	}
+	if err := repo.Delete(ctx, w.ID); err != nil {
+		t.Fatalf("first Delete() (soft-delete) error = %v", err)
+	}
+	err := repo.Delete(ctx, w.ID)
+	if !isRecordNotFound(err) {
+		t.Fatalf("second Delete() error = %v, want ErrRecordNotFound (the row is already soft-deleted, so nothing matched)", err)
+	}
+
+	if events := bus.captured(); len(events) != 2 {
+		t.Errorf("captured %d events, want exactly 2 (create, then the one real soft-delete) -- the double delete matched no row and must publish nothing", len(events))
+	}
+}
+
+// TestAuditCapturePlugin_UpdateMatchingNoRows_PublishesNothing pins the same
+// RowsAffected == 0 guard for the full-record Update path: an Update whose
+// WHERE matched nothing (here: a Repository.Update of a model that was never
+// created) changed no row state, and the Repository reports the nothing-
+// matched situation to its caller as ErrRecordNotFound — capture must not add
+// a fabricated affirmative After for a row the write never touched.
+func TestAuditCapturePlugin_UpdateMatchingNoRows_PublishesNothing(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	if err := db.Exec(testutil.SoftDeletableWidgetTableSQL).Error; err != nil {
+		t.Fatalf("create soft_deletable_widgets table: %v", err)
+	}
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	repo := dbkit.NewRepository[testutil.SoftDeletableWidget](db)
+	w := &testutil.SoftDeletableWidget{ID: "sdw1", Name: "gadget"}
+	if err := repo.Create(ctx, w); err != nil {
+		t.Fatalf("seed Create() error = %v", err)
+	}
+	ghost := &testutil.SoftDeletableWidget{ID: "sdw-never-created", Name: "ghost"}
+	err := repo.Update(ctx, ghost)
+	if !isRecordNotFound(err) {
+		t.Fatalf("Update() of a never-created id error = %v, want ErrRecordNotFound (nothing matched)", err)
+	}
+
+	if events := bus.captured(); len(events) != 1 {
+		t.Errorf("captured %d events, want exactly 1 (the seed create) -- an Update that matched no row must publish nothing", len(events))
+	}
+}
+
+// TestAuditCapturePlugin_DeleteMatchingNoRows_PublishesNothing pins the same
+// RowsAffected == 0 guard for the hard-Delete path: a Repository.Delete of an
+// id that was never created matches no row, the Repository reports
+// ErrRecordNotFound, and capture must not publish a delete event claiming a
+// row was removed when no row state changed.
+func TestAuditCapturePlugin_DeleteMatchingNoRows_PublishesNothing(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	repo := dbkit.NewRepository[testutil.Widget](db)
+	w := &testutil.Widget{ID: "w1", Name: "gadget"}
+	if err := repo.Create(ctx, w); err != nil {
+		t.Fatalf("seed Create() error = %v", err)
+	}
+	err := repo.Delete(ctx, "w-never-created")
+	if !isRecordNotFound(err) {
+		t.Fatalf("Delete() of a never-created id error = %v, want ErrRecordNotFound (nothing matched)", err)
+	}
+
+	if events := bus.captured(); len(events) != 1 {
+		t.Errorf("captured %d events, want exactly 1 (the seed create) -- a Delete that matched no row must publish nothing", len(events))
 	}
 }

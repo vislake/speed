@@ -171,11 +171,28 @@ func (p *auditCapturePlugin) afterUpdate(db *gorm.DB) { p.capture(db, "update") 
 func (p *auditCapturePlugin) afterDelete(db *gorm.DB) { p.capture(db, "delete") }
 
 // capture builds and publishes a WriteCapturedEvent for db.Statement,
-// unless the statement's model is not Auditable or the write already
-// failed. See the type's own doc comment for the failure-handling
+// unless the statement's model is not Auditable, the write already
+// failed, or the write matched no row at all — the RowsAffected guard
+// below. See the type's own doc comment for the failure-handling
 // contract.
 func (p *auditCapturePlugin) capture(db *gorm.DB, operation string) {
 	if db.Error != nil {
+		return
+	}
+	if db.RowsAffected == 0 {
+		// A zero-row write is a write that matched nothing — a not-found
+		// Update or Delete, a double soft-delete, an RLS- or
+		// scope-filtered row — so no row state changed and there is
+		// nothing to capture: publishing would fabricate an affirmative
+		// After ("after the write, the row is …") for a row the write
+		// never touched — a double soft-delete would publish a second,
+		// false deletion record carrying a fresh deleted_at the real row
+		// does not have. The Repository layer reports the same situation
+		// to its caller as ErrRecordNotFound, so no signal is lost. Both
+		// supported engines count rows *matched* here — PostgreSQL's
+		// UPDATE/DELETE command tag and SQLite's changes() since 3.35 —
+		// so a full-record save whose values happen not to change still
+		// reports a matched row and still captures normally.
 		return
 	}
 	auditable, ok := auditableOf(db.Statement)
