@@ -299,6 +299,22 @@ func (m *Module) Objects() *ObjectRepository { return m.objects }
 // storage.store_unavailable.
 func (m *Module) ObjectService() *ObjectService { return m.svc }
 
+// DeriveService returns the module's thumbnail-derivation runtime: the
+// service Register's registered thumbnail-derive handler is backed by, and
+// the synchronous entry point for a host that wants one object's thumbnail
+// derived in-call instead of through the queue. Like ObjectService it is
+// safe to call after NewModule and inert until Register attaches the
+// registry -- before then its store-needing methods fail closed.
+func (m *Module) DeriveService() *DeriveService { return m.derive }
+
+// LifecycleService returns the module's deletion and expiry runtime: the
+// service hosts delete objects through, Register's registered expiry-sweep
+// handler is backed by, and whose EnqueueExpirySweep a host with workers
+// calls on its own schedule -- the module runs no timer of its own. Like
+// the other two services it is safe to call after NewModule and inert
+// until Register attaches the registry.
+func (m *Module) LifecycleService() *LifecycleService { return m.life }
+
 // Derivatives returns the module's derivative-metadata repository.
 func (m *Module) Derivatives() *DerivativeRepository { return m.derivatives }
 

@@ -344,6 +344,33 @@ func TestModule_ObjectService_IsStableAndResolvesItsPolicy(t *testing.T) {
 	}
 }
 
+// TestModule_ServiceAccessors_AreStablePinnedAccessors pins the remaining
+// two service accessors' contract next to the repository and ObjectService
+// accessors': DeriveService() and LifecycleService() return the same,
+// non-nil service on every call -- the instances NewModule built from the
+// module's repositories and queue, and the instances Register's registered
+// job handlers are backed by (module_test.go's handler-binding test proves
+// that identity from the registry side). A host that wants a synchronous
+// derive or a synchronous sweep, or that schedules expiry sweeps on its own
+// timer, reaches the services through these accessors, so a construction
+// that later built fresh instances behind them would silently hand hosts
+// services nothing was wired to.
+func TestModule_ServiceAccessors_AreStablePinnedAccessors(t *testing.T) {
+	m := NewModule(nil)
+	if m.DeriveService() == nil || m.LifecycleService() == nil {
+		t.Fatal("NewModule built no services")
+	}
+	if first, second := m.DeriveService(), m.DeriveService(); first != second {
+		t.Error("DeriveService() returns a different service on each call; hosts hold onto it")
+	}
+	if first, second := m.LifecycleService(), m.LifecycleService(); first != second {
+		t.Error("LifecycleService() returns a different service on each call; hosts hold onto it")
+	}
+	if m.DeriveService() != m.derive || m.LifecycleService() != m.life {
+		t.Error("the accessors do not return the instances the module constructed")
+	}
+}
+
 // TestModule_Register_WiresTheServiceHostSeams proves the services' host
 // seams arrive through Register, end to end: each service's host is nil
 // before any registration -- store-needing calls fail closed until then,
