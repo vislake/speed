@@ -932,6 +932,36 @@ describe('error normalization', () => {
     expect(error.attempts).toBe(1)
   })
 
+  it('drops structurally invalid entries from envelope details', async () => {
+    const standin = scriptedStandin(
+      jsonResponse(400, {
+        code: 'notes.validation_failed',
+        traceId: 'trace-9',
+        details: [
+          { field: 'title', code: 'notes.text_required' },
+          {
+            field: 'price',
+            code: 'billing.invalid_amount',
+            params: { min: 0 },
+          },
+          { field: 'orphan' },
+          { code: 'notes.unknown' },
+          { field: 'broken', code: 42 },
+          'not an object',
+          { field: 'p', code: 'notes.ok', params: 'junk' },
+        ],
+      }),
+    )
+    const api = createClient({ baseUrl: BASE_URL, fetch: standin.fetch })
+    const error = await expectApiError(api<{ ok: boolean }>('/notes'))
+    expect(error.details).toEqual([
+      { field: 'title', code: 'notes.text_required' },
+      { field: 'price', code: 'billing.invalid_amount', params: { min: 0 } },
+      // A valid entry keeps its place even when junk params are dropped.
+      { field: 'p', code: 'notes.ok' },
+    ])
+  })
+
   it('synthesizes an English diagnostic when the envelope has no message', async () => {
     const standin = scriptedStandin(
       jsonResponse(400, {

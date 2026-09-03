@@ -217,9 +217,45 @@ function parseEnvelope(text: string | null): Envelope | undefined {
     envelope.params = candidate.params as Record<string, unknown>
   }
   if (Array.isArray(candidate.details)) {
-    envelope.details = candidate.details as FieldError[]
+    envelope.details = parseFieldErrors(candidate.details)
   }
   return envelope
+}
+
+/**
+ * Keeps only the entries of an envelope `details` array that are
+ * structurally valid FieldErrors (string `field` and `code`; `params`,
+ * when present, a plain object) -- the same strict normalization the
+ * envelope applies to its own fields, so consumers never render a
+ * typed-but-wrong entry.
+ */
+function parseFieldErrors(entries: unknown[]): FieldError[] {
+  const fieldErrors: FieldError[] = []
+  for (const entry of entries) {
+    if (typeof entry !== 'object' || entry === null) {
+      continue
+    }
+    const candidate = entry as Record<string, unknown>
+    if (
+      typeof candidate.field !== 'string' ||
+      typeof candidate.code !== 'string'
+    ) {
+      continue
+    }
+    const fieldError: FieldError = {
+      field: candidate.field,
+      code: candidate.code,
+    }
+    if (
+      typeof candidate.params === 'object' &&
+      candidate.params !== null &&
+      !Array.isArray(candidate.params)
+    ) {
+      fieldError.params = candidate.params as Record<string, unknown>
+    }
+    fieldErrors.push(fieldError)
+  }
+  return fieldErrors
 }
 
 /** Serializes the JSON body option; undefined means no body. */
