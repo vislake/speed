@@ -92,6 +92,73 @@ linters:
           deny:
             - pkg: github.com/vislake/speed/go/
               desc: "pkgcore is the dependency floor of the monorepo: its root package must not import any other module under github.com/vislake/speed/go/"
+        # --- Concrete-infrastructure import bans -------------------------
+        # CLAUDE.md "Dependencies and module boundaries" (18-cicd
+        # discipline-table row): "Do not import concrete infrastructure
+        # implementations in business code. Depend on the pkgcore
+        # interfaces (KVStore, EventBus, ObjectStore, Mailer), never on
+        # go-redis, an S3 SDK, and so on."
+        #
+        # Each rule constrains only files under go/ -- the module
+        # collection -- so examples/reference-app, a CONSUMER that wires
+        # its own kernel at the command-entry layer, is never constrained
+        # by these rules. The allowlist is the files list -- everything
+        # under go/ except the module that owns the implementation -- and
+        # the deny list names the client family by prefix, so subpackages
+        # (minio-go's pkg/credentials) are covered as well. Depguard
+        # denies whole import paths per file: the one or two modules whose
+        # code legitimately owns an implementation could not be singled
+        # out any other way. Paths are resolved relative to this config
+        # file, so the same rule is live whether golangci-lint runs from
+        # the workspace root or from inside a module directory (the
+        # go-module-ci shape: working-directory go/<module>).
+        #
+        # Deliberately NOT encoded as depguard rules yet, each waiting for
+        # its own round or for modules to exist to lint:
+        #   * gorm -- imported so broadly by the real tree (dbkit's
+        #     Repository internals, dbkit.Open()'s plain *gorm.DB for the
+        #     identity and platform data domains, jobs' SQLite store) that
+        #     a deny list would have to be as long as the allowlist. The
+        #     discipline rows that DO constrain gorm usage -- no
+        #     db.Table/db.Model/db.Raw around the Repository, no
+        #     AutoMigrate -- are enforced by the semgrep rules in
+        #     tools/semgrep_rules/.
+        #   * the OTel / LGTM stack -- business modules legitimately touch
+        #     span attributes (the sanctioned home of the tenant
+        #     dimension); what else beyond attribute/ modules may import
+        #     is a decision for the observability round.
+        #   * rbac importing authn, and importing another business
+        #     module's structs for database relations -- both disciplines
+        #     belong to M1 business modules that are still stubs; a deny
+        #     rule needs lint targets to be live (the go-module-ci matrix
+        #     lints only real modules).
+        redis-only-in-pkgcore-and-jobs:
+          files:
+            - "**/go/**"
+            - "!**/go/pkgcore/**"
+            - "!**/go/jobs/**"
+          list-mode: lax
+          deny:
+            - pkg: github.com/redis/go-redis
+              desc: "concrete Redis client imports belong to go/pkgcore (the KVStore/EventBus implementations) and go/jobs (AsynqQueue) alone; business code depends on the pkgcore KVStore/EventBus interfaces"
+            - pkg: github.com/go-redis/redis
+              desc: "legacy go-redis module path (archived) -- same ban as github.com/redis/go-redis"
+        minio-only-in-pkgcore:
+          files:
+            - "**/go/**"
+            - "!**/go/pkgcore/**"
+          list-mode: lax
+          deny:
+            - pkg: github.com/minio/minio-go
+              desc: "the S3 client -- S3ObjectStore and its pkg/credentials subpackage -- belongs to go/pkgcore alone; business code depends on the pkgcore ObjectStore interface"
+        asynq-only-in-jobs:
+          files:
+            - "**/go/**"
+            - "!**/go/jobs/**"
+          list-mode: lax
+          deny:
+            - pkg: github.com/hibiken/asynq
+              desc: "asynq is go/jobs' distributed Queue implementation; business code depends on the jobs/Queue interface"
 
   exclusions:
     generated: lax
