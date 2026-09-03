@@ -1,3 +1,98 @@
 # config
 
-Not yet implemented. See docs/internal/11-cross-cutting.md for the design.
+config is speed's dynamic-configuration module: the schema-first, database-backed settings store whose values can change at runtime and take effect hot — feature-flag enablement, tenant brand items, default limits, AI-model defaults, SMTP parameters. It realizes the dynamic-configuration half of the configuration-management design in `docs/internal/11-cross-cutting.md` (the bootstrap half — process-startup flags/env/files — is `pkgcore/config`, a separate zero-dependency package this module must never import); the scope model it implements is the design's three tiers `system` (platform-wide) → `tenant` (per-tenant overrides) → `user` (deferred, see Known limitations), with reads falling back from the concrete tier to the wide one exactly as the design prescribes. It is also the runtime half of the same document's feature-flag design: modules declare feature flags on `pkgcore`'s registry; this module folds those declarations into its schema, walks flag dependency chains at runtime (`IsEnabled`, `EnabledFlags`), and serves the enablement list to the frontend.
+
+It sits directly above `pkgcore`, `dbkit` and `tenancy` — in the graph of `docs/internal/01-architecture.md` it is among the always-on modules with no off switch — depending on nothing else, and it is **required for a multi-tenant host**: every other module's runtime behavior may be governed by a flag or a limit this module serves.
+
+| Concern | Where |
+|---|---|
+| `Module`, the Register/Attach wiring seam, `Option`s (`WithCipher`, `WithResolver`, `WithPollInterval`), the `SystemPurposeSystemWrite` audited purpose | `module.go` |
+| `Service`, the entire read/write surface: `Get`, `GetTyped`, `Set`, `Watch`, `IsEnabled`, `EnabledFlags`, `PublicSnapshot`, `Refresh`, `Close`, scope resolution and its entitlements, change-event publishing | `service.go` |
+| Canonical values: the one stored/text form per item type, encode/decode, range enforcement against declared bounds | `values.go` |
+| Item/flag schema folding: defaults, `Sensitive`, `Public`, `Group`, bounds, flag dependency and cycle validation, `ErrSchemaConflict` classes | `schema.go` |
+| Row persistence over the `configs` table: exact (key, scope, tenant) get, primary-key upsert, watermark query | `store.go` |
+| The `configs` row model (platform data, never `TenantScoped`) | `model.go` |
+| The read-through row cache and the Watch registry, both keyed per scope tier | `cache.go` |
+| Scope vocabulary and its validation (`system`, `tenant`; `user` rejected) | `scope.go` |
+| Error vocabulary: every sentinel's code, status and params | `errors.go` |
+| The change event declaration (`config.item.changed`) and the redaction marker | `events.go` |
+| The two pre-auth endpoints: `/api/config/public` and `/api/system/features` | `http.go` |
+| Versioned SQL migrations, one subdirectory per dialect | `migrations/` |
+| Package doc comment | `doc.go` |
+
+**Dependencies.** The module imports `pkgcore` (registry contracts, tenant context, `EventBus`, `apperr`, system context), `dbkit` (the `*gorm.DB` wrapper `store.go` reads and writes through, the `MigrationRegistry` its migrations register with, and the field-level AES-GCM `dbkit.Cipher` that Sensitive values are sealed with) and `tenancy` (the `Resolver` interface only — the module never maps hosts to tenants itself). No third-party dependency beyond those modules' own. `Locales()` returns an empty `embed.FS`: the module renders no content of its own, and every user-facing string of the endpoints' responses is a structured error code, matching the discipline that user-facing text lives in i18n resources, never in code.
+
+## The Register/Attach seam
+
+The module's wiring is split into two steps, and the split is load-bearing:
+
+- **Register** declares what never needs the assembled registry: the audited system purpose, the two mounted route paths, the change-event declaration and the audit action. It must be called exactly once per host — `pkgcore` fails a host that registers the same module twice.
+- **Attach** happens *after* every module has registered (i.e. after `Kernel.Bootstrap` returns its `*Registry`): the service's schema is folded from the registry's **combined** item and flag declarations — items and flags owned by other modules are first-class citizens of it — so it cannot exist before registration completes. Attach also demands the runtime dependencies registration must not touch: a `*gorm.DB` with the `configs` table migrated, a `dbkit.Cipher` whenever any registered item is `Sensitive`, and a poll interval (see Hot update below). Attach is idempotence-guarded (`ErrAlreadyAttached`), and refuses a nil registry or nil database outright.
+
+The two routes mounted by Register resolve `m.service` lazily per request; between Register and Attach — a host wiring bug — they answer with the structured `config.service_not_attached` internal error rather than a nil dereference (a regression test pins this). The `*Service` Attach returns is what a host should keep, not the module.
+
+The module itself never calls `Kernel.Bootstrap`: it is a `pkgcore.Module` (implementing `Module`, `Migrations()`, `Register` plus its own `Attach`), and hosts boot it beside their own modules, as `examples/reference-app` does.
+
+## Scope, fallback and entitlements
+
+Every stored value lives at exactly one scope tier and is addressed by the triple `(key, scope, tenant_id)` — the `configs` table's primary key, with the system tier stored under the empty-string tenant sentinel (a NOT NULL column; there is no NULL-magic in the row model). Resolution follows the design's narrow-to-wide order: a read under a tenant consults the tenant tier first, then the system tier, then the schema default (which the service serves as a value with the zero `Scope`, since no row tier owns it). A tenant-less context never consults the tenant tier: it reads system rows, falling back to defaults.
+
+The service — never the caller, never the HTTP layer — enforces each tier's entitlement on `Set`:
+
+- a tenant write requires a tenant in the context (`ErrTenantScopeRequiresTenant` otherwise), and is attributed to the context's tenant, never to a caller-supplied id;
+- a system write requires an audited system context (`pkgcore.WithSystemContext` with the module's own declared purpose `config.system_write`; anything else fails `ErrSystemScopeRequiresSystemContext`), so no tenant-scoped request path can widen a platform setting;
+- `user` scope is declared in the design as future work; a write to it fails `ErrUserScopeUnavailable` rather than being silently stored at the wrong tier.
+
+The `configs` table is **platform data** (it holds every tenant's rows side by side, distinguished by the `tenant_id` column, exactly like the design's shared-schema-with-`tenant_id`-isolation model but with the isolation *deliberately* off: a tenant filter would make the system tier — the fallback every tenant reads — invisible). `model.go` therefore never implements `dbkit.TenantScoped`, and `model_test.go` proves it with `tenancytest.AssertNotTenantScoped`. Module repositories of tenant-owned data must *not* copy this: they embed `dbkit.Repository[T]` and run `AssertIsolated` (see `go/dbkit/AGENTS.md`); this module is the documented exception for platform data.
+
+## Canonical values, schema, bounds
+
+A value is stored and transmitted as a **canonical string** per item type: the string itself, `"true"`/`"false"`, decimal for ints, `time.Duration.String()` for durations. `values.go` owns encode and decode; decode is the single choke point that rejects stored corruption (a row written by a buggy or older writer decodes to `ErrInvalidValue`, never to a wrong-typed `Value`). Ints decode to `int64` uniformly, so a `GetTyped[int]` read fails `ErrTypedValueMismatch` rather than silently truncating on 32-bit hosts — `GetTyped` supports `string`, `bool`, `int64` and `time.Duration`.
+
+The schema (built at Attach from the registry) carries each item's declared `Type`, `Default`, `Min`/`Max`, `Sensitive`, `Public`, `Description` and `Group`. `pkgcore`'s `ConfigSchemaRegistrar.Add` already rejects self-contradictory declarations (`Sensitive` and `Public` together, wrong-typed or out-of-range defaults/bounds, unknown types — all `ErrInvalidConfigItem`); the module's own schema fold additionally enforces what only the whole registry can see: duplicate keys across modules and item/flag collisions fail `ErrSchemaConflict` with the offending `key` in params, a flag dependency on a plain item fails with `depends_on` named, and flag cycles fail `ErrFeatureFlagDependencyCycle` carrying the cycle's keys. Bounds are enforced at write time by the service (`ErrInvalidValue` on a miss). Validation errors never echo the offending value into params, logs or responses — that discipline matters most for Sensitive items and is uniform across the module.
+
+## Sensitive values at rest
+
+A `Sensitive` item is sealed with the host's `dbkit.Cipher` (AES-GCM over the same master-key scheme the AI gateway uses per the design) before it is stored: the `configs` table holds `base64(ciphertext)`, and Attach refuses to run when a Sensitive item is registered but no cipher was provided (`ErrCipherRequired`) — a host without the key could never write or read such a value without leaking it. The plaintext exists only inside the service's cache and in the response of an entitled `Get`. It is redacted — replaced by the stable `[redacted]` marker — at every boundary the plaintext would otherwise cross: the `config.item.changed` event payload, `Watch` deliveries, and logs/errors (the module never echoes values into its own messages; pkgcore's redaction layer covers the rest). `Public` and `Sensitive` are mutually exclusive by declaration validation, so the pre-auth endpoints cannot leak a Sensitive value by construction — a test asserts the raw response bytes contain neither the key nor a written value.
+
+## Hot update: events, invalidation, and the anti-loss poller
+
+`Set` writes the row, advances the process's own cache **before** publishing, and then publishes the change event (`config.item.changed` — the wire name; the design names the event `config.changed`, and the payload type is `config.ItemChangedEvent`) with key, scope, tenant, actor, `OldValue`/`NewValue` (redacted for Sensitive items, marker included when no previous row existed), and `ChangedAt`. The event is also the module's declared audit record for the moment of the write: it carries everything a compliance record needs (who, when, what, old→new), and its persistence into a real audit store is deferred to the `compliance` module (see Known limitations). A failed publish does not roll the write back — the row and the local cache have advanced — and `Set` reports `ErrAuditPublishFailed` so a host that treats audit as mandatory can react; the process never serves the value it just overwrote.
+
+Subscribers and peer instances keep their caches coherent through the module's own subscription to the event (invalidation by exact row triple — never a blanket flush), **plus** a bounded TTL-style backstop: the anti-loss poller. Because a single lost event would otherwise leave a replica serving stale configuration until the next write happens to land, every process polls the `configs` table for rows changed since its watermark on the interval the host chose (`WithPollInterval`; the package constant `DefaultPollInterval` is 30s; `0` disables the poller for single-instance hosts). The watermark query is inclusive (`>=`) so a row written *during* a sweep is guaranteed to be seen by the next one, and each sweep invalidates every changed row and advances the watermark to the newest row's timestamp. The poller never fires watchers — its contract is cache convergence, not change notification — and a poll cycle that finds nothing advances nothing.
+
+`Watch` delivers synchronously on the publishing goroutine for in-process publishers (the standalone mode's memory bus), with per-callback panic containment, and delivers the change as the event saw it: scope-annotated, redacted for Sensitive keys.
+
+## Feature-flag runtime
+
+`pkgcore` owns the declaration side of the design's feature-flag section — modules register `FeatureFlag`s (key, default, description, `DependsOn`), and `pkgcore`'s `ValidateFeatureGraph` fails a bootstrap whose flag graph cannot resolve or cycles. This module owns the runtime side: the schema fold admits flags beside items (item/flag key collisions are schema conflicts), a flag's effective value at any moment is its tenant-tier override, else its system-tier override, else its declared default, and `IsEnabled` treats the flag as enabled only when **it and every flag it depends on** (transitively) report enabled — a tenant that turns a dependency off disables everything above it, per-tenant, without a data migration. `EnabledFlags` renders the sorted list of enabled keys — the runtime half of the design's `/api/system/features` contract — and answers `config.unknown_flag` (params: `key`) for keys that are not declared flags, including plain config items that merely look boolean.
+
+## Endpoints
+
+Two pre-auth endpoints are mounted at the exported `PathPublic` (`/api/config/public`) and `PathSystemFeatures` (`/api/system/features`); hosts name them in tenant-middleware allowlists via the constants. Both answer GET and HEAD only (anything else: 405 with `Allow: GET, HEAD` and the stable `config.method_not_allowed` code), and both resolve the request's tenant through the host-wired `tenancy.Resolver` per the design's unauthenticated rule — custom domain first, subdomain second, platform defaults last, **never an error**: an unmatched host, a failing resolver or no resolver at all reads platform defaults with a 200, because a login page that fails to render is the worst failure mode. `/api/config/public` serves `{"config": {key: value, ...}, "features": [...]}` — only `Public` items, durations as canonical text, an empty feature list as `[]`, never `null` (regression-pinned). `/api/system/features` serves the enablement list alone, `{"features": [...]}`. Every response is JSON with the stable content type, and every error is the structured envelope `{"code": ..., "params": ...}` that `apperr` codes map to HTTP statuses; a non-classified error folds into the module's `config.storage_error` rather than leaking a raw Go error string. The endpoints are deliberately pre-auth in this milestone and serve only what the design marks public — display decisions, never data.
+
+## Rules
+
+- **Do not read config through the raw `configs` table** from another module. The scope fallback, decryption, cache and flag semantics live in the `Service`; anything that reaches around it re-implements a wrong subset (a common wrong subset is "tenant tier only", which silently ignores platform-wide overrides).
+- **Do not hand `Set` a caller-supplied tenant.** The service derives the row's tenant from the context; the API layer never accepts a tenant parameter, per the multi-tenancy discipline.
+- **Do not bypass the audited system context** to write the system tier. `WithSystemContext` with a declared purpose is the only entitlement, and it is the same escape hatch every cross-tenant write in this repository must use.
+- **Do not log or return a Sensitive value** in this module's own code paths; the redaction points live in `events.go` and the service, and new code that touches value-shaped data should route it through the same two points.
+- **Do not add a third scope tier** (user) by editing `scope.go`'s validation alone; the tier's storage, resolution order and entitlement need their own design pass (the design defers it) and their own tests.
+- **Do not add PostgreSQL-only features** to migrations or queries, and **never use `AutoMigrate`** — versioned SQL per dialect, registered through `dbkit`'s `MigrationRegistry` (`migrations/`), is the only path.
+
+## Known limitations (deliberately deferred)
+
+- **No OpenAPI fragment.** The endpoints' contracts live in `http.go` doc comments and tests, not in a spec fragment merged into the reference app's OpenAPI; the design's spec-first order is re-established in the authn round when these endpoints are secured and versioned together. Until then the frontend consumes them through hand-written clients only.
+- **Audit records are events, not persisted rows.** The per-`Set` record is the published `config.item.changed` event; writing it into a durable audit store is the `compliance` module's job (the design routes audit through it). Hosts that need mandatory audit must treat a failed publish (`ErrAuditPublishFailed`) as actionable.
+- **`user` scope is not implemented** (design: future work). Writes to it fail `ErrUserScopeUnavailable`; reads ignore it. Nothing in the schema model needs to change to add the tier later.
+- **Item `Description` is single-language** (English prose in code). The bilingual catalog (`pkgcore/i18n`) renders content, not schemas; when the admin UI round renders schema forms, descriptions move to message ids and the schema item's prose becomes a fallback.
+- **Per-flag consumption semantics are the consumers' job.** The design's "disabled feature answers 404, not 403" and "a disabled flag skips route registration and background jobs, never migrations" rules are enforced by the modules that consume flags (authn, billing, ai-gateway, ...), not by this module — it only answers what is enabled. Likewise, whether a module ships in a binary at all is a scaffolding-time concern, not a runtime query.
+- **Tenant resolution is delegated, never implemented here.** The module consults a `tenancy.Resolver` if the host wired one; domain→tenant mapping and its cache belong to the tenancy side, and the endpoint tests fake the resolver to prove the fallback behavior.
+
+## Testing
+
+Unit tests live beside the source files they test, named `*_test.go` for `*.go` (`service.go` → `service_test.go`, ...), and run on the standalone seams alone — in-memory SQLite (the `configs` table migrated through the real `MigrationRegistry`), the memory bus and KV store — so `go test ./... -race` needs no Docker. Shared assertions (`assertCode`, `assertParam` — decorated `apperr` errors must be matched on their `Code`, never by identity — plus the schema fixtures, the test cipher, and the tenant/system context helpers) live once in `service_test.go` and are used by the other files' tests, matching the house rule that helpers are never duplicated across test files; each file's DB-open helper is its own, with its own counter, following `dbkit`'s precedent. Sensitive-value tests use a 32-byte random key via `crypto/rand`, never a readable string. The `configs` table's non-tenant-scoped proof runs `tenancytest.AssertNotTenantScoped` (`model_test.go`). Pinned timestamps keep watermark and upsert tests deterministic; the poller's own convergence is tested with a millisecond poll interval and a bounded `eventually` loop, which keeps the race detector meaningful.
+
+An `integration_test/` tier (`-tags=integration`) re-runs the same proof surface against real PostgreSQL (both dialect migrations applying, the upsert and watermark query on real server semantics) and real Redis (the event-publish/invalidation path), in the same physical separation the other modules' tiers use — a plain `go test ./...` never touches it.
+
+Examples of the module's public API compile as package tests where the house rules require runnable usage documentation to ship with new public surface; `example_test.go` follows the same discipline.

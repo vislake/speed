@@ -367,9 +367,11 @@ func (s *Service) IsEnabled(ctx context.Context, key string) (bool, error) {
 // enabled for the context's tenant, sorted ascending by key. It is the
 // runtime half of the "/api/system/features query" contract
 // (docs/internal/11-cross-cutting.md): consumers ask "which features are
-// on" rather than probing one flag at a time.
+// on" rather than probing one flag at a time. The returned slice is never
+// nil: an empty result must marshal as JSON's [] -- the wire shape the
+// features endpoints document -- not as null.
 func (s *Service) EnabledFlags(ctx context.Context) ([]string, error) {
-	var out []string
+	out := make([]string, 0)
 	for _, item := range s.schema.items {
 		if !item.isFlag {
 			continue
