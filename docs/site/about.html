@@ -29,10 +29,13 @@
     <tr><td>Dependencies</td><td>Strictly bottom-up: the foundation modules
     (<code>pkgcore</code>, <code>dbkit</code>, <code>observability</code>,
     <code>ratelimit</code>, <code>tenancy</code>) underpin everything above them.</td></tr>
-    <tr><td>Deployment modes</td><td>Every infrastructure dependency is an interface with
-    two implementations: <strong>standalone</strong> (single process, SQLite, zero
-    external dependencies) and <strong>distributed</strong> (PostgreSQL, Redis, S3, real
-    providers). Business code never branches on the mode.</td></tr>
+    <tr><td>Deployment mode and composition</td><td>Two orthogonal axes. Every
+    infrastructure dependency is an interface with several implementations (an in-process
+    one, plus PostgreSQL, Redis, S3 and other backed ones). The <strong>deployment
+    mode</strong> does not select an implementation, it only constrains one: each
+    implementation declares its capabilities, and assembly fails when the composition
+    cannot run in the declared mode. A single-process deployment may talk to real
+    external services. Business code never branches on the mode.</td></tr>
     <tr><td>Multi-tenancy</td><td>A shared database with <code>tenant_id</code>
     isolation, guarded by a GORM plugin, a mandatory generic repository base, and
     PostgreSQL row-level security in the distributed mode.</td></tr>
