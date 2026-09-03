@@ -1,4 +1,4 @@
-# Deployment-mode branching outside kernel wiring
+# Deployment-mode branching outside kernel wiring -- residual-risk detector
 #
 # Discipline row: docs/internal/18-cicd.md architecture-discipline table,
 # "deployment-mode branching outside kernel wiring" row (semgrep: only the
@@ -6,29 +6,47 @@
 # Discipline bullet "Deployment modes: do not branch on
 # `if mode == \"standalone\"` in business logic".
 #
-# Deployment-mode differences belong exclusively to kernel wiring. Business
-# modules receive already-resolved infrastructure (a concrete Queue, a
-# concrete KVStore, ...) through the Registry; a module that inspects the
-# mode constant to change its own behavior has escaped the wiring contract.
+# The deployment-composition retrofit (docs/internal/03-deployment-modes.md)
+# turned the mode from a selector into a constraint: NewKernel takes no
+# deployment mode, each seam is resolved from its registry of
+# capability-declaring implementations, and Bootstrap fails assembly when a
+# resolved implementation cannot satisfy the declared mode's
+# RequiredCapabilities(). What survives of the mode is two kernel-wiring
+# decisions -- the RequiredCapabilities() dispatch in deployment_mode.go and
+# the consumer binary's command entry reading SPEED_DEPLOYMENT_MODE -- plus
+# the mode constants themselves, still part of the public API and still
+# comparable. Business modules receive already-resolved, capability-checked
+# infrastructure through the Registry and have no mode left to inspect, so
+# this rule lives on as a residual-risk detector: a mode comparison outside
+# the allowlisted sites means a mode decision has regressed into library
+# code.
 #
-# ALLOWLIST (paths.exclude below) -- the real kernel-wiring sites, every
-# one of them a mode decision at wiring time:
-#   * go/pkgcore/deployment_mode.go        -- the mode constants + parser
-#   * go/pkgcore/registry.go               -- NewKernel's wiring switch
-#   * go/observability/init.go             -- Init's exporter dispatch
-#   * examples/reference-app/cmd/server/server.go  -- command entry reads
-#     SPEED_DEPLOYMENT_MODE and picks the wiring (kernel assembly is the
+# ALLOWLIST (paths.exclude below) -- the mode-decision sites the retrofit
+# left, each a deliberate, documented wiring-time decision:
+#   * go/pkgcore/deployment_mode.go -- the mode constants + parser +
+#     RequiredCapabilities() dispatch (the one place library code consults
+#     the mode value, deciding which capabilities assembly must demand of
+#     the resolved implementations)
+#   * examples/reference-app/cmd/server/server.go -- the command entry
+#     reads SPEED_DEPLOYMENT_MODE, parses it and passes the result to
+#     Kernel.Bootstrap via WithDeploymentMode (kernel assembly is the
 #     consumer binary's job, not a library module's)
-#   * examples/reference-app/cmd/server/main.go    -- same command entry
-#
-# The reference-app server.go is the one place the environment variable is
-# read (os.Getenv("SPEED_DEPLOYMENT_MODE")); it sits on the allowlist
-# because the command entry IS the kernel wiring for the consumer binary.
+# The other former entries are deliberately NOT exempted: registry.go,
+# observability's init.go and the reference-app main.go no longer carry a
+# mode decision since the retrofit removed their switches, and a comparison
+# re-added there must fire on sight.
 #
 # What fires: string-literal and constant comparisons against the two mode
 # values (both operand orders, == and !=), case labels naming the mode
 # values (unqualified or through any qualifier), and reads of the
 # SPEED_DEPLOYMENT_MODE environment variable -- each is a mode decision.
+#
+# Out of scope: branching on a Capability -- caps.Has(MultiReplicaSafe), a
+# case label on a capability value. Capabilities are the retrofit's new
+# vocabulary for "may this implementation run in this topology", and no
+# architecture-discipline row governs where a capability may gate behavior
+# yet; that branch is a code-review question until such a row (and its own
+# rule) exists. The negative fixture pins these shapes clean.
 #
 # Constant propagation: semgrep resolves same-package literal-valued
 # consts before matching, so a mode decision smuggled through a local
@@ -47,11 +65,12 @@ rules:
   - id: deployment-mode-branch-outside-kernel-wiring
     message: >-
       deployment-mode comparison or SPEED_DEPLOYMENT_MODE read outside the
-      kernel-wiring allowlist. Deployment mode is decided once, in kernel
-      wiring (pkgcore deployment_mode.go / registry.go, observability
-      Init, the reference-app command entry); business code receives
-      already-resolved infrastructure and must never branch on the mode.
-      See the rule header for the exact allowlist.
+      kernel-wiring allowlist. The retrofit confined the mode to wiring:
+      the RequiredCapabilities() dispatch (go/pkgcore/deployment_mode.go)
+      and the consumer command entry's env read (the reference-app
+      cmd/server/server.go) are the only allowlisted sites; business code
+      receives already-resolved, capability-checked infrastructure and must
+      never branch on the mode. See the rule header for the exact allowlist.
     languages:
       - go
     severity: WARNING
@@ -103,7 +122,4 @@ rules:
         - "**/integration_test/**"
         # Kernel-wiring allowlist (see header).
         - "**/go/pkgcore/deployment_mode.go"
-        - "**/go/pkgcore/registry.go"
-        - "**/go/observability/init.go"
         - "**/examples/reference-app/cmd/server/server.go"
-        - "**/examples/reference-app/cmd/server/main.go"

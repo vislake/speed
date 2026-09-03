@@ -5,6 +5,8 @@ package fixture
 import (
 	"os"
 	"strings"
+
+	"github.com/vislake/speed/go/pkgcore"
 )
 
 const (
@@ -33,4 +35,26 @@ func unrelatedSwitch(status int) string {
 		return "ok"
 	}
 	return "unknown"
+}
+
+// Capability branching -- the deployment-composition retrofit's new
+// vocabulary -- is deliberately outside this rule's scope. Deployment mode
+// no longer selects implementations; capability-declaring implementations
+// are what assembly validates against the mode's required capabilities, so
+// a branch on a capability is not a mode decision. No architecture-
+// discipline row governs capability branching yet, so these shapes must
+// stay clean: a future row ships its own rule, and these cases move to
+// that rule's positive fixture.
+func capabilityGate(caps pkgcore.Capability) string {
+	if caps.Has(pkgcore.MultiReplicaSafe) { // stays clean: capability, not mode value
+		return "multi-replica-safe path"
+	}
+	if caps.Has(pkgcore.SurvivesRestart) { // stays clean
+		return "survives-restart path"
+	}
+	switch {
+	case caps.Has(pkgcore.MultiReplicaSafe): // stays clean
+		return "multi-replica-safe case"
+	}
+	return "neither"
 }
