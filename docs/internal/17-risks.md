@@ -32,7 +32,7 @@
 | 各模块的 CI 配置重复维护 | 全部走可复用 workflow 与 composite action；新增模块只在矩阵列表加一行 |
 | 架构纪律写在文档里但无人遵守 | 每条纪律都有对应的自动检查（semgrep/depguard/自研脚本），见 [18 CI/CD](18-cicd.md) 的纪律检查表（**2026-09 已部分落地**：六条 semgrep 规则、depguard 的 redis/minio/asynq 禁令与许可证扫描器均已接线；落地矩阵与仍属未来轮次的行见 18-cicd.md 纪律检查表下的实施状态注记） |
 | 发布时漏打 tag 或版本不一致 | lockstep 发布全流程脚本化；发布后自动触发全新项目生成验证，失败即标记版本不可用 |
-| 依赖引入 GPL 系许可证污染商业交付 | CI 许可证扫描，禁止 GPL/AGPL；MPL/LGPL 需 ADR 记录评估结论。**2026-09 落地**：`tools/license_scan.py` 已在 security.yml 的 license job 运行，策略原样执行（selftest 先行、漂移即报错）；Go 侧 42 条依赖的逐条 adjudication 见 `tools/dependency-licenses.json` |
+| 依赖引入 GPL 系许可证污染商业交付 | CI 许可证扫描，禁止 GPL/AGPL；MPL/LGPL 需 ADR 记录评估结论。**2026-09 落地**：`tools/license_scan.py` 已在 security.yml 的 license job 运行，策略原样执行（selftest 先行、漂移即报错）；Go 侧 34 条、npm 侧 8 条共 42 条依赖的逐条 adjudication 见 `tools/dependency-licenses.json` |
 | Flaky 测试侵蚀对 CI 的信任 | nightly 重复运行检测不稳定用例并自动开 issue；连续不稳定先隔离再修，不允许长期红绿摇摆 |
 | spec-first 增加接口变更的操作步骤，团队可能绕开 | 自动兜底随 API 契约工具链轮次部分落地：后端一半已实现——`task api:gen` 对 reference-app notes 模块的 spec 片段生成 interface，api-contract.yml 在相关 PR 上重新生成并 diff 生成物，绕开无法合入（见 [19 开发工作流](19-dev-workflow.md) 的当前状态注记与 [21 API 契约](21-api-contract.md) 末尾的实现状态注记）；orval 前端 sdk、oasdiff 等其余部分仍待交付，其间靠 code review 维持 spec-first 顺序；收益（编译期杜绝前后端漂移）远大于成本 |
 | 生成代码与手写代码混用导致冲突 | `api-sdk`（纯生成，禁改）与 `api-client`（纯手写运行时）严格分包，生成物整体覆盖不影响手写基建 |

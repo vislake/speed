@@ -71,7 +71,7 @@ Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包�
 ### 许可证合规（对本项目尤其重要）
 脚手架会被用于**对外商业交付**，依赖的许可证会传导给客户项目。CI 中做许可证扫描，**禁止引入 GPL/AGPL 系依赖**；MPL/LGPL 类需单独评估并记录在 ADR 中。这一条在纯内部项目里可以放松，在这里不行。
 
-> **实施状态注记（2026-09，security 轮次）**：已落地——`tools/license_scan.py` 在 security.yml 的 license job 运行（先跑内置 selftest 再扫真实依赖树）；Go 侧 42 条依赖的逐条 adjudication 见 `tools/dependency-licenses.json`，扫描器会把「manifest 与真实依赖树不一致」或「新增依赖缺 adjudication」当作漂移直接报错，策略与本节一致（GPL/AGPL 拒绝、MPL/LGPL 需 ADR、未知许可证 fail-closed）。
+> **实施状态注记（2026-09，security 轮次）**：已落地——`tools/license_scan.py` 在 security.yml 的 license job 运行（先跑内置 selftest 再扫真实依赖树）；Go 侧 34 条、npm 侧 8 条共 42 条依赖的逐条 adjudication 见 `tools/dependency-licenses.json`，扫描器会把「manifest 与真实依赖树不一致」或「新增依赖缺 adjudication」当作漂移直接报错，策略与本节一致（GPL/AGPL 拒绝、MPL/LGPL 需 ADR、未知许可证 fail-closed）。
 
 ### 安全测试专项
 以下场景必须有自动化用例，它们在 [16 验证方式](16-verification.md) 中已定义验收标准：
