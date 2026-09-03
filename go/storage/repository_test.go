@@ -61,6 +61,24 @@ func newUpload(id string, tenant pkgcore.TenantID, createdAt time.Time) Object {
 	}
 }
 
+// newCompleted builds one Object in ObjectStateCompleted: an upload row
+// whose revalidation pipeline has already run, so it carries the finalized
+// columns a completed row must. The digest is a deterministic function of
+// the id rather than of real bytes -- the repository neither knows nor
+// cares about content, and the service round proves the real shape. The
+// explicit CreatedAt is what the ordering tests seed staggered times with.
+func newCompleted(id string, tenant pkgcore.TenantID, createdAt time.Time) Object {
+	o := newUpload(id, tenant, createdAt)
+	o.State = ObjectStateCompleted
+	size := int64(1024)
+	mime := "image/png"
+	digest := sha256HexDigest([]byte(id))
+	o.Size = &size
+	o.MIME = &mime
+	o.ChecksumSHA256 = &digest
+	return o
+}
+
 // assertObjectIDs fails t unless got carries exactly the wanted ids, in
 // order -- the ordering assertions of the cursor tests are the whole point,
 // so a length-only check would not do.
@@ -400,6 +418,98 @@ func TestObjectRepository_ListPage_RejectsForeignOrUnknownCursor(t *testing.T) {
 			assertCode(t, err, dbkit.ErrRecordNotFound.Code)
 		})
 	}
+}
+
+// TestObjectRepository_ListPageState_CompletedRowsOnly pins the filtered
+// form's reason to exist: the service listing promises completed objects
+// only, so the rows a completed-only page may return are exactly the
+// ObjectStateCompleted ones. Uploading rows interspersed by creation time
+// between completed rows are skipped by every page, and skipping them never
+// breaks the keyset ordering of the rows that remain -- the walk from the
+// newest completed row to the oldest lands on precisely the completed set.
+// The unfiltered listPage over the same table still sees every state, which
+// is what keeps the two forms' contracts distinct.
+func TestObjectRepository_ListPageState_CompletedRowsOnly(t *testing.T) {
+	repo := NewObjectRepository(newTestDB(t))
+	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	base := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
+
+	// States interleave by creation time: completed rows sit at minutes 5, 3
+	// and 1, uploading rows at minutes 4 and 2 -- the shape that would leak
+	// an uploading row into a completed-only page if the filter were a
+	// post-query thinning rather than part of the query.
+	seedObject(t, repo, ctx, newCompleted("c-01", "tenant-a", base.Add(5*time.Minute)))
+	seedObject(t, repo, ctx, newUpload("u-01", "tenant-a", base.Add(4*time.Minute)))
+	seedObject(t, repo, ctx, newCompleted("c-02", "tenant-a", base.Add(3*time.Minute)))
+	seedObject(t, repo, ctx, newUpload("u-02", "tenant-a", base.Add(2*time.Minute)))
+	seedObject(t, repo, ctx, newCompleted("c-03", "tenant-a", base.Add(1*time.Minute)))
+
+	// Walk the completed set one row per page; uploading rows between the
+	// completed ones must never surface nor stall the walk.
+	var walked []Object
+	cursor := ""
+	for {
+		page, err := repo.listPageState(ctx, ObjectStateCompleted, 1, cursor)
+		if err != nil {
+			t.Fatalf("listPageState(after %q): %v", cursor, err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		walked = append(walked, page...)
+		cursor = page[len(page)-1].ID
+		if len(walked) > 10 {
+			t.Fatal("walk did not terminate")
+		}
+	}
+	assertObjectIDs(t, walked, "c-01", "c-02", "c-03")
+
+	// The unfiltered form is untouched: it still pages over all five rows.
+	page, err := repo.listPage(ctx, 10, "")
+	if err != nil {
+		t.Fatalf("listPage over the same table: %v", err)
+	}
+	assertObjectIDs(t, page, "c-01", "u-01", "c-02", "u-02", "c-03")
+}
+
+// TestObjectRepository_ListPageState_CursorRowOutsideTheState pins the
+// cursor rule of the filtered form: a cursor that names a row in the wrong
+// state reports dbkit.ErrRecordNotFound -- the same shape as a cursor that
+// never existed -- because a row outside the listed state is exactly as
+// invisible to this listing as a missing one, and a cursor a concurrent
+// transition pushed out of the state must never silently resume the walk
+// from a row the caller was not listing. The unfiltered form accepts an
+// uploading row as its cursor without complaint, which is what keeps the
+// state check on the filtered form alone.
+func TestObjectRepository_ListPageState_CursorRowOutsideTheState(t *testing.T) {
+	repo := NewObjectRepository(newTestDB(t))
+	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	base := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
+
+	seedObject(t, repo, ctx, newCompleted("c-01", "tenant-a", base.Add(2*time.Minute)))
+	seedObject(t, repo, ctx, newUpload("u-01", "tenant-a", base.Add(1*time.Minute)))
+	seedObject(t, repo, ctx, newCompleted("c-00", "tenant-a", base))
+
+	page, err := repo.listPageState(ctx, ObjectStateCompleted, 5, "u-01")
+	if page != nil {
+		t.Errorf("listPageState returned %d rows with an out-of-state cursor, want none", len(page))
+	}
+	assertCode(t, err, dbkit.ErrRecordNotFound.Code)
+
+	// The same row is a legitimate cursor for the unfiltered form: paging
+	// from it walks the rows older than it, c-00.
+	page, err = repo.listPage(ctx, 5, "u-01")
+	if err != nil {
+		t.Fatalf("listPage with an uploading cursor: %v", err)
+	}
+	assertObjectIDs(t, page, "c-00")
+
+	// And an in-state cursor pages normally, skipping nothing on the way.
+	page, err = repo.listPageState(ctx, ObjectStateCompleted, 5, "c-01")
+	if err != nil {
+		t.Fatalf("listPageState(after c-01): %v", err)
+	}
+	assertObjectIDs(t, page, "c-00")
 }
 
 // TestObjectRepository_ListPage_FailsClosedWithoutTenant pins the no-tenant

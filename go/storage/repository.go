@@ -63,13 +63,36 @@ func NewObjectRepository(db *gorm.DB) *ObjectRepository {
 // a cursor that never existed, so a caller can never learn that an id it
 // does not own exists at all.
 func (r *ObjectRepository) listPage(ctx context.Context, limit int, beforeID string) ([]Object, error) {
+	return r.listPageState(ctx, "", limit, beforeID)
+}
+
+// listPageState is listPage restricted to one object state. Pass the state
+// whose rows the listing is about (ObjectService lists completed objects,
+// for instance, so uploading and deleting rows stay invisible through it);
+// an empty state disables the restriction entirely, which is listPage's own
+// unfiltered contract.
+//
+// The state filter reaches the keyset cursor too: the row a beforeID names
+// must itself be in the requested state, or the cursor reports
+// dbkit.ErrRecordNotFound exactly as it would for a cursor that never
+// existed. A cursor row that left the state since the caller's last page --
+// completed and then deleted by a concurrent sweep, say -- therefore reads
+// as "no such row in this listing", never as a page silently resumed from
+// the wrong place.
+func (r *ObjectRepository) listPageState(ctx context.Context, state string, limit int, beforeID string) ([]Object, error) {
 	var objects []Object
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
 		query := tx.Order("created_at DESC, id DESC").Limit(limit)
+		if state != "" {
+			query = query.Where("state = ?", state)
+		}
 		if beforeID != "" {
 			before, err := r.findByIDIn(tx, beforeID)
 			if err != nil {
 				return err
+			}
+			if state != "" && before.State != state {
+				return dbkit.ErrRecordNotFound.WithParam("id", beforeID)
 			}
 			query = query.Where(
 				"(created_at < ?) OR (created_at = ? AND id < ?)",
