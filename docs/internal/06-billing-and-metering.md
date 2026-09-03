@@ -61,11 +61,11 @@ type Decision struct {
 - **回调可能先于下单响应到达**，也可能永远不到达：必须有主动轮询兜底（走 `jobs` 定时任务扫描处于中间态的订单）。
 - `billing-gateway` 拆成独立 module，业务方不接支付时不必被拉入三家 SDK 的依赖树。
 
-## 计量计费：同一管道，两套后端
+## 计量计费：同一管道，可替换的后端
 
-采集接口在两种部署模式下完全一致，业务代码只调 `metering.Recorder.Record(ctx, UsageEvent{...})`：进程内有界 channel 缓冲 + 后台 goroutine 批量 flush，`IdempotencyKey` 防重试重复计量。差异只在 flush 之后：
+采集接口与所选实现无关，完全一致，业务代码只调 `metering.Recorder.Record(ctx, UsageEvent{...})`：进程内有界 channel 缓冲 + 后台 goroutine 批量 flush，`IdempotencyKey` 防重试重复计量。差异只在 flush 之后：
 
-| 环节 | 单进程部署模式 | 分布式部署模式 |
+| 环节 | 进程内实现 | Redis / PostgreSQL 实现 |
 |---|---|---|
 | 缓冲与投递 | 内存 channel 直接进聚合器 | Redis Streams（消费者组，至少一次投递） |
 | 聚合器部署 | 同进程 goroutine | 同进程 goroutine（MVP）→ 量大后拆独立容器 |
@@ -74,7 +74,7 @@ type Decision struct {
 | 原始明细 | 默认关闭 | 可选开启，TimescaleDB hypertable + 保留策略 |
 
 - 不引入 Kafka：Compose 小集群下 Kafka 的运维复杂度与团队规模严重不匹配，而 Redis 在分布式部署模式下本就要用于 session/缓存/限流，复用它不新增基础设施种类。
-- TimescaleDB 是 Postgres 扩展（换镜像即可），不新增数据库引擎；单进程部署模式下 SQLite 无此扩展，因此原始明细默认关闭，只保留汇总表——这正是"能力按部署模式降级"原则的体现。
+- TimescaleDB 是 Postgres 扩展（换镜像即可），不新增数据库引擎；SQLite 无此扩展，因此选用 SQLite 时原始明细默认关闭，只保留汇总表——这是按**所选实现**降级，不是按部署模式降级。
 - 实时配额不查汇总表（有聚合延迟），走计数器；分布式部署模式下定期用聚合结果对账修正计数器，防长期漂移。
 - **超额策略**：Plan 的 `OverageMode` 决定 Block / Allow&Bill / Notify；阈值事件经事件总线发出，由通知模块订阅。
 

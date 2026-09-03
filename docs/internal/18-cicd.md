@@ -9,7 +9,7 @@
 | 流水线 | 触发 | 职责 | 目标时长 |
 |---|---|---|---|
 | `pr-check` | PR 打开/更新 | 受影响模块的 lint + 类型检查 + 单元测试 + 构建 | < 8 分钟 |
-| `pr-full` | PR 打 `full-ci` 标签 / 合入前 | 全量矩阵：双部署模式 × 双方言、集成测试 | < 25 分钟 |
+| `pr-full` | PR 打 `full-ci` 标签 / 合入前 | 全量矩阵：各 seam 的实现 × 双方言、集成测试 | < 25 分钟 |
 | `e2e` | 合入 main / 每日 | reference-app 端到端（Playwright） | < 20 分钟 |
 | `security` | PR + 每日 | 依赖漏洞、密钥扫描、SAST、镜像扫描、许可证检查 | < 10 分钟 |
 | `docs-check` | 涉及文档或公开 API 的 PR | 文档示例编译运行、链接检查、i18n key 一致性、配置清单漂移 | < 5 分钟 |
@@ -22,10 +22,10 @@
 
 ## 成本控制：不是每个 PR 都跑全量
 
-模块数量 × 2 种部署模式 × 2 方言，相乘后组合数太大，每个 PR 全跑既慢又贵。策略：
+模块数量 × 各 seam 的实现套数 × 2 方言，相乘后组合数太大，每个 PR 全跑既慢又贵。策略：
 
 1. **路径过滤**（`dorny/paths-filter`）：只跑改动模块及其**下游依赖**模块。依赖关系从 `go.work` 与 workspace 配置自动推导，不手工维护映射表。
-2. **分层触发**：PR 阶段跑快速检查（单进程部署模式 + SQLite，无需容器）；合入前跑全量矩阵。这利用了单进程部署模式的一个副产品优势——大部分测试不需要 testcontainers 就能跑。
+2. **分层触发**：PR 阶段跑快速检查（全进程内实现 + SQLite，无需容器）；合入前跑全量矩阵。这利用了进程内实现的一个副产品优势——大部分测试不需要 testcontainers 就能跑。
 3. **缓存**：Go module cache、pnpm store、Docker layer、golangci-lint cache 全部启用，按 lockfile 哈希做 key。
 4. **并发控制**：同一 PR 的新推送自动取消旧运行（`concurrency` + `cancel-in-progress`）。
 5. **超时**：每个 job 设 timeout，防止挂死消耗额度。

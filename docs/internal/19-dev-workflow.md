@@ -88,7 +88,7 @@ chore(ci): 缓存 golangci-lint 结果
 PR 模板包含一份 checklist，对应仓库根 [CLAUDE.md](../../CLAUDE.md) 「Architecture Discipline」的纪律：
 
 - [ ] 新增 Repository 已跑 `tenancytest.AssertIsolated`
-- [ ] 新增基础设施依赖已提供单进程与分布式两套实现
+- [ ] 新增基础设施依赖已提供至少一套零外部依赖的实现，且每套实现都声明能力并通过该 seam 的契约测试
 - [ ] 新增用户可见文案已补齐中英双语
 - [ ] 新增公开 API 已附使用文档 + 可编译示例 + `AGENTS.md` 条目
 - [ ] 接口变更已先改 OpenAPI spec，前后端生成物已一并提交

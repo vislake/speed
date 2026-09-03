@@ -4,9 +4,9 @@
 
 ## 技术选型：OTel + LGTM 栈
 
-**埋点层与后端存储层解耦是这里的关键**——OTel SDK 在两种部署模式下都照常埋点，只是导出目标不同：单进程部署模式下导出到 stdout（结构化日志直接可读）并在进程内暴露 `/metrics` 端点（需要时用浏览器直接看，或临时挂一个 Prometheus），完全不需要 Collector 与任何存储组件；分布式部署模式下导出到 OTel Collector。业务代码与中间件零改动。
+**埋点层与后端存储层解耦是这里的关键**——OTel SDK 照常埋点，导出目标是一个可独立选择的实现：导出到 stdout（结构化日志直接可读）并在进程内暴露 `/metrics` 端点（需要时用浏览器直接看，或临时挂一个 Prometheus），完全不需要 Collector 与任何存储组件；或导出到 OTel Collector。**这个选择与部署成几个副本无关**——单进程的生产部署同样应该把遥测送往真实 Collector（见 [03 部署模式与实现组装](03-deployment-modes.md)）。业务代码与中间件零改动。
 
-| 维度 | 选型（分布式部署模式） | 理由 |
+| 维度 | 选型（OTLP → Collector 一侧） | 理由 |
 |---|---|---|
 | 埋点 | OpenTelemetry Go SDK | 厂商中立，换后端不改业务代码 |
 | Metrics | Prometheus | 单二进制、Compose 一键起 |
