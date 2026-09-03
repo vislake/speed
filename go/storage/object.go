@@ -508,13 +508,17 @@ func (s *ObjectService) List(ctx context.Context, limit int, beforeID string) ([
 	return rows, nil
 }
 
-// findByID loads one object of the caller's tenant through the repository
-// and maps its errors onto the service's vocabulary: a row that does not
-// exist (or belongs to another tenant) becomes storage.object_not_found,
-// everything else storage.internal_error with the repository's error as
-// the cause.
-func (s *ObjectService) findByID(ctx context.Context, objectID string) (*Object, error) {
-	row, err := s.objects.FindByID(ctx, objectID)
+// findObjectByID loads one object of the caller's tenant through the
+// repository and maps its errors onto the service vocabulary: a row that
+// does not exist (or belongs to another tenant) becomes
+// storage.object_not_found, everything else storage.internal_error with the
+// repository's error as the cause. Every storage service that looks an
+// object row up -- the transfer runtime and the derive worker alike --
+// shares this one mapping, so a not-found answer means the same thing in
+// both, and a lookup is never remapped differently depending on which
+// service performed it.
+func findObjectByID(ctx context.Context, objects *ObjectRepository, objectID string) (*Object, error) {
+	row, err := objects.FindByID(ctx, objectID)
 	if err != nil {
 		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
 			return nil, ErrObjectNotFound.WithParam("id", objectID)
@@ -522,6 +526,12 @@ func (s *ObjectService) findByID(ctx context.Context, objectID string) (*Object,
 		return nil, ErrInternal.WithCause(err)
 	}
 	return row, nil
+}
+
+// findByID is ObjectService's view of findObjectByID, kept as a method so
+// the transfer runtime's call sites stay as they were.
+func (s *ObjectService) findByID(ctx context.Context, objectID string) (*Object, error) {
+	return findObjectByID(ctx, s.objects, objectID)
 }
 
 // taskTypeDeriveThumbnail names the jobs queue task the completion pipeline
