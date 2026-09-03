@@ -226,3 +226,13 @@ type Membership struct {
 >
 > - **"前端"一段设想的 `SocialLoginButtons` 按服务端下发渠道动态渲染，没有以该形状交付。** 服务端不存在"已启用渠道列表"的发现端点——authn 的 spec 没有此类 operation，`/api/config/public` 只下发配置项与功能开关——"业务项目不需要改代码就能增减渠道"因此不成立。落地的对应物 `SocialSignInSection` 改为 **props 组合**：`SignInScreen` 只在收到宿主传入的 `social` 选项块时渲染社交区，渲染哪些 provider 由该块决定，包内不读取任何配置端点；"各渠道图标与品牌规范内置"同样未落地——组件渲染的是 bundle 文案按钮，不打包品牌资产，与 `ui-kit` 的边界规则一致。该机制记录见 [12 前端架构](12-frontend.md) 的 auth-ui 轮注记三。
 > - **上文设备管理设计段设想的自助管理页面不在组件族内。** 该轮交付的是登录/登出/会话结束占位这一面；设备列表、单设备下线、一键下线其他设备、修改密码联动下线等页面属账号管理 UI，尚未落地——上文 authn 轮注记"会话/设备自助管理"一条括号里的"前端页面尚未存在"对它们仍然准确。其服务端行为（列出设备、查看登录历史、下线单个设备、被下线设备的 refresh 立即失败而其余设备不受影响）已由 `examples/reference-app` 的 `authn_e2e_test.go` 真实 HTTP 端到端验证，见该注记同一条，不依赖这些页面存在。
+
+---
+
+> **实现状态注记（2026-09-04，account-ui 轮：上文 auth-ui 轮注记"账号管理 UI 尚未落地"的翻转落地）——本注记不是设计正文，设计正文保持原样；当前实现状态以根目录 CLAUDE.md 的 Repository Status 为准。**
+>
+> `@speed/account-ui`（账号管理组件家族：`SessionsSection`/`LoginHistorySection`/`SocialBindingsSection`/`BindingCallbackHandler`/`MfaSection`，宿主组合成账号页区块）使上文"用户可见的设备管理"设计段的大部分设想落地：
+>
+> - **设备列表与两种下线按本文形状交付。** 会话列表来自 authn 的 sessions 面，当前设备由服务端答的 `is_current` 明确标记（行内 badge，非客户端推断）；单设备下线走行内操作（被下线会话的 refresh 立即失败仍由服务端保证，`authn_e2e_test.go` 已端到端验证），一键下线其他设备走双确认的危险对话框，以服务端答的 `revoked_count` 播报结果。authn 轮注记里"前端页面尚未存在"的括号对这三者不再准确。
+> - **登录历史、社交绑定/解绑、TOTP 注册一并交付**：登录历史列表渲染服务端记录的 method/result/failure_reason（裸 token 走组件内已知清单，清单外渲染通用文案）；社交绑定走与登录同款的 authorize URL + 回调路由，回调按应答形状分派（绑定形→刷新绑定列表并通知宿主，登录形→渲染"已在别处登录"面板且不回调宿主——该交换把某个账号登了进来）；step-up 门控的 TOTP 更换与恢复码再生成走 `session.verifyStepUp`，"注册成功只活在单个 access token 寿命内"在组件层不承诺重问豁免。"解绑不能致账号无路可登"（`authn.last_login_method`，解绑 409 拒绝并留在页面上）是前端可见的服务端规则之一。
+> - **修改密码时询问"是否同时下线其他设备"仍未落地。** authn 的 spec 至今没有 change-password operation——登录面与账号面上没有任何一处能触发密码修改，联动下线因此无从发生，与上一条注记记录的原因相同。留给 spec 长出 change-password operation 的轮次，届时该行一并实现（服务端"改密即撤销"的会话族行为已有 `authn_e2e_test.go` 同款端到端验证可对照）。

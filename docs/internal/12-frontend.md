@@ -14,6 +14,7 @@ graph BT
     authcore["@speed/auth-core<br/>认证/租户/权限 headless"]
     billcore["@speed/billing-core<br/>计费 headless"]
     authui["@speed/auth-ui"]
+    accountui["@speed/account-ui<br/>账号管理UI"]
     tenantui["@speed/tenancy-ui"]
     billui["@speed/billing-ui"]
     notifcore["@speed/notification-core<br/>通知/未读/SSE headless"]
@@ -30,6 +31,9 @@ graph BT
     billcore --> authcore
     authui --> uikit
     authui --> authcore
+    accountui --> sdk
+    accountui --> uikit
+    accountui --> authcore
     tenantui --> authcore
     billui --> uikit
     billui --> billcore
@@ -122,4 +126,12 @@ M0 的"核心组件"指下面第一组。组件全部受控、props 驱动、不
 > - **tenancy-ui 交付受控的租户切换控件**：`TenantSwitcher`（session 以 prop 进组件、从不自己 attach/观察/驱动会话、当前租户来自 host 的 `currentTenantId`、切换经 `session.switchTenant`、成功只发一次 `onSwitched`、当前租户行禁用、拒绝的切换渲染白名单码文本且可重试）——它是 `authn.switchTenant` 端点的 in-form 运行时消费证明：`src/usage-example.test.tsx` 用真实 api-client + 以真 `Response` 作答的 fetch 替身钉死一次登录加三次切换尝试（成功切换断言 store 持有新令牌、请求携带 `authorization` 与 `{tenant_id}` body；拒绝尝试断言码文本呈现、会话状态不变）。文案 12 叶/语言、9-code 白名单（六 `authn.*` 会话生命周期 + 三 `client.*` 传输）+ `unknown` 兜底，与 auth-ui 共享码的文案逐字同源（同层包互不 import 目录，两版文案以套件双向钉死配对）。
 > - **product-shell 把 SessionGate 形态做成 shipped 三分支视图机**：`ProductShell` 只读 `useAuthState` 快照、从不驱动会话——认证快照 → `layout-kit` `AppShell` 框架包 children；匿名且本 mount 到达过 app → host 的 `sessionEnded` 槽或默认 `auth-ui` `SessionEndedScreen`（仅默认屏内连"回登录视图"action）；匿名且从未到达 → host 的 `signIn` 槽或空（刻意不设默认登录面，通道组合是 host 产品决策）。分支二先于分支三判定：登出过的用户绝不回落到新访客登录面——这就是 auth-ui 轮注记一里 SessionGate fixture 的 shipped 形态。壳本身零文案（无 namespace、无 locale、无错误白名单），全部 chrome props 原样透传给 `AppShell`。`src/usage-example.test.tsx` 编译并执行 README 组合：四 namespace 引导（ui-kit/layout-kit/auth-ui/tenancy-ui）+ `attachSession` + userMenu（`TenantSwitcher` 与 `SignOutButton` 并列），旅程走完整圈——登录 → 框架 → 切租户 → 登出 → 默认会话结束屏 → 再登录回框架，请求与 body 钉死。
 > - **门禁与权限 attach：host 组合形态已证明，shell 自持仍延期**。auth-ui 轮注记二 deferral 的"路由级门禁（layout-kit `RouteGuard` 的 `status` prop）仍是 consumer-shell round 的事"现部分兑现为 `src/gated-journey.test.tsx` 的 fixture：`children` 里的 view-id mini-router 每个目的地挂 `RouteGuard`，status 由 `usePermission` 在 host attach 的列表上派生，切租户 commit 后按 auth-core 存活规则 re-attach（fixture 还以 role-load 替身扮演权限下发，因为真实获取流程——auth-core 轮机制注记 deferral 到 consumer-shell 的 /me 派生列表或 rbac 端点——仍无服务端形态）。旅程覆盖 pending→allowed 的列表重载、denial 期间刷新保持门禁稳定（`onDenied` 恰好一次）、被拒切换与会话死亡收敛。即：**门禁与 re-attach 是 host 在 `children` 里的组合，不是任何包代码**——product-shell 的 deferral 表明文不消费 `RouteGuard`/`usePermission`/`setPermissionSet`，auth-ui 轮注记一 deferral 的"浏览器 leg"（reference-app shell 真实路由与真服务器）保持原样。
+
+> **已落地（account-ui round）：账号管理组件家族交付，auth-ui 轮注记三留给"账号管理 UI"的绑定流程在此兑现。** `web/packages/account-ui` 交付四个账号面区块 + 一个回调组件：`SessionsSection`（会话列表：服务端答 `is_current` 标记当前设备、行内单设备下线、双确认的一键下线其他设备、`revoked_count` 以 role=status 播报；revoked 会话留在列表灰显，当前会话不可从列表下线）、`LoginHistorySection`（最新 20 条登录历史，method/result/failure_reason 裸 token 走组件内已知清单渲染，清单外渲染通用文案）、`SocialBindingsSection`（已绑定身份列表 + 行内解绑 + 每 provider 一个按钮的 add 区，点击只请求该通道 authorize URL 并经 `onAuthorizeUrl` 上报、包从不导航）+ `BindingCallbackHandler`（host 回调路由上完成绑定：effect 以 `(code, state)` 对为键防 StrictMode 双交换，按应答形状分派——绑定形答 `{bound, identity}` → 刷新绑定列表 + `onBound` 一次；登录形答带 tokens → 渲染"已在别处登录"面板且不回调，auth-ui 轮注记三里 `SocialCallbackHandler` 以 `client.protocol` 拒绝的 bound-identity 形态在本包是正常路径）、`MfaSection`（step-up 门控的 TOTP 注册/更换 + 恢复码再生成，见机制注记二）。家族全部文案来自双语 `account-ui` namespace（每语言 106 键）；错误答案经白名单解析（会话生命周期 5 + 社交绑定 8 + 双因子 4 + 限流 1 + client 传输 3，共 21 code + `unknown` 兜底），其中 8 个与登录面同义的 code 逐字复用 auth-ui bundle 文案。runtime 端到端消费在形态层面兑现：`src/usage-example.test.tsx` 编译并执行 README quick start（真实 api-client、scripted fetch 答真实 `Response`、18 个请求按序 pinned、逐请求断言 authorization 头），浏览器 + 真服务器 leg 与 reference-app shell 仍留待 shell / e2e。
+>
+> **同轮机制注记一（读走生成 react-query hooks 是与 auth-ui 零-hooks 契约的刻意对照；host 多一个 QueryClientProvider）**：账号面读的是**可缓存的列表状态**（会话、登录历史、绑定身份），每次写后要失效重取——这正是 sdk 生成 hooks 层（shared-QueryClient 契约，见 [21 API 契约](21-api-contract.md)）的适用面；而登录表单的答案是 one-shot、不是缓存，所以 auth-ui 组件零 hooks 消费的契约不被破坏，两层各自成立。包内只消费生成 hooks 与导出的 query-key 构造器（`getAuthnListIdentitiesQueryKey` 等），失效从不手写 query key，组件也不自建 QueryClient（宿主拥有）；hooks 消费意味着 host 树在 auth-ui 所需 provider 之外**多一个 `QueryClientProvider`**（test-utils 的 `renderWithProviders` 同步多这一层）。连带效应：`@speed/api-sdk` 在本包从 auth-ui 的 type-only dependency 升级为**运行时 dependency**（hooks、query-key 构造器、`authnSocialCallback` 直呼都在这里执行）——包成为 sdk 生成面继 auth-core（compile consumer）之后第二个 in-workspace 消费证明，且是第一个把 hooks 真正渲染进组件树的包。
+>
+> **同轮机制注记二（MFA 面没有"状态"只有"行为"；step-up 验证是包内 dialog 而非页面路由；无 factor-status/disable op）**：authn spec 没有 factor-status operation 也没有 disable operation，`MfaSection` 因此永不声明"已启用/未启用"——状态经行为发现：注册请求 200 ⇒ 无激活因子、挂起向导（secret + provisioning URI 纯文本，包不引入 QR/剪贴板依赖）；403 `authn.step_up_required` ⇒ 存在激活因子，包内 step-up dialog 打开、经 `session.verifyStepUp(code)` 验证成功后再重跑被门控的操作（更换向导因此只在 step-up 后显示替换警告；恢复码再生成无条件走 step-up，重试后 200 ⇒ 面板、404 `authn.mfa_not_enrolled` ⇒ 引导文案指向注册入口）。验证成功只把新因子落进新 access token 的 `amr`，dialog 不承诺 token 轮换后不再询问——"step-up 只活在单个 access token 寿命内"在组件层原样呈现。恢复码只显示一次、离开即弃、包内永不缓存或再取。
+>
+> **同轮机制注记三（auth-ui 不 import；provider 词汇 copy-sync；session prop 的边界是 session operation 的边界）**：绑定面与登录面共享同一批 provider（authn spec 的 5 通道），但同层包互不 import 的规则成立——`SocialProvider`/`SocialProviderConfig` 在本包为自有定义、与 auth-ui 的副本逐字一致并由 spec 保证同轮同步；社交绑定回调与登录回调是同一 spec 端点的两种调用方形状，不需要 auth-ui 的任何类型。session prop 的边界守则：**有 session operation 才给 prop**——add 区的 authorize URL 请求（`session.socialAuthorizeUrl`）与 step-up 验证（`session.verifyStepUp`）是生成面表达不了的两个点，其余表面无 prop（读经绑定 client 的 access token 身份）。家族四区块是 section 不是页面：空/错态隐藏区块标题、渲染 ui-kit `EmptyState`，标题层级不跳级；导航、登入登出、密码修改（spec 无 change-password op，见 05 文档的 account-ui 轮注记）都不是本包形状。
 
