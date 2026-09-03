@@ -37,6 +37,15 @@
     "pending": "Completing sign-in…",
     "retry": "Retry"
   },
+  "signOut": {
+    "label": "Sign out",
+    "busy": "Signing out…"
+  },
+  "sessionEnded": {
+    "title": "Session ended",
+    "description": "Your sign-in is no longer valid. Sign in again to continue.",
+    "signInAction": "Sign in again"
+  },
   "errors": {
     "authn": {
       "invalid_credentials": "Email, phone number or password is incorrect.",
@@ -55,7 +64,12 @@
       "oauth_state_invalid": "The sign-in state has expired. Please start again.",
       "social_exchange_failed": "The social sign-in failed. Please try again.",
       "identity_requires_binding": "This social account is linked to another account. Sign in to that account first to link it.",
-      "identity_already_bound": "This social account is already linked to your account."
+      "identity_already_bound": "This social account is already linked to your account.",
+      "session_not_found": "The session does not exist. Please sign in again.",
+      "session_revoked": "The session was revoked. Please sign in again.",
+      "refresh_token_invalid": "Your sign-in is no longer valid. Please sign in again.",
+      "refresh_token_reused": "Suspicious activity was detected. Please sign in again.",
+      "token_expired": "Your sign-in has expired. Please sign in again."
     },
     "client": {
       "network": "No network connection. Check your connection and try again.",

@@ -37,6 +37,15 @@
     "pending": "正在完成登录…",
     "retry": "重试"
   },
+  "signOut": {
+    "label": "退出登录",
+    "busy": "正在退出…"
+  },
+  "sessionEnded": {
+    "title": "会话已结束",
+    "description": "你的登录状态已失效，请重新登录后继续。",
+    "signInAction": "重新登录"
+  },
   "errors": {
     "authn": {
       "invalid_credentials": "邮箱、手机号或密码不正确。",
@@ -55,7 +64,12 @@
       "oauth_state_invalid": "登录状态已失效，请重新发起登录。",
       "social_exchange_failed": "社交账号登录失败，请重试。",
       "identity_requires_binding": "此社交账号已关联其他账户，请先登录对应账户后再绑定。",
-      "identity_already_bound": "此社交账号已绑定到你的账户。"
+      "identity_already_bound": "此社交账号已绑定到你的账户。",
+      "session_not_found": "会话不存在，请重新登录。",
+      "session_revoked": "会话已被撤销，请重新登录。",
+      "refresh_token_invalid": "登录状态已失效，请重新登录。",
+      "refresh_token_reused": "检测到异常活动，请重新登录。",
+      "token_expired": "登录已过期，请重新登录。"
     },
     "client": {
       "network": "网络连接不可用，请检查网络后重试。",

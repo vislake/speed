@@ -30,6 +30,26 @@ describe('InlineError', () => {
     )
   })
 
+  // The sign-out call (and a host's own protected operations) can answer
+  // with the session-lifecycle codes; each resolves to its own bundle
+  // text, so a whitelist or locale typo in any one of them fails here
+  // even when the component tests only render representatives.
+  const sessionCodes = [
+    ['authn.session_not_found', zhCN.errors.authn.session_not_found],
+    ['authn.session_revoked', zhCN.errors.authn.session_revoked],
+    ['authn.refresh_token_invalid', zhCN.errors.authn.refresh_token_invalid],
+    ['authn.refresh_token_reused', zhCN.errors.authn.refresh_token_reused],
+    ['authn.token_expired', zhCN.errors.authn.token_expired],
+  ] as const
+
+  it.each(sessionCodes)(
+    'render the %s session-lifecycle code with its own text',
+    (code, text) => {
+      renderWithProviders(<InlineError code={code} />)
+      expect(screen.getByRole('alert')).toHaveTextContent(text)
+    },
+  )
+
   it('render the unknown fallback for a code outside the whitelist', () => {
     renderWithProviders(<InlineError code="authn.future_code" />)
     expect(screen.getByRole('alert')).toHaveTextContent(zhCN.errors.unknown)

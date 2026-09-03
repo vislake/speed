@@ -13,6 +13,14 @@
  * storage, attaches a session or touches the network directly. Helpers
  * shared between the components live in src/internal/ and are
  * deliberately not exported.
+ *
+ * The session surface sits beside the sign-in family: SignOutButton
+ * drives session.logout() from a click (a failed logout renders the
+ * answer's code text and stays retryable; a successful one is the host's
+ * to observe), and SessionEndedScreen is the pure placeholder a host
+ * mounts at a view whose authenticated snapshot just turned anonymous,
+ * handing the viewer back to its sign-in surface. Both render only
+ * auth-ui-namespace text and neither reads session state.
  */
 
 export { AUTH_UI_NAMESPACE, authUiResources } from './resources.js'
@@ -41,3 +49,11 @@ export {
   type SocialSignInOptions,
   type SignInScreenProps,
 } from './SignInScreen.js'
+export {
+  SignOutButton,
+  type SignOutButtonProps,
+} from './SignOutButton.js'
+export {
+  SessionEndedScreen,
+  type SessionEndedScreenProps,
+} from './SessionEndedScreen.js'

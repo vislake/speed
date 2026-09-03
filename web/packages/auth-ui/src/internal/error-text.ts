@@ -1,12 +1,14 @@
 /**
  * Error-code text resolution for the auth-ui namespace.
  *
- * Every reachable answer of the sign-in surface -- the authn error codes
- * the spec enumerates across register, the password/SMS logins, the SMS
- * request and the social endpoints, plus the transport-level
- * client.network / client.timeout / client.protocol codes of the
- * @speed/api-client contract -- maps, one bundle key per code, under the
- * errors section ('errors.authn.invalid_credentials' and so on). Codes
+ * Every reachable answer of the sign-in and session surface -- the authn
+ * error codes the spec enumerates across register, the password/SMS
+ * logins, the SMS request and the social endpoints, the session-lifecycle
+ * codes a sign-out call or a host-side protected operation can answer
+ * with, plus the transport-level client.network / client.timeout /
+ * client.protocol codes of the @speed/api-client contract -- maps, one
+ * bundle key per code, under the errors section
+ * ('errors.authn.invalid_credentials' and so on). Codes
  * outside the whitelist -- a future authn code, a client.http.<status>
  * answer, a non-ApiError throw -- resolve to 'errors.unknown', so the
  * bundle can never render a raw key and a missing translation never
@@ -35,6 +37,13 @@ const ERROR_TEXT_CODES = [
   'authn.social_exchange_failed',
   'authn.identity_requires_binding',
   'authn.identity_already_bound',
+  // authn: session lifecycle -- a sign-out call can answer with these,
+  // and a host renders them for its own protected operations.
+  'authn.session_not_found',
+  'authn.session_revoked',
+  'authn.refresh_token_invalid',
+  'authn.refresh_token_reused',
+  'authn.token_expired',
   // Transport-level failures of the api-client contract.
   'client.network',
   'client.timeout',

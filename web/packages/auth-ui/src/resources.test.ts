@@ -47,6 +47,8 @@ describe('auth-ui resources', () => {
       'errors',
       'passwordSignIn',
       'register',
+      'sessionEnded',
+      'signOut',
       'smsSignIn',
       'social',
       'socialCallback',
@@ -102,6 +104,8 @@ describe('auth-ui resources', () => {
       'errors.authn.invalid_credentials',
       'errors.authn.email_already_registered',
       'errors.authn.identity_already_bound',
+      'errors.authn.session_revoked',
+      'errors.authn.token_expired',
       'errors.client.network',
     ]) {
       expect(i18n.t(key, { ns: AUTH_UI_NAMESPACE })).not.toBe(fallback)

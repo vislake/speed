@@ -38,6 +38,7 @@ export const LOGIN_PASSWORD = 'POST /api/v1/authn/login/password'
 export const LOGIN_SMS = 'POST /api/v1/authn/login/sms'
 export const REQUEST_SMS_CODE = 'POST /api/v1/authn/login/sms/request'
 export const REGISTER = 'POST /api/v1/authn/register'
+export const LOGOUT = 'POST /api/v1/authn/logout'
 // The social endpoints embed the provider in the path, so the keys
 // below pin 'google' like the other constants pin their whole path.
 // A test that needs another provider writes its own literal key
