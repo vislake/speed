@@ -38,6 +38,8 @@
 
 "notification.contact_rate_limited" = "操作过于频繁,请 {{.retry_after_seconds}} 秒后重试。"
 
+"notification.dispatch_invalid" = "该通知请求不合法:{{.field}}。"
+
 "notification.sms_sender_required" = "通知服务缺少短信发送通道的配置。"
 
 "notification.mail_from_required" = "通知服务缺少邮件发件人地址的配置。"
@@ -45,6 +47,10 @@
 "notification.contact_email_indexer_required" = "通知服务缺少邮件地址索引密钥的配置。"
 
 "notification.contact_phone_indexer_required" = "通知服务缺少手机号索引密钥的配置。"
+
+"notification.delivery_queue_required" = "通知服务缺少投递队列的配置。"
+
+"notification.user_address_resolver_required" = "通知服务缺少用户地址来源的配置。"
 
 "notification.contact.verify_code.sms" = "您的验证码是 {{.code}},{{.minutes}} 分钟内有效。"
 

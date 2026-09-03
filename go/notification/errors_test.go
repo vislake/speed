@@ -40,11 +40,16 @@ var errorCatalog = []struct {
 	{"ErrContactNotVerified", ErrContactNotVerified, "notification.contact_not_verified", http.StatusConflict},
 	{"ErrContactRateLimited", ErrContactRateLimited, "notification.contact_rate_limited", http.StatusTooManyRequests},
 
+	// The delivery group (delivery.go).
+	{"ErrDispatchInvalid", ErrDispatchInvalid, "notification.dispatch_invalid", http.StatusBadRequest},
+
 	// The Register-time wiring group (module.go).
 	{"ErrSMSSenderRequired", ErrSMSSenderRequired, "notification.sms_sender_required", http.StatusInternalServerError},
 	{"ErrMailFromRequired", ErrMailFromRequired, "notification.mail_from_required", http.StatusInternalServerError},
 	{"ErrContactEmailIndexerRequired", ErrContactEmailIndexerRequired, "notification.contact_email_indexer_required", http.StatusInternalServerError},
 	{"ErrContactPhoneIndexerRequired", ErrContactPhoneIndexerRequired, "notification.contact_phone_indexer_required", http.StatusInternalServerError},
+	{"ErrDeliveryQueueRequired", ErrDeliveryQueueRequired, "notification.delivery_queue_required", http.StatusInternalServerError},
+	{"ErrUserAddressResolverRequired", ErrUserAddressResolverRequired, "notification.user_address_resolver_required", http.StatusInternalServerError},
 }
 
 // TestErrorCatalog_IsComplete is what makes the promise at the top of

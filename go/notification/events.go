@@ -6,20 +6,17 @@ import (
 
 // The domain events notification publishes. Names follow pkgcore.EventDecl's
 // <module>.<entity>.<action> convention, and the module's own delivery
-// subscriber is the first (and, for the in-app channel, the only) consumer
-// -- the platform's other modules publish the events that BECOME
-// notifications; notification publishes the events that announce its own
-// deliveries.
+// machinery is the first consumer of its own inbox event -- the platform's
+// other modules publish the events that BECOME notifications; notification
+// publishes the events that announce its own deliveries.
 const (
 	// EventInboxCreated announces that one message has been delivered into
 	// one recipient's in-app inbox: the row is committed before the event
-	// goes out, so a subscriber that mirrors the inbox elsewhere (the
-	// realtime push of a later block, say) can read the row back without
-	// racing its writer.
-	//
-	// This block only declares the event into the platform's catalog
-	// through Register; the delivery subscriber of a later block is what
-	// actually publishes it.
+	// goes out, so a subscriber that mirrors the inbox elsewhere can read
+	// the row back without racing its writer. The delivery job publishes it
+	// after every successful inbox-row write, and the module's own Hub --
+	// subscribed to it during Register -- is the first subscriber, fanning
+	// the announcement out to the connections of its replica.
 	EventInboxCreated = "notification.inbox.created"
 )
 

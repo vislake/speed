@@ -886,6 +886,10 @@ func (s *ContactService) markBounced(ctx context.Context, id string) (bool, erro
 // deliverable later and the job must not burn retries on it; unsubscribed
 // and bounced are terminal and the job records them as skipped), which is
 // why each status carries its own error rather than one blanket refusal.
+// The unsubscribed and bounced errors additionally carry the contact's
+// channel in their "channel" parameter -- the skip record the job writes
+// for them is per channel, and the job has no other way to learn the
+// channel of a contact the gate refused to return.
 func (s *ContactService) EnsureDeliverable(ctx context.Context, contactID string) (*VerifiedContact, error) {
 	contact, err := s.repo.FindByID(ctx, contactID)
 	if err != nil {
@@ -900,9 +904,9 @@ func (s *ContactService) EnsureDeliverable(ctx context.Context, contactID string
 	case ContactStatusPending:
 		return nil, ErrContactNotVerified
 	case ContactStatusUnsubscribed:
-		return nil, ErrContactUnsubscribed
+		return nil, ErrContactUnsubscribed.WithParam("channel", contact.Channel)
 	case ContactStatusBounced:
-		return nil, ErrContactBounced
+		return nil, ErrContactBounced.WithParam("channel", contact.Channel)
 	default:
 		return nil, errInternal(fmt.Errorf("notification: unknown contact status %q", contact.Status))
 	}

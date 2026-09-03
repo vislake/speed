@@ -42,6 +42,8 @@
 
 "notification.contact_rate_limited" = "Too many attempts. Please try again in {{.retry_after_seconds}} seconds."
 
+"notification.dispatch_invalid" = "That notification request is not valid: {{.field}}."
+
 "notification.sms_sender_required" = "The notification service has no SMS sender configured."
 
 "notification.mail_from_required" = "The notification service has no mail From address configured."
@@ -49,6 +51,10 @@
 "notification.contact_email_indexer_required" = "The notification service has no email-address index key configured."
 
 "notification.contact_phone_indexer_required" = "The notification service has no phone-number index key configured."
+
+"notification.delivery_queue_required" = "The notification service has no delivery queue configured."
+
+"notification.user_address_resolver_required" = "The notification service has no user-address source configured."
 
 "notification.contact.verify_code.sms" = "Your verification code is {{.code}}. It is valid for {{.minutes}} minutes."
 

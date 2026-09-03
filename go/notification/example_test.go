@@ -7,11 +7,33 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 
 	"github.com/vislake/speed/go/notification"
 )
+
+// exampleUserResolver is a UserAddressResolver answering from a fixed
+// per-user address table -- the shape of a host layer over its own identity
+// store, which the notification module deliberately never imports. The demo
+// recipient keeps a verified email address and phone number, the two
+// channels preference resolution can end in; a user with no row resolves to
+// no addresses, which is not an error (the delivery job treats it as the
+// skip-everything case).
+type exampleUserResolver struct{}
+
+func (exampleUserResolver) Resolve(_ context.Context, userID string) (notification.UserAddresses, error) {
+	switch userID {
+	case "user-7":
+		return notification.UserAddresses{
+			Email: "demo@example.com",
+			Phone: "+8613800138000",
+		}, nil
+	default:
+		return notification.UserAddresses{}, nil
+	}
+}
 
 // ExampleInboxMessage walks a delivery into one tenant's in-app inbox the
 // way the module's future consumers will: open and migrate the database,
@@ -102,8 +124,12 @@ func ExampleInboxMessage() {
 // The example doubles as the wiring proof: the module itself declares no
 // types; every type answered below was registered by the host before and
 // after the module's own Register call. The module is constructed with the
-// four seams Register requires -- a console SMS sender, a mail From address
-// and the two address blind indexers -- exactly as a standalone-deployment
+// six seams Register requires -- a console SMS sender, a mail From address,
+// the two address blind indexers, a queue to carry outbound deliveries (here
+// the standalone shape, a jobs.StandaloneQueue over the same database,
+// never started because the walk below enqueues nothing) and a
+// user-address resolver (exampleUserResolver above, never consulted because
+// the walk below resolves no address) -- exactly as a standalone-deployment
 // host assembles them.
 func ExamplePreferenceService() {
 	ctx := context.Background()
@@ -117,9 +143,10 @@ func ExamplePreferenceService() {
 		return
 	}
 
-	// The consent ledger's required seams, in the standalone shape: a
-	// console sender for SMS, and one blind indexer per address channel over
-	// dev keys (a real host derives its keys from its own secret store).
+	// The required seams, in the standalone shape: a console sender for SMS,
+	// one blind indexer per address channel over dev keys (a real host
+	// derives its keys from its own secret store), the standalone queue over
+	// the same database, and a resolver over the host's own identity store.
 	emailIndexer, err := dbkit.NewBlindIndexer("address_index",
 		[]byte("abcdef0123456789abcdef0123456789"), dbkit.NormalizeEmail)
 	if err != nil {
@@ -139,6 +166,8 @@ func ExamplePreferenceService() {
 		notification.WithMailFrom("notifications@example.com"),
 		notification.WithContactEmailIndexer(emailIndexer),
 		notification.WithContactPhoneIndexer(phoneIndexer),
+		notification.WithDeliveryQueue(jobs.NewStandaloneQueue(db)),
+		notification.WithUserAddressResolver(exampleUserResolver{}),
 	)
 	if err = registry.Register(module); err != nil {
 		fmt.Println("register migrations:", err)

@@ -1,12 +1,50 @@
 package notification
 
 import (
+	"context"
 	"io"
 	"reflect"
+	"slices"
 	"testing"
 
+	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 )
+
+// stubQueue is a jobs.Queue test double that records every task enqueued on
+// it, so a Register or Dispatch test can assert on the enqueue shape without
+// starting a worker pool. Get and Cancel are never reached by the delivery
+// pipeline and panic rather than pretend.
+type stubQueue struct {
+	tasks []jobs.Task
+}
+
+func (q *stubQueue) Enqueue(_ context.Context, task jobs.Task, _ ...jobs.EnqueueOption) (jobs.JobID, error) {
+	q.tasks = append(q.tasks, task)
+	return "stub-job", nil
+}
+
+func (q *stubQueue) Get(context.Context, jobs.JobID) (*jobs.Job, error) {
+	panic("stubQueue.Get: not implemented")
+}
+
+func (q *stubQueue) Cancel(context.Context, jobs.JobID) error {
+	panic("stubQueue.Cancel: not implemented")
+}
+
+// stubUserResolver is a UserAddressResolver test double answering from a
+// per-user table, with an injectable error for the seam's failure tests.
+type stubUserResolver struct {
+	byUser map[string]UserAddresses
+	err    error
+}
+
+func (r *stubUserResolver) Resolve(_ context.Context, userID string) (UserAddresses, error) {
+	if r.err != nil {
+		return UserAddresses{}, r.err
+	}
+	return r.byUser[userID], nil
+}
 
 // newHostRegistry returns a pkgcore.Registry over the in-process seam
 // implementations -- the shape a standalone-deployment host assembles for
@@ -22,12 +60,15 @@ func newHostRegistry(t *testing.T) *pkgcore.Registry {
 	return reg
 }
 
-// testModuleOptions returns the four-seam option set every Register test
+// testModuleOptions returns the six-seam option set every Register test
 // needs: a console SMS sender (discarding output -- no test here asserts on
-// what the module sends), the module's mail From address, and the email and
-// phone blind indexers the consent ledger is required to boot with. The
-// indexers are per-test fixtures bound to this package's dev index keys, the
-// same objects contact_test.go's service tests build.
+// what the module sends), the module's mail From address, the email and
+// phone blind indexers the consent ledger is required to boot with, and the
+// delivery pipeline's stub queue and user-address resolver. The indexers
+// are per-test fixtures bound to this package's dev index keys, the same
+// objects contact_test.go's service tests build; the queue and resolver are
+// recording test doubles (stubQueue and stubUserResolver above) whose
+// behaviour later files' delivery tests exercise directly.
 func testModuleOptions(t *testing.T) []Option {
 	t.Helper()
 	return []Option{
@@ -35,21 +76,24 @@ func testModuleOptions(t *testing.T) []Option {
 		WithMailFrom(testMailFrom),
 		WithContactEmailIndexer(testEmailIndexer(t)),
 		WithContactPhoneIndexer(testPhoneIndexer(t)),
+		WithDeliveryQueue(&stubQueue{}),
+		WithUserAddressResolver(&stubUserResolver{byUser: map[string]UserAddresses{}}),
 	}
 }
 
-// TestModule_Register_RequiresSMSSender pins the first of the four
+// TestModule_Register_RequiresSMSSender pins the first of the six
 // Register-time seam validations module.go's doc comment promises: a Module
-// with no SMS sender -- the mail From address and both indexers present, so
-// the gap is isolated -- is refused with ErrSMSSenderRequired at boot rather
-// than discovering the missing transport on the first verification code a
-// patient needs.
+// with no SMS sender -- every other seam present, so the gap is isolated --
+// is refused with ErrSMSSenderRequired at boot rather than discovering the
+// missing transport on the first verification code a patient needs.
 func TestModule_Register_RequiresSMSSender(t *testing.T) {
 	db := newTestDB(t)
 	module := NewModule(db,
 		WithMailFrom(testMailFrom),
 		WithContactEmailIndexer(testEmailIndexer(t)),
 		WithContactPhoneIndexer(testPhoneIndexer(t)),
+		WithDeliveryQueue(&stubQueue{}),
+		WithUserAddressResolver(&stubUserResolver{byUser: map[string]UserAddresses{}}),
 	)
 
 	err := module.Register(newHostRegistry(t))
@@ -69,6 +113,8 @@ func TestModule_Register_RequiresMailFrom(t *testing.T) {
 		WithSMSSender(NewConsoleSMSSender(io.Discard)),
 		WithContactEmailIndexer(testEmailIndexer(t)),
 		WithContactPhoneIndexer(testPhoneIndexer(t)),
+		WithDeliveryQueue(&stubQueue{}),
+		WithUserAddressResolver(&stubUserResolver{byUser: map[string]UserAddresses{}}),
 	)
 
 	err := module.Register(newHostRegistry(t))
@@ -88,6 +134,8 @@ func TestModule_Register_RequiresEmailIndexer(t *testing.T) {
 		WithSMSSender(NewConsoleSMSSender(io.Discard)),
 		WithMailFrom(testMailFrom),
 		WithContactPhoneIndexer(testPhoneIndexer(t)),
+		WithDeliveryQueue(&stubQueue{}),
+		WithUserAddressResolver(&stubUserResolver{byUser: map[string]UserAddresses{}}),
 	)
 
 	err := module.Register(newHostRegistry(t))
@@ -106,6 +154,8 @@ func TestModule_Register_RequiresPhoneIndexer(t *testing.T) {
 		WithSMSSender(NewConsoleSMSSender(io.Discard)),
 		WithMailFrom(testMailFrom),
 		WithContactEmailIndexer(testEmailIndexer(t)),
+		WithDeliveryQueue(&stubQueue{}),
+		WithUserAddressResolver(&stubUserResolver{byUser: map[string]UserAddresses{}}),
 	)
 
 	err := module.Register(newHostRegistry(t))
@@ -113,6 +163,50 @@ func TestModule_Register_RequiresPhoneIndexer(t *testing.T) {
 		t.Fatal("Register without the phone indexer succeeded, want ErrContactPhoneIndexerRequired")
 	}
 	assertCode(t, err, ErrContactPhoneIndexerRequired.Code)
+}
+
+// TestModule_Register_RequiresDeliveryQueue pins the fifth seam validation,
+// the delivery pipeline's first: outbound deliveries are asynchronous by
+// design, so a Module without a queue to carry them is refused with
+// ErrDeliveryQueueRequired at boot rather than having every Dispatch refuse
+// at run time.
+func TestModule_Register_RequiresDeliveryQueue(t *testing.T) {
+	db := newTestDB(t)
+	module := NewModule(db,
+		WithSMSSender(NewConsoleSMSSender(io.Discard)),
+		WithMailFrom(testMailFrom),
+		WithContactEmailIndexer(testEmailIndexer(t)),
+		WithContactPhoneIndexer(testPhoneIndexer(t)),
+		WithUserAddressResolver(&stubUserResolver{byUser: map[string]UserAddresses{}}),
+	)
+
+	err := module.Register(newHostRegistry(t))
+	if err == nil {
+		t.Fatal("Register without a delivery queue succeeded, want ErrDeliveryQueueRequired")
+	}
+	assertCode(t, err, ErrDeliveryQueueRequired.Code)
+}
+
+// TestModule_Register_RequiresUserAddressResolver pins the sixth seam
+// validation: without a resolver the module cannot reach a user on the email
+// or SMS channels at all, so a Module missing it is refused with
+// ErrUserAddressResolverRequired at boot rather than dead-letter every such
+// delivery.
+func TestModule_Register_RequiresUserAddressResolver(t *testing.T) {
+	db := newTestDB(t)
+	module := NewModule(db,
+		WithSMSSender(NewConsoleSMSSender(io.Discard)),
+		WithMailFrom(testMailFrom),
+		WithContactEmailIndexer(testEmailIndexer(t)),
+		WithContactPhoneIndexer(testPhoneIndexer(t)),
+		WithDeliveryQueue(&stubQueue{}),
+	)
+
+	err := module.Register(newHostRegistry(t))
+	if err == nil {
+		t.Fatal("Register without a user-address resolver succeeded, want ErrUserAddressResolverRequired")
+	}
+	assertCode(t, err, ErrUserAddressResolverRequired.Code)
 }
 
 // TestModule_Register_DeclaresContactAuditActions pins the consent ledger's
@@ -235,4 +329,84 @@ func TestModule_Register_DeclaresTheInboxEvent(t *testing.T) {
 	if !found {
 		t.Errorf("published declarations %v do not include %s", reg.Events.Published(), inboxEventDecls[0].Type)
 	}
+}
+
+// TestModule_Register_RegistersTheDeliveryJobHandler pins the module's
+// job-handler contribution: after Register, the registry's job-handler
+// registrar carries the deliver job type bound to the module's own delivery
+// service -- the exact object delivery.go's Dispatch hand, so a host that
+// starts a worker pool over the registry's handlers (the shape
+// Kernel.Bootstrap composes) routes enqueued deliver jobs back to this
+// module without any extra wiring. The bound value is the service itself,
+// asserted by pointer: the registrar stores handlers as given, never a
+// proxy.
+func TestModule_Register_RegistersTheDeliveryJobHandler(t *testing.T) {
+	db := newTestDB(t)
+	module := NewModule(db, testModuleOptions(t)...)
+	reg := newHostRegistry(t)
+
+	if err := module.Register(reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	handlers := reg.Jobs.Handlers()
+	handler, ok := handlers[jobTypeDeliver]
+	if !ok {
+		t.Fatalf("job handlers %v do not include %q", mapKeys(handlers), jobTypeDeliver)
+	}
+	if handler != module.Deliveries() {
+		t.Errorf("handler for %q = %T, want the module's own delivery service", jobTypeDeliver, handler)
+	}
+}
+
+// TestModule_Register_SubscribesTheHubToTheInboxEvent proves the fan-out
+// wiring module.go's doc comment promises: after Register, an inbox event
+// published on the registry's bus reaches a connection on the module's
+// per-replica hub. The hub is the replica's live-update source -- a
+// connection is exactly what an in-app inbox panel holds open -- so the
+// subscription must ride the real bus, not a direct call into the hub's
+// handler: a wiring mistake would leave a panel silent even though the
+// handler itself works (which hub_test.go proves in isolation).
+func TestModule_Register_SubscribesTheHubToTheInboxEvent(t *testing.T) {
+	db := newTestDB(t)
+	module := NewModule(db, testModuleOptions(t)...)
+	reg := newHostRegistry(t)
+
+	if err := module.Register(reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	conn := module.hub.Subscribe()
+	defer conn.Close()
+
+	payload := InboxCreatedPayload{
+		MessageID:       "inbox-77",
+		TenantID:        "tenant-acme",
+		RecipientUserID: "user-7",
+		TypeKey:         "clinic.appointment_reminder",
+	}
+	if err := reg.Events.Bus().Publish(context.Background(), pkgcore.Event{
+		Type:     EventInboxCreated,
+		TenantID: pkgcore.TenantID(payload.TenantID),
+		Payload:  payload,
+	}); err != nil {
+		t.Fatalf("bus publish: %v", err)
+	}
+
+	want := `{"message_id":"inbox-77","tenant_id":"tenant-acme","recipient_user_id":"user-7","type_key":"clinic.appointment_reminder"}`
+	msg := assertMessage(t, conn, nil)
+	if string(msg) != want {
+		t.Errorf("hub payload JSON = %s, want %s", msg, want)
+	}
+}
+
+// mapKeys returns the sorted keys of m for the stable, readable listing the
+// registration tests' failure messages want.
+func mapKeys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
 }

@@ -20,13 +20,14 @@ import (
 // code and its parameters; the text is resolved by the consumer.
 //
 // The errors are grouped by the surface that returns them. The preference
-// group (this file's first block) belongs to the preference matrix;
-// the contact group belongs to the consent ledger ContactService owns; the
-// wiring group reports a Module whose required seams were not supplied
-// before Register validated them -- boot-time failures a caller cannot
-// trigger once the module is registered, listed here because an *apperr
-// sentinel per code is this module's convention for every error it can
-// surface, however unreachable at request time.
+// group (this file's first block) belongs to the preference matrix; the
+// contact group belongs to the consent ledger ContactService owns; the
+// delivery group belongs to the outbound-delivery pipeline DeliveryService
+// owns; the wiring group reports a Module whose required seams were not
+// supplied before Register validated them -- boot-time failures a caller
+// cannot trigger once the module is registered, listed here because an
+// *apperr sentinel per code is this module's convention for every error it
+// can surface, however unreachable at request time.
 var (
 	// ErrRecipientRequired reports a preference write whose recipient is
 	// missing. A preference row is meaningless without the user it applies
@@ -133,11 +134,27 @@ var (
 	ErrContactRateLimited = rateLimited("notification.contact_rate_limited")
 )
 
+// The delivery group: every error the outbound-delivery pipeline
+// (DeliveryService, delivery.go) can return on its public surface. The
+// group's members each carry a "field" parameter naming the offending part
+// of a Dispatch.
+var (
+	// ErrDispatchInvalid reports a Dispatch that cannot be delivered: a
+	// missing type key, a missing or unknown recipient class, a user
+	// recipient without an id or a locale, an external recipient without a
+	// contact id, or a payload that will not marshal. The refusal names the
+	// offending field in its "field" parameter; Dispatch validates before
+	// anything is enqueued, and the job handler re-validates what the queue
+	// hands it, so a malformed payload dies at the API boundary or dead-
+	// letters, never half-delivers.
+	ErrDispatchInvalid = apperr.Invalid("notification.dispatch_invalid")
+)
+
 // The wiring group: a Module whose Register-time validation failed because
 // a required seam was never supplied through NewModule. Each error names
 // the missing seam; the module is unbootable until the host supplies it,
 // exactly as org's Register validates its own required seams (see org's
-// ErrEmailIndexerRequired). All four are Internal: a caller cannot trigger
+// ErrEmailIndexerRequired). All six are Internal: a caller cannot trigger
 // them once the module is registered, and a host hitting one has a
 // configuration bug, not a bad request.
 var (
@@ -165,6 +182,20 @@ var (
 	// no blind indexer for phone contact addresses; the SMS twin of
 	// ErrContactEmailIndexerRequired.
 	ErrContactPhoneIndexerRequired = apperr.Internal("notification.contact_phone_indexer_required")
+
+	// ErrDeliveryQueueRequired reports a Register whose Module has no
+	// delivery queue. Outbound delivery is asynchronous by contract --
+	// Dispatch enqueues, the worker sends -- and a module without a queue
+	// has no delivery path at all; it must fail at boot rather than have
+	// every Dispatch refuse at run time.
+	ErrDeliveryQueueRequired = apperr.Internal("notification.delivery_queue_required")
+
+	// ErrUserAddressResolverRequired reports a Register whose Module has
+	// no user-address resolver. A user delivery's email and SMS channels
+	// resolve the recipient's addresses through this seam (see
+	// UserAddressResolver); without it the module cannot deliver to a
+	// user on any outbound channel.
+	ErrUserAddressResolverRequired = apperr.Internal("notification.user_address_resolver_required")
 )
 
 // rateLimited returns an *apperr.Error carrying HTTP 429, the status apperr

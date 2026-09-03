@@ -6,6 +6,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 
 	"github.com/vislake/speed/go/notification/locales"
@@ -17,9 +18,10 @@ import (
 const moduleName = "notification"
 
 // Module implements pkgcore.Module for go/notification: the tenant's
-// notification inbox, its per-type channel preference matrix, and the
+// notification inbox, its per-type channel preference matrix, the
 // consent-gated external-contact ledger (verified_contacts, platform
-// blacklist, send_records) this round ships.
+// blacklist, send_records), and the outbound-delivery pipeline that turns a
+// dispatch into per-channel sends over the queue.
 //
 // # Wiring
 //
@@ -27,15 +29,14 @@ const moduleName = "notification"
 // The module's tables live in db, which the host opened through dbkit.Open
 // (so it carries the tenant-isolation plugin) and migrated before Bootstrap.
 // Register then validates the module's required seams, contributes the
-// module's declarations -- its event catalog and its audit actions -- to the
-// host's registry, and attaches the registry's notification-type and
-// audit-action registrars to the contact and preference services. The module
-// performs no I/O of its own during registration.
+// module's declarations -- its event catalog, its audit actions, its job
+// handler -- to the host's registry, and attaches the registrars and the
+// host registry the services need. The module performs no I/O of its own
+// during registration.
 type Module struct {
 	// db is the connection the module's tables live in. The inbox,
-	// preference and contact repositories are built over it, and the
-	// delivery subscriber of this round's later commit builds its own over
-	// this same connection.
+	// preference, contact and send-record repositories are built over it,
+	// sharing one connection exactly as the module's other repositories do.
 	db *gorm.DB
 
 	// prefs is the preference matrix's decision layer, built at construction
@@ -52,14 +53,46 @@ type Module struct {
 	// every service method fails closed on them.
 	contacts *ContactService
 
-	// The four required seams of the consent ledger, filled by the With*
-	// options. sms is the SMSSender verification codes go out on when the
-	// contact's channel is sms; mailFrom the From address of every email
-	// this module composes; emailIndexer and phoneIndexer the blind
-	// indexers that make contact addresses queryable without ever storing
-	// them in plaintext. Register refuses to boot the module without all
-	// four (ErrSMSSenderRequired, ErrMailFromRequired,
-	// ErrContactEmailIndexerRequired, ErrContactPhoneIndexerRequired),
+	// deliveries is the outbound-delivery pipeline, built at construction
+	// over the preference, contact and inbox services, and served to
+	// consumers through Deliveries(). Its queue and resolver seams arrive
+	// through the With* options below; its host registry slice is attached
+	// during Register (attachHost), so before Register the pipeline can
+	// only refuse -- every seam nil check fails closed.
+	deliveries *DeliveryService
+
+	// hub is this replica's inbox-announcement fan-out, constructed at
+	// NewModule time and subscribed to EventInboxCreated during Register.
+	// The platform-staff shell that pushes announcements to browsers or
+	// devices is a later round's consumer of hub.Subscribe (hub.go's doc
+	// comment); this round's delivery pipeline is the producer side.
+	hub *Hub
+
+	// queue is the jobs.Queue delivery jobs are enqueued on (Dispatch) and
+	// handled by (the delivery handler Register registers). REQUIRED: a
+	// Module without one fails Register with ErrDeliveryQueueRequired. The
+	// queue seam of a standalone host is jobs' StandaloneQueue; of a
+	// distributed host, its AsynqQueue.
+	queue jobs.Queue
+
+	// resolver supplies a user delivery's addresses at send time (see
+	// UserAddressResolver). REQUIRED on the same terms as queue
+	// (ErrUserAddressResolverRequired): without it the module cannot
+	// deliver to a user on the email or SMS channels. The seam keeps the
+	// module's own tables free of identity data -- the host's authn half
+	// owns addresses, and notification never imports it.
+	resolver UserAddressResolver
+
+	// The six required seams the consent ledger and the delivery pipeline
+	// run on, filled by the With* options. sms is the SMSSender
+	// verification codes go out on when the contact's channel is sms (and
+	// the delivery pipeline's SMS channel uses); mailFrom the From address
+	// of every email this module composes; emailIndexer and phoneIndexer
+	// the blind indexers that make contact addresses queryable without
+	// ever storing them in plaintext. Register refuses to boot the module
+	// without any of them (ErrSMSSenderRequired, ErrMailFromRequired,
+	// ErrContactEmailIndexerRequired, ErrContactPhoneIndexerRequired,
+	// ErrDeliveryQueueRequired, ErrUserAddressResolverRequired),
 	// imitating org's Register-time validation of its own required seams.
 	sms          SMSSender
 	mailFrom     string
@@ -108,11 +141,35 @@ func WithContactPhoneIndexer(indexer *dbkit.BlindIndexer) Option {
 	return func(m *Module) { m.phoneIndexer = indexer }
 }
 
+// WithDeliveryQueue injects the jobs.Queue the module's outbound deliveries
+// run on: DeliveryService.Dispatch enqueues one notification.deliver job on
+// it, and the handler Module.Register registers (reg.Jobs.Handle) is
+// executed by its workers. It is REQUIRED: Register returns
+// ErrDeliveryQueueRequired without one, so a module with no queue fails at
+// boot rather than have every dispatch refuse at run time. The queue of a
+// standalone host is jobs' StandaloneQueue; of a distributed host, its
+// AsynqQueue -- whichever the host's own wiring chose, passed straight
+// through.
+func WithDeliveryQueue(queue jobs.Queue) Option {
+	return func(m *Module) { m.queue = queue }
+}
+
+// WithUserAddressResolver injects the seam user deliveries resolve their
+// recipients' addresses through (see UserAddressResolver). It is REQUIRED:
+// Register returns ErrUserAddressResolverRequired without one, so a module
+// that cannot reach a user on the email or SMS channels fails at boot
+// rather than dead-letter every such delivery.
+func WithUserAddressResolver(resolver UserAddressResolver) Option {
+	return func(m *Module) { m.resolver = resolver }
+}
+
 // NewModule returns a Module whose tables live in db. Constructing a Module
 // performs no I/O: opening and migrating db is the host's responsibility,
-// done once at startup before Bootstrap ever calls Register. The consent
-// ledger's required seams arrive through the With* options; a Module
-// missing any of them fails Register (see the option docs), never a call.
+// done once at startup before Bootstrap ever calls Register. The required
+// seams -- the consent ledger's four (see the With* option docs) plus the
+// delivery pipeline's queue and user-address resolver -- arrive through the
+// With* options; a Module missing any of them fails Register (see the
+// option docs), never a call.
 func NewModule(db *gorm.DB, opts ...Option) *Module {
 	m := &Module{
 		db:       db,
@@ -122,6 +179,12 @@ func NewModule(db *gorm.DB, opts ...Option) *Module {
 	for _, opt := range opts {
 		opt(m)
 	}
+	m.deliveries = newDeliveryService(db, m.prefs, m.contacts)
+	m.deliveries.queue = m.queue
+	m.deliveries.resolver = m.resolver
+	m.deliveries.sms = m.sms
+	m.deliveries.mailFrom = m.mailFrom
+	m.hub = NewHub()
 	return m
 }
 
@@ -135,12 +198,22 @@ func (m *Module) Preferences() *PreferenceService {
 
 // Contacts returns the module's contact service -- the consent ledger's
 // only sanctioned read/write face, and the deliverability gate the
-// delivery job of this round's later commit calls before every send to an
-// external contact. A host hands this to its HTTP handler and its queue
-// handlers once Bootstrap has run, so the service's seams are validated
-// and attached (Register) by the time any caller reaches it.
+// delivery job calls before every send to an external contact. A host
+// hands this to its HTTP handler and its queue handlers once Bootstrap has
+// run, so the service's seams are validated and attached (Register) by the
+// time any caller reaches it.
 func (m *Module) Contacts() *ContactService {
 	return m.contacts
+}
+
+// Deliveries returns the module's delivery pipeline -- the only sanctioned
+// way to enqueue an outbound delivery (DeliveryService.Dispatch), and the
+// jobs.Handler the module registered for its delivery jobs. A host calls
+// this once Bootstrap has run: the pipeline's queue and resolver seams were
+// validated by Register, and its registry slice is attached, by the time any
+// caller reaches it.
+func (m *Module) Deliveries() *DeliveryService {
+	return m.deliveries
 }
 
 // Name implements pkgcore.Module.
@@ -176,7 +249,7 @@ func (m *Module) Locales() embed.FS { return locales.FS }
 // OpenAPISpec implements pkgcore.Module: nil.
 //
 // notification has no OpenAPI fragment yet, because it has no HTTP surface
-// yet: the module's routes arrive in this round's later blocks, and the
+// yet: the module's routes arrive in a later round's HTTP block, and the
 // fragment -- go/notification/api/openapi.yaml, joining the spec-first
 // pipeline of docs/internal/21-api-contract.md -- ships with them. Until
 // then a nil spec contributes nothing to the merged document, which is the
@@ -190,28 +263,36 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // Register runs in three phases, each validating what the one before it
 // established:
 //
-//  1. The consent ledger's required seams are validated first. A Module
-//     missing any of them -- the SMS sender (ErrSMSSenderRequired), the
-//     mail From address (ErrMailFromRequired), or either address blind
-//     indexer (ErrContactEmailIndexerRequired, ErrContactPhoneIndexerRequired)
-//     -- is refused here, at boot, so the failure names the missing seam
-//     instead of surfacing later as a nil-panic or a dead verification
-//     channel. This imitates org's Register-time validation of its own
-//     required seams.
+//  1. The module's six required seams are validated first. A Module missing
+//     any of them -- the consent ledger's SMS sender
+//     (ErrSMSSenderRequired), mail From address (ErrMailFromRequired) and
+//     either address blind indexer (ErrContactEmailIndexerRequired,
+//     ErrContactPhoneIndexerRequired), or the delivery pipeline's queue
+//     (ErrDeliveryQueueRequired) and user-address resolver
+//     (ErrUserAddressResolverRequired) -- is refused here, at boot, so the
+//     failure names the missing seam instead of surfacing later as a
+//     nil-panic or a dead verification or delivery channel. This imitates
+//     org's Register-time validation of its own required seams.
 //
 //  2. The module's declarations are contributed: the event catalog
-//     (EventInboxCreated, one declared event) and, in the same phase, the
-//     consent ledger's audit actions (notification.contact.attested,
-//     .verified and .unsubscribed) onto the host's audit-action registrar,
-//     so the ledger's every state transition is auditable from the moment
-//     the module boots.
+//     (EventInboxCreated, one declared event) and the consent ledger's
+//     audit actions (notification.contact.attested, .verified and
+//     .unsubscribed) onto the host's audit-action registrar, so the
+//     ledger's every state transition is auditable from the moment the
+//     module boots.
 //
-//  3. The registrars are attached to the services that need them: the host
+//  3. The registrars and the module's own machinery are attached: the host
 //     registry's notification-type registrar to the preference service
 //     (attachTypes, giving it the live taxonomy every preference write
-//     validates against), and the registry reference plus the audit-action
-//     registrar to the contact service (attachHost). Both attachments only
-//     pass already-validated references down; nothing is re-validated here.
+//     validates against), the registry reference plus the audit-action
+//     registrar to the contact service (attachHost), the delivery pipeline's
+//     job handler (reg.Jobs.Handle on the delivery job type, so the host's
+//     queue workers run it) and its own host-registry reference
+//     (attachHost, the slice the pipeline reads its event catalog and
+//     locales from at send time), and the hub to the inbox-created event
+//     (reg.Events.Subscribe), so a delivery that lands an inbox row
+//     announces it on this replica's bus. Every attachment only passes
+//     already-validated references down; nothing is re-validated here.
 //
 // No permissions or routes are declared yet: the module has no caller-scoped
 // operation and no request path until a later round builds its HTTP surface,
@@ -230,14 +311,25 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	if m.phoneIndexer == nil {
 		return ErrContactPhoneIndexerRequired
 	}
+	if m.queue == nil {
+		return ErrDeliveryQueueRequired
+	}
+	if m.resolver == nil {
+		return ErrUserAddressResolverRequired
+	}
 	if err := reg.Events.Publishes(inboxEventDecls...); err != nil {
 		return err
 	}
 	if err := reg.AuditActions.Add(contactAuditActionDecls...); err != nil {
 		return err
 	}
+	if err := reg.Jobs.Handle(jobTypeDeliver, m.deliveries); err != nil {
+		return err
+	}
 	m.prefs.attachTypes(reg.Notifications)
 	m.contacts.attachHost(reg, reg.AuditActions)
+	m.deliveries.attachHost(reg)
+	reg.Events.Subscribe(EventInboxCreated, m.hub.HandleEvent)
 	return nil
 }
 

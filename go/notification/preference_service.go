@@ -26,12 +26,13 @@ import (
 //     LIVE registrar, read at call time -- never a snapshot, and never
 //     denormalized onto the row. Set validates the caller's selection
 //     against that declaration and refuses anything it cannot honor, and
-//     ResolveChannels answers "which channels does this recipient actually
-//     get" by folding the declaration's defaults under an absent row.
+//     ResolveForDelivery answers "which channels does this recipient
+//     actually get" by folding the declaration's defaults under an absent
+//     row.
 //   - the matrix's absence semantics live here too: no row means "the
 //     recipient has not chosen" and the type's DefaultChannels apply
 //     (preference.go's doc comment), and the stored empty array means a
-//     deliberate opt-out. ResolveChannels is where those two readings
+//     deliberate opt-out. ResolveForDelivery is where those two readings
 //     diverge into two different answers.
 //
 // The service is stateless apart from its dependencies: the repository, the
@@ -203,16 +204,25 @@ func (s *PreferenceService) Get(ctx context.Context, recipientUserID, typeKey st
 	return pref, nil
 }
 
-// ResolveChannels answers the delivery question: which channels should a
-// delivery to this recipient, for this type, actually use?
+// ResolveForDelivery answers the delivery question: which channels should a
+// delivery to this recipient, for this type, actually use, and under which
+// group does the type's copy sit?
 //
-// The answer is the stored preference when the recipient has one, and the
-// type's declared DefaultChannels when they do not -- absence means "has
-// not chosen", and the defaults are never materialized into rows (see
+// The group is the notification type's declaration, read once here and
+// handed on unmodified: delivery stores it on the inbox row and on nothing
+// else, and every row a type's deliveries produce therefore carries the
+// group the declaring module chose, whatever the recipient's own
+// preferences did to the channels.
+//
+// The channel answer is the stored preference when the recipient has one,
+// and the type's declared DefaultChannels when they do not -- absence means
+// "has not chosen", and the defaults are never materialized into rows (see
 // preference.go), so the recipient who never chose keeps receiving on the
 // type's defaults, including when a later release changes what those are.
 // An opted-out recipient (a stored empty selection, legal only on an
-// unsubscribable type) resolves to an empty slice.
+// unsubscribable type) resolves to an empty slice -- the answer that makes
+// delivery's opt-out semantics: a user who turns a channel off receives
+// nothing on it, whatever the type declares.
 //
 // Unlike Get, this method validates the type first and refuses an unknown
 // typeKey with ErrTypeNotFound: with no declaration there are no defaults to
@@ -222,25 +232,32 @@ func (s *PreferenceService) Get(ctx context.Context, recipientUserID, typeKey st
 // without corrupting the source's declaration, and a caller must never
 // mutate the declaration through it. Store failures and a corrupt stored
 // channels column are reported as ErrInternal.WithCause.
-func (s *PreferenceService) ResolveChannels(ctx context.Context, recipientUserID, typeKey string) ([]string, error) {
+func (s *PreferenceService) ResolveForDelivery(ctx context.Context, recipientUserID, typeKey string) (group string, channels []string, err error) {
 	typ, err := s.lookupType(typeKey)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 
 	pref, err := s.repo.ByUserAndType(ctx, recipientUserID, typeKey)
 	if err != nil {
-		return nil, ErrInternal.WithCause(err)
+		return "", nil, ErrInternal.WithCause(err)
 	}
 	if pref == nil {
-		return slices.Clone(typ.DefaultChannels), nil
+		return typ.Group, slices.Clone(typ.DefaultChannels), nil
 	}
 
-	channels, err := parseChannels(pref.Channels)
+	channels, err = parseChannels(pref.Channels)
 	if err != nil {
-		return nil, ErrInternal.WithCause(err)
+		return "", nil, ErrInternal.WithCause(err)
 	}
-	return channels, nil
+	return typ.Group, channels, nil
+}
+
+// ResolveChannels answers ResolveForDelivery's channel half alone, for
+// callers that need the channels and not the group.
+func (s *PreferenceService) ResolveChannels(ctx context.Context, recipientUserID, typeKey string) ([]string, error) {
+	_, channels, err := s.ResolveForDelivery(ctx, recipientUserID, typeKey)
+	return channels, err
 }
 
 // ListForUser returns every preference the recipient has stored in the
