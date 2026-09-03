@@ -103,9 +103,16 @@ limitations.
 ## Editing and regenerating
 
 The module set is fixed at generation time (`saasctl new --with`); changing
-it later means editing `server.go` and `go.mod` by hand. `saasctl`'s later
-rounds cover the rest of a project's lifecycle: `saasctl upgrade` rewrites
-a project's module requires to a new lockstep version, `saasctl db` runs
-its migrations, `saasctl config` inspects its dynamic configuration. Speed
-modules are libraries: when the checkout's modules change, rebuilding this
-project picks the changes up -- there is no separate install step.
+it later means editing `server.go` and `go.mod` by hand. The rest of the
+project's lifecycle is `saasctl`'s business today: `saasctl upgrade
+--version <v>` rewrites the project's speed module requires to a new
+lockstep release, `saasctl db migrate` applies the required modules' SQL
+migrations to the project's SQLite database from the command line (the
+operator-driven twin of this app's own startup Apply), and `saasctl config
+print` shows how this project's bootstrap environment resolves -- each
+`SPEED_*` variable's value and provenance, the two key variables rendered
+`[redacted]`. Dynamic-configuration value print and editing (the `configs`
+table's values with their tenant scopes and schema-driven redaction) and
+the web-side scaffolds are later `saasctl` rounds. Speed modules are
+libraries: when the checkout's modules change, rebuilding this project
+picks the changes up -- there is no separate install step.

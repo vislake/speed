@@ -129,6 +129,48 @@ func TestSharedFilesPresent(t *testing.T) {
 	}
 }
 
+// TestProjectReadmeNamesTheShippedMaintenanceCommands asserts the generated
+// project's README -- a shared file, materialized verbatim into every
+// selection -- documents the maintenance commands that are wired today
+// (`saasctl upgrade`, `saasctl db migrate`, `saasctl config print`) and
+// presents nothing that shipped only later as available now. The README is
+// the generated project's first documentation, so a lifecycle claim that
+// drifted from the CLI's real surface would mislead every consumer project
+// that reads it.
+func TestProjectReadmeNamesTheShippedMaintenanceCommands(t *testing.T) {
+	content, err := fs.ReadFile(Project, ProjectRoot+"/README.md")
+	if err != nil {
+		t.Fatalf("read project README: %v", err)
+	}
+	readme := string(content)
+	const section = "## Editing and regenerating"
+	start := strings.Index(readme, section)
+	if start < 0 {
+		t.Fatalf("README has no %q section", section)
+	}
+	body := readme[start:]
+	if end := strings.Index(body, "\n## "); end >= 0 {
+		body = body[:end]
+	}
+	// Fold the prose's line wrapping: a command name split across two
+	// wrapped lines must still count as present.
+	body = strings.Join(strings.Fields(body), " ")
+	for _, cmd := range []string{"saasctl upgrade", "saasctl db migrate", "saasctl config print"} {
+		if !strings.Contains(body, cmd) {
+			t.Errorf("%s section does not name the shipped command %q", section, cmd)
+		}
+	}
+	// The stale wording this pins against presented upgrade, db and config
+	// as "later rounds" and claimed config inspects its dynamic
+	// configuration; config print renders the bootstrap environment only,
+	// and dynamic-configuration print is genuinely still later work.
+	for _, stale := range []string{"inspects its dynamic configuration", "`saasctl db` runs", "`saasctl config` inspects"} {
+		if strings.Contains(body, stale) {
+			t.Errorf("%s section still carries the stale claim %q", section, stale)
+		}
+	}
+}
+
 // TestSelectionGoModsCarryTokens asserts each selection's go.mod document
 // (the go.mod.txt asset, renamed by new when it materializes) is a
 // token-carrying template, never a materialized artifact: the module line
