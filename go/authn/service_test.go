@@ -49,7 +49,8 @@ func newServiceFixture(t *testing.T, extra ...Option) *serviceFixture {
 	bus := pkgcore.NewMemoryEventBus()
 	events := testutil.NewEventRecorder()
 	events.Subscribe(bus, EventUserCreated, EventUserLoggedIn, EventLoginFailed,
-		EventSessionRevoked, EventSessionReplayDetected, EventTenantSwitched)
+		EventSessionRevoked, EventSessionReplayDetected, EventTenantSwitched,
+		EventIdentityBound, EventIdentityUnbound)
 
 	opts := append([]Option{
 		WithSigningKeys(keys),

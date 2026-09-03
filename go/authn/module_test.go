@@ -153,36 +153,92 @@ func TestModule_RegisterDeclaresItsSurface(t *testing.T) {
 		if item.Group != "authn" {
 			t.Errorf("config item %q is grouped under %q, want %q", item.Key, item.Group, "authn")
 		}
-		// No sensitive item may appear here without a deliberate
-		// decision: config.Attach refuses a cipher-less startup as soon
-		// as one exists, which changes what every host must wire.
-		if item.Sensitive {
-			t.Errorf("config item %q is Sensitive; that forces a cipher on every host and needs its own decision", item.Key)
+		// A Sensitive item may never also be Public: config.Add rejects
+		// the combination, and the reason is that the pre-authentication
+		// public endpoint would then serve a secret to anyone.
+		if item.Sensitive && item.Public {
+			t.Errorf("config item %q is both Sensitive and Public", item.Key)
 		}
+	}
+
+	// The Sensitive items are the social-channel client secrets, and the
+	// decision to have any at all is deliberate: config.Attach refuses a
+	// cipher-less startup as soon as one exists, so wiring authn makes a
+	// configuration cipher mandatory for every host. This assertion pins
+	// exactly which keys carry that cost, so an accidental sixth one is a
+	// test failure rather than a surprise at somebody else's startup.
+	var sensitive []string
+	for _, item := range reg.Config.Items() {
+		if item.Sensitive {
+			sensitive = append(sensitive, item.Key)
+		}
+	}
+	slices.Sort(sensitive)
+	wantSensitive := []string{
+		ConfigKeyDingTalkClientSecret, ConfigKeyFeishuClientSecret,
+		ConfigKeyGitHubClientSecret, ConfigKeyGoogleClientSecret,
+		ConfigKeyWeChatClientSecret,
+	}
+	slices.Sort(wantSensitive)
+	if !slices.Equal(sensitive, wantSensitive) {
+		t.Errorf("sensitive config items = %v, want %v", sensitive, wantSensitive)
 	}
 	for _, want := range []string{
 		ConfigKeyPasswordMinLength, ConfigKeyPasswordMaxLength,
 		ConfigKeyAccessTokenTTL, ConfigKeyRefreshTokenTTL,
 		ConfigKeySessionTTL, ConfigKeyImmediateRevocation,
+		ConfigKeyTrustedProviders, ConfigKeyOAuthStateTTL,
+		ConfigKeyGoogleClientID, ConfigKeyGoogleClientSecret,
+		ConfigKeyGitHubClientID, ConfigKeyGitHubClientSecret,
+		ConfigKeyWeChatClientID, ConfigKeyWeChatClientSecret,
+		ConfigKeyDingTalkClientID, ConfigKeyDingTalkClientSecret,
+		ConfigKeyFeishuClientID, ConfigKeyFeishuClientSecret,
 	} {
 		if _, ok := items[want]; !ok {
 			t.Errorf("config item %q was not declared", want)
 		}
 	}
 
-	flags := reg.Features.Flags()
-	if len(flags) != 1 || flags[0].Key != FeatureFlagPasswordLogin {
-		t.Errorf("feature flags = %+v, want exactly %q", flags, FeatureFlagPasswordLogin)
-	}
-	if !flags[0].Default {
-		t.Error("the password-login flag defaults to off; a fresh deployment would have no way in")
+	// The trusted-provider list must default to empty. A non-empty default
+	// would silently enable automatic account linking on every deployment
+	// that never looked at the setting, which is the one decision in this
+	// module that must be made deliberately rather than inherited.
+	if got := items[ConfigKeyTrustedProviders].Default; got != "" {
+		t.Errorf("%s defaults to %v, want an empty list so automatic account linking is off until a deployment enables it", ConfigKeyTrustedProviders, got)
 	}
 
-	// authn declares no permissions yet: every endpoint it will serve is
-	// self-service, and the tenant-scoped SSO administration that does
-	// need one lands with the federation work.
-	if perms := reg.Permissions.Permissions(); len(perms) != 0 {
-		t.Errorf("Permissions() = %v, want none for a self-service surface", perms)
+	flags := make(map[string]pkgcore.FeatureFlag, len(reg.Features.Flags()))
+	for _, flag := range reg.Features.Flags() {
+		flags[flag.Key] = flag
+		if flag.Description == "" {
+			t.Errorf("feature flag %q has no description", flag.Key)
+		}
+	}
+	if !flags[FeatureFlagPasswordLogin].Default {
+		t.Error("the password-login flag defaults to off; a fresh deployment would have no way in")
+	}
+	// Every federated channel defaults to OFF: a channel with no
+	// credentials configured must not be rendered on the login page, where
+	// clicking it fails at the provider with an error nobody can act on.
+	for _, key := range []string{
+		FeatureFlagSocialGoogle, FeatureFlagSocialGitHub, FeatureFlagSocialWeChat,
+		FeatureFlagSocialDingTalk, FeatureFlagSocialFeishu, FeatureFlagEnterpriseSSO,
+	} {
+		flag, ok := flags[key]
+		if !ok {
+			t.Errorf("feature flag %q was not declared", key)
+			continue
+		}
+		if flag.Default {
+			t.Errorf("feature flag %q defaults to on; an unconfigured channel would be offered on the login page", key)
+		}
+	}
+
+	// The single permission this module declares. Everything else it
+	// serves is self-service -- a person acting on their own account --
+	// and needs authentication rather than authorization.
+	if perms := reg.Permissions.Permissions(); !slices.Equal(perms, []string{PermissionSSOManage}) {
+		t.Errorf("Permissions() = %v, want exactly %v", perms, []string{PermissionSSOManage})
 	}
 }
 
