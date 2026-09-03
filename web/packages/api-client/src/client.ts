@@ -9,12 +9,17 @@
  *   2. send; a caller-supplied signal cancels the request raw (the
  *      AbortError reaches the caller, standard query-cancellation
  *      semantics -- nothing is wrapped or retried);
- *   3. on HTTP 401 with a refreshAccessToken hook configured: run one
- *      refresh, coalescing concurrent 401s onto a single in-flight
- *      refresh, and retry the original request exactly once (any
- *      method, outside the retry budget). Refresh failure surfaces the
- *      original 401 as a distinguishable auth ApiError and is reported
- *      through the Reporter;
+ *   3. on HTTP 401 from a request that presented a bearer token, with
+ *      a refreshAccessToken hook configured: run one refresh,
+ *      coalescing concurrent 401s onto a single in-flight refresh, and
+ *      retry the original request exactly once (any method, outside
+ *      the retry budget). A 401 on a credential-less request means
+ *      authentication is required -- refreshing cannot provide it --
+ *      so it surfaces untouched, which also keeps a session's own
+ *      refresh request (sent credential-less) from re-entering the
+ *      refresh path. Refresh failure surfaces the original 401 as a
+ *      distinguishable auth ApiError and is reported through the
+ *      Reporter;
  *   4. on 429/502/503/504, network failures and timeouts: retry only
  *      idempotent methods (GET/HEAD/OPTIONS), exponential full-jitter
  *      backoff per RetryPolicy, Retry-After honoured on 429 and 503;
@@ -129,6 +134,17 @@ export interface ClientOptions {
    * session-refresh endpoint; hosts without a session leave it out and
    * every 401 surfaces as an auth ApiError. Never called more than
    * once per request; concurrent 401s share one in-flight refresh.
+   *
+   * The hook fires only for a refused request that itself presented a
+   * bearer token. A 401 on a credential-less request means the
+   * endpoint demands authentication that refreshing cannot provide,
+   * so it surfaces untouched -- and this rule is load-bearing for the
+   * session wiring: a session's own refresh request travels
+   * credential-less (the store is cleared before it is sent), so when
+   * the refresh endpoint refuses a stale token the refusal surfaces
+   * instead of re-entering the refresh path, which would await the
+   * very refresh it is part of and deadlock. Any other client must
+   * keep the refresh request credential-less for the same reason.
    */
   refreshAccessToken?: () => Promise<boolean>
   /** Abort requests that exceed this many milliseconds; absent, no
@@ -150,11 +166,15 @@ function isIdempotent(method: HttpMethod): boolean {
   return method === 'GET' || method === 'HEAD' || method === 'OPTIONS'
 }
 
-/** A response that arrived, with its status, before any body is read. */
+/** A response that arrived, with its status, before any body is read.
+ * `attachedToken` records whether the attempt carried a bearer token:
+ * the silent-401 refresh only applies to a refused attempt that
+ * presented one. */
 interface HttpOutcome {
   kind: 'http'
   status: number
   response: Response
+  attachedToken: boolean
 }
 
 /** The request never reached a usable response. */
@@ -465,7 +485,8 @@ export function createClient(options: ClientOptions): RequestFn {
     // The token is read per attempt: a retry after a successful refresh
     // picks up the fresh token without extra plumbing.
     const token = tokenStore?.get() ?? null
-    if (token !== null && token !== '') {
+    const attachedToken = token !== null && token !== ''
+    if (attachedToken) {
       headers.set('authorization', `Bearer ${token}`)
     }
 
@@ -492,7 +513,12 @@ export function createClient(options: ClientOptions): RequestFn {
         body,
         signal: controller.signal,
       })
-      return { kind: 'http', status: response.status, response }
+      return {
+        kind: 'http',
+        status: response.status,
+        response,
+        attachedToken,
+      }
     } catch (error) {
       if (timedOut) {
         return { kind: 'timeout', cause: error }
@@ -618,7 +644,15 @@ export function createClient(options: ClientOptions): RequestFn {
       }
 
       if (outcome.kind === 'http' && outcome.status === 401) {
-        if (!refreshed && refreshOnce !== undefined) {
+        // Bearer-only: a credential-less 401 means authentication is
+        // required, which refreshing cannot provide -- and a session's
+        // own refresh request (sent credential-less) must never
+        // re-enter the refresh path or it awaits itself.
+        if (
+          !refreshed &&
+          refreshOnce !== undefined &&
+          outcome.attachedToken
+        ) {
           refreshed = true
           const refreshedOk = await refreshOnce()
           // The caller may have aborted while the refresh was in
@@ -646,8 +680,8 @@ export function createClient(options: ClientOptions): RequestFn {
           })
           throw envelopeError(outcome, envelope, attempts)
         }
-        // No hook, or the retried request was refused again: the
-        // session is over, surface the auth error.
+        // No hook, no bearer token, or the retried request was refused
+        // again: the session is over, surface the auth error.
         throw await httpError(outcome, attempts)
       }
 

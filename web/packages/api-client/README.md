@@ -41,10 +41,12 @@ export async function loadNotes(): Promise<Note[]> {
     // credential an XSS walks away with). With no token, requests go
     // out without Authorization.
     accessTokenStore: createMemoryAccessTokenStore(),
-    // Silent 401 refresh: M1 authn supplies the real hook against the
-    // session-refresh endpoint (the refresh token is an httpOnly
-    // cookie JavaScript never sees). Until then every 401 rejects an
-    // ApiError with auth: true, and hosts route it to sign-in.
+    // Silent 401 refresh: the M1 authn round supplies the real hook
+    // against the session-refresh endpoint (the refresh token is an
+    // httpOnly cookie JavaScript never sees). It fires only for a
+    // refused request that carried a bearer token -- with the store
+    // empty there is no session to refresh, so the 401 rejects an
+    // ApiError with auth: true and hosts route it to sign-in.
     refreshAccessToken: async () => false,
     // Abort requests slower than 10s. Transient retries follow
     // DEFAULT_RETRY_POLICY: idempotent methods only (GET/HEAD/OPTIONS),
@@ -163,14 +165,21 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
   ships. The token is re-read before every attempt, so a retry after a
   refresh carries the fresh token. No tenant header exists anywhere:
   tenant context travels inside the access token.
-- **Silent 401 refresh, once per request.** When a request answers 401
-  and a `refreshAccessToken` hook is configured, the client runs one
-  refresh -- concurrent 401s share a single in-flight refresh promise,
-  so a burst of expired-session requests triggers exactly one refresh --
+- **Silent 401 refresh, once per request -- bearer-only.** When a
+  request that *presented a bearer token* answers 401 and a
+  `refreshAccessToken` hook is configured, the client runs one refresh
+  -- concurrent 401s share a single in-flight refresh promise, so a
+  burst of expired-session requests triggers exactly one refresh --
   and retries the original request exactly once, any method, outside
   the transient-retry budget. Refresh failure rejects the original 401
   as an auth `ApiError` and reports `access token refresh failed`
-  through the reporter. The retry mechanics of the refresh token
+  through the reporter. A 401 on a credential-less request means the
+  endpoint demands authentication, which refreshing cannot provide, so
+  it surfaces untouched -- and that rule is load-bearing for the M1
+  session wiring: a session's own refresh request travels
+  credential-less (the store is cleared before it is sent), so a
+  refused refresh token surfaces instead of re-entering the refresh
+  path and awaiting itself. The retry mechanics of the refresh token
   itself (an httpOnly cookie) belong to the M1 authn round; this
   package only defines the seam.
 - **Transient retry, conservatively.** Only idempotent methods

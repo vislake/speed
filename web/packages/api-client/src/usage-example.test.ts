@@ -49,10 +49,12 @@ export async function loadNotes(): Promise<Note[]> {
     // credential an XSS walks away with). With no token, requests go
     // out without Authorization.
     accessTokenStore: createMemoryAccessTokenStore(),
-    // Silent 401 refresh: M1 authn supplies the real hook against the
-    // session-refresh endpoint (the refresh token is an httpOnly
-    // cookie JavaScript never sees). Until then every 401 rejects an
-    // ApiError with auth: true, and hosts route it to sign-in.
+    // Silent 401 refresh: the M1 authn round supplies the real hook
+    // against the session-refresh endpoint (the refresh token is an
+    // httpOnly cookie JavaScript never sees). It fires only for a
+    // refused request that carried a bearer token -- with the store
+    // empty there is no session to refresh, so the 401 rejects an
+    // ApiError with auth: true and hosts route it to sign-in.
     refreshAccessToken: async () => false,
     // Abort requests slower than 10s. Transient retries follow
     // DEFAULT_RETRY_POLICY: idempotent methods only (GET/HEAD/OPTIONS),
@@ -164,15 +166,17 @@ describe('README usage example', () => {
     expect(error.traceId).toBe('trace-1')
     expect(error.attempts).toBe(1)
 
-    // The refresh hook is the M1 stub (returns false): one refresh
-    // attempt, reported, and no retry of the refused request.
+    // The Quick start's store is empty, so this request carried no
+    // bearer token -- and the silent-401 refresh engages only for a
+    // refused request that presented one. A credential-less 401 means
+    // the endpoint demands authentication, which refreshing cannot
+    // supply; the refresh hook stays untouched and nothing is
+    // reported. The hook's M1 wiring (a token-carrying request whose
+    // session expired, refreshing against the session endpoint) is
+    // exercised in the 401-and-refresh describe block of client.test.
     const call = onlyCall(standin)
     expect(call.url).toBe('/api/v1/notes?page=1')
-    expect(consoleWarn).toHaveBeenCalledWith('access token refresh failed', {
-      status: 401,
-      code: 'authn.session_expired',
-      traceId: 'trace-1',
-    })
+    expect(consoleWarn).not.toHaveBeenCalled()
     // The snippet's catch reported the envelope code and trace id.
     expect(consoleError).toHaveBeenCalledWith('loading notes failed', {
       code: 'authn.session_expired',

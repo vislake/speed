@@ -20,6 +20,7 @@ import {
   ERROR_CODE_TIMEOUT,
   isApiError,
   type ApiError,
+  type RequestFn,
   type RetryPolicy,
 } from './index'
 import { createMemoryReporter } from '../test-utils/memory-reporter'
@@ -433,6 +434,11 @@ describe('401 and the refresh hook', () => {
 
   it('does not refresh twice when the retried request is refused again', async () => {
     let refreshCalls = 0
+    // The refused request presents a token (the bearer-only rule: a
+    // credential-less 401 never triggers a refresh), so the sequence
+    // under test is stale-token 401 -> refresh -> retry refused again.
+    const store = createMemoryAccessTokenStore()
+    store.set('stale-token')
     const standin = scriptedStandin(
       jsonResponse(401, { ...SESSION_EXPIRED }),
       jsonResponse(401, { ...SESSION_EXPIRED, traceId: 'trace-2' }),
@@ -440,7 +446,7 @@ describe('401 and the refresh hook', () => {
     const api = createClient({
       baseUrl: BASE_URL,
       fetch: standin.fetch,
-      accessTokenStore: createMemoryAccessTokenStore(),
+      accessTokenStore: store,
       refreshAccessToken: async () => {
         refreshCalls += 1
         return true
@@ -456,11 +462,14 @@ describe('401 and the refresh hook', () => {
 
   it('surfaces the 401 and reports the refresh failure with the envelope attrs', async () => {
     const memory = createMemoryReporter()
+    // A token must be presented for the refresh path to engage.
+    const store = createMemoryAccessTokenStore()
+    store.set('stale-token')
     const standin = scriptedStandin(jsonResponse(401, { ...SESSION_EXPIRED }))
     const api = createClient({
       baseUrl: BASE_URL,
       fetch: standin.fetch,
-      accessTokenStore: createMemoryAccessTokenStore(),
+      accessTokenStore: store,
       refreshAccessToken: async () => false,
       reporter: memory.reporter,
     })
@@ -487,11 +496,13 @@ describe('401 and the refresh hook', () => {
 
   it('reports a bare-401 refresh failure without envelope attrs', async () => {
     const memory = createMemoryReporter()
+    const store = createMemoryAccessTokenStore()
+    store.set('stale-token')
     const standin = scriptedStandin(jsonResponse(401, { error: 'no envelope' }))
     const api = createClient({
       baseUrl: BASE_URL,
       fetch: standin.fetch,
-      accessTokenStore: createMemoryAccessTokenStore(),
+      accessTokenStore: store,
       refreshAccessToken: async () => false,
       reporter: memory.reporter,
     })
@@ -506,11 +517,13 @@ describe('401 and the refresh hook', () => {
 
   it('treats a throwing refresh hook as a failed refresh', async () => {
     const memory = createMemoryReporter()
+    const store = createMemoryAccessTokenStore()
+    store.set('stale-token')
     const standin = scriptedStandin(jsonResponse(401, { ...SESSION_EXPIRED }))
     const api = createClient({
       baseUrl: BASE_URL,
       fetch: standin.fetch,
-      accessTokenStore: createMemoryAccessTokenStore(),
+      accessTokenStore: store,
       refreshAccessToken: async () => {
         throw new Error('refresh endpoint unreachable')
       },
@@ -520,6 +533,85 @@ describe('401 and the refresh hook', () => {
     expect(error.auth).toBe(true)
     expect(memory.warns).toHaveLength(1)
     expect(standin.calls).toHaveLength(1)
+  })
+
+  it('leaves a credential-less 401 untouched: refresh cannot supply missing authentication', async () => {
+    const memory = createMemoryReporter()
+    let refreshCalls = 0
+    const standin = scriptedStandin(jsonResponse(401, { ...SESSION_EXPIRED }))
+    const api = createClient({
+      baseUrl: BASE_URL,
+      fetch: standin.fetch,
+      accessTokenStore: createMemoryAccessTokenStore(),
+      refreshAccessToken: async () => {
+        refreshCalls += 1
+        return true
+      },
+      reporter: memory.reporter,
+    })
+    const error = await expectApiError(api<{ ok: boolean }>('/notes'))
+    expect(error.auth).toBe(true)
+    expect(error.code).toBe('authn.session_expired')
+    expect(error.attempts).toBe(1)
+    // No token was presented, so no refresh was attempted: a 401 on a
+    // credential-less request means the endpoint demands
+    // authentication, which refreshing cannot provide -- and no false
+    // 'refresh failed' warning fires either.
+    expect(refreshCalls).toBe(0)
+    expect(memory.warns).toHaveLength(0)
+    expect(standin.calls).toHaveLength(1)
+    expect(recorded(standin).headers.get('authorization')).toBeNull()
+  })
+
+  it('does not recurse when the refresh request itself is refused', async () => {
+    // The session wiring a host builds (refresh() clearing the store,
+    // then calling the refresh endpoint through this same client)
+    // must not deadlock when the endpoint refuses the stale token.
+    // Before the bearer-only rule the refresh request's own 401
+    // re-entered the refresh path and awaited the in-flight refresh it
+    // was part of -- a request awaiting itself, forever.
+    const store = createMemoryAccessTokenStore()
+    store.set('stale-token')
+    let refreshCalls = 0
+    const standin = scriptedStandin(
+      jsonResponse(401, { ...SESSION_EXPIRED }),
+      jsonResponse(401, { ...SESSION_EXPIRED, traceId: 'trace-2' }),
+    )
+    // The hook only ever runs after createClient has returned (it fires
+    // on a request's 401), so the const binding is initialized by the
+    // time the closure body executes.
+    const api: RequestFn = createClient({
+      baseUrl: BASE_URL,
+      fetch: standin.fetch,
+      accessTokenStore: store,
+      refreshAccessToken: async () => {
+        refreshCalls += 1
+        // A session's refresh travels credential-less (the store is
+        // cleared first), which is exactly what the bearer-only rule
+        // protects from re-entry.
+        store.set(null)
+        try {
+          await api('/api/v1/authn/token/refresh', {
+            method: 'POST',
+            body: { refresh_token: 'stale' },
+          })
+          return true
+        } catch {
+          return false
+        }
+      },
+    })
+    const error = await expectApiError(api<{ ok: boolean }>('/notes'))
+    expect(error.auth).toBe(true)
+    expect(error.code).toBe('authn.session_expired')
+    // The original 401's own envelope is delivered (trace-1), not the
+    // refresh request's (trace-2).
+    expect(error.traceId).toBe('trace-1')
+    // Exactly one refresh, two HTTP calls in total, no recursion.
+    expect(refreshCalls).toBe(1)
+    expect(standin.calls).toHaveLength(2)
+    // The refresh request itself carried no bearer token.
+    expect(recorded(standin, 1).headers.get('authorization')).toBeNull()
   })
 
   it('coalesces concurrent 401s onto one in-flight refresh', async () => {
