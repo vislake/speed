@@ -698,6 +698,150 @@ func TestAuditCapturePlugin_DeleteMatchingNoRows_PublishesNothing(t *testing.T) 
 	}
 }
 
+// auditCaptureHardDeletePurpose is the SystemPurpose the hard-delete capture
+// tests grant themselves, registered from the test process exactly as
+// tenancy's own system-context tests do (these tests exercise the gate, not
+// the legitimacy of a grant).
+const auditCaptureHardDeletePurpose pkgcore.SystemPurpose = "dbkit.test.audit_capture_hard_delete"
+
+// auditCaptureHardDeleteCtx layers a granted system context onto base —
+// which carries the tenant and actor the writes below use, so the caller
+// identity captured on the event stays the same user across the whole
+// create/soft-delete/hard-delete flow — returning the context a
+// Repository.HardDelete call requires. RegisterSystemPurpose is idempotent
+// and mutex-guarded, so the registration here is a no-op from the second
+// call on.
+func auditCaptureHardDeleteCtx(t *testing.T, base context.Context) context.Context {
+	t.Helper()
+	pkgcore.RegisterSystemPurpose(auditCaptureHardDeletePurpose)
+	elevated, err := pkgcore.WithSystemContext(base, pkgcore.SystemReason{
+		Actor:   "audit-capture-test",
+		Purpose: auditCaptureHardDeletePurpose,
+		Ticket:  "dbkit-audit-capture-hard-delete-test",
+	})
+	if err != nil {
+		t.Fatalf("WithSystemContext() error = %v", err)
+	}
+	return elevated
+}
+
+// TestAuditCapturePlugin_HardDelete_ClassifiesAsDelete pins the audit
+// semantics of Repository[T].HardDelete (hard_delete.go): the method is a
+// genuine physical DELETE, so the write-capture plugin must classify it as
+// Operation "delete" with After nil — the row is gone, so there is no
+// after-image to record — distinctly from the Update semantics the same
+// row's soft-delete step carried a moment earlier. This is the design's
+// mandated pair (docs/internal/04-data-and-tenancy.md's delete-semantics
+// section, §4: soft-delete captures as Update with the deleted_at diff,
+// hard-delete captures as Delete for a vanished row, and the landing round
+// must pin both by explicit test assertion). It is also the regression guard
+// for the same section's named pitfall: HardDelete must never hand-emit a
+// second, hand-rolled Delete event on top of the automatic capture — the
+// count assertion below fails the moment a duplicate event appears, and the
+// capturedBus itself loudly rejects any payload that is not a
+// WriteCapturedEvent.
+func TestAuditCapturePlugin_HardDelete_ClassifiesAsDelete(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	if err := db.Exec(testutil.SoftDeletableWidgetTableSQL).Error; err != nil {
+		t.Fatalf("create soft_deletable_widgets table: %v", err)
+	}
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1"})
+
+	repo := dbkit.NewRepository[testutil.SoftDeletableWidget](db)
+	w := &testutil.SoftDeletableWidget{ID: "sdw1", Name: "gadget"}
+	if err := repo.Create(ctx, w); err != nil {
+		t.Fatalf("seed Create() error = %v", err)
+	}
+	if err := repo.Delete(ctx, w.ID); err != nil {
+		t.Fatalf("Delete() (soft-delete) error = %v", err)
+	}
+	if err := repo.HardDelete(auditCaptureHardDeleteCtx(t, ctx), w.ID); err != nil {
+		t.Fatalf("HardDelete() error = %v", err)
+	}
+
+	events := bus.captured()
+	if len(events) != 3 {
+		t.Fatalf("captured %d events, want exactly 3 (create, soft-delete, hard-delete) -- a HardDelete that hand-emitted its own duplicate Delete event on top of the automatic capture would publish a fourth", len(events))
+	}
+	// The design's contrast pair, both pinned on this one row: the
+	// soft-delete step just above was captured as "update" (probed in depth
+	// by TestAuditCapturePlugin_SoftDelete_ClassifiesAsUpdateWithRealDiff),
+	// and the hard-delete step must be captured as "delete" — the two halves
+	// of the delete semantics leave differently classified trails.
+	if got := events[1]; got.Operation != "update" {
+		t.Errorf("soft-delete Operation = %q, want %q (the preamble event must be the soft-delete's update before the hard-delete's delete is asserted)", got.Operation, "update")
+	}
+	got := events[2]
+	if got.Operation != "delete" {
+		t.Errorf("HardDelete Operation = %q, want %q -- HardDelete is a physical DELETE and must be captured with Delete semantics, never Update", got.Operation, "delete")
+	}
+	if got.ResourceID != w.ID {
+		t.Errorf("ResourceID = %q, want %q (extracted from HardDelete's WHERE clause, exactly as Delete's physical branch is)", got.ResourceID, w.ID)
+	}
+	if got.After != nil {
+		t.Errorf("After = %+v, want nil for a delete: the row is physically gone after HardDelete, so there is no after-image to record", got.After)
+	}
+	if got.Before != nil {
+		t.Errorf("Before = %+v, want nil -- the automatic capture mechanism never reads a pre-write snapshot (see WriteCapturedEvent.Before's own doc comment)", got.Before)
+	}
+	if got.TenantID != "tenant-a" {
+		t.Errorf("TenantID = %q, want %q", got.TenantID, "tenant-a")
+	}
+	if got.Actor.ID != "user-1" {
+		t.Errorf("Actor.ID = %q, want %q (the capture reads the actor from the write's context, system context or not)", got.Actor.ID, "user-1")
+	}
+	if got.Table != "soft_deletable_widgets" {
+		t.Errorf("Table = %q, want %q", got.Table, "soft_deletable_widgets")
+	}
+	if got.ResourceType != "soft_deletable_widget" {
+		t.Errorf("ResourceType = %q, want %q", got.ResourceType, "soft_deletable_widget")
+	}
+
+	// Ground truth: the physical row must be gone, agreeing with the captured
+	// Operation/After-nil pair — an event that says "delete" while the row
+	// still sat in the table would be a lie about what happened.
+	if found, _, _ := rawSoftDeletableWidgetRow(t, db, w.ID); found {
+		t.Fatal("row still physically present after HardDelete; the captured delete event must describe a real physical erasure")
+	}
+}
+
+// TestAuditCapturePlugin_HardDelete_NoMatchingRow_PublishesNothing pins the
+// RowsAffected == 0 guard in capture() for HardDelete's no-match path: a
+// HardDelete of an id no row carries — never created, or already erased by
+// an earlier HardDelete — changed no row state, the Repository reports
+// ErrRecordNotFound, and capture must not publish a delete event claiming a
+// row vanished when none did. It is the HardDelete twin of the existing
+// TestAuditCapturePlugin_DeleteMatchingNoRows_PublishesNothing, warranted
+// here because HardDelete is a separately gated entry whose audit behaviour
+// this round is pinning wholesale.
+func TestAuditCapturePlugin_HardDelete_NoMatchingRow_PublishesNothing(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	if err := db.Exec(testutil.SoftDeletableWidgetTableSQL).Error; err != nil {
+		t.Fatalf("create soft_deletable_widgets table: %v", err)
+	}
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	repo := dbkit.NewRepository[testutil.SoftDeletableWidget](db)
+	w := &testutil.SoftDeletableWidget{ID: "sdw1", Name: "gadget"}
+	if err := repo.Create(ctx, w); err != nil {
+		t.Fatalf("seed Create() error = %v", err)
+	}
+
+	err := repo.HardDelete(auditCaptureHardDeleteCtx(t, ctx), "sdw-never-created")
+	if !isRecordNotFound(err) {
+		t.Fatalf("HardDelete() of a never-created id error = %v, want ErrRecordNotFound (nothing matched)", err)
+	}
+
+	if events := bus.captured(); len(events) != 1 {
+		t.Errorf("captured %d events, want exactly 1 (the seed create) -- a HardDelete that matched no row must publish nothing", len(events))
+	}
+}
+
 // auditCaptureOmitWidget is the fixture for the Omit-only scoping tests
 // below: a Widget-shaped, tenant-scoped, auditable model with one extra
 // data column (Label). testutil.Widget itself cannot host the shape those
