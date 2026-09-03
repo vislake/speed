@@ -1,0 +1,46 @@
+# storage's message bundle, American English.
+#
+# One flat top-level entry per error code go/storage/errors.go declares; the
+# id is the whole quoted code. zh-CN.toml must carry exactly the same id
+# set.
+#
+# Interpolated names are the error's own apperr parameter keys, verbatim and
+# snake_case ("max_bytes", not "MaxBytes"): the message is rendered from the
+# structured parameters the API returned, so a mismatch between the two
+# would render an empty slot rather than a value.
+
+"storage.object_not_found" = "That file does not exist."
+
+"storage.object_not_uploading" = "That file is not in a state that allows this operation."
+
+"storage.object_too_large" = "That file is too large. The maximum is {{.max_bytes}} bytes."
+
+"storage.invalid_checksum" = "The checksum is not well formed. It must be 64 lowercase hexadecimal characters."
+
+"storage.checksum_mismatch" = "The uploaded content does not match the declared checksum."
+
+"storage.size_mismatch" = "The stored size does not match the declared size. Declared {{.declared}} bytes, stored {{.actual}}."
+
+"storage.content_length_mismatch" = "The request body's length does not match the declared size of {{.declared}} bytes."
+
+"storage.content_missing" = "No content has been received for this file yet."
+
+"storage.type_not_allowed" = "That file type is not allowed. Allowed types: {{.allowed}}."
+
+"storage.type_mismatch" = "The file's actual type does not match the declared one."
+
+"storage.pixel_limit_exceeded" = "The image is too large. The limit is {{.max_pixels}} pixels."
+
+"storage.image_unreadable" = "That image cannot be read."
+
+"storage.invalid_expiry" = "That retention period is invalid. The maximum is {{.max_lifetime_days}} days."
+
+"storage.store_unavailable" = "The file store is unavailable right now. Try again later."
+
+"storage.store_error" = "A file-store operation failed. Try again later."
+
+"storage.invalid_size" = "The declared size must be a positive number of bytes."
+
+"storage.internal_error" = "An internal error occurred. Try again later."
+
+"storage.queue_required" = "The module is missing its required queue wiring."
