@@ -68,7 +68,9 @@
   > - **敏感项**：加密存储、读取时解密、日志与响应脱敏均按设计落地；变更事件同样不携带明文——payload 的两个取值槽位都放 `[redacted]` 标记，明文不跨出模块。
   > - **作用域**：`system` 与 `tenant` 两层已落地（system 行以空字符串 `tenant_id` 为哨兵），读取从租户覆盖回退到 system 行再到 schema 默认值；`user` 层按"未来可扩展"预留但刻意未实现，任何写入返回 `ErrUserScopeUnavailable`。
   > - **审计**："变更审计" bullet 的落地形态是 `configs` 表行级 `updated_by`/`updated_at` 留痕 + 经共享总线发布的变更事件；专门的审计记录与 `compliance` 消费者随 `compliance` 模块的 round 落地（届时订阅 `config.item.changed` 即可，本模块不依赖审计方）。
-  > - **端点**：`/api/config/public`（公开项生效值 + 依赖解析后的启用功能开关列表）与 `/api/system/features`（启用功能开关列表）都已上线：未登录可访问、只接受 GET/HEAD（其它方法 405 + `Allow: GET, HEAD`），租户经宿主注入的 `tenancy.Resolver` 逐请求解析，未匹配时回退平台默认值、绝不报错——与上面"登录页" bullet 的规则一致。`usePublicConfig()` hook 与任何配置管理 UI 均未交付：api-client round 只落地了运行时与调用纪律，本 round 又只做后端，hook 的实现推迟到未来的 config-web round（届时由前端在启动时消费这两个端点；响应里的"可用支付渠道、可选语言"等条目还要等对应模块注册相应公开配置项后才会出现）。
+  > - **端点**：`/api/config/public`（公开项生效值 + 依赖解析后的启用功能开关列表）与 `/api/system/features`（启用功能开关列表）都已上线：未登录可访问、只接受 GET/HEAD（其它方法 405 + `Allow: GET, HEAD`），租户经宿主注入的 `tenancy.Resolver` 逐请求解析，未匹配时回退平台默认值、绝不报错——与上面"登录页" bullet 的规则一致。响应里的"可用支付渠道、可选语言"等条目还要等对应模块注册相应公开配置项后才会出现。
+  >
+  >   **已落地**（config-web round）：`usePublicConfig()` / `useFeature()` hook 已在 `@speed/api-client` 的隔离子路径 `@speed/api-client/react` 落地（主入口保持零依赖，React 只出现在这个子路径，做法与 `@speed/i18n` 的 `./mui-locale` 一致）。两个 hook 按 `RequestFn` 引用共享同一份缓存：同一个 `api` 的多个消费者只触发一次请求，`useFeature` 直接复用 `usePublicConfig` 的缓存而不单独打 `/api/system/features`，未决或出错时返回 `false`、从不抛出。配置管理 UI 仍未交付。详见 `web/packages/api-client/README.md`（"Config hooks"一节）与 `AGENTS.md`。
 
 **分层缓存**：动态配置读取路径在热路径上（每次权限判断、每次计量都可能读），必须走进程内缓存 + 变更失效，不能每次查库。
 

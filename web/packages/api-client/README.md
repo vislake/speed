@@ -69,6 +69,83 @@ export async function loadNotes(): Promise<Note[]> {
 }
 ```
 
+## Config hooks (`@speed/api-client/react`)
+
+`usePublicConfig` and `useFeature` read go/config's two pre-auth
+endpoints -- `/api/config/public` and `/api/system/features` -- behind
+the isolated `./react` subpath, so the main entry above stays free of
+a React dependency. Build `api` once (a module-scope singleton, or a
+value memoized for the app's lifetime) and pass that same reference
+everywhere: the hooks below share one cache keyed by `api`'s identity,
+so calling both in the same tree costs one fetch, not two.
+
+```ts
+import { createClient } from '@speed/api-client'
+import type { ApiError, RequestFn } from '@speed/api-client'
+import { useFeature, usePublicConfig } from '@speed/api-client/react'
+
+// Construct once, at bootstrap. usePublicConfig/useFeature key their
+// shared cache off this reference -- a fresh createClient() call on
+// every render would defeat the sharing and refetch every time.
+const api = createClient({ baseUrl: '/api/v1' })
+
+/** What a host's app shell needs to render its chrome: the effective
+ * brand name and whether billing is enabled for the tenant the
+ * request host resolves to. */
+interface AppChrome {
+  readonly brandName: string | undefined
+  readonly billingEnabled: boolean
+  readonly isLoading: boolean
+  readonly error: ApiError | undefined
+}
+
+/**
+ * Reads the tenant's public config and the `billing` feature flag
+ * through one shared cache. `api` must be the same RequestFn reference
+ * every caller uses -- that is what lets usePublicConfig and
+ * useFeature below compose into a single request instead of two.
+ */
+function useAppChrome(clientApi: RequestFn): AppChrome {
+  const { data, isLoading, error } = usePublicConfig(clientApi)
+  const billingEnabled = useFeature(clientApi, 'billing')
+
+  return {
+    // Both fields default to "not yet known" rather than a guessed
+    // value: brandName stays undefined and billingEnabled stays false
+    // until the shared fetch settles.
+    brandName:
+      typeof data?.config.brand_name === 'string' ? data.config.brand_name : undefined,
+    billingEnabled,
+    isLoading,
+    error,
+  }
+}
+```
+
+- **`usePublicConfig(api)`** returns `{ data, error, isLoading, refresh }`.
+  `data.config` is `Record<string, unknown>` -- the schema is
+  dynamically extensible per-module, so entries such as available
+  payment channels or selectable languages only appear once the owning
+  module registers them; there is no closed TypeScript type for it.
+  `data.features` is always a sorted array, never `null`, even when
+  empty. `error` surfaces the rejected `ApiError` verbatim -- map
+  `error.code` to bilingual text through your own i18n catalog, never
+  in this package. `refresh()` forces a refetch and republishes to
+  every component sharing this `api`, keeping the previous `data`
+  (stale-while-revalidate) while the refetch is in flight -- the sole
+  revalidation lever this round ships; there is no polling or
+  window-focus refetch (see the package `AGENTS.md`).
+- **`useFeature(api, key)`** returns a plain `boolean`, composed on
+  `usePublicConfig`'s cache rather than a second request to
+  `/api/system/features` -- `false` while loading and on error, never
+  throwing, so a consumer such as a `NavItem`'s `requiredFeature` field
+  stays hidden until the flag is confirmed on rather than flashing.
+  `fetchSystemFeatures` (above) remains the direct route to that
+  endpoint for a caller that genuinely wants it standalone.
+- Neither hook accepts or infers a tenant -- both endpoints resolve
+  tenant from the request's **host**, not from the access token, so a
+  logged-in user's tenant switch has no bearing on this cache.
+
 ## What it does
 
 - **One error type.** Every failed request rejects an `ApiError`.
@@ -131,25 +208,24 @@ export async function loadNotes(): Promise<Note[]> {
 | `fetchSystemFeatures(api, options?)` | function | GETs `SYSTEM_FEATURES_PATH` (go/config's `PathSystemFeatures`); resolves `SystemFeaturesResponse`. |
 | `CONFIG_PUBLIC_PATH` / `SYSTEM_FEATURES_PATH` | const | The two path strings, hand-kept in sync with go/config (no spec fragment exists yet). |
 | `PublicConfigResponse` / `SystemFeaturesResponse` / `ConfigFetchOptions` | type | Wire shapes for the two fetchers above; no tenant field anywhere -- both endpoints resolve tenant server-side from the request host. |
-| `usePublicConfig(api)` *(`@speed/api-client/react`)* | hook | Fetches once per `api` identity and shares the result -- loading/error/data plus a `refresh()` -- with every other instance backed by the same `api`. See the package `AGENTS.md` for the caching contract; a full quick-start lands with the round's docs block. |
+| `usePublicConfig(api)` *(`@speed/api-client/react`)* | hook | Fetches once per `api` identity and shares the result -- loading/error/data plus a `refresh()` -- with every other instance backed by the same `api`. See "Config hooks" above and the package `AGENTS.md` for the caching contract. |
 | `useFeature(api, key)` *(`@speed/api-client/react`)* | hook | `boolean`, composed on `usePublicConfig`'s cache -- `false` while loading and on error, never throws. |
 | `UsePublicConfigResult` *(`@speed/api-client/react`)* | type | `{ data, error, isLoading, refresh }` -- `usePublicConfig`'s return shape. |
 
 ## What is deliberately not here
 
-- **A dedicated Quick start for the hooks** -- `usePublicConfig` /
-  `useFeature` have landed (`@speed/api-client/react`, see the Public
-  surface table above), but the runnable README example for them --
-  mirroring the Quick start above, executed for real by a test the way
-  `usage-example.test.ts` does for the main entry -- lands with this
-  round's docs block, alongside a real reference-app consumer.
 - **Uploads and SSE** -- outside this package's scope
   (docs/internal/21-api-contract.md).
 - **A real first consumer** -- `@speed/api-sdk`, the orval-generated
   typed surface, has landed and calls into this package through its
-  `src/runtime.ts` seam. Both are still test-consumed only: the reference
-  app's mandatory first-consumer status arrives with the M1 consumer
-  shells that import the generated SDK.
+  `src/runtime.ts` seam; `usePublicConfig`/`useFeature` have landed too
+  (`@speed/api-client/react`, Config hooks section above). All three
+  are still test-consumed only: `examples/reference-app` has no
+  frontend shell yet (it is backend-only today), so the reference app's
+  mandatory first-consumer status arrives with the M1 consumer shells
+  that import the generated SDK and, for the hooks, with the first
+  shell that builds a `NavItem`-style `requiredFeature` consumer per
+  `docs/internal/11-cross-cutting.md`.
 - **i18n resources** -- error codes map to bilingual text in the
   consuming package's catalogs; nothing here emits user-facing text.
 
@@ -167,4 +243,6 @@ pnpm build
 
 Tests never touch a network: every request goes through a scripted
 fetch stand-in (`test-utils/fetch-standin.ts`), and the README Quick
-start above is executed verbatim by `src/usage-example.test.ts`.
+start above is executed verbatim by `src/usage-example.test.ts`; the
+Config hooks quick start is executed the same way by
+`src/react-usage-example.test.ts`.

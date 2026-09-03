@@ -98,19 +98,18 @@ for why each is a deliberate non-feature, not a gap.
 
 Deferred with reasons:
 
-- The hooks' own README Quick-start section and a real reference-app
-  consumer -- the hooks themselves have landed (`src/react.ts`, above);
-  the runnable doc example and the reference-app wiring land with this
-  round's docs block. No frontend shell exists in `examples/reference-app`
-  yet to wire into (it is backend-only today); the first M1 frontend-shell
-  round is the natural consumer, per `docs/internal/11-cross-cutting.md`'s
-  `NavItem`'s `requiredFeature` field.
 - Uploads and SSE transports -- outside this package's scope
   (`docs/internal/21-api-contract.md`).
-- A real first consumer -- `@speed/api-sdk` has landed and consumes this
-  runtime through its `src/runtime.ts` seam, but both packages are still
-  test-consumed only: the reference app's mandatory first-consumer status
-  arrives with the M1 consumer shells that import the generated SDK.
+- A real reference-app consumer -- `@speed/api-sdk` has landed and
+  consumes this runtime through its `src/runtime.ts` seam, and
+  `usePublicConfig`/`useFeature` have landed with their own README
+  quick start (`src/react.ts`, `src/react-usage-example.test.ts`), but
+  all three are still test-consumed only: `examples/reference-app` has
+  no frontend shell yet (it is backend-only today), so the reference
+  app's mandatory first-consumer status arrives with the M1 consumer
+  shells that import the generated SDK and, for the hooks, with the
+  first shell that builds a `NavItem`-style `requiredFeature` consumer
+  per `docs/internal/11-cross-cutting.md`.
 - Real `refreshAccessToken` hooks -- M1 authn work (the seam
   `refreshAccessToken?: () => Promise<boolean>` is the contract).
 
@@ -150,12 +149,14 @@ pnpm build       # tsc ESM build (nodenext); dist/ is gitignored build output
 
 Test layout: one file per source file (`errors.ts` -> `errors.test.ts`)
 plus behavior files (`usage-example.test.ts` executes the README Quick
-start against a stubbed global fetch). Shared helpers live in
-`test-utils/` (`fetch-standin.ts` scripted responders, abort-aware the
-way real fetch is; `memory-reporter.ts` capture sinks). Tests never
-require Docker or a network. `src/react.test.ts` opts into the `jsdom`
-environment via a per-file `// @vitest-environment jsdom` docblock
-(vitest 4's built-in mechanism) rather than a package-wide
-`vitest.config.ts` -- every other test file in this package keeps the
-faster default `node` environment, since renderHook's DOM mounting is
-the only thing here that needs one.
+start against a stubbed global fetch; `react-usage-example.test.ts`
+does the same for the README's "Config hooks" quick start, via
+`renderHook`). Shared helpers live in `test-utils/` (`fetch-standin.ts`
+scripted responders, abort-aware the way real fetch is;
+`memory-reporter.ts` capture sinks). Tests never require Docker or a
+network. `src/react.test.ts` and `src/react-usage-example.test.ts`
+opt into the `jsdom` environment via a per-file
+`// @vitest-environment jsdom` docblock (vitest 4's built-in mechanism)
+rather than a package-wide `vitest.config.ts` -- every other test file
+in this package keeps the faster default `node` environment, since
+`renderHook`'s DOM mounting is the only thing here that needs one.
