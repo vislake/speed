@@ -138,6 +138,13 @@ type Membership struct {
   用自定义 matcher 做路径前缀匹配（`pathMatch(r.node, p.node)`），角色绑定在树节点上而非整个租户上。这个 matcher 与物化路径的组合是本模块的实现难点，需要在 M1 早期就打样并压测——前缀匹配的策略数量会随节点数增长，必须配合策略缓存，不能每次请求都全量加载。
 - 数据可见范围按节点子树计算，`Repository[T]` 提供 `WithinSubtree(nodeID)` 作用域，避免每个业务自己拼递归查询。
 
+  > **实现落地更正**（实现 `org` 模块时确认）：本节组织树部分已按下列实际形态落地，个别表述与设计不同：
+  > - **树结构与查询**：`parent_id` + 物化路径按设计落地为 `OrgNode{ParentID, Path, Depth}`，**没有 closure table，也不用递归 CTE**——两条都在 M0 之后被明确否决：closure table 每节点 O(depth) 行、移动一次要重写 O(子树×depth) 行；`WITH RECURSIVE` 虽然 SQLite 和 PostgreSQL 都支持，但项目的可移植性原则是"结构上不可能分叉"而不是"两边碰巧都支持"，`LIKE` 前缀扫描不需要这个论证。子树查询是 `path LIKE prefix||'%'` 一条前缀扫描；祖先链在 Go 里对 `path` 按分隔符 split 即可，不查库。这个方案能立住的前提是**id 字母表被钉死为全小写十六进制 + 连字符**（`uuid.NewString()`），不含任何 `LIKE` 元字符（`%`、`_`），也不含大小写——SQLite 的 `LIKE` 默认大小写不敏感、PostgreSQL 默认大小写敏感，字母表全小写这条不变量测试锁定（`go/org/path.go` 的校验函数 + 200 个 `uuid.NewString()` 采样测试），未来若切到 ULID/Crockford base32 这类含大写的 id 方案，必须重新论证这一节。物化路径**首尾都带分隔符**（`"/id1/id2/.../idN/"`），这样前缀匹配不依赖 id 定长，也让"`1a` 与 `1aa` 这类共享前缀的兄弟节点"不会被误判为子树成员——这条属性有专门测试两端锁定。同一套断言在 SQLite 单元测试与 PostgreSQL `integration_test/` 里跑两遍，结果集必须一致，这就是选择物化路径而非 closure table 的完整证明义务，不是文档一句话带过。
+  > - **`parent_id` 用空字符串哨兵，不用 `NULL`**：与本节代码示例的 `*string` 不同，落地后 `parent_id` 是非空字符串列，租户根节点的 `parent_id` = `""`。原因与 `go/config` 的 `tenant_id` 哨兵一致：`UNIQUE(tenant_id, parent_id, name)` 这条兄弟节点同名唯一索引，在两边数据库里 `NULL` 都被当作"各不相同"，唯一索引形同虚设；空字符串则是一个正常可比较的值，索引才能真正生效。
+  > - **`Membership.Roles []string` 不由 `org` 存储**：设计草图里的角色字段被否决，两个理由——原生数组跨方言被禁用；角色状态属于 `rbac` 的 Casbin 策略存储（按 tenant + user + node path 索引），`org` 只存成员与节点的绑定关系，不重复保管权限状态。`memberships` 落地为**关联数据**（`TenantScoped`，跑 `tenancytest.AssertIsolated`，与本文档 04 节的数据分域表一致），`user_id` 只存 authn 的 id 引用，不建跨模块外键。
+  > - **`Repository[T].WithinSubtree(nodeID)` 尚未落地**：这是 `dbkit` 公共泛型接口的改动，不是 `org` 自己能单方面加的——`go/dbkit/AGENTS.md` 说得很明确，`Repository[T]` 的查询面是刻意收窄的，由后续模块按真实查询需求扩展。`org` 目前只对外暴露 `Scope.DescendantIDs(ctx, nodeID) ([]string, error)`（一次索引前缀扫描），消费方（`rbac` 等）自己拼 `IN ?`。`WithinSubtree` 留给一个手握 `org` + 至少一个别的消费方真实查询形状的 `dbkit` round 再落地。
+  > - **`Scope` 与 `FeatureGate` 两个免 import 的结构化接口**：`org` 与 `rbac`、`org` 与 `config` 之间都没有 import 边（01 节依赖图上也没有画），却各自需要对方的数据——`rbac` 需要节点物化路径与成员可见节点集，`org` 需要功能开关是否启用。两边都复用了 `config.WithResolver` 已经立住的"接口签名只用标准库类型，消费方在自己包里声明同名接口，靠结构化满足"手法：`Scope{Path, DescendantIDs, MemberNodeIDs}` 与 `FeatureGate{IsEnabled}`，宿主在 `Bootstrap` 之后手工把两个模块的实现接到一起，是唯一同时出现两个包名字的地方。
+
 ## 多因素认证（MFA）
 
 - **TOTP 为默认第二因素**（RFC 6238，兼容 Google Authenticator / 1Password 等所有主流应用），不依赖短信通道，也没有跨境短信送达问题。
