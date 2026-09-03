@@ -38,10 +38,26 @@
 //
 // # Current status
 //
-// This block of the round ships the module skeleton and the in-app inbox's
-// storage: the InboxMessage model, its dual-dialect migration, the
+// The round's first block shipped the module skeleton and the in-app
+// inbox's storage: the InboxMessage model, its dual-dialect migration, the
 // Repository that reads and writes inbox rows, and the module's first
-// declared domain event (notification.inbox.created). The preference
-// matrix, the consent ledger and the delivery subscriber are the round's
-// next blocks, built on exactly this storage.
+// declared domain event (notification.inbox.created).
+//
+// This block ships the preference matrix end to end at the service level
+// (no HTTP surface yet -- the handler is a later block, like org's
+// first-round shape): the NotificationPreference model and its dual-dialect
+// migration, whose core semantics are that absence means a type's declared
+// defaults apply (never materialized into rows) and a stored empty array is
+// a deliberate, only-sometimes-legal opt-out; the PreferenceRepository that
+// reads and writes rows; the PreferenceService -- the module's first
+// concrete service -- which validates every write against the live
+// notification-type taxonomy attached from the host registry during
+// Register, refuses what a type cannot honor (error codes and bilingual
+// copy in errors.go and locales/), and resolves the delivery question
+// ("which channels for this recipient and type") by folding defaults under
+// absent rows; and render.go's template-render seam, which pins the
+// convention that a type's title/body copy ships in the declaring module's
+// own locale files under <type_key>.title/.body. The consent ledger and
+// the delivery subscriber are the round's remaining blocks; the latter
+// builds on exactly this service and this render seam.
 package notification

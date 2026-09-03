@@ -3,13 +3,13 @@
 // Kernel.Bootstrap to feed to i18n.Builder.AddModule alongside every other
 // module's Locales() embed.FS.
 //
-// What this bundle will carry is the human description of every error code
+// What this bundle carries is the human description of every error code
 // go/notification/errors.go declares, one flat entry per code, with the id
-// equal to the code itself. It is empty today because errors.go declares no
-// codes yet -- the module's error vocabulary ships with the producers that
-// raise it, in this round's later blocks -- and a locale entry without a
-// producer is dead text, exactly as a code without an entry is a blank
-// message.
+// equal to the code itself: today the preference matrix's codes and the
+// module's internal_error, each shipped with the producer that raises it,
+// and the codes the round's later blocks raise will land here with them.
+// A locale entry without a producer is dead text, exactly as a code without
+// an entry is a blank message.
 //
 // The two files must carry identical id sets. i18n.Builder.AddModule rejects
 // a module whose languages disagree (ErrParityMismatch) while the kernel

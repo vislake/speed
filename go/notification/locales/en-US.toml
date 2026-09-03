@@ -4,12 +4,17 @@
 # the id is the whole quoted code. zh-CN.toml must carry exactly the same id
 # set.
 #
-# This file currently declares no entries: notification's error codes arrive
-# with their producers (see go/notification/errors.go's doc comment), and
-# this block's migration and repository operations fail only through dbkit's
-# own vocabulary, which needs no re-declaration here.
-#
 # Interpolated names are the error's own apperr parameter keys, verbatim and
-# snake_case ("max_depth", not "MaxDepth"): the message is rendered from the
+# snake_case ("type_key", not "TypeKey"): the message is rendered from the
 # structured parameters the API returned, so a mismatch between the two would
 # render an empty slot rather than a value.
+
+"notification.recipient_required" = "A notification preference needs a recipient."
+
+"notification.type_not_found" = "The notification type {{.type_key}} does not exist."
+
+"notification.preference_invalid_channels" = "That channel selection is not valid for {{.type_key}}: {{.channels}}."
+
+"notification.preference_optout_not_allowed" = "Notifications of type {{.type_key}} cannot be switched off entirely; keep at least one channel."
+
+"notification.internal_error" = "The notification service could not complete the request."

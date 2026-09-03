@@ -16,22 +16,30 @@ import (
 const moduleName = "notification"
 
 // Module implements pkgcore.Module for go/notification: the tenant's
-// notification inbox and, in this round's later blocks, the preference
-// matrix, consent ledger and delivery subscriber that fill it.
+// notification inbox, its per-type channel preference matrix and -- in this
+// round's later blocks -- the consent ledger and delivery subscriber that
+// fill it.
 //
 // # Wiring
 //
 // A host constructs one with NewModule and hands it to Kernel.Bootstrap.
-// The inbox rows live in db, which the host opened through dbkit.Open (so
-// it carries the tenant-isolation plugin) and migrated before Bootstrap.
-// Register then contributes the module's declarations -- today, its event
-// catalog -- to the host's registry. The module performs no I/O of its own
-// during registration.
+// The module's tables live in db, which the host opened through dbkit.Open
+// (so it carries the tenant-isolation plugin) and migrated before Bootstrap.
+// Register then contributes the module's declarations -- its event catalog,
+// and the attachment of the host registry's notification-type registrar to
+// the preference service -- to the host's registry. The module performs no
+// I/O of its own during registration.
 type Module struct {
-	// db is the connection the module's tables live in. The delivery
-	// subscriber of a later block builds its Repository over this same
-	// connection; today the module stores it for that block.
+	// db is the connection the module's tables live in. The inbox and
+	// preference repositories are built over it, and the delivery subscriber
+	// of a later block builds its own over this same connection.
 	db *gorm.DB
+
+	// prefs is the preference matrix's decision layer, built at construction
+	// and served to consumers through Preferences(). Its type-taxonomy
+	// reference is attached during Register (attachTypes); before that it is
+	// nil, which the service treats as an empty taxonomy.
+	prefs *PreferenceService
 }
 
 // Option configures a Module at construction time.
@@ -46,11 +54,22 @@ type Option func(*Module)
 // performs no I/O: opening and migrating db is the host's responsibility,
 // done once at startup before Bootstrap ever calls Register.
 func NewModule(db *gorm.DB, opts ...Option) *Module {
-	m := &Module{db: db}
+	m := &Module{
+		db:    db,
+		prefs: NewPreferenceService(db),
+	}
 	for _, opt := range opts {
 		opt(m)
 	}
 	return m
+}
+
+// Preferences returns the module's preference service -- the matrix's only
+// sanctioned read/write face. A host hands this to its HTTP handler once
+// Bootstrap has run, so the service's type-taxonomy reference is attached
+// (Register) by the time any caller reaches it.
+func (m *Module) Preferences() *PreferenceService {
+	return m.prefs
 }
 
 // Name implements pkgcore.Module.
@@ -75,8 +94,10 @@ func (m *Module) Migrations() embed.FS { return migrations.FS }
 
 // Locales implements pkgcore.Module: the descriptions of notification's
 // error codes, in both supported languages with identical id sets. The
-// bundle is currently empty because the module declares no codes yet --
-// see errors.go's doc comment; entries arrive with their producers.
+// bundle's entries travel under notification.* ids only -- the preference
+// matrix's codes (errors.go) -- never templates for other modules'
+// notification types, which live in the declaring modules' own bundles (see
+// render.go's template-id convention).
 func (m *Module) Locales() embed.FS { return locales.FS }
 
 // OpenAPISpec implements pkgcore.Module: nil.
@@ -93,16 +114,20 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // declares and wires -- no database call, no outbound call, nothing that
 // touches m.db.
 //
-// This block contributes exactly one declaration: the module's event
-// catalog, EventInboxCreated first among (currently) one. No permissions,
-// audit actions or routes are declared yet, because the module has no
-// caller-scoped operation and no request path until the later blocks of
-// this round build them; each arrives with the producer that needs it,
-// exactly as errors.go's doc comment says of error codes.
+// This block contributes two declarations. The module's event catalog
+// (EventInboxCreated, one declared event) is published first; then the host
+// registry's notification-type registrar is attached to the preference
+// service (attachTypes), giving it the live taxonomy every preference write
+// validates against. No permissions, audit actions or routes are declared
+// yet, because the module has no caller-scoped operation and no request
+// path until the later blocks of this round build them; each arrives with
+// the producer that needs it, exactly as errors.go's doc comment says of
+// error codes.
 func (m *Module) Register(reg *pkgcore.Registry) error {
 	if err := reg.Events.Publishes(inboxEventDecls...); err != nil {
 		return err
 	}
+	m.prefs.attachTypes(reg.Notifications)
 	return nil
 }
 
