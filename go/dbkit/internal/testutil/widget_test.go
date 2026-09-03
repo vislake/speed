@@ -24,3 +24,9 @@ func TestWidget_GetTenantID_ReturnsTenantIDField(t *testing.T) {
 		})
 	}
 }
+
+func TestWidget_AuditResourceType_ReturnsWidget(t *testing.T) {
+	if got, want := (Widget{}).AuditResourceType(), "widget"; got != want {
+		t.Errorf("AuditResourceType() = %q, want %q", got, want)
+	}
+}

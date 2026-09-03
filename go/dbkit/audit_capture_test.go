@@ -1,0 +1,285 @@
+package dbkit_test
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"testing"
+
+	"gorm.io/gorm"
+
+	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/dbkit/internal/testutil"
+	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
+)
+
+// createWidgetsTable mirrors internal/testutil/migrations/sqlite/
+// 0001_create_widgets.sql so this file's tests can apply it directly
+// through dbkit.Open (which never auto-migrates) without reaching into
+// testutil's own embed.FS, the same way tenant_scope_test.go's
+// createPlatformFlagsTable creates its own fixture table by hand.
+func createWidgetsTable(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	err := db.Exec(`CREATE TABLE widgets (
+		id        VARCHAR(26)  NOT NULL,
+		tenant_id VARCHAR(26)  NOT NULL,
+		name      VARCHAR(255) NOT NULL,
+		value     INTEGER      NOT NULL DEFAULT 0,
+		PRIMARY KEY (tenant_id, id)
+	)`).Error
+	if err != nil {
+		t.Fatalf("create widgets table: %v", err)
+	}
+}
+
+// auditCaptureTestDBSeq numbers this file's in-memory SQLite databases so
+// concurrent or repeated test runs never share one.
+var auditCaptureTestDBSeq atomic.Int64
+
+// openAuditCaptureTestDB opens a dbkit.Open connection with AuditBus set to
+// bus (nil is valid: no capture installed) and the widgets table migrated.
+func openAuditCaptureTestDB(t *testing.T, bus pkgcore.EventBus) *gorm.DB {
+	t.Helper()
+	dsn := fmt.Sprintf("file:audit_capture_test_%d?mode=memory&cache=shared", auditCaptureTestDBSeq.Add(1))
+	db, err := dbkit.Open(context.Background(), dbkit.Options{
+		Dialect:  dbkit.DialectSQLite,
+		DSN:      dsn,
+		AuditBus: bus,
+	})
+	if err != nil {
+		t.Fatalf("dbkit.Open: %v", err)
+	}
+	createWidgetsTable(t, db)
+	return db
+}
+
+// capturedBus is a pkgcore.EventBus test double that records every
+// WriteCapturedEvent published to it, and can be made to fail Publish on
+// demand to exercise the plugin's loud-failure contract.
+type capturedBus struct {
+	mu     sync.Mutex
+	events []dbkit.WriteCapturedEvent
+	fail   error
+}
+
+func (b *capturedBus) Subscribe(string, pkgcore.EventHandler) {}
+
+func (b *capturedBus) Publish(_ context.Context, evt pkgcore.Event) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.fail != nil {
+		return b.fail
+	}
+	payload, ok := evt.Payload.(dbkit.WriteCapturedEvent)
+	if !ok {
+		return fmt.Errorf("dbkit_test: unexpected payload type %T", evt.Payload)
+	}
+	b.events = append(b.events, payload)
+	return nil
+}
+
+func (b *capturedBus) captured() []dbkit.WriteCapturedEvent {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]dbkit.WriteCapturedEvent, len(b.events))
+	copy(out, b.events)
+	return out
+}
+
+var _ pkgcore.EventBus = (*capturedBus)(nil)
+
+func TestOpen_AuditBusNil_InstallsNoCapture(t *testing.T) {
+	db := openAuditCaptureTestDB(t, nil)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	w := &testutil.Widget{ID: "w1", Name: "gadget"}
+	if err := db.WithContext(ctx).Create(w).Error; err != nil {
+		t.Fatalf("Create() error = %v, want nil (AuditBus nil must behave exactly like before this field existed)", err)
+	}
+}
+
+func TestAuditCapturePlugin_Create_PublishesWriteCapturedEvent(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1", DisplayName: "Ada"})
+	w := &testutil.Widget{ID: "w1", Name: "gadget", Value: 42}
+	if err := db.WithContext(ctx).Create(w).Error; err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	events := bus.captured()
+	if len(events) != 1 {
+		t.Fatalf("captured %d events, want exactly 1", len(events))
+	}
+	got := events[0]
+	if got.ResourceType != "widget" {
+		t.Errorf("ResourceType = %q, want %q", got.ResourceType, "widget")
+	}
+	if got.Operation != "create" {
+		t.Errorf("Operation = %q, want %q", got.Operation, "create")
+	}
+	if got.ResourceID != "w1" {
+		t.Errorf("ResourceID = %q, want %q", got.ResourceID, "w1")
+	}
+	if got.TenantID != "tenant-a" {
+		t.Errorf("TenantID = %q, want %q", got.TenantID, "tenant-a")
+	}
+	if got.Actor.ID != "user-1" {
+		t.Errorf("Actor.ID = %q, want %q", got.Actor.ID, "user-1")
+	}
+	if got.OnBehalfOf != nil {
+		t.Errorf("OnBehalfOf = %+v, want nil (no impersonation set)", got.OnBehalfOf)
+	}
+	if got.Table != "widgets" {
+		t.Errorf("Table = %q, want %q", got.Table, "widgets")
+	}
+	if got.After == nil || got.After["name"] != "gadget" {
+		t.Errorf("After = %+v, want a map with name=gadget", got.After)
+	}
+}
+
+func TestAuditCapturePlugin_Create_CapturesOnBehalfOf(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1"})
+	ctx = pkgcore.WithOnBehalfOf(ctx, pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: "admin-1"})
+	w := &testutil.Widget{ID: "w1", Name: "gadget"}
+	if err := db.WithContext(ctx).Create(w).Error; err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	events := bus.captured()
+	if len(events) != 1 {
+		t.Fatalf("captured %d events, want exactly 1", len(events))
+	}
+	if events[0].OnBehalfOf == nil || events[0].OnBehalfOf.ID != "admin-1" {
+		t.Errorf("OnBehalfOf = %+v, want an Actor with ID=admin-1", events[0].OnBehalfOf)
+	}
+}
+
+func TestAuditCapturePlugin_Update_PublishesWriteCapturedEvent(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	w := &testutil.Widget{ID: "w1", Name: "gadget", Value: 1}
+	if err := db.WithContext(ctx).Create(w).Error; err != nil {
+		t.Fatalf("seed Create() error = %v", err)
+	}
+
+	w.Value = 2
+	if err := db.WithContext(ctx).Where("id = ?", "w1").Where("tenant_id = ?", "tenant-a").Save(w).Error; err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	events := bus.captured()
+	if len(events) != 2 {
+		t.Fatalf("captured %d events, want 2 (create then update)", len(events))
+	}
+	got := events[1]
+	if got.Operation != "update" {
+		t.Errorf("Operation = %q, want %q", got.Operation, "update")
+	}
+	if got.ResourceID != "w1" {
+		t.Errorf("ResourceID = %q, want %q", got.ResourceID, "w1")
+	}
+	if got.After == nil || got.After["value"] != 2 {
+		t.Errorf("After = %+v, want a map with value=2", got.After)
+	}
+}
+
+func TestAuditCapturePlugin_Delete_PublishesWriteCapturedEventWithResourceIDFromWhere(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	w := &testutil.Widget{ID: "w1", Name: "gadget"}
+	if err := db.WithContext(ctx).Create(w).Error; err != nil {
+		t.Fatalf("seed Create() error = %v", err)
+	}
+
+	var zero testutil.Widget
+	err := db.WithContext(ctx).Where("id = ?", "w1").Where("tenant_id = ?", "tenant-a").Delete(&zero).Error
+	if err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+
+	events := bus.captured()
+	if len(events) != 2 {
+		t.Fatalf("captured %d events, want 2 (create then delete)", len(events))
+	}
+	got := events[1]
+	if got.Operation != "delete" {
+		t.Errorf("Operation = %q, want %q", got.Operation, "delete")
+	}
+	if got.ResourceID != "w1" {
+		t.Errorf("ResourceID = %q, want %q (extracted from the WHERE clause, since a delete's Dest carries no field values)", got.ResourceID, "w1")
+	}
+	if got.After != nil {
+		t.Errorf("After = %+v, want nil for a delete", got.After)
+	}
+}
+
+// nonAuditableFlag is a TenantScoped-only fixture with no AuditResourceType
+// method, proving the plugin leaves a non-Auditable model completely
+// untouched -- the reverse-and-equally-important property tenantScopePlugin
+// itself is already proven against in tenant_scope_test.go.
+type nonAuditableFlag struct {
+	ID       string `gorm:"primaryKey;size:26"`
+	TenantID string `gorm:"primaryKey;size:26;not null"`
+	Enabled  bool   `gorm:"not null"`
+}
+
+func (f nonAuditableFlag) GetTenantID() pkgcore.TenantID { return pkgcore.TenantID(f.TenantID) }
+func (nonAuditableFlag) TableName() string               { return "non_auditable_flags" }
+
+var _ dbkit.TenantScoped = nonAuditableFlag{}
+
+func TestAuditCapturePlugin_NonAuditableModel_PublishesNothing(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	if err := db.Exec(`CREATE TABLE non_auditable_flags (
+		id        VARCHAR(26) NOT NULL,
+		tenant_id VARCHAR(26) NOT NULL,
+		enabled   BOOLEAN     NOT NULL,
+		PRIMARY KEY (tenant_id, id)
+	)`).Error; err != nil {
+		t.Fatalf("create non_auditable_flags table: %v", err)
+	}
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	f := &nonAuditableFlag{ID: "f1", Enabled: true}
+	if err := db.WithContext(ctx).Create(f).Error; err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if events := bus.captured(); len(events) != 0 {
+		t.Errorf("captured %d events for a non-Auditable model, want 0", len(events))
+	}
+}
+
+func TestAuditCapturePlugin_PublishFailure_FailsTheWriteLoudly(t *testing.T) {
+	publishErr := errors.New("bus unavailable")
+	bus := &capturedBus{fail: publishErr}
+	db := openAuditCaptureTestDB(t, bus)
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	w := &testutil.Widget{ID: "w1", Name: "gadget"}
+	err := db.WithContext(ctx).Create(w).Error
+	if err == nil {
+		t.Fatal("Create() error = nil, want a loud failure when the audit publish itself fails (docs/internal/10-compliance-and-audit.md: an audit-write failure must alert, never silently drop)")
+	}
+	appErr, ok := apperr.As(err)
+	if !ok || appErr.Code != "dbkit.audit_capture_publish_failed" {
+		t.Errorf("Create() error = %v, want an *apperr.Error coded dbkit.audit_capture_publish_failed", err)
+	}
+	if !errors.Is(err, publishErr) {
+		t.Errorf("Create() error = %v, want it to wrap the bus's own publish error", err)
+	}
+}

@@ -156,9 +156,21 @@ Both are thin wrappers around `Open`, so a caller gets dbkit's full mandatory wi
 
 `NewPostgres`'s Docker-availability check (`dockerAvailable` / `dockerHostAddress` in `dbtest/docker_probe.go`) is a small, self-contained probe, not a call into testcontainers-go's own provider/host-resolution machinery — that machinery caches its resolved host process-wide behind a `sync.Once`, which would make it unsafe to unit-test with a deliberately-wrong host (`dbtest/docker_probe_test.go` does exactly that) in the same binary as a happy-path test that needs the real daemon.
 
-### Audit trail persistence — `audit/`
+### Audit trail collection — `audit_capture.go`
 
-The M1 audit-infrastructure round's persistence half (docs/internal/10-compliance-and-audit.md; docs/internal/15-roadmap.md's M1 row): the `AuditEvent` model, its dual-dialect migrations, and `Repository`, the append-only accessor that stores and reads it back. Lives inside `dbkit` rather than as its own `go.work` module or inside `go/compliance` (a stub until M4) — see `audit/AGENTS.md` for the module-home rationale and the round's own scope-freeze report for the full evidence chain. The collection mechanisms (automatic GORM write-capture, explicit `Emit`, and the `pkgcore.Module` persister that subscribes to their events and calls `Repository.Insert`) land alongside this same round, layered directly on the types below.
+The automatic-collection half of the M1 audit-infrastructure round (docs/internal/10-compliance-and-audit.md; docs/internal/15-roadmap.md's M1 row) — the declarative-secondary half (`Emit`) and the persister (`Module`) live in `audit/`, below.
+
+| Signature | Purpose |
+|---|---|
+| `type Auditable interface { AuditResourceType() string }` | Marker interface opting a model into automatic write capture, in the same spirit as `TenantScoped` — a model that does not implement it is completely unaffected by the plugin |
+| `Options.AuditBus pkgcore.EventBus` | New, optional field on `Open`'s `Options`. `nil` (every pre-existing call site's zero value) installs no capture at all — 100% backward compatible. Non-nil installs the plugin, publishing to that bus |
+| `const EventWriteCaptured = "dbkit.write.captured"`, `type WriteCapturedEvent struct { ... }` | Published after every successful `Create`/`Update`/`Delete` against an `Auditable` model — `Actor`/`OnBehalfOf`/`TenantID` read from the write's own context and embedded as plain fields (never left for a subscriber to re-derive from `ctx`, since the distributed bus delivers across a real network hop), plus `Table`/`ResourceType`/`ResourceID`/`Operation`/`Before`/`After`/`OccurredAt`. `Before` is always `nil` for M1 — capturing a genuine pre-write snapshot would cost every audited write an extra `SELECT`; a caller wanting a real diff uses `audit.Emit`'s `Input.Changes` instead. `After` is populated for `Create`/`Update` (nil for `Delete`, since GORM's delete callback never repopulates the destination) |
+
+`ResourceID` is best-effort: extracted from the model's own field values when present (`Create`, `Update`), else from a literal `"id = ?"` WHERE condition — the exact shape `dbkit.Repository[T]`'s own `Update`/`Delete`/`FindByID` always build (`Delete`, where the destination carries no field values at all). A publish failure is reported back into the GORM callback chain with `db.AddError`, per doc 10's rule that an audit-write failure must alert and never be silently dropped — this fails, and can roll back, the very `Create`/`Update`/`Delete` call that triggered it (see `audit_capture.go`'s own doc comment on `auditCapturePlugin`).
+
+### Audit trail persistence and declarative collection — `audit/`
+
+The persistence half of the M1 audit-infrastructure round, plus its declarative-secondary collection mechanism and the persister that ties both collection mechanisms together: the `AuditEvent` model, its dual-dialect migrations, `Repository` (the append-only accessor that stores and reads events back), `Emit`, and `Module`. Lives inside `dbkit` rather than as its own `go.work` module or inside `go/compliance` (a stub until M4) — see `audit/AGENTS.md` for the module-home rationale and the round's own scope-freeze report for the full evidence chain.
 
 | Signature | Purpose |
 |---|---|
@@ -171,6 +183,10 @@ The M1 audit-infrastructure round's persistence half (docs/internal/10-complianc
 | `func (*Repository) Insert(ctx, *AuditEvent) error` | Appends one event, generating `ID` when the caller leaves it empty. No `Update`/`Delete` method exists on `Repository` at all — append-only is enforced by the absence of the method, not a runtime guard |
 | `func (*Repository) Get(ctx, id string) (*AuditEvent, error)` | Returns `(nil, nil)` when no such row exists — the `go/config`-style convention for platform data, not `dbkit.Repository[T]`'s `ErrRecordNotFound` |
 | `func (*Repository) ListByTenant(ctx, tenantID string) ([]AuditEvent, error)` | The minimal read path this round's own tests need; the actor/resource/action/time-range/result query API is M4 (`go/compliance`) scope |
+| `func Emit(ctx, bus pkgcore.EventBus, actions pkgcore.AuditActionRegistrar, in audit.Input) error` | The declarative collection mechanism: validates `in.Action` against `actions.Actions()`, reads `Actor`/`OnBehalfOf`/`TenantID` off `ctx` the same way the write-capture plugin does, and publishes `audit.EventRecorded` |
+| `func audit.New(db *gorm.DB) *audit.Module` | The persister `pkgcore.Module`: subscribes to `EventWriteCaptured`, `audit.EventRecorded`, and `go/tenancy`'s `tenancy.system_context.entered`, normalizing each into an `AuditEvent` and calling `Repository.Insert` |
+
+See `audit/AGENTS.md`'s own "Collection" section for `Emit`/`Input`/`Diff`/`Module`'s full signatures and the `tenancy.system_context.entered` subscription's module-cycle rationale.
 
 ## Dual-dialect constraints for models used with dbkit
 
@@ -377,6 +393,8 @@ func OverdueSubscriptions(ctx context.Context, db *gorm.DB, tenant pkgcore.Tenan
 | `dbkit.invalid_dialect` (no exported Go sentinel — match on `.Code`) | `Open` given an `Options.Dialect` that is neither `DialectPostgres` nor `DialectSQLite` | Startup misconfiguration; fix the configured dialect |
 | `dbkit.connect_failed` (no exported Go sentinel — match on `.Code`) | `Open`'s driver setup, connection-pool retrieval, or `ctx`-bound ping failing | Infrastructure/connectivity problem; the DSN is never included, so check it out of band |
 | `dbkit.tenant_scope_plugin_failed` (no exported Go sentinel — match on `.Code`) | `Open` failing to install the tenant-scoping plugin on an otherwise-open connection | Should not happen outside a GORM-version mismatch; treat as a startup abort |
+| `dbkit.audit_capture_plugin_failed` (no exported Go sentinel — match on `.Code`) | `Open` failing to install the audit-capture plugin when `Options.AuditBus` is set | Same cause and handling as `dbkit.tenant_scope_plugin_failed` above |
+| `dbkit.audit_capture_publish_failed` (no exported Go sentinel — match on `.Code`) | The audit-capture plugin's `bus.Publish` failing for a captured write | Per doc 10's loud-failure rule, this fails (and can roll back) the `Create`/`Update`/`Delete` call that triggered it — never silently dropped. Carries `resource_type` and `operation` params and the bus's own error as `WithCause` |
 | `ErrNilModule` / `ErrEmptyModuleName` / `ErrDuplicateModule` | `MigrationRegistry.Register` given a nil module, an empty `Name()`, or a `Name()` already registered | Fix the registration call; plain `errors.New` sentinels, safe to match with `errors.Is` directly |
 | `ErrDependencyCycle` / `ErrMissingDependency` | `MigrationRegistry.Apply`: the registered modules' `DependsOn` graph has a cycle, or names a module never registered | Fix the module's `DependsOn`, or the bootstrap module set; the error names every module involved |
 | `ErrUnknownDialect` | `MigrationRegistry.Apply` given a `Dialect` that is neither `DialectPostgres` nor `DialectSQLite` | Same fix as `dbkit.invalid_dialect` above |

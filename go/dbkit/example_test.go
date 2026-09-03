@@ -250,3 +250,75 @@ func ExampleBlindIndexer() {
 	// found: User@Example.COM
 	// rejected: dbkit: blind index column "email_index": dbkit: email normalization: input is empty
 }
+
+// exampleTask is a tenant-scoped model that also opts into dbkit's
+// automatic write-capture plugin by implementing dbkit.Auditable.
+// AuditResourceType names the kind of resource a captured write is about;
+// nothing else about the model changes.
+type exampleTask struct {
+	ID       string `gorm:"primaryKey;size:26"`
+	TenantID string `gorm:"primaryKey;size:26;not null"`
+	Title    string `gorm:"size:255;not null"`
+}
+
+// GetTenantID satisfies dbkit.TenantScoped.
+func (t exampleTask) GetTenantID() pkgcore.TenantID { return pkgcore.TenantID(t.TenantID) }
+
+// AuditResourceType satisfies dbkit.Auditable.
+func (exampleTask) AuditResourceType() string { return "task" }
+
+// TableName pins exampleTask's table name explicitly, independent of
+// GORM's pluralization rules, matching the raw CREATE TABLE
+// ExampleAuditable applies below.
+func (exampleTask) TableName() string { return "example_tasks" }
+
+// ExampleAuditable demonstrates dbkit's automatic write-capture mechanism:
+// a model implementing Auditable, opened with Options.AuditBus set,
+// publishes a dbkit.WriteCapturedEvent on every Create, Update or Delete
+// -- with no change to the write call itself. A real host subscribes the
+// go/dbkit/audit persister module to this event instead of the raw
+// pkgcore.EventBus.Subscribe shown here, so the event ends up in the
+// audit_events table; the direct subscription below keeps this example
+// self-contained.
+func ExampleAuditable() {
+	ctx := context.Background()
+
+	bus := pkgcore.NewMemoryEventBus()
+	bus.Subscribe(dbkit.EventWriteCaptured, func(_ context.Context, evt pkgcore.Event) error {
+		captured := evt.Payload.(dbkit.WriteCapturedEvent)
+		fmt.Println(captured.ResourceType, captured.Operation, captured.ResourceID)
+		return nil
+	})
+
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect:  dbkit.DialectSQLite,
+		DSN:      "file:dbkit_auditable_example?mode=memory&cache=shared",
+		AuditBus: bus,
+	})
+	if err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+
+	if err = db.Exec(`CREATE TABLE example_tasks (
+		id        VARCHAR(26)  NOT NULL,
+		tenant_id VARCHAR(26)  NOT NULL,
+		title     VARCHAR(255) NOT NULL,
+		PRIMARY KEY (tenant_id, id)
+	)`).Error; err != nil {
+		fmt.Println("migrate:", err)
+		return
+	}
+
+	ctx = pkgcore.WithTenant(ctx, "tenant-acme")
+	ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1"})
+
+	task := &exampleTask{ID: "task-1", Title: "Review the audit round"}
+	if err = dbkit.NewRepository[exampleTask](db).Create(ctx, task); err != nil {
+		fmt.Println("create:", err)
+		return
+	}
+
+	// Output:
+	// task create task-1
+}

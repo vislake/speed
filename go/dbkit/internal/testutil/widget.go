@@ -24,3 +24,11 @@ type Widget struct {
 func (w Widget) GetTenantID() pkgcore.TenantID {
 	return pkgcore.TenantID(w.TenantID)
 }
+
+// AuditResourceType returns "widget", satisfying dbkit.Auditable so that
+// Widget can double as the audit-capture plugin's own test fixture (see
+// audit_capture_test.go) alongside its existing tenant-scoping role — this
+// package's fixtures are shared by convention (see the package doc
+// comment), and a model participating in both tenant scoping and audit
+// capture together is the realistic shape a real business model takes.
+func (w Widget) AuditResourceType() string { return "widget" }

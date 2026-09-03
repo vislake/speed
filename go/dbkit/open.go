@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
+	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
@@ -68,6 +69,17 @@ type Options struct {
 	// DSN often carries credentials. Callers must not log it, and Open never
 	// includes it in a returned error or elsewhere.
 	DSN string
+
+	// AuditBus, when non-nil, installs dbkit's automatic write-capture
+	// plugin (audit_capture.go): every Create, Update or Delete against a
+	// model implementing Auditable publishes a WriteCapturedEvent on it.
+	// The zero value, nil, is what every call site that existed before this
+	// field did — and still does when it does not opt in — so leaving it
+	// unset installs no capture at all, exactly as before. A real host
+	// wires reg.EventBus() here once the audit persister module
+	// (go/dbkit/audit) is part of its module set; see that package's
+	// AGENTS.md for the end-to-end wiring.
+	AuditBus pkgcore.EventBus
 }
 
 // Open opens a *gorm.DB for opts.Dialect and returns it already wired with
@@ -132,6 +144,14 @@ func Open(ctx context.Context, opts Options) (*gorm.DB, error) {
 		return nil, apperr.Internal("dbkit.tenant_scope_plugin_failed").
 			WithParam("dialect", string(opts.Dialect)).
 			WithCause(err)
+	}
+
+	if opts.AuditBus != nil {
+		if err := db.Use(newAuditCapturePlugin(opts.AuditBus)); err != nil {
+			return nil, apperr.Internal("dbkit.audit_capture_plugin_failed").
+				WithParam("dialect", string(opts.Dialect)).
+				WithCause(err)
+		}
 	}
 
 	return db, nil
