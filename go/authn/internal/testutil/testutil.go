@@ -189,6 +189,39 @@ func NewDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+// NewPostgresDB returns a fresh PostgreSQL database -- a disposable
+// testcontainer, per dbtest.NewPostgres's own doc comment -- with authn's
+// PII serializer registered and every authn migration applied from zero
+// under the postgres dialect. It is the integration tier's counterpart to
+// NewDB above, and follows the identical ordering rule: the serializer is
+// registered before the handle is opened, because GORM's serializer
+// registry is process-global and is consulted while a model's schema is
+// parsed.
+//
+// Skips (via t.Skip, inside dbtest.NewPostgres) when no Docker (or
+// Docker-API-compatible) daemon is reachable, exactly like every other
+// module's postgres integration leg -- there is deliberately no fallback.
+func NewPostgresDB(t *testing.T) *gorm.DB {
+	t.Helper()
+
+	cipher, err := dbkit.NewCipher(CipherKey())
+	if err != nil {
+		t.Fatalf("build the test cipher: %v", err)
+	}
+	dbkit.RegisterEncryptedSerializer(serializerName, cipher)
+
+	db := dbtest.NewPostgres(t)
+
+	registry := dbkit.NewMigrationRegistry()
+	if err := registry.Register(migrationModule{}); err != nil {
+		t.Fatalf("register authn's migrations: %v", err)
+	}
+	if err := registry.Apply(t.Context(), db, dbkit.DialectPostgres); err != nil {
+		t.Fatalf("apply authn's migrations from zero on postgres: %v", err)
+	}
+	return db
+}
+
 // EventRecorder collects the domain events published on a bus, so a test can
 // assert that a security-relevant fact was announced rather than only that a
 // row changed. It is safe for concurrent use, which the refresh-rotation race
