@@ -19,64 +19,79 @@ name: api-contract
 # regenerate; whether it still implements the interface is a compile
 # question, answered by pr-full's reference-app job on full-ci-labeled PRs
 # (the reference-app unit suite is not part of pr-check -- see pr-check's
-# DELIBERATELY NOT WIRED list).
+# DELIBERATELY NOT WIRED list) and, for authn, by this workflow's own
+# go/authn build leg below (go/authn is a real module built on every
+# pr-check run regardless of what changed, so its own compile enforcement
+# does not need to wait for full-ci the way the reference app's does).
 #
 # COVERAGE -- what genuinely runs today
-#   * Regeneration consistency: the pinned oapi-codegen (v2.8.0, the exact
-#     same go run as Taskfile's api:gen task, run from the same directory)
-#     regenerates the notes module's api/notes-server.gen.go from its
-#     api/openapi.yaml fragment, then `git diff --exit-code` fails the job
-#     if the committed artifact is not what the spec generates -- the
-#     21-api-contract.md generated-artifact consistency check for the
-#     backend half, catching a spec edit committed without its regenerated
-#     artifact.
+#   * Regeneration consistency (notes): the pinned oapi-codegen (v2.8.0,
+#     the exact same go run as Taskfile's api:gen task, run from the same
+#     directory) regenerates the notes module's api/notes-server.gen.go
+#     from its api/openapi.yaml fragment, then `git diff --exit-code`
+#     fails the job if the committed artifact is not what the spec
+#     generates -- the 21-api-contract.md generated-artifact consistency
+#     check for the backend half, catching a spec edit committed without
+#     its regenerated artifact.
 #   * The same regeneration-consistency check runs a second time for org's
 #     fragment (go/org/api/openapi.yaml -> go/org/api/org-server.gen.go),
 #     the second module to carry one -- same pinned oapi-codegen invocation,
 #     same git diff --exit-code gate, its own step so either fragment's
 #     failure is unambiguous in the job log.
-#   * Compile enforcement: `go build ./...` of examples/reference-app. This
-#     is what makes "spec changed, handler not updated" fail here for
-#     EITHER fragment: examples/reference-app imports go/org (root
-#     CLAUDE.md's mandatory-first-consumer rule), so a regenerated
-#     api.ServerInterface that outgrows either Handler's compile-time
-#     assertion (internal/notes/handler.go, go/org/handler.go) fails this
-#     one build step, transitively, with no separate step needed for org's
-#     own module build. Without this leg a spec+artifact PR whose handler
-#     lagged would pass both this pipeline and pr-check (which does not
-#     build the reference app). Precise only for a parameter-free
-#     operation, though: an operation carrying a path or query parameter
-#     makes the generated file import github.com/oapi-codegen/runtime,
-#     which the app's go.mod does not require unless something parameterized
-#     already ships, so the first such spec change fails earlier -- on the
-#     missing module -- rather than on the assertion. Both are hard build
-#     failures; only the diagnostic differs, and it resolves itself the
-#     moment a real parameterized operation lands with its handler.
-#     Pre-adding the require would not help: `go mod tidy` drops an unused
-#     dependency.
-#   * Frontend-sdk regeneration consistency: the pinned orval (8.17.0 --
-#     the exact same `pnpm dlx orval` + nodenext-fixup pair as Taskfile's
-#     api:gen frontend leg, run from web/) regenerates @speed/api-sdk's
-#     src/index.ts from the same notes fragment, then a second
-#     `git diff --exit-code` fails the job if the committed generated
-#     package is not what the spec generates -- the generated-artifact
-#     consistency check for the frontend half. orval itself is never a
-#     workspace dependency (pnpm dlx, no lockfile entry); a version bump
-#     is visible in the regenerated header and must land in Taskfile,
-#     web/orval.config.ts and this file together.
+#   * Frontend-sdk regeneration consistency (notes): the pinned orval
+#     (8.17.0 -- the exact same `pnpm dlx orval` + nodenext-fixup pair as
+#     Taskfile's api:gen frontend leg, run from web/) regenerates
+#     @speed/api-sdk's src/index.ts from the same notes fragment, then a
+#     second `git diff --exit-code` fails the job if the committed
+#     generated package is not what the spec generates -- the
+#     generated-artifact consistency check for the frontend half. orval
+#     itself is never a workspace dependency (pnpm dlx, no lockfile
+#     entry); a version bump is visible in the regenerated header and
+#     must land in Taskfile, web/orval.config.ts and this file together.
+#   * Compile enforcement (notes and org): `go build ./...` of
+#     examples/reference-app. This is what makes "spec changed, handler
+#     not updated" fail here for EITHER fragment: examples/reference-app
+#     imports go/org (root CLAUDE.md's mandatory-first-consumer rule), so
+#     a regenerated api.ServerInterface that outgrows either Handler's
+#     compile-time assertion (internal/notes/handler.go,
+#     go/org/handler.go) fails this one build step, transitively, with no
+#     separate step needed for org's own module build. Without this leg a
+#     spec+artifact PR whose handler lagged would pass both this pipeline
+#     and pr-check (which does not build the reference app). Precise only
+#     for a parameter-free operation, though: an operation carrying a
+#     path or query parameter makes the generated file import
+#     github.com/oapi-codegen/runtime, which the app's go.mod does not
+#     require unless something parameterized already ships, so the first
+#     such spec change fails earlier -- on the missing module -- rather
+#     than on the assertion. Both are hard build failures; only the
+#     diagnostic differs, and it resolves itself the moment a real
+#     parameterized operation lands with its handler. Pre-adding the
+#     require would not help: `go mod tidy` drops an unused dependency.
+#   * Regeneration consistency (authn): the identical oapi-codegen v2.8.0
+#     invocation over go/authn/api/openapi.yaml, then its own
+#     `git diff --exit-code` on go/authn/api/authn-server.gen.go --
+#     authn's HTTP surface has no frontend orval leg yet (deferred to the
+#     auth-ui / consumer-shell round, go/authn/AGENTS.md), so this is the
+#     backend half only.
+#   * Compile enforcement (authn): `go build ./...` of go/authn, the same
+#     "spec changed, handler not updated" guarantee notes' reference-app
+#     build gives, against go/authn/handler.go's own compile-time
+#     assertion.
 #
 # DELIBERATELY NOT WIRED HERE -- API-contract items whose tooling does
 # not exist yet (wiring them now would be fake checks):
-#   * spec merging into build/openapi/speed.yaml -- no second module
-#     fragment exists yet; the notes fragment is generated from in place.
-#     The redocly merge waits for the second fragment (M1).
-#   * spec linting (redocly rules) -- lands with the merge above.
+#   * spec merging into build/openapi/speed.yaml, and its redocly lint --
+#     both fragments (notes, authn) generate independently in place; the
+#     merge and lint tooling itself is scheduled for its own round
+#     (docs/internal/21-api-contract.md's implementation-status note).
 #   * breaking-change detection (oasdiff, the release-gate diff against
 #     the last release) -- waits for the first release baseline (M4); a
 #     recorded mechanism decision, not a fake gate
 #     (docs/internal/21-api-contract.md).
-#   * merge-conflict checks across fragments -- a single-fragment world has
-#     nothing to conflict.
+#   * merge-conflict checks across fragments -- nothing merges the two
+#     fragments together yet (the item directly above), so there is
+#     nothing for two fragments to conflict inside.
+#   * authn's frontend orval leg -- see the authn coverage bullet above.
 # Each lands with its tooling round; the stub headers of the other gated
 # pipelines stay until then.
 #
@@ -100,6 +115,10 @@ name: api-contract
 #   web/packages/api-sdk/**                        the generated frontend
 #                                                  package (a hand-edit
 #                                                  triggers the diff)
+#   go/authn/api/**                                 authn's fragment, its
+#                                                  generator config and its
+#                                                  backend generated
+#                                                  artifact
 #   Taskfile.yml                                   api:gen task (the
 #                                                  regeneration command)
 #   .github/workflows/api-contract.yml             this workflow itself
@@ -112,6 +131,7 @@ on:
       - web/orval.config.ts
       - web/scripts/**
       - web/packages/api-sdk/**
+      - go/authn/api/**
       - Taskfile.yml
       - .github/workflows/api-contract.yml
   workflow_dispatch:
@@ -220,4 +240,34 @@ jobs:
         # method is missing.
         run: |
           cd examples/reference-app
+          go build ./...
+      - name: Regenerate authn's API surface (pinned oapi-codegen v2.8.0)
+        # The same command as Taskfile.yml's api:gen task's authn leg --
+        # keep the two in lockstep. Run from the fragment's own directory,
+        # where oapi-codegen.yaml's paths are relative, exactly like the
+        # notes leg above.
+        run: |
+          cd go/authn/api
+          go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
+            -config oapi-codegen.yaml openapi.yaml
+      - name: Generated authn artifact must match the committed spec
+        run: |
+          git diff --exit-code || {
+            echo "error: regenerating from the committed spec left the tree"
+            echo "dirty. The checked-in go/authn/api/authn-server.gen.go is"
+            echo "not what go/authn/api/openapi.yaml generates -- did you"
+            echo "change the spec without running 'task api:gen' and"
+            echo "committing the result?"
+            echo "Per docs/internal/21-api-contract.md, spec + generated"
+            echo "artifact + implementation ship in the same PR."
+            exit 1
+          }
+      - name: authn's Handler must still implement the generated ServerInterface
+        # The same compile-enforcement guarantee as the reference-app build
+        # above, for authn's own handler.go compile-time assertion. go/authn
+        # is a real module (not behind full-ci), so this leg runs on every
+        # PR this workflow triggers on, unlike the reference app's build
+        # above.
+        run: |
+          cd go/authn
           go build ./...

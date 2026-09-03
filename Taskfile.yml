@@ -205,35 +205,42 @@ tasks:
     silent: true
 
   api:gen:
-    desc: Regenerate the generated API surface of every module that ships an OpenAPI fragment -- backend (oapi-codegen types + ServerInterface) for notes and org, plus notes' frontend SDK (orval -> @speed/api-sdk) -- from their fragments.
+    desc: Regenerate the generated API surface of every module that ships an OpenAPI fragment -- backend (oapi-codegen types + ServerInterface) for notes, org and authn, plus notes' frontend SDK (orval -> @speed/api-sdk) -- from their fragments.
     # The backend half of the contract-change flow (docs/internal/
     # 21-api-contract.md's order: edit the spec, regenerate, compile
-    # failures reveal every handler to fix) is real for both modules that
-    # ship a fragment: this task runs oapi-codegen, pinned at v2.8.0, over
-    # each module's own api/openapi.yaml with that directory's own
+    # failures reveal every handler to fix) is real for the three modules
+    # that ship a fragment: this task runs oapi-codegen, pinned at v2.8.0,
+    # over each module's own api/openapi.yaml with that directory's own
     # oapi-codegen.yaml -- rewriting
-    # examples/reference-app/internal/notes/api/notes-server.gen.go and
-    # go/org/api/org-server.gen.go respectively. Each generated
-    # ServerInterface's growth is what makes an un-updated handler stop
-    # compiling (the compile-time assertions live in
-    # internal/notes/handler.go and go/org/handler.go).
+    # examples/reference-app/internal/notes/api/notes-server.gen.go,
+    # go/org/api/org-server.gen.go and go/authn/api/authn-server.gen.go
+    # respectively. Each generated ServerInterface's growth is what makes
+    # an un-updated handler stop compiling (the compile-time assertions
+    # live in internal/notes/handler.go, go/org/handler.go and
+    # go/authn/handler.go).
     #
     # The frontend half of the api:gen promise is live for notes only: its
     # fragment drives the @speed/api-sdk package through orval, pinned at
     # 8.17.0 and run from web/ via pnpm dlx (orval is never a workspace
     # dependency), followed by web/scripts/orval-nodenext-fixup.mjs -- see
-    # that package's AGENTS.md for the seam and the fixup's why. org's
-    # fragment does not feed orval yet: the frontend generation targets a
-    # single spec source today, and no org consumer shell exists to
-    # type-check the generated hooks against -- deferred to the M1
-    # org-web / consumer-shell round (go/org/AGENTS.md's deferrals table).
-    # The redocly merge of every fragment into a build/openapi/speed.yaml,
-    # and breaking-change detection (oasdiff) once a release baseline
-    # exists, stay deferred the same way -- docs/internal/21-api-contract.md.
+    # that package's AGENTS.md for the seam and the fixup's why. Neither
+    # org's nor authn's fragment feeds orval yet: the frontend generation
+    # targets a single spec source today, and no consumer shell exists to
+    # type-check the generated hooks against -- org's leg deferred to the
+    # M1 org-web / consumer-shell round (go/org/AGENTS.md's deferrals
+    # table), authn's to the auth-ui / consumer-shell round that actually
+    # imports it (go/authn/AGENTS.md) -- adding a web package/export/
+    # lockfile change for a fragment nothing on the web side consumes yet
+    # buys nothing today.
+    # Still deferred with reasons: the redocly merge of every fragment into
+    # a build/openapi/speed.yaml, and its spec lint, wait for their own
+    # tooling round (docs/internal/21-api-contract.md's implementation-
+    # status note), and breaking-change detection (oasdiff) waits for the
+    # first release baseline (M4).
     #
     # Keep the commands in lockstep with
     # .github/workflows/api-contract.yml's regeneration steps: the same
-    # go run from the same two directories, and the same pnpm dlx orval +
+    # go run from the same three directories, and the same pnpm dlx orval +
     # fixup pair from web/, then a git diff there fails any PR whose
     # spec change was not committed with its regenerated artifact.
     cmds:
@@ -249,6 +256,10 @@ tasks:
         cd web && \
         pnpm dlx orval@8.17.0 --config orval.config.ts && \
         node scripts/orval-nodenext-fixup.mjs
+      - |
+        cd go/authn/api && \
+        go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
+          -config oapi-codegen.yaml openapi.yaml
 
   docs:serve:
     desc: Preview the docs site (docs/site/) locally over HTTP.
