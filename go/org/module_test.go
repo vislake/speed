@@ -156,7 +156,7 @@ func TestModule_Register_DoesNotDeclareAuthnsEvent(t *testing.T) {
 // alongside a module that declares its own permissions, audit actions and
 // events -- the real host shape -- rather than only in isolation.
 func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
-	reg, err := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).
+	reg, err := pkgcore.NewKernel().
 		Bootstrap(context.Background(), newWiredModule(t, nil), neighbourModule{})
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
@@ -252,7 +252,7 @@ func newWiredModule(t *testing.T, db *gorm.DB, opts ...Option) *Module {
 // proves they survive i18n.Builder.AddModule's parity validation.
 func bootstrapTestModule(t *testing.T, opts ...Option) *pkgcore.Registry {
 	t.Helper()
-	reg, err := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).
+	reg, err := pkgcore.NewKernel().
 		Bootstrap(context.Background(), newWiredModule(t, nil, opts...))
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
@@ -265,7 +265,7 @@ func bootstrapTestModule(t *testing.T, opts ...Option) *pkgcore.Registry {
 // queryable column refuses to boot without the key that makes the column
 // queryable, rather than starting and failing on the first write.
 func TestModule_Register_RefusesAnIndexerlessBoot(t *testing.T) {
-	_, err := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).
+	_, err := pkgcore.NewKernel().
 		Bootstrap(context.Background(), NewModule(nil))
 	if !hasCode(err, ErrEmailIndexerRequired.Code) {
 		t.Fatalf("Bootstrap without an email indexer error = %v, want org.email_indexer_required", err)
@@ -288,7 +288,7 @@ func TestModule_Register_RefusesAMailerlessBootWhileTheEmailIsOn(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := append([]Option{WithEmailIndexer(newTestEmailIndexer(t))}, tc.opts...)
-			_, err := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).
+			_, err := pkgcore.NewKernel().
 				Bootstrap(context.Background(), NewModule(nil, opts...))
 			if !hasCode(err, ErrInvitationMailRequired.Code) {
 				t.Fatalf("Bootstrap error = %v, want org.invitation_mail_required", err)
@@ -301,7 +301,7 @@ func TestModule_Register_RefusesAMailerlessBootWhileTheEmailIsOn(t *testing.T) {
 // host uses once something else delivers the invitation: no sender address,
 // no link builder, and the boot succeeds.
 func TestModule_Register_EmailDisabled_NeedsNoMailWiring(t *testing.T) {
-	_, err := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).
+	_, err := pkgcore.NewKernel().
 		Bootstrap(context.Background(), NewModule(nil,
 			WithEmailIndexer(newTestEmailIndexer(t)),
 			WithInvitationEmailDisabled(),
@@ -359,7 +359,7 @@ func TestModule_Register_DeclaresTheMembershipSurface(t *testing.T) {
 // the way authn would and observing the effect.
 func TestModule_Register_SubscribesToTheAuthnEvent(t *testing.T) {
 	m := newWiredModule(t, newInvitationTestDB(t))
-	reg, err := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).
+	reg, err := pkgcore.NewKernel().
 		Bootstrap(context.Background(), m)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
