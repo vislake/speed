@@ -23,14 +23,18 @@ The **semantics** the document pins are preserved exactly: domain = tenant, `res
 | Concern | Where |
 |---|---|
 | `Module`, the Register/Attach wiring seam, `Option`s (`WithSubtreeResolver`, `WithCacheTTL`), `DefaultCacheTTL`, `PermissionRead` / `PermissionManage` | `module.go` |
-| `Service`, the runtime handle `Attach` returns | `service.go` |
+| `Authorizer`, the interface every consumer programs against, and `Permission(resource, action)` | `authorizer.go` |
+| `Service`, the runtime handle `Attach` returns, plus `Can` / `ListPermissions` / `DataScope` and `Close` | `service.go` |
+| `DefineRole` / `AssignRole` / `RevokeRole` and `RoleDefinition` | `assign.go` |
+| The built-in roles (`BuiltinRoleOwner` / `Admin` / `Member`) and `EnsureBuiltinRoles` | `builtin.go` |
+| The per-subject decision cache, its TTL expiry and its janitor | `cache.go` |
 | `Subject`, `Scope`, `WithSubject` / `SubjectFromContext`, `SystemDomain` | `subject.go` |
-| `SubtreeResolver`, the organization-tree seam | `scope.go` |
+| `SubtreeResolver`, the organization-tree seam; `DataScope` and `PathWithinSubtree` | `scope.go` |
 | The three models and their table names | `model.go` |
 | The three repositories and their filtered reads | `repository.go` |
 | The frozen permission catalog (unexported) | `catalog.go` |
 | Error vocabulary: every sentinel's code and status | `errors.go` |
-| Event and audit-action declarations | `events.go` |
+| Event and audit-action declarations, the payload structs and their wire decoding | `events.go` |
 | Versioned SQL migrations, one subdirectory per dialect | `migrations/` |
 | The bilingual message bundle, one entry per error code | `locales/` |
 
@@ -55,6 +59,54 @@ rbac needs two facts from neighbours it must not import. Both arrive as interfac
 `SubjectFromContext` reports an **incomplete** Subject as no subject at all, so every caller's "no subject, deny" branch covers both cases and no caller has to remember to re-check `Valid()`.
 
 `SubtreeResolver` is optional. A host with no organization module wires none, and tenant-wide bindings keep working. What a missing or failing resolver must never do is widen a node-scoped binding into a tenant-wide one: an unresolvable narrowing **denies** (`ErrSubtreeUnresolved`). A resolver error propagates; a resolver that simply does not know the node denies.
+
+## The decision surface
+
+`Authorizer` is what consumers program against; `*Service` implements it.
+
+| Call | Question it answers |
+|---|---|
+| `Can(ctx, sub, action, resource) (bool, error)` | Does this subject hold `resource:action` **anywhere** in its own tenant? The coarse gate. |
+| `DataScope(ctx, sub, action, resource) (DataScope, error)` | Over **which slice of the organization tree** does it hold it? The row filter. |
+| `ListPermissions(ctx, sub) ([]string, error)` | Everything it holds anywhere, sorted — the list `authn`'s `/me` renders from. |
+| `AssignRole` / `RevokeRole(ctx, sub, role, scope) error` | Grant lifecycle. |
+| `DefineRole(ctx, RoleDefinition) (*Role, error)` | Create a custom role and the permissions it carries. |
+| `EnsureBuiltinRoles(ctx) error` | Seed and reconcile `owner` / `admin` / `member` in the tenant `ctx` carries. Idempotent; meant to run at every boot. |
+
+Semantics that are frozen, and the reasoning behind each:
+
+1. **Deny by default.** No matching grant is `(false, nil)` — a denial, never an error.
+2. **A binding grants only inside its own tenant.** Guaranteed structurally by `Repository[T]`, and the reads use the **Subject's** tenant rather than whatever tenant `ctx` carries, so an ambient context that disagrees with the token cannot redirect the lookup.
+3. **Permission matching is exact.** No wildcard grammar exists (D7): `notes:read` does not imply `notes:write`.
+4. **An undeclared permission denies at check time and is rejected at grant time** (`ErrUnknownPermission`). Strictness belongs where a typo is still fixable; a check must never turn a request into a 500.
+5. **`Can` alone is not sufficient for row-level filtering.** It ignores organization-tree scope and never consults the resolver. A handler returning tenant data must also call `DataScope` and filter with it.
+6. **A node-scoped binding that cannot be resolved denies.** No resolver wired, or the node is gone, means that binding contributes nothing to a `DataScope` — never a widening to the tenant. This is the one case where `Can` and `DataScope` legitimately disagree (`Can` true, `DataScope` `Denied`), and it is documented on both.
+
+`AssignRole` is **idempotent**; `RevokeRole` is **strict** (`ErrBindingNotFound`). The asymmetry is deliberate: assignment that finds its work already done has achieved the caller's goal, while revocation that finds nothing to revoke usually has not — the common cause is a scope mismatch, and reporting success there would say access was withdrawn while the user still holds it.
+
+## Built-in roles
+
+Their permission sets are a **function of the frozen catalog**, never a literal list — naming another module's permission here would be exactly the coupling this module exists to avoid.
+
+| Role | Holds | Why |
+|---|---|---|
+| `owner` | every declared permission | An owner who could not do something could not delegate it either, since delegation is itself a permission. |
+| `admin` | everything except `rbac:manage` | Without that one exclusion the two roles are identical and an admin could grant themselves anything an owner has. |
+| `member` | nothing | Which permissions an ordinary member should hold is a product decision. Deny by default applies to seeding too. |
+
+`EnsureBuiltinRoles` **reconciles** rather than only creating: adding a module to the host's build must widen every existing tenant's owner, and removing one must narrow it. A run that changes nothing writes nothing and publishes nothing, so a fleet restart does not flush every replica's cache.
+
+## The decision cache
+
+Keyed `(tenant, user)`, holding the subject's grants already flattened through their roles. A stale authorization cache keeps answering "yes" after a revoke, so it is built around invalidation first:
+
+1. **Events.** Every assign, revoke and role change publishes on the `EventBus`; the `Service` subscribes to its own events, so a local write and a remote one converge through one code path. A binding change drops one subject; a role change drops the whole tenant (grants are stored already flattened, and there is no index from role back to subject).
+2. **TTL expiry** (`DefaultCacheTTL`, 30s; `WithCacheTTL`) bounds the damage of a lost event to one TTL.
+3. **A janitor** reclaims expired entries. `Service.Close()` stops it, is idempotent, and leaves decisions correct — expiry is enforced on read, not by the janitor.
+
+Node **ids** are cached, never resolved paths: resolution happens per decision, so a member who moves in the organization tree changes scope immediately.
+
+A publish failure is reported (`ErrStorage` wrapping the bus error) *after* the local cache is invalidated: the row is committed and this process is already correct, but the other replicas have not been told, and only the caller can decide whether to retry or accept up to one TTL of divergence.
 
 ## Data domains and which assertion each table runs
 
@@ -94,6 +146,7 @@ A binding stores the node's **id**, never its materialized path. `docs/internal/
 **Authorization posture**
 - Do not make rbac authorize its own writes. `PermissionRead` / `PermissionManage` give a caller the vocabulary to gate role administration; rbac does not check them itself. An engine that authorized its own writes would need a special case for "who may grant the first role", and special cases in an authorization engine are where the holes live. Same posture as `config.Set`.
 - Do not let a permission **check** return an error for an unknown permission — it denies. Errors are for the **grant** path (`ErrUnknownPermission`), because an error is far easier to accidentally treat as "allow" than a plain `false`.
+- Do not treat `RoleBindingChangedEvent.ActorUserID` as an audit record. It is best-effort — the acting subject from `ctx` when the host installed one — because rbac takes no actor parameter and no audit-record layer exists yet (D10).
 - Do not read a value from the `config` module. The cache lifetime is `DefaultCacheTTL` plus `WithCacheTTL`, deliberately not a dynamic config item: reading one would add an `rbac → config` edge the dependency graph does not have.
 
 ## Known limitations (deliberately deferred)
@@ -111,9 +164,11 @@ A binding stores the node's **id**, never its materialized path. `docs/internal/
 | D9 | Subscribing to `org.member.removed` to reap orphaned bindings | `org` publishes no events yet | org |
 | D10 | Impersonation dual-identity (`Actor` + `OnBehalfOf`) on rbac audit records | The audit-record persistence layer does not exist | compliance / admin |
 | D11 | Frontend `usePermission` hooks | Web workspace | a web round |
+| D12 | Editing a custom role after creation (`DefineRole` is create-only; only `EnsureBuiltinRoles` reconciles) | Role mutation is part of the role-configuration surface D1 defers, and shipping a narrower public API is the reversible choice under lockstep versioning | admin console (M3), with D1 |
 
 ## Testing
 
 - Unit tier: `go test ./...` from this directory. No Docker, no external dependency — the standalone in-memory seams double as the test doubles.
 - `model_test.go` carries the model/migration drift gate and the dual-dialect SQL rules; `repository_test.go` runs `tenancytest.AssertIsolated` against all three repositories plus a cross-tenant test for every filtered read; `module_test.go` applies the migrations from zero to head on SQLite and merges the locale bundle through the very `pkgcore/i18n` builder `Kernel.Bootstrap` uses.
+- `scope_test.go` pins the segment-aware prefix rule, including `/g1/r2` vs `/g1/r20` — the classic materialized-path bug, and a required case rather than an optional one. `authorizer_test.go` pins every frozen semantic above. `cache_test.go` runs the concurrency hot spot under `-race`. `events_test.go` round-trips both payloads through `encoding/json` rather than a hand-written map, so a field rename cannot pass while the real bus stops decoding.
 - Integration tier: when this module gains one it goes in `integration_test/` behind `//go:build integration`, so a plain `go test ./...` never touches it. There is no such directory yet — the unit tier above is the whole suite today, and the SQLite leg of the dual-dialect rule is what `newRBACTestDB` exercises; the PostgreSQL leg is not proven against a real server yet.
