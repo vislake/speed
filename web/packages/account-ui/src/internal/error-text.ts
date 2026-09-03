@@ -17,10 +17,11 @@
  * bundle can never render a raw key and a missing translation never
  * leaks another language's text or an English fallback.
  *
- * Wording policy: the seven codes whose failure context is identical to
- * the sign-in surface's (the session-lifecycle family, authn.rate_limited
- * and authn.identity_already_bound) reuse the auth-ui bundle's text
- * verbatim, so the same server answer reads the same on both surfaces.
+ * Wording policy: the eight codes whose failure context is identical to
+ * the sign-in surface's (the session-lifecycle family, authn.rate_limited,
+ * authn.identity_already_bound and authn.identity_requires_binding) reuse
+ * the auth-ui bundle's text verbatim, so the same server answer reads the
+ * same on both surfaces.
  */
 
 import { useAccountUiTranslation } from './translation.js'
@@ -42,8 +43,12 @@ export const ERROR_TEXT_CODES = [
   'authn.refresh_token_reused',
   // authn: shared rate limiter -- any operation behind it.
   'authn.rate_limited',
-  // authn: social bindings -- the bind/unbind endpoints answer these.
+  // authn: social bindings -- the bind/unbind endpoints answer these, and
+  // the callback exchange answers identity_requires_binding when the
+  // external identity's verified email already belongs to another account
+  // whose auto-link conditions were not met.
   'authn.identity_already_bound',
+  'authn.identity_requires_binding',
   'authn.identity_not_found',
   'authn.oauth_state_invalid',
   'authn.social_exchange_failed',

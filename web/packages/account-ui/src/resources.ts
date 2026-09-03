@@ -9,14 +9,14 @@
  *
  * Every user-facing string any account-ui component renders by itself
  * lives here, in zh-CN and en-US with identical leaf key sets
- * (registration enforces that). This package ships no surface keys yet --
- * the scaffold's bundles carry the errors section only, the code-level
- * text the error resolver and InlineError render; the session-list,
- * history, binding and two-factor surfaces' keys land with the component
- * families that render them. The two language files are imported with the
- * JSON import attribute so the NodeNext build keeps working; tsc copies
- * them into dist/ and the published package ships them through the "."
- * entry, never as separate locale subpaths.
+ * (registration enforces that): the errors section, the code-level text
+ * the error resolver and InlineError render; the sessions-section
+ * surface keys; and the bindings, bindingCallback and mfa surface keys of
+ * the social-binding and step-up-gated two-factor component families. The
+ * two language files are imported with the JSON import attribute so the
+ * NodeNext build keeps working; tsc copies them into dist/ and the
+ * published package ships them through the "." entry, never as separate
+ * locale subpaths.
  */
 
 import type { ResourceBundle } from '@speed/i18n'

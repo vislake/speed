@@ -8,6 +8,7 @@
       "refresh_token_reused": "Suspicious activity was detected. Please sign in again.",
       "rate_limited": "Too many attempts. Please try again later.",
       "identity_already_bound": "This social account is already linked to your account.",
+      "identity_requires_binding": "This social account is linked to another account. Sign in to that account first to link it.",
       "identity_not_found": "This sign-in method was not found. It may have been removed.",
       "last_login_method": "You must keep at least one sign-in method.",
       "oauth_state_invalid": "The binding state has expired. Please start again.",
@@ -87,5 +88,69 @@
       "description": "Something went wrong while loading your sign-in history. Please try again."
     },
     "retry": "Retry"
+  },
+  "bindings": {
+    "title": "Linked social accounts",
+    "loading": "Loading linked accounts",
+    "provider": {
+      "google": "Google",
+      "github": "GitHub",
+      "wechat": "WeChat",
+      "dingtalk": "DingTalk",
+      "feishu": "Feishu",
+      "other": "Other"
+    },
+    "unbind": "Unlink",
+    "confirmTitle": "Unlink this social account?",
+    "confirmMessage": "You will no longer be able to sign in with this social account. It can be linked again later.",
+    "confirmLabel": "Unlink",
+    "addSectionTitle": "Link another account",
+    "empty": {
+      "title": "No linked social accounts yet",
+      "description": "Social accounts you link will appear here."
+    },
+    "error": {
+      "title": "Could not load linked accounts",
+      "description": "Something went wrong while loading your linked accounts. Please try again."
+    },
+    "retry": "Retry"
+  },
+  "bindingCallback": {
+    "pending": "Completing the link…",
+    "retry": "Retry",
+    "signedInElsewhere": {
+      "title": "You signed in on another session",
+      "description": "The social account is not linked yet. Sign in to the account you want to link it to, then complete the link from that account's security settings."
+    }
+  },
+  "mfa": {
+    "title": "Two-step verification",
+    "authenticator": {
+      "title": "Authenticator app",
+      "description": "Set an authenticator app (TOTP) as a second verification method. Once set up, security-sensitive operations ask you to verify your identity again.",
+      "enrollButton": "Set up authenticator",
+      "replacingNotice": "Two-step verification is already on for this account. Confirming replaces the current authenticator, and the current recovery codes stop working.",
+      "enrollDescription": "Add the content below to your authenticator app, then enter the 6-digit code the app shows.",
+      "secretLabel": "Secret",
+      "uriLabel": "Setup link",
+      "codeLabel": "6-digit code",
+      "confirmLabel": "Confirm",
+      "cancelLabel": "Cancel"
+    },
+    "recoveryCodes": {
+      "title": "Recovery codes",
+      "description": "A recovery code stands in for the 6-digit code when you cannot use your authenticator app. Regenerating discards the current set.",
+      "regenerateButton": "Regenerate recovery codes",
+      "showOnceTitle": "Save these recovery codes",
+      "showOnceDescription": "These codes are shown exactly once — save them now. Each code can be used once.",
+      "savedLabel": "I have saved them"
+    },
+    "stepUp": {
+      "title": "Verify your identity",
+      "description": "This action requires you to verify your identity again. Enter a 6-digit code from your authenticator app, or one recovery code.",
+      "codeLabel": "Code",
+      "confirmLabel": "Verify",
+      "cancelLabel": "Cancel"
+    }
   }
 }

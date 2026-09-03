@@ -8,6 +8,7 @@
       "refresh_token_reused": "检测到异常活动，请重新登录。",
       "rate_limited": "尝试次数过多，请稍后再试。",
       "identity_already_bound": "此社交账号已绑定到你的账户。",
+      "identity_requires_binding": "此社交账号已关联其他账户，请先登录对应账户后再绑定。",
       "identity_not_found": "未找到该登录方式，可能已被移除。",
       "last_login_method": "至少需要保留一种登录方式。",
       "oauth_state_invalid": "绑定状态已失效，请重新发起绑定。",
@@ -87,5 +88,69 @@
       "description": "加载登录历史时出了问题，请稍后重试。"
     },
     "retry": "重试"
+  },
+  "bindings": {
+    "title": "绑定的社交账号",
+    "loading": "正在加载绑定的账号",
+    "provider": {
+      "google": "Google",
+      "github": "GitHub",
+      "wechat": "微信",
+      "dingtalk": "钉钉",
+      "feishu": "飞书",
+      "other": "其他"
+    },
+    "unbind": "解绑",
+    "confirmTitle": "解绑此社交账号？",
+    "confirmMessage": "解绑后将无法再用此社交账号登录，之后仍可重新绑定。",
+    "confirmLabel": "解绑",
+    "addSectionTitle": "绑定其他账号",
+    "empty": {
+      "title": "暂无绑定的社交账号",
+      "description": "你绑定的社交账号将显示在这里。"
+    },
+    "error": {
+      "title": "无法加载绑定的账号",
+      "description": "加载绑定信息时出了问题，请稍后重试。"
+    },
+    "retry": "重试"
+  },
+  "bindingCallback": {
+    "pending": "正在完成绑定…",
+    "retry": "重试",
+    "signedInElsewhere": {
+      "title": "已在另一会话中登录",
+      "description": "此社交账号尚未绑定。请先登录你要绑定的账户，再从该账户的安全设置中完成绑定。"
+    }
+  },
+  "mfa": {
+    "title": "两步验证",
+    "authenticator": {
+      "title": "身份验证器应用",
+      "description": "将身份验证器应用（TOTP）设为第二重验证方式。开启后，执行安全敏感操作前需要重新验证身份。",
+      "enrollButton": "设置身份验证器",
+      "replacingNotice": "你的账户已开启两步验证。确认后将替换现有验证器，现有恢复码随之作废。",
+      "enrollDescription": "将下方内容添加进你的身份验证器应用，然后输入应用显示的 6 位验证码完成设置。",
+      "secretLabel": "密钥",
+      "uriLabel": "设置链接",
+      "codeLabel": "6 位验证码",
+      "confirmLabel": "确认",
+      "cancelLabel": "取消"
+    },
+    "recoveryCodes": {
+      "title": "恢复码",
+      "description": "恢复码可在无法使用身份验证器应用时代替 6 位验证码通过身份复核；重新生成会使现有恢复码作废。",
+      "regenerateButton": "重新生成恢复码",
+      "showOnceTitle": "请保存这些恢复码",
+      "showOnceDescription": "这些恢复码只显示这一次，请立即保存。每个恢复码只能使用一次。",
+      "savedLabel": "我已保存"
+    },
+    "stepUp": {
+      "title": "重新验证身份",
+      "description": "此操作需要你重新验证身份。请输入身份验证器应用生成的 6 位验证码，或输入一个恢复码。",
+      "codeLabel": "验证码",
+      "confirmLabel": "验证",
+      "cancelLabel": "取消"
+    }
   }
 }
