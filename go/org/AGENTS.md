@@ -2,7 +2,7 @@
 
 Multi-level organization trees for a tenant. This file is the module-level discipline that ships with `go/org` to consuming projects; the design rationale is `docs/internal/05-identity-and-access.md`, and the repository-wide rules are the root `CLAUDE.md` plus `.claude/skills/backend-coding-standards`.
 
-**Status.** The tree, the roster and the invitation flow are implemented: models, dual-dialect migrations, the tree operations, memberships, the `Scope` seam consumers accept without importing org, invitations with their rate-limited delivery through the `pkgcore.Mailer` seam, the resilient `authn.user.created` subscription, the registry wiring, the error catalog and the bilingual message bundle. The HTTP surface (spec fragment, generated server interface, handler) and the `integration_test/` tier are the module's remaining block and are **not** in the tree yet — judge what exists by the tree, not by this sentence.
+**Status.** The module is complete for M1: the tree, the roster and the invitation flow (models, dual-dialect migrations, the tree operations, memberships, the `Scope` seam consumers accept without importing org, invitations with their rate-limited delivery through the `pkgcore.Mailer` seam, the resilient `authn.user.created` subscription, the registry wiring, the error catalog and the bilingual message bundle); the HTTP surface (`api/openapi.yaml`, the generated `api.ServerInterface`, `Handler`, the `SubjectResolver` seam); the PostgreSQL `integration_test/` tier (the dialect-identity proof and all three repositories' `AssertIsolated` suite, re-run against a real server); and the reference app wired as this module's mandatory first consumer end to end (`examples/reference-app/cmd/server/server.go`, `cmd/server/org_flow_test.go`) — a multi-level tree, an invitation issued and accepted, and the roster read back correctly scoped to a subtree. Not yet landed: the frontend `@speed/api-sdk` generation leg for this module's fragment (see "Deferred to a later round" below) and everything else this file's "Out of scope" table names. Judge what exists by the tree, not by this sentence.
 
 ## Scope
 
@@ -18,6 +18,8 @@ Multi-level organization trees for a tenant. This file is the module-level disci
 | Revoking a removed member's sessions | `authn` | org publishes `org.member.removed`; session state is authn's, and reaching into it is what the event exists to avoid |
 | Reading `org.max_depth` / `org.invitation_ttl` from dynamic configuration | a later round | See "org declares no dynamic-config schema" |
 | PostgreSQL RLS policies on `org_nodes` | Deployment / ops | `dbkit` supplies the session-variable wiring only; provisioning the role and the policy is deployment-side, per its own "Out of scope" |
+| Generating `@speed/api-sdk` hooks from this module's fragment | the M1 `org-web` / consumer-shell round | The frontend orval generation targets a single spec source today, and no org consumer shell exists yet to type-check the generated hooks against. Backend generation (`api/org-server.gen.go`) and its `api-contract.yml` diff gate ship with this module regardless — see `docs/internal/21-api-contract.md`'s implementation-status note |
+| The authenticated `SubjectResolver` a real deployment needs | `authn` | This module ships only the seam and a fail-closed default (401 `org.subject_unresolved` when unwired). A real implementation reads a verified access token's claims, which requires `authn` to exist first |
 
 ## Adjudications a reviewer should not "correct"
 
@@ -98,12 +100,13 @@ org refuses rather than deleting the memberships too, for the same reason it ref
 
 (`ScopeService.MemberNodeIDs` still fails **closed** on a dangling row it should never see — empty set plus a `Warn`, never an error and never everything.)
 
-### Two seams that exist so no import does
+### Three seams that exist so no import does
 
-`Scope` (scope.go) and `FeatureGate` (module.go) are both interfaces whose every method signature is built from `context.Context`, `string`, `[]string`, `bool` and `error` — **no org type appears in either**. That is the whole mechanism: a consumer declares the identical method set in its own package and accepts org's implementation structurally.
+`Scope` (scope.go), `FeatureGate` (module.go) and `SubjectResolver` (subject.go) are all interfaces whose every method signature is built from `context.Context`, `*http.Request`, `string`, `[]string`, `bool` and `error` — **no org type appears in any of them**. That is the whole mechanism: a consumer declares the identical method set in its own package and accepts org's implementation structurally.
 
 - `Scope` is what rbac needs (a node's materialized path, a subtree's ids, a subject's reachable node set). org never imports rbac — no such edge in `docs/internal/01`'s graph — and rbac never learns what an `OrgNode` is. `scope_test.go` declares `rbacShapedScope` locally, without naming org's own `Scope` type, and asserts `*ScopeService` satisfies it. **A method that returned `[]OrgNode` would destroy the property and force the import back**; that test is what stops it.
-- `FeatureGate` is the same trick pointed at config: `*config.Service` satisfies it through its own `IsEnabled` method, and neither module imports the other. The host wires them together, and the host is the only place both names appear.
+- `FeatureGate` is the same trick pointed at config: `*config.Service` satisfies it through its own `IsEnabled` method, and neither module imports the other. The host wires them together, and the host is the only place both names appear. `examples/reference-app/cmd/server/server.go`'s `orgFeatureGate` is the live proof: it wraps a `**config.Service` (read lazily, since `config.Attach` runs after org's `Register`) and satisfies `org.FeatureGate` with no import of `org` inside `go/config` or vice versa.
+- `SubjectResolver` is different in kind from the other two: it is not a peer-module seam (nothing else in the module graph implements it yet) but the explicit placeholder for `authn`'s eventual verified-access-token resolver — the same structural trick pointed at a module that does not exist as real code yet. `Handler.resolveSubject` fails closed (401 `org.subject_unresolved`) when it is nil or returns `ok == false`, never inventing a default caller. `examples/reference-app/cmd/server/server.go`'s `demoSubjectResolver` is an explicitly-labelled, clearly-unsafe-for-production stand-in that reads an unauthenticated header, exactly so the reference app can demonstrate the invite/accept flow end to end before `authn` lands.
 
 ### Two wirings are required at boot, and refused loudly
 
@@ -213,11 +216,26 @@ Read `deleteLeaf` before touching `Delete`. It counts the rows its own `DELETE` 
 
 Each is written as option 1 of `go/dbkit/AGENTS.md`'s Known-limitations guidance — built on the same `*gorm.DB` isolation layer 1 protects, against a `TenantScoped` destination, inside `dbkit.WithTenantSession` so layer 3's RLS session variable is set too. **There is no `tenant_id = ?` string anywhere in this package, and no `db.Table` / `db.Model` / `db.Raw`**; `go/org` has no allowlist entry in either semgrep rule, deliberately.
 
+### The HTTP surface — `handler.go`, `subject.go`, `api/`
+
+`api/openapi.yaml` is the second module fragment in the repository after notes' — paths all `/api/v1/org/...`, `operationId` `org_<action><Resource>`, schemas `Org<Type>`, tag `org`, **no `tenant_id` anywhere on the surface**. `api/oapi-codegen.yaml` pins the same generator version notes uses (v2.8.0); `api/org-server.gen.go` is generated and committed, never hand-edited, regenerated by `task api:gen`'s org leg and re-checked by `api-contract.yml`'s own diff gate for this fragment.
+
+| Signature | Notes |
+|---|---|
+| `func NewHandler(tree, members, invites, subject) *Handler` | The three services are the exact instances `Module.Register` holds; `Handler` owns no data access of its own |
+| `Handler` (11 methods) | Implements `api.ServerInterface` — `var _ api.ServerInterface = (*Handler)(nil)` at the bottom of `handler.go` is what makes a spec change that outgrows the handler fail to compile, not merely fail a test |
+| `SubjectResolver.Subject(r) (userID string, ok bool)` | See "Three seams that exist so no import does". Only `org_createInvitation` and `org_acceptInvitation` call it — every other operation reads only the tenant from context |
+| `writeError(w, err)` | Folds any non-`*apperr.Error` into `ErrInternal`; a caller never sees raw Go error text |
+
+Every response type omits the invitation's plaintext address (`toInvitationResponse` never reads `inv.Email`, only `inv.EmailIndex`) — the module's blind-index convention applied to its HTTP surface, not only its storage layer. `OrgCreateInvitationRequest`'s `email` field is the one input the surface accepts in the clear, exactly once, on the way in.
+
 ### Errors — `errors.go`
 
 Tree: `org.node_not_found`, `org.node_name_required`, `org.node_name_too_long`, `org.parent_not_found`, `org.max_depth_exceeded`, `org.cycle_not_allowed`, `org.node_has_children`, `org.node_has_members`, `org.root_already_exists`, `org.root_not_deletable`, `org.duplicate_sibling_name`, `org.invalid_node_id`, `org.internal_error`.
 
 Roster and invitations: `org.membership_not_found`, `org.membership_exists`, `org.member_not_removable`, `org.invitation_not_found`, `org.invitation_expired`, `org.invitation_already_accepted`, `org.invitation_revoked`, `org.invitation_rate_limited` (HTTP 429), `org.invalid_email`, `org.invitations_disabled`, `org.email_indexer_required`, `org.invitation_mail_required`.
+
+HTTP surface: `org.invalid_request_body` (malformed JSON on any operation's request), `org.subject_unresolved` (HTTP 401 — no `SubjectResolver` wired, or it returned `ok == false`; see "Three seams that exist so no import does").
 
 **No error parameter ever carries an email address or a token.** An error's parameters are rendered, logged and traced.
 
@@ -252,6 +270,7 @@ Match on `Code` through `apperr.As`, never by identity — `WithParam`/`WithCaus
 - **Never put an email address or an invitation token in a log line, an event payload, a rate-limit key, an error parameter or an API response.** The blind index is what identifies a recipient in all of those.
 - **Never render user-facing text from a Go string literal.** Even the automatic workspace name comes from the catalog; its only fallback is an identifier, never a word in one of the two languages.
 - **Never send a second unsolicited message to an unaccepted invitee.** The single consent-establishing message is the entire exception org is allowed.
+- **Never resolve the caller's identity from anything but `SubjectResolver`.** No handler method reads a body field, header or query parameter as a user id; `resolveSubject` is the one path in, and it fails closed.
 - Migrations are versioned SQL, one file per dialect, byte-identical apart from the header note. No `AutoMigrate`, no `NOW()`, no `gen_random_uuid()`, no native arrays, no JSONB.
 
 ## Testing
@@ -262,4 +281,4 @@ Unit tests run with no external dependency: `go test ./... -race` from `go/org`.
 
 Tests that touch `Invitation` must register the encrypted-email serializer first (`newInvitationTestDB` does it): the column is written through a named GORM serializer, and GORM cannot parse the model when nothing is registered under that name.
 
-`internal/testutil.NewPostgres` is the integration tier's counterpart, applying the identical files from `postgres/`, so the same assertions can run against both dialects by swapping the constructor alone. The integration tier itself lands with this module's remaining block.
+`internal/testutil.NewPostgres` is the integration tier's counterpart, applying the identical files from `postgres/`, so the same assertions can run against both dialects by swapping the constructor alone. That tier is `integration_test/` (`//go:build integration`, `go test -race -tags=integration ./...` — Docker required): `postgres_tree_test.go` re-runs the A1 dialect-identity proof (the sibling-sharing-a-prefix subtree scan, a whole-subtree `Move`, a cascading delete, the max-depth bound) against a real PostgreSQL, and `postgres_isolation_test.go` re-runs `tenancytest.AssertIsolated` for all three tenant-scoped repositories, including the encrypted-and-blind-indexed `Invitation.Email` column. It is wired into CI on `pr-full.yml`'s `integration-tiers` matrix and into `Taskfile.yml`'s `INTEGRATION_DIRS`.
