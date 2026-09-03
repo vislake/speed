@@ -70,6 +70,20 @@ var ErrHardDeleteRequiresSystemContext = apperr.Invalid("dbkit.hard_delete_requi
 // plugin already published one, and a second, hand-written event would
 // double-count the deletion in the audit trail.
 //
+// One obligation the gate does not discharge is attribution. The capture
+// reads the event's Actor from pkgcore.ActorFromContext on the write's
+// context, and a system context never supplies one: pkgcore.WithSystemContext
+// stores only the SystemReason — whose Actor is a bare string naming who
+// the grant was for, never promoted into the structured Actor carrier —
+// and tenancy's audited wrapper returns exactly that context. A caller
+// erasing under system context must therefore layer pkgcore.WithActor
+// (plus pkgcore.WithOnBehalfOf when the erase is performed under
+// impersonation, per the dual-identity rule) before entering it, or the
+// erasure record — the one audit record whose subject row is about to
+// cease to exist — lands attributed to the zero Actor.
+// TestAuditCapturePlugin_HardDelete_SystemContextAlone_DoesNotAttribute
+// (audit_capture_test.go) pins the mechanism behind this warning.
+//
 // When ctx carries no system context, HardDelete returns
 // ErrHardDeleteRequiresSystemContext before the database is touched at
 // all; when ctx carries one but no tenant, it returns pkgcore's error

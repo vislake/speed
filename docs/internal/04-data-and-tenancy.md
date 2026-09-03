@@ -119,7 +119,7 @@ ctx, err = pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
 | 效果 | 行仍在库里，打上 `deleted_at`/`deleted_by`，从正常查询中隐藏 | 行从库中物理消失 |
 | 可逆性 | 保留窗口内可 `Restore` | 不可逆 |
 | 谁能触发 | 数据的正常所有者，受 RBAC 约束 | 系统上下文白名单（`compliance`、`jobs` 系统任务），见上节 |
-| 审计事件语义 | Update 语义（改的是 `deleted_at` 字段） | Delete 语义（行消失，Resource 的可读名称已在事件里留痕，见 [10 合规与审计](10-compliance-and-audit.md)） |
+| 审计事件语义 | Update 语义（改的是 `deleted_at` 字段） | Delete 语义（行消失，自动采集的事件只携带 Resource 的类型与 ID、`After` 为 nil——捕获事件本身从不带可读名称；擦除后若还要把这次删除读作"曾删掉名为 X 的行"，X 只能来自该行更早的 create/update 捕获事件或显式 `audit.Emit` 的 `Resource.DisplayName`，见 [10 合规与审计](10-compliance-and-audit.md)） |
 
 **设计要点：**
 
@@ -132,7 +132,7 @@ ctx, err = pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
    - **"被遗忘权"请求**：按主体立即彻底删除，跳过保留窗口等待，级联清理关联媒体与派生资源；这条路径本就需要 `compliance` 在系统上下文下操作，见上节白名单。
 
 4. **与已有机制的交互，设计阶段先记下来，免得实现时踩坑：**
-   - **审计采集**：`audit_capture.go` 的自动写捕获插件按 GORM 的 Create/Update/Delete 回调分类；软删除底层是一次 `UPDATE`，天然捕获成 Update 语义的 diff（`deleted_at: nil → <time>`），不会被误记成 Delete 事件——该期望行为已由 `audit_capture_test.go` 的 `TestAuditCapturePlugin_SoftDelete_ClassifiesAsUpdateWithRealDiff` 显式断言钉死，避免被写成"在 `Delete` 里手动再发一条 Delete 审计事件"跟自动采集重复；`HardDelete` 是真正的物理 `DELETE`，走自动采集的 Delete 分支（`After` 为 nil、成功只发一个事件、调用方不得再手动补发），由 `TestAuditCapturePlugin_HardDelete_ClassifiesAsDelete` 与 `TestAuditCapturePlugin_HardDelete_NoMatchingRow_PublishesNothing` 钉死。
+   - **审计采集**：`audit_capture.go` 的自动写捕获插件按 GORM 的 Create/Update/Delete 回调分类；软删除底层是一次 `UPDATE`，天然捕获成 Update 语义的 diff（`deleted_at: nil → <time>`），不会被误记成 Delete 事件——该期望行为已由 `audit_capture_test.go` 的 `TestAuditCapturePlugin_SoftDelete_ClassifiesAsUpdateWithRealDiff` 显式断言钉死，避免被写成"在 `Delete` 里手动再发一条 Delete 审计事件"跟自动采集重复；`HardDelete` 是真正的物理 `DELETE`，走自动采集的 Delete 分支（`After` 为 nil、成功只发一个事件、调用方不得再手动补发），由 `TestAuditCapturePlugin_HardDelete_ClassifiesAsDelete` 与 `TestAuditCapturePlugin_HardDelete_NoMatchingRow_PublishesNothing` 钉死。**署名义务是调用方的，不是门禁的**：捕获插件从写入 context 读 `pkgcore.ActorFromContext`，而系统上下文本身不携带 Actor——`pkgcore.WithSystemContext` 只存 `SystemReason`（其 `Actor` 是无结构字符串，命名授权给谁，从不提升进结构化的 Actor 载体），tenancy 的审计封装返回的也正是这个 context——所以在系统上下文下执行 `HardDelete` 的调用方必须先叠加 `pkgcore.WithActor`（模拟操作下再加 `pkgcore.WithOnBehalfOf`，见双身份规则），否则擦除记录——主体行即将不复存在的那一条审计记录——将以零 Actor 落库。该行为由 `TestAuditCapturePlugin_HardDelete_SystemContextAlone_DoesNotAttribute` 显式钉死；`hard_delete.go` 的文档注释与 `go/dbkit/AGENTS.md` 的"Hard deletion"小节均明示该义务，参考应用 notes 消费方（`TestRepository_HardDelete_SoftDeletedNote_PhysicallyRemoved`）演示的就是合规形态（先在租户 context 上叠加 `pkgcore.WithActor` 再授予系统上下文）。
    - **唯一索引**：软删除行仍是一行真实数据，会继续占用唯一约束——例如 `go/org` 的 `UNIQUE(tenant_id, parent_id, name)`，删除一个节点后在保留窗口内用同名重建会被挡住。落地时需要在"把 `deleted_at` 并入唯一索引做局部索引（`WHERE deleted_at IS NULL`，PostgreSQL 与 SQLite 均支持，不违反双方言约束）"与"接受名字要等清理/彻底删除后才能复用"之间选一个，具体由模块决定，本节只要求不能被遗漏。
    - **RLS**：软删除行对 PostgreSQL RLS 而言就是普通行，`tenant_id` 过滤照常生效；`HardDelete` 用的物理 `DELETE` 同样过 RLS，不需要额外设计。
    - **软删除只是隐藏，不是安全边界，更不是合规意义上的"已删除"**：软删除行仍是数据库里明文存在（加密字段除外）的一行，SQLite（standalone 模式默认方言）没有 RLS，隐藏能力完全靠 Go 层的 GORM scope 承担；不能把"用户在界面上删除了"等同于"数据已经不在了"。只有 `HardDelete` 之后，数据才算真正从库里消失——这正是合规场景要求彻底删除、软删除不能充数的原因。

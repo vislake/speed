@@ -55,15 +55,16 @@ var ErrNotSoftDeletable = apperr.Invalid("dbkit.not_soft_deletable")
 // Delete/Restore call with a descriptive error instead of failing to
 // compile.
 //
-// This package's soft-delete support is scoped to mark-delete only. It
-// implements no HardDelete (the irreversible, system-context-gated
-// compliance-erasure path docs/internal/04-data-and-tenancy.md's §3
-// describes) — that is out of scope for this round and left for a future
-// one. A soft-deleted row is NOT a security boundary and is NOT
-// compliance-grade deletion: it remains a real, plaintext-present row
-// (encrypted fields excepted) until a future HardDelete actually removes
-// it. See AGENTS.md's "Soft deletion" subsection under Known limitations
-// for the full warning.
+// This package's soft-delete support is scoped to mark-delete only; the
+// physical-erasure half of the delete semantics is the deliberately
+// separate Repository[T].HardDelete (hard_delete.go) — the irreversible,
+// system-context-gated compliance-erasure path
+// docs/internal/04-data-and-tenancy.md's §3 describes, landed in the
+// round after this capability. A soft-deleted row is NOT a security
+// boundary and is NOT compliance-grade deletion: it remains a real,
+// plaintext-present row (encrypted fields excepted) until a HardDelete
+// actually removes it. See AGENTS.md's "Soft deletion" and "Hard
+// deletion" sections for the full picture.
 type SoftDeletable interface {
 	GetDeletedAt() *time.Time
 }
