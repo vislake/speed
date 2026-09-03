@@ -19,6 +19,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
@@ -89,6 +91,17 @@ const (
 	// this one additional key, distinct from the cipher key, is what keeps
 	// that rule real rather than aspirational in this app's own wiring.
 	orgIndexKeyEnv = "SPEED_ORG_INDEX_KEY"
+
+	// redisAddrEnv names the environment variable holding the Redis server
+	// address ("host:port") the injected EventBus connects to. Empty -- the
+	// default -- leaves the composition on the in-process bus the
+	// PresetStandalone resolves, so zero-setup standalone development keeps
+	// working with nothing else running; set it to compose a real
+	// Redis-backed bus into the SAME standalone deployment mode, which is
+	// the deployment-mode / implementation-composition orthogonality
+	// docs/internal/03-deployment-modes.md draws (see buildServer's kernel
+	// doc comment below for what the resulting composition proves).
+	redisAddrEnv = "SPEED_REDIS_ADDR"
 )
 
 // devConfigKey is the master key used when SPEED_CONFIG_KEY is unset. It is
@@ -333,19 +346,21 @@ var _ org.FeatureGate = orgFeatureGate{}
 
 // serverConfig is main.go's own bootstrap wiring configuration -- the
 // values a process must know before anything else can start (deployment
-// mode, port, database path, the config master key, the demo host map).
-// It is a plain struct read from the environment by configFromEnv, NOT the
-// dynamic configuration the config module serves: dynamic configuration
-// lives in the configs table and can never hold the very key that encrypts
-// it, so this bootstrap struct is the deliberate exception to "a plain
-// struct, not pkgcore/config's dynamic configuration" -- it is main.go's
-// own wiring, which never goes through Module.Register either.
+// mode, port, database path, the config master key, the optional Redis
+// address, the demo host map). It is a plain struct read from the
+// environment by configFromEnv, NOT the dynamic configuration the config
+// module serves: dynamic configuration lives in the configs table and can
+// never hold the very key that encrypts it, so this bootstrap struct is
+// the deliberate exception to "a plain struct, not pkgcore/config's
+// dynamic configuration" -- it is main.go's own wiring, which never goes
+// through Module.Register either.
 type serverConfig struct {
 	DeploymentMode pkgcore.DeploymentMode
 	Port           string
 	SQLitePath     string
 	ConfigKey      []byte
 	OrgIndexKey    []byte
+	RedisAddr      string
 	HostTenants    map[string]pkgcore.TenantID
 
 	// Mailer overrides the console mailer the standalone Preset resolves
@@ -408,6 +423,12 @@ func configFromEnv() (serverConfig, error) {
 		dbPath = defaultSQLitePath
 	}
 
+	// redisAddr stays empty when unset (or explicitly emptied): the
+	// standalone composition then resolves the "eventbus" seam from the
+	// Preset to the in-process bus, keeping the zero-external-dependency
+	// default intact.
+	redisAddr := os.Getenv(redisAddrEnv)
+
 	// The config master key: SPEED_CONFIG_KEY when set (a hex-encoded
 	// 32-byte key -- see configKeyEnv's doc comment), the documented
 	// development default otherwise (see devConfigKey's). A malformed
@@ -454,6 +475,7 @@ func configFromEnv() (serverConfig, error) {
 		SQLitePath:     dbPath,
 		ConfigKey:      configKey,
 		OrgIndexKey:    orgIndexKey,
+		RedisAddr:      redisAddr,
 		HostTenants:    demoHostTenants,
 	}, nil
 }
@@ -465,15 +487,23 @@ func configFromEnv() (serverConfig, error) {
 // so the two can never drift into testing a different wiring than the one
 // that actually runs.
 //
-// It returns the composed handler and a cleanup function that closes the
-// underlying database connection; the caller must call cleanup once done
-// with the handler.
+// It returns the composed handler and a cleanup function that closes
+// everything buildServer opened (the services, the injected Redis bus and
+// its client when one was built, and the underlying database connection);
+// the caller must call cleanup once done with the handler.
+//
+// The deployment mode no longer refuses anything here: the Kernel it
+// bootstraps is what validates the assembled composition against
+// cfg.DeploymentMode, failing startup with pkgcore's own capability error
+// (ErrCapabilityUnsatisfied) when the resolved composition cannot run in
+// the declared mode. This app wires the eventbus seam only -- the kv,
+// mailer and objectstore seams resolve from the standalone Preset to their
+// in-process implementations -- so today the distributed mode always fails
+// that validation naming the first shortfall ("eventbus.memory" when no
+// Redis address is configured, "kv.memory" when one is), and the standalone
+// mode never does. Those two outcomes, rather than an app-level refusal,
+// are exactly what this file's distributed-mode tests pin.
 func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() error, error) {
-	if cfg.DeploymentMode != pkgcore.DeploymentModeStandalone {
-		return nil, nil, fmt.Errorf(
-			"reference-app: deployment mode %q is not wired in this example yet; only %q is supported until distributed infrastructure (PostgreSQL, Redis, ...) lands",
-			cfg.DeploymentMode, pkgcore.DeploymentModeStandalone)
-	}
 
 	// Deliberately NOT setting dbkit.Options.AuditBus here, even though
 	// notes.Note implements dbkit.Auditable (see model.go): every note
@@ -517,18 +547,24 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	}
 
 	// configService and rbacService are filled by their Attach calls below
-	// (nil until then); cleanup closes both before the database, so
-	// neither config's anti-loss poller nor rbac's cache janitor is still
-	// running against a connection that is being torn down.
+	// (nil until then); redisBus and redisClient are filled below when
+	// cfg.RedisAddr selects the injected Redis-backed composition (nil
+	// otherwise). cleanup closes the services first, then the injected bus
+	// -- stopping its readers so no remote event can still be delivered to
+	// a handler writing the database -- then the client this host owns
+	// (RedisEventBus never closes it), and the database last. Every close
+	// is attempted even when an earlier one failed; the first error wins.
 	var (
 		configService *config.Service
 		rbacService   *rbac.Service
+		redisBus      *pkgcore.RedisEventBus
+		redisClient   *redis.Client
 	)
 
 	cleanup := func() error {
 		var firstErr error
 		if configService != nil {
-			if closeErr := configService.Close(); closeErr != nil {
+			if closeErr := configService.Close(); closeErr != nil && firstErr == nil {
 				firstErr = closeErr
 			}
 		}
@@ -537,14 +573,24 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 				firstErr = closeErr
 			}
 		}
-		if firstErr != nil {
-			return firstErr
+		if redisBus != nil {
+			redisBus.Close()
+		}
+		if redisClient != nil {
+			if closeErr := redisClient.Close(); closeErr != nil && firstErr == nil {
+				firstErr = closeErr
+			}
 		}
 		sqlDB, dbErr := db.DB()
-		if dbErr != nil {
-			return dbErr
+		if dbErr != nil && firstErr == nil {
+			firstErr = dbErr
 		}
-		return sqlDB.Close()
+		if sqlDB != nil {
+			if closeErr := sqlDB.Close(); closeErr != nil && firstErr == nil {
+				firstErr = closeErr
+			}
+		}
+		return firstErr
 	}
 
 	cipher, err := dbkit.NewCipher(cfg.ConfigKey)
@@ -752,20 +798,48 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// dbkit.Options.AuditBus (see db's own doc comment above for why it
 	// deliberately does not).
 	//
-	// WithDeploymentMode(cfg.DeploymentMode) is the mechanical translation
-	// of the old positional pkgcore.NewKernel(cfg.DeploymentMode,
-	// pkgcore.WithMailer(cfg.Mailer)) call: the refusal a few lines above
-	// this function's start still keeps cfg.DeploymentMode at
-	// DeploymentModeStandalone here, which resolves through the zero-value
-	// default Preset exactly as before this retrofit. The cfg.Mailer
-	// override survives the translation as a conditional option -- the
-	// retrofit's WithMailer takes the capability its value declares, and
-	// this app declares pkgcore.Stateless for an override that only
+	// WithDeploymentMode(cfg.DeploymentMode) declares the topology the
+	// composition is validated against; it never selects an implementation
+	// (docs/internal/03-deployment-modes.md's orthogonality rule). When
+	// SPEED_REDIS_ADDR is set, WithEventBus injects a REAL Redis-backed
+	// EventBus -- pkgcore.NewRedisEventBus over a go-redis client this host
+	// constructs and owns -- declaring MultiReplicaSafe|SurvivesRestart,
+	// the capabilities the Redis Streams implementation genuinely carries.
+	// The other three seams resolve from the Preset to their in-process
+	// implementations, so the assembled composition is a standalone
+	// topology whose events cross through real Redis: a single-process
+	// deployment that happens to use a multi-replica-safe, restart-surviving
+	// bus -- the canonical demonstration that the two axes are independent.
+	// Nothing about the rest of this wiring changes: audit.Emit still
+	// publishes on reg.EventBus() (the injected bus), auditModule's
+	// subscriptions run synchronously on the publishing side exactly as
+	// they do on the in-memory bus, and any OTHER process consuming the
+	// same Redis streams receives the events too.
+	//
+	// go-redis is imported here -- and go.mod therefore requires it
+	// directly -- because the app is the assembly host that pkgcore's
+	// RedisEventBus contract names as the client's owner: NewRedisEventBus
+	// builds on a client the host constructs and keeps owning ("the client
+	// the bus was built on stays open, because the host owns it" -- Close's
+	// own doc comment), which is exactly why cleanup below closes
+	// redisClient itself. The no-concrete-infrastructure-implementation
+	// rule constrains business modules, not the application that assembles
+	// them.
+	//
+	// The cfg.Mailer override rides along as a second conditional option --
+	// the retrofit's WithMailer takes the capability its value declares,
+	// and this app declares pkgcore.Stateless for an override that only
 	// server_test.go's in-process capture double ever sets, in a throwaway
 	// test composition where the durability banner would name no real loss
 	// (configFromEnv never sets it; production always takes the preset's
 	// console default).
 	kernelOptions := []pkgcore.KernelOption{pkgcore.WithDeploymentMode(cfg.DeploymentMode)}
+	if cfg.RedisAddr != "" {
+		redisClient = redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
+		redisBus = pkgcore.NewRedisEventBus(redisClient)
+		kernelOptions = append(kernelOptions,
+			pkgcore.WithEventBus(redisBus, pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
+	}
 	if cfg.Mailer != nil {
 		kernelOptions = append(kernelOptions, pkgcore.WithMailer(cfg.Mailer, pkgcore.Stateless))
 	}

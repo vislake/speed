@@ -751,19 +751,68 @@ func TestMetricsAllowlist_GETOnlyAllowlist_LeavesHEADExposed(t *testing.T) {
 	}
 }
 
-// TestBuildServer_DistributedDeploymentMode_ReturnsClearError documents
-// this example's current, honest limitation: only the standalone
-// deployment mode is wired up here today (see buildServer's own doc
-// comment and root CLAUDE.md's M0 status) -- requesting distributed must
-// fail loudly, never silently fall back to SQLite under a "distributed"
-// label.
-func TestBuildServer_DistributedDeploymentMode_ReturnsClearError(t *testing.T) {
+// TestBuildServer_DistributedDeploymentMode_FailsCapabilityValidation pins
+// what requesting the distributed deployment mode means since the retrofit
+// removed buildServer's hard refusal of it: the composition is no longer
+// rejected up front, it is validated -- and with every seam resolved from
+// the Preset, the distributed mode's required capabilities cannot be met.
+// Kernel.Bootstrap must fail with ErrCapabilityUnsatisfied, naming the
+// first shortfall: the "eventbus" seam's "eventbus.memory" implementation
+// lacking MultiReplicaSafe while the mode is "distributed". Bootstrap
+// performs that validation before any Subscribe or goroutine starts, so
+// this test needs no Docker and never touches a network, and it guarantees
+// the mode can never silently degrade into a SQLite-and-in-memory run
+// under a "distributed" label.
+func TestBuildServer_DistributedDeploymentMode_FailsCapabilityValidation(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.DeploymentMode = pkgcore.DeploymentModeDistributed
 
 	_, _, err := buildServer(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("buildServer with DeploymentModeDistributed: want error, got nil")
+	}
+	if !errors.Is(err, pkgcore.ErrCapabilityUnsatisfied) {
+		t.Fatalf("buildServer with DeploymentModeDistributed: error = %v, want errors.Is(err, pkgcore.ErrCapabilityUnsatisfied)", err)
+	}
+	for _, want := range []string{`seam "eventbus"`, `"eventbus.memory"`, "MultiReplicaSafe", `"distributed"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("buildServer with DeploymentModeDistributed: error %q does not mention %s", err, want)
+		}
+	}
+}
+
+// TestBuildServer_DistributedDeploymentMode_InjectedEventBus_StillFailsOnKV
+// is the second half of the distributed-mode pin: even with a real
+// Redis-backed EventBus injected (capabilities MultiReplicaSafe and
+// SurvivesRestart -- exactly the composition the file's README worked
+// example demonstrates in standalone mode), a distributed deployment still
+// fails capability validation, now on the next seam: the "kv" seam's
+// "kv.memory" implementation also lacks MultiReplicaSafe, and the Preset
+// has no Redis-backed KVStore to swap in. An event bus alone does not make
+// a distributed deployment viable -- every seam must satisfy the mode's
+// requirements. Validation precedes module registration, so no Subscribe
+// is ever reached, and the cleanup buildServer runs on this error path is
+// equally network-free: RedisEventBus starts no goroutine and touches no
+// network until the first Subscribe (its group-destroy sweep returns early
+// with nothing subscribed), and a go-redis client dials lazily, so the
+// unreachable 127.0.0.1:6379 address is never contacted -- this test needs
+// no Docker.
+func TestBuildServer_DistributedDeploymentMode_InjectedEventBus_StillFailsOnKV(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.DeploymentMode = pkgcore.DeploymentModeDistributed
+	cfg.RedisAddr = "127.0.0.1:6379"
+
+	_, _, err := buildServer(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("buildServer with DeploymentModeDistributed and an injected Redis EventBus: want error, got nil")
+	}
+	if !errors.Is(err, pkgcore.ErrCapabilityUnsatisfied) {
+		t.Fatalf("buildServer with DeploymentModeDistributed and an injected Redis EventBus: error = %v, want errors.Is(err, pkgcore.ErrCapabilityUnsatisfied)", err)
+	}
+	for _, want := range []string{`seam "kv"`, `"kv.memory"`, "MultiReplicaSafe", `"distributed"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("buildServer with DeploymentModeDistributed and an injected Redis EventBus: error %q does not mention %s", err, want)
+		}
 	}
 }
 
@@ -884,6 +933,7 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	t.Setenv("SPEED_DEPLOYMENT_MODE", "")
 	t.Setenv("PORT", "")
 	t.Setenv("SPEED_DB_PATH", "")
+	t.Setenv("SPEED_REDIS_ADDR", "")
 
 	cfg, err := configFromEnv()
 	if err != nil {
@@ -901,6 +951,9 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	if !bytes.Equal(cfg.ConfigKey, devConfigKey) {
 		t.Fatalf("ConfigKey = %x, want the dev default %x", cfg.ConfigKey, devConfigKey)
 	}
+	if cfg.RedisAddr != "" {
+		t.Fatalf("RedisAddr = %q, want the empty default (in-process bus)", cfg.RedisAddr)
+	}
 }
 
 // TestConfigFromEnv_ReadsOverrides verifies each environment variable
@@ -910,6 +963,7 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	t.Setenv("PORT", "9999")
 	t.Setenv("SPEED_DB_PATH", "/tmp/reference-app-configfromenv-test.db")
 	t.Setenv("SPEED_CONFIG_KEY", "0f0e0d0c0b0a090807060504030201001f1e1d1c1b1a19181716151413121110")
+	t.Setenv("SPEED_REDIS_ADDR", "127.0.0.1:6380")
 
 	cfg, err := configFromEnv()
 	if err != nil {
@@ -923,6 +977,9 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	}
 	if cfg.SQLitePath != "/tmp/reference-app-configfromenv-test.db" {
 		t.Fatalf("SQLitePath = %q, want %q", cfg.SQLitePath, "/tmp/reference-app-configfromenv-test.db")
+	}
+	if cfg.RedisAddr != "127.0.0.1:6380" {
+		t.Fatalf("RedisAddr = %q, want %q", cfg.RedisAddr, "127.0.0.1:6380")
 	}
 	wantKey := []byte{
 		0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09, 0x08,

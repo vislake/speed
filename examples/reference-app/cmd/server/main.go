@@ -63,17 +63,19 @@ func run(baseCtx context.Context) error {
 		return fmt.Errorf("reference-app: load configuration: %w", err)
 	}
 
-	// buildServer runs, and can reject an unsupported deployment mode,
-	// before obs.Init: buildServer's own error ("deployment mode %q is
-	// not wired in this example yet") is the specific diagnostic for this
-	// example's actual limitation (root CLAUDE.md's M0 status -- only
-	// the standalone deployment mode has business wiring at all), the
-	// same limitation obs.Init itself used to double-check. It no longer
-	// can: Init takes no deployment mode and therefore refuses none, so
-	// this ordering is the only place a misconfigured
-	// SPEED_DEPLOYMENT_MODE surfaces, and its message is the accurate
-	// one. Since nothing starts listening until after both calls below
-	// succeed, deferring obs.Init to second costs nothing.
+	// buildServer performs the whole composition -- the Kernel's
+	// deployment mode, the optional Redis-backed EventBus SPEED_REDIS_ADDR
+	// requests, every other seam from the Preset -- and Bootstrap's
+	// capability validation of that composition runs inside it, so it is
+	// the one place a misconfigured one surfaces (its ErrCapabilityUnsatisfied
+	// error, e.g. "distributed" with no SPEED_REDIS_ADDR, or a Redis bus
+	// that fails to connect, names the seam and the shortfall). It must
+	// run before obs.Init because Init takes no deployment mode and
+	// therefore refuses none: after the retrofit removed the old hard
+	// refusal, this ordering is the only place a bad composition fails
+	// before telemetry starts, and its error is the accurate one. Since
+	// nothing starts listening until after both calls below succeed,
+	// deferring obs.Init to second costs nothing.
 	handler, cleanup, err := buildServer(ctx, cfg)
 	if err != nil {
 		return err
