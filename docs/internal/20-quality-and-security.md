@@ -66,8 +66,12 @@ Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包�
 | SBOM 生成 | 每次发布产出，随 Release 附件发布 |
 | npm 发布来源证明 | provenance（GitHub OIDC 签名） |
 
+> **实施状态注记（2026-09，security 轮次）**：上表各行现状——`pnpm audit`（第 2 行前半）已上线：security.yml 的 deps-js job 审计提交的 web/ lockfile，本地实测无已知漏洞；Renovate（第 2 行后半）待依赖自动化轮次。`gitleaks`（第 3 行）的 CI 一半本轮上线（secrets job：v8.30.1 按 release 校验和固定，`.gitleaks.toml` 扩展默认规则集并带唯一一条 path allowlist——放行 go/observability 脱敏测试故意种植的 secret 形状 fixture，那正是该层测试存在的意义，放行理由与残余风险写在文件注释里，真实凭据依然禁止入库）；pre-commit 钩子一半留给 dev-workflow 轮次。GitHub CodeQL（第 4 行）本轮上线（sast job：Go + TypeScript/JavaScript，Go 提取器原生支持 go.work 工作区，一次分析覆盖全部模块）。`govulncheck`（第 1 行）与 `trivy`（第 5 行）暂缓——govulncheck 在当前树有两处独立原因必然失败（标准库公告属于 go.work `go 1.25.0` 工具链线、由 toolchain-pinning 轮抬升 go 指令后清零；模块类公告经 testcontainers 的测试支撑依赖与 exporter 依赖触达、属各模块自己的升级轮），trivy 在发布轮产出镜像前无物可扫——证据与解除条件记录在 security.yml 文件头的 DEFERRED 节。SBOM 与 provenance（第 6、7 行）随发布相关轮次落地。许可证扫描（下节）本轮已落地。
+
 ### 许可证合规（对本项目尤其重要）
 脚手架会被用于**对外商业交付**，依赖的许可证会传导给客户项目。CI 中做许可证扫描，**禁止引入 GPL/AGPL 系依赖**；MPL/LGPL 类需单独评估并记录在 ADR 中。这一条在纯内部项目里可以放松，在这里不行。
+
+> **实施状态注记（2026-09，security 轮次）**：已落地——`tools/license_scan.py` 在 security.yml 的 license job 运行（先跑内置 selftest 再扫真实依赖树）；Go 侧 42 条依赖的逐条 adjudication 见 `tools/dependency-licenses.json`，扫描器会把「manifest 与真实依赖树不一致」或「新增依赖缺 adjudication」当作漂移直接报错，策略与本节一致（GPL/AGPL 拒绝、MPL/LGPL 需 ADR、未知许可证 fail-closed）。
 
 ### 安全测试专项
 以下场景必须有自动化用例，它们在 [16 验证方式](16-verification.md) 中已定义验收标准：
@@ -81,7 +85,7 @@ Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包�
 - 权限提升（低权限角色尝试越权操作）
 
 ### 密钥管理
-- 仓库内**不得出现任何真实凭证**，包括测试用的沙箱密钥
+- 仓库内**不得出现任何真实凭证**，包括测试用的沙箱密钥；密钥泄漏由 CI 强制：security.yml secrets job 每 PR + 每日全树扫描（gitleaks，`.gitleaks.toml` 里唯一一条 allowlist 放行 go/observability 脱敏测试的 secret 形状 fixture——是替身值不是凭证，理由见该文件注释，扫描对其余所有文件保持完整效力）
 - CI 密钥用 GitHub Environments 管理，发布流水线的密钥限定在受保护环境并要求人工审批
 - 本地开发用 `.env.local`（已在 `.gitignore`），`.env.example` 只放占位符
 

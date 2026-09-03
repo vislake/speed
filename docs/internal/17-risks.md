@@ -24,15 +24,15 @@
 | 功能开关组合爆炸导致隐性缺陷 | 依赖图校验让非法组合无法启动；CI 只测三种典型组合；开关只影响路由与任务注册，不影响迁移，降低状态空间 |
 | 国内支付资质与联调周期不可控 | M2 前置启动资质申请；网关抽象层先行，Provider 实现可延后接入而不阻塞领域模型 |
 | 模板（可 fork 部分）与模块版本脱节 | 模板保持极薄（每文件 <50 行，只做组装）；CI 定时跑生成+构建验证 |
-| tenant_id 误入 Prometheus label | CI 断言 + code review checklist |
+| tenant_id 误入 Prometheus label | CI 断言 + code review checklist；**2026-09 落地**：semgrep 规则 `tools/semgrep_rules/tenant-id-metric-label.yml` 随每个 PR 在 pr-check 的 repo-checks job 运行（命中形状与残余缺口见规则文件头，间接引用等文本匹配不到的形态仍靠 observability 的既有断言测试与 review 兜底） |
 | 单进程/分布式两套实现语义漂移（单进程部署模式下测试全绿，切到分布式部署模式才炸） | 同一组用例跑两种部署模式并断言结果一致；接口设计以能力弱的一方为准，不暴露 Redis 特有语义 |
-| 有人在业务逻辑里写 `if mode == "standalone"` 分支 | 部署模式分支只允许存在于 Kernel 装配代码，CI 静态检查业务模块内不得引用 DeploymentMode 常量 |
+| 有人在业务逻辑里写 `if mode == "standalone"` 分支 | 部署模式分支只允许存在于 Kernel 装配代码。**2026-09 落地**：semgrep 规则 `tools/semgrep_rules/deployment-mode-branch.yml` 按值匹配模式常量比较、`SPEED_DEPLOYMENT_MODE` 读取与 case 分支，kernel 装配文件与 reference-app 入口在 path allowlist；「不得引用 DeploymentMode 常量」的标识符粒度检查（常量经别名跨包流传的形态）是规则文件头里如实记录的残余缺口，由 review 兜底 |
 | 单进程部署模式被误用于真实生产/计费 | 启动横幅 + 文档显式声明 + 多副本 fail-fast + 支付默认 MockGateway（真实收款需显式配置） |
 | CI 时长失控，全量矩阵随模块增多拖慢每个 PR | 路径过滤只跑受影响模块及下游；PR 阶段只跑单进程部署模式快检、合入前才跑全量；缓存与并发取消 |
 | 各模块的 CI 配置重复维护 | 全部走可复用 workflow 与 composite action；新增模块只在矩阵列表加一行 |
-| 架构纪律写在文档里但无人遵守 | 每条纪律都有对应的自动检查（semgrep/depguard/自研脚本），见 [18 CI/CD](18-cicd.md) 的纪律检查表 |
+| 架构纪律写在文档里但无人遵守 | 每条纪律都有对应的自动检查（semgrep/depguard/自研脚本），见 [18 CI/CD](18-cicd.md) 的纪律检查表（**2026-09 已部分落地**：六条 semgrep 规则、depguard 的 redis/minio/asynq 禁令与许可证扫描器均已接线；落地矩阵与仍属未来轮次的行见 18-cicd.md 纪律检查表下的实施状态注记） |
 | 发布时漏打 tag 或版本不一致 | lockstep 发布全流程脚本化；发布后自动触发全新项目生成验证，失败即标记版本不可用 |
-| 依赖引入 GPL 系许可证污染商业交付 | CI 许可证扫描，禁止 GPL/AGPL；MPL/LGPL 需 ADR 记录评估结论 |
+| 依赖引入 GPL 系许可证污染商业交付 | CI 许可证扫描，禁止 GPL/AGPL；MPL/LGPL 需 ADR 记录评估结论。**2026-09 落地**：`tools/license_scan.py` 已在 security.yml 的 license job 运行，策略原样执行（selftest 先行、漂移即报错）；Go 侧 42 条依赖的逐条 adjudication 见 `tools/dependency-licenses.json` |
 | Flaky 测试侵蚀对 CI 的信任 | nightly 重复运行检测不稳定用例并自动开 issue；连续不稳定先隔离再修，不允许长期红绿摇摆 |
 | spec-first 增加接口变更的操作步骤，团队可能绕开 | 自动兜底随 API 契约工具链轮次部分落地：后端一半已实现——`task api:gen` 对 reference-app notes 模块的 spec 片段生成 interface，api-contract.yml 在相关 PR 上重新生成并 diff 生成物，绕开无法合入（见 [19 开发工作流](19-dev-workflow.md) 的当前状态注记与 [21 API 契约](21-api-contract.md) 末尾的实现状态注记）；orval 前端 sdk、oasdiff 等其余部分仍待交付，其间靠 code review 维持 spec-first 顺序；收益（编译期杜绝前后端漂移）远大于成本 |
 | 生成代码与手写代码混用导致冲突 | `api-sdk`（纯生成，禁改）与 `api-client`（纯手写运行时）严格分包，生成物整体覆盖不影响手写基建 |

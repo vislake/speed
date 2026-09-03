@@ -18,6 +18,8 @@
 | `release` | 手动触发（指定版本号） | lockstep 全量发布：Go module 逐个打 tag + npm 包逐个发布 + 镜像 + CLI 二进制 | < 30 分钟 |
 | `nightly` | 每日 | 全量矩阵 + 性能基准回归 + flaky test 检测 | 不限 |
 
+> **实施状态注记（2026-09，security 轮次）**：上表是设计规格，不是现状。当前真实落地的流水线：`pr-check`（每个 PR）、`pr-full`（打 `full-ci` 标签的 PR）、`docs-check` 与 `api-contract`（按路径过滤触发），以及本轮由 gated stub 转正的 `security`（每个 PR + 每日 05:37 UTC 定时；触发、职责与暂缓项的解除条件见 `.github/workflows/security.yml` 文件头）。`release` 在 release-foundation 轮次转正（此后手动触发）；`e2e`、`nightly`、`scaffold-verify` 仍是 gated stub，由各自轮次接手。security 行的设计内容逐项核对：pnpm audit、gitleaks、CodeQL 与许可证扫描已接线；依赖漏洞扫描（Go 侧 govulncheck）与镜像扫描（trivy）暂缓——govulncheck 在当前树有两处独立原因必然失败（标准库公告属于 go.work `go 1.25.0` 工具链线、需 toolchain-pinning 轮抬升 go 指令才能清零；模块类公告经 testcontainers 的测试支撑依赖与 exporter 依赖触达、属各模块自己的升级轮），trivy 在仓库产出镜像前无物可扫——两处的证据与解除条件都在 security.yml 文件头的 DEFERRED 节。
+
 ## 成本控制：不是每个 PR 都跑全量
 
 模块数量 × 2 种部署模式 × 2 方言，相乘后组合数太大，每个 PR 全跑既慢又贵。策略：
@@ -78,6 +80,8 @@
 | 每个模块的 `go.mod` 必须能脱离 `go.work` 独立构建 / `tidy`（否则 `replace` 了却漏加 `require` 这类问题会被 workspace 的隐式路径解析掩盖，只有真实消费方或首次 lockstep 发布删掉过渡期 `replace` 行后才会暴露，见 [02 仓库结构与发布](02-repo-and-release.md)） | 过渡手段：`go/tenancy` 的 `TestModuleBuildsStandaloneOutsideWorkspace`（`standalone_build_test.go`）用 `os/exec` 以 `GOWORK=off` 跑一遍该模块自己的 `go build ./...`/`go vet ./...`，随 `go test ./...` 默认执行，不依赖任何 CI 配置；真正的 CI 落地后应替换为流水线里对每个模块单独执行的 `GOWORK=off` 构建步骤 |
 
 **这张表是 CI 的核心价值所在**——纪律靠人记会在三个月后失效，靠 CI 才能长期有效。
+
+> **实施状态注记（2026-09，security 轮次）**：表中由 `semgrep` 承担的行已有六条规则落地（本轮新增），见 `tools/semgrep_rules/`——`raw-gorm-bypass.yml`（第 1 行 `db.Table/Model/Raw`，path allowlist 放行 go/dbkit 与 go/jobs 的合法存储层文件）、`deployment-mode-branch.yml`（第 2 行，按值匹配模式比较与 `SPEED_DEPLOYMENT_MODE` 读取，仅放行 kernel 装配文件与 reference-app 入口）、`tenant-id-metric-label.yml`（第 6 行，配合 observability 既有的标签断言测试）、`non-constant-log-message.yml`（第 10 行）、`handwritten-tenant-id-filter.yml`（第 16 行，放行 go/dbkit 与 go/jobs 存储层）、`gorm-automigrate-ban.yml`（第 18 行，未来防线，当前零真实调用点）。每条规则的文件头写明：对应的纪律行、命中形状、path allowlist 与放行理由、残余缺口；配套 planted-violation fixture（`testdata/<规则>/{positive,negative}.go`）证明规则真的会响。六条规则随每个 PR 在 pr-check 的 repo-checks job 运行（临时 venv 安装 semgrep，扫 `go/`、`examples/`、`tools/` 三棵子树，fixture 子树在 CLI 层排除；CI 首绿前版本故意不 pin），运行方式与执行状态见 `tools/README.md`。两点如实披露：其一，semgrep 对 `examples/reference-app/internal/notes/repository.go:19`（内嵌实例化泛型 `*dbkit.Repository[Note]`）始终抛 PartialParsing 异常、该行不参与分析——它是结构体嵌入声明，与六条规则的命中形状均无关，暂无盲区，但后续新增规则必须知道这个文件扫不全；其二，各规则文件头列出的残余缺口（动态拼装、别名间接引用等文本匹配不到的形态）仍由 code review 兜底。depguard 侧，第 5 行「业务代码不得 import 具体基础设施 SDK」本轮落地三条规则（redis / minio / asynq，仅放行各自实现归属的模块），rules 与 files-list allowlist 的取舍记录在 `.golangci.yml` 的 depguard 注释里；第 15 行「系统上下文白名单」维持评审制——该行已写明 depguard 做不到符号粒度、草稿规则为何未合入，与落地现状一致。此前轮次已落地的行：第 7 行（ESLint `no-literal-text` 规则在 npm-package-ci 每包 lint 腿运行）、第 8 行（中英 key 一致性在 docs-check）、第 9 行（CJK 扫描在 repo-checks）、第 13 行（spec 一致性在 api-contract）、第 23 行（`GOWORK=off` 独立构建在 go-module-ci 第 5 腿，过渡期 `standalone_build_test.go` 保留本地执行）。其余行——跨模块 import struct 与 `rbac` 依赖 `authn`（go-arch-lint / 依赖白名单）、日志字段名规范、前端手写 API 调用、redocly 命名规范、API 层接受 `tenant_id` 参数、跨模块外键迁移 lint、`@speed/api-sdk` 禁改、Repository 隔离测试覆盖脚本——的自动化仍是未来轮次，不在此虚报；PII 直入日志行的运行时一半（脱敏中间件与它的单元测试）已在 go/observability 落地，缺的是 semgrep 静态检查那一半。
 
 ## 发布流水线（lockstep）
 
