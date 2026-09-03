@@ -274,3 +274,19 @@ tasks:
       # validation sees it. Quoted, a malformed value reaches the script
       # whole and fails there with its own message (exit 2, nothing written).
       - python3 tools/new_module.py '{{.NAME}}' --description '{{.DESCRIPTION}}' --design-doc '{{.DESIGN_DOC}}'
+
+  release:plan:
+    desc: Verify the lockstep release plan for one version, offline (M0 round).
+    # Wraps tools/release/lockstep-release.py's default verification mode --
+    # the offline half of the M0 release machinery (docs/internal/
+    # 18-cicd.md, docs/internal/02-repo-and-release.md). The coordinator
+    # derives the publishable set at runtime (go.work + web/packages), prints
+    # the full one-version plan and exits 0 only when the plan is consistent;
+    # nothing is tagged, written or published. Pass the version as a CLI var:
+    #   task release:plan VERSION=v1.2.0
+    # Real publishing is scheduled for the v1.0 release at M4; .github/
+    # workflows/release.yml runs this same verification on its version input.
+    cmds:
+      # Quoted for the same reason as new:module: a malformed VERSION reaches
+      # the script whole and fails there with its own message (exit 2).
+      - python3 tools/release/lockstep-release.py '{{.VERSION}}'
