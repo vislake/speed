@@ -73,13 +73,19 @@ var objectEventDecls = []pkgcore.EventDecl{
 // derivatives -- the rows that describe media bytes living in the host's
 // ObjectStore under keys this module builds and never exposes.
 //
-// ObjectService (m.svc) drives uploads through their lifecycle states:
-// Create declares an upload, Upload streams its bytes into the host's
-// ObjectStore, Complete runs the revalidation pipeline over them and
-// finalizes the row, and Get, OpenContent and List serve completed
-// objects. The HTTP round that mounts the OpenAPI fragment in front of
-// the service, and the processing round that claims the thumbnail-derive
-// task the service enqueues, both land later.
+// Three services drive the object lifecycle, all built by NewModule from
+// the same repositories and queue, all inert until Register attaches the
+// registry: ObjectService (m.svc) drives uploads through their lifecycle
+// states -- Create declares an upload, Upload streams its bytes into the
+// host's ObjectStore, Complete runs the revalidation pipeline over them
+// and finalizes the row, and Get, OpenContent and List serve completed
+// objects; DeriveService (m.derive) turns a completed image object's
+// bytes into its thumbnail derivative, claimed from the queue by the
+// handler Register registers; and LifecycleService (m.life) ends object
+// life -- Delete removes an object and everything it names, Sweep runs
+// one tenant's periodic cleanup, EnqueueExpirySweep schedules it. The HTTP
+// round that mounts the OpenAPI fragment in front of the services lands
+// later.
 type Module struct {
 	// db is the connection storage's tables live in. It is opened and
 	// migrated by the host before Register is ever called; the module
@@ -92,9 +98,9 @@ type Module struct {
 	derivatives *DerivativeRepository
 
 	// queue is the jobs.Queue the module's asynchronous work -- the
-	// thumbnail-derive task the completion pipeline enqueues, deletion's
-	// task in a later round -- runs on (WithQueue). Register refuses to
-	// proceed without one.
+	// thumbnail-derive task the completion pipeline enqueues and the
+	// expiry-sweep task hosts schedule through LifecycleService -- runs on
+	// (WithQueue). Register refuses to proceed without one.
 	queue jobs.Queue
 
 	// svc is the module's ObjectService, the runtime that drives the
@@ -103,6 +109,20 @@ type Module struct {
 	// registry its host seams come from (attach). Hosts drive uploads
 	// through it via ObjectService().
 	svc *ObjectService
+
+	// derive is the module's DeriveService, the runtime that turns a
+	// completed image object's bytes into its thumbnail derivative. It is
+	// the backing service of the thumbnail-derive task's handler, which
+	// Register claims on reg.Jobs so a host that drains the registry's
+	// handlers onto its queue gets a worker that produces thumbnails.
+	derive *DeriveService
+
+	// life is the module's LifecycleService, the deletion and expiry
+	// runtime: hosts delete objects through it, schedule a tenant's
+	// periodic sweep through EnqueueExpirySweep, and Register claims the
+	// expiry-sweep task's handler on reg.Jobs the same way it claims the
+	// derive one.
+	life *LifecycleService
 
 	// The policy ObjectService enforces. They are defaults a host
 	// overrides through the With* options below, resolved into the
@@ -124,12 +144,12 @@ type Option func(*Module)
 
 // WithQueue wires the jobs.Queue the module's asynchronous work runs on:
 // the thumbnail-derive task ObjectService.Complete enqueues for every
-// finalized image object, and deletion's task once the delete round lands.
-// Upload finalization itself is synchronous -- Complete runs the
-// revalidation pipeline in the caller's request before it returns -- so
-// the queue carries only the work that may follow a finalize, and the
-// pipeline warns when an enqueue fails rather than failing a finalize that
-// stands on its own.
+// finalized image object, and the expiry-sweep task EnqueueExpirySweep
+// schedules for a tenant's periodic cleanup. Upload finalization itself is
+// synchronous -- Complete runs the revalidation pipeline in the caller's
+// request before it returns -- so the queue carries only the work that may
+// follow a finalize, and the pipeline warns when an enqueue fails rather
+// than failing a finalize that stands on its own.
 //
 // It is REQUIRED: Register returns ErrQueueRequired without one. A storage
 // module that accepts uploads it can never finish processing is worse than
@@ -233,6 +253,8 @@ func NewModule(db *gorm.DB, opts ...Option) *Module {
 		maxObjectLifetime: m.maxObjectLifetime,
 		allowedTypes:      m.allowedTypes,
 	})
+	m.derive = newDeriveService(m.objects, m.derivatives, m.derivativeMaxEdge, m.maxImagePixels)
+	m.life = newLifecycleService(m.objects, m.derivatives, m.queue)
 	return m
 }
 
@@ -316,16 +338,18 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // touches m.db, nothing that enqueues on m.queue.
 //
 // It contributes storage's permissions, its audit vocabulary and its event
-// catalog, and validates the one wiring the module cannot live without:
-// a queue, without which Register returns ErrQueueRequired (see
-// WithQueue's doc comment for the reasoning).
+// catalog, registers the handlers of the two task types the module's
+// services schedule -- the thumbnail-derive task ObjectService.Complete
+// enqueues and the expiry-sweep task EnqueueExpirySweep schedules -- and
+// validates the one wiring the module cannot live without: a queue,
+// without which Register returns ErrQueueRequired (see WithQueue's doc
+// comment for the reasoning).
 //
 // What Register deliberately does NOT do yet: mount the module's routes or
 // declare the apiPath prefix (the HTTP surface is the HTTP round's, spec
-// first), and register the thumbnail-derive task's handler (the service
-// enqueues the type this round, but only the processing round implements
-// the worker that claims it). The registration stays honest about the
-// surface it actually ships.
+// first, and OpenAPISpec answers nil this round). Everything the service
+// layer ships is registered; the registration stays honest about the
+// surface it actually serves.
 func (m *Module) Register(reg *pkgcore.Registry) error {
 	if m.queue == nil {
 		return ErrQueueRequired
@@ -343,10 +367,23 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	if err := reg.Events.Publishes(objectEventDecls...); err != nil {
 		return err
 	}
-	// Hand the registry to the service: its ObjectStore and EventBus are
-	// the seams Complete, Upload and OpenContent read at call time. A plain
-	// assignment -- no I/O -- so Register's no-I/O contract stands.
+	// Hand the registry to the three services: its ObjectStore and
+	// EventBus are the seams Create, Upload, Complete, OpenContent, Delete
+	// and the expiry sweep read at call time. Plain assignments -- no I/O
+	// -- so Register's no-I/O contract stands.
 	m.svc.attach(reg)
+	m.derive.attach(reg)
+	m.life.attach(reg)
+	// Claim the handlers of the tasks the services enqueue and schedule,
+	// so a host that drains reg.Jobs.Handlers() onto its jobs.Queue after
+	// Bootstrap gets a worker that produces thumbnails and sweeps expiry.
+	// Jobs.Handle is a plain catalog insertion, no I/O.
+	if err := reg.Jobs.Handle(taskTypeDeriveThumbnail, deriveHandler{svc: m.derive}); err != nil {
+		return err
+	}
+	if err := reg.Jobs.Handle(taskTypeExpirySweep, expirySweepHandler{svc: m.life}); err != nil {
+		return err
+	}
 	return nil
 }
 

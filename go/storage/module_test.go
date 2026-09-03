@@ -119,6 +119,18 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 		assertContainsAll(t, types, []string{EventObjectCompleted, EventObjectDeleted})
 	})
 
+	t.Run("job handlers", func(t *testing.T) {
+		handlers := reg.Jobs.Handlers()
+		var types []string
+		for jobType := range handlers {
+			types = append(types, jobType)
+		}
+		assertContainsAll(t, types, []string{taskTypeDeriveThumbnail, taskTypeExpirySweep})
+		if len(types) != 2 {
+			t.Errorf("Register registered %d job handler type(s), want exactly the module's own two", len(types))
+		}
+	})
+
 	t.Run("no routes are mounted", func(t *testing.T) {
 		// The absence is asserted, not left implicit: until the HTTP round
 		// ships the spec and the apiPath constant, mounting anything would
@@ -332,28 +344,28 @@ func TestModule_ObjectService_IsStableAndResolvesItsPolicy(t *testing.T) {
 	}
 }
 
-// TestModule_Register_WiresTheServiceHostSeams proves the service's host
-// seams arrive through Register, end to end: svc.host is nil before any
-// registration -- store-needing calls fail closed until then, which
-// object_test.go pins from the service side -- and after Bootstrap through
-// the real kernel it is the registry, whose ObjectStore the standalone
-// kernel resolves for real (a fresh local-directory store). The lifecycle
-// driven here -- create, upload, complete, open content -- therefore runs
-// against the kernel's own store, not a test fake, so a change that stopped
-// Register from attaching the registry would fail this test rather than
-// only the fail-closed one.
+// TestModule_Register_WiresTheServiceHostSeams proves the services' host
+// seams arrive through Register, end to end: each service's host is nil
+// before any registration -- store-needing calls fail closed until then,
+// which object_test.go and cleanup_test.go pin from the service side --
+// and after Bootstrap through the real kernel it is the registry, whose
+// ObjectStore the standalone kernel resolves for real (a fresh
+// local-directory store). The lifecycle driven here -- create, upload,
+// complete, open content -- therefore runs against the kernel's own store,
+// not a test fake, so a change that stopped Register from attaching the
+// registry would fail this test rather than only the fail-closed one.
 func TestModule_Register_WiresTheServiceHostSeams(t *testing.T) {
 	m := newWiredModule(t, newTestDB(t))
-	if m.svc.host != nil {
-		t.Fatal("the service holds a registry before Register; it must fail closed until the module registers")
+	if m.svc.host != nil || m.derive.host != nil || m.life.host != nil {
+		t.Fatal("the services hold a registry before Register; they must fail closed until the module registers")
 	}
 
 	reg, err := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).Bootstrap(context.Background(), m)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	if m.svc.host == nil {
-		t.Fatal("Register did not hand the registry to the service; store-needing calls will fail closed forever")
+	if m.svc.host == nil || m.derive.host == nil || m.life.host == nil {
+		t.Fatal("Register did not hand the registry to the services; store-needing calls will fail closed forever")
 	}
 	if reg.ObjectStore() == nil || reg.EventBus() == nil {
 		t.Fatal("the standalone kernel did not resolve the registry's object store and event bus")
@@ -397,6 +409,41 @@ func TestModule_Register_WiresTheServiceHostSeams(t *testing.T) {
 	}
 	if !bytes.Equal(raw, png) {
 		t.Error("OpenContent did not return the uploaded bytes")
+	}
+}
+
+// TestModule_Register_RegistersTheServicesJobHandlers proves the two
+// handler registrations land on the registry bound to the module's own
+// services -- a host that drains reg.Jobs.Handlers() onto its jobs.Queue
+// after Bootstrap gets a derive worker and an expiry-sweep worker acting
+// on the module that registered them, never on some other module's
+// services. Each handler's behaviour on a real job is pinned by
+// derive_test.go and cleanup_test.go; this test pins the registration the
+// module performs, which those service-side tests cannot see.
+func TestModule_Register_RegistersTheServicesJobHandlers(t *testing.T) {
+	m := newWiredModule(t, nil)
+	reg, err := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).Bootstrap(context.Background(), m)
+	if err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+
+	handlers := reg.Jobs.Handlers()
+	if len(handlers) != 2 {
+		t.Fatalf("Register registered %d job handler type(s), want exactly the module's own two: %v", len(handlers), handlers)
+	}
+
+	d, ok := handlers[taskTypeDeriveThumbnail].(deriveHandler)
+	if !ok {
+		t.Errorf("handler of %q = %T, want deriveHandler", taskTypeDeriveThumbnail, handlers[taskTypeDeriveThumbnail])
+	} else if d.svc != m.derive {
+		t.Error("the derive handler backs a different DeriveService than the module's own")
+	}
+
+	e, ok := handlers[taskTypeExpirySweep].(expirySweepHandler)
+	if !ok {
+		t.Errorf("handler of %q = %T, want expirySweepHandler", taskTypeExpirySweep, handlers[taskTypeExpirySweep])
+	} else if e.svc != m.life {
+		t.Error("the expiry-sweep handler backs a different LifecycleService than the module's own")
 	}
 }
 
