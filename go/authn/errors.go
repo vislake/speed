@@ -1,6 +1,8 @@
 package authn
 
 import (
+	"net/http"
+
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
@@ -199,6 +201,55 @@ var (
 	// ErrInternal is the catch-all for a server-side failure whose detail
 	// must not reach the response body.
 	ErrInternal = apperr.Internal("authn.internal_error")
+
+	// ErrRateLimited is returned when a sliding-window rate-limit
+	// dimension (ratelimit.go) is over limit. It carries a
+	// "retry_after_seconds" parameter. apperr has no TooManyRequests
+	// builder -- every other module's error catalog has so far needed
+	// only the six HTTP statuses the package ships -- so this is built
+	// directly from the exported Error fields, the same way apperr's own
+	// unexported newError does internally.
+	ErrRateLimited = &apperr.Error{Code: "authn.rate_limited", Status: http.StatusTooManyRequests}
+
+	// ErrAccountLocked is returned when an account is inside its
+	// progressive login-failure lockout window (ratelimit.go). It carries
+	// a "retry_after_seconds" parameter. It is distinct from
+	// ErrRateLimited because the two answer different questions to an
+	// operator reading the login history: "too many requests, from
+	// wherever" versus "this specific account is temporarily locked".
+	ErrAccountLocked = &apperr.Error{Code: "authn.account_locked", Status: http.StatusTooManyRequests}
+
+	// ErrVerificationCodeInvalid is the single answer to every failed
+	// phone-login code verification: no code was ever issued, it expired,
+	// it is locked from too many wrong guesses, or the code itself was
+	// wrong. Collapsing all four into one error is the same
+	// user-enumeration and information-minimization defence
+	// ErrInvalidCredentials is for password sign-in.
+	ErrVerificationCodeInvalid = apperr.Unauthorized("authn.verification_code_invalid")
+
+	// ErrSMSDeliveryFailed is returned when a verification code could not
+	// be handed to the SMSSender transport.
+	ErrSMSDeliveryFailed = apperr.Internal("authn.sms_delivery_failed")
+
+	// ErrMFANotEnrolled is returned when an operation needs an ACTIVE TOTP
+	// factor -- confirming one that was never started, regenerating
+	// recovery codes with none enrolled, or a step-up with no confirmed
+	// factor to verify against.
+	ErrMFANotEnrolled = apperr.NotFound("authn.mfa_not_enrolled")
+
+	// ErrMFAAlreadyEnrolled is returned when ConfirmTOTP is called for a
+	// factor that is already active.
+	ErrMFAAlreadyEnrolled = apperr.Conflict("authn.mfa_already_enrolled")
+
+	// ErrMFAInvalidCode is the single answer to every failed second-factor
+	// verification: a wrong TOTP code, a replayed one, or an unknown or
+	// already-used recovery code. Collapsing these is the same
+	// information-minimization defence ErrVerificationCodeInvalid is.
+	ErrMFAInvalidCode = apperr.Unauthorized("authn.mfa_invalid_code")
+
+	// ErrStepUpRequired is returned by RequireStepUp when the calling
+	// Principal's access token carries no recent second-factor proof.
+	ErrStepUpRequired = apperr.Forbidden("authn.step_up_required")
 )
 
 // errorCodes lists every code this module can return, in catalog order. It
@@ -237,4 +288,12 @@ var errorCodes = []string{
 	ErrSSODomainNotAllowed.Code,
 	ErrSSOTokenInvalid.Code,
 	ErrInternal.Code,
+	ErrRateLimited.Code,
+	ErrAccountLocked.Code,
+	ErrVerificationCodeInvalid.Code,
+	ErrSMSDeliveryFailed.Code,
+	ErrMFANotEnrolled.Code,
+	ErrMFAAlreadyEnrolled.Code,
+	ErrMFAInvalidCode.Code,
+	ErrStepUpRequired.Code,
 }

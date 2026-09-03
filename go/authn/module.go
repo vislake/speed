@@ -3,7 +3,9 @@ package authn
 import (
 	"embed"
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"gorm.io/gorm"
@@ -67,6 +69,16 @@ const (
 // page reads the answer from the pre-auth feature endpoint before anyone has
 // signed in.
 const FeatureFlagPasswordLogin = "authn.password_login"
+
+// FeatureFlagSMSLogin gates phone-plus-SMS-code sign-in as a channel. Unlike
+// the social channels below it defaults to ON: it needs no third-party
+// credentials to function -- the standalone deployment mode's console
+// sender always works, and a distributed deployment cannot even finish
+// constructing this module without a real one wired (see
+// ErrMissingDistributedSMSSender) -- so, like password sign-in, there is no
+// "configured but not yet usable" state for the flag to protect the login
+// page from.
+const FeatureFlagSMSLogin = "authn.sms_login"
 
 // Feature flags gating the federated sign-in channels, one per channel plus
 // one for the enterprise relying party.
@@ -142,6 +154,20 @@ const (
 	ConfigKeyOAuthStateTTL = "authn.oauth_state_ttl"
 )
 
+// Configuration keys for phone-login verification codes. Both are dynamic
+// rather than bootstrap: an operator tunes them per deployment the same way
+// as the token TTLs above, and neither depends on the machine the process
+// runs on the way the argon2id cost parameters do.
+const (
+	// ConfigKeySMSCodeTTL is how long a phone-login verification code
+	// stays valid after it is sent.
+	ConfigKeySMSCodeTTL = "authn.sms_code_ttl"
+	// ConfigKeySMSCodeMaxAttempts is how many wrong codes a single issued
+	// verification code tolerates before it locks and a fresh one must be
+	// requested.
+	ConfigKeySMSCodeMaxAttempts = "authn.sms_code_max_attempts"
+)
+
 // options accumulates everything NewService and NewModule can be configured
 // with.
 type options struct {
@@ -162,6 +188,14 @@ type options struct {
 	redirects        RedirectAllowlist
 	oauthStateTTL    time.Duration
 	federationClient *http.Client
+
+	// SMS and MFA state: the transport a phone-login code is delivered
+	// through, the deployment mode NewModule enforces it against, and the
+	// code lifetime/attempt budget.
+	smsSender          SMSSender
+	deploymentMode     pkgcore.DeploymentMode
+	smsCodeTTL         time.Duration
+	smsCodeMaxAttempts int
 }
 
 // Option configures the authn module and the service inside it.
@@ -327,19 +361,69 @@ func WithFederationHTTPClient(client *http.Client) Option {
 	}
 }
 
+// WithSMSSender wires the transport phone-login verification codes are
+// delivered through. See ErrMissingDistributedSMSSender for what happens
+// when it is omitted under WithDeploymentMode(pkgcore.
+// DeploymentModeDistributed); the standalone deployment mode, and a caller
+// that never calls WithDeploymentMode at all, default to
+// NewConsoleSMSSender.
+func WithSMSSender(sender SMSSender) Option {
+	return func(o *options) { o.smsSender = sender }
+}
+
+// WithDeploymentMode records which deployment mode this module is being
+// wired for, solely so newOptions can enforce that a distributed deployment
+// supplies an explicit SMSSender rather than silently defaulting to one
+// that prints to a writer nobody in that deployment mode is reading. This
+// is the one piece of deployment-mode awareness this module carries, and it
+// lives entirely in this wiring-time validation function -- never in
+// Service's business logic -- for the same reason pkgcore.Kernel's own
+// resolveMailer and resolveObjectStore live in kernel wiring rather than in
+// a business module: "do not branch on deployment mode in business logic"
+// governs behavior selection inside a request, not a once-at-construction-time
+// checked precondition. Omitting this option is equivalent to standalone: it
+// is not itself a required option and existing callers that never call it
+// keep building successfully.
+func WithDeploymentMode(mode pkgcore.DeploymentMode) Option {
+	return func(o *options) { o.deploymentMode = mode }
+}
+
+// WithSMSCodeTTL sets how long a phone-login verification code stays valid.
+// A non-positive duration is ignored.
+func WithSMSCodeTTL(d time.Duration) Option {
+	return func(o *options) {
+		if d > 0 {
+			o.smsCodeTTL = d
+		}
+	}
+}
+
+// WithSMSCodeMaxAttempts sets how many wrong codes a single issued
+// verification code tolerates before it locks and a fresh one must be
+// requested. A non-positive value is ignored.
+func WithSMSCodeMaxAttempts(n int) Option {
+	return func(o *options) {
+		if n > 0 {
+			o.smsCodeMaxAttempts = n
+		}
+	}
+}
+
 // newOptions applies opts over the defaults and rejects a configuration the
 // module cannot run with.
 func newOptions(opts []Option) (options, error) {
 	cfg := options{
-		now:            time.Now,
-		issuer:         DefaultIssuer,
-		accessTTL:      DefaultAccessTokenTTL,
-		refreshTTL:     DefaultRefreshTokenTTL,
-		sessionTTL:     DefaultSessionTTL,
-		revocationMode: RevocationModeNatural,
-		passwordParams: DefaultPasswordParams(),
-		passwordPolicy: DefaultPasswordPolicy(),
-		oauthStateTTL:  DefaultOAuthStateTTL,
+		now:                time.Now,
+		issuer:             DefaultIssuer,
+		accessTTL:          DefaultAccessTokenTTL,
+		refreshTTL:         DefaultRefreshTokenTTL,
+		sessionTTL:         DefaultSessionTTL,
+		revocationMode:     RevocationModeNatural,
+		passwordParams:     DefaultPasswordParams(),
+		passwordPolicy:     DefaultPasswordPolicy(),
+		oauthStateTTL:      DefaultOAuthStateTTL,
+		smsCodeTTL:         DefaultSMSCodeTTL,
+		smsCodeMaxAttempts: DefaultSMSCodeMaxAttempts,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -352,6 +436,12 @@ func newOptions(opts []Option) (options, error) {
 	}
 	if len(cfg.blindIndexKey) != blindIndexKeySize {
 		return options{}, errors.New("authn: a 32-byte blind-index key is required; supply one with WithBlindIndexKey")
+	}
+	if cfg.smsSender == nil {
+		if cfg.deploymentMode == pkgcore.DeploymentModeDistributed {
+			return options{}, fmt.Errorf("%w: wire one with WithSMSSender", ErrMissingDistributedSMSSender)
+		}
+		cfg.smsSender = NewConsoleSMSSender(os.Stdout)
 	}
 	return cfg, nil
 }
@@ -447,6 +537,11 @@ func featureFlags() []pkgcore.FeatureFlag {
 			Key:         FeatureFlagPasswordLogin,
 			Default:     true,
 			Description: "Allows signing in with an email address or phone number and a password.",
+		},
+		{
+			Key:         FeatureFlagSMSLogin,
+			Default:     true,
+			Description: "Allows signing in with a phone number and a one-time SMS code.",
 		},
 		{
 			Key:         FeatureFlagSocialGoogle,
@@ -565,6 +660,24 @@ func configItems() []pkgcore.ConfigItem {
 			Max:         time.Hour,
 			Group:       moduleName,
 			Description: "How long a social or single sign-on authorization flow may take between leaving for the provider and returning.",
+		},
+		{
+			Key:         ConfigKeySMSCodeTTL,
+			Type:        "duration",
+			Default:     DefaultSMSCodeTTL,
+			Min:         time.Minute,
+			Max:         time.Hour,
+			Group:       moduleName,
+			Description: "How long a phone-login verification code stays valid after it is sent.",
+		},
+		{
+			Key:         ConfigKeySMSCodeMaxAttempts,
+			Type:        "int",
+			Default:     DefaultSMSCodeMaxAttempts,
+			Min:         3,
+			Max:         10,
+			Group:       moduleName,
+			Description: "How many wrong codes a single issued verification code tolerates before it locks and a fresh one must be requested.",
 		},
 	}
 	return append(items, socialCredentialItems()...)

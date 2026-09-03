@@ -59,6 +59,9 @@ type RegisterInput struct {
 	// Locale is the language backend-generated content for this user is
 	// rendered in.
 	Locale string
+	// IP is the requesting client's address, for the registration rate
+	// limit.
+	IP string
 }
 
 // LoginInput describes a password sign-in attempt.
@@ -121,6 +124,17 @@ type Service struct {
 	redirects        RedirectAllowlist
 	trustedProviders []string
 	sso              *SSOService
+
+	// SMS phone-login and MFA state.
+	kv                 pkgcore.KVStore
+	guard              *rateGuard
+	sms                SMSSender
+	smsCodeTTL         time.Duration
+	smsCodeMaxAttempts int
+	verificationCodes  *VerificationCodeRepository
+	mfaFactors         *MFAFactorRepository
+	recoveryCodes      *RecoveryCodeRepository
+	issuer             string
 }
 
 // NewService assembles a Service over db, using bus and kv -- the pkgcore
@@ -183,6 +197,18 @@ func NewService(db *gorm.DB, bus pkgcore.EventBus, kv pkgcore.KVStore, opts ...O
 	if err != nil {
 		return nil, err
 	}
+	verificationCodes, err := NewVerificationCodeRepository(db)
+	if err != nil {
+		return nil, err
+	}
+	mfaFactors, err := NewMFAFactorRepository(db)
+	if err != nil {
+		return nil, err
+	}
+	recoveryCodes, err := NewRecoveryCodeRepository(db)
+	if err != nil {
+		return nil, err
+	}
 
 	tokenOpts := []TokenOption{
 		WithTokenTTL(cfg.accessTTL),
@@ -221,6 +247,16 @@ func NewService(db *gorm.DB, bus pkgcore.EventBus, kv pkgcore.KVStore, opts ...O
 		states:           states,
 		redirects:        cfg.redirects,
 		trustedProviders: slices.Clone(cfg.trustedProviders),
+
+		kv:                 kv,
+		guard:              newRateGuard(kv),
+		sms:                cfg.smsSender,
+		smsCodeTTL:         cfg.smsCodeTTL,
+		smsCodeMaxAttempts: cfg.smsCodeMaxAttempts,
+		verificationCodes:  verificationCodes,
+		mfaFactors:         mfaFactors,
+		recoveryCodes:      recoveryCodes,
+		issuer:             cfg.issuer,
 	}
 
 	sso, err := newSSOService(svc, db, cfg)
@@ -265,6 +301,10 @@ func (s *Service) Verifier() *Verifier { return s.verifier }
 // email, which needs the delivery and verification flows; until those land,
 // the honest position is that the conflict is visible here.
 func (s *Service) Register(ctx context.Context, in RegisterInput) (*User, error) {
+	if err := s.guard.CheckRegister(ctx, in.IP); err != nil {
+		return nil, err
+	}
+
 	email := strings.TrimSpace(in.Email)
 	phone := strings.TrimSpace(in.Phone)
 	if email == "" && phone == "" {
@@ -335,6 +375,18 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (*User, error)
 // the account owner's own security page.
 func (s *Service) Login(ctx context.Context, in LoginInput) (*TokenPair, error) {
 	identifier := strings.TrimSpace(in.Identifier)
+	// account is the blind index the progressive lockout and the
+	// per-account sliding window key on. It is computed even for an
+	// identifier this module cannot recognize (identifierIndex returns ""
+	// rather than an error for that case), so CheckLogin always sees a
+	// best-effort account dimension -- checked BEFORE any password work,
+	// so a locked-out or rate-limited caller cannot force an argon2id
+	// derivation merely by retrying.
+	account := s.identifierIndex(identifier)
+	if err := s.guard.CheckLogin(ctx, account, in.IP); err != nil {
+		return nil, err
+	}
+
 	if identifier == "" {
 		// Recorded and announced like any other failure rather than
 		// returned early. An empty identifier is still an attempt from
@@ -365,14 +417,16 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*TokenPair, error) 
 		// stopwatch. Without this the enumeration oracle the error
 		// message closes is simply reopened as a timing side channel.
 		s.burnPasswordWork(in.Password)
-		s.recordFailure(ctx, in, "", s.identifierIndex(identifier), FailureReasonUnknownUser)
+		s.recordFailure(ctx, in, "", account, FailureReasonUnknownUser)
+		s.guard.RecordLoginFailure(ctx, account)
 		return nil, ErrInvalidCredentials
 	}
 
-	index := s.identifierIndex(identifier)
+	index := account
 	if user.PasswordHash == "" {
 		s.burnPasswordWork(in.Password)
 		s.recordFailure(ctx, in, user.ID, index, FailureReasonNoPassword)
+		s.guard.RecordLoginFailure(ctx, index)
 		return nil, ErrInvalidCredentials
 	}
 
@@ -380,14 +434,17 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*TokenPair, error) 
 	if err != nil {
 		obs.FromContext(ctx).Error("stored password hash is unreadable", "user_id", user.ID, "error", err)
 		s.recordFailure(ctx, in, user.ID, index, FailureReasonBadPassword)
+		s.guard.RecordLoginFailure(ctx, index)
 		return nil, ErrInvalidCredentials
 	}
 	if !ok {
 		s.recordFailure(ctx, in, user.ID, index, FailureReasonBadPassword)
+		s.guard.RecordLoginFailure(ctx, index)
 		return nil, ErrInvalidCredentials
 	}
 	if user.Status != UserStatusActive {
 		s.recordFailure(ctx, in, user.ID, index, FailureReasonSuspended)
+		s.guard.RecordLoginFailure(ctx, index)
 		return nil, ErrInvalidCredentials
 	}
 
@@ -397,6 +454,7 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*TokenPair, error) 
 		return nil, err
 	}
 
+	s.guard.RecordLoginSuccess(ctx, index)
 	s.upgradePasswordHash(ctx, user, in.Password)
 
 	amr := []string{MethodPassword}
@@ -547,15 +605,26 @@ func (s *Service) Logout(ctx context.Context, sessionID string) error {
 	return s.sessions.Revoke(ctx, sessionID, RevokeReasonLogout)
 }
 
-// mintPair signs an access token for the session and assembles the response.
-// issued.Secret is empty for a tenant switch, which reuses the caller's
-// existing refresh token rather than minting one.
+// mintPair signs an access token for the session and assembles the
+// response, using the session's OWN authentication methods. issued.Secret is
+// empty for a tenant switch, which reuses the caller's existing refresh
+// token rather than minting one.
 func (s *Service) mintPair(user *User, session *Session, tenantID pkgcore.TenantID, issued IssuedRefreshToken) (*TokenPair, error) {
+	return s.mintPairWithAMR(user, session, tenantID, issued, session.AMRList())
+}
+
+// mintPairWithAMR is mintPair generalized to an explicit amr, which
+// VerifyStepUp (mfa.go) uses to mint a token carrying an ENRICHED AMR --
+// the session's own methods plus the second factor just verified -- without
+// persisting that enrichment back to the session row. See VerifyStepUp's
+// own doc comment for why not persisting it is what bounds the elevation to
+// one access-token lifetime.
+func (s *Service) mintPairWithAMR(user *User, session *Session, tenantID pkgcore.TenantID, issued IssuedRefreshToken, amr []string) (*TokenPair, error) {
 	principal := Principal{
 		UserID:    user.ID,
 		TenantID:  tenantID,
 		SessionID: session.ID,
-		AMR:       session.AMRList(),
+		AMR:       amr,
 	}
 	principal.Email = user.Email
 

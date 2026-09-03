@@ -54,6 +54,18 @@ const (
 	// EventIdentityUnbound is published when an external identity is
 	// detached from a user.
 	EventIdentityUnbound = "authn.identity.unbound"
+
+	// EventMFAEnrolled is published when a user confirms a new second
+	// factor (Service.ConfirmTOTP). Like EventIdentityBound, this is a
+	// security-relevant change to how the account can be accessed, so it
+	// is announced rather than only written down.
+	EventMFAEnrolled = "authn.mfa.enrolled"
+
+	// EventMFARecoveryCodesRegenerated is published when a user's
+	// recovery-code batch is replaced (Service.RegenerateRecoveryCodes),
+	// which silently invalidates every code from the previous batch --
+	// exactly the kind of change its owner should hear about.
+	EventMFARecoveryCodesRegenerated = "authn.mfa.recovery_codes_regenerated"
 )
 
 // Audit actions this module registers. They use the present-tense verb form
@@ -78,6 +90,11 @@ const (
 	// AuditActionSSOConfigure records a tenant's enterprise single
 	// sign-on configuration being written.
 	AuditActionSSOConfigure = "authn.sso.configure"
+	// AuditActionMFAEnroll records a second factor being confirmed.
+	AuditActionMFAEnroll = "authn.mfa.enroll"
+	// AuditActionMFARecoveryCodesRegenerate records a recovery-code batch
+	// being replaced.
+	AuditActionMFARecoveryCodesRegenerate = "authn.mfa.recovery_codes_regenerate"
 )
 
 // UserCreatedPayload is the Event.Payload of EventUserCreated.
@@ -193,6 +210,17 @@ type IdentityUnboundPayload struct {
 	Provider string
 }
 
+// MFAEnrolledPayload is the Event.Payload of both EventMFAEnrolled and
+// EventMFARecoveryCodesRegenerated. It carries no secret and no code: a
+// subscriber that needs to notify the account owner does so with its own
+// template, not with anything from this payload.
+type MFAEnrolledPayload struct {
+	// UserID is the account the change happened on.
+	UserID string
+	// Type is one of the MFAType* constants.
+	Type string
+}
+
 // eventDecls is what Module.Register declares to the registry. Declaring an
 // event is a documentation and mapping contract -- it is what lets the
 // integration module map internal facts onto a versioned public schema
@@ -239,6 +267,16 @@ var eventDecls = []pkgcore.EventDecl{
 		PayloadType: "authn.IdentityUnboundPayload",
 		Description: "Published when an external social or single sign-on identity is detached from an account.",
 	},
+	{
+		Type:        EventMFAEnrolled,
+		PayloadType: "authn.MFAEnrolledPayload",
+		Description: "Published when a user confirms a new second factor.",
+	},
+	{
+		Type:        EventMFARecoveryCodesRegenerated,
+		PayloadType: "authn.MFAEnrolledPayload",
+		Description: "Published when a user's MFA recovery-code batch is replaced, invalidating the previous one.",
+	},
 }
 
 // auditActions is what Module.Register registers with the audit-action
@@ -251,4 +289,6 @@ var auditActions = []string{
 	AuditActionIdentityBind,
 	AuditActionIdentityUnbind,
 	AuditActionSSOConfigure,
+	AuditActionMFAEnroll,
+	AuditActionMFARecoveryCodesRegenerate,
 }
