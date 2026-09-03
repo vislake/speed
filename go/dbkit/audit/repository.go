@@ -64,6 +64,42 @@ func (r *Repository) Insert(ctx context.Context, evt *AuditEvent) error {
 	return nil
 }
 
+// InsertIdempotent behaves exactly like Insert, except a duplicate primary
+// key -- evt.ID colliding with an already-persisted row -- is treated as
+// "this exact event was already recorded" rather than an error: it
+// returns nil without inserting a second row, leaving the existing one
+// untouched (Repository has no Update method, and this is not one either).
+//
+// This exists for Module's own event subscribers alone (onWriteCaptured,
+// onRecorded, onSystemContextEntered in module.go), which set evt.ID to a
+// value deterministically derived from the event's own content before
+// calling this method (see module.go's auditDeterministicEventID) rather
+// than leaving it for Insert to randomly generate. That derivation is what
+// makes the dedup possible: in distributed deployment mode,
+// pkgcore.RedisEventBus delivers every event to every replica once each
+// (its own doc comment: "each event is delivered to every replica exactly
+// once" -- once per replica, not once system-wide, by design, since most
+// subscribers are not writing to one shared row), so a single real action
+// independently reaches every replica's Module subscriber. Without this
+// method, each of those independent deliveries would call Insert with
+// evt.ID left empty, each generating its own distinct random UUID, so a
+// single note.create would leave N audit_events rows for N replicas
+// instead of 1 -- see go/dbkit/audit/AGENTS.md's "Multi-replica delivery"
+// section for the full write-up.
+//
+// Insert itself keeps its stricter, non-idempotent contract for every
+// other caller: a caller-supplied duplicate ID from outside this
+// package's own deterministic derivation remains a genuine error, since
+// Repository has no way to know whether that caller intended idempotent
+// retry semantics or made an honest mistake.
+func (r *Repository) InsertIdempotent(ctx context.Context, evt *AuditEvent) error {
+	err := r.Insert(ctx, evt)
+	if err == nil || errors.Is(err, gorm.ErrDuplicatedKey) {
+		return nil
+	}
+	return err
+}
+
 // Get returns the audit event with the given id, or (nil, nil) when no
 // such row exists -- mirroring go/config's (*store).get convention for
 // platform data, rather than dbkit.Repository[T]'s ErrRecordNotFound

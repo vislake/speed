@@ -119,6 +119,97 @@ func TestRepository_Insert_PopulatesOccurredAtWhenZero(t *testing.T) {
 	}
 }
 
+// TestRepository_Insert_DuplicateID_Fails pins Insert's own documented,
+// stricter, non-idempotent contract -- a duplicate caller-supplied ID is a
+// genuine error -- so a future change to InsertIdempotent's dedup logic
+// cannot accidentally loosen Insert itself along with it.
+func TestRepository_Insert_DuplicateID_Fails(t *testing.T) {
+	db := openAuditTestDB(t)
+	repo := NewRepository(db)
+
+	first := sampleEvent()
+	first.ID = "duplicate-id"
+	if err := repo.Insert(context.Background(), first); err != nil {
+		t.Fatalf("Insert() [first] error = %v", err)
+	}
+
+	second := sampleEvent()
+	second.ID = "duplicate-id"
+	if err := repo.Insert(context.Background(), second); err == nil {
+		t.Fatal("Insert() [second, duplicate ID] error = nil, want a primary-key conflict")
+	}
+}
+
+// TestRepository_InsertIdempotent_DuplicateID_IsANoOp is the regression
+// test for the finding recorded in go/dbkit/audit/AGENTS.md's
+// "Multi-replica delivery" section: in distributed deployment mode with
+// more than one replica, pkgcore.RedisEventBus delivers every event to
+// every replica once each, so Module's subscribers (module.go's
+// onWriteCaptured, onRecorded, onSystemContextEntered) independently call
+// Insert once per replica for the SAME logical event. Before
+// InsertIdempotent existed, each of those calls generated its own random
+// ID (Insert's default when evt.ID is left empty), so N replicas produced
+// N rows for one real action. This test proves the fix at the Repository
+// layer directly: inserting the same evt.ID twice through
+// InsertIdempotent succeeds both times but persists exactly one row --
+// module_test.go's
+// TestModule_OnWriteCaptured_DeliveredToMultipleReplicas_PersistsExactlyOnce
+// and its two siblings prove the same property end to end, through
+// Module's real deterministic-ID derivation.
+func TestRepository_InsertIdempotent_DuplicateID_IsANoOp(t *testing.T) {
+	db := openAuditTestDB(t)
+	repo := NewRepository(db)
+
+	first := sampleEvent()
+	first.ID = "replica-shared-id"
+	if err := repo.InsertIdempotent(context.Background(), first); err != nil {
+		t.Fatalf("InsertIdempotent() [replica A] error = %v", err)
+	}
+
+	second := sampleEvent()
+	second.ID = "replica-shared-id"
+	if err := repo.InsertIdempotent(context.Background(), second); err != nil {
+		t.Fatalf("InsertIdempotent() [replica B, same ID] error = %v, want nil (a duplicate ID must be a silent no-op, not an error)", err)
+	}
+
+	got, err := repo.Get(context.Background(), "replica-shared-id")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("Get() = nil, want the row from the first InsertIdempotent() call")
+	}
+
+	rows, err := repo.ListByTenant(context.Background(), "tenant-a")
+	if err != nil {
+		t.Fatalf("ListByTenant() error = %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("ListByTenant() returned %d rows, want exactly 1 (the second InsertIdempotent() call must not have inserted a second row)", len(rows))
+	}
+}
+
+// TestRepository_InsertIdempotent_NewID_Inserts proves InsertIdempotent
+// behaves exactly like Insert for the ordinary, non-duplicate case.
+func TestRepository_InsertIdempotent_NewID_Inserts(t *testing.T) {
+	db := openAuditTestDB(t)
+	repo := NewRepository(db)
+
+	evt := sampleEvent()
+	evt.ID = "fresh-id"
+	if err := repo.InsertIdempotent(context.Background(), evt); err != nil {
+		t.Fatalf("InsertIdempotent() error = %v", err)
+	}
+
+	got, err := repo.Get(context.Background(), "fresh-id")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("Get() = nil, want the inserted event")
+	}
+}
+
 func TestRepository_Get_ReturnsInsertedEvent(t *testing.T) {
 	db := openAuditTestDB(t)
 	repo := NewRepository(db)

@@ -5,8 +5,10 @@ import (
 	"embed"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
@@ -155,6 +157,7 @@ func (m *Module) onWriteCaptured(ctx context.Context, evt pkgcore.Event) error {
 	}
 
 	row := &AuditEvent{
+		ID:         auditDeterministicEventID(dbkit.EventWriteCaptured, payload.OccurredAt, payload.TenantID, payload.ResourceType, payload.ResourceID, payload.Operation, string(payload.Actor.Type), payload.Actor.ID),
 		Action:     payload.ResourceType + "." + payload.Operation,
 		TenantID:   payload.TenantID,
 		OccurredAt: payload.OccurredAt,
@@ -164,7 +167,7 @@ func (m *Module) onWriteCaptured(ctx context.Context, evt pkgcore.Event) error {
 	row.SetResource(Resource{Type: payload.ResourceType, ID: payload.ResourceID})
 	row.SetResult(Result{Success: true})
 	row.Changes = changesJSON(payload.Before, payload.After)
-	return m.repo.Insert(ctx, row)
+	return m.repo.InsertIdempotent(ctx, row)
 }
 
 // onRecorded normalizes a RecordedEvent (Emit's own event type) into an
@@ -177,6 +180,7 @@ func (m *Module) onRecorded(ctx context.Context, evt pkgcore.Event) error {
 	}
 
 	row := &AuditEvent{
+		ID:         auditDeterministicEventID(EventRecorded, payload.OccurredAt, payload.TenantID, payload.Action, payload.Resource.Type, payload.Resource.ID, string(payload.Actor.Type), payload.Actor.ID),
 		Action:     payload.Action,
 		TenantID:   payload.TenantID,
 		OccurredAt: payload.OccurredAt,
@@ -188,7 +192,7 @@ func (m *Module) onRecorded(ctx context.Context, evt pkgcore.Event) error {
 	if payload.Changes != nil {
 		row.Changes = changesJSON(payload.Changes.Before, payload.Changes.After)
 	}
-	return m.repo.Insert(ctx, row)
+	return m.repo.InsertIdempotent(ctx, row)
 }
 
 // onSystemContextEntered normalizes tenancy's already-shipped
@@ -206,6 +210,7 @@ func (m *Module) onSystemContextEntered(ctx context.Context, evt pkgcore.Event) 
 	}
 
 	row := &AuditEvent{
+		ID:         auditDeterministicEventID(tenancySystemContextEnteredEventType, enteredAt, string(evt.TenantID), actor, purpose, ticket),
 		Action:     tenancySystemContextEnteredEventType,
 		TenantID:   string(evt.TenantID),
 		OccurredAt: enteredAt,
@@ -216,7 +221,50 @@ func (m *Module) onSystemContextEntered(ctx context.Context, evt pkgcore.Event) 
 	if ticket != "" {
 		row.Changes = changesJSON(nil, map[string]any{"ticket": ticket})
 	}
-	return m.repo.Insert(ctx, row)
+	return m.repo.InsertIdempotent(ctx, row)
+}
+
+// auditEventIDNamespace is a fixed, arbitrary UUID used as the namespace
+// argument to uuid.NewSHA1 in auditDeterministicEventID, exactly the way
+// any UUIDv5 namespace constant is meant to be used: fixed so the same
+// input always yields the same output, arbitrary because nothing outside
+// this package ever needs to recognize it as meaningful. Generated once
+// with `uuidgen`; never reused as a namespace for anything else.
+var auditEventIDNamespace = uuid.MustParse("6f2a9b3e-6c9c-4e3f-8f1a-9d9b7e2b7b41")
+
+// auditDeterministicEventID derives an AuditEvent.ID deterministically
+// from eventType, occurredAt and parts, using uuid.NewSHA1 (a UUIDv5-style,
+// namespace-and-content hash) rather than the random UUIDs Repository.Insert
+// generates by default.
+//
+// It exists so that Module's three event subscribers (onWriteCaptured,
+// onRecorded, onSystemContextEntered) can call Repository.InsertIdempotent
+// with an ID that is the SAME across every replica that independently
+// receives the SAME underlying event -- see InsertIdempotent's doc comment
+// for why that is necessary in distributed deployment mode -- while still
+// being (for all practical purposes) distinct for any two genuinely
+// different events. occurredAt is taken at nanosecond precision
+// (time.RFC3339Nano) specifically so that two distinct real actions on the
+// same resource by the same actor essentially never collide: they would
+// have to share the same tenant, resource, actor, operation AND the same
+// nanosecond timestamp, which does not happen outside of the exact
+// redelivery this function exists to detect. occurredAt is formatted as
+// UTC RFC3339Nano rather than hashed as a time.Time value directly because
+// a time.Time decoded from JSON (the shape a remote replica's copy of the
+// SAME event takes -- see writeCapturedFromWire/recordedFromWire) is not
+// == or reflect.DeepEqual to the original in-process value (no monotonic
+// reading, and Location may differ); formatting first normalizes both to
+// an identical string.
+func auditDeterministicEventID(eventType string, occurredAt time.Time, parts ...string) string {
+	all := make([]string, 0, len(parts)+2)
+	all = append(all, eventType, occurredAt.UTC().Format(time.RFC3339Nano))
+	all = append(all, parts...)
+	// \x1f (the ASCII "unit separator") joins the parts so that, e.g.,
+	// parts {"ab", "c"} and {"a", "bc"} never hash identically -- a plain
+	// "" or "|" separator could collide across a field boundary a real
+	// tenant ID, resource ID or actor ID might one day contain.
+	data := strings.Join(all, "\x1f")
+	return uuid.NewSHA1(auditEventIDNamespace, []byte(data)).String()
 }
 
 // changesJSON marshals before and after into a Diff-shaped

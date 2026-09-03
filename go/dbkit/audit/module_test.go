@@ -330,3 +330,146 @@ func TestChangesJSON_Populated_MarshalsBoth(t *testing.T) {
 		t.Errorf("decoded = %+v, want Before.a=1 After.a=2", decoded)
 	}
 }
+
+// TestModule_OnWriteCaptured_DeliveredToMultipleReplicas_PersistsExactlyOnce
+// reproduces the multi-replica duplication bug this round's review found:
+// in distributed deployment mode, pkgcore.RedisEventBus delivers a single
+// published event to every replica once each (its own doc comment: "each
+// event is delivered to every replica exactly once" -- once per replica,
+// not once system-wide), and every replica independently runs
+// onWriteCaptured against the SAME shared database. Before
+// auditDeterministicEventID/InsertIdempotent existed, each independent
+// call to Insert generated its own random UUID, so a single real write
+// left one audit_events row per replica instead of one row total.
+//
+// This test simulates exactly that: onWriteCaptured is invoked twice for
+// the SAME logical write -- once as the publishing replica would see it
+// (the concrete dbkit.WriteCapturedEvent struct, delivered synchronously
+// in-process) and once as every OTHER replica would see it (the identical
+// event decoded from JSON, the shape pkgcore.RedisEventBus's Redis Streams
+// transport reconstructs it as -- see the sibling
+// TestModule_OnWriteCaptured_JSONMapPayload_PersistsAuditEvent for that
+// same round trip in isolation) -- against the one shared Module/db pair a
+// real deployment's replicas would also share, and asserts exactly one row
+// results, not two.
+func TestModule_OnWriteCaptured_DeliveredToMultipleReplicas_PersistsExactlyOnce(t *testing.T) {
+	_, m := newRegisteredModule(t)
+
+	original := dbkit.WriteCapturedEvent{
+		Actor:        pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1"},
+		TenantID:     "tenant-a",
+		ResourceType: "note",
+		ResourceID:   "note-1",
+		Operation:    "create",
+		After:        map[string]any{"title": "Meeting notes"},
+		OccurredAt:   time.Now(),
+	}
+	raw, marshalErr := json.Marshal(original)
+	if marshalErr != nil {
+		t.Fatalf("json.Marshal() error = %v", marshalErr)
+	}
+	var asMap any
+	if unmarshalErr := json.Unmarshal(raw, &asMap); unmarshalErr != nil {
+		t.Fatalf("json.Unmarshal() error = %v", unmarshalErr)
+	}
+
+	ctx := context.Background()
+	// Replica A: the publishing replica's own synchronous, in-process
+	// delivery -- the concrete struct.
+	if err := m.onWriteCaptured(ctx, pkgcore.Event{Type: dbkit.EventWriteCaptured, TenantID: "tenant-a", Payload: original}); err != nil {
+		t.Fatalf("onWriteCaptured() [replica A] error = %v", err)
+	}
+	// Replica B: a remote replica's reader goroutine delivering the SAME
+	// event after its own JSON round trip through Redis Streams.
+	if err := m.onWriteCaptured(ctx, pkgcore.Event{Type: dbkit.EventWriteCaptured, TenantID: "tenant-a", Payload: asMap}); err != nil {
+		t.Fatalf("onWriteCaptured() [replica B] error = %v", err)
+	}
+
+	rows, err := m.repo.ListByTenant(ctx, "tenant-a")
+	if err != nil {
+		t.Fatalf("ListByTenant() error = %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("ListByTenant() returned %d rows, want exactly 1 (one real write delivered to 2 replicas must persist once, not once per replica)", len(rows))
+	}
+}
+
+// TestModule_OnRecorded_DeliveredToMultipleReplicas_PersistsExactlyOnce is
+// onRecorded's counterpart of
+// TestModule_OnWriteCaptured_DeliveredToMultipleReplicas_PersistsExactlyOnce
+// -- see that test's doc comment for the scenario being reproduced.
+func TestModule_OnRecorded_DeliveredToMultipleReplicas_PersistsExactlyOnce(t *testing.T) {
+	_, m := newRegisteredModule(t)
+
+	original := RecordedEvent{
+		Actor:      pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1"},
+		TenantID:   "tenant-a",
+		Action:     "notes.note.create",
+		Resource:   Resource{Type: "note", ID: "note-1"},
+		Result:     Result{Success: true},
+		OccurredAt: time.Now(),
+	}
+	raw, marshalErr := json.Marshal(original)
+	if marshalErr != nil {
+		t.Fatalf("json.Marshal() error = %v", marshalErr)
+	}
+	var asMap any
+	if unmarshalErr := json.Unmarshal(raw, &asMap); unmarshalErr != nil {
+		t.Fatalf("json.Unmarshal() error = %v", unmarshalErr)
+	}
+
+	ctx := context.Background()
+	if err := m.onRecorded(ctx, pkgcore.Event{Type: EventRecorded, TenantID: "tenant-a", Payload: original}); err != nil {
+		t.Fatalf("onRecorded() [replica A] error = %v", err)
+	}
+	if err := m.onRecorded(ctx, pkgcore.Event{Type: EventRecorded, TenantID: "tenant-a", Payload: asMap}); err != nil {
+		t.Fatalf("onRecorded() [replica B] error = %v", err)
+	}
+
+	rows, err := m.repo.ListByTenant(ctx, "tenant-a")
+	if err != nil {
+		t.Fatalf("ListByTenant() error = %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("ListByTenant() returned %d rows, want exactly 1 (one real Emit delivered to 2 replicas must persist once, not once per replica)", len(rows))
+	}
+}
+
+// TestModule_OnSystemContextEntered_DeliveredToMultipleReplicas_PersistsExactlyOnce
+// is onSystemContextEntered's counterpart of
+// TestModule_OnWriteCaptured_DeliveredToMultipleReplicas_PersistsExactlyOnce
+// -- see that test's doc comment for the scenario being reproduced.
+func TestModule_OnSystemContextEntered_DeliveredToMultipleReplicas_PersistsExactlyOnce(t *testing.T) {
+	_, m := newRegisteredModule(t)
+
+	original := fakeSystemContextEnteredEvent{
+		Actor:     "platform-admin-1",
+		Purpose:   "admin.tenant_search",
+		Ticket:    "SUP-1234",
+		EnteredAt: time.Now(),
+	}
+	raw, marshalErr := json.Marshal(original)
+	if marshalErr != nil {
+		t.Fatalf("json.Marshal() error = %v", marshalErr)
+	}
+	var asMap any
+	if unmarshalErr := json.Unmarshal(raw, &asMap); unmarshalErr != nil {
+		t.Fatalf("json.Unmarshal() error = %v", unmarshalErr)
+	}
+
+	ctx := context.Background()
+	if err := m.onSystemContextEntered(ctx, pkgcore.Event{Type: tenancySystemContextEnteredEventType, TenantID: "tenant-a", Payload: original}); err != nil {
+		t.Fatalf("onSystemContextEntered() [replica A] error = %v", err)
+	}
+	if err := m.onSystemContextEntered(ctx, pkgcore.Event{Type: tenancySystemContextEnteredEventType, TenantID: "tenant-a", Payload: asMap}); err != nil {
+		t.Fatalf("onSystemContextEntered() [replica B] error = %v", err)
+	}
+
+	rows, err := m.repo.ListByTenant(ctx, "tenant-a")
+	if err != nil {
+		t.Fatalf("ListByTenant() error = %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("ListByTenant() returned %d rows, want exactly 1 (one real system-context grant delivered to 2 replicas must persist once, not once per replica)", len(rows))
+	}
+}
