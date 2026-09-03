@@ -242,16 +242,16 @@ function parseFieldErrors(entries: unknown[]): FieldError[] {
     ) {
       continue
     }
-    const fieldError: FieldError = {
-      field: candidate.field,
-      code: candidate.code,
-    }
-    if (
+    const params =
       typeof candidate.params === 'object' &&
       candidate.params !== null &&
       !Array.isArray(candidate.params)
-    ) {
-      fieldError.params = candidate.params as Record<string, unknown>
+        ? (candidate.params as Record<string, unknown>)
+        : undefined
+    const fieldError: FieldError = {
+      field: candidate.field,
+      code: candidate.code,
+      ...(params === undefined ? {} : { params }),
     }
     fieldErrors.push(fieldError)
   }
