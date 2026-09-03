@@ -4,6 +4,8 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
@@ -181,6 +183,82 @@ func ExampleService_DataScope() {
 	// tenant-wide: false
 	// in scope /group1/region2/store7: true
 	// in scope /group1/region3: false
+}
+
+// ExampleRequirePermissionFunc shows rbac's whole contribution to the HTTP
+// layer: the gate that sits after authentication in the fixed middleware
+// chain of docs/internal/01-architecture.md. This module mounts no routes
+// of its own -- it hands the host a gate to wrap the host's routes in.
+//
+// The Func form picks the required permission per request, which is what a
+// single path serving several methods needs: a read permission on GET, a
+// write permission on POST. The chooser must depend only on the request's
+// ROUTE -- never on a header, query parameter or body, because a
+// permission the caller can choose is a permission the caller can choose
+// to be one they hold.
+func ExampleRequirePermissionFunc() {
+	ctx := context.Background()
+
+	svc, err := newExampleService(ctx, "rbac_example_gate", nil)
+	if err != nil {
+		fmt.Println("setup:", err)
+		return
+	}
+	defer func() { _ = svc.Close() }()
+
+	tenantCtx := pkgcore.WithTenant(ctx, "tenant-a")
+	if _, err = svc.DefineRole(tenantCtx, rbac.RoleDefinition{
+		Key:            "note-reader",
+		DescriptionKey: "rbac.role.member",
+		Permissions:    []string{"notes:read"},
+	}); err != nil {
+		fmt.Println("define:", err)
+		return
+	}
+
+	reader := rbac.Subject{TenantID: "tenant-a", UserID: "user-1"}
+	if err = svc.AssignRole(tenantCtx, reader, "note-reader", rbac.Scope{}); err != nil {
+		fmt.Println("assign:", err)
+		return
+	}
+
+	notes := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	gate := rbac.RequirePermissionFunc(svc, func(r *http.Request) string {
+		if r.Method == http.MethodGet {
+			return rbac.Permission("notes", "read")
+		}
+		// Every other method needs write. A method the table forgot would
+		// return "", which denies -- there is deliberately no "nothing
+		// required" answer.
+		return rbac.Permission("notes", "write")
+	})(notes)
+
+	// The authenticating side installs the Subject; the gate reads it back.
+	// Neither module imports the other.
+	call := func(method string) int {
+		r := httptest.NewRequest(method, "/api/v1/notes", nil)
+		r = r.WithContext(rbac.WithSubject(r.Context(), reader))
+		rec := httptest.NewRecorder()
+		gate.ServeHTTP(rec, r)
+		return rec.Code
+	}
+
+	fmt.Println("GET :", call(http.MethodGet))
+	fmt.Println("POST:", call(http.MethodPost))
+
+	// A request with no Subject at all is refused the same way a denied
+	// one is -- an unauthenticated caller learns nothing from the
+	// difference.
+	anonymous := httptest.NewRecorder()
+	gate.ServeHTTP(anonymous, httptest.NewRequest(http.MethodGet, "/api/v1/notes", nil))
+	fmt.Println("anon:", anonymous.Code)
+
+	// Output:
+	// GET : 200
+	// POST: 403
+	// anon: 403
 }
 
 // newExampleService performs the wiring Example already walks through,
