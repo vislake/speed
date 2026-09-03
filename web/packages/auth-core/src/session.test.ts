@@ -692,6 +692,177 @@ describe('refresh', () => {
     expect(harness.session.getSnapshot().principal?.user_id).toBe('user-2')
   })
 
+  it('adopts the rotated token when a tenant switch wins the race', async () => {
+    // Regression: a refresh in flight when a tenant switch commits
+    // used to lose the race wholesale -- including the rotated refresh
+    // token the server issued for the one it consumed. The session
+    // kept presenting the consumed token, so its next refresh read as
+    // a replay, was refused, and signed the session out. The switch's
+    // own access token and principal must stand; only the rotated
+    // refresh token is adopted onto them.
+    let releaseRefresh!: () => void
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve
+    })
+    let refreshCount = 0
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+      [SWITCH_TENANT]: () =>
+        makePair({
+          access_token: 'access-switched',
+          // No refresh_token: a switch reuses the caller's.
+          principal: principal('user-1', 'tenant-2'),
+        }),
+      [REFRESH]: (call) => {
+        const presented = (call.options?.body as { refresh_token?: string })
+          ?.refresh_token
+        if (presented !== 'refresh-1' && presented !== 'refresh-2') {
+          // Presenting a consumed token reads as a replay and is
+          // refused, exactly as the authn server answers it.
+          throw apiError(401, 'authn.session_expired')
+        }
+        refreshCount += 1
+        return refreshGate.then(() =>
+          makePair({
+            access_token: 'access-rotated',
+            refresh_token: 'refresh-2',
+          }),
+        )
+      },
+    })
+    await harness.session.loginWithPassword({
+      identifier: 'ada@example.com',
+      password: 'pw',
+    })
+    const refreshing = harness.session.refresh()
+    // The tenant switch commits while the refresh is still in flight.
+    await harness.session.switchTenant('tenant-2')
+    expect(harness.store.get()).toBe('access-switched')
+    expect(harness.session.getSnapshot().principal?.tenant_id).toBe('tenant-2')
+    releaseRefresh()
+    // The refresh lost the race for the visible state -- the switch's
+    // access token and principal stand untouched -- but the session
+    // emerged with a current token: the rotated refresh token was
+    // adopted, so it can still refresh.
+    await expect(refreshing).resolves.toBe(true)
+    expect(harness.store.get()).toBe('access-switched')
+    expect(harness.session.getSnapshot().principal?.tenant_id).toBe('tenant-2')
+    await expect(harness.session.refresh()).resolves.toBe(true)
+    // The second refresh presented the rotated token, not the consumed
+    // one: it was served instead of refused as a replay.
+    const refreshCalls = harness.calls.filter(
+      (call) => call.path === '/api/v1/authn/token/refresh',
+    )
+    expect(refreshCalls).toHaveLength(2)
+    expect(refreshCount).toBe(2)
+    expect(refreshCalls[1]?.options?.body).toEqual({ refresh_token: 'refresh-2' })
+    expect(harness.store.get()).toBe('access-rotated')
+  })
+
+  it('adopts the rotated token when a step-up wins the race', async () => {
+    // The step-up twin of the tenant-switch race above: a step-up also
+    // commits without minting a new refresh token, so an in-flight
+    // refresh that succeeds afterwards must hand its rotated token to
+    // the elevated session rather than let its next refresh die.
+    let releaseRefresh!: () => void
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve
+    })
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+      [STEP_UP]: () =>
+        makePair({
+          access_token: 'access-elevated',
+          principal: principal(),
+        }),
+      [REFRESH]: (call) => {
+        const presented = (call.options?.body as { refresh_token?: string })
+          ?.refresh_token
+        if (presented !== 'refresh-1' && presented !== 'refresh-2') {
+          throw apiError(401, 'authn.session_expired')
+        }
+        return refreshGate.then(() =>
+          makePair({
+            access_token: 'access-rotated',
+            refresh_token: 'refresh-2',
+          }),
+        )
+      },
+    })
+    await harness.session.loginWithPassword({
+      identifier: 'ada@example.com',
+      password: 'pw',
+    })
+    const refreshing = harness.session.refresh()
+    // The step-up commits while the refresh is still in flight.
+    await harness.session.verifyStepUp('654321')
+    expect(harness.store.get()).toBe('access-elevated')
+    releaseRefresh()
+    await expect(refreshing).resolves.toBe(true)
+    // The elevation stands; only the rotated refresh token was adopted.
+    expect(harness.store.get()).toBe('access-elevated')
+    expect(harness.session.getSnapshot().principal?.tenant_id).toBe('tenant-1')
+    // The session still refreshes, on the rotated token.
+    await expect(harness.session.refresh()).resolves.toBe(true)
+    expect(harness.store.get()).toBe('access-rotated')
+  })
+
+  it('shares the switch-race request with a refresh started after the switch', async () => {
+    // Regression: the single-flight refresh used to be keyed on the
+    // generation. A tenant switch bumps the generation but keeps the
+    // held token, so a refresh started after the switch fired a second
+    // request presenting the same token while the first was still in
+    // flight -- two parallel presentations of one token, which the
+    // authn server reads as theft and answers by rotating the whole
+    // family out from under the session. Keyed on the held token, the
+    // later refresh shares the in-flight request instead.
+    let releaseRefresh!: () => void
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve
+    })
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+      [SWITCH_TENANT]: () =>
+        makePair({
+          access_token: 'access-switched',
+          principal: principal('user-1', 'tenant-2'),
+        }),
+      [REFRESH]: () =>
+        refreshGate.then(() =>
+          makePair({
+            access_token: 'access-rotated',
+            refresh_token: 'refresh-2',
+          }),
+        ),
+    })
+    await harness.session.loginWithPassword({
+      identifier: 'ada@example.com',
+      password: 'pw',
+    })
+    const first = harness.session.refresh()
+    await harness.session.switchTenant('tenant-2')
+    // Same held token, newer generation: the request in flight is
+    // shared, never doubled.
+    const second = harness.session.refresh()
+    expect(
+      harness.calls.filter((call) => call.path === '/api/v1/authn/token/refresh'),
+    ).toHaveLength(1)
+    releaseRefresh()
+    await expect(first).resolves.toBe(true)
+    await expect(second).resolves.toBe(true)
+    // The shared result adopted the rotated refresh token onto the
+    // switch's session; the switch's own access token and principal
+    // stand.
+    expect(harness.store.get()).toBe('access-switched')
+    expect(harness.session.getSnapshot().principal?.tenant_id).toBe('tenant-2')
+    expect(
+      harness.calls.filter((call) => call.path === '/api/v1/authn/token/refresh'),
+    ).toHaveLength(1)
+    // And the session still refreshes -- on the rotated token.
+    await expect(harness.session.refresh()).resolves.toBe(true)
+    expect(harness.store.get()).toBe('access-rotated')
+  })
+
   it('leaves an in-flight refresh intact when a login fails', async () => {
     let releaseRefresh!: () => void
     const refreshGate = new Promise<void>((resolve) => {

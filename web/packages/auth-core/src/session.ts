@@ -32,16 +32,27 @@
  * would let a failed operation strand an in-flight refresh: the
  * refresh's writes would be dropped as stale even though nothing
  * changed.) refresh() never bumps: it captures the generation it
- * started under, and every one of its writes -- store, held refresh
- * token, snapshot -- is dropped when that generation no longer holds.
- * That makes a completed logout win over a refresh that resolves
- * after it (a refresh cannot resurrect an ended session) and a
- * committed user operation win over a refresh that resolves after it;
- * a token-issuing response that lost the race is discarded, never
- * applied. refresh() is also single-flight per generation: concurrent
- * callers -- the api-client silent-401 hook and an application timer
- * -- share one in-flight request, because the authn server treats
- * parallel refreshes as token theft and rotates the whole family.
+ * started under, and its writes -- the store, the snapshot -- apply
+ * only while that generation still holds. That makes a completed
+ * logout win over a refresh that resolves after it (a refresh cannot
+ * resurrect an ended session) and a committed user operation win over
+ * a refresh that resolves after it: the losing pair's access token
+ * and principal are never applied over the winner's. The one
+ * exception is the held refresh token itself: when the operation that
+ * won the race kept it -- a tenant switch or a step-up mints no new
+ * refresh token -- the refresh's success has still consumed it
+ * server-side, so the session adopts only the rotated token from the
+ * losing pair; without that, the session's next refresh would present
+ * a consumed token, read as a replay and die. (A losing pair that
+ * violates the contract is dropped, never cleared: the winner's
+ * session stands.) refresh() is also single-flight per held token:
+ * concurrent callers -- the api-client silent-401 hook and an
+ * application timer -- share one in-flight request, because the authn
+ * server treats parallel refreshes presenting the same token as theft
+ * and rotates the whole family. The flight is keyed on the token
+ * rather than the generation so a refresh started after a switch or
+ * step-up committed -- which kept the token -- shares the request
+ * still in flight instead of firing a second presentation of it.
  *
  * Host-attached permission sets: the snapshot additionally carries
  * setPermissionSet(domain, list) data -- lists the host attaches (the
@@ -138,12 +149,16 @@ export interface AuthSession {
    * business; the session only carries them and applies the survival
    * rules in the file header when a principal change commits. */
   setPermissionSet(domain: AuthDomain, perms: readonly string[] | null): void
-  /** Silently refreshes the access token. Resolves true when a fresh
-   * pair was stored, false when there is nothing to refresh or the
-   * refresh token was refused (the session is over). Never throws for
-   * a refused token; a transport/server failure rethrows the raw
-   * ApiError and leaves the held tokens in place. Concurrent calls
-   * under one generation share a single in-flight request. */
+  /** Silently refreshes the access token. Resolves true when the
+   * session holds a current token afterwards -- a fresh pair was
+   * stored, or (when a tenant switch or step-up committed while the
+   * refresh was in flight, keeping the held token) the rotated
+   * refresh token was adopted onto the winner's session. Resolves
+   * false when there is nothing to refresh or the refresh token was
+   * refused (the session is over). Never throws for a refused token;
+   * a transport/server failure rethrows the raw ApiError and leaves
+   * the held tokens in place. Concurrent calls presenting the same
+   * held token share a single in-flight request. */
   refresh(): Promise<boolean>
 }
 
@@ -263,9 +278,8 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
   // when the captured generation still holds.
   let generation = 0
   // The single-flight refresh (see the file header): at most one
-  // in-flight request per generation.
-  let refreshFlight: { generation: number; promise: Promise<boolean> } | null =
-    null
+  // in-flight request per held refresh token.
+  let refreshFlight: { held: string; promise: Promise<boolean> } | null = null
   const listeners = new Set<AuthSessionListener>()
 
   function notify(): void {
@@ -370,10 +384,33 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
       throw error
     }
     if (generation !== capturedGeneration) {
-      // A user operation committed while the refresh was in flight:
-      // the freshly minted pair belongs to a session that no longer
-      // exists here. The old held token was already consumed by the
-      // server, so nothing is restored.
+      // A user operation committed while the refresh was in flight and
+      // owns the session now. If it kept the held token -- a tenant
+      // switch or a step-up mints no new refresh token -- this
+      // refresh's success still consumed the token server-side, so the
+      // session must adopt the rotated one or its next refresh reads
+      // as a replay and dies. Only the rotated token is adopted: the
+      // winner's access token, principal and snapshot stand, and the
+      // losing pair was minted against the pre-commit context. A
+      // commit that replaced the token (a different login) or ended
+      // the session (a logout) makes the pair stale: dropped outright.
+      if (refreshToken === held) {
+        try {
+          const rotated = parseIssued(pair, true)
+          refreshToken = rotated.refreshToken
+          // Nothing observable changed: no store write, no snapshot
+          // change and no notify -- the winner's state already stands
+          // and subscribers saw it commit. Resolving true tells the
+          // silent-401 caller that the store's current token is worth
+          // a retry.
+          return true
+        } catch {
+          // A contract-violating 2xx consumed the held token with
+          // nothing adoptable: the session keeps the winner's tokens
+          // but can no longer refresh. Degrade silently -- clearing
+          // would kill the session a user operation just committed.
+        }
+      }
       return false
     }
     let issued: IssuedTokens
@@ -478,18 +515,20 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
       }
       const capturedGeneration = generation
       const inFlight = refreshFlight
-      if (
-        inFlight !== null &&
-        inFlight.generation === capturedGeneration
-      ) {
-        // Same generation, same held token: share the in-flight
-        // request. A second concurrent refresh would read as token
-        // theft to the server and rotate the whole family out from
-        // under the first.
+      if (inFlight !== null && inFlight.held === held) {
+        // Same held token: share the in-flight request. The flight is
+        // keyed on the token, not the generation, because a tenant
+        // switch or a step-up commits without replacing the held
+        // token (their responses mint no new one): a refresh started
+        // after such a commit would otherwise fire a second request
+        // presenting the same token while the first is still in
+        // flight -- which the authn server reads as token theft and
+        // answers by rotating the whole family out from under the
+        // session.
         return inFlight.promise
       }
       const promise = runRefresh(held, capturedGeneration)
-      refreshFlight = { generation: capturedGeneration, promise }
+      refreshFlight = { held, promise }
       // Clear the flight slot on both paths. (promise.finally(...)
       // would hand us a second promise that rejects unhandled when
       // the refresh does -- the caller's handler covers only the
