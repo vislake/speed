@@ -5,9 +5,18 @@
  * bindRequestFn harness (asserted on method, path and body) and commits
  * the fresh token; the current-tenant row is disabled and can never
  * re-trigger a switch. While a switch is in flight the trigger is
- * disabled and a role="status" notice renders the switching text; a
- * successful switch is quiet (no alert) and fires onSwitched exactly
- * once, after the commit. A rejected switch renders the answer's code
+ * disabled and a role="status" notice renders the switching text, and a
+ * synchronous entry guard in the switch handler refuses any second
+ * attempt in that window; jsdom cannot stage such an attempt -- the
+ * closing list unmounts synchronously here instead of animating out, so
+ * no activation can reach the handler mid-flight, and the guard's
+ * browser-tier window (rows of the still-closing list, mounted and
+ * clickable for the exit transition) is the reference-app Playwright
+ * journeys' to pin. A successful switch is quiet (no alert) and fires
+ * onSwitched exactly once, after the commit -- a throwing onSwitched is
+ * contained: the commit stands, no error renders, and no rejection
+ * escapes the fire-and-forget row handler. A rejected switch renders the
+ * answer's code
  * text in one alert, changes nothing locally -- the store keeps its
  * token and the trigger stays ready to retry, and a retry clears the
  * alert. The session-lifecycle codes resolve to their own texts in the
@@ -187,6 +196,55 @@ describe('TenantSwitcher', () => {
     expect(onSwitched).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('contain a throwing onSwitched: the commit stands and no rejection escapes', async () => {
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+      [SWITCH_TENANT]: () =>
+        makePair({
+          access_token: 'access-2',
+          principal: { user_id: 'user-1', tenant_id: 'tenant-2', session_id: 'session-1' },
+        }),
+    })
+    await signIn(harness)
+    const onUnhandled = vi.fn<(reason: unknown) => void>()
+    const listener = (event: PromiseRejectionEvent) => {
+      onUnhandled(event.reason)
+    }
+    window.addEventListener('unhandledrejection', listener)
+    const onSwitched = vi.fn(() => {
+      throw new Error('host post-switch work failed')
+    })
+    try {
+      renderSwitcher(harness, { onSwitched })
+      const user = userEvent.setup()
+      const { other } = await openMenu(user)
+      await user.click(other)
+      await waitFor(() => expect(harness.store.get()).toBe('access-2'))
+      // The host's own work failed, but the switch committed and the
+      // contract holds: the callback fired exactly once with the new
+      // tenant, nothing rendered an error (a throwing host callback is
+      // not a switch failure), and the throw was contained instead of
+      // becoming an unhandled rejection of the fire-and-forget promise.
+      expect(onSwitched).toHaveBeenCalledTimes(1)
+      expect(onSwitched).toHaveBeenCalledWith('tenant-2')
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+      expect(screen.queryByRole('status')).not.toBeInTheDocument()
+      await waitFor(() =>
+        expect(
+          screen.getByRole('button', { name: 'Sunshine Dental' }),
+        ).toBeEnabled(),
+      )
+      // unhandledrejection dispatches after the microtask queue drains;
+      // yield once, then assert none ever fired.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      expect(onUnhandled).not.toHaveBeenCalled()
+    } finally {
+      window.removeEventListener('unhandledrejection', listener)
+    }
   })
 
   it('render a membership-refusal answer in one alert and change nothing locally', async () => {

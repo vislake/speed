@@ -16,13 +16,21 @@
  * change through its own auth-core hooks, and onSwitched fires exactly
  * once, after the commit -- refetching, navigation, permission-list
  * re-attachment and previous-tenant query-cache cleanup are the host's
- * to run then. A failed switch leaves the state exactly as it was (the
+ * to run then. A throwing host callback is contained: it is not a switch
+ * failure (the onSwitched contract) and never surfaces as one -- no
+ * error banner, and no unhandled rejection from the fire-and-forget row
+ * handler. A failed switch leaves the state exactly as it was (the
  * auth-core contract: a raw ApiError rejection with zero state change)
  * and renders the answer's code text in one InlineError under the
  * control -- the whitelist of reachable codes (authn.tenant_membership_required,
  * the session-lifecycle codes, the transport-level client.* codes) or
  * the unknown fallback, never a raw key -- with the trigger re-enabled
- * and the same row retryable on the next open.
+ * and the same row retryable on the next open. The flight is also guarded
+ * at the entry of the switch handler itself: one switch at a time, with
+ * the guard checked synchronously, because the disabled trigger renders
+ * only on the next frame and cannot stop a repeat activation of a row of
+ * the still-closing list in the same window -- such an attempt is
+ * refused, never queued, and never reaches the session.
  *
  * The component is controlled and fails closed: the session arrives as a
  * prop, tenants and the current tenant id are host data, and nothing
@@ -42,7 +50,7 @@
  * (see @speed/auth-core's session header).
  */
 
-import { useId, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import Button from '@mui/material/Button'
 import Box from '@mui/material/Box'
 import Menu from '@mui/material/Menu'
@@ -76,7 +84,8 @@ export interface TenantSwitcherProps {
   /** Fired exactly once after a switch commits, with the id of the
    * tenant the session now operates in. The host refetches and cleans
    * its own state here; throwing from this callback is not a switch
-   * failure and never renders an error. */
+   * failure and never renders an error, and the component contains it,
+   * so it cannot escape as an unhandled rejection either. */
   readonly onSwitched?: (tenantId: string) => void
 }
 
@@ -97,22 +106,45 @@ export function TenantSwitcher({
     tenants.find((tenant) => tenant.id === currentTenantId) ?? null
   const triggerDisabled = pending || currentTenant === null
 
+  // The in-flight flag the entry guard checks. It is a ref, not state,
+  // because the guard must be synchronous: pending renders only on the
+  // next frame, and a repeat activation of a still-mounted closing-list
+  // row can reach switchTo in the same window.
+  const switching = useRef(false)
+
   const switchTo = async (tenantId: string): Promise<void> => {
+    // One switch at a time: a second attempt while a flight is pending
+    // is refused before any await, never queued. The first flight's
+    // commit wins and fires onSwitched exactly once.
+    if (switching.current) {
+      return
+    }
+    switching.current = true
     setErrorCode(null)
     setPending(true)
     try {
       await session.switchTenant(tenantId)
       // Success is the host's to observe: the snapshot flipped to the new
-      // tenant and onSwitched fires exactly once below, after pending
-      // cleared, so a throwing host callback cannot surface as a switch
+      // tenant and onSwitched fires exactly once below, after the
+      // in-flight state cleared, so the commit never surfaces as an
       // error through this component.
     } catch (error) {
       setErrorCode(errorCodeOf(error))
       setPending(false)
+      switching.current = false
       return
     }
     setPending(false)
-    onSwitched?.(tenantId)
+    switching.current = false
+    try {
+      onSwitched?.(tenantId)
+    } catch {
+      // A throwing host callback is not a switch failure (onSwitched's
+      // contract): the commit already happened and nothing here renders
+      // the host's error. The containment also keeps that throw out of
+      // this promise, which the row handler fires and forgets -- an
+      // unhandled rejection would be the alternative.
+    }
   }
 
   return (
