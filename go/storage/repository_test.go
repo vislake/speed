@@ -696,6 +696,167 @@ func TestObjectRepository_MarkDeleting_ReportsNotFound(t *testing.T) {
 	}
 }
 
+// TestObjectRepository_FinalizeUpload_CommitsTheTransition proves the happy
+// path of the upload lifecycle's single state-changing write: a row that is
+// still uploading with its window still open flips to completed carrying
+// exactly the finalized metadata passed in, and every other column of the
+// row survives the full-row write untouched.
+func TestObjectRepository_FinalizeUpload_CommitsTheTransition(t *testing.T) {
+	repo := NewObjectRepository(newTestDB(t))
+	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	seedObject(t, repo, ctx, newUpload("obj-1", "tenant-a", time.Now()))
+
+	row, err := repo.FindByID(ctx, "obj-1")
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	size := int64(2048)
+	mime := "image/png"
+	digest := sha256HexDigest([]byte("finalized bytes"))
+	row.State = ObjectStateCompleted
+	row.Size = &size
+	row.MIME = &mime
+	row.ChecksumSHA256 = &digest
+
+	done, err := repo.finalizeUpload(ctx, row, time.Now())
+	if err != nil {
+		t.Fatalf("finalizeUpload: %v", err)
+	}
+	if !done {
+		t.Fatal("finalizeUpload done = false on an in-window uploading row, want true")
+	}
+
+	got, err := repo.FindByID(ctx, "obj-1")
+	if err != nil {
+		t.Fatalf("FindByID after finalizeUpload: %v", err)
+	}
+	if got.State != ObjectStateCompleted {
+		t.Errorf("row state after finalizeUpload = %q, want %q", got.State, ObjectStateCompleted)
+	}
+	if got.Size == nil || *got.Size != size {
+		t.Errorf("row size after finalizeUpload = %v, want %d", got.Size, size)
+	}
+	if got.MIME == nil || *got.MIME != mime {
+		t.Errorf("row MIME after finalizeUpload = %v, want %q", got.MIME, mime)
+	}
+	if got.ChecksumSHA256 == nil || *got.ChecksumSHA256 != digest {
+		t.Errorf("row checksum after finalizeUpload = %v, want %q", got.ChecksumSHA256, digest)
+	}
+	if got.DeclaredSize != row.DeclaredSize || got.DeclaredType != row.DeclaredType {
+		t.Errorf("finalizeUpload rewrote columns outside the finalized set: declared %d/%q, want %d/%q",
+			got.DeclaredSize, got.DeclaredType, row.DeclaredSize, row.DeclaredType)
+	}
+}
+
+// TestObjectRepository_FinalizeUpload_RefusesAClosedWindow pins the
+// write-time half of the hard-deadline rule: a row whose upload window
+// closed before the finalize's now is refused, and stays uploading. The
+// entry gate in Complete checks the window too, but only this write-time
+// condition keeps a completion pipeline that straddles its own window end
+// from committing after it.
+func TestObjectRepository_FinalizeUpload_RefusesAClosedWindow(t *testing.T) {
+	repo := NewObjectRepository(newTestDB(t))
+	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	// newUpload's window is createdAt+30m, so a row created 31 minutes ago
+	// is strictly past its window for any now.
+	seedObject(t, repo, ctx, newUpload("obj-1", "tenant-a", time.Now().Add(-31*time.Minute)))
+
+	row, err := repo.FindByID(ctx, "obj-1")
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	row.State = ObjectStateCompleted
+	done, err := repo.finalizeUpload(ctx, row, time.Now())
+	if err != nil {
+		t.Fatalf("finalizeUpload: %v", err)
+	}
+	if done {
+		t.Fatal("finalizeUpload done = true on a row whose window closed, want false")
+	}
+	got, err := repo.FindByID(ctx, "obj-1")
+	if err != nil {
+		t.Fatalf("FindByID after refused finalizeUpload: %v", err)
+	}
+	if got.State != ObjectStateUploading {
+		t.Errorf("row state = %q, want %q -- the refusal must leave the row untouched",
+			got.State, ObjectStateUploading)
+	}
+}
+
+// TestObjectRepository_FinalizeUpload_RefusesWhenNotAnUploadingRowHere pins
+// the other two refusal shapes, in one table: a finalize whose row no
+// longer exists anywhere, a finalize aimed at a row another tenant owns,
+// and a finalize of a row a concurrent completion already flipped. All
+// three answer (false, nil) -- a zero-row conditional write is not an
+// error -- and leave the world exactly as it was. The tenant row is the
+// sweep-reclaim race's half: after the reclaim removed the row, the
+// straggling completion's finalize must refuse rather than report success
+// for nothing.
+func TestObjectRepository_FinalizeUpload_RefusesWhenNotAnUploadingRowHere(t *testing.T) {
+	repo := NewObjectRepository(newTestDB(t))
+	ctxA := tenantCtx(pkgcore.TenantID("tenant-a"))
+	ctxB := tenantCtx(pkgcore.TenantID("tenant-b"))
+	seedObject(t, repo, ctxA, newUpload("obj-1", "tenant-a", time.Now()))
+	seedObject(t, repo, ctxB, newUpload("obj-2", "tenant-b", time.Now()))
+	completed := newCompleted("obj-3", "tenant-a", time.Now())
+	seedObject(t, repo, ctxA, completed)
+
+	tests := []struct {
+		name string
+		ctx  context.Context
+		id   string
+	}{
+		{"row that never existed", ctxA, "obj-99"},
+		{"row owned by another tenant", ctxB, "obj-1"},
+		{"row another completion already finalized", ctxA, "obj-3"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			row, err := repo.FindByID(tc.ctx, tc.id)
+			if err != nil {
+				if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+					// The never-existed shape has no row to read; a bare id
+					// is all the finalize needs.
+					row = &Object{ID: tc.id}
+				} else {
+					t.Fatalf("FindByID: %v", err)
+				}
+			}
+			done, err := repo.finalizeUpload(tc.ctx, row, time.Now())
+			if err != nil {
+				t.Fatalf("finalizeUpload: %v", err)
+			}
+			if done {
+				t.Fatalf("finalizeUpload done = true for %s, want false", tc.name)
+			}
+		})
+	}
+
+	// The refusals changed nothing: obj-1 is still tenant-a's uploading
+	// row, obj-2 still tenant-b's, obj-3 still completed.
+	got, err := repo.FindByID(ctxA, "obj-1")
+	if err != nil {
+		t.Fatalf("FindByID(obj-1) after refusals: %v", err)
+	}
+	if got.State != ObjectStateUploading {
+		t.Errorf("obj-1 state = %q, want %q", got.State, ObjectStateUploading)
+	}
+	got, err = repo.FindByID(ctxB, "obj-2")
+	if err != nil {
+		t.Fatalf("FindByID(obj-2) after refusals: %v", err)
+	}
+	if got.State != ObjectStateUploading {
+		t.Errorf("obj-2 state = %q, want %q", got.State, ObjectStateUploading)
+	}
+	got, err = repo.FindByID(ctxA, "obj-3")
+	if err != nil {
+		t.Fatalf("FindByID(obj-3) after refusals: %v", err)
+	}
+	if got.State != ObjectStateCompleted {
+		t.Errorf("obj-3 state = %q, want %q", got.State, ObjectStateCompleted)
+	}
+}
+
 // TestObjectRepository_DeleteObjectRows_RemovesTheRows proves the protocol's
 // commit point: one call removes an object's derivative rows and the object
 // row itself, permanently -- a later FindByID reports dbkit.ErrRecordNotFound

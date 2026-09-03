@@ -189,6 +189,50 @@ func (r *ObjectRepository) markDeleting(ctx context.Context, objectID string) (*
 	return row, nil
 }
 
+// finalizeUpload is the upload lifecycle's single state-changing write: it
+// moves one row from ObjectStateUploading to ObjectStateCompleted carrying
+// the finalized metadata the pipeline derived. The write is conditional --
+// only a row that is still uploading AND whose upload window is still open
+// at the moment of the write can be finalized:
+//
+//	WHERE id = ? AND state = 'uploading' AND upload_expires_at > ?
+//
+// Both conditions are load-bearing, and both exist because this write can
+// land long after the caller's entry checks ran. The deadline condition
+// makes the upload window a hard one: the completion pipeline checks the
+// window when it starts, but only a write-time check keeps a pipeline that
+// straddles its own window end from committing after it -- the module's
+// rule is that a declaration whose window lapsed is reclaimed as
+// never-arriving, and the commit is where that must hold. The state
+// condition is the delete protocol's other half: the expiry sweep reclaims
+// expired uploads from an unlocked listing, and a completion racing the
+// reclaim either commits before the row removal (the reclaim then removes
+// the completed row along with it -- legitimate, because a row this write
+// refused can never complete after the reclaim listed it) or writes zero
+// rows after it (refused here, never a silent success for a row that is
+// gone).
+//
+// The returned bool is whether the write committed. It is false for all
+// three refusal shapes -- the row vanished, it is no longer uploading, or
+// its window closed -- and the caller re-reads the row to tell them apart.
+// Real failures are wrapped in ErrInternal; a zero-row conditional write is
+// not an error.
+func (r *ObjectRepository) finalizeUpload(ctx context.Context, row *Object, now time.Time) (bool, error) {
+	done := false
+	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		res := tx.Where(
+			"id = ? AND state = ? AND upload_expires_at > ?",
+			row.ID, ObjectStateUploading, now,
+		).Select("*").Save(row)
+		done = res.RowsAffected > 0
+		return res.Error
+	})
+	if err != nil {
+		return false, ErrInternal.WithCause(err)
+	}
+	return done, nil
+}
+
 // deleteObjectRows removes one object's rows -- its derivative rows and
 // then the object row itself -- in a single transaction, the protocol's
 // commit point: before it, every earlier step (mark, byte deletion) is

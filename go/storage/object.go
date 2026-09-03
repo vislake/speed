@@ -295,7 +295,9 @@ func (s *ObjectService) Upload(ctx context.Context, objectID string, contentLeng
 //     (storage.object_not_found, storage.object_not_uploading).
 //  2. The upload window must not have passed (storage.content_missing): a
 //     declaration whose window lapsed is reclaimed as never-arriving even
-//     if bytes happen to sit under its key.
+//     if bytes happen to sit under its key. The window is checked again at
+//     the finalize write itself, so a pipeline that straddles its own
+//     window end cannot commit after it.
 //  3. The object store must be wired (storage.store_unavailable).
 //  4. The stored bytes must exist (storage.content_missing -- the common
 //     complete-before-upload shape) and must be readable
@@ -323,6 +325,15 @@ func (s *ObjectService) Upload(ctx context.Context, objectID string, contentLeng
 // actually stored, which after a sanitizer rewrite are the sanitized ones
 // (so a finalized digest may differ from a declared one exactly when the
 // declared digest described bytes carrying metadata that was stripped).
+//
+// The advance is a conditional commit (ObjectRepository.finalizeUpload):
+// only a row still uploading with its window still open may be finalized.
+// When the write commits zero rows -- the object vanished mid-pipeline,
+// its window closed, or another completion won the transition -- Complete
+// answers with the code that matches what a re-read finds
+// (storage.object_not_found, storage.content_missing,
+// storage.object_not_uploading) and runs no side effect: a finalize that
+// did not commit announces nothing, enqueues nothing and logs nothing.
 //
 // Side effects follow the finalize, and neither can fail the call: an
 // image object's thumbnail derivation is enqueued on the module's queue
@@ -407,8 +418,29 @@ func (s *ObjectService) Complete(ctx context.Context, objectID string) (Object, 
 	row.Size = &size
 	row.MIME = &mime
 	row.ChecksumSHA256 = &digest
-	if err := s.objects.Update(ctx, row); err != nil {
-		return Object{}, ErrInternal.WithCause(err)
+	done, err := s.objects.finalizeUpload(ctx, row, time.Now())
+	if err != nil {
+		return Object{}, err
+	}
+	if !done {
+		// The finalize wrote zero rows, so the transition did not commit:
+		// between the entry checks and this write the row vanished (the
+		// expiry sweep reclaimed it), its upload window closed (the
+		// deadline is enforced at the write, not just at the entry check),
+		// or a concurrent completion won the transition first. Re-read to
+		// tell the three apart and answer with what the caller will find.
+		// Reporting success for a finalize that did not commit would be a
+		// silent false success -- and so would running the log line, the
+		// thumbnail task or the completion event below it, which is why
+		// they all sit behind the committed branch.
+		current, err := s.findByID(ctx, objectID)
+		if err != nil {
+			return Object{}, err
+		}
+		if current.State == ObjectStateUploading {
+			return Object{}, ErrContentMissing.WithParam("id", objectID)
+		}
+		return Object{}, ErrObjectNotUploading.WithParam("id", objectID)
 	}
 
 	observability.FromContext(ctx).Info("object completed",

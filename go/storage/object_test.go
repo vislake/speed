@@ -954,6 +954,55 @@ func TestObjectService_Complete_PublishesTheEventAndEnqueuesDerivation(t *testin
 	}
 }
 
+// TestObjectService_Complete_RefusesWhenTheRowsVanishMidPipeline reproduces
+// the completion-versus-reclaim race at the service boundary: the sweep
+// reclaim removes the object's rows -- and its bytes -- while the completion
+// pipeline is between its last store write (the sanitizer's rewrite of the
+// stripped bytes) and its finalize. The finalize is a conditional commit, so
+// the lost update answers storage.object_not_found -- what the caller will
+// find -- and runs no side effect: a finalize that did not commit logs
+// nothing, enqueues no thumbnail task and publishes no completion event.
+// (On the pre-conditional-write code this test failed with the shape the two
+// lost-update forms each took: a vanished row surfaced as
+// storage.internal_error wrapping a record-not-found -- an internal fault
+// where the honest answer is object-not-found -- and a row whose window
+// closed mid-pipeline finalized silently into completed. The conditional
+// finalize answers both from a re-read; this test pins the vanished-row
+// shape.)
+func TestObjectService_Complete_RefusesWhenTheRowsVanishMidPipeline(t *testing.T) {
+	svc, store, queue, bus := newTestService(t, nil)
+	ctx := serviceCtx("tenant-a")
+	row := createAndUpload(t, svc, ctx, jpegWithExif(t), "image/jpeg")
+
+	// The EXIF-bearing fixture makes the pipeline rewrite its stored bytes,
+	// so the hook fires on the pipeline's last store write before the
+	// finalize. The hook runs the reclaim in the sweep's own order -- bytes
+	// first, then the rows -- exactly as the expiry sweep's reclaim will.
+	hooked := &hookedStore{fakeStore: store}
+	hooked.onPut = func() {
+		if err := hooked.DeleteObject(ctx, row.Key); err != nil {
+			t.Errorf("DeleteObject(%s): %v", row.Key, err)
+		}
+		if err := svc.objects.deleteObjectRows(ctx, row.ID); err != nil {
+			t.Errorf("deleteObjectRows(%s): %v", row.ID, err)
+		}
+	}
+	svc.host = &fakeHost{store: hooked, bus: bus}
+
+	_, err := svc.Complete(ctx, row.ID)
+	assertCode(t, err, ErrObjectNotFound.Code)
+	assertParam(t, err, "id", row.ID)
+	if len(bus.events) != 0 {
+		t.Errorf("events = %d, want none -- a finalize that did not commit announces nothing", len(bus.events))
+	}
+	if len(queue.tasks) != 0 {
+		t.Errorf("tasks = %d, want none -- a finalize that did not commit enqueues nothing", len(queue.tasks))
+	}
+	if _, err := svc.objects.FindByID(ctx, row.ID); err == nil {
+		t.Error("row still exists after the reclaim removed it")
+	}
+}
+
 // TestObjectService_Reads_CompletedRowsOnly pins the visibility rule Get and
 // OpenContent share: an object that is not completed reads exactly like an
 // object that does not exist -- uploading and deleting rows included -- and
