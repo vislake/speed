@@ -46,13 +46,14 @@ vars:
   # testcontainers for dbkit and tenancy (including tenancy's tenancytest
   # subpackage), Redis via testcontainers for jobs, Redis plus MinIO/S3
   # via testcontainers for pkgcore (its integration_test/ carries both
-  # tiers), and PostgreSQL plus Redis via testcontainers for config (its
-  # integration_test/ carries both legs). This list is the enumeration of
+  # tiers), and PostgreSQL plus Redis via testcontainers for config and for
+  # rbac (each of their integration_test/ directories carries both legs).
+  # This list is the enumeration of
   # the modules' integration_test/ directories: one entry per module that
   # carries one. A module shipping a tier without an entry here silently
   # drops out of test:full, so keep the two in step -- verify by listing the
   # integration_test/ directories under go/.
-  INTEGRATION_DIRS: go/dbkit go/tenancy go/jobs go/pkgcore go/config
+  INTEGRATION_DIRS: go/dbkit go/tenancy go/jobs go/pkgcore go/config go/rbac
 
 tasks:
   default:
