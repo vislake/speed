@@ -1,14 +1,20 @@
 # tools/ — repo scripts
 
 Plain, dependency-free Python scripts (standard library only, Python >= 3.11
-for `tomllib`) that back the repository's cross-cutting disciplines: three
-discipline checkers and one scaffold generator. The checkers are the
+for `tomllib`) that back the repository's cross-cutting disciplines: four
+checkers and one scaffold generator. Three of the checkers are the
 local-run counterparts of the CI discipline checks scheduled in
 `docs/internal/18-cicd.md` (the table rows for banning CJK outside
 `docs/internal/`, for requiring identical zh-CN/en-US message-key sets, and
 for making every tenant-scoped Repository run the tenancytest isolation
-suite, all marked there as self-written scripts); CI workflows mount them
-under `tools/`. The generator is the backend of the `task new:module`
+suite, all marked there as self-written scripts). The remaining checker,
+`tools/check_toolchain.py`, is a repo self-check rather than an 18-cicd
+discipline row: it gates the tool versions the root `.mise.toml` pins --
+mirrors of the authoritative sources CI actually reads (Taskfile.yml
+header, `go.work`, `web/.nvmrc`, `web/package.json`, setup-go-env's
+`GOLANGCI_VERSION`) -- proving the mirrors cannot drift, and pr-check's
+repo-checks job runs it. CI workflows mount all of them under `tools/`.
+The generator is the backend of the `task new:module`
 promised by `docs/internal/19-dev-workflow.md`. Nothing here needs anything
 beyond `python3`, and the checkers print hit paths relative to their
 `--root`.
@@ -18,6 +24,7 @@ beyond `python3`, and the checkers print hit paths relative to their
 | `scan_cjk.py` | Checker | Root `CLAUDE.md` Language Rule: English everywhere outside `docs/internal/` | 0 clean / 1 violations / 2 error |
 | `check_i18n_keys.py` | Checker | Root `CLAUDE.md` internationalization rule: zh-CN and en-US key sets identical | 0 clean / 1 mismatch or parse error / 2 error |
 | `check_repo_isolation.py` | Checker | Multi-tenant isolation discipline: every Repository type (a struct embedding `dbkit.Repository[T]`) is covered by `tenancytest.AssertIsolated` in its package's tests | 0 all covered / 1 uncovered repository / 2 error |
+| `check_toolchain.py` | Checker | Root `.mise.toml` tool versions mirror their authoritative sources (Taskfile.yml header, `go.work`, `web/.nvmrc`, `web/package.json`, setup-go-env's `GOLANGCI_VERSION`) | 0 all mirrors match / 1 drift / 2 error |
 | `new_module.py` | Generator | Scaffolds the canonical stub of a new Go module under `go/<name>` and prints its registration checklist; never modifies shared repository files | 0 scaffolded / 2 refusal or validation error |
 
 ## scan_cjk.py — CJK scanner
@@ -215,6 +222,42 @@ automatically:
   these shapes occur in the repository today; the module docstring of the
   script is the authority when one appears.
 
+## check_toolchain.py — .mise.toml drift gate
+
+The root `.mise.toml` pins the developer toolchain (task, go, node, pnpm,
+golangci-lint) for the local `mise install` that `task setup` runs. CI
+cannot read `.mise.toml` directly -- actions/setup-go's go-version-file
+resolves go.mod, go.work, go.sum or .go-version only, and setup-node reads
+web/.nvmrc -- so every version the file pins is a MIRROR of an
+authoritative source elsewhere in the repository, and this script fails
+when a mirror drifts from its source. CI reads the sources; the gate is
+what proves a local `mise install` cannot drift from them.
+
+Usage:
+
+```
+python3 tools/check_toolchain.py --root /path/to/repo
+python3 tools/check_toolchain.py        # --root defaults to the current directory
+```
+
+Per-tool output is one grep-friendly line; exit 1 whenever any mirror
+differs from its source:
+
+```
+toolchain: ok          task: .mise.toml 3.53.1 == Taskfile.yml header comment (3.53.1)
+toolchain: MISMATCH    node: .mise.toml pins 24 but web/.nvmrc says 23
+```
+
+The sources, one per tool: `task` from the Taskfile.yml header comment
+(the one tool whose only pin lives there, scanned over the header's first
+40 lines); `go` from go.work's `go` directive (the file actions/setup-go
+actually reads -- setup-go-env's go-version-file input stays go.work
+rather than being repointed at .mise.toml, which setup-go cannot parse);
+`node` from web/.nvmrc; `pnpm` from web/package.json's packageManager
+field; `golangci-lint` from GOLANGCI_VERSION in
+.github/actions/setup-go-env/action.yml. Bump a source and its mirror
+together -- the .mise.toml header comments name the source of every tool.
+
 ## new_module.py — Go module stub generator
 
 Scaffolds the canonical stub of a future module, exactly the three files
@@ -264,13 +307,14 @@ anything.
 ## Running in CI and locally
 
 CI workflows mount the checkers directly, from the repository root, and
-fail the build on a nonzero exit: `python3 tools/scan_cjk.py` runs in
-pr-check's repo-checks job (every pull request,
-`.github/workflows/pr-check.yml`), and `python3 tools/check_i18n_keys.py`
-runs in the docs-check pipeline (`.github/workflows/docs-check.yml`),
-whose pull_request path filter fires on PRs touching documentation or
-i18n resources. `tools/check_repo_isolation.py` is wired into no workflow
-yet; its row lands with a future CI round. Locally, run them from the
+fail the build on a nonzero exit: `python3 tools/scan_cjk.py` and
+`python3 tools/check_toolchain.py` run in pr-check's repo-checks job
+(every pull request, `.github/workflows/pr-check.yml`), and
+`python3 tools/check_i18n_keys.py` runs in the docs-check pipeline
+(`.github/workflows/docs-check.yml`), whose pull_request path filter fires
+on PRs touching documentation or i18n resources.
+`tools/check_repo_isolation.py` is wired into no workflow yet; its row
+lands with a future CI round. Locally, run them from the
 repository root — the default `--root` is the current directory, so plain
 `python3 tools/scan_cjk.py` also works there. All output paths are relative
 to `--root`. All scripts are plain executables with no third-party

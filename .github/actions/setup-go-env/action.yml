@@ -28,12 +28,15 @@ description: >-
 # and tools/new_module.py keeps writing 1.23 for new stubs -- the bare
 # directive of a dependency-free module, bumped when the implementation
 # round adds its first dependency. That is fine: the guard refuses a
-# go.mod above go.work's line, never one below it.) There is no
-# .tool-versions or mise.toml yet (toolchain pinning is a later round, per
-# docs/internal/19-dev-workflow.md and the roadmap M0 "mise toolchain"
-# engineering item). CI and the local workspace therefore resolve the same
-# file and cannot drift. When that round lands, repoint the go-version-file
-# input below at the shared version file, in this single place.
+# go.mod above go.work's line, never one below it.) The root .mise.toml
+# mirrors this directive for local toolchain installs (the Taskfile setup
+# task runs `mise install` against it). The go-version-file input stays
+# go.work rather than being repointed at .mise.toml: actions/setup-go can
+# only read go.mod, go.work, go.sum or .go-version, so a mise config is
+# not a file it can resolve. CI and local installs therefore read two
+# files by design, and tools/check_toolchain.py -- wired into pr-check's
+# repo-checks job -- is the drift gate proving the .mise.toml mirror
+# equals this directive.
 #
 # GOLANGCI-LINT
 # golangci-lint installs only for jobs that lint: callers set the

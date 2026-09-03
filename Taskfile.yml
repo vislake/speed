@@ -61,14 +61,20 @@ tasks:
     silent: true
 
   setup:
-    desc: Sync the Go workspace so every module agrees on shared dependency versions.
-    # docs/internal/19-dev-workflow.md promises more for setup -- toolchain
-    # installation (mise) and database initialization. Neither can be wired
-    # yet: the repo has no mise config or lefthook file (toolchain pinning and
-    # pre-commit hooks are a later round), and standalone mode has nothing to
-    # initialize -- the reference app opens its own SQLite file and runs its
-    # migrations at server start. What setup does today is the part that
-    # exists: resolve and record the workspace's shared dependency graph.
+    desc: Install the pinned toolchain (mise must be on PATH; skipped with a warning when absent), then sync the Go workspace so every module agrees on shared dependency versions.
+    # docs/internal/19-dev-workflow.md plans more for setup: toolchain
+    # installation (mise) and database initialization. The toolchain half is
+    # now real -- the root .mise.toml pins task/go/node/pnpm/golangci-lint,
+    # each version mirroring an authoritative source (go.work, web/.nvmrc,
+    # web/package.json, the Taskfile header, setup-go-env's GOLANGCI_VERSION),
+    # and the first leg below runs `mise install` against it. The leg warns
+    # and continues when mise is not on PATH rather than failing, because the
+    # underlying commands stay directly runnable: `mise install` from the
+    # repository root once mise is on PATH, and `go work sync` always.
+    # Database initialization is still absent by design: standalone mode has
+    # nothing to initialize -- the reference app opens its own SQLite file
+    # and runs its migrations at server start -- and pre-commit hooks
+    # (lefthook) wait for a later round.
     #
     # When the sync moves a module's go.mod/go.sum (a dependency bumped by the
     # workspace union, or a require relabeled), run `go mod tidy` from inside
@@ -77,6 +83,15 @@ tasks:
     # go/tenancy standalone_build_test.go, which build with GOWORK=off) fails
     # until the module's go.sum also carries the standalone graph entries.
     cmds:
+      - |
+        if command -v mise >/dev/null 2>&1; then
+          mise install
+        else
+          echo "warning: mise is not on PATH, so the toolchain-install leg was skipped."
+          echo "         The root .mise.toml pins task/go/node/pnpm/golangci-lint; install"
+          echo "         mise (https://mise.jdx.dev) and re-run 'task setup', or run"
+          echo "         'mise install' from the repository root once mise is on PATH."
+        fi
       - go work sync
 
   test:
@@ -141,8 +156,10 @@ tasks:
           echo "         skipped -- CI runs them on every pull request, so a local run that"
           echo "         skips them can be green while the PR fails. Install it pinned"
           echo "         (brew install golangci-lint, or the release tarball from"
-          echo "         github.com/golangci/golangci-lint) and re-run; mise will pin it"
-          echo "         when the toolchain round lands (docs/internal/19-dev-workflow.md)."
+          echo "         github.com/golangci/golangci-lint) and re-run. With mise on PATH,"
+          echo "         'task setup' installs the pinned toolchain from the root .mise.toml"
+          echo "         (golangci-lint included; tools/check_toolchain.py keeps the mirrors"
+          echo "         honest in CI -- docs/internal/19-dev-workflow.md)."
           echo "         Run it manually from any module directory:  golangci-lint run ./..."
         fi
 

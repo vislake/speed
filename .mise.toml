@@ -1,0 +1,33 @@
+# Toolchain versions for local development, pinned by mise (https://mise.jdx.dev).
+#
+# Every version here MIRRORS an authoritative source elsewhere in the
+# repository: CI cannot read this file (actions/setup-go's go-version-file
+# resolves go.mod / go.work / go.sum / .go-version only, and setup-node
+# reads web/.nvmrc), so CI keeps reading the sources and .mise.toml exists
+# for `mise install` (the Taskfile setup task's toolchain leg). Two files
+# that both state a version drift unless something checks them, which is
+# why tools/check_toolchain.py -- wired into pr-check's repo-checks job,
+# every pull request -- fails when a mirror no longer equals its source.
+# Bump the authoritative source and this file together. Sources, one per
+# tool:
+#   task          the Taskfile.yml header comment -- "task 3.53.1 (the
+#                 version verified against this file)" -- the one tool
+#                 whose only pin lives there
+#   go            go.work's `go` directive, which actions/setup-go reads
+#                 (.github/actions/setup-go-env/action.yml)
+#   node          web/.nvmrc, which the shared setup-node-env action reads
+#   pnpm          web/package.json's packageManager field
+#   golangci-lint GOLANGCI_VERSION in
+#                 .github/actions/setup-go-env/action.yml
+
+[tools]
+# Mirror of the Taskfile.yml header's task pin.
+task = "3.53.1"
+# Mirror of go.work's `go` directive.
+go = "1.25.0"
+# Mirror of web/.nvmrc.
+node = "24"
+# Mirror of web/package.json's packageManager (the version after "pnpm@").
+pnpm = "11.1.2"
+# Mirror of GOLANGCI_VERSION in .github/actions/setup-go-env/action.yml.
+golangci-lint = "2.11.4"

@@ -34,6 +34,14 @@ name: pr-check
 #         CLAUDE.md Language Rule (18-cicd discipline table row). Scans the
 #         whole tree including this .github directory: comments in these
 #         files must stay English.
+#       - tools/check_toolchain.py -- the .mise.toml drift gate: every
+#         version the root .mise.toml pins (task/go/node/pnpm/
+#         golangci-lint) must mirror its authoritative source (Taskfile.yml
+#         header, go.work, web/.nvmrc, web/package.json, setup-go-env's
+#         GOLANGCI_VERSION). CI reads those sources, never the .mise.toml
+#         -- actions/setup-go and setup-node cannot parse it -- so this
+#         gate is what proves a local `mise install` (Taskfile setup)
+#         installs exactly the toolchain CI runs with.
 #       - go build github.com/vislake/speed/go/... -- every module compiles
 #         in workspace context from the go.work root.
 #       - go work sync + git diff --exit-code -- the checked-in workspace
@@ -149,6 +157,8 @@ jobs:
         uses: ./.github/actions/setup-go-env
       - name: CJK discipline scan (Language Rule)
         run: python3 tools/scan_cjk.py
+      - name: Toolchain drift gate (.mise.toml mirrors)
+        run: python3 tools/check_toolchain.py
       - name: Build every module in workspace context
         run: go build github.com/vislake/speed/go/...
       - name: Workspace integrity (go.work.sum must be canonical)
