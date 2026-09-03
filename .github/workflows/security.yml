@@ -28,8 +28,11 @@ name: security
 #     developer-local tooling and belongs to a dev-workflow round, not
 #     to CI. The binary is pinned by release and verified by checksum
 #     (the setup-go-env download pattern); the default rule set is used
-#     -- no .gitleaks.toml exists, and one should only arrive with a
-#     real allowlist need.
+#     -- .gitleaks.toml extends it with exactly one path allowlist, for
+#     the go/observability redaction-test fixtures (secret-shaped
+#     stand-in values are the point of that test code; the allowlist
+#     comment records the reasoning). Any further allowlist entry must
+#     arrive with its own justification in that file.
 #   * GitHub CodeQL for static analysis -- LIVE (sast job), Go and
 #     TypeScript/JavaScript in one database. CodeQL runs only in CI: the
 #     codeql-action is the tool (no offline equivalent), and it pins its
@@ -144,11 +147,12 @@ jobs:
           echo "${GITLEAKS_SHA256}  $RUNNER_TOOL_CACHE/gitleaks/gitleaks.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TOOL_CACHE/gitleaks/gitleaks.tar.gz" -C "$RUNNER_TOOL_CACHE/gitleaks" gitleaks
           chmod +x "$RUNNER_TOOL_CACHE/gitleaks/gitleaks"
-      # Scans the working tree and commit history with the default rule
-      # set (no .gitleaks.toml yet -- see the header). Exit 0: no
-      # leaks; exit 1: leaks found.
+      # Scans the working tree and commit history: .gitleaks.toml extends
+      # the default rule set with the one path allowlist the tree needs
+      # (observability redaction-test fixtures -- see the header). Exit
+      # 0: no leaks; exit 1: leaks found.
       - name: Secret scan (gitleaks detect)
-        run: "$RUNNER_TOOL_CACHE/gitleaks/gitleaks detect --source . --no-banner"
+        run: "$RUNNER_TOOL_CACHE/gitleaks/gitleaks detect --config .gitleaks.toml --source . --no-banner"
 
   license:
     name: dependency license compliance
