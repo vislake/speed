@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/eventbustest"
 )
 
 // invoicePaid is the concrete payload type used across these tests: a plain
@@ -668,5 +669,26 @@ func TestRedisEventBus_Close_SparesAPeerGroup(t *testing.T) {
 	}
 	eventually(t, "the surviving reader on bus C to deliver after bus B closed", func() bool {
 		return recC.count() == 1
+	})
+}
+
+// TestRedisEventBus_ConformsToEventBusContract proves NewRedisEventBus
+// satisfies the shared contract eventbustest.AssertConforms checks -- the
+// same suite go/pkgcore's own eventbus_conformance_test.go runs against
+// NewMemoryEventBus -- against a real Redis, so drift between the two
+// EventBus implementations under the deployment-composition retrofit's N
+// registered implementations per seam is caught here once instead of
+// pairwise. Every bus AssertConforms's subtests build shares one Redis
+// container and client (one container per test file, per this package's own
+// doc comment) and is closed on this test's cleanup, mirroring how every
+// other test in this file manages a RedisEventBus's lifetime.
+func TestRedisEventBus_ConformsToEventBusContract(t *testing.T) {
+	ctx := context.Background()
+	client := startRedisClient(t, ctx)
+
+	eventbustest.AssertConforms(t, func() pkgcore.EventBus {
+		bus := pkgcore.NewRedisEventBus(client)
+		t.Cleanup(bus.Close)
+		return bus
 	})
 }

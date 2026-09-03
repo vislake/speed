@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/kvstoretest"
 )
 
 func TestRedisKVStore_SetGetDelete(t *testing.T) {
@@ -358,4 +359,24 @@ func TestRedisKVStore_ConcurrentIncrementsLoseNoUpdates(t *testing.T) {
 	if parsed != goroutines*increments {
 		t.Errorf("counter = %v, want %d: a concurrent increment was lost", parsed, goroutines*increments)
 	}
+}
+
+// TestRedisKVStore_ConformsToKVStoreContract proves NewRedisKVStore
+// satisfies the shared contract kvstoretest.AssertConforms checks -- the
+// same suite go/pkgcore's own kv_conformance_test.go runs against
+// NewMemoryKVStore -- against a real Redis, so drift between the two
+// KVStore implementations under the deployment-composition retrofit's N
+// registered implementations per seam is caught here once instead of
+// pairwise. Every store AssertConforms's subtests build shares one Redis
+// container and client (one container per test file), which is safe because
+// NewRedisKVStore holds no per-instance state of its own -- it is a thin
+// wrapper over the shared client, unlike RedisEventBus, which is why no
+// per-store cleanup is needed here.
+func TestRedisKVStore_ConformsToKVStoreContract(t *testing.T) {
+	ctx := context.Background()
+	client := startRedisClient(t, ctx)
+
+	kvstoretest.AssertConforms(t, func() pkgcore.KVStore {
+		return pkgcore.NewRedisKVStore(client)
+	})
 }

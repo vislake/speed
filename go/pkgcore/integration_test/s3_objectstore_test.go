@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/objectstoretest"
 )
 
 // readObject streams one object to the end and closes its reader, failing the
@@ -286,4 +287,24 @@ func (r *abortingReader) Read(p []byte) (int, error) {
 	}
 	<-r.ctx.Done()
 	return 0, r.ctx.Err()
+}
+
+// TestS3ObjectStore_ConformsToObjectStoreContract proves NewS3ObjectStore
+// satisfies the shared contract objectstoretest.AssertConforms checks --
+// the same suite go/pkgcore's own objectstore_conformance_test.go runs
+// against NewLocalObjectStore -- against a real MinIO, so drift between the
+// two ObjectStore implementations under the deployment-composition
+// retrofit's N registered implementations per seam is caught here once
+// instead of pairwise. Every subtest AssertConforms runs shares the one
+// bucket startMinioObjectStore provisions for this test (one container per
+// test file); this is safe because AssertConforms derives a distinct key
+// per subtest from the subtest name (see its own conformKey), so concurrent
+// subtests never collide on an object key.
+func TestS3ObjectStore_ConformsToObjectStoreContract(t *testing.T) {
+	ctx := context.Background()
+	store := startMinioObjectStore(t, ctx)
+
+	objectstoretest.AssertConforms(t, func() pkgcore.ObjectStore {
+		return store
+	})
 }
