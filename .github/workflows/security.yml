@@ -1,59 +1,193 @@
 name: security
 
-# STUB -- not implemented. Triggered runs fail loudly at the guard step
-# below; nothing in this pipeline can pass silently.
+# Supply-chain and security scans -- docs/internal/18-cicd.md's pipeline
+# table, security row: dependency vulnerabilities, secret scanning, SAST,
+# license compliance, container image scanning. Target under 10 minutes
+# for the per-PR legs; every job carries a timeout and stale runs are
+# cancelled via concurrency (18-cicd cost-control rules 4 and 5).
 #
-# PIPELINE (docs/internal/18-cicd.md pipeline table, security row): supply-
-# chain and security scans -- dependency vulnerabilities, secret scanning,
-# SAST, container image scanning, license checks. Target under 10 minutes.
+# DESIGN-TABLE TRIGGER: every PR plus a daily run; both are enabled by
+# this implementing round, which replaces the gated stub that stood here.
+# The daily cron (05:37 UTC, deliberately off the round marks) exists
+# because the advisory databases this pipeline consults -- npm, Go's
+# vuln DB, CodeQL -- move between PRs; the scheduled run re-checks the
+# default branch.
 #
-# DESIGN-TABLE TRIGGER: every PR plus a daily run; both are enabled by the
-# implementing round (a daily scheduled stub would only produce noise).
+# TOOL POSTURE (docs/internal/20-quality-and-security.md, supply-chain,
+# secret-management and license-compliance sections):
+#   * pnpm audit for npm dependencies -- LIVE (deps-js job). web/ ships a
+#     pnpm lockfile with real runtime dependencies (@speed/i18n carries
+#     i18next/react-i18next), so the audit scans a real graph; the
+#     frozen-lockfile CI install resolves exactly what the lockfile
+#     pins, which is what the audit consults. Renovate, the
+#     automated-update half of the documented posture, is a later round:
+#     it needs its own app-level credentials, and this repo never holds
+#     credentials (see SECRETS below).
+#   * gitleaks for secret leakage -- LIVE (secrets job), the CI half of
+#     the documented posture. The pre-commit-hook half is
+#     developer-local tooling and belongs to a dev-workflow round, not
+#     to CI. The binary is pinned by release and verified by checksum
+#     (the setup-go-env download pattern); the default rule set is used
+#     -- no .gitleaks.toml exists, and one should only arrive with a
+#     real allowlist need.
+#   * GitHub CodeQL for static analysis -- LIVE (sast job), Go and
+#     TypeScript/JavaScript in one database. CodeQL runs only in CI: the
+#     codeql-action is the tool (no offline equivalent), and it pins its
+#     own extractor bundle. The repository root is a go.work workspace
+#     with no go.mod at the root; the CodeQL Go extractor supports
+#     go.work workspaces natively (module discovery from the workspace
+#     file), so autobuild at the checkout root covers every module.
+#   * license scan -- LIVE (license job): tools/license_scan.py from the
+#     same implementing round. The committed manifest
+#     (tools/dependency-licenses.json) is re-derived from the live tree
+#     on every run -- a newly required dependency, an orphan entry, a
+#     version change or a used_by drift all fail with an actionable
+#     message -- and every entry must satisfy the copyleft policy:
+#     GPL/AGPL banned outright (this repo scaffolds commercial
+#     deliveries, so dependency licenses transmit to customer projects),
+#     MPL/LGPL only with a recorded ADR (none exists), unknown ids fail
+#     closed pending adjudication.
+#   * govulncheck for Go dependencies -- NOT WIRED, see DEFERRED.
+#   * trivy for container images -- NOT WIRED, see DEFERRED.
 #
-# TOOL POSTURE (docs/internal/20-quality-and-security.md, supply-chain and
-# license-compliance sections): govulncheck for Go dependencies; pnpm audit
-# + Renovate for npm -- the premise now holds: web/ ships a pnpm lockfile
-# (the root package declares devDependencies only; @speed/i18n already
-# carries i18next/react-i18next as runtime dependencies), but the audit
-# wiring itself is deferred to the M0 implementing round of this pipeline;
-# gitleaks (pre-commit hook AND CI) for secret leakage; GitHub CodeQL for
-# static analysis; trivy for container images once images exist; and a
-# license scan that BANS GPL/AGPL dependencies -- this repo scaffolds
-# commercial deliveries, so dependency licenses transmit to customer
-# projects, and MPL/LGPL needs a recorded ADR.
+# DEFERRED (each has a real prerequisite missing today; wiring them now
+# would produce a permanently red check -- the half-wired state this repo
+# refuses to ship, see the gated-stub rationale in pr-check.yml):
+#   * deps-go (govulncheck @v1.1.4, one run per module directory against
+#     the CI toolchain go 1.25.0 from go.work): the scan cannot pass on
+#     the current tree, in two independent classes, and neither fix is
+#     this round's to make (no go.mod/go.work edits -- this is the
+#     security-tooling round):
+#       - stdlib class, all six implemented modules: open Go-standard-
+#         library advisories (e.g. GO-2026-6218 net/url, GO-2026-6090
+#         and GO-2026-5856 crypto/tls, GO-2026-6088 encoding/xml,
+#         GO-2026-5972 encoding/asn1, fixed in go1.26.4-1.26.6) are a
+#         property of the toolchain line, and go.work's go directive
+#         (1.25.0) predates their fixes. Locally proven on go1.26.1:
+#         pkgcore 15 stdlib findings, ratelimit 9; dbkit 18, tenancy 17,
+#         observability 12 and jobs 12 mix the same stdlib set with the
+#         module findings below. CI's exact 1.25.0 is strictly more
+#         affected. The fix -- raising the go directive to a patched
+#         release -- belongs to the toolchain-pinning round.
+#       - module class: dbkit and tenancy reach golang.org/x/crypto
+#         v0.55.0 (GO-2026-6355/6354, fixed in v0.56.0) and
+#         github.com/moby/go-archive v0.2.0 (GO-2026-6253, fixed in
+#         v0.3.0) through testcontainers v0.44.0 in their
+#         Docker-integration test-support packages (dbkit/dbtest, the
+#         tenancytest helper tree); observability reaches
+#         google.golang.org/grpc v1.81.1 (GO-2026-6061, fixed in
+#         v1.82.1) through its direct OTLP gRPC exporter requires, and
+#         jobs reaches the same grpc through the exporter edge. The
+#         fixes are dependency bumps owned by the modules themselves.
+#     Wire deps-go when the toolchain-pinning round lands (the stdlib
+#     class clears; the module class clears as the owning rounds bump):
+#     one job, a matrix over the six implemented modules,
+#     `go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...` with
+#     working-directory go/<module> after setup-go-env. Govulncheck
+#     version stays pinned at v1.1.4 (locally cached and proven).
+#   * trivy (container image scanning): the repository builds no images
+#     today -- nothing ships a Dockerfile -- so there is nothing to
+#     scan. Wire when the release round produces an image.
 #
-# WHAT EXISTS TODAY: none of the scanning tooling is wired yet -- no
-# govulncheck invocation or config, no gitleaks config, no CodeQL setup, no
-# images to scan, and no npm audit invocation or config anywhere: the root
-# package declares devDependencies only, but @speed/i18n already carries
-# i18next/react-i18next as runtime dependencies, so an audit would scan a
-# real dependency graph (audit wiring is deferred to this pipeline's
-# implementing round). Nothing is wired here on purpose: half-wired scans
-# would be fake checks. The repo holds no real credentials of any kind and
-# must never acquire any (20-quality-and-security.md secret management);
-# CI secrets belong to GitHub Environments.
-#
-# GATE: the roadmap M0 engineering item "security and license scanning"
-# (semgrep/depguard discipline rules land in the same round per the roadmap,
-# but they are separate discipline-table rows, not this pipeline).
+# SECRETS: the repo holds no real credentials of any kind and must never
+# acquire any (20-quality-and-security.md secret management); CI secrets
+# belong to GitHub Environments. Every tool download below is pinned by
+# commit SHA or release checksum.
 
 on:
+  pull_request:
   workflow_dispatch:
+  schedule:
+    # Daily 05:37 UTC -- advisory databases move between PRs; the
+    # scheduled run re-checks the default branch.
+    - cron: "37 5 * * *"
+
+concurrency:
+  group: security-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  security:
-    name: security scans (stub guard -- not implemented yet)
+  deps-js:
+    name: npm dependency audit
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Stub guard
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Set up pinned Node.js, pnpm and the pnpm store cache
+        uses: ./.github/actions/setup-node-env
+      # pnpm audit reads the committed lockfile (the frozen-lockfile CI
+      # install resolves exactly what it pins), so no install step is
+      # needed; the audit consults the live npm advisory database.
+      - name: Audit npm dependencies (pnpm audit)
+        working-directory: web
+        run: pnpm audit
+
+  secrets:
+    name: secret leakage scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Download gitleaks (checksum-verified)
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
         run: |
-          echo "error: the security pipeline is not implemented. This failing"
-          echo "run is its stub guard, so the pipeline can never pass"
-          echo "silently. Wire the scans named in the file header (govulncheck,"
-          echo "gitleaks, CodeQL, trivy, license scan) when the roadmap M0"
-          echo "security-and-license-scanning item lands."
-          exit 1
+          mkdir -p "$RUNNER_TOOL_CACHE/gitleaks"
+          curl -fsSL -o "$RUNNER_TOOL_CACHE/gitleaks/gitleaks.tar.gz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TOOL_CACHE/gitleaks/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TOOL_CACHE/gitleaks/gitleaks.tar.gz" -C "$RUNNER_TOOL_CACHE/gitleaks" gitleaks
+          chmod +x "$RUNNER_TOOL_CACHE/gitleaks/gitleaks"
+      # Scans the working tree and commit history with the default rule
+      # set (no .gitleaks.toml yet -- see the header). Exit 0: no
+      # leaks; exit 1: leaks found.
+      - name: Secret scan (gitleaks detect)
+        run: "$RUNNER_TOOL_CACHE/gitleaks/gitleaks detect --source . --no-banner"
+
+  license:
+    name: dependency license compliance
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      # The planted-fixture suite proves the scanner's verdicts (clean,
+      # GPL, MPL without ADR, MPL with ADR, unknown license, drift
+      # shapes) before the real check runs against the tree.
+      - name: License scanner self-tests (tools/license_scan_testdata)
+        run: python3 tools/license_scan.py --selftest
+      - name: License scan against the live tree
+        run: python3 tools/license_scan.py
+
+  sast:
+    name: CodeQL static analysis (Go + TypeScript/JavaScript)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write  # SARIF upload -- the only job that needs it
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      # The CodeQL Go extractor builds with a real Go toolchain; the
+      # pinned one comes from go.work via setup-go-env, matching every
+      # other CI job.
+      - name: Set up pinned Go toolchain and caches
+        uses: ./.github/actions/setup-go-env
+      - name: Initialize CodeQL (Go + TypeScript/JavaScript)
+        uses: github/codeql-action/init@6f5948dfacef28e207b48d0905cf90c03365536d  # v3.37.9
+        with:
+          languages: go, javascript-typescript
+      # Autobuild runs the CodeQL Go extractor at the checkout root; the
+      # extractor discovers the go.work workspace natively and covers
+      # every module under it. TypeScript/JavaScript needs no build step.
+      - name: Autobuild (Go workspace)
+        uses: github/codeql-action/autobuild@6f5948dfacef28e207b48d0905cf90c03365536d  # v3.37.9
+      - name: Analyze
+        uses: github/codeql-action/analyze@6f5948dfacef28e207b48d0905cf90c03365536d  # v3.37.9
