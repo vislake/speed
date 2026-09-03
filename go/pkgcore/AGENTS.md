@@ -8,9 +8,10 @@ It owns five things and nothing else:
 |---|---|
 | The `Module` / `Registry` / `Kernel` wiring contract | `registry.go` |
 | Tenant context and the audited escape hatch from tenant filtering | `tenant.go` |
-| Dual-deployment-mode infrastructure interfaces (`KVStore`, `EventBus`, `Mailer`, `ObjectStore`) plus each one's standalone implementation and the Redis-, SMTP- or S3-backed distributed one | `kv.go`, `eventbus.go`, `mailer.go`, `objectstore.go`, `redis_kv.go`, `redis_eventbus.go`, `smtp_mailer.go`, `s3_objectstore.go` |
+| Infrastructure seam interfaces (`KVStore`, `EventBus`, `Mailer`, `ObjectStore`) plus each one's in-process implementation and its Redis-, SMTP- or S3-backed one | `kv.go`, `eventbus.go`, `mailer.go`, `objectstore.go`, `redis_kv.go`, `redis_eventbus.go`, `smtp_mailer.go`, `s3_objectstore.go` |
+| The capability/registry/preset machinery `Kernel.Bootstrap` resolves and validates every seam through, and the eight built-in `Registration`s it pre-populates | `capability.go`, `seam_registry.go`, `preset.go`, `builtin_implementations.go` |
 | The merged backend message catalog, assembled by `Bootstrap` from every module's `Locales()` embed.FS | `i18n/` (+ `locales/`, pkgcore's own seed message files) |
-| The `DeploymentMode` enumeration | `deployment_mode.go` |
+| The `DeploymentMode` enumeration (a topology declaration only -- see "Deployment mode and implementation composition" below) | `deployment_mode.go` |
 
 Three subpackages: `apperr` (the structured application error every module returns), `config` (the bootstrap configuration loader, run once at process startup) and `i18n` (the message catalog backend-generated content is rendered through, on nicksnyder/go-i18n). `locales/` is the seed bundle `i18n` needs to load pkgcore's own messages.
 
@@ -32,14 +33,30 @@ Three subpackages: `apperr` (the structured application error every module retur
 | `func (*Registry) Mailer() Mailer` | The mailer the registry was built with |
 | `func (*Registry) ObjectStore() ObjectStore` | The object store the registry was wired to. Not a `NewRegistry` parameter — the seam post-dates that frozen three-argument signature — so a hand-built registry has none until `Bootstrap` installs one, and only a bootstrapped `Registry` may be used for the store |
 | `func (*Registry) Locales() *i18n.Catalog` | The merged message catalog `Bootstrap` assembled from every module's `Locales()` embed.FS. Like `ObjectStore`, not a `NewRegistry` parameter; nil on a hand-built registry, installed by `Bootstrap` after the register loop |
-| `func NewKernel(mode DeploymentMode, opts ...KernelOption) *Kernel` | A kernel that assembles modules for one deployment mode |
-| `func WithEventBus(bus EventBus) KernelOption` | Inject the host's `EventBus`. Required for `DeploymentModeDistributed`, which has no built-in one |
-| `func WithKVStore(store KVStore) KernelOption` | Inject the host's `KVStore`. Required for `DeploymentModeDistributed`, which has no built-in one |
-| `func WithMailer(mailer Mailer) KernelOption` | Inject the host's `Mailer`. Required for `DeploymentModeDistributed`, which has no built-in one |
-| `func WithObjectStore(store ObjectStore) KernelOption` | Wire the host's `ObjectStore` in place of the deployment mode's default. Required for `DeploymentModeDistributed`, which has no built-in one; a standalone host that must keep objects across restarts injects its own local store too, because the standalone default is a throwaway directory. A nil store leaves the default in place |
-| `func (*Kernel) DeploymentMode() DeploymentMode` | The deployment mode the kernel assembles for |
-| `func (*Kernel) Bootstrap(ctx context.Context, modules ...Module) (*Registry, error)` | Dependency-sort, register each module, validate the feature graph |
+| `func NewKernel(opts ...KernelOption) *Kernel` | With no options, a kernel that behaves like today's zero-configuration standalone default: `DeploymentModeStandalone` composed with `PresetStandalone`. `opts` layer a wider deployment mode, a different `Preset`, or per-seam injection on top |
+| `func WithDeploymentMode(mode DeploymentMode) KernelOption` | Set the topology `Bootstrap` validates the resolved composition against |
+| `func WithPreset(preset Preset) KernelOption` | Replace the whole seam-name mapping unwired seams resolve against, in place of `PresetStandalone`. Has no effect on a seam also injected directly: injection always wins, per seam |
+| `func WithEventBus(bus EventBus, capabilities Capability) KernelOption` | Inject the host's `EventBus` in place of whatever the active `Preset` would have resolved for the `"eventbus"` seam, declaring what `bus` is capable of. A nil `bus` leaves the `Preset`'s resolution in place |
+| `func WithKVStore(store KVStore, capabilities Capability) KernelOption` | Mirrors `WithEventBus` for the `"kv"` seam |
+| `func WithMailer(mailer Mailer, capabilities Capability) KernelOption` | Mirrors `WithEventBus` for the `"mailer"` seam |
+| `func WithObjectStore(store ObjectStore, capabilities Capability) KernelOption` | Mirrors `WithEventBus` for the `"objectstore"` seam. A standalone host that must keep objects across restarts injects its own persistent-directory store here, because the built-in `"objectstore.local"` implementation the `Preset` resolves to defaults to a throwaway temporary directory |
+| `func (*Kernel) DeploymentMode() DeploymentMode` | The deployment mode the kernel validates the assembled composition against |
+| `func (*Kernel) Bootstrap(ctx context.Context, modules ...Module) (*Registry, error)` | Resolve and capability-validate all four seams (preset or injected), dependency-sort modules, register each one, validate the feature graph. Logs a startup warning (never a failure) for any resolved seam that does not declare `SurvivesRestart` |
 | `func ValidateFeatureGraph(reg *Registry) error` | Reports feature flags depending on flags nobody registered |
+
+**Capability declarations, the seam registry and presets** -- the machinery `Bootstrap`'s seam resolution above is built on; see "Deployment mode and implementation composition" below for the design this implements.
+
+| Signature | Purpose |
+|---|---|
+| `type Capability uint8`, consts `MultiReplicaSafe` / `SurvivesRestart` | What an implementation declares about itself at registration or injection time. `func (Capability) Has(want Capability) bool`; `func (Capability) String() string` renders the set bits pipe-joined (`"MultiReplicaSafe\|SurvivesRestart"`), `"none"` for zero |
+| `type Config map[string]string` | Flat scalar settings a `Preset`-resolved implementation's constructor reads. pkgcore never reads environment or files itself; a host wanting real credentials injects the implementation directly instead of relying on `Config` |
+| `type Registration[T any] struct { Name string; Capabilities Capability; New func(Config) (T, error) }` | One named implementation of a seam |
+| `func NewSeamRegistry[T any]() *SeamRegistry[T]`, `func (*SeamRegistry[T]) Register(Registration[T]) error`, `func (*SeamRegistry[T]) Build(name string, cfg Config) (T, Capability, error)` | Name-to-constructor registry for one seam, mirroring `database/sql`'s driver pattern. Safe for concurrent `Register`/`Build` |
+| `var EventBusRegistry, KVStoreRegistry, MailerRegistry, ObjectStoreRegistry *SeamRegistry[...]` | The four package-level registries, pre-populated with pkgcore's eight built-in implementations by `builtin_implementations.go`. A host registers its own implementation on the matching one before bootstrapping a `Kernel` whose `Preset` names it |
+| `type Preset map[string]string` | Seam key (`"eventbus"`, `"kv"`, `"mailer"`, `"objectstore"`) to implementation name |
+| `var PresetStandalone`, `var PresetDistributed Preset` | The zero-value default (`eventbus.memory` / `kv.memory` / `mailer.console` / `objectstore.local`, none `MultiReplicaSafe`) and pkgcore's own Redis/SMTP/S3 composition (`eventbus.redis` / `kv.redis` / `mailer.smtp` / `objectstore.s3`, all `MultiReplicaSafe\|SurvivesRestart`) |
+
+Built-in implementation names: `eventbus.memory`, `eventbus.redis`, `kv.memory`, `kv.redis`, `mailer.console`, `mailer.smtp`, `objectstore.local`, `objectstore.s3` -- each a thin `Config`-consuming adapter over the unchanged typed constructor in the table below (`NewMemoryEventBus`, `NewRedisEventBus`, ...). The two Redis-backed adapters fall back to `"localhost:6379"` when `cfg["addr"]` is unset; the SMTP and S3 adapters have no safe default credentials and fail with `ErrMissingSeamConfig` instead of calling their panicking constructor with an empty field.
 
 Registrar interfaces: `RouteRegistrar`, `ConfigSchemaRegistrar`, `FeatureRegistrar`, `PermissionRegistrar`, `JobHandlerRegistrar`, `NotificationRegistrar`, `EventRegistrar` (`Publishes` / `Published` / `Subscribe` / `Bus`), `AuditActionRegistrar`.
 
@@ -56,9 +73,11 @@ Declaration types:
 `ConfigItem` declarations are validated when registered: `Type` must be one of `string` / `int` / `bool` / `duration`; a non-nil `Default` must be a Go value of that kind (`string`, `int` or `int64`, `bool`, `time.Duration`; nil is legal and means "no value until one is set"); `Min`/`Max` are declarative ranges defined for `int` and `duration` items only, must satisfy `Min <= Max`, and a non-nil `Default` must fall inside them; `Sensitive` and `Public` are mutually exclusive. A contradictory declaration fails the whole `Add` call with an error wrapping `ErrInvalidConfigItem` -- see the error index below.
 
 
-**Deployment mode**
+**Deployment mode and implementation composition**
 
-`type DeploymentMode string`, constants `DeploymentModeStandalone` / `DeploymentModeDistributed`, `func ParseDeploymentMode(string) (DeploymentMode, error)` (trims and lowercases), `func (DeploymentMode) Valid() bool` (exact match, so `"Standalone"` is not valid).
+These are two orthogonal axes (`docs/internal/03-deployment-modes.md` is the authority): deployment mode declares topology -- how many replicas may run at once -- and therefore which capabilities every seam's resolved implementation must have; it never selects an implementation. `Kernel.Bootstrap` is the one place that compares the two, per seam, using `validateSeamCapability`.
+
+`type DeploymentMode string`, constants `DeploymentModeStandalone` / `DeploymentModeDistributed`, `func ParseDeploymentMode(string) (DeploymentMode, error)` (trims and lowercases), `func (DeploymentMode) Valid() bool` (exact match, so `"Standalone"` is not valid), `func (DeploymentMode) RequiredCapabilities() Capability` (`DeploymentModeDistributed` → `MultiReplicaSafe`; everything else, including an invalid value `Bootstrap` would have already rejected via `Valid()`, → `0`).
 
 **Tenant context**
 
@@ -160,21 +179,28 @@ Booting a host:
 ```go
 mode, err := pkgcore.ParseDeploymentMode(os.Getenv("SPEED_DEPLOYMENT_MODE"))
 
-// DeploymentModeStandalone needs no options; DeploymentModeDistributed must
-// be given a bus, a key-value store, a mailer and an object store. A real
-// host wires the broker/Redis/SMTP/S3-backed implementations here; the
-// in-memory, console and local-directory constructors of the API tables are
-// the standalone-mode counterparts and the test doubles.
-var opts []pkgcore.KernelOption
+// A bare NewKernel() -- no options -- is DeploymentModeStandalone composed
+// with PresetStandalone and needs nothing else. DeploymentModeDistributed
+// requires every seam's resolved implementation to declare MultiReplicaSafe,
+// which PresetStandalone's four in-process implementations do not, so a
+// distributed host injects its own real ones and declares what they can do.
+opts := []pkgcore.KernelOption{pkgcore.WithDeploymentMode(mode)}
 if mode == pkgcore.DeploymentModeDistributed {
+	const multiReplica = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
 	opts = append(opts,
-		pkgcore.WithEventBus(broker.NewEventBus(cfg)),
-		pkgcore.WithKVStore(redis.NewKVStore(cfg)),
-		pkgcore.WithMailer(smtp.NewMailer(cfg)),
-		pkgcore.WithObjectStore(s3.NewObjectStore(cfg)))
+		pkgcore.WithEventBus(broker.NewEventBus(cfg), multiReplica),
+		pkgcore.WithKVStore(redis.NewKVStore(cfg), multiReplica),
+		pkgcore.WithMailer(smtp.NewMailer(cfg), multiReplica),
+		pkgcore.WithObjectStore(s3.NewObjectStore(cfg), multiReplica))
 }
-reg, err := pkgcore.NewKernel(mode, opts...).Bootstrap(ctx, tenancy.New(), billing.New())
+reg, err := pkgcore.NewKernel(opts...).Bootstrap(ctx, tenancy.New(), billing.New())
 ```
+
+A host that wants pkgcore's own Redis/SMTP/S3 implementations instead of
+building its own reaches for `WithPreset(pkgcore.PresetDistributed)` in
+place of the four `WithEventBus`/`WithKVStore`/`WithMailer`/`WithObjectStore`
+calls above -- see `PresetDistributed`'s own doc comment for what it does and
+does not source configuration for.
 
 Returning an error:
 
@@ -188,15 +214,17 @@ Full runnable versions of all of the above live in `example_test.go` (the shared
 
 **Dependencies**
 
-- Do not import any other speed module here, `dbkit` included. pkgcore is the floor; an import from above is a cycle. That is why `Module.Migrations` returns a plain `embed.FS` rather than a `dbkit` type.
+- Do not import any other speed module here, `dbkit` included -- `go/observability` too, even though it seems tempting for structured logging. pkgcore is the floor; an import from above is a cycle. That is why `Module.Migrations` returns a plain `embed.FS` rather than a `dbkit` type, and why `warnIfNotDurable`'s `SurvivesRestart` startup warning reaches for the standard library's `log/slog` directly instead of `obs.FromContext` -- the one call site in the package that logs anything, and it runs only at `Bootstrap` time, never on a request path.
 - Do not add a third-party dependency to the root package without arguing for it in the pull request: it lands in every consumer's `go.sum`. Three are in today, and all three earned their place the same way — a deployment-mode implementation cannot be written against a weaker third party: koanf in the `config` subpackage, and, in the root package itself, go-redis v9 backing the distributed-mode `KVStore` and `EventBus`, and minio-go v7 speaking the S3 dialect every supported object service accepts for the distributed-mode `ObjectStore`. minio-go was chosen over the AWS SDK for the leaner dependency graph and for covering MinIO, Aliyun OSS and AWS S3 with one client; consumers still never import it, because `NewS3ObjectStore` builds its own client and no minio type crosses the seam.
 
-**Interfaces and deployment modes**
+**Interfaces, deployment modes and implementation composition**
 
-- Do not expose a capability on an infrastructure interface that only one implementation can satisfy. Design against the weaker side, which is the standalone deployment mode: no server-side scripting, no pub/sub, no pipelines on `KVStore`.
-- Do not branch on `DeploymentMode` outside kernel wiring. Business logic must not contain `if mode == DeploymentModeStandalone`.
-- Do not write a mock for `KVStore`, `EventBus`, `Mailer` or `ObjectStore`. `NewMemoryKVStore`, `NewMemoryEventBus`, `NewConsoleMailer` and `NewLocalObjectStore` are the test doubles.
-- Do not use `NewMemoryEventBus`, `NewMemoryKVStore`, `NewConsoleMailer` or `NewLocalObjectStore` as a distributed-mode fallback. The first three are single-process, so every replica would get a private instance (and a console mailer prints where nobody reads); a local directory is the standalone mode's own private root, which a distributed host has no business sharing. `DeploymentModeDistributed` fails assembly instead, and the host injects real ones with `WithEventBus`, `WithKVStore`, `WithMailer` and `WithObjectStore`.
+- Do not expose a capability on an infrastructure interface that only one implementation can satisfy. Design against the weakest of that seam's registered implementations -- an anchor that moves as implementations are added, not a fixed "the standalone one": no server-side scripting, no pub/sub, no pipelines on `KVStore`.
+- Do not branch on `DeploymentMode` outside kernel wiring. Business logic must not contain `if mode == DeploymentModeStandalone`; the retrofit that added `Capability`/`Preset`/`SeamRegistry` made this structurally easier to hold, since business code has no global mode value to branch on at all -- it only ever sees the `Registry`'s already-resolved `EventBus`/`KVStore`/`Mailer`/`ObjectStore`.
+- Do not write a mock for `KVStore`, `EventBus`, `Mailer` or `ObjectStore`. `NewMemoryKVStore`, `NewMemoryEventBus`, `NewConsoleMailer` and `NewLocalObjectStore` are the test doubles, and are also what `"kv.memory"`/`"eventbus.memory"`/`"mailer.console"`/`"objectstore.local"` adapt onto in `builtin_implementations.go`.
+- Do not add a new infrastructure dependency's seam registration anywhere but `builtin_implementations.go`. It is the one centralized place every built-in `Registration` lives, mirroring the "single home" instinct the rest of the codebase already applies elsewhere (e.g. `@speed/api-client`'s HTTP seam) -- not eight scattered `init()`s.
+- Do not declare a `Capability` an implementation does not actually have, and do not add a new `Capability` bit without updating `String()`. `Kernel.Bootstrap`'s validation trusts the declaration, not the value: `WithEventBus(bus, pkgcore.MultiReplicaSafe)` on a bus that is not multi-replica-safe passes assembly and fails silently later, in production, under real replica count -- the one thing this whole mechanism exists to catch.
+- Do not expect `Kernel.Bootstrap` to fail an assembly for lacking `SurvivesRestart`. It logs a startup warning (via `log/slog`, since pkgcore cannot import `go/observability` -- see the dependency-direction rule below) and proceeds; losing state across a restart is a legitimate, deliberate choice for a throwaway or development composition, never a hard error.
 - Do not silently change an interface's semantics when adding an implementation. `NewRedisKVStore` preserves the in-memory store's observable behaviour; where a Redis-backed bus cannot (asynchronous cross-process delivery, JSON payload shape, failures of remote handlers unobservable, no catch-up), the difference is documented on the constructor and spelled out to consumers before they choose it.
 - Do not build a read-modify-write cycle out of `Get` + `Set`. Use `IncrByFloat` or `CompareAndSwap`; they are the only operations every backend can make atomic.
 - Do not retain or hand out a caller's byte slice in a `KVStore` implementation, and do not perform an operation on a cancelled context — return the context error instead.
@@ -257,10 +285,10 @@ Full runnable versions of all of the above live in `example_test.go` (the shared
 | `ErrInvalidConfigItem` | An item whose fields contradict one another: an unknown `Type`, a `Default`/`Min`/`Max` of the wrong Go type, `Min`/`Max` on a `string`/`bool` item, `Min` above `Max`, a `Default` outside its declared range, or `Sensitive` with `Public` | Fix the declaration; nothing was registered (the message never prints a sensitive item's value) |
 | `ErrDuplicateConfigKey` / `ErrDuplicateFeatureFlag` / `ErrDuplicatePermission` / `ErrDuplicateJobType` / `ErrDuplicateNotificationType` / `ErrDuplicateEventType` / `ErrDuplicateAuditAction` | The same key registered twice | Two modules own one key; decide which does |
 | `ErrUnresolvedFeatureDependency` | A flag depending on a flag nobody registered | Register the flag, or drop the dependency |
-| `ErrMissingDistributedEventBus` | `Bootstrap` on `DeploymentModeDistributed` with no bus wired | Inject the host's bus with `WithEventBus` |
-| `ErrMissingDistributedKVStore` | `Bootstrap` on `DeploymentModeDistributed` with no store wired | Inject the host's store with `WithKVStore` |
-| `ErrMissingDistributedMailer` | `Bootstrap` on `DeploymentModeDistributed` with no mailer wired | Inject the host's mailer with `WithMailer` |
-| `ErrMissingDistributedObjectStore` | `Bootstrap` on `DeploymentModeDistributed` with no object store wired | Inject the host's object store with `WithObjectStore` |
+| `ErrCapabilityUnsatisfied` | `Bootstrap` resolving a seam (preset or injected) whose declared `Capability` does not satisfy `DeploymentMode.RequiredCapabilities()` | The error names the seam, the implementation and the missing capability; wire a qualifying implementation with `WithEventBus`/`WithKVStore`/`WithMailer`/`WithObjectStore`, or `WithPreset` a composition that already qualifies. Replaces the four `ErrMissingDistributed*` sentinels a fixed mode-keyed switch used to return before this retrofit |
+| `ErrUnknownImplementation` | `SeamRegistry.Build`, or `Bootstrap` resolving a `Preset` entry, naming an implementation nothing registered | Register it first, or fix the `Preset`/`Config` typo |
+| `ErrDuplicateImplementation` | `SeamRegistry.Register` with a `Registration.Name` already registered on that registry | Pick a different name; the original registration is untouched |
+| `ErrMissingSeamConfig` | A built-in `mailer.smtp` or `objectstore.s3` `Registration.New` called with a `Config` missing a field that has no safe default (SMTP host; S3 endpoint, bucket or credentials) | Supply the field in `Config`, or bypass the preset layer with `WithMailer`/`WithObjectStore` and a hand-built `SMTPConfig`/`S3Config` |
 | `ErrEventBusClosed` | `Publish` on a `RedisEventBus` after `Close` | Wiring error: a closed bus is out of the deployment; build a fresh one |
 | `config.ErrMissingValue` | A `config:"required"` field left zero | The error names the key and every source consulted |
 | `config.ErrInvalidValue` | A supplied value not applicable to its field | The error names the offending key and its source |
