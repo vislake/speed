@@ -201,8 +201,9 @@ def registration_checklist(module_name: str, design_doc: str) -> list[str]:
         "  2. CI matrix: register the module in the pr-check/pr-full "
         "workflow matrix (docs/internal/18-cicd.md, reusable-workflow "
         "design section: adding a module is one row in the orchestrating "
-        "workflow's matrix list). The .github/ tree is M0 work; until the "
-        "workflows exist, this registration happens when they land.",
+        "workflow's matrix list). Both pipelines are live: add the module "
+        "to the matrix in .github/workflows/pr-check.yml and pr-full.yml, "
+        "or it is never linted, vetted or tested in CI.",
         "  3. Lockstep release: step 1's go.work use entry is this "
         "module's release registration too -- the release coordinator "
         "(tools/release/lockstep-release.py) derives the per-module tag "

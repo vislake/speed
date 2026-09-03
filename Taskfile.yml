@@ -137,12 +137,14 @@ tasks:
     # it on every pull request (the reusable go-module-ci workflow's
     # golangci-lint leg; the reference app lints in pr-full). It cannot run
     # from the workspace root, though: with go.work in effect, golangci-lint
-    # v2 silently lints nothing there (logs "typechecking error ... directory
-    # prefix . does not contain modules listed in go.work", reports 0 issues,
-    # and exits 0). It must run from inside a module directory, so this task
-    # loops over the use entries of go.work -- which keeps newly scaffolded
-    # modules and the reference app covered automatically -- and runs it once
-    # per module.
+    # v2 effectively lints nothing there (logs "typechecking error ...
+    # directory prefix . does not contain modules listed in go.work", reports
+    # "0 issues.", and exits nonzero -- 7 on the pinned 2.11.4). The nonzero
+    # exit is the safe direction: a root-level invocation fails loudly rather
+    # than passing silently having checked nothing. It must run from inside a
+    # module directory, so this task loops over the use entries of go.work --
+    # which keeps newly scaffolded modules and the reference app covered
+    # automatically -- and runs it once per module.
     cmds:
       - go vet {{.ALL_PKGS}}
       - cd "{{.APP_DIR}}" && go vet ./...
@@ -155,9 +157,11 @@ tasks:
         else
           echo "warning: golangci-lint is not on PATH, so the golangci legs above were"
           echo "         skipped -- CI runs them on every pull request, so a local run that"
-          echo "         skips them can be green while the PR fails. Install it pinned"
-          echo "         (brew install golangci-lint, or the release tarball from"
-          echo "         github.com/golangci/golangci-lint) and re-run. With mise on PATH,"
+          echo "         skips them can be green while the PR fails. Install version 2.11.4,"
+          echo "         the version CI pins (.github/actions/setup-go-env/action.yml), from"
+          echo "         the release tarball at github.com/golangci/golangci-lint and re-run;"
+          echo "         note that 'brew install golangci-lint' pins no version and verifies"
+          echo "         no checksum, so it can disagree with CI. With mise on PATH,"
           echo "         'task setup' installs the pinned toolchain from the root .mise.toml"
           echo "         (golangci-lint included; tools/check_toolchain.py keeps the mirrors"
           echo "         honest in CI -- docs/internal/19-dev-workflow.md)."
@@ -172,24 +176,28 @@ tasks:
         echo
         echo "What IS runnable today: the reference-app server in standalone deployment"
         echo "mode (single process, SQLite, zero external dependencies), built on the"
-        echo "real modules -- pkgcore, dbkit, tenancy, observability (and, once its"
-        echo "round lands, the rest). See examples/reference-app/README.md. Run it"
-        echo "directly:"
+        echo "real modules -- pkgcore, dbkit, tenancy, observability, config (and,"
+        echo "once their rounds land, the rest). See examples/reference-app/README.md."
+        echo "Run it directly:"
         echo "    cd examples/reference-app && go run ./cmd/server"
         echo "It listens on :8080 (override with PORT) and stores to ./reference-app.db"
         echo "(override with SPEED_DB_PATH)."
         echo
         echo "This task itself does not run that: the 'task dev' target promises backend"
-        echo "+ frontend in standalone deployment mode with hot reload. There is no"
-        echo "web/ frontend workspace, no hot-reload runner, and no composed dev loop"
-        echo "in this repository yet (docs/internal/19-dev-workflow.md,"
+        echo "+ frontend in standalone deployment mode with hot reload. The web/ pnpm"
+        echo "workspace does exist now, but it ships libraries only (five packages --"
+        echo "see web/README.md): there is no frontend application shell, no hot-reload"
+        echo "runner, and no composed dev loop in this repository yet"
+        echo "(docs/internal/19-dev-workflow.md,"
         echo "docs/internal/15-roadmap.md) -- those land in later rounds."
         exit 1
     # Without silent, task echoes the whole script block above back as the
     # command line (task: [dev] | ...) before running it, doubling every
     # line. A not-implemented stub exists to print this message, so silent
     # keeps the message the only output; the exit-1 contract is unaffected.
-    # Same for api:gen, docs:serve and seed below.
+    # Same for seed below -- the only other task that is both a
+    # not-implemented stub and marked silent. api:gen and docs:serve were
+    # stubs when this note was written; both are real tasks now.
     silent: true
 
   api:gen:
@@ -274,9 +282,11 @@ tasks:
     # script's --help epilog and in docs/internal/19-dev-workflow.md's
     # module-generator section. Pass the arguments as CLI vars:
     #   task new:module NAME=sharing DESCRIPTION='...' DESIGN_DOC=docs/internal/NN-name.md
-    # The script prints a registration checklist (go.work use entry, CI matrix
-    # row, lockstep release tag, roadmap and navigation rows) for the human to
-    # perform -- it never rewrites shared repository files itself.
+    # The script prints a registration checklist (go.work use entry -- which is
+    # itself the lockstep release registration, since the coordinator derives
+    # the per-module tag list from go.work at runtime -- CI matrix row, roadmap
+    # and navigation rows) for the human to perform -- it never rewrites shared
+    # repository files itself.
     cmds:
       # Every variable is quoted: an unquoted {{.NAME}} or {{.DESIGN_DOC}}
       # would let the shell split a value on spaces before the script's own
