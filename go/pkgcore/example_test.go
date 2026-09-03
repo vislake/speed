@@ -89,6 +89,34 @@ func ExampleWithSystemContext() {
 	// true
 }
 
+// ExampleWithActor shows the impersonation shape an audit trail needs: the
+// current Actor and an independently-set OnBehalfOf actor. During an
+// impersonated (admin-as-user) session, Actor is the impersonated user and
+// OnBehalfOf is the real administrator -- both must remain readable at
+// once, which is why WithActor and WithOnBehalfOf never clear one another.
+func ExampleWithActor() {
+	impersonated := pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-42", DisplayName: "Ada"}
+	admin := pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: "admin-1", DisplayName: "Grace"}
+
+	ctx := pkgcore.WithActor(context.Background(), impersonated)
+	ctx = pkgcore.WithOnBehalfOf(ctx, admin)
+
+	actor, ok := pkgcore.ActorFromContext(ctx)
+	fmt.Println(ok, actor.Type, actor.ID)
+
+	onBehalfOf, ok := pkgcore.OnBehalfOfFromContext(ctx)
+	fmt.Println(ok, onBehalfOf.Type, onBehalfOf.ID)
+
+	// A context with neither set carries no actor at all.
+	_, ok = pkgcore.ActorFromContext(context.Background())
+	fmt.Println(ok)
+
+	// Output:
+	// true user user-42
+	// true platform_admin admin-1
+	// false
+}
+
 // ExampleKVStore shows the four operations every KVStore backend supports.
 // NewMemoryKVStore is the standalone-mode implementation and doubles as the
 // test double for code written against the interface.

@@ -71,6 +71,17 @@ Declaration types:
 | `func WithSystemContext(ctx, SystemReason) (context.Context, error)` | Grant the escape hatch; `SystemReason{Actor, Purpose, Ticket}` |
 | `func SystemReasonFromContext(ctx) (SystemReason, bool)` | Read who bypassed filtering and why |
 
+**Actor context**
+
+| Signature | Purpose |
+|---|---|
+| `type ActorType string`, consts `ActorTypeUser` / `ActorTypePlatformAdmin` / `ActorTypeAPIKey` / `ActorTypeSystem` | Closed enumeration of who can be behind an `Actor` |
+| `type Actor struct { Type ActorType; ID string; DisplayName string }` | Who is making a request or performing an action |
+| `func WithActor(ctx, Actor) context.Context` / `func ActorFromContext(ctx) (Actor, bool)` | Set/read the current actor. `false` only when `WithActor` was never called -- unlike `TenantFromContext`, a zero-value `Actor` that was explicitly set is still reported present |
+| `func WithOnBehalfOf(ctx, Actor) context.Context` / `func OnBehalfOfFromContext(ctx) (Actor, bool)` | Set/read the real actor behind an impersonated session, layered independently of `WithActor` so both identities survive together -- the dual-identity rule `docs/internal/10-compliance-and-audit.md` requires for every impersonated audit record |
+
+`go/dbkit/audit`'s `AuditEvent` model (see that package's `AGENTS.md`) maps this shape onto its `Actor`/`OnBehalfOf` columns; the mechanisms that read `ActorFromContext`/`OnBehalfOfFromContext` at write-capture time and embed the result as plain event-payload fields (never expecting a subscriber to re-read a context the distributed `EventBus` has already replaced) are the M1 audit-infrastructure round's remaining collection work.
+
 **Infrastructure interfaces**
 
 | Signature | Purpose |

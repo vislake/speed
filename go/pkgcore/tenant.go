@@ -21,6 +21,11 @@ const (
 	ctxKeyTenant ctxKey = iota
 	// ctxKeySystemReason addresses the SystemReason carried by a context.
 	ctxKeySystemReason
+	// ctxKeyActor addresses the Actor carried by a context. See actor.go.
+	ctxKeyActor
+	// ctxKeyOnBehalfOf addresses the on-behalf-of Actor carried by a
+	// context, set independently of ctxKeyActor. See actor.go.
+	ctxKeyOnBehalfOf
 )
 
 // ErrNoTenant is returned by MustTenantFromContext when the context carries
