@@ -1,0 +1,67 @@
+{
+  "passwordSignIn": {
+    "title": "密码登录",
+    "identifierLabel": "邮箱或手机号",
+    "passwordLabel": "密码",
+    "submit": "登录"
+  },
+  "smsSignIn": {
+    "title": "短信登录",
+    "phoneLabel": "手机号",
+    "sendCode": "发送验证码",
+    "sentNotice": "验证码已发送至 {{phone}}",
+    "codeLabel": "验证码",
+    "submit": "登录",
+    "resendCode": "重新发送",
+    "editPhone": "更换手机号"
+  },
+  "register": {
+    "identifierLabel": "邮箱或手机号",
+    "passwordLabel": "密码",
+    "displayNameLabel": "昵称（可选）",
+    "submit": "注册",
+    "successTitle": "账户创建成功",
+    "successMessage": "你的账户已创建，现在可以登录了。"
+  },
+  "social": {
+    "title": "或使用社交账号登录",
+    "provider": {
+      "google": "Google",
+      "github": "GitHub",
+      "wechat": "微信",
+      "dingtalk": "钉钉",
+      "feishu": "飞书"
+    }
+  },
+  "socialCallback": {
+    "pending": "正在完成登录…",
+    "retry": "重试"
+  },
+  "errors": {
+    "authn": {
+      "invalid_credentials": "邮箱、手机号或密码不正确。",
+      "tenant_membership_required": "你的账户尚未加入此组织。",
+      "account_locked": "账户已锁定，请稍后再试。",
+      "rate_limited": "尝试次数过多，请稍后再试。",
+      "verification_code_invalid": "验证码不正确或已过期，请重新获取。",
+      "email_already_registered": "该邮箱已被注册。",
+      "phone_already_registered": "该手机号已被注册。",
+      "identifier_required": "请输入邮箱或手机号。",
+      "password_too_short": "密码太短。",
+      "password_too_long": "密码太长。",
+      "password_too_weak": "密码强度不足，请使用更复杂的密码。",
+      "provider_unknown": "不支持的社交账号登录方式。",
+      "redirect_uri_not_allowed": "登录回调地址不受支持。",
+      "oauth_state_invalid": "登录状态已失效，请重新发起登录。",
+      "social_exchange_failed": "社交账号登录失败，请重试。",
+      "identity_requires_binding": "此社交账号已关联其他账户，请先登录对应账户后再绑定。",
+      "identity_already_bound": "此社交账号已绑定到你的账户。"
+    },
+    "client": {
+      "network": "网络连接不可用，请检查网络后重试。",
+      "timeout": "请求超时，请稍后重试。",
+      "protocol": "服务返回了异常响应，请稍后重试。"
+    },
+    "unknown": "出了点问题，请稍后重试。"
+  }
+}

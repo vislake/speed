@@ -1,0 +1,67 @@
+{
+  "passwordSignIn": {
+    "title": "Password",
+    "identifierLabel": "Email or phone number",
+    "passwordLabel": "Password",
+    "submit": "Sign in"
+  },
+  "smsSignIn": {
+    "title": "SMS code",
+    "phoneLabel": "Phone number",
+    "sendCode": "Send code",
+    "sentNotice": "Code sent to {{phone}}",
+    "codeLabel": "Verification code",
+    "submit": "Sign in",
+    "resendCode": "Resend code",
+    "editPhone": "Change phone number"
+  },
+  "register": {
+    "identifierLabel": "Email or phone number",
+    "passwordLabel": "Password",
+    "displayNameLabel": "Display name (optional)",
+    "submit": "Create account",
+    "successTitle": "Account created",
+    "successMessage": "Your account has been created. You can sign in now."
+  },
+  "social": {
+    "title": "or continue with a social account",
+    "provider": {
+      "google": "Google",
+      "github": "GitHub",
+      "wechat": "WeChat",
+      "dingtalk": "DingTalk",
+      "feishu": "Feishu"
+    }
+  },
+  "socialCallback": {
+    "pending": "Completing sign-in…",
+    "retry": "Retry"
+  },
+  "errors": {
+    "authn": {
+      "invalid_credentials": "Email, phone number or password is incorrect.",
+      "tenant_membership_required": "Your account is not a member of this organization.",
+      "account_locked": "The account is locked. Please try again later.",
+      "rate_limited": "Too many attempts. Please try again later.",
+      "verification_code_invalid": "The code is incorrect or has expired. Request a new one.",
+      "email_already_registered": "This email is already registered.",
+      "phone_already_registered": "This phone number is already registered.",
+      "identifier_required": "Enter an email or phone number.",
+      "password_too_short": "The password is too short.",
+      "password_too_long": "The password is too long.",
+      "password_too_weak": "The password is too weak. Use a stronger one.",
+      "provider_unknown": "This social sign-in provider is not supported.",
+      "redirect_uri_not_allowed": "The sign-in redirect address is not allowed.",
+      "oauth_state_invalid": "The sign-in state has expired. Please start again.",
+      "social_exchange_failed": "The social sign-in failed. Please try again.",
+      "identity_requires_binding": "This social account is linked to another account. Sign in to that account first to link it.",
+      "identity_already_bound": "This social account is already linked to your account."
+    },
+    "client": {
+      "network": "No network connection. Check your connection and try again.",
+      "timeout": "The request timed out. Please try again later.",
+      "protocol": "The service returned an unexpected response. Please try again later."
+    },
+    "unknown": "Something went wrong. Please try again later."
+  }
+}
