@@ -842,6 +842,64 @@ func TestAuditCapturePlugin_HardDelete_NoMatchingRow_PublishesNothing(t *testing
 	}
 }
 
+// TestAuditCapturePlugin_HardDelete_SystemContextAlone_DoesNotAttribute
+// pins the mechanism behind the attribution obligation hard_delete.go's doc
+// comment and go/dbkit/AGENTS.md's "Hard deletion" section record: the
+// system-context gate checks presence only and never invents an identity —
+// pkgcore.WithSystemContext stores just the SystemReason (whose Actor is a
+// bare string naming who the grant was for), and audit_capture.go reads the
+// event's Actor from pkgcore.ActorFromContext on the write's context. A
+// HardDelete performed on a system context that was never given an actor
+// therefore lands attributed to the zero Actor — which is exactly why those
+// docs tell callers to layer pkgcore.WithActor before entering system
+// context, rather than expecting the gate to attribute for them. If a
+// future round decides the capture should fall back to SystemReason.Actor
+// after all, this test fails — deliberately — until that fallback ships
+// with its own documented semantics, so the warning can never quietly drift
+// out of sync with the mechanism it warns about.
+func TestAuditCapturePlugin_HardDelete_SystemContextAlone_DoesNotAttribute(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	if err := db.Exec(testutil.SoftDeletableWidgetTableSQL).Error; err != nil {
+		t.Fatalf("create soft_deletable_widgets table: %v", err)
+	}
+
+	// The tenant-scoped context deliberately carries no actor: the caller
+	// enters system context without ever layering pkgcore.WithActor, exactly
+	// the shape the docs above warn about.
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	repo := dbkit.NewRepository[testutil.SoftDeletableWidget](db)
+	w := &testutil.SoftDeletableWidget{ID: "sdw1", Name: "gadget"}
+	if err := repo.Create(ctx, w); err != nil {
+		t.Fatalf("seed Create() error = %v", err)
+	}
+	if err := repo.HardDelete(auditCaptureHardDeleteCtx(t, ctx), w.ID); err != nil {
+		t.Fatalf("HardDelete() error = %v", err)
+	}
+
+	events := bus.captured()
+	if len(events) != 2 {
+		t.Fatalf("captured %d events, want exactly 2 (create, hard-delete)", len(events))
+	}
+	got := events[1]
+	if got.Operation != "delete" {
+		t.Errorf("HardDelete Operation = %q, want %q", got.Operation, "delete")
+	}
+	if got.Actor != (pkgcore.Actor{}) {
+		t.Errorf("Actor = %+v, want the zero Actor -- a system context supplies no actor, and the capture never invents one from SystemReason.Actor; this is the corner hard_delete.go's attribution obligation warns callers about", got.Actor)
+	}
+	if got.ResourceID != w.ID {
+		t.Errorf("ResourceID = %q, want %q", got.ResourceID, w.ID)
+	}
+	// Ground truth: the erasure itself happened (this is not a refusal-path
+	// test) — the row is physically gone even though its erasure record could
+	// not be attributed.
+	if found, _, _ := rawSoftDeletableWidgetRow(t, db, w.ID); found {
+		t.Fatal("row still physically present after HardDelete")
+	}
+}
+
 // auditCaptureOmitWidget is the fixture for the Omit-only scoping tests
 // below: a Widget-shaped, tenant-scoped, auditable model with one extra
 // data column (Label). testutil.Widget itself cannot host the shape those
