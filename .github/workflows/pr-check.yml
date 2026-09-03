@@ -117,8 +117,8 @@ name: pr-check
 #     live outside any package, so only a repo-level run exercises
 #     them. The react-hooks plugin awaits a stateful-components round.
 #     The API-contract toolchain runs as its own path-filtered
-#     pipeline, api-contract.yml: on PRs touching one of the three
-#     module fragments (notes, org, authn) or the generator side it
+#     pipeline, api-contract.yml: on PRs touching one of the four
+#     module fragments (notes, org, storage, authn) or the generator side it
 #     regenerates the touched fragments' backend interfaces via pinned
 #     oapi-codegen and the merged document's frontend SDK via pinned
 #     orval into @speed/api-sdk (the merge itself -- notes + authn
