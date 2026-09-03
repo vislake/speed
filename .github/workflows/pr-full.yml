@@ -19,7 +19,7 @@ name: pr-full
 # the label gate, for manual full-matrix runs.
 #
 # COVERAGE -- what genuinely runs today
-#   * go-modules job: the same eight-module matrix as pr-check through the
+#   * go-modules job: the same ten-module matrix as pr-check through the
 #     reusable go-module-ci workflow (golangci-lint, go vet, unit tests
 #     under -race, a workspace-context build and a GOWORK=off standalone
 #     build) -- the full matrix runs the unit tier too. Per 18-cicd's
@@ -54,6 +54,13 @@ name: pr-full
 #                    (postgres_tree_test.go) and the three tenant-scoped
 #                    repositories' AssertIsolated suite
 #                    (postgres_isolation_test.go) against a real server
+#       go/authn     PostgreSQL -- migrations zero-to-head, the mandatory
+#                    tenancytest isolation suite, blind-index uniqueness
+#                    and concurrent refresh-token rotation, all proven
+#                    against real PostgreSQL rather than SQLite (no Redis
+#                    tier: authn touches KVStore only through ratelimit and
+#                    the revocation list, both already covered by their own
+#                    owning module's tier -- go/authn/AGENTS.md)
 #   * reference-app job: examples/reference-app's golangci-lint leg and unit
 #     suite under -race, dir-scoped from inside the module -- reference-app
 #     is its own module, listed in go.work but outside go/, so neither the
@@ -108,6 +115,7 @@ jobs:
           - go/ratelimit
           - go/rbac
           - go/org
+          - go/authn
     uses: ./.github/workflows/reusable/go-module-ci.yml
     with:
       module: ${{ matrix.module }}
@@ -132,6 +140,7 @@ jobs:
           - go/config
           - go/rbac
           - go/org
+          - go/authn
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

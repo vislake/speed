@@ -1,0 +1,98 @@
+# Lint config for the merged, multi-module OpenAPI document
+# (build/openapi/speed.yaml), produced by `task api:merge` /
+# .github/workflows/api-contract.yml from every module's own api/openapi.yaml
+# fragment (docs/internal/21-api-contract.md's "spec organization and
+# merging" section). Each
+# fragment still generates its backend/frontend artifacts independently
+# (task api:gen) -- this file's job starts only once fragments are merged
+# into one document, checking the naming conventions that exist specifically
+# to avoid merge conflicts between fragments (21-api-contract.md's
+# the "naming conventions that avoid merge conflicts" table):
+# operationId, component schema names, and
+# tags.
+#
+# Pinned at @redocly/cli 2.51.1 (`pnpm --package=@redocly/cli@2.51.1 dlx
+# redocly ...`), the same pinning discipline as oapi-codegen (v2.8.0) and
+# orval (8.17.0) elsewhere in this repository -- see Taskfile.yml's api:gen
+# and api:merge tasks and .github/workflows/api-contract.yml, which must
+# stay in lockstep with the version pinned here and with each other.
+#
+# `extends: minimal` rather than `recommended`: the recommended preset's
+# `security-defined` and `no-empty-servers` rules are real documentation
+# gaps (no OpenAPI `security:` scheme or `servers:` block exists anywhere
+# yet), but neither is part of the naming-convention problem this round
+# exists to solve, and fixing them means touching every module's fragment,
+# not just authn's -- out of scope for this round. They are turned off
+# explicitly below, alongside `tag-description` (every tag would need a
+# `description`, another pre-existing documentation gap), rather than left
+# to fire as noise on every PR this workflow runs on.
+extends:
+  - minimal
+
+rules:
+  no-empty-servers: off
+  security-defined: off
+  tag-description: off
+
+  # operationId must be "<module>_<action><Resource>" (lowercase module,
+  # camelCase action+resource) -- this is the rule 21-api-contract.md calls
+  # out by name as CI-enforced: operationId feeds oapi-codegen's generated
+  # Go method names and orval's generated hook names directly, so a
+  # convention violation here corrupts the entire generated call surface,
+  # not just documentation.
+  rule/speed-operation-id-format:
+    subject:
+      type: Operation
+      property: operationId
+    assertions:
+      pattern: "^[a-z][a-zA-Z0-9]*_[a-z][a-zA-Z0-9]*$"
+    message: "operationId must follow <module>_<action><Resource> (docs/internal/21-api-contract.md)"
+    severity: error
+
+  # Component schema names must be PascalCase ("<Module><Type>", e.g.
+  # AuthnSession, NotesNote) -- verified against redocly's synthetic
+  # NamedSchemas subject, which walks components.schemas and exposes each
+  # entry's OWN KEY (not a "name" property) to the assertion; every schema
+  # both fragments declare today passes this pattern.
+  rule/speed-schema-name-format:
+    subject:
+      type: NamedSchemas
+    assertions:
+      pattern: "^[A-Z][A-Za-z0-9]*$"
+    message: "component schema names must be PascalCase, prefixed with their owning module (<Module><Type> -- docs/internal/21-api-contract.md)"
+    severity: error
+
+  # Tags should be the module name, optionally qualified in parentheses --
+  # authn's own fragment already uses "authn (authenticated)" alongside
+  # plain "authn" to separate its public and protected operations in
+  # generated documentation, which this pattern tolerates.
+  #
+  # Severity is `warn`, not `error`, for one honest reason: notes' fragment
+  # (examples/reference-app/internal/notes/api/openapi.yaml, an earlier
+  # round) declares no `tags:` on either of its two operations, so `join`
+  # buckets them into a synthetic "openapi_other" tag that fails this
+  # pattern. Fixing notes' fragment is a real, low-risk change, but it also
+  # regenerates @speed/api-sdk (orval groups generated hooks by tag), which
+  # is out of scope for this round -- see go/authn/AGENTS.md's Known
+  # limitations. Promote this to `error` once notes' fragment is fixed.
+  rule/speed-tag-format:
+    subject:
+      type: Tag
+      property: name
+    assertions:
+      pattern: "^[a-z][a-z0-9-]*(\\s\\([a-zA-Z ]+\\))?$"
+    message: "tags should be the module name, optionally qualified in parentheses (docs/internal/21-api-contract.md)"
+    severity: warn
+
+# NOT enforced here, and why: the path-prefix convention
+# ("/api/v1/<module>/...") has no redocly subject type that exposes a
+# PathItem's own map key to an assertion the way NamedSchemas exposes a
+# schema's key -- `type: PathItem` recurses into the item's nested string
+# fields (summary, description, ...) instead, which was verified empirically
+# to produce false positives against real, correctly-prefixed paths rather
+# than checking the path itself. Both fragments already follow the
+# convention (visible in the spec files themselves), and the operationId
+# rule above indirectly reinforces it, since the module prefix is the same
+# token in both places. A real path-prefix check is left to code review
+# until a working mechanism is found, rather than shipping a redocly rule
+# that does not actually check what its name claims.

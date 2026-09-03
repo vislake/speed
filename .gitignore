@@ -28,7 +28,18 @@ dist/
 *.tsbuildinfo
 
 # Build artifacts
-/build/
+# /build/* (not /build/) plus the negation below: git cannot re-include a
+# file whose PARENT DIRECTORY is itself excluded ("It is not possible to
+# re-include a file if a parent directory of that file is excluded" --
+# git-scm.com/docs/gitignore), so /build/ itself must not be the excluded
+# pattern.
+/build/*
+# Except the merged multi-module OpenAPI document: a real, committed
+# generated artifact (task api:merge / .github/workflows/api-contract.yml's
+# git diff --exit-code consistency gate), following the same
+# generated-but-committed pattern as internal/notes/api/notes-server.gen.go
+# and web/packages/api-sdk/src/index.ts.
+!/build/openapi/
 /tmp/
 
 # Local data (standalone deployment mode)
