@@ -346,7 +346,12 @@ The fixtures live under `tools/semgrep_rules/testdata/<rule>/`: each rule's
 `positive.go` must fire on every pattern shape the rule declares, and
 `negative.go` proves the flip side (the shapes that deliberately stay
 clean, including allowlisted behavior). The rules are proven against those
-fixtures and against the real tree before shipping.
+fixtures and against the real tree before shipping. Fixture proofs run per
+rule (`--config tools/semgrep_rules/<rule>.yml` against that rule's own
+`testdata/` directory): a negative fixture may legitimately carry a shape
+another rule fires on, so a whole-ruleset scan over fixtures is not the
+proof shape (the real-tree scan excludes `testdata/` at the CLI level
+anyway, so cross-rule fixture hits never reach CI).
 
 Running locally (the docker image is the pinned local version; CI instead
 pip-installs into a throwaway venv -- see below):
