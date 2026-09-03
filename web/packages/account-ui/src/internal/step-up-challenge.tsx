@@ -66,6 +66,13 @@ export function StepUpChallenge({
   const { t } = useAccountUiTranslation()
   const resolve = useAccountUiErrorText()
   const titleId = useId()
+  // The submit action sits outside the form -- the MUI dialog layout
+  // keeps the actions below the content -- and reaches it through this
+  // id, so a plain submit button still drives the form's submit path.
+  // The id is useId-derived, never hand-written, like titleId above:
+  // two challenge dialogs on one page (tests, or a host rendering two
+  // surfaces) can never collide on a shared document id.
+  const formId = useId()
 
   const [code, setCode] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -115,11 +122,6 @@ export function StepUpChallenge({
       setSubmitting(false)
     }
   }
-
-  // The form lives in the content; the actions sit below it and reach it
-  // by id, keeping the MUI dialog layout while a plain submit button
-  // still drives the form's submit path.
-  const formId = 'step-up-challenge-form'
 
   return (
     <Dialog
