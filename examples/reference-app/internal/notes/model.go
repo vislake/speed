@@ -56,5 +56,36 @@ type Note struct {
 	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
 }
 
+// AuditResourceType implements dbkit.Auditable: it names notes' audit
+// resource kind "note", the label dbkit's automatic GORM write-capture
+// plugin would attach to a Note write's WriteCapturedEvent if a host
+// wired dbkit.Options.AuditBus for this model's database connection.
+//
+// cmd/server's buildServer deliberately does NOT wire AuditBus for this
+// app's own shared connection -- see its own doc comment on the call to
+// dbkit.Open for a real, empirically-confirmed deadlock (SQLite allows
+// only one writer per file, and dbkit.Repository[Note]'s write transaction
+// is still open when that plugin's callback would fire) that the
+// automatic mechanism hits whenever the audit persister shares a database
+// file with the model being captured. Note implements Auditable anyway,
+// both because a future fix to that mechanism (or a host wiring a
+// dedicated audit connection) should not require touching this model
+// again, and because it is real, tested behavior in its own right (see
+// model_test.go's TestNote_AuditResourceType_ReturnsNote and
+// go/dbkit/example_test.go's ExampleAuditable).
+//
+// This app's actual audit trail for note creation goes through the
+// declarative mechanism instead: handler.go's NotesCreateNote calls
+// audit.Emit explicitly, after h.repo.Create has already returned (so
+// after that write's own transaction has committed, which is exactly why
+// Emit's call site does not hit the same hazard) -- see
+// server_test.go's TestBuildServer_NoteCreate_PersistsAuditEvent for the
+// end-to-end proof that a real POST /api/v1/notes request produces a
+// persisted go/dbkit/audit.AuditEvent row with Action "notes.note.create".
+func (Note) AuditResourceType() string { return "note" }
+
 // compile-time check that Note satisfies dbkit.TenantScoped.
 var _ dbkit.TenantScoped = Note{}
+
+// compile-time check that Note satisfies dbkit.Auditable.
+var _ dbkit.Auditable = Note{}

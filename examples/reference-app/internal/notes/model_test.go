@@ -56,3 +56,18 @@ func TestNote_GetTenantID_ReturnsEmbeddedTenantModelValue(t *testing.T) {
 func TestNote_ImplementsTenantScoped(t *testing.T) {
 	var _ dbkit.TenantScoped = Note{}
 }
+
+// TestNote_AuditResourceType_ReturnsNote is a runtime-checkable companion
+// to model.go's compile-time `var _ dbkit.Auditable = Note{}` assertion,
+// pinning the exact resource-type string dbkit's automatic write-capture
+// plugin would label a Note write's WriteCapturedEvent with, were this
+// app's own database wired for it (see model.go's AuditResourceType doc
+// comment for why it deliberately is not, and for the declarative
+// audit.Emit path this app uses instead -- proved end to end by
+// server_test.go's TestBuildServer_NoteCreate_PersistsAuditEvent).
+func TestNote_AuditResourceType_ReturnsNote(t *testing.T) {
+	var n Note
+	if got, want := n.AuditResourceType(), "note"; got != want {
+		t.Fatalf("AuditResourceType() = %q, want %q", got, want)
+	}
+}

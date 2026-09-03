@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/dbkit/audit"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/tenancy"
@@ -786,5 +788,101 @@ func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
 	if len(globexNotes) != 1 || globexNotes[0].Text != "globex-body-forge-probe" {
 		t.Fatalf("globex notes after all forgery attempts = %+v, want exactly one note with text %q",
 			globexNotes, "globex-body-forge-probe")
+	}
+}
+
+// TestBuildServer_NoteCreate_PersistsAuditEvent is this round's B3 proof:
+// examples/reference-app -- root CLAUDE.md's mandatory first consumer of
+// every module -- is a real consumer of go/dbkit/audit, not merely a
+// package that compiles against it. It drives a real POST /api/v1/notes
+// request through the full composed stack (tenancy.Middleware,
+// notes.Handler, a real SQLite database) exactly as
+// TestBuildServer_MultiTenantIsolation_EndToEnd above does, then reads the
+// audit_events table back through a second dbkit.Open connection to the
+// same SQLite file -- the identical "buildServer hands out neither its
+// *gorm.DB nor a module's own service, so a second connection is the only
+// reach a test has into storage" pattern public_config_test.go's
+// buildSeededTestServer/seedConfigRows already use for the config
+// module's own table -- and asserts on a real audit.Repository.ListByTenant
+// result, not a mock or an in-memory event assertion (handler_test.go's
+// TestHandler_Create_ValidText_RecordsAuditEvent already covers that
+// narrower unit-level claim).
+func TestBuildServer_NoteCreate_PersistsAuditEvent(t *testing.T) {
+	cfg := testConfig(t)
+	handler, cleanup, err := buildServer(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("buildServer: %v", err)
+	}
+	t.Cleanup(func() {
+		if cleanupErr := cleanup(); cleanupErr != nil {
+			t.Errorf("cleanup: %v", cleanupErr)
+		}
+	})
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	const host = "acme.demo.localhost"
+	const tenantID = "tenant-acme"
+	createNoteAs(t, srv, host, "buy milk")
+	notes := listNotesAs(t, srv, host)
+	if len(notes) != 1 {
+		t.Fatalf("notes after create = %+v, want exactly 1", notes)
+	}
+	noteID := notes[0].ID
+
+	auditDB, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: cfg.SQLitePath})
+	if err != nil {
+		t.Fatalf("open second connection to %q: %v", cfg.SQLitePath, err)
+	}
+	t.Cleanup(func() {
+		sqlDB, dbErr := auditDB.DB()
+		if dbErr != nil {
+			t.Errorf("second connection handle: %v", dbErr)
+			return
+		}
+		if closeErr := sqlDB.Close(); closeErr != nil {
+			t.Errorf("close second connection: %v", closeErr)
+		}
+	})
+
+	events, err := audit.NewRepository(auditDB).ListByTenant(context.Background(), tenantID)
+	if err != nil {
+		t.Fatalf("ListByTenant(%q): %v", tenantID, err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("audit events for tenant %q = %+v, want exactly 1", tenantID, events)
+	}
+
+	got := events[0]
+	if got.Action != "notes.note.create" {
+		t.Fatalf("AuditEvent.Action = %q, want %q", got.Action, "notes.note.create")
+	}
+	if got.Resource().Type != "note" {
+		t.Fatalf("AuditEvent.Resource().Type = %q, want %q", got.Resource().Type, "note")
+	}
+	if got.Resource().ID != noteID {
+		t.Fatalf("AuditEvent.Resource().ID = %q, want %q", got.Resource().ID, noteID)
+	}
+	if got.TenantID != tenantID {
+		t.Fatalf("AuditEvent.TenantID = %q, want %q", got.TenantID, tenantID)
+	}
+	if !got.Result().Success {
+		t.Fatalf("AuditEvent.Result().Success = %v, want true", got.Result().Success)
+	}
+	if got.OccurredAt.IsZero() {
+		t.Fatal("AuditEvent.OccurredAt is zero, want a real timestamp")
+	}
+
+	// A negative control symmetric with this test's own positive
+	// assertions: an unrelated tenant's read must see none of acme's audit
+	// trail -- audit_events carries a real tenant_id column precisely so
+	// this remains true even though the table is platform data, not
+	// dbkit.TenantScoped (see go/dbkit/audit's model.go doc comment).
+	globexEvents, err := audit.NewRepository(auditDB).ListByTenant(context.Background(), "tenant-globex")
+	if err != nil {
+		t.Fatalf("ListByTenant(%q): %v", "tenant-globex", err)
+	}
+	if len(globexEvents) != 0 {
+		t.Fatalf("audit events for tenant %q = %+v, want none", "tenant-globex", globexEvents)
 	}
 }

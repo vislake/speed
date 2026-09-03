@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/vislake/speed/examples/reference-app/internal/notes/api"
+	"github.com/vislake/speed/go/dbkit/audit"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 )
@@ -23,12 +24,21 @@ import (
 // newTestHandler returns a Handler backed by a freshly migrated SQLite
 // database and a real in-memory pkgcore.EventBus, so tests can assert on
 // both the HTTP response and the event actually published -- not a mock of
-// either.
+// either. The AuditActionRegistrar it hands to NewHandler comes from a real
+// *pkgcore.Registry with AuditActionNoteCreate already declared on it,
+// exactly as module.go's Register does before ever constructing a Handler
+// -- not a hand-rolled fake -- so a test exercising audit.Emit's own
+// action-validation path (TestHandler_Create_ValidText_RecordsAuditEvent)
+// runs against the identical registrar shape production wiring uses.
 func newTestHandler(t *testing.T) (*Handler, pkgcore.EventBus) {
 	t.Helper()
 	repo := newMigratedRepository(t)
 	bus := pkgcore.NewMemoryEventBus()
-	return NewHandler(repo, bus), bus
+	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	if err := reg.AuditActions.Add(AuditActionNoteCreate); err != nil {
+		t.Fatalf("declare %q on a fresh AuditActionRegistrar: %v", AuditActionNoteCreate, err)
+	}
+	return NewHandler(repo, bus, reg.AuditActions), bus
 }
 
 // doRequest issues req against h and returns the recorded response. When
@@ -98,6 +108,61 @@ func TestHandler_Create_ValidText_ReturnsCreatedNoteAndPublishesEvent(t *testing
 	}
 	if payload.TenantID != "tenant-acme" {
 		t.Fatalf("published event TenantID = %q, want %q", payload.TenantID, "tenant-acme")
+	}
+}
+
+// TestHandler_Create_ValidText_RecordsAuditEvent proves NotesCreateNote's
+// recordNoteCreatedAudit call actually reaches audit.Emit and publishes a
+// real audit.RecordedEvent -- at the Handler-unit level, against the real
+// in-memory pkgcore.EventBus and the real *pkgcore.Registry-sourced
+// AuditActionRegistrar newTestHandler builds (not a fake), so a broken
+// wiring between NewHandler's auditActions parameter and audit.Emit's own
+// validation would fail this test. The full, end-to-end proof that this
+// event is actually persisted as a queryable go/dbkit/audit.AuditEvent row
+// -- through the real composed HTTP server and a real audit.Repository --
+// is cmd/server/server_test.go's TestBuildServer_NoteCreate_PersistsAuditEvent.
+func TestHandler_Create_ValidText_RecordsAuditEvent(t *testing.T) {
+	h, bus := newTestHandler(t)
+
+	var recorded []pkgcore.Event
+	bus.Subscribe(audit.EventRecorded, func(ctx context.Context, evt pkgcore.Event) error {
+		recorded = append(recorded, evt)
+		return nil
+	})
+
+	body := strings.NewReader(`{"text":"buy milk"}`)
+	req := httptest.NewRequest(http.MethodPost, apiPath, body)
+	rec := doRequest(h, req, "tenant-acme")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	var resp api.NotesNote
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v; body = %s", err, rec.Body.String())
+	}
+
+	if len(recorded) != 1 {
+		t.Fatalf("recorded %d audit.EventRecorded events, want 1", len(recorded))
+	}
+	payload, ok := recorded[0].Payload.(audit.RecordedEvent)
+	if !ok {
+		t.Fatalf("recorded event Payload = %#v, want audit.RecordedEvent", recorded[0].Payload)
+	}
+	if payload.Action != AuditActionNoteCreate {
+		t.Fatalf("recorded event Action = %q, want %q", payload.Action, AuditActionNoteCreate)
+	}
+	if payload.Resource.Type != "note" {
+		t.Fatalf("recorded event Resource.Type = %q, want %q", payload.Resource.Type, "note")
+	}
+	if resp.ID == nil || payload.Resource.ID != *resp.ID {
+		t.Fatalf("recorded event Resource.ID = %q, want %v", payload.Resource.ID, resp.ID)
+	}
+	if !payload.Result.Success {
+		t.Fatalf("recorded event Result.Success = %v, want true", payload.Result.Success)
+	}
+	if payload.TenantID != "tenant-acme" {
+		t.Fatalf("recorded event TenantID = %q, want %q", payload.TenantID, "tenant-acme")
 	}
 }
 

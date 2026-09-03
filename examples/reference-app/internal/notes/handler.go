@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/vislake/speed/examples/reference-app/internal/notes/api"
+	"github.com/vislake/speed/go/dbkit/audit"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
@@ -80,15 +81,23 @@ var errInternal = apperr.Internal("notes.internal_error")
 // request parameter, header or body, per root CLAUDE.md's multi-tenant
 // isolation rule and backend coding standard §3.1.
 type Handler struct {
-	repo *Repository
-	bus  pkgcore.EventBus
-	mux  *http.ServeMux
+	repo         *Repository
+	bus          pkgcore.EventBus
+	auditActions pkgcore.AuditActionRegistrar
+	mux          *http.ServeMux
 }
 
-// NewHandler returns a Handler serving repo's notes and publishing
-// EventNoteCreated on bus whenever a note is created. bus may be nil, in
-// which case creating the note still succeeds but nothing is published
-// -- see the NotesCreateNote method.
+// NewHandler returns a Handler serving repo's notes, publishing
+// EventNoteCreated on bus and recording an AuditEvent through
+// audit.Emit (validated against auditActions) whenever a note is created.
+// bus may be nil, in which case creating the note still succeeds but
+// nothing is published -- see the NotesCreateNote method. auditActions
+// must not be nil when bus is non-nil: NotesCreateNote calls audit.Emit
+// unconditionally once a note is created, and Emit needs a real
+// AuditActionRegistrar to validate AuditActionNoteCreate against (see
+// module.go's Register, the one real caller, for why the two are always
+// handed to NewHandler together, both sourced from the same *pkgcore.
+// Registry).
 //
 // The returned Handler's routing is registered by the generated
 // api.HandlerFromMux helper: it derives this module's method+path
@@ -102,8 +111,8 @@ type Handler struct {
 // before. The spec's path and module.go's apiPath (the mount point, and
 // the path tests request) must keep agreeing -- see apiPath's doc
 // comment in module.go.
-func NewHandler(repo *Repository, bus pkgcore.EventBus) *Handler {
-	h := &Handler{repo: repo, bus: bus}
+func NewHandler(repo *Repository, bus pkgcore.EventBus, auditActions pkgcore.AuditActionRegistrar) *Handler {
+	h := &Handler{repo: repo, bus: bus, auditActions: auditActions}
 	h.mux = http.NewServeMux()
 	api.HandlerFromMux(h, h.mux)
 	return h
@@ -171,6 +180,7 @@ func (h *Handler) NotesCreateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.recordNoteCreatedAudit(ctx, note)
 	h.publishNoteCreated(ctx, tenant, note)
 
 	// obs.FromContext(ctx) attaches tenant_id (and trace_id/span_id, once
@@ -185,17 +195,63 @@ func (h *Handler) NotesCreateNote(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(toNoteResponse(note))
 }
 
+// recordNoteCreatedAudit records an AuditEvent for note's creation through
+// audit.Emit -- the declarative collection mechanism go/dbkit/audit
+// documents, used here instead of dbkit's automatic AuditBus-driven write
+// capture for the reason model.go's AuditResourceType doc comment gives in
+// full (a same-connection deadlock hazard under SQLite). Calling this
+// AFTER h.repo.Create has already returned is exactly what sidesteps that
+// hazard: by this point Create's own WithTenantSession transaction has
+// committed, so audit.Emit's own write against the same database opens a
+// fresh, uncontended session rather than nesting inside an open one.
+//
+// A failure is logged at Error level, not returned: the note itself was
+// already committed by the time this runs, so a failure to record its
+// audit trail must not turn an otherwise successful create into a 500 for
+// the caller -- matching publishNoteCreated's identical reasoning below,
+// and docs/internal/10-compliance-and-audit.md's own rule that an
+// audit-write failure "must alert, must not be silently dropped": an
+// Error-level structured log line is what "alert" means at this
+// milestone's scope, there being no dedicated alerting pipe yet. This and
+// publishNoteCreated are deliberately the only two places in this handler
+// that both log and do not also return the same error -- the backend
+// coding standard's "do not log an error and also return it" rule (§11)
+// is about not doing both for the SAME failure, and here nothing else
+// ever surfaces either one.
+func (h *Handler) recordNoteCreatedAudit(ctx context.Context, note *Note) {
+	if h.bus == nil {
+		return
+	}
+	// Resource.DisplayName is deliberately left empty rather than set to
+	// note.Text: a note's whole content is arbitrary, caller-supplied free
+	// text (up to maxTextLength characters -- see handler.go's own
+	// constant), never a short human-readable label the way doc 10's
+	// Resource.DisplayName is meant to be, and the audit trail is not the
+	// place to duplicate a resource's full body just because a short label
+	// is unavailable for this placeholder resource.
+	err := audit.Emit(ctx, h.bus, h.auditActions, audit.Input{
+		Action:   AuditActionNoteCreate,
+		Resource: audit.Resource{Type: "note", ID: note.ID},
+		Result:   audit.Result{Success: true},
+	})
+	if err != nil {
+		// See this method's own doc comment above for why tenant_id is not
+		// repeated here as an explicit key-value pair: obs.FromContext(ctx)
+		// already attaches it.
+		obs.FromContext(ctx).Error("notes.note.create audit event emit failed",
+			"note_id", note.ID, "error", err)
+	}
+}
+
 // publishNoteCreated publishes EventNoteCreated for note, using the
 // EventBus the Module obtained from the Registry at wiring time (see
 // module.go's Register) -- this is the "actual event publish happens
 // later, inside the handler" half of that split. A publish failure is
 // logged, not returned: the note itself was already committed by the time
 // this runs, so a subscriber's failure must not turn an otherwise
-// successful create into a 500 for the caller. This is deliberately the
-// only place in this handler that both logs and does not also return the
-// same error -- the backend coding standard's "do not log an error and
-// also return it" rule (§11) is about not doing both for the SAME
-// failure, and here nothing else ever surfaces this one.
+// successful create into a 500 for the caller. See recordNoteCreatedAudit
+// above for the identical reasoning applied to this handler's other
+// log-not-return call.
 func (h *Handler) publishNoteCreated(ctx context.Context, tenant pkgcore.TenantID, note *Note) {
 	if h.bus == nil {
 		return

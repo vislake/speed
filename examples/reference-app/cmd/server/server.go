@@ -16,6 +16,7 @@ import (
 
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/dbkit/audit"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/tenancy"
@@ -244,6 +245,28 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			cfg.DeploymentMode, pkgcore.DeploymentModeStandalone)
 	}
 
+	// Deliberately NOT setting dbkit.Options.AuditBus here, even though
+	// notes.Note implements dbkit.Auditable (see model.go): every note
+	// write in this app goes through dbkit.Repository[Note], which wraps
+	// Create in a WithTenantSession transaction, and
+	// dbkit.auditCapturePlugin's After("gorm:create") callback runs
+	// *inside* that still-open transaction. Wiring AuditBus to a bus whose
+	// subscriber (audit.Module, below) writes into this SAME SQLite file
+	// makes that subscriber try to open a second write session against a
+	// database that already holds an uncommitted write transaction on the
+	// very same OS thread -- SQLite allows only one writer at a time, so
+	// this deadlocks into "database is locked" (SQLITE_BUSY) on every
+	// single note creation, confirmed empirically while wiring this app.
+	// See go/dbkit/audit/AGENTS.md's "Known limitations" for the full
+	// write-up and the options for a future round to actually fix the
+	// automatic-capture mechanism (deferring the plugin's publish until
+	// after the enclosing transaction commits, most likely).
+	//
+	// This app instead persists its audit trail through the declarative
+	// audit.Emit call notes/handler.go's NotesCreateNote makes explicitly
+	// -- after h.repo.Create has already returned, i.e. after that
+	// transaction has committed, which is exactly why Emit's call site
+	// never hits the same hazard.
 	db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: cfg.SQLitePath})
 	if err != nil {
 		return nil, nil, fmt.Errorf("reference-app: open database: %w", err)
@@ -274,6 +297,16 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	}
 
 	notesModule := notes.NewModule(db)
+
+	// auditModule is go/dbkit/audit's persister. It shares notesModule's
+	// own database connection -- no new infra dependency is needed for
+	// this app to have a real, queryable audit trail -- and subscribes to
+	// audit.EventRecorded, the event notes/handler.go's NotesCreateNote
+	// publishes through audit.Emit after a note is successfully created
+	// (see the doc comment on db's own construction above for why this
+	// app uses that mechanism rather than dbkit's automatic
+	// AuditBus-driven write capture).
+	auditModule := audit.New(db)
 
 	// The config module shares notes' database and is given everything it
 	// needs to serve its two endpoints: the master cipher (notes declares a
@@ -313,18 +346,36 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
+	if regErr := migrationRegistry.Register(auditModule); regErr != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	}
 	if applyErr := migrationRegistry.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: apply migrations: %w", applyErr)
 	}
 
-	// Bootstrap registers both modules in argument order -- notes first, so
-	// the configuration items and feature flags its Register declares are
-	// in the registry before the config module's own Register runs -- and
-	// then Attach freezes the schema snapshot those declarations fold
-	// into, exactly the sequence config's Attach doc comment prescribes
-	// ("after Kernel.Bootstrap has returned").
-	reg, err := pkgcore.NewKernel(cfg.DeploymentMode).Bootstrap(ctx, notesModule, configModule)
+	// Bootstrap registers all three modules in argument order -- notes
+	// first, so the configuration items and feature flags its Register
+	// declares are in the registry before the config module's own
+	// Register runs, and then Attach freezes the schema snapshot those
+	// declarations fold into, exactly the sequence config's Attach doc
+	// comment prescribes ("after Kernel.Bootstrap has returned"). audit
+	// last is not load-bearing order -- its Module.DependsOn is nil, and
+	// its subscriptions are valid to install before or after any
+	// publisher registers (see audit's Module.DependsOn doc comment) --
+	// it simply reads naturally as "the two business-facing modules, then
+	// the cross-cutting persister watching both of them."
+	//
+	// A single Registry -- and so a single EventBus, reg.EventBus() --
+	// serves every module Bootstrap registers here, which is what lets
+	// auditModule's subscriptions (installed inside its own Register)
+	// actually receive the audit.EventRecorded event notesModule's
+	// handler publishes through audit.Emit (see NewHandler's wiring
+	// below): no separate bus construction is needed the way it would be
+	// if this app wired dbkit.Options.AuditBus (see db's own doc comment
+	// above for why it deliberately does not).
+	reg, err := pkgcore.NewKernel(cfg.DeploymentMode).Bootstrap(ctx, notesModule, configModule, auditModule)
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: bootstrap kernel: %w", err)

@@ -182,7 +182,16 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // called (no Publish) until a real HTTP request creates a note; see
 // handler.go's NotesCreateNote method.
 func (m *Module) Register(reg *pkgcore.Registry) error {
-	m.handler = NewHandler(m.repo, reg.EventBus())
+	if err := reg.AuditActions.Add(AuditActionNoteCreate); err != nil {
+		return err
+	}
+
+	// reg.AuditActions is handed to NewHandler so NotesCreateNote can call
+	// audit.Emit against the exact AuditActionRegistrar AuditActionNoteCreate
+	// was just declared on -- Emit itself validates the action string against
+	// it before publishing (see audit.Emit's own doc comment), which is what
+	// requires the declaration above to run before this line, not after it.
+	m.handler = NewHandler(m.repo, reg.EventBus(), reg.AuditActions)
 	reg.Routes.Mount(apiPath, m.handler)
 
 	if err := reg.Permissions.Add(PermissionRead, PermissionWrite); err != nil {
@@ -193,9 +202,6 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		PayloadType: eventNoteCreatedPayloadType,
 		Description: "Published whenever a new note is created for a tenant.",
 	}); err != nil {
-		return err
-	}
-	if err := reg.AuditActions.Add(AuditActionNoteCreate); err != nil {
 		return err
 	}
 
