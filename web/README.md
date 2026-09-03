@@ -44,9 +44,10 @@ web/
   tsconfig.base.json    strict base every package extends
   eslint.config.mjs     one flat config for the whole workspace
   packages/
-    tokens/             @speed/tokens  -- design tokens, zero dependencies
-    i18n/               @speed/i18n    -- react-i18next wrapper + namespace registry
-    ui-kit/             @speed/ui-kit   -- theme factory + six controlled components
+    tokens/             @speed/tokens      -- design tokens, zero dependencies
+    i18n/               @speed/i18n        -- react-i18next wrapper + namespace registry
+    ui-kit/             @speed/ui-kit      -- theme factory + six controlled components
+    api-client/         @speed/api-client  -- hand-written HTTP runtime; fetch, retry, ApiError
 ```
 
 Root `package.json` holds only what every package shares (typescript,
@@ -94,14 +95,15 @@ build`, ...) or with `pnpm --filter @speed/<name> <script>` from `web/`.
 
 ## What is not here yet
 
-`api-client`, `api-sdk`, Storybook, Playwright and the web side of the
+`api-sdk` (the orval-generated typed surface that will call into
+`api-client`'s runtime), Storybook, Playwright and the web side of the
 app shell are all planned; see the repo roadmap
 (`docs/internal/15-roadmap.md`) and the CI workflow headers for what each
 round delivers.
 
 The lockstep release machinery exists in its M0, offline-verification
 form: the changesets bootstrap at `.changeset/` (the fixed version group
-over the three packages, `config.json` — no changesets entries or bump
+over the four packages, `config.json` — no changesets entries or bump
 runs yet) and the release coordinator in `tools/release/`, which checks
 from the repository root that the fixed group covers exactly the
 packages that exist, that package versions are uniform, and that the Go
