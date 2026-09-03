@@ -119,11 +119,12 @@ docker-compose.dev-tools.yml     # 可选：MinIO、MailHog、支付沙箱代理
 
 ## 当前实现状态
 
-**本文描述的是目标设计，代码尚未跟进。** 截至本次修订，已实现的部分仍是早期的二元开关形态：
+**本文描述的设计已落地**（2026-09，deployment-composition 改造轮）。实现分布：
 
-- `go/pkgcore`：`NewKernel(mode, opts...)` 以部署模式为首位参数，并用它**选择**默认实现（`registry.go` 的 `kvStore`/`resolveMailer`/`resolveObjectStore`）；四个 seam 各有一个 `ErrMissingDistributed*` 错误。宿主可用 `WithEventBus`/`WithKVStore`/`WithMailer`/`WithObjectStore` 覆盖，因此自由组装在**注入层面**已经可行，缺的是注册表、preset、能力声明与校验。
-- `go/observability`：`Init` 接受部署模式，且 `OTLPEndpoint` 对单进程模式**被忽略**（`init.go`）——这是唯一一处连注入都绕不过的硬绑定，单进程部署目前无法把遥测送往真实 Collector。
-- `go/jobs`：`StandaloneQueue` 与 `AsynqQueue` 由宿主选择，本身不读部署模式，形态已经接近目标设计。
-- `examples/reference-app`：入口拒绝 standalone 以外的一切部署模式，分布式路径从未真正启动过。
+- `go/pkgcore` 新增四件套：`capability.go`（`Capability` 位掩码与 `Has`，两个能力位 `MultiReplicaSafe`/`SurvivesRestart`）、`seam_registry.go`（`SeamRegistry[T]`/`Registration[T]`，镜像 `database/sql` 的驱动注册模式——实现按名字注册，`Build(name, cfg)` 按名解析并回报其能力位）、`preset.go`（`Preset` 是 seam 名 → 实现名的映射，`PresetStandalone`/`PresetDistributed` 两个预置）、`builtin_implementations.go`（四个 seam 的注册表集中预置八套内置实现：`eventbus.memory`/`redis`、`kv.memory`/`redis`、`mailer.console`/`smtp`、`objectstore.local`/`s3`）。`NewKernel(opts...)` 不再以部署模式为首位参数：`WithDeploymentMode` 只声明拓扑，`WithPreset` 换整张映射，`WithEventBus`/`WithKVStore`/`WithMailer`/`WithObjectStore` 各带能力位注入单套实现。`Bootstrap` 在四个 seam 解析完成后做一次能力校验：某 seam 解析出的实现不满足声明模式的 `RequiredCapabilities()` 即启动失败，错误 wrap `ErrCapabilityUnsatisfied` 并点名 seam、实现名、缺失能力与模式（四个 `ErrMissingDistributed*` 哨兵已删除）；不满足 `SurvivesRestart` 的实现照常启动、但打印横幅警告（约束 5）。
+- 契约测试随模块落地，「契约测试」节的目标形态已是仓库标准：`go/pkgcore/eventbustest`、`kvstoretest`、`mailertest`、`objectstoretest` 四个 `AssertConforms(t, factory)` 套件，每套内置实现各跑一遍——真实 Redis/MinIO 上的实现跑在 pkgcore 的 Docker 集成层，SMTP 走进程内 fake relay（矩阵形态见 [16 验证](16-verification.md) §2 与 [18 CI/CD](18-cicd.md)）。
+- `go/observability`：`Init(ctx, opts...)` 不再接收部署模式，导出器选择只取决于是否提供 `WithOTLPEndpoint`——单进程组装如今可以把遥测送往真实 Collector（`ErrMissingOTLPEndpoint` 已删除）。旧形态里唯一连注入都绕不过的硬绑定就此消失。
+- `go/jobs`：`StandaloneQueue` 与 `AsynqQueue` 由宿主直接选择、本身不读部署模式，形态与本文一致；Queue seam 的注册表化/能力声明化留给 go/jobs 自己的轮次。
+- `examples/reference-app`：入口不再拒绝任何部署模式（`cmd/server/server.go` 读 `SPEED_DEPLOYMENT_MODE`，默认 standalone）；`SPEED_REDIS_ADDR` 把「eventbus」seam 从 preset 换成真实 Redis Streams 总线——standalone 拓扑 + `MultiReplicaSafe` 实现的组装正是两条轴正交的演示。其 Docker-backed 集成测试（`examples/reference-app/integration_test/`，随 pr-full 的 reference-app job 与 `task test:full` 运行）以真实子进程启动整机，跨进程断言事件经真实 Redis 送达。
 
-改造的破坏面（`DeploymentMode` 类型与常量、`ParseDeploymentMode`、`NewKernel` 签名、`Kernel.DeploymentMode()`、四个 `ErrMissingDistributed*`）全部集中在 `go/pkgcore` 与 `go/observability` 两个模块，v1.0 未发布，是改造成本最低的时刻。
+改造的破坏面（`NewKernel` 签名、四个 `ErrMissingDistributed*`、`observability.Init` 签名）集中在 `go/pkgcore` 与 `go/observability` 两个模块，已在 v1.0 之前以破坏性提交完成；`DeploymentMode` 类型与常量、`ParseDeploymentMode`、`Kernel.DeploymentMode()` 保留——模式仍是公开 API，只是不再选择实现。
