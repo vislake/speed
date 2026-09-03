@@ -504,7 +504,6 @@ func configFromEnv() (serverConfig, error) {
 // mode never does. Those two outcomes, rather than an app-level refusal,
 // are exactly what this file's distributed-mode tests pin.
 func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() error, error) {
-
 	// Deliberately NOT setting dbkit.Options.AuditBus here, even though
 	// notes.Note implements dbkit.Auditable (see model.go): every note
 	// write in this app goes through dbkit.Repository[Note], which wraps
@@ -563,32 +562,33 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 
 	cleanup := func() error {
 		var firstErr error
-		if configService != nil {
-			if closeErr := configService.Close(); closeErr != nil && firstErr == nil {
-				firstErr = closeErr
+		// keepErr records err as the cleanup failure only when it is the
+		// first one seen -- every close below is attempted regardless, so
+		// neither an early nor a late failure can hide the other. It is a
+		// helper rather than an inline "closeErr != nil && firstErr == nil"
+		// guard because the very first site would make that guard a
+		// tautology (firstErr is provably nil there).
+		keepErr := func(err error) {
+			if err != nil && firstErr == nil {
+				firstErr = err
 			}
 		}
+		if configService != nil {
+			keepErr(configService.Close())
+		}
 		if rbacService != nil {
-			if closeErr := rbacService.Close(); closeErr != nil && firstErr == nil {
-				firstErr = closeErr
-			}
+			keepErr(rbacService.Close())
 		}
 		if redisBus != nil {
 			redisBus.Close()
 		}
 		if redisClient != nil {
-			if closeErr := redisClient.Close(); closeErr != nil && firstErr == nil {
-				firstErr = closeErr
-			}
+			keepErr(redisClient.Close())
 		}
 		sqlDB, dbErr := db.DB()
-		if dbErr != nil && firstErr == nil {
-			firstErr = dbErr
-		}
+		keepErr(dbErr)
 		if sqlDB != nil {
-			if closeErr := sqlDB.Close(); closeErr != nil && firstErr == nil {
-				firstErr = closeErr
-			}
+			keepErr(sqlDB.Close())
 		}
 		return firstErr
 	}
