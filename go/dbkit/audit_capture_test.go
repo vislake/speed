@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -193,6 +194,76 @@ func TestAuditCapturePlugin_Update_PublishesWriteCapturedEvent(t *testing.T) {
 	}
 	if got.After == nil || got.After["value"] != 2 {
 		t.Errorf("After = %+v, want a map with value=2", got.After)
+	}
+}
+
+// TestAuditCapturePlugin_SoftDelete_ClassifiesAsUpdateWithRealDiff is the
+// scouting round's own named regression test: soft-delete
+// (Repository[T].Delete against a SoftDeletable model) is, underneath, one
+// UPDATE, and must be captured with Update semantics -- never a hand-rolled
+// extra Delete-semantics event bolted onto Delete's own code, which would
+// duplicate the automatic capture
+// (docs/internal/04-data-and-tenancy.md, "删除语义" §4's own named pitfall).
+//
+// Checking Operation == "update" alone is not enough to catch the real
+// hazard here: softDelete (repository.go) must build a real *T and write
+// through Where(...).Select(...).Updates(&m) -- Model == Dest == &m --
+// rather than tx.Model(&zero).Updates(map[string]any{...}), because gorm's
+// SetupUpdateReflectValue sets Statement.ReflectValue to the (untouched,
+// zero-valued) Model whenever Model != Dest, which the map-payload shape
+// always is. Under that wrong shape, this test's Operation assertion would
+// still pass, but After["deleted_at"] would silently come back nil even
+// though the real SQL write set a real timestamp -- a lying audit trail on
+// an otherwise "passing" test. Asserting the real, non-nil, matching
+// deleted_at value is what actually exercises the fix.
+func TestAuditCapturePlugin_SoftDelete_ClassifiesAsUpdateWithRealDiff(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	if err := db.Exec(testutil.SoftDeletableWidgetTableSQL).Error; err != nil {
+		t.Fatalf("create soft_deletable_widgets table: %v", err)
+	}
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1"})
+
+	repo := dbkit.NewRepository[testutil.SoftDeletableWidget](db)
+	w := &testutil.SoftDeletableWidget{ID: "sdw1", Name: "gadget"}
+	if err := repo.Create(ctx, w); err != nil {
+		t.Fatalf("seed Create() error = %v", err)
+	}
+
+	before := time.Now()
+	if err := repo.Delete(ctx, w.ID); err != nil {
+		t.Fatalf("Delete() (soft-delete) error = %v", err)
+	}
+	after := time.Now()
+
+	events := bus.captured()
+	if len(events) != 2 {
+		t.Fatalf("captured %d events, want 2 (create then soft-delete)", len(events))
+	}
+	got := events[1]
+	if got.Operation != "update" {
+		t.Errorf("Operation = %q, want %q (soft-delete is an UPDATE underneath, never captured with Delete semantics)", got.Operation, "update")
+	}
+	if got.ResourceID != "sdw1" {
+		t.Errorf("ResourceID = %q, want %q", got.ResourceID, "sdw1")
+	}
+	if got.Before != nil {
+		t.Errorf("Before = %+v, want nil -- the automatic capture mechanism never reads a pre-write snapshot for Update, soft-delete included (see WriteCapturedEvent.Before's own doc comment); this is not a gap to fix here", got.Before)
+	}
+	rawDeletedAt, ok := got.After["deleted_at"]
+	if !ok || rawDeletedAt == nil {
+		t.Fatalf("After[\"deleted_at\"] = %v (ok=%v), want a real, non-nil timestamp -- this is exactly the hazard TestAuditCapturePlugin_SoftDelete_ClassifiesAsUpdateWithRealDiff exists to catch: a map-payload Updates call would leave this nil even with the right Operation", rawDeletedAt, ok)
+	}
+	deletedAtPtr, ok := rawDeletedAt.(*time.Time)
+	if !ok || deletedAtPtr == nil {
+		t.Fatalf("After[\"deleted_at\"] = %v (%T), want a non-nil *time.Time", rawDeletedAt, rawDeletedAt)
+	}
+	if deletedAtPtr.Before(before.Add(-time.Second)) || deletedAtPtr.After(after.Add(time.Second)) {
+		t.Errorf("After[\"deleted_at\"] = %v, want a timestamp between %v and %v", deletedAtPtr, before, after)
+	}
+	if got.After["deleted_by"] != "user-1" {
+		t.Errorf("After[\"deleted_by\"] = %v, want %q", got.After["deleted_by"], "user-1")
 	}
 }
 
