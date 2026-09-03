@@ -44,6 +44,11 @@ name: pr-full
 #                    redis_eventbus_test.go against Redis,
 #                    minio_container_test.go/s3_objectstore_test.go against
 #                    MinIO/S3)
+#       go/rbac      PostgreSQL and Redis -- its integration_test/ runs
+#                    both legs (postgres_leg_test.go for the second
+#                    dialect's migrations and AssertIsolated,
+#                    redis_leg_test.go for the cross-replica cache
+#                    invalidation a revoke depends on)
 #   * reference-app job: examples/reference-app's golangci-lint leg and unit
 #     suite under -race, dir-scoped from inside the module -- reference-app
 #     is its own module, listed in go.work but outside go/, so neither the
@@ -96,6 +101,7 @@ jobs:
           - go/config
           - go/jobs
           - go/ratelimit
+          - go/rbac
     uses: ./.github/workflows/reusable/go-module-ci.yml
     with:
       module: ${{ matrix.module }}
@@ -118,6 +124,7 @@ jobs:
           - go/jobs
           - go/pkgcore
           - go/config
+          - go/rbac
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
