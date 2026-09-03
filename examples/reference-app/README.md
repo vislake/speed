@@ -24,7 +24,22 @@ cd examples/reference-app
 go run ./cmd/server
 ```
 
-This starts a server on `:8080` (override with `PORT`), backed by a SQLite file `reference-app.db` in the current directory (override with `SPEED_DB_PATH`), running in the standalone deployment mode (`SPEED_DEPLOYMENT_MODE=standalone`, the default — `distributed` is not wired up in this example yet and fails fast with a clear error, since no PostgreSQL/Redis wiring exists here).
+This starts a server on `:8080` (override with `PORT`), backed by a SQLite file `reference-app.db` in the current directory (override with `SPEED_DB_PATH`), running in the standalone deployment mode (`SPEED_DEPLOYMENT_MODE=standalone`, the default) with every infrastructure seam resolved from the standalone preset to its in-process implementation — zero external dependencies. Nothing needs to be running to try it.
+
+`SPEED_DEPLOYMENT_MODE=distributed` is a different story: the deployment mode only *constrains* which implementations are permissible (see below), and this app never composes the implementations a distributed deployment would need (PostgreSQL, a Redis-backed KVStore, SMTP, S3) — so a distributed boot fails inside the Kernel's own composition validation with pkgcore's `ErrCapabilityUnsatisfied`, naming the seam, the implementation, the missing capability and the mode. That is the design working, not an app-level refusal: capability validation, not a hard-coded `if mode == "standalone"` check, is what decides. `cmd/server/server_test.go` pins both failure shapes.
+
+### Real Redis inside a standalone topology
+
+Deployment mode and implementation composition are two orthogonal axes (`docs/internal/03-deployment-modes.md`): the mode constrains which implementations are *permissible* — it never selects one. This app demonstrates the point with no code changes: set `SPEED_REDIS_ADDR` and the same standalone topology keeps its SQLite file, in-process KVStore, console mailer and local object store, but the EventBus seam becomes a real Redis Streams bus:
+
+```
+docker run --rm -p 6379:6379 redis:7-alpine
+SPEED_REDIS_ADDR=127.0.0.1:6379 go run ./cmd/server
+```
+
+`buildServer` constructs the go-redis client itself — the app is the assembly host pkgcore's `NewRedisEventBus` names as the client's owner, so cleanup closes the bus and the client in turn — and injects the bus via `WithEventBus(redisBus, MultiReplicaSafe|SurvivesRestart)`, the capabilities the Redis implementation genuinely carries (see `go/pkgcore/redis_eventbus.go`). Standalone mode requires no capabilities, so the mixed composition passes Bootstrap's validation and runs; every event the app publishes — the notes audit-trail `audit.event.recorded` included — is appended to a real Redis stream before it reaches the in-process subscribers, so any other consumer group (a second replica, an observer process) reads the same events. The example's integration tier proves that crossing end to end: `TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses` in `integration_test/` boots this very binary against a real testcontainers Redis, creates a note over real HTTP, and sees the audit event arrive in a consumer group owned by the test process, then reads the SQLite row back through `go/dbkit/audit`'s own `Repository`.
+
+Injecting one seam composes only that one: `SPEED_DEPLOYMENT_MODE=distributed SPEED_REDIS_ADDR=127.0.0.1:6379` still fails Bootstrap's validation on the KV seam, which remains the in-process preset implementation a distributed deployment cannot use — the failure shape `TestBuildServer_DistributedDeploymentMode_InjectedEventBus_StillFailsOnKV` pins.
 
 ### Tenants: an access token, not a `Host` header
 
@@ -84,6 +99,12 @@ curl -s -i localhost:8080/api/v1/notes -H 'Authorization: Bearer not-a-real-toke
 go build ./...
 go vet ./...
 go test ./... -race
+```
+
+The unit suite needs no Docker and no external services. A second tier, `integration_test/` (tagged `//go:build integration`), exercises the same real composition against real infrastructure and does need Docker running (it starts Redis via testcontainers-go):
+
+```
+go test -tags=integration ./...
 ```
 
 `internal/notes/repository_test.go` runs the mandatory `tenancytest.AssertIsolated` suite against the real repository. `cmd/server/server_test.go` builds the real, fully composed handler (via the same `buildServer` function `main()` calls) and drives it end to end with two different authn-issued access tokens, proving cross-tenant isolation through the actual middleware + handler + repository stack — not a mocked shortcut. That same file's `TestBuildServer_NoteCreate_PersistsAuditEvent` is the audit-trail equivalent: a real POST through the composed stack, then a real read back through `go/dbkit/audit`'s own `Repository.ListByTenant`. `cmd/server/authn_e2e_test.go` is the fuller proof: it drives all three of authn's sign-in channels — password, social (against a local test server standing in for GitHub, never a live provider), and phone plus an SMS code (the standalone deployment mode's console sender, captured for the test to read) — each to a working access token that then calls the notes API, plus the self-service session surface (list devices, view login history, revoke one device, and prove that device's refresh now fails while another device's still works).
