@@ -26,6 +26,22 @@ package referenceapp_test
 // a note through its real HTTP stack, and stops it with SIGTERM, asserting
 // the graceful-shutdown exit code.
 //
+// Authentication is as real as a subprocess can make it. The note request
+// carries an access token minted below through authn's public Signer API,
+// signed with the same committed dev key seed cmd/server derives its
+// signing key from (server.go's devSigningKeySeed), so the child's real
+// Verifier accepts it exactly as it accepts one a sign-in issued -- expiry,
+// issuer and Ed25519 signature all checked, none of it faked. A
+// register-then-login round trip is deliberately not attempted, because it
+// cannot succeed against the production wiring this test boots: the app's
+// demoMemberships store starts empty (its own doc comment in server.go
+// records that seed accounts wait for authn+org+billing together), so a
+// freshly registered account has no tenant membership and login/password
+// fails closed. The tenant the request acts inside comes from the token's
+// claim, never from a Host header; rbac's demo gate still reads the acting
+// user from the X-Demo-User header, exactly as the unit suite's
+// createNoteAs does (demo_subject.go's demoSubjectResolver).
+//
 // The observer half lives in THIS process: a second RedisEventBus
 // instance, subscribed to the audit.event.recorded stream through a
 // consumer group warmed up (with marker events) before the app boots, so
@@ -50,6 +66,7 @@ package referenceapp_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -68,6 +85,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 
+	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
@@ -221,25 +239,107 @@ type testListNotesResponse struct {
 	Notes []testNote `json:"notes"`
 }
 
-// The demo Host -> tenant mapping and demo-subject header are package
-// main's demo constants (server.go's demoHostTenants and
-// demo_subject.go's demoUserHeader/demoOwnerUserID), hardcoded here with
-// their meaning spelled out: the Host header is the ONLY thing that
-// selects the tenant, exactly as in the unit suite's createNoteAs; the
-// demo-user header names WHO is acting for rbac's gate, a placeholder for
-// authn.
+// The reference app's demo constants, hardcoded here with their meaning
+// spelled out (cmd/server owns the real declarations; these must match
+// them).
+//
+// acmeTenantID is the tenant the note is created in and read back under.
+// The token's tenant claim -- not a Host header -- is what selects it
+// (authn.NewPrincipalResolver), mirroring the unit suite, where the bearer
+// token is "the ONLY thing that selects the tenant" (server_test.go's
+// createNoteAs doc).
+//
+// demoUserHdr/demoOwner name WHO is acting for rbac's demo gate:
+// demoSubjectResolver (cmd/server/demo_subject.go) reads the acting user
+// from the header -- a placeholder for the access token's subject claim
+// that the demo wiring keeps while authn supplies the tenant half -- so
+// these requests carry both the token and the header, exactly like the
+// unit suite's createNoteAs does.
+//
+// devSigningKeySeed and devSigningKeyID mirror cmd/server/server.go's
+// devSigningKeySeed and the kid its devSigningKeySet() signs under. They
+// are that file's committed DEV key material -- a recognizable constant
+// for zero-setup standalone development, never a secret (server.go's own
+// doc comment on the seed) -- reused here so the child's real Verifier
+// accepts the token demoAccessToken mints. The two copies MUST stay in
+// step: a mismatch makes the child answer 401 to the first notes request
+// and fails this test loudly, which is the intended coupling.
 const (
-	acmeHost     = "acme.demo.localhost"
 	acmeTenantID = "tenant-acme"
 	demoUserHdr  = "X-Demo-User"
 	demoOwner    = "demo-owner"
+	// devSigningKeyID is the kid of the reference app's committed dev
+	// signing key (cmd/server's devSigningKeySet).
+	devSigningKeyID = "reference-app-dev"
 )
+
+// devSigningKeySeed is cmd/server/server.go's devSigningKeySeed, copied
+// byte for byte -- the 0x20..0x3f ascending sequence, deliberately the
+// same shape of recognizable non-secret as devConfigKey's 0x00..0x1f.
+var devSigningKeySeed = []byte{
+	0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+	0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
+	0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
+	0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f,
+}
+
+// demoSessionID is the session the demo access token claims, named after
+// the demo owner like every demo identity in this app. The session row
+// itself does not exist and does not need to: authn.Middleware only
+// consults the session store when a host wires a RevocationChecker, and
+// cmd/server's chain deliberately does not (revocation takes effect on the
+// refresh path, the natural-expiry mode -- go/authn/middleware.go's
+// WithRevocationChecker doc). If a future wiring adds the checker, this
+// test fails loudly on the first request and must mint a real session
+// instead.
+const demoSessionID = "demo-owner-session"
 
 // apiClient is the test's own HTTP client for talking to the subprocess's
 // real TCP listener. A fresh client per test, with a bounded timeout so a
 // wedged child fails the test instead of hanging it.
 func apiClient() *http.Client {
 	return &http.Client{Timeout: 10 * time.Second}
+}
+
+// demoAccessToken mints a real access token for the demo owner acting in
+// tenant, through authn's public Signer API with the key material the
+// child derives from the same dev seed (see devSigningKeySeed above). The
+// derivation mirrors cmd/server's devSigningKeySet() line for line --
+// ed25519.NewKeyFromSeed, then a TokenKey under devSigningKeyID -- so the
+// child's KeySet holds the verifying half of exactly the key that signed
+// here.
+//
+// This is not a fake credential: the child verifies the token's Ed25519
+// signature, issuer and expiry through the same Verifier that checks every
+// Authorization header it receives. What is skipped is the sign-in round
+// trip that would normally precede minting one, and why it is skipped is
+// the test doc's authentication paragraph -- the production wiring this
+// test boots contains no account that could complete it.
+func demoAccessToken(t *testing.T, tenant pkgcore.TenantID) string {
+	t.Helper()
+
+	priv := ed25519.NewKeyFromSeed(devSigningKeySeed)
+	pub, ok := priv.Public().(ed25519.PublicKey)
+	if !ok {
+		t.Fatal("derive the demo signing key's public half")
+	}
+	keys, err := authn.NewKeySet(authn.TokenKey{ID: devSigningKeyID, Private: priv, Public: pub})
+	if err != nil {
+		t.Fatalf("build the demo key set: %v", err)
+	}
+	signer, err := authn.NewSigner(keys)
+	if err != nil {
+		t.Fatalf("build the demo token signer: %v", err)
+	}
+	token, _, err := signer.Issue(authn.Principal{
+		UserID:    demoOwner,
+		SessionID: demoSessionID,
+		TenantID:  tenant,
+	})
+	if err != nil {
+		t.Fatalf("issue the demo access token: %v", err)
+	}
+	return token
 }
 
 func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *testing.T) {
@@ -377,43 +477,48 @@ func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *
 	time.Sleep(600 * time.Millisecond)
 	recorder.clear()
 
-	// Create one note through the child's real HTTP stack.
+	// Create one note through the child's real HTTP stack, authenticated
+	// the way every protected request to this app must be: a dev-seeded
+	// access token (demoAccessToken) whose tenant claim tenancy.Middleware
+	// trusts, plus the X-Demo-User header rbac's demo gate still reads for
+	// the acting user.
 	body, err := json.Marshal(map[string]string{"text": "buy milk through a real redis bus"})
 	if err != nil {
 		t.Fatalf("marshal request body: %v", err)
 	}
 	notesURL := "http://127.0.0.1:" + strconv.Itoa(port) + "/api/v1/notes"
+	accessToken := demoAccessToken(t, acmeTenantID)
 	req, err := http.NewRequest(http.MethodPost, notesURL, bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("build POST request: %v", err)
 	}
-	req.Host = acmeHost
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set(demoUserHdr, demoOwner)
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		t.Fatalf("POST %s (Host=%s): %v", notesURL, acmeHost, err)
+		t.Fatalf("POST %s: %v", notesURL, err)
 	}
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("POST /api/v1/notes (Host=%s) status = %d, want %d\n%s",
-			acmeHost, resp.StatusCode, http.StatusCreated, childLogs())
+		t.Fatalf("POST /api/v1/notes status = %d, want %d\n%s",
+			resp.StatusCode, http.StatusCreated, childLogs())
 	}
 
 	listReq, err := http.NewRequest(http.MethodGet, notesURL, nil)
 	if err != nil {
 		t.Fatalf("build GET request: %v", err)
 	}
-	listReq.Host = acmeHost
+	listReq.Header.Set("Authorization", "Bearer "+accessToken)
 	listReq.Header.Set(demoUserHdr, demoOwner)
 	listResp, err := httpClient.Do(listReq)
 	if err != nil {
-		t.Fatalf("GET %s (Host=%s): %v", notesURL, acmeHost, err)
+		t.Fatalf("GET %s: %v", notesURL, err)
 	}
 	defer listResp.Body.Close()
 	if listResp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /api/v1/notes (Host=%s) status = %d, want %d\n%s",
-			acmeHost, listResp.StatusCode, http.StatusOK, childLogs())
+		t.Fatalf("GET /api/v1/notes status = %d, want %d\n%s",
+			listResp.StatusCode, http.StatusOK, childLogs())
 	}
 	var listed testListNotesResponse
 	if err := json.NewDecoder(listResp.Body).Decode(&listed); err != nil {
