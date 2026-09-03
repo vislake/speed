@@ -25,8 +25,11 @@
  * authorization URL -- a pure request reported upward through
  * onAuthorizeUrl, never a navigation the package performs -- and the
  * host completes the flow at its callback route with
- * BindingCallbackHandler. When every configured provider is already
- * bound the add area does not render.
+ * BindingCallbackHandler. One bind flow at a time: while a channel's
+ * URL is being built every provider button is disabled, so a second
+ * authorize request -- any channel's -- cannot start before the first
+ * answers. When every configured provider is already bound the add
+ * area does not render.
  *
  * The provider vocabulary is deliberately not imported from @speed/auth-ui
  * (same-layer packages never import each other): SocialProvider and
@@ -213,6 +216,13 @@ export function SocialBindingsSection({
   }
 
   async function handleAuthorize(config: SocialProviderConfig): Promise<void> {
+    // One bind flow at a time, across every provider: the busy slot is
+    // provider-wide, so a second authorize click while a URL is being
+    // built -- this channel's or any other's -- is refused outright
+    // instead of racing the in-flight request.
+    if (busyProvider !== null) {
+      return
+    }
     setAuthorizeError(null)
     setBusyProvider(config.provider)
     try {
@@ -331,7 +341,7 @@ export function SocialBindingsSection({
           {hasAddArea && (
             <AddArea
               available={available}
-              busyProvider={busyProvider}
+              busy={busyProvider !== null}
               authorizeError={authorizeError}
               sectionLabel={t('bindings.addSectionTitle')}
               providerLabel={(provider) => t(`bindings.provider.${provider}`)}
@@ -361,17 +371,20 @@ export function SocialBindingsSection({
 
 /** The add area: one button per unbound configured provider, plus the
  * authorize-path failure banner. Rendered only when the list has
- * loaded and at least one configured provider is unbound. */
+ * loaded and at least one configured provider is unbound. While a bind
+ * flow is building every button is disabled together -- the busy flag
+ * is provider-wide, never one channel's alone. */
 function AddArea({
   available,
-  busyProvider,
+  busy,
   authorizeError,
   sectionLabel,
   providerLabel,
   onAuthorize,
 }: {
   readonly available: readonly SocialProviderConfig[]
-  readonly busyProvider: SocialProvider | null
+  /** True while any channel's authorization URL is being built. */
+  readonly busy: boolean
   readonly authorizeError: string | null
   readonly sectionLabel: string
   readonly providerLabel: (provider: SocialProvider) => string
@@ -398,7 +411,7 @@ function AddArea({
           <Button
             key={config.provider}
             variant="outlined"
-            disabled={busyProvider === config.provider}
+            disabled={busy}
             onClick={() => onAuthorize(config)}
           >
             {providerLabel(config.provider)}

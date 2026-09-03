@@ -17,9 +17,11 @@
  * once the list converged); the add area lists exactly the configured
  * providers not already bound and clicking one asks the session for
  * that channel's authorization URL, reporting it upward through
- * onAuthorizeUrl (never navigating, single-flight while the URL is
- * being built); when every configured provider is already bound the add
- * area does not render. Loading, error and empty states render their
+ * onAuthorizeUrl (never navigating, and single-flight across the
+ * providers: while any channel's URL is being built every provider
+ * button is disabled and a raw second click sends nothing); when every
+ * configured provider is already bound the add area does not render.
+ * Loading, error and empty states render their
  * own placeholder with the section header hidden (except the first-run
  * shape: an empty list with an unbound configured provider is exactly
  * the add area's cue and keeps the header). Every scenario ends with an
@@ -371,6 +373,95 @@ describe('SocialBindingsSection', () => {
     const query = new URLSearchParams(authorizeCall?.query)
     expect(query.get('redirect_uri')).toBe('https://app.test/callback')
     await waitFor(() => expect(wechatButton).toBeEnabled())
+
+    await expectNoAxeViolations()
+  })
+
+  it('single-flight the authorize requests across providers: one URL built at a time, every button disabled together', async () => {
+    const list = [identity({ id: 'github-1', provider: 'github' })]
+    let releaseWechat: () => void = () => undefined
+    const wechatGate = new Promise<void>((resolve) => {
+      releaseWechat = resolve
+    })
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === LOGIN_PATH) {
+        return jsonResponse(200, makePair())
+      }
+      if (call.method === 'GET' && call.path === IDENTITIES_PATH) {
+        return jsonResponse(200, { identities: list })
+      }
+      if (
+        call.method === 'GET' &&
+        call.path === '/api/v1/authn/social/wechat/authorize'
+      ) {
+        await wechatGate
+        return jsonResponse(200, {
+          authorize_url:
+            'https://open.weixin.qq.com/connect/oauth2/authorize?state=st-1',
+        })
+      }
+      if (
+        call.method === 'GET' &&
+        call.path === '/api/v1/authn/social/google/authorize'
+      ) {
+        // An answer the pre-fix code would have collected: a second
+        // flow started while the WeChat one was still building. The
+        // fix keeps this path untouched -- the assertion below pins it.
+        return jsonResponse(200, {
+          authorize_url:
+            'https://accounts.google.com/o/oauth2/v2/auth?state=st-2',
+        })
+      }
+      return errorResponse(500, 'internal')
+    })
+    await signInWithPassword(rig)
+    const reported: string[] = []
+    renderWithProviders(
+      <SocialBindingsSection
+        session={rig.session}
+        providers={[config('wechat'), config('google')]}
+        onAuthorizeUrl={(url) => {
+          reported.push(url)
+        }}
+      />,
+    )
+
+    const wechatButton = await screen.findByRole('button', {
+      name: zhCN.bindings.provider.wechat,
+    })
+    const googleButton = screen.getByRole('button', { name: 'Google' })
+    await userEvent.click(wechatButton)
+    // The busy slot is provider-wide, never one channel's alone: while
+    // the WeChat URL is being built the Google button is disabled with
+    // it, so no second flow can even be started from the surface.
+    expect(wechatButton).toBeDisabled()
+    expect(googleButton).toBeDisabled()
+    // A raw second click -- any channel's -- sends nothing either: the
+    // request path is single-flight, not just the disabled styling
+    // (userEvent would refuse the click on a disabled button --
+    // pointer-events none -- so this attempt is dispatched raw).
+    fireEvent.click(googleButton)
+    expect(
+      rig.calls.filter(
+        (call) => call.path === '/api/v1/authn/social/google/authorize',
+      ),
+    ).toHaveLength(0)
+
+    releaseWechat()
+    // Exactly one URL is reported -- the WeChat one, the flow that
+    // actually started -- and the Google flow never happened.
+    await waitFor(() => expect(reported).toHaveLength(1))
+    expect(reported[0]).toBe(
+      'https://open.weixin.qq.com/connect/oauth2/authorize?state=st-1',
+    )
+    expect(
+      rig.calls.filter(
+        (call) => call.path === '/api/v1/authn/social/wechat/authorize',
+      ),
+    ).toHaveLength(1)
+    // The flow answered: both buttons are enabled again.
+    await waitFor(() => expect(wechatButton).toBeEnabled())
+    expect(googleButton).toBeEnabled()
 
     await expectNoAxeViolations()
   })
