@@ -215,6 +215,55 @@ func TestService_RevokeRole_InvalidatesTheCacheImmediately(t *testing.T) {
 	}
 }
 
+func TestService_RevokeDuringInFlightLoad_DoesNotResurrectStaleGrant(t *testing.T) {
+	// The HIGH review finding on grantsFor: a database load and a
+	// concurrent revoke race on the read-then-write path into the cache.
+	// Reproduced deterministically, without relying on goroutine
+	// scheduling, via the afterLoadGrants test hook -- it runs at exactly
+	// the point the finding's concrete scenario needs: after loadGrants
+	// has already observed the still-present binding, but before that
+	// result would be written to the cache. From inside that window a
+	// concurrent RevokeRole deletes the binding, commits, and invalidates
+	// -- which must fence out the in-flight load's stale write.
+	svc := newTestService(t)
+	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
+	grant(t, svc, sub, "reader", Scope{}, "notes:read")
+
+	svc.afterLoadGrants = func() {
+		svc.afterLoadGrants = nil // run exactly once
+		if err := svc.RevokeRole(tenantCtx(sub.TenantID), sub, "reader", Scope{}); err != nil {
+			t.Fatalf("RevokeRole racing the in-flight load: %v", err)
+		}
+	}
+
+	// This call's own load started before the revoke (the hook only fires
+	// after loadGrants returns), so it correctly reports the grant that
+	// was still there when the read ran.
+	ok, err := svc.Can(context.Background(), sub, "read", "notes")
+	if err != nil {
+		t.Fatalf("Can: %v", err)
+	}
+	if !ok {
+		t.Fatal("Can during the in-flight load = false, want true (the revoke had not happened when the read ran)")
+	}
+
+	// The decisive assertion: the stale, pre-revoke result must not have
+	// been cached once the revoke landed inside the race window.
+	if _, cached := svc.cache.get(grantKey{tenant: sub.TenantID, user: sub.UserID}, svc.now()); cached {
+		t.Fatal("the pre-revoke load was cached despite a revoke landing before the cache write -- the revoked permission would keep answering \"granted\" for a full cache TTL")
+	}
+
+	// A fresh call now reads through to the database and must see the
+	// revoke.
+	ok, err = svc.Can(context.Background(), sub, "read", "notes")
+	if err != nil {
+		t.Fatalf("Can after the race: %v", err)
+	}
+	if ok {
+		t.Fatal("Can after the race = true, want false (the revoke must be visible on the very next call)")
+	}
+}
+
 func TestService_RevokeOnOneReplica_InvalidatesTheOther(t *testing.T) {
 	// Two Services over one database and one bus: the shape of a
 	// multi-replica deployment, with the in-memory bus standing in for the

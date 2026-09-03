@@ -73,11 +73,17 @@ type permissionGrant struct {
 // grantCache is the process-local decision cache. The zero value is not
 // usable; build one with newGrantCache.
 type grantCache struct {
-	// mu guards entries. It is a RWMutex because the read path (every
-	// authorization decision) vastly outnumbers the write path (a grant
-	// change, or the first read of a subject).
+	// mu guards entries and gen. It is a RWMutex because the read path
+	// (every authorization decision) vastly outnumbers the write path (a
+	// grant change, or the first read of a subject).
 	mu      sync.RWMutex
 	entries map[grantKey]grantEntry
+
+	// gen counts every invalidate and invalidateTenant call. It is the
+	// fencing token grantsFor uses to close the read-then-write race
+	// between a database load and a concurrent revoke: see generation and
+	// putIfCurrent below.
+	gen uint64
 
 	// ttl is the anti-loss expiry from DefaultCacheTTL or WithCacheTTL.
 	ttl time.Duration
@@ -123,8 +129,14 @@ func (c *grantCache) get(key grantKey, now time.Time) (map[string]permissionGran
 	return entry.grants, true
 }
 
-// put stores a subject's grants. The caller must not mutate grants
-// afterwards; see grantEntry.
+// put stores a subject's grants unconditionally. The caller must not
+// mutate grants afterwards; see grantEntry.
+//
+// Only tests and put's own fenced counterpart below write through this
+// path unconditionally; grantsFor's read-then-write load uses
+// putIfCurrent instead, precisely because an unconditional store is what
+// lets a load that is in flight during a revoke resurrect the grant it
+// raced -- see putIfCurrent's doc comment.
 func (c *grantCache) put(key grantKey, grants map[string]permissionGrant, now time.Time) {
 	if c.ttl <= 0 {
 		return
@@ -135,12 +147,54 @@ func (c *grantCache) put(key grantKey, grants map[string]permissionGrant, now ti
 	c.entries[key] = grantEntry{grants: grants, loadedAt: now}
 }
 
+// generation returns the cache's current invalidation counter. grantsFor
+// captures it BEFORE starting a database load and passes it to
+// putIfCurrent afterward, fencing the write against any invalidate or
+// invalidateTenant that lands in between. See putIfCurrent.
+func (c *grantCache) generation() uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.gen
+}
+
+// putIfCurrent stores a subject's grants, but only if no invalidation
+// (invalidate or invalidateTenant) has been observed since gen was
+// captured by generation(). The caller must not mutate grants afterwards;
+// see grantEntry.
+//
+// This is what closes the race a plain get-miss/load/put would otherwise
+// have: goroutine A takes a cache miss and starts a database read; while
+// that read is in flight, a revoke commits its DELETE and calls
+// invalidate(), which has nothing to drop yet because A has not written
+// anything -- but it DOES bump gen. When A's stale, pre-revoke read
+// finally returns, its put is fenced by the gen it captured before the
+// read started: since gen has moved on, the store is discarded instead of
+// resurrecting the just-revoked permission for a full cache TTL. See
+// grantsFor in service.go for the caller side of the fence.
+func (c *grantCache) putIfCurrent(key grantKey, grants map[string]permissionGrant, now time.Time, gen uint64) {
+	if c.ttl <= 0 {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.gen != gen {
+		// Something invalidated (this subject specifically, or this
+		// subject's whole tenant) after the load that produced grants
+		// started reading. That load's result may already be stale, so it
+		// must not be cached; the next read will load fresh instead.
+		return
+	}
+	c.entries[key] = grantEntry{grants: grants, loadedAt: now}
+}
+
 // invalidate drops one subject's entry. It is what an assign or a revoke
 // triggers: only that subject's grants changed.
 func (c *grantCache) invalidate(key grantKey) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.entries, key)
+	c.gen++
 }
 
 // invalidateTenant drops every entry belonging to one tenant. It is what a
@@ -159,6 +213,7 @@ func (c *grantCache) invalidateTenant(tenant pkgcore.TenantID) {
 			delete(c.entries, key)
 		}
 	}
+	c.gen++
 }
 
 // len reports how many entries are held, expired ones included. Only the

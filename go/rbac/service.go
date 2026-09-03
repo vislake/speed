@@ -63,6 +63,15 @@ type Service struct {
 	// now is the clock. It is a field so a test can pin the TTL boundary
 	// without sleeping; production always gets time.Now.
 	now func() time.Time
+
+	// afterLoadGrants, when non-nil, runs synchronously inside grantsFor
+	// right after loadGrants returns and before the result is written to
+	// the cache. It exists solely so a test can inject a concurrent
+	// invalidation into that exact window deterministically, rather than
+	// relying on goroutine scheduling luck to reproduce the race the
+	// generation fence in cache.go exists to close; production code never
+	// sets it, and grantsFor is a no-op wrapper around it when it is nil.
+	afterLoadGrants func()
 }
 
 // Close releases the Service's background resources: it stops the decision
@@ -210,11 +219,22 @@ func (s *Service) grantsFor(ctx context.Context, sub Subject) (map[string]permis
 		return grants, nil
 	}
 
+	// The generation is captured BEFORE the database read starts, not
+	// after. That ordering is what makes the fence below correct: if a
+	// revoke's invalidate() (or a role change's invalidateTenant())
+	// commits anywhere between this line and the eventual putIfCurrent,
+	// the generation will have moved on and the stale load below is
+	// discarded instead of cached -- see grantCache.putIfCurrent's doc
+	// comment for the full race this closes.
+	gen := s.cache.generation()
 	grants, err := s.loadGrants(ctx, sub)
 	if err != nil {
 		return nil, err
 	}
-	s.cache.put(key, grants, now)
+	if s.afterLoadGrants != nil {
+		s.afterLoadGrants()
+	}
+	s.cache.putIfCurrent(key, grants, now, gen)
 	return grants, nil
 }
 

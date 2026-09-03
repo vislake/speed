@@ -224,6 +224,94 @@ func TestGrantCache_Close_StopsTheJanitor_AndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestGrantCache_PutIfCurrent_SucceedsWhenGenerationUnchanged(t *testing.T) {
+	// The ordinary case: nothing invalidated between generation() and
+	// putIfCurrent, so the load's result is stored exactly like put would.
+	c := newGrantCache(time.Minute)
+	t.Cleanup(c.close)
+
+	key := grantKey{tenant: "tenant-a", user: "user-1"}
+	gen := c.generation()
+	now := time.Now()
+	c.putIfCurrent(key, grantsOf("notes:read"), now, gen)
+
+	got, ok := c.get(key, now)
+	if !ok {
+		t.Fatal("putIfCurrent with an unchanged generation reported a miss, want a hit")
+	}
+	if _, granted := got["notes:read"]; !granted {
+		t.Fatalf("cached grants = %v, want notes:read", got)
+	}
+}
+
+func TestGrantCache_PutIfCurrent_DiscardsAfterInterveningInvalidate(t *testing.T) {
+	// The fenced race this method exists to close (see its doc comment and
+	// the HIGH review finding on service.go's grantsFor): a load captures
+	// the generation, then something invalidates the SAME key before the
+	// load's result is written back. The stale result must not resurrect
+	// what the invalidation just dropped.
+	c := newGrantCache(time.Minute)
+	t.Cleanup(c.close)
+
+	key := grantKey{tenant: "tenant-a", user: "user-1"}
+	gen := c.generation() // captured "before the database read"
+
+	c.invalidate(key) // the concurrent revoke, landing mid-load
+
+	now := time.Now()
+	c.putIfCurrent(key, grantsOf("notes:read"), now, gen) // the stale load finally writes
+
+	if _, ok := c.get(key, now); ok {
+		t.Fatal("putIfCurrent stored a load whose generation was stale, resurrecting a revoked grant")
+	}
+}
+
+func TestGrantCache_PutIfCurrent_DiscardsAfterInterveningInvalidateTenant(t *testing.T) {
+	// The tenant-wide counterpart: a role's permissions narrowed and
+	// invalidateTenant ran while an unrelated load for a subject in that
+	// tenant was in flight. onRoleChanged's invalidation must not be
+	// "un-invalidated" by that load's late write either.
+	c := newGrantCache(time.Minute)
+	t.Cleanup(c.close)
+
+	key := grantKey{tenant: "tenant-a", user: "user-1"}
+	gen := c.generation()
+
+	c.invalidateTenant("tenant-a")
+
+	now := time.Now()
+	c.putIfCurrent(key, grantsOf("notes:read"), now, gen)
+
+	if _, ok := c.get(key, now); ok {
+		t.Fatal("putIfCurrent stored a load whose generation predated a tenant-wide invalidation")
+	}
+}
+
+func TestGrantCache_InvalidateTenant_BumpsGenerationEvenWithNoMatchingEntries(t *testing.T) {
+	// The exact "no-op because A has not yet written anything" step of the
+	// documented race: invalidate/invalidateTenant must fence a future
+	// write even when there is nothing in the map yet to delete.
+	c := newGrantCache(time.Minute)
+	t.Cleanup(c.close)
+
+	before := c.generation()
+	c.invalidateTenant("tenant-a")
+	if c.generation() == before {
+		t.Fatal("invalidateTenant with no matching entries left the generation unchanged")
+	}
+}
+
+func TestGrantCache_Invalidate_BumpsGenerationEvenWhenKeyAbsent(t *testing.T) {
+	c := newGrantCache(time.Minute)
+	t.Cleanup(c.close)
+
+	before := c.generation()
+	c.invalidate(grantKey{tenant: "tenant-a", user: "nobody"})
+	if c.generation() == before {
+		t.Fatal("invalidate of an absent key left the generation unchanged")
+	}
+}
+
 func TestGrantCache_ConcurrentUse_IsRaceFree(t *testing.T) {
 	// The decision cache is the module's one concurrency hot spot (backend
 	// coding standard §13: caches require -race tests). Readers, writers
@@ -241,7 +329,7 @@ func TestGrantCache_ConcurrentUse_IsRaceFree(t *testing.T) {
 			defer wg.Done()
 			key := grantKey{tenant: "tenant-a", user: "user-1"}
 			for n := 0; n < iterations; n++ {
-				switch worker % 4 {
+				switch worker % 5 {
 				case 0:
 					c.put(key, grantsOf("notes:read"), time.Now())
 				case 1:
@@ -253,6 +341,10 @@ func TestGrantCache_ConcurrentUse_IsRaceFree(t *testing.T) {
 					}
 				case 2:
 					c.invalidate(key)
+				case 3:
+					// The fenced write path grantsFor actually uses.
+					gen := c.generation()
+					c.putIfCurrent(key, grantsOf("notes:read"), time.Now(), gen)
 				default:
 					c.invalidateTenant("tenant-a")
 				}
