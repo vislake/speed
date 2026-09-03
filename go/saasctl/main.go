@@ -3,12 +3,11 @@
 // modules it pulls in: shaping new consumer projects (new), rewriting a
 // project's speed module requires when a new lockstep release lands
 // (upgrade), and maintaining a generated project's database and dynamic
-// configuration (db migrate and config print, planned).
+// configuration (db migrate and config print).
 //
 // The exit-code contract is uniform across commands: 0 for success and
 // help, 2 for usage errors (a malformed invocation of a command that
-// exists), 1 for execution errors and for commands this build does not
-// wire yet.
+// exists), 1 for execution errors.
 package main
 
 import (
@@ -16,6 +15,8 @@ import (
 	"io"
 	"os"
 
+	configcmd "github.com/vislake/speed/go/saasctl/internal/config"
+	dbcmd "github.com/vislake/speed/go/saasctl/internal/db"
 	newcmd "github.com/vislake/speed/go/saasctl/internal/new"
 	"github.com/vislake/speed/go/saasctl/internal/upgrade"
 )
@@ -32,14 +33,13 @@ Commands:
   new        Materialize the project skeleton into a new consumer project
   upgrade    Rewrite a project's speed dependencies to one version for a
              new release
-  db         Database maintenance for a generated project (planned):
-             saasctl db migrate
-  config     Configuration maintenance for a generated project (planned):
-             saasctl config print
+  db         Apply a generated project's speed-module migrations to its
+             SQLite database (saasctl db migrate)
+  config     Show how a generated project's bootstrap configuration
+             resolves (saasctl config print)
 
-This build wires new and upgrade; the remaining planned commands fail
-with a clear not-implemented message until their milestones land. Run
-"saasctl <command> -h" for each command's flags.
+All four commands are wired in this build. Run "saasctl <command> -h" for
+each command's flags.
 
 Exit codes: 0 success or help, 2 usage error, 1 execution error.
 `
@@ -50,13 +50,12 @@ func main() {
 
 // run dispatches one invocation and returns its process exit code. The
 // root-level exit-code shape mirrors the per-command one: no arguments,
-// help, -h and --help print the root usage to stdout and exit 0; a
-// command this build does not wire prints one line to stderr and exits 1;
-// an unknown command prints the unknown-command error plus the root usage
-// to stderr and exits 2. Usage and error writes are best-effort -- the
-// only realistic failure is a closed pipe, and the returned exit code is
-// the whole contract either way -- so each call blank-assigns the write
-// error (the repository's errcheck config runs with check-blank off).
+// help, -h and --help print the root usage to stdout and exit 0; an
+// unknown command prints the unknown-command error plus the root usage to
+// stderr and exits 2. Usage and error writes are best-effort -- the only
+// realistic failure is a closed pipe, and the returned exit code is the
+// whole contract either way -- so each call blank-assigns the write error
+// (the repository's errcheck config runs with check-blank off).
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		_, _ = fmt.Fprint(stdout, rootUsage)
@@ -70,9 +69,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return newcmd.Run(args[1:], stdout, stderr)
 	case "upgrade":
 		return upgrade.Run(args[1:], stdout, stderr)
-	case "db", "config":
-		_, _ = fmt.Fprintf(stderr, "saasctl: %s is not implemented in this build (only new and upgrade are wired); it lands with its own milestone\n", args[0])
-		return 1
+	case "db":
+		return dbcmd.Run(args[1:], stdout, stderr)
+	case "config":
+		return configcmd.Run(args[1:], stdout, stderr)
 	default:
 		_, _ = fmt.Fprintf(stderr, "saasctl: unknown command %q\n\n", args[0])
 		_, _ = fmt.Fprint(stderr, rootUsage)

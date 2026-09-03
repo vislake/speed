@@ -8,10 +8,11 @@
 //	new     scaffold a new consumer project
 //	upgrade rewrite a project's speed module requires to one lockstep
 //	        version
-//	db      run the project's migrations (planned)
-//	config  inspect the project's dynamic configuration (planned)
+//	db      maintain a generated project's SQLite database
+//	config  show how a generated project's bootstrap configuration
+//	        resolves
 //
-// This build wires new and upgrade; db and config land in the later rounds
-// of the saasctl milestone (docs/internal/02-repo-and-release.md and
-// docs/internal/15-roadmap.md track which).
+// This build wires all four commands; db migrate and config print landed
+// with the saasctl milestone's B3 round (docs/internal/15-roadmap.md
+// tracks which).
 package main

@@ -2,11 +2,26 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vislake/speed/go/saasctl/internal/appconfig"
 )
+
+// bootstrapEnvKeys lists the five bootstrap variables a generated
+// project's configuration reads; the dispatch tests clear them all so a
+// run starts from the same defaults a fresh shell would be in. The list
+// mirrors the ones internal/db and internal/config carry.
+var bootstrapEnvKeys = []string{
+	appconfig.DeploymentModeEnv,
+	appconfig.PortEnv,
+	appconfig.DBPathEnv,
+	appconfig.ConfigKeyEnv,
+	appconfig.OrgIndexKeyEnv,
+}
 
 // runCLI invokes run with captured output.
 func runCLI(t *testing.T, args []string) (int, string, string) {
@@ -71,26 +86,66 @@ func TestRunUnknownCommand(t *testing.T) {
 	}
 }
 
-// TestRunPlannedCommandsNotImplemented: db and config exist on the usage
-// surface but land with later milestones. Each is refused with a one-line
-// not-implemented message on stderr and exit code 1 -- the execution-error
-// code, so a script that treats 2 as "invocation mistake" can distinguish
-// "right shape, not built yet" from "malformed".
-func TestRunPlannedCommandsNotImplemented(t *testing.T) {
-	for _, arg := range []string{"db", "config"} {
-		arg := arg
-		t.Run(arg, func(t *testing.T) {
-			code, stdout, stderr := runCLI(t, []string{arg})
-			if code != 1 {
-				t.Errorf("run(%q) = %d, want 1", arg, code)
-			}
-			if !strings.Contains(stderr, "not implemented") {
-				t.Errorf("stderr does not say not implemented: %q", stderr)
-			}
-			if stdout != "" {
-				t.Errorf("run(%q) wrote to stdout: %q", arg, stdout)
-			}
-		})
+// TestRunDBDispatchesThroughCLI drives `saasctl db migrate` through the
+// root dispatch -- the one place main.go and the db command group meet --
+// against a real, fresh SQLite database in a temp directory: exit 0 and
+// the applied-migrations report on stdout, with the go.mod's config
+// require supplying the one migration-shipping module the run applies.
+// The migrate command's own behavior matrix lives in internal/db's
+// suite; this test only proves the dispatch reaches it.
+func TestRunDBDispatchesThroughCLI(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "cli-app.db")
+	for _, key := range bootstrapEnvKeys {
+		t.Setenv(key, "")
+	}
+	t.Setenv(appconfig.DBPathEnv, dbPath)
+	mod := filepath.Join(t.TempDir(), "go.mod")
+	content := "module example.com/smile/cli-app\n\ngo 1.25.0\n\nrequire github.com/vislake/speed/go/config v0.0.0-00010101000000-000000000000\n"
+	if err := os.WriteFile(mod, []byte(content), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	code, stdout, stderr := runCLI(t, []string{"db", "migrate", mod})
+	if code != 0 {
+		t.Fatalf("run(db migrate) = %d, want 0; stderr:\n%s", code, stderr)
+	}
+	if stderr != "" {
+		t.Errorf("run(db migrate) wrote to stderr on success: %q", stderr)
+	}
+	want := fmt.Sprintf("Migrated %s: applied 1 migration files (config 1)\n", dbPath)
+	if stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
+	}
+}
+
+// TestRunConfigDispatchesThroughCLI drives `saasctl config print` through
+// the root dispatch -- the one place main.go and the config command group
+// meet -- against a go.mod in a temp directory: exit 0 and the five
+// provenance lines on stdout, resolved from the module path and the
+// cleared environment. The print command's own behavior matrix lives in
+// internal/config's suite; this test only proves the dispatch reaches it.
+func TestRunConfigDispatchesThroughCLI(t *testing.T) {
+	for _, key := range bootstrapEnvKeys {
+		t.Setenv(key, "")
+	}
+	mod := filepath.Join(t.TempDir(), "go.mod")
+	content := "module example.com/smile/cli-app\n\ngo 1.25.0\n"
+	if err := os.WriteFile(mod, []byte(content), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	code, stdout, stderr := runCLI(t, []string{"config", "print", mod})
+	if code != 0 {
+		t.Fatalf("run(config print) = %d, want 0; stderr:\n%s", code, stderr)
+	}
+	if stderr != "" {
+		t.Errorf("run(config print) wrote to stderr on success: %q", stderr)
+	}
+	want := "deployment mode  standalone   unset or empty (default standalone)\n" +
+		"port             8080         unset or empty (default 8080)\n" +
+		"sqlite path      cli-app.db   unset or empty (default cli-app.db)\n" +
+		"config key       [redacted]   unset or empty (development default)\n" +
+		"org index key    [redacted]   unset or empty (development default)\n"
+	if stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
 }
 
