@@ -30,7 +30,6 @@ graph BT
     billcore --> authcore
     authui --> uikit
     authui --> authcore
-    tenantui --> uikit
     tenantui --> authcore
     billui --> uikit
     billui --> billcore
@@ -38,10 +37,13 @@ graph BT
     notifui --> notifcore
     notifcore --> sdk
     layout --> uikit
-    layout --> authcore
+    pshell --> authcore
+    pshell --> authui
     pshell --> layout
     ashell --> layout
 ```
+
+> **图校准注记（product-shell round，边按已落地依赖修正）**：`layout --> auth-core` 与 `tenantui --> ui-kit` 两条自设计图起从未兑现的边已删除——layout-kit 落地时是 auth-agnostic 的（依赖仅 `i18n`/`ui-kit`，`RouteGuard` 只吃 host 注入的 `status` 值，见该包 AGENTS.md）；tenancy-ui 的 `src/` 从不 import `ui-kit`（主题 provider 只出现在 `test-utils/` 与 devDependencies——测试树要渲染在真实 host 组合下），其依赖仅 `auth-core`（type-only）与 `i18n`。新增 `pshell --> auth-core` 与 `pshell --> auth-ui`：product-shell 直接依赖两者（`useAuthState` 读会话快照、`auth-ui` 的默认 `SessionEndedScreen`）。正文下段"两者共享 `layout-kit`/`ui-kit`/`auth-core`"按**直接依赖**读为：product-shell 依赖 `layout-kit`/`auth-core`/`auth-ui`（`ui-kit` 与 `i18n` 经这三者间接进入），admin-shell 落地时同理只取所需。billing/notification 与 admin-shell 等计划中节点及全部其他边保持不变。
 
 **product-shell 与 admin-shell 拆成两个包、两个独立部署应用**：客户端权限是"租户内角色"，运营端是"内部员工角色"且能跨租户看数据，混在一起会造成权限逻辑纠缠和跨租户数据泄漏的审计风险。两者共享 `layout-kit`/`ui-kit`/`auth-core`，shell 本身只是薄的组装配置层，重复代码很少。
 
@@ -107,11 +109,17 @@ M0 的"核心组件"指下面第一组。组件全部受控、props 驱动、不
 >
 > **token 传输现实注记（同一轮）**：上文"Token 存储：refresh token 走 httpOnly+Secure+SameSite Cookie，access token 只存内存"是设计目标；shipped 的 authn API 走的是另一条现实：token 签发响应把 refresh token 放在**响应体**（`AuthnTokenPair.refresh_token`，在 tenant-switch 与 step-up 响应中缺席——两者轮换既有 token 家族），**不设置 refresh cookie**——authn 设置的唯一 HttpOnly cookie 是 social 绑定预授权路径那个（`Path /api/v1/authn/social`）；refresh 端点在请求体里读取调用方持有的 token。`@speed/auth-core` 按此现实设计：access token 只进内存 store（`@speed/api-client` 每次发送前重读），refresh token 只存在于会话闭包、永不写入任何存储，无 `restore`——刷新页面即回到匿名，需重新登录（见该包 README 的 Known limitations）。是否引入 refresh cookie 或持久化层，留待 M4 发布基线与安全评审。
 
-> **已落地（auth-ui round）：登录组件家族落地，上一注记留给 consumer-shell 的"运行时端到端消费"在形态层面兑现（真实 api-client + fetch 替身 seam，见 21-api-contract.md 的同一轮注记）。** `web/packages/auth-ui` 交付受控的登录组件家族，组件全部以 session prop 驱动、零 hooks 消费、成功后只触发一次回调、从不导航或直连网络：`SignInScreen` 以 tab 条组装通道（密码为默认通道，切换即卸载前一表单——刻意重置，通道错误不跨表面残留，社交块只在给了 `social` prop 时出现），`PasswordSignInForm` 单 identifier 字段（邮箱或手机，由后端决定），`SMSSignInForm` 两步 phone→code（请求步唯一的 code 形态失败是 `authn.rate_limited`），`RegisterForm` 以 `'@'` 启发式把 identifier 拆进 spec 的 email/phone 分离形态、trim 可选 display name、locale 在提交时读取；社交一半是 `SocialSignInSection`（每 provider 一个按钮，点击只请求该通道的 authorize URL——纯请求经 `onAuthorizeUrl` 上报，包从不导航）加 host 回调路由上的 `SocialCallbackHandler`（effect 以 `(code, state)` 对为键，StrictMode 双调用只发起一次交换）；会话出口是 `SignOutButton`（成功后刻意静默、失败可重试、渲染不区分是否已认证）与 `SessionEndedScreen`（`ui-kit` `EmptyState` 的 noPermission 变体、全部文本槽从 auth-ui namespace 覆盖——无 session prop、无 hooks、无网络）。全部内置文案来自双语 `auth-ui` namespace（每语言 57 键）；错误答案经 25-code 可达子集白名单解析（11 个登录/注册 code、6 个社交端点 code、5 个会话生命周期 code、3 个 client 传输 code），白名单外一律落 `unknown` 兜底，包内永远不渲染裸 key。浏览器 + 真服务器 leg 与跨路由门禁仍留待 reference-app shell / e2e。
+> **已落地（auth-ui round）：登录组件家族落地，上一注记留给 consumer-shell 的"运行时端到端消费"在形态层面兑现（真实 api-client + fetch 替身 seam，见 21-api-contract.md 的同一轮注记）。** `web/packages/auth-ui` 交付受控的登录组件家族，组件全部以 session prop 驱动、零 hooks 消费、成功后只触发一次回调、从不导航或直连网络：`SignInScreen` 以 tab 条组装通道（密码为默认通道，切换即卸载前一表单——刻意重置，通道错误不跨表面残留，社交块只在给了 `social` prop 时出现），`PasswordSignInForm` 单 identifier 字段（邮箱或手机，由后端决定），`SMSSignInForm` 两步 phone→code（请求步唯一的 code 形态失败是 `authn.rate_limited`），`RegisterForm` 以 `'@'` 启发式把 identifier 拆进 spec 的 email/phone 分离形态、trim 可选 display name、locale 在提交时读取；社交一半是 `SocialSignInSection`（每 provider 一个按钮，点击只请求该通道的 authorize URL——纯请求经 `onAuthorizeUrl` 上报，包从不导航）加 host 回调路由上的 `SocialCallbackHandler`（effect 以 `(code, state)` 对为键，StrictMode 双调用只发起一次交换）；会话出口是 `SignOutButton`（成功后刻意静默、失败可重试、渲染不区分是否已认证）与 `SessionEndedScreen`（`ui-kit` `EmptyState` 的 noPermission 变体、全部文本槽从 auth-ui namespace 覆盖——无 session prop、无 hooks、无网络）。全部内置文案来自双语 `auth-ui` namespace（每语言 59 键）；错误答案经 27-code 可达子集白名单解析（13 个登录/注册与 identifier code——含后来补上的 `invalid_email`/`invalid_phone`、6 个社交端点 code、5 个会话生命周期 code、3 个 client 传输 code），白名单外一律落 `unknown` 兜底，包内永远不渲染裸 key。浏览器 + 真服务器 leg 与跨路由门禁仍留待 reference-app shell / e2e。
 >
 > **同轮机制注记一（组件零 hooks 消费是刻意契约，host 侧会话观察是快照驱动）**：auth-ui 的组件契约是 auth-core round 的 host-gate 形态倒推的——session 以 prop 进组件、成功登录只发一次 `onSignedIn`，之后 host 用自己的 `useAuthState` 快照翻转决定渲染什么；`src/usage-example.test.tsx` 的 SessionGate fixture 就是 host-router 的迷你模型：认证快照 → app 视图；曾在 app 视图而快照转匿名 → `SessionEndedScreen`；首次认证前 → 登录面。会话结束是**可观察的而非可命令的**：无恢复、无 refresh cookie，服务端会话死亡经 api-client 的 401-刷新腿收敛——`refresh()` 解析 `false` 即本地登出、快照转匿名（api-client 的 Reporter seam 以 `access token refresh failed` 上报那次被拒的刷新），`SessionEndedScreen` 的 action 经 `onSignIn` 把用户交还 host 的登录面。跨路由门禁（layout-kit `RouteGuard`、shell 真实路由）不是本轮的形状，属 consumer-shell。
 >
 > **同轮机制注记二（permission-attach 缺口原样保留并指向 shell）**：auth-core round 注记记录的"权限集只能由 host 侧 attach、无服务端下发端点"这一缺口在 auth-ui round **没有变化**——登录组件家族只消费身份（会话快照与 `/me` 的 `AuthnPrincipal`），auth-ui 无任何权限集合参数；`usePermission` 的集合仍由 host 在 `attachSession` 后 set（auth-core 的 `setPermissionSet`），路由级门禁（layout-kit `RouteGuard` 的 `status` prop）仍是 consumer-shell round 的事。家族刻意停在身份层，不碰授权。
 >
 > **同轮机制注记三（register ≠ login；绑定 / MFA / 企业 SSO 表面未交付；`client.protocol` 拒绝 bound-identity 形态；channels 全是 props）**：注册成功不建立会话（spec 的 register 不是会话操作）——`RegisterForm` 靠 `onRegistered`（携带生成的 `AuthnUser`）或成功面板把新账号交还 host 的登录面再登录；绑定 UI（已认证用户给账号加通道）不在本家族——`SocialCallbackHandler` 只按登录面处理回调路由，交换答回 bound-identity 无 token 形态（服务端对已认证调用方的回答）时按 auth-core 的 `completeSocialLogin` 契约以 `client.protocol` 拒绝，绑定流程留给账号管理 UI；step-up 门槛操作与每租户配置的企业 OIDC 在本家族也没有表面。服务端不存在通道发现端点（`go/authn` 侧无此类 operation），家族只渲染 host 组合进 props 的通道与 provider——页面上方的品牌、标题与 register 链接同理都是 host 内容，不入包。
+
+> **已落地（product-shell round）：consumer-shell 的一半以 `@speed/tenancy-ui` 与 `@speed/product-shell` 两个包落地；auth-ui 轮注记一/二/三中"跨路由门禁属 consumer-shell round"的声称由本注记部分取代——门禁作为 host 组合的形态已由套件证明，shell 自持门禁与权限真实获取仍未落地。** 两个新包把上文的 host 义务收进可交付形态：
+>
+> - **tenancy-ui 交付受控的租户切换控件**：`TenantSwitcher`（session 以 prop 进组件、从不自己 attach/观察/驱动会话、当前租户来自 host 的 `currentTenantId`、切换经 `session.switchTenant`、成功只发一次 `onSwitched`、当前租户行禁用、拒绝的切换渲染白名单码文本且可重试）——它是 `authn.switchTenant` 端点的 in-form 运行时消费证明：`src/usage-example.test.tsx` 用真实 api-client + 以真 `Response` 作答的 fetch 替身钉死一次登录加三次切换尝试（成功切换断言 store 持有新令牌、请求携带 `authorization` 与 `{tenant_id}` body；拒绝尝试断言码文本呈现、会话状态不变）。文案 12 叶/语言、9-code 白名单（六 `authn.*` 会话生命周期 + 三 `client.*` 传输）+ `unknown` 兜底，与 auth-ui 共享码的文案逐字同源（同层包互不 import 目录，两版文案以套件双向钉死配对）。
+> - **product-shell 把 SessionGate 形态做成 shipped 三分支视图机**：`ProductShell` 只读 `useAuthState` 快照、从不驱动会话——认证快照 → `layout-kit` `AppShell` 框架包 children；匿名且本 mount 到达过 app → host 的 `sessionEnded` 槽或默认 `auth-ui` `SessionEndedScreen`（仅默认屏内连"回登录视图"action）；匿名且从未到达 → host 的 `signIn` 槽或空（刻意不设默认登录面，通道组合是 host 产品决策）。分支二先于分支三判定：登出过的用户绝不回落到新访客登录面——这就是 auth-ui 轮注记一里 SessionGate fixture 的 shipped 形态。壳本身零文案（无 namespace、无 locale、无错误白名单），全部 chrome props 原样透传给 `AppShell`。`src/usage-example.test.tsx` 编译并执行 README 组合：四 namespace 引导（ui-kit/layout-kit/auth-ui/tenancy-ui）+ `attachSession` + userMenu（`TenantSwitcher` 与 `SignOutButton` 并列），旅程走完整圈——登录 → 框架 → 切租户 → 登出 → 默认会话结束屏 → 再登录回框架，请求与 body 钉死。
+> - **门禁与权限 attach：host 组合形态已证明，shell 自持仍延期**。auth-ui 轮注记二 deferral 的"路由级门禁（layout-kit `RouteGuard` 的 `status` prop）仍是 consumer-shell round 的事"现部分兑现为 `src/gated-journey.test.tsx` 的 fixture：`children` 里的 view-id mini-router 每个目的地挂 `RouteGuard`，status 由 `usePermission` 在 host attach 的列表上派生，切租户 commit 后按 auth-core 存活规则 re-attach（fixture 还以 role-load 替身扮演权限下发，因为真实获取流程——auth-core 轮机制注记 deferral 到 consumer-shell 的 /me 派生列表或 rbac 端点——仍无服务端形态）。旅程覆盖 pending→allowed 的列表重载、denial 期间刷新保持门禁稳定（`onDenied` 恰好一次）、被拒切换与会话死亡收敛。即：**门禁与 re-attach 是 host 在 `children` 里的组合，不是任何包代码**——product-shell 的 deferral 表明文不消费 `RouteGuard`/`usePermission`/`setPermissionSet`，auth-ui 轮注记一 deferral 的"浏览器 leg"（reference-app shell 真实路由与真服务器）保持原样。
 

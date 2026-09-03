@@ -56,6 +56,13 @@ web/
     auth-ui/            @speed/auth-ui    -- the sign-in family over an auth-core session:
                                              password/SMS/register channels plus the social
                                              pair, sign-out and session-ended; controlled
+    tenancy-ui/         @speed/tenancy-ui -- the tenant-switch affordance: one controlled
+                                             TenantSwitcher fed the current tenant by the
+                                             host, reporting each commit through onSwitched
+    product-shell/      @speed/product-shell -- the tenant-facing assembly shell: ProductShell
+                                             composes the AppShell frame, the sign-in family
+                                             and the session hooks into one three-branch view
+                                             machine with zero text of its own
 ```
 
 Root `package.json` holds only what every package shares (typescript,
@@ -117,15 +124,21 @@ build`, ...) or with `pnpm --filter @speed/<name> <script>` from `web/`.
 
 ## What is not here yet
 
-Storybook, Playwright and the web side of the app shell are all planned;
-see the repo roadmap (`docs/internal/15-roadmap.md`) and the CI workflow
-headers for what each round delivers. (The generated sdk is here — it
-ships in the layout above; its M1 consumer shells and tenant query-key
-namespacing are not.)
+Storybook and Playwright are planned, and so is the app that hosts
+these packages — the reference app's consumer shell (web frontend) and
+the platform-staff admin-shell; see the repo roadmap
+(`docs/internal/15-roadmap.md`) and the CI workflow headers for what
+each round delivers. The shell packages themselves are here:
+layout-kit's frame, auth-ui's sign-in family and, since this round,
+tenancy-ui's switcher and product-shell's three-branch assembly all
+ship in the layout above, their composed sign-in/switch/sign-out
+journey discharged in form by the packages' own usage examples. (The
+generated sdk is here too — it ships in the layout above; its tenant
+query-key namespacing is not.)
 
 The lockstep release machinery exists in its M0, offline-verification
 form: the changesets bootstrap at `.changeset/` (the fixed version group
-over the five packages, `config.json` — no changesets entries or bump
+over the ten packages, `config.json` — no changesets entries or bump
 runs yet) and the release coordinator in `tools/release/`, which checks
 from the repository root that the fixed group covers exactly the
 packages that exist, that package versions are uniform, and that the Go

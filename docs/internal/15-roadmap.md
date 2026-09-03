@@ -27,6 +27,8 @@
 
 **关于 M0 的排期**：从 4-5 周上调到 6-7 周。M0 要完成的是 CI 矩阵、纪律检查规则、发布脚本、模块生成器、契约工具链、pkgcore 全套双实现、dbkit、ratelimit、前端基础包和文档工程——这些没有一项能演示，但每一项做不扎实后面都会反复返工。压缩 M0 是这类项目最常见也最昂贵的错误。
 
+**关于 M1 行前端五个 web 包的状态（2026-09 更新）**：M1 行内容单元格点名的五个 web 包已全部交付——`auth-core`/`auth-ui`/`layout-kit` 在各自轮次落地，`tenancy-ui` 与 `product-shell`（本表所称"shell"的租户面一半，`product-shell` 把 `AppShell` 框架、登录组件家族与会话 hooks 组装成三分支视图机，`tenancy-ui` 提供其 `userMenu` 里的租户切换控件）在本轮落地，十个 web 包全部进入 pr-check 的 npm 矩阵与 changesets 固定版本组（详见根 CLAUDE.md 普查与 [12 前端架构](12-frontend.md)、[21 API 契约](21-api-contract.md) 的实现状态注记）。仍在表内的：`saasctl`/`create-saas-app` 属 Go 侧脚手架内容（`saasctl new` 生成的骨架目前不含 web 前端），由各自的 Go 轮次推进，不在本注记范围；`admin-shell`（M3 行，面向平台员工）未动；reference-app 的 consumer shell（web 前端目录）仍未建立——web 侧的强制消费证明目前以"形态层面"标准在包内完成（真实 api-client + fetch 替身的 usage-example 旅程），浏览器 + 真服务器 leg 随 reference-app 前端轮落地。
+
 **建议的中途试点（重要）**：虽然对外一次性发布 v1.0，但强烈建议在 **M2 结束时**（认证、组织、计费、存储、通知齐备）就找一个真实小项目试点接入，而不是等到 v1.0。理由：那时地基已经稳定但尚未大面积铺开，发现 API 问题的修改成本最低；等到 v1.0 之后再发现，改动要同时波及脚手架和已交付项目。reference-app 能验证"能不能用"，只有真实项目能验证"好不好用"。
 
 **排期风险提示**：M2 因为国内外支付双通道都在 MVP 内，比原估多 1-2 周（微信/支付宝的商户资质申请、沙箱联调、回调验签往往比预期慢）。建议提前启动商户资质申请，不要等到 M2 才开始。

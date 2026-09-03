@@ -29,7 +29,15 @@ name: pr-check
 #     family over that session, whose usage example drives the composed
 #     flows through a real api-client over a scripted fetch -- the
 #     authn surface's runtime end-to-end consumption discharged in
-#     form); root CLAUDE.md, Repository Status) each
+#     form, and @speed/tenancy-ui, the tenant-switch affordance over
+#     that same session (its usage example pins one login and three
+#     switch attempts the same in-form way), and @speed/product-shell,
+#     the tenant-facing assembly shell composing the AppShell frame,
+#     the sign-in family and the session hooks into one three-branch
+#     view machine with zero text of its own -- the whole
+#     sign-in/switch/sign-out journey discharged in form, the browser
+#     and real-server leg still the reference-app shell's); root
+#     CLAUDE.md, Repository Status) each
 #     run through the reusable npm-package-ci workflow: a frozen-lockfile
 #     workspace install from the web/ root, then lint (the flat-config
 #     ESLint at web/ -- typescript-eslint recommended, no-explicit-any,
@@ -188,6 +196,8 @@ jobs:
           - web/packages/layout-kit
           - web/packages/auth-core
           - web/packages/auth-ui
+          - web/packages/tenancy-ui
+          - web/packages/product-shell
     uses: ./.github/workflows/reusable/npm-package-ci.yml
     with:
       package: ${{ matrix.package }}
