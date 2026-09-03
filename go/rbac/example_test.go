@@ -45,7 +45,7 @@ func Example() {
 		return
 	}
 
-	registry, err := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).Bootstrap(ctx, module)
+	registry, err := pkgcore.NewKernel().Bootstrap(ctx, module)
 	if err != nil {
 		fmt.Println("bootstrap:", err)
 		return
@@ -283,7 +283,7 @@ func newExampleService(ctx context.Context, dsn string, resolver rbac.SubtreeRes
 		return nil, err
 	}
 
-	registry, err := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).Bootstrap(ctx, module, notesLikeModule{})
+	registry, err := pkgcore.NewKernel().Bootstrap(ctx, module, notesLikeModule{})
 	if err != nil {
 		return nil, err
 	}

@@ -145,7 +145,7 @@ func TestModule_Attach_FreezesEveryModulesPermissions(t *testing.T) {
 	m := NewModule(newRBACTestDB(t))
 	host := &declaringModule{name: "notes", perms: []string{"notes:read", "notes:write"}}
 
-	reg, err := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).Bootstrap(context.Background(), m, host)
+	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), m, host)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
