@@ -19,9 +19,11 @@
  * the five session-lifecycle codes, the three transport-level client.*
  * codes, errors.unknown). Same-tier packages cannot import one another's
  * catalogs, so the texts are deliberate duplicates, kept verbatim -- the
- * pairing is pinned by the error-text suite beside inline-error.tsx, and
- * a divergence between the two packages' copies is a translation bug to
- * fix in both, not a reason to introduce a dependency edge.
+ * error-text suite beside inline-error.tsx imports the auth-ui bundles
+ * themselves as test data and pins every copied leaf to its source, so
+ * a divergence between the two packages' copies is a translation bug
+ * that fails there, to fix in both, never a reason to introduce a
+ * dependency edge.
  */
 
 import type { ResourceBundle } from '@speed/i18n'

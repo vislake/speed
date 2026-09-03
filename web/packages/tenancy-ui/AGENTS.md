@@ -69,7 +69,9 @@ of one server code's text must not diverge). When auth-ui's texts
 change, copy the change here. The suite pins the pairing in both
 directions inside this package -- a whitelist code without its two
 bundle leaves fails, a bundle leaf without its whitelist code fails --
-but no suite here can see a drift from the auth-ui bundle itself.
+and pins the copies to their source too: the error-text suite imports
+the auth-ui bundles themselves as test data, so a drift between the
+packages' texts fails here rather than reaching the product.
 
 ## i18n
 

@@ -14,12 +14,14 @@
  * resolve through the registered namespace to its own dedicated text in
  * both languages -- never the errors.unknown fallback and never a raw
  * key. The texts are the auth-ui error texts for the same codes, copied
- * verbatim (same-tier packages cannot import one another's catalogs); a
- * divergence from the auth-ui bundle is a translation bug this walk
- * cannot see, caught by the deliberate-duplication note in
- * resources.ts. Component-level render coverage (the role="alert" banner
- * for a given code) lives in TenantSwitcher.test.tsx; this file pins the
- * whole-list pairing that banner depends on.
+ * verbatim (same-tier packages cannot import one another's catalogs),
+ * and the verbatim claim is pinned here too: the auth-ui bundles
+ * themselves are imported as test data, and every whitelisted code's
+ * two tenancy-ui leaves must equal the auth-ui leaf of the same code,
+ * so a divergence between the packages' copies fails this file instead
+ * of reaching the product. Component-level render coverage (the
+ * role="alert" banner for a given code) lives in TenantSwitcher.test.tsx;
+ * this file pins the whole-list pairing that banner depends on.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -27,9 +29,16 @@ import { TENANCY_UI_NAMESPACE, tenancyUiResources } from '../resources.js'
 import { createI18n, registerNamespace } from '@speed/i18n'
 import zhCN from '../locales/zh-CN.json' with { type: 'json' }
 import enUS from '../locales/en-US.json' with { type: 'json' }
+// The same-tier rule keeps this package from importing auth-ui's catalog
+// at runtime; the verbatim-copy pin below imports the source bundles
+// here, as test data only.
+import authUiZhCN from '../../../auth-ui/src/locales/zh-CN.json' with { type: 'json' }
+import authUiEnUS from '../../../auth-ui/src/locales/en-US.json' with { type: 'json' }
 import { ERROR_TEXT_CODES } from './error-text.js'
 
-type Bundle = typeof zhCN
+/** A language bundle's errors section, structural so both packages'
+ * bundles satisfy the helpers below. */
+type Bundle = { errors: unknown }
 
 /** The code leaf keys of the errors section, e.g. 'authn.token_expired'. */
 function errorLeafKeys(bundle: Bundle): string[] {
@@ -92,6 +101,19 @@ describe('tenancy-ui error-text whitelist', () => {
       expect(en, code).not.toBe(enUS.errors.unknown)
       expect(en, code).not.toBe(`errors.${code}`)
       expect(en, code).toBe(bundleText(enUS, code))
+    }
+  })
+
+  it('keep every whitelisted text a verbatim copy of the auth-ui text for the same code', () => {
+    for (const code of ERROR_TEXT_CODES) {
+      const authZh = bundleText(authUiZhCN, code)
+      const authEn = bundleText(authUiEnUS, code)
+      // The auth-ui leaf is the copy's source: a missing or empty one
+      // fails here rather than passing a vacuous equality.
+      expect(authZh, code).not.toBe('')
+      expect(authEn, code).not.toBe('')
+      expect(bundleText(zhCN, code), code).toBe(authZh)
+      expect(bundleText(enUS, code), code).toBe(authEn)
     }
   })
 

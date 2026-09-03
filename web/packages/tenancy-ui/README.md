@@ -253,8 +253,9 @@ The `errors.authn.*` and `errors.client.*` texts are deliberate,
 verbatim copies of the `auth-ui` error texts for the same codes:
 same-tier packages cannot import one another's catalogs, and two
 versions of one server code's text must not drift apart in the product.
-The copy is noted in `resources.ts`; a divergence from the auth-ui
-bundle is a translation bug the suites here cannot see.
+The copy is noted in `resources.ts`, and the error-text suite imports
+the auth-ui bundles themselves as test data, so a divergence from the
+auth-ui bundle is a translation bug that fails that suite.
 
 ## Accessibility
 
@@ -295,9 +296,11 @@ package's `dist/`. Three layers of helpers, mirroring
   request's method, path, authorization header and serialized body.
 
 `src/resources.test.ts` pins the bundle discipline, the internal
-`error-text` suite pins the whitelist pairing in both directions, and
-`src/TenantSwitcher.test.tsx` pins the component behaviour above --
-every text expectation reads the bundle values. `src/usage-example.test.tsx`
+`error-text` suite pins the whitelist pairing in both directions and
+the verbatim copy against auth-ui's own bundles (imported as test
+data), and `src/TenantSwitcher.test.tsx` pins the component behaviour
+above -- every text expectation reads the bundle values.
+`src/usage-example.test.tsx`
 compiles and executes the Quick start composition end to end over the
 real-client rig (four requests in a pinned order: the password sign-in
 and the three switch attempts, with each switch's bearer token and
@@ -370,8 +373,10 @@ the `speed/no-literal-text` rule enforces the namespace discipline over
   be mounted under the host's `attachSession` anyway.
 - **Error texts deliberately duplicate auth-ui's.** Same-tier packages
   cannot import one another's catalogs; the verbatim copy and its
-  drift risk are recorded in `resources.ts` and the error-text suite
-  pins the pairing within this package's own bundles.
+  drift risk are recorded in `resources.ts`, the error-text suite pins
+  the pairing within this package's own bundles, and it pins every
+  copied leaf against the auth-ui bundles imported as test data, so a
+  drift between the packages fails the suite.
 - **Storybook / browser-side visual verification**: no preview-harness
   round exists yet, same deferral `ui-kit`, `layout-kit` and `auth-ui`
   carry; `color-contrast` stays axe-disabled for the same jsdom reason

@@ -19,7 +19,9 @@
  * The texts themselves are the auth-ui error texts for the same codes,
  * copied verbatim: same-tier packages cannot import one another's
  * catalogs, so this errors section is a deliberate duplicate of the
- * reachable subset (see resources.ts).
+ * reachable subset (see resources.ts) -- a duplicate the error-text
+ * suite pins to its source, importing the auth-ui bundles as test data
+ * so the copies cannot drift.
  */
 
 import { useTenancyUiTranslation } from './translation.js'
