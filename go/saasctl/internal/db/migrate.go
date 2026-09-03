@@ -84,13 +84,17 @@ type migrationModule struct {
 }
 
 // migrationUniverse lists every speed root module that ships its own SQL
-// migrations, in alphabetical order -- the order the reference app's
-// cmd/server/server.go registers them in, and the order the command's
-// reports name module counts in. A module that ships no migration files
-// of its own (pkgcore, dbkit, tenancy, observability, ratelimit, jobs,
-// ...) is deliberately not here: a consumer project that requires only
-// those applies its schema through its app's own startup Apply, which
-// composes whatever modules the app wires.
+// migrations, in alphabetical order -- the order the command's reports
+// name module counts in, kept stable so the universe and its report lines
+// never reorder on a whim. Alphabetical is not an apply order: dbkit's
+// MigrationRegistry topologically sorts the registered modules by
+// DependsOn and applies one transaction per module, with this list's
+// registration order breaking ties among modules that declare no
+// dependency relationship. A module that ships no migration files of its
+// own (pkgcore, dbkit, tenancy, observability, ratelimit, jobs, ...) is
+// deliberately not here: a consumer project that requires only those
+// applies its schema through its app's own startup Apply, which composes
+// whatever modules the app wires.
 var migrationUniverse = []migrationModule{
 	{
 		name:    "authn",
