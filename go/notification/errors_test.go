@@ -22,11 +22,29 @@ var errorCatalog = []struct {
 	code string
 	want int
 }{
+	// The preference-matrix group and the module-wide internal error.
 	{"ErrRecipientRequired", ErrRecipientRequired, "notification.recipient_required", http.StatusBadRequest},
 	{"ErrTypeNotFound", ErrTypeNotFound, "notification.type_not_found", http.StatusNotFound},
 	{"ErrPreferenceInvalidChannels", ErrPreferenceInvalidChannels, "notification.preference_invalid_channels", http.StatusBadRequest},
 	{"ErrPreferenceOptoutNotAllowed", ErrPreferenceOptoutNotAllowed, "notification.preference_optout_not_allowed", http.StatusBadRequest},
 	{"ErrInternal", ErrInternal, "notification.internal_error", http.StatusInternalServerError},
+
+	// The consent-ledger group (contact.go).
+	{"ErrContactNotFound", ErrContactNotFound, "notification.contact_not_found", http.StatusNotFound},
+	{"ErrContactInvalidChannel", ErrContactInvalidChannel, "notification.contact_invalid_channel", http.StatusBadRequest},
+	{"ErrContactInvalidAddress", ErrContactInvalidAddress, "notification.contact_invalid_address", http.StatusBadRequest},
+	{"ErrContactCodeInvalid", ErrContactCodeInvalid, "notification.contact_code_invalid", http.StatusBadRequest},
+	{"ErrContactCodeDeliveryFailed", ErrContactCodeDeliveryFailed, "notification.contact_code_delivery_failed", http.StatusInternalServerError},
+	{"ErrContactUnsubscribed", ErrContactUnsubscribed, "notification.contact_unsubscribed", http.StatusConflict},
+	{"ErrContactBounced", ErrContactBounced, "notification.contact_bounced", http.StatusConflict},
+	{"ErrContactNotVerified", ErrContactNotVerified, "notification.contact_not_verified", http.StatusConflict},
+	{"ErrContactRateLimited", ErrContactRateLimited, "notification.contact_rate_limited", http.StatusTooManyRequests},
+
+	// The Register-time wiring group (module.go).
+	{"ErrSMSSenderRequired", ErrSMSSenderRequired, "notification.sms_sender_required", http.StatusInternalServerError},
+	{"ErrMailFromRequired", ErrMailFromRequired, "notification.mail_from_required", http.StatusInternalServerError},
+	{"ErrContactEmailIndexerRequired", ErrContactEmailIndexerRequired, "notification.contact_email_indexer_required", http.StatusInternalServerError},
+	{"ErrContactPhoneIndexerRequired", ErrContactPhoneIndexerRequired, "notification.contact_phone_indexer_required", http.StatusInternalServerError},
 }
 
 // TestErrorCatalog_IsComplete is what makes the promise at the top of

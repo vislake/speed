@@ -1,6 +1,8 @@
 package notification
 
 import (
+	"net/http"
+
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
@@ -16,6 +18,15 @@ import (
 // Every code in this file has a matching description entry in
 // locales/{zh-CN,en-US}.toml, under the identical id. The API returns the
 // code and its parameters; the text is resolved by the consumer.
+//
+// The errors are grouped by the surface that returns them. The preference
+// group (this file's first block) belongs to the preference matrix;
+// the contact group belongs to the consent ledger ContactService owns; the
+// wiring group reports a Module whose required seams were not supplied
+// before Register validated them -- boot-time failures a caller cannot
+// trigger once the module is registered, listed here because an *apperr
+// sentinel per code is this module's convention for every error it can
+// surface, however unreachable at request time.
 var (
 	// ErrRecipientRequired reports a preference write whose recipient is
 	// missing. A preference row is meaningless without the user it applies
@@ -54,3 +65,112 @@ var (
 	// on the record even though the caller sees only the code.
 	ErrInternal = apperr.Internal("notification.internal_error")
 )
+
+// The consent-ledger group: every error ContactService (contact.go) can
+// return, one per reason a contact operation can fail. The statuses are
+// the caller's (a host's HTTP handler, or the delivery job's mapper) whole
+// answer on how to treat the failure -- see each error's own comment.
+var (
+	// ErrContactNotFound reports a contact operation naming an id no row
+	// of the caller's tenant holds -- never a row of another tenant's,
+	// which is indistinguishable from a row that does not exist (see
+	// VerifiedContactRepository.ByChannelAndAddressIndex).
+	ErrContactNotFound = apperr.NotFound("notification.contact_not_found")
+
+	// ErrContactInvalidChannel reports a contact create naming a channel
+	// outside the closed vocabulary (email, sms -- see types.go). There is
+	// no in-app contact: the in-app channel of the inbox belongs to users,
+	// never to external addresses.
+	ErrContactInvalidChannel = apperr.Invalid("notification.contact_invalid_channel")
+
+	// ErrContactInvalidAddress reports an address with no canonical form:
+	// a phone number that is not valid E.164, an email that normalizes to
+	// nothing. The address is never stored, and never blind-indexed -- an
+	// input with no canonical form must not produce an index column at
+	// all.
+	ErrContactInvalidAddress = apperr.Invalid("notification.contact_invalid_address")
+
+	// ErrContactCodeInvalid reports a verification attempt whose code is
+	// wrong, expired, replayed, or directed at a contact that has nothing
+	// to verify any more. The four cases are deliberately one code (see
+	// VerifyCode): telling the caller which part failed hands an attacker
+	// a free oracle on whether a code is still live.
+	ErrContactCodeInvalid = apperr.Invalid("notification.contact_code_invalid")
+
+	// ErrContactCodeDeliveryFailed reports a verification-code message the
+	// transport refused after the code was stamped. For a create the
+	// pending row is revoked before this is returned; for a resend the
+	// fresh hash stays on the row (see ResendCode), harmless because the
+	// previous code was already dead.
+	ErrContactCodeDeliveryFailed = apperr.Internal("notification.contact_code_delivery_failed")
+
+	// ErrContactUnsubscribed reports an operation on a contact that has
+	// permanently unsubscribed: verification and resend refuse it, and
+	// the deliverability gate refuses every delivery to it. The status is
+	// terminal for the contact (see Unsubscribe); nothing in this API
+	// revives it.
+	ErrContactUnsubscribed = apperr.Conflict("notification.contact_unsubscribed")
+
+	// ErrContactBounced reports an operation on a contact whose address
+	// has proven unable to receive messages (a hard delivery failure).
+	// Terminal in this round: re-proving a bounced address is a later
+	// round's remediation, and AGENTS.md records the deferral.
+	ErrContactBounced = apperr.Conflict("notification.contact_bounced")
+
+	// ErrContactNotVerified reports a delivery attempt (EnsureDeliverable)
+	// against a contact whose consent was never proved -- the contact is
+	// still pending. Distinct from the terminal statuses because a pending
+	// contact may become deliverable later: the delivery job treats this
+	// as a skip, where unsubscribed and bounced are permanent refusals.
+	ErrContactNotVerified = apperr.Conflict("notification.contact_not_verified")
+
+	// ErrContactRateLimited reports a verification-code send or verify
+	// attempt denied by the module's rate limits (see contactRateLimits),
+	// carrying the dimension that denied it and the seconds until that
+	// dimension's window resets. Every code-message path fails closed on
+	// its budget; the params are what a caller renders a "try again
+	// later" message from.
+	ErrContactRateLimited = rateLimited("notification.contact_rate_limited")
+)
+
+// The wiring group: a Module whose Register-time validation failed because
+// a required seam was never supplied through NewModule. Each error names
+// the missing seam; the module is unbootable until the host supplies it,
+// exactly as org's Register validates its own required seams (see org's
+// ErrEmailIndexerRequired). All four are Internal: a caller cannot trigger
+// them once the module is registered, and a host hitting one has a
+// configuration bug, not a bad request.
+var (
+	// ErrSMSSenderRequired reports a Register whose Module has no SMS
+	// sender. The module sends verification codes by SMS as its
+	// synchronous messaging exception; a module without a sender must
+	// fail at boot rather than discover the gap on the first code a
+	// patient needs.
+	ErrSMSSenderRequired = apperr.Internal("notification.sms_sender_required")
+
+	// ErrMailFromRequired reports a Register whose Module has no mail
+	// From address. Every outbound mail this module composes (email
+	// verification codes first among them) carries the address; a module
+	// without one must fail at boot rather than send unaddressable mail.
+	ErrMailFromRequired = apperr.Internal("notification.mail_from_required")
+
+	// ErrContactEmailIndexerRequired reports a Register whose Module has
+	// no blind indexer for email contact addresses. The module never
+	// stores or queries plaintext addresses; without the indexer it
+	// cannot even create a contact. org validates its own indexer the
+	// same way (org.email_indexer_required).
+	ErrContactEmailIndexerRequired = apperr.Internal("notification.contact_email_indexer_required")
+
+	// ErrContactPhoneIndexerRequired reports a Register whose Module has
+	// no blind indexer for phone contact addresses; the SMS twin of
+	// ErrContactEmailIndexerRequired.
+	ErrContactPhoneIndexerRequired = apperr.Internal("notification.contact_phone_indexer_required")
+)
+
+// rateLimited returns an *apperr.Error carrying HTTP 429, the status apperr
+// has no constructor for.
+func rateLimited(code string) *apperr.Error {
+	err := apperr.Invalid(code)
+	err.Status = http.StatusTooManyRequests
+	return err
+}

@@ -4,6 +4,11 @@
 # the id is the whole quoted code. zh-CN.toml must carry exactly the same id
 # set.
 #
+# The bundle also carries the message templates the module renders at send
+# time (see renderContactCode in contact.go): the
+# notification.contact.verify_code.* ids. Template ids are flat too, and the
+# two languages carry the same id set.
+#
 # Interpolated names are the error's own apperr parameter keys, verbatim and
 # snake_case ("type_key", not "TypeKey"): the message is rendered from the
 # structured parameters the API returned, so a mismatch between the two would
@@ -18,3 +23,35 @@
 "notification.preference_optout_not_allowed" = "Notifications of type {{.type_key}} cannot be switched off entirely; keep at least one channel."
 
 "notification.internal_error" = "The notification service could not complete the request."
+
+"notification.contact_not_found" = "That contact does not exist."
+
+"notification.contact_invalid_channel" = "That contact channel is not supported."
+
+"notification.contact_invalid_address" = "That address is not in a valid form for receiving notifications."
+
+"notification.contact_code_invalid" = "The verification code is wrong or has expired."
+
+"notification.contact_code_delivery_failed" = "The verification code could not be sent. Please try again."
+
+"notification.contact_unsubscribed" = "That address has unsubscribed and receives no more notifications."
+
+"notification.contact_bounced" = "That address cannot receive messages and has been stopped."
+
+"notification.contact_not_verified" = "That address has not completed verification yet and cannot receive messages."
+
+"notification.contact_rate_limited" = "Too many attempts. Please try again in {{.retry_after_seconds}} seconds."
+
+"notification.sms_sender_required" = "The notification service has no SMS sender configured."
+
+"notification.mail_from_required" = "The notification service has no mail From address configured."
+
+"notification.contact_email_indexer_required" = "The notification service has no email-address index key configured."
+
+"notification.contact_phone_indexer_required" = "The notification service has no phone-number index key configured."
+
+"notification.contact.verify_code.sms" = "Your verification code is {{.code}}. It is valid for {{.minutes}} minutes."
+
+"notification.contact.verify_code.email.subject" = "Your verification code"
+
+"notification.contact.verify_code.email.body" = "Your verification code is {{.code}}. It is valid for {{.minutes}} minutes."

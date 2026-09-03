@@ -1,6 +1,7 @@
 package notification
 
 import (
+	"io"
 	"reflect"
 	"testing"
 
@@ -21,6 +22,129 @@ func newHostRegistry(t *testing.T) *pkgcore.Registry {
 	return reg
 }
 
+// testModuleOptions returns the four-seam option set every Register test
+// needs: a console SMS sender (discarding output -- no test here asserts on
+// what the module sends), the module's mail From address, and the email and
+// phone blind indexers the consent ledger is required to boot with. The
+// indexers are per-test fixtures bound to this package's dev index keys, the
+// same objects contact_test.go's service tests build.
+func testModuleOptions(t *testing.T) []Option {
+	t.Helper()
+	return []Option{
+		WithSMSSender(NewConsoleSMSSender(io.Discard)),
+		WithMailFrom(testMailFrom),
+		WithContactEmailIndexer(testEmailIndexer(t)),
+		WithContactPhoneIndexer(testPhoneIndexer(t)),
+	}
+}
+
+// TestModule_Register_RequiresSMSSender pins the first of the four
+// Register-time seam validations module.go's doc comment promises: a Module
+// with no SMS sender -- the mail From address and both indexers present, so
+// the gap is isolated -- is refused with ErrSMSSenderRequired at boot rather
+// than discovering the missing transport on the first verification code a
+// patient needs.
+func TestModule_Register_RequiresSMSSender(t *testing.T) {
+	db := newTestDB(t)
+	module := NewModule(db,
+		WithMailFrom(testMailFrom),
+		WithContactEmailIndexer(testEmailIndexer(t)),
+		WithContactPhoneIndexer(testPhoneIndexer(t)),
+	)
+
+	err := module.Register(newHostRegistry(t))
+	if err == nil {
+		t.Fatal("Register without an SMS sender succeeded, want ErrSMSSenderRequired")
+	}
+	assertCode(t, err, ErrSMSSenderRequired.Code)
+}
+
+// TestModule_Register_RequiresMailFrom pins the second seam validation: the
+// module cannot compose a single outbound email without a From address, so a
+// Module missing it is refused with ErrMailFromRequired even though every
+// other seam is present.
+func TestModule_Register_RequiresMailFrom(t *testing.T) {
+	db := newTestDB(t)
+	module := NewModule(db,
+		WithSMSSender(NewConsoleSMSSender(io.Discard)),
+		WithContactEmailIndexer(testEmailIndexer(t)),
+		WithContactPhoneIndexer(testPhoneIndexer(t)),
+	)
+
+	err := module.Register(newHostRegistry(t))
+	if err == nil {
+		t.Fatal("Register without a mail From address succeeded, want ErrMailFromRequired")
+	}
+	assertCode(t, err, ErrMailFromRequired.Code)
+}
+
+// TestModule_Register_RequiresEmailIndexer pins the third seam validation:
+// an email contact can only be stored queryably through its blind index, so
+// a Module missing the email indexer is refused with
+// ErrContactEmailIndexerRequired at boot.
+func TestModule_Register_RequiresEmailIndexer(t *testing.T) {
+	db := newTestDB(t)
+	module := NewModule(db,
+		WithSMSSender(NewConsoleSMSSender(io.Discard)),
+		WithMailFrom(testMailFrom),
+		WithContactPhoneIndexer(testPhoneIndexer(t)),
+	)
+
+	err := module.Register(newHostRegistry(t))
+	if err == nil {
+		t.Fatal("Register without the email indexer succeeded, want ErrContactEmailIndexerRequired")
+	}
+	assertCode(t, err, ErrContactEmailIndexerRequired.Code)
+}
+
+// TestModule_Register_RequiresPhoneIndexer pins the fourth seam validation:
+// the SMS twin of the email indexer, refused with
+// ErrContactPhoneIndexerRequired when absent.
+func TestModule_Register_RequiresPhoneIndexer(t *testing.T) {
+	db := newTestDB(t)
+	module := NewModule(db,
+		WithSMSSender(NewConsoleSMSSender(io.Discard)),
+		WithMailFrom(testMailFrom),
+		WithContactEmailIndexer(testEmailIndexer(t)),
+	)
+
+	err := module.Register(newHostRegistry(t))
+	if err == nil {
+		t.Fatal("Register without the phone indexer succeeded, want ErrContactPhoneIndexerRequired")
+	}
+	assertCode(t, err, ErrContactPhoneIndexerRequired.Code)
+}
+
+// TestModule_Register_DeclaresContactAuditActions pins the consent ledger's
+// audit-action contribution: after Register, the registry's audit-action
+// registrar carries the three actions contact.go's state transitions emit
+// (attested, verified, unsubscribed), so a transition can be audited from
+// the moment the module boots. Each declared action travels as the same
+// string contact.go emits -- never re-typed at the assertion site.
+func TestModule_Register_DeclaresContactAuditActions(t *testing.T) {
+	db := newTestDB(t)
+	module := NewModule(db, testModuleOptions(t)...)
+	reg := newHostRegistry(t)
+
+	if err := module.Register(reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	declared := reg.AuditActions.Actions()
+	for _, want := range contactAuditActionDecls {
+		found := false
+		for _, got := range declared {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("audit actions %v do not include %q", declared, want)
+		}
+	}
+}
+
 // TestModule_Register_AttachesTheHostRegistrarToPreferenceService proves the
 // wiring contract module.go's doc comment promises: after Register, the
 // preference service's type-taxonomy reference is the host registry's live
@@ -30,7 +154,7 @@ func newHostRegistry(t *testing.T) *pkgcore.Registry {
 // types of its own; every type in the matrix is a host-module type.
 func TestModule_Register_AttachesTheHostRegistrarToPreferenceService(t *testing.T) {
 	db := newTestDB(t)
-	module := NewModule(db)
+	module := NewModule(db, testModuleOptions(t)...)
 	reg := newHostRegistry(t)
 
 	if err := module.Register(reg); err != nil {
@@ -56,7 +180,7 @@ func TestModule_Register_AttachesTheHostRegistrarToPreferenceService(t *testing.
 // later.
 func TestModule_Register_TaxonomyIsLiveNotASnapshot(t *testing.T) {
 	db := newTestDB(t)
-	module := NewModule(db)
+	module := NewModule(db, testModuleOptions(t)...)
 	reg := newHostRegistry(t)
 
 	if err := module.Register(reg); err != nil {
@@ -92,7 +216,7 @@ func TestModule_Register_TaxonomyIsLiveNotASnapshot(t *testing.T) {
 // assertion site.
 func TestModule_Register_DeclaresTheInboxEvent(t *testing.T) {
 	db := newTestDB(t)
-	module := NewModule(db)
+	module := NewModule(db, testModuleOptions(t)...)
 	reg := newHostRegistry(t)
 
 	if err := module.Register(reg); err != nil {

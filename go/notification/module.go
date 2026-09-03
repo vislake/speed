@@ -5,6 +5,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 
 	"github.com/vislake/speed/go/notification/locales"
@@ -16,23 +17,25 @@ import (
 const moduleName = "notification"
 
 // Module implements pkgcore.Module for go/notification: the tenant's
-// notification inbox, its per-type channel preference matrix and -- in this
-// round's later blocks -- the consent ledger and delivery subscriber that
-// fill it.
+// notification inbox, its per-type channel preference matrix, and the
+// consent-gated external-contact ledger (verified_contacts, platform
+// blacklist, send_records) this round ships.
 //
 // # Wiring
 //
 // A host constructs one with NewModule and hands it to Kernel.Bootstrap.
 // The module's tables live in db, which the host opened through dbkit.Open
 // (so it carries the tenant-isolation plugin) and migrated before Bootstrap.
-// Register then contributes the module's declarations -- its event catalog,
-// and the attachment of the host registry's notification-type registrar to
-// the preference service -- to the host's registry. The module performs no
-// I/O of its own during registration.
+// Register then validates the module's required seams, contributes the
+// module's declarations -- its event catalog and its audit actions -- to the
+// host's registry, and attaches the registry's notification-type and
+// audit-action registrars to the contact and preference services. The module
+// performs no I/O of its own during registration.
 type Module struct {
-	// db is the connection the module's tables live in. The inbox and
-	// preference repositories are built over it, and the delivery subscriber
-	// of a later block builds its own over this same connection.
+	// db is the connection the module's tables live in. The inbox,
+	// preference and contact repositories are built over it, and the
+	// delivery subscriber of this round's later commit builds its own over
+	// this same connection.
 	db *gorm.DB
 
 	// prefs is the preference matrix's decision layer, built at construction
@@ -40,23 +43,81 @@ type Module struct {
 	// reference is attached during Register (attachTypes); before that it is
 	// nil, which the service treats as an empty taxonomy.
 	prefs *PreferenceService
+
+	// contacts is the consent-ledger's decision layer, built at construction
+	// and served to consumers through Contacts(). Its host seams arrive
+	// through the With* options below and are validated by Register, which
+	// then attaches the registry reference and the audit-action registrar
+	// through attachHost; before Register, the service's seams are nil and
+	// every service method fails closed on them.
+	contacts *ContactService
+
+	// The four required seams of the consent ledger, filled by the With*
+	// options. sms is the SMSSender verification codes go out on when the
+	// contact's channel is sms; mailFrom the From address of every email
+	// this module composes; emailIndexer and phoneIndexer the blind
+	// indexers that make contact addresses queryable without ever storing
+	// them in plaintext. Register refuses to boot the module without all
+	// four (ErrSMSSenderRequired, ErrMailFromRequired,
+	// ErrContactEmailIndexerRequired, ErrContactPhoneIndexerRequired),
+	// imitating org's Register-time validation of its own required seams.
+	sms          SMSSender
+	mailFrom     string
+	emailIndexer *dbkit.BlindIndexer
+	phoneIndexer *dbkit.BlindIndexer
 }
 
 // Option configures a Module at construction time.
-//
-// The first concrete options arrive with the seams later blocks inject --
-// the delivery subscriber's queue and preference reader above all. The
-// variadic plumbing exists from this block on so that every option a later
-// block adds is a drop-in, exactly as org's Option machinery works.
 type Option func(*Module)
+
+// WithSMSSender injects the SMSSender verification-code messages use when a
+// contact's channel is sms. It is REQUIRED: Register returns
+// ErrSMSSenderRequired without one, so a module with no sender fails at
+// boot rather than discover the gap on the first code a patient needs.
+// NewConsoleSMSSender is the zero-external-dependency implementation (see
+// sms.go); a distributed host may hand over any sender satisfying the
+// structural interface, the console sender's twin among authn's own.
+func WithSMSSender(sender SMSSender) Option {
+	return func(m *Module) { m.sms = sender }
+}
+
+// WithMailFrom sets the From address of every outbound mail this module
+// composes -- email verification codes first among them. It is REQUIRED:
+// Register returns ErrMailFromRequired without one (org's own
+// WithMailFrom is required on the same terms).
+func WithMailFrom(from string) Option {
+	return func(m *Module) { m.mailFrom = from }
+}
+
+// WithContactEmailIndexer injects the blind indexer email contact addresses
+// are normalized and indexed with (dbkit.NewBlindIndexer over
+// dbkit.NormalizeEmail). It is REQUIRED: Register returns
+// ErrContactEmailIndexerRequired without one, so a module that cannot index
+// an email address can never store one. The indexer's key must never be the
+// encryption key of the module's address cipher (the F8 design rule;
+// contact.go's doc comment spells it out).
+func WithContactEmailIndexer(indexer *dbkit.BlindIndexer) Option {
+	return func(m *Module) { m.emailIndexer = indexer }
+}
+
+// WithContactPhoneIndexer is the SMS twin of WithContactEmailIndexer: the
+// blind indexer phone contacts are indexed with (dbkit.NewBlindIndexer over
+// dbkit.NormalizePhoneE164), REQUIRED on the same terms
+// (ErrContactPhoneIndexerRequired).
+func WithContactPhoneIndexer(indexer *dbkit.BlindIndexer) Option {
+	return func(m *Module) { m.phoneIndexer = indexer }
+}
 
 // NewModule returns a Module whose tables live in db. Constructing a Module
 // performs no I/O: opening and migrating db is the host's responsibility,
-// done once at startup before Bootstrap ever calls Register.
+// done once at startup before Bootstrap ever calls Register. The consent
+// ledger's required seams arrive through the With* options; a Module
+// missing any of them fails Register (see the option docs), never a call.
 func NewModule(db *gorm.DB, opts ...Option) *Module {
 	m := &Module{
-		db:    db,
-		prefs: NewPreferenceService(db),
+		db:       db,
+		prefs:    NewPreferenceService(db),
+		contacts: NewContactService(db),
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -70,6 +131,16 @@ func NewModule(db *gorm.DB, opts ...Option) *Module {
 // (Register) by the time any caller reaches it.
 func (m *Module) Preferences() *PreferenceService {
 	return m.prefs
+}
+
+// Contacts returns the module's contact service -- the consent ledger's
+// only sanctioned read/write face, and the deliverability gate the
+// delivery job of this round's later commit calls before every send to an
+// external contact. A host hands this to its HTTP handler and its queue
+// handlers once Bootstrap has run, so the service's seams are validated
+// and attached (Register) by the time any caller reaches it.
+func (m *Module) Contacts() *ContactService {
+	return m.contacts
 }
 
 // Name implements pkgcore.Module.
@@ -93,11 +164,13 @@ func (m *Module) DependsOn() []string { return nil }
 func (m *Module) Migrations() embed.FS { return migrations.FS }
 
 // Locales implements pkgcore.Module: the descriptions of notification's
-// error codes, in both supported languages with identical id sets. The
-// bundle's entries travel under notification.* ids only -- the preference
-// matrix's codes (errors.go) -- never templates for other modules'
-// notification types, which live in the declaring modules' own bundles (see
-// render.go's template-id convention).
+// error codes and its own send-time message templates, in both supported
+// languages with identical id sets. The bundle's entries travel under
+// notification.* ids only -- the error codes of errors.go and the
+// verification-code templates of contact.go (the
+// notification.contact.verify_code.* ids renderContactCode renders) --
+// never templates for other modules' notification types, which live in the
+// declaring modules' own bundles (see render.go's template-id convention).
 func (m *Module) Locales() embed.FS { return locales.FS }
 
 // OpenAPISpec implements pkgcore.Module: nil.
@@ -114,20 +187,57 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // declares and wires -- no database call, no outbound call, nothing that
 // touches m.db.
 //
-// This block contributes two declarations. The module's event catalog
-// (EventInboxCreated, one declared event) is published first; then the host
-// registry's notification-type registrar is attached to the preference
-// service (attachTypes), giving it the live taxonomy every preference write
-// validates against. No permissions, audit actions or routes are declared
-// yet, because the module has no caller-scoped operation and no request
-// path until the later blocks of this round build them; each arrives with
-// the producer that needs it, exactly as errors.go's doc comment says of
-// error codes.
+// Register runs in three phases, each validating what the one before it
+// established:
+//
+//  1. The consent ledger's required seams are validated first. A Module
+//     missing any of them -- the SMS sender (ErrSMSSenderRequired), the
+//     mail From address (ErrMailFromRequired), or either address blind
+//     indexer (ErrContactEmailIndexerRequired, ErrContactPhoneIndexerRequired)
+//     -- is refused here, at boot, so the failure names the missing seam
+//     instead of surfacing later as a nil-panic or a dead verification
+//     channel. This imitates org's Register-time validation of its own
+//     required seams.
+//
+//  2. The module's declarations are contributed: the event catalog
+//     (EventInboxCreated, one declared event) and, in the same phase, the
+//     consent ledger's audit actions (notification.contact.attested,
+//     .verified and .unsubscribed) onto the host's audit-action registrar,
+//     so the ledger's every state transition is auditable from the moment
+//     the module boots.
+//
+//  3. The registrars are attached to the services that need them: the host
+//     registry's notification-type registrar to the preference service
+//     (attachTypes, giving it the live taxonomy every preference write
+//     validates against), and the registry reference plus the audit-action
+//     registrar to the contact service (attachHost). Both attachments only
+//     pass already-validated references down; nothing is re-validated here.
+//
+// No permissions or routes are declared yet: the module has no caller-scoped
+// operation and no request path until a later round builds its HTTP surface,
+// and each declaration arrives with the producer that needs it, exactly as
+// errors.go's doc comment says of error codes.
 func (m *Module) Register(reg *pkgcore.Registry) error {
+	if m.sms == nil {
+		return ErrSMSSenderRequired
+	}
+	if m.mailFrom == "" {
+		return ErrMailFromRequired
+	}
+	if m.emailIndexer == nil {
+		return ErrContactEmailIndexerRequired
+	}
+	if m.phoneIndexer == nil {
+		return ErrContactPhoneIndexerRequired
+	}
 	if err := reg.Events.Publishes(inboxEventDecls...); err != nil {
 		return err
 	}
+	if err := reg.AuditActions.Add(contactAuditActionDecls...); err != nil {
+		return err
+	}
 	m.prefs.attachTypes(reg.Notifications)
+	m.contacts.attachHost(reg, reg.AuditActions)
 	return nil
 }
 

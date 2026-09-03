@@ -3,6 +3,7 @@ package notification_test
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/vislake/speed/go/dbkit"
@@ -100,7 +101,10 @@ func ExampleInboxMessage() {
 //
 // The example doubles as the wiring proof: the module itself declares no
 // types; every type answered below was registered by the host before and
-// after the module's own Register call.
+// after the module's own Register call. The module is constructed with the
+// four seams Register requires -- a console SMS sender, a mail From address
+// and the two address blind indexers -- exactly as a standalone-deployment
+// host assembles them.
 func ExamplePreferenceService() {
 	ctx := context.Background()
 
@@ -113,8 +117,29 @@ func ExamplePreferenceService() {
 		return
 	}
 
+	// The consent ledger's required seams, in the standalone shape: a
+	// console sender for SMS, and one blind indexer per address channel over
+	// dev keys (a real host derives its keys from its own secret store).
+	emailIndexer, err := dbkit.NewBlindIndexer("address_index",
+		[]byte("abcdef0123456789abcdef0123456789"), dbkit.NormalizeEmail)
+	if err != nil {
+		fmt.Println("email indexer:", err)
+		return
+	}
+	phoneIndexer, err := dbkit.NewBlindIndexer("address_index",
+		[]byte("3456789abcdef0123456789abcdef015"), dbkit.NormalizePhoneE164)
+	if err != nil {
+		fmt.Println("phone indexer:", err)
+		return
+	}
+
 	registry := dbkit.NewMigrationRegistry()
-	module := notification.NewModule(db)
+	module := notification.NewModule(db,
+		notification.WithSMSSender(notification.NewConsoleSMSSender(io.Discard)),
+		notification.WithMailFrom("notifications@example.com"),
+		notification.WithContactEmailIndexer(emailIndexer),
+		notification.WithContactPhoneIndexer(phoneIndexer),
+	)
 	if err = registry.Register(module); err != nil {
 		fmt.Println("register migrations:", err)
 		return
