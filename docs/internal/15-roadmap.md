@@ -25,6 +25,8 @@
 
 **限流同理需要前移**：`ratelimit` 保护的是 M1 `authn` 一落地就会上线的登录/注册/密码重置端点。如果 M0 不提供这个共享原语，M1 的认证接口只能先无防护上线，等暴力破解风险倒逼补救时，代价是已发布认证 API 的行为变更——和数据保护前移是同一类论证。
 
+**关于 storage 的排期（2026-09 更新）**：M2 的 `storage` 单元格已提前于本表窗口作为独立模块轮落地（在 M1 收尾后的实现流中完成）。已交付：模块本体——双方言迁移的 `objects`/`object_derivatives` 两表、Create→Upload→Complete 传输生命周期与存储字节再校验、缩略图异步派生、崩溃收敛的删除与过期回收——HTTP 面七个操作与 OpenAPI 片段（`/api/v1/storage`）、PostgreSQL + MinIO 双 Docker 集成腿，以及 reference-app 端到端接入。与 [07 平台服务](07-platform-services.md)「媒体存储与处理」目标设计的偏差（上传走**服务端中转流式**而非预签名直传、短时效预签名 URL 未落地等）与逐项落地/未落地对照，见该小节的**实现状态**标注；模块能力边界见 `go/storage/AGENTS.md`。
+
 **关于 M0 的排期**：从 4-5 周上调到 6-7 周。M0 要完成的是 CI 矩阵、纪律检查规则、发布脚本、模块生成器、契约工具链、pkgcore 全套双实现、dbkit、ratelimit、前端基础包和文档工程——这些没有一项能演示，但每一项做不扎实后面都会反复返工。压缩 M0 是这类项目最常见也最昂贵的错误。
 
 **关于 M1 行前端五个 web 包的状态（2026-09 更新）**：M1 行内容单元格点名的五个 web 包已全部交付——`auth-core`/`auth-ui`/`layout-kit` 在各自轮次落地，`tenancy-ui` 与 `product-shell`（本表所称"shell"的租户面一半，`product-shell` 把 `AppShell` 框架、登录组件家族与会话 hooks 组装成三分支视图机，`tenancy-ui` 提供其 `userMenu` 里的租户切换控件）在本轮落地，十个 web 包全部进入 pr-check 的 npm 矩阵与 changesets 固定版本组（详见根 CLAUDE.md 普查与 [12 前端架构](12-frontend.md)、[21 API 契约](21-api-contract.md) 的实现状态注记）。仍在表内的：`saasctl`/`create-saas-app` 属 Go 侧脚手架内容（`saasctl new` 生成的骨架目前不含 web 前端），由各自的 Go 轮次推进，不在本注记范围；`admin-shell`（M3 行，面向平台员工）未动；reference-app 的 consumer shell（web 前端目录）仍未建立——web 侧的强制消费证明目前以"形态层面"标准在包内完成（真实 api-client + fetch 替身的 usage-example 旅程），浏览器 + 真服务器 leg 随 reference-app 前端轮落地。

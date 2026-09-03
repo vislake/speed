@@ -49,6 +49,17 @@ type Object struct {
 - **生命周期**：支持按租户配置保留期与自动清理（配合 `compliance` 的数据保留策略），删除时同步清理派生资源，避免孤儿文件。
 - 前端：`ui-kit` 提供 `FileUploader`（拖拽、进度、多文件、失败重试、预览），不再让每个项目重写一遍。
 
+**实现状态（2026-09，storage 模块轮）**：本节是目标设计；`go/storage` 模块已作为独立模块轮提前于 M2 计划窗口落地（排期注见 [15 里程碑](15-roadmap.md)），reference-app 端到端接入是第一个消费者（`cmd/server/storage_flow_test.go`）。逐项对照如下；能力边界、已知限制与延期项以 `go/storage/AGENTS.md` 为准：
+
+- **数据模型**：目标设计的 `Object` 拆为两张双方言迁移的 `TenantScoped` 表——`objects` 与 `object_derivatives`；`Derivatives []Derivative` 不是内嵌字段，而是按 `(tenant, object_id, kind)` 唯一索引的独立行（`kind` 当前仅 `thumbnail`）。存储路径即 `ObjectKey(tenant, objectID)` / `DerivativeKey(tenant, objectID, kind)`，由模块自身推导，永不暴露给客户端。
+- **上传链路**：已落地为**服务端中转流式上传**而非本节的预签名直传——`Create` 开启上传窗口（依声明的大小/类型/校验和，可附请求保留期，宿主以 `WithMaxObjectLifetime` 设上限），`Upload` 将请求体流式写入 `pkgcore.ObjectStore` seam（字节不进数据库），`Complete` 收口。**预签名直传未落地**：模块不引入任何 presigner，直传凭据与短时效预签名 URL 一并留待分布式形态轮。
+- **安全校验**：已落地于 `Complete` 的再校验管线——以对存储字节的实际探测为准，不信任客户端声明：真实大小与 MIME、字节上限与像素上限、**结构化元数据剥离**（JPEG APP 段、PNG eXIf，含 GPS；结构无法验证的文件直接拒绝而非放行），随后才落定 checksum 与尺寸。可选病毒扫描钩子未落地。
+- **派生资源**：缩略图异步派生已落地——`Complete` 把任务入队到模块 `Register` 必需的 `jobs.Queue`，worker 侧经 `DeriveService` 写入 `object_derivatives`。WebP 转换与水印未落地。
+- **访问控制**：已落地形态为私有对象经 API 鉴权访问——内容经 `OpenContent` 服务端流式返回，租户取自请求上下文，绝不来自请求参数；**短时效预签名 URL 未落地**；对外分享属 `sharing` 模块（M3），与本节「内部预签名、外部分享令牌、二者不混用」的划分一致。
+- **多套实现**：字节所在的 `ObjectStore` seam 的本地 FS 与 S3 兼容双实现已由 `pkgcore` 落地（见 [03 部署模式](03-deployment-modes.md) 与 `go/pkgcore` 的 census 条目），storage 自身只依赖 seam 接口；本模块的集成层以 PostgreSQL + MinIO 两条腿验证（`go test -tags=integration`）。
+- **生命周期**：核心已落地——`LifecycleService.Delete` 崩溃收敛删除协议（行标记 `completed`→`deleting` → 删原字节 → 按确定顺序删各派生行的字节 → 单事务删全部行；任一步中断由下一次运行收敛而非重复执行），删除同步清理派生资源；宿主经 `EnqueueExpirySweep` 按租户排程的 `Sweep` 恢复中断删除、回收上传窗口已关闭的 `uploading` 行、删除保留期已到的 `completed` 对象。差异：保留期由调用方逐对象请求、宿主设上限，**按租户的运行时保留策略配置、以及与 `compliance` 数据保留策略的联动，仍属 M4**。
+- 前端 `ui-kit` 的 `FileUploader` 未落地，属 M2 前端轮。
+
 ## 分享链接（sharing）
 
 面向"把一份内部资源安全地给外部人看"的通用需求：患者查看自己的效果图、客户查看报告、匿名访问一次性结果页。它与 `storage` 的预签名 URL 是两套机制——预签名是给已认证用户的内部访问，分享链接是给未认证外部访问者的受控入口。
