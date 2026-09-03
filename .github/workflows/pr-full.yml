@@ -49,6 +49,7 @@ name: pr-full
 #                    dialect's migrations and AssertIsolated,
 #                    redis_leg_test.go for the cross-replica cache
 #                    invalidation a revoke depends on)
+<<<<<<< HEAD
 #       go/org       PostgreSQL -- its integration_test/ re-runs the A1
 #                    materialized-path dialect-identity proof
 #                    (postgres_tree_test.go) and the three tenant-scoped
@@ -61,21 +62,43 @@ name: pr-full
 #                    tier: authn touches KVStore only through ratelimit and
 #                    the revocation list, both already covered by their own
 #                    owning module's tier -- go/authn/AGENTS.md)
-#   * reference-app job: examples/reference-app's golangci-lint leg and unit
-#     suite under -race, dir-scoped from inside the module -- reference-app
-#     is its own module, listed in go.work but outside go/, so neither the
-#     module matrix above nor the go/... import-path build of pr-check
-#     covers it (Taskfile's APP_DIR legs are the local mirror). Its lint
-#     lives here, not in pr-check, keeping the fast per-PR pipeline on its
-#     8-minute budget; the app's go.mod is still validated on every PR by
-#     pr-check's repo-checks workspace build.
+#   * reference-app job: examples/reference-app's golangci-lint leg, unit
+#     suite under -race, and its Docker-backed integration tier
+#     (-tags=integration -- testcontainers Redis) -- reference-app is its
+#     own module, listed in go.work but outside go/, so neither the module
+#     matrix above nor the go/... import-path build of pr-check covers it
+#     (Taskfile's APP_DIR legs are the local mirror, and Taskfile test:full
+#     runs the app's integration tier the same way this job does). The
+#     app's integration_test/ boots the real server with a real Redis
+#     Streams EventBus in a standalone topology -- the retrofit's proof
+#     that implementation composition is orthogonal to deployment mode.
+#     Its lint lives here, not in pr-check, keeping the fast per-PR
+#     pipeline on its 8-minute budget; the app's go.mod is still validated
+#     on every PR by pr-check's repo-checks workspace build.
+=======
+#   * reference-app job: examples/reference-app's golangci-lint leg, unit
+#     suite under -race, and its Docker-backed integration tier
+#     (-tags=integration -- testcontainers Redis) -- reference-app is its
+#     own module, listed in go.work but outside go/, so neither the module
+#     matrix above nor the go/... import-path build of pr-check covers it
+#     (Taskfile's APP_DIR legs are the local mirror, and Taskfile test:full
+#     runs the app's integration tier the same way this job does). The
+#     app's integration_test/ boots the real server with a real Redis
+#     Streams EventBus in a standalone topology -- the retrofit's proof
+#     that implementation composition is orthogonal to deployment mode.
+#     Its lint lives here, not in pr-check, keeping the fast per-PR
+#     pipeline on its 8-minute budget; the app's go.mod is still validated
+#     on every PR by pr-check's repo-checks workspace build.
+>>>>>>> 10dac5b (ci(repo): run the reference-app integration tier on full-ci and in test:full)
 #
 # NOT YET -- listed honestly, roadmap M0:
 #   * the dual deployment mode x dual dialect full-matrix acceptance across
 #     every module. What runs above is the real part of the matrix that
-#     exists today: the standalone-mode unit suites plus the PostgreSQL /
-#     Redis / MinIO-S3 integration tiers. No distributed-mode or second-
-#     dialect tier exists to run yet.
+#     exists today: the standalone-mode unit suites, the PostgreSQL /
+#     Redis / MinIO-S3 integration tiers, and the reference-app job's
+#     integration tier (a real-Redis composition in a standalone topology,
+#     not a distributed-mode run). No distributed-mode or second-dialect
+#     tier exists to run yet.
 #   * coverage reporting: Taskfile test:full passes -cover, but CI has no
 #     collector for coverage output, so -cover is deliberately not passed
 #     on the legs above (and the go-module-ci legs are shared with pr-check
@@ -155,10 +178,14 @@ jobs:
         run: go test -race -tags=integration ./...
 
   reference-app:
-    name: reference-app lint + unit suite (-race)
+    name: reference-app lint + unit + integration (-race)
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'full-ci')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Raised from 10 when the Docker-backed integration tier landed below: a
+    # cold testcontainers image pull plus the -race suites, the same budget
+    # as the integration-tiers rows (this job runs in parallel with them,
+    # so the wall clock stays inside the 25-minute pipeline target).
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -176,3 +203,10 @@ jobs:
       - name: Unit tests under the race detector
         working-directory: examples/reference-app
         run: go test -race ./...
+      # The app's own Docker-backed tier, mirroring Taskfile test:full's
+      # APP_DIR integration leg. golangci-lint is not needed here, but
+      # setup-go-env already installed it above for the lint step; the cost
+      # is the one install this job pays for anyway.
+      - name: Integration tier under the race detector (testcontainers)
+        working-directory: examples/reference-app
+        run: go test -race -tags=integration ./...
