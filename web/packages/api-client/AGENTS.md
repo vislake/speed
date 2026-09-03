@@ -61,12 +61,22 @@ this one may issue HTTP requests itself.
 
 Landed: the runtime above (client, errors, retry, reporter, token
 store) plus the `speed/no-direct-http` ESLint rule that routes all
-other package HTTP through it.
+other package HTTP through it. Also landed (config-web round, B1):
+`fetchPublicConfig` / `fetchSystemFeatures` in `src/config-fetcher.ts`
+-- typed wrappers around go/config's two pre-auth endpoints
+(`PathPublic` / `PathSystemFeatures`), built on the `RequestFn` seam
+above. Both path constants are hand-kept in sync with the Go side
+(`go/config/AGENTS.md`'s Known limitations: no OpenAPI fragment exists
+for these endpoints). Neither function accepts a tenant argument --
+both endpoints resolve tenant server-side from the request host.
 
 Deferred with reasons:
 
-- `useFeature` / `usePublicConfig` hooks and the public-config fetcher
-  -- they consume the M1 config endpoints (`docs/internal/12-frontend.md`).
+- `useFeature` / `usePublicConfig` React hooks -- the fetchers they will
+  wrap now exist (`fetchPublicConfig` / `fetchSystemFeatures` above);
+  the hooks themselves (shared single-flight cache, `refresh()`) land in
+  a follow-up block behind an isolated `./react` subpath export, so this
+  package's main entry keeps zero runtime dependencies.
 - Uploads and SSE transports -- outside this package's scope
   (`docs/internal/21-api-contract.md`).
 - A real first consumer -- `@speed/api-sdk` has landed and consumes this
@@ -78,18 +88,20 @@ Deferred with reasons:
 
 ## Public surface
 
-The twelve runtime exports are pinned by `src/index.test.ts`
-(`ApiError`, `DEFAULT_RETRY_POLICY`, `ERROR_CODE_NETWORK`,
-`ERROR_CODE_PROTOCOL`, `ERROR_CODE_TIMEOUT`, `createClient`,
-`createConsoleReporter`, `createMemoryAccessTokenStore`,
-`httpErrorCode`, `isApiError`, `retryAfterDelayMs`, `retryDelayMs`),
-with compile-time shape-drift guards for the type exports
-(`RequestFn`, `ClientOptions`, `RequestOptions`, `AccessTokenStore`,
-`RetryPolicy`, `Reporter`, `FieldError`, `HttpMethod`, `ApiErrorInit`).
-See the README's public-surface table for semantics. Removing or
-renaming an export breaks the pin tests and the typecheck; extend the
-surface deliberately, with the README table updated in the same
-commit.
+The sixteen runtime exports are pinned by `src/index.test.ts`
+(`ApiError`, `CONFIG_PUBLIC_PATH`, `DEFAULT_RETRY_POLICY`,
+`ERROR_CODE_NETWORK`, `ERROR_CODE_PROTOCOL`, `ERROR_CODE_TIMEOUT`,
+`SYSTEM_FEATURES_PATH`, `createClient`, `createConsoleReporter`,
+`createMemoryAccessTokenStore`, `fetchPublicConfig`,
+`fetchSystemFeatures`, `httpErrorCode`, `isApiError`,
+`retryAfterDelayMs`, `retryDelayMs`), with compile-time shape-drift
+guards for the type exports (`RequestFn`, `ClientOptions`,
+`RequestOptions`, `AccessTokenStore`, `RetryPolicy`, `Reporter`,
+`FieldError`, `HttpMethod`, `ApiErrorInit`, `ConfigFetchOptions`,
+`PublicConfigResponse`, `SystemFeaturesResponse`). See the README's
+public-surface table for semantics. Removing or renaming an export
+breaks the pin tests and the typecheck; extend the surface
+deliberately, with the README table updated in the same commit.
 
 ## Development
 

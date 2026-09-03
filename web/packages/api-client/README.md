@@ -127,12 +127,18 @@ export async function loadNotes(): Promise<Note[]> {
 | `retryDelayMs(attempt, policy, random?)` | function | Pure full-jitter backoff maths (test-friendly: inject `random`). |
 | `retryAfterDelayMs(header, now?)` | function | Pure `Retry-After` parser: delta-seconds or HTTP-date, ms delay or null. |
 | `Reporter` / `createConsoleReporter()` | type / function | The diagnostics seam and its console-backed default. |
+| `fetchPublicConfig(api, options?)` | function | GETs `CONFIG_PUBLIC_PATH` (go/config's `PathPublic`); resolves `PublicConfigResponse`. |
+| `fetchSystemFeatures(api, options?)` | function | GETs `SYSTEM_FEATURES_PATH` (go/config's `PathSystemFeatures`); resolves `SystemFeaturesResponse`. |
+| `CONFIG_PUBLIC_PATH` / `SYSTEM_FEATURES_PATH` | const | The two path strings, hand-kept in sync with go/config (no spec fragment exists yet). |
+| `PublicConfigResponse` / `SystemFeaturesResponse` / `ConfigFetchOptions` | type | Wire shapes for the two fetchers above; no tenant field anywhere -- both endpoints resolve tenant server-side from the request host. |
 
 ## What is deliberately not here
 
-- **Hooks and fetchers for `useFeature` / `usePublicConfig`** -- they
-  belong to this package by roadmap split (docs/internal/12-frontend.md)
-  but consume the M1 config endpoints; they land with that round.
+- **`useFeature` / `usePublicConfig` hooks** -- the typed fetchers above
+  now exist (`fetchPublicConfig` / `fetchSystemFeatures`); the React
+  hooks that cache and share them across a tree land in a follow-up
+  block, behind an isolated `./react` subpath export so this package's
+  main entry stays dependency-free of React.
 - **Uploads and SSE** -- outside this package's scope
   (docs/internal/21-api-contract.md).
 - **A real first consumer** -- `@speed/api-sdk`, the orval-generated
