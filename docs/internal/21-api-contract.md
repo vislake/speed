@@ -77,7 +77,7 @@ ApiError:
 | 场景 | 为什么不在 spec 里 | 如何处理 |
 |---|---|---|
 | 站内信 SSE 推送 | 长连接流式，生成器支持差 | 单独文档化事件格式；前端在 `@speed/notification-ui` 内封装唯一一处 EventSource 调用 |
-| 文件上传的直传形态（例外已消除，2026-09-04） | 该例外成立的前提是上传请求直接发往 S3/OSS、不经过本服务，故 spec 表达不了；此形态未落地——`storage` 轮交付的是**服务端中转流式**上传（Create→Upload→Complete 均为普通端点），relayed 上传全程可由 OpenAPI 表达 | wire 契约权威是 `go/storage/api/openapi.yaml` 的七个操作；前端 storage 调用由 api-sdk 从该片段生成（consumer-shell round）；`FileUploader` 是受控队列组件，上传经 host 注入的 `execute` 执行，不封装任何上传 HTTP |
+| 文件上传的直传形态（例外已消除，2026-09-04） | 该例外成立的前提是上传请求直接发往 S3/OSS、不经过本服务，故 spec 表达不了；此形态未落地——`storage` 轮交付的是**服务端中转流式**上传（Create→Upload→Complete 均为普通端点），relayed 上传全程可由 OpenAPI 表达 | wire 契约权威是 `go/storage/api/openapi.yaml` 的七个操作；前端 storage 调用由 api-sdk 从该片段生成（consumer-shell round）；`FileUploader` 是受控队列组件——队列是 host 的 `rows` 状态、交互经回调上报，上传传输是 host 自己的代码，组件不封装任何上传 HTTP |
 | 外发 Webhook | 是本系统**发出**的请求，不是提供的接口 | 用独立的 AsyncAPI 风格文档描述事件负载，见 [07 平台服务](07-platform-services.md) |
 | 支付渠道回调 | 由第三方按各自格式回调 | 内部实现细节，不进公开 spec |
 

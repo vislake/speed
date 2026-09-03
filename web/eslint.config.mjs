@@ -21,7 +21,12 @@
  * whitelisting HTTP does not whitelist text. The react-hooks plugin will
  * earn its place the round that introduces stateful components outside
  * ui-kit's controlled set; it stays out until then, keeping this config
- * dependency-free.
+ * dependency-free. That set is re-assessed on every component round, and
+ * the FileUploader redesign (2026-09-04) passed it: the queue renders
+ * from host-owned rows props, every pick, cancel, retry and remove
+ * reports up through a callback, and the upload transport is host code
+ * -- no stateful component entered the package, so the plugin still has
+ * no seat here.
  */
 import tseslint from 'typescript-eslint'
 import { noDirectHttpRule } from './eslint-rules/no-direct-http.js'
