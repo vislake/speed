@@ -249,7 +249,7 @@ func (exampleBillingModule) Register(reg *pkgcore.Registry) error {
 // ExampleKernel_Bootstrap shows the host side of module wiring: hand the
 // kernel every module, get one Registry back with everything they contributed.
 func ExampleKernel_Bootstrap() {
-	kernel := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone)
+	kernel := pkgcore.NewKernel()
 
 	// Modules may be listed in any order. Bootstrap sorts them so that each one
 	// registers after the modules it depends on.
@@ -309,30 +309,34 @@ func ExampleValidateFeatureGraph() {
 	// pkgcore: unresolved feature flag dependency: "billing.dunning" depends on unregistered flag "billing.invoicing"
 }
 
-// ExampleWithEventBus shows the distributed-mode wiring seam.
-// DeploymentModeDistributed has no built-in EventBus, because falling back to
-// the in-memory one would give every replica a private bus, so the host
-// injects its own.
+// ExampleWithEventBus shows the code-injection layer of implementation
+// composition, and the capability validation that replaced the old
+// mode-keyed "distributed mode has no built-in implementation" checks.
+// DeploymentModeDistributed requires every seam's resolved implementation to
+// declare MultiReplicaSafe; the standalone Preset a bare NewKernel() would
+// otherwise resolve to does not, so the host injects its own.
 func ExampleWithEventBus() {
-	// Assembling a distributed-mode kernel without a bus fails at startup. A
-	// real distributed-mode host would also need WithKVStore, WithMailer and
-	// WithObjectStore, but their checks run after the EventBus check, so
-	// leaving them out here still isolates this example to the EventBus
-	// failure.
-	_, err := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed).Bootstrap(context.Background())
-	fmt.Println(errors.Is(err, pkgcore.ErrMissingDistributedEventBus))
+	// Assembling a distributed-mode kernel with nothing injected resolves
+	// every seam through the standalone Preset, whose implementations do not
+	// declare MultiReplicaSafe, so the very first seam Bootstrap validates --
+	// the event bus -- fails the capability check.
+	_, err := pkgcore.NewKernel(pkgcore.WithDeploymentMode(pkgcore.DeploymentModeDistributed)).Bootstrap(context.Background())
+	fmt.Println(errors.Is(err, pkgcore.ErrCapabilityUnsatisfied))
 
-	// A real host passes its broker-backed bus here; the in-memory one stands
-	// in for it in this example. DeploymentModeDistributed requires a KVStore,
-	// a Mailer and an ObjectStore too, so all three are wired alongside the
-	// bus with their own stand-ins.
+	// A real host passes its broker-backed bus here, declaring the
+	// capabilities it actually has; the in-memory bus stands in for it in
+	// this example, declared MultiReplicaSafe so the composition passes
+	// validation -- the capability declaration is what assembly trusts, not
+	// what the value actually is. DeploymentModeDistributed requires the same
+	// of a KVStore, a Mailer and an ObjectStore too, so all three are wired
+	// alongside the bus with their own stand-ins.
 	store, cleanup := exampleLocalObjectStore()
 	defer cleanup()
-	kernel := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed,
-		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus()),
-		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore()),
-		pkgcore.WithMailer(pkgcore.NewConsoleMailer()),
-		pkgcore.WithObjectStore(store))
+	kernel := pkgcore.NewKernel(pkgcore.WithDeploymentMode(pkgcore.DeploymentModeDistributed),
+		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus(), pkgcore.MultiReplicaSafe),
+		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore(), pkgcore.MultiReplicaSafe),
+		pkgcore.WithMailer(pkgcore.NewConsoleMailer(), pkgcore.MultiReplicaSafe),
+		pkgcore.WithObjectStore(store, pkgcore.MultiReplicaSafe))
 	reg, err := kernel.Bootstrap(context.Background(), exampleTenancyModule{})
 	fmt.Println(err, reg.EventBus() != nil)
 
@@ -341,29 +345,30 @@ func ExampleWithEventBus() {
 	// <nil> true
 }
 
-// ExampleWithKVStore shows the distributed-mode wiring seam for the
-// key-value seam, mirroring ExampleWithEventBus. DeploymentModeDistributed
-// has no built-in KVStore, because falling back to the in-memory one would
-// give every replica a private store, so the host injects its own.
+// ExampleWithKVStore shows the code-injection layer for the key-value seam,
+// mirroring ExampleWithEventBus.
 func ExampleWithKVStore() {
-	// Assembling a distributed-mode kernel without a store fails at startup,
-	// once the bus is wired: the bus check runs first, so it is wired here
-	// too, to isolate the failure this example is about to the KVStore check.
-	_, err := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed, pkgcore.WithEventBus(pkgcore.NewMemoryEventBus())).
+	// Assembling a distributed-mode kernel fails on the first seam whose
+	// resolved implementation does not satisfy the required capability, in
+	// a fixed order: the bus is wired here with MultiReplicaSafe so its check
+	// passes, which isolates this example's failure to the KVStore check --
+	// still resolving to the standalone Preset's "kv.memory", which lacks it.
+	_, err := pkgcore.NewKernel(pkgcore.WithDeploymentMode(pkgcore.DeploymentModeDistributed),
+		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus(), pkgcore.MultiReplicaSafe)).
 		Bootstrap(context.Background())
-	fmt.Println(errors.Is(err, pkgcore.ErrMissingDistributedKVStore))
+	fmt.Println(errors.Is(err, pkgcore.ErrCapabilityUnsatisfied))
 
-	// A real host passes its Redis-backed store here; the in-memory one
-	// stands in for it in this example. The Mailer and ObjectStore seams are
-	// wired too, because their checks run after the KVStore one and this
-	// kernel will succeed.
+	// A real host passes its Redis-backed store here, declaring
+	// MultiReplicaSafe; the in-memory store stands in for it in this example.
+	// The Mailer and ObjectStore seams are wired too, because every seam must
+	// satisfy the same capability for this kernel to bootstrap successfully.
 	store, cleanup := exampleLocalObjectStore()
 	defer cleanup()
-	kernel := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed,
-		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus()),
-		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore()),
-		pkgcore.WithMailer(pkgcore.NewConsoleMailer()),
-		pkgcore.WithObjectStore(store))
+	kernel := pkgcore.NewKernel(pkgcore.WithDeploymentMode(pkgcore.DeploymentModeDistributed),
+		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus(), pkgcore.MultiReplicaSafe),
+		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore(), pkgcore.MultiReplicaSafe),
+		pkgcore.WithMailer(pkgcore.NewConsoleMailer(), pkgcore.MultiReplicaSafe),
+		pkgcore.WithObjectStore(store, pkgcore.MultiReplicaSafe))
 	reg, err := kernel.Bootstrap(context.Background(), exampleTenancyModule{})
 	fmt.Println(err, reg.KVStore() != nil)
 
@@ -372,34 +377,33 @@ func ExampleWithKVStore() {
 	// <nil> true
 }
 
-// ExampleWithMailer shows the distributed-mode wiring seam for the mail
-// seam, mirroring ExampleWithEventBus and ExampleWithKVStore.
-// DeploymentModeDistributed has no built-in Mailer, because falling back to
-// the console mailer would print every message to a replica's stdout where
-// nobody reads it, so the host injects its own.
+// ExampleWithMailer shows the code-injection layer for the mail seam,
+// mirroring ExampleWithEventBus and ExampleWithKVStore.
 func ExampleWithMailer() {
-	// Assembling a distributed-mode kernel without a mailer fails at startup,
-	// once the bus and the store are wired: their checks run first, so both
-	// are wired here too, to isolate the failure this example is about to the
-	// Mailer check.
-	_, err := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed,
-		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus()),
-		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore())).
+	// Assembling a distributed-mode kernel with the bus and the store wired
+	// (both declared MultiReplicaSafe, so their checks pass) isolates this
+	// example's failure to the Mailer check: it still resolves to the
+	// standalone Preset's "mailer.console", which does not declare the
+	// capability.
+	_, err := pkgcore.NewKernel(pkgcore.WithDeploymentMode(pkgcore.DeploymentModeDistributed),
+		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus(), pkgcore.MultiReplicaSafe),
+		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore(), pkgcore.MultiReplicaSafe)).
 		Bootstrap(context.Background())
-	fmt.Println(errors.Is(err, pkgcore.ErrMissingDistributedMailer))
+	fmt.Println(errors.Is(err, pkgcore.ErrCapabilityUnsatisfied))
 
-	// A real host passes its SMTP-backed mailer here; the console one stands
-	// in for it in this example, and the local object store stands in for the
-	// S3-backed one, for the same reason the bus and KVStore stand-ins above
-	// do: the distributed mode requires all four seams, so each is wired
-	// alongside the one under test.
+	// A real host passes its SMTP-backed mailer here, declaring
+	// MultiReplicaSafe; the console one stands in for it in this example, and
+	// the local object store stands in for the S3-backed one, for the same
+	// reason the bus and KVStore stand-ins above do: the distributed mode
+	// requires the capability of all four seams, so each is wired alongside
+	// the one under test.
 	store, cleanup := exampleLocalObjectStore()
 	defer cleanup()
-	kernel := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed,
-		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus()),
-		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore()),
-		pkgcore.WithMailer(pkgcore.NewConsoleMailer()),
-		pkgcore.WithObjectStore(store))
+	kernel := pkgcore.NewKernel(pkgcore.WithDeploymentMode(pkgcore.DeploymentModeDistributed),
+		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus(), pkgcore.MultiReplicaSafe),
+		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore(), pkgcore.MultiReplicaSafe),
+		pkgcore.WithMailer(pkgcore.NewConsoleMailer(), pkgcore.MultiReplicaSafe),
+		pkgcore.WithObjectStore(store, pkgcore.MultiReplicaSafe))
 	reg, err := kernel.Bootstrap(context.Background(), exampleTenancyModule{})
 	fmt.Println(err, reg.Mailer() != nil)
 
@@ -583,33 +587,31 @@ func ExampleObjectStore() {
 	// invalid: true
 }
 
-// ExampleWithObjectStore shows the distributed-mode wiring seam for the
-// object-store seam, mirroring ExampleWithEventBus and its counterparts.
-// DeploymentModeDistributed has no built-in ObjectStore, because falling back
-// to the local directory store would give every replica a private store whose
-// objects the other replicas could never read, so the host injects its own.
+// ExampleWithObjectStore shows the code-injection layer for the object-store
+// seam, mirroring ExampleWithEventBus and its counterparts.
 func ExampleWithObjectStore() {
-	// Assembling a distributed-mode kernel without an object store fails at
-	// startup, once the bus, the key-value store and the mailer are wired:
-	// their checks run first, so all three are wired here too, to isolate the
-	// failure this example is about to the ObjectStore check.
-	_, err := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed,
-		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus()),
-		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore()),
-		pkgcore.WithMailer(pkgcore.NewConsoleMailer())).
+	// Assembling a distributed-mode kernel with the bus, the key-value store
+	// and the mailer wired (all three declared MultiReplicaSafe, so their
+	// checks pass) isolates this example's failure to the ObjectStore check:
+	// it still resolves to the standalone Preset's "objectstore.local", which
+	// does not declare the capability.
+	_, err := pkgcore.NewKernel(pkgcore.WithDeploymentMode(pkgcore.DeploymentModeDistributed),
+		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus(), pkgcore.MultiReplicaSafe),
+		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore(), pkgcore.MultiReplicaSafe),
+		pkgcore.WithMailer(pkgcore.NewConsoleMailer(), pkgcore.MultiReplicaSafe)).
 		Bootstrap(context.Background())
-	fmt.Println(errors.Is(err, pkgcore.ErrMissingDistributedObjectStore))
+	fmt.Println(errors.Is(err, pkgcore.ErrCapabilityUnsatisfied))
 
-	// A real host passes its S3-backed store here; the local one stands in
-	// for it in this example, and every module's ObjectStore() calls reach
-	// the store the host wired in.
+	// A real host passes its S3-backed store here, declaring MultiReplicaSafe;
+	// the local one stands in for it in this example, and every module's
+	// ObjectStore() calls reach the store the host wired in.
 	store, cleanup := exampleLocalObjectStore()
 	defer cleanup()
-	kernel := pkgcore.NewKernel(pkgcore.DeploymentModeDistributed,
-		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus()),
-		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore()),
-		pkgcore.WithMailer(pkgcore.NewConsoleMailer()),
-		pkgcore.WithObjectStore(store))
+	kernel := pkgcore.NewKernel(pkgcore.WithDeploymentMode(pkgcore.DeploymentModeDistributed),
+		pkgcore.WithEventBus(pkgcore.NewMemoryEventBus(), pkgcore.MultiReplicaSafe),
+		pkgcore.WithKVStore(pkgcore.NewMemoryKVStore(), pkgcore.MultiReplicaSafe),
+		pkgcore.WithMailer(pkgcore.NewConsoleMailer(), pkgcore.MultiReplicaSafe),
+		pkgcore.WithObjectStore(store, pkgcore.MultiReplicaSafe))
 	reg, err := kernel.Bootstrap(context.Background(), exampleTenancyModule{})
 	fmt.Println(err, reg.ObjectStore() != nil)
 
@@ -644,4 +646,119 @@ func ExampleNewS3ObjectStore() {
 	fmt.Println("store wired; the first operation contacts the service")
 	// Output:
 	// store wired; the first operation contacts the service
+}
+
+// ExampleCapability shows the bitmask deployment mode and implementation
+// composition compare: an implementation declares what it Has, a deployment
+// mode declares what it requires, and Kernel.Bootstrap checks the two
+// against each other. See ExampleWithEventBus and its siblings for that
+// check running for real, inside Bootstrap.
+func ExampleCapability() {
+	redisLike := pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
+	inProcess := pkgcore.Capability(0)
+
+	fmt.Println(redisLike.Has(pkgcore.MultiReplicaSafe))
+	fmt.Println(inProcess.Has(pkgcore.MultiReplicaSafe))
+	// A DeploymentModeStandalone requirement is the zero Capability, which
+	// every implementation satisfies, including one declaring nothing.
+	fmt.Println(inProcess.Has(0))
+
+	fmt.Println(redisLike)
+	fmt.Println(inProcess)
+
+	// Output:
+	// true
+	// false
+	// true
+	// MultiReplicaSafe|SurvivesRestart
+	// none
+}
+
+// ExampleSeamRegistry shows the name-to-constructor mechanism a Preset
+// resolves through: pkgcore pre-populates one SeamRegistry per seam
+// (EventBusRegistry and its siblings) with the built-in implementations
+// listed in this package's AGENTS.md, and a host registers its own the same
+// way this example registers a test one.
+func ExampleSeamRegistry() {
+	registry := pkgcore.NewSeamRegistry[pkgcore.KVStore]()
+
+	err := registry.Register(pkgcore.Registration[pkgcore.KVStore]{
+		Name:         "kv.example",
+		Capabilities: pkgcore.MultiReplicaSafe,
+		New:          func(pkgcore.Config) (pkgcore.KVStore, error) { return pkgcore.NewMemoryKVStore(), nil },
+	})
+	fmt.Println("register:", err)
+
+	store, caps, err := registry.Build("kv.example", pkgcore.Config{})
+	fmt.Println("build:", err, store != nil, caps)
+
+	// Registering the same name twice is rejected; the original registration
+	// is left in place.
+	err = registry.Register(pkgcore.Registration[pkgcore.KVStore]{Name: "kv.example"})
+	fmt.Println("duplicate:", errors.Is(err, pkgcore.ErrDuplicateImplementation))
+
+	// Building a name nothing registered is rejected too.
+	_, _, err = registry.Build("kv.nonexistent", pkgcore.Config{})
+	fmt.Println("unknown:", errors.Is(err, pkgcore.ErrUnknownImplementation))
+
+	// Output:
+	// register: <nil>
+	// build: <nil> true MultiReplicaSafe
+	// duplicate: true
+	// unknown: true
+}
+
+// ExampleWithPreset shows the middle composition layer: a Preset names, per
+// seam, which registered implementation Bootstrap builds for a seam the host
+// has not injected directly. WithPreset replaces the whole map; injecting a
+// seam directly (WithMailer, here) still wins over the Preset for that one
+// seam, regardless of option order.
+func ExampleWithPreset() {
+	// A host that wants pkgcore's own Redis-backed EventBus and KVStore, but
+	// keeps the console Mailer, composes a Preset from the two built-in ones:
+	// PresetDistributed's eventbus/kv entries, PresetStandalone's mailer
+	// entry. Nothing is dialed by resolving "eventbus.redis"/"kv.redis" here
+	// (see NewRedisEventBus and NewRedisKVStore's own doc comments), so this
+	// example needs no real Redis to run.
+	custom := pkgcore.Preset{
+		"eventbus":    pkgcore.PresetDistributed["eventbus"],
+		"kv":          pkgcore.PresetDistributed["kv"],
+		"mailer":      pkgcore.PresetStandalone["mailer"],
+		"objectstore": pkgcore.PresetStandalone["objectstore"],
+	}
+	reg, err := pkgcore.NewKernel(pkgcore.WithPreset(custom)).Bootstrap(context.Background())
+	fmt.Println(err, reg.EventBus() != nil, reg.KVStore() != nil, reg.Mailer() != nil)
+
+	// Output:
+	// <nil> true true true
+}
+
+// ExampleDeploymentMode_RequiredCapabilities shows what Kernel.Bootstrap
+// compares every resolved seam's declared Capability against.
+func ExampleDeploymentMode_RequiredCapabilities() {
+	fmt.Println(pkgcore.DeploymentModeStandalone.RequiredCapabilities())
+	fmt.Println(pkgcore.DeploymentModeDistributed.RequiredCapabilities())
+
+	// Output:
+	// none
+	// MultiReplicaSafe
+}
+
+// ExampleErrMissingSeamConfig shows the built-in "mailer.smtp" and
+// "objectstore.s3" implementations' one deliberate gap: neither has a safe
+// default host, bucket or credential, so resolving either through a Preset
+// with an empty Config fails instead of building an unusable mailer or
+// store. A host that wants real credentials injects the implementation
+// directly with WithMailer or WithObjectStore instead (see
+// ExampleNewSMTPMailer and ExampleNewS3ObjectStore).
+func ExampleErrMissingSeamConfig() {
+	_, _, err := pkgcore.MailerRegistry.Build("mailer.smtp", pkgcore.Config{})
+	fmt.Println(errors.Is(err, pkgcore.ErrMissingSeamConfig))
+
+	_, _, err = pkgcore.ObjectStoreRegistry.Build("objectstore.s3", pkgcore.Config{})
+	fmt.Println(errors.Is(err, pkgcore.ErrMissingSeamConfig))
+
+	// Output:
+	// true
+	// true
 }

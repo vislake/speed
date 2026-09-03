@@ -712,7 +712,7 @@ func TestBootstrap_DuplicateFeatureFlagAcrossModules_ReturnsError(t *testing.T) 
 		},
 	}
 
-	reg, err := NewKernel(DeploymentModeStandalone).Bootstrap(context.Background(), org, billing)
+	reg, err := NewKernel().Bootstrap(context.Background(), org, billing)
 	if !errors.Is(err, ErrDuplicateFeatureFlag) {
 		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrDuplicateFeatureFlag", err)
 	}
@@ -1069,7 +1069,7 @@ func TestBootstrap_ValidChain_RegistersInDependencyOrder(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var order []string
-			kernel := NewKernel(DeploymentModeStandalone)
+			kernel := NewKernel()
 
 			reg, err := kernel.Bootstrap(context.Background(), tt.modules(&order)...)
 			if err != nil {
@@ -1223,7 +1223,7 @@ func TestBootstrap_DependencyChainsLongerThanOneHop(t *testing.T) {
 				modules = append(modules, depChainMod(name, tt.deps[name], &order))
 			}
 
-			reg, err := NewKernel(DeploymentModeStandalone).Bootstrap(context.Background(), modules...)
+			reg, err := NewKernel().Bootstrap(context.Background(), modules...)
 			if err != nil {
 				t.Fatalf("Bootstrap returned an error: %v", err)
 			}
@@ -1272,7 +1272,7 @@ func TestBootstrap_DependencyCycle_ErrorNamesTheCycle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			kernel := NewKernel(DeploymentModeStandalone)
+			kernel := NewKernel()
 
 			reg, err := kernel.Bootstrap(context.Background(), tt.modules...)
 			if !errors.Is(err, ErrDependencyCycle) {
@@ -1291,7 +1291,7 @@ func TestBootstrap_DependencyCycle_ErrorNamesTheCycle(t *testing.T) {
 }
 
 func TestBootstrap_DependencyNotInModuleList_ErrorNamesBothModules(t *testing.T) {
-	kernel := NewKernel(DeploymentModeStandalone)
+	kernel := NewKernel()
 
 	reg, err := kernel.Bootstrap(context.Background(),
 		regTestModule{name: "billing", deps: []string{"metering"}},
@@ -1326,7 +1326,7 @@ func TestBootstrap_DeepChainMissingTailIsReported(t *testing.T) {
 		depChainMod("d", []string{"e"}, &order),
 	}
 
-	reg, err := NewKernel(DeploymentModeStandalone).Bootstrap(context.Background(), modules...)
+	reg, err := NewKernel().Bootstrap(context.Background(), modules...)
 	if err == nil {
 		t.Fatal("Bootstrap succeeded, want an error naming the missing dependency")
 	}
@@ -1339,7 +1339,7 @@ func TestBootstrap_DeepChainMissingTailIsReported(t *testing.T) {
 }
 
 func TestBootstrap_DuplicateModuleName_ReturnsError(t *testing.T) {
-	kernel := NewKernel(DeploymentModeStandalone)
+	kernel := NewKernel()
 
 	_, err := kernel.Bootstrap(context.Background(),
 		regTestModule{name: "billing"},
@@ -1368,7 +1368,7 @@ func TestBootstrap_RegisterFails_WrapsModuleNameAndStops(t *testing.T) {
 	// "org" depends on "billing", so it registers strictly after the failure.
 	later := regTestRecorder("org", []string{"billing"}, &order)
 
-	kernel := NewKernel(DeploymentModeStandalone)
+	kernel := NewKernel()
 	reg, err := kernel.Bootstrap(context.Background(), later, failing)
 
 	if !errors.Is(err, failure) {
@@ -1404,7 +1404,7 @@ func TestBootstrap_UnresolvedFeatureDependency_ReturnsError(t *testing.T) {
 		},
 	}
 
-	kernel := NewKernel(DeploymentModeStandalone)
+	kernel := NewKernel()
 	reg, err := kernel.Bootstrap(context.Background(), billing, org)
 
 	if !errors.Is(err, ErrUnresolvedFeatureDependency) {
@@ -1445,7 +1445,7 @@ func TestBootstrap_SharesOneRegistryAcrossModules(t *testing.T) {
 		},
 	}
 
-	kernel := NewKernel(DeploymentModeStandalone)
+	kernel := NewKernel()
 	reg, err := kernel.Bootstrap(context.Background(), org, billing)
 	if err != nil {
 		t.Fatalf("Bootstrap() error = %v, want nil", err)
@@ -1467,12 +1467,13 @@ func TestBootstrap_CancelledContext_StopsBeforeRegistering(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	// KVStore, Mailer and ObjectStore are wired too, with the standalone
-	// defaults: the distributed mode requires all four seams, and this test's
-	// subject is the context-cancellation check, not wiring.
-	kernel := NewKernel(DeploymentModeDistributed,
-		WithEventBus(newRegTestBus()), WithKVStore(NewMemoryKVStore()),
-		WithMailer(NewConsoleMailer()), WithObjectStore(NewLocalObjectStore(t.TempDir())))
+	// KVStore, Mailer and ObjectStore are wired too, declared MultiReplicaSafe
+	// so the capability check passes: the distributed mode requires it of
+	// every seam, and this test's subject is the context-cancellation check,
+	// not capability validation.
+	kernel := NewKernel(WithDeploymentMode(DeploymentModeDistributed),
+		WithEventBus(newRegTestBus(), MultiReplicaSafe), WithKVStore(NewMemoryKVStore(), MultiReplicaSafe),
+		WithMailer(NewConsoleMailer(), MultiReplicaSafe), WithObjectStore(NewLocalObjectStore(t.TempDir()), MultiReplicaSafe))
 	reg, err := kernel.Bootstrap(ctx, regTestRecorder("billing", nil, &order))
 
 	if !errors.Is(err, context.Canceled) {
@@ -1488,24 +1489,34 @@ func TestBootstrap_CancelledContext_StopsBeforeRegistering(t *testing.T) {
 
 func TestKernel_DeploymentMode_ReportsTheConfiguredDeploymentMode(t *testing.T) {
 	for _, want := range []DeploymentMode{DeploymentModeStandalone, DeploymentModeDistributed} {
-		if got := NewKernel(want).DeploymentMode(); got != want {
+		if got := NewKernel(WithDeploymentMode(want)).DeploymentMode(); got != want {
 			t.Errorf("DeploymentMode() = %q, want %q", got, want)
 		}
 	}
 }
 
-// TestBootstrap_DistributedModeWithoutEventBus_FailsFast pins the fail-fast
-// rule from docs/internal/03-deployment-modes.md: the standalone in-memory
-// bus is single-process, so a distributed-mode kernel that has none wired in
-// must refuse to assemble instead of handing every module a bus its replicas
-// cannot share.
-func TestBootstrap_DistributedModeWithoutEventBus_FailsFast(t *testing.T) {
+// TestBootstrap_DistributedModeWithMemoryEventBus_FailsCapabilityCheck pins
+// the fail-fast rule from docs/internal/03-deployment-modes.md: the built-in
+// "eventbus.memory" implementation is single-process, so a distributed-mode
+// kernel that resolves to it (the PresetStandalone default, since nothing was
+// injected and no wider Preset was chosen) must refuse to assemble instead of
+// handing every module a bus its replicas cannot share. This is the
+// capability-validation replacement for the old
+// TestBootstrap_DistributedModeWithoutEventBus_FailsFast, which asserted the
+// same fail-fast property against the mode-keyed ErrMissingDistributedEventBus
+// this retrofit removed.
+func TestBootstrap_DistributedModeWithMemoryEventBus_FailsCapabilityCheck(t *testing.T) {
 	var order []string
 
-	reg, err := NewKernel(DeploymentModeDistributed).Bootstrap(context.Background(), regTestRecorder("billing", nil, &order))
+	reg, err := NewKernel(WithDeploymentMode(DeploymentModeDistributed)).Bootstrap(context.Background(), regTestRecorder("billing", nil, &order))
 
-	if !errors.Is(err, ErrMissingDistributedEventBus) {
-		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrMissingDistributedEventBus", err)
+	if !errors.Is(err, ErrCapabilityUnsatisfied) {
+		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrCapabilityUnsatisfied", err)
+	}
+	for _, want := range []string{"eventbus", "eventbus.memory", "MultiReplicaSafe", "distributed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to name %q", err, want)
+		}
 	}
 	if reg != nil {
 		t.Error("Bootstrap() returned a registry alongside the error, want nil")
@@ -1515,21 +1526,30 @@ func TestBootstrap_DistributedModeWithoutEventBus_FailsFast(t *testing.T) {
 	}
 }
 
-// TestBootstrap_DistributedModeWithoutKVStore_FailsFast mirrors
-// TestBootstrap_DistributedModeWithoutEventBus_FailsFast for the KVStore
-// seam: the standalone in-memory store is single-process, so a
-// distributed-mode kernel with none wired in must refuse to assemble instead
-// of handing every module a store its replicas cannot share. The bus is
-// wired here so the bus check inside Bootstrap, which runs first, passes and
-// the failure actually exercises the KVStore check instead of masking it.
-func TestBootstrap_DistributedModeWithoutKVStore_FailsFast(t *testing.T) {
+// TestBootstrap_DistributedModeWithMemoryKVStore_FailsCapabilityCheck mirrors
+// TestBootstrap_DistributedModeWithMemoryEventBus_FailsCapabilityCheck for the
+// KVStore seam: the built-in "kv.memory" implementation is single-process, so
+// a distributed-mode kernel that resolves to it must refuse to assemble
+// instead of handing every module a store its replicas cannot share. The bus
+// and mailer are injected and declared MultiReplicaSafe here so their checks
+// inside Bootstrap, which run first, pass and the failure actually exercises
+// the KVStore check instead of masking it. This replaces the old
+// TestBootstrap_DistributedModeWithoutKVStore_FailsFast, which asserted the
+// same property against ErrMissingDistributedKVStore.
+func TestBootstrap_DistributedModeWithMemoryKVStore_FailsCapabilityCheck(t *testing.T) {
 	var order []string
 
-	kernel := NewKernel(DeploymentModeDistributed, WithEventBus(NewMemoryEventBus()), WithMailer(NewConsoleMailer()))
+	kernel := NewKernel(WithDeploymentMode(DeploymentModeDistributed),
+		WithEventBus(NewMemoryEventBus(), MultiReplicaSafe), WithMailer(NewConsoleMailer(), MultiReplicaSafe))
 	reg, err := kernel.Bootstrap(context.Background(), regTestRecorder("billing", nil, &order))
 
-	if !errors.Is(err, ErrMissingDistributedKVStore) {
-		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrMissingDistributedKVStore", err)
+	if !errors.Is(err, ErrCapabilityUnsatisfied) {
+		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrCapabilityUnsatisfied", err)
+	}
+	for _, want := range []string{"kv", "kv.memory", "MultiReplicaSafe", "distributed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to name %q", err, want)
+		}
 	}
 	if reg != nil {
 		t.Error("Bootstrap() returned a registry alongside the error, want nil")
@@ -1549,22 +1569,23 @@ func TestBootstrap_WiresTheDeploymentModeEventBusIntoTheRegistry(t *testing.T) {
 	}{
 		{
 			name:   "the standalone deployment mode falls back to the in-memory bus",
-			kernel: func(EventBus) *Kernel { return NewKernel(DeploymentModeStandalone) },
+			kernel: func(EventBus) *Kernel { return NewKernel() },
 		},
 		{
 			name:         "an injected bus replaces the standalone default",
-			kernel:       func(injected EventBus) *Kernel { return NewKernel(DeploymentModeStandalone, WithEventBus(injected)) },
+			kernel:       func(injected EventBus) *Kernel { return NewKernel(WithEventBus(injected, 0)) },
 			wantInjected: true,
 		},
 		{
 			name: "the distributed deployment mode uses the injected bus",
 			kernel: func(injected EventBus) *Kernel {
-				// KVStore, Mailer and ObjectStore are wired too, with the
-				// standalone defaults: this table exercises the EventBus seam
-				// specifically, and the distributed mode also requires the
-				// other seams, so leaving them unwired would fail Bootstrap
-				// before the EventBus wiring under test even runs.
-				return NewKernel(DeploymentModeDistributed, WithEventBus(injected), WithKVStore(NewMemoryKVStore()), WithMailer(NewConsoleMailer()), WithObjectStore(NewLocalObjectStore(t.TempDir())))
+				// KVStore, Mailer and ObjectStore are wired too, declared
+				// MultiReplicaSafe so their capability checks pass: this table
+				// exercises the EventBus seam specifically, and the distributed
+				// mode also requires the other seams to satisfy the same
+				// capability, so leaving them unwired (or under-declared) would
+				// fail Bootstrap before the EventBus wiring under test even runs.
+				return NewKernel(WithDeploymentMode(DeploymentModeDistributed), WithEventBus(injected, MultiReplicaSafe), WithKVStore(NewMemoryKVStore(), MultiReplicaSafe), WithMailer(NewConsoleMailer(), MultiReplicaSafe), WithObjectStore(NewLocalObjectStore(t.TempDir()), MultiReplicaSafe))
 			},
 			wantInjected: true,
 		},
@@ -1627,17 +1648,17 @@ func TestBootstrap_WiresTheDeploymentModeKVStoreIntoTheRegistry(t *testing.T) {
 	}{
 		{
 			name:   "the standalone deployment mode falls back to the in-memory store",
-			kernel: func(KVStore) *Kernel { return NewKernel(DeploymentModeStandalone) },
+			kernel: func(KVStore) *Kernel { return NewKernel() },
 		},
 		{
 			name:         "an injected store replaces the standalone default",
-			kernel:       func(injected KVStore) *Kernel { return NewKernel(DeploymentModeStandalone, WithKVStore(injected)) },
+			kernel:       func(injected KVStore) *Kernel { return NewKernel(WithKVStore(injected, 0)) },
 			wantInjected: true,
 		},
 		{
 			name: "the distributed deployment mode uses the injected store",
 			kernel: func(injected KVStore) *Kernel {
-				return NewKernel(DeploymentModeDistributed, WithEventBus(NewMemoryEventBus()), WithKVStore(injected), WithMailer(NewConsoleMailer()), WithObjectStore(NewLocalObjectStore(t.TempDir())))
+				return NewKernel(WithDeploymentMode(DeploymentModeDistributed), WithEventBus(NewMemoryEventBus(), MultiReplicaSafe), WithKVStore(injected, MultiReplicaSafe), WithMailer(NewConsoleMailer(), MultiReplicaSafe), WithObjectStore(NewLocalObjectStore(t.TempDir()), MultiReplicaSafe))
 			},
 			wantInjected: true,
 		},
@@ -1684,7 +1705,7 @@ func TestBootstrap_WiresTheDeploymentModeKVStoreIntoTheRegistry(t *testing.T) {
 func TestBootstrap_UnknownDeploymentMode_ReturnsError(t *testing.T) {
 	var order []string
 
-	reg, err := NewKernel(DeploymentMode("staging")).Bootstrap(context.Background(), regTestRecorder("billing", nil, &order))
+	reg, err := NewKernel(WithDeploymentMode(DeploymentMode("staging"))).Bootstrap(context.Background(), regTestRecorder("billing", nil, &order))
 
 	if !errors.Is(err, ErrInvalidDeploymentMode) {
 		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrInvalidDeploymentMode", err)
@@ -1701,7 +1722,7 @@ func TestBootstrap_UnknownDeploymentMode_ReturnsError(t *testing.T) {
 }
 
 func TestWithEventBus_NilBusKeepsTheDeploymentModeDefault(t *testing.T) {
-	reg, err := NewKernel(DeploymentModeStandalone, WithEventBus(nil)).Bootstrap(context.Background())
+	reg, err := NewKernel(WithEventBus(nil, MultiReplicaSafe)).Bootstrap(context.Background())
 	if err != nil {
 		t.Fatalf("Bootstrap() error = %v, want nil", err)
 	}
@@ -1713,7 +1734,7 @@ func TestWithEventBus_NilBusKeepsTheDeploymentModeDefault(t *testing.T) {
 // TestWithKVStore_NilStoreKeepsTheDeploymentModeDefault mirrors
 // TestWithEventBus_NilBusKeepsTheDeploymentModeDefault for the key-value seam.
 func TestWithKVStore_NilStoreKeepsTheDeploymentModeDefault(t *testing.T) {
-	reg, err := NewKernel(DeploymentModeStandalone, WithKVStore(nil)).Bootstrap(context.Background())
+	reg, err := NewKernel(WithKVStore(nil, MultiReplicaSafe)).Bootstrap(context.Background())
 	if err != nil {
 		t.Fatalf("Bootstrap() error = %v, want nil", err)
 	}
@@ -1722,22 +1743,31 @@ func TestWithKVStore_NilStoreKeepsTheDeploymentModeDefault(t *testing.T) {
 	}
 }
 
-// TestBootstrap_DistributedModeWithoutMailer_FailsFast mirrors
-// TestBootstrap_DistributedModeWithoutEventBus_FailsFast and its KVStore
-// counterpart for the mail seam: the standalone console mailer prints to a
-// process's stdout, so a distributed-mode kernel with none wired in must
-// refuse to assemble instead of handing every module a mailer whose output
-// nobody reads. Bus and KVStore are wired here so their checks inside
-// Bootstrap, which run first, pass and the failure actually exercises the
-// Mailer check instead of masking it.
-func TestBootstrap_DistributedModeWithoutMailer_FailsFast(t *testing.T) {
+// TestBootstrap_DistributedModeWithConsoleMailer_FailsCapabilityCheck mirrors
+// TestBootstrap_DistributedModeWithMemoryEventBus_FailsCapabilityCheck and its
+// KVStore counterpart for the mail seam: the built-in "mailer.console"
+// implementation prints to a process's stdout, so a distributed-mode kernel
+// that resolves to it must refuse to assemble instead of handing every module
+// a mailer whose output nobody reads. Bus and KVStore are injected and
+// declared MultiReplicaSafe here so their checks inside Bootstrap, which run
+// first, pass and the failure actually exercises the Mailer check instead of
+// masking it. This replaces the old
+// TestBootstrap_DistributedModeWithoutMailer_FailsFast, which asserted the
+// same property against ErrMissingDistributedMailer.
+func TestBootstrap_DistributedModeWithConsoleMailer_FailsCapabilityCheck(t *testing.T) {
 	var order []string
 
-	kernel := NewKernel(DeploymentModeDistributed, WithEventBus(NewMemoryEventBus()), WithKVStore(NewMemoryKVStore()))
+	kernel := NewKernel(WithDeploymentMode(DeploymentModeDistributed),
+		WithEventBus(NewMemoryEventBus(), MultiReplicaSafe), WithKVStore(NewMemoryKVStore(), MultiReplicaSafe))
 	reg, err := kernel.Bootstrap(context.Background(), regTestRecorder("billing", nil, &order))
 
-	if !errors.Is(err, ErrMissingDistributedMailer) {
-		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrMissingDistributedMailer", err)
+	if !errors.Is(err, ErrCapabilityUnsatisfied) {
+		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrCapabilityUnsatisfied", err)
+	}
+	for _, want := range []string{"mailer", "mailer.console", "MultiReplicaSafe", "distributed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to name %q", err, want)
+		}
 	}
 	if reg != nil {
 		t.Error("Bootstrap() returned a registry alongside the error, want nil")
@@ -1747,23 +1777,31 @@ func TestBootstrap_DistributedModeWithoutMailer_FailsFast(t *testing.T) {
 	}
 }
 
-// TestBootstrap_DistributedModeWithoutObjectStore_FailsFast mirrors
-// TestBootstrap_DistributedModeWithoutMailer_FailsFast and its older
-// counterparts for the object-store seam: the standalone deployment mode's
-// local store is a throwaway directory on one host's disk, so a
-// distributed-mode kernel with none wired in must refuse to assemble instead
+// TestBootstrap_DistributedModeWithLocalObjectStore_FailsCapabilityCheck
+// mirrors TestBootstrap_DistributedModeWithConsoleMailer_FailsCapabilityCheck
+// and its older counterparts for the object-store seam: the built-in
+// "objectstore.local" implementation is a directory on one host's disk, so a
+// distributed-mode kernel that resolves to it must refuse to assemble instead
 // of handing every module a store whose objects its replicas can never see.
-// Bus, KVStore and Mailer are wired here so their checks inside Bootstrap,
-// which run first, pass and the failure actually exercises the ObjectStore
-// check instead of masking it.
-func TestBootstrap_DistributedModeWithoutObjectStore_FailsFast(t *testing.T) {
+// Bus, KVStore and Mailer are injected and declared MultiReplicaSafe here so
+// their checks inside Bootstrap, which run first, pass and the failure
+// actually exercises the ObjectStore check instead of masking it. This
+// replaces the old TestBootstrap_DistributedModeWithoutObjectStore_FailsFast,
+// which asserted the same property against ErrMissingDistributedObjectStore.
+func TestBootstrap_DistributedModeWithLocalObjectStore_FailsCapabilityCheck(t *testing.T) {
 	var order []string
 
-	kernel := NewKernel(DeploymentModeDistributed, WithEventBus(NewMemoryEventBus()), WithKVStore(NewMemoryKVStore()), WithMailer(NewConsoleMailer()))
+	kernel := NewKernel(WithDeploymentMode(DeploymentModeDistributed),
+		WithEventBus(NewMemoryEventBus(), MultiReplicaSafe), WithKVStore(NewMemoryKVStore(), MultiReplicaSafe), WithMailer(NewConsoleMailer(), MultiReplicaSafe))
 	reg, err := kernel.Bootstrap(context.Background(), regTestRecorder("billing", nil, &order))
 
-	if !errors.Is(err, ErrMissingDistributedObjectStore) {
-		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrMissingDistributedObjectStore", err)
+	if !errors.Is(err, ErrCapabilityUnsatisfied) {
+		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrCapabilityUnsatisfied", err)
+	}
+	for _, want := range []string{"objectstore", "objectstore.local", "MultiReplicaSafe", "distributed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to name %q", err, want)
+		}
 	}
 	if reg != nil {
 		t.Error("Bootstrap() returned a registry alongside the error, want nil")
@@ -1791,17 +1829,17 @@ func TestBootstrap_WiresTheDeploymentModeMailerIntoTheRegistry(t *testing.T) {
 	}{
 		{
 			name:   "the standalone deployment mode falls back to the console mailer",
-			kernel: func(Mailer) *Kernel { return NewKernel(DeploymentModeStandalone) },
+			kernel: func(Mailer) *Kernel { return NewKernel() },
 		},
 		{
 			name:         "an injected mailer replaces the standalone default",
-			kernel:       func(injected Mailer) *Kernel { return NewKernel(DeploymentModeStandalone, WithMailer(injected)) },
+			kernel:       func(injected Mailer) *Kernel { return NewKernel(WithMailer(injected, 0)) },
 			wantInjected: true,
 		},
 		{
 			name: "the distributed deployment mode uses the injected mailer",
 			kernel: func(injected Mailer) *Kernel {
-				return NewKernel(DeploymentModeDistributed, WithEventBus(NewMemoryEventBus()), WithKVStore(NewMemoryKVStore()), WithMailer(injected), WithObjectStore(NewLocalObjectStore(t.TempDir())))
+				return NewKernel(WithDeploymentMode(DeploymentModeDistributed), WithEventBus(NewMemoryEventBus(), MultiReplicaSafe), WithKVStore(NewMemoryKVStore(), MultiReplicaSafe), WithMailer(injected, MultiReplicaSafe), WithObjectStore(NewLocalObjectStore(t.TempDir()), MultiReplicaSafe))
 			},
 			wantInjected: true,
 		},
@@ -1850,7 +1888,7 @@ func TestBootstrap_WiresTheDeploymentModeMailerIntoTheRegistry(t *testing.T) {
 // TestWithEventBus_NilBusKeepsTheDeploymentModeDefault and its KVStore
 // counterpart for the mail seam.
 func TestWithMailer_NilMailerKeepsTheDeploymentModeDefault(t *testing.T) {
-	reg, err := NewKernel(DeploymentModeStandalone, WithMailer(nil)).Bootstrap(context.Background())
+	reg, err := NewKernel(WithMailer(nil, MultiReplicaSafe)).Bootstrap(context.Background())
 	if err != nil {
 		t.Fatalf("Bootstrap() error = %v, want nil", err)
 	}
@@ -1863,7 +1901,7 @@ func TestWithMailer_NilMailerKeepsTheDeploymentModeDefault(t *testing.T) {
 // TestWithMailer_NilMailerKeepsTheDeploymentModeDefault and its older
 // counterparts for the object-store seam.
 func TestWithObjectStore_NilStoreKeepsTheDeploymentModeDefault(t *testing.T) {
-	reg, err := NewKernel(DeploymentModeStandalone, WithObjectStore(nil)).Bootstrap(context.Background())
+	reg, err := NewKernel(WithObjectStore(nil, MultiReplicaSafe)).Bootstrap(context.Background())
 	if err != nil {
 		t.Fatalf("Bootstrap() error = %v, want nil", err)
 	}
@@ -1892,19 +1930,19 @@ func TestBootstrap_WiresTheDeploymentModeObjectStoreIntoTheRegistry(t *testing.T
 	}{
 		{
 			name:   "the standalone deployment mode falls back to a private store",
-			kernel: func(ObjectStore) *Kernel { return NewKernel(DeploymentModeStandalone) },
+			kernel: func(ObjectStore) *Kernel { return NewKernel() },
 		},
 		{
 			name: "an injected store replaces the standalone default",
 			kernel: func(injected ObjectStore) *Kernel {
-				return NewKernel(DeploymentModeStandalone, WithObjectStore(injected))
+				return NewKernel(WithObjectStore(injected, 0))
 			},
 			wantInjected: true,
 		},
 		{
 			name: "the distributed deployment mode uses the injected store",
 			kernel: func(injected ObjectStore) *Kernel {
-				return NewKernel(DeploymentModeDistributed, WithEventBus(NewMemoryEventBus()), WithKVStore(NewMemoryKVStore()), WithMailer(NewConsoleMailer()), WithObjectStore(injected))
+				return NewKernel(WithDeploymentMode(DeploymentModeDistributed), WithEventBus(NewMemoryEventBus(), MultiReplicaSafe), WithKVStore(NewMemoryKVStore(), MultiReplicaSafe), WithMailer(NewConsoleMailer(), MultiReplicaSafe), WithObjectStore(injected, MultiReplicaSafe))
 			},
 			wantInjected: true,
 		},
@@ -2043,7 +2081,7 @@ func (m localeBundleModule) Register(*Registry) error { return nil }
 // locales package, so this merge test consumes the same bytes the package
 // ships to consumers.
 func TestBootstrap_AssemblesCatalogFromModuleLocaleFiles(t *testing.T) {
-	reg, err := NewKernel(DeploymentModeStandalone).Bootstrap(context.Background(),
+	reg, err := NewKernel().Bootstrap(context.Background(),
 		localeBundleModule{name: "pkgcore"})
 	if err != nil {
 		t.Fatal(err)
@@ -2077,7 +2115,7 @@ func TestBootstrap_EmptyLocaleFilesYieldEmptyCatalog_HandBuiltRegistryStaysNil(t
 	// still a catalog, because Bootstrap always installs the frozen merge.
 	// A hand-built Registry, by contrast, never has a catalog at all: the
 	// seam is installed by Bootstrap alone, exactly like ObjectStore.
-	reg, err := NewKernel(DeploymentModeStandalone).Bootstrap(context.Background(),
+	reg, err := NewKernel().Bootstrap(context.Background(),
 		regTestModule{name: "empty"})
 	if err != nil {
 		t.Fatal(err)

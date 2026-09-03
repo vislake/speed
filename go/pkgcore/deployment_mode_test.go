@@ -79,6 +79,35 @@ func TestParseDeploymentMode_InvalidValues_ReturnDescriptiveError(t *testing.T) 
 	}
 }
 
+func TestDeploymentMode_RequiredCapabilities(t *testing.T) {
+	tests := []struct {
+		name string
+		mode DeploymentMode
+		want Capability
+	}{
+		{name: "distributed requires MultiReplicaSafe", mode: DeploymentModeDistributed, want: MultiReplicaSafe},
+		{name: "standalone requires nothing extra", mode: DeploymentModeStandalone, want: 0},
+		{
+			// RequiredCapabilities is not the place an invalid mode is
+			// rejected -- Kernel.Bootstrap checks Valid() itself before ever
+			// asking for the requirement -- so an invalid value falls back to
+			// the standalone requirement rather than panicking or erroring.
+			name: "an invalid mode falls back to the standalone requirement",
+			mode: DeploymentMode("staging"),
+			want: 0,
+		},
+		{name: "the zero value falls back to the standalone requirement", mode: DeploymentMode(""), want: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.mode.RequiredCapabilities(); got != tt.want {
+				t.Errorf("DeploymentMode(%q).RequiredCapabilities() = %v, want %v", tt.mode, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDeploymentModeValid(t *testing.T) {
 	tests := []struct {
 		name string

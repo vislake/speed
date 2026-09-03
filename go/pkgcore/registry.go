@@ -5,9 +5,9 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net/http"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -58,33 +58,16 @@ var ErrMissingDependency = errors.New("pkgcore: missing module dependency")
 // ErrUnresolvedFeatureDependency is returned when a feature flag depends on a flag nobody registered.
 var ErrUnresolvedFeatureDependency = errors.New("pkgcore: unresolved feature flag dependency")
 
-// ErrMissingDistributedEventBus is returned by Bootstrap when a Kernel assembled
-// for DeploymentModeDistributed has no EventBus wired in. There is no
-// distributed implementation to fall back on, and falling back to the
-// in-memory bus would give every replica a private bus, so assembly fails
-// instead.
-var ErrMissingDistributedEventBus = errors.New("pkgcore: distributed deployment mode requires an explicit event bus")
-
-// ErrMissingDistributedKVStore is returned by Bootstrap when a Kernel assembled
-// for DeploymentModeDistributed has no KVStore wired in. There is no
-// distributed implementation to fall back on, and falling back to the
-// in-memory store would give every replica a private store, so assembly
-// fails instead.
-var ErrMissingDistributedKVStore = errors.New("pkgcore: distributed deployment mode requires an explicit key-value store")
-
-// ErrMissingDistributedMailer is returned by Bootstrap when a Kernel assembled
-// for DeploymentModeDistributed has no Mailer wired in. There is no
-// distributed implementation to fall back on, and falling back to the console
-// mailer would print every message to a replica's stdout where nobody reads
-// it, so assembly fails instead.
-var ErrMissingDistributedMailer = errors.New("pkgcore: distributed deployment mode requires an explicit mailer")
-
-// ErrMissingDistributedObjectStore is returned by Bootstrap when a Kernel
-// assembled for DeploymentModeDistributed has no ObjectStore wired in. There
-// is no distributed implementation to fall back on, and falling back to the
-// local file system store would give every replica its own private disk and
-// split the objectspace silently, so assembly fails instead.
-var ErrMissingDistributedObjectStore = errors.New("pkgcore: distributed deployment mode requires an explicit object store")
+// ErrCapabilityUnsatisfied is returned by Bootstrap when a resolved seam
+// implementation -- whether picked from the Kernel's active Preset or
+// injected by the host through a KernelOption -- does not declare every
+// Capability the Kernel's DeploymentMode requires. It replaces the four
+// ErrMissingDistributed* sentinels a mode-keyed switch used to return: with N
+// implementations per seam, "missing the distributed implementation" no
+// longer describes the failure, so the error instead names the seam, the
+// implementation and exactly which capability is missing (see
+// validateSeamCapability).
+var ErrCapabilityUnsatisfied = errors.New("pkgcore: seam implementation does not satisfy the deployment mode's required capability")
 
 // errNilFeatureRegistrar guards ValidateFeatureGraph against an unwired registry.
 var errNilFeatureRegistrar = errors.New("pkgcore: registry has no feature registrar")
@@ -728,218 +711,276 @@ func (r *memoryAuditActionRegistrar) Actions() []string {
 	return slices.Sorted(maps.Keys(r.actions))
 }
 
-// Kernel assembles modules into a running application for one deployment mode.
-// The deployment mode selects the infrastructure implementations the assembled
-// Registry is wired to; kernel assembly is the only place allowed to branch on
-// it, which is why the implementations are injected here rather than chosen by
-// a module.
+// Kernel assembles modules into a running application for one deployment
+// topology, built from a composition of independently selected seam
+// implementations. Deployment mode and implementation composition are two
+// orthogonal axes (docs/internal/03-deployment-modes.md): the deployment mode
+// declares how many replicas the assembled application may run as, which
+// only constrains which implementations are permissible for a
+// shared-state seam; it never selects one. Kernel assembly is the only place
+// allowed to branch on the mode, which is why capability validation lives
+// here rather than inside a module.
 type Kernel struct {
 	deploymentMode DeploymentMode
-	bus            EventBus
-	kv             KVStore
-	mailer         Mailer
-	objectStore    ObjectStore
+
+	// preset names, for each seam, which registered implementation to build
+	// when the host has not injected one directly for that seam. NewKernel
+	// defaults it to PresetStandalone; WithPreset replaces the whole map.
+	preset Preset
+
+	eventBus    kernelSeam[EventBus]
+	kv          kernelSeam[KVStore]
+	mailer      kernelSeam[Mailer]
+	objectStore kernelSeam[ObjectStore]
 }
 
-// KernelOption injects an infrastructure implementation into a Kernel.
-// Distributed implementations are supplied this way because the kernel would
-// otherwise have to construct them from deployment configuration it does not
-// carry: a broker address, credentials, a registry of hosts. The host, which
-// reads its own configuration, builds the implementation and injects it; the
-// kernel stays the only place that picks the standalone defaults.
+// kernelSeam holds one infrastructure seam's resolution state on a Kernel:
+// the zero value means the seam resolves through the Kernel's Preset, and a
+// KernelOption such as WithEventBus sets injected to record that the host
+// supplied value directly instead, together with the Capability it declared
+// for that value.
+type kernelSeam[T any] struct {
+	value        T
+	capabilities Capability
+	injected     bool
+}
+
+// KernelOption configures a Kernel before Bootstrap resolves its seams.
+// WithDeploymentMode sets the topology to validate the composition against;
+// WithPreset replaces which registered implementation each unwired seam
+// resolves to; WithEventBus, WithKVStore, WithMailer and WithObjectStore
+// inject a specific implementation for one seam, overriding whatever the
+// Preset would have picked for it, and carry the Capability that
+// implementation declares.
 type KernelOption func(*Kernel)
 
-// WithEventBus wires bus into every Registry the kernel bootstraps, in place of
-// the deployment mode's default. It is the seam a distributed-mode host uses
-// to supply its broker-backed EventBus: DeploymentModeDistributed has no
-// built-in implementation, so Bootstrap fails without it. A nil bus leaves
-// the deployment mode's default in place.
-func WithEventBus(bus EventBus) KernelOption {
+// WithDeploymentMode sets the topology Bootstrap validates the resolved
+// composition against. The zero-value Kernel already defaults to
+// DeploymentModeStandalone, so this option only matters to widen the
+// requirement to DeploymentModeDistributed.
+func WithDeploymentMode(mode DeploymentMode) KernelOption {
+	return func(k *Kernel) { k.deploymentMode = mode }
+}
+
+// WithPreset replaces the whole seam-name mapping a Kernel resolves its
+// unwired seams against, in place of the zero-value default,
+// PresetStandalone. It has no effect on a seam the host also injects
+// directly with WithEventBus or one of its siblings: injection always wins,
+// per seam, regardless of option order.
+func WithPreset(preset Preset) KernelOption {
+	return func(k *Kernel) { k.preset = preset }
+}
+
+// WithEventBus wires bus into every Registry the kernel bootstraps, in place
+// of whatever the active Preset would have resolved for the "eventbus" seam.
+// capabilities is what bus declares about itself; Bootstrap's validation
+// compares it against the deployment mode's requirement exactly as it does
+// for a preset-resolved implementation, so an injected bus that lacks a
+// required capability is rejected the same way a preset-resolved one would
+// be. A nil bus leaves the Preset's resolution for this seam in place.
+func WithEventBus(bus EventBus, capabilities Capability) KernelOption {
 	return func(k *Kernel) {
 		if bus == nil {
 			return
 		}
-		k.bus = bus
+		k.eventBus = kernelSeam[EventBus]{value: bus, capabilities: capabilities, injected: true}
 	}
 }
 
-// WithKVStore wires store into every Registry the kernel bootstraps, in place
-// of the deployment mode's default. It is the seam a distributed-mode host
-// uses to supply its Redis-backed KVStore: DeploymentModeDistributed has no
-// built-in implementation, so Bootstrap fails without it. A nil store leaves
-// the deployment mode's default in place.
-func WithKVStore(store KVStore) KernelOption {
+// WithKVStore mirrors WithEventBus for the "kv" seam.
+func WithKVStore(store KVStore, capabilities Capability) KernelOption {
 	return func(k *Kernel) {
 		if store == nil {
 			return
 		}
-		k.kv = store
+		k.kv = kernelSeam[KVStore]{value: store, capabilities: capabilities, injected: true}
 	}
 }
 
-// WithMailer wires mailer into every Registry the kernel bootstraps, in place
-// of the deployment mode's default. It is the seam a distributed-mode host
-// uses to supply its SMTP-backed Mailer: DeploymentModeDistributed has no
-// built-in implementation, so Bootstrap fails without it. A nil mailer leaves
-// the deployment mode's default in place.
-func WithMailer(mailer Mailer) KernelOption {
+// WithMailer mirrors WithEventBus for the "mailer" seam.
+func WithMailer(mailer Mailer, capabilities Capability) KernelOption {
 	return func(k *Kernel) {
 		if mailer == nil {
 			return
 		}
-		k.mailer = mailer
+		k.mailer = kernelSeam[Mailer]{value: mailer, capabilities: capabilities, injected: true}
 	}
 }
 
-// WithObjectStore wires store into every Registry the kernel bootstraps, in
-// place of the deployment mode's default. It is the seam a distributed-mode
-// host uses to supply its S3-backed ObjectStore: DeploymentModeDistributed
-// has no built-in implementation, so Bootstrap fails without it. A
+// WithObjectStore mirrors WithEventBus for the "objectstore" seam. A
 // DeploymentModeStandalone host that must keep objects across restarts
-// injects its own local store here too, because the standalone default is a
-// throwaway directory. A nil store leaves the deployment mode's default in
-// place.
-func WithObjectStore(store ObjectStore) KernelOption {
+// injects its own persistent-directory store here, because the built-in
+// "objectstore.local" implementation the Preset resolves to defaults to a
+// throwaway temporary directory.
+func WithObjectStore(store ObjectStore, capabilities Capability) KernelOption {
 	return func(k *Kernel) {
 		if store == nil {
 			return
 		}
-		k.objectStore = store
+		k.objectStore = kernelSeam[ObjectStore]{value: store, capabilities: capabilities, injected: true}
 	}
 }
 
-// NewKernel returns a Kernel that assembles modules for the given deployment
-// mode, with opts supplying the implementations the deployment mode itself
-// cannot build. An unknown deployment mode is reported by Bootstrap rather
-// than here, because that is where the wiring which depends on it happens.
-func NewKernel(mode DeploymentMode, opts ...KernelOption) *Kernel {
-	k := &Kernel{deploymentMode: mode}
+// NewKernel returns a Kernel that, with no options, behaves exactly like
+// today's zero-configuration standalone default: DeploymentModeStandalone
+// composed with PresetStandalone, which resolves every seam to its
+// in-process, zero-external-dependency implementation and starts in seconds
+// with nothing else running. opts layer a wider deployment mode, a different
+// Preset, or per-seam injection on top.
+func NewKernel(opts ...KernelOption) *Kernel {
+	k := &Kernel{
+		deploymentMode: DeploymentModeStandalone,
+		preset:         PresetStandalone,
+	}
 	for _, opt := range opts {
 		opt(k)
 	}
 	return k
 }
 
-// eventBus returns the EventBus the assembled Registry is wired to: the
-// injected one when the host supplied it, and the in-memory bus for
-// DeploymentModeStandalone, which is single-process by design.
-// DeploymentModeDistributed reports an error instead of falling back, because
-// the in-memory bus would give every replica a private bus and split event
-// delivery silently.
-func (k *Kernel) eventBus() (EventBus, error) {
-	if k.bus != nil {
-		return k.bus, nil
-	}
-	switch k.deploymentMode {
-	case DeploymentModeStandalone:
-		return NewMemoryEventBus(), nil
-	case DeploymentModeDistributed:
-		return nil, fmt.Errorf("%w: wire one with WithEventBus", ErrMissingDistributedEventBus)
-	default:
-		return nil, fmt.Errorf("%w: %q", ErrInvalidDeploymentMode, k.deploymentMode)
-	}
-}
-
-// kvStore returns the KVStore the assembled Registry is wired to: the
-// injected one when the host supplied it, and the in-memory store for
-// DeploymentModeStandalone, which is single-process by design.
-// DeploymentModeDistributed reports an error instead of falling back, because
-// the in-memory store would give every replica a private store and split
-// state silently.
-func (k *Kernel) kvStore() (KVStore, error) {
-	if k.kv != nil {
-		return k.kv, nil
-	}
-	switch k.deploymentMode {
-	case DeploymentModeStandalone:
-		return NewMemoryKVStore(), nil
-	case DeploymentModeDistributed:
-		return nil, fmt.Errorf("%w: wire one with WithKVStore", ErrMissingDistributedKVStore)
-	default:
-		return nil, fmt.Errorf("%w: %q", ErrInvalidDeploymentMode, k.deploymentMode)
-	}
-}
-
-// resolveMailer returns the Mailer the assembled Registry is wired to: the
-// injected one when the host supplied it, and the console mailer for
-// DeploymentModeStandalone, which has no real transport by design.
-// DeploymentModeDistributed reports an error instead of falling back, because
-// the console mailer would print every message to a replica's stdout where
-// nobody reads it. It parallels eventBus and kvStore; the field it resolves
-// is named mailer, which a method of the same name could not be.
-func (k *Kernel) resolveMailer() (Mailer, error) {
-	if k.mailer != nil {
-		return k.mailer, nil
-	}
-	switch k.deploymentMode {
-	case DeploymentModeStandalone:
-		return NewConsoleMailer(), nil
-	case DeploymentModeDistributed:
-		return nil, fmt.Errorf("%w: wire one with WithMailer", ErrMissingDistributedMailer)
-	default:
-		return nil, fmt.Errorf("%w: %q", ErrInvalidDeploymentMode, k.deploymentMode)
-	}
-}
-
-// resolveObjectStore returns the ObjectStore the assembled Registry is wired
-// to: the injected one when the host supplied it, and a fresh private
-// temporary directory for DeploymentModeStandalone. The standalone default
-// is deliberately throwaway: the deployment mode keeps nothing across
-// restarts by itself, and a host that must keep objects injects a
-// NewLocalObjectStore of its own directory with WithObjectStore.
-// DeploymentModeDistributed reports an error instead of falling back, because
-// a local store would give every replica its own private disk and split the
-// objectspace silently. It parallels eventBus, kvStore and resolveMailer; the
-// field it resolves is named objectStore, which a method of the same name
-// could not be.
-func (k *Kernel) resolveObjectStore() (ObjectStore, error) {
-	if k.objectStore != nil {
-		return k.objectStore, nil
-	}
-	switch k.deploymentMode {
-	case DeploymentModeStandalone:
-		directory, err := os.MkdirTemp("", "pkgcore-object-store-*")
-		if err != nil {
-			return nil, fmt.Errorf("pkgcore: standalone object store: %w", err)
-		}
-		return NewLocalObjectStore(directory), nil
-	case DeploymentModeDistributed:
-		return nil, fmt.Errorf("%w: wire one with WithObjectStore", ErrMissingDistributedObjectStore)
-	default:
-		return nil, fmt.Errorf("%w: %q", ErrInvalidDeploymentMode, k.deploymentMode)
-	}
-}
-
-// DeploymentMode returns the deployment mode the kernel assembles modules for.
+// DeploymentMode returns the deployment mode the kernel validates the
+// assembled composition against.
 func (k *Kernel) DeploymentMode() DeploymentMode { return k.deploymentMode }
+
+// seamResolution names what Bootstrap resolved for one seam: the Preset key
+// it resolves under, which implementation it ended up with, and the
+// Capability that implementation declared. It is the shared shape the
+// capability-validation pass and the SurvivesRestart startup warning both
+// consume, so a Bootstrap does not resolve the same information twice.
+type seamResolution struct {
+	// seamKey is the Preset key the seam resolves under: "eventbus", "kv",
+	// "mailer" or "objectstore".
+	seamKey string
+	// implementation names what was resolved: the Registration.Name a
+	// preset-resolved seam was built from, or the literal "<injected>" for a
+	// host-supplied value, which carries no registry name of its own.
+	implementation string
+	capabilities   Capability
+}
+
+// resolveKernelSeam returns the value a Kernel bootstraps one seam with:
+// seam.value when the host injected one, or preset[seamKey] built through
+// registry otherwise. cfg is always the empty Config for a preset-resolved
+// seam today: carrying per-implementation settings (a Redis address, SMTP
+// credentials) through the Preset layer is deliberately deferred (see
+// Config's own doc comment); a host that needs them injects the
+// implementation directly instead, which is exactly what WithEventBus and
+// its siblings are for.
+func resolveKernelSeam[T any](seam kernelSeam[T], seamKey string, preset Preset, registry *SeamRegistry[T]) (T, seamResolution, error) {
+	if seam.injected {
+		return seam.value, seamResolution{seamKey: seamKey, implementation: "<injected>", capabilities: seam.capabilities}, nil
+	}
+
+	name := preset[seamKey]
+	impl, caps, err := registry.Build(name, Config{})
+	if err != nil {
+		var zero T
+		return zero, seamResolution{}, fmt.Errorf("pkgcore: resolve %q seam: %w", seamKey, err)
+	}
+	return impl, seamResolution{seamKey: seamKey, implementation: name, capabilities: caps}, nil
+}
+
+// validateSeamCapability returns an error wrapping ErrCapabilityUnsatisfied,
+// naming res's seam, its implementation and exactly which capability is
+// missing, when res does not declare every bit set in required. It reports
+// nil when res satisfies required, including the common case required == 0,
+// which DeploymentModeStandalone always passes regardless of what any seam
+// declares.
+func validateSeamCapability(res seamResolution, required Capability, mode DeploymentMode) error {
+	if res.capabilities.Has(required) {
+		return nil
+	}
+	missing := required &^ res.capabilities
+	return fmt.Errorf("%w: seam %q implementation %q lacks %s, required by deployment mode %q",
+		ErrCapabilityUnsatisfied, res.seamKey, res.implementation, missing, mode)
+}
+
+// warnIfNotDurable logs a startup warning when res does not declare
+// SurvivesRestart, per docs/internal/03-deployment-modes.md's rule that an
+// implementation whose state does not outlive the process must announce
+// itself at startup. This is a property of the resolved implementation, not
+// of the deployment mode -- DeploymentModeStandalone never requires
+// SurvivesRestart, but a standalone composition can still choose to be
+// warned about it -- so it runs for every seam, in every mode, never failing
+// the bootstrap: losing state across a restart is a legitimate, deliberate
+// choice for a development or throwaway composition.
+//
+// pkgcore is the dependency floor of the workspace and cannot import
+// go/observability (the reverse direction; see
+// docs/internal/01-architecture.md's dependency graph), so this reaches for
+// log/slog directly rather than the context-aware obs.FromContext wrapper
+// every downstream module uses for its own logging. Nothing here runs on a
+// request path, so the absence of trace/tenant correlation this one call
+// site would otherwise lose is immaterial.
+func warnIfNotDurable(res seamResolution) {
+	if res.capabilities.Has(SurvivesRestart) {
+		return
+	}
+	slog.Default().Warn("pkgcore: seam implementation does not survive a process restart",
+		"seam", res.seamKey,
+		"implementation", res.implementation,
+	)
+}
 
 // Bootstrap sorts modules into dependency order, registers each of them into
 // one shared Registry, and validates the resulting feature flag graph.
 //
-// It fails, without registering anything further, on a deployment mode whose
-// infrastructure implementations are not wired in, on a dependency cycle, on a
+// Each of the four infrastructure seams is resolved first: the host's
+// injected implementation when there is one, otherwise the Kernel's active
+// Preset built through that seam's SeamRegistry. Every resolved
+// implementation's declared Capability is then checked against what
+// DeploymentMode requires, and Bootstrap fails, naming the seam and the
+// implementation, on the first one that falls short -- the direct replacement
+// for the four mode-keyed hardcoded checks (ErrMissingDistributedEventBus and
+// its three siblings) this retrofit removed: one capability comparison, run
+// once per seam, that does not grow as more implementations are registered.
+// An implementation that does not declare SurvivesRestart logs a startup
+// warning instead of failing Bootstrap; see warnIfNotDurable.
+//
+// It fails, without registering anything further, on an invalid deployment
+// mode, on a seam whose resolved implementation does not satisfy the
+// deployment mode's required capability, on a dependency cycle, on a
 // dependency that is not part of modules, on a duplicate module name, on the
-// first Register error, and on an unresolved feature flag dependency. ctx must
-// be non-nil; cancelling it stops the bootstrap between modules.
+// first Register error, and on an unresolved feature flag dependency. ctx
+// must be non-nil; cancelling it stops the bootstrap between modules.
 func (k *Kernel) Bootstrap(ctx context.Context, modules ...Module) (*Registry, error) {
-	// The deployment mode's wiring is resolved first so that a misconfigured
-	// distributed-mode host fails at startup rather than after a partial
-	// assembly.
-	bus, err := k.eventBus()
+	if !k.deploymentMode.Valid() {
+		return nil, fmt.Errorf("%w: %q", ErrInvalidDeploymentMode, k.deploymentMode)
+	}
+
+	// The seams are resolved, in this fixed order, before anything else, so
+	// that a misconfigured composition fails at startup rather than after a
+	// partial assembly -- the same guarantee the four mode-keyed checks this
+	// retrofit replaced used to give.
+	bus, busRes, err := resolveKernelSeam(k.eventBus, presetKeyEventBus, k.preset, EventBusRegistry)
 	if err != nil {
 		return nil, err
 	}
-	kv, err := k.kvStore()
+	kv, kvRes, err := resolveKernelSeam(k.kv, presetKeyKVStore, k.preset, KVStoreRegistry)
 	if err != nil {
 		return nil, err
 	}
-	mailer, err := k.resolveMailer()
+	mailer, mailerRes, err := resolveKernelSeam(k.mailer, presetKeyMailer, k.preset, MailerRegistry)
 	if err != nil {
 		return nil, err
 	}
-	objectStore, err := k.resolveObjectStore()
+	objectStore, objectStoreRes, err := resolveKernelSeam(k.objectStore, presetKeyObjectStore, k.preset, ObjectStoreRegistry)
 	if err != nil {
 		return nil, err
+	}
+
+	required := k.deploymentMode.RequiredCapabilities()
+	resolvedSeams := [...]seamResolution{busRes, kvRes, mailerRes, objectStoreRes}
+	for _, res := range resolvedSeams {
+		// capErr, not err: govet's shadow check flags reusing err inside this
+		// loop, since the outer err from the seam-resolution block above is
+		// still in scope and still meaningful to a reader below the loop.
+		if capErr := validateSeamCapability(res, required, k.deploymentMode); capErr != nil {
+			return nil, capErr
+		}
+	}
+	for _, res := range resolvedSeams {
+		warnIfNotDurable(res)
 	}
 
 	ordered, err := sortModulesByDependency(modules)
