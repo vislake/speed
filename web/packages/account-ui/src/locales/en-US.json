@@ -1,0 +1,29 @@
+{
+  "errors": {
+    "authn": {
+      "session_not_found": "The session does not exist. Please sign in again.",
+      "session_revoked": "The session was revoked. Please sign in again.",
+      "token_expired": "Your sign-in has expired. Please sign in again.",
+      "refresh_token_invalid": "Your sign-in is no longer valid. Please sign in again.",
+      "refresh_token_reused": "Suspicious activity was detected. Please sign in again.",
+      "rate_limited": "Too many attempts. Please try again later.",
+      "identity_already_bound": "This social account is already linked to your account.",
+      "identity_not_found": "This sign-in method was not found. It may have been removed.",
+      "last_login_method": "You must keep at least one sign-in method.",
+      "oauth_state_invalid": "The binding state has expired. Please start again.",
+      "social_exchange_failed": "The social account binding failed. Please try again.",
+      "provider_unknown": "This social account provider is not supported.",
+      "redirect_uri_not_allowed": "The callback address is not allowed.",
+      "step_up_required": "This action requires you to verify your identity again.",
+      "mfa_not_enrolled": "Two-step verification is not enabled.",
+      "mfa_already_enrolled": "Two-step verification is already enabled.",
+      "mfa_invalid_code": "The code is incorrect or has expired. Try again."
+    },
+    "client": {
+      "network": "No network connection. Check your connection and try again.",
+      "timeout": "The request timed out. Please try again later.",
+      "protocol": "The service returned an unexpected response. Please try again later."
+    },
+    "unknown": "Something went wrong. Please try again later."
+  }
+}

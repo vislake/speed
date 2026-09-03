@@ -37,7 +37,11 @@ name: pr-check
 #     the sign-in family and the session hooks into one three-branch
 #     view machine with zero text of its own -- the whole
 #     sign-in/switch/sign-out journey discharged in form, the browser
-#     and real-server leg still the reference-app shell's); root
+#     and real-server leg still the reference-app shell's), and
+#     @speed/account-ui, the signed-in account-management surface over
+#     that same session -- session and login-history lists, social
+#     bindings and step-up-gated two-factor management -- the account
+#     face the authn and auth-ui rounds deferred); root
 #     CLAUDE.md, Repository Status) each
 #     run through the reusable npm-package-ci workflow: a frozen-lockfile
 #     workspace install from the web/ root, then lint (the flat-config
@@ -200,6 +204,7 @@ jobs:
           - web/packages/auth-ui
           - web/packages/tenancy-ui
           - web/packages/product-shell
+          - web/packages/account-ui
     uses: ./.github/workflows/reusable/npm-package-ci.yml
     with:
       package: ${{ matrix.package }}

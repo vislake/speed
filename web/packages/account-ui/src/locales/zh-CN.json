@@ -1,0 +1,29 @@
+{
+  "errors": {
+    "authn": {
+      "session_not_found": "会话不存在，请重新登录。",
+      "session_revoked": "会话已被撤销，请重新登录。",
+      "token_expired": "登录已过期，请重新登录。",
+      "refresh_token_invalid": "登录状态已失效，请重新登录。",
+      "refresh_token_reused": "检测到异常活动，请重新登录。",
+      "rate_limited": "尝试次数过多，请稍后再试。",
+      "identity_already_bound": "此社交账号已绑定到你的账户。",
+      "identity_not_found": "未找到该登录方式，可能已被移除。",
+      "last_login_method": "至少需要保留一种登录方式。",
+      "oauth_state_invalid": "绑定状态已失效，请重新发起绑定。",
+      "social_exchange_failed": "社交账号绑定失败，请重试。",
+      "provider_unknown": "不支持的社交账号提供商。",
+      "redirect_uri_not_allowed": "回调地址不受支持。",
+      "step_up_required": "此操作需要你重新验证身份。",
+      "mfa_not_enrolled": "你尚未开启两步验证。",
+      "mfa_already_enrolled": "两步验证已开启，无需重复设置。",
+      "mfa_invalid_code": "验证码不正确或已过期，请重试。"
+    },
+    "client": {
+      "network": "网络连接不可用，请检查网络后重试。",
+      "timeout": "请求超时，请稍后重试。",
+      "protocol": "服务返回了异常响应，请稍后重试。"
+    },
+    "unknown": "出了点问题，请稍后重试。"
+  }
+}
