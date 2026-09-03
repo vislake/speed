@@ -65,16 +65,15 @@ func run(baseCtx context.Context) error {
 
 	// buildServer runs, and can reject an unsupported deployment mode,
 	// before obs.Init: buildServer's own error ("deployment mode %q is
-	// not wired in this example yet") is the clearer, more specific
-	// diagnostic for this example's actual limitation (root CLAUDE.md's
-	// M0 status -- only the standalone deployment mode has business
-	// wiring at all), and it would be confusing for a misconfigured
-	// SPEED_DEPLOYMENT_MODE=distributed to instead surface obs.Init's
-	// "requires an OTLP endpoint" first, which reads like a fixable
-	// configuration gap rather than "this example does not support that
-	// deployment mode yet". Since nothing starts listening until after
-	// both calls below succeed, deferring obs.Init to second costs
-	// nothing.
+	// not wired in this example yet") is the specific diagnostic for this
+	// example's actual limitation (root CLAUDE.md's M0 status -- only
+	// the standalone deployment mode has business wiring at all), the
+	// same limitation obs.Init itself used to double-check. It no longer
+	// can: Init takes no deployment mode and therefore refuses none, so
+	// this ordering is the only place a misconfigured
+	// SPEED_DEPLOYMENT_MODE surfaces, and its message is the accurate
+	// one. Since nothing starts listening until after both calls below
+	// succeed, deferring obs.Init to second costs nothing.
 	handler, cleanup, err := buildServer(ctx, cfg)
 	if err != nil {
 		return err
@@ -89,7 +88,7 @@ func run(baseCtx context.Context) error {
 	// spans and metrics are flushed rather than dropped when the process
 	// exits -- the same reason srv.Shutdown below is given a bounded
 	// context instead of just letting the process die.
-	obsShutdown, err := obs.Init(ctx, cfg.DeploymentMode, obs.WithServiceName("reference-app"))
+	obsShutdown, err := obs.Init(ctx, obs.WithServiceName("reference-app"))
 	if err != nil {
 		return fmt.Errorf("reference-app: init observability: %w", err)
 	}

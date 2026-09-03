@@ -662,21 +662,23 @@ func TestBuildServer_Metrics_NoTenantRequired(t *testing.T) {
 // the other route buildServer allowlists.
 //
 // Unlike TestBuildServer_Metrics_NoTenantRequired above, this test calls
-// obs.Init(DeploymentModeStandalone) itself first, so metricsHandler
-// answers with a real Prometheus scrape (200) here, exactly as main.go's
-// run() arranges before serving any production traffic (see main.go's
-// run) -- reproducing, as a permanent automated test, exactly what manual
-// verification of this gap found: with Init having actually run, both GET
-// and HEAD /metrics return 200 regardless of Host/resolution outcome.
+// obs.Init() itself first -- no deployment mode argument; Init's
+// no-endpoint path wires the local exporters, which is exactly the
+// wiring main.go's run() arranges before serving any production traffic
+// -- so metricsHandler answers with a real Prometheus scrape (200)
+// here, reproducing, as a permanent automated test, exactly what manual
+// verification of this gap found: with Init having actually run, both
+// GET and HEAD /metrics return 200 regardless of Host/resolution
+// outcome.
 // Init's returned shutdown is registered via t.Cleanup so the
 // package-level handler obs.MetricsHandler() returns is restored to its
 // unavailable-by-default state before any other test in this binary runs
 // -- the same discipline go/observability's own tests use to keep
 // repeated Init calls independent.
 func TestMetricsAllowlist_ResolutionFailure_StillReturns200(t *testing.T) {
-	shutdown, err := obs.Init(context.Background(), pkgcore.DeploymentModeStandalone)
+	shutdown, err := obs.Init(context.Background())
 	if err != nil {
-		t.Fatalf("obs.Init(DeploymentModeStandalone): %v", err)
+		t.Fatalf("obs.Init: %v", err)
 	}
 	t.Cleanup(func() {
 		if shutdownErr := shutdown(context.Background()); shutdownErr != nil {
