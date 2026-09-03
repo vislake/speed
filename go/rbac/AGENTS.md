@@ -35,6 +35,7 @@ The **semantics** the document pins are preserved exactly: domain = tenant, `res
 | The frozen permission catalog (unexported) | `catalog.go` |
 | Error vocabulary: every sentinel's code and status | `errors.go` |
 | Event and audit-action declarations, the payload structs and their wire decoding | `events.go` |
+| `RequirePermission` / `RequirePermissionFunc`, the HTTP gate, and `WithSubjectResolver` | `middleware.go` |
 | Versioned SQL migrations, one subdirectory per dialect | `migrations/` |
 | The bilingual message bundle, one entry per error code | `locales/` |
 
@@ -53,7 +54,7 @@ rbac needs two facts from neighbours it must not import. Both arrive as interfac
 
 | Seam | Interface | Implemented by |
 |---|---|---|
-| Who is asking | `Subject`, installed on the request context with `WithSubject` and read back with `SubjectFromContext` | the authenticating side (`authn` in production; a demo middleware in the reference app) |
+| Who is asking | `Subject`, installed on the request context with `WithSubject` and read back with `SubjectFromContext` — or, at the HTTP edge, `RequirePermission` / `RequirePermissionFunc`'s `WithSubjectResolver(func(*http.Request) (Subject, bool))` option when a host's authenticating layer carries identity some other way | the authenticating side (`authn` in production; a demo middleware in the reference app) |
 | Where an organization node sits | `SubtreeResolver.NodePath(ctx, nodeID) (path string, ok bool, err error)`, wired with `WithSubtreeResolver` | the host (`org`, once it exists) |
 
 `SubjectFromContext` reports an **incomplete** Subject as no subject at all, so every caller's "no subject, deny" branch covers both cases and no caller has to remember to re-check `Valid()`.
@@ -125,6 +126,12 @@ A publish failure is reported (`ErrStorage` wrapping the bus error) *after* the 
 
 `SystemDomain` (`"system"`) carries platform-operations grants. It is an **ordinary tenant id** as far as every layer is concerned: its rows are stored through the same repositories, filtered by the same isolation plugin, covered by the same row-level-security policy, and evaluated by the identical code path. Nothing in this module branches on it — which is exactly what makes it trustworthy: there is no widened path to reach by accident. It is **not** a wildcard: a subject in the system domain gains no access to any customer tenant's data by holding it.
 
+## The HTTP gate
+
+rbac mounts no routes of its own (`Module.OpenAPISpec()` returns `nil` — D1, D2). Its entire contribution to the HTTP layer is `RequirePermission(az, permission, opts...)` and `RequirePermissionFunc(az, permissionFor, opts...)`, the gate `docs/internal/01-architecture.md`'s fixed middleware chain names after authentication: `… → authn.Middleware → rbac.RequirePermission → …`.
+
+Both fail closed identically and indistinguishably: no usable `Subject`, an unparseable permission string, and a plain denial all end as `403 rbac.permission_denied` — the three are not told apart in the response so an unauthenticated caller learns nothing about what exists. The one case reported differently is a check that could not be **performed** — an `Authorizer` error, meaning storage was unreachable — which is `500 rbac.storage_error`; the request is blocked either way, but a client sees a retryable failure rather than a permanent denial. The gate is **coarse**: it answers `Can`, not `DataScope`, so passing it means the request may proceed, not that every row it returns is in scope — a handler still filters with `DataScope`.
+
 ## Node paths are resolved, never stored
 
 A binding stores the node's **id**, never its materialized path. `docs/internal/16-verification.md` requires a member's permissions to follow a move in the organization tree immediately; a denormalized path column would be stale at exactly that moment. The path is resolved through `SubtreeResolver` at evaluation time, on every decision.
@@ -171,4 +178,6 @@ A binding stores the node's **id**, never its materialized path. `docs/internal/
 - Unit tier: `go test ./...` from this directory. No Docker, no external dependency — the standalone in-memory seams double as the test doubles.
 - `model_test.go` carries the model/migration drift gate and the dual-dialect SQL rules; `repository_test.go` runs `tenancytest.AssertIsolated` against all three repositories plus a cross-tenant test for every filtered read; `module_test.go` applies the migrations from zero to head on SQLite and merges the locale bundle through the very `pkgcore/i18n` builder `Kernel.Bootstrap` uses.
 - `scope_test.go` pins the segment-aware prefix rule, including `/g1/r2` vs `/g1/r20` — the classic materialized-path bug, and a required case rather than an optional one. `authorizer_test.go` pins every frozen semantic above. `cache_test.go` runs the concurrency hot spot under `-race`. `events_test.go` round-trips both payloads through `encoding/json` rather than a hand-written map, so a field rename cannot pass while the real bus stops decoding.
-- Integration tier: when this module gains one it goes in `integration_test/` behind `//go:build integration`, so a plain `go test ./...` never touches it. There is no such directory yet — the unit tier above is the whole suite today, and the SQLite leg of the dual-dialect rule is what `newRBACTestDB` exercises; the PostgreSQL leg is not proven against a real server yet.
+- Integration tier: `integration_test/`, behind `//go:build integration`, so a plain `go test ./...` never touches it — run with `go test -tags=integration ./...` (Docker required). Two legs, mirroring `go/config/integration_test/`:
+  - `postgres_leg_test.go` runs the migrations from zero to head on a real PostgreSQL server (the second dialect the unit tier's SQLite leg cannot prove) and re-runs `tenancytest.AssertIsolated` and an end-to-end evaluation against it, including the reason `node_id` is an empty-string sentinel rather than `NULL` on the bindings' unique index — PostgreSQL treats `NULL`s as distinct inside a unique index, so a nullable column would silently accept a duplicate tenant-wide grant no single revoke could withdraw.
+  - `redis_leg_test.go` attaches two `Service` instances to one real Redis Streams bus, each with a one-hour cache lifetime so no convergence it proves can be explained by the anti-loss TTL, and shows an assign, a revoke, and a role-permission change on one replica reach the other — the property the standalone in-memory bus cannot demonstrate, since there is only ever one process to converge.
