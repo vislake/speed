@@ -50,7 +50,7 @@ operationId 直接决定生成的函数名与 hook 名，命名不规范会污�
 
 > **实现状态注记（2026-09-03，`speed/no-direct-http` 已生效）——本注记不是设计正文，设计正文保持原样。**
 >
-> 上文这条 ESLint 强制规则的 HTTP 一半已落地：`web/eslint-rules/no-direct-http.js` 拒绝前端各包 `src` 中的直接 HTTP——裸全局 `fetch(...)`（带遮蔽检查：标识符能解析到局部或导入绑定时不算全局）、`window.fetch`/`globalThis.fetch`、`new XMLHttpRequest()`，以及任何 `axios`/`node-fetch` 的 import/require（规则不认路径）。配置级白名单只有一处：`web/eslint.config.mjs` 把 `packages/api-client/**` 整体豁免——api-client 就是手写 HTTP 的家，扩大白名单属于架构变更。规则的语义是"除 api-client 外禁止直接触碰网络"，与上文的"只用 `api-sdk` hook"不冲突：生成层（orval/`@speed/api-sdk`）尚未落地，在那之前 api-client 运行时只被自己的单元测试消费（见包内 README）；`api-sdk` 落地后同样调用 api-client 作 HTTP 层，规则继续把 HTTP 收口在一个包内。规则与其单测在 `web/eslint-rules/no-direct-http.js` / `no-direct-http.test.mjs`，由 pr-check 的 repo-checks 任务逐 PR 与 `no-literal-text` 单测同命令运行。
+> 上文这条 ESLint 强制规则的 HTTP 一半已落地：`web/eslint-rules/no-direct-http.js` 拒绝前端各包 `src` 中的直接 HTTP——裸全局 `fetch(...)`（带遮蔽检查：标识符能解析到局部或导入绑定时不算全局）、`window.fetch`/`globalThis.fetch`、`new XMLHttpRequest()`，以及任何 `axios`/`node-fetch` 的 import/require（规则不认路径）。配置级白名单只有一处：`web/eslint.config.mjs` 把 `packages/api-client/**` 整体豁免——api-client 就是手写 HTTP 的家，扩大白名单属于架构变更。规则的语义是"除 api-client 外禁止直接触碰网络"，与上文的"只用 `api-sdk` hook"不冲突：`@speed/api-sdk` 生成层同日稍后落地（见文末实现状态注记），其生成代码同样经手写接缝调用 api-client 作 HTTP 层——每轮重新生成后其 src 都必须通过本规则，规则继续把 HTTP 收口在一个包内。规则与其单测在 `web/eslint-rules/no-direct-http.js` / `no-direct-http.test.mjs`，由 pr-check 的 repo-checks 任务逐 PR 与 `no-literal-text` 单测同命令运行。
 
 ## 统一的错误响应
 
@@ -103,13 +103,15 @@ ApiError:
 
 ---
 
-> **实现状态注记（2026-09-03，M0：后端一半与前端运行时一半已落地）——本注记不是设计正文，设计正文保持原样；完整工具链仍是本文的设计目标，当前实现状态以 [19 开发工作流](19-dev-workflow.md) 的当前状态注记与根目录 CLAUDE.md 的 Repository Status 为准。**
+> **实现状态注记（2026-09-03，M0：spec-first 闭环两半均已落地——后端 interface 生成、前端 sdk 生成、前端运行时与 CI 一致性 diff）——本注记不是设计正文，设计正文保持原样；完整工具链仍是本文的设计目标，当前实现状态以 [19 开发工作流](19-dev-workflow.md) 的当前状态注记与根目录 CLAUDE.md 的 Repository Status 为准。**
 >
-> 后端一半已在 reference-app 的 notes 模块落地作为示范，前端运行时一半（`@speed/api-client` 与 `speed/no-direct-http`）亦已落地（见下）：
+> 后端一半与前端 sdk 一半已在 reference-app 的 notes 模块落地作为示范，前端运行时（`@speed/api-client` 与 `speed/no-direct-http`）亦已落地（见下）：
 >
 > - **"规范的组织与合并"惯例的第一个实例**：`examples/reference-app/internal/notes/api/openapi.yaml` 片段，同目录携带生成器配置 `oapi-codegen.yaml`（钉定 oapi-codegen v2.8.0）与生成物 `notes-server.gen.go`——对应上文 `<module>/api/openapi.yaml` 的模块资产布局，只是落在 reference-app 而非 go/ 模块下。
 > - **上文"契约变更的正确顺序"第 2 步真实生效**：notes 的 handler 实现生成的 `api.ServerInterface`（`internal/notes/handler.go` 的 `var _` 编译期断言 + `api.HandlerFromMux` 从片段注册路由），`task api:gen` 执行重新生成；spec 加了 operation 而 handler 没跟上时编译直接失败。
-> - **"与发布流程的绑定"第 3 条（生成物一致性检查）的后端一半已接线**：`.github/workflows/api-contract.yml` 在改动片段 / 生成器配置 / `Taskfile.yml` / 流水线自身的 PR 上触发，重新生成后 `git diff --exit-code` 比对生成物，再 `go build` reference-app 兜底 handler 编译。
-> - **"前端：禁止手写 API 调用"一节的运行时一半已落地**：`@speed/api-client` 包（`web/packages/api-client`）交付 `createClient` 手写 HTTP 运行时——可注入 fetch、内存 access-token store（包内无任何 storage API）、401 静默单飞刷新、超时、幂等方法限定的瞬态重试、`ApiError` 归一化与结构化 reporter；上文第 49 行那条强制规则的执行件 `speed/no-direct-http` 同时落地（语义见上文注记）。生成层落地前，api-client 运行时只被自己的单元测试消费（reference-app 的强制首个消费身份属于 `api-sdk` 生成轮次）。
+> - **"与发布流程的绑定"第 3 条（生成物一致性检查）两半均已接线**：`.github/workflows/api-contract.yml` 在改动片段 / 生成器配置（含 `web/orval.config.ts` 与 `web/scripts/**`）/ `Taskfile.yml` / 流水线自身的 PR 上触发——后端 oapi-codegen 重新生成后第一个 `git diff --exit-code` 比对生成物；前端 orval + nodenext-fixup 从 web/ 重新生成后第二个 `git diff --exit-code` 比对 `@speed/api-sdk` 的 `src/index.ts`；最后 `go build` reference-app 兜底 handler 编译。
+> - **"前端：禁止手写 API 调用"一节的运行时一半已落地**：`@speed/api-client` 包（`web/packages/api-client`）交付 `createClient` 手写 HTTP 运行时——可注入 fetch、内存 access-token store（包内无任何 storage API）、401 静默单飞刷新、超时、幂等方法限定的瞬态重试、`ApiError` 归一化与结构化 reporter；上文第 49 行那条强制规则的执行件 `speed/no-direct-http` 同时落地（语义见上文注记）。生成层（`@speed/api-sdk`）落地后其生成代码同样经接缝调用 api-client 作 HTTP 层（见下一条）；M0 阶段两者都只被自己的单元测试消费，reference-app 的强制首个消费身份属 M1 的 consumer 壳。
 >
-> 仍未实现（继续以本文为设计目标）：多片段合并成 `build/openapi/speed.yaml`（目前仅 notes 一个片段，没有合并对象）、redocly 规范 lint、orval 前端 sdk 生成（web/ 工作区与 `@speed/api-client` 已存在，生成 sdk 包本身待后续独立的 web/ 轮次）、oasdiff 破坏性变更闸门——它们随 API 契约工具链轮次（[15 roadmap](15-roadmap.md)）交付。
+> - **上文"契约变更的正确顺序"第 4 步与前端 sdk 一半真实生效**：`@speed/api-sdk` 包（`web/packages/api-sdk`）由 orval（钉定 8.17.0，经 `pnpm dlx` 从 web/ 运行、永不进入 lockfile）从同一 notes 片段生成 TanStack Query hooks 与 TS 类型，文件头带钉定版本的 DO-NOT-EDIT 标记；生成代码不直接触碰网络——mutator 指向包内唯一手写源文件 `src/runtime.ts`（`bindRequestFn(createClient(...))` 由 host 启动时绑定一次、last-wins，`speedRequest` 把 orval 的 axios 形态调用适配到 `@speed/api-client` 的 `RequestFn` 契约），并以 exports map 的 `./runtime` 子路径暴露，整体再生成不会覆盖它。机制注记（对设计正文第 44 行"不含任何手写代码"的落地修正）：orval 的 mutator 发射为无扩展名相对导入，nodenext 构建无法编译（TS2835），由确定性再生成脚本 `web/scripts/orval-nodenext-fixup.mjs` 改写为显式 `.js`——工具缺口用工具补（脚本在 orval 改变发射形态时非零退出），手写面收敛到那一个接缝文件。生成代码无租户概念：无租户头（tenant 只存在于 access-token claims，前端从不把租户放进请求头，即第 45 行所述），query key 为裸 spec 路径，租户 query-key 命名空间属 M1 consumer-shell 纪律。`task api:gen` 前端 leg 与 api-contract.yml 的再生成步骤执行同一对命令（见 [19 开发工作流](19-dev-workflow.md) 的当前状态注记）；钉定与延期细节以包内 README/AGENTS.md 为准。
+>
+> 仍未实现（继续以本文为设计目标）：多片段合并成 `build/openapi/speed.yaml` 与 redocly 规范 lint——目前仅 notes 一个片段，没有合并对象，随第二个片段于 M1 交付；oasdiff 破坏性变更闸门——需首个发布基线，计划 M4，作为机制决策记录而非假闸门（见 [19 开发工作流](19-dev-workflow.md) 当前状态注记与 `@speed/api-sdk` 的 AGENTS.md）。

@@ -106,14 +106,15 @@ PR 模板包含一份 checklist，对应仓库根 [CLAUDE.md](../../CLAUDE.md) �
 
 `task api:gen` 一键完成"合并 spec + 生成后端 interface + 生成前端 sdk"。PR 中 spec 与生成物必须同时存在，CI 会重新生成并比对。
 
-**当前状态：后端一半已落地（M0，以 reference-app 的 notes 模块为示范），其余待工具链轮次交付。** 仓库现在有了第一套真实运转的 spec-first 闭环：
+**当前状态：前后端两半均已落地（M0，以 reference-app 的 notes 模块为示范），spec-first 闭环真实运转。** 仓库现在有了第一套真实运转的 spec-first 闭环：
 
 - **模块自持 spec 片段**：`examples/reference-app/internal/notes/api/openapi.yaml`——[21 API 契约](21-api-contract.md)"规范的组织与合并"里 `<module>/api/openapi.yaml` 惯例的第一个实例（落在 reference-app 而非 go/ 模块下），生成器配置与生成物同目录：`oapi-codegen.yaml`（钉定 oapi-codegen v2.8.0）生成 `notes-server.gen.go`。
 - **`task api:gen` 已从 not-implemented stub 变为真实任务**：在上述 api/ 目录内执行 `go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 -config oapi-codegen.yaml openapi.yaml`，重新生成生成物。
 - **"编译失败暴露待改点"真实生效**：`internal/notes/handler.go` 以 `var _ api.ServerInterface = (*Handler)(nil)` 编译期断言实现生成的 interface，并以 `api.HandlerFromMux` 让路由从片段本身推导——往片段加一个 operation 后重新生成，handler 不补实现就编译不过（本轮的编译失败演示即验证此路径）。
-- **CI 兜底已接线**：`.github/workflows/api-contract.yml` 在改动 spec 片段 / 生成器配置 / `Taskfile.yml` / 流水线自身的 PR 上触发（路径过滤），重新生成后 `git diff --exit-code` 比对生成物，并 `go build` reference-app 保证 handler 跟上 spec——这是 [18 CI/CD](18-cicd.md) 管道表 api-contract 行所规划"生成物一致性 diff"的后端一半。
+- **CI 兜底已接线**：`.github/workflows/api-contract.yml` 在改动 spec 片段 / 生成器配置（含 `web/orval.config.ts` 与 `web/scripts/**`）/ `Taskfile.yml` / 流水线自身的 PR 上触发（路径过滤），后端 oapi-codegen 重新生成后 `git diff --exit-code` 比对生成物，并 `go build` reference-app 保证 handler 跟上 spec——这是 [18 CI/CD](18-cicd.md) 管道表 api-contract 行所规划"生成物一致性 diff"的后端一半；前端一半见下一条。
+- **前端 sdk 一半已落地**：`@speed/api-sdk`（`web/packages/api-sdk`）由钉定的 orval 8.17.0 从同一 notes 片段生成 hooks 与 TS 类型（DO-NOT-EDIT 头带钉定版本），`task api:gen` 的前端 leg 执行 `cd web && pnpm dlx orval@8.17.0 --config orval.config.ts && node scripts/orval-nodenext-fixup.mjs`（orval 永不进入 lockfile）；生成代码不直接触碰网络，经包内唯一手写接缝 `src/runtime.ts`（`bindRequestFn(createClient(...))`）路由到 api-client 运行时；orval 发射的无扩展名 mutator 导入由 `web/scripts/orval-nodenext-fixup.mjs` 确定性改写为显式 `.js`（nodenext/TS2835，机制与延期细节见该包 AGENTS.md）。该包进入 pr-check 的 npm 矩阵与 api-contract.yml 的第二个一致性 diff；与后端相同的"task api:gen + CI 重新生成比对"模式，api:gen 的两个 leg 与 api-contract.yml 的两个再生成步骤一一对应、保持 lockstep。
 
-仍未实现——上面计划句描述的仍是完整目标：合并各模块片段成 `build/openapi/speed.yaml`（目前只有 notes 一个片段，没有合并对象）、redocly 规范 lint、orval 前端 sdk 与 `@speed/api-sdk`（api-client 运行时已随 M0 落地；生成 sdk 包本身待后续独立的 web/ 工作区轮次）、oasdiff 破坏性变更闸门。这些随 API 契约工具链轮次（[15 roadmap](15-roadmap.md)）交付，届时 `task api:gen` 与 api-contract.yml 在现有骨架上扩展；详见 [21 API 契约](21-api-contract.md) 末尾的实现状态注记。
+仍未实现——上面计划句描述的仍是完整目标：合并各模块片段成 `build/openapi/speed.yaml`（目前只有 notes 一个片段，没有合并对象——随第二个片段于 M1 交付）、redocly 规范 lint（随合并一并交付）、oasdiff 破坏性变更闸门（需首个发布基线，计划 M4，已作为机制决策记录而非假闸门）。这些随各自的触发条件交付，届时 `task api:gen` 与 api-contract.yml 在现有骨架上扩展；详见 [21 API 契约](21-api-contract.md) 末尾的实现状态注记。
 
 **先写实现再补 spec 是被禁止的**——那等于回到 code-first，失去编译期约束的全部意义。
 
