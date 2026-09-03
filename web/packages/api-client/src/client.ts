@@ -334,6 +334,15 @@ function sleep(ms: number): Promise<void> {
   })
 }
 
+/** Throws the raw AbortError the moment a cancelled signal is observed
+ * after an await, so caller cancellation is never retried, never
+ * wrapped, and never delivered as a result (RequestOptions.signal). */
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) {
+    throw new DOMException('The operation was aborted.', 'AbortError')
+  }
+}
+
 /**
  * Creates the request function. Construction is where configuration
  * mistakes surface (bad baseUrl, unusable fetch, malformed policy);
@@ -487,17 +496,19 @@ export function createClient(options: ClientOptions): RequestFn {
     const idempotent = isIdempotent(method)
     const url = buildUrl(baseUrl, path, requestOptions.query)
     const signal = requestOptions.signal
-    if (signal?.aborted === true) {
-      // Real fetch rejects an already-aborted signal; stand-ins in
-      // tests may not, so normalize before sending.
-      throw new DOMException('The operation was aborted.', 'AbortError')
-    }
+    // Real fetch rejects an already-aborted signal; stand-ins in
+    // tests may not, so normalize before sending.
+    throwIfAborted(signal)
 
     let attempts = 0
     let refreshed = false
     for (;;) {
       attempts += 1
       const outcome = await attemptOnce(method, url, requestOptions, signal)
+      // The caller may have aborted while the request was in flight:
+      // cancellation wins over any outcome, so nothing below may retry
+      // or deliver on behalf of a caller that gave up.
+      throwIfAborted(signal)
 
       if (outcome.kind === 'http' && isSuccessStatus(outcome.status)) {
         let body: string
@@ -505,13 +516,22 @@ export function createClient(options: ClientOptions): RequestFn {
           body = await outcome.response.text()
         } catch (error) {
           // The headers said 2xx but the body never arrived: a
-          // network-class failure, retryable like any other.
+          // network-class failure, retryable like any other -- except
+          // when the caller aborted during the read, in which case the
+          // failure IS the cancellation and surfaces raw.
+          throwIfAborted(signal)
           if (idempotent && attempts < retryPolicy.maxAttempts) {
             await sleep(retryDelayMs(attempts - 1, retryPolicy))
+            // An abort during the backoff cancels the retry: the next
+            // attempt must not fire after the caller cancelled.
+            throwIfAborted(signal)
             continue
           }
           throw failureError({ kind: 'network', cause: error }, attempts)
         }
+        // The body arrived; an abort during the read cancels the
+        // delivery instead of resolving a 2xx for a cancelled caller.
+        throwIfAborted(signal)
         if (body === '') {
           // 204-style: no content is a valid, empty success.
           return undefined as T
@@ -541,7 +561,12 @@ export function createClient(options: ClientOptions): RequestFn {
       if (outcome.kind === 'http' && outcome.status === 401) {
         if (!refreshed && refreshOnce !== undefined) {
           refreshed = true
-          if (await refreshOnce()) {
+          const refreshedOk = await refreshOnce()
+          // The caller may have aborted while the refresh was in
+          // flight: cancellation wins -- never send the post-refresh
+          // retry, never deliver an auth error either.
+          throwIfAborted(signal)
+          if (refreshedOk) {
             // Retry once with whatever token the store holds now (the
             // token is re-read at send time). Orthogonal to the retry
             // budget and to method idempotency.
@@ -566,6 +591,9 @@ export function createClient(options: ClientOptions): RequestFn {
             ? retryDelayFor(outcome, attempts - 1, retryPolicy)
             : retryDelayMs(attempts - 1, retryPolicy)
         await sleep(delay)
+        // An abort during the backoff cancels the retry: the next
+        // attempt must not fire after the caller cancelled.
+        throwIfAborted(signal)
         continue
       }
 

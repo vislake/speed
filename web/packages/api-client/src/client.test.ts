@@ -71,6 +71,45 @@ async function expectApiError(promise: Promise<unknown>): Promise<ApiError> {
   return error
 }
 
+/** Asserts the promise rejects with the raw AbortError -- caller
+ * cancellation is never wrapped in an ApiError. */
+async function expectRawAbort(promise: Promise<unknown>): Promise<void> {
+  let error: unknown
+  try {
+    await promise
+  } catch (caught) {
+    error = caught
+  }
+  expect(error).toBeInstanceOf(DOMException)
+  if (error instanceof DOMException) {
+    expect(error.name).toBe('AbortError')
+  }
+  expect(isApiError(error)).toBe(false)
+}
+
+/** A body stream the test gates by hand: the response's text() stays
+ * pending until release (success) or fail (error) is called. */
+function gatedBody(): {
+  stream: ReadableStream<Uint8Array>
+  release: (text: string) => void
+  fail: (cause: unknown) => void
+} {
+  let release: (text: string) => void = () => {}
+  let fail: (cause: unknown) => void = () => {}
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      release = (text: string) => {
+        controller.enqueue(new TextEncoder().encode(text))
+        controller.close()
+      }
+      fail = (cause: unknown) => {
+        controller.error(cause)
+      }
+    },
+  })
+  return { stream, release, fail }
+}
+
 const SESSION_EXPIRED = {
   code: 'authn.session_expired',
   traceId: 'trace-1',
@@ -708,6 +747,120 @@ describe('caller cancellation', () => {
     const call = recorded(standin)
     expect(call.signal?.aborted).toBe(true)
     // ...and no retry followed the cancellation.
+    expect(standin.calls).toHaveLength(1)
+  })
+
+  it('cancels a request aborted during the backoff, before any retry fires', async () => {
+    vi.useFakeTimers()
+    try {
+      // A deterministic 2s backoff (Retry-After honoured on 503), long
+      // enough to cancel in the middle of it.
+      const standin = scriptedStandin(
+        textResponse(503, 'Service Unavailable', { 'retry-after': '2' }),
+      )
+      const api = createClient({
+        baseUrl: BASE_URL,
+        fetch: standin.fetch,
+        retryPolicy: DEFAULT_RETRY_POLICY,
+      })
+      const controller = new AbortController()
+      const rejection = expectRawAbort(
+        api<{ ok: boolean }>('/notes', { signal: controller.signal }),
+      )
+      // Let the 503 arrive and the backoff timer arm.
+      await vi.advanceTimersByTimeAsync(0)
+      controller.abort()
+      // The backoff elapses; the retry must not fire after cancellation.
+      await vi.advanceTimersByTimeAsync(2000)
+      await rejection
+      expect(standin.calls).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cancels a request aborted while the refresh is in flight, before the retry fires', async () => {
+    const store = createMemoryAccessTokenStore()
+    store.set('stale-token')
+    let refreshCalls = 0
+    let releaseRefresh: () => void = () => {}
+    const refreshGate = new Promise<boolean>((resolve) => {
+      releaseRefresh = () => resolve(true)
+    })
+    const standin = scriptedStandin(
+      jsonResponse(401, { ...SESSION_EXPIRED }),
+      jsonResponse(200, { ok: true }),
+    )
+    const api = createClient({
+      baseUrl: BASE_URL,
+      fetch: standin.fetch,
+      accessTokenStore: store,
+      refreshAccessToken: () => {
+        refreshCalls += 1
+        return refreshGate
+      },
+    })
+    const controller = new AbortController()
+    const rejection = expectRawAbort(
+      api<{ ok: boolean }>('/notes', { signal: controller.signal }),
+    )
+    // Each plain await advances the request chain by roughly one
+    // microtask hop, so flush until the 401 has started the refresh.
+    for (let i = 0; i < 32 && refreshCalls === 0; i += 1) {
+      await Promise.resolve()
+    }
+    expect(refreshCalls).toBe(1)
+    controller.abort()
+    // The refresh completes successfully -- but the post-refresh retry
+    // must not fire for a caller that cancelled.
+    releaseRefresh()
+    await rejection
+    expect(standin.calls).toHaveLength(1)
+  })
+
+  it('never delivers a 2xx whose body finished reading after an abort', async () => {
+    const body = gatedBody()
+    const standin = scriptedStandin(
+      new Response(body.stream, { status: 200 }),
+    )
+    const api = createClient({ baseUrl: BASE_URL, fetch: standin.fetch })
+    const controller = new AbortController()
+    const rejection = expectRawAbort(
+      api<{ ok: boolean }>('/notes', { signal: controller.signal }),
+    )
+    // Let the request reach the point where it is reading the body.
+    await Promise.resolve()
+    await Promise.resolve()
+    controller.abort()
+    // The body arrives in full -- the cancelled caller still gets the
+    // raw AbortError, never the 2xx result.
+    body.release('{"ok":true}')
+    await rejection
+    expect(standin.calls).toHaveLength(1)
+  })
+
+  it('surfaces the raw abort, not a network retry, when the body read fails after cancellation', async () => {
+    const body = gatedBody()
+    const standin = scriptedStandin(
+      new Response(body.stream, { status: 200 }),
+    )
+    const api = createClient({
+      baseUrl: BASE_URL,
+      fetch: standin.fetch,
+      retryPolicy: zeroDelay(3),
+    })
+    const controller = new AbortController()
+    const rejection = expectRawAbort(
+      api<{ ok: boolean }>('/notes', { signal: controller.signal }),
+    )
+    // Let the request reach the point where it is reading the body.
+    await Promise.resolve()
+    await Promise.resolve()
+    controller.abort()
+    // The body dies mid-read: cancellation wins over the retryable
+    // network-class failure the client would otherwise see.
+    body.fail(new TypeError('connection lost mid-body'))
+    await rejection
     expect(standin.calls).toHaveLength(1)
   })
 })
