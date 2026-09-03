@@ -11,6 +11,7 @@ package testutil
 import (
 	"context"
 	"embed"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -187,3 +188,93 @@ func NewDB(t *testing.T) *gorm.DB {
 	}
 	return db
 }
+
+// EventRecorder collects the domain events published on a bus, so a test can
+// assert that a security-relevant fact was announced rather than only that a
+// row changed. It is safe for concurrent use, which the refresh-rotation race
+// tests need.
+type EventRecorder struct {
+	mu     sync.Mutex
+	events []pkgcore.Event
+}
+
+// NewEventRecorder returns an empty recorder.
+func NewEventRecorder() *EventRecorder {
+	return &EventRecorder{}
+}
+
+// Subscribe installs the recorder on bus for each of types.
+func (r *EventRecorder) Subscribe(bus pkgcore.EventBus, types ...string) {
+	for _, eventType := range types {
+		bus.Subscribe(eventType, func(_ context.Context, evt pkgcore.Event) error {
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			r.events = append(r.events, evt)
+			return nil
+		})
+	}
+}
+
+// Events returns a snapshot of everything recorded so far.
+func (r *EventRecorder) Events() []pkgcore.Event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]pkgcore.Event, len(r.events))
+	copy(out, r.events)
+	return out
+}
+
+// Count reports how many events of eventType were recorded.
+func (r *EventRecorder) Count(eventType string) int {
+	n := 0
+	for _, evt := range r.Events() {
+		if evt.Type == eventType {
+			n++
+		}
+	}
+	return n
+}
+
+// First returns the first recorded event of eventType.
+func (r *EventRecorder) First(eventType string) (pkgcore.Event, bool) {
+	for _, evt := range r.Events() {
+		if evt.Type == eventType {
+			return evt, true
+		}
+	}
+	return pkgcore.Event{}, false
+}
+
+// ErrKVUnavailable is what FailingKVStore returns from every operation.
+var ErrKVUnavailable = errors.New("testutil: the key-value store is unreachable")
+
+// FailingKVStore is a pkgcore.KVStore whose every operation fails, so a test
+// can prove that code depending on it fails CLOSED rather than treating an
+// unreachable store as an empty one.
+type FailingKVStore struct{}
+
+// Get implements pkgcore.KVStore.
+func (FailingKVStore) Get(context.Context, string) ([]byte, bool, error) {
+	return nil, false, ErrKVUnavailable
+}
+
+// Set implements pkgcore.KVStore.
+func (FailingKVStore) Set(context.Context, string, []byte, time.Duration) error {
+	return ErrKVUnavailable
+}
+
+// Delete implements pkgcore.KVStore.
+func (FailingKVStore) Delete(context.Context, string) error { return ErrKVUnavailable }
+
+// IncrByFloat implements pkgcore.KVStore.
+func (FailingKVStore) IncrByFloat(context.Context, string, float64) (float64, error) {
+	return 0, ErrKVUnavailable
+}
+
+// CompareAndSwap implements pkgcore.KVStore.
+func (FailingKVStore) CompareAndSwap(context.Context, string, []byte, []byte) (bool, error) {
+	return false, ErrKVUnavailable
+}
+
+// compile-time check that FailingKVStore satisfies the seam it stands in for.
+var _ pkgcore.KVStore = FailingKVStore{}
