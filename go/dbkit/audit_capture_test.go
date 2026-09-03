@@ -3,6 +3,7 @@ package dbkit_test
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,6 +37,32 @@ func createWidgetsTable(t *testing.T, db *gorm.DB) {
 	if err != nil {
 		t.Fatalf("create widgets table: %v", err)
 	}
+}
+
+// rawSoftDeletableWidgetRow reads id's raw deleted_at/deleted_by columns
+// directly through db.Raw, bypassing every GORM callback (including the
+// soft-delete auto-scope plugin, which raw SQL never runs) — the "what
+// actually landed in the database" ground truth this file's soft-delete
+// capture tests cross-check their captured After against. found is false
+// when no row with id exists at all. It is this black-box file's twin of
+// the same-named helper in repository_test.go.
+func rawSoftDeletableWidgetRow(t *testing.T, db *gorm.DB, id string) (found bool, deletedAt *time.Time, deletedBy string) {
+	t.Helper()
+	var (
+		nullDeletedAt sql.NullTime
+		nullDeletedBy sql.NullString
+	)
+	row := db.Raw(`SELECT deleted_at, deleted_by FROM soft_deletable_widgets WHERE id = ?`, id).Row()
+	if err := row.Scan(&nullDeletedAt, &nullDeletedBy); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil, ""
+		}
+		t.Fatalf("raw soft_deletable_widgets lookup for id %q: %v", id, err)
+	}
+	if nullDeletedAt.Valid {
+		deletedAt = &nullDeletedAt.Time
+	}
+	return true, deletedAt, nullDeletedBy.String
 }
 
 // auditCaptureTestDBSeq numbers this file's in-memory SQLite databases so
@@ -265,6 +292,49 @@ func TestAuditCapturePlugin_SoftDelete_ClassifiesAsUpdateWithRealDiff(t *testing
 	if got.After["deleted_by"] != "user-1" {
 		t.Errorf("After[\"deleted_by\"] = %v, want %q", got.After["deleted_by"], "user-1")
 	}
+
+	// The second regression this test now also pins: softDelete's write is a
+	// two-column UPDATE whose payload is a freshly built struct carrying
+	// nothing but DeletedAt/DeletedBy — every other field is zero on that
+	// payload. Capturing the whole payload as After would fabricate zero
+	// values for the id/tenant_id/name columns the write never touched,
+	// values that contradict the real row (which still holds name="gadget").
+	// After must be scoped to exactly the columns the UPDATE assigned.
+	//
+	// softDelete's Select is the raw field names "DeletedAt"/"DeletedBy"
+	// (repository.go), which GORM resolves to the DB column names
+	// "deleted_at"/"deleted_by"; the assertion below uses the DB names
+	// because After is keyed by DB column name (WriteCapturedEvent.After's
+	// own doc comment).
+	if len(got.After) != 2 {
+		t.Errorf("After = %+v, want exactly the 2 columns this UPDATE wrote (deleted_at, deleted_by) -- capturing the untouched id/tenant_id/name columns would fabricate zero values for a row that still holds real ones", got.After)
+	}
+	for key := range got.After {
+		if key != "deleted_at" && key != "deleted_by" {
+			t.Errorf("After has key %q, want only deleted_at/deleted_by: a column this UPDATE never touched cannot truthfully appear in After", key)
+		}
+	}
+
+	// Ground-truth cross-check: the row the soft-delete left behind must
+	// agree with the captured After on every captured column — After is
+	// documented as "the row's column values following the write", so a
+	// captured value that differs from the real row is a lie by definition.
+	rowFound, rowDeletedAt, rowDeletedBy := rawSoftDeletableWidgetRow(t, db, w.ID)
+	if !rowFound {
+		t.Fatal("row physically gone after Delete() on a SoftDeletable model, want it still present (mark-delete, not physical delete)")
+	}
+	if rowDeletedAt == nil {
+		t.Fatal("row deleted_at = nil after a successful soft-delete, want a populated timestamp")
+	}
+	if rowDeletedAt.Before(before.Add(-time.Second)) || rowDeletedAt.After(after.Add(time.Second)) {
+		t.Errorf("row deleted_at = %v, want a timestamp between %v and %v", rowDeletedAt, before, after)
+	}
+	if !deletedAtPtr.Equal(*rowDeletedAt) {
+		t.Errorf("captured After[\"deleted_at\"] = %v does not equal the row's own deleted_at %v -- the captured After must describe the row state the write really produced", deletedAtPtr, rowDeletedAt)
+	}
+	if rowDeletedBy != "user-1" {
+		t.Errorf("row deleted_by = %q, want %q", rowDeletedBy, "user-1")
+	}
 }
 
 func TestAuditCapturePlugin_Delete_PublishesWriteCapturedEventWithResourceIDFromWhere(t *testing.T) {
@@ -454,5 +524,75 @@ func TestAuditCapturePlugin_SerializerField_RedactsRatherThanCrashOrLeak(t *test
 	// self-referential *schema.serializer wrapper instead of a plain value.
 	if _, err := json.Marshal(events[0].After); err != nil {
 		t.Fatalf("json.Marshal(After) error = %v, want captured field values to always be JSON-marshalable", err)
+	}
+}
+
+// TestAuditCapturePlugin_Restore_CapturesOnlyTheColumnsItWrites pins the
+// same After-scoping regression as the soft-delete test above, for the
+// inverse write: Restore (repository.go) issues the identical two-column,
+// fresh-struct UPDATE shape against a soft-deleted row, so its captured
+// After must likewise carry exactly deleted_at/deleted_by — with nil and ""
+// being the truthful post-restore state — and never fabricate values for
+// the untouched id/tenant_id/name columns (which the real row still holds
+// after the restore).
+func TestAuditCapturePlugin_Restore_CapturesOnlyTheColumnsItWrites(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	if err := db.Exec(testutil.SoftDeletableWidgetTableSQL).Error; err != nil {
+		t.Fatalf("create soft_deletable_widgets table: %v", err)
+	}
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1"})
+
+	repo := dbkit.NewRepository[testutil.SoftDeletableWidget](db)
+	w := &testutil.SoftDeletableWidget{ID: "sdw1", Name: "gadget"}
+	if err := repo.Create(ctx, w); err != nil {
+		t.Fatalf("seed Create() error = %v", err)
+	}
+	if err := repo.Delete(ctx, w.ID); err != nil {
+		t.Fatalf("seed Delete() (soft-delete) error = %v", err)
+	}
+	if err := repo.Restore(ctx, w.ID); err != nil {
+		t.Fatalf("Restore() error = %v", err)
+	}
+
+	events := bus.captured()
+	if len(events) != 3 {
+		t.Fatalf("captured %d events, want 3 (create, soft-delete, restore)", len(events))
+	}
+	got := events[2]
+	if got.Operation != "update" {
+		t.Errorf("Operation = %q, want %q (Restore is an UPDATE underneath, exactly like soft-delete)", got.Operation, "update")
+	}
+	if got.ResourceID != "sdw1" {
+		t.Errorf("ResourceID = %q, want %q", got.ResourceID, "sdw1")
+	}
+	if len(got.After) != 2 {
+		t.Errorf("After = %+v, want exactly the 2 columns Restore's UPDATE wrote (deleted_at, deleted_by) -- the untouched id/tenant_id/name columns must not appear as fabricated zeroes", got.After)
+	}
+	for key := range got.After {
+		if key != "deleted_at" && key != "deleted_by" {
+			t.Errorf("After has key %q, want only deleted_at/deleted_by: a column this UPDATE never touched cannot truthfully appear in After", key)
+		}
+	}
+	at, ok := got.After["deleted_at"]
+	atPtr, isTime := at.(*time.Time)
+	if !ok || !isTime || atPtr != nil {
+		t.Errorf("After[\"deleted_at\"] = %#v (ok=%v), want an explicit nil *time.Time -- the restored row's deleted_at is NULL", at, ok)
+	}
+	if got.After["deleted_by"] != "" {
+		t.Errorf("After[\"deleted_by\"] = %v, want \"\" -- the restored row's deleted_by is the empty string", got.After["deleted_by"])
+	}
+
+	// Ground truth: the restored row must agree with the captured After.
+	rowFound, rowDeletedAt, rowDeletedBy := rawSoftDeletableWidgetRow(t, db, w.ID)
+	if !rowFound {
+		t.Fatal("row physically gone after Restore(), want it still present")
+	}
+	if rowDeletedAt != nil {
+		t.Errorf("row deleted_at = %v after Restore(), want nil (restored row is live again)", rowDeletedAt)
+	}
+	if rowDeletedBy != "" {
+		t.Errorf("row deleted_by = %q after Restore(), want \"\"", rowDeletedBy)
 	}
 }

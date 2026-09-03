@@ -74,6 +74,16 @@ type WriteCapturedEvent struct {
 	// column name. Populated for Create and Update (where the model's own
 	// field values are available); nil for Delete, since GORM's delete
 	// callback does not repopulate the destination from the deleted row.
+	//
+	// For an Update that restricted which columns it wrote — an explicit
+	// Select list, or an Omit list; Repository[T]'s soft-delete and Restore
+	// writes are the canonical two-column-SELECT shape — After carries
+	// exactly the columns the statement assigned, never a value for a
+	// column the write did not touch: a column-restricted update's payload
+	// holds only the restricted columns, so capturing the payload whole
+	// would fabricate zero values for untouched columns whose real row
+	// values are still in place (see scopeAfterToWrittenColumns). For an
+	// unrestricted full-record Update, After is the whole row.
 	After map[string]any
 	// OccurredAt is when the write was captured.
 	OccurredAt time.Time
@@ -182,6 +192,9 @@ func (p *auditCapturePlugin) capture(db *gorm.DB, operation string) {
 	fields := fieldValuesMap(db.Statement)
 	if operation != "delete" {
 		evt.After = fields
+		if operation == "update" {
+			evt.After = scopeAfterToWrittenColumns(db.Statement, fields)
+		}
 	}
 	if id, ok := fields[idColumn]; ok {
 		evt.ResourceID, _ = id.(string)
@@ -293,6 +306,109 @@ func fieldValuesMap(stmt *gorm.Statement) map[string]any {
 		}
 		value, _ := field.ValueOf(stmt.Context, v)
 		out[field.DBName] = value
+	}
+	return out
+}
+
+// scopeAfterToWrittenColumns trims after — the full-payload capture
+// fieldValuesMap produced — down to the columns the executed statement's
+// SQL actually assigned, for an Update statement that restricted its
+// columns. It exists because a column-restricted update's payload holds
+// only the restricted columns: every other field is zero on the payload,
+// so capturing the payload whole would fabricate zero values for columns
+// the write never touched, values that contradict the real row (still in
+// the database with its pre-write state intact on those columns). After is
+// documented as the row's column values *following the write* — it must
+// never claim a value for a column the write did not assign.
+//
+// GORM deletes its SET clause from db.Statement.Clauses before after-*
+// callbacks run (callbacks/update.go), so the written set cannot be read
+// back from the statement's final state; it is reconstructed from the
+// statement's Select/Omit lists instead, mirroring how GORM itself decided
+// the assignments (ConvertToAssignments):
+//
+//   - No Select list and no Omit list — or a Select("*") with no Omit
+//     list: an unrestricted, full-record write, where the payload is the
+//     whole row. after is returned unchanged.
+//   - An explicit Select list (Repository[T]'s soft-delete and Restore
+//     writes are the canonical shape: Select("DeletedAt", "DeletedBy") on
+//     a freshly built struct): the write assigned exactly the resolved
+//     select columns plus every auto-update-time column GORM force-adds
+//     (field.AutoUpdateTime > 0, hooks not skipped via stmt.SkipHooks),
+//     minus the resolved Omit list.
+//   - An Omit list without a Select list: every column but the omitted
+//     ones.
+//
+// Select/Omit entries are resolved the way GORM itself resolves them
+// (LookUpField, statement.go's SelectAndOmitColumns): a Go field name like
+// "DeletedAt" maps to its DB column name, an unresolvable name is kept
+// verbatim (harmless here — after is keyed by DB column name, so a verbatim
+// entry that names no column selects nothing). Values for the columns that
+// survive the scope are truthful, which is what makes this a fix rather
+// than a loss: GORM writes each assignment's final value back into the
+// statement's ReflectValue before capture runs (callbacks/update.go's
+// SetupUpdateReflectValue), so fieldValuesMap already read the real written
+// values — the scope only drops the fabricated zeroes for untouched
+// columns.
+func scopeAfterToWrittenColumns(stmt *gorm.Statement, after map[string]any) map[string]any {
+	if stmt.Schema == nil || len(after) == 0 {
+		return after
+	}
+
+	resolve := func(name string) string {
+		if field := stmt.Schema.LookUpField(name); field != nil && field.DBName != "" {
+			return field.DBName
+		}
+		return name
+	}
+
+	written := make(map[string]bool, len(stmt.Schema.Fields))
+	all := false
+	for _, name := range stmt.Selects {
+		switch resolved := resolve(name); resolved {
+		case "*":
+			all = true
+		default:
+			written[resolved] = true
+		}
+	}
+
+	omitted := make(map[string]bool, len(stmt.Omits))
+	for _, name := range stmt.Omits {
+		omitted[resolve(name)] = true
+	}
+
+	if len(written) == 0 && len(omitted) == 0 {
+		return after
+	}
+	if all {
+		// Select("*") is an unrestricted write: every column was assigned.
+		if len(omitted) == 0 {
+			return after
+		}
+		for _, field := range stmt.Schema.Fields {
+			written[field.DBName] = true
+		}
+	} else if !stmt.SkipHooks {
+		// GORM force-adds auto-update-time columns to a restricted
+		// struct-update's assignments whenever hooks run — mirror that
+		// here, or an UpdatedAt a model has but did not list would be
+		// dropped from After despite the SQL really having written it.
+		for _, field := range stmt.Schema.Fields {
+			if field.AutoUpdateTime > 0 && !field.PrimaryKey && field.Updatable {
+				written[field.DBName] = true
+			}
+		}
+	}
+
+	out := make(map[string]any, len(written))
+	for dbName, value := range after {
+		if written[dbName] && !omitted[dbName] {
+			out[dbName] = value
+		}
+	}
+	if len(out) == len(after) {
+		return after
 	}
 	return out
 }
