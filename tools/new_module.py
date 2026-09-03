@@ -5,7 +5,11 @@ docs/internal/19-dev-workflow.md's module-generator section promises
 `task new:module` so that adding a module never means hand-repeating the
 same skeleton (the doc lists the eight things a new module needs --
 go.mod, directory skeleton, AGENTS.md, design doc, migration directory, test
-skeleton, CI matrix registration, release-script registration). This script
+skeleton, CI matrix registration, lockstep release registration -- which
+in this repository is the go.work use entry itself: the release
+coordinator (tools/release/lockstep-release.py) derives the per-module
+tag list from go.work at runtime, so a module never registered there
+cannot be released). This script
 is the generator behind that task: the root Taskfile.yml's new:module task
 invokes it, and --help documents the wiring contract (see the epilog).
 
@@ -56,9 +60,9 @@ Refusals and guardrails:
     in the workspace without a scaffolder), so there is nothing canonical
     to scaffold.
 
-After scaffolding, the script prints a registration checklist (go.work use
-entry, CI matrix row, lockstep release tag list, roadmap/design-doc rows)
-as actionable reminders. It never modifies any of those shared repository
+After scaffolding, the script prints a registration checklist -- go.work
+use entry (which is also the lockstep release registration, see below),
+CI matrix row, roadmap/design-doc rows -- as actionable reminders. It never modifies any of those shared repository
 files itself -- that is deliberate: a scaffolder that silently edits go.work
 and CI matrices makes review diffs impossible to read, so the checklist is
 the contract with the human (or with the future Taskfile task, which can
@@ -199,11 +203,14 @@ def registration_checklist(module_name: str, design_doc: str) -> list[str]:
         "design section: adding a module is one row in the orchestrating "
         "workflow's matrix list). The .github/ tree is M0 work; until the "
         "workflows exist, this registration happens when they land.",
-        "  3. Lockstep release list: add the module to the release "
-        "pipeline's per-module tag list (docs/internal/02-repo-and-release."
-        "md: each module is tagged go/<module>/<version> and tagging is "
-        "scripted -- a module missing from the list never gets tagged and "
-        "consumers cannot pin it).",
+        "  3. Lockstep release: step 1's go.work use entry is this "
+        "module's release registration too -- the release coordinator "
+        "(tools/release/lockstep-release.py) derives the per-module tag "
+        "list from go.work at runtime, so a module missing from go.work "
+        "can never be tagged (docs/internal/02-repo-and-release.md: each "
+        "module is tagged go/<module>/<version>, and the coordinator's "
+        "completeness drift check fails a release plan loudly until the "
+        "use entry lands).",
         "  4. Roadmap and design doc: register the module in the milestone "
         "that plans it (docs/internal/15-roadmap.md) and in the navigation "
         "of docs/internal/00-overview.md / 01-architecture.md (module "
