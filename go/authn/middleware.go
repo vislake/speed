@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -224,14 +225,38 @@ type errorBody struct {
 // status. Only the code and its parameters are written: an error's cause may
 // carry token-validation internals or a database message, and internal detail
 // must never reach a response body.
+//
+// A rate-limit or lockout error (ratelimit.go's ErrRateLimited,
+// ErrAccountLocked) additionally gets a Retry-After header from its
+// "retry_after_seconds" parameter -- the HTTP-specific translation of the
+// underlying decision, and therefore this function's job rather than
+// ratelimit.go's (docs/internal/11-cross-cutting.md). handler.go's HTTP
+// surface shares this one implementation with Middleware and
+// RequireAuthenticated above rather than writing its own, so every authn
+// endpoint's error body has exactly one shape and exactly one place that
+// decides what a Retry-After header is worth.
 func writeAppError(w http.ResponseWriter, err error) {
 	appErr, ok := apperr.As(err)
 	if !ok {
 		appErr = ErrInternal.WithCause(errors.Join(err))
 	}
+	if seconds, ok := retryAfterSeconds(appErr); ok {
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+	}
 	w.Header().Set("Content-Type", errorContentType)
 	w.WriteHeader(appErr.Status)
 	_ = json.NewEncoder(w).Encode(errorBody{Code: appErr.Code, Params: appErr.Params})
+}
+
+// retryAfterSeconds extracts the "retry_after_seconds" parameter
+// ratelimit.go's ErrRateLimited and ErrAccountLocked carry, reporting false
+// when appErr carries none.
+func retryAfterSeconds(appErr *apperr.Error) (int, bool) {
+	if appErr.Params == nil {
+		return 0, false
+	}
+	seconds, ok := appErr.Params["retry_after_seconds"].(int)
+	return seconds, ok
 }
 
 // compile-time check that *PrincipalResolver satisfies tenancy.Resolver.

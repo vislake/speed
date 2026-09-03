@@ -465,9 +465,10 @@ func newOptions(opts []Option) (options, error) {
 
 // Module implements pkgcore.Module for authn.
 type Module struct {
-	db   *gorm.DB
-	opts []Option
-	svc  *Service
+	db      *gorm.DB
+	opts    []Option
+	svc     *Service
+	handler *Handler
 }
 
 // NewModule returns a Module backed by db.
@@ -532,6 +533,8 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		return err
 	}
 	m.svc = svc
+	m.handler = NewHandler(svc)
+	reg.Routes.Mount(apiPath, m.handler)
 
 	if err := reg.Events.Publishes(eventDecls...); err != nil {
 		return err

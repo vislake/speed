@@ -159,12 +159,22 @@ func (s *httpSMSSender) Send(ctx context.Context, msg SMS) error {
 		return fmt.Errorf("authn: encode sms gateway request: %w", err)
 	}
 
+	// #nosec G704 -- gosec's taint analysis flags any http.NewRequestWithContext
+	// call whose URL is a variable, but s.endpoint is dialled through
+	// internal/safehttp's guarded client by default (this function's own doc
+	// comment above), which resolves and dials the exact validated IP,
+	// rejecting private/loopback/link-local/CGNAT ranges and defeating DNS
+	// rebinding -- the same false positive already justified at provider.go's
+	// doJSON, getJSON and postJSON for the identical reason.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("authn: build sms gateway request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
+	// #nosec G704 -- the same false positive as this function's earlier
+	// #nosec comment, now at the point gosec's taint analysis actually
+	// flags the request's execution rather than its construction.
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("authn: send sms: %w", err)

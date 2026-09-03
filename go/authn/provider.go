@@ -294,6 +294,11 @@ func doJSON(ctx context.Context, client *http.Client, req *http.Request, out any
 
 // getJSON issues a GET and decodes the JSON answer, applying each header.
 func getJSON(ctx context.Context, client *http.Client, endpoint string, headers map[string]string, out any) error {
+	// #nosec G704 -- the same false positive doJSON's own #nosec comment
+	// below justifies: gosec's taint analysis flags request construction
+	// with a variable URL regardless of the client that later executes it,
+	// and cannot see that client is safehttp.NewClient() by default (or an
+	// explicit test override) either way.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return fmt.Errorf("build the request: %w", err)
@@ -311,6 +316,8 @@ func postJSON(ctx context.Context, client *http.Client, endpoint string, headers
 	if err != nil {
 		return fmt.Errorf("encode the request: %w", err)
 	}
+	// #nosec G704 -- the same false positive as getJSON's identical comment
+	// just above.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(encoded))
 	if err != nil {
 		return fmt.Errorf("build the request: %w", err)
