@@ -2,7 +2,10 @@ package rbac
 
 import (
 	"context"
+	"errors"
 	"sort"
+
+	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/pkgcore"
 )
@@ -128,6 +131,10 @@ func (s *Service) AssignRole(ctx context.Context, sub Subject, role string, scop
 		return err
 	}
 
+	if s.beforeBindingCreate != nil {
+		s.beforeBindingCreate()
+	}
+
 	binding := &RoleBinding{
 		ID:     newID(),
 		UserID: sub.UserID,
@@ -135,6 +142,18 @@ func (s *Service) AssignRole(ctx context.Context, sub Subject, role string, scop
 		NodeID: scope.NodeID,
 	}
 	if err := s.bindings.Create(writeCtx, binding); err != nil {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			// The Find above and this Create are not atomic, so two
+			// concurrent identical AssignRole calls can both pass Find
+			// before either has written its row. The loser's Create hits
+			// uq_rbac_role_bindings_tenant_user_role_node, which dbkit.Open
+			// wires gorm's TranslateError to report as this driver-agnostic
+			// sentinel rather than a dialect-specific error. That unique
+			// index firing means exactly one thing here: the grant this
+			// call wanted is already there, which is a no-op per this
+			// method's own documented contract, not a storage failure.
+			return nil
+		}
 		return ErrStorage.WithCause(err)
 	}
 	return s.publishBindingChanged(ctx, EventRoleBindingAssigned, sub, def, scope)

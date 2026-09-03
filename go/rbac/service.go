@@ -72,6 +72,15 @@ type Service struct {
 	// generation fence in cache.go exists to close; production code never
 	// sets it, and grantsFor is a no-op wrapper around it when it is nil.
 	afterLoadGrants func()
+
+	// beforeBindingCreate is afterLoadGrants's counterpart for AssignRole:
+	// it runs synchronously right after AssignRole's existence check
+	// (Find) reports the binding absent and right before its Create, so a
+	// test can deterministically inject a second, concurrent identical
+	// AssignRole into that exact window instead of relying on goroutine
+	// scheduling to reproduce the race. Nil, and therefore a no-op, in
+	// production.
+	beforeBindingCreate func()
 }
 
 // Close releases the Service's background resources: it stops the decision

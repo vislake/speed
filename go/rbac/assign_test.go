@@ -241,6 +241,51 @@ func TestService_AssignRole_IsIdempotent(t *testing.T) {
 	}
 }
 
+func TestService_AssignRole_ConcurrentIdenticalAssign_IsANoOp(t *testing.T) {
+	// The LOW review finding on AssignRole: the existence check (Find) and
+	// the insert (Create) are not atomic, so two concurrent identical
+	// AssignRole calls can both pass Find before either has written its
+	// row. Reproduced deterministically via the beforeBindingCreate test
+	// hook: it fires after THIS call's own Find already reported the
+	// binding absent, and inside it a second call's Create is simulated,
+	// landing first and taking the unique index. This call's own Create
+	// then hits uq_rbac_role_bindings_tenant_user_role_node and must be
+	// treated the same as "the grant is already there" -- a no-op
+	// returning nil per AssignRole's documented contract -- not surfaced
+	// as ErrStorage.
+	svc := newTestService(t)
+	ctx := tenantCtx("tenant-a")
+	role, err := svc.DefineRole(ctx, RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}})
+	if err != nil {
+		t.Fatalf("DefineRole: %v", err)
+	}
+	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
+
+	svc.beforeBindingCreate = func() {
+		svc.beforeBindingCreate = nil // run exactly once
+		if createErr := svc.bindings.Create(ctx, &RoleBinding{
+			ID:     newID(),
+			UserID: sub.UserID,
+			RoleID: role.ID,
+			NodeID: "",
+		}); createErr != nil {
+			t.Fatalf("simulated concurrent AssignRole's Create: %v", createErr)
+		}
+	}
+
+	if assignErr := svc.AssignRole(ctx, sub, "reader", Scope{}); assignErr != nil {
+		t.Fatalf("AssignRole racing a concurrent identical assign = %v, want nil (an idempotent no-op)", assignErr)
+	}
+
+	bindings, err := svc.bindings.ByUser(ctx, sub.UserID)
+	if err != nil {
+		t.Fatalf("ByUser: %v", err)
+	}
+	if len(bindings) != 1 {
+		t.Fatalf("got %d bindings after the race, want 1 (the unique index, not a duplicate row)", len(bindings))
+	}
+}
+
 func TestService_AssignRole_DifferentScopes_AreDifferentGrants(t *testing.T) {
 	svc := newTestService(t)
 	ctx := tenantCtx("tenant-a")
