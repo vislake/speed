@@ -1,0 +1,30 @@
+# rbac 模块面向用户的中文（zh-CN）文案。
+#
+# 每条消息对应 go/rbac/errors.go 中的一个导出错误码：按后端编码规范 §6.2，
+# 接口只返回结构化错误码与参数，从不直接返回这段文案，客户端根据错误码在自己
+# 的 i18n 目录中查找——本文件就是 rbac 模块为该目录提供的一份资源。
+#
+# 文件契约（见 go/pkgcore/i18n）：每条消息是扁平的一条顶层条目——不允许
+# [errors] 这类分组 section（go-i18n 会把 section 名折进消息 id）——id 是带
+# 模块名前缀（"rbac."）的完整带引号 key，且 en-US.toml 必须携带完全相同的
+# id 集合。
+
+"rbac.unknown_permission" = "该权限不存在。"
+
+"rbac.role_not_found" = "未找到该角色。"
+
+"rbac.duplicate_role" = "同名角色已存在。"
+
+"rbac.binding_not_found" = "未找到该角色授权记录。"
+
+"rbac.subject_required" = "请先登录。"
+
+"rbac.permission_denied" = "你没有执行该操作的权限。"
+
+"rbac.subtree_unresolved" = "该授权指向的组织单元已不存在，因此不授予任何权限。"
+
+"rbac.service_not_attached" = "访问控制服务正在启动，请稍后重试。"
+
+"rbac.already_attached" = "访问控制服务已在运行。"
+
+"rbac.storage_error" = "服务器内部发生错误，请稍后重试。"

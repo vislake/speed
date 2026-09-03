@@ -1,0 +1,31 @@
+# rbac's user-facing messages, American English.
+#
+# One entry per exported error code in go/rbac/errors.go: the API returns
+# the structured code plus parameters and never this prose (backend coding
+# standard §6.2), so this file is the resource a client resolves that code
+# against, not something the handler interpolates.
+#
+# File contract (go/pkgcore/i18n): every message is one flat top-level
+# entry -- no [errors] style grouping section, which go-i18n would fold
+# into the message id -- the id is the whole quoted key prefixed with the
+# module name ("rbac."), and zh-CN.toml must carry exactly the same id set.
+
+"rbac.unknown_permission" = "That permission does not exist."
+
+"rbac.role_not_found" = "That role was not found."
+
+"rbac.duplicate_role" = "A role with that key already exists."
+
+"rbac.binding_not_found" = "That role assignment was not found."
+
+"rbac.subject_required" = "Sign in to continue."
+
+"rbac.permission_denied" = "You do not have permission to do that."
+
+"rbac.subtree_unresolved" = "That role assignment covers an organization unit that no longer exists, so it grants nothing."
+
+"rbac.service_not_attached" = "Access control is still starting up. Please try again shortly."
+
+"rbac.already_attached" = "Access control is already running."
+
+"rbac.storage_error" = "Something went wrong on our side. Please try again."
