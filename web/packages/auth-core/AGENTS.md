@@ -9,15 +9,26 @@ browser package.
 
 The session lifecycle of a browser client: `createAuthSession(store)`
 in `src/session.ts` turns the generated authn operations of
-`@speed/api-sdk` (password/SMS login, logout, tenant switch, step-up,
-refresh) into one observable memory-only state machine. It is headless:
-no UI, no DOM. The React hooks in `src/hooks.ts` (`useAuthState`,
-`useCurrentTenant`, `usePermission`, plus the `attachSession` seam that
-binds them to one session, last bind wins) live on the same layer --
-react is a peer dependency, never a regular one. The package sits
-directly above `@speed/api-client` (the access-token store it receives
-is the same store that package reads on every send) and `@speed/api-sdk`
-(the generated operations it calls). Never import either of those from
+`@speed/api-sdk` into one observable memory-only state machine -- the
+session operations (password/SMS login, logout, tenant switch,
+step-up, refresh), the social callback login (`completeSocialLogin`)
+and the pre-session operations the sign-up and social flows need
+(`requestSMSCode`, `register`, `socialAuthorizeUrl`). The pre-session
+operations never change session state, on success or failure: an SMS
+code request is an acceptance, a built authorize URL has nothing to
+commit, and a registration returns the created `AuthnUser` --
+registering is not signing in, and the host follows up with a login.
+`completeSocialLogin` carries the full login contract, plus one extra
+refusal: a sign-in flow answered with the binding-shaped response
+(user and identity, no tokens) is a `client.protocol` violation,
+rejected before any state change. It is headless: no UI, no DOM. The
+React hooks in `src/hooks.ts` (`useAuthState`, `useCurrentTenant`,
+`usePermission`, plus the `attachSession` seam that binds them to one
+session, last bind wins) live on the same layer -- react is a peer
+dependency, never a regular one. The package sits directly above
+`@speed/api-client` (the access-token store it receives is the same
+store that package reads on every send) and `@speed/api-sdk` (the
+generated operations it calls). Never import either of those from
 below this layer.
 
 ## Rules that are load-bearing here
