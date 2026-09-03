@@ -21,6 +21,8 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(jsdom@30.0.1)(vite@8.2.2)
 
+  packages/api-client: {}
+
   packages/i18n:
     dependencies:
       i18next:

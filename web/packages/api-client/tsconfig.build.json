@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // ESM authoring rules: NodeNext mode makes tsc emit relative imports
+    // verbatim, so sources must write explicit .js extensions (TS2835
+    // otherwise) -- the emitted dist/ is then loadable by Node ESM and
+    // typecheckable by NodeNext consumers as-is.
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "noEmit": false,
+    "declaration": true,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"]
+}

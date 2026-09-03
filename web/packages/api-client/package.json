@@ -1,0 +1,21 @@
+{
+  "name": "@speed/api-client",
+  "version": "0.0.0",
+  "description": "Speed hand-written API runtime: injectable fetch, memory-only bearer-token attachment, silent single-flight 401 refresh, ApiError envelope normalization and idempotent-only retry -- the HTTP layer the generated @speed/api-sdk surface calls",
+  "type": "module",
+  "sideEffects": false,
+  "files": ["dist", "README.md", "AGENTS.md"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json"
+  }
+}
