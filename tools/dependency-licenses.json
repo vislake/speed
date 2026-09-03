@@ -136,6 +136,7 @@
       "license": "BSD-2-Clause",
       "name": "github.com/redis/go-redis/v9",
       "used_by": [
+        "go/config",
         "go/jobs",
         "go/pkgcore"
       ],
@@ -147,6 +148,7 @@
       "license": "MIT",
       "name": "github.com/testcontainers/testcontainers-go",
       "used_by": [
+        "go/config",
         "go/dbkit",
         "go/jobs",
         "go/pkgcore"
@@ -169,6 +171,7 @@
       "license": "MIT",
       "name": "github.com/testcontainers/testcontainers-go/modules/postgres",
       "used_by": [
+        "go/config",
         "go/dbkit"
       ],
       "version": "v0.44.0"
@@ -179,6 +182,7 @@
       "license": "MIT",
       "name": "github.com/testcontainers/testcontainers-go/modules/redis",
       "used_by": [
+        "go/config",
         "go/jobs",
         "go/pkgcore"
       ],
@@ -343,6 +347,7 @@
       "license": "MIT",
       "name": "gorm.io/gorm",
       "used_by": [
+        "go/config",
         "go/dbkit",
         "go/jobs",
         "go/tenancy"
@@ -386,6 +391,7 @@
       "license": "MIT",
       "name": "react",
       "used_by": [
+        "web/packages/api-sdk",
         "web/packages/i18n",
         "web/packages/ui-kit"
       ],
@@ -430,6 +436,16 @@
         "web/packages/ui-kit"
       ],
       "version": "7.87.0"
+    },
+    {
+      "ecosystem": "npm",
+      "evidence": "web workspace pnpm install (frozen, pnpm-lock.yaml): node_modules/.pnpm/@tanstack+react-query@5.102.8*/node_modules/@tanstack/react-query/package.json license field + LICENSE",
+      "license": "MIT",
+      "name": "@tanstack/react-query",
+      "used_by": [
+        "web/packages/api-sdk"
+      ],
+      "version": "5.102.8"
     }
   ],
   "schema": 1,
