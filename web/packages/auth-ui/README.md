@@ -536,8 +536,13 @@ the `speed/no-literal-text` rule enforces the namespace discipline over
   honesty standard every package here used before a shell consumer
   existed. The remaining leg, a browser driving a real server, lands
   with the reference-app shells (which will also be where generated
-  TanStack Query hooks, tenant query-key namespacing and `RouteGuard`
-  wiring first appear); the M4 e2e pipeline covers the full stack.
+  TanStack Query hooks and tenant query-key namespacing first appear,
+  and where `RouteGuard` -- its host-composition shape already proven
+  in form by `product-shell`'s gated-journey suite, which mounts the
+  gate inside the shell's children and feeds it a status the fixture
+  host computes from the role lists it attached -- first wires behind
+  real permission fetches and a router); the M4 e2e pipeline covers
+  the full stack.
 - **Auth-core hooks stay host-side by design.** Components in this
   family take the session as a prop and fire callbacks; the host
   observes session transitions with `useAuthState` and friends. A
