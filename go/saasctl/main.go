@@ -2,8 +2,9 @@
 // code; saasctl manages the boundary where a project meets the speed
 // modules it pulls in: shaping new consumer projects (new), rewriting a
 // project's speed module requires when a new lockstep release lands
-// (upgrade), and maintaining a generated project's database and dynamic
-// configuration (db migrate and config print).
+// (upgrade), applying a generated project's speed-module migrations to its
+// database (db migrate), and showing how its bootstrap configuration
+// resolves (config print).
 //
 // The exit-code contract is uniform across commands: 0 for success and
 // help, 2 for usage errors (a malformed invocation of a command that
@@ -25,8 +26,9 @@ const rootUsage = `Usage: saasctl <command> [args]
 
 saasctl manages the boundary where a speed consumer project meets the
 speed modules it pulls in: it shapes new projects, rewrites a project's
-speed module requires when a new lockstep release lands, and maintains a
-generated project's database and dynamic configuration.
+speed module requires when a new lockstep release lands, applies the
+speed modules' migrations to a generated project's database, and shows
+how its bootstrap configuration resolves.
 
 Commands:
 
