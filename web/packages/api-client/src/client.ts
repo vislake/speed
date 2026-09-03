@@ -130,10 +130,11 @@ export interface ClientOptions {
   /**
    * Silent-401-refresh hook: resolves true when a fresh access token
    * was stored (via accessTokenStore) and the original request may be
-   * retried once. The M1 authn round supplies it against the
-   * session-refresh endpoint; hosts without a session leave it out and
-   * every 401 surfaces as an auth ApiError. Never called more than
-   * once per request; concurrent 401s share one in-flight refresh.
+   * retried once. @speed/auth-core supplies it against the
+   * session-refresh operation (`() => session.refresh()`); hosts
+   * without a session leave it out and every 401 surfaces as an auth
+   * ApiError. Never called more than once per request; concurrent 401s
+   * share one in-flight refresh.
    *
    * The hook fires only for a refused request that itself presented a
    * bearer token. A 401 on a credential-less request means the

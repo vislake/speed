@@ -86,12 +86,13 @@ name: pr-check
 # DELIBERATELY NOT WIRED HERE (18-cicd discipline table rows whose tooling
 # does not exist in the repository yet; each lands with its tooling round --
 # wiring them now would be fake checks):
-#   * spec merging, redocly rules, oasdiff, Playwright e2e -- none of
-#     that tooling exists yet (see the gated pipeline stubs
-#     e2e/scaffold-verify/nightly in this directory for where each wires
-#     in; security.yml is no longer a stub -- its scans moved to the live
-#     security pipeline, and release.yml is its own live pipeline,
-#     dispatched manually). The ESLint foundation is wired, not
+#   * oasdiff and Playwright e2e -- that tooling does not exist yet
+#     (see the gated pipeline stubs e2e/scaffold-verify/nightly in this
+#     directory for where each wires in; security.yml is no longer a
+#     stub -- its scans moved to the live security pipeline, and
+#     release.yml is its own live pipeline, dispatched manually). Spec
+#     merging and the redocly naming lint are real, but they run in the
+#     API-contract pipeline below, not here. The ESLint foundation is wired, not
 #     deferred: the workspace's speed/no-literal-text rule enforces
 #     i18n-sourced text over React package src, and speed/no-direct-http
 #     enforces the API-contract HTTP discipline (hand-written
@@ -102,14 +103,16 @@ name: pr-check
 #     unit tests in the repo-checks job described above -- the rules
 #     live outside any package, so only a repo-level run exercises
 #     them. The react-hooks plugin awaits a stateful-components round.
-#     The API-contract toolchain is real but lives in its own
-#     path-filtered pipeline, api-contract.yml, so it is not wired into
-#     this check: on PRs touching the notes module's spec fragment or
-#     the generator side it regenerates the fragment's API surface on
-#     both halves -- backend via pinned oapi-codegen, frontend via
-#     pinned orval into @speed/api-sdk -- diffs both committed
-#     artifacts, and builds the reference app so a spec that outgrew
-#     its handler fails compilation without needing a full-ci label.
+#     The API-contract toolchain runs as its own path-filtered
+#     pipeline, api-contract.yml: on PRs touching one of the three
+#     module fragments (notes, org, authn) or the generator side it
+#     regenerates the touched fragments' backend interfaces via pinned
+#     oapi-codegen and the merged document's frontend SDK via pinned
+#     orval into @speed/api-sdk (the merge itself -- notes + authn
+#     joined by pinned redocly, linted against redocly.yaml -- and both
+#     committed artifacts diffed), and builds the reference app so a
+#     spec that outgrew its handler fails compilation without needing
+#     a full-ci label.
 #     i18n key-parity wiring exists and runs in docs-check on
 #     doc/i18n-touching PRs -- deliberately not here, so this fast
 #     per-PR check stays under its 8-minute budget.

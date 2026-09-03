@@ -49,12 +49,14 @@ export async function loadNotes(): Promise<Note[]> {
     // credential an XSS walks away with). With no token, requests go
     // out without Authorization.
     accessTokenStore: createMemoryAccessTokenStore(),
-    // Silent 401 refresh: the M1 authn round supplies the real hook
-    // against the session-refresh endpoint (the refresh token is an
-    // httpOnly cookie JavaScript never sees). It fires only for a
-    // refused request that carried a bearer token -- with the store
-    // empty there is no session to refresh, so the 401 rejects an
-    // ApiError with auth: true and hosts route it to sign-in.
+    // Silent 401 refresh: @speed/auth-core supplies the real hook --
+    // `refreshAccessToken: () => session.refresh()` -- against the
+    // session-refresh operation of the generated authn surface (the
+    // held refresh token lives in the session closure, never in this
+    // store). It fires only for a refused request that carried a
+    // bearer token -- with the store empty there is no session to
+    // refresh, so the 401 rejects an ApiError with auth: true and
+    // hosts route it to sign-in.
     refreshAccessToken: async () => false,
     // Abort requests slower than 10s. Transient retries follow
     // DEFAULT_RETRY_POLICY: idempotent methods only (GET/HEAD/OPTIONS),

@@ -36,7 +36,7 @@ and `src/` must keep passing it on every regeneration.
   wins, no once-guard (tests and hot reload rebind).
 - **No tenant concept exists in generated code.** No tenant header,
   no tenant id in query keys, no `tenant_id` in request or response
-  types (the notes fragment documents its absence). Tenant query-key
+  types (the fragments document its absence). Tenant query-key
   namespacing is an M1 consumer-shell discipline, recorded in
   `web/orval.config.ts` and the README.
 - **orval stays out of the lockfile.** Every runner -- the Taskfile
@@ -56,20 +56,25 @@ and `src/` must keep passing it on every regeneration.
 
 ## In this round vs. deferred
 
-Landed: the generated notes surface (`src/index.ts`), the runtime seam,
-the regeneration tooling (config + fixup script) and the CI wiring that
-regenerates and diffs the artifact.
+Landed: the generated surface over the merged document (`src/index.ts`
+-- orval input is `build/openapi/speed.yaml`, the redocly `join` of
+the notes and authn fragments), the runtime seam, the regeneration
+tooling (config + fixup script) and the CI wiring that regenerates and
+diffs the artifact. `@speed/auth-core` compile-consumes the authn
+surface in-workspace: its unit suite binds a scripted request function
+through `bindRequestFn` -- the same seam a host's real client binds --
+so a spec change whose regenerated surface outgrows auth-core's calls
+fails that package's typecheck.
 
 Deferred with reasons:
 
-- Redocly merge of module fragments into a single spec -- waits for the
-  second fragment, M1 (`docs/internal/21-api-contract.md`).
 - The oasdiff breaking-change gate -- waits for the first release
   baseline, M4 (recorded mechanism decision, not a fake gate).
 - Real UI consumers (reference-app shells) and tenant query-key
-  namespacing -- M1. Until then the package is test-consumed-only;
-  its unit tests bind a fake request function and never touch a
-  network.
+  namespacing -- M1. Compile consumption is live (`@speed/auth-core`
+  above); runtime end-to-end consumption -- shells driving real
+  logins against a real server -- is not, and the package's own unit
+  tests still bind a fake request function and never touch a network.
 - Release-time packaging of the merged spec into the published SDK --
   M4 machinery with release-foundation (`docs/internal/18-cicd.md`);
   do not claim it lives here.
@@ -79,10 +84,10 @@ Deferred with reasons:
 Two entry points:
 
 - `.` (generated `src/index.ts`) -- the operation functions, hooks and
-  response models orval derives from the module fragments. The shape
+  response models orval derives from the merged document. The shape
   is orval's, not ours: expect it to change only through the generator.
 - `./runtime` (`src/runtime.ts`) -- `bindRequestFn` and `speedRequest`
-  (the mutator), the stable hand-written seam M1 shells import.
+  (the mutator), the stable hand-written seam hosts bind.
 
 `src/runtime.test.ts` pins the seam's behaviour; `src/index.test.ts`
 pins the generated surface's observable behaviour (hooks issue the
