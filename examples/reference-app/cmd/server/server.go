@@ -7,12 +7,14 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
@@ -51,7 +53,42 @@ const (
 	// docs/internal/09-observability.md's own description of the standalone
 	// deployment mode) has no demo Host to send and must not depend on one.
 	metricsPath = "/metrics"
+
+	// configKeyEnv names the environment variable holding the hex-encoded
+	// 32-byte master key the config module seals Sensitive values with
+	// (config.WithCipher over dbkit.NewCipher). It is the bootstrap
+	// configuration this app's own configs table must never hold -- the
+	// key that encrypts the table cannot live in the table -- so it comes
+	// from the environment like every other bootstrap value, with the
+	// documented development default below.
+	configKeyEnv = "SPEED_CONFIG_KEY"
+
+	// configKeyHexLength is the encoded length of the required 32-byte key
+	// (2 hex characters per byte), checked so a short or malformed
+	// SPEED_CONFIG_KEY fails configuration loading with a precise message
+	// rather than surfacing later as an opaque NewCipher error.
+	configKeyHexLength = 64
 )
+
+// devConfigKey is the master key used when SPEED_CONFIG_KEY is unset. It is
+// the ascending 0x00..0x1f byte sequence -- a recognizable constant, never
+// a secret -- because zero-setup standalone development (`go run
+// ./cmd/server`, `task dev`, this app's tests) must work with no
+// environment at all, while config's Sensitive items demand a real
+// 32-byte key the moment one is declared (Attach fails with
+// ErrCipherRequired otherwise).
+//
+// This default is a documented trade-off, not a pattern to copy: it is a
+// key committed to the repository, which real hosts must never do. A real
+// deployment must set SPEED_CONFIG_KEY from a secret store (or refuse to
+// start); the constant exists so the *demo* keeps working out of the box,
+// and its name and doc comment are the guard rails that keep it honest.
+var devConfigKey = []byte{
+	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+	0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+	0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+}
 
 // demoHostTenants is a hard-coded, obviously-temporary Host -> TenantID
 // lookup standing in for the Resolver authn will eventually supply for
@@ -121,15 +158,20 @@ func (s strictHostResolver) Resolve(r *http.Request) (pkgcore.TenantID, error) {
 // compile-time check that strictHostResolver satisfies tenancy.Resolver.
 var _ tenancy.Resolver = strictHostResolver{}
 
-// serverConfig is main.go's own wiring configuration. It is a plain
-// struct, not pkgcore/config's dynamic configuration (which is not a real
-// module yet -- see root CLAUDE.md's M0 status): this is main.go, the
-// minimal starter skeleton, never a business module, so it never goes
-// through Module.Register either.
+// serverConfig is main.go's own bootstrap wiring configuration -- the
+// values a process must know before anything else can start (deployment
+// mode, port, database path, the config master key, the demo host map).
+// It is a plain struct read from the environment by configFromEnv, NOT the
+// dynamic configuration the config module serves: dynamic configuration
+// lives in the configs table and can never hold the very key that encrypts
+// it, so this bootstrap struct is the deliberate exception to "a plain
+// struct, not pkgcore/config's dynamic configuration" -- it is main.go's
+// own wiring, which never goes through Module.Register either.
 type serverConfig struct {
 	DeploymentMode pkgcore.DeploymentMode
 	Port           string
 	SQLitePath     string
+	ConfigKey      []byte
 	HostTenants    map[string]pkgcore.TenantID
 }
 
@@ -156,10 +198,32 @@ func configFromEnv() (serverConfig, error) {
 		dbPath = defaultSQLitePath
 	}
 
+	// The config master key: SPEED_CONFIG_KEY when set (a hex-encoded
+	// 32-byte key -- see configKeyEnv's doc comment), the documented
+	// development default otherwise (see devConfigKey's). A malformed
+	// value must fail startup with a precise message rather than surface
+	// later as an opaque cipher error; hex.DecodeString rejects anything
+	// that is not valid lowercase-or-uppercase hex, and the length check
+	// below rejects anything that does not decode to exactly 32 bytes.
+	configKey := devConfigKey
+	if encoded := os.Getenv(configKeyEnv); encoded != "" {
+		if len(encoded) != configKeyHexLength {
+			return serverConfig{}, fmt.Errorf(
+				"reference-app: %s must hold %d hex characters (a 32-byte key), got %d",
+				configKeyEnv, configKeyHexLength, len(encoded))
+		}
+		decoded, err := hex.DecodeString(encoded)
+		if err != nil {
+			return serverConfig{}, fmt.Errorf("reference-app: %s: %w", configKeyEnv, err)
+		}
+		configKey = decoded
+	}
+
 	return serverConfig{
 		DeploymentMode: deploymentMode,
 		Port:           port,
 		SQLitePath:     dbPath,
+		ConfigKey:      configKey,
 		HostTenants:    demoHostTenants,
 	}, nil
 }
@@ -184,7 +248,18 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	if err != nil {
 		return nil, nil, fmt.Errorf("reference-app: open database: %w", err)
 	}
+
+	// configService is filled by Attach below (nil until then); cleanup
+	// closes it first so the anti-loss poller never races the database
+	// close it polls against.
+	var configService *config.Service
+
 	cleanup := func() error {
+		if configService != nil {
+			if closeErr := configService.Close(); closeErr != nil {
+				return closeErr
+			}
+		}
 		sqlDB, dbErr := db.DB()
 		if dbErr != nil {
 			return dbErr
@@ -192,10 +267,49 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return sqlDB.Close()
 	}
 
+	cipher, err := dbkit.NewCipher(cfg.ConfigKey)
+	if err != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: build the config master cipher: %w", err)
+	}
+
 	notesModule := notes.NewModule(db)
+
+	// The config module shares notes' database and is given everything it
+	// needs to serve its two endpoints: the master cipher (notes declares a
+	// Sensitive item, so Attach would refuse a cipher-less module), a
+	// resolver, and the default anti-loss poller cadence.
+	//
+	// The resolver is tenancy.NewDomainResolver -- deliberately NOT the
+	// strictHostResolver gating the notes API -- and its default tenant is
+	// deliberately empty. config's public endpoints are pre-auth display
+	// decisions, the one case go/tenancy's DomainResolver doc comment
+	// blesses with unmatched-host leniency; an empty default tenant maps
+	// that leniency onto the endpoint's own "platform defaults" tier (a
+	// host that resolves to no tenant reads system-scope rows, never an
+	// error), which is exactly the login-page rule of
+	// docs/internal/11-cross-cutting.md's dynamic-config section applied
+	// to this app's brand snapshot. strictHostResolver would defeat the
+	// purpose: its fail-closed 403 is right for real CRUD data (see its
+	// own doc comment) and wrong for a request that must render a brand no
+	// matter whose it is.
+	configModule := config.NewModule(db,
+		config.WithCipher(cipher),
+		config.WithResolver(tenancy.NewDomainResolver(
+			func(host string) (pkgcore.TenantID, bool) {
+				tid, ok := cfg.HostTenants[host]
+				return tid, ok
+			},
+			"",
+		)),
+	)
 
 	migrationRegistry := dbkit.NewMigrationRegistry()
 	if regErr := migrationRegistry.Register(notesModule); regErr != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	}
+	if regErr := migrationRegistry.Register(configModule); regErr != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
@@ -204,10 +318,21 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return nil, nil, fmt.Errorf("reference-app: apply migrations: %w", applyErr)
 	}
 
-	reg, err := pkgcore.NewKernel(cfg.DeploymentMode).Bootstrap(ctx, notesModule)
+	// Bootstrap registers both modules in argument order -- notes first, so
+	// the configuration items and feature flags its Register declares are
+	// in the registry before the config module's own Register runs -- and
+	// then Attach freezes the schema snapshot those declarations fold
+	// into, exactly the sequence config's Attach doc comment prescribes
+	// ("after Kernel.Bootstrap has returned").
+	reg, err := pkgcore.NewKernel(cfg.DeploymentMode).Bootstrap(ctx, notesModule, configModule)
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: bootstrap kernel: %w", err)
+	}
+	configService, err = configModule.Attach(reg)
+	if err != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: attach the config module: %w", err)
 	}
 
 	mux := http.NewServeMux()
@@ -246,11 +371,36 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// load balancer, a script) probes it with HEAD instead of GET --
 	// exactly the class of bug this allowlist exists to prevent, just on
 	// the one method easy to forget because the mux layer papers over it.
+	//
+	// The config module's two endpoints are allowlisted for the same
+	// reason the health and metrics endpoints are -- but with a
+	// difference: config's paths are named through the module's exported
+	// constants (config.PathPublic, config.PathSystemFeatures) rather
+	// than hand-written strings, because the module owns the paths and a
+	// host that re-types them could drift. They are pre-auth display
+	// surfaces by design (see go/config/http.go's doc comments): the
+	// request must reach the config module's own handler so ITS resolver
+	// -- tenancy.NewDomainResolver, see its wiring above -- can map the
+	// Host onto the tenant whose brand to render, or onto platform
+	// defaults when the Host matches nothing. strictHostResolver must not
+	// 403 those requests first: a browser pointed at an unknown Host
+	// still deserves a login page and its brand -- docs/internal/
+	// 11-cross-cutting.md's dynamic-config section says an unmatched host
+	// must resolve to platform defaults and never error, because an
+	// unrenderable login page is the worst possible failure mode.
+	// Allowlisting here is safe for exactly the reason the endpoints
+	// exist: they serve only what the design marks public (display
+	// decisions), never tenant data -- the notes API stays behind
+	// strictHostResolver, fail-closed as before.
 	handler := tenancy.Middleware(resolver,
 		tenancy.WithAllowlist(http.MethodGet, healthzPath),
 		tenancy.WithAllowlist(http.MethodHead, healthzPath),
 		tenancy.WithAllowlist(http.MethodGet, metricsPath),
 		tenancy.WithAllowlist(http.MethodHead, metricsPath),
+		tenancy.WithAllowlist(http.MethodGet, config.PathPublic),
+		tenancy.WithAllowlist(http.MethodHead, config.PathPublic),
+		tenancy.WithAllowlist(http.MethodGet, config.PathSystemFeatures),
+		tenancy.WithAllowlist(http.MethodHead, config.PathSystemFeatures),
 	)(mux)
 	return handler, cleanup, nil
 }

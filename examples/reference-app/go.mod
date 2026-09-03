@@ -10,8 +10,11 @@ replace github.com/vislake/speed/go/tenancy => ../../go/tenancy
 
 replace github.com/vislake/speed/go/observability => ../../go/observability
 
+replace github.com/vislake/speed/go/config => ../../go/config
+
 require (
 	github.com/google/uuid v1.6.0
+	github.com/vislake/speed/go/config v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/dbkit v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000

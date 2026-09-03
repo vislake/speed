@@ -65,7 +65,56 @@ const (
 	// became true as a result -- two different questions that happen to
 	// share a module and entity name.
 	AuditActionNoteCreate = "notes.note.create"
+
+	// Configuration keys, feature flags and their default values below.
+	//
+	// A word on ownership before the declarations: notes is this app's
+	// only business module so far, yet the items it registers here are
+	// platform-grade keys (the brand, the support address, the AI
+	// feature toggles). That is a deliberate placeholder arrangement, not
+	// the shape a finished app ships: root CLAUDE.md's "The reference app
+	// is the mandatory first consumer of every module" rule means SOME
+	// module must be the first consumer of the config module's schema
+	// registration, and notes is the only candidate -- so it registers
+	// the keys this app's own frontend and support flows need, and
+	// documents the temporary custody in this comment. When the real
+	// owner modules land (branding in a platform/tenant module, the
+	// support address in notification, the AI toggles in ai-gateway),
+	// these registrations move with their keys, and the notes module
+	// shrinks back to its own CRUD schema.
+	//
+	// The values and validation shape follow pkgcore.ConfigItem's and
+	// pkgcore.FeatureFlag's doc comments; config's Attach folds them into
+	// its runtime schema (go/config/module.go's Attach doc comment) and
+	// its unit and integration tiers pin the same semantics against
+	// fixtures that mirror these declarations.
 )
+
+// ConfigKeyBrandSiteName is the public, tenant-overridable display name a
+// tenant's own frontend shows (the "brand" of the white-label rule in
+// docs/internal/11-cross-cutting.md's dynamic-config section). It is
+// Public so the unauthenticated /api/config/public endpoint may serve it,
+// and it defaults to the app's own name.
+const ConfigKeyBrandSiteName = "brand.site_name"
+
+// ConfigKeySupportReplyEmail is the address support mail is sent from
+// (and shown as the contact address where support is offered). It is
+// Sensitive: a mail configuration can embed account identity, it must lie
+// encrypted at rest, and it must never reach the public endpoint.
+const ConfigKeySupportReplyEmail = "support.reply_email"
+
+// FeatureFlagSmilePreview gates the smile-preview feature; when a tenant
+// enables it, the frontend offers previews before a full simulation. The
+// second flag depends on it (see ai.premium_upsell's DependsOn below), so
+// the two together exercise the flag-dependency chain of config's
+// feature-flag runtime.
+const FeatureFlagSmilePreview = "ai.smile_preview"
+
+// FeatureFlagPremiumUpsell gates the premium upsell UI. It DependsOn
+// ai.smile_preview: showing a premium offer for a feature the tenant has
+// not even enabled is noise, so the flag only reads enabled while its
+// dependency is on (config resolves DependsOn chains on every read).
+const FeatureFlagPremiumUpsell = "ai.premium_upsell"
 
 // NoteCreatedPayload is the concrete type carried in the
 // pkgcore.Event.Payload of every EventNoteCreated event -- the payload
@@ -147,6 +196,50 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		return err
 	}
 	if err := reg.AuditActions.Add(AuditActionNoteCreate); err != nil {
+		return err
+	}
+
+	// The configuration schema and feature flags this module owns (see
+	// the ownership note above the key constants). Registering them here
+	// -- rather than letting config's own module invent defaults -- is
+	// the point of the whole split: config provides the mechanism (the
+	// table, the scope hierarchy, the validation, the endpoints), while
+	// every value's meaning and default belongs to the module that owns
+	// the key. pkgcore validates the declarations on Add (a malformed
+	// item or a duplicated key fails registration), and config.Attach
+	// freezes them into the runtime schema after Bootstrap.
+	if err := reg.Config.Add(
+		pkgcore.ConfigItem{
+			Key:         ConfigKeyBrandSiteName,
+			Type:        "string",
+			Default:     "Smile Studio",
+			Public:      true,
+			Description: "The tenant's display name, shown on its own pages and emails.",
+			Group:       "brand",
+		},
+		pkgcore.ConfigItem{
+			Key:         ConfigKeySupportReplyEmail,
+			Type:        "string",
+			Sensitive:   true,
+			Description: "The address this tenant's support mail is sent from.",
+			Group:       "support",
+		},
+	); err != nil {
+		return err
+	}
+	if err := reg.Features.Add(
+		pkgcore.FeatureFlag{
+			Key:         FeatureFlagSmilePreview,
+			Default:     false,
+			Description: "Lets a tenant's users try AI smile previews before a full simulation.",
+		},
+		pkgcore.FeatureFlag{
+			Key:         FeatureFlagPremiumUpsell,
+			Default:     true,
+			Description: "Shows the premium upsell to a tenant's users.",
+			DependsOn:   []string{FeatureFlagSmilePreview},
+		},
+	); err != nil {
 		return err
 	}
 	return nil

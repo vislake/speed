@@ -174,3 +174,77 @@ func TestModule_Register_DeclaresRoutesPermissionsEventsAndAuditActions(t *testi
 // with module.go's own assertion, kept here too as a visible part of this
 // file's own test surface.
 var _ pkgcore.Module = (*Module)(nil)
+
+// TestModule_Register_DeclaresConfigSchemaAndFeatureFlags pins the schema
+// this module registers for the config module to freeze at Attach
+// (go/config/module.go's Attach doc comment): two configuration items with
+// the exact Public/Sensitive shape cmd/server's public endpoint depends on
+// (brand.site_name served unauthenticated, support.reply_email never), and
+// two feature flags whose DependsOn chain (premium_upsell on smile_preview)
+// exercises config's dependency resolution. The registrars validate on Add,
+// so Register failing here would already be caught by the other Register
+// test; this test proves the *declarations*, the meaning the reference
+// app's own endpoints will serve.
+func TestModule_Register_DeclaresConfigSchemaAndFeatureFlags(t *testing.T) {
+	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	m := NewModule(nil)
+
+	if err := m.Register(reg); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	items := reg.Config.Items()
+	var siteName, replyEmail *pkgcore.ConfigItem
+	for i := range items {
+		switch items[i].Key {
+		case ConfigKeyBrandSiteName:
+			siteName = &items[i]
+		case ConfigKeySupportReplyEmail:
+			replyEmail = &items[i]
+		}
+	}
+	if siteName == nil {
+		t.Fatalf("config item %q was not registered (got %v)", ConfigKeyBrandSiteName, items)
+	}
+	if !siteName.Public {
+		t.Errorf("config item %q Public = false, want true -- the public endpoint may only serve explicitly public items", ConfigKeyBrandSiteName)
+	}
+	if siteName.Default != "Smile Studio" {
+		t.Errorf("config item %q Default = %q, want %q", ConfigKeyBrandSiteName, siteName.Default, "Smile Studio")
+	}
+	if siteName.Type != "string" {
+		t.Errorf("config item %q Type = %q, want %q", ConfigKeyBrandSiteName, siteName.Type, "string")
+	}
+	if replyEmail == nil {
+		t.Fatalf("config item %q was not registered (got %v)", ConfigKeySupportReplyEmail, items)
+	}
+	if !replyEmail.Sensitive {
+		t.Errorf("config item %q Sensitive = false, want true -- a mail configuration must be encrypted at rest and withheld from the public endpoint", ConfigKeySupportReplyEmail)
+	}
+
+	flags := reg.Features.Flags()
+	var smilePreview, premiumUpsell *pkgcore.FeatureFlag
+	for i := range flags {
+		switch flags[i].Key {
+		case FeatureFlagSmilePreview:
+			smilePreview = &flags[i]
+		case FeatureFlagPremiumUpsell:
+			premiumUpsell = &flags[i]
+		}
+	}
+	if smilePreview == nil {
+		t.Fatalf("feature flag %q was not registered (got %v)", FeatureFlagSmilePreview, flags)
+	}
+	if smilePreview.Default {
+		t.Errorf("feature flag %q Default = true, want false", FeatureFlagSmilePreview)
+	}
+	if premiumUpsell == nil {
+		t.Fatalf("feature flag %q was not registered (got %v)", FeatureFlagPremiumUpsell, flags)
+	}
+	if !premiumUpsell.Default {
+		t.Errorf("feature flag %q Default = false, want true", FeatureFlagPremiumUpsell)
+	}
+	if len(premiumUpsell.DependsOn) != 1 || premiumUpsell.DependsOn[0] != FeatureFlagSmilePreview {
+		t.Errorf("feature flag %q DependsOn = %v, want [%q]", FeatureFlagPremiumUpsell, premiumUpsell.DependsOn, FeatureFlagSmilePreview)
+	}
+}

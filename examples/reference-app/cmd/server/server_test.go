@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -25,6 +26,7 @@ func testConfig(t *testing.T) serverConfig {
 		DeploymentMode: pkgcore.DeploymentModeStandalone,
 		Port:           "0",
 		SQLitePath:     filepath.Join(t.TempDir(), "reference-app-test.db"),
+		ConfigKey:      devConfigKey,
 		HostTenants:    demoHostTenants,
 	}
 }
@@ -599,6 +601,9 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	if cfg.SQLitePath != defaultSQLitePath {
 		t.Fatalf("SQLitePath = %q, want %q", cfg.SQLitePath, defaultSQLitePath)
 	}
+	if !bytes.Equal(cfg.ConfigKey, devConfigKey) {
+		t.Fatalf("ConfigKey = %x, want the dev default %x", cfg.ConfigKey, devConfigKey)
+	}
 }
 
 // TestConfigFromEnv_ReadsOverrides verifies each environment variable
@@ -607,6 +612,7 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	t.Setenv("SPEED_DEPLOYMENT_MODE", string(pkgcore.DeploymentModeDistributed))
 	t.Setenv("PORT", "9999")
 	t.Setenv("SPEED_DB_PATH", "/tmp/reference-app-configfromenv-test.db")
+	t.Setenv("SPEED_CONFIG_KEY", "0f0e0d0c0b0a090807060504030201001f1e1d1c1b1a19181716151413121110")
 
 	cfg, err := configFromEnv()
 	if err != nil {
@@ -620,6 +626,39 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	}
 	if cfg.SQLitePath != "/tmp/reference-app-configfromenv-test.db" {
 		t.Fatalf("SQLitePath = %q, want %q", cfg.SQLitePath, "/tmp/reference-app-configfromenv-test.db")
+	}
+	wantKey := []byte{
+		0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09, 0x08,
+		0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x00,
+		0x1f, 0x1e, 0x1d, 0x1c, 0x1b, 0x1a, 0x19, 0x18,
+		0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11, 0x10,
+	}
+	if !bytes.Equal(cfg.ConfigKey, wantKey) {
+		t.Fatalf("ConfigKey = %x, want the decoded SPEED_CONFIG_KEY %x", cfg.ConfigKey, wantKey)
+	}
+}
+
+// TestConfigFromEnv_ConfigKeyRejectsMalformedValues proves configFromEnv
+// fails configuration loading on a malformed SPEED_CONFIG_KEY -- too short
+// to be a 32-byte key, or not hex at all -- with a precise error, rather
+// than letting a subtly wrong key reach dbkit.NewCipher (whose error would
+// name only the key size) or, worse, silently sealing values with a key
+// the operator did not intend.
+func TestConfigFromEnv_ConfigKeyRejectsMalformedValues(t *testing.T) {
+	t.Setenv("SPEED_DEPLOYMENT_MODE", "")
+	t.Setenv("PORT", "")
+	t.Setenv("SPEED_DB_PATH", "")
+
+	for name, encoded := range map[string]string{
+		"too short": "00ff",                                                             // 1 byte, not 32
+		"not hex":   "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", // 64 chars, not hex
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("SPEED_CONFIG_KEY", encoded)
+			if _, err := configFromEnv(); err == nil {
+				t.Fatalf("configFromEnv with SPEED_CONFIG_KEY=%q: want error, got nil", encoded)
+			}
+		})
 	}
 }
 
