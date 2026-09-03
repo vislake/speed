@@ -45,6 +45,23 @@
 #     alignment commit's empirical scan (whose two-file result missed it),
 #     and is exempted as the same kind of assembly-time constraint the
 #     other two sites make.
+#   * go/saasctl/internal/db/migrate.go -- the db migrate command's
+#     command-entry gate: migrating is a standalone-mode operation (the
+#     distributed mode's schema lives in PostgreSQL, which the command
+#     never touches), so the mode the project's bootstrap environment
+#     resolves to is refused when it is not standalone. It is the consumer
+#     CLI's counterpart of the reference-app server.go exemption -- the
+#     command entry's wiring-time contract, never a business-module
+#     decision -- and the saasctl module's repo-checks gate failed on it
+#     until this entry landed.
+#   * go/saasctl/internal/template/project/cmd/server/config.go -- the
+#     embedded generated app's own command entry reading
+#     SPEED_DEPLOYMENT_MODE at bootstrap, byte-for-byte the shape the
+#     reference-app server.go exemption covers. The file carries the
+#     template's //go:build ignore compile-containment marker and
+#     materializes into consumer projects outside this tree, where
+#     repo-checks does not scan it; the in-tree copy is the template, not
+#     library code.
 # The other former entries are deliberately NOT exempted: registry.go,
 # observability's init.go and the reference-app main.go no longer carry a
 # mode decision since the retrofit removed their switches, and a comparison
@@ -81,10 +98,12 @@ rules:
       deployment-mode comparison or SPEED_DEPLOYMENT_MODE read outside the
       kernel-wiring allowlist. The retrofit confined the mode to wiring:
       the RequiredCapabilities() dispatch (go/pkgcore/deployment_mode.go)
-      and the consumer command entry's env read (the reference-app
-      cmd/server/server.go) are the only allowlisted sites; business code
-      receives already-resolved, capability-checked infrastructure and must
-      never branch on the mode. See the rule header for the exact allowlist.
+      and consumer command entries reading SPEED_DEPLOYMENT_MODE (the
+      reference-app cmd/server/server.go, the saasctl CLI's db migrate and
+      its embedded generated-app config.go) are the only allowlisted
+      sites; business code receives already-resolved,
+      capability-checked infrastructure and must never branch on the
+      mode. See the rule header for the exact allowlist.
     languages:
       - go
     severity: WARNING
@@ -138,3 +157,6 @@ rules:
         - "**/go/pkgcore/deployment_mode.go"
         - "**/examples/reference-app/cmd/server/server.go"
         - "**/go/authn/module.go"
+        # Consumer-command-entry sites (see header).
+        - "**/go/saasctl/internal/db/migrate.go"
+        - "**/go/saasctl/internal/template/project/cmd/server/config.go"
