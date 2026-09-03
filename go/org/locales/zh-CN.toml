@@ -1,0 +1,32 @@
+# org 的消息包,简体中文。
+#
+# 每条 go/org/errors.go 声明的错误码对应一条扁平的顶层条目,id 就是带引号的
+# 完整错误码。en-US.toml 必须携带完全相同的 id 集合。
+#
+# 插值名直接使用错误自身的 apperr 参数键,原样保留 snake_case
+# (是 "max_depth" 而不是 "MaxDepth"):消息由 API 返回的结构化参数渲染,
+# 两边对不上就会渲染出一个空位而不是真实值。
+
+"org.node_not_found" = "该组织节点不存在。"
+
+"org.node_name_required" = "组织节点必须填写名称。"
+
+"org.node_name_too_long" = "名称过长,最多 {{.max_length}} 个字符。"
+
+"org.max_depth_exceeded" = "组织树自根节点向下最多 {{.max_depth}} 层。"
+
+"org.parent_not_found" = "选择的上级节点不存在。"
+
+"org.cycle_not_allowed" = "节点不能移动到自身或其下级节点之下。"
+
+"org.node_has_children" = "该节点下还有 {{.descendant_count}} 个节点。请先删除它们,或申请删除整个分支。"
+
+"org.root_already_exists" = "该组织已经存在根节点。"
+
+"org.root_not_deletable" = "组织的根节点不可删除。"
+
+"org.duplicate_sibling_name" = "同一上级下已存在名为 {{.name}} 的节点。"
+
+"org.invalid_node_id" = "该组织节点标识不合法。"
+
+"org.internal_error" = "组织服务未能完成本次请求。"

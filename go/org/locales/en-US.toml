@@ -1,0 +1,33 @@
+# org's message bundle, American English.
+#
+# One flat top-level entry per error code go/org/errors.go declares; the id
+# is the whole quoted code. zh-CN.toml must carry exactly the same id set.
+#
+# Interpolated names are the error's own apperr parameter keys, verbatim and
+# snake_case ("max_depth", not "MaxDepth"): the message is rendered from the
+# structured parameters the API returned, so a mismatch between the two would
+# render an empty slot rather than a value.
+
+"org.node_not_found" = "That organization node does not exist."
+
+"org.node_name_required" = "An organization node needs a name."
+
+"org.node_name_too_long" = "That name is too long. Use at most {{.max_length}} characters."
+
+"org.parent_not_found" = "The parent node you selected does not exist."
+
+"org.max_depth_exceeded" = "The organization tree cannot go more than {{.max_depth}} levels below its root."
+
+"org.cycle_not_allowed" = "A node cannot be moved into itself or into one of the nodes beneath it."
+
+"org.node_has_children" = "This node still has {{.descendant_count}} node(s) beneath it. Delete those first, or ask for the whole branch to be removed."
+
+"org.root_already_exists" = "This organization already has a root node."
+
+"org.root_not_deletable" = "The root node of an organization cannot be deleted."
+
+"org.duplicate_sibling_name" = "Another node under the same parent is already named {{.name}}."
+
+"org.invalid_node_id" = "That organization node identifier is not valid."
+
+"org.internal_error" = "The organization service could not complete the request."
