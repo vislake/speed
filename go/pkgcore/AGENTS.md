@@ -276,4 +276,4 @@ Full runnable versions of all of the above live in `example_test.go` (the shared
 | `i18n.ErrUnknownLocale` | `Lookup`/`LookupPlural` for a locale no module ships | Programming error; the catalog never falls back to a default language |
 | `i18n.ErrUnknownCode` | `Lookup`/`LookupPlural` for a code no module contributed | Programming error; the catalog never falls back to a default language |
 
-Design rationale lives in `docs/internal/01-architecture.md` (module graph and the `Registry` decision), `03-deployment-modes.md` (dual deployment modes), `04-data-and-tenancy.md` (tenant isolation) and `11-cross-cutting.md` (the message-catalog mechanism and the adoption of go-i18n).
+Design rationale lives in `docs/internal/01-architecture.md` (module graph and the `Registry` decision), `03-deployment-modes.md` (deployment mode and implementation composition), `04-data-and-tenancy.md` (tenant isolation) and `11-cross-cutting.md` (the message-catalog mechanism and the adoption of go-i18n).
