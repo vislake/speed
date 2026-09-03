@@ -53,6 +53,9 @@ web/
     layout-kit/         @speed/layout-kit -- AppShell/RouteGuard chrome, no auth opinion
     auth-core/          @speed/auth-core  -- headless session layer over the generated authn
                                              surface; memory-only, no UI, no storage writes
+    auth-ui/            @speed/auth-ui    -- the sign-in family over an auth-core session:
+                                             password/SMS/register channels plus the social
+                                             pair, sign-out and session-ended; controlled
 ```
 
 Root `package.json` holds only what every package shares (typescript,

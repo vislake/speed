@@ -25,7 +25,11 @@ name: pr-check
 #     shared AppShell/RouteGuard app-chrome layer with no auth-mechanism
 #     opinion, and @speed/auth-core, the headless session layer over
 #     the generated authn surface (the api-sdk's first in-workspace
-#     compile consumer); root CLAUDE.md, Repository Status) each
+#     compile consumer, and @speed/auth-ui, the sign-in component
+#     family over that session, whose usage example drives the composed
+#     flows through a real api-client over a scripted fetch -- the
+#     authn surface's runtime end-to-end consumption discharged in
+#     form); root CLAUDE.md, Repository Status) each
 #     run through the reusable npm-package-ci workflow: a frozen-lockfile
 #     workspace install from the web/ root, then lint (the flat-config
 #     ESLint at web/ -- typescript-eslint recommended, no-explicit-any,
@@ -182,6 +186,7 @@ jobs:
           - web/packages/api-sdk
           - web/packages/layout-kit
           - web/packages/auth-core
+          - web/packages/auth-ui
     uses: ./.github/workflows/reusable/npm-package-ci.yml
     with:
       package: ${{ matrix.package }}
