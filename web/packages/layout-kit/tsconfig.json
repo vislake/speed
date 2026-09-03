@@ -5,16 +5,24 @@
     // layout-kit renders DOM chrome, same as ui-kit: JSX compiles through
     // the automatic runtime.
     "jsx": "react-jsx",
-    // layout-kit imports @speed/i18n at runtime. Its published "types"
-    // point into dist/, which is never committed and not yet built in a
-    // fresh checkout, so type resolution maps the workspace specifier
-    // straight onto the sibling's source -- same pattern ui-kit uses.
-    // Emitted dist/ keeps the bare specifier, which consumers resolve
-    // against the real published package. Keep this in lockstep with
-    // what src/ imports.
+    // layout-kit imports @speed/i18n and @speed/ui-kit at runtime (the
+    // latter since RouteGuard's default deniedFallback reuses ui-kit's
+    // EmptyState). @speed/tokens is a transitive resolution target only
+    // -- ui-kit's own theme module imports it, and TypeScript follows
+    // that import from wherever the @speed/ui-kit specifier lands -- this
+    // package never imports @speed/tokens itself (see the package
+    // AGENTS.md's "no direct tokens dependency" rule). All three
+    // packages' published "types" point into dist/, which is never
+    // committed and not yet built in a fresh checkout, so type resolution
+    // maps every workspace specifier straight onto the sibling's source
+    // -- same pattern ui-kit uses for its own siblings. Emitted dist/
+    // keeps the bare specifiers, which consumers resolve against the real
+    // published packages. Keep this in lockstep with what src/ imports.
     "paths": {
       "@speed/i18n": ["../i18n/src/index.ts"],
-      "@speed/i18n/mui-locale": ["../i18n/src/mui-locale.ts"]
+      "@speed/i18n/mui-locale": ["../i18n/src/mui-locale.ts"],
+      "@speed/ui-kit": ["../ui-kit/src/index.ts"],
+      "@speed/tokens": ["../tokens/src/index.ts"]
     }
   }
 }

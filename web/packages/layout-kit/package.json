@@ -16,10 +16,11 @@
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "build": "pnpm --filter @speed/i18n build && tsc -p tsconfig.build.json"
+    "build": "pnpm --filter @speed/ui-kit build && tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@speed/i18n": "workspace:*"
+    "@speed/i18n": "workspace:*",
+    "@speed/ui-kit": "workspace:*"
   },
   "peerDependencies": {
     "@emotion/react": "^11.5.0",

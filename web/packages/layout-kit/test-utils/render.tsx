@@ -2,31 +2,32 @@
  * Shared DOM-test harness for layout-kit packages' tests.
  *
  * renderWithProviders mounts a unit under the tree a real host builds:
- * I18nextProvider (the layout-kit namespace's translations need) around a
- * plain MUI ThemeProvider. Unlike ui-kit's own harness, this package
- * takes no dependency on @speed/tokens or @speed/ui-kit (see the package
- * AGENTS.md), so the theme here is MUI's stock `createTheme()` rather
- * than the speed-token-mapped one -- AppShell only reads
- * `theme.breakpoints` / `theme.zIndex`, both MUI-identical to the speed
- * defaults, so this is a faithful stand-in for what a real host renders.
+ * I18nextProvider (both the layout-kit and ui-kit namespaces'
+ * translations need it -- RouteGuard's default deniedFallback reuses
+ * ui-kit's EmptyState) around ui-kit's own AppThemeProvider, the same
+ * theme runtime every real host composes rather than a second,
+ * hand-rolled one. AppShell only reads `theme.breakpoints` /
+ * `theme.zIndex`, both MUI-identical to the speed token defaults (see
+ * the package AGENTS.md's tokens adjudication), so this is a faithful
+ * stand-in for what a real host renders even though this package takes
+ * no *direct* dependency on @speed/tokens itself.
  *
  * The i18n instance is created per call with a deterministic
- * configuration (no storage, no URL, no navigator) and the layout-kit
- * namespace registered -- a fresh instance per call keeps
- * registerNamespace's double-registration guard from firing across
- * tests.
+ * configuration (no storage, no URL, no navigator) and both namespaces
+ * registered -- a fresh instance per call keeps registerNamespace's
+ * double-registration guard from firing across tests.
  */
 
 import { render } from '@testing-library/react'
 import type { RenderResult } from '@testing-library/react'
 import type { ReactElement } from 'react'
-import { ThemeProvider, createTheme } from '@mui/material/styles'
 import {
   createI18n,
   I18nextProvider,
   registerNamespace,
   type I18nInstance,
 } from '@speed/i18n'
+import { AppThemeProvider, UI_KIT_NAMESPACE, uiKitResources } from '@speed/ui-kit'
 import { LAYOUT_KIT_NAMESPACE, layoutKitResources } from '../src/resources.js'
 
 export interface RenderWithProvidersOptions {
@@ -47,8 +48,6 @@ export interface RenderWithProvidersResult extends RenderResult {
 
 export const TEST_LANGUAGES = ['zh-CN', 'en-US'] as const
 
-const theme = createTheme()
-
 export function createLayoutKitI18n(language: string = 'zh-CN'): I18nInstance {
   const instance = createI18n({
     supportedLanguages: TEST_LANGUAGES,
@@ -58,6 +57,7 @@ export function createLayoutKitI18n(language: string = 'zh-CN'): I18nInstance {
     navigatorLanguages: [],
   })
   registerNamespace(instance, LAYOUT_KIT_NAMESPACE, layoutKitResources)
+  registerNamespace(instance, UI_KIT_NAMESPACE, uiKitResources)
   return instance
 }
 
@@ -69,7 +69,7 @@ export function renderWithProviders(
   const instance = i18n ?? createLayoutKitI18n(language)
   const result = render(
     <I18nextProvider i18n={instance}>
-      <ThemeProvider theme={theme}>{ui}</ThemeProvider>
+      <AppThemeProvider i18n={instance}>{ui}</AppThemeProvider>
     </I18nextProvider>,
   )
   return { ...result, i18n: instance }

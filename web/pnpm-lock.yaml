@@ -97,6 +97,9 @@ importers:
       '@speed/i18n':
         specifier: workspace:*
         version: link:../i18n
+      '@speed/ui-kit':
+        specifier: workspace:*
+        version: link:../ui-kit
     devDependencies:
       '@emotion/react':
         specifier: ^11.14.0
