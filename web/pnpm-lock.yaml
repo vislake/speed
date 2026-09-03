@@ -21,6 +21,85 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@types/node@26.4.1)(jsdom@30.0.1)(vite@8.2.2(@types/node@26.4.1))
 
+  ../examples/reference-app/web:
+    dependencies:
+      '@emotion/react':
+        specifier: ^11.14.0
+        version: 11.14.0(@types/react@19.2.18)(react@19.2.8)
+      '@emotion/styled':
+        specifier: ^11.14.1
+        version: 11.14.1(@emotion/react@11.14.0(@types/react@19.2.18)(react@19.2.8))(@types/react@19.2.18)(react@19.2.8)
+      '@mui/material':
+        specifier: ^9.4.0
+        version: 9.4.0(@emotion/react@11.14.0(@types/react@19.2.18)(react@19.2.8))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@19.2.18)(react@19.2.8))(@types/react@19.2.18)(react@19.2.8))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@speed/account-ui':
+        specifier: workspace:*
+        version: link:../../../web/packages/account-ui
+      '@speed/api-client':
+        specifier: workspace:*
+        version: link:../../../web/packages/api-client
+      '@speed/api-sdk':
+        specifier: workspace:*
+        version: link:../../../web/packages/api-sdk
+      '@speed/auth-core':
+        specifier: workspace:*
+        version: link:../../../web/packages/auth-core
+      '@speed/auth-ui':
+        specifier: workspace:*
+        version: link:../../../web/packages/auth-ui
+      '@speed/i18n':
+        specifier: workspace:*
+        version: link:../../../web/packages/i18n
+      '@speed/layout-kit':
+        specifier: workspace:*
+        version: link:../../../web/packages/layout-kit
+      '@speed/product-shell':
+        specifier: workspace:*
+        version: link:../../../web/packages/product-shell
+      '@speed/tenancy-ui':
+        specifier: workspace:*
+        version: link:../../../web/packages/tenancy-ui
+      '@speed/tokens':
+        specifier: workspace:*
+        version: link:../../../web/packages/tokens
+      '@speed/ui-kit':
+        specifier: workspace:*
+        version: link:../../../web/packages/ui-kit
+      '@tanstack/react-query':
+        specifier: ^5.62.0
+        version: 5.102.8(react@19.2.8)
+      react:
+        specifier: ^19.2.8
+        version: 19.2.8
+      react-dom:
+        specifier: ^19.2.8
+        version: 19.2.8(react@19.2.8)
+    devDependencies:
+      '@testing-library/jest-dom':
+        specifier: ^7.0.1
+        version: 7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.11(@types/node@26.4.1)(jsdom@30.0.1)(vite@8.2.2(@types/node@26.4.1)))
+      '@testing-library/react':
+        specifier: ^16.3.3
+        version: 16.3.3(@testing-library/dom@10.4.1)(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@types/react':
+        specifier: ^19.2.18
+        version: 19.2.18
+      '@types/react-dom':
+        specifier: ^19.2.5
+        version: 19.2.5(@types/react@19.2.18)
+      eslint:
+        specifier: ^10.9.1
+        version: 10.9.1
+      jsdom:
+        specifier: ^30.0.1
+        version: 30.0.1
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@26.4.1)(jsdom@30.0.1)(vite@8.2.2(@types/node@26.4.1))
+
   packages/account-ui:
     dependencies:
       '@speed/api-sdk':

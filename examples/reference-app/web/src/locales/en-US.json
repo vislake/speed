@@ -1,0 +1,6 @@
+{
+  "skeleton": {
+    "title": "Reference app shell",
+    "description": "The host shell is wired: theme, i18n and the session seam are in place. Sign-in, the app frame and business surfaces land in later iterations."
+  }
+}

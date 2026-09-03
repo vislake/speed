@@ -1,0 +1,42 @@
+{
+  "name": "reference-app-web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The reference-app web host: the browser-leg consumer of the @speed packages, living outside web/ exactly where a delivered consumer project lives",
+  "type": "module",
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/material": "^9.4.0",
+    "@speed/account-ui": "workspace:*",
+    "@speed/api-client": "workspace:*",
+    "@speed/api-sdk": "workspace:*",
+    "@speed/auth-core": "workspace:*",
+    "@speed/auth-ui": "workspace:*",
+    "@speed/i18n": "workspace:*",
+    "@speed/layout-kit": "workspace:*",
+    "@speed/product-shell": "workspace:*",
+    "@speed/tenancy-ui": "workspace:*",
+    "@speed/tokens": "workspace:*",
+    "@speed/ui-kit": "workspace:*",
+    "@tanstack/react-query": "^5.62.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "eslint": "^10.9.1",
+    "jsdom": "^30.0.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}

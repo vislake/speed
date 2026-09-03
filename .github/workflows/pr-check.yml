@@ -205,6 +205,10 @@ jobs:
           - web/packages/tenancy-ui
           - web/packages/product-shell
           - web/packages/account-ui
+          # The reference-app web host: an external workspace member under
+          # examples/reference-app/web, running the same lint/typecheck/
+          # test/build matrix through the same reusable.
+          - examples/reference-app/web
     uses: ./.github/workflows/reusable/npm-package-ci.yml
     with:
       package: ${{ matrix.package }}

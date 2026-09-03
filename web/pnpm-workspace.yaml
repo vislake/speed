@@ -3,3 +3,9 @@
 # (see web/README.md "Why web/ is its own workspace root").
 packages:
   - packages/*
+  # The reference app's web host lives outside web/ -- exactly where a
+  # delivered consumer project lives -- and joins the workspace as an
+  # external member so it installs, lints, typechecks, tests and builds
+  # under the same one-lockfile workspace, over workspace:* deps on the
+  # @speed packages (examples/reference-app/web/package.json).
+  - ../examples/reference-app/web

@@ -1,0 +1,24 @@
+# reference-app-web is a workspace member of web/ (see web/pnpm-workspace.yaml)
+# but lives outside it, at exactly the location a delivered consumer project
+# does. pnpm discovers its workspace root by walking up from the process
+# working directory, and web/ is not on this directory's ancestor path -- so
+# a run started here (the npm-package-ci reusable's lint/typecheck/test/build
+# legs, working-directory: examples/reference-app/web) sees this directory as
+# a one-project workspace of its own.
+#
+# pnpm 11 reads pnpm settings from the workspace manifest, not from .npmrc
+# (project .npmrc files contribute auth and network keys only). The run gate
+# below is the one setting this standalone context needs: when pnpm runs a
+# package script it first verifies the project's deps are in sync and
+# auto-installs when they are not, and an install started here cannot resolve
+# the workspace:* dependencies -- they resolve only from the web/ root,
+# where the reusable's leg 0 installs the whole workspace from
+# web/pnpm-lock.yaml (frozen). That frozen install is the lockfile gate; this
+# setting disables the redundant per-run install gate instead of moving the
+# scripts' working directory out of the package.
+#
+# Only this one key is declared here on purpose: the file exists solely to
+# carry the setting for standalone runs, and web/ stays the single real
+# workspace root (no packages list, so no project is ever treated as a
+# workspace root by web/-rooted commands).
+verify-deps-before-run: false

@@ -1,0 +1,50 @@
+{
+  "extends": "../../../web/tsconfig.base.json",
+  "include": ["src"],
+  "compilerOptions": {
+    // reference-app-web is a DOM-rendering host: JSX compiles through the
+    // automatic runtime (react-jsx), same as every DOM package in web/.
+    //
+    // The host composes every @speed package -- tokens through
+    // product-shell -- and renders them under the ui-kit theme providers,
+    // reads @speed/i18n translations, drives sessions through the
+    // api-client/api-sdk seam and consumes the generated authn operations
+    // over the shared-QueryClient contract. src/ resolves the whole
+    // @speed graph through the sibling-source paths below, mirroring the
+    // same pattern every package uses for the packages it composes: the
+    // published "types" of the workspace siblings point into their dist/,
+    // which is never committed and not yet built in a fresh checkout, so
+    // type resolution maps every workspace specifier straight onto the
+    // sibling's source. Emitted dist/ (none yet: the build script is this
+    // same no-emit typecheck until the M4 html runner lands a bundler)
+    // would keep the bare specifiers, which consumers resolve against the
+    // real published packages. Relative depth: this app lives outside
+    // web/, so sibling paths climb out of examples/reference-app/web to
+    // the workspace root first.
+    //
+    // Every @speed specifier the transitive graph can import must be
+    // mapped here: ui-kit's own sources import @speed/tokens and
+    // @speed/i18n/mui-locale, api-sdk's runtime subpath is what hosts
+    // bind, and the sibling packages resolve their own @speed imports
+    // through their own node_modules -- which exist only after install.
+    // Keep this in lockstep with what src/ imports. List order matters:
+    // a subpath entry must be tried before the entry that is its prefix
+    // (first match wins in paths).
+    "jsx": "react-jsx",
+    "paths": {
+      "@speed/api-sdk/runtime": ["../../../web/packages/api-sdk/src/runtime.ts"],
+      "@speed/api-sdk": ["../../../web/packages/api-sdk/src/index.ts"],
+      "@speed/api-client": ["../../../web/packages/api-client/src/index.ts"],
+      "@speed/auth-core": ["../../../web/packages/auth-core/src/index.ts"],
+      "@speed/auth-ui": ["../../../web/packages/auth-ui/src/index.ts"],
+      "@speed/tenancy-ui": ["../../../web/packages/tenancy-ui/src/index.ts"],
+      "@speed/account-ui": ["../../../web/packages/account-ui/src/index.ts"],
+      "@speed/product-shell": ["../../../web/packages/product-shell/src/index.ts"],
+      "@speed/layout-kit": ["../../../web/packages/layout-kit/src/index.ts"],
+      "@speed/i18n/mui-locale": ["../../../web/packages/i18n/src/mui-locale.ts"],
+      "@speed/i18n": ["../../../web/packages/i18n/src/index.ts"],
+      "@speed/tokens": ["../../../web/packages/tokens/src/index.ts"],
+      "@speed/ui-kit": ["../../../web/packages/ui-kit/src/index.ts"]
+    }
+  }
+}
