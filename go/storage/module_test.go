@@ -1,9 +1,11 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,8 @@ import (
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+
+	"github.com/vislake/speed/go/storage/internal/testutil"
 )
 
 // TestModule_Identity pins the module's identity and, in particular, its
@@ -251,13 +255,15 @@ func TestModule_Options_IgnoreNonsenseValues(t *testing.T) {
 
 // TestModule_Options_AllowedTypes_ReplaceAndDefaultOpen pins the two
 // promises of WithAllowedTypes: each call replaces the whole set (the last
-// call wins, never a union), and the default is nil -- deliberately open,
-// since no enforcer exists until the service round, and a restriction
-// declared before an enforcer existed would only mislead (module.go records
-// this).
+// call wins, never a union), and the default -- nil on the module, meaning
+// "the module default" -- is resolved when the service is built, so a host
+// that configures nothing gets the module's own allowlist of image/jpeg and
+// image/png, never an open door (the resolution itself is pinned at the
+// newObjectService level in object_test.go; this test pins that NewModule
+// performs it for the module's own service).
 func TestModule_Options_AllowedTypes_ReplaceAndDefaultOpen(t *testing.T) {
 	if m := NewModule(nil); m.allowedTypes != nil {
-		t.Errorf("default allowedTypes = %v, want nil (open until the service round enforces)", m.allowedTypes)
+		t.Errorf("default allowedTypes on the module = %v, want nil (meaning: resolve to the module default when the service is built)", m.allowedTypes)
 	}
 
 	m := NewModule(nil, WithAllowedTypes("image/png"), WithAllowedTypes("application/pdf", "image/jpeg"))
@@ -273,6 +279,14 @@ func TestModule_Options_AllowedTypes_ReplaceAndDefaultOpen(t *testing.T) {
 	types[0] = "image/gif"
 	if len(m2.allowedTypes) != 1 || m2.allowedTypes[0] != "image/png" {
 		t.Errorf("allowedTypes = %v, want [image/png] -- the option must copy, the caller's slice is not the module's config", m2.allowedTypes)
+	}
+
+	// An explicit option flows through to the service the module built; a
+	// module-level nil is resolved there to the module default, which the
+	// service test pins at the newObjectService level.
+	m3 := NewModule(nil, WithAllowedTypes("application/pdf"))
+	if got := m3.ObjectService().cfg.allowedTypes; len(got) != 1 || got[0] != "application/pdf" {
+		t.Errorf("service allowlist after WithAllowedTypes(application/pdf) = %v, want [application/pdf]", got)
 	}
 }
 
@@ -290,6 +304,100 @@ func TestModule_Repositories_AreStablePinnedAccessors(t *testing.T) {
 	}
 	if first, second := m.Derivatives(), m.Derivatives(); first != second {
 		t.Error("Derivatives() returns a different repository on each call; hosts hold onto it")
+	}
+}
+
+// TestModule_ObjectService_IsStableAndResolvesItsPolicy pins the service
+// accessor's contract alongside the repository accessors': ObjectService()
+// returns the same, non-nil service on every call, built by NewModule from
+// the module's policy before Register ever runs. A host that configures no
+// WithAllowedTypes sees the module default (image/jpeg, image/png) already
+// resolved into the service's config at construction, so the restriction is
+// real from the service's first call, not from some later wiring moment.
+func TestModule_ObjectService_IsStableAndResolvesItsPolicy(t *testing.T) {
+	m := NewModule(nil)
+	if m.ObjectService() == nil {
+		t.Fatal("NewModule built no service")
+	}
+	if first, second := m.ObjectService(), m.ObjectService(); first != second {
+		t.Error("ObjectService() returns a different service on each call; hosts hold onto it")
+	}
+	got := m.ObjectService().cfg.allowedTypes
+	if len(got) != len(defaultAllowedTypes) {
+		t.Fatalf("service allowlist with no WithAllowedTypes option = %v, want the module default %v", got, defaultAllowedTypes)
+	}
+	for i := range defaultAllowedTypes {
+		if got[i] != defaultAllowedTypes[i] {
+			t.Errorf("service allowlist with no WithAllowedTypes option = %v, want the module default %v", got, defaultAllowedTypes)
+		}
+	}
+}
+
+// TestModule_Register_WiresTheServiceHostSeams proves the service's host
+// seams arrive through Register, end to end: svc.host is nil before any
+// registration -- store-needing calls fail closed until then, which
+// object_test.go pins from the service side -- and after Bootstrap through
+// the real kernel it is the registry, whose ObjectStore the standalone
+// kernel resolves for real (a fresh local-directory store). The lifecycle
+// driven here -- create, upload, complete, open content -- therefore runs
+// against the kernel's own store, not a test fake, so a change that stopped
+// Register from attaching the registry would fail this test rather than
+// only the fail-closed one.
+func TestModule_Register_WiresTheServiceHostSeams(t *testing.T) {
+	m := newWiredModule(t, newTestDB(t))
+	if m.svc.host != nil {
+		t.Fatal("the service holds a registry before Register; it must fail closed until the module registers")
+	}
+
+	reg, err := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).Bootstrap(context.Background(), m)
+	if err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	if m.svc.host == nil {
+		t.Fatal("Register did not hand the registry to the service; store-needing calls will fail closed forever")
+	}
+	if reg.ObjectStore() == nil || reg.EventBus() == nil {
+		t.Fatal("the standalone kernel did not resolve the registry's object store and event bus")
+	}
+
+	ctx := serviceCtx("tenant-a")
+	png := testutil.PNG(t, 16, 16)
+	svc := m.ObjectService()
+	row, err := svc.Create(ctx, CreateParams{DeclaredSize: int64(len(png)), DeclaredType: "image/png"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err = svc.Upload(ctx, row.ID, nil, bytes.NewReader(png)); err != nil {
+		t.Fatalf("Upload: %v", err)
+	}
+	completed, err := svc.Complete(ctx, row.ID)
+	if err != nil {
+		t.Fatalf("Complete against the kernel-resolved store: %v", err)
+	}
+	if completed.State != ObjectStateCompleted {
+		t.Errorf("state = %q, want %q", completed.State, ObjectStateCompleted)
+	}
+	got, err := svc.Get(ctx, row.ID)
+	if err != nil {
+		t.Fatalf("Get after completion: %v", err)
+	}
+	if got.MIME == nil || *got.MIME != "image/png" || got.Size == nil || *got.Size != int64(len(png)) {
+		t.Errorf("finalized metadata = mime %v size %v, want mime %q size %d", got.MIME, got.Size, "image/png", len(png))
+	}
+	// OpenContent must read the bytes back through the registry's own store.
+	_, rc, err := svc.OpenContent(ctx, row.ID)
+	if err != nil {
+		t.Fatalf("OpenContent through the kernel-resolved store: %v", err)
+	}
+	raw, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("reading the opened content: %v", err)
+	}
+	if err := rc.Close(); err != nil {
+		t.Fatalf("closing the opened content: %v", err)
+	}
+	if !bytes.Equal(raw, png) {
+		t.Error("OpenContent did not return the uploaded bytes")
 	}
 }
 
