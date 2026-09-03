@@ -4,7 +4,11 @@
   "description": "Speed hand-written API runtime: injectable fetch, memory-only bearer-token attachment, silent single-flight 401 refresh, ApiError envelope normalization and idempotent-only retry -- the HTTP layer the generated @speed/api-sdk surface calls",
   "type": "module",
   "sideEffects": false,
-  "files": ["dist", "README.md", "AGENTS.md"],
+  "files": [
+    "dist",
+    "README.md",
+    "AGENTS.md"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -27,6 +31,7 @@
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.3",
+    "@types/node": "^26.4.1",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
     "jsdom": "^30.0.1",
