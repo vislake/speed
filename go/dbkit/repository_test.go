@@ -2,7 +2,9 @@ package dbkit
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"slices"
 	"sort"
 	"sync/atomic"
@@ -474,5 +476,306 @@ func TestRepository_NoTenantInContext_FailsClosedBeforeAnyQuery(t *testing.T) {
 				t.Errorf("query count = %d, want 0 (%s must fail before touching the database)", got, tt.name)
 			}
 		})
+	}
+}
+
+// softDeleteRepoTestDBSeq numbers this file's dbkit.Open-backed in-memory
+// SQLite databases for the SoftDeletable tests below, so repeated or
+// parallel runs never share one.
+var softDeleteRepoTestDBSeq atomic.Int64
+
+// newSoftDeletableWidgetRepo returns a Repository[testutil.SoftDeletableWidget]
+// backed by a fresh, private in-memory SQLite database opened through Open
+// itself (unlike newWidgetRepo's plain testutil.NewTestSQLite) — this is
+// deliberate: Repository[T]'s FindByID and List issue no deleted_at
+// condition of their own (the design's mark-delete auto-scope lives
+// entirely in the query-callback plugin, soft_delete.go), so hiding a
+// soft-deleted row from them depends on that plugin actually being
+// installed on the underlying *gorm.DB, exactly as it would be in
+// production. Open installs it unconditionally (see open.go).
+func newSoftDeletableWidgetRepo(t *testing.T) *Repository[testutil.SoftDeletableWidget] {
+	t.Helper()
+	dsn := fmt.Sprintf("file:soft_delete_repo_test_%d?mode=memory&cache=shared", softDeleteRepoTestDBSeq.Add(1))
+	db, err := Open(context.Background(), Options{Dialect: DialectSQLite, DSN: dsn})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if err := db.Exec(testutil.SoftDeletableWidgetTableSQL).Error; err != nil {
+		t.Fatalf("create soft_deletable_widgets table: %v", err)
+	}
+	return NewRepository[testutil.SoftDeletableWidget](db)
+}
+
+// rawSoftDeletableWidgetRow reads id's raw deleted_at/deleted_by columns
+// directly through db.Raw, bypassing every GORM callback (including the
+// soft-delete auto-scope plugin, which raw SQL never runs) — the
+// "what actually landed in the database" check every test below uses
+// instead of trusting Repository's own account of what it did. found is
+// false when no row with id exists at all.
+func rawSoftDeletableWidgetRow(t *testing.T, db *gorm.DB, id string) (found bool, deletedAt *time.Time, deletedBy string) {
+	t.Helper()
+	var (
+		nullDeletedAt sql.NullTime
+		nullDeletedBy sql.NullString
+	)
+	row := db.Raw(`SELECT deleted_at, deleted_by FROM soft_deletable_widgets WHERE id = ?`, id).Row()
+	if err := row.Scan(&nullDeletedAt, &nullDeletedBy); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil, ""
+		}
+		t.Fatalf("raw soft_deletable_widgets lookup for id %q: %v", id, err)
+	}
+	if nullDeletedAt.Valid {
+		deletedAt = &nullDeletedAt.Time
+	}
+	return true, deletedAt, nullDeletedBy.String
+}
+
+// ctxTenantActor returns ctxTenant(tenant) additionally carrying actor as
+// the current pkgcore.Actor, for the softDelete tests that need to prove
+// deleted_by is populated from it.
+func ctxTenantActor(tenant, actorID string) context.Context {
+	return pkgcore.WithActor(ctxTenant(tenant), pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: actorID})
+}
+
+func TestRepository_Delete_SoftDeletable_MarksInsteadOfPhysicallyDeleting(t *testing.T) {
+	repo := newSoftDeletableWidgetRepo(t)
+	ctx := ctxTenantActor("tenant-a", "user-1")
+
+	w := &testutil.SoftDeletableWidget{ID: "w1", Name: "gadget"}
+	if err := repo.Create(ctx, w); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	before := time.Now()
+	if err := repo.Delete(ctx, w.ID); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	after := time.Now()
+
+	found, deletedAt, deletedBy := rawSoftDeletableWidgetRow(t, repo.db, w.ID)
+	if !found {
+		t.Fatal("row physically gone after Delete() on a SoftDeletable model, want it still present (mark-delete, not physical delete)")
+	}
+	if deletedAt == nil {
+		t.Fatal("deleted_at = nil, want a populated timestamp")
+	}
+	if deletedAt.Before(before.Add(-time.Second)) || deletedAt.After(after.Add(time.Second)) {
+		t.Errorf("deleted_at = %v, want a timestamp between %v and %v", deletedAt, before, after)
+	}
+	if deletedBy != "user-1" {
+		t.Errorf("deleted_by = %q, want %q", deletedBy, "user-1")
+	}
+}
+
+func TestRepository_Delete_SoftDeletable_HiddenFromFindByIDAndList(t *testing.T) {
+	repo := newSoftDeletableWidgetRepo(t)
+	ctx := ctxTenantActor("tenant-a", "user-1")
+
+	w := &testutil.SoftDeletableWidget{ID: "w1", Name: "gadget"}
+	if err := repo.Create(ctx, w); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := repo.Delete(ctx, w.ID); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+
+	if _, err := repo.FindByID(ctx, w.ID); !isRecordNotFound(err) {
+		t.Errorf("FindByID() after Delete() error = %v, want ErrRecordNotFound", err)
+	}
+	list, err := repo.List(ctx)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(list) != 0 {
+		t.Errorf("List() after Delete() = %+v, want empty", list)
+	}
+}
+
+func TestRepository_Delete_SoftDeletable_AlreadyDeleted_ReturnsNotFound(t *testing.T) {
+	repo := newSoftDeletableWidgetRepo(t)
+	ctx := ctxTenantActor("tenant-a", "user-1")
+
+	w := &testutil.SoftDeletableWidget{ID: "w1", Name: "gadget"}
+	if err := repo.Create(ctx, w); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := repo.Delete(ctx, w.ID); err != nil {
+		t.Fatalf("first Delete() error = %v", err)
+	}
+	_, firstDeletedAt, firstDeletedBy := rawSoftDeletableWidgetRow(t, repo.db, w.ID)
+
+	// A second delete, by a different actor, must not succeed and must not
+	// clobber the first delete's own deleted_at/deleted_by attribution --
+	// the deleted_at IS NULL guard in softDelete's own WHERE clause is what
+	// makes this a no-match rather than a second write.
+	secondCtx := ctxTenantActor("tenant-a", "user-2")
+	if err := repo.Delete(secondCtx, w.ID); !isRecordNotFound(err) {
+		t.Fatalf("second Delete() on an already-soft-deleted row error = %v, want ErrRecordNotFound", err)
+	}
+
+	_, secondDeletedAt, secondDeletedBy := rawSoftDeletableWidgetRow(t, repo.db, w.ID)
+	if secondDeletedBy != firstDeletedBy {
+		t.Errorf("deleted_by after the failed second Delete() = %q, want unchanged %q", secondDeletedBy, firstDeletedBy)
+	}
+	if !secondDeletedAt.Equal(*firstDeletedAt) {
+		t.Errorf("deleted_at after the failed second Delete() = %v, want unchanged %v", secondDeletedAt, firstDeletedAt)
+	}
+}
+
+func TestRepository_Restore_SoftDeletable_ClearsDeletedAtAndReappearsInQueries(t *testing.T) {
+	repo := newSoftDeletableWidgetRepo(t)
+	ctx := ctxTenantActor("tenant-a", "user-1")
+
+	w := &testutil.SoftDeletableWidget{ID: "w1", Name: "gadget"}
+	if err := repo.Create(ctx, w); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := repo.Delete(ctx, w.ID); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+
+	if err := repo.Restore(ctx, w.ID); err != nil {
+		t.Fatalf("Restore() error = %v", err)
+	}
+
+	found, deletedAt, deletedBy := rawSoftDeletableWidgetRow(t, repo.db, w.ID)
+	if !found {
+		t.Fatal("row gone after Restore(), want it present")
+	}
+	if deletedAt != nil {
+		t.Errorf("deleted_at after Restore() = %v, want nil", deletedAt)
+	}
+	if deletedBy != "" {
+		t.Errorf("deleted_by after Restore() = %q, want empty", deletedBy)
+	}
+
+	got, err := repo.FindByID(ctx, w.ID)
+	if err != nil {
+		t.Fatalf("FindByID() after Restore() error = %v", err)
+	}
+	if got.ID != w.ID {
+		t.Errorf("FindByID() after Restore() = %+v, want ID %q", got, w.ID)
+	}
+	list, err := repo.List(ctx)
+	if err != nil {
+		t.Fatalf("List() after Restore() error = %v", err)
+	}
+	if len(list) != 1 || list[0].ID != w.ID {
+		t.Errorf("List() after Restore() = %+v, want exactly [%s]", list, w.ID)
+	}
+}
+
+func TestRepository_Restore_SoftDeletable_NotCurrentlyDeleted_ReturnsNotFound(t *testing.T) {
+	repo := newSoftDeletableWidgetRepo(t)
+	ctx := ctxTenantActor("tenant-a", "user-1")
+
+	w := &testutil.SoftDeletableWidget{ID: "w1", Name: "gadget"}
+	if err := repo.Create(ctx, w); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if err := repo.Restore(ctx, w.ID); !isRecordNotFound(err) {
+		t.Fatalf("Restore() on a never-deleted row error = %v, want ErrRecordNotFound", err)
+	}
+}
+
+func TestRepository_Restore_NonSoftDeletable_ReturnsErrNotSoftDeletable(t *testing.T) {
+	repo := newWidgetRepo(t)
+	ctx := ctxTenant("tenant-a")
+
+	widget := &testutil.Widget{ID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", Name: "gadget"}
+	if err := repo.Create(ctx, widget); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	err := repo.Restore(ctx, widget.ID)
+	appErr, ok := apperr.As(err)
+	if !ok || appErr.Code != ErrNotSoftDeletable.Code {
+		t.Fatalf("Restore() on a non-SoftDeletable T error = %v, want ErrNotSoftDeletable", err)
+	}
+}
+
+// TestRepository_Delete_NonSoftDeletable_PhysicalDeleteUnchanged is the
+// backward-compatibility regression this round promises: a T that does not
+// implement SoftDeletable (Widget) keeps today's real, physical DELETE,
+// byte-for-byte -- the row is genuinely gone from the table, not merely
+// hidden, and RowsAffected-derived ErrRecordNotFound behavior on a second
+// Delete is unchanged.
+func TestRepository_Delete_NonSoftDeletable_PhysicalDeleteUnchanged(t *testing.T) {
+	repo := newWidgetRepo(t)
+	ctx := ctxTenant("tenant-a")
+
+	widget := &testutil.Widget{ID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", Name: "gadget"}
+	if err := repo.Create(ctx, widget); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := repo.Delete(ctx, widget.ID); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+
+	var count int64
+	if err := repo.db.Raw(`SELECT COUNT(*) FROM widgets WHERE id = ?`, widget.ID).Scan(&count).Error; err != nil {
+		t.Fatalf("raw widgets count: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("raw row count after Delete() = %d, want 0 (physical delete, row genuinely gone)", count)
+	}
+
+	if err := repo.Delete(ctx, widget.ID); !isRecordNotFound(err) {
+		t.Fatalf("second Delete() of an already-gone row error = %v, want ErrRecordNotFound", err)
+	}
+}
+
+// TestRepository_Update_StaleModelAfterSoftDelete_SilentlyClearsDeletedAt
+// documents (and pins, so a future change to Update's behavior here is a
+// deliberate decision, not an accident) a real, un-fixed hazard this round
+// explicitly chose not to address: Update's existing "Select(\"*\")"
+// full-record save writes every column, deleted_at/deleted_by included,
+// and is not scoped by deleted_at at all (the auto-scope plugin is
+// query-only, per soft_delete.go's own doc comment). A caller that Delete's
+// a row and then Update's a stale in-memory copy captured before the
+// delete silently "undeletes" it as a side effect -- Update was
+// deliberately left untouched by this round (the brief scoped changes to
+// Delete and Restore only); see AGENTS.md's Known limitations for the
+// documented guidance to future callers.
+func TestRepository_Update_StaleModelAfterSoftDelete_SilentlyClearsDeletedAt(t *testing.T) {
+	repo := newSoftDeletableWidgetRepo(t)
+	ctx := ctxTenantActor("tenant-a", "user-1")
+
+	w := &testutil.SoftDeletableWidget{ID: "w1", Name: "gadget"}
+	if err := repo.Create(ctx, w); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// stale is a copy of w's state as it was BEFORE the Delete below --
+	// exactly what a caller would be holding if it read the row, then
+	// raced (or simply came later) with someone else's Delete.
+	stale := *w
+
+	if err := repo.Delete(ctx, w.ID); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if found, deletedAt, _ := rawSoftDeletableWidgetRow(t, repo.db, w.ID); !found || deletedAt == nil {
+		t.Fatalf("row after Delete(): found=%v deletedAt=%v, want found with a populated deleted_at", found, deletedAt)
+	}
+
+	// Update's contract is unchanged by this round: full-record save, no
+	// deleted_at awareness. Writing the stale copy (DeletedAt == nil,
+	// DeletedBy == "") back over the row clears the very columns Delete
+	// just set.
+	staleCopy := stale
+	if err := repo.Update(ctx, &staleCopy); err != nil {
+		t.Fatalf("Update() with a stale pre-delete model error = %v", err)
+	}
+
+	found, deletedAt, deletedBy := rawSoftDeletableWidgetRow(t, repo.db, w.ID)
+	if !found {
+		t.Fatal("row missing after Update(), want it present")
+	}
+	if deletedAt != nil {
+		t.Errorf("deleted_at after Update() with a stale pre-delete model = %v, want nil -- this is the documented, un-fixed hazard: Update silently 'undeletes' the row", deletedAt)
+	}
+	if deletedBy != "" {
+		t.Errorf("deleted_by after Update() with a stale pre-delete model = %q, want empty -- same documented hazard", deletedBy)
 	}
 }

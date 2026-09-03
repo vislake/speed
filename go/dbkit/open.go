@@ -83,16 +83,22 @@ type Options struct {
 }
 
 // Open opens a *gorm.DB for opts.Dialect and returns it already wired with
-// dbkit's mandatory safeguards: sane connection-pool limits and the
-// tenant-scoping GORM plugin (see tenant_scope.go).
+// dbkit's mandatory safeguards: sane connection-pool limits, the
+// tenant-scoping GORM plugin (see tenant_scope.go), and the soft-delete
+// auto-scope GORM plugin (see soft_delete.go) — both installed
+// unconditionally, like tenant scoping, since each is a per-model opt-in
+// marker interface rather than a global switch: a model implementing
+// neither TenantScoped nor SoftDeletable is completely unaffected by
+// either.
 //
 // Open is the ONLY sanctioned way to obtain a *gorm.DB anywhere in this
 // codebase. No code path in dbkit returns a *gorm.DB before the
-// tenant-scoping plugin has been installed on it, so no caller can end up
-// holding an "unprotected" handle by accident — the plugin is active before
-// Open returns, not left for the caller to add. Business modules never call
-// gorm.Open, postgres.Open, or sqlite.Open directly; they call Open and
-// build a dbkit.Repository[T] on top of the connection it returns.
+// tenant-scoping and soft-delete plugins have been installed on it, so no
+// caller can end up holding an "unprotected" handle by accident — both
+// plugins are active before Open returns, not left for the caller to add.
+// Business modules never call gorm.Open, postgres.Open, or sqlite.Open
+// directly; they call Open and build a dbkit.Repository[T] on top of the
+// connection it returns.
 //
 // Open validates opts.Dialect, opens the matching driver, applies the
 // connection-pool defaults declared above, and verifies connectivity with a
@@ -142,6 +148,12 @@ func Open(ctx context.Context, opts Options) (*gorm.DB, error) {
 
 	if err := db.Use(newTenantScopePlugin()); err != nil {
 		return nil, apperr.Internal("dbkit.tenant_scope_plugin_failed").
+			WithParam("dialect", string(opts.Dialect)).
+			WithCause(err)
+	}
+
+	if err := db.Use(newSoftDeleteScopePlugin()); err != nil {
+		return nil, apperr.Internal("dbkit.soft_delete_scope_plugin_failed").
 			WithParam("dialect", string(opts.Dialect)).
 			WithCause(err)
 	}

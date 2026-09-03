@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -50,6 +51,25 @@ const (
 	tenantIDColumn    = "tenant_id"
 	idFieldName       = "ID"
 	tenantIDFieldName = "TenantID"
+)
+
+// deletedAtColumn, deletedByColumn, deletedAtFieldName and deletedByFieldName
+// name the SQL columns and Go struct fields softDelete and Restore reach for
+// a T implementing SoftDeletable (soft_delete.go). deletedAtColumn
+// duplicates soft_delete.go's softDeleteScopeColumn in value, deliberately
+// — see that constant's own doc comment for why this file does not unify
+// the two.
+//
+// A model opting into SoftDeletable is expected to declare exactly these
+// two exported fields, by these exact names, mirroring the ID/TenantID
+// convention documented above: SoftDeletable cannot demand this in the type
+// system either (it exposes only GetDeletedAt), so a T missing either field
+// is caught at run time, the first time Delete or Restore reaches for it.
+const (
+	deletedAtColumn    = "deleted_at"
+	deletedByColumn    = "deleted_by"
+	deletedAtFieldName = "DeletedAt"
+	deletedByFieldName = "DeletedBy"
 )
 
 // ErrRecordNotFound is returned by FindByID, Update, and Delete when no row
@@ -324,14 +344,30 @@ func (r *Repository[T]) Update(ctx context.Context, m *T) error {
 	return nil
 }
 
-// Delete resolves the tenant from ctx and deletes the row with the given
+// Delete resolves the tenant from ctx and removes the row with the given
 // id, scoped to that tenant. It returns ErrRecordNotFound, not a generic
 // gorm error and not a silent no-op success, when nothing matches —
 // including when id exists under a different tenant.
 //
+// Delete branches on T's own capability
+// (docs/internal/04-data-and-tenancy.md, "删除语义" §1-2): when T implements
+// SoftDeletable, this is a mark-delete — one UPDATE setting
+// deleted_at/deleted_by, leaving the row in place but hidden from ordinary
+// queries by soft_delete.go's auto-scope plugin — handled by softDelete
+// below. Every other T keeps today's real, physical DELETE, byte-identical
+// to before this capability existed; this branch never changes for such a
+// T. See Restore for the mark-delete path's inverse, and AGENTS.md's
+// "Soft deletion" section for what this capability is (and is explicitly
+// not — a security boundary or compliance-grade erasure).
+//
 // When ctx carries no tenant, Delete returns pkgcore's error unmodified
 // before the database is touched at all.
 func (r *Repository[T]) Delete(ctx context.Context, id string) error {
+	var zero T
+	if _, ok := any(&zero).(SoftDeletable); ok {
+		return r.softDelete(ctx, id)
+	}
+
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
 		return err
@@ -339,11 +375,140 @@ func (r *Repository[T]) Delete(ctx context.Context, id string) error {
 
 	var rowsAffected int64
 	err = WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
-		var zero T
 		res := tx.
 			Where(idColumn+" = ?", id).
 			Where(tenantIDColumn+" = ?", tenant).
 			Delete(&zero)
+		rowsAffected = res.RowsAffected
+		return res.Error
+	})
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return ErrRecordNotFound.WithParam("id", id)
+	}
+	return nil
+}
+
+// softDelete implements Delete's mark-delete branch for a T implementing
+// SoftDeletable. It issues exactly one UPDATE — never a hand-rolled extra
+// audit event, never a physical DELETE — setting deleted_at to now and
+// deleted_by to the acting identity resolved from ctx
+// (pkgcore.ActorFromContext; the empty string when ctx carries no actor,
+// which is not itself an error — mirroring how audit_capture.go treats a
+// missing Actor as its zero value).
+//
+// The WHERE clause explicitly requires deleted_at IS NULL: a row already
+// soft-deleted does not match, so a double-delete returns ErrRecordNotFound
+// instead of silently clobbering the original deleted_at/deleted_by
+// attribution with a second, later write.
+//
+// This builds a real *T (var m T) and writes through it — never
+// tx.Model(&zero).Updates(map[string]any{...}) — and calls
+// Updates(&m) with Model and Dest both equal to &m. This is load-bearing,
+// not a style preference: gorm's SetupUpdateReflectValue
+// (gorm.io/gorm/callbacks/update.go) sets Statement.ReflectValue to
+// Statement.Model whenever Model != Dest, which a
+// tx.Model(&zero).Updates(map[...]) call always is — so ReflectValue would
+// resolve to the untouched zero-valued struct, not the write's actual
+// payload. dbkit's audit-capture plugin (audit_capture.go's
+// fieldValuesMap) reads exactly that ReflectValue to populate
+// WriteCapturedEvent.After, so a map-payload Updates call here would make
+// audit capture silently record After["deleted_at"] as nil even though the
+// real SQL write set a real timestamp — a lying audit trail that would
+// still report the correct Operation ("update"). Building m and calling
+// tx.Where(...).Select(...).Updates(&m) keeps Model == Dest == &m, so
+// ReflectValue correctly resolves to the populated struct instead. See
+// TestAuditCapturePlugin_SoftDelete_ClassifiesAsUpdateWithRealDiff in
+// audit_capture_test.go, which fails under the map-payload shape and
+// passes under this one.
+func (r *Repository[T]) softDelete(ctx context.Context, id string) error {
+	tenant, err := pkgcore.MustTenantFromContext(ctx)
+	if err != nil {
+		return err
+	}
+
+	deletedBy := ""
+	if actor, ok := pkgcore.ActorFromContext(ctx); ok {
+		deletedBy = actor.ID
+	}
+	now := time.Now()
+
+	var m T
+	if setErr := setSoftDeleteFields(&m, &now, deletedBy); setErr != nil {
+		return setErr
+	}
+
+	var rowsAffected int64
+	err = WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		res := tx.
+			Where(idColumn+" = ?", id).
+			Where(tenantIDColumn+" = ?", tenant).
+			Where(deletedAtColumn+" IS NULL").
+			Select(deletedAtFieldName, deletedByFieldName).
+			Updates(&m)
+		rowsAffected = res.RowsAffected
+		return res.Error
+	})
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return ErrRecordNotFound.WithParam("id", id)
+	}
+	return nil
+}
+
+// Restore clears deleted_at/deleted_by on a row previously soft-deleted by
+// Delete, making it visible to ordinary queries again
+// (docs/internal/04-data-and-tenancy.md, "删除语义" §2's mark-delete
+// inverse). It returns ErrNotSoftDeletable when T does not implement
+// SoftDeletable — such a T's Delete never soft-deleted anything for Restore
+// to undo — and ErrRecordNotFound when no row matches id under ctx's
+// tenant that is currently soft-deleted (including a row that exists but
+// was never deleted, and a cross-tenant id, collapsed into the same signal
+// FindByID/Update/Delete already use for the identical reason: not letting
+// a caller learn, from the shape of the error alone, which case it hit).
+//
+// Restore does not enforce a retention window: the design doc's
+// "保留窗口内可 Restore" framing describes retention-window configuration as
+// a future compliance-module (M4) concern that does not exist yet
+// (deferred scope). This Restore succeeds unconditionally for any
+// currently-soft-deleted row under ctx's tenant, with no deadline.
+//
+// The .Unscoped() call is a defensive no-op given that the soft-delete
+// auto-scope (soft_delete.go's softDeleteScopePlugin) only touches query
+// callbacks, never update — kept here, self-documenting, in case that scope
+// is ever broadened to cover Update in a later round.
+//
+// When ctx carries no tenant, Restore returns pkgcore's error unmodified
+// before the database is touched at all.
+func (r *Repository[T]) Restore(ctx context.Context, id string) error {
+	var zero T
+	if _, ok := any(&zero).(SoftDeletable); !ok {
+		return ErrNotSoftDeletable.WithParam("type", fmt.Sprintf("%T", zero))
+	}
+
+	tenant, err := pkgcore.MustTenantFromContext(ctx)
+	if err != nil {
+		return err
+	}
+
+	var m T
+	if setErr := setSoftDeleteFields(&m, nil, ""); setErr != nil {
+		return setErr
+	}
+
+	var rowsAffected int64
+	err = WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		res := tx.
+			Where(idColumn+" = ?", id).
+			Where(tenantIDColumn+" = ?", tenant).
+			Where(deletedAtColumn+" IS NOT NULL").
+			Unscoped().
+			Select(deletedAtFieldName, deletedByFieldName).
+			Updates(&m)
 		rowsAffected = res.RowsAffected
 		return res.Error
 	})
@@ -401,4 +566,28 @@ func idOf[T any](m *T) (id string, ok bool) {
 		return "", false
 	}
 	return f.String(), true
+}
+
+// setSoftDeleteFields sets T's "DeletedAt" (*time.Time) and "DeletedBy"
+// (string) fields (see the column-convention comment above
+// deletedAtColumn/deletedByColumn) through reflection, since SoftDeletable
+// exposes only a getter — mirroring setTenantID's identical convention, not
+// a new pattern. softDelete calls it with a non-nil deletedAt and the
+// resolved actor id; Restore calls it with deletedAt nil and deletedBy ""
+// to clear both columns.
+func setSoftDeleteFields[T any](m *T, deletedAt *time.Time, deletedBy string) error {
+	v := reflect.ValueOf(m).Elem()
+
+	da := v.FieldByName(deletedAtFieldName)
+	if !da.IsValid() || !da.CanSet() || da.Type() != reflect.TypeOf((*time.Time)(nil)) {
+		return fmt.Errorf("dbkit: %T must have an exported %q *time.Time field for Repository to manage it", *m, deletedAtFieldName)
+	}
+	db := v.FieldByName(deletedByFieldName)
+	if !db.IsValid() || !db.CanSet() || db.Kind() != reflect.String {
+		return fmt.Errorf("dbkit: %T must have an exported %q string field for Repository to manage it", *m, deletedByFieldName)
+	}
+
+	da.Set(reflect.ValueOf(deletedAt))
+	db.SetString(deletedBy)
+	return nil
 }
