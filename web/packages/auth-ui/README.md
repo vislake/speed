@@ -229,8 +229,10 @@ step's terminal state -- then the code step completes the sign-in with
 `session.loginWithSMSCode`. The sent notice announces the receiving
 number (`role="status"`); resend repeats the request against the same
 number; changing the phone returns to the first step. The request
-step's only code-shaped failure is `authn.rate_limited`; every failure
-renders through the one banner.
+step renders the code the server answers: `authn.invalid_phone` when
+the number has no E.164 form (no leading '+' and country code) and
+`authn.rate_limited` when the attempt trips the send policy, each
+through the one banner.
 
 | Prop | Type | Notes |
 |---|---|---|
@@ -246,9 +248,10 @@ separated email/phone shape rather than a single ambiguous identifier.
 The optional display name is trimmed and omitted when blank; the
 locale the request declares is the session's current UI language, read
 at submit time so a mid-flight language switch is honoured. Password
-policy lives on the backend, whose code-level answers
-(`authn.password_too_short` and friends) render through the one
-banner. The created user goes to `onRegistered` -- with a callback the
+policy and identifier canonical form live on the backend, whose
+code-level answers (`authn.password_too_short` and friends, and the
+identifier-format refusals `authn.invalid_email` / `authn.invalid_phone`)
+render through the one banner. The created user goes to `onRegistered` -- with a callback the
 form stays quiet and the host navigates to its sign-in screen -- or,
 without one, renders as a success panel in place of the form.
 
@@ -363,7 +366,7 @@ namespace, so nothing of `ui-kit`'s built-in texts can leak through.
 ## Text and i18n
 
 All built-in strings live in the bilingual `auth-ui` namespace
-(`src/locales/zh-CN.json` and `en-US.json`, 57 keys each with
+(`src/locales/zh-CN.json` and `en-US.json`, 59 keys each with
 identical leaf key sets, enforced by registration and by
 `tools/check_i18n_keys.py` in CI):
 
@@ -393,7 +396,7 @@ codes of the `@speed/api-client` contract:
 
 | Area | Codes with dedicated text |
 |---|---|
-| Sign-in and register (identifier, credential, policy, attempt answers) | `authn.invalid_credentials`, `authn.tenant_membership_required`, `authn.account_locked`, `authn.rate_limited`, `authn.verification_code_invalid`, `authn.email_already_registered`, `authn.phone_already_registered`, `authn.identifier_required`, `authn.password_too_short`, `authn.password_too_long`, `authn.password_too_weak` |
+| Sign-in and register (identifier, canonical-format, credential, policy, attempt answers) | `authn.invalid_credentials`, `authn.tenant_membership_required`, `authn.account_locked`, `authn.rate_limited`, `authn.verification_code_invalid`, `authn.email_already_registered`, `authn.phone_already_registered`, `authn.identifier_required`, `authn.invalid_email`, `authn.invalid_phone`, `authn.password_too_short`, `authn.password_too_long`, `authn.password_too_weak` |
 | Social endpoints | `authn.provider_unknown`, `authn.redirect_uri_not_allowed`, `authn.oauth_state_invalid`, `authn.social_exchange_failed`, `authn.identity_requires_binding`, `authn.identity_already_bound` |
 | Session lifecycle (a sign-out call can answer with these; a host renders them for its own protected operations too) | `authn.session_not_found`, `authn.session_revoked`, `authn.refresh_token_invalid`, `authn.refresh_token_reused`, `authn.token_expired` |
 | Transport (the api-client contract) | `client.network`, `client.timeout`, `client.protocol` |

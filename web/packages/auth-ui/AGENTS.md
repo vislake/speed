@@ -51,7 +51,7 @@ never decides what happens after a sign-in.
 3. **New reachable error codes join the whitelist and both locale
    files in one commit.** `src/internal/error-text.ts`'s
    `ERROR_TEXT_CODES` is the reachable-subset whitelist this family
-   renders (the 25 authn/session-lifecycle/client codes the README's
+   renders (the 27 authn/session-lifecycle/client codes the README's
    Text and i18n section tables, plus the `errors.unknown` fallback for
    anything else). When a code becomes reachable through a submit path
    of this family, it is added there and to both `errors.*` sections at
