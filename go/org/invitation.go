@@ -260,6 +260,37 @@ func (r *InvitationRepository) byTokenHash(ctx context.Context, hash string) (*I
 	return &inv, nil
 }
 
+// acceptIfPending atomically transitions the invitation identified by id,
+// scoped to the caller's tenant, from InvitationStatusPending to
+// InvitationStatusAccepted, stamping AcceptedAt, and reports whether this
+// call is the one that performed the transition.
+//
+// The "status = ?" condition on the UPDATE below is a compare-and-swap
+// guard that dbkit.Repository[T].Update cannot express -- it writes
+// unconditionally once id and tenant match. Without this guard, two
+// concurrent InviteService.Accept calls racing on the same token could both
+// read InvitationStatusPending before either commits, and both would go on
+// to create a membership: exactly the single-use violation this method
+// exists to close. Gating the write itself on the row still being pending
+// means at most one caller ever observes won == true; a caller that
+// observes false lost the race (or the invitation was revoked out from
+// under it) and MUST NOT create a membership.
+func (r *InvitationRepository) acceptIfPending(ctx context.Context, id string, acceptedAt time.Time) (won bool, err error) {
+	var rowsAffected int64
+	dbErr := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		res := tx.
+			Where("id = ?", id).
+			Where("status = ?", InvitationStatusPending).
+			Updates(&Invitation{Status: InvitationStatusAccepted, AcceptedAt: &acceptedAt})
+		rowsAffected = res.RowsAffected
+		return res.Error
+	})
+	if dbErr != nil {
+		return false, ErrInternal.WithCause(dbErr)
+	}
+	return rowsAffected == 1, nil
+}
+
 // byStatus returns the caller tenant's invitations in the given status,
 // newest first and then by id so the order is total and stable.
 func (r *InvitationRepository) byStatus(ctx context.Context, status string) ([]Invitation, error) {

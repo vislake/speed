@@ -3,7 +3,9 @@ package org
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -496,6 +498,98 @@ func TestInviteService_Accept_ExistingMember_KeepsTheirSeat(t *testing.T) {
 	// Nothing changed, so nothing was announced.
 	if joined := f.host.bus.events(EventMemberJoined); len(joined) != 0 {
 		t.Errorf("published %d member-joined events, want 0", len(joined))
+	}
+}
+
+// TestInviteService_Accept_ConcurrentAcceptsBySeparateUsers_ExactlyOneWins
+// reproduces the TOCTOU race an invitation token is exposed to: the token
+// can be forwarded or shared, or a client can fire the request twice, so two
+// DIFFERENT authenticated users can present the same still-pending token to
+// Accept at the same time. The invitation's own doc comment, and Accept's,
+// both describe the token as a single-use bearer credential -- "whoever
+// holds it joins the tenant" -- so at most one of the two racing callers may
+// ever come away with a membership.
+//
+// Before the compare-and-swap guard in InvitationRepository.acceptIfPending,
+// Accept read the invitation's status, then only much later (after calling
+// MemberService.ensure, itself several DB round trips) wrote
+// Status = Accepted with a plain, unconditional Update. Both goroutines
+// below can complete their read while the row is still Pending, so both
+// proceed to create their own membership and both writes of
+// Status = Accepted then "succeed" -- one becomes an unnoticed second
+// membership out of a supposedly single-use invitation. This test runs the
+// race many times, under -race, to make that window practically certain to
+// be hit at least once if it exists.
+func TestInviteService_Accept_ConcurrentAcceptsBySeparateUsers_ExactlyOneWins(t *testing.T) {
+	f := newInviteFixture(t)
+
+	const trials = 25
+	for trial := 0; trial < trials; trial++ {
+		result := f.invite(t, fmt.Sprintf("race-%d@example.test", trial))
+		userA := fmt.Sprintf("u-race-%d-a", trial)
+		userB := fmt.Sprintf("u-race-%d-b", trial)
+
+		var (
+			wg               sync.WaitGroup
+			start            = make(chan struct{})
+			mu               sync.Mutex
+			successes        int
+			membershipErrors int
+			otherErrors      []error
+		)
+		wg.Add(2)
+		for _, userID := range []string{userA, userB} {
+			userID := userID
+			go func() {
+				defer wg.Done()
+				<-start
+				_, err := f.m.Invitations().Accept(f.ctx, result.Token, userID)
+				mu.Lock()
+				defer mu.Unlock()
+				switch {
+				case err == nil:
+					successes++
+				case hasCode(err, ErrInvitationAlreadyAccepted.Code):
+					membershipErrors++
+				default:
+					otherErrors = append(otherErrors, err)
+				}
+			}()
+		}
+		close(start)
+		wg.Wait()
+
+		if len(otherErrors) != 0 {
+			t.Fatalf("trial %d: unexpected error(s) racing Accept: %v", trial, otherErrors)
+		}
+		if successes != 1 || membershipErrors != 1 {
+			t.Fatalf("trial %d: got %d successes and %d already-accepted errors racing Accept on one token, want exactly 1 and 1 (single-use violated)",
+				trial, successes, membershipErrors)
+		}
+
+		// Confirm only ONE of the two users actually got a seat: the
+		// invariant that matters is not just the return values above but
+		// that a second membership was never persisted.
+		haveA, haveB := f.userHasMembership(t, userA), f.userHasMembership(t, userB)
+		if haveA == haveB {
+			t.Fatalf("trial %d: membership(A)=%v membership(B)=%v, want exactly one of the two racing users seated", trial, haveA, haveB)
+		}
+	}
+}
+
+// userHasMembership reports whether userID holds a membership in the
+// fixture's tenant.
+func (f inviteFixture) userHasMembership(t *testing.T, userID string) bool {
+	t.Helper()
+	_, err := f.m.Members().Get(f.ctx, userID)
+	switch {
+	case err == nil:
+		return true
+	case hasCode(err, ErrMembershipNotFound.Code):
+		return false
+	default:
+		t.Fatalf("Members().Get(%s): %v", userID, err)
+		return false
 	}
 }
 

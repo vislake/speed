@@ -288,6 +288,20 @@ func (s *InviteService) Invite(ctx context.Context, req InviteRequest) (*InviteR
 // seat keeps the one they have rather than gaining a second. Accepting the
 // same invitation twice is nonetheless reported
 // (ErrInvitationAlreadyAccepted): a replayed link is worth surfacing.
+//
+// # Single-use under concurrency
+//
+// Two different callers can present the same token at the same time -- the
+// token can be forwarded or shared, or a client can fire the request twice.
+// The status checks above this comment only rule out a token that was
+// ALREADY terminal at the moment this call started; they do nothing about
+// another Accept committing in between. The claim below
+// (InvitationRepository.acceptIfPending) is what actually enforces
+// single-use: it flips pending -> accepted in the database with a
+// "status = 'pending'" compare-and-swap guard, so of any number of
+// concurrent callers racing on this token, at most one observes won == true
+// and only that one goes on to call members.ensure. A caller that loses the
+// race creates no membership at all.
 func (s *InviteService) Accept(ctx context.Context, token, userID string) (*Membership, error) {
 	if userID == "" {
 		return nil, ErrMembershipNotFound.WithParam("user_id", userID)
@@ -306,15 +320,29 @@ func (s *InviteService) Accept(ctx context.Context, token, userID string) (*Memb
 		return nil, ErrInvitationExpired.WithParam("invitation_id", invitation.ID)
 	}
 
-	membership, created, err := s.members.ensure(ctx, userID, invitation.NodeID)
+	// Claim the invitation atomically, in the database, BEFORE creating any
+	// membership -- see the doc comment above for why the ordering here is
+	// not negotiable.
+	acceptedAt := s.now()
+	won, err := s.repo.acceptIfPending(ctx, invitation.ID, acceptedAt)
 	if err != nil {
 		return nil, err
 	}
-
-	acceptedAt := s.now()
+	if !won {
+		return nil, s.reportLostAcceptRace(ctx, token)
+	}
 	invitation.Status = InvitationStatusAccepted
 	invitation.AcceptedAt = &acceptedAt
-	if err := s.repo.Update(ctx, invitation); err != nil {
+
+	membership, created, err := s.members.ensure(ctx, userID, invitation.NodeID)
+	if err != nil {
+		// This call won the claim above but failed to turn it into a
+		// membership. Best-effort give the invitation back to pending so a
+		// retry after a transient failure is not permanently locked out by
+		// the claim this call just won; a failure to revert is logged, not
+		// returned, since the caller is already receiving ensure's own
+		// error and reporting a second one would hide the first.
+		s.revertAcceptClaim(ctx, invitation)
 		return nil, err
 	}
 
@@ -327,6 +355,35 @@ func (s *InviteService) Accept(ctx context.Context, token, userID string) (*Memb
 		})
 	}
 	return membership, nil
+}
+
+// reportLostAcceptRace re-reads the invitation after this call's
+// acceptIfPending lost the compare-and-swap race, and reports the terminal
+// state a concurrent Accept (or Revoke) left it in -- the same reporting a
+// caller who observed that terminal state directly, at the top of Accept,
+// would have gotten.
+func (s *InviteService) reportLostAcceptRace(ctx context.Context, token string) error {
+	current, err := s.repo.byTokenHash(ctx, hashInvitationToken(token))
+	if err != nil {
+		return err
+	}
+	if current.Status == InvitationStatusRevoked {
+		return ErrInvitationRevoked.WithParam("invitation_id", current.ID)
+	}
+	return ErrInvitationAlreadyAccepted.WithParam("invitation_id", current.ID)
+}
+
+// revertAcceptClaim gives an invitation this call just claimed via
+// acceptIfPending back to InvitationStatusPending, after members.ensure
+// failed to produce a membership for it. See Accept's own comment for why
+// this is best-effort.
+func (s *InviteService) revertAcceptClaim(ctx context.Context, invitation *Invitation) {
+	invitation.Status = InvitationStatusPending
+	invitation.AcceptedAt = nil
+	if err := s.repo.Update(ctx, invitation); err != nil {
+		obs.FromContext(ctx).Warn("org could not revert an invitation claim after membership creation failed",
+			"invitation_id", invitation.ID, "error", err)
+	}
 }
 
 // Revoke withdraws a pending invitation, making its token useless. Revoking
