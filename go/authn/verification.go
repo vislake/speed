@@ -65,6 +65,13 @@ const (
 	// verification code tolerates before it locks.
 	DefaultSMSCodeMaxAttempts = 5
 
+	// maxMarkAttemptRetries bounds how many times verifyPhoneLoginCode
+	// retries MarkAttempt's compare-and-swap after losing a race to a
+	// concurrent wrong guess against the SAME code. It only needs to
+	// cover genuine same-instant contention, never an unbounded loop --
+	// see verifyPhoneLoginCode's own doc comment.
+	maxMarkAttemptRetries = 5
+
 	// DefaultLocale is the language backend-generated content renders in
 	// when the intended recipient has not chosen one -- User.Locale is
 	// empty, or a login has not resolved to a user at all yet. It matches
@@ -333,6 +340,17 @@ func (s *Service) LoginWithSMSCode(ctx context.Context, in SMSLoginInput) (*Toke
 // same ErrVerificationCodeInvalid: distinguishing them would tell a caller
 // exactly how close they are to the attempt limit or that a code they
 // cannot see even exists, neither of which helps anyone but an attacker.
+//
+// A wrong guess retries MarkAttempt's compare-and-swap, up to
+// maxMarkAttemptRetries times, when it loses the race: unlike Consume just
+// below (single-use -- losing means someone else already finished the job,
+// so there is nothing left to retry), MarkAttempt's counter is not
+// single-use, and a lost race here means a CONCURRENT wrong guess advanced
+// it first, not that this guess's own attempt was recorded. Silently
+// dropping the loser (as a single unconditional call would) lets a burst of
+// truly concurrent wrong guesses under-count the shared counter and try
+// more distinguishable guesses than MaxAttempts allows -- exactly what
+// MarkAttempt's own doc comment says must not happen.
 func (s *Service) verifyPhoneLoginCode(ctx context.Context, targetIndex, code string) error {
 	record, err := s.verificationCodes.FindLatestActive(ctx, VerificationPurposePhoneLogin, targetIndex, s.now())
 	if err != nil {
@@ -346,10 +364,7 @@ func (s *Service) verifyPhoneLoginCode(ctx context.Context, targetIndex, code st
 	}
 
 	if hashVerificationCode(code) != record.CodeHash {
-		locked := record.Attempts+1 >= record.MaxAttempts
-		if _, markErr := s.verificationCodes.MarkAttempt(ctx, record.ID, record.Attempts, locked); markErr != nil {
-			obs.FromContext(ctx).Error("verification code attempt could not be recorded", "error", markErr)
-		}
+		s.markPhoneLoginAttempt(ctx, targetIndex, record)
 		return ErrVerificationCodeInvalid
 	}
 
@@ -363,6 +378,42 @@ func (s *Service) verifyPhoneLoginCode(ctx context.Context, targetIndex, code st
 		return ErrVerificationCodeInvalid
 	}
 	return nil
+}
+
+// markPhoneLoginAttempt records one more wrong guess against record,
+// retrying MarkAttempt's compare-and-swap when a concurrent wrong guess
+// against the SAME code wins the race first -- see verifyPhoneLoginCode's
+// own doc comment for why a lost race must be retried here rather than
+// silently dropped. Any error, or exhausting maxMarkAttemptRetries, is
+// logged and swallowed: verifyPhoneLoginCode's own caller already gets
+// ErrVerificationCodeInvalid regardless, and this is best-effort accounting
+// on top of that authoritative answer, not a second gate.
+func (s *Service) markPhoneLoginAttempt(ctx context.Context, targetIndex string, record *VerificationCode) {
+	for range maxMarkAttemptRetries {
+		locked := record.Attempts+1 >= record.MaxAttempts
+		won, err := s.verificationCodes.MarkAttempt(ctx, record.ID, record.Attempts, locked)
+		if err != nil {
+			obs.FromContext(ctx).Error("verification code attempt could not be recorded", "error", err)
+			return
+		}
+		if won {
+			return
+		}
+
+		// Lost the race to a concurrent wrong guess against the same
+		// code: re-read its current state and retry against the fresh
+		// attempt count.
+		fresh, findErr := s.verificationCodes.FindLatestActive(ctx, VerificationPurposePhoneLogin, targetIndex, s.now())
+		if findErr != nil {
+			// Locked (excluded by FindLatestActive's own "status =
+			// active" filter) or consumed by a concurrent successful
+			// verification: either way there is nothing left to retry.
+			return
+		}
+		record = fresh
+	}
+	obs.FromContext(ctx).Warn("verification code attempt retries exhausted",
+		"retries", maxMarkAttemptRetries)
 }
 
 // recordSMSFailure writes a failed phone-login attempt to the login history

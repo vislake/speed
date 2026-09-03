@@ -268,6 +268,63 @@ func TestLoginWithSMSCode_LocksAfterMaxAttempts(t *testing.T) {
 	}
 }
 
+// TestMarkPhoneLoginAttempt_RetriesOnLostRace proves a wrong guess that
+// loses MarkAttempt's compare-and-swap race to a CONCURRENT wrong guess
+// against the SAME code still gets its own attempt recorded, rather than
+// being silently dropped and under-counting the shared counter.
+//
+// The race is reproduced deterministically rather than with real
+// goroutines: this test reads the record once (the "stale" snapshot a
+// goroutine would be holding when it loses the race), then commits a
+// SEPARATE MarkAttempt call that advances the real row out from under
+// it -- exactly what a concurrent wrong guess landing between
+// verifyPhoneLoginCode's own read and write would do -- before finally
+// calling markPhoneLoginAttempt with the stale snapshot.
+func TestMarkPhoneLoginAttempt_RetriesOnLostRace(t *testing.T) {
+	t.Parallel()
+
+	const maxAttempts = 5
+	var buf bytes.Buffer
+	f := newSMSServiceFixture(t, &buf, WithSMSCodeMaxAttempts(maxAttempts))
+	registerPhoneUser(t, f, testPhone, testTenantA)
+	if err := f.svc.RequestSMSCode(t.Context(), RequestSMSCodeInput{Phone: testPhone, IP: "203.0.113.21"}); err != nil {
+		t.Fatalf("RequestSMSCode() error = %v", err)
+	}
+
+	index, err := f.svc.users.PhoneIndexOf(testPhone)
+	if err != nil {
+		t.Fatalf("PhoneIndexOf() error = %v", err)
+	}
+	stale, err := f.svc.verificationCodes.FindLatestActive(t.Context(), VerificationPurposePhoneLogin, index, f.svc.now())
+	if err != nil {
+		t.Fatalf("FindLatestActive() error = %v", err)
+	}
+	if stale.Attempts != 0 {
+		t.Fatalf("Attempts = %d for a freshly issued code, want 0", stale.Attempts)
+	}
+
+	// A concurrent wrong guess wins the compare-and-swap first, advancing
+	// Attempts from 0 to 1 behind this goroutine's back.
+	won, err := f.svc.verificationCodes.MarkAttempt(t.Context(), stale.ID, stale.Attempts, false)
+	if err != nil || !won {
+		t.Fatalf("simulated concurrent MarkAttempt() = (%v, %v), want (true, nil)", won, err)
+	}
+
+	// This goroutine's own guess -- still holding the STALE record it read
+	// before the concurrent write landed -- must still get counted, not
+	// silently dropped by a single unretried MarkAttempt(id, 0, ...) call
+	// that loses this exact race.
+	f.svc.markPhoneLoginAttempt(t.Context(), index, stale)
+
+	after, err := f.svc.verificationCodes.FindLatestActive(t.Context(), VerificationPurposePhoneLogin, index, f.svc.now())
+	if err != nil {
+		t.Fatalf("FindLatestActive() (after) error = %v", err)
+	}
+	if after.Attempts != 2 {
+		t.Errorf("Attempts = %d after a concurrent guess plus this goroutine's own (via a stale record), want 2 (both counted)", after.Attempts)
+	}
+}
+
 // TestVerificationCodeModel_IsNotTenantScoped is the mandatory isolation
 // assertion for this round's identity-domain table: a code is issued to a
 // phone number, not to a tenant, so it must stay visible whatever tenant
