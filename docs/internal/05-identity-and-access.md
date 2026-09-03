@@ -219,3 +219,10 @@ type Membership struct {
 > **中间件顺序的调整**（详见 [01 架构](01-architecture.md) 的同名实现状态注记）：`authn.Middleware` 实际跑在 `tenancy.Middleware` **之前**，而非本文所在的 01 号文档原始顺序——`go/authn/AGENTS.md`"The middleware chain is authn, then tenancy"一节有完整推理。
 
 ---
+
+> **实现状态注记（2026-09-03，auth-ui 轮：本文两处点名 `@speed/auth-ui` 的设计以修正形状落地）——本注记不是设计正文，设计正文保持原样；当前实现状态以根目录 CLAUDE.md 的 Repository Status 为准。**
+>
+> 落地的 `@speed/auth-ui`（登录组件家族：`SignInScreen`/`PasswordSignInForm`/`SMSSignInForm`/`RegisterForm`/`SocialSignInSection`/`SocialCallbackHandler`/`SignOutButton`/`SessionEndedScreen`）使上文两处设想可以对照记录偏差：
+>
+> - **"前端"一段设想的 `SocialLoginButtons` 按服务端下发渠道动态渲染，没有以该形状交付。** 服务端不存在"已启用渠道列表"的发现端点——authn 的 spec 没有此类 operation，`/api/config/public` 只下发配置项与功能开关——"业务项目不需要改代码就能增减渠道"因此不成立。落地的对应物 `SocialSignInSection` 改为 **props 组合**：`SignInScreen` 只在收到宿主传入的 `social` 选项块时渲染社交区，渲染哪些 provider 由该块决定，包内不读取任何配置端点；"各渠道图标与品牌规范内置"同样未落地——组件渲染的是 bundle 文案按钮，不打包品牌资产，与 `ui-kit` 的边界规则一致。该机制记录见 [12 前端架构](12-frontend.md) 的 auth-ui 轮注记三。
+> - **上文设备管理设计段设想的自助管理页面不在组件族内。** 该轮交付的是登录/登出/会话结束占位这一面；设备列表、单设备下线、一键下线其他设备、修改密码联动下线等页面属账号管理 UI，尚未落地——上文 authn 轮注记"会话/设备自助管理"一条括号里的"前端页面尚未存在"对它们仍然准确。其服务端行为（列出设备、查看登录历史、下线单个设备、被下线设备的 refresh 立即失败而其余设备不受影响）已由 `examples/reference-app` 的 `authn_e2e_test.go` 真实 HTTP 端到端验证，见该注记同一条，不依赖这些页面存在。
