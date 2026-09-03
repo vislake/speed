@@ -588,8 +588,11 @@ export function createClient(options: ClientOptions): RequestFn {
         // The body arrived; an abort during the read cancels the
         // delivery instead of resolving a 2xx for a cancelled caller.
         throwIfAborted(signal)
-        if (body === '') {
-          // 204-style: no content is a valid, empty success.
+        if (body.trim() === '') {
+          // 204-style: no content is a valid, empty success. Blank
+          // counts as empty (some servers pad the bodyless response
+          // with whitespace), symmetric with parseEnvelope treating a
+          // whitespace-only error body as envelope-less.
           return undefined as T
         }
         let data: unknown

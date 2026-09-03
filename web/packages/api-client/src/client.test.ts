@@ -305,6 +305,12 @@ describe('successful responses', () => {
     await expect(api<undefined>('/notes/n-1')).resolves.toBeUndefined()
   })
 
+  it('treats a whitespace-only 2xx body as an empty success', async () => {
+    const standin = scriptedStandin(textResponse(200, ' \n '))
+    const api = createClient({ baseUrl: BASE_URL, fetch: standin.fetch })
+    await expect(api<undefined>('/notes/n-1')).resolves.toBeUndefined()
+  })
+
   it('retries a 2xx whose body fails to arrive, then succeeds', async () => {
     let first = true
     const standin = createStandinFetch(() => {
