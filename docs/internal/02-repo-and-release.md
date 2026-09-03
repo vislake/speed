@@ -8,8 +8,8 @@
 speed/
   go.work
   go/
-    pkgcore/  dbkit/  observability/  tenancy/  config/  jobs/
-    storage/  notification/  authn/  rbac/  org/  metering/
+    pkgcore/  dbkit/  observability/  ratelimit/  tenancy/  config/
+    jobs/  storage/  notification/  authn/  rbac/  org/  metering/
     billing/  billing-gateway/  ai-gateway/  sharing/
     integration/  compliance/  admin/  saasctl/
                                               # 各含独立 go.mod
