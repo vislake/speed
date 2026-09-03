@@ -113,7 +113,7 @@ PR 模板包含一份 checklist，对应仓库根 [CLAUDE.md](../../CLAUDE.md) �
 - **"编译失败暴露待改点"真实生效**：`internal/notes/handler.go` 以 `var _ api.ServerInterface = (*Handler)(nil)` 编译期断言实现生成的 interface，并以 `api.HandlerFromMux` 让路由从片段本身推导——往片段加一个 operation 后重新生成，handler 不补实现就编译不过（本轮的编译失败演示即验证此路径）。
 - **CI 兜底已接线**：`.github/workflows/api-contract.yml` 在改动 spec 片段 / 生成器配置 / `Taskfile.yml` / 流水线自身的 PR 上触发（路径过滤），重新生成后 `git diff --exit-code` 比对生成物，并 `go build` reference-app 保证 handler 跟上 spec——这是 [18 CI/CD](18-cicd.md) 管道表 api-contract 行所规划"生成物一致性 diff"的后端一半。
 
-仍未实现——上面计划句描述的仍是完整目标：合并各模块片段成 `build/openapi/speed.yaml`（目前只有 notes 一个片段，没有合并对象）、redocly 规范 lint、orval 前端 sdk 与 `@speed/api-sdk`（前端 sdk 包待后续 web/ 工作区轮次落地：api-client/api-sdk）、oasdiff 破坏性变更闸门。这些随 API 契约工具链轮次（[15 roadmap](15-roadmap.md)）交付，届时 `task api:gen` 与 api-contract.yml 在现有骨架上扩展；详见 [21 API 契约](21-api-contract.md) 末尾的实现状态注记。
+仍未实现——上面计划句描述的仍是完整目标：合并各模块片段成 `build/openapi/speed.yaml`（目前只有 notes 一个片段，没有合并对象）、redocly 规范 lint、orval 前端 sdk 与 `@speed/api-sdk`（api-client 运行时已随 M0 落地；生成 sdk 包本身待后续独立的 web/ 工作区轮次）、oasdiff 破坏性变更闸门。这些随 API 契约工具链轮次（[15 roadmap](15-roadmap.md)）交付，届时 `task api:gen` 与 api-contract.yml 在现有骨架上扩展；详见 [21 API 契约](21-api-contract.md) 末尾的实现状态注记。
 
 **先写实现再补 spec 是被禁止的**——那等于回到 code-first，失去编译期约束的全部意义。
 
