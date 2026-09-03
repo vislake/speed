@@ -1,0 +1,469 @@
+openapi: 3.0.3
+info:
+  title: storage
+  description: >-
+    Object metadata and its derivatives -- the rows that describe media
+    bytes living in the host's ObjectStore under keys storage builds and
+    never exposes (see the module's own AGENTS.md). This fragment follows
+    the operationId (storage_<verb><Resource>) and schema-name
+    (Storage<Type>) conventions from
+    .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
+    regenerates storage-server.gen.go (in this directory) from this file,
+    with oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
+    .github/workflows/api-contract.yml.
+
+    There is deliberately no tenant_id anywhere on this surface, in any
+    path, query, header or request/response body: the tenant is always the
+    one tenancy.Middleware already resolved from the request
+    (docs/internal/04-data-and-tenancy.md; root CLAUDE.md's multi-tenant
+    isolation rule).
+
+    Merging this fragment into an application-wide build/openapi/speed.yaml
+    stays future work until the merge tooling lands (see
+    docs/internal/21-api-contract.md's implementation-status note) --
+    storage is the third module fragment, after notes and org.
+  version: 0.0.0
+paths:
+  /api/v1/storage/objects:
+    post:
+      operationId: storage_createObject
+      summary: Declare an upload in the caller's tenant.
+      description: >-
+        Create is the first step of the three-step upload lifecycle: it
+        validates the declaration and records an uploading object whose
+        uploadExpiresAt bounds how long the caller has to PUT the content.
+        The declaration carries a positive declaredSize within the host's
+        per-object ceiling, a non-empty declaredType (the server
+        canonicalizes it and checks it against the host's media-type
+        allowlist), an optional declaredChecksum of 64 lowercase hex
+        characters, and an optional absolute retention deadline in the
+        future and within the host's lifetime ceiling. The response is the
+        upload descriptor: object metadata plus the deadline. Content
+        itself never travels on this endpoint -- the upload and download
+        endpoints carry bytes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorageCreateObjectRequest'
+      responses:
+        '201':
+          description: The upload was declared; the caller may now upload content.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageObject'
+        '400':
+          description: >-
+            The request body was missing or malformed, the declared size
+            was non-positive or above the per-object ceiling, the declared
+            type is not on the allowlist, the declared checksum is not a
+            valid SHA-256 hex string, or the retention deadline is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageError'
+    get:
+      operationId: storage_listObjects
+      summary: List the caller's tenant's completed objects, newest first.
+      description: >-
+        Keyset-paginated: the page returns up to limit objects (1-200,
+        default 50) ordered newest first, and the caller echoes the last
+        row's id as the next page's beforeId. A row inserted between two
+        fetches shifts nothing. A beforeId naming no completed object of
+        the caller's tenant -- a cursor that never existed, one deleted
+        since, or another tenant's object -- reports 404,
+        indistinguishable on purpose. List returns metadata only: no item
+        carries derivatives, because a list must never fan out one query
+        per row.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: The page size, from 1 through 200. Defaults to 50.
+          schema:
+            type: integer
+            default: 50
+        - name: beforeId
+          in: query
+          required: false
+          description: >-
+            Return only objects ordered before the one with this id (the
+            keyset cursor); the last page's final row id.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The matching completed objects.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageListObjectsResponse'
+        '400':
+          description: limit is outside the 1-200 bound.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageError'
+        '404':
+          description: beforeId does not name a completed object of the caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageError'
+  /api/v1/storage/objects/{objectId}:
+    get:
+      operationId: storage_getObject
+      summary: Get one completed object's metadata.
+      description: >-
+        The full metadata of a completed object of the caller's tenant,
+        including its derivatives -- an empty array when none have been
+        derived yet. Uploading rows are not visible here (their descriptor
+        was the create response), and deleting rows are not visible
+        anywhere on this surface: both answer 404 like ids that never
+        existed.
+      parameters:
+        - $ref: '#/components/parameters/ObjectID'
+      responses:
+        '200':
+          description: The object's metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageObject'
+        '404':
+          description: objectId names no completed object of the caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageError'
+    delete:
+      operationId: storage_deleteObject
+      summary: Permanently delete an object of the caller's tenant.
+      description: >-
+        Deletion removes the object's bytes, every derivative's bytes and
+        all of its rows, and is irreversible. An object still uploading
+        reports 409: only the expiry sweep reclaims uploads, once their
+        window closes. An object already deleting -- an interrupted
+        delete, which a mid-protocol store failure can leave behind -- is
+        resumed to completion and answers 204. An id naming no completed
+        or deleting object of the caller's tenant -- never created,
+        already deleted, or another tenant's -- reports 404,
+        indistinguishable on purpose, so a repeated delete answers 404
+        after the first 204.
+      parameters:
+        - $ref: '#/components/parameters/ObjectID'
+      responses:
+        '204':
+          description: >-
+            The object was deleted, or its interrupted deletion was
+            resumed to completion.
+        '404':
+          description: >-
+            objectId names no completed or deleting object of the
+            caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageError'
+        '409':
+          description: The object is still uploading.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageError'
+  /api/v1/storage/objects/{objectId}/content:
+    put:
+      operationId: storage_uploadObjectContent
+      summary: Upload one declared object's bytes.
+      description: >-
+        The second step of the upload lifecycle: the request body is the
+        object's raw bytes, streamed. The upload binds to the declaration:
+        it is accepted only while the object is uploading and before its
+        uploadExpiresAt, and the body's length must match the declared
+        size exactly -- a Content-Length that disagrees with the declared
+        size is a 400, and a stream that ends early or overruns is a 409
+        once the bytes are counted against the declaration. The content is
+        deliberately NOT inspected here: the media type was declared at
+        create and is probed from the stored bytes at complete, and the
+        declared checksum is verified there too, so this endpoint stays a
+        dumb byte pipe. A caller that skips it and completes directly gets
+        content_missing.
+      parameters:
+        - $ref: '#/components/parameters/ObjectID'
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '204':
+          description: The bytes were stored.
+        '400':
+          description: The body's Content-Length disagrees with the declared size.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageError'
+        '404':
+          description: objectId does not name an object of the caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageError'
+        '409':
+          description: >-
+            The object is not uploading, its upload window has closed
+            (the content is treated as never-arriving), or the stored byte
+            count does not match the declared size.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageError'
+    get:
+      operationId: storage_getObjectContent
+      summary: Stream a completed object's bytes.
+      description: >-
+        The raw bytes of a completed object of the caller's tenant, served
+        with the media type probed from the bytes at complete time (the
+        sanitized, metadata-stripped form). Only completed objects are
+        readable: uploading and deleting rows answer 404 like everything
+        else this surface hides.
+      parameters:
+        - $ref: '#/components/parameters/ObjectID'
+      responses:
+        '200':
+          description: The object's bytes.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: objectId names no completed object of the caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageError'
+  /api/v1/storage/objects/{objectId}/complete:
+    post:
+      operationId: storage_completeObject
+      summary: Finalize a declared and uploaded object.
+      description: >-
+        The last step of the upload lifecycle. Complete revalidates the
+        stored bytes against the declaration -- their count against the
+        declared size and their SHA-256 against the declared checksum when
+        one was given -- and probes their real media type, which must be
+        on the module's allowlist and, when a type was declared, agree
+        with it. Images are decoded within the module's pixel ceiling and
+        sanitized: metadata such as EXIF/GPS is stripped before the bytes
+        are finalized, and the stored content is replaced with the
+        sanitized form, so the checksum and type verified are the
+        sanitized bytes'. Only a row still uploading with its window open
+        can be finalized, so a completion racing the window's end or a
+        concurrent reclaim cannot commit behind them. The response is the
+        finalized object's metadata; thumbnail derivation is enqueued
+        asynchronously, and its result shows up by polling getObject's
+        derivatives array.
+      parameters:
+        - $ref: '#/components/parameters/ObjectID'
+      responses:
+        '200':
+          description: The object was finalized.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageObject'
+        '400':
+          description: >-
+            The probed media type is not on the allowlist or disagrees
+            with the declared one, the image exceeds the pixel ceiling, or
+            the image could not be decoded for probing or sanitization.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageError'
+        '404':
+          description: objectId does not name an object of the caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageError'
+        '409':
+          description: >-
+            The object is not uploading, its content never arrived or its
+            upload window closed, or the stored bytes do not match the
+            declared size or checksum.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageError'
+components:
+  parameters:
+    ObjectID:
+      name: objectId
+      in: path
+      required: true
+      description: An application-generated UUID naming an object of the caller's tenant.
+      schema:
+        type: string
+  schemas:
+    StorageObject:
+      type: object
+      description: >-
+        One object's metadata. Which fields are populated depends on the
+        object's state: an uploading row (the create response) carries the
+        declaration and the upload deadline; a completed row additionally
+        carries the finalized size, media type, checksum and dimensions.
+        The object's storage key never appears on this surface.
+      properties:
+        id:
+          type: string
+          description: Application-generated UUID.
+        state:
+          type: string
+          description: >-
+            "uploading" or "completed". A deleting row is never visible on
+            this surface.
+        declaredSize:
+          type: integer
+          format: int64
+          description: The size the uploader declared at create time, in bytes.
+        declaredType:
+          type: string
+          description: The media type declared at create time.
+        declaredChecksum:
+          type: string
+          description: >-
+            The SHA-256 declared at create time, as 64 lowercase hex
+            characters; absent when none was declared.
+        size:
+          type: integer
+          format: int64
+          description: The finalized byte count, verified against the declaration at complete time.
+        mimeType:
+          type: string
+          description: The media type probed from the bytes at complete time.
+        checksumSha256:
+          type: string
+          description: >-
+            The SHA-256 of the finalized (sanitized) bytes, as 64
+            lowercase hex characters.
+        width:
+          type: integer
+          description: The probed pixel width; images only.
+        height:
+          type: integer
+          description: The probed pixel height; images only.
+        expiresAt:
+          type: string
+          format: date-time
+          description: >-
+            The retention deadline after which the object is swept;
+            absent when the object never expires.
+        uploadExpiresAt:
+          type: string
+          format: date-time
+          description: >-
+            The deadline by which the content had to arrive. It binds
+            only the upload lifecycle, and it stays present on completed
+            rows as the record of when that window closed.
+        createdAt:
+          type: string
+          format: date-time
+        derivatives:
+          type: array
+          description: >-
+            The object's derived artifacts, oldest first; empty when none
+            exist yet. Only the single-object get carries this array:
+            list responses are metadata only.
+          items:
+            $ref: '#/components/schemas/StorageObjectDerivative'
+    StorageCreateObjectRequest:
+      type: object
+      required:
+        - declaredSize
+        - declaredType
+      properties:
+        declaredSize:
+          type: integer
+          format: int64
+          description: >-
+            The object's size in bytes. Must be positive and within the
+            host's per-object ceiling.
+        declaredType:
+          type: string
+          minLength: 1
+          description: >-
+            The object's media type, such as "image/jpeg" or "image/png".
+            The server canonicalizes it (parameters stripped,
+            case-folded) and checks it against the host's allowlist.
+        declaredChecksum:
+          type: string
+          description: >-
+            The expected SHA-256 of the content, as 64 lowercase hex
+            characters, verified at complete time. Omit to skip that
+            check.
+        expiresAt:
+          type: string
+          format: date-time
+          description: >-
+            An absolute retention deadline after which the object is
+            swept. Must be in the future and within the host's lifetime
+            ceiling. Omit for an object that never expires.
+    StorageListObjectsResponse:
+      type: object
+      properties:
+        objects:
+          type: array
+          description: One page of completed objects, newest first.
+          items:
+            $ref: '#/components/schemas/StorageObject'
+    StorageObjectDerivative:
+      type: object
+      description: >-
+        A derived artifact of an object. Derivative bytes are produced
+        from the sanitized original, and a derivative never carries the
+        original's metadata.
+      properties:
+        id:
+          type: string
+          description: Application-generated UUID.
+        kind:
+          type: string
+          description: 'The derivation that produced it: currently "thumbnail".'
+        mimeType:
+          type: string
+          description: The derivative's media type.
+        size:
+          type: integer
+          format: int64
+          description: The derivative's byte count.
+        width:
+          type: integer
+          description: The derivative's pixel width; images only.
+        height:
+          type: integer
+          description: The derivative's pixel height; images only.
+        createdAt:
+          type: string
+          format: date-time
+    StorageError:
+      type: object
+      description: >-
+        The structured {code, params} error envelope every speed API
+        returns instead of localized text (backend coding standard §6.2;
+        docs/internal/11-cross-cutting.md) -- a client resolves code
+        through its own i18n catalog, populated from this module's
+        Locales() resources for the codes documented in AGENTS.md's error
+        index.
+      properties:
+        code:
+          type: string
+          example: storage.object_not_found
+        params:
+          type: object
+          additionalProperties: true
