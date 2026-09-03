@@ -44,6 +44,8 @@
 - 每个模块声明自己的配置结构体片段，由 Kernel 聚合装配——与 migrations、i18n 资源的聚合机制保持一致。
 - `saasctl config print` 打印最终生效配置及**每个值的来源**（来自 flag / env / 文件 / 默认值），敏感值自动脱敏。这是排查"为什么我改了配置文件没生效"的关键工具。
 
+  > **实现状态注记（2026-09-03，saasctl 轮）：** 上面这条 bootstrap 侧的 `config print` 已落地为 `saasctl config print [go.mod]`（`go/saasctl` 的 config 命令组），针对脚手架生成项目的引导配置：五行（`SPEED_DEPLOYMENT_MODE`、`PORT`、`SPEED_DB_PATH`、`SPEED_CONFIG_KEY`、`SPEED_ORG_INDEX_KEY`）各显示生效值与来源——取到环境变量的标 `from <ENV>`，未设置的标"unset or empty"，回退到生成应用的内置默认值并标注默认来源，两个密钥行无论环境里是什么一律 `[redacted]`。两处如实偏差：(1) 脚手架生成的消费应用没有 flag 层与配置文件层（引导来源实际只有 env 与内置默认值两层），因此 print 的来源标注目前只区分"环境变量"与"默认值"，flag/文件两档等消费应用真有了这些层再扩展；(2) 动态配置（`configs` 表）的值打印与编辑、以及按注册 schema 驱动的脱敏仍未实现——v0.1 的 print 覆盖的是引导配置面，动态面的 schema 与租户作用域解析是另一个维护面，与其余延期一并记录在 `go/saasctl/AGENTS.md` 的 Known limitations。print 与生成应用引导是同源的：它解析环境所用的 `internal/appconfig` 是模板内 `cmd/server/config.go` 的孪生，孪生关系由测试钉死，所以 print 打印或拒绝的正是应用会启动或不启动的。
+
 **动态配置**
 - 存储为 `configs` 表，**三层作用域**：`system`（平台全局）→ `tenant`（租户覆盖）→ 未来可扩展到 `user`。读取时按作用域从具体到宽泛回退，这是多租户 SaaS 的刚需（每个租户可以有自己的功能开关和限额）。
 - 接口：
@@ -87,6 +89,8 @@
 **模块开关**
 - CLI 生成骨架时按需引入，未选择的模块不进依赖、不进二进制。这是最彻底的禁用，也让不需要计费的项目不必背上三家支付 SDK 的依赖树。
 - 模块间有依赖关系（`billing` 依赖 `metering`、`admin` 依赖 `rbac`），CLI 需要做依赖闭包解析并在选择冲突时明确报错。
+
+  > **实现状态注记（2026-09-03，saasctl 轮）：** `saasctl new --with=…` 按本节的"正向选择 + 依赖闭包 + 冲突报错"落地，v0.1 的可选范围是 `{authn, rbac, org}`——即下方分级表里"底座型"中已经实现、且能构成最小可用组合的三件；`jobs`、`storage`、`notification` 与下方"业务能力型"各行等其模块实现轮次后再扩展（切换范围不是本轮的承诺，见 `go/saasctl/AGENTS.md` Known limitations）。落地形态与表格措辞的三点对应：`--with` 是**正向选择**，不存在 `--without`——"不要 authn"的表达是列出其余模块；向下闭包规则是选择 `rbac` 或 `org` 而不选 `authn` 时报错并点名 `authn` 是被隐含的依赖（它们的路由需要一个认证层），未知名字报错时列出合法集合；默认值是 `authn,rbac,org` 全选，`--with=""` 显式表达只带必需五件（`pkgcore`/`dbkit`/`tenancy`/`config`/`observability` 无关闭选项，与分级表"必需"行一致），恰好就是 99 行"最小可用组合"的两种形态。表格里"底座型——关闭 jobs 意味着 storage/notification/… 全部不可用，CLI 必须在关闭前明确列出连带影响并要求确认"这一句的确认交互，在 v0.1 无对应模块可关，等可选范围扩大到有连带的模块时再定。CI 只测三种典型组合（109 行）在 v0.1 落到脚手架侧为：`new` 的每个合法选择都有 golden 钉死 + 端到端 proof 至少跑默认与 `--with=authn` 两个选择，三组合全矩阵的流水线形态属 scaffold-verify 的 M4 门（见 [18 CI/CD](18-cicd.md) 实施状态注记）。
 
 **模块的可选性分级**（避免"我能不能不要 jobs"这类问题反复出现）：
 

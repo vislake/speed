@@ -12,10 +12,17 @@ name: scaffold-verify
 # DESIGN-TABLE TRIGGER: daily plus post-release; both are enabled by the
 # implementing round.
 #
-# WHAT EXISTS TODAY: no project scaffold -- tools/new_module.py generates
-# go/<name> module STUBS only (module generator, documented in
-# tools/README.md), go/saasctl is itself a stub module with no commands,
-# and no create-saas-app npm package exists.
+# WHAT EXISTS TODAY (updated by the saasctl round): go/saasctl v0.1 ships
+# the project-generation side of this pipeline -- `saasctl new` materializes
+# a bootable consumer project from go:embed-ed templates (selection over
+# {authn, rbac, org}, golden output pinned byte-identical), and the round's
+# end-to-end consumer proof generated, tidied, built, booted and smoke-tested
+# one (recorded answer by answer in go/saasctl/AGENTS.md's Testing section).
+# Still absent: create-saas-app and the web-side template (frontend-scaffold
+# round), and -- the point of this stub -- no generated project has yet been
+# booted once in each deployment mode by a pipeline. The GATE below is the
+# earliest partial wiring's full form; nothing in this file changes until
+# then except this header.
 #
 # GATE: the roadmap M4 acceptance "saasctl new + create-saas-app generate a
 # fresh project that boots in both deployment modes"; earliest partial

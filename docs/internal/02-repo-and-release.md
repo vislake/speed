@@ -76,3 +76,12 @@ speed/
 
 **CLI 分工**：`saasctl`（Go，`go:embed` 后端模板）生成后端骨架并提供 `saasctl db migrate`；`create-saas-app`（Node）生成前端骨架。各自用本生态原生方式分发，不强行统一。
 
+**M1 状态注记（saasctl 轮，2026-09，对应 roadmap M1 的 saasctl CLI 条目）：** Go 半边已落地为 `go/saasctl` v0.1——`new`（后端骨架生成）、`upgrade`（go.mod 版本改写）、`db migrate`（SQLite 迁移应用）与 `config print`（引导配置来源展示）四个命令全部接线；`create-saas-app` 与前端模板仍未动，由前端脚手架轮接手。落地对正文有四处如实偏差或精确化：
+
+- **根 `templates/` 目录从未实现**（布局树第 25-26 行）：后端模板不以 `templates/backend-app/…` 存放，而是 `go:embed` 收在 `go/saasctl/internal/template/project/` 下——一个自带模板的可执行二进制，业务方 `saasctl new` 时无需另拉模板仓库，模板的"可编译性由真实 materialize + tidy + build 证明、绝不就地编译"由 go:embed 布局与 `//go:build ignore` 标记双重保证（A2）。前端模板等 `create-saas-app` 轮再定存放处；布局树的 `templates/` 一行按"规划"读，不按"现状"读。
+- **脚手架过渡态形态的精确化**（上文"首次发布前的过渡状态"blockquote 的生成物版本）：`saasctl new` 生成的项目 go.mod 不写 `replace ... => ../pkgcore` 这种相对路径，而是——每个 speed require 钉零占位版本 `v0.0.0-00010101000000-000000000000`，每条 replace 指向 `--speed-root` 解析出的 speed checkout 绝对路径（`SPEED_ROOT`、ancestor go.work probe 依次兜底），完整的间接 require 块、不随 go.sum（首次 consumer 侧 `go mod tidy` 写出的 go.sum 不触碰这些行）——模板内嵌 go.mod 是 tidy-pruned 的 golden，materialize 后按字面替换。blockquote 要求的"首次 lockstep 发布后清理所有临时 replace"对脚手架生成物同样成立，清理点仍是 M4 首次发布（届时 `new` 改为生成真实版本 requires）。
+- **`saasctl upgrade` 的改写面**（正文"一次性改写 go.mod / package.json 全部相关依赖"）：v0.1 只改写 go.mod——`golang.org/x/mod/modfile` 仅重写每条 speed require 的版本 token，replace 块、`// indirect` 标记、注释与格式逐字节保留，幂等；package.json 侧的改写随 `create-saas-app` 轮。
+- **分发形态**：`saasctl` 以 goreleaser 多平台二进制发布（M4 发布流水线的制品步骤），`create-saas-app` 以 npm 包发布——各自原生分发，与正文一致；v0.1 期间 `saasctl` 需要本地 speed checkout（见 `go/saasctl/AGENTS.md` 的 Speed-root resolution）。
+
+轮次端到端证明（每个 `new` 出来的项目真实 tidy/build/boot/冒烟，`db migrate` 与 `upgrade` 跑真实文件）的记录与答案在 `go/saasctl/AGENTS.md` Testing 章节；该证明的 CI 化形态是 scaffold-verify 流水线的 M4 门（见 [18 CI/CD](18-cicd.md) 的实施状态注记）。
+

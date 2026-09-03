@@ -25,6 +25,8 @@
 - CI 定时任务：`saasctl new tmpapp` + `create-saas-app tmpapp-web` → `go build` / `pnpm build` → 先 `docker compose -f docker-compose.standalone.yml up`（应在数十秒内就绪）再 `docker compose up` → 两次都跑冒烟脚本打健康检查与登录接口
 - 这条流水线一旦红，说明模板与模块版本已脱节，必须立即修复
 
+> **实现状态注记（2026-09-03，saasctl 轮）：** 本条流水线的"生成 → 构建 → 冒烟"工具侧已在 saasctl 轮真实落地并跑通——`saasctl new`（含 `--with` 选择）materialize 出项目后，经真实 `go mod tidy`（网络）与 `go build` 编译，boot 起来冒烟真实组成的 HTTP 链（healthz、config/public、register、错密码 401、坏 token 401、匿名 403 等逐项断言），外加 `db migrate` 与 `upgrade` 对真实文件的操作；程序与逐项答案记录在 `go/saasctl/AGENTS.md` Testing 章节，是模板与模块版本"此刻未脱节"的证据。但本节的 CI 化形态仍未落地：`scaffold-verify.yml` 仍是 gated stub（其文件头已由本轮更新，记录"生成侧已存在且有离线证明；双部署模式 boot 门仍未接线"），CI 定时触发与第 25 行的两次 `docker compose`（standalone 与 distributed 各 boot 一次）属 M4 该流水线转正时的范围——届时每轮 PR 不跑它（它按设计是每日 + 发布后），模板腐化的日常防线靠 saasctl 轮之后的仓库内测试（golden 钉死 + materialize 证明）。
+
 **6. 国际化**
 - CI lint：UI 包 JSX 中不得出现裸文本节点；Go 代码中面向用户的错误不得使用字面量文案
 - 资源完整性检查：`zh-CN` 与 `en-US` 的 key 集合必须完全一致，缺任何一边 CI 报错
@@ -35,7 +37,7 @@
 - 优先级链测试：同一个键分别从 flag/env/文件/默认值提供，断言覆盖顺序正确
 - 缺失必填配置时启动必须 fail-fast 并给出可读错误（含缺失键名与来源提示）
 - 动态配置：租户级覆盖回退到全局的解析正确；修改后各实例在事件广播下热生效；敏感项在日志与 API 响应中确实被脱敏；每次变更都产生审计记录
-- `saasctl config print` 输出的来源标注与实际一致
+- `saasctl config print` 输出的来源标注与实际一致——**已解除（2026-09-03，saasctl 轮）**：print 与生成应用的引导同源（`internal/appconfig` 是模板内 `cmd/server/config.go` 的孪生，孪生关系由测试钉死），实测两个变体——设了 `SPEED_*` 的环境时每行标 `from <ENV>`、空环境下每行标默认来源——密钥行一律 `[redacted]`，逐行输出与真实解析一致（程序与答案见 `go/saasctl/AGENTS.md` Testing 章节）。注意该行只覆盖引导配置面；动态配置（`configs` 表）的打印仍待其维护面落地。
 
 **8. 文档**
 - CI 强制编译并运行所有文档中的代码示例（Go `Example` 测试 + Storybook 构建），示例失败等同于构建失败
