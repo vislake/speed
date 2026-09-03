@@ -337,10 +337,18 @@ func (s *Service) IsEnabled(ctx context.Context, key string) (bool, error) {
 		if !ok || !entry.isFlag {
 			return false, ErrUnknownFlag.WithParam("key", k)
 		}
+		// Path-based DFS: a flag is marked only for the duration of the
+		// walk of its own subtree, so a dependency reachable through two
+		// chains -- a legal diamond, admitted by Attach's detectFlagCycles
+		// -- is visited once per chain without tripping the guard. A
+		// genuine cycle re-enters a flag still on the current path and
+		// still fails here; the guard is the redundant net for schemas
+		// built behind Attach's back.
 		if seen[k] {
 			return false, ErrFeatureFlagDependencyCycle.WithParam("key", k)
 		}
 		seen[k] = true
+		defer delete(seen, k)
 		canonical, _, err := s.resolve(ctx, entry)
 		if err != nil {
 			return false, err

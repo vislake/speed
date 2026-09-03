@@ -689,6 +689,53 @@ func TestService_IsEnabled_WalksTheDependencyChain(t *testing.T) {
 	}
 }
 
+// A diamond-shaped dependency graph -- two flags sharing one dependency --
+// is legal: Attach's detectFlagCycles proves acyclicity over the whole
+// graph, so the runtime walk must not re-report a shared dependency as a
+// cycle when it is reachable through two chains. IsEnabled must answer true
+// for every flag and EnabledFlags must not fail wholesale (it is what both
+// features endpoints consume). Regression: the walk marked a flag for the
+// whole traversal instead of for its own subtree, so the second chain into
+// the shared flag tripped ErrFeatureFlagDependencyCycle and every consumer
+// of the flag surface failed on a legal declaration.
+func TestService_IsEnabled_SharedDependencyThroughTwoChainsIsNotACycle(t *testing.T) {
+	svc, _ := attachServiceForTest(t, openServiceTestDB(t), buildTestCipher(t), nil, []pkgcore.FeatureFlag{
+		{Key: "billing.base", Default: true, Description: "Base billing, shared by the export and analytics chains"},
+		{Key: "billing.export", Default: true, Description: "Exports invoices", DependsOn: []string{"billing.base"}},
+		{Key: "billing.analytics", Default: true, Description: "Revenue analytics", DependsOn: []string{"billing.base"}},
+		{Key: "billing.reporting", Default: true, Description: "The reporting suite", DependsOn: []string{"billing.export", "billing.analytics"}},
+	})
+
+	for key, want := range map[string]bool{
+		"billing.base":      true,
+		"billing.export":    true,
+		"billing.analytics": true,
+		"billing.reporting": true,
+	} {
+		got, err := svc.IsEnabled(tenantA(), key)
+		if err != nil {
+			t.Fatalf("IsEnabled(%s): %v", key, err)
+		}
+		if got != want {
+			t.Fatalf("IsEnabled(%s) = %v, want %v", key, got, want)
+		}
+	}
+
+	flags, err := svc.EnabledFlags(tenantA())
+	if err != nil {
+		t.Fatalf("EnabledFlags: %v", err)
+	}
+	wantFlags := []string{"billing.analytics", "billing.base", "billing.export", "billing.reporting"}
+	if len(flags) != len(wantFlags) {
+		t.Fatalf("EnabledFlags = %v, want %v", flags, wantFlags)
+	}
+	for i := range wantFlags {
+		if flags[i] != wantFlags[i] {
+			t.Fatalf("EnabledFlags = %v, want %v", flags, wantFlags)
+		}
+	}
+}
+
 func TestService_IsEnabled_OnlyKnowsDeclaredFlags(t *testing.T) {
 	svc := attachDefaultServiceForTest(t)
 	err := codeHelperIsEnabled(svc, "brand.nonexistent")
