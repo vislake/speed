@@ -110,6 +110,17 @@ type Service struct {
 	now         func() time.Time
 	params      PasswordParams
 	policy      PasswordPolicy
+
+	// Federation state: the social channels a deployment wired, the
+	// single-use state store their callbacks are validated against, the
+	// redirect URIs they may return to, and the providers whose
+	// verified-email assertion is allowed to link an existing account.
+	identities       *UserIdentityRepository
+	providers        *ProviderRegistry
+	states           *StateStore
+	redirects        RedirectAllowlist
+	trustedProviders []string
+	sso              *SSOService
 }
 
 // NewService assembles a Service over db, using bus and kv -- the pkgcore
@@ -160,6 +171,18 @@ func NewService(db *gorm.DB, bus pkgcore.EventBus, kv pkgcore.KVStore, opts ...O
 	if err != nil {
 		return nil, err
 	}
+	identities, err := NewUserIdentityRepository(db)
+	if err != nil {
+		return nil, err
+	}
+	states, err := NewStateStore(kv, cfg.oauthStateTTL)
+	if err != nil {
+		return nil, err
+	}
+	providers, err := NewProviderRegistry(cfg.providers...)
+	if err != nil {
+		return nil, err
+	}
 
 	tokenOpts := []TokenOption{
 		WithTokenTTL(cfg.accessTTL),
@@ -181,20 +204,43 @@ func NewService(db *gorm.DB, bus pkgcore.EventBus, kv pkgcore.KVStore, opts ...O
 		return nil, err
 	}
 
-	return &Service{
-		users:       users,
-		sessions:    manager,
-		sessionRepo: sessionRepo,
-		attempts:    attempts,
-		signer:      signer,
-		verifier:    verifier,
-		bus:         bus,
-		membership:  cfg.membership,
-		now:         cfg.now,
-		params:      cfg.passwordParams,
-		policy:      cfg.passwordPolicy,
-	}, nil
+	svc := &Service{
+		users:            users,
+		sessions:         manager,
+		sessionRepo:      sessionRepo,
+		attempts:         attempts,
+		signer:           signer,
+		verifier:         verifier,
+		bus:              bus,
+		membership:       cfg.membership,
+		now:              cfg.now,
+		params:           cfg.passwordParams,
+		policy:           cfg.passwordPolicy,
+		identities:       identities,
+		providers:        providers,
+		states:           states,
+		redirects:        cfg.redirects,
+		trustedProviders: slices.Clone(cfg.trustedProviders),
+	}
+
+	sso, err := newSSOService(svc, db, cfg)
+	if err != nil {
+		return nil, err
+	}
+	svc.sso = sso
+	return svc, nil
 }
+
+// Identities returns the external-identity repository, for callers that need
+// to read a binding directly.
+func (s *Service) Identities() *UserIdentityRepository { return s.identities }
+
+// Providers returns the registry of wired social channels, whose Names() is
+// what the login page's enabled-channel list is built from.
+func (s *Service) Providers() *ProviderRegistry { return s.providers }
+
+// SSO returns the enterprise single sign-on relying party.
+func (s *Service) SSO() *SSOService { return s.sso }
 
 // Users returns the user repository, for callers that need to read a user
 // record directly -- the HTTP layer's /me handler, for instance.

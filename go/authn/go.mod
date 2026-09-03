@@ -12,6 +12,7 @@ replace github.com/vislake/speed/go/observability => ../observability
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/coreos/go-oidc/v3 v3.16.0
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/vislake/speed/go/dbkit v0.0.0-00010101000000-000000000000
@@ -19,6 +20,7 @@ require (
 	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/tenancy v0.0.0-00010101000000-000000000000
 	golang.org/x/crypto v0.55.0
+	golang.org/x/oauth2 v0.36.0
 	gorm.io/gorm v1.31.2
 )
 
@@ -45,6 +47,7 @@ require (
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/glebarez/go-sqlite v1.21.2 // indirect
 	github.com/glebarez/sqlite v1.11.0 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect

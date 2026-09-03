@@ -42,6 +42,18 @@ const (
 	// EventTenantSwitched is published when a session changes which
 	// tenant its access tokens are issued for.
 	EventTenantSwitched = "authn.tenant.switched"
+
+	// EventIdentityBound is published when an external identity -- a
+	// social account or an enterprise single sign-on subject -- is
+	// attached to a user. It is a security-relevant change to how an
+	// account can be signed into, which is exactly the class of change the
+	// account owner should hear about, so it is announced rather than only
+	// written down.
+	EventIdentityBound = "authn.identity.bound"
+
+	// EventIdentityUnbound is published when an external identity is
+	// detached from a user.
+	EventIdentityUnbound = "authn.identity.unbound"
 )
 
 // Audit actions this module registers. They use the present-tense verb form
@@ -57,6 +69,15 @@ const (
 	AuditActionSessionRevoke = "authn.session.revoke"
 	// AuditActionTenantSwitch records a session changing its active tenant.
 	AuditActionTenantSwitch = "authn.tenant.switch"
+	// AuditActionIdentityBind records an external identity being attached
+	// to an account.
+	AuditActionIdentityBind = "authn.identity.bind"
+	// AuditActionIdentityUnbind records an external identity being
+	// detached from an account.
+	AuditActionIdentityUnbind = "authn.identity.unbind"
+	// AuditActionSSOConfigure records a tenant's enterprise single
+	// sign-on configuration being written.
+	AuditActionSSOConfigure = "authn.sso.configure"
 )
 
 // UserCreatedPayload is the Event.Payload of EventUserCreated.
@@ -140,6 +161,38 @@ type TenantSwitchedPayload struct {
 	ToTenantID   string
 }
 
+// IdentityBoundPayload is the Event.Payload of EventIdentityBound.
+//
+// It carries no external identifier and no email address. A subscriber that
+// needs either reads the identity row under its own access control; putting a
+// provider's account identifier on the bus would broadcast it to every
+// subscriber and, in the distributed deployment mode, write it into the
+// broker.
+type IdentityBoundPayload struct {
+	// UserID is the account the identity was attached to.
+	UserID string
+	// IdentityID is the new UserIdentity.ID.
+	IdentityID string
+	// Provider is the channel, one of the Provider* constants or an
+	// "oidc:<tenant>" enterprise channel.
+	Provider string
+	// AutoLinked reports whether the binding happened automatically during
+	// a sign-in, rather than being requested by an already-signed-in user.
+	// It is the field a security notice keys on: an automatic link is the
+	// one the account owner did not explicitly ask for.
+	AutoLinked bool
+}
+
+// IdentityUnboundPayload is the Event.Payload of EventIdentityUnbound.
+type IdentityUnboundPayload struct {
+	// UserID is the account the identity was detached from.
+	UserID string
+	// IdentityID is the removed UserIdentity.ID.
+	IdentityID string
+	// Provider is the channel the removed identity belonged to.
+	Provider string
+}
+
 // eventDecls is what Module.Register declares to the registry. Declaring an
 // event is a documentation and mapping contract -- it is what lets the
 // integration module map internal facts onto a versioned public schema
@@ -176,6 +229,16 @@ var eventDecls = []pkgcore.EventDecl{
 		PayloadType: "authn.TenantSwitchedPayload",
 		Description: "Published when a session changes the tenant its access tokens are issued for.",
 	},
+	{
+		Type:        EventIdentityBound,
+		PayloadType: "authn.IdentityBoundPayload",
+		Description: "Published when an external social or single sign-on identity is attached to an account.",
+	},
+	{
+		Type:        EventIdentityUnbound,
+		PayloadType: "authn.IdentityUnboundPayload",
+		Description: "Published when an external social or single sign-on identity is detached from an account.",
+	},
 }
 
 // auditActions is what Module.Register registers with the audit-action
@@ -185,4 +248,7 @@ var auditActions = []string{
 	AuditActionUserLogin,
 	AuditActionSessionRevoke,
 	AuditActionTenantSwitch,
+	AuditActionIdentityBind,
+	AuditActionIdentityUnbind,
+	AuditActionSSOConfigure,
 }

@@ -3,6 +3,7 @@ package authn
 import (
 	"embed"
 	"errors"
+	"net/http"
 	"time"
 
 	"gorm.io/gorm"
@@ -67,6 +68,80 @@ const (
 // signed in.
 const FeatureFlagPasswordLogin = "authn.password_login"
 
+// Feature flags gating the federated sign-in channels, one per channel plus
+// one for the enterprise relying party.
+//
+// Every one of them defaults to OFF. A channel with no credentials configured
+// must not appear on the login page, and a flag that defaulted on would put
+// it there for every deployment that has not turned it off -- where it would
+// fail at the provider with an error the person clicking it cannot act on.
+// The login page reads these from the pre-authentication feature endpoint,
+// which is why they are flags rather than a computed "is this configured"
+// answer: the endpoint is served before anyone has signed in.
+const (
+	// FeatureFlagSocialGoogle gates the Google channel.
+	FeatureFlagSocialGoogle = "authn.social.google"
+	// FeatureFlagSocialGitHub gates the GitHub channel.
+	FeatureFlagSocialGitHub = "authn.social.github"
+	// FeatureFlagSocialWeChat gates the WeChat Open Platform channel.
+	FeatureFlagSocialWeChat = "authn.social.wechat"
+	// FeatureFlagSocialDingTalk gates the DingTalk channel.
+	FeatureFlagSocialDingTalk = "authn.social.dingtalk"
+	// FeatureFlagSocialFeishu gates the Feishu / Lark channel.
+	FeatureFlagSocialFeishu = "authn.social.feishu"
+	// FeatureFlagEnterpriseSSO gates the per-tenant OpenID Connect
+	// relying party.
+	FeatureFlagEnterpriseSSO = "authn.sso.oidc"
+)
+
+// Configuration keys for the social channels' credentials.
+//
+// Each channel contributes a client id and a client secret. The secrets are
+// Sensitive, which has a consequence every host must know about and which is
+// why it is stated here rather than buried: config.Attach refuses a
+// cipher-less startup as soon as ANY registered item is Sensitive. Wiring
+// authn therefore makes a configuration cipher mandatory.
+//
+// That is the right trade. The alternative -- reading provider secrets from
+// bootstrap environment variables instead -- would mean an operator cannot
+// add a login channel without a redeploy, which is exactly the "customers can
+// configure this themselves" property dynamic configuration exists for.
+const (
+	// ConfigKeyGoogleClientID is Google's OAuth client identifier.
+	ConfigKeyGoogleClientID = "authn.social.google.client_id"
+	// ConfigKeyGoogleClientSecret is Google's OAuth client secret.
+	ConfigKeyGoogleClientSecret = "authn.social.google.client_secret" //nolint:gosec // a configuration key name, not a credential.
+	// ConfigKeyGitHubClientID is GitHub's OAuth client identifier.
+	ConfigKeyGitHubClientID = "authn.social.github.client_id"
+	// ConfigKeyGitHubClientSecret is GitHub's OAuth client secret.
+	ConfigKeyGitHubClientSecret = "authn.social.github.client_secret" //nolint:gosec // a configuration key name, not a credential.
+	// ConfigKeyWeChatClientID is the WeChat Open Platform "appid".
+	ConfigKeyWeChatClientID = "authn.social.wechat.client_id"
+	// ConfigKeyWeChatClientSecret is the WeChat Open Platform "secret".
+	ConfigKeyWeChatClientSecret = "authn.social.wechat.client_secret" //nolint:gosec // a configuration key name, not a credential.
+	// ConfigKeyDingTalkClientID is DingTalk's application key.
+	ConfigKeyDingTalkClientID = "authn.social.dingtalk.client_id"
+	// ConfigKeyDingTalkClientSecret is DingTalk's application secret.
+	ConfigKeyDingTalkClientSecret = "authn.social.dingtalk.client_secret" //nolint:gosec // a configuration key name, not a credential.
+	// ConfigKeyFeishuClientID is the Feishu "app_id".
+	ConfigKeyFeishuClientID = "authn.social.feishu.client_id"
+	// ConfigKeyFeishuClientSecret is the Feishu "app_secret".
+	ConfigKeyFeishuClientSecret = "authn.social.feishu.client_secret" //nolint:gosec // a configuration key name, not a credential.
+
+	// ConfigKeyTrustedProviders is the whitespace-delimited list of social
+	// channels whose EmailVerified assertion may automatically link a new
+	// external identity to an EXISTING account.
+	//
+	// Its default is EMPTY, which disables automatic linking entirely. See
+	// WithTrustedProviders for why that is the safe default and why Google
+	// is the channel a deployment would sensibly add first.
+	ConfigKeyTrustedProviders = "authn.social.trusted_providers"
+
+	// ConfigKeyOAuthStateTTL bounds how long an authorization flow may
+	// take between leaving for a provider and coming back.
+	ConfigKeyOAuthStateTTL = "authn.oauth_state_ttl"
+)
+
 // options accumulates everything NewService and NewModule can be configured
 // with.
 type options struct {
@@ -81,6 +156,12 @@ type options struct {
 	revocationMode RevocationMode
 	passwordParams PasswordParams
 	passwordPolicy PasswordPolicy
+
+	providers        []SocialProvider
+	trustedProviders []string
+	redirects        RedirectAllowlist
+	oauthStateTTL    time.Duration
+	federationClient *http.Client
 }
 
 // Option configures the authn module and the service inside it.
@@ -189,6 +270,63 @@ func WithPasswordPolicy(p PasswordPolicy) Option {
 	return func(o *options) { o.passwordPolicy = p }
 }
 
+// WithSocialProviders wires the social-login channels a deployment offers.
+// Constructing each provider is the host's job, because each one needs
+// credentials the host reads from its own secret source.
+func WithSocialProviders(providers ...SocialProvider) Option {
+	return func(o *options) { o.providers = append(o.providers, providers...) }
+}
+
+// WithTrustedProviders names the social channels whose EmailVerified
+// assertion is allowed to link a new external identity to an EXISTING account
+// automatically.
+//
+// The default is EMPTY, which means no automatic linking happens at all and
+// every new external identity whose address already belongs to an account is
+// refused with ErrIdentityRequiresBinding. That is the fail-closed default on
+// purpose: automatic linking is convenience, and the failure mode of getting
+// it wrong is somebody else signing in to your account.
+//
+// The channel a deployment would sensibly add first is Google, which is the
+// only one of the five shipped here that delivers "email_verified" inside a
+// document it signed, rather than as a field in an ordinary API response.
+func WithTrustedProviders(providers ...string) Option {
+	return func(o *options) { o.trustedProviders = append(o.trustedProviders, providers...) }
+}
+
+// WithRedirectAllowlist registers the redirect URIs an authorization flow may
+// return to. An empty allowlist refuses every flow, which is the correct
+// closed default for a deployment that has not enabled social login.
+func WithRedirectAllowlist(allowlist RedirectAllowlist) Option {
+	return func(o *options) { o.redirects = allowlist }
+}
+
+// WithOAuthStateTTL bounds how long an authorization flow may take. A
+// non-positive duration is ignored.
+func WithOAuthStateTTL(d time.Duration) Option {
+	return func(o *options) {
+		if d > 0 {
+			o.oauthStateTTL = d
+		}
+	}
+}
+
+// WithFederationHTTPClient replaces the HTTP client the ENTERPRISE single
+// sign-on relying party talks to a tenant's identity provider with.
+//
+// The default is the SSRF-guarded client, and replacing it removes that
+// guard: the issuer URL is typed by a tenant administrator, so the guard is
+// what stops it pointing at the deployment's own network. Tests inject a
+// plain client because their identity provider is an httptest server on
+// loopback, which the guard correctly refuses; a deployment has no reason to.
+func WithFederationHTTPClient(client *http.Client) Option {
+	return func(o *options) {
+		if client != nil {
+			o.federationClient = client
+		}
+	}
+}
+
 // newOptions applies opts over the defaults and rejects a configuration the
 // module cannot run with.
 func newOptions(opts []Option) (options, error) {
@@ -201,6 +339,7 @@ func newOptions(opts []Option) (options, error) {
 		revocationMode: RevocationModeNatural,
 		passwordParams: DefaultPasswordParams(),
 		passwordPolicy: DefaultPasswordPolicy(),
+		oauthStateTTL:  DefaultOAuthStateTTL,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -294,22 +433,71 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	if err := reg.Config.Add(configItems()...); err != nil {
 		return err
 	}
-	return reg.Features.Add(pkgcore.FeatureFlag{
-		Key:         FeatureFlagPasswordLogin,
-		Default:     true,
-		Description: "Allows signing in with an email address or phone number and a password.",
-	})
+	if err := reg.Permissions.Add(PermissionSSOManage); err != nil {
+		return err
+	}
+	return reg.Features.Add(featureFlags()...)
+}
+
+// featureFlags is the toggle set this module declares: one for password
+// sign-in, one per social channel, and one for the enterprise relying party.
+func featureFlags() []pkgcore.FeatureFlag {
+	return []pkgcore.FeatureFlag{
+		{
+			Key:         FeatureFlagPasswordLogin,
+			Default:     true,
+			Description: "Allows signing in with an email address or phone number and a password.",
+		},
+		{
+			Key:         FeatureFlagSocialGoogle,
+			Default:     false,
+			Description: "Offers Google as a sign-in channel. Requires the Google client id and secret to be configured.",
+		},
+		{
+			Key:         FeatureFlagSocialGitHub,
+			Default:     false,
+			Description: "Offers GitHub as a sign-in channel. Requires the GitHub client id and secret to be configured.",
+		},
+		{
+			Key:         FeatureFlagSocialWeChat,
+			Default:     false,
+			Description: "Offers WeChat as a sign-in channel. Requires the WeChat Open Platform appid and secret to be configured.",
+		},
+		{
+			Key:         FeatureFlagSocialDingTalk,
+			Default:     false,
+			Description: "Offers DingTalk as a sign-in channel. Requires the DingTalk application key and secret to be configured.",
+		},
+		{
+			Key:         FeatureFlagSocialFeishu,
+			Default:     false,
+			Description: "Offers Feishu as a sign-in channel. Requires the Feishu app id and secret to be configured.",
+		},
+		{
+			Key:         FeatureFlagEnterpriseSSO,
+			Default:     false,
+			Description: "Allows each tenant to configure an OpenID Connect identity provider its members sign in through.",
+		},
+	}
 }
 
 // configItems is the dynamic-configuration schema this module declares.
 //
-// None of these items is Sensitive, which is worth stating because it has a
-// consequence for the host: config.Attach refuses a cipher-less startup as
-// soon as ANY registered item is sensitive, and nothing here forces that.
-// The provider credentials that will are federation's, not this file's.
+// The social-channel client secrets here ARE Sensitive, which has a
+// consequence for every host: config.Attach refuses a cipher-less startup as
+// soon as one Sensitive item is registered. Wiring authn therefore makes a
+// configuration cipher mandatory, and that is a deliberate decision rather
+// than a side effect -- see the comment on the ConfigKey* block.
+//
+// Note the pairing rule the registry enforces: an item may be Sensitive or
+// Public, never both. Client secrets are Sensitive; the client IDs beside
+// them are neither, because although a client id is not a secret, nothing on
+// the pre-authentication public endpoint needs it -- the login page renders a
+// channel button from the FEATURE FLAG, and the id only ever appears in the
+// authorization URL this module builds server-side.
 func configItems() []pkgcore.ConfigItem {
 	defaults := DefaultPasswordPolicy()
-	return []pkgcore.ConfigItem{
+	items := []pkgcore.ConfigItem{
 		{
 			Key:         ConfigKeyPasswordMinLength,
 			Type:        "int",
@@ -362,7 +550,60 @@ func configItems() []pkgcore.ConfigItem {
 			Group:       moduleName,
 			Description: "Enforces session revocation on every request through the shared key-value store, instead of waiting for access tokens to expire.",
 		},
+		{
+			Key:         ConfigKeyTrustedProviders,
+			Type:        "string",
+			Default:     "",
+			Group:       moduleName,
+			Description: "Whitespace-delimited social channels whose verified-email assertion may automatically link a new sign-in to an existing account. Empty disables automatic linking entirely.",
+		},
+		{
+			Key:         ConfigKeyOAuthStateTTL,
+			Type:        "duration",
+			Default:     DefaultOAuthStateTTL,
+			Min:         time.Minute,
+			Max:         time.Hour,
+			Group:       moduleName,
+			Description: "How long a social or single sign-on authorization flow may take between leaving for the provider and returning.",
+		},
 	}
+	return append(items, socialCredentialItems()...)
+}
+
+// socialCredentialItems is the per-channel credential schema, one client id
+// and one Sensitive client secret each.
+func socialCredentialItems() []pkgcore.ConfigItem {
+	channels := []struct {
+		idKey, secretKey, label, idName, secretName string
+	}{
+		{ConfigKeyGoogleClientID, ConfigKeyGoogleClientSecret, "Google", "client id", "client secret"},
+		{ConfigKeyGitHubClientID, ConfigKeyGitHubClientSecret, "GitHub", "client id", "client secret"},
+		{ConfigKeyWeChatClientID, ConfigKeyWeChatClientSecret, "WeChat", "appid", "secret"},
+		{ConfigKeyDingTalkClientID, ConfigKeyDingTalkClientSecret, "DingTalk", "application key", "application secret"},
+		{ConfigKeyFeishuClientID, ConfigKeyFeishuClientSecret, "Feishu", "app id", "app secret"},
+	}
+
+	items := make([]pkgcore.ConfigItem, 0, 2*len(channels))
+	for _, channel := range channels {
+		items = append(items,
+			pkgcore.ConfigItem{
+				Key:         channel.idKey,
+				Type:        "string",
+				Default:     "",
+				Group:       moduleName,
+				Description: channel.label + " OAuth " + channel.idName + ".",
+			},
+			pkgcore.ConfigItem{
+				Key:         channel.secretKey,
+				Type:        "string",
+				Default:     "",
+				Sensitive:   true,
+				Group:       moduleName,
+				Description: channel.label + " OAuth " + channel.secretName + ".",
+			},
+		)
+	}
+	return items
 }
 
 // compile-time check that *Module satisfies pkgcore.Module.

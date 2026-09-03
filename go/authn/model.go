@@ -73,6 +73,15 @@ const (
 const (
 	// MethodPassword is an email-or-phone plus password sign-in.
 	MethodPassword = "password"
+	// MethodSocial is a sign-in through a social channel. The session's
+	// AMR carries the channel too ("social:google"); this coarser value is
+	// what the login history records, so a person reading their own
+	// security page sees one row type per way in rather than one per
+	// vendor.
+	MethodSocial = "social"
+	// MethodOIDC is a sign-in through a tenant's enterprise single
+	// sign-on.
+	MethodOIDC = "oidc"
 )
 
 // Failure reasons recorded in [LoginAttempt.FailureReason]. They are for the
@@ -93,6 +102,10 @@ const (
 	// FailureReasonNoMembership is a correct credential for a user who is
 	// not an active member of any tenant, or of the requested one.
 	FailureReasonNoMembership = "no_membership"
+	// FailureReasonRequiresBinding is an external identity that resolved
+	// to an existing account by email address without satisfying the
+	// automatic-linking rule.
+	FailureReasonRequiresBinding = "requires_binding"
 )
 
 // User is a person who can authenticate. It is IDENTITY-domain data: a person
