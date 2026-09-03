@@ -97,7 +97,7 @@ ctx, err = pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
 
 约束：
 
-1. **只能由白名单模块调用**：`admin`、`compliance`、`jobs` 的系统任务、`authn` 的注册登录路径。CI 用 depguard 禁止其他模块 import 这个函数。
+1. **只能由白名单模块调用**：`admin`、`compliance`、`jobs` 的系统任务、`authn` 的注册登录路径，以及 `tenancy` 模块自身的审计封装 `tenancy.WithSystemContext`（业务代码应调用它而非直接调用这个原语）。白名单由 code review / CODEOWNERS（`go/pkgcore`、`go/tenancy`）加两个函数的文档注释把关，**不是** depguard——depguard 只能按整个 import path 粒度放行/拒绝文件，做不到只挡 `WithSystemContext` 这一个符号：`pkgcore` 根包同时还装着 `TenantID`/`WithTenant`/`apperr`，`go/dbkit`（真实代码、不在白名单上）合法地 import 它们，把「仅白名单可 import `pkgcore`」接成 depguard 规则会连带拦下 dbkit 23 处无关导入，草稿规则因此未合入（完整推演见 `.golangci.yml` 的 depguard 注释；要让这条纪律可静态检查，需要先把 `WithSystemContext` 迁到独立子包，那是公开 API 决策，不属于 lint 配置的副作用）。
 2. **必须携带原因**：`Purpose` 是必填枚举，不接受自由文本，防止"随便填一个"。
 3. **每次使用都是审计事件**：进入系统上下文本身就要落审计，含 Actor、Purpose、影响的记录数。
 4. **系统上下文下的查询依然受 RBAC 约束**：绕过的是租户过滤，不是权限判定。平台管理员没有 `tenant:read_any` 权限一样不能查。
