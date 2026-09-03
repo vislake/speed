@@ -142,6 +142,54 @@ func TestMigrateFreshDatabaseAppliesTheWholeRequiredUniverse(t *testing.T) {
 	}
 }
 
+// TestMigrateDefaultDatabaseAnchorsAtTheGoModArgument: with SPEED_DB_PATH
+// unset, the database defaults to <app name>.db, resolved -- by this
+// command -- next to the go.mod argument, not the caller's working
+// directory: `saasctl db migrate /path/to/project/go.mod` migrates the
+// project's own database whichever directory it is invoked from. The
+// project's go.mod lives in one directory, the command runs from another,
+// and the database file must land next to the go.mod -- where the app's
+// default database lands when the app is run from its own directory --
+// never in the caller's.
+func TestMigrateDefaultDatabaseAnchorsAtTheGoModArgument(t *testing.T) {
+	projectDir := t.TempDir()
+	mod := filepath.Join(projectDir, "go.mod")
+	full, err := os.ReadFile(filepath.Join("testdata", "full.mod"))
+	if err != nil {
+		t.Fatalf("read the full.mod fixture: %v", err)
+	}
+	if err := os.WriteFile(mod, full, 0o644); err != nil {
+		t.Fatalf("write the project's go.mod: %v", err)
+	}
+
+	// The operator runs the command from a directory that is not the
+	// project's, pointing at the project's go.mod by absolute path.
+	callerDir := t.TempDir()
+	t.Chdir(callerDir)
+	code, stdout, stderr := driveMigrate(t, []string{mod}, nil)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, stderr)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+
+	// The report names the database next to the go.mod...
+	want := fmt.Sprintf("Migrated %s: applied 14 migration files (authn 9, config 1, org 3, rbac 1)\n",
+		filepath.Join(projectDir, "cli-app.db"))
+	if stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
+	}
+	// ...the database file really exists there with the full ledger...
+	if got := ledgerCounts(t, openDB(t, filepath.Join(projectDir, "cli-app.db"))); !reflect.DeepEqual(got, fullUniverseLedger) {
+		t.Errorf("ledger = %v, want %v", got, fullUniverseLedger)
+	}
+	// ...and nothing was created in the caller's working directory.
+	if _, err := os.Stat(filepath.Join(callerDir, "cli-app.db")); !os.IsNotExist(err) {
+		t.Errorf("database file exists in the caller's working directory; the default path must resolve next to the go.mod argument (stat err = %v)", err)
+	}
+}
+
 // TestMigrateRerunOverTheSameDatabaseReportsUpToDate: a second run
 // applies nothing -- the ledger already records every file, so the report
 // says so, and the database is left byte-for-byte the same shape.

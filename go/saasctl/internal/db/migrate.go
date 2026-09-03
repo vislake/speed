@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -42,6 +43,14 @@ their sqlite migration files through dbkit's MigrationRegistry -- one
 transaction per module, in dependency order, each file recorded in
 schema_migrations as it lands, so a re-run applies only what is not yet
 recorded.
+
+With SPEED_DB_PATH unset, the database defaults to <app name>.db, and this
+command resolves that default next to the [go.mod] argument -- the
+directory the generated app is documented to run from, where its default
+database lands -- so a go.mod argument naming another directory's project
+migrates that project's own database whichever directory the command is
+invoked from. A set SPEED_DB_PATH always wins and is used exactly as the
+app would use it.
 
 Migrating is a standalone-mode operation: the distributed mode's schema
 lives in PostgreSQL, which this command never touches, so a deployment
@@ -262,10 +271,9 @@ func migrate(modPath string) (string, error) {
 		return "", fmt.Errorf("none of the required speed modules ships its own migrations (requires: %s): db migrate applies the migrations of the authn, config, org and rbac modules; a project that requires only other speed modules applies its schema through its app's own startup Apply, not through saasctl", strings.Join(proj.Requires, ", "))
 	}
 
-	// The database path and deployment mode resolve from the same
+	// The deployment mode and database path resolve from the same
 	// environment surface the generated app boots from -- appconfig.Load
-	// is the app's configFromEnv twin, errors and all -- so the database
-	// this command migrates is the database the app opens.
+	// is the app's configFromEnv twin, errors and all.
 	cfg, err := appconfig.Load(proj.AppName, os.LookupEnv)
 	if err != nil {
 		return "", err
@@ -273,7 +281,19 @@ func migrate(modPath string) (string, error) {
 	if cfg.DeploymentMode != pkgcore.DeploymentModeStandalone {
 		return "", fmt.Errorf("db migrate applies the standalone deployment mode's SQLite schema; %s resolves to %q, and the distributed mode's schema lives in PostgreSQL, which this command never touches", appconfig.DeploymentModeEnv, cfg.DeploymentMode)
 	}
+	// The app's default database path (<app name>.db, resolved when
+	// SPEED_DB_PATH is unset) is relative to the app's working directory;
+	// this command anchors it to the directory of the go.mod argument it
+	// was handed instead -- the directory the app is documented to run
+	// from, where its default database actually lands -- so a go.mod
+	// argument pointing at another directory's project migrates that
+	// project's own database rather than silently creating one in the
+	// caller's working directory. An explicit SPEED_DB_PATH always wins
+	// and is used exactly as the app would use it.
 	dbPath := cfg.SQLitePath
+	if !cfg.SQLitePathFromEnv {
+		dbPath = filepath.Join(filepath.Dir(modPath), dbPath)
+	}
 
 	// A file that does not exist yet is a fresh database, migrated from
 	// nothing. A file that exists must be a regular file, and -- because a
