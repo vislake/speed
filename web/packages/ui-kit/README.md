@@ -2,9 +2,11 @@
 
 The platform's first DOM-rendering package: the theme factory that turns
 `@speed/tokens` into an MUI v9 theme (`createAppTheme`,
-`AppThemeProvider`), and six controlled core components (`PageHeader`,
-`EmptyState`, `ConfirmDialog`, `FormField`, `FormLayout`, `DataTable`)
-that render only the state hosts give them. Every built-in user-facing
+`AppThemeProvider`), and seven controlled core components (`PageHeader`,
+`EmptyState`, `ConfirmDialog`, `FileUploader`, `FormField`,
+`FormLayout`, `DataTable`) that render only the state hosts give them --
+`FileUploader`'s resident upload queue is the one interaction-local
+carve-out, documented in its section below. Every built-in user-facing
 string lives in the bilingual `ui-kit` namespace registered through
 `@speed/i18n` -- components never ship text in code, and the workspace's
 `no-literal-text` ESLint rule refuses it there.
@@ -18,6 +20,7 @@ string lives in the bilingual `ui-kit` namespace registered through
 | `components/PageHeader.tsx` | `PageHeader`, `PageHeaderProps`, `PageHeaderBreadcrumb` |
 | `components/EmptyState.tsx` | `EmptyState`, `EmptyStateProps`, `EmptyStateVariant` |
 | `components/ConfirmDialog.tsx` | `ConfirmDialog`, `ConfirmDialogProps`, `ConfirmDialogVariant` |
+| `components/FileUploader.tsx` | `FileUploader`, `FileUploaderProps`, `FileUploadContext`, `FileUploadExecutor`, `FileUploadQueueSummary` |
 | `components/FormField.tsx` | `FormField`, `FormFieldProps`, `FormFieldRenderState`, `REQUIRED_ERROR_KEY` |
 | `components/FormLayout.tsx` | `FormLayout`, `FormLayoutProps` |
 | `components/DataTable.tsx` | `DataTable`, `DataTableColumn`, `DataTableSort`, `DataTableSortDirection`, `DataTableFilter`, `DataTablePagination`, `DataTableProps` |
@@ -61,6 +64,52 @@ exactly once per instance -- never inside a component or provider, or
 the double-registration guard throws. This exact composition is
 compiled and executed by the package suite (`src/usage-example.test.tsx`),
 so the documented usage cannot drift from the API.
+
+An upload panel can share the same host screen. `FileUploader` is the
+family's execute-injected widget: picking files enqueues them and the
+widget calls the host-supplied `execute` once per file, in parallel,
+with an abort signal and a per-file `onProgress` reporter, while the
+queue and each row's transfer state live and die with the mount. The
+host owns everything transport-shaped -- its executor typically calls a
+generated api-sdk storage operation (the storage hooks publish in the
+consumer-shell round; see `go/storage/AGENTS.md`) -- and receives queue
+summaries to render or gate a submit on; the widget itself never
+fetches:
+
+```tsx
+import { useState } from 'react'
+import Typography from '@mui/material/Typography'
+import { FileUploader } from '@speed/ui-kit'
+import type { FileUploadExecutor } from '@speed/ui-kit'
+
+function UploadPanel({ uploadFile }: { readonly uploadFile: FileUploadExecutor }) {
+  const [summary, setSummary] = useState({
+    uploading: 0,
+    succeeded: 0,
+    failed: 0,
+    total: 0,
+  })
+  return (
+    <>
+      <FileUploader multiple execute={uploadFile} onQueueChange={setSummary} />
+      <Typography variant="caption" component="p" sx={{ m: 0 }}>
+        {summary.uploading} uploading, {summary.succeeded} succeeded, {summary.failed} failed
+      </Typography>
+    </>
+  )
+}
+```
+
+An executor that rejects before touching the network -- pre-flight
+validation (size, type, count) is its job -- puts the row into the
+failed state showing the rejection's message (host-written and
+host-translated, the same contract as the form family's error text);
+the row's retry affordance hands the same `File` back to `execute` with
+a fresh context. This exact composition -- `UploadPanel` next to the
+members page the earlier example renders, its transport a scripted
+fetch stub answering one round trip per picked file in pick order -- is
+compiled and executed by the package suite, so the documented usage
+cannot drift from the API.
 
 ## The theme factory
 
@@ -115,6 +164,14 @@ state is owned by the host and flows through props; a component echoes
 state back and fires change callbacks. Components never fetch, never
 mutate data, never keep business state -- so the same component works in
 a form, a modal and a server-rendered screen without surprises.
+`FileUploader` is the one deliberate exception, and what it keeps is
+interaction-local, not business state: picking files is an inherently
+multi-step gesture, so its queue and per-row transfer state are born and
+die with the mount (the same carve-out as ConfirmDialog's double-confirm
+arm). The host still owns the upload itself -- the widget calls the
+host-supplied `execute` per file and reports queue summaries up through
+`onQueueChange`; it never fetches, and nothing it holds outlives the
+mount.
 
 ### PageHeader
 
@@ -257,6 +314,52 @@ mid-read); an empty table renders the stock EmptyState placeholder,
 overridable via `emptyTitle`/`emptyDescription`/`emptyAction`. Extra
 props: `rowKey?`, `size?` ('small' | 'medium'), `sx?`.
 
+### FileUploader
+
+The file picker with a resident transfer queue -- the interaction-local
+carve-out the Components intro names. Picking files enqueues them, and
+the widget calls the host-supplied `execute` once per file, in
+parallel; the queue and each row's transfer state are born and die with
+the mount and are never lifted into host state. The widget itself makes
+zero network calls, touches no storage and persists nothing; everything
+the host needs to know is reported up through `onQueueChange`
+(uploading / succeeded / failed counts plus the total), typically into
+a `useState` summary the host renders or gates a submit on.
+
+`execute: FileUploadExecutor` is required and is the whole transport:
+`(file, { signal, onProgress }) => Promise<void>`. Resolving completes
+the row; rejecting puts it in the failed state, and the rejection's
+`message` -- when non-empty -- renders as the row's error text. That
+text is host-written and host-translated (the same contract as the form
+family's validation-error text); an empty message falls back to the
+built-in failure wording. Pre-flight validation (size, type, count) is
+the executor's job: reject early, before touching the network. A real
+executor typically calls a generated api-sdk storage operation (storage
+hooks publish in the consumer-shell round -- `go/storage/AGENTS.md`);
+ui-kit ships no endpoint, and the usage example's scripted fetch stub
+stands in for that call. The per-file `signal` aborts when the user
+cancels or removes the row, or the widget unmounts; `onProgress` takes
+fractions within [0, 1] -- the row's bar is indeterminate until the
+first report, determinate after. A settle applies only while the row
+still exists and still uploads, so an executor that resolves or rejects
+after a cancel, a remove or an unmount is ignored.
+
+Other props: `multiple` (several files per selection; false by
+default), `accept` (forwarded to the picker; advisory only -- real
+validation is the executor's), `allowDrop` (adds a drop surface below
+the trigger; the keyboard path never depends on it), `chooseFilesLabel`
+(picker label; the built-in bilingual text by default). The trigger is
+a button rendered as a label wrapping a visually hidden but focusable
+file input -- one tab stop for the whole control, focus shown through
+the label's `:focus-within` rule. Uploading rows show their progress
+bar and a cancel affordance (abort + remove); failed rows show the
+host's error text and a retry affordance (the same `File` handed back
+to `execute` with a fresh context); settled rows offer remove. Settles
+announce in a single polite live region (`role="status"`) that mounts
+with the queue, stored structurally and rendered in the language active
+at render time. Props: `execute` (required), `multiple?`, `accept?`,
+`allowDrop?`, `chooseFilesLabel?`, `onQueueChange?`, `sx?`.
+
 ## Text and i18n
 
 Every string a component renders by itself comes from the `ui-kit`
@@ -285,6 +388,16 @@ live). The full key set:
 | `form.invalid` | generic invalid-value message | |
 | `pageHeader.breadcrumbNav` | breadcrumb nav landmark accessible name | |
 | `pageHeader.showFullPath` | breadcrumb collapse-expand button label | replaces MUI's stock English "Show path" |
+| `fileUploader.chooseFiles` | picker trigger label | `chooseFilesLabel` overrides |
+| `fileUploader.dropHint` | drop-surface hint, with `allowDrop` | |
+| `fileUploader.statusUploading` | uploading row status text and progress bar aria-label | |
+| `fileUploader.statusSucceeded` | succeeded row status text | |
+| `fileUploader.statusFailed` | failed row status text | |
+| `fileUploader.actionRetry` | failed row retry button label | |
+| `fileUploader.actionRemove` | settled row remove button label | |
+| `fileUploader.actionCancel` | uploading row cancel button label | |
+| `fileUploader.announceUploaded` | live-region announcement when a file uploads | interpolates `{{name}}` |
+| `fileUploader.announceFailed` | live-region announcement when a file fails | interpolates `{{name}}` |
 
 The two files (`src/locales/zh-CN.json` and `en-US.json`) carry
 identical leaf key sets, enforced by registration and by
@@ -354,7 +467,7 @@ same rationale documented here.
 ## Development
 
 From `web/packages/ui-kit`: `pnpm lint`, `pnpm typecheck`, `pnpm test`
-(123 tests across 11 files), `pnpm build`. The test suite runs in jsdom
+(147 tests across 12 files), `pnpm build`. The test suite runs in jsdom
 (`vitest.config.ts`); shared helpers live in `test-utils/`
 (`renderWithProviders` builds the host tree -- fresh i18n instance per
 call, namespace registered -- and `expectNoAxeViolations` runs axe).
