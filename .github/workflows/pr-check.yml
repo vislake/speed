@@ -61,8 +61,9 @@ name: pr-check
 #         semgrep upgrade that silently stops matching a rule cannot pass
 #         the green tree scan unnoticed (the mirror of how the
 #         no-literal-text rule's own unit tests keep that rule honest).
-#         Version deliberately unpinned until the first green CI run,
-#         then pinned (see tools/README.md, execution status).
+#         Pinned at 1.176.0 -- the version the rules' local proofs ran
+#         against -- so the only merge-gating tool in the repository is no
+#         longer a floating version (see tools/README.md, execution status).
 #       - go build github.com/vislake/speed/go/... -- every module compiles
 #         in workspace context from the go.work root.
 #       - go work sync + git diff --exit-code -- the checked-in workspace
@@ -110,9 +111,11 @@ name: pr-check
 #     per-PR check stays under its 8-minute budget.
 #   * reference-app lint and unit suite: the reference app runs its
 #     golangci-lint leg and unit suite in pr-full's reference-app job
-#     (full-ci-labeled PRs), keeping this per-PR check on its budget; the
-#     app's go.mod is still validated here, by repo-checks' workspace-wide
-#     build.
+#     (full-ci-labeled PRs), keeping this per-PR check on its budget. Its
+#     compilation is NOT deferred, though: repo-checks builds the app
+#     directly (the workspace-wide go/... build does not reach it -- the
+#     app's module path is outside that pattern), so a handler that no
+#     longer satisfies the generated ServerInterface fails here.
 #   * Docker-backed integration tiers (-tags=integration): wired, but in
 #     pr-full -- 18-cicd's layered-triggering rule assigns them to the
 #     pre-merge full matrix (PRs labeled full-ci), not to the fast per-PR
@@ -180,7 +183,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       # golangci-lint is deliberately not installed here (setup-go-env's
       # install-golangci input, default false): this job never lints, and
-      # an unconditional install would mean a ~20 MB download and an
+      # an unconditional install would mean a ~15 MB download and an
       # analysis-cache round-trip on every run for nothing.
       - name: Set up pinned Go toolchain and caches
         uses: ./.github/actions/setup-go-env
@@ -195,7 +198,7 @@ jobs:
       - name: Semgrep architecture-discipline rules (tools/semgrep_rules)
         run: |
           python3 -m venv /tmp/semgrep-venv
-          /tmp/semgrep-venv/bin/pip install --quiet semgrep
+          /tmp/semgrep-venv/bin/pip install --quiet semgrep==1.176.0
           # Fixtures stay out of the real-tree scan: planted violations
           # are the rules' proofs, not tree state -- excluded at the CLI
           # level, the same shape as the local proof runs.
@@ -210,15 +213,36 @@ jobs:
           python3 tools/semgrep_fixture_check.py /tmp/semgrep-venv/bin/semgrep
       - name: Build every module in workspace context
         run: go build github.com/vislake/speed/go/...
+      # The pattern above resolves against the go/ module paths only, so it
+      # matches nothing in the reference app, whose module is
+      # github.com/vislake/speed/examples/reference-app. Without this step
+      # the app -- CLAUDE.md's mandatory first consumer of every module, and
+      # the only artifact that boots -- is never built on an ordinary PR:
+      # api-contract.yml's path filter does not cover its handler, and
+      # pr-full is label-gated (a skipped job satisfies a required check), so
+      # a PR deleting a handler method would break the ServerInterface
+      # assertion and still merge green. One build against an already-warm
+      # Go cache closes that.
+      - name: Build the reference app (its module lives outside go/...)
+        working-directory: examples/reference-app
+        run: go build ./...
       - name: Workspace integrity (go.work.sum must be canonical)
+        # git status, not git diff: `git diff --exit-code` reports only
+        # modifications to TRACKED files, so a `go work sync` that CREATES a
+        # file passed this gate silently. That is not hypothetical -- the
+        # fourteen stub modules under go/ carry no go.sum yet, so the first
+        # dependency any of them gains makes go work sync write a brand-new
+        # untracked go.sum, exactly the artifact this gate exists to force
+        # into the commit. --untracked-files=all still honours .gitignore.
         run: |
           go work sync
-          git diff --exit-code || {
+          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+            git status --porcelain --untracked-files=all
             echo "error: 'go work sync' left the tree dirty -- commit the"
             echo "workspace sync together with your dependency changes"
             echo "(go.work.sum / go.mod / go.sum), see Taskfile setup."
             exit 1
-          }
+          fi
       # The eslint rules' own unit tests (web/eslint-rules/) live outside
       # every package, so no npm-package-ci leg picks them up; they run
       # here, once per PR, against the same frozen-lockfile install and

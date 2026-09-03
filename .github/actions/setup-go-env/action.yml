@@ -45,7 +45,7 @@ description: >-
 # pr-full -- so there is exactly one install site, and it is opt-in. The
 # other callers (pr-check's repo-checks job, pr-full's integration-tiers
 # rows) run Go but never lint; an unconditional install would cost them a
-# ~20 MB download plus checksum verify on every job (the RUNNER_TOOL_CACHE
+# ~15 MB download plus checksum verify on every job (the RUNNER_TOOL_CACHE
 # install dir below is per-job, so the existence guard never short-circuits
 # on a fresh runner), a wasted analysis-cache restore, and -- on a cold
 # cache key -- the risk that a short non-linting job finishing first saves
@@ -54,8 +54,13 @@ description: >-
 # Opting in instead of out keeps a job that lints but forgets the input
 # loud (golangci-lint: command not found at its lint step) rather than
 # silently expensive. The version and the tarball sha256 below must be
-# bumped together, and the hash updated from the release's
-# golangci-lint-<version>-checksums.txt asset.
+# bumped together, the hash updated from the release's
+# golangci-lint-<version>-checksums.txt asset, and the same version
+# literal updated in the analysis-cache key and its restore-keys prefix
+# below -- three sites, not two. A stale prefix there costs only a
+# permanent cache miss, so it fails silently and would otherwise go
+# unnoticed. The .mise.toml mirror needs no manual edit: check_toolchain.py
+# reads GOLANGCI_VERSION out of this file and fails CI on drift.
 #
 # CACHE
 # actions/setup-go's cache: true restores and saves the Go module cache,
@@ -68,7 +73,7 @@ description: >-
 # into the install, keyed on the same lockfile hashes plus the linter
 # version (18-cicd cost-control rule 3: caches keyed on lockfile hashes):
 # dependency changes invalidate the analysis results the cache holds. The
-# binary itself is not cached -- at roughly 20 MB per job it is cheaper to
+# binary itself is not cached -- at roughly 15 MB per job it is cheaper to
 # re-download and re-verify the pinned artifact than to store it, and the
 # checksum check runs on every job that installs it instead of only on
 # cache misses.

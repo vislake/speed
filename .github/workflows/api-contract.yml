@@ -36,6 +36,15 @@ name: api-contract
 #     assertion (internal/notes/handler.go) stops compiling. Without this
 #     leg a spec+artifact PR whose handler lagged would pass both this
 #     pipeline and pr-check (which does not build the reference app).
+#     Precise only for a parameter-free operation, though: an operation
+#     carrying a path or query parameter makes the generated file import
+#     github.com/oapi-codegen/runtime, which the app's go.mod does not
+#     require (nothing parameterized ships yet), so the first such spec
+#     change fails earlier -- on the missing module -- rather than on the
+#     assertion. Both are hard build failures; only the diagnostic
+#     differs, and it resolves itself the moment a real parameterized
+#     operation lands with its handler. Pre-adding the require would not
+#     help: `go mod tidy` drops an unused dependency.
 #   * Frontend-sdk regeneration consistency: the pinned orval (8.17.0 --
 #     the exact same `pnpm dlx orval` + nodenext-fixup pair as Taskfile's
 #     api:gen frontend leg, run from web/) regenerates @speed/api-sdk's
@@ -109,7 +118,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       # golangci-lint is deliberately not installed here (setup-go-env's
       # install-golangci input, default false): this job never lints, and an
-      # unconditional install would mean a ~20 MB download on every run for
+      # unconditional install would mean a ~15 MB download on every run for
       # nothing. The Go toolchain is what oapi-codegen (go run) and the
       # build leg need; the Go build cache makes repeated runs fast.
       - name: Set up pinned Go toolchain and caches

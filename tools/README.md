@@ -1,7 +1,7 @@
 # tools/ — repo scripts
 
 Plain, dependency-free Python scripts (standard library only, Python >= 3.11
-for `tomllib`) that back the repository's cross-cutting disciplines and its release machinery: three discipline checkers, the dependency-license scanner with its committed manifest, one scaffold generator, the semgrep architecture-discipline ruleset under `tools/semgrep_rules/` with its planted-violation fixtures, and the lockstep release coordinator (a release tool, not a discipline checker — it follows the same convention, which is why it lives here). The checkers are the local-run counterparts of the CI discipline checks scheduled in `docs/internal/18-cicd.md` (the table rows for banning CJK outside `docs/internal/`, for requiring identical zh-CN/en-US message-key sets, and for making every tenant-scoped Repository run the tenancytest isolation suite, all marked there as self-written scripts); CI workflows mount them under `tools/`. Two further scripts are repo self-checks rather than 18-cicd discipline rows: `tools/check_toolchain.py` gates the tool versions the root `.mise.toml` pins — mirrors of the authoritative sources CI actually reads (Taskfile.yml header, `go.work`, `web/.nvmrc`, `web/package.json`, setup-go-env's `GOLANGCI_VERSION`) — proving the mirrors cannot drift, and pr-check's repo-checks job runs it; `tools/check_docs_site.py` validates the docs-site skeleton (required entry files, internal links, offline preview) and the docs-check pipeline runs it. The generator is the backend of the `task new:module` promised by `docs/internal/19-dev-workflow.md`. The release coordinator (`release/lockstep-release.py`) is the M0 deliverable for the roadmap's lockstep-release item (`docs/internal/02-repo-and-release.md`, `docs/internal/18-cicd.md`), an offline verification of the full one-version release plan, wrapped by the root Taskfile's `release:plan` task and mounted by `.github/workflows/release.yml`; its unittest suite and go.mod fixtures live beside it under `tools/release/`. Nothing here needs anything beyond `python3` except the semgrep ruleset, which needs a semgrep binary to run (see the ruleset section for the pinned local version and the CI shape), and the checkers print hit paths relative to their `--root`.
+for `tomllib`) that back the repository's cross-cutting disciplines and its release machinery: three discipline checkers, the dependency-license scanner with its committed manifest, one scaffold generator, the semgrep architecture-discipline ruleset under `tools/semgrep_rules/` with its planted-violation fixtures, and the lockstep release coordinator (a release tool, not a discipline checker — it follows the same convention, which is why it lives here). The checkers are the local-run counterparts of the CI discipline checks scheduled in `docs/internal/18-cicd.md` (the table rows for banning CJK outside `docs/internal/`, for requiring identical zh-CN/en-US message-key sets, and for making every tenant-scoped Repository run the tenancytest isolation suite, all marked there as self-written scripts); CI workflows mount two of the three under `tools/` — `scan_cjk.py` in pr-check's repo-checks job and `check_i18n_keys.py` in the docs-check pipeline — while `check_repo_isolation.py` is wired into no workflow yet and runs locally only (see "Running in CI and locally" below). Two further scripts are repo self-checks rather than 18-cicd discipline rows: `tools/check_toolchain.py` gates the tool versions the root `.mise.toml` pins — mirrors of the authoritative sources CI actually reads (Taskfile.yml header, `go.work`, `web/.nvmrc`, `web/package.json`, setup-go-env's `GOLANGCI_VERSION`) — proving the mirrors cannot drift, and pr-check's repo-checks job runs it; `tools/check_docs_site.py` validates the docs-site skeleton (required entry files, internal links, offline preview) and the docs-check pipeline runs it. The generator is the backend of the `task new:module` promised by `docs/internal/19-dev-workflow.md`. The release coordinator (`release/lockstep-release.py`) is the M0 deliverable for the roadmap's lockstep-release item (`docs/internal/02-repo-and-release.md`, `docs/internal/18-cicd.md`), an offline verification of the full one-version release plan, wrapped by the root Taskfile's `release:plan` task and mounted by `.github/workflows/release.yml`; its unittest suite and go.mod fixtures live beside it under `tools/release/`. Nothing here needs anything beyond `python3` except the semgrep ruleset, which needs a semgrep binary to run (see the ruleset section for the pinned local version and the CI shape), and the checkers print hit paths relative to their `--root`.
 
 | Script | Kind | Enforces / does | Exit codes |
 |---|---|---|---|
@@ -393,11 +393,15 @@ Execution status, stated honestly:
   The skipped line is a struct-field declaration, which none of the six
   rules' shapes targets, so no rule is blind-sided today -- but a rule
   written later must know this file cannot be fully scanned.
-- Version posture: the CI step's `pip install semgrep` is deliberately
-  unpinned until the first green CI run pins it (the local proofs all ran
-  the pinned `returntocorp/semgrep:1.176.0` image); the docker run prints
-  a `safe.directory` warning because the host git path is unreachable
-  inside the container -- benign, the scan completes.
+- Version posture: the CI step installs `semgrep==1.176.0`, the version
+  the local proofs ran against (the pinned `returntocorp/semgrep:1.176.0`
+  image). It was deliberately unpinned until the first green CI run; that
+  condition has been met, and leaving it floating made the ruleset the
+  only merge-gating tool in a repository that pins every other version.
+  The pin is not mirrored in `.mise.toml` or `check_toolchain.py` -- that
+  is new gate wiring for a future CI round, not a drift fix. The docker
+  run prints a `safe.directory` warning because the host git path is
+  unreachable inside the container -- benign, the scan completes.
 
 ## license_scan.py — dependency license compliance
 
@@ -525,7 +529,10 @@ license job (`.github/workflows/security.yml`).
 lands with a future CI round. Locally, run them from the
 repository root — the default `--root` is the current directory, so plain
 `python3 tools/scan_cjk.py` also works there. All output paths are relative
-to `--root`. All scripts are plain executables with no third-party
+to `--root`. `license_scan.py` is the exception: it takes no `--root` at
+all (passing one is a usage error, exit 2) and always resolves the
+repository root from its own location under `tools/`, so it can be invoked
+by absolute path from any working directory. All scripts are plain executables with no third-party
 dependencies and no module metadata of their own; they live here precisely
 so a CI image never needs a Go toolchain or a package install to enforce
 these disciplines. The generator is a developer-time tool: run it when a

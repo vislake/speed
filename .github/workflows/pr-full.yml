@@ -123,7 +123,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       # golangci-lint is deliberately not installed here (setup-go-env's
       # install-golangci input, default false): this job never lints, and
-      # an unconditional install would mean a ~20 MB download and an
+      # an unconditional install would mean a ~15 MB download and an
       # analysis-cache round-trip per matrix row for nothing.
       - name: Set up pinned Go toolchain and caches
         uses: ./.github/actions/setup-go-env

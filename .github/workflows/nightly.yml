@@ -11,8 +11,9 @@ name: nightly
 # (a scheduled stub would only produce daily noise).
 #
 # CONTENT PLANNED:
-#   * the full matrix -- inherits everything pr-full runs, so nightly cannot
-#     be meaningfully implemented before pr-full exists;
+#   * the full matrix -- inherits everything pr-full runs, so nightly could
+#     not be meaningfully implemented before pr-full existed; pr-full is
+#     live now, so this half is unblocked;
 #   * benchmark regression: docs/internal/20-quality-and-security.md names
 #     the planned hotspots (tenant-filtered repository queries,
 #     authorization decisions, dynamic-config reads, session validation
@@ -24,8 +25,11 @@ name: nightly
 #     the auto-issue mechanism needs a token with issues: write, reviewed
 #     when the round lands.
 #
-# GATE: pr-full live (roadmap M0 full-matrix acceptance) plus the first
-# benchmark suites (roadmap M1 onward).
+# GATE: the first benchmark suites (roadmap M1 onward). pr-full, the other
+# half of this pipeline's content, went live with the M0 CI round, so the
+# full-matrix half no longer blocks anything; no benchmark suite exists in
+# the tree yet (grep "func Benchmark" over go/ and examples/ returns
+# nothing), which is what still blocks the pipeline as a whole.
 
 on:
   workflow_dispatch:
