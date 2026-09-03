@@ -989,6 +989,34 @@ describe('host-attached permission sets', () => {
     })
   })
 
+  it('wipes sets a same-user login would otherwise inherit', async () => {
+    let loginCount = 0
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => {
+        loginCount += 1
+        // The second login mints a brand-new session (a fresh token
+        // pair) for the same user and tenant as the first: its lists
+        // were fetched under a session that has ended.
+        if (loginCount === 2) {
+          return makePair({
+            access_token: 'access-2',
+            refresh_token: 'refresh-2',
+          })
+        }
+        return makePair()
+      },
+    })
+    await harness.session.loginWithPassword(credentials)
+    harness.session.setPermissionSet('tenant', ['notes:read'])
+    harness.session.setPermissionSet('system', ['users:manage'])
+    await harness.session.loginWithPassword(credentials)
+    expect(harness.session.getSnapshot().principal).toEqual(principal())
+    expect(harness.session.getSnapshot().permissionSets).toEqual({
+      tenant: null,
+      system: null,
+    })
+  })
+
   it('a tenant switch drops the tenant set and keeps the system set', async () => {
     const harness = makeHarness({
       [LOGIN_PASSWORD]: () => makePair(),

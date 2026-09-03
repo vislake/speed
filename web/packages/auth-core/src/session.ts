@@ -59,11 +59,16 @@
  * /me-derived permissions of the current tenant and, for platform
  * staff, the tenant-independent system set). The session never
  * evaluates a list; it only applies the survival rules when a
- * principal change commits: same user and tenant (a silent refresh or
- * a step-up) keeps both lists, a tenant switch drops the tenant-domain
- * list and keeps the system-domain one, and a different user or an
- * anonymous transition clears both domains. A failed operation
- * changes nothing, lists included.
+ * principal change commits: a silent refresh or a step-up (the same
+ * session continuing) keeps both lists, a tenant switch drops the
+ * tenant-domain list and keeps the system-domain one, and a login --
+ * even by the same user in the same tenant, whose previous session
+ * this login replaced -- or an anonymous transition clears both
+ * domains: the (user_id, tenant_id) key cannot tell a silent refresh
+ * from a brand-new login, and a login starts a server session whose
+ * lists the host has not fetched yet, so nothing may ride over from
+ * the previous session's. A failed operation changes nothing, lists
+ * included.
  */
 
 import {
@@ -147,7 +152,12 @@ export interface AuthSession {
    * Notifies subscribers like any other snapshot change. What the
    * lists mean -- and which host attaches them -- is the host's
    * business; the session only carries them and applies the survival
-   * rules in the file header when a principal change commits. */
+   * rules in the file header when a principal change commits (a
+   * login or a tenant switch clears what must not survive). Because
+   * the session never correlates a list with the principal it was
+   * fetched under, a host that attaches /me-derived lists should
+   * refetch them after every login and tenant switch rather than
+   * reuse lists captured under an earlier commit. */
   setPermissionSet(domain: AuthDomain, perms: readonly string[] | null): void
   /** Silently refreshes the access token. Resolves true when the
    * session holds a current token afterwards -- a fresh pair was
@@ -240,15 +250,25 @@ const NO_PERMISSION_SETS: AuthPermissionSets = {
  * A tenant switch keeps the user but changes the tenant: the
  * tenant-domain list belonged to the old tenant and must not leak
  * into the new one, while the tenant-independent system-domain list
- * survives (platform-staff impersonation semantics). A different
- * user -- or no previous principal at all -- clears both domains: a
- * login never inherits another session's lists. */
+ * survives (platform-staff impersonation semantics). A login clears
+ * both domains unconditionally (freshLogin): its response starts a
+ * brand-new server session, so even a same-user same-tenant login
+ * must not inherit lists that were fetched under the session it
+ * replaced -- the host re-attaches fresh /me-derived lists after the
+ * commit. A different user -- or no previous principal at all --
+ * clears both domains too: a login never inherits another session's
+ * lists. */
 function nextPermissionSets(
   previous: AuthSnapshot,
   principal: AuthnPrincipal,
+  freshLogin: boolean,
 ): AuthPermissionSets {
   const prevPrincipal = previous.principal
-  if (prevPrincipal === null || prevPrincipal.user_id !== principal.user_id) {
+  if (
+    freshLogin ||
+    prevPrincipal === null ||
+    prevPrincipal.user_id !== principal.user_id
+  ) {
     return NO_PERMISSION_SETS
   }
   if (prevPrincipal.tenant_id !== principal.tenant_id) {
@@ -301,8 +321,12 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
     }
   }
 
-  /** Applies a validated token-issuing response. */
-  function commitIssued(issued: IssuedTokens): void {
+  /** Applies a validated token-issuing response. freshLogin marks a
+   * login operation, whose response starts a new server session:
+   * both host-attached permission domains clear even when the
+   * principal is unchanged. A silent refresh or a step-up -- the
+   * same session continuing -- passes false and the lists keep. */
+  function commitIssued(issued: IssuedTokens, freshLogin: boolean): void {
     store.set(issued.accessToken)
     if (issued.refreshToken !== null) {
       refreshToken = issued.refreshToken
@@ -310,7 +334,7 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
     snapshot = {
       state: 'authenticated',
       principal: issued.principal,
-      permissionSets: nextPermissionSets(snapshot, issued.principal),
+      permissionSets: nextPermissionSets(snapshot, issued.principal, freshLogin),
     }
   }
 
@@ -320,11 +344,14 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
    * to know its own request failed), then applied only if no other
    * user operation committed meanwhile. A committed operation bumps
    * the generation so an in-flight refresh that resolves later is
-   * dropped instead of overwriting the fresher tokens. */
+   * dropped instead of overwriting the fresher tokens. freshLogin is
+   * true only for the login operations, whose commits clear both
+   * host-attached permission domains (see nextPermissionSets). */
   function settleIssued(
     opGeneration: number,
     body: AuthnTokenPair,
     expectRefreshToken: boolean,
+    freshLogin: boolean,
   ): AuthSnapshot {
     const issued = parseIssued(body, expectRefreshToken)
     if (generation !== opGeneration) {
@@ -333,7 +360,7 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
       // dropped -- its freshly minted tokens are never applied.
       return snapshot
     }
-    commitIssued(issued)
+    commitIssued(issued, freshLogin)
     generation += 1
     notify()
     return snapshot
@@ -423,7 +450,7 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
       notify()
       return false
     }
-    commitIssued(issued)
+    commitIssued(issued, false)
     notify()
     return true
   }
@@ -445,7 +472,7 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
     ): Promise<AuthSnapshot> {
       const opGeneration = generation
       const pair = await authnLoginWithPassword(request)
-      return settleIssued(opGeneration, pair, true)
+      return settleIssued(opGeneration, pair, true, true)
     },
 
     async loginWithSMSCode(
@@ -453,7 +480,7 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
     ): Promise<AuthSnapshot> {
       const opGeneration = generation
       const pair = await authnLoginWithSMSCode(request)
-      return settleIssued(opGeneration, pair, true)
+      return settleIssued(opGeneration, pair, true, true)
     },
 
     async logout(): Promise<void> {
@@ -477,13 +504,13 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
     async switchTenant(tenantId: string): Promise<AuthSnapshot> {
       const opGeneration = generation
       const pair = await authnSwitchTenant({ tenant_id: tenantId })
-      return settleIssued(opGeneration, pair, false)
+      return settleIssued(opGeneration, pair, false, false)
     },
 
     async verifyStepUp(code: string): Promise<AuthSnapshot> {
       const opGeneration = generation
       const pair = await authnVerifyStepUp({ code })
-      return settleIssued(opGeneration, pair, false)
+      return settleIssued(opGeneration, pair, false, false)
     },
 
     setPermissionSet(

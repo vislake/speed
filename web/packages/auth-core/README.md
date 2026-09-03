@@ -97,9 +97,13 @@ session.setPermissionSet('tenant', null)                          // clears a do
 
 The session applies the survival rules when a principal change commits:
 a silent refresh or a step-up keeps both lists, a tenant switch drops
-the tenant list and keeps the system one, and a different user or a
-logout clears both. These checks are a UX affordance, never a security
-boundary -- the server authorizes.
+the tenant list and keeps the system one, and a login -- even by the
+same user in the same tenant -- or an anonymous transition clears both.
+These checks are a UX affordance, never a security boundary -- the
+server authorizes. Refetch a domain's lists after a login or a tenant
+switch: the session clears what must not survive, but it never knows
+whether a list you attach still describes the principal it was fetched
+under.
 
 ## The failure contract
 

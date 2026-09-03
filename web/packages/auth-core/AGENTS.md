@@ -49,12 +49,18 @@ below this layer.
 - **The permission sets are host-attached data with survival rules,
   never evaluation.** The session only carries the per-domain lists
   (`setPermissionSet`) and applies the rules in its header when a
-  principal change commits (same user and tenant keeps both lists, a
-  tenant switch drops the tenant list and keeps the system one, a
-  different user or an anonymous transition clears both, a failed
-  operation changes nothing). Set membership is decided by the hooks
-  and the shells, never here — and never fetched from a server here
-  either: the /me-derived lists belong to the host to attach.
+  principal change commits (a silent refresh or a step-up keeps both
+  lists, a tenant switch drops the tenant list and keeps the system
+  one, a login — even by the same user in the same tenant — or an
+  anonymous transition clears both, a failed operation changes
+  nothing). Set membership is decided by the hooks and the shells,
+  never here — and never fetched from a server here either: the
+  /me-derived lists belong to the host to attach. Because a login and
+  a tenant switch clear what must not survive, the host discipline is
+  to refetch a domain's lists after those commits instead of reusing
+  lists fetched under an earlier principal: the session never
+  correlates a list with the principal it was fetched under, so
+  attaching a stale list is a host bug it cannot detect.
 - **The hooks read the attached session and never drive it.** A
   component that must log in calls `session.loginWithPassword` from an
   event handler; hooks never mutate state, never fetch, and fail
