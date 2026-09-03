@@ -170,6 +170,8 @@ describe('README usage example', () => {
     expect(call.url).toBe('/api/v1/notes?page=1')
     expect(consoleWarn).toHaveBeenCalledWith('access token refresh failed', {
       status: 401,
+      code: 'authn.session_expired',
+      traceId: 'trace-1',
     })
     // The snippet's catch reported the envelope code and trace id.
     expect(consoleError).toHaveBeenCalledWith('loading notes failed', {
