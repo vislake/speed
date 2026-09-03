@@ -502,6 +502,24 @@ golangci-lint run ./...                             # from inside go/authn
 go -C go/authn test -tags=integration -race ./integration_test/...   # PostgreSQL, Docker required
 ```
 
+All three are wired into CI: the unit tier and lint run through the shared
+`go-module-ci` matrix in both `pr-check.yml` (every PR) and `pr-full.yml`
+(`full-ci`-labeled PRs), and the PostgreSQL integration tier runs in
+`pr-full.yml`'s `integration-tiers` matrix — `go/authn` is a row in both
+matrices, and `Taskfile.yml`'s `INTEGRATION_DIRS` carries the same entry for
+`task test:full`'s local loop.
+
+`examples/reference-app` is this module's mandatory first consumer
+(root CLAUDE.md): `cmd/server/server.go` wires the real `Module` into the
+composed server ahead of `notes`' and `config`'s, and
+`cmd/server/authn_e2e_test.go` drives all three sign-in channels (password,
+social, phone+SMS) plus session revoke/refresh end to end through that real,
+composed HTTP server — the proof this module's own package-level tests
+cannot give, because they never assemble the actual middleware chain a host
+wires (`authn.Middleware` then `tenancy.Middleware(NewPrincipalResolver())`,
+see "The middleware chain is authn, then tenancy" above) around a real
+`net/http` server.
+
 Every new model gets `tenancytest.AssertNotTenantScoped` (identity data) or
 `AssertIsolated` (tenant data). Shared fakes live in `internal/testutil`, which
 deliberately does **not** import this package — a test file in `package authn`
@@ -575,8 +593,9 @@ rather than trying to synchronize on the exact step boundary.
 | `sessions.ip_region` and `login_attempts.ip_region` ship empty. | Resolving an IP to a region needs a local GeoIP database whose licence has to clear the licence scanner first (`docs/internal/05-identity-and-access.md` says so explicitly). The columns exist now so no later table migration is needed. |
 | The declared dynamic-config items are not yet read back at runtime; the values are injected through options with the same defaults. | The schema is declared, which is what a module owes the config module. The read-through binding lands with the block that needs a live value. |
 | This module's HTTP surface has no frontend orval leg (`@speed/api-sdk` second export). | No frontend consumer exists yet; `@speed/api-sdk` is test-consumed-only until an M1 shell imports it. The backend half (spec, generated interface, handler, compile-time assertion) is fully wired, so nothing is unverifiable — adding a web package/export/lockfile change for a fragment nothing on the web side consumes yet buys nothing today. Lands with the `auth-ui` / consumer-shell round. |
-| This module's HTTP surface is not yet reachable from a real server: `go/authn`'s own build/lint/test gates are green standalone, but nothing wires `Handler` into the reference app, `pr-check`/`pr-full`'s CI matrices, or `Taskfile.yml`'s `INTEGRATION_DIRS`. | Deliberately out of this block's scope — a later block's job (reference-app first-consumer wiring, CI matrix rows, the redocly merge of this fragment with notes' into `build/openapi/speed.yaml` now that a second fragment exists). |
-| A brand-new account provisioned by an unmatched, trusted external identity (social or enterprise SSO) cannot sign in until something makes it an active member of the requested tenant. | Membership is `org`'s data and this module fails closed on it by design (see "Fail closed on membership"). The account and its identity are provisioned regardless — only the session is refused — so a later membership grant (or an `org`-round subscriber reacting to `authn.user.created`) lets the same sign-in succeed with no further action here. |
+| A brand-new account provisioned by an unmatched, trusted external identity (social or enterprise SSO) cannot sign in until something makes it an active member of the requested tenant. | Membership is `org`'s data and this module fails closed on it by design (see "Fail closed on membership"). The account and its identity are provisioned regardless — only the session is refused — so a later membership grant (or an `org`-round subscriber reacting to `authn.user.created`) lets the same sign-in succeed with no further action here. `examples/reference-app`'s `authn_e2e_test.go` sidesteps the same limitation the same honest way — register, grant, then sign in — for exactly this reason. |
+| The reference app has no seed-data path, so `demoMemberships` (`examples/reference-app/cmd/server/server.go`) starts empty in production wiring: `task dev`'s server compiles, serves every operation and enforces every rule correctly, but no demo account can actually reach a tenant without `Taskfile.yml`'s `seed` task, which itself is a stub awaiting `org`+`billing`. | This module's own wiring is complete (reference-app first-consumer status, CI matrix rows, integration tier — see this file's "Testing" section); what remains is `org`'s membership data, out of this module's scope by design (see the row above). |
+| `redocly.yaml`'s `rule/speed-tag-format` runs at `warn`, not `error`, because `examples/reference-app/internal/notes/api/openapi.yaml` (an earlier round, not this module's fragment) declares no per-operation `tags:` and so fails the module-tag convention once merged with this module's fragment. | Fixing notes' fragment is real but out of scope here — it also regenerates `@speed/api-sdk` (orval groups hooks by tag), a change this round has no reason to make. See `redocly.yaml`'s own comment. |
 | Real SMS carrier adapters (Aliyun, Tencent Cloud, Twilio), QQ/Weibo/Alipay social providers, SAML, and WebAuthn/passkeys are not implemented. | Each needs credentials, a live account, or is explicitly deferred by `docs/internal/05-identity-and-access.md`. See this round's plan for the owning milestone of each. |
 | `RequireStepUp` has no fallback for an account with no MFA factor enrolled — it blocks the sensitive action unconditionally rather than, say, accepting a re-entered password. | A password-re-entry fallback needs its own design decision (how long that proof stays valid, whether it composes with MFA) that this block did not make. |
 | MFA (TOTP) is not enforced at LOGIN time — only `RequireStepUp`-gated sensitive actions require it. A password or SMS sign-in for an account WITH an enrolled factor still succeeds on the first factor alone. | Full second-factor-at-login is a larger design question (an interactive "enter your code now" challenge mid-flow) this block's scope did not include; the round's plan scoped MFA to enrollment, recovery and step-up. |

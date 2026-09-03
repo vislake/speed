@@ -88,6 +88,12 @@ pkgcore/eventbustest.AssertConforms(t, factory)
 
 CI 的矩阵因此不再是"同一组用例跑两遍部署模式"，而是：**每个 seam 的契约测试 × 该 seam 的每套实现**，外加若干条有代表性的整机组装冒烟。
 
+> **实现状态注记（2026-09-03，authn 轮）——本注记不是设计正文，设计正文保持原样。**
+>
+> "短信发送"一行已经是真实代码，不再是设计目标：`go/authn/sms.go` 的 `SMSSender` 接口有两套实现——单进程用 `NewConsoleSMSSender`（写到注入的 `io.Writer`，`examples/reference-app` 默认接 `os.Stdout`），分布式用 `NewHTTPSMSSender`（通用 JSON 网关 POST，默认走 `internal/safehttp` 的 SSRF 防护客户端）；分布式部署模式下不传 `SMSSender` 会在装配期直接失败（`ErrMissingDistributedSMSSender`），不会静默退化成打印到 stdout。真正的运营商适配器（阿里云/腾讯云/Twilio）仍未接入，属于 M2 `notification` 轮的工作（`go/authn/AGENTS.md` 的 Known limitations）。
+>
+> "认证"一行的"密码登录"半边也已落地，并且比这行原文写得更多：`go/authn` 除密码外还实现了手机号+短信验证码登录、五个社交登录渠道（Google/GitHub/微信开放平台/钉钉/飞书）、按租户配置的企业 OIDC 单点登录、TOTP 二次验证与恢复码、会话/设备自助管理。"内置种子账号"这半边仍不存在——`Taskfile.yml` 的 `seed` 任务仍是一个等待 `org`+`billing` 的占位 stub，`examples/reference-app` 的 `demoMemberships`（`cmd/server/server.go`）在生产装配路径下从空状态启动：一个新注册账号在被显式授予租户成员身份之前无法登入任何租户——这是 `go/authn/service.go`'s `resolveTenant` 的既定 fail-closed 行为，不是缺陷（`go/authn/AGENTS.md` 的 Known limitations 有完整记录）。当前实现状态以根目录 CLAUDE.md 的 Repository Status 为准。
+
 ## 必须遵守的约束
 
 1. **业务代码只依赖接口，永远不 import 具体实现**。`billing` 依赖 `pkgcore.KVStore`，不 import `go-redis`。

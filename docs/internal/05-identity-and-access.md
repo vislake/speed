@@ -203,3 +203,19 @@ type Membership struct {
 **边界**：API Key（见 [07 平台服务](07-platform-services.md)）与用户会话是两套独立体系，吊销互不影响，但都纳入审计。
 
 ---
+
+> **实现状态注记（2026-09-03，authn 轮）——本注记不是设计正文，设计正文保持原样；当前实现状态以根目录 CLAUDE.md 的 Repository Status 为准。**
+>
+> `go/authn` 已经是有真实实现、有测试的模块，`examples/reference-app` 是它的强制第一消费者。本文设计目标里已经落地的部分：
+>
+> - **令牌**：access token 用 EdDSA（Ed25519）签名而非本文未点名算法，`kid` 寻址，一把当前签名密钥 + 任意把只验证的历史密钥（`KeySet`，形状照抄 `dbkit.NewCipher(activeKey, retiredKeys...)`）；access token 默认 15 分钟，携带 `sub`/`tid`/`sid`/`amr`，不含权限（rbac 的边界）；refresh token 为服务端生成的高熵随机值，存哈希，绑定 session，`family_id`/`rotated_from` 支持重放检测。
+> - **会话与撤销**：`sessions` 表 + 上文"自然过期"/"立即失效"两种模式，均可通过动态配置项 `authn.session_revocation_immediate` 选择，而不是按部署模式二选一——两种模式在两种部署模式下都能工作。已作废的 refresh token 被重放 ⇒ 撤销整个 token 族与 session，发布 `authn.session.replay_detected` 事件。
+> - **登录日志与限流**：`login_attempts` 表按本文所写记录方式/结果/失败原因；`go/ratelimit` 之上叠了本文明确要求的"渐进式"业务逻辑（`go/authn/ratelimit.go`），登录/注册/短信发送/短信校验/step-up 均已接入，且按账号+IP、IP、目标标识符等本文规定的维度独立限流；`KVStore` 不可用时一律 fail-closed（拒绝而非放行），这是本轮明确记录的策略决定，不是遗漏。**唯一未实现的一格**：`ip_region`（IP 归属地）列已建但留空——GeoIP 许可证审查（本文自己点名的 MaxMind GeoLite2 注册与条款问题）尚未完成，因此"异常登录检测"（新设备/新地区/不可能位移）整体推迟，属于依赖 GeoIP 结果的下游能力。
+> - **第三方账号登录**：Google、GitHub、微信开放平台、钉钉、飞书五个渠道全部实现，且每一个都能在完全离线（`httptest`）下通过测试——不依赖真实网络请求。"只有 `EmailVerified=true` 且渠道在信任名单上才自动关联"的规则、微信必须用 `unionid` 而非 `openid`、解绑不能致账号无路可登，三条安全规则均已落地并有对应的负向测试。QQ/微博/支付宝按本文"二期按需补充"仍未做；SAML 按本文"作为可选子包延后"仍未做。
+> - **组织模型**：本文"组织模型：多层级组织树"一节整体仍是设计目标——`org` 模块还是占位 stub。`go/authn` 因此没有 `memberships` 表，也不 import `org`，而是声明了一个它自己的最小 `MembershipReader` 接口，由宿主注入；`resolveTenant` 在没有注入实现、或调用返回"不是成员"时一律拒绝（fail-closed），绝不放行——这条边界本身就是"业务模块之间禁止 import 对方的 struct"规则的直接应用。
+> - **MFA**：TOTP（RFC 6238，标准库自实现并用官方测试向量钉住，未引入 `pquerna/otp`）、十个一次性恢复码、`RequireStepUp` 对改密码/改 MFA 等敏感操作的二次校验均已实现。**尚未做的**：登录时刻本身尚不强制第二因子——已启用 MFA 的账号仅凭密码或短信验证码仍可完成首次登录，第二因子只在 step-up 场景生效；WebAuthn/passkey 按本文"不在 v1.0 范围"仍只预留了接口位。
+> - **会话/设备自助管理**：`examples/reference-app`（无 `@speed/auth-ui`，前端页面尚未存在）的 `authn_e2e_test.go` 通过真实 HTTP 端到端验证了本节描述的核心行为——列出设备、查看登录历史、下线单个设备、被下线设备的 refresh 立即失败而其余设备不受影响。
+>
+> **中间件顺序的调整**（详见 [01 架构](01-architecture.md) 的同名实现状态注记）：`authn.Middleware` 实际跑在 `tenancy.Middleware` **之前**，而非本文所在的 01 号文档原始顺序——`go/authn/AGENTS.md`"The middleware chain is authn, then tenancy"一节有完整推理。
+
+---

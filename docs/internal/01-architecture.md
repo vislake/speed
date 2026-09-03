@@ -127,6 +127,12 @@ type Registry struct {
 **中间件链固定顺序**（写进文档，禁止随意调整）：
 `recover → request-id/log-context → 可观测性埋点 → tenancy.Middleware → authn.Middleware → rbac.RequirePermission → billing 权益校验(可选) → handler`
 
+> **实现状态注记（2026-09-03，authn 轮）——本注记不是设计正文，设计正文保持原样。**
+>
+> `go/authn` 落地时发现上面这条顺序在 `tenancy.Resolver` 现有签名下无法成立：`Resolve(r *http.Request) (pkgcore.TenantID, error)` 只返回一个 tenant，不返回 context，如果 `tenancy.Middleware` 先跑，等 `authn.Middleware` 再验一次 token 时，验证结果没有地方可以传给前面已经决定过 tenant 的那次解析——等于同一个凭证要被验两遍，而且两条验证路径可能分叉，最终谁说了算是"没有做鉴权决策的那一路"，这本身就不安全。
+>
+> 因此 `examples/reference-app/cmd/server/server.go` 实际接的顺序是 `authn.Middleware(verifier) → tenancy.Middleware(authn.NewPrincipalResolver())`——先验一次 token，`authn.NewPrincipalResolver` 再把已验证的 Principal 读出来交给 `tenancy.Middleware` 做 tenant 注入，`tenancy.Middleware` 仍然是唯一调用 `pkgcore.WithTenant` 的地方，失败即关闭（fail-closed）的语义不变：未认证请求只有落在 `tenancy.WithAllowlist` 白名单里才会放行（登录、注册、token 刷新、社交回调等 pre-auth 路由），其余路由一律要求一个已验证的 Principal。`rbac.RequirePermission` 尚未实现，链条到 `authn.Middleware` 为止；`billing` 权益校验同样未实现。完整推理见 `go/authn/AGENTS.md`"The middleware chain is authn, then tenancy" 一节与 `go/authn/middleware.go`'s `PrincipalResolver` 文档注释。当前实现状态以根目录 CLAUDE.md 的 Repository Status 为准。
+
 **依赖注入用 google/wire**（编译期生成）而非 uber/fx：脚手架会被很多不同团队阅读修改，显式生成的装配代码比运行时反射更容易被陌生团队理解和调试。
 
 **事件总线是给可观测性与审计留的统一缝隙**：`observability` 与 `compliance` 只需订阅同一总线即可拿到全部领域事件，业务模块无需耦合它们的具体实现。
