@@ -3,253 +3,38 @@ package pkgcore
 import (
 	"bufio"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	"mime"
 	"mime/multipart"
 	"net"
 	"net/smtp"
 	"strings"
-	"sync"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/go/pkgcore/internal/testutil"
 )
 
-// ---- in-process fake SMTP relay -------------------------------------------
-
-// fakeSMTPOptions shapes the scripted relay a test talks to.
-type fakeSMTPOptions struct {
-	// caps are the EHLO capabilities advertised in order, one per reply line,
-	// e.g. "AUTH PLAIN". STARTTLS is appended automatically when cert is set.
-	caps []string
-
-	// cert, when set, makes the relay advertise STARTTLS and upgrade with this
-	// certificate when the client asks.
-	cert *tls.Certificate
-
-	// implicit wraps the listener in TLS from the first byte, for relays that
-	// speak TLS-only SMTP.
-	implicit bool
-
-	// hang makes the relay answer the greeting but never reply to any command,
-	// which is what a dead relay looks like mid-transaction.
-	hang bool
-
-	// reject, when set, answers 550 to every RCPT it reports true for.
-	reject func(rcpt string) bool
-}
-
-// smtpExchange is everything the relay saw in one MAIL..DATA transaction.
-type smtpExchange struct {
-	auth    string   // the whole "AUTH PLAIN ..." line, empty when none came
-	from    string   // the whole "MAIL FROM:<...>" line
-	rcpts   []string // whole "RCPT TO:<...>" lines
-	msg     string   // dot-unstuffed message body as received
-	connTLS bool     // whether the connection was TLS by the time DATA ran
-}
-
-// fakeSMTPServer is a scripted SMTP relay for exercising the mailer without a
-// real one. It answers each command with a fixed success reply, records every
-// exchange, and plays the failure scripts its options describe.
-type fakeSMTPServer struct {
-	t    *testing.T
-	ln   net.Listener
-	opts fakeSMTPOptions
-
-	mu        sync.Mutex
-	exchanges []smtpExchange
-}
-
-// startFakeSMTPServer listens on an ephemeral localhost port and cleans up at
-// the end of the test.
-func startFakeSMTPServer(t *testing.T, opts fakeSMTPOptions) *fakeSMTPServer {
+// mailerFor builds an SMTP mailer pointed at the fake relay server. The mode
+// knob exists because certificate validation is the TLS stack's business,
+// not the mailer's: the tests here script the protocol, so they all skip
+// it. It stays local to this file, rather than living alongside
+// testutil.FakeSMTPServer, because testutil must not import this package
+// (package pkgcore) — doing so from an unexported-symbol-testing file like
+// this one, which is package pkgcore itself, would be an import cycle
+// (pkgcore's own test binary -> testutil -> pkgcore). See
+// internal/testutil/fake_smtp_server.go's own doc comment for the fuller
+// version of this note, and mailer_conformance_test.go (package
+// pkgcore_test, which has no such restriction) for the parallel helper that
+// package needs for the same reason.
+func mailerFor(t *testing.T, server *testutil.FakeSMTPServer, mode SMTPTLSMode, username, password string) Mailer {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	host, port, err := net.SplitHostPort(server.Addr())
 	if err != nil {
-		t.Fatalf("fake SMTP relay: listen: %v", err)
-	}
-	if opts.implicit {
-		if opts.cert == nil {
-			ln.Close()
-			t.Fatal("fake SMTP relay: implicit TLS requires a certificate")
-		}
-		ln = tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{*opts.cert}})
-	}
-	s := &fakeSMTPServer{t: t, ln: ln, opts: opts}
-	go s.acceptLoop()
-	t.Cleanup(func() { ln.Close() })
-	return s
-}
-
-// addr returns the relay's 127.0.0.1:port address.
-func (s *fakeSMTPServer) addr() string { return s.ln.Addr().String() }
-
-// take returns the recorded exchanges, emptying the record.
-func (s *fakeSMTPServer) take() []smtpExchange {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	exchanges := s.exchanges
-	s.exchanges = nil
-	return exchanges
-}
-
-func (s *fakeSMTPServer) record(ex smtpExchange) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.exchanges = append(s.exchanges, ex)
-}
-
-func (s *fakeSMTPServer) acceptLoop() {
-	for {
-		conn, err := s.ln.Accept()
-		if err != nil {
-			return
-		}
-		go s.handle(conn)
-	}
-}
-
-// handle runs one SMTP session: greet, then answer commands until the client
-// quits or the connection dies. The greeting is the relay's first word, and on
-// an implicit-TLS listener it also triggers the lazy server-side handshake.
-func (s *fakeSMTPServer) handle(conn net.Conn) {
-	defer conn.Close()
-	fmt.Fprint(conn, "220 fake ESMTP ready\r\n")
-
-	br := bufio.NewReader(conn)
-	connTLS := s.opts.implicit
-	ex := smtpExchange{}
-
-	for {
-		line, err := br.ReadString('\n')
-		if err != nil {
-			return
-		}
-		cmd := strings.TrimRight(line, "\r\n")
-		parts := strings.SplitN(cmd, " ", 2)
-		switch strings.ToUpper(parts[0]) {
-		case "EHLO", "HELO":
-			if s.opts.hang {
-				continue // leave the client waiting forever
-			}
-			s.writeCapabilities(conn)
-		case "STARTTLS":
-			fmt.Fprint(conn, "220 2.0.0 Ready to start TLS\r\n")
-			tlsConn := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{*s.opts.cert}})
-			if err := tlsConn.Handshake(); err != nil {
-				return
-			}
-			conn = tlsConn
-			br = bufio.NewReader(conn)
-			connTLS = true
-		case "AUTH":
-			ex.auth = cmd
-			fmt.Fprint(conn, "235 2.7.0 Authentication successful\r\n")
-		case "MAIL":
-			ex.from = cmd
-			fmt.Fprint(conn, "250 2.1.0 Ok\r\n")
-		case "RCPT":
-			ex.rcpts = append(ex.rcpts, cmd)
-			if s.opts.reject != nil && s.opts.reject(cmd) {
-				fmt.Fprint(conn, "550 5.1.1 No such user\r\n")
-				continue
-			}
-			fmt.Fprint(conn, "250 2.1.5 Ok\r\n")
-		case "DATA":
-			fmt.Fprint(conn, "354 End data with <CR><LF>.<CR><LF>\r\n")
-			var body []string
-			for {
-				dataLine, err := br.ReadString('\n')
-				if err != nil {
-					return
-				}
-				trimmed := strings.TrimRight(dataLine, "\r\n")
-				if trimmed == "." {
-					break
-				}
-				if strings.HasPrefix(trimmed, "..") {
-					trimmed = trimmed[1:] // dot-unstuff
-				}
-				body = append(body, trimmed)
-			}
-			ex.msg = strings.Join(body, "\r\n")
-			ex.connTLS = connTLS
-			s.record(ex)
-			ex = smtpExchange{}
-			fmt.Fprint(conn, "250 2.0.0 Ok: queued\r\n")
-		case "QUIT":
-			fmt.Fprint(conn, "221 2.0.0 Bye\r\n")
-			return
-		default:
-			s.t.Errorf("fake SMTP relay: unexpected command %q", cmd)
-			fmt.Fprint(conn, "500 5.5.1 Command unrecognized\r\n")
-		}
-	}
-}
-
-// writeCapabilities answers EHLO the way a real relay does: a first line
-// carrying the server name, then one line per capability, the last one
-// single-spaced so the client knows the reply is complete. The first line
-// must carry a dash continuation: net/smtp only parses capabilities out of a
-// multiline reply, and discards the reply's first line along with any
-// single-line reply, so a "250 STARTTLS" one-liner would never be seen.
-func (s *fakeSMTPServer) writeCapabilities(w io.Writer) {
-	caps := append([]string{"fake ESMTP"}, s.opts.caps...)
-	if s.opts.cert != nil {
-		caps = append(caps, "STARTTLS")
-	}
-	for i, capability := range caps {
-		prefix := "250-"
-		if i == len(caps)-1 {
-			prefix = "250 "
-		}
-		fmt.Fprintf(w, "%s%s\r\n", prefix, capability)
-	}
-}
-
-// newSelfSignedCert returns a certificate the fake relay can present. The
-// mailer under test dials with InsecureSkipVerify, so the certificate only
-// has to make the server-side handshake succeed.
-func newSelfSignedCert(t *testing.T) tls.Certificate {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("generate relay key: %v", err)
-	}
-	template := x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "fake relay"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
-		DNSNames:     []string{"localhost"},
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatalf("create relay certificate: %v", err)
-	}
-	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
-}
-
-// mailerFor builds an SMTP mailer pointed at the fake relay. The tlsConfig
-// knob exists because certificate validation is the TLS stack's business, not
-// the mailer's: the tests here script the protocol, so they all skip it.
-func mailerFor(t *testing.T, s *fakeSMTPServer, mode SMTPTLSMode, username, password string) Mailer {
-	t.Helper()
-	host, port, err := net.SplitHostPort(s.addr())
-	if err != nil {
-		t.Fatalf("split relay address %q: %v", s.addr(), err)
+		t.Fatalf("split relay address %q: %v", server.Addr(), err)
 	}
 	var portNumber int
 	if _, err := fmt.Sscanf(port, "%d", &portNumber); err != nil {
@@ -275,7 +60,7 @@ func mailerFor(t *testing.T, s *fakeSMTPServer, mode SMTPTLSMode, username, pass
 func TestSMTPMailer_Send_DeliversOverAPlaintextRelay(t *testing.T) {
 	t.Parallel()
 
-	server := startFakeSMTPServer(t, fakeSMTPOptions{})
+	server := testutil.StartFakeSMTPServer(t, testutil.FakeSMTPOptions{})
 	mailer := mailerFor(t, server, SMTPTLSModeAuto, "", "")
 
 	mail := Mail{
@@ -289,28 +74,28 @@ func TestSMTPMailer_Send_DeliversOverAPlaintextRelay(t *testing.T) {
 		t.Fatalf("Send() error = %v, want nil", err)
 	}
 
-	exchanges := server.take()
+	exchanges := server.Take()
 	if len(exchanges) != 1 {
 		t.Fatalf("relay recorded %d exchanges, want 1", len(exchanges))
 	}
 	ex := exchanges[0]
-	if ex.from != "MAIL FROM:<ops@example.com>" {
-		t.Errorf("MAIL line = %q, want MAIL FROM:<ops@example.com>", ex.from)
+	if ex.From != "MAIL FROM:<ops@example.com>" {
+		t.Errorf("MAIL line = %q, want MAIL FROM:<ops@example.com>", ex.From)
 	}
 	wantRcpts := []string{"RCPT TO:<ada@example.com>", "RCPT TO:<grace@example.com>"}
-	if fmt.Sprint(ex.rcpts) != fmt.Sprint(wantRcpts) {
-		t.Errorf("RCPT lines = %v, want %v", ex.rcpts, wantRcpts)
+	if fmt.Sprint(ex.Rcpts) != fmt.Sprint(wantRcpts) {
+		t.Errorf("RCPT lines = %v, want %v", ex.Rcpts, wantRcpts)
 	}
-	if ex.auth != "" {
-		t.Errorf("AUTH line = %q, want none without credentials", ex.auth)
+	if ex.Auth != "" {
+		t.Errorf("AUTH line = %q, want none without credentials", ex.Auth)
 	}
-	if ex.connTLS {
+	if ex.ConnTLS {
 		t.Error("DATA ran over TLS, want a plaintext relay to stay plaintext")
 	}
 
-	headerBlock, body, found := strings.Cut(ex.msg, "\r\n\r\n")
+	headerBlock, body, found := strings.Cut(ex.Msg, "\r\n\r\n")
 	if !found {
-		t.Fatalf("relay message has no header/body separator: %q", ex.msg)
+		t.Fatalf("relay message has no header/body separator: %q", ex.Msg)
 	}
 	headers := strings.Split(headerBlock, "\r\n")
 	expectHeader := func(index int, want string) {
@@ -368,8 +153,8 @@ func TestSMTPMailer_Send_DeliversOverAPlaintextRelay(t *testing.T) {
 func TestSMTPMailer_Send_UpgradesWithSTARTTLS(t *testing.T) {
 	t.Parallel()
 
-	cert := newSelfSignedCert(t)
-	server := startFakeSMTPServer(t, fakeSMTPOptions{cert: &cert})
+	cert := testutil.NewSelfSignedCert(t)
+	server := testutil.StartFakeSMTPServer(t, testutil.FakeSMTPOptions{Cert: &cert})
 	mailer := mailerFor(t, server, SMTPTLSModeAuto, "", "")
 
 	err := mailer.Send(context.Background(), Mail{
@@ -380,19 +165,19 @@ func TestSMTPMailer_Send_UpgradesWithSTARTTLS(t *testing.T) {
 		t.Fatalf("Send() error = %v, want nil", err)
 	}
 
-	exchanges := server.take()
+	exchanges := server.Take()
 	if len(exchanges) != 1 {
 		t.Fatalf("relay recorded %d exchanges, want 1", len(exchanges))
 	}
-	if !exchanges[0].connTLS {
+	if !exchanges[0].ConnTLS {
 		t.Error("DATA did not run over TLS, want the STARTTLS upgrade to have happened")
 	}
 	wantPrefix := "From: ops@example.com\r\nTo: ada@example.com\r\nSubject: over TLS\r\nDate: "
-	if !strings.HasPrefix(exchanges[0].msg, wantPrefix) {
-		t.Errorf("relay message does not start with the expected headers: %q", exchanges[0].msg)
+	if !strings.HasPrefix(exchanges[0].Msg, wantPrefix) {
+		t.Errorf("relay message does not start with the expected headers: %q", exchanges[0].Msg)
 	}
-	if !strings.HasSuffix(exchanges[0].msg, "\r\n\r\nupgraded") {
-		t.Errorf("relay message does not end with the expected body: %q", exchanges[0].msg)
+	if !strings.HasSuffix(exchanges[0].Msg, "\r\n\r\nupgraded") {
+		t.Errorf("relay message does not end with the expected body: %q", exchanges[0].Msg)
 	}
 }
 
@@ -402,8 +187,8 @@ func TestSMTPMailer_Send_UpgradesWithSTARTTLS(t *testing.T) {
 func TestSMTPMailer_Send_SpeaksTLSFromTheFirstByte(t *testing.T) {
 	t.Parallel()
 
-	cert := newSelfSignedCert(t)
-	server := startFakeSMTPServer(t, fakeSMTPOptions{implicit: true, cert: &cert})
+	cert := testutil.NewSelfSignedCert(t)
+	server := testutil.StartFakeSMTPServer(t, testutil.FakeSMTPOptions{Implicit: true, Cert: &cert})
 	mailer := mailerFor(t, server, SMTPTLSModeImplicitTLS, "", "")
 
 	err := mailer.Send(context.Background(), Mail{
@@ -414,9 +199,9 @@ func TestSMTPMailer_Send_SpeaksTLSFromTheFirstByte(t *testing.T) {
 		t.Fatalf("Send() error = %v, want nil", err)
 	}
 
-	exchanges := server.take()
-	if len(exchanges) != 1 || !exchanges[0].connTLS {
-		t.Fatalf("relay recorded %d exchanges with connTLS=%t, want one over TLS", len(exchanges), exchanges[0].connTLS)
+	exchanges := server.Take()
+	if len(exchanges) != 1 || !exchanges[0].ConnTLS {
+		t.Fatalf("relay recorded %d exchanges with connTLS=%t, want one over TLS", len(exchanges), exchanges[0].ConnTLS)
 	}
 }
 
@@ -426,8 +211,8 @@ func TestSMTPMailer_Send_SpeaksTLSFromTheFirstByte(t *testing.T) {
 func TestSMTPMailer_Send_AuthenticatesOverTLS(t *testing.T) {
 	t.Parallel()
 
-	cert := newSelfSignedCert(t)
-	server := startFakeSMTPServer(t, fakeSMTPOptions{cert: &cert, caps: []string{"AUTH PLAIN"}})
+	cert := testutil.NewSelfSignedCert(t)
+	server := testutil.StartFakeSMTPServer(t, testutil.FakeSMTPOptions{Cert: &cert, Caps: []string{"AUTH PLAIN"}})
 	mailer := mailerFor(t, server, SMTPTLSModeAuto, "relay@example.com", "s3cret")
 
 	err := mailer.Send(context.Background(), Mail{
@@ -439,14 +224,14 @@ func TestSMTPMailer_Send_AuthenticatesOverTLS(t *testing.T) {
 	}
 
 	wantAuth := "AUTH PLAIN " + base64.StdEncoding.EncodeToString([]byte("\x00relay@example.com\x00s3cret"))
-	exchanges := server.take()
+	exchanges := server.Take()
 	if len(exchanges) != 1 {
 		t.Fatalf("relay recorded %d exchanges, want 1", len(exchanges))
 	}
-	if exchanges[0].auth != wantAuth {
-		t.Errorf("AUTH line = %q, want %q", exchanges[0].auth, wantAuth)
+	if exchanges[0].Auth != wantAuth {
+		t.Errorf("AUTH line = %q, want %q", exchanges[0].Auth, wantAuth)
 	}
-	if !exchanges[0].connTLS {
+	if !exchanges[0].ConnTLS {
 		t.Error("DATA did not run over TLS, want AUTH to have happened on the TLS connection")
 	}
 }
@@ -507,8 +292,8 @@ func TestSMTPMailer_RefusesAuthOverAPlaintextConnection(t *testing.T) {
 func TestSMTPMailer_Send_FailsWhenTheRelayRejectsARecipient(t *testing.T) {
 	t.Parallel()
 
-	server := startFakeSMTPServer(t, fakeSMTPOptions{
-		reject: func(rcpt string) bool { return strings.Contains(rcpt, "grace@") },
+	server := testutil.StartFakeSMTPServer(t, testutil.FakeSMTPOptions{
+		Reject: func(rcpt string) bool { return strings.Contains(rcpt, "grace@") },
 	})
 	mailer := mailerFor(t, server, SMTPTLSModeAuto, "", "")
 
@@ -523,7 +308,7 @@ func TestSMTPMailer_Send_FailsWhenTheRelayRejectsARecipient(t *testing.T) {
 	if !strings.Contains(err.Error(), "send mail via smtp") {
 		t.Errorf("Send() error = %v, want it to carry the relay address context", err)
 	}
-	if exchanges := server.take(); len(exchanges) != 0 {
+	if exchanges := server.Take(); len(exchanges) != 0 {
 		t.Errorf("relay recorded %d exchanges, want none: the message must not be sent when a recipient is refused", len(exchanges))
 	}
 }
@@ -534,7 +319,7 @@ func TestSMTPMailer_Send_FailsWhenTheRelayRejectsARecipient(t *testing.T) {
 func TestSMTPMailer_Send_DeadlineBreaksAHungRelay(t *testing.T) {
 	t.Parallel()
 
-	server := startFakeSMTPServer(t, fakeSMTPOptions{hang: true})
+	server := testutil.StartFakeSMTPServer(t, testutil.FakeSMTPOptions{Hang: true})
 	mailer := mailerFor(t, server, SMTPTLSModeAuto, "", "")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -570,7 +355,7 @@ func TestSMTPMailer_Send_DeadlineBreaksAHungRelay(t *testing.T) {
 func TestSMTPMailer_Send_CancellationBreaksAHungRelay(t *testing.T) {
 	t.Parallel()
 
-	server := startFakeSMTPServer(t, fakeSMTPOptions{hang: true})
+	server := testutil.StartFakeSMTPServer(t, testutil.FakeSMTPOptions{Hang: true})
 	mailer := mailerFor(t, server, SMTPTLSModeAuto, "", "")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -670,7 +455,7 @@ func TestSMTPMailer_Send_ReportsDialFailures(t *testing.T) {
 func TestSMTPMailer_Send_CancelledContextFailsBeforeDialing(t *testing.T) {
 	t.Parallel()
 
-	server := startFakeSMTPServer(t, fakeSMTPOptions{})
+	server := testutil.StartFakeSMTPServer(t, testutil.FakeSMTPOptions{})
 	mailer := mailerFor(t, server, SMTPTLSModeAuto, "", "")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -683,7 +468,7 @@ func TestSMTPMailer_Send_CancelledContextFailsBeforeDialing(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Send() error = %v, want context.Canceled", err)
 	}
-	if exchanges := server.take(); len(exchanges) != 0 {
+	if exchanges := server.Take(); len(exchanges) != 0 {
 		t.Errorf("relay recorded %d exchanges, want none after cancellation", len(exchanges))
 	}
 }
