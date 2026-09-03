@@ -323,6 +323,14 @@ func (s *ObjectService) Create(ctx context.Context, params CreateParams) (Object
 // other starts, and the metadata a Complete finalizes always describes the
 // bytes actually stored under the key. The serialization covers this process
 // only (see objectLocks below).
+//
+// The expiry sweep is a third actor the lock does not cover, and a successful
+// write can still lose its row to it: the sweep reclaims an upload whose
+// window closes mid-stream, removing its bytes and then its row. Upload
+// re-reads the row after a successful put and, finding the row reclaimed or
+// its window already closed, takes the put's bytes back (best effort) and
+// answers storage.content_missing -- never leaving a write the reclaim
+// orphaned under the key.
 func (s *ObjectService) Upload(ctx context.Context, objectID string, contentLength *int64, body io.Reader) error {
 	release := s.locks.acquire(objectID)
 	defer release()
@@ -348,8 +356,8 @@ func (s *ObjectService) Upload(ctx context.Context, objectID string, contentLeng
 		body = bytes.NewReader(nil)
 	}
 	counter := &countingReader{r: io.LimitReader(body, row.DeclaredSize+1)}
-	if err := st.PutObject(ctx, row.Key, counter); err != nil {
-		return ErrStoreError.WithCause(err)
+	if putErr := st.PutObject(ctx, row.Key, counter); putErr != nil {
+		return ErrStoreError.WithCause(putErr)
 	}
 	if counter.n != row.DeclaredSize {
 		// The stored bytes do not match the declaration. Remove them again
@@ -357,11 +365,39 @@ func (s *ObjectService) Upload(ctx context.Context, objectID string, contentLeng
 		// store's delete is idempotent, and a failure to clean up is
 		// logged, not fatal -- the next upload attempt replaces the bytes
 		// atomically anyway.
-		if err := st.DeleteObject(ctx, row.Key); err != nil {
+		if cleanupErr := st.DeleteObject(ctx, row.Key); cleanupErr != nil {
 			observability.FromContext(ctx).Warn("rejected upload cleanup failed",
-				"object_id", objectID, "error", err)
+				"object_id", objectID, "error", cleanupErr)
 		}
 		return checkStoredSize(counter.n, row.DeclaredSize)
+	}
+
+	// The put above and the sweep's reclaim of this upload can interleave:
+	// the window closes while the bytes stream in, and reclaim removes the
+	// row -- after the bytes, in its own order -- so a put that lands
+	// between the reclaim's two removals leaves the only bytes under the
+	// key, describing a row that no longer exists. Re-read to detect the
+	// reclaim and take those bytes back (best effort -- in the other
+	// interleaving the reclaim already removed them, and the store's delete
+	// is idempotent), answering storage.content_missing exactly as a
+	// completion racing the same reclaim would.
+	current, err := s.findByID(ctx, objectID)
+	if err != nil {
+		if !hasCode(err, ErrObjectNotFound.Code) {
+			return err
+		}
+		if cleanupErr := st.DeleteObject(ctx, row.Key); cleanupErr != nil {
+			observability.FromContext(ctx).Warn("uploaded bytes removed after the upload was reclaimed",
+				"object_id", objectID, "error", cleanupErr)
+		}
+		return ErrContentMissing.WithParam("id", objectID)
+	}
+	if current.State == ObjectStateUploading && time.Now().After(current.UploadExpiresAt) {
+		if cleanupErr := st.DeleteObject(ctx, row.Key); cleanupErr != nil {
+			observability.FromContext(ctx).Warn("uploaded bytes removed after the upload window closed",
+				"object_id", objectID, "error", cleanupErr)
+		}
+		return ErrContentMissing.WithParam("id", objectID)
 	}
 	return nil
 }
@@ -418,6 +454,10 @@ func (s *ObjectService) Upload(ctx context.Context, objectID string, contentLeng
 // (storage.object_not_found, storage.content_missing,
 // storage.object_not_uploading) and runs no side effect: a finalize that
 // did not commit announces nothing, enqueues nothing and logs nothing.
+// One cleanup runs behind a lost finalize: when the sanitizer rewrote the
+// stored bytes (step 10) and the sweep reclaimed the row in the same moment,
+// the rewrite can be the only bytes left under the key, and they are taken
+// back (best effort) so a finalize that did not commit never orphans them.
 //
 // Side effects follow the finalize, and neither can fail the call: an
 // image object's thumbnail derivation is enqueued on the module's queue
@@ -533,9 +573,33 @@ func (s *ObjectService) Complete(ctx context.Context, objectID string) (Object, 
 		// they all sit behind the committed branch.
 		current, err := s.findByID(ctx, objectID)
 		if err != nil {
+			// The row vanished: the sweep reclaimed it. When the sanitizer
+			// rewrote the bytes first (changed), the writeback may be the
+			// only bytes left under the key -- the reclaim removed the row
+			// after its own byte removal, and a writeback landing between
+			// the two would outlive the row it describes. Take the writeback
+			// back (best effort -- in the other interleaving the reclaim
+			// already removed it, and the store's delete is idempotent) so a
+			// lost finalize never leaves orphaned content under the key.
+			if changed {
+				if cleanupErr := st.DeleteObject(ctx, row.Key); cleanupErr != nil {
+					observability.FromContext(ctx).Warn("sanitized writeback removed after the object vanished",
+						"object_id", objectID, "error", cleanupErr)
+				}
+			}
 			return Object{}, err
 		}
 		if current.State == ObjectStateUploading {
+			// The window closed under the pipeline. A writeback that landed
+			// (changed) is taken back the same way: the row is reclaimed by
+			// the next sweep, and the rewrite must not be what the reclaim
+			// finds under the key.
+			if changed {
+				if cleanupErr := st.DeleteObject(ctx, row.Key); cleanupErr != nil {
+					observability.FromContext(ctx).Warn("sanitized writeback removed after the upload window closed",
+						"object_id", objectID, "error", cleanupErr)
+				}
+			}
 			return Object{}, ErrContentMissing.WithParam("id", objectID)
 		}
 		return Object{}, ErrObjectNotUploading.WithParam("id", objectID)

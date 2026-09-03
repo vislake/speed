@@ -1004,6 +1004,88 @@ func TestObjectService_Complete_RefusesWhenTheRowsVanishMidPipeline(t *testing.T
 	}
 }
 
+// TestObjectService_Upload_RefusesWhenTheReclaimRemovesTheRowMidWrite pins
+// Upload's post-write re-check: the expiry sweep's reclaim removes the row
+// while this upload's bytes are being written -- its byte removal ran before
+// the put rewrote the key, and its row removal lands right after -- so the
+// upload answers storage.content_missing, the same answer a completion
+// racing the reclaim gives, and takes its own bytes back: a write the
+// reclaim orphaned must not be what a later sweep finds under the key. (On
+// the pre-re-check code this test failed with the upload reporting success
+// for bytes whose row a concurrent reclaim had just removed.)
+func TestObjectService_Upload_RefusesWhenTheReclaimRemovesTheRowMidWrite(t *testing.T) {
+	svc, store, _, bus := newTestService(t, nil)
+	ctx := serviceCtx("tenant-a")
+	body := testutil.PNG(t, 32, 24) // both attempts declare this size
+	row := createAndUpload(t, svc, ctx, body, "image/png")
+
+	// The hook fires on the second upload's own byte write, right after the
+	// put landed. The reclaim's row removal runs in the sweep's order (its
+	// byte removal already ran, before the put rewrote the key), so the
+	// bytes the put just wrote are the only ones left under the key once the
+	// row is gone.
+	hooked := &hookedStore{fakeStore: store}
+	hooked.onPut = func() {
+		if _, err := svc.objects.deleteObjectRows(ctx, row.ID); err != nil {
+			t.Errorf("deleteObjectRows(%s): %v", row.ID, err)
+		}
+	}
+	svc.host = &fakeHost{store: hooked, bus: bus}
+
+	err := svc.Upload(ctx, row.ID, nil, bytes.NewReader(body))
+	assertCode(t, err, ErrContentMissing.Code)
+	assertParam(t, err, "id", row.ID)
+	if _, ok := store.bytes(row.Key); ok {
+		t.Error("the reclaimed upload's bytes were not taken back")
+	}
+}
+
+// TestObjectService_Complete_TakesBackItsWritebackWhenTheReclaimWins pins the
+// cleanup behind a lost finalize: the reclaim removes the row -- and, in its
+// own bytes-first order, the stored bytes -- while the completion pipeline is
+// between its read of those bytes and the sanitizer's rewrite of them. The
+// rewrite then recreates bytes the reclaim already removed, and the finalize
+// commits zero rows; the completion answers storage.object_not_found (what
+// the caller will find) and removes the rewrite, so a finalize that did not
+// commit never leaves the bytes it wrote under the key. (On the pre-cleanup
+// code this test failed with the reclaimed key holding the rewritten bytes
+// after the refusal -- the orphan this fix removes.)
+func TestObjectService_Complete_TakesBackItsWritebackWhenTheReclaimWins(t *testing.T) {
+	svc, store, queue, bus := newTestService(t, nil)
+	ctx := serviceCtx("tenant-a")
+	row := createAndUpload(t, svc, ctx, jpegWithExif(t), "image/jpeg")
+
+	// The hooks run the reclaim against the pipeline's schedule: its byte
+	// removal lands right after the pipeline read the bytes -- so the
+	// sanitizer's rewrite of the stripped bytes is what outlives it -- and
+	// its row removal lands right after the rewrite, before the finalize.
+	hooked := &hookedStore{fakeStore: store}
+	hooked.onGet = func() {
+		if err := hooked.DeleteObject(ctx, row.Key); err != nil {
+			t.Errorf("DeleteObject(%s): %v", row.Key, err)
+		}
+	}
+	hooked.onPut = func() {
+		if _, err := svc.objects.deleteObjectRows(ctx, row.ID); err != nil {
+			t.Errorf("deleteObjectRows(%s): %v", row.ID, err)
+		}
+	}
+	svc.host = &fakeHost{store: hooked, bus: bus}
+
+	_, err := svc.Complete(ctx, row.ID)
+	assertCode(t, err, ErrObjectNotFound.Code)
+	assertParam(t, err, "id", row.ID)
+	if _, ok := store.bytes(row.Key); ok {
+		t.Error("the writeback survived the lost finalize -- the reclaimed key holds bytes only the pipeline wrote")
+	}
+	if len(bus.events) != 0 {
+		t.Errorf("events = %d, want none -- a finalize that did not commit announces nothing", len(bus.events))
+	}
+	if len(queue.tasks) != 0 {
+		t.Errorf("tasks = %d, want none -- a finalize that did not commit enqueues nothing", len(queue.tasks))
+	}
+}
+
 // TestObjectService_Reads_CompletedRowsOnly pins the visibility rule Get and
 // OpenContent share: an object that is not completed reads exactly like an
 // object that does not exist -- uploading and deleting rows included -- and

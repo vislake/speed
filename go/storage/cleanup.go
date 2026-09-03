@@ -39,7 +39,14 @@ package storage
 // this sweep listed can never complete behind its back: either the
 // completion committed before the window closed, in which case the row is
 // completed and no longer matches the reclaim listing, or the write is
-// refused and the row is reclaimed. Uploads are reclaimed without an event:
+// refused and the row is reclaimed. A transfer
+// whose store write interleaves with the reclaim converges on its own side:
+// Upload re-reads the row after its put, and Complete's lost-finalize
+// branch re-reads after its sanitizer writeback, and whichever finds the
+// row reclaimed (or the window closed) takes its own bytes back before
+// answering storage.content_missing (object.go) -- a reclaim never inherits
+// a late write under the key it just emptied, and a lost finalize never
+// leaves its writeback behind. Uploads are reclaimed without an event:
 // nothing ever read them, so no subscriber has anything to forget. Deleted
 // completed objects announce EventObjectDeleted exactly like a Delete call.
 //

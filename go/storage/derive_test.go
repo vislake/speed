@@ -452,13 +452,16 @@ func TestDeriveService_DeriveThumbnail_ReChecksThePixelCeiling(t *testing.T) {
 	assertParam(t, err, "max_pixels", int64(10_000))
 }
 
-// hookedStore wraps a fakeStore and runs onPut after every successful byte
-// write -- the seam the mid-run deletion race tests need: the delete
-// protocol's row removal lands while DeriveThumbnail is between its own byte
-// write and its convergence re-check.
+// hookedStore wraps a fakeStore and runs its hooks around the store
+// operations the mid-run race tests need to interleave with: onPut after
+// every successful byte write, onGet after every successful byte read. The
+// package's deletion and transfer-lifecycle races all drive the same shape --
+// the expiry sweep's or the delete protocol's removals landing while a
+// pipeline is between its own store operations -- through one of the two.
 type hookedStore struct {
 	*fakeStore
 	onPut func()
+	onGet func()
 }
 
 func (s *hookedStore) PutObject(ctx context.Context, key string, r io.Reader) error {
@@ -469,6 +472,17 @@ func (s *hookedStore) PutObject(ctx context.Context, key string, r io.Reader) er
 		s.onPut()
 	}
 	return nil
+}
+
+func (s *hookedStore) GetObject(ctx context.Context, key string) (io.ReadCloser, error) {
+	rc, err := s.fakeStore.GetObject(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if s.onGet != nil {
+		s.onGet()
+	}
+	return rc, nil
 }
 
 // TestDeriveService_DeriveThumbnail_DropsItsBytesWhenTheObjectDisappears

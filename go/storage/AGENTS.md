@@ -78,7 +78,12 @@ after the `With*` options have been applied and handed the registry when
   state is refused (`storage.content_missing` / `storage.object_not_uploading`,
   param `id`). A short or oversize body is refused after the store write and the
   partial bytes are deleted best-effort (`storage.size_mismatch`); cleanup
-  failure degrades to a warning log, never a silent success.
+  failure degrades to a warning log, never a silent success. A successful write
+  that interleaves with the expiry sweep's reclaim of the same row — the window
+  closes mid-stream, the sweep removes the bytes and the row — is caught by a
+  post-write re-read: a reclaimed row or a closed window answers
+  `storage.content_missing` and the write's bytes are taken back best-effort, so
+  a reclaim never inherits a late write under the key it just emptied.
 - `Complete(ctx, objectID)` runs the revalidation pipeline over the stored bytes
   and finalizes the row (see below). Side effects — the completion event publish
   and the thumbnail-derive enqueue — cannot fail the call; they warn on failure.
@@ -215,8 +220,14 @@ upload window is enforced at the finalize write itself, not at listing time:
 this sweep listed can never complete behind its back — either the completion
 committed before the window closed, in which case the row is completed and no
 longer matches the reclaim listing, or the write is refused and the row is
-reclaimed. Rows a concurrent sweep already removed are nothing left to do, not
-errors.
+reclaimed. The convergence runs the other way too: a transfer whose own store
+write interleaves with the reclaim is caught on the transfer side, which
+re-reads the row after the write and takes its bytes back when the row is
+gone or the window has closed (see `Upload` above and `Complete`'s
+lost-finalize branch in object.go) — so a reclaim never leaves a late
+transfer write orphaned under the key it just emptied, and a transfer never
+leaves bytes a reclaim already removed. Rows a concurrent sweep already
+removed are nothing left to do, not errors.
 
 `EnqueueExpirySweep(ctx)` puts one tenant's sweep on the queue as task
 `storage.expiry_sweep`, tenant-scoped because every query the sweep runs is:
