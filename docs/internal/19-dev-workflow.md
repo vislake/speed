@@ -16,7 +16,10 @@ task lint           # 全部 lint
 task api:gen        # 合并 spec + 生成后端 interface + 生成前端 sdk
 task docs:serve     # 本地预览文档站
 task new:module     # 脚手架自身的模块生成器（见下）
+task release:plan   # 离线验证某个版本号下全模块的 lockstep 发布计划一致（M0 轮）
 ```
+
+`task release:plan` 是 M0 发布轮新增的真实任务（非 stub）：离线验证"给定版本号下，全部 Go 模块与 npm 包能按同一版本号一致发布"——包装 `tools/release/lockstep-release.py` 的默认校验模式（退出码 0 仅当计划一致；不写任何文件），是 [02 仓库结构与发布](02-repo-and-release.md) / [18 CI/CD](18-cicd.md) 发布设计的 M0 落地一半。用法：`task release:plan VERSION=v1.2.0`。`.github/workflows/release.yml` 手动触发时运行同一校验加协调器自测（见 [18 CI/CD](18-cicd.md) 的 M0 注记）；真实发布——推 tag、changesets bump、npm publish、GitHub Release——排在 v1.0（M4 里程碑）。
 
 `task dev` 必须在 **单进程部署模式**下工作：单进程、SQLite、零外部依赖。这是单进程部署模式给开发体验带来的直接收益——本地开发不需要 `docker compose up` 拉起一堆容器。
 
@@ -32,7 +35,7 @@ task new:module     # 脚手架自身的模块生成器（见下）
 
 ## 模块生成器
 
-新增一个 Go module 需要八件事：go.mod、目录骨架、`AGENTS.md`、`docs/` 设计文档、迁移目录、测试骨架、CI 矩阵登记、发布脚本登记。手工做八件事必然遗漏，所以生成器 `tools/new_module.py` 自动完成其中可以安全自动化的部分，其余以**注册清单**逐项提醒，不让任何一件无声漏掉：
+新增一个 Go module 需要八件事：go.mod、目录骨架、`AGENTS.md`、`docs/` 设计文档、迁移目录、测试骨架、CI 矩阵登记、发布登记。其中发布登记不是独立动作——它就是 go.work `use` 条目本身：发布协调器（`tools/release/lockstep-release.py`，M0 轮落地）在运行时从 go.work 推导每模块 tag 列表，从未登记进 go.work 的模块不可能被打 tag（详见下方 M0 注记）。手工做八件事必然遗漏，所以生成器 `tools/new_module.py` 自动完成其中可以安全自动化的部分，其余以**注册清单**逐项提醒，不让任何一件无声漏掉：
 
 ```
 python3 tools/new_module.py NAME --description '...' --design-doc docs/internal/NN-name.md
@@ -42,8 +45,10 @@ python3 tools/new_module.py NAME --description '...' --design-doc docs/internal/
 
 - **go.mod、目录骨架、`AGENTS.md`**：由生成器产出，即 stub 的全部文件。
 - **`docs/` 设计文档**：作为 `--design-doc` 输入参数；尚不存在时生成器仅警告、不失败——但 `AGENTS.md` 的 stub 行已经指向它，设计文档必须与该模块同 PR 提交。
-- **CI 矩阵登记、发布脚本登记**：出现在注册清单里（连同 go.work `use` 条目与 roadmap/文档导航登记）。这两类登记漏掉不会立即报错，却会让模块漏跑 CI、漏打 lockstep tag，正是生成器要兜住的遗漏。
+- **CI 矩阵登记、发布登记**：出现在注册清单里（连同 go.work `use` 条目与 roadmap/文档导航登记）。这两类登记漏掉不会立即报错——CI 矩阵漏登记会让模块漏跑 CI，正是生成器要兜住的遗漏；发布登记则与清单第 1 项的 go.work `use` 条目是同一件事，见下方 M0 注记。
 - **迁移目录、测试骨架**：stub 没有迁移也没有测试，生成器不为它们占位空目录；两者在模块的实现轮次随代码落地（版本化迁移与测试要求见根 [CLAUDE.md](../../CLAUDE.md)），比骨架阶段占位更贴近真实状态。
+
+**M0 注记：发布登记的语义随 lockstep 发布脚本落地而简化。** 本轮交付的发布协调器（`tools/release/lockstep-release.py`，含其 unittest 套件；入口为 `task release:plan` 与 `.github/workflows/release.yml`）在运行时从 go.work 推导可发布模块集合——**因此清单第 1 项的 go.work `use` 条目本身就是发布登记**，清单第 3 项的表述已相应改为说明这一点，不再存在独立的"每模块 tag 列表"。配套地，模块漏登不再"悄悄漏 tag"：协调器的完备性检查双向核对 go.work 与 `go/` 目录树（`use` 条目缺 go.mod、`go/` 下存在未登记模块都报错退出），漏了任何一项，`task release:plan` 与 release.yml 的发布验证就直接失败。npm 侧的对应物是 `web/.changeset/config.json` 的 fixed group 覆盖集合：新增或移除 npm 包时必须与包列表在同一改动里同步（覆盖不齐同样使发布验证失败）。第一轮真实发布时还要执行的"过渡态 replace 行清理"（把模块 go.mod 里的 `replace ... => ../<模块>` 改写为真实版本）在 M0 只以纯函数 + testdata 夹具形式交付，**严禁对真实 go.mod 运行**——树的过渡态保留到 v1.0（M4）；详见 [02 仓库结构与发布](02-repo-and-release.md) 的 M0 注记与 `tools/release/AGENTS.md`。
 
 `task new:module` 是这层脚手架的 Taskfile 包装，已接线转调本脚本（接线契约见脚本 `--help` 的 epilog）：
 
