@@ -31,14 +31,20 @@ name: npm-package-ci
 #                    error); the eslint/typescript-eslint versions are
 #                    pinned in the shared web/package.json
 #                    devDependencies. The workspace's own rules live
-#                    behind the speed/ plugin namespace: no-literal-text
-#                    (implementation and rule tests in web/eslint-rules/)
+#                    behind the speed/ plugin namespace (implementations
+#                    and rule tests in web/eslint-rules/): no-literal-text
 #                    errors on user-facing text written inline in package
-#                    src -- package tests and test-utils are exempt by
-#                    config (fixture strings are data). The rule's unit
-#                    tests live outside every package; pr-check runs them
-#                    once per PR in its repo-checks job, not in these
-#                    per-package legs.
+#                    src, and no-direct-http errors on hand-written HTTP
+#                    (fetch / XMLHttpRequest / axios / node-fetch).
+#                    Package tests and test-utils are exempt by config
+#                    (fixture strings and scripted stand-ins are data),
+#                    and packages/api-client is no-direct-http's single
+#                    whitelist -- api-client src is where hand-written
+#                    HTTP is designed to live, and the rule is the guard
+#                    that keeps it there. The rules' unit tests live
+#                    outside every package; pr-check runs them once per
+#                    PR in its repo-checks job, not in these per-package
+#                    legs.
 #   2. pnpm typecheck
 #                    tsc --noEmit under the strict web/tsconfig.base.json
 #                    settings (each package's tsconfig extends it).
@@ -55,10 +61,13 @@ name: npm-package-ci
 # does not exist in the repository yet; each lands with the round that
 # introduces it -- wiring them now would be fake checks):
 #   * ESLint rules that need the generated api-sdk consumer surface --
-#     no hand-written backend calls -- land with the api-client/api-sdk
-#     round, where the types to check against exist. (The no-bare-text
-#     half of the JSX family is wired: speed/no-literal-text covers
-#     React package src from the shared flat config; see leg 1.)
+#     request-shape checks against the generated types -- land with the
+#     api-sdk round, where the types to check against exist. (The
+#     hand-written-calls half of the API-contract family is wired:
+#     speed/no-direct-http covers package src from the shared flat
+#     config with packages/api-client as its single whitelist, and the
+#     JSX family's no-bare-text half likewise with no-literal-text; see
+#     leg 1.)
 #   * Repo-level i18n key parity over package locale files
 #     (tools/check_i18n_keys.py's web JSON extension) is wired in the
 #     repo-level docs-check pipeline, whose path filter already covers
