@@ -3,9 +3,12 @@
  * quick start documents, end to end over a real @speed/api-client.
  *
  * Every step of the quick start executes here: the bilingual i18n
- * instance with both namespaces registered (the tenancy-ui namespace for
- * the switcher's strings, the ui-kit namespace because the switcher's
- * inline error renders ui-kit chrome), the AppThemeProvider tree, the
+ * instance with both namespaces registered (the tenancy-ui namespace
+ * for every string the switcher renders -- its inline error banner
+ * included, a plain MUI alert under that namespace, never ui-kit
+ * chrome; the ui-kit namespace because a host app composes under
+ * ui-kit's AppThemeProvider and any ui-kit chrome the host renders
+ * reads that namespace), the AppThemeProvider tree, the
  * host gate over the auth-core hooks -- anonymous viewers see a plain
  * sign-in button (this package is the auth-agnostic neighbour of
  * auth-ui, never its importer, so the host brings its own sign-in

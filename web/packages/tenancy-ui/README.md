@@ -81,9 +81,13 @@ bindRequestFn(
 attachSession(session)
 
 // 3. The bilingual instance, both namespaces registered exactly once.
-//    The ui-kit namespace is registered because the switcher's inline
-//    error banner renders ui-kit chrome; registerNamespace validates
-//    identical leaf key sets before it mutates.
+//    The switcher renders no ui-kit chrome itself -- its strings and
+//    its inline error banner are plain MUI elements under the
+//    tenancy-ui namespace. The ui-kit namespace is registered because
+//    a host app composes under ui-kit (the AppThemeProvider below) and
+//    renders ui-kit chrome, which reads that namespace.
+//    registerNamespace validates identical leaf key sets before it
+//    mutates.
 const i18n = createI18n({
   supportedLanguages: ['zh-CN', 'en-US'],
   defaultLanguage: 'zh-CN',
