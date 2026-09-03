@@ -58,7 +58,7 @@ type Object struct {
 - **访问控制**：已落地形态为私有对象经 API 鉴权访问——内容经 `OpenContent` 服务端流式返回，租户取自请求上下文，绝不来自请求参数；**短时效预签名 URL 未落地**；对外分享属 `sharing` 模块（M3），与本节「内部预签名、外部分享令牌、二者不混用」的划分一致。
 - **多套实现**：字节所在的 `ObjectStore` seam 的本地 FS 与 S3 兼容双实现已由 `pkgcore` 落地（见 [03 部署模式](03-deployment-modes.md) 与 `go/pkgcore` 的 census 条目），storage 自身只依赖 seam 接口；本模块的集成层以 PostgreSQL + MinIO 两条腿验证（`go test -tags=integration`）。
 - **生命周期**：核心已落地——`LifecycleService.Delete` 崩溃收敛删除协议（行标记 `completed`→`deleting` → 删原字节 → 按确定顺序删各派生行的字节 → 单事务删全部行；任一步中断由下一次运行收敛而非重复执行），删除同步清理派生资源；宿主经 `EnqueueExpirySweep` 按租户排程的 `Sweep` 恢复中断删除、回收上传窗口已关闭的 `uploading` 行、删除保留期已到的 `completed` 对象。差异：保留期由调用方逐对象请求、宿主设上限，**按租户的运行时保留策略配置、以及与 `compliance` 数据保留策略的联动，仍属 M4**。
-- 前端 `ui-kit` 的 `FileUploader` 未落地，属 M2 前端轮。
+- 前端 `ui-kit` 的 `FileUploader` 已随其组件轮（2026-09-04）提前于 M2 计划窗口落地，排期注见 [15 里程碑](15-roadmap.md)：受控队列组件——pick 队列与每行传输状态（上传中/成功/失败，重试/取消/移除）作为 interaction-local 例外存于组件内、经 `onQueueChange` 上报，上传本身由 host 注入的 `execute(file, { signal, onProgress })` 逐文件执行，**组件零网络**——大小/类型/数量预校验与并发上限是 executor 的职责；本条目标设计点名的拖拽、多文件、进度与失败重试均已交付，**预览不在组件内**。storage 的前端调用（api-sdk 生成的 hooks）仍随 consumer-shell round 落地，wire 契约见 `go/storage/api/openapi.yaml`。
 
 ## 分享链接（sharing）
 

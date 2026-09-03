@@ -68,7 +68,7 @@ const myRequest = (url) => fetch(...)     // a homegrown wrapper is equally wron
 - **DO NOT** edit any file in `@speed/api-sdk` — it is generated and overwritten wholesale on every release.
 - When an endpoint does not fit your need, change the spec, not the frontend. The sequence is in `docs/internal/21-api-contract.md`.
 
-**Exceptions** (not expressible in OpenAPI, and each must be confined to exactly one place): the in-app-message SSE connection lives in `notification-core`; direct file upload lives in the `FileUploader` inside `ui-kit`.
+**Exceptions** (not expressible in OpenAPI, and each must be confined to exactly one place): the in-app-message SSE connection lives in `notification-core`; uploads need no exception — they are server-relayed through spec-described endpoints (`go/storage/api/openapi.yaml`), and ui-kit's `FileUploader` renders the queue while the host injects the upload call (an api-sdk storage operation once the consumer-shell round publishes it).
 
 ## 3. Components
 

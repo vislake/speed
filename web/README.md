@@ -46,7 +46,7 @@ web/
   packages/
     tokens/             @speed/tokens      -- design tokens, zero dependencies
     i18n/               @speed/i18n        -- react-i18next wrapper + namespace registry
-    ui-kit/             @speed/ui-kit      -- theme factory + six controlled components
+    ui-kit/             @speed/ui-kit      -- theme factory + seven controlled components
     api-client/         @speed/api-client  -- hand-written HTTP runtime; fetch, retry, ApiError
     api-sdk/            @speed/api-sdk    -- generated API surface (orval output from the
                                              merged notes + authn document); calls api-client through a seam

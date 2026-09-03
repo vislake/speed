@@ -4,9 +4,19 @@
 
 The first DOM-rendering package: the `createAppTheme` theme factory that
 maps the merged token tree onto an MUI v9 theme, `AppThemeProvider`
-(theme + MUI locale linkage + CssBaseline), and six controlled core
+(theme + MUI locale linkage + CssBaseline), and seven controlled core
 components (`PageHeader`, `EmptyState`, `ConfirmDialog`, `FormField`,
-`FormLayout`, `DataTable`) that render only the state hosts give them.
+`FormLayout`, `DataTable`, `FileUploader`) that render only the state
+hosts give them. The one interaction-local carve-out in that rule is
+`FileUploader`: the queue of picked files and each row's transfer state
+(uploading/succeeded/failed, retry/cancel/remove) live inside the widget
+— the same carve-out a confirm's arming occupies — while the upload
+itself runs through the host-injected
+`execute(file, { signal, onProgress })` executor, one call per picked
+file. That boundary is what keeps the package free of HTTP: the
+executor owns pre-flight validation (size, type, count) and any
+concurrency limit, every queue transition reports up through
+`onQueueChange`, and nothing the widget holds outlives the mount.
 Built-in user-facing strings live in the bilingual `ui-kit` namespace;
 the repo's text discipline (both languages, identical key sets, nothing
 inline) is enforced over this package's `src` by the workspace's own
@@ -43,6 +53,10 @@ plumbing and deliberately not exported.
   every knob is a prop the host owns and a callback the component
   fires. Interaction-only state (a confirm's arming, a tooltip's open)
   is the allowed exception and must be provably interaction-local.
+  `FileUploader` is that exception's named instance: its picked-file
+  queue and per-row transfer state are interaction-local, and the upload
+  transport stays host-injected through the `execute` prop — never
+  package code.
 - **Host-content props are fallbacks over namespace defaults, or pure
   host content — never required translations.** `EmptyState` /
   `ConfirmDialog` ship namespace defaults with overridable
@@ -99,6 +113,15 @@ concurrent runs). Bilingual assertions import the shipped bundles
 literal. `src/usage-example.test.tsx` compiles and executes the README's
 Quick-start composition, so the documented usage cannot drift from the
 API; when the README composition changes, that file changes with it.
+The `FileUploader` suite reaches every interaction state — success,
+failure with retry, cancel mid-flight, an unmount aborting in-flight
+uploads, late settles after unmount — through fixture executors with no
+real transport, and its a11y assertions run through the same
+`expectNoAxeViolations` used everywhere here. The usage example's
+upload panel drives the documented host composition over a scripted
+fetch answering genuine `Response` objects; scripted transports and
+their fixture URLs live in test files only, and the workspace's
+`no-direct-http` rule keeps every fetch out of `src`.
 
 ## Deferrals (recorded, do not re-open silently)
 
@@ -115,3 +138,11 @@ API; when the README composition changes, that file changes with it.
   not indirect ones (ternary branches, literals crossing component
   boundaries) — documented partial enforcement; hosts own their
   literals.
+- **The storage frontend leg** — storage operations generated into
+  `@speed/api-sdk` from the `go/storage` OpenAPI fragment, the natural
+  transport for a host's `execute` — waits for the consumer-shell
+  round. Until then the wire contract's authority is
+  `go/storage/api/openapi.yaml` itself; hosts run their own transport
+  and this package ships none. The deferral is recorded three ways so
+  no single doc owns the claim: `go/storage/AGENTS.md`'s deferral
+  list, the Taskfile `api:gen` header comment, and this entry.

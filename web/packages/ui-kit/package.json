@@ -1,7 +1,7 @@
 {
   "name": "@speed/ui-kit",
   "version": "0.0.0",
-  "description": "Speed UI kit: the MUI v9 theme factory (createAppTheme + AppThemeProvider) and the six controlled core components (PageHeader, EmptyState, ConfirmDialog, FormField, FormLayout, DataTable), bilingual out of the box through @speed/i18n",
+  "description": "Speed UI kit: the MUI v9 theme factory (createAppTheme + AppThemeProvider) and the seven controlled core components (PageHeader, EmptyState, ConfirmDialog, FormField, FormLayout, DataTable, FileUploader), bilingual out of the box through @speed/i18n",
   "type": "module",
   "sideEffects": false,
   "files": ["dist", "README.md", "AGENTS.md"],

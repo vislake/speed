@@ -78,6 +78,8 @@ M0 的"核心组件"指下面第一组。组件全部受控、props 驱动、不
 
 `FileUploader`（M2，配合 storage）、`StatCard` / `Sparkline`（M2，用量展示）、`StatusBadge`、`SearchInput`、`ToastProvider`、`LoadingOverlay`、`JobProgress`（M1，配合 jobs 的进度展示）。
 
+> **已落地**（file-uploader round）：本组首项 `FileUploader` 已提前于 M2 计划窗口交付（排期注见 [15 里程碑](15-roadmap.md)）：受控队列组件——pick 队列与每行传输状态（上传中/成功/失败，重试/取消/移除）作为 interaction-local 例外存于组件内（与 `ConfirmDialog` 的 armed 状态同类），每次队列变化经 `onQueueChange` 上报；**上传本身由 host 注入的 `execute(file, { signal, onProgress })` 逐文件执行，组件零 HTTP**——host 的传输就是组件的网络边界，大小/类型/数量预校验与并发上限都是 executor 的职责，该例外与「组件全部受控」一条的关系见 ui-kit AGENTS.md。host 的 executor 正是 storage 前端操作就位后要接的位置：api-sdk 的 storage 调用仍随 consumer-shell round 从 `go/storage/api/openapi.yaml` 生成，[21 API 契约](21-api-contract.md) 的该轮注记与 ui-kit AGENTS.md 的 deferral 条目同记该延期。
+
 **表单方案**：react-hook-form + zod 校验。zod schema 优先从 OpenAPI 生成的类型推导，避免前后端校验规则各写一套。
 
 ## 跨领域 hooks 的归属
