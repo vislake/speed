@@ -67,11 +67,26 @@ func newIntegrationService(t *testing.T, db *gorm.DB, members *testutil.Membersh
 // round's most important concurrency guarantee under a REAL database rather
 // than SQLite's coarse locking: concurrentRefreshers goroutines all present
 // the SAME refresh token to Service.Refresh at once. Exactly one may
-// succeed; every other goroutine must observe the replay-detected refusal,
-// and the whole token family plus its session end up revoked as a result --
+// succeed; every other goroutine must observe a refusal, and the whole
+// token family plus its session end up revoked as a result --
 // SessionManager.Rotate's own doc comment describes this as "a client
 // racing itself and a thief racing the victim look the same, and the safe
 // reading is the second one".
+//
+// A loser's refusal is legitimately EITHER of two codes, not only one, and
+// that is real concurrent behaviour rather than test slop to paper over: a
+// goroutine that reads the refresh-token row before the winner's Consume
+// call sees it still active and loses the CAS itself, which
+// SessionManager.Rotate reports as ErrRefreshTokenReused (session.go);
+// once ANY loser's handleReplay has revoked the session, a goroutine that
+// had not yet reached its own Consume call observes the ALREADY revoked
+// session first (Rotate checks session status before attempting Consume)
+// and reports ErrSessionRevoked instead. Both are the database, not this
+// test, resolving the exact same race two different call sites happened to
+// observe it from -- SQLite's coarse table-level locking serializes these
+// goroutines enough that this second code path rarely if ever surfaces
+// there, which is itself part of why this property gets its own real-database
+// leg.
 func TestRefreshRotation_ConcurrentReplay_ExactlyOneWinner_Postgres(t *testing.T) {
 	t.Parallel()
 
@@ -119,7 +134,7 @@ func TestRefreshRotation_ConcurrentReplay_ExactlyOneWinner_Postgres(t *testing.T
 			switch {
 			case refreshErr == nil:
 				successes++
-			case isReplayError(refreshErr):
+			case isExpectedLoserError(refreshErr):
 				failures++
 			default:
 				otherErrs = append(otherErrs, refreshErr)
@@ -133,11 +148,11 @@ func TestRefreshRotation_ConcurrentReplay_ExactlyOneWinner_Postgres(t *testing.T
 		t.Errorf("successes = %d, want exactly 1 (concurrentRefreshers=%d)", successes, concurrentRefreshers)
 	}
 	if failures != concurrentRefreshers-1 {
-		t.Errorf("replay-refused failures = %d, want %d", failures, concurrentRefreshers-1)
+		t.Errorf("refused losers = %d, want %d", failures, concurrentRefreshers-1)
 	}
 	if len(otherErrs) != 0 {
-		t.Errorf("%d goroutines got an unexpected error (want either success or a replay refusal): %v",
-			len(otherErrs), otherErrs)
+		t.Errorf("%d goroutines got an unexpected error (want either success, %s or %s): %v",
+			len(otherErrs), authn.ErrRefreshTokenReused.Code, authn.ErrSessionRevoked.Code, otherErrs)
 	}
 
 	// The side effect Rotate's doc comment promises: the WHOLE family and
@@ -152,11 +167,17 @@ func TestRefreshRotation_ConcurrentReplay_ExactlyOneWinner_Postgres(t *testing.T
 	}
 }
 
-// isReplayError reports whether err is authn.ErrRefreshTokenReused, matched
-// on its Code the way every other test in this module does (apperr's
-// builders derive a new value per decoration, so a decorated error is never
-// identical to the sentinel it came from -- see service.go's hasCode).
-func isReplayError(err error) bool {
+// isExpectedLoserError reports whether err is one of the two codes a losing
+// goroutine may legitimately observe -- see this file's own doc comment on
+// TestRefreshRotation_ConcurrentReplay_ExactlyOneWinner_Postgres for why
+// there are two rather than one. Matched on Code the way every other test
+// in this module does (apperr's builders derive a new value per
+// decoration, so a decorated error is never identical to the sentinel it
+// came from -- see service.go's hasCode).
+func isExpectedLoserError(err error) bool {
 	appErr, ok := apperr.As(err)
-	return ok && appErr.Code == authn.ErrRefreshTokenReused.Code
+	if !ok {
+		return false
+	}
+	return appErr.Code == authn.ErrRefreshTokenReused.Code || appErr.Code == authn.ErrSessionRevoked.Code
 }

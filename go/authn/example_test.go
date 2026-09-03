@@ -3,6 +3,7 @@ package authn_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -407,4 +408,57 @@ func ExampleService_EnrollTOTP() {
 	// Output:
 	// provisioning URI has otpauth scheme: true
 	// recovery codes issued: 10
+}
+
+// ExampleNewHandler drives authn's HTTP surface end to end: register, sign
+// in, then list the caller's own sessions. NewHandler's routing comes from
+// the spec-generated api.ServerInterface (api/authn-server.gen.go,
+// regenerated from api/openapi.yaml by task api:gen), so this is also a
+// compilable proof that the handler still implements every operation the
+// fragment declares.
+//
+// The protected /sessions call only succeeds because it is wrapped in
+// authn.Middleware, exactly as a real host must: Handler itself never
+// verifies a bearer token -- see requirePrincipal's doc comment in
+// handler.go and ExampleNewPrincipalResolver's identical middleware-chain
+// wiring above.
+func ExampleNewHandler() {
+	ctx := context.Background()
+	module, _ := exampleModule(ctx)
+	svc := module.Service()
+	handler := authn.Middleware(svc.Verifier())(authn.NewHandler(svc))
+
+	registerBody, _ := json.Marshal(map[string]string{
+		"email": "http-demo@example.com", "password": "a perfectly fine passphrase",
+	})
+	registerReq := httptest.NewRequest(http.MethodPost, "/api/v1/authn/register", bytes.NewReader(registerBody))
+	registerRec := httptest.NewRecorder()
+	handler.ServeHTTP(registerRec, registerReq)
+	fmt.Println("register status:", registerRec.Code)
+
+	loginBody, _ := json.Marshal(map[string]string{
+		"identifier": "http-demo@example.com", "password": "a perfectly fine passphrase",
+	})
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", bytes.NewReader(loginBody))
+	loginRec := httptest.NewRecorder()
+	handler.ServeHTTP(loginRec, loginReq)
+
+	var pair struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(loginRec.Body.Bytes(), &pair); err != nil {
+		panic(err)
+	}
+	fmt.Println("login status:", loginRec.Code)
+
+	sessionsReq := httptest.NewRequest(http.MethodGet, "/api/v1/authn/sessions", nil)
+	sessionsReq.Header.Set("Authorization", "Bearer "+pair.AccessToken)
+	sessionsRec := httptest.NewRecorder()
+	handler.ServeHTTP(sessionsRec, sessionsReq)
+	fmt.Println("sessions status:", sessionsRec.Code)
+
+	// Output:
+	// register status: 201
+	// login status: 200
+	// sessions status: 200
 }
