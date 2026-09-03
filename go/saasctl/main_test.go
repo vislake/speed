@@ -71,13 +71,13 @@ func TestRunUnknownCommand(t *testing.T) {
 	}
 }
 
-// TestRunPlannedCommandsNotImplemented: upgrade, db and config exist on
-// the usage surface but land with later milestones. Each is refused with
-// a one-line not-implemented message on stderr and exit code 1 -- the
-// execution-error code, so a script that treats 2 as "invocation mistake"
-// can distinguish "right shape, not built yet" from "malformed".
+// TestRunPlannedCommandsNotImplemented: db and config exist on the usage
+// surface but land with later milestones. Each is refused with a one-line
+// not-implemented message on stderr and exit code 1 -- the execution-error
+// code, so a script that treats 2 as "invocation mistake" can distinguish
+// "right shape, not built yet" from "malformed".
 func TestRunPlannedCommandsNotImplemented(t *testing.T) {
-	for _, arg := range []string{"upgrade", "db", "config"} {
+	for _, arg := range []string{"db", "config"} {
 		arg := arg
 		t.Run(arg, func(t *testing.T) {
 			code, stdout, stderr := runCLI(t, []string{arg})
@@ -123,6 +123,39 @@ func TestRunNewDispatchesThroughCLI(t *testing.T) {
 	}
 	if !strings.HasPrefix(string(mod), "module cli-app\n") {
 		t.Errorf("go.mod module line is not %q, got %q", "module cli-app", firstLineOf(mod))
+	}
+}
+
+// TestRunUpgradeDispatchesThroughCLI drives `saasctl upgrade` through the
+// root dispatch -- the one place main.go and the upgrade command meet --
+// against a real go.mod in a temp directory: exit 0 and the speed require
+// rewritten to the target version, with the single-line require form
+// exercised here (the block form is covered by internal/upgrade's own
+// suite). The upgrade command's behavior matrix lives there; this test only
+// proves the dispatch reaches it.
+func TestRunUpgradeDispatchesThroughCLI(t *testing.T) {
+	const version = "v0.9.0"
+	path := filepath.Join(t.TempDir(), "go.mod")
+	mod := "module cli-app\n\ngo 1.25.0\n\nrequire github.com/vislake/speed/go/authn v0.0.0-00010101000000-000000000000\n"
+	if err := os.WriteFile(path, []byte(mod), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	code, stdout, stderr := runCLI(t, []string{"upgrade", "--version", version, path})
+	if code != 0 {
+		t.Fatalf("run(upgrade) = %d, want 0; stderr:\n%s", code, stderr)
+	}
+	if stderr != "" {
+		t.Errorf("run(upgrade) wrote to stderr on success: %q", stderr)
+	}
+	if !strings.Contains(stdout, "Rewrote 1 github.com/vislake/speed/go/* require lines to "+version+" in "+path) {
+		t.Errorf("stdout does not report the rewrite: %q", stdout)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read rewritten go.mod: %v", err)
+	}
+	if want := "require github.com/vislake/speed/go/authn " + version + "\n"; !strings.Contains(string(got), want) {
+		t.Errorf("rewritten go.mod lacks %q:\n%s", want, got)
 	}
 }
 

@@ -8,8 +8,8 @@ go 1.25.0
 // generates are migrated and read through these same modules). Declaring the
 // full graph up front keeps every subsequent go.mod edit additive: later
 // imports only add go.sum entries, never require lines. go mod tidy is
-// therefore NOT run on this module until the first real import exists --
-// it would delete every require below.
+// therefore still not run on this module -- it would delete every require
+// below until the later blocks import them.
 require (
 	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/dbkit v0.0.0-00010101000000-000000000000
@@ -21,6 +21,13 @@ require (
 	github.com/vislake/speed/go/rbac v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/org v0.0.0-00010101000000-000000000000
 )
+
+// golang.org/x/mod is saasctl's single third-party dependency, justified in
+// internal/upgrade's package doc: rewriting a consumer go.mod must preserve
+// the file the Go toolchain itself maintains (comments, blocks, formatting,
+// replace directives), and modfile is the Go team's own parser for the job.
+// One version, pinned in step with the workspace's go.work.sum.
+require golang.org/x/mod v0.27.0
 
 // Every graph module resolves to its sibling directory in this repository
 // (the transition-state shape every consumer go.mod carries: speed modules

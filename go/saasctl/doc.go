@@ -5,12 +5,13 @@
 //
 // Subcommands:
 //
-//	new     scaffold a new consumer project (this round)
-//	upgrade rewrite a project's module requires to a new lockstep version
-//	db      run the project's migrations
-//	config  inspect the project's dynamic configuration
+//	new     scaffold a new consumer project
+//	upgrade rewrite a project's speed module requires to one lockstep
+//	        version
+//	db      run the project's migrations (planned)
+//	config  inspect the project's dynamic configuration (planned)
 //
-// Only `new` is wired in this build; the remaining subcommands land in the
-// later rounds of the saasctl milestone (docs/internal/02-repo-and-release.md
-// and docs/internal/15-roadmap.md track which).
+// This build wires new and upgrade; db and config land in the later rounds
+// of the saasctl milestone (docs/internal/02-repo-and-release.md and
+// docs/internal/15-roadmap.md track which).
 package main

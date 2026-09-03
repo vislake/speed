@@ -1,9 +1,9 @@
 // Command saasctl is the speed consumer CLI. Consumers manage their own
 // code; saasctl manages the boundary where a project meets the speed
 // modules it pulls in: shaping new consumer projects (new), rewriting a
-// generated project's dependency lines when a new speed release lands
-// (upgrade, planned), and maintaining a generated project's database and
-// dynamic configuration (db migrate and config print, planned).
+// project's speed module requires when a new lockstep release lands
+// (upgrade), and maintaining a generated project's database and dynamic
+// configuration (db migrate and config print, planned).
 //
 // The exit-code contract is uniform across commands: 0 for success and
 // help, 2 for usage errors (a malformed invocation of a command that
@@ -17,27 +17,28 @@ import (
 	"os"
 
 	newcmd "github.com/vislake/speed/go/saasctl/internal/new"
+	"github.com/vislake/speed/go/saasctl/internal/upgrade"
 )
 
 const rootUsage = `Usage: saasctl <command> [args]
 
 saasctl manages the boundary where a speed consumer project meets the
-speed modules it pulls in: it shapes new projects, and a later build
-rewrites a generated project's dependency lines for a new speed release
-and maintains its database and dynamic configuration.
+speed modules it pulls in: it shapes new projects, rewrites a project's
+speed module requires when a new lockstep release lands, and maintains a
+generated project's database and dynamic configuration.
 
 Commands:
 
   new        Materialize the project skeleton into a new consumer project
-  upgrade    Rewrite a project's speed dependencies for a new release
-             (planned)
+  upgrade    Rewrite a project's speed dependencies to one version for a
+             new release
   db         Database maintenance for a generated project (planned):
              saasctl db migrate
   config     Configuration maintenance for a generated project (planned):
              saasctl config print
 
-This build wires only new; the planned commands fail with a clear
-not-implemented message until their milestones land. Run
+This build wires new and upgrade; the remaining planned commands fail
+with a clear not-implemented message until their milestones land. Run
 "saasctl <command> -h" for each command's flags.
 
 Exit codes: 0 success or help, 2 usage error, 1 execution error.
@@ -67,8 +68,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "new":
 		return newcmd.Run(args[1:], stdout, stderr)
-	case "upgrade", "db", "config":
-		_, _ = fmt.Fprintf(stderr, "saasctl: %s is not implemented in this build (only new is wired); it lands with its own milestone\n", args[0])
+	case "upgrade":
+		return upgrade.Run(args[1:], stdout, stderr)
+	case "db", "config":
+		_, _ = fmt.Fprintf(stderr, "saasctl: %s is not implemented in this build (only new and upgrade are wired); it lands with its own milestone\n", args[0])
 		return 1
 	default:
 		_, _ = fmt.Fprintf(stderr, "saasctl: unknown command %q\n\n", args[0])
