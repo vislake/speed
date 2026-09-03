@@ -8,8 +8,14 @@ Today this app demonstrates real, end-to-end usage of `pkgcore`, `dbkit`, `tenan
 
 | Path | What it is |
 |---|---|
-| `internal/notes/` | A complete `pkgcore.Module`: a tenant-scoped "Note" resource (`id`, `tenant_id`, `text`, `created_at`) with real SQL migrations (both dialects), a `dbkit.Repository[Note]`-based store, HTTP handlers, a real zh-CN/en-US locale pair, an OpenAPI fragment, and permission/event/audit-action declarations. |
-| `cmd/server/` | The runnable entry point: initializes `observability` and serves its `/metrics` Prometheus endpoint, wires the notes `Module` into a `pkgcore.Kernel`, opens SQLite, runs migrations, and serves HTTP behind `tenancy.Middleware`. |
+| `internal/notes/` | A complete `pkgcore.Module`: a tenant-scoped "Note" resource (`id`, `tenant_id`, `text`, `created_at`) with real SQL migrations (both dialects), a `dbkit.Repository[Note]`-based store, HTTP handlers, a real zh-CN/en-US locale pair, an OpenAPI fragment, and permission/event/audit-action declarations. Creating a note also records a real audit trail entry — see "Audit trail" below. |
+| `cmd/server/` | The runnable entry point: initializes `observability` and serves its `/metrics` Prometheus endpoint, wires the notes `Module` (plus `config` and `go/dbkit/audit`'s persister `Module`) into a `pkgcore.Kernel`, opens SQLite, runs migrations, and serves HTTP behind `tenancy.Middleware`. |
+
+### Audit trail
+
+`go/dbkit/audit` is this app's mandatory-first-consumer proof: `internal/notes/handler.go`'s `NotesCreateNote` calls `audit.Emit` explicitly, after a note is created, under the already-declared `notes.note.create` audit action, and `cmd/server/server.go` wires `audit.New(db)` into the Kernel's module set, sharing notes' own database connection. There is no HTTP endpoint to read the trail back yet (the query/report API is `go/compliance`'s M4 scope) — `cmd/server/server_test.go`'s `TestBuildServer_NoteCreate_PersistsAuditEvent` is the executable proof instead, reading the row back through a second `dbkit.Open` connection to the same SQLite file.
+
+This app deliberately does **not** wire `dbkit.Options.AuditBus` (the automatic GORM write-capture mechanism `notes.Note` is otherwise eligible for, via its `AuditResourceType() string { return "note" }` method) onto its own shared database connection: doing so deadlocks every note creation into `SQLITE_BUSY`, because the write-capture plugin's publish happens synchronously, inside the same still-open write transaction `dbkit.Repository[Note].Create` holds, and the persister on the other end would try to write into the very same SQLite file. See `go/dbkit/AGENTS.md`'s "Audit trail collection" section (Known limitation) and `cmd/server/server.go`'s own doc comment on its `dbkit.Open` call for the full write-up — a real, empirically-confirmed hazard this app's own wiring surfaced, not a hypothetical one.
 
 ## Running it
 
@@ -59,4 +65,4 @@ go vet ./...
 go test ./... -race
 ```
 
-`internal/notes/repository_test.go` runs the mandatory `tenancytest.AssertIsolated` suite against the real repository. `cmd/server/server_test.go` builds the real, fully composed handler (via the same `buildServer` function `main()` calls) and drives it end to end with two different `Host` headers, proving cross-tenant isolation through the actual middleware + handler + repository stack — not a mocked shortcut.
+`internal/notes/repository_test.go` runs the mandatory `tenancytest.AssertIsolated` suite against the real repository. `cmd/server/server_test.go` builds the real, fully composed handler (via the same `buildServer` function `main()` calls) and drives it end to end with two different `Host` headers, proving cross-tenant isolation through the actual middleware + handler + repository stack — not a mocked shortcut. That same file's `TestBuildServer_NoteCreate_PersistsAuditEvent` is the audit-trail equivalent: a real POST through the composed stack, then a real read back through `go/dbkit/audit`'s own `Repository.ListByTenant`.
