@@ -21,6 +21,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // exampleSubscription is a tenant-scoped model, matching the shape every
@@ -415,4 +416,102 @@ func ExampleSoftDeletable() {
 	// Output:
 	// find after delete: dbkit.record_not_found
 	// restored: billing question
+}
+
+// exampleHardDeletePurpose is the SystemPurpose ExampleRepository_HardDelete grants
+// itself, on the fixture-purpose convention hard_delete_test.go's
+// hardDeleteTestPurpose follows (RegisterSystemPurpose is idempotent and
+// mutex-guarded, so the registration is a no-op from the second grant on).
+// In production the grant comes from a whitelisted module entering
+// tenancy.WithSystemContext's audited wrapper; this example registers and
+// grants directly only because it sits below tenancy in the dependency
+// graph, exactly as dbkit's own hard_delete.go does.
+const exampleHardDeletePurpose pkgcore.SystemPurpose = "dbkit.example.hard_delete"
+
+// ExampleRepository_HardDelete demonstrates Repository[T].HardDelete, the restricted,
+// irreversible half of the delete semantics: an ordinary tenant-scoped
+// context is refused outright (the gate runs before the database is
+// touched), while a system context granted over that same tenant context
+// passes the gate and the row is physically erased -- a SoftDeletable T
+// included, so a soft-deleted row is removable too. The erasure is proven
+// with db.WithContext(...).Unscoped(), which bypasses the query-only
+// soft-delete auto-scope plugin: finding nothing there means the row is
+// physically gone, not merely hidden.
+func ExampleRepository_HardDelete() {
+	ctx := context.Background()
+
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:dbkit_hard_delete_example?mode=memory&cache=shared",
+	})
+	if err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+
+	if err = db.Exec(`CREATE TABLE example_tickets (
+		id         VARCHAR(26)  NOT NULL,
+		tenant_id  VARCHAR(26)  NOT NULL,
+		subject    VARCHAR(255) NOT NULL,
+		deleted_at TIMESTAMP NULL,
+		deleted_by VARCHAR(64) NOT NULL DEFAULT '',
+		PRIMARY KEY (tenant_id, id)
+	)`).Error; err != nil {
+		fmt.Println("migrate:", err)
+		return
+	}
+
+	ctx = pkgcore.WithTenant(ctx, "tenant-acme")
+	ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1"})
+
+	repo := dbkit.NewRepository[exampleTicket](db)
+	ticket := &exampleTicket{ID: "ticket-1", Subject: "billing question"}
+	if err = repo.Create(ctx, ticket); err != nil {
+		fmt.Println("create:", err)
+		return
+	}
+
+	// An ordinary tenant-scoped context is refused: the gate runs before
+	// the database is touched. The refusal is matched by code through
+	// apperr.As, never by errors.Is against the package-level var.
+	if err = repo.HardDelete(ctx, ticket.ID); err != nil {
+		if appErr, ok := apperr.As(err); ok {
+			fmt.Println("hard delete on tenant ctx:", appErr.Code)
+		} else {
+			fmt.Println("hard delete on tenant ctx: unexpected error:", err)
+			return
+		}
+	}
+
+	// A granted system context layered over the tenant context passes the
+	// gate -- but the tenant stays binding: the DELETE below is scoped to
+	// tenant-acme and to it only.
+	pkgcore.RegisterSystemPurpose(exampleHardDeletePurpose)
+	sysCtx, err := pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
+		Actor:   "retention-cleanup-job",
+		Purpose: exampleHardDeletePurpose,
+		Ticket:  "dbkit-hard-delete-example",
+	})
+	if err != nil {
+		fmt.Println("system context:", err)
+		return
+	}
+	if err = repo.HardDelete(sysCtx, ticket.ID); err != nil {
+		fmt.Println("hard delete:", err)
+		return
+	}
+
+	// Ground truth: the physical row is gone. .Unscoped() skips the
+	// soft-delete auto-scope (which would hide a merely soft-deleted row),
+	// and the context carries tenant-acme so the tenant-scoping plugin's
+	// own filter applies -- gorm's ErrRecordNotFound prints as "record not
+	// found".
+	var gone exampleTicket
+	if err = db.WithContext(ctx).Unscoped().Where("id = ?", ticket.ID).First(&gone).Error; err != nil {
+		fmt.Println("erased:", err)
+	}
+
+	// Output:
+	// hard delete on tenant ctx: dbkit.hard_delete_requires_system_context
+	// erased: record not found
 }
