@@ -18,7 +18,9 @@
  * account-ui BindingCallbackHandler completes at, so it parses here
  * (provider validated against the demo provider set -- no unknown
  * provider ever drives an exchange) and renders inside the account
- * surface. Everything else degrades to home with no nav item
+ * surface, the host answering the handler's onBound cue by navigating
+ * back to the account fragment (the account-ui family never navigates
+ * itself). Everything else degrades to home with no nav item
  * selected; there is no 404 chrome in this round.
  *
  * The brand in the AppBar and on the sign-in/home headings is the
@@ -190,8 +192,24 @@ export function AppView(): ReactElement {
       content = <NotesView />
       break
     case 'account':
-    case 'binding':
       content = <AccountView />
+      break
+    case 'binding':
+      // The binding subroute completes the exchange inside the account
+      // surface; onBound is the host's cue that the exchange landed a
+      // binding-shaped answer (the identities list refetched). The
+      // answer here is navigation back to the account fragment, which
+      // unmounts the completion handler -- its pending notice rests
+      // until this cue, so the cue's answer is what takes it off the
+      // page.
+      content = (
+        <AccountView
+          bindingTarget={parsed.target}
+          onBound={() => {
+            window.location.hash = ROUTE_ACCOUNT
+          }}
+        />
+      )
       break
   }
 

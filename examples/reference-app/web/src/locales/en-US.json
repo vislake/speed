@@ -52,9 +52,9 @@
       "unknown": "Something went wrong. Try again later."
     }
   },
-  "placeholder": {
-    "accountTitle": "Account",
-    "accountDescription": "Sessions, login history, social bindings and multi-factor authentication land in a later iteration."
+  "account": {
+    "heading": "Account",
+    "intro": "Manage your sign-in sessions, recent sign-in activity and linked social accounts, and set up two-step verification."
   },
   "tenants": {
     "acme": "Acme Dental",

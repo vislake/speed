@@ -16,19 +16,24 @@
  * host-computed aria-current, home over the served brand), navigation
  * travels home/notes/account through the location hash -- notes
  * answering with its served list (the empty demo list renders the
- * list's empty state), account still the placeholder surface -- and
- * unknown fragments degrade to home with nothing selected, and a sign-out after the frame converges to
- * the session-ended screen and back to the sign-in surface -- the
- * session still anonymous, the config cache still one fetch. A
- * bilingual leg proves the frame and the auth surface speak the active
- * language while the served brand stays verbatim.
+ * list's empty state), the account fragment rendering the account
+ * surface over its served state, and the binding subroute completing
+ * its exchange inside that surface: the host's answer to the handler's
+ * onBound cue is navigation back to the account fragment, unmounting
+ * the completion UI (the journey gates the exchange's answer so it can
+ * rest on the pending notice before the cue). Unknown fragments
+ * degrade to home with nothing selected, and a sign-out after the
+ * frame converges to the session-ended screen and back to the sign-in
+ * surface -- the session still anonymous, the config cache still one
+ * fetch. A bilingual leg proves the frame and the auth surface speak
+ * the active language while the served brand stays verbatim.
  *
  * Built-in strings are asserted through the bundles they render from --
  * the app's own zh-CN/en-US fixtures imported relatively, the auth-ui
- * copy through the package's locale fixtures (relative imports, the
- * product-shell precedent) -- never inline: the CJK scan treats test
- * files as English text like everything else, and inline copy would
- * both violate that rule and drift from the resources.
+ * and account-ui copy through the packages' locale fixtures (relative
+ * imports, the product-shell precedent) -- never inline: the CJK scan
+ * treats test files as English text like everything else, and inline
+ * copy would both violate that rule and drift from the resources.
  */
 
 import { act, waitFor } from '@testing-library/react'
@@ -36,6 +41,7 @@ import userEvent from '@testing-library/user-event'
 import type { UserEvent } from '@testing-library/user-event'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { switchLanguage } from '@speed/i18n'
+import accountUiZhCN from '../../../../web/packages/account-ui/src/locales/zh-CN.json' with { type: 'json' }
 import authUiEnUS from '../../../../web/packages/auth-ui/src/locales/en-US.json' with { type: 'json' }
 import authUiZhCN from '../../../../web/packages/auth-ui/src/locales/zh-CN.json' with { type: 'json' }
 import zhCN from './locales/zh-CN.json' with { type: 'json' }
@@ -193,8 +199,27 @@ describe('AppView', () => {
     ).toBe(true)
   })
 
-  it('travels home/notes/account through the hash, notes answering with its served empty list, and degrades unknown fragments', async () => {
-    const rig = makeAppRig()
+  it('travels home/notes/account through the hash, lands the binding exchange back on the account fragment, and degrades unknown fragments', async () => {
+    const server = demoServer({
+      publicConfig: { config: { 'brand.site_name': BRAND }, features: [] },
+    })
+    // The binding callback's answer is held open so the journey can rest
+    // on the completion handler's pending notice before the exchange
+    // lands and the host's own navigation answers the onBound cue.
+    let releaseBinding: (() => void) | undefined
+    const rig = makeRealClientRig((call) => {
+      if (
+        call.method === 'POST' &&
+        call.path === '/api/v1/authn/social/github/callback'
+      ) {
+        return new Promise<Response>((resolve) => {
+          releaseBinding = () => {
+            resolve(server(call))
+          }
+        })
+      }
+      return server(call)
+    })
     const view = rendered(rig)
     const user = userEvent.setup()
     await signInWithPasswordUi(view, user)
@@ -214,19 +239,40 @@ describe('AppView', () => {
     expect(homeLink()).not.toHaveAttribute('aria-current')
 
     navigateTo('#/account')
+    // The account fragment renders the account surface: the host's own
+    // heading and intro above the account-ui sections. The heading is
+    // role-scoped -- its text is also the account nav item's label.
     expect(
-      await view.findByText(zhCN.placeholder.accountDescription),
+      await view.findByRole('heading', { name: zhCN.account.heading }),
     ).toBeInTheDocument()
+    expect(view.getByText(zhCN.account.intro)).toBeInTheDocument()
     expect(accountLink()).toHaveAttribute('aria-current', 'page')
     expect(notesLink()).not.toHaveAttribute('aria-current')
 
-    // The binding subroute renders the account surface (its completion
-    // UI arrives with the surface commit) and keeps the account nav
-    // item selected.
+    // The binding subroute renders the same surface with the completion
+    // handler exchanging the fragment's (code, state) pair over the
+    // app's client; the pending notice rests while the answer is held,
+    // and the account nav stays selected.
     navigateTo('#/auth/binding/github?code=c&state=s')
+    expect(
+      await view.findByText(accountUiZhCN.bindingCallback.pending),
+    ).toBeInTheDocument()
+    expect(accountLink()).toHaveAttribute('aria-current', 'page')
+
+    // The exchange lands a binding-shaped answer. The host answers the
+    // handler's onBound cue by navigating back to the account fragment
+    // -- the hash moves, the machine re-renders the plain account
+    // surface, and the completion UI unmounts with it.
+    act(() => {
+      releaseBinding?.()
+    })
+    await waitFor(() => expect(window.location.hash).toBe('#/account'))
     await waitFor(() =>
-      expect(accountLink()).toHaveAttribute('aria-current', 'page'),
+      expect(
+        view.queryByText(accountUiZhCN.bindingCallback.pending),
+      ).not.toBeInTheDocument(),
     )
+    expect(accountLink()).toHaveAttribute('aria-current', 'page')
 
     // Unknown fragments: home content, nothing selected.
     navigateTo('#/definitely-not-a-route')

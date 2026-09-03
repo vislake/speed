@@ -52,9 +52,9 @@
       "unknown": "出了点问题，请稍后再试。"
     }
   },
-  "placeholder": {
-    "accountTitle": "账户",
-    "accountDescription": "会话管理、登录历史、社交绑定与双重验证功能将在后续迭代中落地。"
+  "account": {
+    "heading": "账户",
+    "intro": "管理您的登录会话、最近登录记录与已关联的社交账号，并设置双重验证。"
   },
   "tenants": {
     "acme": "Acme 牙科诊所",
