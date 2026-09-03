@@ -1,0 +1,8 @@
+# The "clinic" fixture module's bundle for the integration tier's Chinese
+# language file. The copy is deliberately the same English text as en-US.toml
+# (with an identical id set, as pkgcore/i18n's AddModule parity rule
+# requires): the Redis leg asserts on rendered text, and this fixture is not
+# product copy -- it only has to prove that a declaring module's bundle
+# travels through Bootstrap's catalog merge and renders at delivery time.
+"clinic.appointment_reminder.in_app.title" = "Appointment reminder"
+"clinic.appointment_reminder.in_app.body" = "{{.patient_name}}, your appointment at {{.appointment_time}} is coming up."

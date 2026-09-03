@@ -1,0 +1,8 @@
+# The "clinic" fixture module's English bundle for the integration tier.
+# The id set is identical to zh-CN.toml's, and the copy is deliberately the
+# same English text in both files: the Redis leg asserts on rendered text,
+# and this fixture is not product copy -- it only has to prove that a
+# declaring module's bundle travels through Bootstrap's catalog merge and
+# renders at delivery time.
+"clinic.appointment_reminder.in_app.title" = "Appointment reminder"
+"clinic.appointment_reminder.in_app.body" = "{{.patient_name}}, your appointment at {{.appointment_time}} is coming up."
