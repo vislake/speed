@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>About — speed documentation</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header>
+  <nav>
+    <a href="index.html">Home</a>
+    <a href="about.html">About</a>
+    <a href="status.html">Status</a>
+  </nav>
+</header>
+<main>
+  <h1>About speed</h1>
+
+  <p>speed is the shared foundation of a multi-tenant SaaS product family. It is
+  <strong>not an application</strong>: it is a set of independently released Go modules
+  and npm packages, versioned in lockstep, that a business project pulls in and compiles
+  into a single binary. Modules call each other in-process — there is no service
+  discovery and no Kubernetes-shaped infrastructure.</p>
+
+  <h2>The shape</h2>
+  <table>
+    <tr><th>Aspect</th><th>Design</th></tr>
+    <tr><td>Dependencies</td><td>Strictly bottom-up: the foundation modules
+    (<code>pkgcore</code>, <code>dbkit</code>, <code>observability</code>,
+    <code>ratelimit</code>, <code>tenancy</code>) underpin everything above them.</td></tr>
+    <tr><td>Deployment modes</td><td>Every infrastructure dependency is an interface with
+    two implementations: <strong>standalone</strong> (single process, SQLite, zero
+    external dependencies) and <strong>distributed</strong> (PostgreSQL, Redis, S3, real
+    providers). Business code never branches on the mode.</td></tr>
+    <tr><td>Multi-tenancy</td><td>A shared database with <code>tenant_id</code>
+    isolation, guarded by a GORM plugin, a mandatory generic repository base, and
+    PostgreSQL row-level security in the distributed mode.</td></tr>
+    <tr><td>Versioning</td><td>Lockstep: all modules and packages share one version and
+    release together; only same-version combinations are supported.</td></tr>
+  </table>
+
+  <h2>How documentation is distributed</h2>
+  <p>Each module carries its own <code>docs/</code> and <code>AGENTS.md</code> inside the
+  module, so documentation ships with the code and stays current with the version a
+  consumer actually pulls. This site is the <em>central</em> reference — planned to be
+  versioned per release, with the module-level docs pointing at it for the overview.</p>
+
+  <h2>This site today versus the plan</h2>
+  <p>Real now: hand-written static pages (this one, the landing page, the status page)
+  with a single stylesheet, served by the python3 standard library — deliberately no
+  build step and no framework, so the skeleton is previewable and CI-checkable offline.
+  The operating note for this tree is docs/site/README.md; the conventions it follows
+  are set in docs/internal/13-documentation-standards.md.</p>
+  <p>Deferred to a later milestone (M4): per-version release directories, an
+  <code>llms.txt</code> at the site root once the site goes public, the complete
+  documentation set, and the static-site machinery decision. Nothing on this site
+  anticipates that choice.</p>
+</main>
+<footer>
+  <p><a href="index.html">Home</a> · <a href="status.html">Status</a></p>
+</footer>
+</body>
+</html>

@@ -4,9 +4,11 @@
 The rule (CLAUDE.md, "Language Rule (read this first)"): docs/internal/** is
 written in Chinese; every other file in the repository is English, and CI
 fails on CJK characters found outside docs/internal/ (i18n resources under
-locale directories, and the future docs/site/ localization directories, are
-the exceptions). docs/internal/18-cicd.md schedules this as a self-written
-discipline check; this script is its local-run counterpart.
+locale directories, and the docs/site/ public documentation site --
+English-first, with zh-CN localization directories added by need, per
+docs/internal/13-documentation-standards.md -- are the exceptions).
+docs/internal/18-cicd.md schedules this as a self-written discipline
+check; this script is its local-run counterpart.
 
 Scan semantics, mirroring go/ratelimit/language_test.go (the module-level
 precedent):
@@ -27,7 +29,8 @@ precedent):
 Carve-outs (a whole subtree is exempt, matching CLAUDE.md's exceptions):
 
   docs/internal/          Chinese by rule; never scanned
-  docs/site/              future localization tree; never scanned
+  docs/site/              public documentation site (English-first, zh-CN
+                          by need, per docs/internal/13); never scanned
   <dir>/locales, locale, i18n, translations   i18n resource directories;
                           files there legitimately carry CJK user-facing
                           text (e.g. .../notes/locales/zh-CN.toml). The
@@ -77,7 +80,7 @@ LOCALE_DIR_NAMES = frozenset({"locales", "locale", "i18n", "translations"})
 # machines (GoLand writes Chinese UI strings into .idea/, for instance).
 NON_SCANNED_DIR_NAMES = frozenset({".git", ".idea", ".vscode", "node_modules", "vendor"})
 
-# docs/internal/** and the future docs/site/** are exempt wholesale. The
+# docs/internal/** and the docs/site/** subtree are exempt wholesale. The
 # entries are repo-relative directory paths whose whole subtree is skipped;
 # their common ancestor ("docs") itself is still descended into so the
 # pruning happens at the right level.

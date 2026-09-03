@@ -1,20 +1,22 @@
 # tools/ — repo scripts
 
 Plain, dependency-free Python scripts (standard library only, Python >= 3.11
-for `tomllib`) that back the repository's cross-cutting disciplines: four
+for `tomllib`) that back the repository's cross-cutting disciplines: five
 checkers and one scaffold generator. Three of the checkers are the
 local-run counterparts of the CI discipline checks scheduled in
 `docs/internal/18-cicd.md` (the table rows for banning CJK outside
 `docs/internal/`, for requiring identical zh-CN/en-US message-key sets, and
 for making every tenant-scoped Repository run the tenancytest isolation
-suite, all marked there as self-written scripts). The remaining checker,
-`tools/check_toolchain.py`, is a repo self-check rather than an 18-cicd
-discipline row: it gates the tool versions the root `.mise.toml` pins --
-mirrors of the authoritative sources CI actually reads (Taskfile.yml
-header, `go.work`, `web/.nvmrc`, `web/package.json`, setup-go-env's
-`GOLANGCI_VERSION`) -- proving the mirrors cannot drift, and pr-check's
-repo-checks job runs it. CI workflows mount all of them under `tools/`.
-The generator is the backend of the `task new:module`
+suite, all marked there as self-written scripts). The other two are repo
+self-checks rather than 18-cicd discipline rows: `tools/check_toolchain.py`
+gates the tool versions the root `.mise.toml` pins -- mirrors of the
+authoritative sources CI actually reads (Taskfile.yml header, `go.work`,
+`web/.nvmrc`, `web/package.json`, setup-go-env's `GOLANGCI_VERSION`) --
+proving the mirrors cannot drift, and pr-check's repo-checks job runs it;
+`tools/check_docs_site.py` validates the docs-site skeleton (required
+entry files, internal links, offline preview) and the docs-check pipeline
+runs it. CI workflows mount all of them under `tools/`. The generator is
+the backend of the `task new:module`
 promised by `docs/internal/19-dev-workflow.md`. Nothing here needs anything
 beyond `python3`, and the checkers print hit paths relative to their
 `--root`.
@@ -25,6 +27,7 @@ beyond `python3`, and the checkers print hit paths relative to their
 | `check_i18n_keys.py` | Checker | Root `CLAUDE.md` internationalization rule: zh-CN and en-US key sets identical | 0 clean / 1 mismatch or parse error / 2 error |
 | `check_repo_isolation.py` | Checker | Multi-tenant isolation discipline: every Repository type (a struct embedding `dbkit.Repository[T]`) is covered by `tenancytest.AssertIsolated` in its package's tests | 0 all covered / 1 uncovered repository / 2 error |
 | `check_toolchain.py` | Checker | Root `.mise.toml` tool versions mirror their authoritative sources (Taskfile.yml header, `go.work`, `web/.nvmrc`, `web/package.json`, setup-go-env's `GOLANGCI_VERSION`) | 0 all mirrors match / 1 drift / 2 error |
+| `check_docs_site.py` | Checker | `docs/site/` skeleton structure: required entry files present, internal links resolve inside the tree, offline preview serves (python3 stdlib HTTP server) | 0 clean / 1 violation / 2 error |
 | `new_module.py` | Generator | Scaffolds the canonical stub of a new Go module under `go/<name>` and prints its registration checklist; never modifies shared repository files | 0 scaffolded / 2 refusal or validation error |
 
 ## scan_cjk.py — CJK scanner
@@ -71,7 +74,7 @@ tree is scanned.
 | Path | Why |
 |---|---|
 | `docs/internal/` | Chinese by rule — the Language Rule's own exception. |
-| `docs/site/` | Future localization tree (per `CLAUDE.md`); reserved. |
+| `docs/site/` | Public documentation site (per `docs/internal/13-documentation-standards.md`, English-first with zh-CN localization directories added by need) — localization legitimately carries CJK, so the whole subtree is exempt. |
 | Any directory named `locales`, `locale`, `i18n` or `translations` | i18n resource directories legitimately carry CJK user-facing text (e.g. `.../notes/locales/zh-CN.toml`). The basename set is the `LOCALE_DIR_NAMES` constant at the top of the script — extend it when a new i18n directory convention appears, rather than loosening the scan. |
 | `.git/`, `node_modules/`, `vendor/` | VCS metadata and vendored dependencies. |
 
@@ -258,6 +261,38 @@ field; `golangci-lint` from GOLANGCI_VERSION in
 .github/actions/setup-go-env/action.yml. Bump a source and its mirror
 together -- the .mise.toml header comments name the source of every tool.
 
+## check_docs_site.py — docs-site skeleton checker
+
+The docs site (docs/site/) is a real, previewable skeleton -- static
+HTML with no build step, no npm project and no network
+(docs/site/README.md) -- whose full machinery (per-version release
+directories, llms.txt at the public root, a build step/SSG) is a later
+milestone per docs/internal/13-documentation-standards.md. This script
+checks what can be checked about such a tree without any tooling: the
+required entry files (index.html, README.md) exist at the site root;
+every internal link and asset reference on every HTML page resolves
+inside the site tree (fragments, external http(s)/mailto/tel/data URLs
+and protocol-relative URLs are skipped; an absolute path escaping the
+tree is a violation); and the offline preview really serves -- the
+script starts the python3 stdlib HTTP server on an ephemeral port and
+fetches the site root, expecting a 200.
+
+Usage:
+
+```
+python3 tools/check_docs_site.py --root /path/to/repo
+python3 tools/check_docs_site.py        # --root defaults to the current directory
+```
+
+Per-violation output is one grep-friendly line; exit 1 on any
+violation, 2 when the site tree or the preview server cannot be
+handled:
+
+```
+docs-site: violation    index.html: required entry file is missing
+docs-site: violation    status.html: link 'aboutx.html' resolves to nothing
+```
+
 ## new_module.py — Go module stub generator
 
 Scaffolds the canonical stub of a future module, exactly the three files
@@ -310,9 +345,10 @@ CI workflows mount the checkers directly, from the repository root, and
 fail the build on a nonzero exit: `python3 tools/scan_cjk.py` and
 `python3 tools/check_toolchain.py` run in pr-check's repo-checks job
 (every pull request, `.github/workflows/pr-check.yml`), and
-`python3 tools/check_i18n_keys.py` runs in the docs-check pipeline
-(`.github/workflows/docs-check.yml`), whose pull_request path filter fires
-on PRs touching documentation or i18n resources.
+`python3 tools/check_i18n_keys.py` plus `python3 tools/check_docs_site.py`
+run in the docs-check pipeline (`.github/workflows/docs-check.yml`),
+whose pull_request path filter fires on PRs touching documentation or
+i18n resources.
 `tools/check_repo_isolation.py` is wired into no workflow yet; its row
 lands with a future CI round. Locally, run them from the
 repository root — the default `--root` is the current directory, so plain

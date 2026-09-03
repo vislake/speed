@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Status — speed documentation</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header>
+  <nav>
+    <a href="index.html">Home</a>
+    <a href="about.html">About</a>
+    <a href="status.html">Status</a>
+  </nav>
+</header>
+<main>
+  <h1>Implementation status</h1>
+
+  <p class="lede">Coarse milestone status. The authoritative, always-current statement
+  lives in the repository root CLAUDE.md's <em>Repository Status</em> section — this page
+  deliberately does not repeat per-module detail, because a duplicated status would
+  rot.</p>
+
+  <h2>Milestones</h2>
+  <table>
+    <tr><th>Milestone</th><th>Focus</th><th>State</th></tr>
+    <tr><td>M0</td><td>Foundations: <code>pkgcore</code>, <code>dbkit</code>,
+    <code>tenancy</code>, <code>observability</code>, <code>jobs</code>,
+    <code>ratelimit</code>; web packages <code>@speed/tokens</code>,
+    <code>@speed/i18n</code>, <code>@speed/ui-kit</code>; the developer toolchain
+    (mise) and this site skeleton.</td>
+    <td>In progress — implemented, tested modules and packages are enumerated in the
+    repository root CLAUDE.md.</td></tr>
+    <tr><td>M1+</td><td>Business modules on the foundation: authn, rbac, org, metering,
+    billing, integration, and the rest of the module graph.</td>
+    <td>Not started — planned in the roadmap (docs/internal/15-roadmap.md).</td></tr>
+    <tr><td>M4</td><td>The full documentation set and this site's machinery: per-version
+    release directories, <code>llms.txt</code> at the public root, and a build
+    step.</td>
+    <td>Not started — the skeleton pages you are reading are the only real part so
+    far.</td></tr>
+  </table>
+
+  <h2>Reading the authoritative status</h2>
+  <p>The repository root CLAUDE.md states — per feature — what genuinely runs and passes
+  in CI today, and which listed modules are still placeholder stubs. It is written to be
+  checked rather than trusted: when working in the repository, verify a claim before
+  relying on it. That file is not part of this site; preview the site and open the file
+  side by side when you need the current detail.</p>
+</main>
+<footer>
+  <p><a href="index.html">Home</a> · <a href="about.html">About</a></p>
+</footer>
+</body>
+</html>

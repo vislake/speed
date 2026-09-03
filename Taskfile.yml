@@ -222,19 +222,22 @@ tasks:
           -config oapi-codegen.yaml openapi.yaml
 
   docs:serve:
-    desc: Not implemented -- the docs site does not exist yet.
+    desc: Preview the docs site (docs/site/) locally over HTTP.
+    # The docs-site skeleton is real -- docs/site/ is hand-written static
+    # HTML with no build step, no npm project and no network, so previewing
+    # it needs only the python3 standard-library HTTP server. What this is
+    # NOT yet is the full documentation-engineering deliverable of
+    # docs/internal/13-documentation-standards.md: per-version release
+    # directories, llms.txt at the site root once the site goes public,
+    # the complete M4 doc set and the machinery decision (a build step /
+    # SSG) all stay deferred -- docs/site/README.md names the split. The
+    # structural check keeping the skeleton honest in CI is
+    # tools/check_docs_site.py (docs-check pipeline). The underlying
+    # command is directly runnable without the task CLI:
+    #   python3 -m http.server 8000 -d docs/site
+    # Edit the port number to preview on another port; Ctrl-C stops it.
     cmds:
-      - |
-        echo "docs:serve: not implemented yet."
-        echo
-        echo "The planned command previews the docs site locally. There is no docs site"
-        echo "in this repository yet (no docs/site/ tree, no site tooling) -- the"
-        echo "documentation-engineering round per docs/internal/15-roadmap.md and"
-        echo "docs/internal/13-documentation-standards.md will deliver the skeleton."
-        echo "Until then, preview the design docs directly as markdown:"
-        echo "    open docs/internal/00-overview.md"
-        exit 1
-    silent: true
+      - python3 -m http.server 8000 -d docs/site
 
   seed:
     desc: Not implemented -- no demo-data seeding path exists in the reference app yet.
