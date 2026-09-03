@@ -272,7 +272,12 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 //     (ErrUserAddressResolverRequired) -- is refused here, at boot, so the
 //     failure names the missing seam instead of surfacing later as a
 //     nil-panic or a dead verification or delivery channel. This imitates
-//     org's Register-time validation of its own required seams.
+//     org's Register-time validation of its own required seams. The consent
+//     ledger's four transport seams are then attached to the contact
+//     service a host reaches through Contacts(), the attachment block in
+//     the body below -- a module whose seams only validated, never landed
+//     on that service, would hand the host a ledger whose first
+//     CreateContact dereferences a nil blind indexer.
 //
 //  2. The module's declarations are contributed: the event catalog
 //     (EventInboxCreated, one declared event) and the consent ledger's
@@ -317,6 +322,19 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	if m.resolver == nil {
 		return ErrUserAddressResolverRequired
 	}
+	// The consent ledger's four transport seams are attached to the contact
+	// service Contacts() hands out only once every one of them validated.
+	// Options write the module's own fields (NewModule); the checks above
+	// refuse a module missing any; and this block is what makes the
+	// accessor's doc promise true -- "the service's seams are validated and
+	// attached (Register) by the time any caller reaches it". The delivery
+	// pipeline's own seams get the same copy in NewModule; the contact
+	// service predates the options there (see its constructor), so its copy
+	// belongs here, next to the validation that gates it.
+	m.contacts.sms = m.sms
+	m.contacts.mailFrom = m.mailFrom
+	m.contacts.emailIndexer = m.emailIndexer
+	m.contacts.phoneIndexer = m.phoneIndexer
 	if err := reg.Events.Publishes(inboxEventDecls...); err != nil {
 		return err
 	}

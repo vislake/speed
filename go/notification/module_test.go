@@ -266,6 +266,43 @@ func TestModule_Register_AttachesTheHostRegistrarToPreferenceService(t *testing.
 	}
 }
 
+// TestModule_Register_AttachesTransportSeamsToContactService pins the
+// promise module.go's Contacts() doc makes -- "the service's seams are
+// validated and attached (Register) by the time any caller reaches it" --
+// for the consent ledger's four transport seams. Register validates the
+// SMS sender, the mail From address and the two address blind indexers on
+// the module, but a host reaches the ledger through Contacts(); a Register
+// that validated them without attaching them to the service it hands out
+// would give the host a service whose first CreateContact dereferences a
+// nil blind indexer. The PostgreSQL tier's consent-flow test caught
+// exactly that wiring gap through a kernel-booted module -- the one path
+// no earlier test walked, every service test having built its service by
+// hand and assigned the fields directly. This test pins the invariant at
+// unit level, where it runs on every pull request.
+func TestModule_Register_AttachesTransportSeamsToContactService(t *testing.T) {
+	db := newTestDB(t)
+	module := NewModule(db, testModuleOptions(t)...)
+	reg := newHostRegistry(t)
+
+	if err := module.Register(reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	contacts := module.Contacts()
+	if contacts.sms == nil {
+		t.Error("Contacts() carries no SMS sender after Register")
+	}
+	if contacts.mailFrom != testMailFrom {
+		t.Errorf("Contacts() mail From = %q, want the option's %q", contacts.mailFrom, testMailFrom)
+	}
+	if contacts.emailIndexer == nil {
+		t.Error("Contacts() carries no email blind indexer after Register")
+	}
+	if contacts.phoneIndexer == nil {
+		t.Error("Contacts() carries no phone blind indexer after Register")
+	}
+}
+
 // TestModule_Register_TaxonomyIsLiveNotASnapshot proves the reference is
 // live: a type the host registers AFTER Register still governs preference
 // writes and reads. The module must hold the registrar, never a copy taken at
