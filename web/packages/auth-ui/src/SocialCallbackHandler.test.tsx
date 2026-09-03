@@ -5,7 +5,10 @@
  * success; StrictMode's double effect invocation starts exactly one
  * exchange. A failed exchange renders its code text in one alert under a
  * retry button that re-runs the same pair, and a changed pair starts a
- * fresh exchange. The en-US bundle renders on an English-starting
+ * fresh exchange while the session is still anonymous. A mount that
+ * finds the session already authenticated starts no exchange and fires
+ * onSignedIn again -- the re-entry to the callback URL after a
+ * completed exchange. The en-US bundle renders on an English-starting
  * instance and the pending tree passes axe. Text expectations read the
  * bundle values, never inline language.
  */
@@ -135,9 +138,18 @@ describe('SocialCallbackHandler', () => {
     expect(harness.store.get()).toBe('access-1')
   })
 
-  it('start a fresh exchange when the pair changes', async () => {
+  it('start a fresh exchange when the pair changes while anonymous', async () => {
+    let attempts = 0
     const harness = makeHarness({
-      [SOCIAL_CALLBACK]: () => ({ tokens: makePair() }),
+      [SOCIAL_CALLBACK]: () => {
+        attempts += 1
+        if (attempts === 1) {
+          // The first pair is refused, so the session stays anonymous --
+          // the state in which a fresh exchange is possible.
+          throw apiError(400, 'authn.oauth_state_invalid')
+        }
+        return { tokens: makePair() }
+      },
     })
     const onSignedIn = vi.fn()
     const { rerender } = renderWithProviders(
@@ -149,7 +161,9 @@ describe('SocialCallbackHandler', () => {
         onSignedIn={onSignedIn}
       />,
     )
-    await waitFor(() => expect(onSignedIn).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toBeInTheDocument(),
+    )
     rerender(
       <SocialCallbackHandler
         session={harness.session}
@@ -159,12 +173,55 @@ describe('SocialCallbackHandler', () => {
         onSignedIn={onSignedIn}
       />,
     )
-    await waitFor(() => expect(onSignedIn).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(onSignedIn).toHaveBeenCalledTimes(1))
     expect(harness.calls).toHaveLength(2)
     expect(harness.calls[1]?.options?.body).toEqual({
       code: 'oauth-code-2',
       state: STATE,
     })
+    expect(harness.store.get()).toBe('access-1')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('not re-exchange when a remount finds the session already signed in', async () => {
+    const harness = makeHarness({
+      [SOCIAL_CALLBACK]: () => ({ tokens: makePair() }),
+    })
+    const onSignedIn = vi.fn()
+    const first = renderWithProviders(
+      <SocialCallbackHandler
+        session={harness.session}
+        provider="google"
+        code={CODE}
+        state={STATE}
+        onSignedIn={onSignedIn}
+      />,
+    )
+    await waitFor(() => expect(onSignedIn).toHaveBeenCalledTimes(1))
+    expect(harness.calls).toHaveLength(1)
+    expect(harness.store.get()).toBe('access-1')
+
+    // The viewer returns to the callback URL after the sign-in landed
+    // (a back/forward re-entry in the same SPA instance): the mount
+    // finds the session authenticated, starts no second exchange for
+    // the consumed code and signals the host onward instead.
+    first.unmount()
+    renderWithProviders(
+      <SocialCallbackHandler
+        session={harness.session}
+        provider="google"
+        code={CODE}
+        state={STATE}
+        onSignedIn={onSignedIn}
+      />,
+    )
+    await waitFor(() => expect(onSignedIn).toHaveBeenCalledTimes(2))
+    expect(harness.calls).toHaveLength(1)
+    expect(harness.store.get()).toBe('access-1')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(
+      screen.getByText(zhCN.socialCallback.pending),
+    ).toBeInTheDocument()
   })
 
   it('render the en-US pending notice on an English-starting instance', async () => {

@@ -6,8 +6,12 @@
  * provider redirected back; an effect -- ref-keyed on the (code, state)
  * pair, so the double effect invocation of StrictMode development starts
  * exactly one exchange -- completes the login through the session and
- * fires onSignedIn once. While the exchange is in flight the handler
- * shows the pending notice; a failed exchange (authn.oauth_state_invalid,
+ * fires onSignedIn once. A mount that finds the session already
+ * authenticated (a re-entry to the callback URL after a completed
+ * exchange) starts no exchange -- the single-use code is consumed -- and
+ * fires onSignedIn again so the host navigates the viewer onward. While
+ * the exchange is in flight the handler shows the pending notice; a
+ * failed exchange (authn.oauth_state_invalid,
  * authn.social_exchange_failed, authn.identity_requires_binding) renders
  * its code text in the InlineError banner under a retry button that
  * re-runs the exchange for the same pair. Nothing here navigates: the
@@ -35,7 +39,9 @@ export interface SocialCallbackHandlerProps {
   readonly code: string
   /** The state the authorize URL carried; the server validates it. */
   readonly state: string
-  /** Fired once after the exchange commits; the host navigates. */
+  /** Fired once after the exchange commits -- and again on a later
+   * mount that finds the session already authenticated, the re-entry
+   * case where no exchange is started; the host navigates. */
   readonly onSignedIn?: () => void
 }
 
@@ -76,6 +82,17 @@ export function SocialCallbackHandler({
     }
     handledPairRef.current = pair
     const run = ++runRef.current
+    // A mount that finds the session already authenticated is a re-entry
+    // to the callback route after a completed exchange: the code is
+    // single-use server-side, so a second exchange could only fail and
+    // paint a failure over a session that is actually live. Start no
+    // exchange; fire onSignedIn again and keep the pending notice up
+    // until the host reacts (navigating onward, or gating on its own
+    // authenticated snapshot).
+    if (session.getSnapshot().state === 'authenticated') {
+      onSignedIn?.()
+      return
+    }
     setStatus('pending')
     setErrorCode(null)
     void (async () => {

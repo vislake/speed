@@ -298,8 +298,16 @@ renders it with the provider and the `code`/`state` the provider
 redirected back; an effect -- ref-keyed on the `(code, state)` pair,
 so the double effect invocation of StrictMode development starts
 exactly one exchange -- completes the login through
-`session.completeSocialLogin` and fires `onSignedIn` once. While the
-exchange is in flight the handler shows the pending notice
+`session.completeSocialLogin` and fires `onSignedIn` once. A mount
+that finds the session already authenticated is a re-entry to the
+callback URL after a completed exchange: the single-use code is
+consumed, so no second exchange is started -- the handler fires
+`onSignedIn` again and keeps the pending notice up until the host
+reacts. Without either an `onSignedIn` handler or a gate on the
+authenticated snapshot the pending notice stays up by design: the
+handler never paints the success itself, and the commit of an
+exchange is observable through the auth-core hooks the host attaches.
+While the exchange is in flight the handler shows the pending notice
 (`role="status"`); a failed exchange (`authn.oauth_state_invalid`,
 `authn.social_exchange_failed`, `authn.identity_requires_binding`)
 renders its code text in the banner under a retry button that re-runs
@@ -312,7 +320,7 @@ route; nothing here navigates.
 | `provider` | `SocialProvider` (required) | the channel the redirect came back on, threaded through to the exchange verbatim |
 | `code` | `string` (required) | the authorization response the provider redirected back |
 | `state` | `string` (required) | the state the authorize URL carried; the server validates it |
-| `onSignedIn` | `() => void` | fired once after the exchange commits |
+| `onSignedIn` | `() => void` | fired once after the exchange commits -- and once more on a later mount that finds the session already signed in (the re-entry case starts no exchange), so the host bounces the viewer onward |
 
 ## SignOutButton
 
