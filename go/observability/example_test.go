@@ -42,9 +42,9 @@ import (
 )
 
 // exampleMetricsCollector implements just enough of the OTLP collector's
-// MetricsService to let a DeploymentModeDistributed Init's shutdown
-// function complete cleanly against it, for ExampleInit. It is a
-// separate, minimal type rather than a reuse of init_test.go's own
+// MetricsService to let an endpoint-configuring Init's shutdown function
+// complete cleanly against it, for ExampleInit. It is a separate,
+// minimal type rather than a reuse of init_test.go's own
 // fakeMetricServer/startFakeCollector: those are built around a
 // *testing.T (t.Helper(), t.Fatalf), which no Example function can supply.
 type exampleMetricsCollector struct {
@@ -58,38 +58,29 @@ func (exampleMetricsCollector) Export(context.Context, *colmetricpb.ExportMetric
 	return &colmetricpb.ExportMetricsServiceResponse{}, nil
 }
 
-// ExampleInit shows Init's two configuration errors, then its success
-// path: wire providers for a deployment mode, use MetricsHandler (as a
-// host mounts it at /metrics), and shut down cleanly during graceful
-// process shutdown. See examples/reference-app/cmd/server/main.go's run
-// function for the same shape at a real call site -- obs.Init(ctx,
-// cfg.DeploymentMode, obs.WithServiceName("reference-app")), immediately
-// followed by a deferred call to the returned shutdown function.
+// ExampleInit shows Init's success path: supply an OTLP endpoint, wire
+// providers, use MetricsHandler (as a host mounts it at /metrics), and
+// shut down cleanly during graceful process shutdown. See
+// examples/reference-app/cmd/server/main.go's run function for the same
+// shape at a real call site -- obs.Init(ctx, obs.WithServiceName(...)),
+// immediately followed by a deferred call to the returned shutdown
+// function.
 //
-// DeploymentModeStandalone's own success path is deliberately not
-// executed here: it writes real trace and metric data straight to
-// os.Stdout by design (Init's own doc comment: stdout output is for "a
-// developer tailing the process"), which would make this example's
-// captured output non-deterministic.
-// init_test.go's TestInit_Standalone_ProducesWorkingExporters exercises
-// that path directly instead, with a real recorded request and a real
+// Init's no-endpoint success path is deliberately not executed here: it
+// writes real trace and metric data straight to os.Stdout by design
+// (Init's own doc comment: stdout output is for "a developer tailing the
+// process"), which would make this example's captured output
+// non-deterministic. init_test.go's
+// TestInit_NoEndpoint_WiresWorkingLocalExporters exercises that path
+// directly instead, with a real recorded request and a real
 // Prometheus-format scrape.
 func ExampleInit() {
-	// An unrecognized deployment mode is rejected before anything is wired.
-	_, err := observability.Init(context.Background(), pkgcore.DeploymentMode("staging"))
-	fmt.Println("unrecognized deployment mode:", errors.Is(err, pkgcore.ErrInvalidDeploymentMode))
-
-	// DeploymentModeDistributed requires an OTLP endpoint;
-	// DeploymentModeStandalone does not (see Init's own doc comment) and
-	// is what examples/reference-app and `task dev` actually run today.
-	_, err = observability.Init(context.Background(), pkgcore.DeploymentModeDistributed)
-	fmt.Println("distributed with no endpoint:", errors.Is(err, observability.ErrMissingOTLPEndpoint))
-
-	// A minimal fake OTLP collector stands in for a real one (a real LGTM
-	// stack's collector, in a distributed deployment) so the success path
-	// below stays deterministic and dependency-free under `go test` --
-	// see init_test.go's own startFakeCollector for the fuller version
-	// (both signals, not just metrics) this mirrors.
+	// A minimal fake OTLP collector stands in for a real one (a real
+	// LGTM stack's collector, wherever a host points its telemetry at
+	// one) so the success path below stays deterministic and
+	// dependency-free under `go test` -- see init_test.go's own
+	// startFakeCollector for the fuller version (both signals, not just
+	// metrics) this mirrors.
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		fmt.Println("listen:", err)
@@ -100,19 +91,23 @@ func ExampleInit() {
 	go func() { _ = grpcServer.Serve(lis) }()
 	defer grpcServer.Stop()
 
-	shutdown, err := observability.Init(context.Background(), pkgcore.DeploymentModeDistributed,
+	// The endpoint is the whole decision: no deployment mode is passed
+	// (Init takes none), and supplying one alone wires the OTLP
+	// exporters -- the same success path a single-process assembly
+	// pointing at a real collector takes.
+	shutdown, err := observability.Init(context.Background(),
 		observability.WithServiceName("example-service"),
 		observability.WithOTLPEndpoint(lis.Addr().String()),
 		observability.WithOTLPInsecure(true),
 	)
 	fmt.Println("init:", err)
 
-	// MetricsHandler continues to report 404 under
-	// DeploymentModeDistributed: there is no local Prometheus registry to
-	// scrape when metrics are pushed via OTLP instead.
+	// MetricsHandler continues to report 404 with the OTLP exporters
+	// wired: there is no local Prometheus registry to scrape when
+	// metrics are pushed via OTLP instead.
 	rr := httptest.NewRecorder()
 	observability.MetricsHandler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	fmt.Println("metrics status under DeploymentModeDistributed:", rr.Code)
+	fmt.Println("metrics status with OTLP exporters:", rr.Code)
 
 	// shutdown must run during graceful process shutdown so buffered
 	// spans and metrics are flushed rather than dropped -- see Init's own
@@ -120,10 +115,8 @@ func ExampleInit() {
 	fmt.Println("shutdown:", shutdown(context.Background()))
 
 	// Output:
-	// unrecognized deployment mode: true
-	// distributed with no endpoint: true
 	// init: <nil>
-	// metrics status under DeploymentModeDistributed: 404
+	// metrics status with OTLP exporters: 404
 	// shutdown: <nil>
 }
 
@@ -222,8 +215,8 @@ func ExampleRedactedValue() {
 // for the same negative control against the package's own tests.
 func ExampleMiddleware() {
 	// A private Prometheus registry, mirroring what a host's real
-	// Init(DeploymentModeStandalone) wires up internally (see init.go's
-	// initStandalone), so this example can inspect exactly what
+	// no-endpoint Init wires up internally (see init.go's
+	// initLocalExporters), so this example can inspect exactly what
 	// Middleware recorded without depending on Init or touching
 	// os.Stdout.
 	reg := prometheus.NewRegistry()

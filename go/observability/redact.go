@@ -13,9 +13,8 @@ package observability
 // sink handler underneath every *slog.Logger FromContext returns. It
 // redacts attributes by key name and by value shape before the record ever
 // reaches the sink, so the guarantee holds uniformly for every sink a host
-// plugs in -- the standalone deployment mode's console handler, a JSON
-// handler feeding Loki, or a future slog-to-OTel bridge -- with no
-// per-sink code.
+// plugs in -- a console handler, a JSON handler feeding Loki, or a future
+// slog-to-OTel bridge -- with no per-sink code.
 //
 // # Why key naming, not a registry marker
 //
