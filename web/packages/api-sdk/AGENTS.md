@@ -45,9 +45,16 @@ and `src/` must keep passing it on every regeneration.
   error (`[speed-api-sdk] no request function bound: ...`); rebinding
   replaces the previous function, last bind wins, no once-guard (tests
   and hot reload rebind).
-- **No tenant concept exists in generated code.** No tenant header,
-  no tenant id in query keys, no `tenant_id` in request or response
-  types (the fragments document its absence). Tenant query-key
+- **No tenant header and no tenant query key exist in generated
+  code.** Tenant context travels inside the access token -- never in
+  a header -- and query keys are bare spec paths. `tenant_id` does
+  appear in the authn fragment's types, where the identity API
+  genuinely needs it: the optional request-body field on the login,
+  SMS and social-callback operations, the response field on
+  `AuthnPrincipal`, and the required `AuthnSwitchTenantRequest`
+  body field. The fragment documents those fields as claims or
+  server-verified requests, never as a data scope; every other
+  fragment's types carry no `tenant_id` at all. Tenant query-key
   namespacing is an M1 consumer-shell discipline, recorded in
   `web/orval.config.ts` and the README.
 - **orval stays out of the lockfile.** Every runner -- the Taskfile

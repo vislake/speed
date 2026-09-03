@@ -122,14 +122,20 @@ under.
   refused the held token (the session is over and signs out locally --
   the server has already terminated the token family). A transport
   failure or server-side error rethrows the raw `ApiError` with the
-  held tokens restored in place.
-- Concurrent `refresh()` calls under one generation share a single
-  in-flight request: the authn server treats parallel refreshes as
-  token theft and rotates the whole family, so the session serialises
-  them itself.
+  store and the held tokens untouched (a refresh never clears them).
+- Concurrent `refresh()` calls presenting the same held refresh token
+  share a single in-flight request: the authn server treats parallel
+  presentations of one token as theft and rotates the whole family,
+  so the session serialises them itself -- and a call made after a
+  tenant switch or step-up presents the same held token, so it still
+  shares the flight.
 - A completed `logout` wins over a refresh that resolves after it, and
-  a committed login/switch/step-up wins over a stale refresh: an
-  issued pair that lost the race is discarded, never applied.
+  a committed login/switch/step-up wins over a stale refresh: the
+  losing pair's access token and snapshot are never applied over the
+  winner's -- with one exception, the rotated refresh token itself,
+  adopted into the held slot when the winning operation kept the held
+  token (a tenant switch or step-up mints no new one, and the server
+  has already consumed the held token for that refresh).
 
 ## Known limitations
 

@@ -39,11 +39,15 @@ below this layer.
 - **`refresh()` is the silent path.** It resolves `false` (never
   rejects) for an invalid/expired/refused refresh token and signs the
   session out locally; it rethrows raw only for transport/server
-  failures, with the held tokens restored.
+  failures, with the store and the held tokens untouched.
 - **The generation guard is the concurrency invariant.** User
   operations capture the generation at entry and bump it only on
-  commit; refresh never bumps and drops every write whose generation
-  no longer holds. Do not "simplify" this into bump-on-entry or
+  commit; refresh never bumps, and a stale refresh response applies
+  nothing over the winner's state — one adoption excepted: the
+  rotated refresh token still lands in the held slot when the winning
+  operation kept the held token (a tenant switch or step-up mints no
+  new one, and the server has already consumed the held token for
+  that refresh). Do not "simplify" this into bump-on-entry or
   compare-free writes — the regression tests around concurrent
   login/refresh/logout pin the current semantics.
 - **The permission sets are host-attached data with survival rules,
@@ -66,14 +70,19 @@ below this layer.
   event handler; hooks never mutate state, never fetch, and fail
   closed (anonymous snapshot, null tenant, `false` permissions) before
   `attachSession` has been called.
-- **Refresh is single-flight per generation.** Concurrent callers
-  share one in-flight request; a second parallel refresh reads as
-  token theft to the authn server.
-- **The refresh request travels credential-less.** `runRefresh` clears
-  the store first and restores the previous token on a rethrowable
-  failure. That ordering is load-bearing for the api-client bearer-only
-  refresh rule; keep it, and keep the restore skip on generation
-  change.
+- **Refresh is single-flight per held refresh token.** Presentations
+  of the same held token share one in-flight request; a second
+  parallel presentation of it reads as token theft to the authn
+  server, so the session serialises them itself. A call made after a
+  tenant switch or step-up presents the same held token and still
+  shares that flight.
+- **The refresh request travels credential-less by declaration.** The
+  generated mutator's `omitAccessToken` keeps the request free of the
+  Authorization header, and `runRefresh` never reads, clears or
+  restores the token store — there is nothing to restore on a
+  rethrowable failure. Keep it that way: a clear-and-restore ordering
+  would re-arm the api-client bearer-only refresh rule against the
+  session's own refresh request.
 - **Response validation is fail-closed and happens before any state
   change** — even when the operation's generation is stale, a
   contract-violating 2xx still rejects (the caller deserves to know its
@@ -107,7 +116,8 @@ public.
 - The failure contract, protocol violations, the generation guard
   (failed login leaves an in-flight refresh intact; logout cannot be
   resurrected; a newer login is never overwritten), single-flight
-  refresh, store-clear/restore and the real-client composition
+  refresh, the store-untouched-while-refreshing guarantee and the
+  real-client composition
   (silent-401 refresh through `createClient`) each have dedicated
   tests. The hooks' fail-closed reads before attach, the
   tenant/permission selectors over a scripted session, domain
