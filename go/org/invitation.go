@@ -110,11 +110,15 @@ type Invitation struct {
 	InviterUserID string `gorm:"column:inviter_user_id;size:64;not null"`
 
 	// Locale is the language the invitation message was rendered in, chosen
-	// when the invitation was created: the request's own Accept-Language, or
-	// the platform default. It is captured on the row rather than looked up
-	// at send time because the recipient may not be a user at all and so has
-	// no profile to read a preference from -- and the message must be in the
-	// RECIPIENT's language, never the operator's.
+	// when the invitation was created: the OrgCreateInvitationRequest.locale
+	// the inviting operator named on the invitee's behalf, or the platform
+	// default when they named none. It is deliberately never the operator's
+	// own Accept-Language header -- the invitee has made no request of their
+	// own yet for the server to read a preference from, and the message must
+	// render in the RECIPIENT's language, never the operator's UI language.
+	// It is captured on the row rather than looked up at send time because
+	// the recipient may not be a user at all and so has no profile to read a
+	// preference from either.
 	Locale string `gorm:"column:locale;size:16;not null"`
 
 	// TokenHash is the hex-encoded SHA-256 of the invitation token. The

@@ -24,6 +24,9 @@ type OrgCreateInvitationRequest struct {
 	// Email The invitee's address.
 	Email string `json:"email"`
 
+	// Locale The RECIPIENT's preferred language for the invitation email, an IETF tag such as "en-US" or "zh-CN" -- something the inviting operator, who knows the invitee, supplies explicitly, since the server has no request of the invitee's own to read a language preference from at invite-creation time. Omitted, or naming a language the platform carries no message catalog for, falls back to the platform default; it is NEVER inferred from the inviting operator's own browser or UI language.
+	Locale *string `json:"locale,omitempty"`
+
 	// NodeID The node the invitee will be bound to on acceptance.
 	NodeID string `json:"nodeId"`
 }

@@ -290,11 +290,14 @@ paths:
         tenant and, separately, per recipient) before anything is stored;
         an earlier pending invitation for the same address is revoked so
         only the newest link works. The invitation email renders in the
-        RECIPIENT's locale (negotiated from Accept-Language, falling back
-        to the platform default), never the inviting operator's UI
-        language. The response never carries the invitation token: it is a
-        bearer credential handed to the invitee alone, through the message
-        this endpoint sends.
+        RECIPIENT's locale, taken from the optional locale field below --
+        never from the inviting operator's own Accept-Language or UI
+        language, since the invitee has made no request of their own yet
+        for the server to read a header from. Omitting locale, or naming
+        one the platform does not carry a message catalog for, falls back
+        to the platform default. The response never carries the invitation
+        token: it is a bearer credential handed to the invitee alone,
+        through the message this endpoint sends.
       requestBody:
         required: true
         content:
@@ -507,6 +510,17 @@ components:
         nodeId:
           type: string
           description: The node the invitee will be bound to on acceptance.
+        locale:
+          type: string
+          description: >-
+            The RECIPIENT's preferred language for the invitation email, an
+            IETF tag such as "en-US" or "zh-CN" -- something the inviting
+            operator, who knows the invitee, supplies explicitly, since the
+            server has no request of the invitee's own to read a language
+            preference from at invite-creation time. Omitted, or naming a
+            language the platform carries no message catalog for, falls
+            back to the platform default; it is NEVER inferred from the
+            inviting operator's own browser or UI language.
     OrgAcceptInvitationRequest:
       type: object
       required:

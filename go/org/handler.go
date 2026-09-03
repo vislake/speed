@@ -3,7 +3,6 @@ package org
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/org/api"
@@ -331,7 +330,7 @@ func (h *Handler) OrgCreateInvitation(w http.ResponseWriter, r *http.Request) {
 		Email:         req.Email,
 		NodeID:        req.NodeID,
 		InviterUserID: inviterUserID,
-		Locale:        firstAcceptLanguage(r.Header.Get("Accept-Language")),
+		Locale:        recipientLocale(req.Locale),
 	})
 	if err != nil {
 		writeError(w, err)
@@ -394,15 +393,29 @@ func (h *Handler) OrgAcceptInvitation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toMembershipResponse(membership))
 }
 
-// firstAcceptLanguage returns the primary language tag of an Accept-Language
-// header value ("zh-CN,zh;q=0.9" -> "zh-CN"), or "" for an empty header.
-// negotiateLocale (mail.go) only ever accepts an exact match against the
-// catalog's own locale set and falls back to the platform default
-// otherwise, so no fuller RFC 4647 matching is needed here.
-func firstAcceptLanguage(header string) string {
-	primary, _, _ := strings.Cut(header, ",")
-	primary, _, _ = strings.Cut(primary, ";")
-	return strings.TrimSpace(primary)
+// recipientLocale reads the RECIPIENT's locale off an
+// OrgCreateInvitationRequest, or "" when the caller supplied none.
+//
+// This is deliberately NOT read from the request's own Accept-Language
+// header: that header belongs to the authenticated inviter/operator making
+// THIS HTTP call, and the invitee -- who has made no request of their own
+// yet, and may not even be a user -- has no channel to reach the server
+// through at invite-creation time. An earlier version of this handler read
+// Accept-Language here, which silently rendered every invitation email in
+// the ADMIN's own browser language, directly contradicting the "renders in
+// the recipient's locale" contract this endpoint documents (root CLAUDE.md's
+// i18n rule; org/api/openapi.yaml's org_createInvitation description). See
+// TestHandler_OrgCreateInvitation_LocaleIsFromRequestBody_NeverAcceptLanguage.
+//
+// An empty return is not an error: InviteService.Invite negotiates it
+// through negotiateLocale (mail.go), which falls back to the platform
+// default for an empty or unrecognized locale exactly as it does for any
+// other unrecognized tag.
+func recipientLocale(locale *string) string {
+	if locale == nil {
+		return ""
+	}
+	return *locale
 }
 
 // toNodeResponse converts node to its spec-generated JSON response type.

@@ -146,14 +146,19 @@ func sendMail(ctx context.Context, host hostSeams, mail pkgcore.Mail) error {
 // default otherwise.
 //
 // It runs once, when the invitation is created, and the result is stored on
-// the row -- so the message is rendered in the language the invitee asked
-// for at the moment they were invited, and a later send renders the same
-// language rather than whatever the sending operator happens to be using.
+// the row -- so the message renders in the language the inviting operator
+// named for the invitee at that moment (OrgCreateInvitationRequest.locale;
+// see Invitation.Locale), and a later send renders the same language rather
+// than whatever the sending operator happens to be using. requested is
+// NEVER an Accept-Language header: the invitee has made no HTTP request of
+// their own yet, so there is nothing to read one from, and the operator's
+// own header would only give back the operator's language.
 //
 // Falling back to the default here rather than failing is right because the
-// input is an Accept-Language header, which is a preference and not a
-// command. Falling back at LOOKUP time would be wrong, and the catalog
-// refuses to: a locale it serves must carry every id.
+// input is a preference, not a command -- an operator may name a locale the
+// platform carries no catalog for, or name none at all. Falling back at
+// LOOKUP time would be wrong, and the catalog refuses to: a locale it
+// serves must carry every id.
 func negotiateLocale(catalog *i18n.Catalog, requested string) string {
 	if catalog == nil {
 		return i18n.LocaleZHCN

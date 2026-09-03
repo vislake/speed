@@ -167,11 +167,20 @@ func TestSendMail_WithoutATransport(t *testing.T) {
 	}
 }
 
-// TestMail_RendersRecipientLocale_NotOperatorLocale is the rule from the
-// coding standard, end to end: backend-generated content renders in the
-// RECIPIENT's locale. The invitee may not be a user at all, so the language
-// they asked for at invite time is captured on the row and used at send time,
-// no matter who does the inviting or in what language.
+// TestMail_RendersRecipientLocale_NotOperatorLocale pins the SERVICE-layer
+// half of the coding standard's rule -- backend-generated content renders in
+// the RECIPIENT's locale -- by driving InviteService.Invite directly: two
+// invitations, each with a different InviteRequest.Locale, must render two
+// different subjects, and Invite must never look anywhere else (an
+// operator-scoped field, say) for the language to use.
+//
+// It deliberately does NOT exercise where InviteRequest.Locale itself comes
+// from at the HTTP boundary -- that is
+// TestHandler_OrgCreateInvitation_LocaleIsFromRequestBody_NeverAcceptLanguage
+// (handler_test.go), which is the test that actually proves the operator's
+// own Accept-Language header is never consulted. The two tests are
+// deliberately split at the same seam the code is: this one to the request
+// struct, that one to the header the request struct must never come from.
 func TestMail_RendersRecipientLocale_NotOperatorLocale(t *testing.T) {
 	f := newInviteFixture(t)
 

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/org/api"
+	"github.com/vislake/speed/go/pkgcore/i18n"
 )
 
 // fixedSubject is a SubjectResolver that answers the same way for every
@@ -481,20 +482,81 @@ func TestHandler_MustTenant_NoTenantInContext_ReturnsInternalError(t *testing.T)
 	assertErrorCode(t, rec, http.StatusInternalServerError, ErrInternal.Code)
 }
 
-func TestFirstAcceptLanguage(t *testing.T) {
-	tests := []struct {
-		header string
-		want   string
-	}{
-		{"", ""},
-		{"zh-CN", "zh-CN"},
-		{"zh-CN,zh;q=0.9,en;q=0.8", "zh-CN"},
-		{"  en-US ;q=0.9", "en-US"},
-	}
-	for _, tc := range tests {
-		if got := firstAcceptLanguage(tc.header); got != tc.want {
-			t.Errorf("firstAcceptLanguage(%q) = %q, want %q", tc.header, got, tc.want)
+// doRequestWithHeaders is doRequest plus the ability to set request headers
+// -- specifically, here, Accept-Language -- which doRequest itself has no
+// way to express.
+func doRequestWithHeaders(h *Handler, ctx context.Context, method, path string, body any, headers map[string]string) *httptest.ResponseRecorder {
+	var reader *bytes.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			panic(err)
 		}
+		reader = bytes.NewReader(encoded)
+	} else {
+		reader = bytes.NewReader(nil)
+	}
+	req := httptest.NewRequest(method, path, reader).WithContext(ctx)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// TestHandler_OrgCreateInvitation_LocaleIsFromRequestBody_NeverAcceptLanguage
+// pins the fix for the bug where OrgCreateInvitation read the invitation's
+// locale off the CALLER's own Accept-Language header -- the authenticated
+// inviter/operator making this request, not the invitee, who has made no
+// request of their own for the server to read a header from. Root CLAUDE.md:
+// "Backend-generated content ... renders in the recipient's locale, not the
+// operator's UI language."
+func TestHandler_OrgCreateInvitation_LocaleIsFromRequestBody_NeverAcceptLanguage(t *testing.T) {
+	h, m, _ := newTestHandler(t, fixedSubject{userID: "u-inviter", ok: true})
+	ctx := tenantCtx("tenant-a")
+	root, _, _ := seedTree(t, m.tree, ctx)
+
+	// The request body names the recipient's locale explicitly; the
+	// operator's own Accept-Language claims a different one. The stored
+	// invitation must render in the body's locale, never the header's.
+	locale := i18n.LocaleENUS
+	rec := doRequestWithHeaders(h, ctx, http.MethodPost, "/api/v1/org/invitations",
+		api.OrgCreateInvitationRequest{Email: "a@example.test", NodeID: root.ID, Locale: &locale},
+		map[string]string{"Accept-Language": i18n.LocaleZHCN},
+	)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body %q", rec.Code, rec.Body.String())
+	}
+	var inv api.OrgInvitation
+	decodeBody(t, rec, &inv)
+	stored, err := m.Invitations().Repository().FindByID(ctx, *inv.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if stored.Locale != i18n.LocaleENUS {
+		t.Errorf("stored Locale = %q, want the body's %q -- Accept-Language leaked through", stored.Locale, i18n.LocaleENUS)
+	}
+
+	// No locale in the body at all, but the header still claims one this
+	// endpoint must never consult: the stored locale must fall all the way
+	// through to the platform default, not the header's language.
+	recNoLocale := doRequestWithHeaders(h, ctx, http.MethodPost, "/api/v1/org/invitations",
+		api.OrgCreateInvitationRequest{Email: "b@example.test", NodeID: root.ID},
+		map[string]string{"Accept-Language": i18n.LocaleENUS},
+	)
+	if recNoLocale.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body %q", recNoLocale.Code, recNoLocale.Body.String())
+	}
+	var invNoLocale api.OrgInvitation
+	decodeBody(t, recNoLocale, &invNoLocale)
+	storedNoLocale, err := m.Invitations().Repository().FindByID(ctx, *invNoLocale.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if storedNoLocale.Locale != i18n.LocaleZHCN {
+		t.Errorf("stored Locale = %q, want the platform default %q -- the Accept-Language header (%q) was read instead of falling back",
+			storedNoLocale.Locale, i18n.LocaleZHCN, i18n.LocaleENUS)
 	}
 }
 
