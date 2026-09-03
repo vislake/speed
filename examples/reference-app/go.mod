@@ -12,12 +12,15 @@ replace github.com/vislake/speed/go/observability => ../../go/observability
 
 replace github.com/vislake/speed/go/config => ../../go/config
 
+replace github.com/vislake/speed/go/rbac => ../../go/rbac
+
 require (
 	github.com/google/uuid v1.6.0
 	github.com/vislake/speed/go/config v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/dbkit v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/rbac v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/tenancy v0.0.0-00010101000000-000000000000
 	go.opentelemetry.io/otel/sdk v1.44.0
 	gorm.io/gorm v1.31.2

@@ -37,9 +37,21 @@ const (
 
 	// PermissionRead and PermissionWrite are notes' resource:action
 	// permission strings (backend coding standard §2's Register example).
-	// No rbac module exists yet to enforce them (root CLAUDE.md's M0
-	// status), so declaring them here only exercises the registry surface
-	// today; nothing in this package checks them yet.
+	//
+	// They are really enforced. Declaring them here is what puts them in
+	// the permission catalog go/rbac freezes after Bootstrap, and cmd/server
+	// wraps this module's route in rbac's permission gate: a GET of
+	// /api/v1/notes requires PermissionRead and anything that writes
+	// requires PermissionWrite (see cmd/server/demo_subject.go, which
+	// derives the resource half from these very constants rather than
+	// retyping it).
+	//
+	// Nothing in THIS package checks them, and that is the design rather
+	// than a gap: a business module declares its permission vocabulary and
+	// the authorization engine enforces it at the edge, so notes needs no
+	// dependency on rbac at all. What notes does not yet do is row-level
+	// filtering by organization subtree (rbac.Service.DataScope), which
+	// needs an organization tree this app has none of.
 	PermissionRead  = "notes:read"
 	PermissionWrite = "notes:write"
 

@@ -1,0 +1,322 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strings"
+
+	"github.com/vislake/speed/go/config"
+	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/rbac"
+
+	"github.com/vislake/speed/examples/reference-app/internal/notes"
+)
+
+// This file holds everything this example needs to demonstrate rbac end to
+// end: where a Subject comes from, which permission gates which route, and
+// the demo grants seeded at startup. It is deliberately a file of its own
+// rather than more of server.go, because every line in it is scaffolding
+// that authn deletes when it lands.
+
+// demoUserHeader names the request header this example reads an acting
+// user id from.
+//
+// THIS IS NOT AUTHENTICATION, and it is not a pattern to copy. An
+// unauthenticated header is a claim, not an identity: anyone who can reach
+// the server can set it to any value and become that user. It exists for
+// exactly the same reason demoHostTenants exists -- so this reference app
+// can demonstrate real authorization behavior end to end before authn
+// exists -- and it carries the same warning demoHostTenants and
+// strictHostResolver carry in server.go.
+//
+// What replaces it is already decided and needs no change here: authn will
+// verify an access token and assemble the rbac.Subject from its claims,
+// and buildServer will pass authn's resolver to rbac.WithSubjectResolver
+// in place of demoSubjectResolver below. The seam does not move; only what
+// is plugged into it does.
+const demoUserHeader = "X-Demo-User"
+
+// The demo users seeded into every configured tenant. Two of them, because
+// one user proves only that the gate opens: it takes a second, holding
+// strictly less authority, to prove the gate also closes on a real user
+// rather than only on an anonymous request.
+const (
+	// demoOwnerUserID holds the built-in owner role, so it carries every
+	// permission any module declared -- including both of notes'.
+	demoOwnerUserID = "demo-owner"
+
+	// demoReaderUserID holds demoReaderRoleKey, a custom role carrying
+	// notes:read and nothing else. It may list notes and may not create
+	// one, which is the difference the permission gate exists to enforce.
+	demoReaderUserID = "demo-reader"
+
+	// demoReaderRoleKey is the tenant-scoped key of that read-only role.
+	// It is defined per tenant, like every role: roles are tenant data,
+	// and there is deliberately no cross-tenant template to copy from.
+	demoReaderRoleKey = "note-reader"
+
+	// demoSingleTenantUserID holds demoReaderRoleKey in ONE tenant only,
+	// which is what makes this example demonstrate the single most
+	// important property of a grant: it is a fact about a (tenant, user)
+	// PAIR, never about a user. The same id acting under the other demo
+	// host holds nothing at all and is refused -- not because it is
+	// unknown, but because its grant lives in a different tenant.
+	demoSingleTenantUserID = "demo-acme-only"
+)
+
+// demoSingleTenantID is the one tenant demoSingleTenantUserID is granted
+// in. It is a literal rather than "whichever tenant comes first" because
+// map iteration order is unspecified, and a demo whose grants move between
+// boots would be a poor thing to reason about.
+const demoSingleTenantID pkgcore.TenantID = "tenant-acme"
+
+// The two action halves this example composes permission strings from. A
+// permission is "<resource>:<action>" (rbac.Permission), and notes declares
+// exactly notes:read and notes:write.
+const (
+	demoActionRead  = "read"
+	demoActionWrite = "write"
+)
+
+// routePublic marks a mounted route that must NOT be gated on a
+// permission. It is the empty resource, spelled as a named constant so a
+// reader of demoRouteGuards sees an intentional decision rather than a
+// forgotten entry.
+const routePublic = ""
+
+// notesRoutePath is where the notes module mounts its route. This example
+// needs the literal because the module keeps its own path unexported --
+// and it does not need to keep the two in sync by hand: mountModuleRoutes
+// refuses to start when a module mounts a path demoRouteGuards does not
+// name, so a path change here surfaces as a startup failure naming the new
+// path, never as a silently ungated route.
+const notesRoutePath = "/api/v1/notes"
+
+// demoRouteGuards declares, for every path a module mounts, the resource
+// whose permissions gate it -- or routePublic when the path is
+// deliberately reachable without one.
+//
+// The map is exhaustive by construction: mountModuleRoutes fails the
+// server build for any mounted path missing from it. That direction
+// matters. A table whose default is "ungated" quietly serves every route a
+// future module adds; a table whose default is "refuse to start" cannot.
+//
+// config's two paths are routePublic for the same reason they are
+// allowlisted in tenancy.Middleware (see buildServer): they are pre-auth
+// display surfaces -- a login page's brand and feature flags -- that must
+// render before anyone has signed in, and they serve only what the design
+// marks public, never tenant data.
+var demoRouteGuards = map[string]string{
+	notesRoutePath: notesResource,
+	// The config module's two pre-auth endpoints, named through its own
+	// exported constants so a rename cannot drift into a silently ungated
+	// path here.
+	config.PathPublic:         routePublic,
+	config.PathSystemFeatures: routePublic,
+}
+
+// notesResource is the resource half of notes' permission strings. It is
+// derived from the module's own exported constants rather than retyped, so
+// this example cannot drift from the permissions notes actually declares.
+var notesResource = mustResourceOf(notes.PermissionRead, notes.PermissionWrite)
+
+// mustResourceOf returns the shared resource half of the given permission
+// strings, and panics when they do not agree on one.
+//
+// A panic is right here and only here: this runs at package
+// initialization, before any request exists, and a disagreement means the
+// permission constants this file gates on are not the ones it thinks they
+// are -- an unrecoverable startup condition, which is the one case the
+// backend coding standard's no-panic rule exempts.
+func mustResourceOf(permissions ...string) string {
+	var shared string
+	for _, permission := range permissions {
+		resource, _, ok := splitDemoPermission(permission)
+		if !ok {
+			panic(fmt.Sprintf("reference-app: %q is not a <resource>:<action> permission", permission))
+		}
+		if shared == "" {
+			shared = resource
+			continue
+		}
+		if resource != shared {
+			panic(fmt.Sprintf("reference-app: permissions %v span more than one resource (%q and %q)", permissions, shared, resource))
+		}
+	}
+	return shared
+}
+
+// splitDemoPermission divides "<resource>:<action>" the way rbac's own
+// gate does. rbac keeps its splitter unexported -- a consumer composes
+// permissions with rbac.Permission and rarely takes one apart -- so this
+// example carries the four lines rather than asking for a public API it is
+// the only caller of.
+func splitDemoPermission(permission string) (resource, action string, ok bool) {
+	resource, action, found := strings.Cut(permission, ":")
+	if !found || resource == "" || action == "" {
+		return "", "", false
+	}
+	return resource, action, true
+}
+
+// demoSubjectResolver is what this example plugs into
+// rbac.WithSubjectResolver: the seam through which the authenticating side
+// hands rbac an identity, without either module importing the other.
+//
+// The two halves come from deliberately different places, and the
+// difference is the point:
+//
+//   - The TENANT comes from the request context, where tenancy.Middleware
+//     put it after resolving it server-side. It is never read from the
+//     header below, and never from anything else the caller controls --
+//     accepting a caller-supplied tenant_id is the single most common
+//     horizontal-privilege-escalation bug in multi-tenant systems, and
+//     root CLAUDE.md forbids it outright.
+//   - The USER comes from demoUserHeader, which is a placeholder and is
+//     documented as one on that constant. In production it comes from the
+//     same verified claims the tenant does.
+//
+// It fails closed: no tenant, no user, or an incomplete pair reports
+// (Subject{}, false), and rbac's gate turns that into a 403.
+func demoSubjectResolver(r *http.Request) (rbac.Subject, bool) {
+	tenantID, ok := pkgcore.TenantFromContext(r.Context())
+	if !ok || tenantID == "" {
+		return rbac.Subject{}, false
+	}
+	userID := r.Header.Get(demoUserHeader)
+	if userID == "" {
+		return rbac.Subject{}, false
+	}
+	sub := rbac.Subject{TenantID: tenantID, UserID: userID}
+	if !sub.Valid() {
+		return rbac.Subject{}, false
+	}
+	return sub, true
+}
+
+// demoPermissionFor chooses the permission a request must hold, from the
+// resource its route is guarded by and its HTTP method.
+//
+// It depends on the ROUTE and nothing else -- never a header, a query
+// parameter or a body field, because a permission the caller can choose is
+// a permission the caller can choose to be one they hold. Anything that is
+// not a read method requires the write permission, which is deliberately
+// the strict direction: a method this example never thought about (PATCH,
+// an exotic verb) demands more authority rather than less.
+func demoPermissionFor(resource string) func(*http.Request) string {
+	return func(r *http.Request) string {
+		switch r.Method {
+		case http.MethodGet, http.MethodHead:
+			return rbac.Permission(resource, demoActionRead)
+		default:
+			return rbac.Permission(resource, demoActionWrite)
+		}
+	}
+}
+
+// guardModuleRoute wraps one mounted module route in rbac's permission
+// gate, or returns it untouched when demoRouteGuards marks the path
+// public. A path the table does not name is an error, so buildServer fails
+// to start rather than serving it ungated.
+func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler) (http.Handler, error) {
+	resource, declared := demoRouteGuards[path]
+	if !declared {
+		return nil, fmt.Errorf(
+			"reference-app: a module mounted %q, which demoRouteGuards does not name; add it with the resource that gates it, or with routePublic if it is deliberately unauthenticated",
+			path)
+	}
+	if resource == routePublic {
+		return handler, nil
+	}
+	return rbac.RequirePermissionFunc(az, demoPermissionFor(resource),
+		rbac.WithSubjectResolver(demoSubjectResolver),
+	)(handler), nil
+}
+
+// seedDemoGrants gives every configured tenant its built-in roles and the
+// two demo users their grants, so `go run ./cmd/server` demonstrates a
+// working gate with no setup at all.
+//
+// It runs once per boot and is idempotent in both halves:
+// EnsureBuiltinRoles reconciles rather than recreates, and AssignRole is a
+// no-op when the grant is already there. Each tenant is seeded under its
+// OWN tenant context -- roles and bindings are tenant data, and nothing
+// here reads or writes across a tenant boundary.
+//
+// A real deployment does not do this. Roles are seeded when a tenant is
+// created and grants are made by an administrator through the admin
+// console; seeding fixed demo users at every boot is a property of an
+// example that has no sign-up flow yet.
+func seedDemoGrants(ctx context.Context, svc *rbac.Service, tenants map[string]pkgcore.TenantID) error {
+	seeded := make(map[pkgcore.TenantID]struct{}, len(tenants))
+	for _, tenantID := range tenants {
+		if _, done := seeded[tenantID]; done {
+			// Two demo hosts can map to one tenant; seed it once.
+			continue
+		}
+		seeded[tenantID] = struct{}{}
+
+		tenantCtx := pkgcore.WithTenant(ctx, tenantID)
+		if err := svc.EnsureBuiltinRoles(tenantCtx); err != nil {
+			return fmt.Errorf("reference-app: seed the built-in roles of %q: %w", tenantID, err)
+		}
+		if err := seedDemoReaderRole(tenantCtx, svc); err != nil {
+			return fmt.Errorf("reference-app: seed the demo reader role of %q: %w", tenantID, err)
+		}
+
+		grants := []struct {
+			userID  string
+			roleKey string
+		}{
+			{userID: demoOwnerUserID, roleKey: rbac.BuiltinRoleOwner},
+			{userID: demoReaderUserID, roleKey: demoReaderRoleKey},
+		}
+		if tenantID == demoSingleTenantID {
+			grants = append(grants, struct {
+				userID  string
+				roleKey string
+			}{userID: demoSingleTenantUserID, roleKey: demoReaderRoleKey})
+		}
+		for _, grant := range grants {
+			sub := rbac.Subject{TenantID: tenantID, UserID: grant.userID}
+			// A tenant-wide Scope: this example has no organization tree,
+			// so it wires no rbac.SubtreeResolver either, and a
+			// node-scoped grant would correctly be denied for want of one.
+			if err := svc.AssignRole(tenantCtx, sub, grant.roleKey, rbac.Scope{}); err != nil {
+				return fmt.Errorf("reference-app: grant %q to %q in %q: %w", grant.roleKey, grant.userID, tenantID, err)
+			}
+		}
+	}
+	return nil
+}
+
+// seedDemoReaderRole defines the read-only demo role in the tenant ctx
+// carries, tolerating the role already existing from an earlier boot.
+//
+// rbac's DefineRole is create-only by design, so "already there" comes
+// back as a conflict rather than as success; this is the caller-side
+// idempotence that create-only API implies.
+func seedDemoReaderRole(ctx context.Context, svc *rbac.Service) error {
+	_, err := svc.DefineRole(ctx, rbac.RoleDefinition{
+		Key: demoReaderRoleKey,
+		// An i18n message id, never display prose: a role row must not
+		// carry user-facing text in one language.
+		DescriptionKey: "rbac.role.member",
+		Permissions:    []string{notes.PermissionRead},
+	})
+	if err != nil && !isAlreadyDefined(err) {
+		return err
+	}
+	return nil
+}
+
+// isAlreadyDefined reports whether err is rbac's duplicate-role conflict.
+// Classification goes through the CODE, not errors.Is against the
+// sentinel: every WithParam call derives a new *apperr.Error, so the
+// exported vars are templates rather than singletons.
+func isAlreadyDefined(err error) bool {
+	appErr, ok := apperr.As(err)
+	return ok && appErr.Code == rbac.ErrDuplicateRole.Code
+}

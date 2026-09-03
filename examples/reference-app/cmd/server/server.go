@@ -19,6 +19,7 @@ import (
 	"github.com/vislake/speed/go/dbkit/audit"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/rbac"
 	"github.com/vislake/speed/go/tenancy"
 
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
@@ -272,16 +273,29 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return nil, nil, fmt.Errorf("reference-app: open database: %w", err)
 	}
 
-	// configService is filled by Attach below (nil until then); cleanup
-	// closes it first so the anti-loss poller never races the database
-	// close it polls against.
-	var configService *config.Service
+	// configService and rbacService are filled by their Attach calls below
+	// (nil until then); cleanup closes both before the database, so
+	// neither config's anti-loss poller nor rbac's cache janitor is still
+	// running against a connection that is being torn down.
+	var (
+		configService *config.Service
+		rbacService   *rbac.Service
+	)
 
 	cleanup := func() error {
+		var firstErr error
 		if configService != nil {
 			if closeErr := configService.Close(); closeErr != nil {
-				return closeErr
+				firstErr = closeErr
 			}
+		}
+		if rbacService != nil {
+			if closeErr := rbacService.Close(); closeErr != nil && firstErr == nil {
+				firstErr = closeErr
+			}
+		}
+		if firstErr != nil {
+			return firstErr
 		}
 		sqlDB, dbErr := db.DB()
 		if dbErr != nil {
@@ -337,7 +351,20 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		)),
 	)
 
+	// rbac needs nothing from this host but a database: it declares its own
+	// permissions during Register and reads EVERY module's declarations
+	// once, in Attach, after Bootstrap. No SubtreeResolver is wired because
+	// this app has no organization tree yet -- see WithSubtreeResolver's
+	// doc comment for why that is a supported configuration rather than a
+	// gap, and demo_subject.go's seedDemoGrants for why every demo grant is
+	// therefore tenant-wide.
+	rbacModule := rbac.NewModule(db)
+
 	migrationRegistry := dbkit.NewMigrationRegistry()
+	if regErr := migrationRegistry.Register(rbacModule); regErr != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	}
 	if regErr := migrationRegistry.Register(notesModule); regErr != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
@@ -355,17 +382,20 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return nil, nil, fmt.Errorf("reference-app: apply migrations: %w", applyErr)
 	}
 
-	// Bootstrap registers all three modules in argument order -- notes
+	// Bootstrap registers all four modules in argument order -- notes
 	// first, so the configuration items and feature flags its Register
 	// declares are in the registry before the config module's own
 	// Register runs, and then Attach freezes the schema snapshot those
 	// declarations fold into, exactly the sequence config's Attach doc
-	// comment prescribes ("after Kernel.Bootstrap has returned"). audit
-	// last is not load-bearing order -- its Module.DependsOn is nil, and
-	// its subscriptions are valid to install before or after any
-	// publisher registers (see audit's Module.DependsOn doc comment) --
-	// it simply reads naturally as "the two business-facing modules, then
-	// the cross-cutting persister watching both of them."
+	// comment prescribes ("after Kernel.Bootstrap has returned"). rbac
+	// comes next so its own Attach -- which snapshots every permission
+	// every module declared during Register -- runs against a Registry
+	// that has already seen every module's declarations. audit last is
+	// not load-bearing order -- its Module.DependsOn is nil, and its
+	// subscriptions are valid to install before or after any publisher
+	// registers (see audit's Module.DependsOn doc comment) -- it simply
+	// reads naturally as "the business-facing modules, then the
+	// cross-cutting persister watching them."
 	//
 	// A single Registry -- and so a single EventBus, reg.EventBus() --
 	// serves every module Bootstrap registers here, which is what lets
@@ -375,7 +405,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// below): no separate bus construction is needed the way it would be
 	// if this app wired dbkit.Options.AuditBus (see db's own doc comment
 	// above for why it deliberately does not).
-	reg, err := pkgcore.NewKernel(cfg.DeploymentMode).Bootstrap(ctx, notesModule, configModule, auditModule)
+	reg, err := pkgcore.NewKernel(cfg.DeploymentMode).Bootstrap(ctx, notesModule, configModule, rbacModule, auditModule)
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: bootstrap kernel: %w", err)
@@ -385,11 +415,28 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: attach the config module: %w", err)
 	}
+	// rbac's Attach must also come after Bootstrap, and for a sharper
+	// reason than config's: what it freezes is the snapshot of every
+	// permission every module declared, so a snapshot taken any earlier
+	// would be missing whatever registered after it -- and a permission
+	// missing from that catalog cannot be granted at all.
+	rbacService, err = rbacModule.Attach(reg)
+	if err != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: attach the rbac module: %w", err)
+	}
+	if seedErr := seedDemoGrants(ctx, rbacService, cfg.HostTenants); seedErr != nil {
+		_ = cleanup()
+		return nil, nil, seedErr
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(http.MethodGet+" "+healthzPath, healthzHandler)
 	mux.HandleFunc(http.MethodGet+" "+metricsPath, metricsHandler)
-	mountModuleRoutes(mux, reg)
+	if mountErr := mountModuleRoutes(mux, reg, rbacService); mountErr != nil {
+		_ = cleanup()
+		return nil, nil, mountErr
+	}
 
 	// strictHostResolver -- not tenancy.DomainResolver -- gates the mux:
 	// see its own doc comment above for why an unrecognized Host must fail
@@ -469,13 +516,26 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 // at Path itself AND at everything nested below it -- so both patterns are
 // registered explicitly here, pointing at the same Handler, instead of
 // relying on ServeMux's implicit redirect-on-missing-slash behavior.
-func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry) {
+//
+// Every route also passes through guardModuleRoute on the way to the mux,
+// which is where rbac's permission gate is applied -- see
+// demo_subject.go's demoRouteGuards. Mounting is the right place for it:
+// a route that reaches the mux ungated is served ungated, so the check
+// that every mounted path has a declared guard belongs on the only path
+// that can mount one. A path the table does not name fails the build here
+// rather than being served.
+func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Authorizer) error {
 	for _, route := range reg.Routes.Routes() {
-		mux.Handle(route.Path, route.Handler)
+		handler, err := guardModuleRoute(az, route.Path, route.Handler)
+		if err != nil {
+			return err
+		}
+		mux.Handle(route.Path, handler)
 		if !strings.HasSuffix(route.Path, "/") {
-			mux.Handle(route.Path+"/", route.Handler)
+			mux.Handle(route.Path+"/", handler)
 		}
 	}
+	return nil
 }
 
 // healthzHandler always returns 200 with no tenant required. It is

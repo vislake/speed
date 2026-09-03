@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
 	obs "github.com/vislake/speed/go/observability"
@@ -68,6 +69,13 @@ type testListNotesResponse struct {
 // host resolves to -- Host is the ONLY thing that selects the tenant, set
 // on the request exactly as a real client's would be, never a header or
 // body field the server would have to trust.
+//
+// The demo user header is a different thing entirely and must not be
+// confused with it: it names WHO is acting, which the rbac gate needs, and
+// it is a placeholder for authn (see demo_subject.go's demoUserHeader).
+// demoOwnerUserID holds every permission, so these two helpers exercise
+// the happy path; the tests that exercise the gate itself send other
+// users, or none.
 func createNoteAs(t *testing.T, srv *httptest.Server, host, text string) {
 	t.Helper()
 
@@ -82,6 +90,7 @@ func createNoteAs(t *testing.T, srv *httptest.Server, host, text string) {
 	}
 	req.Host = host
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(demoUserHeader, demoOwnerUserID)
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -105,6 +114,7 @@ func listNotesAs(t *testing.T, srv *httptest.Server, host string) []testNote {
 		t.Fatalf("build request: %v", err)
 	}
 	req.Host = host
+	req.Header.Set(demoUserHeader, demoOwnerUserID)
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -177,6 +187,197 @@ func TestBuildServer_MultiTenantIsolation_EndToEnd(t *testing.T) {
 		if strings.Contains(n.Text, "acme") {
 			t.Fatalf("tenant-globex's list leaked an acme note: %+v", n)
 		}
+	}
+}
+
+// notesRequestAs issues method against /api/v1/notes with the given Host
+// and acting user, returning the raw response for the caller to assert on.
+// An empty user sends no demo user header at all, which is how an
+// unauthenticated request is expressed.
+func notesRequestAs(t *testing.T, srv *httptest.Server, method, host, user string, body io.Reader) *http.Response {
+	t.Helper()
+
+	req, err := http.NewRequest(method, srv.URL+"/api/v1/notes", body)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Host = host
+	if user != "" {
+		req.Header.Set(demoUserHeader, user)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("%s /api/v1/notes (Host=%s, user=%q): %v", method, host, user, err)
+	}
+	return resp
+}
+
+// assertPermissionDenied reads resp and requires it to be rbac's 403 with
+// the structured code the client resolves against the module's locale
+// files -- not merely "some 4xx", which tenancy's own fail-closed 403 would
+// also satisfy.
+func assertPermissionDenied(t *testing.T, resp *http.Response, what string) {
+	t.Helper()
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("%s: read body: %v", what, err)
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("%s: status = %d, want %d; body = %s", what, resp.StatusCode, http.StatusForbidden, body)
+	}
+	var decoded struct {
+		Code string `json:"code"`
+	}
+	if err = json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("%s: decoding %s: %v", what, body, err)
+	}
+	if decoded.Code != "rbac.permission_denied" {
+		t.Fatalf("%s: error code = %q, want %q; body = %s", what, decoded.Code, "rbac.permission_denied", body)
+	}
+}
+
+// TestBuildServer_PermissionGate_EnforcesTheNotesPermissions is the
+// reference app doing its job as rbac's mandatory first consumer: a real
+// route, really gated, with the decision made by the real Service over a
+// real database.
+//
+// The three users are chosen to separate three different reasons a request
+// may be refused, which a single "denied" case would conflate:
+//
+//   - demo-owner holds every declared permission and passes both methods.
+//   - demo-reader holds notes:read and nothing else, so it lists notes and
+//     is refused when it tries to create one. This is the case that proves
+//     the gate closes on a REAL, correctly identified user -- not merely on
+//     an anonymous one.
+//   - an unknown user is authenticated as far as this demo goes and holds
+//     no grant at all, so it is refused both ways.
+func TestBuildServer_PermissionGate_EnforcesTheNotesPermissions(t *testing.T) {
+	srv := buildTestServer(t)
+	const acmeHost = "acme.demo.localhost"
+
+	// The owner may write.
+	resp := notesRequestAs(t, srv, http.MethodPost, acmeHost, demoOwnerUserID,
+		strings.NewReader(`{"text":"owner note"}`))
+	func() {
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusCreated {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("POST as %s: status = %d, want %d; body = %s", demoOwnerUserID, resp.StatusCode, http.StatusCreated, body)
+		}
+	}()
+
+	// The reader may list...
+	resp = notesRequestAs(t, srv, http.MethodGet, acmeHost, demoReaderUserID, nil)
+	func() {
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("GET as %s: status = %d, want %d; body = %s", demoReaderUserID, resp.StatusCode, http.StatusOK, body)
+		}
+	}()
+
+	// ...and may not create. This is the whole point of the gate.
+	assertPermissionDenied(t,
+		notesRequestAs(t, srv, http.MethodPost, acmeHost, demoReaderUserID, strings.NewReader(`{"text":"reader note"}`)),
+		"POST as the read-only demo user")
+
+	// A user with no grant at all is refused in both directions.
+	assertPermissionDenied(t,
+		notesRequestAs(t, srv, http.MethodGet, acmeHost, "nobody", nil),
+		"GET as an ungranted user")
+	assertPermissionDenied(t,
+		notesRequestAs(t, srv, http.MethodPost, acmeHost, "nobody", strings.NewReader(`{"text":"nope"}`)),
+		"POST as an ungranted user")
+}
+
+// TestBuildServer_PermissionGate_NoSubject_IsRefused covers the request
+// that carries a resolvable tenant and no identity at all. It must be
+// refused by rbac -- not served, and not confused with tenancy's own
+// fail-closed 403, which is why the assertion is on rbac's code rather
+// than on the status alone.
+func TestBuildServer_PermissionGate_NoSubject_IsRefused(t *testing.T) {
+	srv := buildTestServer(t)
+
+	assertPermissionDenied(t,
+		notesRequestAs(t, srv, http.MethodGet, "acme.demo.localhost", "", nil),
+		"GET with no demo user header")
+	assertPermissionDenied(t,
+		notesRequestAs(t, srv, http.MethodPost, "acme.demo.localhost", "", strings.NewReader(`{"text":"anon"}`)),
+		"POST with no demo user header")
+}
+
+// TestBuildServer_PermissionGate_GrantsDoNotCrossTenants is the isolation
+// property at the AUTHORIZATION layer, which is a different layer from the
+// data isolation TestBuildServer_MultiTenantIsolation_EndToEnd proves.
+//
+// Both demo tenants seed most of the same user ids, so a test using one of
+// those would pass even against an engine keyed on the user alone. The
+// sharp case is demoSingleTenantUserID, which is granted in tenant-acme
+// and nowhere else: acting under the other demo host, the identical user
+// id must be refused. The tenant it is decided in comes from the resolved
+// Host, never from anything the caller sent -- the header only names WHO
+// is acting.
+func TestBuildServer_PermissionGate_GrantsDoNotCrossTenants(t *testing.T) {
+	srv := buildTestServer(t)
+
+	resp := notesRequestAs(t, srv, http.MethodGet, "acme.demo.localhost", demoSingleTenantUserID, nil)
+	func() {
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("GET in the tenant that granted %s: status = %d, want %d; body = %s",
+				demoSingleTenantUserID, resp.StatusCode, http.StatusOK, body)
+		}
+	}()
+
+	assertPermissionDenied(t,
+		notesRequestAs(t, srv, http.MethodGet, "globex.demo.localhost", demoSingleTenantUserID, nil),
+		"GET as the same user id in the tenant that never granted it")
+
+	// And the refusal is genuinely about the tenant rather than the user
+	// being unknown: the SAME host grants the same role to demo-reader.
+	resp = notesRequestAs(t, srv, http.MethodGet, "globex.demo.localhost", demoReaderUserID, nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET as %s in tenant-globex: status = %d, want %d; body = %s",
+			demoReaderUserID, resp.StatusCode, http.StatusOK, body)
+	}
+}
+
+// TestBuildServer_PublicConfigEndpoints_StayUngated guards the routePublic
+// half of demoRouteGuards through the composed server: config's two
+// pre-auth endpoints must keep answering with no identity whatsoever, or a
+// login page could never render its own brand.
+func TestBuildServer_PublicConfigEndpoints_StayUngated(t *testing.T) {
+	srv := buildTestServer(t)
+
+	for _, path := range []string{config.PathPublic, config.PathSystemFeatures} {
+		t.Run(path, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, srv.URL+path, nil)
+			if err != nil {
+				t.Fatalf("build request: %v", err)
+			}
+			// No demo user header, and a Host that resolves to no tenant.
+			req.Host = "totally-unrecognized-host.example"
+
+			resp, err := srv.Client().Do(req)
+			if err != nil {
+				t.Fatalf("GET %s: %v", path, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("GET %s with no identity: status = %d, want %d; body = %s",
+					path, resp.StatusCode, http.StatusOK, body)
+			}
+		})
 	}
 }
 
@@ -481,6 +682,7 @@ func notesRequest(t *testing.T, srv *httptest.Server, method, host string, body 
 		t.Fatalf("build request: %v", err)
 	}
 	req.Host = host
+	req.Header.Set(demoUserHeader, demoOwnerUserID)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -719,6 +921,7 @@ func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
 		t.Fatalf("build request: %v", err)
 	}
 	req.Host = globexHost
+	req.Header.Set(demoUserHeader, demoOwnerUserID)
 	req.Header.Set("X-Tenant-ID", "tenant-acme")
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -741,6 +944,7 @@ func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
 		t.Fatalf("build request: %v", err)
 	}
 	req2.Host = globexHost
+	req2.Header.Set(demoUserHeader, demoOwnerUserID)
 	resp2, err := srv.Client().Do(req2)
 	if err != nil {
 		t.Fatalf("GET with forged tenant_id query parameter: %v", err)
