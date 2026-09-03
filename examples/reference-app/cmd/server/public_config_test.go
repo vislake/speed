@@ -23,9 +23,19 @@ import (
 
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/org"
 
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
 )
+
+// orgDefaultFlags is org's two feature flags in the alphabetical order the
+// features endpoints report them, both on by default (org.WithFeatureGate
+// wires *config.Service, so their effective state is dependency-resolved
+// through the same config machinery as notes' own ai.* flags): every
+// platform-default assertion below must include them now that org is a
+// bootstrapped module, or these tests would silently stop covering org's
+// contribution to the merged feature set.
+var orgDefaultFlags = []string{org.FeatureInvitationEmail, org.FeatureInvitations}
 
 // configSeed is one row to insert into the configs table behind a test
 // server. buildServer hands out neither its *gorm.DB nor the config
@@ -222,16 +232,17 @@ func TestPublicConfig_UnmatchedHost_ServesPlatformDefaults(t *testing.T) {
 		t.Fatalf("GET %s (Host=%s) status = %d, want %d; body = %s",
 			config.PathPublic, unmatchedHost, resp.StatusCode, http.StatusOK, body)
 	}
-	requirePublicSnapshot(t, body, "Smile Studio", []string{})
+	requirePublicSnapshot(t, body, "Smile Studio", orgDefaultFlags)
 
 	// The features endpoint answers the same way for the same host: 200,
-	// platform defaults, empty flag list.
+	// platform defaults, org's two flags (both default-on) and nothing
+	// else -- see orgDefaultFlags' own doc comment.
 	resp2, body2 := doAs(t, srv, http.MethodGet, config.PathSystemFeatures, unmatchedHost, nil)
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("GET %s (Host=%s) status = %d, want %d; body = %s",
 			config.PathSystemFeatures, unmatchedHost, resp2.StatusCode, http.StatusOK, body2)
 	}
-	requireFeatures(t, body2, []string{})
+	requireFeatures(t, body2, orgDefaultFlags)
 }
 
 // TestPublicConfig_MatchedHost_ServesTenantOverrides proves the tenant
@@ -257,16 +268,16 @@ func TestPublicConfig_MatchedHost_ServesTenantOverrides(t *testing.T) {
 		t.Fatalf("GET %s (Host=%s) status = %d, want %d; body = %s",
 			config.PathPublic, acmeHost, resp.StatusCode, http.StatusOK, body)
 	}
-	requirePublicSnapshot(t, body, "Acme Studio", []string{})
+	requirePublicSnapshot(t, body, "Acme Studio", orgDefaultFlags)
 
 	// tenant-globex has no override row: it must fall back to the platform
 	// default, not to acme's override -- and the unmatched host likewise.
 	_, globexBody := doAs(t, srv, http.MethodGet, config.PathPublic, globexHost, nil)
-	requirePublicSnapshot(t, globexBody, "Smile Studio", []string{})
+	requirePublicSnapshot(t, globexBody, "Smile Studio", orgDefaultFlags)
 
 	const unmatchedHost = "totally-unrecognized-host.example"
 	_, unmatchedBody := doAs(t, srv, http.MethodGet, config.PathPublic, unmatchedHost, nil)
-	requirePublicSnapshot(t, unmatchedBody, "Smile Studio", []string{})
+	requirePublicSnapshot(t, unmatchedBody, "Smile Studio", orgDefaultFlags)
 }
 
 // TestSystemFeatures_EnabledFlagChain_ResolvesDependencies proves the
@@ -291,10 +302,16 @@ func TestSystemFeatures_EnabledFlagChain_ResolvesDependencies(t *testing.T) {
 		t.Fatalf("GET %s (Host=%s) status = %d, want %d; body = %s",
 			config.PathSystemFeatures, acmeHost, resp.StatusCode, http.StatusOK, body)
 	}
-	requireFeatures(t, body, []string{notes.FeatureFlagPremiumUpsell, notes.FeatureFlagSmilePreview})
+	// Sorted ascending across both modules' flags: "ai." sorts before
+	// "org." lexically, so the notes pair comes first, then org's own two
+	// (both default-on regardless of the ai.* seed -- see orgDefaultFlags).
+	requireFeatures(t, body, []string{
+		notes.FeatureFlagPremiumUpsell, notes.FeatureFlagSmilePreview,
+		org.FeatureInvitationEmail, org.FeatureInvitations,
+	})
 
 	_, globexBody := doAs(t, srv, http.MethodGet, config.PathSystemFeatures, globexHost, nil)
-	requireFeatures(t, globexBody, []string{})
+	requireFeatures(t, globexBody, orgDefaultFlags)
 }
 
 // TestPublicConfigEndpoints_Head_Returns200WithoutBody proves the HEAD

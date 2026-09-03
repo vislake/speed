@@ -30,6 +30,7 @@ func testConfig(t *testing.T) serverConfig {
 		Port:           "0",
 		SQLitePath:     filepath.Join(t.TempDir(), "reference-app-test.db"),
 		ConfigKey:      devConfigKey,
+		OrgIndexKey:    devOrgIndexKey,
 		HostTenants:    demoHostTenants,
 	}
 }

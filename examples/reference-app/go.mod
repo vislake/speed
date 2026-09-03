@@ -14,11 +14,23 @@ replace github.com/vislake/speed/go/config => ../../go/config
 
 replace github.com/vislake/speed/go/rbac => ../../go/rbac
 
+replace github.com/vislake/speed/go/org => ../../go/org
+
+// go/ratelimit is not imported directly by this app; it is a transitive
+// dependency of go/org (its invitation rate limiting, see
+// go/org/invite.go). Like every other workspace-local module it carries no
+// published version, so this app's own go.mod needs its own replace for it
+// too -- root CLAUDE.md's per-module standalone-build rule (`GOWORK=off go
+// build`) means `go mod tidy` must resolve every dependency, direct or
+// transitive, without relying on the workspace.
+replace github.com/vislake/speed/go/ratelimit => ../../go/ratelimit
+
 require (
 	github.com/google/uuid v1.6.0
 	github.com/vislake/speed/go/config v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/dbkit v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/org v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/rbac v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/tenancy v0.0.0-00010101000000-000000000000
@@ -26,12 +38,15 @@ require (
 	gorm.io/gorm v1.31.2
 )
 
+require github.com/vislake/speed/go/ratelimit v0.0.0-00010101000000-000000000000 // indirect
+
 require (
 	dario.cat/mergo v1.0.2 // indirect
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
+	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
@@ -82,6 +97,7 @@ require (
 	github.com/moby/term v0.5.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nicksnyder/go-i18n/v2 v2.6.1 // indirect
+	github.com/oapi-codegen/runtime v1.7.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
