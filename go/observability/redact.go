@@ -68,6 +68,15 @@ package observability
 // untouched all the same, because exemption means no key rule applies
 // whatever the surrounding path says.
 //
+// The one place the exemption does not reach is an inline slog.Group
+// attribute whose OWN name is sensitive. There the attribute's key IS the
+// group name, so redactAttrWhole replaces the group wholesale before any
+// child is visited -- the bucket is the secret -- and
+// slog.Group("credentials", "user_id", ...) collapses with its exempt
+// child inside it. That is the safe direction (more redaction, never
+// less), and it is why this rule is stated as two halves rather than one:
+// both are pinned by TestRedact_ExemptKeysUnderSensitivePaths.
+//
 // # Deliberate boundaries
 //
 //   - The record's message is NOT scanned: messages are constant strings

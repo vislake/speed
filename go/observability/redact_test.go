@@ -562,3 +562,67 @@ func TestRedact_NoPerAttributeAllocationOnBenignRecord(t *testing.T) {
 		t.Errorf("allocation count scales with attribute count: 1 benign attribute cost %.0f allocs, 6 cost %.0f (expected within 2)", one, six)
 	}
 }
+
+// TestRedact_ExemptKeysUnderSensitivePaths pins the interaction the
+// exemption's own documentation used to overstate: what happens when a
+// never-redact correlation key sits under a path that names a secret.
+// TestRedact_CorrelationKeysNeverRedacted above logs correlation keys
+// under no sensitive path at all, so nothing exercised this intersection
+// and the class comment drifted from the code unnoticed.
+//
+// The code checks the exemption before the key-based rule, so exemption
+// wins over a sensitive key PATH in both of its forms: a dotted key whose
+// leading segment names a secret, and an exempt attribute logged under a
+// WithGroup context named for a secret. It does NOT reach an inline
+// slog.Group attribute whose own name is sensitive: that attribute's key
+// IS the group name, so redactAttrWhole replaces the group before any
+// child is visited -- the bucket is the secret. The divergence is toward
+// more redaction, so it leaks nothing; it is pinned here because it is
+// the half a reader of the exemption rule would not predict.
+func TestRedact_ExemptKeysUnderSensitivePaths(t *testing.T) {
+	t.Run("WithGroup named for a secret leaves an exempt child intact", func(t *testing.T) {
+		var buf bytes.Buffer
+		ctx := textLoggerCtx(context.Background(), &buf)
+		obs.FromContext(ctx).WithGroup("credentials").Info("event",
+			"user_id", testJWT,
+		)
+		out := buf.String()
+		if want := "credentials.user_id=" + testJWT; !strings.Contains(out, want) {
+			t.Errorf("expected the exempt user_id to survive under a sensitive group verbatim as %q; got: %s", want, out)
+		}
+		if strings.Contains(out, obs.RedactedValue) {
+			t.Errorf("an exempt key must not be redacted by the surrounding group name; got: %s", out)
+		}
+	})
+
+	t.Run("dotted key under a secret-named segment stays intact", func(t *testing.T) {
+		var buf bytes.Buffer
+		ctx := textLoggerCtx(context.Background(), &buf)
+		obs.FromContext(ctx).Info("event", "credentials.user_id", "u-1")
+		out := buf.String()
+		if !strings.Contains(out, "credentials.user_id=u-1") {
+			t.Errorf("expected the exempt trailing segment to survive a sensitive path; got: %s", out)
+		}
+		if strings.Contains(out, obs.RedactedValue) {
+			t.Errorf("an exempt trailing segment must not be redacted; got: %s", out)
+		}
+	})
+
+	t.Run("inline group named for a secret collapses, exempt child included", func(t *testing.T) {
+		var buf bytes.Buffer
+		ctx := textLoggerCtx(context.Background(), &buf)
+		obs.FromContext(ctx).Info("event",
+			slog.Group("credentials", "user_id", "u-1", "password", testSecret),
+		)
+		out := buf.String()
+		if want := "credentials=" + obs.RedactedValue; !strings.Contains(out, want) {
+			t.Errorf("expected the sensitive group to collapse wholesale to %q; got: %s", want, out)
+		}
+		if strings.Contains(out, "u-1") {
+			t.Errorf("the exempt child must not survive a collapsed sensitive group; got: %s", out)
+		}
+		if strings.Contains(out, testSecret) {
+			t.Errorf("the secret must never reach the sink; got: %s", out)
+		}
+	})
+}
