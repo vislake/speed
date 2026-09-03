@@ -30,3 +30,59 @@
 "org.invalid_node_id" = "该组织节点标识不合法。"
 
 "org.internal_error" = "组织服务未能完成本次请求。"
+
+"org.node_has_members" = "该节点下还有成员,请先把他们调整到其他节点再删除。"
+
+"org.membership_not_found" = "此人不是该组织的成员。"
+
+"org.membership_exists" = "此人已经是该组织的成员。"
+
+"org.member_not_removable" = "不能移除组织的最后一名成员。"
+
+"org.invitation_not_found" = "该邀请链接无效。"
+
+"org.invitation_expired" = "该邀请已过期,请重新索取。"
+
+"org.invitation_already_accepted" = "该邀请已被接受。"
+
+"org.invitation_revoked" = "该邀请已被撤回。"
+
+"org.invitation_rate_limited" = "邀请发送过于频繁,请在 {{.retry_after_seconds}} 秒后重试。"
+
+"org.invalid_email" = "该邮箱地址无法用于发送邀请。"
+
+"org.invitations_disabled" = "该组织的邀请功能已关闭。"
+
+"org.email_indexer_required" = "邀请功能不可用:本次部署缺少邀请所需的密钥。"
+
+"org.invitation_mail_required" = "邀请功能不可用:本次部署未配置邀请发件人。"
+
+# 邀请邮件正文。这是 org 唯一会发出的消息,并且按照**收件人**的语言渲染
+# ——即邀请记录上保存的 locale,而不是发起邀请的操作者的界面语言。
+#
+# 插值名使用 snake_case,与 mail.go 构造的参数表一致。node_name 进入 HTML
+# 正文前会做转义,纯文本正文里原样使用。
+
+"org.invitation.subject" = "邀请你加入 {{.node_name}}"
+
+"org.invitation.body_text" = """
+你好,
+
+有人邀请你加入 {{.node_name}}。
+
+打开下面的链接即可接受邀请:
+{{.accept_url}}
+
+如果你并没有在等待这封邀请,忽略这封邮件即可。
+"""
+
+"org.invitation.body_html" = """
+<p>你好,</p>
+<p>有人邀请你加入 {{.node_name}}。</p>
+<p><a href="{{.accept_url}}">接受邀请</a></p>
+<p>如果你并没有在等待这封邀请,忽略这封邮件即可。</p>
+"""
+
+# org 为“有租户但还没有树”的新用户自动创建根节点时使用的名称。
+# 租户随时可以把它改成对自己有意义的名字。
+"org.default_workspace_name" = "工作区"

@@ -1,6 +1,9 @@
 package org
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"strings"
 	"testing"
@@ -30,7 +33,67 @@ var errorCatalog = []struct {
 	{"ErrRootNotDeletable", ErrRootNotDeletable, "org.root_not_deletable", http.StatusConflict},
 	{"ErrDuplicateSiblingName", ErrDuplicateSiblingName, "org.duplicate_sibling_name", http.StatusConflict},
 	{"ErrInvalidNodeID", ErrInvalidNodeID, "org.invalid_node_id", http.StatusBadRequest},
+	{"ErrNodeHasMembers", ErrNodeHasMembers, "org.node_has_members", http.StatusConflict},
 	{"ErrInternal", ErrInternal, "org.internal_error", http.StatusInternalServerError},
+
+	{"ErrMembershipNotFound", ErrMembershipNotFound, "org.membership_not_found", http.StatusNotFound},
+	{"ErrMembershipExists", ErrMembershipExists, "org.membership_exists", http.StatusConflict},
+	{"ErrMemberNotRemovable", ErrMemberNotRemovable, "org.member_not_removable", http.StatusConflict},
+	{"ErrInvitationNotFound", ErrInvitationNotFound, "org.invitation_not_found", http.StatusNotFound},
+	{"ErrInvitationExpired", ErrInvitationExpired, "org.invitation_expired", http.StatusConflict},
+	{"ErrInvitationAlreadyAccepted", ErrInvitationAlreadyAccepted, "org.invitation_already_accepted", http.StatusConflict},
+	{"ErrInvitationRevoked", ErrInvitationRevoked, "org.invitation_revoked", http.StatusConflict},
+	{"ErrInvitationRateLimited", ErrInvitationRateLimited, "org.invitation_rate_limited", http.StatusTooManyRequests},
+	{"ErrInvalidEmail", ErrInvalidEmail, "org.invalid_email", http.StatusBadRequest},
+	{"ErrInvitationsDisabled", ErrInvitationsDisabled, "org.invitations_disabled", http.StatusForbidden},
+	{"ErrEmailIndexerRequired", ErrEmailIndexerRequired, "org.email_indexer_required", http.StatusInternalServerError},
+	{"ErrInvitationMailRequired", ErrInvitationMailRequired, "org.invitation_mail_required", http.StatusInternalServerError},
+}
+
+// TestErrorCatalog_IsComplete is what makes the promise at the top of
+// errorCatalog true -- every exported Err* sentinel errors.go declares must
+// appear in the table above, so a new error cannot be added without also
+// gaining its status assertion and its two translations.
+//
+// It reads the source file rather than reflecting, because Go offers no way
+// to enumerate a package's own variables at run time.
+func TestErrorCatalog_IsComplete(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "errors.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse errors.go: %v", err)
+	}
+
+	catalogued := make(map[string]bool, len(errorCatalog))
+	for _, tc := range errorCatalog {
+		catalogued[tc.name] = true
+	}
+
+	declared := 0
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			value, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for _, name := range value.Names {
+				if !strings.HasPrefix(name.Name, "Err") {
+					continue
+				}
+				declared++
+				if !catalogued[name.Name] {
+					t.Errorf("errors.go declares %s, which errorCatalog does not list", name.Name)
+				}
+			}
+		}
+	}
+	if declared != len(errorCatalog) {
+		t.Errorf("errors.go declares %d exported errors, errorCatalog lists %d", declared, len(errorCatalog))
+	}
 }
 
 func TestErrorCatalog_CodesAndStatuses(t *testing.T) {

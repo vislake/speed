@@ -1006,3 +1006,121 @@ func TestTreeService_TenantIsNeverATreeServiceParameter(t *testing.T) {
 		t.Error("tenant-b reached tenant-a's root")
 	}
 }
+
+// TestTreeService_Delete_WithMembers_ReturnsNodeHasMembers pins the guard
+// this block adds. Without it a cascading delete would leave memberships
+// pointing at rows that no longer exist, and a dangling membership is a
+// person whose data scope can no longer be resolved.
+func TestTreeService_Delete_WithMembers_ReturnsNodeHasMembers(t *testing.T) {
+	m, _ := newTestModule(t)
+	ctx := tenantCtx("tenant-a")
+	root, left, right := seedTree(t, m.Tree(), ctx)
+	chair, err := m.Tree().CreateChild(ctx, left.ID, "chair 1", "room")
+	if err != nil {
+		t.Fatalf("CreateChild: %v", err)
+	}
+	if _, err := m.Members().Add(ctx, "u-owner", root.ID); err != nil {
+		t.Fatalf("Add(owner): %v", err)
+	}
+	if _, err := m.Members().Add(ctx, "u-chair", chair.ID); err != nil {
+		t.Fatalf("Add(chair): %v", err)
+	}
+
+	// The member sits BELOW the node being deleted, so a check that only
+	// looked at the node itself would miss them.
+	for _, cascade := range []bool{false, true} {
+		if err := m.Tree().Delete(ctx, left.ID, cascade); !hasCode(err, ErrNodeHasMembers.Code) {
+			t.Errorf("Delete(cascade=%t) error = %v, want org.node_has_members", cascade, err)
+		}
+	}
+	if _, err := m.Tree().Get(ctx, chair.ID); err != nil {
+		t.Errorf("the refused delete removed the subtree anyway: %v", err)
+	}
+
+	// An empty branch is still deletable: the guard is about members, not
+	// about structure.
+	if err := m.Tree().Delete(ctx, right.ID, false); err != nil {
+		t.Errorf("Delete(empty branch): %v", err)
+	}
+
+	// And once the member is moved out of the way, the delete proceeds.
+	if _, err := m.Tree().Move(ctx, chair.ID, root.ID); err != nil {
+		t.Fatalf("Move: %v", err)
+	}
+	if err := m.Tree().Delete(ctx, left.ID, false); err != nil {
+		t.Errorf("Delete after moving the member out: %v", err)
+	}
+}
+
+// TestTreeService_Delete_OtherTenantsMembers_DoNotBlockADelete pins that the
+// guard is tenant-scoped like everything else: another tenant's membership on
+// a same-named node id cannot make this tenant's node undeletable.
+func TestTreeService_Delete_OtherTenantsMembers_DoNotBlockADelete(t *testing.T) {
+	m, _ := newTestModule(t)
+	ctx := tenantCtx("tenant-a")
+	_, left, _ := seedTree(t, m.Tree(), ctx)
+
+	seedMembership(t, m.Members().Repository(), tenantCtx("tenant-b"), Membership{
+		ID: "20000000-0000-4000-8000-000000000020", UserID: "u-theirs",
+		NodeID: left.ID, Status: MembershipStatusActive,
+	})
+	if err := m.Tree().Delete(ctx, left.ID, false); err != nil {
+		t.Errorf("Delete = %v, want success -- another tenant's membership must not block it", err)
+	}
+}
+
+// TestTreeService_Delete_WithoutARosterWired_SkipsTheGuard pins that a
+// TreeService built on its own -- no roster beside it, so no membership can
+// be orphaned -- keeps working exactly as it did before the guard existed.
+func TestTreeService_Delete_WithoutARosterWired_SkipsTheGuard(t *testing.T) {
+	tree := NewTreeService(newTestDB(t))
+	ctx := tenantCtx("tenant-a")
+
+	root, err := tree.CreateRoot(ctx, "group", "group")
+	if err != nil {
+		t.Fatalf("CreateRoot: %v", err)
+	}
+	child, err := tree.CreateChild(ctx, root.ID, "store", "store")
+	if err != nil {
+		t.Fatalf("CreateChild: %v", err)
+	}
+	if tree.members != nil {
+		t.Fatal("a bare TreeService has a member guard; the test proves nothing")
+	}
+	if err := tree.Delete(ctx, child.ID, false); err != nil {
+		t.Errorf("Delete: %v", err)
+	}
+}
+
+// TestTreeService_MaxDepth_IsPerServiceNotGlobal pins the WithMaxDepth
+// override: the bound lives on the service, so two hosts in one process can
+// disagree about it without one reconfiguring the other.
+func TestTreeService_MaxDepth_IsPerServiceNotGlobal(t *testing.T) {
+	shallow := NewModule(newTestDB(t), WithEmailIndexer(newTestEmailIndexer(t)), WithMaxDepth(1))
+	ctx := tenantCtx("tenant-a")
+
+	root, err := shallow.Tree().CreateRoot(ctx, "group", "group")
+	if err != nil {
+		t.Fatalf("CreateRoot: %v", err)
+	}
+	child, err := shallow.Tree().CreateChild(ctx, root.ID, "store", "store")
+	if err != nil {
+		t.Fatalf("CreateChild at depth 1: %v", err)
+	}
+	_, err = shallow.Tree().CreateChild(ctx, child.ID, "chair", "room")
+	if !hasCode(err, ErrMaxDepthExceeded.Code) {
+		t.Fatalf("CreateChild at depth 2 error = %v, want org.max_depth_exceeded", err)
+	}
+	if got := errParam(t, err, "max_depth"); got != 1 {
+		t.Errorf("max_depth parameter = %v, want the configured 1", got)
+	}
+
+	// The package default is untouched by the override above.
+	if maxDepth == 1 {
+		t.Fatal("the package default happens to equal the override; the test proves nothing")
+	}
+	deep := NewTreeService(newTestDB(t))
+	if deep.maxDepth != maxDepth {
+		t.Errorf("a second service's maxDepth = %d, want the package default %d", deep.maxDepth, maxDepth)
+	}
+}

@@ -33,12 +33,45 @@ type TreeService struct {
 	// materialized-path prefix scan dialect-identical (path.go). Whatever it
 	// returns is validated by validateNodeID before it is ever stored.
 	newID func() string
+
+	// maxDepth is the deepest Depth a node of this tree may carry, defaulting
+	// to the package constant of the same name and overridable by a host
+	// through Module's WithMaxDepth.
+	//
+	// It is an option rather than a dynamic configuration item because org
+	// cannot read one without importing the config module, which the
+	// dependency graph forbids; declaring a config schema this module would
+	// then ignore would be a lying schema. See go/org/AGENTS.md.
+	maxDepth int
+
+	// members, when wired, is asked whether anybody is bound inside a subtree
+	// before that subtree is deleted. Nil leaves the check off, which is the
+	// right default for a TreeService built on its own: a tree with no roster
+	// beside it cannot orphan a membership.
+	members nodeMemberGuard
+
+	// host is the lazily-read view of the host's Registry, used to publish
+	// this module's tree events. Nil publishes nothing, which is what a
+	// TreeService constructed outside a bootstrapped host does.
+	host hostSeams
+}
+
+// nodeMemberGuard reports whether any membership is bound to one of the given
+// nodes. TreeService uses it to refuse a delete that would leave memberships
+// pointing at rows that no longer exist.
+//
+// It is an interface rather than a direct *MembershipRepository so that the
+// tree half of this module stays testable without a roster, and so the
+// dependency reads in one direction only: the tree asks a question, the
+// roster answers it.
+type nodeMemberGuard interface {
+	anyInNodes(ctx context.Context, nodeIDs []string) (bool, error)
 }
 
 // NewTreeService returns a TreeService over db. db is expected to come from
 // dbkit.Open, already migrated with this module's Migrations().
 func NewTreeService(db *gorm.DB) *TreeService {
-	return &TreeService{repo: NewRepository(db), newID: uuid.NewString}
+	return &TreeService{repo: NewRepository(db), newID: uuid.NewString, maxDepth: maxDepth}
 }
 
 // Repository returns the tree's data-access type, for callers that need the
@@ -110,6 +143,7 @@ func (s *TreeService) CreateRoot(ctx context.Context, name, kind string) (*OrgNo
 	if err := s.create(ctx, &node); err != nil {
 		return nil, err
 	}
+	s.publishCreated(ctx, node)
 	return &node, nil
 }
 
@@ -131,8 +165,8 @@ func (s *TreeService) CreateChild(ctx context.Context, parentID, name, kind stri
 	}
 
 	depth := depthOf(parent.Path) + 1
-	if depth > maxDepth {
-		return nil, ErrMaxDepthExceeded.WithParam("max_depth", maxDepth)
+	if depth > s.maxDepth {
+		return nil, ErrMaxDepthExceeded.WithParam("max_depth", s.maxDepth)
 	}
 	if err := s.assertNameFree(ctx, parentID, cleanName); err != nil {
 		return nil, err
@@ -154,6 +188,7 @@ func (s *TreeService) CreateChild(ctx context.Context, parentID, name, kind stri
 	if err := s.create(ctx, &node); err != nil {
 		return nil, err
 	}
+	s.publishCreated(ctx, node)
 	return &node, nil
 }
 
@@ -253,8 +288,8 @@ func (s *TreeService) Move(ctx context.Context, nodeID, newParentID string) (*Or
 		return nil, err
 	}
 	for _, n := range subtree {
-		if depthOf(n.Path)+delta > maxDepth {
-			return nil, ErrMaxDepthExceeded.WithParam("max_depth", maxDepth)
+		if depthOf(n.Path)+delta > s.maxDepth {
+			return nil, ErrMaxDepthExceeded.WithParam("max_depth", s.maxDepth)
 		}
 	}
 
@@ -280,7 +315,25 @@ func (s *TreeService) Move(ctx context.Context, nodeID, newParentID string) (*Or
 	if moved == nil {
 		return nil, ErrInternal.WithCause(ErrNodeNotFound.WithParam("node_id", nodeID))
 	}
+	publishEvent(ctx, s.host, EventNodeMoved, NodeMoved{
+		NodeID:      moved.ID,
+		OldParentID: node.ParentID,
+		NewParentID: newParent.ID,
+		OldPath:     node.Path,
+		NewPath:     moved.Path,
+	})
 	return moved, nil
+}
+
+// publishCreated announces one newly created node.
+func (s *TreeService) publishCreated(ctx context.Context, node OrgNode) {
+	publishEvent(ctx, s.host, EventNodeCreated, NodeCreated{
+		NodeID:   node.ID,
+		ParentID: node.ParentID,
+		Path:     node.Path,
+		Depth:    node.Depth,
+		Kind:     node.Kind,
+	})
 }
 
 // Delete removes a node.
@@ -293,6 +346,10 @@ func (s *TreeService) Move(ctx context.Context, nodeID, newParentID string) (*Or
 //
 // The tenant root is never deletable (ErrRootNotDeletable): removing it would
 // leave the tenant with no tree and every membership dangling.
+//
+// A node with members bound to it, or to anything beneath it, is not
+// deletable either (ErrNodeHasMembers) once a host has wired the roster --
+// see assertNoMembers.
 //
 // Both paths are a single statement inside a single transaction, so a node
 // cannot be orphaned by a child arriving between a "does it have children?"
@@ -311,10 +368,16 @@ func (s *TreeService) Delete(ctx context.Context, nodeID string, cascade bool) e
 	}
 
 	prefix := subtreePrefix(node.Path)
+	if memberErr := s.assertNoMembers(ctx, prefix, nodeID); memberErr != nil {
+		return memberErr
+	}
+
 	if cascade {
-		if _, deleteErr := s.repo.deleteSubtree(ctx, prefix); deleteErr != nil {
+		removed, deleteErr := s.repo.deleteSubtree(ctx, prefix)
+		if deleteErr != nil {
 			return deleteErr
 		}
+		s.publishDeleted(ctx, *node, true, removed)
 		return nil
 	}
 
@@ -330,7 +393,50 @@ func (s *TreeService) Delete(ctx context.Context, nodeID string, cascade bool) e
 			WithParam("node_id", nodeID).
 			WithParam("descendant_count", matched-1)
 	}
+	s.publishDeleted(ctx, *node, false, matched)
 	return nil
+}
+
+// assertNoMembers reports ErrNodeHasMembers when anybody is bound inside the
+// subtree about to be deleted.
+//
+// Without it a cascading delete would leave memberships pointing at rows that
+// no longer exist, and a dangling membership is not a cosmetic problem: it is
+// a person whose data scope can no longer be resolved. org refuses the delete
+// rather than deleting the memberships too, for the same reason it refuses to
+// re-parent orphans -- silently changing who is in a tenant, or what they can
+// see, is not something a structural edit should do on its own. Move the
+// members first, then delete the node.
+//
+// The check is skipped when no roster is wired, which is the case for a
+// TreeService constructed on its own.
+func (s *TreeService) assertNoMembers(ctx context.Context, prefix, nodeID string) error {
+	if s.members == nil {
+		return nil
+	}
+	subtree, err := s.repo.subtree(ctx, prefix)
+	if err != nil {
+		return err
+	}
+	occupied, err := s.members.anyInNodes(ctx, nodeIDs(subtree))
+	if err != nil {
+		return err
+	}
+	if occupied {
+		return ErrNodeHasMembers.WithParam("node_id", nodeID)
+	}
+	return nil
+}
+
+// publishDeleted announces one removed node (and, for a cascade, its whole
+// subtree).
+func (s *TreeService) publishDeleted(ctx context.Context, node OrgNode, cascade bool, removed int64) {
+	publishEvent(ctx, s.host, EventNodeDeleted, NodeDeleted{
+		NodeID:       node.ID,
+		Path:         node.Path,
+		Cascade:      cascade,
+		RemovedCount: removed,
+	})
 }
 
 // Ancestors returns nodeID's ancestors, root first, excluding nodeID itself.

@@ -31,3 +31,62 @@
 "org.invalid_node_id" = "That organization node identifier is not valid."
 
 "org.internal_error" = "The organization service could not complete the request."
+
+"org.node_has_members" = "That node still has members. Move them elsewhere before deleting it."
+
+"org.membership_not_found" = "That person is not a member of this organization."
+
+"org.membership_exists" = "That person is already a member of this organization."
+
+"org.member_not_removable" = "You cannot remove the last member of an organization."
+
+"org.invitation_not_found" = "That invitation link is not valid."
+
+"org.invitation_expired" = "That invitation has expired. Ask for a new one."
+
+"org.invitation_already_accepted" = "That invitation has already been accepted."
+
+"org.invitation_revoked" = "That invitation was withdrawn."
+
+"org.invitation_rate_limited" = "Too many invitations have been sent. Try again in {{.retry_after_seconds}} seconds."
+
+"org.invalid_email" = "That is not an email address we can send an invitation to."
+
+"org.invitations_disabled" = "Invitations are turned off for this organization."
+
+"org.email_indexer_required" = "Invitations are not available: this deployment is missing its invitation key."
+
+"org.invitation_mail_required" = "Invitations are not available: this deployment has no invitation sender configured."
+
+# The invitation message itself. It is the one message org sends, and it
+# renders in the RECIPIENT's language -- the locale captured on the
+# invitation row -- never the inviting operator's UI language.
+#
+# Interpolated names are snake_case, matching the parameter map mail.go
+# builds. node_name is HTML-escaped before it reaches the HTML body and left
+# verbatim in the plain-text one.
+
+"org.invitation.subject" = "You have been invited to join {{.node_name}}"
+
+"org.invitation.body_text" = """
+Hello,
+
+You have been invited to join {{.node_name}}.
+
+Open this link to accept the invitation:
+{{.accept_url}}
+
+If you were not expecting this invitation, you can ignore this message.
+"""
+
+"org.invitation.body_html" = """
+<p>Hello,</p>
+<p>You have been invited to join {{.node_name}}.</p>
+<p><a href="{{.accept_url}}">Accept the invitation</a></p>
+<p>If you were not expecting this invitation, you can ignore this message.</p>
+"""
+
+# The name of the root node org creates on its own for a brand-new user who
+# arrives with a tenant but no tree. Tenants rename it the moment it means
+# something else to them.
+"org.default_workspace_name" = "Workspace"
