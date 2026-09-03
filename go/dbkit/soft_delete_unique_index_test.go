@@ -8,7 +8,7 @@ import (
 
 // TestSoftDeleteUniqueIndex_NameReusableAfterSoftDelete_ViaPartialIndex is
 // this round's proof for the unique-index interaction
-// docs/internal/04-data-and-tenancy.md's "删除语义" §4 requires every
+// docs/internal/04-data-and-tenancy.md's delete-semantics section (§4) requires every
 // soft-deletable model to decide explicitly: a soft-deleted row is still a
 // real row and still occupies a plain unique constraint. This round's
 // answer, for SoftDeletableWidget (testutil.SoftDeletableWidgetTableSQL),

@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -321,4 +322,97 @@ func ExampleAuditable() {
 
 	// Output:
 	// task create task-1
+}
+
+// exampleTicket is a tenant-scoped model that also opts into dbkit's
+// mark-delete (soft-delete) capability by implementing dbkit.SoftDeletable
+// -- DeletedAt and DeletedBy are the two required fields (see
+// soft_delete.go's SoftDeletable doc comment); nothing else about the
+// model changes, and GetDeletedAt is never called by dbkit itself, exactly
+// like GetTenantID.
+type exampleTicket struct {
+	ID        string     `gorm:"primaryKey;size:26"`
+	TenantID  string     `gorm:"primaryKey;size:26;not null"`
+	Subject   string     `gorm:"size:255;not null"`
+	DeletedAt *time.Time `gorm:"column:deleted_at"`
+	DeletedBy string     `gorm:"column:deleted_by;not null;default:''"`
+}
+
+// GetTenantID satisfies dbkit.TenantScoped.
+func (t exampleTicket) GetTenantID() pkgcore.TenantID { return pkgcore.TenantID(t.TenantID) }
+
+// GetDeletedAt satisfies dbkit.SoftDeletable.
+func (t exampleTicket) GetDeletedAt() *time.Time { return t.DeletedAt }
+
+// TableName pins exampleTicket's table name explicitly, independent of
+// GORM's pluralization rules, matching the raw CREATE TABLE
+// ExampleSoftDeletable applies below.
+func (exampleTicket) TableName() string { return "example_tickets" }
+
+// ExampleSoftDeletable demonstrates dbkit's mark-delete capability: a model
+// implementing SoftDeletable gets a Delete that marks instead of physically
+// removing the row (hidden from ordinary queries by the soft-delete
+// auto-scope plugin Open installs unconditionally), and a Restore that
+// undoes it. Repository[T]'s method set does not change to expose this --
+// Delete keeps its existing signature and simply behaves differently for a
+// SoftDeletable T, and Restore is the one new method.
+func ExampleSoftDeletable() {
+	ctx := context.Background()
+
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:dbkit_soft_deletable_example?mode=memory&cache=shared",
+	})
+	if err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+
+	if err = db.Exec(`CREATE TABLE example_tickets (
+		id         VARCHAR(26)  NOT NULL,
+		tenant_id  VARCHAR(26)  NOT NULL,
+		subject    VARCHAR(255) NOT NULL,
+		deleted_at TIMESTAMP NULL,
+		deleted_by VARCHAR(64) NOT NULL DEFAULT '',
+		PRIMARY KEY (tenant_id, id)
+	)`).Error; err != nil {
+		fmt.Println("migrate:", err)
+		return
+	}
+
+	ctx = pkgcore.WithTenant(ctx, "tenant-acme")
+	ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1"})
+
+	repo := dbkit.NewRepository[exampleTicket](db)
+	ticket := &exampleTicket{ID: "ticket-1", Subject: "billing question"}
+	if err = repo.Create(ctx, ticket); err != nil {
+		fmt.Println("create:", err)
+		return
+	}
+
+	// Delete marks the row instead of physically removing it -- ordinary
+	// reads no longer see it.
+	if err = repo.Delete(ctx, ticket.ID); err != nil {
+		fmt.Println("delete:", err)
+		return
+	}
+	if _, err = repo.FindByID(ctx, ticket.ID); err != nil {
+		fmt.Println("find after delete:", err)
+	}
+
+	// Restore clears deleted_at/deleted_by, making the row visible again.
+	if err = repo.Restore(ctx, ticket.ID); err != nil {
+		fmt.Println("restore:", err)
+		return
+	}
+	restored, err := repo.FindByID(ctx, ticket.ID)
+	if err != nil {
+		fmt.Println("find after restore:", err)
+		return
+	}
+	fmt.Println("restored:", restored.Subject)
+
+	// Output:
+	// find after delete: dbkit.record_not_found
+	// restored: billing question
 }

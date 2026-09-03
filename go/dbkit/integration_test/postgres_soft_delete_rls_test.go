@@ -15,11 +15,12 @@ import (
 )
 
 // TestRepository_PostgresRLS_SoftDeletedRowStillTenantFilteredCorrectly is
-// this round's RLS proof, per
-// docs/internal/04-data-and-tenancy.md's "删除语义" §4: "软删除行对
-// PostgreSQL RLS 而言就是普通行，tenant_id 过滤照常生效" — a claim this test
-// verifies against a real restricted role and a real RLS policy, rather
-// than merely asserting it in a doc comment. No new policy is needed for a
+// this round's RLS proof, per docs/internal/04-data-and-tenancy.md's
+// delete-semantics section (§4): a soft-deleted row is, to PostgreSQL RLS,
+// just an ordinary row, and tenant_id filtering keeps applying to it
+// exactly as before — a claim this test verifies against a real restricted
+// role and a real RLS policy, rather than merely asserting it in a doc
+// comment. No new policy is needed for a
 // soft-deleted row: it is exactly the same UNIQUE(tenant_id, id) row the
 // tenant_isolation policy already covers, whether or not deleted_at is set.
 //
@@ -111,8 +112,8 @@ func TestRepository_PostgresRLS_SoftDeletedRowStillTenantFilteredCorrectly(t *te
 	// restricted role, with app.current_tenant set to the row's OWNING
 	// tenant, sees the soft-deleted row through plain SQL -- RLS filters by
 	// tenant_id only, exactly as docs/internal/04-data-and-tenancy.md's
-	// "对 PostgreSQL RLS 而言就是普通行" claim says, with no special-casing
-	// for deleted_at needed or present in the policy. This is what "no
+	// "a soft-deleted row is an ordinary row to RLS" claim says, with no
+	// special-casing for deleted_at needed or present in the policy. This is what "no
 	// special handling needed" actually means operationally: the row is
 	// still reachable through RLS by its rightful tenant at the raw-SQL
 	// layer; it is dbkit's Go-side soft-delete auto-scope plugin (query-only,

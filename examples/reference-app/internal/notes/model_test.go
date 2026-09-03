@@ -2,6 +2,7 @@ package notes
 
 import (
 	"testing"
+	"time"
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
@@ -69,5 +70,29 @@ func TestNote_AuditResourceType_ReturnsNote(t *testing.T) {
 	var n Note
 	if got, want := n.AuditResourceType(), "note"; got != want {
 		t.Fatalf("AuditResourceType() = %q, want %q", got, want)
+	}
+}
+
+// TestNote_ImplementsSoftDeletable is a runtime-checkable companion to
+// model.go's compile-time `var _ dbkit.SoftDeletable = Note{}` assertion,
+// mirroring TestNote_ImplementsTenantScoped's identical rationale.
+func TestNote_ImplementsSoftDeletable(t *testing.T) {
+	var _ dbkit.SoftDeletable = Note{}
+}
+
+// TestNote_GetDeletedAt_ReturnsFieldValue is a no-database sanity check
+// that Note's GetDeletedAt method returns exactly the DeletedAt field it
+// was given, mirroring TestNote_GetTenantID_ReturnsEmbeddedTenantModelValue's
+// role for GetTenantID.
+func TestNote_GetDeletedAt_ReturnsFieldValue(t *testing.T) {
+	if got := (Note{}).GetDeletedAt(); got != nil {
+		t.Fatalf("GetDeletedAt() on a zero-valued Note = %v, want nil", got)
+	}
+
+	now := time.Now()
+	n := Note{DeletedAt: &now}
+	got := n.GetDeletedAt()
+	if got == nil || !got.Equal(now) {
+		t.Fatalf("GetDeletedAt() = %v, want %v", got, now)
 	}
 }

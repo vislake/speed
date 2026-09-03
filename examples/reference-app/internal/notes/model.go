@@ -54,7 +54,39 @@ type Note struct {
 	// written by application code, and never NOW() in a migration (backend
 	// coding standard §5's dual-dialect rule: SQLite has no NOW()).
 	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
+
+	// DeletedAt and DeletedBy are dbkit.SoftDeletable's required pair
+	// (dbkit/soft_delete.go): implementing that interface below is what
+	// makes dbkit.Repository[Note].Delete a mark-delete (one UPDATE
+	// setting these two columns) instead of today's physical DELETE, and
+	// what makes dbkit.Repository[Note].Restore meaningful for this model.
+	// Neither field is ever set by application code directly -- both are
+	// written through dbkit's own reflection-based field access, exactly
+	// as TenantID is (see dbkit/repository.go's setTenantID /
+	// setSoftDeleteFields).
+	//
+	// This is notes' service-level proof of the mark-delete round
+	// (docs/internal/04-data-and-tenancy.md's delete-semantics section): repository_test.go's
+	// TestRepository_DeleteThenRestoreThenDelete_HiddenFromNormalQueriesThroughoutLifecycle
+	// drives Create/Delete/Restore/Delete straight through this package's
+	// real, migrated Repository, promoted unchanged from
+	// dbkit.Repository[Note] -- no code in this package's repository.go
+	// itself needed to change for that proof to hold. Notes does not
+	// expose a delete/restore HTTP endpoint yet (a good, named follow-up
+	// scope, not required for this proof) -- see this migration's own
+	// doc comment (migrations/{postgres,sqlite}/0002_add_soft_delete.sql)
+	// for why HardDelete is out of scope here too.
+	DeletedAt *time.Time `gorm:"column:deleted_at"`
+	DeletedBy string     `gorm:"column:deleted_by;not null;default:''"`
 }
+
+// GetDeletedAt returns Note's soft-delete marker, satisfying
+// dbkit.SoftDeletable. Like GetTenantID, this is never called by dbkit's
+// soft-delete auto-scope plugin or by Repository[Note] itself -- it is a
+// pure marker used only for the capability check that routes
+// dbkit.Repository[Note].Delete onto the mark-delete path; the actual
+// field writes go through reflection on fixed field names.
+func (n Note) GetDeletedAt() *time.Time { return n.DeletedAt }
 
 // AuditResourceType implements dbkit.Auditable: it names notes' audit
 // resource kind "note", the label dbkit's automatic GORM write-capture
@@ -89,3 +121,6 @@ var _ dbkit.TenantScoped = Note{}
 
 // compile-time check that Note satisfies dbkit.Auditable.
 var _ dbkit.Auditable = Note{}
+
+// compile-time check that Note satisfies dbkit.SoftDeletable.
+var _ dbkit.SoftDeletable = Note{}

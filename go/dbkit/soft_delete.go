@@ -38,7 +38,7 @@ var ErrNotSoftDeletable = apperr.Invalid("dbkit.not_soft_deletable")
 // completely unaffected — Delete keeps today's physical-delete behavior,
 // and this plugin never so much as looks at it — so soft-delete is a
 // per-model, explicitly declared capability, never an implicit new default
-// (docs/internal/04-data-and-tenancy.md, "删除语义" §1).
+// (docs/internal/04-data-and-tenancy.md's delete-semantics section, §1).
 //
 // Like TenantScoped, GetDeletedAt is a single-getter marker never actually
 // called by the plugin or by Repository[T] itself: the interface only says
@@ -80,7 +80,8 @@ func newSoftDeleteScopePlugin() *softDeleteScopePlugin {
 //
 // It is deliberately narrower than tenantScopePlugin: it registers only
 // Before("gorm:query"), not create/update/delete. The design doc's literal
-// text is "自动在查询回调追加 deleted_at IS NULL" — query callback only.
+// text says the auto-scope belongs on the query callback only, not on
+// create/update/delete.
 // Repository[T].Delete and Restore build their own explicit
 // "deleted_at IS NULL" / "deleted_at IS NOT NULL" WHERE clauses instead of
 // relying on this plugin (see repository.go), and Repository[T].Update is

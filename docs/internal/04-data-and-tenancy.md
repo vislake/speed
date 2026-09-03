@@ -108,7 +108,7 @@ ctx, err = pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
 
 ## 删除语义：标记删除（可恢复）与彻底删除（合规擦除）
 
-> **现状**：`dbkit.Repository[T].Delete` 目前只有一种语义——按租户物理删除该行（真实 `DELETE`），没有软删除机制。本节是设计新增，不是既有实现的文档化；落地属于后续实现轮次，不在本次变更范围内。
+> **现状（2026-09-03，dbkit 软删除轮次）**：本节的标记删除（软删除）半部分已经落地——新增标记接口 `dbkit.SoftDeletable`（要求模型携带 `DeletedAt *time.Time`、`DeletedBy string`）、`Repository[T].Delete` 按模型能力分流、新增 `Repository[T].Restore`，以及查询回调专用的自动 scope 插件，均在 `go/dbkit`（`soft_delete.go`、`repository.go`）实现并测试，参考应用的 notes 模块（`examples/reference-app/internal/notes`）是第一个真实消费者。彻底删除（`HardDelete`）仍是设计阶段，尚未开始实现，留给后续轮次；保留期配置同样未落地，属于 `compliance` 模块（M4）范畴。本节下方的设计要点、交互清单与边界描述现在是已落地机制的权威说明，而不仅是设计意图；`go/dbkit/AGENTS.md` 的"Soft deletion"小节是面向消费方的对应文档。
 
 这里要分开的是两个都成立、但互相冲突的真实需求：终端用户手滑删错数据后要能自己找回；合规要求某些删除必须是不可逆的物理擦除，"删了但其实还在"不能算数。这不是同一个操作的两个开关，而是**同一份数据生命周期里两个先后发生、职责不同的阶段**——用一个 `Delete` 方法同时承担两种语义只会两头不讨好：默认物理删除，用户误删无法挽回；默认软删除，合规意义上的"已删除"又变得不可信。
 

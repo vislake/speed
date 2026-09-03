@@ -203,7 +203,7 @@ func TestAuditCapturePlugin_Update_PublishesWriteCapturedEvent(t *testing.T) {
 // UPDATE, and must be captured with Update semantics -- never a hand-rolled
 // extra Delete-semantics event bolted onto Delete's own code, which would
 // duplicate the automatic capture
-// (docs/internal/04-data-and-tenancy.md, "删除语义" §4's own named pitfall).
+// (docs/internal/04-data-and-tenancy.md's delete-semantics section, §4's own named pitfall).
 //
 // Checking Operation == "update" alone is not enough to catch the real
 // hazard here: softDelete (repository.go) must build a real *T and write
