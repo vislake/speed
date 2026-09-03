@@ -33,11 +33,27 @@
 //     membership; rbac decides what a member may do with them.
 //
 //   - Notification delivery. org publishes domain events and lets whoever
-//     subscribes decide what to send. The one exception, added in a later
-//     block of this module, is the invitation email: a consent-establishing
-//     verification-class message, sent directly through the pkgcore.Mailer
-//     seam and rate limited, exactly as the security rules allow for that
-//     one message class.
+//     subscribes decide what to send. The one exception is the invitation
+//     email: a consent-establishing verification-class message, sent
+//     directly through the pkgcore.Mailer seam and rate limited on two
+//     dimensions, exactly as the security rules allow for that one message
+//     class. It is gated by the org.invitation_email feature flag, so a
+//     host whose notification module takes delivery over switches org's own
+//     leg off without a code change.
+//
+//   - Session and token state. A removed member's tokens for the tenant
+//     must be revoked; org publishes org.member.removed and authn, which
+//     owns that state, subscribes. Reaching into another module's state is
+//     what the event exists to avoid.
+//
+// # Memberships and scope
+//
+// A Membership binds one person to one node of one tenant's tree -- one seat
+// per person per tenant -- and the subtree beneath that node is their data
+// scope. That query side is exposed as Scope, an interface whose every
+// method signature is built from stdlib types alone, so an authorization
+// consumer can restate it in its own package and accept org's implementation
+// structurally rather than importing this module.
 //
 // # Tree representation
 //

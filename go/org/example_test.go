@@ -121,3 +121,139 @@ func Example() {
 	//   North Region
 	// delete without cascade: org.node_has_children
 }
+
+// Example_membershipAndScope walks the flow a dental group actually goes
+// through: place two stores under a group, invite somebody into one of them,
+// let them accept, and then ask what each member is allowed to see.
+//
+// The last part is the seam authorization consumes. org.Scope's methods are
+// built from stdlib types only, so rbac declares the identical interface in
+// its own package and accepts this implementation structurally -- neither
+// module ever imports the other.
+func Example_membershipAndScope() {
+	ctx := context.Background()
+
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:org_example_members?mode=memory&cache=shared",
+	})
+	if err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+
+	// The invitation address is encrypted at rest and made queryable by an
+	// HMAC blind index. The key below is a literal only because this is an
+	// example; a host injects it from its own secret store, and it must be a
+	// DIFFERENT secret from the encryption key.
+	indexer, err := dbkit.NewBlindIndexer("email_index", []byte("example-blind-index-key-32-bytes"), dbkit.NormalizeEmail)
+	if err != nil {
+		fmt.Println("blind indexer:", err)
+		return
+	}
+	cipher, err := dbkit.NewCipher([]byte("example-email-cipher-key-32bytes"))
+	if err != nil {
+		fmt.Println("cipher:", err)
+		return
+	}
+	dbkit.RegisterEncryptedSerializer(org.EmailSerializerName, cipher)
+
+	// WithInvitationEmailDisabled keeps this example's output free of the
+	// standalone mode's console mailer. A host that lets org deliver the
+	// invitation instead wires WithMailFrom and WithInvitationLinkBuilder,
+	// and the message goes out through the pkgcore.Mailer seam in the
+	// RECIPIENT's language.
+	module := org.NewModule(db,
+		org.WithEmailIndexer(indexer),
+		org.WithInvitationEmailDisabled(),
+	)
+
+	registry := dbkit.NewMigrationRegistry()
+	if regErr := registry.Register(module); regErr != nil {
+		fmt.Println("register migrations:", regErr)
+		return
+	}
+	if applyErr := registry.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
+		fmt.Println("apply migrations:", applyErr)
+		return
+	}
+
+	// Bootstrap is what hands the module its host seams -- the event bus,
+	// the mailer, the key-value store the rate limiter counts in, and the
+	// merged message catalog. Nothing in org reads them before this point.
+	if _, bootErr := pkgcore.NewKernel(pkgcore.DeploymentModeStandalone).Bootstrap(ctx, module); bootErr != nil {
+		fmt.Println("bootstrap:", bootErr)
+		return
+	}
+
+	ctx = pkgcore.WithTenant(ctx, "acme-dental")
+	tree, members, invitations := module.Tree(), module.Members(), module.Invitations()
+
+	group, err := tree.CreateRoot(ctx, "Acme Dental", "group")
+	if err != nil {
+		fmt.Println("create group:", err)
+		return
+	}
+	north, err := tree.CreateChild(ctx, group.ID, "North Store", "store")
+	if err != nil {
+		fmt.Println("create north:", err)
+		return
+	}
+	if _, err = tree.CreateChild(ctx, group.ID, "South Store", "store"); err != nil {
+		fmt.Println("create south:", err)
+		return
+	}
+
+	// The owner sits at the group; every user id here is an opaque string
+	// learned from an authenticated caller or a domain event. org never
+	// imports an authn type to hold one.
+	if _, err = members.Add(ctx, "user-owner", group.ID); err != nil {
+		fmt.Println("add owner:", err)
+		return
+	}
+
+	// Inviting returns the token exactly once. It is a bearer credential:
+	// it belongs in the message addressed to the invitee and nowhere else --
+	// no log line, no API response, no event payload.
+	invite, err := invitations.Invite(ctx, org.InviteRequest{
+		Email:         "dentist@example.test",
+		NodeID:        north.ID,
+		InviterUserID: "user-owner",
+		Locale:        "en-US",
+	})
+	if err != nil {
+		fmt.Println("invite:", err)
+		return
+	}
+
+	// Acceptance resolves the token inside the tenant the context already
+	// carries. The token never names a tenant, so a link that arrives at the
+	// wrong tenant's host simply does not match anything.
+	if _, err = invitations.Accept(ctx, invite.Token, "user-dentist"); err != nil {
+		fmt.Println("accept:", err)
+		return
+	}
+
+	roster, err := members.List(ctx, group.ID)
+	if err != nil {
+		fmt.Println("list members:", err)
+		return
+	}
+	fmt.Printf("members under the group: %d\n", len(roster))
+
+	scope := module.Scope()
+	for _, user := range []string{"user-owner", "user-dentist", "user-stranger"} {
+		visible, scopeErr := scope.MemberNodeIDs(ctx, user)
+		if scopeErr != nil {
+			fmt.Println("scope:", scopeErr)
+			return
+		}
+		fmt.Printf("%s can see %d node(s)\n", user, len(visible))
+	}
+
+	// Output:
+	// members under the group: 2
+	// user-owner can see 3 node(s)
+	// user-dentist can see 1 node(s)
+	// user-stranger can see 0 node(s)
+}
