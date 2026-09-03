@@ -27,6 +27,7 @@ var errorCatalog = []struct {
 	{"ErrObjectNotFound", ErrObjectNotFound, "storage.object_not_found", http.StatusNotFound},
 
 	{"ErrObjectNotUploading", ErrObjectNotUploading, "storage.object_not_uploading", http.StatusConflict},
+	{"ErrObjectUploading", ErrObjectUploading, "storage.object_uploading", http.StatusConflict},
 	{"ErrChecksumMismatch", ErrChecksumMismatch, "storage.checksum_mismatch", http.StatusConflict},
 	{"ErrSizeMismatch", ErrSizeMismatch, "storage.size_mismatch", http.StatusConflict},
 	{"ErrContentMissing", ErrContentMissing, "storage.content_missing", http.StatusConflict},

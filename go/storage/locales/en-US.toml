@@ -13,6 +13,8 @@
 
 "storage.object_not_uploading" = "That file is not in a state that allows this operation."
 
+"storage.object_uploading" = "That file is still being uploaded and cannot be deleted."
+
 "storage.object_too_large" = "That file is too large. The maximum is {{.max_bytes}} bytes."
 
 "storage.invalid_checksum" = "The checksum is not well formed. It must be 64 lowercase hexadecimal characters."

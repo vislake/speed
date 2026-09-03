@@ -11,6 +11,8 @@
 
 "storage.object_not_uploading" = "该文件当前不在可上传状态,无法执行此操作。"
 
+"storage.object_uploading" = "该文件仍在上传中,无法删除。"
+
 "storage.object_too_large" = "文件过大,单个文件最多 {{.max_bytes}} 字节。"
 
 "storage.invalid_checksum" = "校验值格式不正确,应为 64 位小写十六进制字符。"

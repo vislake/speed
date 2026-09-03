@@ -50,6 +50,17 @@ var (
 	// an object that already completed or is being deleted.
 	ErrObjectNotUploading = apperr.Conflict("storage.object_not_uploading")
 
+	// ErrObjectUploading reports a deletion attempted on an object that is
+	// still in ObjectStateUploading. Deleting rows never hit this error --
+	// they resume the deletion protocol instead -- so it is the one state
+	// a delete refuses: an upload in flight belongs to the transfer
+	// runtime, and only the sweep reclaims uploading rows, once their
+	// window closes. This is ErrObjectNotUploading's twin: that error says
+	// "the object left uploading before the upload finished", this one
+	// says "the object has not left uploading before the deletion asked
+	// for it".
+	ErrObjectUploading = apperr.Conflict("storage.object_uploading")
+
 	// ErrObjectTooLarge reports a create whose declared size exceeds the
 	// module's configured upload ceiling. The ceiling is the module's
 	// limit, not the tenant's business choice: a tenant that wants to
