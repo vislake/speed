@@ -568,7 +568,6 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		redisBus        *pkgcore.RedisEventBus
 		redisClient     *redis.Client
 	)
-	)
 
 	cleanup := func() error {
 		var firstErr error
