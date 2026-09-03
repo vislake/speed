@@ -38,6 +38,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/pkgcore"
 )
 
 // e2eEmail, e2ePhone and e2eRedirectURI are the one demo account and the one
@@ -129,6 +130,17 @@ func buildAuthnE2EServer(t *testing.T) (*httptest.Server, serverConfig, *bytes.B
 	t.Helper()
 
 	cfg := testConfig(t)
+	// This test signs its demo account into tenant-e2e, a tenant of its
+	// own that testConfig's shared demoHostTenants map (acme/globex) does
+	// not name. Replace the map -- never mutate the shared one -- so
+	// seedDemoGrants (demo_subject.go) seeds tenant-e2e with the built-in
+	// roles and the demo grants at boot, exactly as it does for the two
+	// demo tenants in every other test: the merged notes gate resolves WHO
+	// is acting from demoUserHeader (demoSubjectResolver in
+	// demo_subject.go), and demo-owner -- the acting user createNoteAs
+	// sends -- holds the owner role in every seeded tenant, so a notes
+	// call after a real sign-in is not denied for want of a grant.
+	cfg.HostTenants = map[string]pkgcore.TenantID{"e2e.demo.localhost": "tenant-e2e"}
 	var smsOut bytes.Buffer
 	cfg.SMSOutput = &smsOut
 

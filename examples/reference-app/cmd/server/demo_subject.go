@@ -125,9 +125,23 @@ const orgRoutePath = "/api/v1/org"
 // demonstrate. A real deployment layers a genuine permission check inside
 // org's own handlers (or wires org's Scope into rbac's DataScope, the
 // no-import seam org.md documents), not at this router gate.
+//
+// authn's path is routePublic for the same structural reason org's is:
+// authn.Handler resolves and requires its own caller identity per
+// operation through requirePrincipal (server.go's authnPreAuthAllowlist
+// names the pre-auth exceptions), and the operations that must work before
+// anyone has a Principal at all -- registration, every sign-in entry point,
+// token refresh, the social authorize/callback pair -- are a deliberately
+// ungated surface. Gating the whole path on a coarse rbac permission would
+// refuse the sign-in flow this app exists to demonstrate; authn's own
+// per-operation requirePrincipal is where its gate lives.
 var demoRouteGuards = map[string]string{
 	notesRoutePath: notesResource,
 	orgRoutePath:   routePublic,
+	// authn's path constant lives in server.go, which owns the pre-auth
+	// (method, path) allowlist under it; naming the path here through that
+	// same constant keeps the two in sync the way config's entries do.
+	authnAPIPath: routePublic,
 	// The config module's two pre-auth endpoints, named through its own
 	// exported constants so a rename cannot drift into a silently ungated
 	// path here.
