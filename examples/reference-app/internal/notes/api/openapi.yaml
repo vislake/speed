@@ -11,10 +11,12 @@ info:
     .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
     regenerates notes-server.gen.go (in this directory) from this file,
     with oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
-    .github/workflows/api-contract.yml. Merging this fragment into an
-    application-wide build/openapi/speed.yaml stays future work until
-    other modules ship fragments and the merge tooling lands (see
-    docs/internal/21-api-contract.md's implementation-status note).
+    .github/workflows/api-contract.yml. The merge is no longer future
+    work: this fragment joins the authn fragment into the committed
+    application-wide build/openapi/speed.yaml (task api:merge, redocly
+    pinned at 2.51.1), which is also the frontend SDK's generation
+    input (docs/internal/21-api-contract.md's spec-organization and
+    merging section).
   version: 0.0.0
 paths:
   /api/v1/notes:

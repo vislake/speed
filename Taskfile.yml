@@ -284,7 +284,7 @@ tasks:
           -config oapi-codegen.yaml openapi.yaml
 
   api:merge:
-    desc: Merge every module's OpenAPI fragment into build/openapi/speed.yaml and lint the result against redocly.yaml's naming-convention rules.
+    desc: Merge every module's OpenAPI fragment into build/openapi/speed.yaml, stamp its info block, and lint the result against redocly.yaml's naming-convention rules.
     # docs/internal/21-api-contract.md's "spec organization and merging"
     # section: each module fragment still generates its own backend
     # artifacts independently, but the MERGED document is a real release
@@ -301,9 +301,14 @@ tasks:
     # its own paths and components -- join is redocly's command for merging
     # documents of that shape. Pinned at 2.51.1, the same pinning discipline
     # as oapi-codegen (v2.8.0) and orval (8.17.0) above -- see redocly.yaml's
-    # own header for what the lint step checks and why. Keep the commands
-    # here in lockstep with .github/workflows/api-contract.yml's merge
-    # steps.
+    # own header for what the lint step checks and why. join keeps the FIRST
+    # input's info block (title, description, version), so between join and
+    # lint the deterministic stamp web/scripts/redocly-join-fixup.mjs
+    # rewrites title and description to the application level -- without
+    # it the merged document, and the generated SDK's "Source:" header,
+    # would carry notes' title and a description claiming the merge is
+    # still future work. Keep the commands here in lockstep with
+    # .github/workflows/api-contract.yml's merge steps.
     cmds:
       - mkdir -p build/openapi
       - >-
@@ -311,6 +316,7 @@ tasks:
         examples/reference-app/internal/notes/api/openapi.yaml
         go/authn/api/openapi.yaml
         -o build/openapi/speed.yaml
+      - node web/scripts/redocly-join-fixup.mjs
       - pnpm --package=@redocly/cli@2.51.1 dlx redocly lint build/openapi/speed.yaml --config redocly.yaml
 
   docs:serve:
