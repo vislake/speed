@@ -257,10 +257,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// very same OS thread -- SQLite allows only one writer at a time, so
 	// this deadlocks into "database is locked" (SQLITE_BUSY) on every
 	// single note creation, confirmed empirically while wiring this app.
-	// See go/dbkit/audit/AGENTS.md's "Known limitations" for the full
-	// write-up and the options for a future round to actually fix the
-	// automatic-capture mechanism (deferring the plugin's publish until
-	// after the enclosing transaction commits, most likely).
+	// See go/dbkit/AGENTS.md's "Audit trail collection" section for the
+	// full write-up and the options for a future round to actually fix
+	// the automatic-capture mechanism (deferring the plugin's publish
+	// until after the enclosing transaction commits, most likely).
 	//
 	// This app instead persists its audit trail through the declarative
 	// audit.Emit call notes/handler.go's NotesCreateNote makes explicitly
