@@ -350,8 +350,16 @@ fixtures and against the real tree before shipping. Fixture proofs run per
 rule (`--config tools/semgrep_rules/<rule>.yml` against that rule's own
 `testdata/` directory): a negative fixture may legitimately carry a shape
 another rule fires on, so a whole-ruleset scan over fixtures is not the
-proof shape (the real-tree scan excludes `testdata/` at the CLI level
-anyway, so cross-rule fixture hits never reach CI).
+proof shape.
+
+The same per-rule expectations are re-checked on every pull request by
+`tools/semgrep_fixture_check.py`, invoked at the end of the semgrep step
+in pr-check's repo-checks job: each rule must fire at least once on its
+own `positive.go` and stay clean on its own `negative.go` (the mirror of
+how the no-literal-text rule's own unit tests keep that rule honest).
+The self-check exists because the real-tree scan alone cannot detect a
+semgrep upgrade that silently stopped matching a rule -- the tree would
+stay clean and nothing would go red.
 
 Running locally (the docker image is the pinned local version; CI instead
 pip-installs into a throwaway venv -- see below):
@@ -362,11 +370,22 @@ docker run --rm -v "$PWD:/repo:ro" -w /repo \
   --error --exclude tools/semgrep_rules go examples tools
 ```
 
+The fixture self-check runs the same way, per rule, through a shim that
+maps the `semgrep` binary to the pinned image:
+
+```
+python3 tools/semgrep_fixture_check.py /path/to/semgrep-docker-shim
+```
+
 Execution status, stated honestly:
 
 - The real-tree scan passes today: 0 findings across `go/` `examples/`
   `tools/` (89 Go files, 6 rules), exit 0. Proven locally with the docker
   image above on the round's final state.
+- The fixture self-check passes today: all six rules fire on their
+  planted `positive.go` fixtures and stay clean on their own
+  `negative.go`. Proven locally with the same pinned image (through a
+  throwaway shim in /tmp, nothing installed on the host).
 - Known parser limitation: semgrep always skips line 19 of
   `examples/reference-app/internal/notes/repository.go` (the embedded
   instantiated generic `*dbkit.Repository[Note]` raises a PartialParsing

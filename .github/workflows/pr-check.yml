@@ -52,9 +52,14 @@ name: pr-check
 #         planted-violation fixtures under tools/semgrep_rules/testdata/.
 #         The step below pip-installs semgrep into a throwaway venv and
 #         scans go/ examples/ tools/ with the fixture subtree excluded at
-#         the CLI level; any finding fails the PR. Version deliberately
-#         unpinned until the first green CI run, then pinned (see
-#         tools/README.md, execution status).
+#         the CLI level; any finding fails the PR. The same step then runs
+#         tools/semgrep_fixture_check.py: every rule must fire on its own
+#         planted positive fixture and stay silent on its negative, so a
+#         semgrep upgrade that silently stops matching a rule cannot pass
+#         the green tree scan unnoticed (the mirror of how the
+#         no-literal-text rule's own unit tests keep that rule honest).
+#         Version deliberately unpinned until the first green CI run,
+#         then pinned (see tools/README.md, execution status).
 #       - go build github.com/vislake/speed/go/... -- every module compiles
 #         in workspace context from the go.work root.
 #       - go work sync + git diff --exit-code -- the checked-in workspace
@@ -185,14 +190,18 @@ jobs:
         run: |
           python3 -m venv /tmp/semgrep-venv
           /tmp/semgrep-venv/bin/pip install --quiet semgrep
-          # Fixtures stay out of the scan: planted violations are the
-          # rules' proofs (exercised directly in the rules' own checks),
-          # not tree state -- so they are excluded at the CLI level, the
-          # same shape as the local proof runs.
+          # Fixtures stay out of the real-tree scan: planted violations
+          # are the rules' proofs, not tree state -- excluded at the CLI
+          # level, the same shape as the local proof runs.
           /tmp/semgrep-venv/bin/semgrep scan \
             --config tools/semgrep_rules --error \
             --exclude tools/semgrep_rules \
             go examples tools
+          # Fixture self-check: every rule must fire on its own planted
+          # positive fixture and stay silent on its negative -- without
+          # it, a semgrep upgrade that silently stopped matching a rule
+          # would leave the real-tree scan green with nothing to catch.
+          python3 tools/semgrep_fixture_check.py /tmp/semgrep-venv/bin/semgrep
       - name: Build every module in workspace context
         run: go build github.com/vislake/speed/go/...
       - name: Workspace integrity (go.work.sum must be canonical)
