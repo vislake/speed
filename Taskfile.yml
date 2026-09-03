@@ -192,7 +192,7 @@ tasks:
     silent: true
 
   api:gen:
-    desc: Regenerate the notes module's generated API surface (types + ServerInterface) from its OpenAPI fragment.
+    desc: Regenerate the notes module's generated API surface -- backend (oapi-codegen types + ServerInterface) and frontend SDK (orval -> @speed/api-sdk) -- from its OpenAPI fragment.
     # The backend half of the contract-change flow (docs/internal/
     # 21-api-contract.md's order: edit the spec, regenerate, compile
     # failures reveal every handler to fix) is now real for the one module
@@ -203,23 +203,31 @@ tasks:
     # handler stop compiling (its compile-time assertion lives in
     # internal/notes/handler.go).
     #
-    # The rest of the planned api:gen promise stays not implemented, and
-    # this task does not claim it: no other module ships a spec fragment
-    # yet, so there is nothing to merge into a build/openapi/speed.yaml,
-    # and the frontend sdk generation (orval), spec linting (redocly) and
-    # breaking-change detection (oasdiff) have no tooling in the repository
-    # (docs/internal/21-api-contract.md defines them; the roadmap M0
-    # API-contract items deliver them).
+    # The frontend half of the api:gen promise is live too: the notes
+    # fragment drives the @speed/api-sdk package through orval, pinned at
+    # 8.17.0 and run from web/ via pnpm dlx (orval is never a workspace
+    # dependency), followed by web/scripts/orval-nodenext-fixup.mjs --
+    # see that package's AGENTS.md for the seam and the fixup's why.
+    # Still deferred with reasons: no other module ships a spec fragment
+    # yet, so the redocly merge of fragments into a
+    # build/openapi/speed.yaml waits for the second fragment (M1), and
+    # breaking-change detection (oasdiff) waits for the first release
+    # baseline (M4) -- docs/internal/21-api-contract.md.
     #
-    # Keep the command in lockstep with .github/workflows/api-contract.yml's
-    # regeneration step: the same go run from the same directory, then a
-    # git diff there fails any PR whose spec change was not committed with
-    # its regenerated artifact.
+    # Keep the commands in lockstep with
+    # .github/workflows/api-contract.yml's regeneration steps: the same
+    # go run from the same directory, and the same pnpm dlx orval +
+    # fixup pair from web/, then a git diff there fails any PR whose
+    # spec change was not committed with its regenerated artifact.
     cmds:
       - |
         cd "{{.APP_DIR}}/internal/notes/api" && \
         go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
           -config oapi-codegen.yaml openapi.yaml
+      - |
+        cd web && \
+        pnpm dlx orval@8.17.0 --config orval.config.ts && \
+        node scripts/orval-nodenext-fixup.mjs
 
   docs:serve:
     desc: Preview the docs site (docs/site/) locally over HTTP.
