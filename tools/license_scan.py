@@ -9,6 +9,13 @@ peerDependencies -- what a consumer installs because of a package).
 Workspace-internal packages (@speed/*, github.com/vislake/speed/go/*) are
 not external dependencies and carry no entry.
 
+examples/reference-app/go.mod is deliberately out of scope: the reference
+app is a consumer example, not a shipped library, so its own dependencies
+are not part of the repository's dependency-delivery list (its direct
+third-party requires are all permissive today). The M4 release-prep
+expansion -- transitive coverage and the reference app's own deps -- is
+noted in tools/README.md.
+
 Policy, mirroring docs/internal/20-quality-and-security.md:
   * strong copyleft (GPL family, AGPL)           -> FAIL
   * weak copyleft (MPL, LGPL)                     -> FAIL unless the entry

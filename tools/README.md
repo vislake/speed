@@ -408,6 +408,12 @@ dependency of the implemented Go modules (all direct requires in
 dependencies + peerDependencies, versions resolved from
 `web/pnpm-lock.yaml` -- what a frozen-lockfile CI install yields).
 Workspace-internal packages carry no entry.
+`examples/reference-app/go.mod` is deliberately out of scope: the
+reference app is a consumer example, not a delivered library, so its own
+dependencies are not part of the repository's dependency-delivery list
+(its direct third-party requires are all permissive today). Transitive
+coverage and the reference app's own deps are the M4 release-prep
+expansion of this manifest.
 
 Policy (mirroring `docs/internal/20-quality-and-security.md`): strong
 copyleft (GPL family, AGPL) fails outright; weak copyleft (MPL, LGPL)
