@@ -330,22 +330,26 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
     held: string,
     capturedGeneration: number,
   ): Promise<boolean> {
-    // The refresh request travels credential-less: clear the access
-    // store first. That is load-bearing -- the client's silent-401
-    // refresh engages only for a refused request that presented a
-    // bearer token, so a refused refresh token surfaces here instead
-    // of re-entering the refresh path and awaiting itself (see the
-    // api-client README's bearer-only rule).
-    const previousAccessToken = store.get()
-    store.set(null)
+    // The refresh request travels credential-less by declaration: the
+    // generated authnRefreshToken operation carries omitAccessToken
+    // (orval's speedRequestCredentialless mutator), so it goes out
+    // without an Authorization header and the store is never read --
+    // let alone cleared -- for it. That is load-bearing: the client's
+    // silent-401 refresh engages only for a refused request that
+    // presented a bearer token, so a refused refresh token surfaces
+    // here instead of re-entering the refresh path and awaiting itself
+    // (see the api-client README's bearer-only rule). Clearing the
+    // store to make the request credential-less would momentarily
+    // strip the token from every concurrent request, turning their
+    // 401s into spurious auth failures under that same rule; the store
+    // is never touched on the way out.
     let pair: AuthnTokenPair
     try {
       pair = await authnRefreshToken({ refresh_token: held })
     } catch (error) {
       if (generation !== capturedGeneration) {
         // A user operation committed while the refresh was in flight:
-        // it owns the session now; nothing to restore, nothing to
-        // clear.
+        // it owns the session now; its state stands untouched.
         return false
       }
       if (
@@ -360,9 +364,9 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
         return false
       }
       // Transport failure or a server-side error: the held token may
-      // still be valid, so put the access token back and let the
-      // caller surface the error raw.
-      store.set(previousAccessToken)
+      // still be valid. Nothing was cleared on the way out, so the
+      // session stands exactly as it was; rethrow and let the caller
+      // surface the error raw.
       throw error
     }
     if (generation !== capturedGeneration) {

@@ -521,7 +521,10 @@ describe('refresh', () => {
     expect(harness.session.getSnapshot().state).toBe('anonymous')
   })
 
-  it('restores the access token and rethrows raw on a transport failure', async () => {
+  it('keeps the session tokens and rethrows raw on a transport failure', async () => {
+    // The refresh request never touched the store on the way out (it
+    // travels credential-less by declaration), so a transport failure
+    // has nothing to restore: the session stands exactly as it was.
     const refused = apiError(0, 'client.network')
     const harness = makeHarness({
       [LOGIN_PASSWORD]: () => makePair(),
@@ -539,7 +542,7 @@ describe('refresh', () => {
     expect(harness.session.getSnapshot().state).toBe('authenticated')
   })
 
-  it('restores the access token and rethrows raw on a server-side error', async () => {
+  it('keeps the session tokens and rethrows raw on a server-side error', async () => {
     const refused = apiError(503, 'authn.temporarily_unavailable')
     const harness = makeHarness({
       [LOGIN_PASSWORD]: () => makePair(),
@@ -584,6 +587,36 @@ describe('refresh', () => {
     ).toHaveLength(1)
   })
 
+  it('keeps the token store populated while the refresh is in flight', async () => {
+    // Regression: the refresh request used to travel credential-less
+    // by clearing the store first, which momentarily stripped the
+    // token from every concurrent request -- under api-client's
+    // bearer-only rule their 401s would then surface as spurious auth
+    // failures. The generated refresh operation now declares
+    // omitAccessToken instead, so the store must hold the current
+    // token throughout the refresh.
+    let releaseRefresh!: () => void
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve
+    })
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+      [REFRESH]: () =>
+        refreshGate.then(() => makePair({ access_token: 'access-2' })),
+    })
+    await harness.session.loginWithPassword({
+      identifier: 'ada@example.com',
+      password: 'pw',
+    })
+    const refreshing = harness.session.refresh()
+    // The refresh request has gone out; the store still holds the
+    // token a concurrent request would present right now.
+    expect(harness.store.get()).toBe('access-1')
+    releaseRefresh()
+    await expect(refreshing).resolves.toBe(true)
+    expect(harness.store.get()).toBe('access-2')
+  })
+
   it('cannot resurrect a session a logout ended while it was in flight', async () => {
     let releaseRefresh!: () => void
     const refreshGate = new Promise<void>((resolve) => {
@@ -600,8 +633,9 @@ describe('refresh', () => {
       password: 'pw',
     })
     const refreshing = harness.session.refresh()
-    // The refresh request cleared the store; the logout completes
-    // while the refresh is still in flight.
+    // The logout completes while the refresh is still in flight (the
+    // refresh request never touched the store; clearing is the
+    // logout's own work).
     await harness.session.logout()
     expect(harness.store.get()).toBeNull()
     expect(harness.session.getSnapshot().state).toBe('anonymous')
@@ -921,12 +955,111 @@ describe('with the real api-client', () => {
     expect(meCalls).toHaveLength(2)
     expect(meCalls[0]?.authorization).toBe('Bearer access-1')
     expect(meCalls[1]?.authorization).toBe('Bearer access-2')
-    // The session's own refresh request travelled credential-less:
-    // the bearer-only rule that keeps it out of the refresh path.
+    // The session's own refresh request travelled credential-less --
+    // by declaration (the generated operation carries omitAccessToken),
+    // never by clearing the store: the bearer-only rule that keeps it
+    // out of the refresh path.
     const refreshCall = fetchCalls.find(
       (call) => call.path === '/api/v1/authn/token/refresh',
     )
     expect(refreshCall?.authorization).toBeNull()
+  })
+
+  it('keeps concurrent requests presenting their token through a refresh', async () => {
+    // Regression: the refresh request used to clear the store to make
+    // itself credential-less. A request starting in that window went
+    // out without a token, and its 401 -- a credential-less one -- was
+    // terminal under the bearer-only rule: a spurious auth failure.
+    // The store must hold the current token throughout, so a request
+    // that starts mid-refresh presents it, shares the in-flight
+    // refresh on its 401, and retries with the fresh token.
+    const store = createMemoryAccessTokenStore()
+    const session = createAuthSession(store)
+    const fetchCalls: Array<{
+      path: string
+      method: string
+      authorization: string | null
+    }> = []
+    let releaseRefresh!: () => void
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve
+    })
+    let refreshEntered!: () => void
+    const refreshStarted = new Promise<void>((resolve) => {
+      refreshEntered = resolve
+    })
+    let meAttempts = 0
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = new URL(String(input))
+      const method = init?.method ?? 'GET'
+      const authorization = new Headers(init?.headers).get('authorization')
+      fetchCalls.push({ path: url.pathname, method, authorization })
+      if (url.pathname === '/api/v1/authn/login/password') {
+        return jsonResponse(200, makePair())
+      }
+      if (url.pathname === '/api/v1/authn/me') {
+        meAttempts += 1
+        // Both first attempts carry the stale token and are refused;
+        // both retries carry the fresh one.
+        if (meAttempts <= 2) {
+          return jsonResponse(401, {
+            code: 'authn.session_expired',
+            traceId: 'trace-1',
+            message: 'session expired',
+          })
+        }
+        return jsonResponse(200, principal())
+      }
+      if (url.pathname === '/api/v1/authn/token/refresh') {
+        refreshEntered()
+        await refreshGate
+        return jsonResponse(
+          200,
+          makePair({ access_token: 'access-2', refresh_token: 'refresh-2' }),
+        )
+      }
+      throw new Error(`unexpected fetch: ${url.pathname}`)
+    }
+    const client = createClient({
+      baseUrl: 'https://api.test',
+      fetch: fetcher,
+      accessTokenStore: store,
+      refreshAccessToken: () => session.refresh(),
+    })
+    bindRequestFn(client)
+
+    await session.loginWithPassword({
+      identifier: 'ada@example.com',
+      password: 'pw',
+    })
+    expect(store.get()).toBe('access-1')
+
+    // The first request's 401 starts the silent refresh; the second
+    // starts while that refresh is still in flight. Its first attempt
+    // must still carry the token the store holds -- not go out
+    // credential-less into a terminal 401.
+    const first = authnGetMe()
+    const second = authnGetMe()
+    await refreshStarted
+    expect(store.get()).toBe('access-1')
+    releaseRefresh()
+    await expect(first).resolves.toMatchObject({ user_id: 'user-1' })
+    await expect(second).resolves.toMatchObject({ user_id: 'user-1' })
+
+    expect(store.get()).toBe('access-2')
+    const meCalls = fetchCalls.filter((call) => call.path === '/api/v1/authn/me')
+    expect(meCalls).toHaveLength(4)
+    // Both first attempts -- one per request, fired before the refresh
+    // released -- presented the stale token; both retries presented
+    // the fresh one. Neither request ever lost its bearer.
+    expect(meCalls[0]?.authorization).toBe('Bearer access-1')
+    expect(meCalls[1]?.authorization).toBe('Bearer access-1')
+    expect(meCalls[2]?.authorization).toBe('Bearer access-2')
+    expect(meCalls[3]?.authorization).toBe('Bearer access-2')
+    // The two 401s shared exactly one session refresh.
+    expect(
+      fetchCalls.filter((call) => call.path === '/api/v1/authn/token/refresh'),
+    ).toHaveLength(1)
   })
 })
 
