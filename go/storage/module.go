@@ -69,21 +69,6 @@ var objectEventDecls = []pkgcore.EventDecl{
 	},
 }
 
-// ObjectCompletedPayload is the JSON payload of EventObjectCompleted.
-// ObjectID is the object's id, Size its finalized byte size, and MIME the
-// media type the bytes were validated to carry.
-type ObjectCompletedPayload struct {
-	ObjectID string `json:"object_id"`
-	Size     int64  `json:"size"`
-	MIME     string `json:"mime"`
-}
-
-// ObjectDeletedPayload is the JSON payload of EventObjectDeleted. ObjectID
-// is the id of the deleted object.
-type ObjectDeletedPayload struct {
-	ObjectID string `json:"object_id"`
-}
-
 // Module implements pkgcore.Module for go/storage: object metadata and its
 // derivatives -- the rows that describe media bytes living in the host's
 // ObjectStore under keys this module builds and never exposes.

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"embed"
-	"encoding/json"
 	"io"
 	"strings"
 	"testing"
@@ -422,32 +421,8 @@ func TestModule_Objects_ReturnsAUsableRepository(t *testing.T) {
 	}
 }
 
-// TestModule_EventPayloads_JSONTags pins the wire shape of the two event
-// payloads: snake_case keys, so the JSON a subscriber receives and the
-// attributes a logger extracts use the project-wide attribute vocabulary,
-// not Go field names.
-func TestModule_EventPayloads_JSONTags(t *testing.T) {
-	completed := ObjectCompletedPayload{ObjectID: "obj-1", Size: 2048, MIME: "image/png"}
-	raw, err := json.Marshal(completed)
-	if err != nil {
-		t.Fatalf("marshal ObjectCompletedPayload: %v", err)
-	}
-	if got := string(raw); got != `{"object_id":"obj-1","size":2048,"mime":"image/png"}` {
-		t.Errorf("ObjectCompletedPayload JSON = %s", got)
-	}
-
-	deleted := ObjectDeletedPayload{ObjectID: "obj-1"}
-	raw, err = json.Marshal(deleted)
-	if err != nil {
-		t.Fatalf("marshal ObjectDeletedPayload: %v", err)
-	}
-	if got := string(raw); got != `{"object_id":"obj-1"}` {
-		t.Errorf("ObjectDeletedPayload JSON = %s", got)
-	}
-}
-
 // stubQueue is the do-nothing jobs.Queue every wired module in this file
-// gets. Register only requires that a queue EXISTS; nothing in this round
+// gets. Register only requires that a queue EXISTS; nothing this file drives
 // enqueues, so the stub records nothing and always succeeds.
 type stubQueue struct{}
 

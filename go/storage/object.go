@@ -33,11 +33,11 @@ import (
 // thumbnail derivation on is the same jobs.Queue Module.Register requires
 // (WithQueue).
 //
-// What ObjectService deliberately does NOT yet do: derive thumbnails (the
-// worker that claims the task this file enqueues is the processing round's),
-// mount an HTTP surface (the api/ fragment is the HTTP round's, spec-first),
-// sweep expired or deleted rows, and delete objects. All of those arrive in
-// later rounds; this file stops at the transfer lifecycle and says so.
+// What ObjectService deliberately does NOT yet do: mount an HTTP surface
+// (the api/ fragment is the HTTP round's, spec-first). Thumbnail derivation
+// is enqueued here and claimed by DeriveService (derive.go); deletion and
+// expiry sweeping live in LifecycleService (cleanup.go). This file stops at
+// the transfer lifecycle and says so.
 
 // ObjectService drives uploads through their lifecycle: Create validates a
 // declaration and reserves the object's id and store key, Upload streams
@@ -60,32 +60,18 @@ type ObjectService struct {
 	// panicking mid-completion.
 	queue jobs.Queue
 
-	// host is the slice of the registry the service reads at call time:
-	// the ObjectStore bytes live in and the EventBus completion is
-	// announced on. It is nil until Module.Register hands the registry
-	// over (attach); methods that need a store fail closed with
-	// ErrStoreUnavailable before then.
-	host hostSeams
+	// serviceHost carries the registry slice this service reads at call
+	// time -- the ObjectStore bytes live in and the EventBus completion is
+	// announced on -- plus the guarded seam accessors every storage
+	// service shares (events.go). host is nil until Module.Register hands
+	// the registry over (attach); methods that need a store fail closed
+	// with ErrStoreUnavailable before then.
+	serviceHost
 
 	// cfg is the frozen policy the service enforces, resolved from the
 	// Module's With* options at construction (see newObjectService).
 	cfg serviceConfig
 }
-
-// hostSeams is the slice of *pkgcore.Registry ObjectService reads. Declaring
-// the two accessors as an interface keeps the service testable against
-// fakes and honest about its host dependency: it needs a store for bytes
-// and a bus for the completion event, and nothing else the registry carries.
-type hostSeams interface {
-	// ObjectStore returns the store the registry was bootstrapped with.
-	ObjectStore() pkgcore.ObjectStore
-	// EventBus returns the bus the registry's Events registrar installs
-	// subscriptions on.
-	EventBus() pkgcore.EventBus
-}
-
-// compile-time check that the concrete registry satisfies the seam.
-var _ hostSeams = (*pkgcore.Registry)(nil)
 
 // serviceConfig is the resolved policy ObjectService enforces. Module builds
 // one from its own option-set fields; tests build one directly. A nil
@@ -124,12 +110,6 @@ func newObjectService(objects *ObjectRepository, queue jobs.Queue, cfg serviceCo
 	}
 	return &ObjectService{objects: objects, queue: queue, cfg: cfg}
 }
-
-// attach wires the registry the module registered against into the service.
-// It is called exactly once, by Module.Register, and performs no I/O: it
-// stores the registry, and the store and bus are read from it at call time
-// so the service always uses the registry's final wiring.
-func (s *ObjectService) attach(reg *pkgcore.Registry) { s.host = reg }
 
 // defaultListPageSize is the page size List serves a caller that asks for
 // zero or a negative limit.
@@ -544,46 +524,15 @@ func (s *ObjectService) findByID(ctx context.Context, objectID string) (*Object,
 	return row, nil
 }
 
-// requireStore returns the object store the registry resolved, or fails
-// closed: no registry attached yet, or a registry carrying no store, means
-// no bytes can go anywhere, and the service says so with
-// storage.store_unavailable before attempting anything (calling a method
-// on a nil ObjectStore would panic, which is why the seam is guarded
-// here rather than at the call sites).
-func (s *ObjectService) requireStore() (pkgcore.ObjectStore, error) {
-	if s.host == nil {
-		return nil, ErrStoreUnavailable
-	}
-	if st := s.host.ObjectStore(); st != nil {
-		return st, nil
-	}
-	return nil, ErrStoreUnavailable
-}
-
-// publish sends one domain event on the registry's bus. The registry is
-// read at call time, so publishing uses the bus the module registered its
-// event catalog on. Callers treat a returned error as a logged, recovered
-// anomaly: the durable fact the event announces was already committed
-// before publishing was attempted.
-func (s *ObjectService) publish(ctx context.Context, evt pkgcore.Event) error {
-	if s.host == nil {
-		return errors.New("storage: no host registry wired")
-	}
-	bus := s.host.EventBus()
-	if bus == nil {
-		return errors.New("storage: registry carries no event bus")
-	}
-	return bus.Publish(ctx, evt)
-}
-
 // taskTypeDeriveThumbnail names the jobs queue task the completion pipeline
 // enqueues for a completed image object. The task's payload is a
-// deriveThumbnailTaskPayload; the worker that claims the type -- a later
-// processing round, which also registers the type's handler -- reads the
+// deriveThumbnailTaskPayload; the worker that claims the type reads the
 // object's row from the task's tenant and id and produces the thumbnail
-// under the derivative key the grammar in key.go fixes. The type is
-// registered nowhere yet by design: a type with no handler cannot be
-// claimed, and the enqueue side is what this round ships.
+// under the derivative key the grammar in key.go fixes. Module.Register
+// registers the type's handler (derive.go's deriveHandler, backed by
+// DeriveService); a host that wants registered handlers claimed drains
+// reg.Jobs.Handlers() onto its jobs.Queue after Bootstrap, exactly as
+// go/jobs documents.
 const taskTypeDeriveThumbnail = "storage.object.derive.thumbnail"
 
 // deriveThumbnailTaskPayload is the JSON payload of the thumbnail-derive
