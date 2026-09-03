@@ -14,9 +14,10 @@
  * page's whole first paint is one GET /api/config/public), a completed
  * sign-in flips the machine into the frame (header brand, nav carrying
  * host-computed aria-current, home over the served brand), navigation
- * travels home/notes/account through the location hash with the
- * placeholder surfaces answering, unknown fragments degrade to home
- * with nothing selected, and a sign-out after the frame converges to
+ * travels home/notes/account through the location hash -- notes
+ * answering with its served list (the empty demo list renders the
+ * list's empty state), account still the placeholder surface -- and
+ * unknown fragments degrade to home with nothing selected, and a sign-out after the frame converges to
  * the session-ended screen and back to the sign-in surface -- the
  * session still anonymous, the config cache still one fetch. A
  * bilingual leg proves the frame and the auth surface speak the active
@@ -192,7 +193,7 @@ describe('AppView', () => {
     ).toBe(true)
   })
 
-  it('travels home/notes/account through the hash, answering placeholders, and degrades unknown fragments', async () => {
+  it('travels home/notes/account through the hash, notes answering with its served empty list, and degrades unknown fragments', async () => {
     const rig = makeAppRig()
     const view = rendered(rig)
     const user = userEvent.setup()
@@ -204,8 +205,10 @@ describe('AppView', () => {
     const homeLink = () => view.getByRole('link', { name: zhCN.nav.home })
 
     navigateTo('#/notes')
+    // The notes surface's read answered the demo's empty list, so the
+    // list's empty state stands in for the notes page.
     expect(
-      await view.findByText(zhCN.placeholder.notesDescription),
+      await view.findByText(zhCN.notes.list.emptyTitle),
     ).toBeInTheDocument()
     expect(notesLink()).toHaveAttribute('aria-current', 'page')
     expect(homeLink()).not.toHaveAttribute('aria-current')

@@ -30,9 +30,29 @@
       "description": "Upgrade to unlock advanced simulation effects and capabilities."
     }
   },
+  "notes": {
+    "heading": "Notes",
+    "intro": "Jot down what you are working on; the list shows every note your current tenant has created.",
+    "createdColumn": "Created",
+    "list": {
+      "emptyTitle": "No notes yet",
+      "emptyDescription": "Create your first note and it will show up here."
+    },
+    "create": {
+      "textLabel": "Text",
+      "textTooLong": "The text is too long. Shorten it and try again.",
+      "submit": "Create note"
+    },
+    "errors": {
+      "permissionDenied": "You do not have permission to create notes. If you believe this is a mistake, contact an administrator.",
+      "textRequired": "Enter the note text.",
+      "textTooLong": "The note text is too long. Shorten it and try again.",
+      "internalError": "Creating the note failed. Try again later.",
+      "client": "Could not reach the server. Check your connection and try again.",
+      "unknown": "Something went wrong. Try again later."
+    }
+  },
   "placeholder": {
-    "notesTitle": "Notes",
-    "notesDescription": "The notes list and creation flow land in a later iteration.",
     "accountTitle": "Account",
     "accountDescription": "Sessions, login history, social bindings and multi-factor authentication land in a later iteration."
   },

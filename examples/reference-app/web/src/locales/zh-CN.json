@@ -30,9 +30,29 @@
       "description": "升级到高级版，解锁更多模拟效果与能力。"
     }
   },
+  "notes": {
+    "heading": "记事",
+    "intro": "写下您的工作记录；列表展示当前租户的全部记事。",
+    "createdColumn": "创建时间",
+    "list": {
+      "emptyTitle": "还没有记事",
+      "emptyDescription": "创建第一条记事，它会显示在这里。"
+    },
+    "create": {
+      "textLabel": "内容",
+      "textTooLong": "内容过长，请精简后再试。",
+      "submit": "创建记事"
+    },
+    "errors": {
+      "permissionDenied": "没有创建记事的权限。如果认为这是误判，请联系管理员。",
+      "textRequired": "请输入记事内容。",
+      "textTooLong": "记事内容过长，请精简后再试。",
+      "internalError": "创建记事时出了点问题，请稍后再试。",
+      "client": "无法连接到服务器，请检查网络后重试。",
+      "unknown": "出了点问题，请稍后再试。"
+    }
+  },
   "placeholder": {
-    "notesTitle": "记事",
-    "notesDescription": "记事列表与新建记事功能将在后续迭代中落地。",
     "accountTitle": "账户",
     "accountDescription": "会话管理、登录历史、社交绑定与双重验证功能将在后续迭代中落地。"
   },

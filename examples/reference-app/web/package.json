@@ -27,7 +27,8 @@
     "@speed/ui-kit": "workspace:*",
     "@tanstack/react-query": "^5.62.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "react-hook-form": "^7.0.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^7.0.1",
