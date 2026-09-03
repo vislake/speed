@@ -29,12 +29,25 @@
  * packages/api-sdk/src/runtime.ts. That seam (the package's only
  * hand-written file) forwards every call to the request function the
  * host binds from @speed/api-client, so no generated file and no bridge
- * file performs HTTP itself. Two orval behaviours are worked around
- * here and documented in the package AGENTS.md: orval emits the mutator
- * import without a file extension (breaking nodenext builds), which
+ * file performs HTTP itself. One operation overrides the mutator:
+ * `authn_refreshToken`, the session-refresh operation, routes through
+ * `speedRequestCredentialless` instead, which declares the request
+ * credential-less (`omitAccessToken` on @speed/api-client's
+ * RequestOptions). A session's refresh authenticates with the refresh
+ * token in its body and must never present an access token; declaring
+ * that per request beats clearing the host's token store for the
+ * refresh's duration, which would leave concurrent requests
+ * momentarily token-less and turn their bearer-valid 401s into
+ * spurious auth failures under the client's bearer-only refresh rule
+ * (see the refreshAccessToken doc in @speed/api-client's client.ts).
+ * Three orval behaviours are worked around here and documented in the
+ * package AGENTS.md: orval emits each mutator import without a file
+ * extension (breaking nodenext builds), which
  * web/scripts/orval-nodenext-fixup.mjs rewrites deterministically after
- * every run; and query keys carry no tenant prefix by design -- tenant
- * query-key namespacing is an M1 consumer-shell discipline.
+ * every run; the same script's rewrite now covers every mutator name
+ * the per-operation override can emit; and query keys carry no tenant
+ * prefix by design -- tenant query-key namespacing is an M1
+ * consumer-shell discipline.
  *
  * Config paths are relative to this file's directory (web/).
  */
@@ -61,6 +74,20 @@ export default {
         mutator: {
           path: './packages/api-sdk/src/runtime.ts',
           name: 'speedRequest',
+        },
+        operations: {
+          // The one credential-less operation in the surface: a
+          // session's refresh authenticates with the refresh token in
+          // its body and must never present an access token -- declared
+          // per request (`speedRequestCredentialless` sets
+          // omitAccessToken) so the host's token store is never cleared
+          // for it (rationale above and in runtime.ts).
+          authn_refreshToken: {
+            mutator: {
+              path: './packages/api-sdk/src/runtime.ts',
+              name: 'speedRequestCredentialless',
+            },
+          },
         },
       },
     },

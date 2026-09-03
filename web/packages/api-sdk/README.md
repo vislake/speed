@@ -43,20 +43,30 @@ comment, the Taskfile and the workflow together.
 
 ### Why the fixup script
 
-orval emits the configured mutator import without a file extension
-(`import { speedRequest } from './runtime';`), a specifier TypeScript
-accepts under bundler resolution but rejects under nodenext (TS2835),
-where this package's build runs. `web/scripts/orval-nodenext-fixup.mjs`
-deterministically rewrites that one import to `'./runtime.js'` after
-every regeneration and exits non-zero when orval's emission changes, so
-generator drift fails CI instead of shipping an unbuildable package.
-Config paths in `orval.config.ts` are relative to the config file's
-directory (`web/`).
+orval emits mutator imports without a file extension -- one line per
+mutator: `import { speedRequest } from './runtime';`, plus a second line
+for each per-operation override (`import { speedRequestCredentialless }
+from './runtime';` for the authn refresh operation) -- specifiers
+TypeScript accepts under bundler resolution but rejects under nodenext
+(TS2835), where this package's build runs.
+`web/scripts/orval-nodenext-fixup.mjs` deterministically rewrites every
+such import to the explicit `'./runtime.js'` form after each
+regeneration and exits non-zero when orval's emission changes or drops
+them, so generator drift fails CI instead of shipping an unbuildable
+package. Config paths in `orval.config.ts` are relative to the config
+file's directory (`web/`).
 
 ## How generated code calls HTTP
 
 Generated functions call the mutator `speedRequest` (imported from
-`src/runtime.ts`) with one axios-shaped options object. `runtime.ts`
+`src/runtime.ts`) with one axios-shaped options object; a per-operation
+override in `web/orval.config.ts` switches the session-refresh
+operation to the `speedRequestCredentialless` mutator, which declares
+the request credential-less (`omitAccessToken`) so it carries no
+Authorization header and never reads the host's token store -- the
+refresh request authenticates with the refresh token in its body, and
+its 401 must stay terminal under `@speed/api-client`'s bearer-only
+refresh rule rather than re-entering the refresh path. `runtime.ts`
 adapts that call to the `@speed/api-client` request function the host
 bound once at bootstrap:
 
@@ -94,7 +104,8 @@ generates:
 - Error typing is `NotesError` (the structured `{code, params}` envelope
   -- codes resolve to bilingual user-facing text in the consuming
   package's own catalogs; no i18n resources ship here).
-- `./runtime` subpath: `bindRequestFn` and the `speedRequest` mutator.
+- `./runtime` subpath: `bindRequestFn`, the `speedRequest` mutator and
+  the per-operation `speedRequestCredentialless` mutator.
 
 The authn group is the second export group, covering the full session
 lifecycle -- `authnLoginWithPassword`, `authnLoginWithSMSCode`,

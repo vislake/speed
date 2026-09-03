@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RequestFn, RequestOptions } from '@speed/api-client'
-import { bindRequestFn, speedRequest } from './runtime'
+import {
+  bindRequestFn,
+  speedRequest,
+  speedRequestCredentialless,
+} from './runtime'
 
 /** The host side of the seam: a request function that records every
  * call instead of touching a network. */
@@ -66,6 +70,41 @@ describe('bindRequestFn / speedRequest', () => {
     expect(calls[0]?.options?.query).toEqual({ page: 1, tag: null })
   })
 
+  it('never sets the omitAccessToken key on an ordinary speedRequest call', async () => {
+    // Exact-shape assertion: the flag is only ever present when a
+    // credential-less operation declared it, so hosts can rely on its
+    // absence meaning "attach the bearer token from the store".
+    await speedRequest<unknown>({
+      url: '/api/v1/notes',
+      method: 'GET',
+    })
+    expect(calls).toEqual([
+      { path: '/api/v1/notes', options: { method: 'GET' } },
+    ])
+    expect(calls[0]?.options?.omitAccessToken).toBeUndefined()
+  })
+
+  it('declares the credential-less flag on speedRequestCredentialless calls', async () => {
+    const body = { refresh_token: 'stale' }
+    await speedRequestCredentialless<unknown>({
+      url: '/api/v1/authn/token/refresh',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      data: body,
+    })
+    expect(calls).toEqual([
+      {
+        path: '/api/v1/authn/token/refresh',
+        options: {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+          omitAccessToken: true,
+        },
+      },
+    ])
+  })
+
   it('rebinding replaces the previous request function (last bind wins)', async () => {
     // The second function records without a method option, so the
     // recorded shape tells which function served the call.
@@ -88,6 +127,16 @@ describe('bindRequestFn / speedRequest', () => {
     const fresh = await import('./runtime')
     expect(() =>
       fresh.speedRequest({ url: '/api/v1/notes', method: 'GET' }),
+    ).toThrow(
+      '[speed-api-sdk] no request function bound: call bindRequestFn(createClient(...)) once at bootstrap before any generated hook runs.',
+    )
+    // Both mutators share the unbound guard -- a credential-less
+    // operation is no less a programmer error when nothing is bound.
+    expect(() =>
+      fresh.speedRequestCredentialless({
+        url: '/api/v1/authn/token/refresh',
+        method: 'POST',
+      }),
     ).toThrow(
       '[speed-api-sdk] no request function bound: call bindRequestFn(createClient(...)) once at bootstrap before any generated hook runs.',
     )

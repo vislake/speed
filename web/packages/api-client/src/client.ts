@@ -5,7 +5,9 @@
  * the whole request lifecycle on each call:
  *
  *   1. attach `Authorization: Bearer <token>` from the store (per
- *      attempt, so a refreshed token is picked up on retry);
+ *      attempt, so a refreshed token is picked up on retry) -- unless
+ *      the request declares `omitAccessToken`, in which case it goes
+ *      out credential-less and the store is never read;
  *   2. send; a caller-supplied signal cancels the request raw (the
  *      AbortError reaches the caller, standard query-cancellation
  *      semantics -- nothing is wrapped or retried);
@@ -73,9 +75,21 @@ export interface RequestOptions {
    * `content-type` defaults to application/json when a body is sent;
    * and `authorization` is reserved -- when the store holds a token it
    * overwrites a caller-supplied value, because the store is the
-   * session's single source of truth.
+   * session's single source of truth. Declare `omitAccessToken` below
+   * to send the request credential-less instead.
    */
   headers?: Readonly<Record<string, string>>
+  /**
+   * Declares this request credential-less: no `Authorization` header
+   * is attached and the token store is never read, no matter what it
+   * holds. A session's own refresh operation is the canonical user --
+   * it authenticates with the refresh token in its body, and its 401
+   * must stay terminal under the bearer-only rule (see
+   * `ClientOptions.refreshAccessToken`) -- and declaring that on the
+   * request keeps the store untouched for every concurrent request,
+   * which may still be presenting a perfectly valid token.
+   */
+  omitAccessToken?: boolean
   /**
    * Query parameters, URL-encoded and appended to the path; null and
    * undefined entries are skipped. Put parameter values here, never in
@@ -140,12 +154,16 @@ export interface ClientOptions {
    * bearer token. A 401 on a credential-less request means the
    * endpoint demands authentication that refreshing cannot provide,
    * so it surfaces untouched -- and this rule is load-bearing for the
-   * session wiring: a session's own refresh request travels
-   * credential-less (the store is cleared before it is sent), so when
-   * the refresh endpoint refuses a stale token the refusal surfaces
-   * instead of re-entering the refresh path, which would await the
-   * very refresh it is part of and deadlock. Any other client must
-   * keep the refresh request credential-less for the same reason.
+   * session wiring: a session's own refresh operation declares the
+   * per-request `omitAccessToken` flag, so its request travels
+   * credential-less with the store never cleared, so when the refresh
+   * endpoint refuses a stale token the refusal surfaces instead of
+   * re-entering the refresh path, which would await the very refresh
+   * it is part of and deadlock. Any other client must keep its
+   * credential-less requests declared the same way for the same
+   * reason: clearing the store instead would momentarily strip the
+   * token from concurrent requests that still hold a valid one,
+   * turning their 401s into spurious auth failures.
    */
   refreshAccessToken?: () => Promise<boolean>
   /** Abort requests that exceed this many milliseconds; absent, no
@@ -484,11 +502,19 @@ export function createClient(options: ClientOptions): RequestFn {
       headers.set('content-type', 'application/json')
     }
     // The token is read per attempt: a retry after a successful refresh
-    // picks up the fresh token without extra plumbing.
-    const token = tokenStore?.get() ?? null
-    const attachedToken = token !== null && token !== ''
-    if (attachedToken) {
-      headers.set('authorization', `Bearer ${token}`)
+    // picks up the fresh token without extra plumbing. A request that
+    // declares omitAccessToken skips the read entirely -- it must go out
+    // credential-less no matter what the store holds (a session's own
+    // refresh request authenticates with the refresh token in its body),
+    // and its 401 therefore counts as a credential-less one.
+    const omitToken = requestOptions.omitAccessToken === true
+    let attachedToken = false
+    if (!omitToken) {
+      const token = tokenStore?.get() ?? null
+      attachedToken = token !== null && token !== ''
+      if (attachedToken) {
+        headers.set('authorization', `Bearer ${token}`)
+      }
     }
 
     const controller = new AbortController()

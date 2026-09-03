@@ -165,7 +165,11 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
   two-method interface (`get(): string | null`, `set(token: string |
   null): void`); the memory implementation is the only one the package
   ships. The token is re-read before every attempt, so a retry after a
-  refresh carries the fresh token. No tenant header exists anywhere:
+  refresh carries the fresh token. A request can declare
+  `omitAccessToken` to travel credential-less even while the store
+  holds a token -- the session-refresh operation is generated to do
+  exactly that (see `@speed/api-sdk`) -- in which case the store is
+  never read for that request. No tenant header exists anywhere:
   tenant context travels inside the access token.
 - **Silent 401 refresh, once per request -- bearer-only.** When a
   request that *presented a bearer token* answers 401 and a
@@ -179,13 +183,15 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
   endpoint demands authentication, which refreshing cannot provide, so
   it surfaces untouched -- and that rule is load-bearing for the M1
   session wiring: a session's own refresh request travels
-  credential-less (the store is cleared before it is sent), so a
-  refused refresh token surfaces instead of re-entering the refresh
-  path and awaiting itself. The refresh token itself is the host's
-  business: a session layer (@speed/auth-core) holds it in its closure
-  -- the authn API returns it in the response body and sets no refresh
-  cookie -- and drives the refresh operation; this package only defines
-  the seam.
+  credential-less by declaration (`omitAccessToken`, set on the
+  generated refresh operation by `@speed/api-sdk`), so a refused
+  refresh token surfaces instead of re-entering the refresh path and
+  awaiting itself -- and the store is never cleared to make it so, so
+  concurrent requests keep presenting the token they hold throughout.
+  The refresh token itself is the host's business: a session layer
+  (@speed/auth-core) holds it in its closure -- the authn API returns
+  it in the response body and sets no refresh cookie -- and drives the
+  refresh operation; this package only defines the seam.
 - **Transient retry, conservatively.** Only idempotent methods
   (GET/HEAD/OPTIONS) are retried, only on 429 (honouring `Retry-After`,
   capped at `maxDelayMs`), 502/503/504, network failures and timeouts.
@@ -231,14 +237,18 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
   (docs/internal/21-api-contract.md).
 - **A real first consumer** -- `@speed/api-sdk`, the orval-generated
   typed surface, has landed and calls into this package through its
-  `src/runtime.ts` seam; `usePublicConfig`/`useFeature` have landed too
-  (`@speed/api-client/react`, Config hooks section above). All three
-  are still test-consumed only: `examples/reference-app` has no
-  frontend shell yet (it is backend-only today), so the reference app's
-  mandatory first-consumer status arrives with the M1 consumer shells
-  that import the generated SDK and, for the hooks, with the first
-  shell that builds a `NavItem`-style `requiredFeature` consumer per
-  `docs/internal/11-cross-cutting.md`.
+  `src/runtime.ts` seam, and `@speed/auth-core` compile-consumes both
+  in-workspace (its session layer imports this package's
+  `AccessTokenStore` seam and calls the generated authn operations
+  through the bound request function). `usePublicConfig`/`useFeature`
+  have landed too (`@speed/api-client/react`, Config hooks section
+  above). The runtime first consumer is still to come:
+  `examples/reference-app` has no frontend shell yet (it is
+  backend-only today), so the reference app's mandatory first-consumer
+  status arrives with the M1 consumer shells that bind a real
+  `createClient` against a real server and, for the hooks, with the
+  first shell that builds a `NavItem`-style `requiredFeature` consumer
+  per `docs/internal/11-cross-cutting.md`.
 - **i18n resources** -- error codes map to bilingual text in the
   consuming package's catalogs; nothing here emits user-facing text.
 

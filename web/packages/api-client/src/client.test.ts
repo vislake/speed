@@ -214,6 +214,30 @@ describe('request shape', () => {
     expect(recorded(standin).headers.has('authorization')).toBe(false)
   })
 
+  it('honours omitAccessToken: the request goes out credential-less even when the store holds a token', async () => {
+    // A session's own refresh request is the canonical user: it must
+    // never present an access token, and saying so per request must
+    // not require clearing the store to make it true.
+    const store = createMemoryAccessTokenStore()
+    store.set('store-token')
+    const standin = scriptedStandin(jsonResponse(200, { ok: true }))
+    const api = createClient({
+      baseUrl: BASE_URL,
+      fetch: standin.fetch,
+      accessTokenStore: store,
+    })
+    await api<{ ok: boolean }>('/api/v1/authn/token/refresh', {
+      method: 'POST',
+      omitAccessToken: true,
+    })
+    const call = recorded(standin)
+    expect(call.headers.get('authorization')).toBeNull()
+    // The store is untouched: credential-less-ness was declared on the
+    // request, never manufactured by clearing the session's token --
+    // concurrent requests keep presenting the token they hold.
+    expect(store.get()).toBe('store-token')
+  })
+
   it('lets the store win over a caller-supplied authorization header', async () => {
     const store = createMemoryAccessTokenStore()
     store.set('store-token')
@@ -564,12 +588,15 @@ describe('401 and the refresh hook', () => {
   })
 
   it('does not recurse when the refresh request itself is refused', async () => {
-    // The session wiring a host builds (refresh() clearing the store,
-    // then calling the refresh endpoint through this same client)
-    // must not deadlock when the endpoint refuses the stale token.
-    // Before the bearer-only rule the refresh request's own 401
-    // re-entered the refresh path and awaited the in-flight refresh it
-    // was part of -- a request awaiting itself, forever.
+    // The session wiring a host builds -- the refresh operation
+    // declared credential-less via omitAccessToken, travelling through
+    // this same client -- must not deadlock when the endpoint refuses
+    // the stale token. Before the bearer-only rule the refresh
+    // request's own 401 re-entered the refresh path and awaited the
+    // in-flight refresh it was part of -- a request awaiting itself,
+    // forever. The declaration makes that impossibility structural: the
+    // refresh request is credential-less no matter what the store
+    // holds, so its 401 never engages the refresh path.
     const store = createMemoryAccessTokenStore()
     store.set('stale-token')
     let refreshCalls = 0
@@ -586,14 +613,14 @@ describe('401 and the refresh hook', () => {
       accessTokenStore: store,
       refreshAccessToken: async () => {
         refreshCalls += 1
-        // A session's refresh travels credential-less (the store is
-        // cleared first), which is exactly what the bearer-only rule
-        // protects from re-entry.
-        store.set(null)
+        // A session's refresh travels credential-less by declaration --
+        // the refresh token rides in the body, never in an
+        // Authorization header, and the store is never cleared for it.
         try {
           await api('/api/v1/authn/token/refresh', {
             method: 'POST',
             body: { refresh_token: 'stale' },
+            omitAccessToken: true,
           })
           return true
         } catch {
@@ -610,8 +637,46 @@ describe('401 and the refresh hook', () => {
     // Exactly one refresh, two HTTP calls in total, no recursion.
     expect(refreshCalls).toBe(1)
     expect(standin.calls).toHaveLength(2)
-    // The refresh request itself carried no bearer token.
+    // The refresh request itself carried no bearer token -- and the
+    // store was never cleared to make it so.
     expect(recorded(standin, 1).headers.get('authorization')).toBeNull()
+    expect(store.get()).toBe('stale-token')
+  })
+
+  it('keeps a declared credential-less 401 terminal even while the store holds a token', async () => {
+    // The refresh operation's own request is the canonical declared
+    // credential-less one: when the endpoint refuses a stale refresh
+    // token, that 401 must surface to the session -- it must not
+    // re-enter the refresh path just because the store happens to hold
+    // an access token (the stale one, never cleared). Before
+    // omitAccessToken existed this scenario was only reachable with an
+    // emptied store; the declaration pins it without the clearing.
+    const store = createMemoryAccessTokenStore()
+    store.set('stale-token')
+    let refreshCalls = 0
+    const standin = scriptedStandin(jsonResponse(401, { ...SESSION_EXPIRED }))
+    const api = createClient({
+      baseUrl: BASE_URL,
+      fetch: standin.fetch,
+      accessTokenStore: store,
+      refreshAccessToken: async () => {
+        refreshCalls += 1
+        return true
+      },
+    })
+    const error = await expectApiError(
+      api<{ ok: boolean }>('/api/v1/authn/token/refresh', {
+        method: 'POST',
+        body: { refresh_token: 'stale' },
+        omitAccessToken: true,
+      }),
+    )
+    expect(error.auth).toBe(true)
+    expect(error.attempts).toBe(1)
+    expect(refreshCalls).toBe(0)
+    expect(standin.calls).toHaveLength(1)
+    expect(recorded(standin).headers.get('authorization')).toBeNull()
+    expect(store.get()).toBe('stale-token')
   })
 
   it('coalesces concurrent 401s onto one in-flight refresh', async () => {

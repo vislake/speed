@@ -18,6 +18,7 @@ import type {
 } from '@tanstack/react-query';
 
 import { speedRequest } from './runtime.js';
+import { speedRequestCredentialless } from './runtime.js';
 export interface NotesCreateNoteRequest {
   /**
      * The note's placeholder content.
@@ -619,7 +620,7 @@ export const authnRefreshToken = (
 ) => {
 
 
-      return speedRequest<AuthnTokenPair>(
+      return speedRequestCredentialless<AuthnTokenPair>(
       {url: `/api/v1/authn/token/refresh`, method: 'POST',
       headers: {'Content-Type': 'application/json', },
       data: authnRefreshTokenRequest, signal

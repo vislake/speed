@@ -25,15 +25,26 @@ and `src/` must keep passing it on every regeneration.
   a second hand-written file inside `src/` to bridge a generation gap.
   Tooling gaps are fixed in tooling: the extensionless-mutator-import
   problem is solved by `web/scripts/orval-nodenext-fixup.mjs`, a
-  deterministic post-generation rewrite that exits non-zero when orval
-  changes its emission, and by the tsconfig pair (`bundler` resolution
-  for typecheck, `nodenext` for build), not by shipped source.
+  deterministic post-generation rewrite of every `'./runtime'` mutator
+  import (one per mutator -- plain `speedRequest` plus one line per
+  per-operation override such as `speedRequestCredentialless`) that
+  exits non-zero when orval changes its emission or drops the imports,
+  and by the tsconfig pair (`bundler` resolution for typecheck,
+  `nodenext` for build), not by shipped source.
 - **The mutator seam is a binding, not an import.** `speedRequest`
   adapts orval's axios-shaped call to the request function a host bound
-  with `bindRequestFn(createClient(...))`. Calls made while unbound
-  throw a programmer error (`[speed-api-sdk] no request function
-  bound: ...`); rebinding replaces the previous function, last bind
-  wins, no once-guard (tests and hot reload rebind).
+  with `bindRequestFn(createClient(...))`, attaching the bearer token
+  from the host's api-client store. `speedRequestCredentialless` is
+  the second mutator, selected per operation by `web/orval.config.ts`
+  for requests that must go out without a bearer token (today only the
+  authn session-refresh operation, which authenticates with the refresh
+  token in its body and whose 401 must stay terminal -- see
+  `@speed/api-client`'s bearer-only rule): it forwards the call with
+  `omitAccessToken` declared and never sets the plain mutator's shape.
+  Calls made through either mutator while unbound throw a programmer
+  error (`[speed-api-sdk] no request function bound: ...`); rebinding
+  replaces the previous function, last bind wins, no once-guard (tests
+  and hot reload rebind).
 - **No tenant concept exists in generated code.** No tenant header,
   no tenant id in query keys, no `tenant_id` in request or response
   types (the fragments document its absence). Tenant query-key
@@ -86,8 +97,10 @@ Two entry points:
 - `.` (generated `src/index.ts`) -- the operation functions, hooks and
   response models orval derives from the merged document. The shape
   is orval's, not ours: expect it to change only through the generator.
-- `./runtime` (`src/runtime.ts`) -- `bindRequestFn` and `speedRequest`
-  (the mutator), the stable hand-written seam hosts bind.
+- `./runtime` (`src/runtime.ts`) -- `bindRequestFn`, the `speedRequest`
+  mutator and the per-operation `speedRequestCredentialless` mutator
+  (selected by `web/orval.config.ts`), the stable hand-written seam
+  hosts bind.
 
 `src/runtime.test.ts` pins the seam's behaviour; `src/index.test.ts`
 pins the generated surface's observable behaviour (hooks issue the

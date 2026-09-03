@@ -39,11 +39,26 @@ this one may issue HTTP requests itself.
   envelope's code/traceId/params/details; everything else synthesizes a
   reserved `client.*` code (`client.network`, `client.timeout`,
   `client.protocol`, `client.http.<status>`).
-- **Refresh is once per request, single-flight.** A 401 with a
+- **Refresh is once per request, single-flight -- and bearer-only.**
+  The hook fires only for a refused request that itself presented a
+  bearer token; a 401 on a credential-less request means the endpoint
+  demands authentication that refreshing cannot provide, so it
+  surfaces untouched (never retried, no false `refresh failed`
+  warning) -- which is what keeps a session's own refresh request from
+  re-entering the refresh path and awaiting itself. A 401 with a
   configured hook triggers one refresh shared by concurrent 401s, then
   one retry of the original request (any method), outside the
   transient-retry budget. Hook failure reports `access token refresh
   failed` and rejects the original 401 as an auth `ApiError`.
+- **Credential-less-ness is declared per request, never manufactured
+  by clearing the store.** `RequestOptions.omitAccessToken` sends the
+  request without an Authorization header and skips the store read
+  entirely -- the session-refresh operation is generated to carry it
+  (orval's `speedRequestCredentialless` mutator in @speed/api-sdk).
+  Clearing the store instead would momentarily strip the token from
+  concurrent requests that still hold a valid one, turning their 401s
+  into spurious auth failures under the bearer-only rule above; do not
+  reintroduce a store-clearing refresh wiring.
 - **Retry is idempotent-only and transient-only.** GET/HEAD/OPTIONS on
   429 (honouring Retry-After, capped by the policy) / 502 / 503 / 504 /
   network failure / timeout. Full-jitter backoff via `retryDelayMs`;
@@ -100,16 +115,20 @@ Deferred with reasons:
 
 - Uploads and SSE transports -- outside this package's scope
   (`docs/internal/21-api-contract.md`).
-- A real reference-app consumer -- `@speed/api-sdk` has landed and
-  consumes this runtime through its `src/runtime.ts` seam, and
-  `usePublicConfig`/`useFeature` have landed with their own README
-  quick start (`src/react.ts`, `src/react-usage-example.test.ts`), but
-  all three are still test-consumed only: `examples/reference-app` has
-  no frontend shell yet (it is backend-only today), so the reference
-  app's mandatory first-consumer status arrives with the M1 consumer
-  shells that import the generated SDK and, for the hooks, with the
-  first shell that builds a `NavItem`-style `requiredFeature` consumer
-  per `docs/internal/11-cross-cutting.md`.
+- A real reference-app consumer -- `@speed/api-sdk`, the orval-generated
+  typed surface, has landed and calls into this runtime through its
+  `src/runtime.ts` seam, and `@speed/auth-core` compile-consumes both
+  in-workspace (its session layer imports this package's
+  `AccessTokenStore` seam and calls the generated authn operations
+  through the bound request function). `usePublicConfig`/`useFeature`
+  have landed with their own README quick start (`src/react.ts`,
+  `src/react-usage-example.test.ts`). The runtime first consumer is
+  still to come: `examples/reference-app` has no frontend shell yet (it
+  is backend-only today), so the reference app's mandatory
+  first-consumer status arrives with the M1 consumer shells that bind a
+  real `createClient` and, for the hooks, with the first shell that
+  builds a `NavItem`-style `requiredFeature` consumer per
+  `docs/internal/11-cross-cutting.md`.
 - Real `refreshAccessToken` hooks -- M1 authn work (the seam
   `refreshAccessToken?: () => Promise<boolean>` is the contract).
 
