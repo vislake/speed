@@ -11,10 +11,17 @@ types, the key grammar, the migration sets for both dialects, the bilingual
 locale bundles, the module wiring, and the full object lifecycle across the
 three services `NewModule` builds: `ObjectService`'s transfer lifecycle with
 its revalidation pipeline, `DeriveService`'s thumbnail derivation, and
-`LifecycleService`'s crash-convergent delete protocol and expiry sweep (see
-"Deferred and not shipped" for what is deliberately absent). All gates run
-green: `go build ./...`, `go vet ./...`, `golangci-lint run ./...`,
-`go test ./... -race` (from this directory), plus the workspace
+`LifecycleService`'s crash-convergent delete protocol and expiry sweep; the
+HTTP surface (`api/openapi.yaml`, the generated `api.ServerInterface`,
+`Handler`, mounted by `Register` at `/api/v1/storage`); the Docker-backed
+`integration_test/` tier (a PostgreSQL leg and a MinIO/S3 leg, see
+"Testing"); and the reference app wired as the module's mandatory first
+consumer end to end (`examples/reference-app/cmd/server/server.go`,
+`cmd/server/storage_flow_test.go`). See "Deferred and not shipped" for what
+is deliberately absent. All gates run green: `go build ./...`,
+`go vet ./...`, `golangci-lint run ./...`, `go test ./... -race` (from this
+directory), `go test -race -tags=integration ./...` (Docker required for
+the integration tier), plus the workspace
 `go build github.com/vislake/speed/go/...` form.
 
 ## What the module tracks
@@ -257,7 +264,47 @@ magic numbers:
   expiry-sweep task `EnqueueExpirySweep` schedules (cleanup.go's
   `expirySweepHandler`, backed by `LifecycleService`) — catalog insertions a
   host drains onto its queue after Bootstrap and gets a worker that produces
-  thumbnails and sweeps expiry.
+  thumbnails and sweeps expiry;
+- builds `Handler` (`handler.go`) and mounts the module's HTTP surface on
+  `reg.Routes` at `apiPath` (`/api/v1/storage`, agreed with the fragment's
+  `paths:` keys so the host's outer mux knows which requests to hand over).
+  `Handler` is built here, not in `NewModule`, so it serves the service and
+  repository instances the host's `With*` options actually configured —
+  the same `m.svc`, `m.life`, `m.objects` and `m.derivatives` the job
+  handlers above are bound to. `Routes.Mount` is a plain registration, no
+  I/O, so Register's no-I/O contract stands.
+
+### The HTTP surface — `handler.go`, `api/`
+
+`api/openapi.yaml` is the module's OpenAPI fragment, the third in the
+repository after notes' and org's: paths all `/api/v1/storage/...`,
+operationIds `storage_<action><Resource>`, schemas `Storage<Type>`, tag
+`storage`, **no `tenant_id` anywhere on the surface** (the tenant comes from
+the context `tenancy.Middleware` resolved before the handler runs, per root
+CLAUDE.md's isolation rule). Seven operations define the whole surface: the
+three-step upload lifecycle (`storage_createObject`,
+`storage_uploadObjectContent`, `storage_completeObject`), object reads
+(`storage_listObjects`, `storage_getObject`, `storage_getObjectContent`)
+and object deletion (`storage_deleteObject`). `api/oapi-codegen.yaml` pins
+the same generator version notes and org use (v2.8.0);
+`api/storage-server.gen.go` is generated and committed, never hand-edited —
+`task api:gen` regenerates it from the fragment and api-contract.yml's own
+diff gate re-checks it on every spec-touching PR. The fragment is embedded
+(`//go:embed`), so the spec and the generated types travel inside the
+module binary (`OpenAPISpec()`); object keys still never cross the wire —
+consumers name objects by id, exactly as this file's key-grammar section
+promises.
+
+`Handler` implements the generated `api.ServerInterface` behind the
+compile-time assertion at the bottom of handler.go — "spec changed, handler
+not" is a compile failure, never a runtime surprise — and performs no data
+access of its own: it drives the same services and repositories Register
+attached, and only the two lookups no service method expresses (the delete
+pre-read the HTTP surface needs to promise 404 where the service converges
+on success, and the derivative listing `storage_getObject` carries). Two
+error codes exist for the surface only: `storage.invalid_request_body`
+(malformed JSON on any operation) and `storage.invalid_limit` (list page
+size outside the 1-200 window the spec documents and the handler enforces).
 
 Audit actions are declared but **not emitted** by the services; the
 reference-app pattern of explicit `audit.Emit` calls under already-declared
@@ -320,9 +367,29 @@ plain unit suite under `-race`:
   a stale upload — each over a real migration, a real kernel bootstrap, and a
   deterministically encoded PNG.
 
-The migration SQL for both dialects ships under `migrations/{postgres,sqlite}`
-and applies from zero on SQLite in the unit tier; no PostgreSQL/Redis integration
-tier exists in this module yet (see below).
+The migration SQL for both dialects ships under
+`migrations/{postgres,sqlite}` and applies from zero on SQLite in the unit
+tier. A Docker-backed integration tier (`integration_test/`, built with
+`//go:build integration` so a plain unit run never touches it) re-proves on
+real infrastructure what a SQLite-only suite cannot, run as
+`go test -race -tags=integration ./...` from this directory — the exact
+invocation pr-full.yml's integration-tiers job runs for this module:
+
+- `postgres_leg_test.go` — the module's postgres/*.sql migration files
+  apply from zero against a real PostgreSQL server (testutil.NewPostgres
+  through dbkit's dbtest helper, skipping when no Docker daemon is
+  reachable), and `tenancytest.AssertIsolated` re-runs over both
+  tenant-scoped repositories (objects, object_derivatives) on the second
+  dialect, with fixtures filling every NOT NULL column exactly as the unit
+  tier's do;
+- `minio_leg_test.go` — one object's full lifecycle driven against a real
+  MinIO server through `pkgcore.NewS3ObjectStore`, the implementation the
+  distributed deployment mode composes: every assertion on the store's
+  physical contents is made through a raw minio-go client, never through
+  the module's own read paths, so nothing the module believes about its
+  writes goes unchecked. The composition is a standalone-mode kernel whose
+  ObjectStore the host overrides via `WithObjectStore` — the injectable
+  seam a distributed-mode host wires, exercised against real MinIO.
 
 ## Known limitations
 
@@ -361,11 +428,15 @@ tier exists in this module yet (see below).
 
 ## Deferred and not shipped (with reasons)
 
-- **HTTP surface.** `OpenAPISpec()` returns nil; there is no `api/` fragment, no
-  handler. The module's surface is the Go API above; the spec-first HTTP round
-  (routes in front of `ObjectService` and the deletion surface, object keys
-  still never crossing the wire) is its own round because a fragment and its
-  generated interface are locked by the api-contract pipeline.
+- **Frontend `@speed/api-sdk` generation for this module's fragment.** The
+  frontend orval leg of `task api:gen` covers notes only: storage's fragment
+  does not feed orval, because the frontend generation targets a single spec
+  source today and no storage consumer shell exists yet to type-check the
+  generated hooks against — deferred to the M1 consumer-shell round, exactly
+  as org's fragment (Taskfile.yml's api:gen comments and
+  docs/internal/21-api-contract.md record the same deferral). The backend
+  half (`api/storage-server.gen.go`) and its api-contract.yml diff gate ship
+  regardless.
 - **Audit emission.** The three audit actions are declared; the services log
   their transitions (`object completed`, `object deleted`, `expired upload
   reclaimed`) but emit no audit rows. A host that needs rows now emits
@@ -381,8 +452,3 @@ tier exists in this module yet (see below).
   shapes. Direct-to-store client uploads with presigned credentials, and
   short-lived read URLs, are a later distributed-mode round and are deliberately
   not half-built here.
-- **An integration tier.** The unit tier proves SQLite; the dual-dialect rule's
-  PostgreSQL leg and a real store round trip through `pkgcore`'s S3
-  implementation remain unproven in this module's own suites until a Docker
-  integration tier lands, in the same shape the platform's other modules run
-  under `full-ci`.
