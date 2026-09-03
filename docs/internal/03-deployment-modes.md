@@ -42,12 +42,13 @@
 
 ## 能力声明与组装校验
 
-每套实现声明自己的能力，每种部署模式声明它要求的能力，装配时做集合比较。能力至少包含这两项：
+每套实现声明自己的能力，每种部署模式声明它要求的能力，装配时做集合比较。能力至少包含这三项：
 
 | 能力 | 含义 | 不满足的例子 |
 |---|---|---|
 | `MultiReplicaSafe` | 多个副本共享同一份状态 | 进程内 channel 总线：每个副本各发各的；内存 `KVStore`：配额各算各的；本地目录 `ObjectStore`：每个副本一块私有盘 |
 | `SurvivesRestart` | 进程重启后数据仍在 | 内存 `KVStore`、进程内事件总线、临时目录 `ObjectStore` |
+| `Stateless` | 实现不承载任何跨调用状态——进程死亡不损失数据，横幅警告（约束 5）对它是空洞的 | 内存 `KVStore`：它持有键值状态，只是不跨重启；Redis 总线：状态在服务端，声明的是 `SurvivesRestart` |
 
 部署模式声明所需能力：
 
@@ -58,7 +59,7 @@
 
 **校验失败即启动失败**，错误信息点名"哪个 seam 的哪套实现不满足哪条能力"。这取代了早期按模式硬编码的那批错误（`ErrMissingDistributedEventBus` 之类）——在 N 套实现下，"缺少分布式实现"这个说法本身就不成立。
 
-能力表是可扩展的：将来若需要区分投递顺序保证、消费者组语义等维度，是往表里加行，不是加开关。
+能力表是可扩展的，而且这个扩展点已经实践过——`Stateless` 位（见上表）是改造落地后追加的第三位：横幅警告（约束 5）对 `mailer.console` 这类无状态实现是空洞的，于是加一个「无状态」位来豁免，警告只对有状态却不持久的实现打出。将来若需要区分投递顺序保证、消费者组语义等维度，照旧是往表里加行，不是加开关。
 
 ## 组装的表达：preset 与逐项覆盖
 
@@ -119,9 +120,10 @@ docker-compose.dev-tools.yml     # 可选：MinIO、MailHog、支付沙箱代理
 
 ## 当前实现状态
 
-**本文描述的设计已落地**（2026-09，deployment-composition 改造轮）。实现分布：
+**本文描述的设计已落地**（2026-09，deployment-composition 改造轮）——preset 的「参数通道」一项除外，见下方专列 bullet。实现分布：
 
-- `go/pkgcore` 新增四件套：`capability.go`（`Capability` 位掩码与 `Has`，两个能力位 `MultiReplicaSafe`/`SurvivesRestart`）、`seam_registry.go`（`SeamRegistry[T]`/`Registration[T]`，镜像 `database/sql` 的驱动注册模式——实现按名字注册，`Build(name, cfg)` 按名解析并回报其能力位）、`preset.go`（`Preset` 是 seam 名 → 实现名的映射，`PresetStandalone`/`PresetDistributed` 两个预置）、`builtin_implementations.go`（四个 seam 的注册表集中预置八套内置实现：`eventbus.memory`/`redis`、`kv.memory`/`redis`、`mailer.console`/`smtp`、`objectstore.local`/`s3`）。`NewKernel(opts...)` 不再以部署模式为首位参数：`WithDeploymentMode` 只声明拓扑，`WithPreset` 换整张映射，`WithEventBus`/`WithKVStore`/`WithMailer`/`WithObjectStore` 各带能力位注入单套实现。`Bootstrap` 在四个 seam 解析完成后做一次能力校验：某 seam 解析出的实现不满足声明模式的 `RequiredCapabilities()` 即启动失败，错误 wrap `ErrCapabilityUnsatisfied` 并点名 seam、实现名、缺失能力与模式（四个 `ErrMissingDistributed*` 哨兵已删除）；不满足 `SurvivesRestart` 的实现照常启动、但打印横幅警告（约束 5）。
+- `go/pkgcore` 新增四件套：`capability.go`（`Capability` 位掩码与 `Has`，三个能力位 `MultiReplicaSafe`/`SurvivesRestart`/`Stateless`——第三个是紧随其后补的：`mailer.console` 这类无状态实现没有可跨重启丢失的数据，`SurvivesRestart` 横幅对它们空洞，于是加 `Stateless` 位豁免，警告只对有状态却不持久的实现（内存 `KVStore` 等）打出）、`seam_registry.go`（`SeamRegistry[T]`/`Registration[T]`，镜像 `database/sql` 的驱动注册模式——实现按名字注册，`Build(name, cfg)` 按名解析并回报其能力位）、`preset.go`（`Preset` 是 seam 名 → 实现名的映射，`PresetStandalone`/`PresetDistributed` 两个预置）、`builtin_implementations.go`（四个 seam 的注册表集中预置八套内置实现：`eventbus.memory`/`redis`、`kv.memory`/`redis`、`mailer.console`/`smtp`、`objectstore.local`/`s3`）。`NewKernel(opts...)` 不再以部署模式为首位参数：`WithDeploymentMode` 只声明拓扑，`WithPreset` 换整张映射，`WithEventBus`/`WithKVStore`/`WithMailer`/`WithObjectStore` 各带能力位注入单套实现。`Bootstrap` 在四个 seam 解析完成后做一次能力校验：某 seam 解析出的实现不满足声明模式的 `RequiredCapabilities()` 即启动失败，错误 wrap `ErrCapabilityUnsatisfied` 并点名 seam、实现名、缺失能力与模式（四个 `ErrMissingDistributed*` 哨兵已删除）；不满足 `SurvivesRestart` 的实现照常启动、但打印横幅警告（约束 5）。
+- **preset 的「参数通道」与「配置文件逐项覆盖」未随本轮落地，是明确的遗留**：正文「组装的表达」一节要求 preset 形如「seam → 实现名 + 该实现的参数」、在引导配置层（koanf）解析完成，并存在「内置 preset < 配置文件逐项覆盖 < 代码注入」三层。shipped 的 `Preset` 只是 seam 名 → 实现名的映射（`map[string]string`），解析路径上的参数通道是空的——`seam_registry.go` 的 `Build(name, cfg)` 签名预留了 `cfg`，但 preset 解析路径恒以空 `Config` 构建（`resolveKernelSeam`），`cfg` 尚无任何调用方填充；引导配置层与逐项覆盖通道同样不存在，`pkgcore` 自身从不读配置文件或环境，宿主自己的 koanf/环境层在上，把解析好的 `Preset` 喂进来（与 `Config.OTLPEndpoint` 今天的喂法相同，见 `preset.go` 的 doc comment）。这层缺失的可见后果：`PresetDistributed` 里两个 Redis seam 落到裸默认地址（`localhost:6379`，无鉴权），SMTP/S3 两个没有安全默认的 seam 在该 preset 下以 `ErrMissingSeamConfig` 解析失败——需要真实凭证的宿主走代码注入（`WithMailer`/`WithObjectStore`），注入恒优先于 preset（按 seam）。参数通道留给后续轮次；装配校验、横幅警告与能力位已按正文落地。
 - 契约测试随模块落地，「契约测试」节的目标形态已是仓库标准：`go/pkgcore/eventbustest`、`kvstoretest`、`mailertest`、`objectstoretest` 四个 `AssertConforms(t, factory)` 套件，每套内置实现各跑一遍——真实 Redis/MinIO 上的实现跑在 pkgcore 的 Docker 集成层，SMTP 走进程内 fake relay（矩阵形态见 [16 验证](16-verification.md) §2 与 [18 CI/CD](18-cicd.md)）。
 - `go/observability`：`Init(ctx, opts...)` 不再接收部署模式，导出器选择只取决于是否提供 `WithOTLPEndpoint`——单进程组装如今可以把遥测送往真实 Collector（`ErrMissingOTLPEndpoint` 已删除）。旧形态里唯一连注入都绕不过的硬绑定就此消失。
 - `go/jobs`：`StandaloneQueue` 与 `AsynqQueue` 由宿主直接选择、本身不读部署模式，形态与本文一致；Queue seam 的注册表化/能力声明化留给 go/jobs 自己的轮次。
