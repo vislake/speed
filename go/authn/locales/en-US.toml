@@ -1,0 +1,33 @@
+# English (en-US) user-facing text for the authn module.
+#
+# Every id here matches one apperr.Error.Code in errors.go. The API itself
+# never returns this text: it returns the structured code plus parameters, and
+# a client resolves the code through its own catalog, of which this file is
+# authn's contribution. Backend-generated content (a verification email, a
+# security notice) renders through the merged catalog in the RECIPIENT's
+# language, not the operator's.
+#
+# File contract (see go/pkgcore/i18n): every entry is one flat top-level
+# message -- no [errors]-style grouping sections, which go-i18n would fold
+# into the message ids -- and zh-CN.toml must carry exactly the same id set.
+# Builder.AddModule fails the bootstrap if the two sets differ.
+
+"authn.invalid_credentials" = "The sign-in details are incorrect."
+"authn.identifier_required" = "Enter an email address or a phone number."
+"authn.invalid_email" = "That email address is not valid."
+"authn.invalid_phone" = "That phone number is not valid."
+"authn.email_already_registered" = "An account already uses that email address."
+"authn.phone_already_registered" = "An account already uses that phone number."
+"authn.password_too_short" = "The password must be at least {{.min_length}} characters long."
+"authn.password_too_long" = "The password must be at most {{.max_length}} characters long."
+"authn.password_too_weak" = "That password is too easy to guess. Choose a different one."
+"authn.authentication_required" = "Sign in to continue."
+"authn.token_invalid" = "The session credential is not valid. Sign in again."
+"authn.token_expired" = "The session credential has expired."
+"authn.session_revoked" = "This session was signed out. Sign in again."
+"authn.refresh_token_invalid" = "The session could not be renewed. Sign in again."
+"authn.refresh_token_reused" = "This session was ended for your security because its credential was used twice. Sign in again."
+"authn.tenant_membership_required" = "You are not a member of that workspace."
+"authn.tenant_membership_unavailable" = "Workspace membership could not be checked. Try again shortly."
+"authn.revocation_check_failed" = "The request could not be verified. Try again shortly."
+"authn.internal_error" = "An internal error occurred. Please try again later."

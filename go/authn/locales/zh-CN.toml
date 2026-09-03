@@ -1,0 +1,31 @@
+# authn 模块面向用户的中文（zh-CN）文案。
+#
+# 每条 id 与 errors.go 中的一个 apperr.Error.Code 一一对应。接口本身从不直接
+# 返回这段文案：它只返回结构化错误码与参数，由客户端按错误码在自己的 i18n 目录
+# 中查找，本文件就是 authn 模块为该目录提供的资源。后端生成的内容（验证邮件、
+# 安全通知）通过合并后的消息目录渲染，用的是**收件人**的语言，而不是操作者的
+# 界面语言。
+#
+# 文件契约（见 go/pkgcore/i18n）：每条消息是扁平的一条顶层条目——不允许
+# [errors] 这类分组 section（go-i18n 会把 section 名折进消息 id）——且
+# en-US.toml 必须携带完全相同的 id 集合，否则 Builder.AddModule 会让启动失败。
+
+"authn.invalid_credentials" = "登录信息有误。"
+"authn.identifier_required" = "请输入邮箱地址或手机号。"
+"authn.invalid_email" = "邮箱地址格式不正确。"
+"authn.invalid_phone" = "手机号格式不正确。"
+"authn.email_already_registered" = "该邮箱地址已被注册。"
+"authn.phone_already_registered" = "该手机号已被注册。"
+"authn.password_too_short" = "密码长度不能少于 {{.min_length}} 个字符。"
+"authn.password_too_long" = "密码长度不能超过 {{.max_length}} 个字符。"
+"authn.password_too_weak" = "该密码过于常见，请更换一个。"
+"authn.authentication_required" = "请先登录。"
+"authn.token_invalid" = "登录凭证无效，请重新登录。"
+"authn.token_expired" = "登录凭证已过期。"
+"authn.session_revoked" = "该会话已被下线，请重新登录。"
+"authn.refresh_token_invalid" = "会话无法续期，请重新登录。"
+"authn.refresh_token_reused" = "检测到凭证被重复使用，出于安全考虑已结束该会话，请重新登录。"
+"authn.tenant_membership_required" = "你不是该工作区的成员。"
+"authn.tenant_membership_unavailable" = "暂时无法校验工作区成员身份，请稍后重试。"
+"authn.revocation_check_failed" = "暂时无法校验本次请求，请稍后重试。"
+"authn.internal_error" = "服务器内部发生错误，请稍后重试。"
