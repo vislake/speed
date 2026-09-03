@@ -68,7 +68,9 @@ is the only authority the machine reads.
   and auth-ui already carry them, and an extra edge here is how a shell
   quietly starts depending on machinery it must stay agnostic to (the
   platform-facing sibling shell will reuse this same package later).
-  Test-only needs go in `devDependencies`.
+  Test-only needs go in `devDependencies` — the suites' `@speed/tenancy-ui`
+  is exactly that: a composition partner of journey code, never of the
+  package's own imports.
 - **All chrome props pass through to `AppShell` untouched.** The shell
   must not reinterpret, reorder or path-match `navItems` — their
   `selected` state is host-computed, per layout-kit's contract, and a
@@ -105,11 +107,14 @@ Unit tests are vitest + jsdom, one file per source file under `src/`,
 shared helpers only in `test-utils/`. `renderWithProviders` mounts the
 unit under the real host tree — `I18nextProvider` around `ui-kit`'s
 `AppThemeProvider`, fresh i18n instance per call with exactly the three
-namespaces a real host registers (`ui-kit`, `layout-kit`, `auth-ui`) —
-and `test-utils/setup.ts` installs the desktop `matchMedia` stub the
-frame's responsive drawer needs. Bilingual assertions import the shipped
-sibling bundles relatively (`../../auth-ui/src/locales/zh-CN.json`, the
-layout-kit equivalent) — never an inline translation. Two suites:
+namespaces a real host registers (`ui-kit`, `layout-kit`, `auth-ui`);
+the journey suites build their instance from the same helper and
+register tenancy-ui's namespace on it (the fourth, exactly as a host
+composing the switcher must) — and `test-utils/setup.ts` installs the
+desktop `matchMedia` stub the frame's responsive drawer needs. Bilingual
+assertions import the shipped sibling bundles relatively
+(`../../auth-ui/src/locales/zh-CN.json`, the layout-kit and tenancy-ui
+equivalents) — never an inline translation. Three suites:
 
 - `src/components/ProductShell.test.tsx` — the view machine. It drives
   real sessions over the real-client rig (a genuine `@speed/api-client`
@@ -120,27 +125,54 @@ layout-kit equivalent) — never an inline translation. Two suites:
   authenticated branch is a full page, layout-kit's page-chrome
   precedent; `color-contrast` disabled, jsdom computes no layout).
 - `src/usage-example.test.tsx` — compiles and executes the README's
-  Quick start composition (the same three-namespace bootstrap, one
-  attached session, the documented slots) and pins the journey's
-  requests in order, so the documented usage cannot drift from the API.
+  Quick start composition (the four-namespace bootstrap, one attached
+  session, the documented slots — the `userMenu` composing tenancy-ui's
+  `TenantSwitcher` beside `SignOutButton`, fed by `useCurrentTenant`)
+  and pins the journey's requests in order, bodies included, through
+  the switch turn, so the documented usage cannot drift from the API.
+- `src/gated-journey.test.tsx` — the host-side permission-gating
+  composition over the same frame, as packaged evidence. Its fixture
+  host (a view-id mini-router in `children` — the README's documented
+  host duty played for real) gates every destination with layout-kit's
+  `RouteGuard`, fed a status it derives from auth-core's `usePermission`
+  over lists it attaches from role-load responses and re-attaches on
+  switch (auth-core's survival rules drop the tenant-domain list at the
+  switch commit). The suite journeys a switch whose pending→allowed
+  reload drops and restores the lists, a denial spell whose refresh
+  keeps the guard settled so `onDenied` fires exactly once across
+  re-renders with the default ui-kit noPermission fallback, a refused
+  switch to a non-member tenant (tenancy-ui's error text, snapshot
+  unchanged, retryable) and a server-side session death converging to
+  the session-ended screen.
 
 `test-utils/` copies auth-ui's real-client rig (same fetcher shape, same
 `jsonResponse` over genuine Response objects) and stays in lockstep with
-it by hand; `makePair` rides along here because shell journeys only script
-happy paths. `attachSession` is module-level and last-bind-wins, so it
-persists across tests in a file: a test that needs an anonymous or
-specific session must bind one explicitly before rendering.
+it by hand; it additionally records each call's body beside its method,
+path and `authorization`, which the switch-turn pins need. `makePair`
+rides along, with the token-issuing overrides a multi-tenant journey
+scripts (a switch answers with an access token and no refresh token —
+the authn API's shape). The journey suites compose tenancy-ui's
+switcher, so tenancy-ui sits in `devDependencies`, aliased to its
+sources by `tsconfig.json`'s `paths` and `vitest.config.ts`'s alias list
+(lockstep, as with every sibling); package code never imports it.
+`attachSession` is module-level and last-bind-wins, so it persists across
+tests in a file: a test that needs an anonymous or specific session must
+bind one explicitly before rendering.
 
 ## Deferrals (recorded, do not re-open silently)
 
-- **Permission gating.** No authorization source exists yet; `RouteGuard`
-  (layout-kit) is not consumed by this package and permission lists are
-  not attached to the session. When those land (a later round wires the
-  shell's own guard), this package may grow the gate — until then it
-  must not invent one.
-- **Tenant switcher.** The current tenant is read from the attached
-  session by hosts (`useCurrentTenant`); a switcher view is a later
-  round's product surface.
+- **Permission gating.** This package still never consumes layout-kit's
+  `RouteGuard` and never attaches permission lists to the session: the
+  gate is host composition in `children`, and its evidence is the
+  fixture host of the gated-journey suite (Testing), not shell code.
+  When a later round wires the shell's own guard, this package may grow
+  the gate — until then it must not invent one.
+- **Tenant switcher in package code.** The switcher never appears in
+  this package's code; hosts compose tenancy-ui's `TenantSwitcher` into
+  the `userMenu` slot, and that composition — including the host's
+  re-attach duty on switch — is packaged evidence of the usage-example
+  and gated-journey suites (Testing). A first-party switcher surface is
+  a later round's product decision; the package must not grow one.
 - **Platform-facing shell.** `admin-shell` is the same tier for platform
   staff, a later round; this package must stay free of anything
   platform-shaped so the two shells can share their foundations.

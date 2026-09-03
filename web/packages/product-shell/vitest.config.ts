@@ -6,12 +6,14 @@
  * The aliases point @speed/* specifiers at the siblings' src entry files
  * so tests run against live sources (a sibling's dist/ is never committed
  * and not guaranteed to exist when tests run). src/ resolves @speed/
- * auth-core, @speed/auth-ui and @speed/layout-kit; test-utils/ imports
- * the ui-kit theme providers -- whose own sources import @speed/tokens
- * and @speed/i18n/mui-locale, aliased below for the same reason -- and
- * drives sessions through the api-client and api-sdk seam. Aliases match
- * by prefix, so a subpath entry must come before the entry that is its
- * prefix: "@speed/i18n/mui-locale" before "@speed/i18n", and
+ * auth-core, @speed/auth-ui and @speed/layout-kit; the journey suites
+ * also compose @speed/tenancy-ui's TenantSwitcher (a test-only import,
+ * in devDependencies); test-utils/ imports the ui-kit theme providers --
+ * whose own sources import @speed/tokens and @speed/i18n/mui-locale,
+ * aliased below for the same reason -- and drives sessions through the
+ * api-client and api-sdk seam. Aliases match by prefix, so a subpath
+ * entry must come before the entry that is its prefix:
+ * "@speed/i18n/mui-locale" before "@speed/i18n", and
  * "@speed/api-sdk/runtime" before "@speed/api-sdk".
  */
 import { fileURLToPath } from 'node:url'
@@ -34,6 +36,10 @@ export default defineConfig({
       {
         find: '@speed/layout-kit',
         replacement: sibling('../layout-kit/src/index.ts'),
+      },
+      {
+        find: '@speed/tenancy-ui',
+        replacement: sibling('../tenancy-ui/src/index.ts'),
       },
       {
         find: '@speed/i18n/mui-locale',

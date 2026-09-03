@@ -9,9 +9,11 @@
     // src/ renders layout-kit's AppShell and auth-ui's SessionEndedScreen
     // over auth-core's session hooks; test-utils/ registers the three
     // sibling namespaces (ui-kit's providers included) and drives
-    // sessions through the api-client/api-sdk seam. Every sibling this
-    // program pulls into its graph resolves to the sibling's source via
-    // the paths below -- same pattern every DOM-rendering package uses;
+    // sessions through the api-client/api-sdk seam; the journey suites
+    // compose tenancy-ui's TenantSwitcher (a test-only import, in
+    // devDependencies). Every sibling this program pulls into its graph
+    // resolves to the sibling's source via the paths below -- same
+    // pattern every DOM-rendering package uses;
     // the siblings' published "types" point into their dist/, which is
     // never committed and not yet built in a fresh checkout. Emitted
     // dist/ keeps the bare specifiers, which consumers resolve against
@@ -25,6 +27,7 @@
       "@speed/auth-core": ["../auth-core/src/index.ts"],
       "@speed/auth-ui": ["../auth-ui/src/index.ts"],
       "@speed/layout-kit": ["../layout-kit/src/index.ts"],
+      "@speed/tenancy-ui": ["../tenancy-ui/src/index.ts"],
       "@speed/i18n": ["../i18n/src/index.ts"],
       "@speed/i18n/mui-locale": ["../i18n/src/mui-locale.ts"],
       "@speed/tokens": ["../tokens/src/index.ts"],

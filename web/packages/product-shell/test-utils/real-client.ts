@@ -13,10 +13,14 @@
  * (including the 401-refresh leg, which api-client exercises itself) is
  * handled by the client rather than scripted around.
  *
- * The rig mirrors the real-client leg of @speed/auth-ui's own
- * test-utils/real-client.ts (same fetcher shape, same jsonResponse over
- * genuine Response objects); it is the product-shell half of that
- * evidence, since this package has no session logic of its own to test.
+ * The rig mirrors the real-client legs of @speed/auth-ui's own
+ * test-utils/real-client.ts and of @speed/tenancy-ui's copy (same fetcher
+ * shape, same jsonResponse over genuine Response objects); it is the
+ * product-shell half of that evidence, since this package has no session
+ * logic of its own to test. Bodies are recorded the way tenancy-ui's
+ * copy records them: the gated-journey suite pins what a tenant switch
+ * sent, and a journey test must be able to assert the request it just
+ * made.
  * makePair rides along here (auth-ui keeps it in its session-harness):
  * product-shell journeys drive only the happy paths -- a token-issuing
  * login and a 204 logout -- so the pair is the only answer shape the
@@ -43,6 +47,9 @@ export interface RealCall {
   /** The authorization header value, or null for a credential-less
    * request (the refresh leg travels credential-less by declaration). */
   readonly authorization: string | null
+  /** The serialized request body -- api-client sends JSON strings --
+   * or null when the request carried none. */
+  readonly body: string | null
 }
 
 /** One scripted endpoint: answer with a genuine Response, immediately
@@ -79,7 +86,8 @@ export function makeRealClientRig(respond: RealResponder): RealClientRig {
     const url = new URL(String(input))
     const method = init?.method ?? 'GET'
     const authorization = new Headers(init?.headers).get('authorization')
-    const call: RealCall = { method, path: url.pathname, authorization }
+    const body = typeof init?.body === 'string' ? init.body : null
+    const call: RealCall = { method, path: url.pathname, authorization, body }
     calls.push(call)
     return respond(call)
   }

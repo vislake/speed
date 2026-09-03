@@ -254,6 +254,9 @@ importers:
       '@speed/i18n':
         specifier: workspace:*
         version: link:../i18n
+      '@speed/tenancy-ui':
+        specifier: workspace:*
+        version: link:../tenancy-ui
       '@speed/ui-kit':
         specifier: workspace:*
         version: link:../ui-kit

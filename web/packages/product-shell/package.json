@@ -37,6 +37,7 @@
     "@speed/api-client": "workspace:*",
     "@speed/api-sdk": "workspace:*",
     "@speed/i18n": "workspace:*",
+    "@speed/tenancy-ui": "workspace:*",
     "@speed/ui-kit": "workspace:*",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
