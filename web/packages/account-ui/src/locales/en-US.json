@@ -25,5 +25,67 @@
       "protocol": "The service returned an unexpected response. Please try again later."
     },
     "unknown": "Something went wrong. Please try again later."
+  },
+  "sessions": {
+    "title": "Sessions",
+    "loading": "Loading sessions",
+    "current": "Current session",
+    "status": {
+      "revoked": "Signed out"
+    },
+    "deviceUnknown": "Unknown device",
+    "revokeAria": "Sign out this session",
+    "signedIn": "Signed in {{time}}",
+    "lastSeen": "Last active {{time}}",
+    "revokeOthers": {
+      "label": "Sign out other devices",
+      "confirmTitle": "Sign out other devices?",
+      "confirmMessage": "This signs the account out on every other device. Only this device stays signed in, and the other devices will need to sign in again to continue.",
+      "confirmLabel": "Sign out",
+      "done_one": "Signed out {{count}} other device.",
+      "done_other": "Signed out {{count}} other devices."
+    },
+    "empty": {
+      "title": "No sessions yet",
+      "description": "Devices you sign in from will appear here."
+    },
+    "error": {
+      "title": "Could not load sessions",
+      "description": "Something went wrong while loading your sessions. Please try again."
+    },
+    "retry": "Retry"
+  },
+  "history": {
+    "title": "Sign-in history",
+    "loading": "Loading sign-in history",
+    "method": {
+      "password": "Password",
+      "sms": "SMS code",
+      "social": "Social account",
+      "oidc": "Enterprise SSO",
+      "other": "Other"
+    },
+    "result": {
+      "success": "Success"
+    },
+    "reason": {
+      "unknown_user": "No account was found with these details",
+      "bad_password": "Wrong password",
+      "no_password": "No password is set on this account",
+      "bad_code": "Wrong verification code",
+      "suspended": "This account is suspended",
+      "no_membership": "This account is not part of the organization you chose",
+      "requires_binding": "This social account must be linked first",
+      "other": "Sign-in failed"
+    },
+    "empty": {
+      "title": "No sign-in history yet",
+      "description": "Sign-in attempts for this account will appear here."
+    },
+    "error": {
+      "title": "Could not load sign-in history",
+      "description": "Something went wrong while loading your sign-in history. Please try again."
+    },
+    "retry": "Retry"
   }
 }

@@ -25,5 +25,67 @@
       "protocol": "服务返回了异常响应，请稍后重试。"
     },
     "unknown": "出了点问题，请稍后重试。"
+  },
+  "sessions": {
+    "title": "登录会话",
+    "loading": "正在加载会话",
+    "current": "当前会话",
+    "status": {
+      "revoked": "已退出"
+    },
+    "deviceUnknown": "未知设备",
+    "revokeAria": "退出此会话",
+    "signedIn": "登录于 {{time}}",
+    "lastSeen": "上次活跃 {{time}}",
+    "revokeOthers": {
+      "label": "退出其他设备",
+      "confirmTitle": "退出其他设备？",
+      "confirmMessage": "将退出当前账号在其他所有设备上的登录，本设备不受影响。退出后，这些设备需要重新登录才能继续使用。",
+      "confirmLabel": "退出",
+      "done_one": "已退出 {{count}} 台其他设备。",
+      "done_other": "已退出 {{count}} 台其他设备。"
+    },
+    "empty": {
+      "title": "暂无会话",
+      "description": "你登录过的设备将显示在这里。"
+    },
+    "error": {
+      "title": "无法加载会话列表",
+      "description": "加载会话时出了问题，请稍后重试。"
+    },
+    "retry": "重试"
+  },
+  "history": {
+    "title": "登录历史",
+    "loading": "正在加载登录历史",
+    "method": {
+      "password": "密码",
+      "sms": "短信验证码",
+      "social": "社交账号",
+      "oidc": "企业 SSO",
+      "other": "其他方式"
+    },
+    "result": {
+      "success": "登录成功"
+    },
+    "reason": {
+      "unknown_user": "未找到使用这些信息注册的账号",
+      "bad_password": "密码错误",
+      "no_password": "该账号尚未设置密码",
+      "bad_code": "验证码错误",
+      "suspended": "该账号已被停用",
+      "no_membership": "该账号不属于所选组织",
+      "requires_binding": "该社交账号需先完成绑定",
+      "other": "登录失败"
+    },
+    "empty": {
+      "title": "暂无登录历史",
+      "description": "此账号的登录尝试记录将显示在这里。"
+    },
+    "error": {
+      "title": "无法加载登录历史",
+      "description": "加载登录历史时出了问题，请稍后重试。"
+    },
+    "retry": "重试"
   }
 }
