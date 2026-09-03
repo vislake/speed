@@ -35,7 +35,7 @@
       "revoked": "已退出"
     },
     "deviceUnknown": "未知设备",
-    "revokeAria": "退出此会话",
+    "revokeAriaWithDevice": "退出此会话：{{device}}",
     "signedIn": "登录于 {{time}}",
     "lastSeen": "上次活跃 {{time}}",
     "revokeOthers": {

@@ -35,7 +35,7 @@
       "revoked": "Signed out"
     },
     "deviceUnknown": "Unknown device",
-    "revokeAria": "Sign out this session",
+    "revokeAriaWithDevice": "Sign out this session: {{device}}",
     "signedIn": "Signed in {{time}}",
     "lastSeen": "Last active {{time}}",
     "revokeOthers": {

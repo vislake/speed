@@ -260,66 +260,73 @@ export function SocialBindingsSection({
       ) : rows === undefined ? null : (
         <Box>
           {notice?.kind === 'unbind-failed' && <InlineError code={notice.code} />}
-          {rows.map((identity, index) => {
-            const id = identity.id ?? null
-            const provider = identity.provider ?? null
-            const providerLabel =
-              provider !== null && KNOWN_PROVIDERS.has(provider)
-                ? t(`bindings.provider.${provider}`)
-                : t('bindings.provider.other')
-            const email =
-              identity.email != null && identity.email !== ''
-                ? identity.email
-                : null
-            return (
-              <Box
-                key={id ?? String(index)}
-                sx={{
-                  py: 1.5,
-                  minWidth: 0,
-                  ...(index > 0
-                    ? { borderTop: '1px solid', borderColor: 'divider' }
-                    : {}),
-                }}
-              >
+          {/* The identity rows are one real list, as the sessions rows
+              are: a screen-reader user hears each binding as one item
+              of a numbered set. The notice above and the add area
+              below are page-level content and stay outside the list. */}
+          <Box component="ul" sx={{ m: 0, p: 0, listStyle: 'none' }}>
+            {rows.map((identity, index) => {
+              const id = identity.id ?? null
+              const provider = identity.provider ?? null
+              const providerLabel =
+                provider !== null && KNOWN_PROVIDERS.has(provider)
+                  ? t(`bindings.provider.${provider}`)
+                  : t('bindings.provider.other')
+              const email =
+                identity.email != null && identity.email !== ''
+                  ? identity.email
+                  : null
+              return (
                 <Box
+                  component="li"
+                  key={id ?? String(index)}
                   sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 1.5,
+                    py: 1.5,
+                    minWidth: 0,
+                    ...(index > 0
+                      ? { borderTop: '1px solid', borderColor: 'divider' }
+                      : {}),
                   }}
                 >
-                  <Box sx={{ minWidth: 0 }}>
-                    <Typography variant="body1" sx={{ fontWeight: 500 }}>
-                      {providerLabel}
-                    </Typography>
-                    {email !== null && (
-                      <Typography
-                        variant="body2"
-                        color="text.secondary"
-                        noWrap
-                      >
-                        {email}
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 1.5,
+                    }}
+                  >
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography variant="body1" sx={{ fontWeight: 500 }}>
+                        {providerLabel}
                       </Typography>
+                      {email !== null && (
+                        <Typography
+                          variant="body2"
+                          color="text.secondary"
+                          noWrap
+                        >
+                          {email}
+                        </Typography>
+                      )}
+                    </Box>
+                    {id !== null && (
+                      <Box sx={{ marginLeft: 'auto', flexShrink: 0 }}>
+                        <Button
+                          variant="outlined"
+                          color="error"
+                          size="small"
+                          disabled={unbindBusy}
+                          onClick={() => setUnbindTarget(id)}
+                        >
+                          {t('bindings.unbind')}
+                        </Button>
+                      </Box>
                     )}
                   </Box>
-                  {id !== null && (
-                    <Box sx={{ marginLeft: 'auto', flexShrink: 0 }}>
-                      <Button
-                        variant="outlined"
-                        color="error"
-                        size="small"
-                        disabled={unbindBusy}
-                        onClick={() => setUnbindTarget(id)}
-                      >
-                        {t('bindings.unbind')}
-                      </Button>
-                    </Box>
-                  )}
                 </Box>
-              </Box>
-            )
-          })}
+              )
+            })}
+          </Box>
 
           {hasAddArea && (
             <AddArea

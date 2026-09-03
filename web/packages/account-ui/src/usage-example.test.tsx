@@ -136,28 +136,12 @@ function timeText(key: string, iso: string): string {
   return key.replace('{{time}}', formatter.format(new Date(iso)))
 }
 
-/** The revoke action of the row that carries the given device label:
- * climbs from the label to the row container that also holds the row's
- * action button (row action and row label share no wrapper role). */
-function revokeButtonOf(device: string, aria: string): HTMLElement {
-  const label = screen.getByText(device)
-  let row: HTMLElement | null = label
-  while (
-    row !== null &&
-    row.querySelector(`button[aria-label="${aria}"]`) === null
-  ) {
-    row = row.parentElement
-  }
-  if (row === null) {
-    throw new Error(`no row container with a revoke action under ${device}`)
-  }
-  const button = row.querySelector(
-    `button[aria-label="${aria}"]`,
-  ) as HTMLButtonElement | null
-  if (button === null) {
-    throw new Error(`no revoke action in the row of ${device}`)
-  }
-  return button
+/** The row-end revoke label of the row whose device label reads
+ * `device`, interpolated the way the component interpolates it -- each
+ * row's action is named after the row itself, so the action is
+ * queryable per row without climbing the DOM. */
+function revokeAriaOf(device: string): string {
+  return zhCN.sessions.revokeAriaWithDevice.replace('{{device}}', device)
 }
 
 /**
@@ -405,21 +389,35 @@ describe('the README quick start, exercised over a real api-client', () => {
     await expectNoAxeViolations()
 
     // Sign the iPad out of this account: the single-row revoke is a
-    // one-click action on the row itself.
+    // one-click action on the row itself, and each row's action is named
+    // after that row's device label -- the three revocable rows each
+    // answer by name, the current laptop row carries no action.
+    for (const device of ['Windows desktop', 'iPad Safari', 'Android phone']) {
+      expect(
+        screen.getByRole('button', { name: revokeAriaOf(device) }),
+      ).toBeTruthy()
+    }
     expect(
-      screen.getAllByRole('button', { name: zhCN.sessions.revokeAria }),
-    ).toHaveLength(3)
+      screen.queryByRole('button', { name: revokeAriaOf('This laptop') }),
+    ).toBeNull()
     await user.click(
-      revokeButtonOf('iPad Safari', zhCN.sessions.revokeAria),
+      screen.getByRole('button', { name: revokeAriaOf('iPad Safari') }),
     )
     await waitFor(() => {
       expect(
         screen.getAllByText(zhCN.sessions.status.revoked),
       ).toHaveLength(1)
     })
+    // The revoked row's action is gone; the other two rows keep theirs,
+    // still each named after its own device.
     expect(
-      screen.getAllByRole('button', { name: zhCN.sessions.revokeAria }),
-    ).toHaveLength(2)
+      screen.queryByRole('button', { name: revokeAriaOf('iPad Safari') }),
+    ).toBeNull()
+    for (const device of ['Windows desktop', 'Android phone']) {
+      expect(
+        screen.getByRole('button', { name: revokeAriaOf(device) }),
+      ).toBeTruthy()
+    }
 
     // Sign out everywhere else -- the one double-confirmed action on the
     // page: the first click on the danger confirm arms it (the ui-kit

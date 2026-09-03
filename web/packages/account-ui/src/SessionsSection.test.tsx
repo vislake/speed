@@ -79,6 +79,13 @@ function timeText(key: string, iso: string): string {
   return key.replace('{{time}}', formatter.format(new Date(iso)))
 }
 
+/** The row-end revoke label of the row whose device label reads
+ * `device`, interpolated the way the component interpolates it -- each
+ * row's action is named after the row itself. */
+function revokeAriaOf(device: string): string {
+  return zhCN.sessions.revokeAriaWithDevice.replace('{{device}}', device)
+}
+
 describe('SessionsSection', () => {
   it('render every session with raw values, the current marker, and one revoke action per non-current active row', async () => {
     const sessions = [
@@ -152,11 +159,25 @@ describe('SessionsSection', () => {
     expect(screen.getByText(timeText(zhCN.sessions.signedIn, T1))).toBeTruthy()
     expect(screen.getByText(timeText(zhCN.sessions.lastSeen, T3))).toBeTruthy()
 
+    // The rows are one real list: each session is one list item, so a
+    // screen-reader user hears the row boundaries and the item count
+    // instead of a flat text-and-button sequence.
+    const rows = screen.getAllByRole('listitem')
+    expect(rows).toHaveLength(3)
+    // Each row's content lives inside its own item: the current marker
+    // and the status badge in their rows, the revoke action in the
+    // active non-current row -- named after that row's device label.
+    expect(within(rows[0]!).getByText(zhCN.sessions.current)).toBeTruthy()
+    expect(within(rows[0]!).queryByRole('button')).toBeNull()
+    expect(
+      within(rows[2]!).getByText(zhCN.sessions.status.revoked),
+    ).toBeTruthy()
     // Exactly one revoke affordance: the active non-current row; the
     // current and the revoked rows carry none.
-    const revokeButtons = screen.getAllByRole('button', { name: zhCN.sessions.revokeAria })
+    const revokeButtons = screen.getAllByRole('button', {
+      name: revokeAriaOf('Chrome/126.0.0.0 on Windows'),
+    })
     expect(revokeButtons).toHaveLength(1)
-    expect(screen.getByText(zhCN.sessions.status.revoked)).toBeTruthy()
 
     await expectNoAxeViolations()
   })
@@ -266,7 +287,9 @@ describe('SessionsSection', () => {
     await signInWithPassword(rig)
     renderWithProviders(<SessionsSection />)
 
-    const revokeButton = await screen.findByRole('button', { name: zhCN.sessions.revokeAria })
+    const revokeButton = await screen.findByRole('button', {
+      name: revokeAriaOf('Chrome/126.0.0.0 on Windows'),
+    })
     await user.click(revokeButton)
 
     // The refetch after the successful revoke turns the row revoked and
@@ -274,7 +297,11 @@ describe('SessionsSection', () => {
     await waitFor(() => {
       expect(screen.getAllByText(zhCN.sessions.status.revoked)).toHaveLength(1)
     })
-    expect(screen.queryByRole('button', { name: zhCN.sessions.revokeAria })).toBeNull()
+    expect(
+      screen.queryByRole('button', {
+        name: revokeAriaOf('Chrome/126.0.0.0 on Windows'),
+      }),
+    ).toBeNull()
     // No failure banner: a successful single revoke is silent.
     expect(screen.queryByRole('alert')).toBeNull()
 
@@ -312,14 +339,20 @@ describe('SessionsSection', () => {
     await signInWithPassword(rig)
     renderWithProviders(<SessionsSection />)
 
-    const revokeButton = await screen.findByRole('button', { name: zhCN.sessions.revokeAria })
+    const revokeButton = await screen.findByRole('button', {
+      name: revokeAriaOf('Chrome/126.0.0.0 on Windows'),
+    })
     await user.click(revokeButton)
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       zhCN.errors.authn.session_not_found,
     )
     // Nothing was revoked: the row still carries its revoke action.
-    expect(screen.getAllByRole('button', { name: zhCN.sessions.revokeAria })).toHaveLength(1)
+    expect(
+      screen.getAllByRole('button', {
+        name: revokeAriaOf('Chrome/126.0.0.0 on Windows'),
+      }),
+    ).toHaveLength(1)
   })
 
   it('revoke every other session only behind the danger double-confirm dialog and surface the revoked count', async () => {

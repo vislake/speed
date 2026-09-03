@@ -262,181 +262,199 @@ export function SessionsSection() {
               {t('sessions.revokeOthers.done', { count: notice.count })}
             </Alert>
           )}
-          {sessions.map((session, index) => {
-            const id = session.id ?? null
-            const revoked = session.status === 'revoked'
-            const current = session.is_current === true
-            const revocable = id !== null && !current && !revoked
-            const metaColor = revoked ? 'text.disabled' : 'text.secondary'
-            // Line 1 carries the friendliest label the answer offers (its
-            // device string when present); the raw user_agent repeats as a
-            // muted detail line only when line 1 is not already it.
-            const device =
-              session.device != null && session.device !== ''
-                ? session.device
-                : null
-            const agent =
-              session.user_agent != null && session.user_agent !== ''
-                ? session.user_agent
-                : null
-            const deviceLabel =
-              device ?? agent ?? t('sessions.deviceUnknown')
-            const agentLine =
-              device !== null && agent !== null && agent !== device
-                ? agent
-                : null
-            const created = parseDate(session.created_at)
-            const lastSeen = parseDate(session.last_seen_at)
-            const showLastSeen =
-              lastSeen !== null && session.last_seen_at !== session.created_at
-            return (
-              <Box
-                key={id ?? String(index)}
-                sx={{
-                  py: 1.5,
-                  minWidth: 0,
-                  ...(index > 0
-                    ? { borderTop: '1px solid', borderColor: 'divider' }
-                    : {}),
-                }}
-              >
+          {/* The rows are one real list: a screen-reader user hears each
+              session as one item of a numbered set with a boundary
+              between rows, never a flat div stack. The notices above are
+              page-level messages and stay outside the list. */}
+          <Box component="ul" sx={{ m: 0, p: 0, listStyle: 'none' }}>
+            {sessions.map((session, index) => {
+              const id = session.id ?? null
+              const revoked = session.status === 'revoked'
+              const current = session.is_current === true
+              const revocable = id !== null && !current && !revoked
+              const metaColor = revoked ? 'text.disabled' : 'text.secondary'
+              // Line 1 carries the friendliest label the answer offers (its
+              // device string when present); the raw user_agent repeats as a
+              // muted detail line only when line 1 is not already it.
+              const device =
+                session.device != null && session.device !== ''
+                  ? session.device
+                  : null
+              const agent =
+                session.user_agent != null && session.user_agent !== ''
+                  ? session.user_agent
+                  : null
+              const deviceLabel =
+                device ?? agent ?? t('sessions.deviceUnknown')
+              const agentLine =
+                device !== null && agent !== null && agent !== device
+                  ? agent
+                  : null
+              const created = parseDate(session.created_at)
+              const lastSeen = parseDate(session.last_seen_at)
+              const showLastSeen =
+                lastSeen !== null &&
+                session.last_seen_at !== session.created_at
+              return (
                 <Box
+                  component="li"
+                  key={id ?? String(index)}
                   sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 1.5,
+                    py: 1.5,
+                    minWidth: 0,
+                    ...(index > 0
+                      ? { borderTop: '1px solid', borderColor: 'divider' }
+                      : {}),
                   }}
                 >
-                  <Typography
-                    variant="body1"
-                    noWrap
-                    sx={{
-                      minWidth: 0,
-                      fontWeight: 500,
-                      color: revoked ? 'text.disabled' : 'text.primary',
-                    }}
-                  >
-                    {deviceLabel}
-                  </Typography>
                   <Box
                     sx={{
-                      marginLeft: 'auto',
-                      flexShrink: 0,
                       display: 'flex',
                       alignItems: 'center',
+                      gap: 1.5,
                     }}
                   >
-                    {current && (
-                      <Chip
-                        size="small"
-                        color="primary"
-                        variant="outlined"
-                        label={t('sessions.current')}
-                      />
-                    )}
-                    {revoked && (
-                      <Chip
-                        size="small"
-                        variant="outlined"
-                        label={t('sessions.status.revoked')}
-                        sx={{ color: 'text.disabled' }}
-                      />
-                    )}
-                    {revocable && (
-                      <IconButton
-                        aria-label={t('sessions.revokeAria')}
-                        size="small"
-                        disabled={busy || revokingId === id}
-                        onClick={() => {
-                          if (id !== null) {
-                            void handleRevokeSession(id)
+                    <Typography
+                      variant="body1"
+                      noWrap
+                      sx={{
+                        minWidth: 0,
+                        fontWeight: 500,
+                        color: revoked ? 'text.disabled' : 'text.primary',
+                      }}
+                    >
+                      {deviceLabel}
+                    </Typography>
+                    <Box
+                      sx={{
+                        marginLeft: 'auto',
+                        flexShrink: 0,
+                        display: 'flex',
+                        alignItems: 'center',
+                      }}
+                    >
+                      {current && (
+                        <Chip
+                          size="small"
+                          color="primary"
+                          variant="outlined"
+                          label={t('sessions.current')}
+                        />
+                      )}
+                      {revoked && (
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          label={t('sessions.status.revoked')}
+                          sx={{ color: 'text.disabled' }}
+                        />
+                      )}
+                      {revocable && (
+                        <IconButton
+                          aria-label={t('sessions.revokeAriaWithDevice', {
+                            device: deviceLabel,
+                            // The label is an aria-label, not HTML: the
+                            // device string must reach the accessibility
+                            // tree verbatim (i18next's default value
+                            // escaping would embed a literal `&#x2F;`
+                            // for a user-agent's slashes).
+                            interpolation: { escapeValue: false },
+                          })}
+                          size="small"
+                          disabled={busy || revokingId === id}
+                          onClick={() => {
+                            if (id !== null) {
+                              void handleRevokeSession(id)
+                            }
+                          }}
+                          sx={{ color: 'text.secondary' }}
+                        >
+                          {revokingId === id ? (
+                            <CircularProgress
+                              size={18}
+                              thickness={5}
+                              aria-hidden="true"
+                            />
+                          ) : (
+                            <SignOutIcon />
+                          )}
+                        </IconButton>
+                      )}
+                    </Box>
+                  </Box>
+
+                  {agentLine !== null && (
+                    <Typography
+                      variant="body2"
+                      noWrap
+                      title={agentLine}
+                      color={metaColor}
+                      sx={{ minWidth: 0 }}
+                    >
+                      {agentLine}
+                    </Typography>
+                  )}
+
+                  {session.amr != null && session.amr.length > 0 && (
+                    <Box
+                      sx={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: 0.75,
+                        mt: 0.5,
+                      }}
+                    >
+                      {session.amr.map((amr) => (
+                        <Chip
+                          key={amr}
+                          size="small"
+                          variant="outlined"
+                          label={amr}
+                          sx={
+                            revoked ? { color: 'text.disabled' } : undefined
                           }
-                        }}
-                        sx={{ color: 'text.secondary' }}
-                      >
-                        {revokingId === id ? (
-                          <CircularProgress
-                            size={18}
-                            thickness={5}
-                            aria-hidden="true"
-                          />
-                        ) : (
-                          <SignOutIcon />
-                        )}
-                      </IconButton>
-                    )}
-                  </Box>
+                        />
+                      ))}
+                    </Box>
+                  )}
+
+                  {(session.ip != null ||
+                    created !== null ||
+                    showLastSeen) && (
+                    <Box
+                      sx={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        columnGap: 2.5,
+                        rowGap: 0.5,
+                        mt: 0.5,
+                      }}
+                    >
+                      {session.ip != null && (
+                        <Typography variant="body2" color={metaColor}>
+                          {session.ip}
+                        </Typography>
+                      )}
+                      {created !== null && (
+                        <Typography variant="body2" color={metaColor}>
+                          {t('sessions.signedIn', {
+                            time: formatTime.format(created),
+                          })}
+                        </Typography>
+                      )}
+                      {showLastSeen && lastSeen !== null && (
+                        <Typography variant="body2" color={metaColor}>
+                          {t('sessions.lastSeen', {
+                            time: formatTime.format(lastSeen),
+                          })}
+                        </Typography>
+                      )}
+                    </Box>
+                  )}
                 </Box>
-
-                {agentLine !== null && (
-                  <Typography
-                    variant="body2"
-                    noWrap
-                    title={agentLine}
-                    color={metaColor}
-                    sx={{ minWidth: 0 }}
-                  >
-                    {agentLine}
-                  </Typography>
-                )}
-
-                {session.amr != null && session.amr.length > 0 && (
-                  <Box
-                    sx={{
-                      display: 'flex',
-                      flexWrap: 'wrap',
-                      gap: 0.75,
-                      mt: 0.5,
-                    }}
-                  >
-                    {session.amr.map((amr) => (
-                      <Chip
-                        key={amr}
-                        size="small"
-                        variant="outlined"
-                        label={amr}
-                        sx={revoked ? { color: 'text.disabled' } : undefined}
-                      />
-                    ))}
-                  </Box>
-                )}
-
-                {(session.ip != null ||
-                  created !== null ||
-                  showLastSeen) && (
-                  <Box
-                    sx={{
-                      display: 'flex',
-                      flexWrap: 'wrap',
-                      columnGap: 2.5,
-                      rowGap: 0.5,
-                      mt: 0.5,
-                    }}
-                  >
-                    {session.ip != null && (
-                      <Typography variant="body2" color={metaColor}>
-                        {session.ip}
-                      </Typography>
-                    )}
-                    {created !== null && (
-                      <Typography variant="body2" color={metaColor}>
-                        {t('sessions.signedIn', {
-                          time: formatTime.format(created),
-                        })}
-                      </Typography>
-                    )}
-                    {showLastSeen && lastSeen !== null && (
-                      <Typography variant="body2" color={metaColor}>
-                        {t('sessions.lastSeen', {
-                          time: formatTime.format(lastSeen),
-                        })}
-                      </Typography>
-                    )}
-                  </Box>
-                )}
-              </Box>
-            )
-          })}
+              )
+            })}
+          </Box>
         </Box>
       )}
 
