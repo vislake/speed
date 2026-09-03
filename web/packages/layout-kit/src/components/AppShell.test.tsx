@@ -170,6 +170,25 @@ describe('AppShell', () => {
       expect(getByRole('main')).toBeInTheDocument()
     })
 
+    it('makes the main landmark focusable so the skip link actually moves focus there', () => {
+      mockMatchMedia(true)
+      const { getByRole } = renderWithProviders(
+        <AppShell navItems={NAV_ITEMS}>content</AppShell>,
+      )
+      const skipLink = getByRole('link', { name: zhCN.appShell.skipToContent })
+      const main = getByRole('main')
+      // The skip link must target the main landmark by id ...
+      expect(skipLink.getAttribute('href')).toBe(`#${main.id}`)
+      // ... and that target must be programmatically focusable
+      // (tabIndex={-1}), or a browser's fragment-navigation focusing
+      // algorithm only scrolls to it without ever moving the assistive
+      // -tech focus cursor. jsdom enforces the same focusability rule
+      // as browsers, so calling .focus() directly on the target is a
+      // faithful check of the mechanism the fix relies on.
+      main.focus()
+      expect(document.activeElement).toBe(main)
+    })
+
     it('relabels the nav landmark and toggle button when the language switches to en-US', async () => {
       mockMatchMedia(false)
       const { getByRole, i18n } = renderWithProviders(

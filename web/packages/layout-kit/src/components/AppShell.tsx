@@ -273,6 +273,12 @@ export function AppShell({
       <Box
         component="main"
         id={mainContentId}
+        // A bare `main` has no tabindex, so it is not natively focusable
+        // and the fragment-navigation focusing algorithm the skip link
+        // above relies on can only scroll to it, never move focus into
+        // it. tabIndex={-1} makes it a valid, non-tab-order focus target
+        // without adding a Tab stop.
+        tabIndex={-1}
         sx={{
           flexGrow: 1,
           minWidth: 0,
