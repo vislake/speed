@@ -1,9 +1,9 @@
 /**
  * The reference-app web host's own message bundle. The app registers this
  * namespace alongside the five namespace-shipping packages it composes
- * (ui-kit, layout-kit, auth-ui, tenancy-ui, account-ui); B1 ships only the
- * skeleton keys the bootstrap placeholder view renders, later iterations
- * extend it as surfaces land.
+ * (ui-kit, layout-kit, auth-ui, tenancy-ui, account-ui); it carries the
+ * app's own copy -- nav labels, surface chrome, feature-card text, the
+ * demo tenant roster names -- the shell views render through t().
  */
 
 import type { ResourceBundle } from '@speed/i18n'

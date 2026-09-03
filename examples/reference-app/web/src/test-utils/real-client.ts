@@ -23,7 +23,7 @@ import {
   createClient,
   createMemoryAccessTokenStore,
 } from '@speed/api-client'
-import type { AccessTokenStore } from '@speed/api-client'
+import type { AccessTokenStore, RequestFn } from '@speed/api-client'
 import { bindRequestFn } from '@speed/api-sdk/runtime'
 import { createAuthSession } from '@speed/auth-core'
 import type { AuthSession } from '@speed/auth-core'
@@ -39,6 +39,11 @@ export interface RealCall {
   /** The authorization header value, or null for a credential-less
    * request (the refresh leg travels credential-less by declaration). */
   readonly authorization: string | null
+  /** The raw request body as the fetch stand-in received it, '' when the
+   * request sent none. Responders whose answer depends on the payload
+   * (the demo-server's tenant-switch answer reads the requested
+   * tenant_id from here) parse it themselves. */
+  readonly body: string
 }
 
 /** One scripted endpoint: answer with a genuine Response, immediately
@@ -54,6 +59,13 @@ export interface RealClientRig {
   readonly session: AuthSession
   /** The access-token store the client and the session share. */
   readonly store: AccessTokenStore
+  /**
+   * The bound client as the RequestFn the config hooks fetch through
+   * -- the same value a host passes to its AppServicesProvider's api
+   * slot, so app-services units consume the rig exactly as the
+   * bootstrap's composition does.
+   */
+  readonly api: RequestFn
   /** Every request observed, in order. */
   readonly calls: RealCall[]
 }
@@ -80,6 +92,7 @@ export function makeRealClientRig(respond: RealResponder): RealClientRig {
       path: url.pathname,
       query: url.search,
       authorization,
+      body: String(init?.body ?? ''),
     }
     calls.push(call)
     return respond(call)
@@ -91,7 +104,7 @@ export function makeRealClientRig(respond: RealResponder): RealClientRig {
     refreshAccessToken: () => session.refresh(),
   })
   bindRequestFn(client)
-  return { session, store, calls }
+  return { session, store, api: client, calls }
 }
 
 /** A JSON answer in the API's envelope shape, like the real server. */

@@ -38,21 +38,26 @@
  *  4. The providers -- I18nextProvider around AppThemeProvider (token
  *     theme + the MUI locale of the active language + CssBaseline)
  *     around the shared QueryClientProvider contract the generated
- *     react-query hooks read from.
+ *     react-query hooks read from, then the app's own
+ *     AppServicesProvider carrying the session and the client (as the
+ *     RequestFn the config hooks fetch through) down to the views.
  *
- * B1 renders a skeleton placeholder in place of the real frame: the
- * three-branch view machine (product-shell over the AppShell frame with
- * the tenant switcher, RouteGuard gates wired behind real permission
- * fetches) and the business surfaces land in the shell iteration that
- * follows this one. The html runner that mounts this bootstrap into a
- * real browser page served by the reference-app server lands with the
- * M4 html-runner work -- until then this module compiles, typechecks
- * and renders under test harnesses, which is the whole of the shipped
- * browser story.
+ *  5. The view machine -- AppView, the product-shell composition: the
+ *     auth-core-driven three-branch machine (signed out showing the
+ *     sign-in surface, signed in with a tenant showing the AppShell
+ *     frame over the hash-routed surfaces, a dead session converging
+ *     to the session-ended screen), with the frame's nav, header brand
+ *     (the server-served Public brand.site_name value) and user menu
+ *     (tenant switcher over the demo roster, sign-out) all host
+ *     content. The html runner that mounts this bootstrap into a real
+ *     browser page served by the reference-app server lands with the
+ *     M4 html-runner work -- until then this module compiles,
+ *     typechecks and renders under test harnesses, which is the whole
+ *     of the shipped browser story.
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { StrictMode, type ReactElement } from 'react'
+import { StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { createClient, createMemoryAccessTokenStore } from '@speed/api-client'
 import { bindRequestFn } from '@speed/api-sdk/runtime'
@@ -61,12 +66,10 @@ import {
   createI18n,
   I18nextProvider,
   registerNamespace,
-  useTranslation,
   type I18nInstance,
 } from '@speed/i18n'
 import {
   AppThemeProvider,
-  EmptyState,
   UI_KIT_NAMESPACE,
   uiKitResources,
 } from '@speed/ui-kit'
@@ -74,6 +77,8 @@ import { LAYOUT_KIT_NAMESPACE, layoutKitResources } from '@speed/layout-kit'
 import { AUTH_UI_NAMESPACE, authUiResources } from '@speed/auth-ui'
 import { TENANCY_UI_NAMESPACE, tenancyUiResources } from '@speed/tenancy-ui'
 import { ACCOUNT_UI_NAMESPACE, accountUiResources } from '@speed/account-ui'
+import { AppView } from './app.js'
+import { AppServicesProvider } from './app-services.js'
 import {
   REFERENCE_APP_NAMESPACE,
   referenceAppResources,
@@ -128,24 +133,13 @@ export function bootstrapReferenceApp(
       <I18nextProvider i18n={i18n}>
         <AppThemeProvider i18n={i18n}>
           <QueryClientProvider client={queryClient}>
-            <ShellPlaceholder />
+            <AppServicesProvider session={session} api={client}>
+              <AppView />
+            </AppServicesProvider>
           </QueryClientProvider>
         </AppThemeProvider>
       </I18nextProvider>
     </StrictMode>,
   )
   return { root, i18n, queryClient }
-}
-
-/** The B1 skeleton view: the ui-kit EmptyState speaking the app's own
- * namespace keys, standing in for the product-shell view machine and
- * the AppShell frame the shell iteration composes. */
-function ShellPlaceholder(): ReactElement {
-  const { t } = useTranslation(REFERENCE_APP_NAMESPACE)
-  return (
-    <EmptyState
-      title={t('skeleton.title')}
-      description={t('skeleton.description')}
-    />
-  )
 }

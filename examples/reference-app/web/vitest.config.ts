@@ -35,6 +35,10 @@ export default defineConfig({
         replacement: sibling('../../../web/packages/api-sdk/src/index.ts'),
       },
       {
+        find: '@speed/api-client/react',
+        replacement: sibling('../../../web/packages/api-client/src/react.ts'),
+      },
+      {
         find: '@speed/api-client',
         replacement: sibling('../../../web/packages/api-client/src/index.ts'),
       },

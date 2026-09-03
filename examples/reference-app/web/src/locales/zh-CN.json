@@ -1,6 +1,43 @@
 {
-  "skeleton": {
-    "title": "参考应用界面骨架",
-    "description": "宿主外壳已就绪：主题、国际化与会话接线已就位。登录界面、应用框架与业务界面在后续迭代中落地。"
+  "brand": {
+    "fallback": "微笑模拟平台"
+  },
+  "nav": {
+    "home": "首页",
+    "notes": "记事",
+    "account": "账户"
+  },
+  "signIn": {
+    "registerPrompt": "还没有账户？",
+    "registerAction": "注册"
+  },
+  "register": {
+    "heading": "创建账户",
+    "success": "账户创建成功。请使用刚注册的凭证登录。",
+    "backToSignIn": "返回登录"
+  },
+  "home": {
+    "intro": "您的微笑模拟工作台。下方卡片展示当前租户已启用的功能。"
+  },
+  "features": {
+    "heading": "已启用功能",
+    "smilePreview": {
+      "title": "微笑预览",
+      "description": "在运行完整模拟之前，先预览微笑效果。"
+    },
+    "premiumUpsell": {
+      "title": "高级版升级",
+      "description": "升级到高级版，解锁更多模拟效果与能力。"
+    }
+  },
+  "placeholder": {
+    "notesTitle": "记事",
+    "notesDescription": "记事列表与新建记事功能将在后续迭代中落地。",
+    "accountTitle": "账户",
+    "accountDescription": "会话管理、登录历史、社交绑定与双重验证功能将在后续迭代中落地。"
+  },
+  "tenants": {
+    "acme": "Acme 牙科诊所",
+    "globex": "Globex 牙科诊所"
   }
 }

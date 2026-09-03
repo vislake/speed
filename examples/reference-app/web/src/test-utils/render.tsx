@@ -35,6 +35,7 @@ import { render } from '@testing-library/react'
 import type { RenderResult } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
+import { attachSession } from '@speed/auth-core'
 import {
   createI18n,
   I18nextProvider,
@@ -47,6 +48,8 @@ import { LAYOUT_KIT_NAMESPACE, layoutKitResources } from '@speed/layout-kit'
 import { AUTH_UI_NAMESPACE, authUiResources } from '@speed/auth-ui'
 import { TENANCY_UI_NAMESPACE, tenancyUiResources } from '@speed/tenancy-ui'
 import { ACCOUNT_UI_NAMESPACE, accountUiResources } from '@speed/account-ui'
+import { AppServicesProvider } from '../app-services.js'
+import type { AppServices } from '../app-services.js'
 import {
   REFERENCE_APP_NAMESPACE,
   referenceAppResources,
@@ -118,4 +121,46 @@ export function renderWithProviders(
     </I18nextProvider>,
   )
   return { ...result, i18n: instance, queryClient }
+}
+
+export interface RenderWithAppServicesOptions extends RenderWithProvidersOptions {
+  /**
+   * Attach the services' session to the auth-core hooks before
+   * rendering, mirroring the host bootstrap's attachSession call
+   * (last bind wins; the previous session's transitions stop reaching
+   * the hooks). Defaults to true; pass false to render a unit that
+   * must see the hooks' unattached fail-closed state.
+   */
+  readonly attach?: boolean
+}
+
+export interface RenderWithAppServicesResult extends RenderWithProvidersResult {
+  /** The services the tree rendered with. */
+  readonly services: AppServices
+}
+
+/**
+ * Renders a unit under the app's own composition plus its
+ * AppServicesProvider (the services layer main.tsx adds around the
+ * view machine), attaching the services' session to the auth-core
+ * hooks exactly as the host bootstrap does -- view units read the
+ * current tenant and the auth state from those hooks, so the journey
+ * they exercise is the journey a real page runs.
+ */
+export function renderWithAppServices(
+  ui: ReactElement,
+  services: AppServices,
+  options: RenderWithAppServicesOptions = {},
+): RenderWithAppServicesResult {
+  const { attach = true, ...providerOptions } = options
+  if (attach) {
+    attachSession(services.session)
+  }
+  const result = renderWithProviders(
+    <AppServicesProvider session={services.session} api={services.api}>
+      {ui}
+    </AppServicesProvider>,
+    providerOptions,
+  )
+  return { ...result, services }
 }

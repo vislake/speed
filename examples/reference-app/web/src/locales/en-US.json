@@ -1,6 +1,43 @@
 {
-  "skeleton": {
-    "title": "Reference app shell",
-    "description": "The host shell is wired: theme, i18n and the session seam are in place. Sign-in, the app frame and business surfaces land in later iterations."
+  "brand": {
+    "fallback": "Smile Simulation Platform"
+  },
+  "nav": {
+    "home": "Home",
+    "notes": "Notes",
+    "account": "Account"
+  },
+  "signIn": {
+    "registerPrompt": "No account yet?",
+    "registerAction": "Register"
+  },
+  "register": {
+    "heading": "Create an account",
+    "success": "Account created. Sign in with the credentials you just registered.",
+    "backToSignIn": "Back to sign in"
+  },
+  "home": {
+    "intro": "Your smile-simulation workbench. The cards below show the features your current tenant has enabled."
+  },
+  "features": {
+    "heading": "Enabled features",
+    "smilePreview": {
+      "title": "Smile preview",
+      "description": "Preview a smile result before running a full simulation."
+    },
+    "premiumUpsell": {
+      "title": "Premium upgrade",
+      "description": "Upgrade to unlock advanced simulation effects and capabilities."
+    }
+  },
+  "placeholder": {
+    "notesTitle": "Notes",
+    "notesDescription": "The notes list and creation flow land in a later iteration.",
+    "accountTitle": "Account",
+    "accountDescription": "Sessions, login history, social bindings and multi-factor authentication land in a later iteration."
+  },
+  "tenants": {
+    "acme": "Acme Dental",
+    "globex": "Globex Dental"
   }
 }
