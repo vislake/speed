@@ -884,8 +884,8 @@ func TestObjectRepository_DeleteObjectRows_RemovesTheRows(t *testing.T) {
 		t.Errorf("deleteObjectRows removed = false on an existing row, want true")
 	}
 
-	if _, err := objects.FindByID(ctx, "obj-1"); !hasCode(err, dbkit.ErrRecordNotFound.Code) {
-		t.Errorf("FindByID after deleteObjectRows = %v, want %v", err, dbkit.ErrRecordNotFound.Code)
+	if _, findErr := objects.FindByID(ctx, "obj-1"); !hasCode(findErr, dbkit.ErrRecordNotFound.Code) {
+		t.Errorf("FindByID after deleteObjectRows = %v, want %v", findErr, dbkit.ErrRecordNotFound.Code)
 	}
 	rows, err := derivatives.listByObject(ctx, "obj-1")
 	if err != nil {

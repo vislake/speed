@@ -372,38 +372,43 @@ func (s *ObjectService) Complete(ctx context.Context, objectID string) (Object, 
 		_ = rc.Close()
 		return Object{}, ErrStoreError.WithCause(err)
 	}
-	if err := rc.Close(); err != nil {
+	err = rc.Close()
+	if err != nil {
 		return Object{}, ErrStoreError.WithCause(err)
 	}
-	if err := checkStoredSize(int64(len(raw)), row.DeclaredSize); err != nil {
+	err = checkStoredSize(int64(len(raw)), row.DeclaredSize)
+	if err != nil {
 		return Object{}, err
 	}
-	if err := checkContentChecksum(raw, row.DeclaredChecksum); err != nil {
+	err = checkContentChecksum(raw, row.DeclaredChecksum)
+	if err != nil {
 		return Object{}, err
 	}
 	probed := probeMediaType(raw)
-	if err := checkAllowedMediaType(probed, s.cfg.allowedTypes); err != nil {
+	err = checkAllowedMediaType(probed, s.cfg.allowedTypes)
+	if err != nil {
 		return Object{}, err
 	}
-	if err := checkDeclaredTypeMatches(row.DeclaredType, probed); err != nil {
+	err = checkDeclaredTypeMatches(row.DeclaredType, probed)
+	if err != nil {
 		return Object{}, err
 	}
 
 	stored := raw
 	changed := false
 	if isImageMediaType(probed) {
-		width, height, err := decodeImageFacts(raw, s.cfg.maxImagePixels)
-		if err != nil {
-			return Object{}, err
+		width, height, decodeErr := decodeImageFacts(raw, s.cfg.maxImagePixels)
+		if decodeErr != nil {
+			return Object{}, decodeErr
 		}
-		sanitized, wasStripped, err := sanitizeContent(raw, probed)
-		if err != nil {
-			return Object{}, ErrImageUnreadable.WithCause(err)
+		sanitized, wasStripped, stripErr := sanitizeContent(raw, probed)
+		if stripErr != nil {
+			return Object{}, ErrImageUnreadable.WithCause(stripErr)
 		}
 		changed = wasStripped
 		if wasStripped {
-			if err := st.PutObject(ctx, row.Key, bytes.NewReader(sanitized)); err != nil {
-				return Object{}, ErrStoreError.WithCause(err)
+			if writeErr := st.PutObject(ctx, row.Key, bytes.NewReader(sanitized)); writeErr != nil {
+				return Object{}, ErrStoreError.WithCause(writeErr)
 			}
 			stored = sanitized
 		}
@@ -446,9 +451,9 @@ func (s *ObjectService) Complete(ctx context.Context, objectID string) (Object, 
 	observability.FromContext(ctx).Info("object completed",
 		"object_id", row.ID, "size", size, "mime", mime, "sanitized", changed)
 	if isImageMediaType(probed) {
-		if err := s.enqueueThumbnailDerive(ctx, row); err != nil {
+		if enqueueErr := s.enqueueThumbnailDerive(ctx, row); enqueueErr != nil {
 			observability.FromContext(ctx).Warn("thumbnail derive enqueue failed",
-				"object_id", row.ID, "error", err)
+				"object_id", row.ID, "error", enqueueErr)
 		}
 	}
 	if err := s.publish(ctx, pkgcore.Event{

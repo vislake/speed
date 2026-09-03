@@ -255,8 +255,9 @@ func (r *ObjectRepository) finalizeUpload(ctx context.Context, row *Object, now 
 // tenant.
 func (r *ObjectRepository) deleteObjectRows(ctx context.Context, objectID string) (removed bool, err error) {
 	err = dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
-		if err := tx.Where("object_id = ?", objectID).Delete(&ObjectDerivative{}).Error; err != nil {
-			return err
+		delRes := tx.Where("object_id = ?", objectID).Delete(&ObjectDerivative{})
+		if delRes.Error != nil {
+			return delRes.Error
 		}
 		res := tx.Where("id = ?", objectID).Delete(&Object{})
 		if res.Error != nil {

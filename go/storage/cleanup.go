@@ -182,7 +182,8 @@ func (s *LifecycleService) Delete(ctx context.Context, objectID string) error {
 		return err
 	}
 
-	if err := st.DeleteObject(ctx, row.Key); err != nil {
+	err = st.DeleteObject(ctx, row.Key)
+	if err != nil {
 		// The row stays deleting and the bytes that were already removed
 		// are simply not there for the next run -- DeleteObject is
 		// idempotent, which is what makes the protocol resumable from any
@@ -195,7 +196,8 @@ func (s *LifecycleService) Delete(ctx context.Context, objectID string) error {
 		return err
 	}
 	for _, d := range derivatives {
-		if err := st.DeleteObject(ctx, d.Key); err != nil {
+		err = st.DeleteObject(ctx, d.Key)
+		if err != nil {
 			return ErrStoreError.WithCause(err)
 		}
 	}
@@ -263,7 +265,8 @@ func (s *LifecycleService) Sweep(ctx context.Context) error {
 		return err
 	}
 	for _, row := range deleting {
-		if err := s.Delete(ctx, row.ID); err != nil {
+		err = s.Delete(ctx, row.ID)
+		if err != nil {
 			return err
 		}
 	}
@@ -274,7 +277,8 @@ func (s *LifecycleService) Sweep(ctx context.Context) error {
 		return err
 	}
 	for _, row := range uploads {
-		if err := s.reclaimUpload(ctx, row); err != nil {
+		err = s.reclaimUpload(ctx, row)
+		if err != nil {
 			return err
 		}
 	}
@@ -286,7 +290,8 @@ func (s *LifecycleService) Sweep(ctx context.Context) error {
 		return err
 	}
 	for _, row := range expired {
-		if err := s.Delete(ctx, row.ID); err != nil {
+		err = s.Delete(ctx, row.ID)
+		if err != nil {
 			return err
 		}
 	}
