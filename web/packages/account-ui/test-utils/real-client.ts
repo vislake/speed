@@ -13,11 +13,13 @@
  *
  * The rig mirrors the real-client leg of @speed/auth-ui's own suite
  * (same fetcher shape, same jsonResponse over genuine Response
- * objects). session-harness.ts is the other half of the test story in
- * that package: it drives the same operations through a scripted
- * request function for component tests that need to throw raw ApiErrors
- * or inspect request bodies. Journey tests use this rig; component
- * tests use the harness.
+ * objects), and it is the whole of this package's test story: the
+ * component suites of every surface and the usage-example journey all
+ * drive through it. auth-ui's other half -- a scripted request function
+ * for tests that throw raw ApiErrors -- has no counterpart here: every
+ * answer an account surface can render is scriptable as a genuine
+ * Response carrying the API envelope, so no test needs to bypass the
+ * real transport.
  */
 
 import {
