@@ -1,0 +1,26 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // ESM authoring rules: NodeNext mode makes tsc emit relative imports
+    // verbatim, so sources must write explicit .js extensions (TS2835
+    // otherwise) -- the emitted dist/ is then loadable by Node ESM and
+    // typecheckable by NodeNext consumers as-is.
+    //
+    // The workspace siblings (@speed/auth-core, @speed/i18n) are resolved
+    // here exactly like a consumer resolves them: through the package
+    // exports map to the siblings' emitted dist/ declarations (no paths
+    // mapping). tsconfig.json (the noEmit typecheck, tests included) maps
+    // the workspace specifier onto the siblings' source instead; the build
+    // script rebuilds the two siblings first so the dist declarations this
+    // program type-checks against are never stale.
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "jsx": "react-jsx",
+    "noEmit": false,
+    "declaration": true,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
+}

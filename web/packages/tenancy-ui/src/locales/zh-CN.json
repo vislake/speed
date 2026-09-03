@@ -1,0 +1,22 @@
+{
+  "tenantSwitcher": {
+    "noCurrentTenant": "无当前组织",
+    "switching": "正在切换…"
+  },
+  "errors": {
+    "authn": {
+      "tenant_membership_required": "你的账户尚未加入此组织。",
+      "session_not_found": "会话不存在，请重新登录。",
+      "session_revoked": "会话已被撤销，请重新登录。",
+      "refresh_token_invalid": "登录状态已失效，请重新登录。",
+      "refresh_token_reused": "检测到异常活动，请重新登录。",
+      "token_expired": "登录已过期，请重新登录。"
+    },
+    "client": {
+      "network": "网络连接不可用，请检查网络后重试。",
+      "timeout": "请求超时，请稍后重试。",
+      "protocol": "服务返回了异常响应，请稍后重试。"
+    },
+    "unknown": "出了点问题，请稍后重试。"
+  }
+}

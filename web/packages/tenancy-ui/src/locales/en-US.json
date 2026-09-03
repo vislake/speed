@@ -1,0 +1,22 @@
+{
+  "tenantSwitcher": {
+    "noCurrentTenant": "No current organization",
+    "switching": "Switching…"
+  },
+  "errors": {
+    "authn": {
+      "tenant_membership_required": "Your account is not a member of this organization.",
+      "session_not_found": "The session does not exist. Please sign in again.",
+      "session_revoked": "The session was revoked. Please sign in again.",
+      "refresh_token_invalid": "Your sign-in is no longer valid. Please sign in again.",
+      "refresh_token_reused": "Suspicious activity was detected. Please sign in again.",
+      "token_expired": "Your sign-in has expired. Please sign in again."
+    },
+    "client": {
+      "network": "No network connection. Check your connection and try again.",
+      "timeout": "The request timed out. Please try again later.",
+      "protocol": "The service returned an unexpected response. Please try again later."
+    },
+    "unknown": "Something went wrong. Please try again later."
+  }
+}
