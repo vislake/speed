@@ -310,6 +310,40 @@ def derive_go_modules(repo_root: str) -> tuple[list[str], list[str]]:
     except OSError as exc:
         raise ReleaseError(f"cannot list {go_dir}: {exc}")
 
+    # Each module's go.mod must declare the path its directory implies: the
+    # plan derives every tag as go/<directory>/<version>, so a go.mod whose
+    # module line disagrees would be tagged under a path no Go consumer
+    # could ever resolve for it. Checking only that a go.mod FILE exists
+    # (as the on_disk scan above does) leaves that all-green.
+    for d in on_disk:
+        mod_path = os.path.join(go_dir, d, "go.mod")
+        try:
+            with open(mod_path, encoding="utf-8") as fh:
+                mod_text = fh.read()
+        except OSError as exc:
+            raise ReleaseError(f"cannot read {mod_path}: {exc}")
+        declared = None
+        for line in mod_text.splitlines():
+            m = re.match(r"^module\s+(\S+)\s*$", line.strip())
+            if m:
+                declared = m.group(1)
+                break
+        expected = f"{MODULE_PATH_PREFIX}/{d}"
+        if declared is None:
+            raise ReleaseError(
+                f"{GO_DIR_NAME}/{d}/go.mod has no module directive -- the "
+                f"release plan cannot confirm that its tag "
+                f"{GO_DIR_NAME}/{d}/<version> names the module it declares"
+            )
+        if declared != expected:
+            raise ReleaseError(
+                f"{GO_DIR_NAME}/{d}/go.mod declares module {declared!r} but "
+                f"its directory implies {expected!r} -- the plan would tag "
+                f"it {GO_DIR_NAME}/{d}/<version>, which Go consumers could "
+                f"never resolve for {declared!r}; rename the directory or "
+                f"fix the module line"
+            )
+
     missing_from_gowork = sorted(set(on_disk) - registered_go)
     if missing_from_gowork:
         raise ReleaseError(
@@ -616,6 +650,16 @@ def first_release_replace_cleanup(go_mod_text: str) -> tuple[str, tuple[str, ...
     for lineno, raw in enumerate(go_mod_text.splitlines(), 1):
         s = raw.strip()
         if not s or s.startswith("//"):
+            continue
+        # Strip a trailing line comment before any directive regex sees the
+        # line, so both parser branches below treat "X => ../X // note" the
+        # same as the bare form. Without this the single-line branch matched
+        # nothing (silently planning no drop) while the block branch refused
+        # the file -- an asymmetry that could have shipped a first release
+        # whose go.mod still carried a transitional replace. No legal module
+        # path or replace target contains "//".
+        s = s.split("//", 1)[0].strip()
+        if not s:
             continue
         m = re.match(r"^module\s+(\S+)\s*$", s)
         if m:

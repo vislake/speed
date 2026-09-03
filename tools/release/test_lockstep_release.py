@@ -227,6 +227,36 @@ class DerivationDriftTest(unittest.TestCase):
         self.assertEqual(modules, ["alpha"])
         self.assertEqual(consumers, ["examples/refapp"])
 
+    def test_module_line_disagreeing_with_its_directory_fails_loudly(self) -> None:
+        """The plan derives each tag as go/<directory>/<version>.
+
+        A go.mod declaring a module path other than its directory name
+        would be tagged under a path Go consumers could never resolve, yet
+        before this gate the plan was all-green: the derivation checked
+        only that a go.mod FILE existed, never what it declared.
+        """
+        self._module("alpha")
+        _write_file(
+            os.path.join(self.root, "go", "foo", "go.mod"),
+            "module github.com/vislake/speed/go/bar\n",
+        )
+        self._go_work("use (\n\t./go/alpha\n\t./go/foo\n)\n")
+        with self.assertRaises(rel.ReleaseError) as cm:
+            rel.derive_go_modules(self.root)
+        message = str(cm.exception)
+        self.assertIn("github.com/vislake/speed/go/bar", message)
+        self.assertIn("github.com/vislake/speed/go/foo", message)
+
+    def test_module_without_a_module_line_fails_loudly(self) -> None:
+        self._module("alpha")
+        _write_file(
+            os.path.join(self.root, "go", "foo", "go.mod"), "go 1.25.0\n"
+        )
+        self._go_work("use (\n\t./go/alpha\n\t./go/foo\n)\n")
+        with self.assertRaises(rel.ReleaseError) as cm:
+            rel.derive_go_modules(self.root)
+        self.assertIn("no module directive", str(cm.exception))
+
     def test_module_missing_from_go_work_fails_loudly(self) -> None:
         """Drift gate: a go/ module the go.work does not register."""
         self._module("alpha")
@@ -374,6 +404,27 @@ class CleanupEngineTest(unittest.TestCase):
                 "github.com/vislake/speed/go/dbkit",
             ),
         )
+
+    def test_commented_transitional_replace_is_planned_in_both_shapes(self) -> None:
+        """A trailing line comment must not change what the cleanup plans.
+
+        `replace X => ../X // note` is legal go.mod (go mod edit parses it
+        and preserves the replace), so both parser branches have to see
+        through the comment. Before the comment-stripping fix the
+        single-line branch silently ignored such a line -- planning no
+        drop and raising nothing -- while the block branch refused the
+        file outright. Either way the first release could have shipped a
+        module whose go.mod still pointed at ../pkgcore.
+        """
+        for fixture in ("cleanable-commented", "cleanable-block-commented"):
+            with self.subTest(fixture=fixture):
+                module, drops = rel.first_release_replace_cleanup(
+                    _read_fixture(fixture)
+                )
+                self.assertEqual(module, "github.com/vislake/speed/go/config")
+                self.assertEqual(
+                    drops, ("github.com/vislake/speed/go/pkgcore",)
+                )
 
     def test_consumer_module_is_left_alone(self) -> None:
         module, drops = rel.first_release_replace_cleanup(
