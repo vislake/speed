@@ -28,3 +28,13 @@
 "rbac.already_attached" = "访问控制服务已在运行。"
 
 "rbac.storage_error" = "服务器内部发生错误，请稍后重试。"
+
+# The built-in roles' display names (builtin.go). A role row stores this id
+# in its description_key column and never the prose itself, so an operator
+# console renders the name in the reader's own language.
+
+"rbac.role.owner" = "所有者"
+
+"rbac.role.admin" = "管理员"
+
+"rbac.role.member" = "成员"

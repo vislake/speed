@@ -29,3 +29,13 @@
 "rbac.already_attached" = "Access control is already running."
 
 "rbac.storage_error" = "Something went wrong on our side. Please try again."
+
+# The built-in roles' display names (builtin.go). A role row stores this id
+# in its description_key column and never the prose itself, so an operator
+# console renders the name in the reader's own language.
+
+"rbac.role.owner" = "Owner"
+
+"rbac.role.admin" = "Administrator"
+
+"rbac.role.member" = "Member"

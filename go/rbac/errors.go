@@ -81,3 +81,16 @@ var (
 	// identifier leaks outward (backend coding standard §6.2).
 	ErrStorage = apperr.Internal("rbac.storage_error")
 )
+
+// hasCode reports whether err is an *apperr.Error carrying exactly code.
+//
+// Classification goes through the CODE rather than errors.Is against the
+// sentinel value, because every WithParam/WithCause call returns a new
+// *apperr.Error: the sentinels above are templates, not singletons, so
+// errors.Is(err, ErrRoleNotFound) is false for the decorated error a
+// repository actually returns. Consumers outside this package classify the
+// same way, with apperr.As and a Code comparison.
+func hasCode(err error, code string) bool {
+	appErr, ok := apperr.As(err)
+	return ok && appErr.Code == code
+}

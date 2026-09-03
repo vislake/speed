@@ -3,6 +3,8 @@ package rbac
 import (
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/vislake/speed/go/dbkit"
 )
 
@@ -176,3 +178,13 @@ var (
 	_ dbkit.TenantScoped = RolePermission{}
 	_ dbkit.TenantScoped = RoleBinding{}
 )
+
+// newID returns the primary key a new row in this module gets.
+//
+// IDs are generated in the APPLICATION, never by the database: gen_random_uuid()
+// and its relatives are PostgreSQL-only, and this module's tables must
+// migrate and behave identically on SQLite (root CLAUDE.md's dual-dialect
+// rule). A single helper rather than a scattered uuid.NewString() keeps
+// that decision in one place, next to the size:36 column definitions that
+// depend on it.
+func newID() string { return uuid.NewString() }

@@ -153,6 +153,7 @@ func TestModule_Attach_FreezesEveryModulesPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
+	t.Cleanup(func() { _ = svc.Close() })
 
 	for _, perm := range []string{"notes:read", "notes:write", PermissionRead, PermissionManage} {
 		if !svc.catalog.Has(perm) {
@@ -173,12 +174,14 @@ func TestModule_Attach_TwiceReportsAlreadyAttached(t *testing.T) {
 	if err := m.Register(reg); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if _, err := m.Attach(reg); err != nil {
+	first, err := m.Attach(reg)
+	if err != nil {
 		t.Fatalf("first Attach: %v", err)
 	}
+	t.Cleanup(func() { _ = first.Close() })
 
-	svc, err := m.Attach(reg)
-	if svc != nil {
+	second, err := m.Attach(reg)
+	if second != nil {
 		t.Fatal("the second Attach returned a Service alongside its error")
 	}
 	assertErrorCode(t, err, "rbac.already_attached")
@@ -198,15 +201,11 @@ func TestModule_Attach_RejectsMissingWiring(t *testing.T) {
 	}
 }
 
-// stubResolver is a SubtreeResolver that answers nothing. It exists only
-// to prove the option carries the host's implementation onto the Service;
-// what a resolver's answers mean is the evaluation block's concern.
-type stubResolver struct{}
-
-func (stubResolver) NodePath(context.Context, string) (string, bool, error) { return "", false, nil }
-
 func TestModule_Options_ReachTheService(t *testing.T) {
-	resolver := stubResolver{}
+	// stubResolver (service_test.go) with no paths answers nothing, which
+	// is all this test needs: it proves the option carries the host's
+	// implementation onto the Service, not what a resolver's answers mean.
+	resolver := &stubResolver{}
 	m := NewModule(newRBACTestDB(t), WithSubtreeResolver(resolver), WithCacheTTL(5*time.Second))
 	reg := newPlainRegistry()
 	if err := m.Register(reg); err != nil {
@@ -216,6 +215,7 @@ func TestModule_Options_ReachTheService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
+	t.Cleanup(func() { _ = svc.Close() })
 
 	if svc.subtree != SubtreeResolver(resolver) {
 		t.Fatalf("the wired SubtreeResolver did not reach the Service (got %#v)", svc.subtree)
@@ -244,6 +244,7 @@ func TestModule_NoSubtreeResolver_IsASupportedConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Attach without a resolver: %v", err)
 	}
+	t.Cleanup(func() { _ = svc.Close() })
 	if svc.subtree != nil {
 		t.Fatalf("subtree = %#v, want nil when no host wired one", svc.subtree)
 	}
@@ -305,6 +306,13 @@ func TestModule_Locales_ParityAndCoverage(t *testing.T) {
 		ErrAlreadyAttached.Code,
 		ErrStorage.Code,
 	}
+	// The built-in roles' display names resolve through the same catalog:
+	// a role row stores an i18n id in description_key and never the prose,
+	// so a missing entry would render a role as a raw key in the console.
+	for _, definition := range builtinRoles {
+		codes = append(codes, definition.descriptionKey)
+	}
+
 	locales := catalog.Locales()
 	if len(locales) == 0 {
 		t.Fatal("the catalog serves no locales")

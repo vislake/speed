@@ -195,7 +195,19 @@ func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
 		subtree:         m.subtree,
 		bus:             reg.Events.Bus(),
 		cacheTTL:        m.cacheTTL,
+		cache:           newGrantCache(m.cacheTTL),
+		now:             time.Now,
 	}
+
+	// The Service subscribes to its OWN events. That is not a loop: it is
+	// how a replica learns about a grant change written by a different
+	// replica, and running the local write's invalidation through the same
+	// handler as the remote one means there is a single invalidation code
+	// path to get right rather than two that could drift.
+	reg.Events.Subscribe(EventRoleBindingAssigned, svc.onRoleBindingChanged)
+	reg.Events.Subscribe(EventRoleBindingRevoked, svc.onRoleBindingChanged)
+	reg.Events.Subscribe(EventRoleChanged, svc.onRoleChanged)
+
 	m.service = svc
 	return svc, nil
 }

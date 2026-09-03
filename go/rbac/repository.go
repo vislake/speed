@@ -101,6 +101,27 @@ func (r *RolePermissionRepository) ByRole(ctx context.Context, roleID string) ([
 	})
 }
 
+// ByRoles returns every permission granted to any of roleIDs inside the
+// tenant ctx carries -- the evaluation path's one permission read.
+//
+// It exists so that flattening a subject's bindings into a grant set costs
+// ONE query rather than one per role. The alternative, calling ByRole in a
+// loop, is the N+1 pattern on the hottest read in the product; the IN
+// clause is expressed through the same tenant-filtered builder as every
+// other read here, so it buys that without giving up any isolation layer.
+//
+// An empty roleIDs yields an empty slice without touching the database: an
+// "IN ()" predicate is a dialect-specific edge (and a syntax error on some
+// of them) with no useful answer.
+func (r *RolePermissionRepository) ByRoles(ctx context.Context, roleIDs []string) ([]RolePermission, error) {
+	if len(roleIDs) == 0 {
+		return nil, nil
+	}
+	return findWithinTenant[RolePermission](ctx, r.db, func(tx *gorm.DB) *gorm.DB {
+		return tx.Where("role_id IN ?", roleIDs)
+	})
+}
+
 // RoleBindingRepository is the data-access type for rbac_role_bindings.
 type RoleBindingRepository struct {
 	*dbkit.Repository[RoleBinding]
@@ -135,6 +156,98 @@ func (r *RoleBindingRepository) ByRole(ctx context.Context, roleID string) ([]Ro
 	return findWithinTenant[RoleBinding](ctx, r.db, func(tx *gorm.DB) *gorm.DB {
 		return tx.Where("role_id = ?", roleID)
 	})
+}
+
+// Find returns the one binding that grants userID the role roleID at
+// exactly nodeID (empty nodeID meaning tenant-wide), inside the tenant ctx
+// carries. It reports ErrBindingNotFound when there is none.
+//
+// The scope is matched EXACTLY rather than "at or above": assigning and
+// revoking address one row, and treating a revoke of a tenant-wide grant as
+// covering a node-scoped one would delete a grant the caller did not name.
+// uq_rbac_role_bindings makes the four columns unique, so at most one row
+// can match.
+func (r *RoleBindingRepository) Find(ctx context.Context, userID, roleID, nodeID string) (*RoleBinding, error) {
+	rows, err := findWithinTenant[RoleBinding](ctx, r.db, func(tx *gorm.DB) *gorm.DB {
+		return tx.
+			Where("user_id = ?", userID).
+			Where("role_id = ?", roleID).
+			Where("node_id = ?", nodeID)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, ErrBindingNotFound.
+			WithParam("role_id", roleID).
+			WithParam("node_id", nodeID)
+	}
+	binding := rows[0]
+	return &binding, nil
+}
+
+// CreateWithPermissions inserts a role and the permission rows it grants
+// in ONE tenant-scoped transaction, so a role never becomes visible
+// holding a partial permission set.
+//
+// Atomicity matters more here than the two-statement cost suggests: a role
+// that materialized with three of its five permissions would be a silently
+// under-powered grant that no error told anyone about, and the retry that
+// followed would hit the role key's unique index rather than completing the
+// set. dbkit.WithTenantSession already opens the transaction (it must, to
+// scope the PostgreSQL session GUC), so the write rides inside the same
+// boundary every read here uses, with the isolation plugin's create
+// callback forcing tenant_id on every row -- including the batch insert,
+// which it covers row by row.
+func (r *RoleRepository) CreateWithPermissions(ctx context.Context, role *Role, permissions []RolePermission) error {
+	if _, err := pkgcore.MustTenantFromContext(ctx); err != nil {
+		return err
+	}
+	if err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		if err := tx.Create(role).Error; err != nil {
+			return err
+		}
+		if len(permissions) == 0 {
+			return nil
+		}
+		return tx.Create(&permissions).Error
+	}); err != nil {
+		if errors.Is(err, pkgcore.ErrNoTenant) {
+			return err
+		}
+		return ErrStorage.WithCause(err)
+	}
+	return nil
+}
+
+// ReplaceForRole makes roleID's permission rows exactly permissions,
+// deleting what is no longer granted and inserting what is new, in one
+// tenant-scoped transaction.
+//
+// It is a replace rather than a merge because the caller (built-in role
+// reconciliation) knows the whole desired set, and a merge would leave a
+// permission that was removed from the definition still granted -- the
+// failure mode where a role quietly keeps authority someone deliberately
+// took away from it.
+func (r *RolePermissionRepository) ReplaceForRole(ctx context.Context, roleID string, permissions []RolePermission) error {
+	if _, err := pkgcore.MustTenantFromContext(ctx); err != nil {
+		return err
+	}
+	if err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		if err := tx.Where("role_id = ?", roleID).Delete(&RolePermission{}).Error; err != nil {
+			return err
+		}
+		if len(permissions) == 0 {
+			return nil
+		}
+		return tx.Create(&permissions).Error
+	}); err != nil {
+		if errors.Is(err, pkgcore.ErrNoTenant) {
+			return err
+		}
+		return ErrStorage.WithCause(err)
+	}
+	return nil
 }
 
 // findWithinTenant runs a filtered read for one tenant-scoped model.
