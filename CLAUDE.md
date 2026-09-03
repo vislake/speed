@@ -61,14 +61,20 @@ pkgcore -> dbkit / observability / ratelimit -> tenancy -> config / jobs -> stor
 
 Every module implements `pkgcore.Module` and registers everything through a single `Register(reg *Registry)` call — routes, config schema, feature flags, permissions, job handlers, notification types, events, audit actions. The `Registry` struct exists so that adding a new cross-cutting mechanism does not change the `Module` interface, which under lockstep versioning would break every module at once.
 
-### Dual deployment modes
+### Deployment mode and implementation composition
 
-Every infrastructure dependency is an interface in `pkgcore` with **two implementations**, selected by `SPEED_DEPLOYMENT_MODE=standalone|distributed` during kernel wiring:
+These are **two orthogonal axes**, and conflating them is a design error the design docs used to make (`docs/internal/03-deployment-modes.md` is the authority):
 
-- **standalone** — single process, SQLite, in-memory KV / event bus / queue, console mailer, mock payment, zero external dependencies, starts in seconds.
-- **distributed** — PostgreSQL, Redis, S3-compatible storage, real providers, the LGTM observability stack.
+- **Deployment mode** — how many replicas this runs as, and therefore which implementations are *permissible*.
+- **Implementation composition** — which implementation each infrastructure seam actually uses.
 
-A side benefit worth knowing: the standalone implementations double as test doubles, so most unit tests need no testcontainers.
+Every infrastructure dependency is an interface in `pkgcore` with **N implementations** (N ≥ 1, not fixed at two): `EventBus` has an in-process channel and a Redis Streams implementation, with NATS a candidate; `Mailer` has console and SMTP; and so on. **The deployment mode does not select an implementation — it only constrains one.** Each implementation declares its capabilities (`MultiReplicaSafe`, `SurvivesRestart`), each deployment mode declares what it requires, and assembly fails at startup when the composition cannot run in the declared mode, naming the seam and the implementation.
+
+The constraint is one-directional: a multi-replica deployment excludes in-process implementations, while a single-process deployment excludes nothing — a single binary talking to real PostgreSQL, real Stripe and real SMTP is the ordinary shape of a small-customer production install, not a misuse. Whether an implementation is a fake or the real thing is an environment-and-credentials question the *application assembler* answers; the framework ships no "production" or "test" preset and enforces no such policy.
+
+**Status:** the registry, presets, capability declarations and assembly validation described here are the *target* design, not shipped code — `pkgcore` and `observability` still implement the earlier binary switch (`NewKernel` takes a deployment mode and uses it to *select* defaults; `observability.Init` ignores `OTLPEndpoint` in standalone mode). `docs/internal/03-deployment-modes.md`'s implementation-status section tracks the gap.
+
+A side benefit worth knowing: the in-process implementations double as test doubles, so most unit tests need no testcontainers.
 
 ### Multi-tenancy
 
@@ -91,7 +97,7 @@ Every rule below is enforced by code review, and by CI where the tooling for it 
 - **Do not let `rbac` depend on `authn`.** Authorization only knows `Subject{TenantID, UserID}`; the authenticating side assembles the Subject and calls authorization.
 - **Do not import another business module's structs for database relations.** Use ID references plus domain events — `authn` publishes `UserCreated`, `org` subscribes to create the default workspace; `org` never imports `authn.User`.
 - **Do not import concrete infrastructure implementations in business code.** Depend on the `pkgcore` interfaces (`KVStore`, `EventBus`, `ObjectStore`, `Mailer`), never on `go-redis`, an S3 SDK, and so on.
-- **Do not expose a capability on an interface that only one implementation can satisfy.** Interfaces are designed against the weaker side, which is the standalone deployment mode.
+- **Do not expose a capability on an interface that only one implementation can satisfy.** Interfaces are designed against the weakest of that seam's registered implementations — an anchor that moves as implementations are added, not a fixed "the standalone one".
 
 ### API contract
 
@@ -118,7 +124,7 @@ Every rule below is enforced by code review, and by CI where the tooling for it 
 ### Deployment modes
 
 - **Do not branch on `if mode == "standalone"` in business logic.** Deployment-mode differences belong exclusively to kernel wiring.
-- Any new infrastructure dependency **must** ship both a standalone implementation (zero external dependencies) and a distributed one.
+- Any new infrastructure dependency **must** ship at least one implementation with zero external dependencies (so it stays usable in a single-process composition and as a test double), and every implementation **must** declare its capabilities and pass that seam's contract test suite.
 
 ### Logging
 
