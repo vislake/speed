@@ -1,0 +1,20 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": ["src", "test-utils"],
+  "compilerOptions": {
+    // layout-kit renders DOM chrome, same as ui-kit: JSX compiles through
+    // the automatic runtime.
+    "jsx": "react-jsx",
+    // layout-kit imports @speed/i18n at runtime. Its published "types"
+    // point into dist/, which is never committed and not yet built in a
+    // fresh checkout, so type resolution maps the workspace specifier
+    // straight onto the sibling's source -- same pattern ui-kit uses.
+    // Emitted dist/ keeps the bare specifier, which consumers resolve
+    // against the real published package. Keep this in lockstep with
+    // what src/ imports.
+    "paths": {
+      "@speed/i18n": ["../i18n/src/index.ts"],
+      "@speed/i18n/mui-locale": ["../i18n/src/mui-locale.ts"]
+    }
+  }
+}

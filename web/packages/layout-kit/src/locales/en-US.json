@@ -1,0 +1,8 @@
+{
+  "appShell": {
+    "skipToContent": "Skip to content",
+    "navLabel": "Main navigation",
+    "openNav": "Open navigation menu",
+    "closeNav": "Close navigation menu"
+  }
+}

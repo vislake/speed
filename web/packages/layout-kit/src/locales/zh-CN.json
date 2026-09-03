@@ -1,0 +1,8 @@
+{
+  "appShell": {
+    "skipToContent": "跳转到主要内容",
+    "navLabel": "主导航",
+    "openNav": "打开导航菜单",
+    "closeNav": "关闭导航菜单"
+  }
+}
