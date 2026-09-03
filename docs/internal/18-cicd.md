@@ -9,7 +9,7 @@
 | 流水线 | 触发 | 职责 | 目标时长 |
 |---|---|---|---|
 | `pr-check` | PR 打开/更新 | 受影响模块的 lint + 类型检查 + 单元测试 + 构建 | < 8 分钟 |
-| `pr-full` | PR 打 `full-ci` 标签 / 合入前 | 全量矩阵：各 seam 的实现 × 双方言、集成测试 | < 25 分钟 |
+| `pr-full` | PR 打 `full-ci` 标签 / 合入前 | 全量矩阵：每个 seam 的契约测试 × 该 seam 的每套实现（[16-verification](16-verification.md) §2 的矩阵形态），双方言，外加代表性整机组装冒烟 | < 25 分钟 |
 | `e2e` | 合入 main / 每日 | reference-app 端到端（Playwright） | < 20 分钟 |
 | `security` | PR + 每日 | 依赖漏洞、密钥扫描、SAST、镜像扫描、许可证检查 | < 10 分钟 |
 | `docs-check` | 涉及文档或公开 API 的 PR | 文档示例编译运行、链接检查、i18n key 一致性、配置清单漂移 | < 5 分钟 |
@@ -56,7 +56,7 @@
 | 纪律 | 检查手段 |
 |---|---|
 | 禁止绕过 `Repository[T]` 直接用 `db.Table/Model/Raw` | `semgrep` 自定义规则 |
-| 业务逻辑中禁止 `if mode == "standalone"` 分支 | `semgrep` 规则（仅放行 kernel 装配包） |
+| 业务逻辑中禁止 `if mode == "standalone"` 分支 | `semgrep` 规则（残余风险探测器；文件级 allowlist 仅两个 kernel 装配模式决策点：`deployment_mode.go` 的必需能力分发与 reference-app 入口的 env 读取） |
 | 业务模块间禁止跨模块 import struct | `go-arch-lint` 或 `depguard`（golangci-lint 插件） |
 | `rbac` 不得依赖 `authn` | `depguard` 依赖白名单 |
 | 业务代码不得 import 具体基础设施 SDK | `depguard`（禁止 `go-redis`、S3 SDK 等出现在业务模块） |
@@ -81,9 +81,11 @@
 
 **这张表是 CI 的核心价值所在**——纪律靠人记会在三个月后失效，靠 CI 才能长期有效。
 
-> **实施状态注记（2026-09，security 轮次）**：表中由 `semgrep` 承担的行已有六条规则落地（本轮新增），见 `tools/semgrep_rules/`——`raw-gorm-bypass.yml`（第 1 行 `db.Table/Model/Raw`，path allowlist 放行 go/dbkit 与 go/jobs 的合法存储层文件）、`deployment-mode-branch.yml`（第 2 行，按值匹配模式比较与 `SPEED_DEPLOYMENT_MODE` 读取，仅放行 kernel 装配文件与 reference-app 入口）、`tenant-id-metric-label.yml`（第 6 行，配合 observability 既有的标签断言测试）、`non-constant-log-message.yml`（第 10 行）、`handwritten-tenant-id-filter.yml`（第 16 行，放行 go/dbkit 与 go/jobs 存储层）、`gorm-automigrate-ban.yml`（第 18 行，未来防线，当前零真实调用点）。每条规则的文件头写明：对应的纪律行、命中形状、path allowlist 与放行理由、残余缺口；配套 planted-violation fixture（`testdata/<规则>/{positive,negative}.go`）证明规则真的会响。六条规则随每个 PR 在 pr-check 的 repo-checks job 运行（临时 venv 安装 semgrep，扫 `go/`、`examples/`、`tools/` 三棵子树，fixture 子树在 CLI 层排除；CI 首绿前版本故意不 pin），运行方式与执行状态见 `tools/README.md`。两点如实披露：其一，semgrep 对 `examples/reference-app/internal/notes/repository.go:19`（内嵌实例化泛型 `*dbkit.Repository[Note]`）始终抛 PartialParsing 异常、该行不参与分析——它是结构体嵌入声明，与六条规则的命中形状均无关，暂无盲区，但后续新增规则必须知道这个文件扫不全；其二，各规则文件头列出的残余缺口（动态拼装、别名间接引用等文本匹配不到的形态）仍由 code review 兜底。depguard 侧，第 5 行「业务代码不得 import 具体基础设施 SDK」本轮落地三条规则（redis / minio / asynq，仅放行各自实现归属的模块），rules 与 files-list allowlist 的取舍记录在 `.golangci.yml` 的 depguard 注释里；第 15 行「系统上下文白名单」维持评审制——该行已写明 depguard 做不到符号粒度、草稿规则为何未合入，与落地现状一致。此前轮次已落地的行：第 7 行（ESLint `no-literal-text` 规则在 npm-package-ci 每包 lint 腿运行）、第 8 行（中英 key 一致性在 docs-check）、第 9 行（CJK 扫描在 repo-checks）、第 13 行（spec 一致性在 api-contract）、第 23 行（`GOWORK=off` 独立构建在 go-module-ci 第 5 腿，过渡期 `standalone_build_test.go` 保留本地执行）。其余行——跨模块 import struct 与 `rbac` 依赖 `authn`（go-arch-lint / 依赖白名单）、日志字段名规范、前端手写 API 调用、API 层接受 `tenant_id` 参数、跨模块外键迁移 lint、`@speed/api-sdk` 禁改、Repository 隔离测试覆盖脚本——的自动化仍是未来轮次，不在此虚报；PII 直入日志行的运行时一半（脱敏中间件与它的单元测试）已在 go/observability 落地，缺的是 semgrep 静态检查那一半。
+> **实施状态注记（2026-09，security 轮次）**：表中由 `semgrep` 承担的行已有六条规则落地（本轮新增），见 `tools/semgrep_rules/`——`raw-gorm-bypass.yml`（第 1 行 `db.Table/Model/Raw`，path allowlist 放行 go/dbkit 与 go/jobs 的合法存储层文件）、`deployment-mode-branch.yml`（第 2 行，按值匹配模式比较与 `SPEED_DEPLOYMENT_MODE` 读取，仅放行两个 kernel 装配模式决策点：`go/pkgcore/deployment_mode.go` 的必需能力分发与 reference-app 入口的 env 读取）、`tenant-id-metric-label.yml`（第 6 行，配合 observability 既有的标签断言测试）、`non-constant-log-message.yml`（第 10 行）、`handwritten-tenant-id-filter.yml`（第 16 行，放行 go/dbkit 与 go/jobs 存储层）、`gorm-automigrate-ban.yml`（第 18 行，未来防线，当前零真实调用点）。每条规则的文件头写明：对应的纪律行、命中形状、path allowlist 与放行理由、残余缺口；配套 planted-violation fixture（`testdata/<规则>/{positive,negative}.go`）证明规则真的会响。六条规则随每个 PR 在 pr-check 的 repo-checks job 运行（临时 venv 安装 semgrep，扫 `go/`、`examples/`、`tools/` 三棵子树，fixture 子树在 CLI 层排除；CI 首绿前版本故意不 pin），运行方式与执行状态见 `tools/README.md`。两点如实披露：其一，semgrep 对 `examples/reference-app/internal/notes/repository.go:19`（内嵌实例化泛型 `*dbkit.Repository[Note]`）始终抛 PartialParsing 异常、该行不参与分析——它是结构体嵌入声明，与六条规则的命中形状均无关，暂无盲区，但后续新增规则必须知道这个文件扫不全；其二，各规则文件头列出的残余缺口（动态拼装、别名间接引用等文本匹配不到的形态）仍由 code review 兜底。depguard 侧，第 5 行「业务代码不得 import 具体基础设施 SDK」本轮落地三条规则（redis / minio / asynq，仅放行各自实现归属的模块），rules 与 files-list allowlist 的取舍记录在 `.golangci.yml` 的 depguard 注释里；第 15 行「系统上下文白名单」维持评审制——该行已写明 depguard 做不到符号粒度、草稿规则为何未合入，与落地现状一致。此前轮次已落地的行：第 7 行（ESLint `no-literal-text` 规则在 npm-package-ci 每包 lint 腿运行）、第 8 行（中英 key 一致性在 docs-check）、第 9 行（CJK 扫描在 repo-checks）、第 13 行（spec 一致性在 api-contract）、第 23 行（`GOWORK=off` 独立构建在 go-module-ci 第 5 腿，过渡期 `standalone_build_test.go` 保留本地执行）。其余行——跨模块 import struct 与 `rbac` 依赖 `authn`（go-arch-lint / 依赖白名单）、日志字段名规范、前端手写 API 调用、API 层接受 `tenant_id` 参数、跨模块外键迁移 lint、`@speed/api-sdk` 禁改、Repository 隔离测试覆盖脚本——的自动化仍是未来轮次，不在此虚报；PII 直入日志行的运行时一半（脱敏中间件与它的单元测试）已在 go/observability 落地，缺的是 semgrep 静态检查那一半。
 
 > **实施状态注记（2026-09-03，authn 轮次）**：上一条注记里点名"仍是未来轮次"的 operationId / schema 命名规范一行，本轮已落地——`go/authn/api/openapi.yaml` 是继 notes 之后的第二个模块 spec 片段，触发了合并的存在意义：仓库根目录的 `redocly.yaml` 定义了 `rule/speed-operation-id-format`、`rule/speed-schema-name-format` 两条 error 级命名规范规则，`Taskfile.yml` 的 `task api:merge` 与 `.github/workflows/api-contract.yml` 用钉定的 `@redocly/cli@2.51.1` 把两个片段 `join` 进 `build/openapi/speed.yaml` 后按这两条规则 `lint`，`git diff --exit-code` 校验该文件与提交版本一致。详见 [19 开发工作流](19-dev-workflow.md) 与 [21 API 契约](21-api-contract.md) 各自的实现状态注记。
+
+> **实施状态注记（2026-09，deployment-composition 轮次更新）**：第 2 行规则随改造转为残余风险探测器——部署模式从选择器变成约束（`NewKernel` 不再收模式、四个 seam 从各自的实现注册表解析带能力声明的实现），`registry.go`、observability `init.go`、reference-app `main.go` 的模式分支被移除，allowlist 相应删到上一段句读的两个决策点；按 `Capability` 分支（如 `caps.Has(MultiReplicaSafe)`）是改造引入的新词汇，尚无纪律行，规则头与 `tools/README.md` 的残余缺口列明确记录为不覆盖。pr-full 的真实矩阵随之对齐 [16-verification](16-verification.md) §2 的形态：pkgcore 的 Docker 腿把三套有真实后端的 seam 契约测试（`kvstoretest`/`eventbustest` 对真实 Redis、`objectstoretest` 对 MinIO/S3）各跑一遍——mailer 的 SMTP 实现无容器后端，同一套 `mailertest.AssertConforms` 在单元层对进程内 fake SMTP server 跑；reference-app job 新增其 Docker-backed 组装腿（真实 Redis `EventBus` 注入、standalone 拓扑启动整机——正是 §2 的"代表性整机组装冒烟"），Taskfile `test:full` 同步镜像。
 
 ## 发布流水线（lockstep）
 
@@ -102,7 +104,7 @@
 - **`.github/workflows/release.yml` 的现状 = 只验证、不发布**：手动触发、输入版本号（`workflow_dispatch` 的 `version` 输入承载版本号，第 1 步的"版本号未被占用"预检由协调器查重实现）。步骤为：校验版本号格式（正则 `^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`，v 必需；`workflow_dispatch` 输入不支持 pattern 校验，故用 grep 步骤）→ 跑发布协调器默认模式 → 跑协调器自测。工作流权限仅 `contents: read`，**不接任何发布凭据——它不可能真实发布，这是本轮的刻意设计**。
 - **协调器 `tools/release/lockstep-release.py`**（默认模式 = 离线验证；`--self-test` = 自带 unittest 套件）：推导可发布集合（go.work `use` 条目 + `web/packages/*`），检查版本格式、查重（`git tag -l`——因此 checkout 必须 `fetch-depth: 0`，浅克隆看不到 tag 会静默废掉查重预检）、go.work↔`go/` 树双向完备、npm 版本统一、`web/.changeset/config.json` fixed 组恰好覆盖现存包，全绿后打印完整单版本发布计划（每模块 tag、每包 bump 后版本）。本地入口 `task release:plan VERSION=v1.2.0`。
 - **第 3 步（Go 发布）的两半**：打 tag 以硬闸本地模式存在于协调器（`--apply` 必须配 `--allow-local-tag-creation`，只创建本地、永不推送的 tag，仅用于在 scratch checkout 演练）；首次发布的 replace 清理以纯函数 + `tools/release/testdata/` 夹具交付，**严禁对真实 go.mod 运行**——树的过渡态保留到 v1.0（[02 仓库结构与发布](02-repo-and-release.md) 的 M0 注记）。
-- **第 2、4、5、6、7 步的接线逐一等待**：第 2 步等 pr-full 的全量编排成熟（当前 pr-full 只跑六模块 Docker 集成矩阵 + reference-app 单测）；第 4 步等 M4（changesets 未安装进 web/、仓库无 npm 凭据）；第 5 步等制品轮（goreleaser 配置、镜像构建、spec 合并工具均未落地）；第 6 步等 `scaffold-verify.yml` 脱离 gated stub（现状见根 CLAUDE.md）；第 7 步等 M4。预发布通道与回滚策略（见下）不变，随真实发布轮实现。
+- **第 2、4、5、6、7 步的接线逐一等待**：第 2 步等 pr-full 的全量编排成熟（当前 pr-full 跑六模块 Docker 集成矩阵 + reference-app 单测与 Redis 组装集成测试）；第 4 步等 M4（changesets 未安装进 web/、仓库无 npm 凭据）；第 5 步等制品轮（goreleaser 配置、镜像构建、spec 合并工具均未落地）；第 6 步等 `scaffold-verify.yml` 脱离 gated stub（现状见根 CLAUDE.md）；第 7 步等 M4。预发布通道与回滚策略（见下）不变，随真实发布轮实现。
 - **验收口径**：该 M0 条目的退出条件是"一次命令能把全部模块以同一版本号发布出去"可**离线证明**——release.yml 每次手动触发（版本格式合法、各项预检全绿即通过）就是这份证明；首次端到端真实运行在 v1.0（M4）。协调器的绝对禁令与"树变化时该动什么"见 `tools/release/AGENTS.md`。
 
 ### 预发布通道
