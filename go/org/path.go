@@ -75,6 +75,36 @@ const (
 	// the migrations declare.
 	maxDepth = 8
 
+	// idSegmentLen is how many characters one path segment costs: a
+	// 36-character UUID (uuid.NewString's only output shape in this
+	// package -- see the dialect-identity proof above) plus the one
+	// pathSeparator that follows it.
+	idSegmentLen = 37
+
+	// pathColumnWidth mirrors the "path VARCHAR(1024)" column width the
+	// postgres and sqlite migrations under migrations/0001_create_org_nodes.sql
+	// both declare. It has no way to be checked against the migration files
+	// themselves at compile time, so module_test.go's
+	// TestModule_WithMaxDepth_CeilingMatchesPathColumnWidth greps them and
+	// fails if this ever drifts from what is actually declared there.
+	pathColumnWidth = 1024
+
+	// maxDepthCeiling is the highest depth value WithMaxDepth may ever
+	// configure -- independent of, and larger than, the maxDepth default
+	// above, which only bounds the depth a host gets without configuring
+	// one.
+	//
+	// A path of depth d holds d+1 segments (buildPath's leading separator
+	// plus one idSegmentLen per level), so the largest d that still fits in
+	// pathColumnWidth solves 1 + idSegmentLen*(d+1) <= pathColumnWidth: d+1
+	// <= 27 (1 + 37*27 = 1000), so d <= 26. One level deeper already
+	// overflows PostgreSQL's VARCHAR(1024) (1 + 37*28 = 1037) while
+	// SQLite's type affinity would silently accept it -- exactly the
+	// standalone/distributed divergence maxDepth's own bound above exists
+	// to prevent, and precisely what a host-configurable override could
+	// reintroduce without this ceiling. See WithMaxDepth.
+	maxDepthCeiling = (pathColumnWidth-1)/idSegmentLen - 1
+
 	// maxNameLen is the longest node name, in runes, org accepts. Bounded
 	// in Go for the same SQLite type-affinity reason as maxDepth.
 	maxNameLen = 200

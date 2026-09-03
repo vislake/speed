@@ -3,6 +3,8 @@ package org
 import (
 	"context"
 	"embed"
+	"regexp"
+	"strconv"
 	"testing"
 	"time"
 
@@ -413,6 +415,82 @@ func TestModule_Options(t *testing.T) {
 	}
 	if def.invites.ttl != defaultInvitationTTL {
 		t.Errorf("WithInvitationTTL(-1h) changed the ttl to %v, want the default %v", def.invites.ttl, defaultInvitationTTL)
+	}
+}
+
+// TestModule_WithMaxDepth_AboveCeilingIsIgnored pins the upper bound
+// WithMaxDepth enforces: a host cannot configure a tree deeper than
+// maxDepthCeiling, the deepest depth whose materialized path still fits the
+// migrations' "path VARCHAR(1024)" column on both dialects.
+//
+// Before this bound existed, WithMaxDepth(maxDepthCeiling+1) (or any higher
+// value) was accepted verbatim, so a tree deep enough to overflow that
+// column would fail at the database on PostgreSQL (distributed deployment
+// mode) while SQLite's type affinity let the identical operation succeed
+// silently in standalone deployment mode -- the exact cross-dialect
+// divergence path.go's own maxDepth bound exists to rule out for the
+// UNCONFIGURED default, reopened here through the host override.
+func TestModule_WithMaxDepth_AboveCeilingIsIgnored(t *testing.T) {
+	tooDeep := NewModule(nil, WithMaxDepth(maxDepthCeiling+1))
+	if tooDeep.tree.maxDepth != maxDepth {
+		t.Errorf("WithMaxDepth(%d) changed maxDepth to %d, want the default %d (value must be rejected, not clamped or accepted)",
+			maxDepthCeiling+1, tooDeep.tree.maxDepth, maxDepth)
+	}
+
+	wayTooDeep := NewModule(nil, WithMaxDepth(1000))
+	if wayTooDeep.tree.maxDepth != maxDepth {
+		t.Errorf("WithMaxDepth(1000) changed maxDepth to %d, want the default %d", wayTooDeep.tree.maxDepth, maxDepth)
+	}
+
+	// The ceiling itself must still be accepted -- only what's beyond it is
+	// rejected.
+	atCeiling := NewModule(nil, WithMaxDepth(maxDepthCeiling))
+	if atCeiling.tree.maxDepth != maxDepthCeiling {
+		t.Errorf("WithMaxDepth(%d) = %d, want %d accepted verbatim", maxDepthCeiling, atCeiling.tree.maxDepth, maxDepthCeiling)
+	}
+}
+
+// TestModule_WithMaxDepth_CeilingMatchesPathColumnWidth guards
+// maxDepthCeiling (path.go) against drifting from the "path VARCHAR(1024)"
+// width the postgres and sqlite migrations actually declare: the constant
+// has no compiler-checked link to the SQL files, so a migration width
+// change with no matching update to maxDepthCeiling would silently
+// reintroduce the divergence WithMaxDepth's ceiling exists to close.
+func TestModule_WithMaxDepth_CeilingMatchesPathColumnWidth(t *testing.T) {
+	fs := NewModule(nil).Migrations()
+	pathColumnRe := regexp.MustCompile(`(?m)^\s*path\s+VARCHAR\((\d+)\)`)
+
+	for _, dialect := range []string{"postgres", "sqlite"} {
+		content, err := fs.ReadFile(dialect + "/0001_create_org_nodes.sql")
+		if err != nil {
+			t.Fatalf("ReadFile(%s/0001_create_org_nodes.sql): %v", dialect, err)
+		}
+		match := pathColumnRe.FindSubmatch(content)
+		if match == nil {
+			t.Fatalf("%s migration: no \"path VARCHAR(n)\" column declaration found", dialect)
+		}
+		width, err := strconv.Atoi(string(match[1]))
+		if err != nil {
+			t.Fatalf("%s migration: parse path column width %q: %v", dialect, match[1], err)
+		}
+		if width != pathColumnWidth {
+			t.Errorf("%s migration declares path VARCHAR(%d), but path.go's pathColumnWidth = %d -- update pathColumnWidth (and re-derive maxDepthCeiling) to match",
+				dialect, width, pathColumnWidth)
+		}
+	}
+
+	wantCeiling := (pathColumnWidth-1)/idSegmentLen - 1
+	if maxDepthCeiling != wantCeiling {
+		t.Errorf("maxDepthCeiling = %d, want %d derived from pathColumnWidth=%d and idSegmentLen=%d",
+			maxDepthCeiling, wantCeiling, pathColumnWidth, idSegmentLen)
+	}
+	// And the boundary itself: one level beyond the ceiling must overflow
+	// the column, or the ceiling is not actually tight.
+	if fits := 1 + idSegmentLen*(maxDepthCeiling+1); fits > pathColumnWidth {
+		t.Errorf("a tree at maxDepthCeiling (%d) already needs %d characters, over the %d-character column", maxDepthCeiling, fits, pathColumnWidth)
+	}
+	if overflows := 1 + idSegmentLen*(maxDepthCeiling+2); overflows <= pathColumnWidth {
+		t.Errorf("a tree one level beyond maxDepthCeiling only needs %d characters, still fits the %d-character column -- the ceiling is not tight", overflows, pathColumnWidth)
 	}
 }
 

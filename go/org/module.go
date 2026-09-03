@@ -229,10 +229,17 @@ func WithFeatureGate(gate FeatureGate) Option {
 
 // WithMaxDepth bounds how deep this host's organization trees may go, the
 // tenant root counting as depth 0. Values below 1 are ignored: a tree that
-// cannot hold a single child is not a tree.
+// cannot hold a single child is not a tree. Values above maxDepthCeiling are
+// ignored too: that ceiling is the deepest tree the path column's
+// VARCHAR(1024) width can hold on EITHER dialect, and a value beyond it
+// would make the standalone deployment mode's SQLite silently accept a tree
+// the distributed mode's PostgreSQL would reject at the database with
+// "value too long for character varying(1024)" -- see maxDepthCeiling's own
+// doc comment in path.go for the arithmetic. Either kind of rejected value
+// leaves maxDepth's package default in place, exactly like the below-1 case.
 func WithMaxDepth(depth int) Option {
 	return func(m *Module) {
-		if depth >= 1 {
+		if depth >= 1 && depth <= maxDepthCeiling {
 			m.tree.maxDepth = depth
 		}
 	}
