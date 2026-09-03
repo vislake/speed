@@ -19,7 +19,7 @@ name: pr-full
 # the label gate, for manual full-matrix runs.
 #
 # COVERAGE -- what genuinely runs today
-#   * go-modules job: the same six-module matrix as pr-check through the
+#   * go-modules job: the same seven-module matrix as pr-check through the
 #     reusable go-module-ci workflow (golangci-lint, go vet, unit tests
 #     under -race, a workspace-context build and a GOWORK=off standalone
 #     build) -- the full matrix runs the unit tier too. Per 18-cicd's
@@ -35,6 +35,9 @@ name: pr-full
 #       go/dbkit     PostgreSQL
 #       go/tenancy   PostgreSQL (its tier lives under
 #                    tenancytest/integration_test/; ./... covers it)
+#       go/config    PostgreSQL and Redis -- its integration_test/ runs
+#                    both legs (postgres_leg_test.go,
+#                    redis_leg_test.go)
 #       go/jobs      Redis
 #       go/pkgcore   Redis and MinIO/S3 -- its integration_test/ runs both
 #                    tiers (redis_container_test.go/redis_kv_test.go/
@@ -90,6 +93,7 @@ jobs:
           - go/dbkit
           - go/tenancy
           - go/observability
+          - go/config
           - go/jobs
           - go/ratelimit
     uses: ./.github/workflows/reusable/go-module-ci.yml
@@ -113,6 +117,7 @@ jobs:
           - go/tenancy
           - go/jobs
           - go/pkgcore
+          - go/config
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
