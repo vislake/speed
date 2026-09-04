@@ -2,14 +2,18 @@ package compliance
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"errors"
 	"io"
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/sharing"
+	sharingmigrations "github.com/vislake/speed/go/sharing/migrations"
 
 	"github.com/vislake/speed/go/compliance/internal/testutil"
 )
@@ -263,5 +267,114 @@ func TestExportService_Export_DeliveryFailureIsReported(t *testing.T) {
 	// not roll back or lose it.
 	if _, err := store.GetObject(context.Background(), result.ObjectKey); err != nil {
 		t.Errorf("GetObject(%q) after delivery failure: %v", result.ObjectKey, err)
+	}
+}
+
+// sharingModuleStub feeds go/sharing's own embedded migrations to
+// dbkit.MigrationRegistry, mirroring module_test.go's fakeAuditModule --
+// only Name and Migrations are ever read by MigrationRegistry.Apply here.
+type sharingModuleStub struct{}
+
+func (sharingModuleStub) Name() string                     { return "sharing" }
+func (sharingModuleStub) DependsOn() []string              { return nil }
+func (sharingModuleStub) Migrations() embed.FS             { return sharingmigrations.FS }
+func (sharingModuleStub) Locales() embed.FS                { return embed.FS{} }
+func (sharingModuleStub) OpenAPISpec() []byte              { return nil }
+func (sharingModuleStub) Register(*pkgcore.Registry) error { return nil }
+
+var _ pkgcore.Module = sharingModuleStub{}
+
+// newRealSharingService returns a *sharing.Service wired the way a real
+// host wires one: go/sharing's own real, versioned migration files applied
+// from zero through the real dbkit.MigrationRegistry -- the identical
+// construction newTestAuditDB (module_test.go) uses for dbkit/audit --
+// then sharing.NewModule(db).Register attached against a real
+// pkgcore.Registry, exactly as Kernel.Bootstrap would attach it for a real
+// host. Going through Register (rather than calling sharing.NewService
+// directly) is deliberate: it exercises sharing's actual Create/Access
+// implementation fully attached, so this test's event-publish and
+// sensitive-audit calls behave as a real deployment's would instead of
+// logging Service's documented "no host registry wired" fallback.
+func newRealSharingService(t *testing.T) *sharing.Service {
+	t.Helper()
+	db := dbtest.NewSQLite(t)
+	registry := dbkit.NewMigrationRegistry()
+	if err := registry.Register(sharingModuleStub{}); err != nil {
+		t.Fatalf("register sharing migrations: %v", err)
+	}
+	if err := registry.Apply(context.Background(), db, dbkit.DialectSQLite); err != nil {
+		t.Fatalf("apply sharing migrations: %v", err)
+	}
+
+	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	sharingModule := sharing.NewModule(db)
+	if err := sharingModule.Register(reg); err != nil {
+		t.Fatalf("sharing.Module.Register: %v", err)
+	}
+	return sharingModule.Service()
+}
+
+// TestExportService_Export_DeliversThroughRealSharingService is the
+// non-scripted counterpart to TestExportService_Export_DeliversThroughSharing
+// above: every other Export test in this file runs against
+// fakeSharingCreator, a double that just echoes back whatever
+// sharing.CreateParams it was called with, so none of them prove a minted
+// Share actually round-trips through a real *sharing.Service. This test
+// wires ExportService.sharing to a real sharing.NewService over a real,
+// migrated database, then proves the round trip end to end: the token
+// Export hands back resolves through the real Service.Access to a Share
+// whose ResourceRef names the export's own stored object key, and reading
+// that key back from the same ObjectStore Export wrote it to yields the
+// identical manifest Export gathered. (go/sharing's Access does not itself
+// resolve ResourceRef into bytes -- AGENTS.md's Known limitations records
+// that as sharing's own future-round work -- so this test reads the
+// object directly through the ObjectStore, the same seam a future HTTP
+// layer would use once it exists.)
+func TestExportService_Export_DeliversThroughRealSharingService(t *testing.T) {
+	svc, repo, store, _ := newExportHarness(t)
+	tenant := pkgcore.TenantID("tenant-a")
+	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
+
+	realSharing := newRealSharingService(t)
+	svc.sharing = realSharing
+
+	result, err := svc.Export(context.Background(), tenant)
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if result.Delivery.ShareID == "" || result.Delivery.Token == "" {
+		t.Fatalf("Export result.Delivery = %+v, want a real minted share id and token", result.Delivery)
+	}
+
+	ctx := pkgcore.WithTenant(context.Background(), tenant)
+	share, err := realSharing.Access(ctx, result.Delivery.Token, sharing.AccessParams{})
+	if err != nil {
+		t.Fatalf("real sharing.Service.Access(minted token): %v", err)
+	}
+	if share.ID != result.Delivery.ShareID {
+		t.Errorf("Access share ID = %q, want %q", share.ID, result.Delivery.ShareID)
+	}
+	if share.ResourceRef != result.ObjectKey {
+		t.Errorf("Access share ResourceRef = %q, want the stored export object key %q", share.ResourceRef, result.ObjectKey)
+	}
+
+	r, err := store.GetObject(context.Background(), share.ResourceRef)
+	if err != nil {
+		t.Fatalf("GetObject(%q) (the ResourceRef a real caller would resolve the minted share to): %v", share.ResourceRef, err)
+	}
+	defer r.Close()
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read stored object: %v", err)
+	}
+	var stored ExportManifest
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		t.Fatalf("unmarshal stored manifest: %v", err)
+	}
+	if stored.Tenant != tenant {
+		t.Errorf("stored manifest tenant = %q, want %q", stored.Tenant, tenant)
+	}
+	if _, ok := stored.Participants["testutil.fake_note"]; !ok {
+		t.Errorf("stored manifest missing participant %q: %+v", "testutil.fake_note", stored.Participants)
 	}
 }
