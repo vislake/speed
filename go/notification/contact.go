@@ -610,7 +610,7 @@ func (s *ContactService) VerifyCode(ctx context.Context, in VerifyCodeInput) (*V
 		return nil, ErrContactCodeInvalid
 	}
 
-	moved, err := s.consumePendingCode(ctx, contact.ID, contact.CodeHash)
+	moved, at, err := s.consumePendingCode(ctx, contact.ID, contact.CodeHash)
 	if err != nil {
 		return nil, errInternal(err)
 	}
@@ -634,6 +634,16 @@ func (s *ContactService) VerifyCode(ctx context.Context, in VerifyCodeInput) (*V
 		}
 	}
 
+	// The CAS moved the row, and the in-memory contact predates it. Sync
+	// the three fields the transition changed onto the returned snapshot --
+	// stamped with the same timestamp the UPDATE wrote -- so the caller
+	// never receives a verified row wearing its pending face (Unsubscribe
+	// syncs contact.Status onto its snapshot the same way after
+	// markUnsubscribed).
+	contact.Status = ContactStatusVerified
+	contact.ConsentAt = &at
+	contact.VerifiedAt = &at
+
 	if err := s.emit(ctx, AuditActionContactVerified, contact, audit.Result{Success: true}); err != nil {
 		return nil, err
 	}
@@ -644,8 +654,11 @@ func (s *ContactService) VerifyCode(ctx context.Context, in VerifyCodeInput) (*V
 // to verified. It succeeds only for a row that is still pending and whose
 // stored hash still equals wantHash; the UPDATE writes the verified status
 // and the two consent timestamps in the same statement, so the transition
-// is atomic and the code single-use. The returned bool is whether a row
-// actually moved (RowsAffected == 1).
+// is atomic and the code single-use. The first returned value is whether a
+// row actually moved (RowsAffected == 1); the second is the timestamp the
+// UPDATE wrote when it did -- the very value VerifyCode syncs onto its
+// in-memory snapshot, so the snapshot and the row can never disagree about
+// when consent was given.
 //
 // The WHERE clause names the identity, the current status and the code
 // hash; the SET names only non-zero target values, which is all this
@@ -654,9 +667,8 @@ func (s *ContactService) VerifyCode(ctx context.Context, in VerifyCodeInput) (*V
 // change is non-zero, and the code columns are left as the inert dead data
 // the model's doc comment describes, their reuse blocked by the status
 // gate, never by clearing them.
-func (s *ContactService) consumePendingCode(ctx context.Context, id, wantHash string) (bool, error) {
-	moved := false
-	err := dbkit.WithTenantSession(ctx, s.repo.db, func(tx *gorm.DB) error {
+func (s *ContactService) consumePendingCode(ctx context.Context, id, wantHash string) (moved bool, at time.Time, err error) {
+	err = dbkit.WithTenantSession(ctx, s.repo.db, func(tx *gorm.DB) error {
 		now := s.now()
 		res := tx.Where("id = ? AND status = ? AND code_hash = ?", id, ContactStatusPending, wantHash).
 			Updates(&VerifiedContact{Status: ContactStatusVerified, ConsentAt: &now, VerifiedAt: &now})
@@ -664,9 +676,10 @@ func (s *ContactService) consumePendingCode(ctx context.Context, id, wantHash st
 			return res.Error
 		}
 		moved = res.RowsAffected == 1
+		at = now
 		return nil
 	})
-	return moved, err
+	return moved, at, err
 }
 
 // ResendCodeInput names the contact whose code should be re-issued.

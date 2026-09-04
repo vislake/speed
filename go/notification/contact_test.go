@@ -286,8 +286,11 @@ func wrongCode(code string) string {
 }
 
 // mustFindContact re-reads one contact row, the authoritative state after
-// any service call (VerifyCode and CreateContact return snapshots whose
-// status fields predate the transition they performed).
+// any service call. VerifyCode's returned snapshot is synced with the
+// transition it performed; CreateContact's is not -- its code columns land
+// in a separate stampCode UPDATE after the create returns -- so a test
+// that cares about the code hash reads the row, never the create-time
+// struct.
 func mustFindContact(t *testing.T, env *contactEnv, ctx context.Context, id string) *VerifiedContact {
 	t.Helper()
 	got, err := env.svc.repo.FindByID(ctx, id)
@@ -570,6 +573,34 @@ func TestContact_VerifyCode_WrongCodeRefusedThenCorrectWorks(t *testing.T) {
 
 	if _, err := env.svc.VerifyCode(ctx, VerifyCodeInput{ContactID: contact.ID, Code: code}); err != nil {
 		t.Fatalf("VerifyCode with the correct code after a wrong attempt: %v", err)
+	}
+}
+
+// TestContact_VerifyCode_ReturnsVerifiedSnapshot pins that VerifyCode's
+// RETURNED contact reflects the transition it performed: the caller that
+// trusts the returned snapshot must see a verified contact with both
+// consent timestamps set, never the pending face the row wore when the
+// compare-and-swap moved it. (Regression: VerifyCode returned the stale
+// pre-CAS snapshot, its Status still pending.)
+func TestContact_VerifyCode_ReturnsVerifiedSnapshot(t *testing.T) {
+	env := newContactEnv(t)
+	ctx := tenantCtx("tenant-acme")
+
+	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelSMS, Address: testPhone})
+	if err != nil {
+		t.Fatalf("CreateContact: %v", err)
+	}
+	code := smsCodeAt(t, env.smsBuf, 0)
+
+	verified, err := env.svc.VerifyCode(ctx, VerifyCodeInput{ContactID: contact.ID, Code: code})
+	if err != nil {
+		t.Fatalf("VerifyCode: %v", err)
+	}
+	if verified.Status != ContactStatusVerified {
+		t.Errorf("returned contact status = %s, want %s", verified.Status, ContactStatusVerified)
+	}
+	if verified.ConsentAt == nil || verified.VerifiedAt == nil {
+		t.Errorf("returned contact consent_at / verified_at not both set: %+v", verified)
 	}
 }
 
