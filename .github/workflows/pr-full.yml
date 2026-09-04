@@ -19,7 +19,7 @@ name: pr-full
 # the label gate, for manual full-matrix runs.
 #
 # COVERAGE -- what genuinely runs today
-#   * go-modules job: the same fifteen-module matrix as pr-check through the
+#   * go-modules job: the same sixteen-module matrix as pr-check through the
 #     reusable go-module-ci workflow (golangci-lint, go vet, unit tests
 #     under -race, a workspace-context build and a GOWORK=off standalone
 #     build) -- the full matrix runs the unit tier too. Per 18-cicd's
@@ -147,6 +147,7 @@ jobs:
           - go/notification
           - go/pki
           - go/integration
+          - go/metering
     uses: ./.github/workflows/reusable/go-module-ci.yml
     with:
       module: ${{ matrix.module }}
