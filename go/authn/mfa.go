@@ -436,6 +436,16 @@ func (s *Service) regenerateRecoveryCodesLocked(ctx context.Context, userID stri
 // no separate expiry mechanism needed: Refresh already mints from
 // session.AMRList(), never from a token's own claims.
 func (s *Service) VerifyStepUp(ctx context.Context, principal Principal, code, ip string) (*TokenPair, error) {
+	start := time.Now()
+	pair, err := s.verifyStepUp(ctx, principal, code, ip)
+	s.recordAuthMetric(ctx, authOpMFAChallenge, start, err)
+	return pair, err
+}
+
+// verifyStepUp is VerifyStepUp's actual implementation, split out for the
+// identical shadow-avoidance reason service.go's Login doc comment
+// explains.
+func (s *Service) verifyStepUp(ctx context.Context, principal Principal, code, ip string) (*TokenPair, error) {
 	if principal.UserID == "" || principal.SessionID == "" {
 		return nil, ErrAuthenticationRequired
 	}

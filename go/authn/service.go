@@ -7,6 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
@@ -15,6 +18,96 @@ import (
 
 	obs "github.com/vislake/speed/go/observability"
 )
+
+// InstrumentationName identifies this package's own tracer/meter, mirroring
+// go/jobs/standalone_queue.go's and go/notification/delivery.go's identical
+// use of their own package path for the same purpose.
+const InstrumentationName = "github.com/vislake/speed/go/authn"
+
+// Metric instrument names registerAuthMetrics wires under
+// InstrumentationName -- the "登录成功/失败率、MFA 挑战量、token 刷新失败率"
+// (login success/failure rate, MFA challenge volume, refresh failure rate)
+// row docs/internal/09-observability.md's must-instrument table requires
+// for the authentication domain. One counter and one histogram cover all
+// three: each is sliced by its "operation" attribute (authOpLogin/
+// authOpRefresh/authOpMFAChallenge) and "outcome" attribute
+// (authOutcomeSucceeded/authOutcomeFailed), so "login failure rate" is
+// authCountMetricName{operation=login,outcome=failed} over the same
+// operation's succeeded count, and "MFA challenge volume" is the sum of
+// authCountMetricName{operation=mfa_challenge,*} -- the identical
+// slice-by-status-attribute shape go/jobs' jobAttemptsMetricName and
+// go/notification's deliveryCountMetricName both already use.
+const (
+	authCountMetricName    = "authn.auth.count"
+	authDurationMetricName = "authn.auth.duration"
+)
+
+// The "operation" attribute values authCountMetricName/authDurationMetricName
+// carry -- a bounded, declared vocabulary (never tenant_id or user_id),
+// exactly one per instrumented Service method below.
+const (
+	authOpLogin        = "login"
+	authOpRefresh      = "refresh"
+	authOpMFAChallenge = "mfa_challenge"
+)
+
+// The "outcome" attribute values authCountMetricName/authDurationMetricName
+// carry.
+const (
+	authOutcomeSucceeded = "succeeded"
+	authOutcomeFailed    = "failed"
+)
+
+// registerAuthMetrics wires the "authn.auth.count" Counter and
+// "authn.auth.duration" Histogram this file's own
+// authCountMetricName/authDurationMetricName doc comment names, mirroring
+// go/notification/delivery.go's registerDeliveryMetrics: registered once at
+// construction (NewService), with the registration error ignored the same
+// way go/observability/middleware.go's Middleware ignores it -- the global
+// otel API returns a working no-op instrument alongside any error, and
+// NewService has no request-scoped ctx/logger available yet to warn with
+// the way go/jobs' registerJobMetrics does from its own call site (Start).
+func registerAuthMetrics() (metric.Int64Counter, metric.Float64Histogram) {
+	meter := otel.Meter(InstrumentationName)
+	count, _ := meter.Int64Counter(
+		authCountMetricName,
+		metric.WithDescription("Number of authentication operations completed, by operation (login, refresh, mfa_challenge) and resulting outcome (succeeded or failed). Failure rate for any operation is derivable from this by outcome."),
+		metric.WithUnit("{operation}"),
+	)
+	duration, _ := meter.Float64Histogram(
+		authDurationMetricName,
+		metric.WithDescription("Duration of one authentication operation, in seconds, by operation and resulting outcome."),
+		metric.WithUnit("s"),
+	)
+	return count, duration
+}
+
+// recordAuthMetric records one completed authentication operation onto
+// authCountMetricName/authDurationMetricName, labeled by op and outcome
+// only -- deliberately never tenant_id or user_id, for the identical
+// cardinality reason go/jobs/standalone_queue.go's registerJobMetrics doc
+// comment gives. err's nilness alone decides the outcome: every one of
+// Login/Refresh/VerifyStepUp's early returns already report a non-nil error
+// on any refusal (bad credentials, rate-limited, revoked session, wrong MFA
+// code), so a plain nil check at the deferred call site is both sufficient
+// and immune to a future added return path being forgotten -- unlike an
+// explicit outcome flag threaded through every branch.
+func (s *Service) recordAuthMetric(ctx context.Context, op string, start time.Time, err error) {
+	outcome := authOutcomeSucceeded
+	if err != nil {
+		outcome = authOutcomeFailed
+	}
+	attrs := metric.WithAttributes(
+		attribute.String("operation", op),
+		attribute.String("outcome", outcome),
+	)
+	if s.authCount != nil {
+		s.authCount.Add(ctx, 1, attrs)
+	}
+	if s.authDuration != nil {
+		s.authDuration.Record(ctx, time.Since(start).Seconds(), attrs)
+	}
+}
 
 // MembershipReader answers the one question authn must ask about
 // organizations without importing the module that owns them.
@@ -140,6 +233,14 @@ type Service struct {
 	// force Secure on the pre-authentication OAuth cookie regardless of
 	// r.TLS. See that option's doc comment.
 	secureCookies bool
+
+	// authCount and authDuration back the
+	// "authn.auth.count"/"authn.auth.duration" instruments
+	// registerAuthMetrics wires from NewService. recordAuthMetric guards
+	// against their nil zero value, the same fail-open contract
+	// go/jobs.StandaloneQueue's own metric fields document.
+	authCount    metric.Int64Counter
+	authDuration metric.Float64Histogram
 }
 
 // NewService assembles a Service over db, using bus and kv -- the pkgcore
@@ -235,6 +336,8 @@ func NewService(db *gorm.DB, bus pkgcore.EventBus, kv pkgcore.KVStore, opts ...O
 		return nil, err
 	}
 
+	authCount, authDuration := registerAuthMetrics()
+
 	svc := &Service{
 		users:            users,
 		sessions:         manager,
@@ -263,6 +366,9 @@ func NewService(db *gorm.DB, bus pkgcore.EventBus, kv pkgcore.KVStore, opts ...O
 		recoveryCodes:      recoveryCodes,
 		issuer:             cfg.issuer,
 		secureCookies:      cfg.secureCookies,
+
+		authCount:    authCount,
+		authDuration: authDuration,
 	}
 
 	sso, err := newSSOService(svc, db, cfg)
@@ -380,6 +486,21 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (*User, error)
 // specific reason is written to the login history for the operator and for
 // the account owner's own security page.
 func (s *Service) Login(ctx context.Context, in LoginInput) (*TokenPair, error) {
+	start := time.Now()
+	pair, err := s.login(ctx, in)
+	s.recordAuthMetric(ctx, authOpLogin, start, err)
+	return pair, err
+}
+
+// login is Login's actual implementation, split out into its own unexported
+// method purely so Login's own body can wrap it in the two lines that
+// record authOpLogin's count/duration without introducing a NAMED return
+// value into a function this long -- every one of its existing "if err :=
+// ...; err != nil" blocks would otherwise shadow that named return and trip
+// govet's shadow analyzer (enabled via this repo's .golangci.yml govet
+// enable-all setting), which is why Refresh and VerifyStepUp use the
+// identical split rather than a named return of their own.
+func (s *Service) login(ctx context.Context, in LoginInput) (*TokenPair, error) {
 	identifier := strings.TrimSpace(in.Identifier)
 	// account is the blind index the progressive lockout and the
 	// per-account sliding window key on. It is computed even for an
@@ -514,6 +635,15 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*TokenPair, error) 
 // to it: without the re-check they would keep refreshing into a tenant they
 // no longer belong to until the session itself expired, which is weeks.
 func (s *Service) Refresh(ctx context.Context, presented string) (*TokenPair, error) {
+	start := time.Now()
+	pair, err := s.refresh(ctx, presented)
+	s.recordAuthMetric(ctx, authOpRefresh, start, err)
+	return pair, err
+}
+
+// refresh is Refresh's actual implementation, split out for the identical
+// shadow-avoidance reason Login's own doc comment explains.
+func (s *Service) refresh(ctx context.Context, presented string) (*TokenPair, error) {
 	session, issued, err := s.sessions.Rotate(ctx, presented)
 	if err != nil {
 		return nil, err

@@ -1,11 +1,16 @@
 package authn
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/authn/internal/testutil"
@@ -668,5 +673,184 @@ func TestNewService_RejectsAnIncompleteWiring(t *testing.T) {
 				t.Error("NewService() error = nil, want a rejection")
 			}
 		})
+	}
+}
+
+// setupAuthMetricsMeterProvider installs, as OTel's global MeterProvider for
+// the duration of the test, a real SDK MeterProvider backed by a
+// ManualReader -- never a Prometheus/OTLP exporter, since this file only
+// needs to read back exactly what was recorded -- mirroring
+// go/jobs/standalone_queue_test.go's and go/notification/delivery_test.go's
+// own helper of the same shape. Deliberately NOT called from a t.Parallel()
+// test: it swaps the process-wide global otel MeterProvider, which is safe
+// only while no OTHER test's Service is concurrently recording into it (see
+// this test's own doc comment).
+func setupAuthMetricsMeterProvider(t *testing.T) *sdkmetric.ManualReader {
+	t.Helper()
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	otel.SetMeterProvider(mp)
+	return reader
+}
+
+// collectAuthMetric runs a fresh Collect and returns the single metric named
+// name, failing the test if it is missing -- name is always one of
+// authCountMetricName/authDurationMetricName.
+func collectAuthMetric(t *testing.T, reader *sdkmetric.ManualReader, name string) metricdata.Metrics {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect() error = %v, want nil", err)
+	}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name == name {
+				return m
+			}
+		}
+	}
+	var got []string
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			got = append(got, m.Name)
+		}
+	}
+	t.Fatalf("metric %q not found; metrics present: %v", name, got)
+	return metricdata.Metrics{}
+}
+
+func authMetricAttrString(attrs attribute.Set, key string) string {
+	v, _ := attrs.Value(attribute.Key(key))
+	return v.AsString()
+}
+
+// authCounterValue returns the int64 Sum value of m's data point labeled
+// exactly by operation/outcome, failing the test if m is not a Sum[int64] or
+// no matching data point exists.
+func authCounterValue(t *testing.T, m metricdata.Metrics, operation, outcome string) int64 {
+	t.Helper()
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	if !ok {
+		t.Fatalf("metric %q Data = %T, want metricdata.Sum[int64]", m.Name, m.Data)
+	}
+	for _, dp := range sum.DataPoints {
+		if authMetricAttrString(dp.Attributes, "operation") == operation && authMetricAttrString(dp.Attributes, "outcome") == outcome {
+			return dp.Value
+		}
+	}
+	t.Fatalf("metric %q has no data point for operation=%q outcome=%q", m.Name, operation, outcome)
+	return 0
+}
+
+// authHistogramCount returns the observation Count of m's data point labeled
+// exactly by operation/outcome, failing the test if m is not a
+// Histogram[float64] or no matching data point exists.
+func authHistogramCount(t *testing.T, m metricdata.Metrics, operation, outcome string) uint64 {
+	t.Helper()
+	hist, ok := m.Data.(metricdata.Histogram[float64])
+	if !ok {
+		t.Fatalf("metric %q Data = %T, want metricdata.Histogram[float64]", m.Name, m.Data)
+	}
+	for _, dp := range hist.DataPoints {
+		if authMetricAttrString(dp.Attributes, "operation") == operation && authMetricAttrString(dp.Attributes, "outcome") == outcome {
+			return dp.Count
+		}
+	}
+	t.Fatalf("metric %q has no data point for operation=%q outcome=%q; data points: %+v", m.Name, operation, outcome, hist.DataPoints)
+	return 0
+}
+
+// TestService_AuthMetrics_RecordCountAndDurationByOperationAndOutcome is the
+// regression proof that Service actually emits the
+// docs/internal/09-observability.md must-instrument row for the
+// authentication domain -- login success/failure rate, MFA challenge
+// volume, refresh failure rate -- rather than leaving every outcome
+// observable only through login_attempts rows and structured logs. Before
+// registerAuthMetrics/recordAuthMetric existed, every collectAuthMetric call
+// below would fail with "metric ... not found", which is the negative
+// control this test relies on.
+//
+// Deliberately not t.Parallel(): it swaps the process-wide global otel
+// MeterProvider (see setupAuthMetricsMeterProvider's own doc comment).
+func TestService_AuthMetrics_RecordCountAndDurationByOperationAndOutcome(t *testing.T) {
+	reader := setupAuthMetricsMeterProvider(t)
+	f := newServiceFixture(t)
+	// Two distinct accounts, deliberately: RecordLoginFailure keys its
+	// progressive lockout delay off the account's blind index and
+	// real wall-clock time (never the fixture's injected clock -- see its
+	// own doc comment), so a failed attempt immediately followed by a
+	// SUCCESSFUL one on the SAME account would itself be refused as locked
+	// out. Using two accounts keeps the failure and success paths
+	// independent, which is all this test needs -- the metric is labeled
+	// by operation and outcome, never by account.
+	f.registerUser(t, "metrics-fail@example.com", testTenantA)
+	user := f.registerUser(t, "metrics-ok@example.com", testTenantA)
+
+	if _, err := f.svc.Login(t.Context(), LoginInput{
+		Identifier: "metrics-fail@example.com", Password: "wrong password entirely", IP: "203.0.113.20",
+	}); err == nil {
+		t.Fatal("Login(wrong password) error = nil, want a refusal")
+	}
+	pair, err := f.svc.Login(t.Context(), LoginInput{
+		Identifier: "metrics-ok@example.com", Password: testPassword, IP: "203.0.113.20",
+	})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	// A successful refresh.
+	f.clock.Advance(time.Minute)
+	if _, refreshErr := f.svc.Refresh(t.Context(), pair.RefreshToken); refreshErr != nil {
+		t.Fatalf("Refresh() error = %v", refreshErr)
+	}
+
+	// A successful MFA step-up (TOTP) and a failed one (wrong code).
+	_, err = f.svc.EnrollTOTP(t.Context(), Principal{UserID: user.ID})
+	if err != nil {
+		t.Fatalf("EnrollTOTP() error = %v", err)
+	}
+	// ConfirmTOTP is itself a step-up-adjacent call but not the metric under
+	// test; only VerifyStepUp records authOpMFAChallenge, so its outcome is
+	// irrelevant here beyond needing a confirmed factor to challenge against.
+
+	// Built from the existing pair's own Principal rather than
+	// loginPrincipal(t, f, ...), which would itself call Login again and
+	// throw off the login-succeeded count asserted below.
+	principal := pair.Principal
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, "000000", "203.0.113.21"); err == nil {
+		t.Fatal("VerifyStepUp(wrong code, unconfirmed factor) error = nil, want a refusal")
+	}
+
+	count := collectAuthMetric(t, reader, authCountMetricName)
+	if got := authCounterValue(t, count, authOpLogin, authOutcomeFailed); got != 1 {
+		t.Errorf("%s{operation=login,outcome=failed} = %d, want 1", authCountMetricName, got)
+	}
+	if got := authCounterValue(t, count, authOpLogin, authOutcomeSucceeded); got != 1 {
+		t.Errorf("%s{operation=login,outcome=succeeded} = %d, want 1", authCountMetricName, got)
+	}
+	if got := authCounterValue(t, count, authOpRefresh, authOutcomeSucceeded); got != 1 {
+		t.Errorf("%s{operation=refresh,outcome=succeeded} = %d, want 1", authCountMetricName, got)
+	}
+	if got := authCounterValue(t, count, authOpMFAChallenge, authOutcomeFailed); got != 1 {
+		t.Errorf("%s{operation=mfa_challenge,outcome=failed} = %d, want 1", authCountMetricName, got)
+	}
+
+	duration := collectAuthMetric(t, reader, authDurationMetricName)
+	if got := authHistogramCount(t, duration, authOpLogin, authOutcomeSucceeded); got != 1 {
+		t.Errorf("%s{operation=login,outcome=succeeded} count = %d, want 1", authDurationMetricName, got)
+	}
+	if got := authHistogramCount(t, duration, authOpRefresh, authOutcomeSucceeded); got != 1 {
+		t.Errorf("%s{operation=refresh,outcome=succeeded} count = %d, want 1", authDurationMetricName, got)
+	}
+}
+
+// TestRegisterAuthMetrics_Smoke is registerAuthMetrics's own equivalent of
+// go/jobs/standalone_queue_test.go's TestRegisterJobMetrics_Smoke:
+// registration alone (no operation ever attempted) must not error or panic.
+func TestRegisterAuthMetrics_Smoke(t *testing.T) {
+	count, duration := registerAuthMetrics()
+	if count == nil || duration == nil {
+		t.Fatalf("registerAuthMetrics() = (%v, %v), want two non-nil instruments", count, duration)
 	}
 }
