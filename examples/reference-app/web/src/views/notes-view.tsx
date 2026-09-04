@@ -88,8 +88,13 @@ function submitErrorCodeOf(error: unknown): string {
  * app-namespace key carrying its current-language text. A create answer
  * that is not on this list (a future server code, a client.http.<status>
  * transport answer) resolves to the unknown fallback, so the surface
- * never shows a raw key or another language's text. */
-const NOTE_ERROR_TEXT_KEYS: Readonly<Record<string, string>> = {
+ * never shows a raw key or another language's text. Exported for the
+ * surface's error-surface whitelist to be deep-imported by the
+ * codes-alignment suite -- an import from this view's own module, never
+ * from a package entry point (the package boundaries' whitelists are
+ * each package's own, and the app's whitelist lives where the app
+ * renders it). */
+export const NOTE_ERROR_TEXT_KEYS: Readonly<Record<string, string>> = {
   'rbac.permission_denied': 'notes.errors.permissionDenied',
   'notes.text_required': 'notes.errors.textRequired',
   'notes.text_too_long': 'notes.errors.textTooLong',
