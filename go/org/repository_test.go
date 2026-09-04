@@ -302,8 +302,8 @@ func TestRepository_deleteSubtree(t *testing.T) {
 
 // TestRepository_deleteLeaf covers the guard that makes a non-cascading
 // delete safe: the row count is checked inside the transaction, so a prefix
-// matching more than the one node rolls the DELETE back rather than
-// orphaning whatever it also matched.
+// matching more than the one node rolls the mark-delete UPDATE back rather
+// than orphaning whatever it also matched.
 func TestRepository_deleteLeaf(t *testing.T) {
 	repo := NewRepository(newTestDB(t))
 	ctx := tenantCtx("tenant-a")
