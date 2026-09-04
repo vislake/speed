@@ -931,14 +931,16 @@ func (s *ContactService) markBounced(ctx context.Context, id string) (bool, erro
 //   - bounced        -- ErrContactBounced: the address rejects messages;
 //   - unknown id     -- ErrContactNotFound.
 //
-// The job maps the three refusals differently (a pending contact may be
-// deliverable later and the job must not burn retries on it; unsubscribed
-// and bounced are terminal and the job records them as skipped), which is
-// why each status carries its own error rather than one blanket refusal.
-// The unsubscribed and bounced errors additionally carry the contact's
-// channel in their "channel" parameter -- the skip record the job writes
-// for them is per channel, and the job has no other way to learn the
-// channel of a contact the gate refused to return.
+// The delivery job maps the refusals on the same split: a pending contact
+// or an unknown id returns the refusal for the queue's bounded
+// retry-and-dead-letter horizon -- a verification landing inside the
+// horizon lets the job deliver itself, where unsubscribed and bounced are
+// terminal and the job records them as skipped -- which is why each status
+// carries its own error rather than one blanket refusal. The unsubscribed
+// and bounced errors additionally carry the contact's channel in their
+// "channel" parameter -- the skip record the job writes for them is per
+// channel, and the job has no other way to learn the channel of a contact
+// the gate refused to return.
 func (s *ContactService) EnsureDeliverable(ctx context.Context, contactID string) (*VerifiedContact, error) {
 	contact, err := s.repo.FindByID(ctx, contactID)
 	if err != nil {

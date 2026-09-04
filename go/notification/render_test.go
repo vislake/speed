@@ -25,10 +25,13 @@ import (
 // convention promises. The three fixture types also ship their
 // "<type_key>.description" id in both languages, the copy the type
 // directory (handler.go's NotificationListTypes) renders from.
-func testClinicCatalog(t *testing.T) *i18n.Catalog {
-	t.Helper()
-	fs := fstest.MapFS{
-		"zh-CN.toml": &fstest.MapFile{Data: []byte(`
+// clinicFixtureFS is the fixture business module's locale bundle, shared by
+// testClinicCatalog and the delivery tests that widen the catalog with the
+// notification module's own bundle (a double-opt-in contact create renders
+// the module's verification-code copy, which the clinic fixture does not
+// carry).
+var clinicFixtureFS = fstest.MapFS{
+	"zh-CN.toml": &fstest.MapFile{Data: []byte(`
 "clinic.appointment_reminder.in_app.title" = "预约提醒"
 "clinic.appointment_reminder.in_app.body" = "{{.patient_name}} 您好，您预约的 {{.appointment_time}} 快到了。"
 "clinic.appointment_reminder.email.subject" = "预约提醒"
@@ -39,7 +42,7 @@ func testClinicCatalog(t *testing.T) *i18n.Catalog {
 "clinic.security_alert.description" = "与您账户安全相关的重要通知。"
 "clinic.reminder_only.in_app.title" = "只有标题的提醒"
 `)},
-		"en-US.toml": &fstest.MapFile{Data: []byte(`
+	"en-US.toml": &fstest.MapFile{Data: []byte(`
 "clinic.appointment_reminder.in_app.title" = "Appointment reminder"
 "clinic.appointment_reminder.in_app.body" = "Hi {{.patient_name}}, your appointment at {{.appointment_time}} is coming up."
 "clinic.appointment_reminder.email.subject" = "Appointment reminder"
@@ -50,9 +53,12 @@ func testClinicCatalog(t *testing.T) *i18n.Catalog {
 "clinic.security_alert.description" = "Alerts about the security of your account."
 "clinic.reminder_only.in_app.title" = "A reminder with no body copy"
 `)},
-	}
+}
+
+func testClinicCatalog(t *testing.T) *i18n.Catalog {
+	t.Helper()
 	builder := i18n.NewBuilder()
-	if err := builder.AddModule("clinic", fs); err != nil {
+	if err := builder.AddModule("clinic", clinicFixtureFS); err != nil {
 		t.Fatalf("AddModule(clinic): %v", err)
 	}
 	return builder.Build()

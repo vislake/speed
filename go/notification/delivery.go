@@ -621,26 +621,37 @@ func (s *DeliveryService) deliverUserSMS(ctx context.Context, tenantID string, d
 // the module never sends to an unverified address, the verification message
 // itself being the only exception, and delivery is not it).
 //
-// The refusal mapping follows the ledger's statuses: a pending contact
-// (consent never proved) or a contact that no longer exists returns success
-// without sending and without recording -- a pending contact may become
-// deliverable later, and the job must neither burn retries on it nor leave a
-// skipped record that outlives its eventual verification; an unsubscribed
-// or bounced contact is terminal, and is recorded as a skipped send under
-// the contact's own channel. A verified contact proceeds to its channel's
-// transport, and a permanent transport refusal marks the tenant's own
-// contact bounced (MarkBounced) before the attempt is recorded -- the
-// delivery job's hard-failure leg; writing the platform blacklist is a later
-// round's work (blacklist.go's doc comment records the boundary).
+// The refusal mapping follows the ledger's statuses, split on whether a
+// retry can change the answer: a pending contact (consent never proved) and
+// a contact that no longer exists return the gate's refusal, and the
+// queue's bounded retry-and-dead-letter horizon answers it -- a
+// verification landing inside the horizon lets the job deliver itself, and
+// a refusal the horizon outlives converges to an operator-visible
+// dead-lettered job, never a silent success. Neither deferred refusal
+// settles a send record: the gate refused before the contact's channel
+// resolved, and a record without a channel could never be probed by a retry
+// (see settleContactRefusal) -- the attempt carries no record precisely so
+// the retry that follows a verification probes fresh and delivers. An
+// unsubscribed or bounced contact is terminal -- no retry changes the
+// answer -- and is recorded as a skipped send under the contact's own
+// channel. A verified contact proceeds to its channel's transport, and a
+// permanent transport refusal marks the tenant's own contact bounced
+// (MarkBounced) before the attempt is recorded -- the delivery job's
+// hard-failure leg; writing the platform blacklist is a later round's work
+// (blacklist.go's doc comment records the boundary).
 func (s *DeliveryService) deliverToContact(ctx context.Context, tenantID string, d Dispatch) error {
 	contact, err := s.contacts.EnsureDeliverable(ctx, d.Recipient.ContactID)
 	if err != nil {
 		if perr, ok := apperr.As(err); ok {
 			switch perr.Code {
 			case ErrContactNotFound.Code, ErrContactNotVerified.Code:
-				// See the doc comment: neither is terminal, neither is
-				// recorded, neither is retried.
-				return nil
+				// Neither refusal is terminal: a pending contact may be
+				// verified before the retry horizon ends, and a not-found
+				// id is a dispatch an operator should see dead-lettered,
+				// not a message lost to a silent success. The refusal
+				// returns for the queue's bounded horizon (see the doc
+				// comment), with nothing recorded.
+				return err
 			case ErrContactUnsubscribed.Code, ErrContactBounced.Code:
 				return s.settleContactRefusal(ctx, tenantID, d, perr)
 			}

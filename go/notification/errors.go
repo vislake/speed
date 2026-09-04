@@ -126,8 +126,12 @@ var (
 	// ErrContactNotVerified reports a delivery attempt (EnsureDeliverable)
 	// against a contact whose consent was never proved -- the contact is
 	// still pending. Distinct from the terminal statuses because a pending
-	// contact may become deliverable later: the delivery job treats this
-	// as a skip, where unsubscribed and bounced are permanent refusals.
+	// contact may become deliverable later: the delivery job returns this
+	// refusal for the queue's bounded retry-and-dead-letter horizon --
+	// never a terminal skip, which would drop a message whose verification
+	// lands a moment later, and never a silent success, which would hide a
+	// verification that never comes (unsubscribed and bounced, which no
+	// retry can change, are the permanent refusals).
 	ErrContactNotVerified = apperr.Conflict("notification.contact_not_verified")
 
 	// ErrContactRateLimited reports a verification-code send or verify

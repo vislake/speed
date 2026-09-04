@@ -38,8 +38,10 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/jobs"
+	"github.com/vislake/speed/go/notification/locales"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/i18n"
 )
 
 // deliveryTenant and deliveryUser are the fixed tenant and recipient every
@@ -732,13 +734,14 @@ func TestDelivery_UnsubscribeBetweenEnqueueAndAttemptSkipsWithTheReasonRecorded(
 	}
 }
 
-// TestDelivery_UnknownContactIsSkippedSilently pins the not-found answer of
-// the consent gate: a delivery naming a contact id no row of the tenant
-// holds is refused without a record and without a transport call -- the
-// refusal surfaces neither to the queue (the job converges) nor as a send
-// record (there is no recipient state worth recording), exactly as
-// deliverToContact's doc comment promises.
-func TestDelivery_UnknownContactIsSkippedSilently(t *testing.T) {
+// TestDelivery_UnknownContactRefusalSurfacesToTheQueue pins the not-found
+// answer of the consent gate: a delivery naming a contact id no row of the
+// tenant holds returns the gate's refusal -- the queue's bounded
+// retry-and-dead-letter horizon is the response, so a delivery that can
+// never deliver converges to an operator-visible dead-lettered job instead
+// of a silent success -- and the refusal settles nothing: no transport
+// call, no send record, no channel to record under.
+func TestDelivery_UnknownContactRefusalSurfacesToTheQueue(t *testing.T) {
 	env := newDeliveryEnv(t)
 	ctx := tenantCtx(deliveryTenant)
 
@@ -751,8 +754,10 @@ func TestDelivery_UnknownContactIsSkippedSilently(t *testing.T) {
 		Locale: "zh-CN",
 		Params: renderTestParams,
 	}
-	if err := env.dispatchAndAttempt(t, d); err != nil {
-		t.Fatalf("delivery attempt: %v", err)
+	if err := env.dispatchAndAttempt(t, d); err == nil {
+		t.Fatal("delivery to an unknown contact succeeded, want the not-found refusal back")
+	} else {
+		assertCode(t, err, ErrContactNotFound.Code)
 	}
 
 	if got := len(env.host.mailer.messages()); got != 0 {
@@ -760,6 +765,101 @@ func TestDelivery_UnknownContactIsSkippedSilently(t *testing.T) {
 	}
 	if rec := env.sendRecordByChannel(t, ctx, d, ChannelEmail); rec != nil {
 		t.Errorf("an unknown-contact delivery settled a send record (%s: %s), want none", rec.Status, rec.Error)
+	}
+}
+
+// TestDelivery_PendingContactRefusalIsDeferredUntilVerification pins the
+// pending answer of the consent gate: a delivery to a contact whose double
+// opt-in code was never verified returns the gate's refusal (the job
+// retries within the queue's bounded horizon instead of silently
+// converging), and once the code IS verified the very same job payload
+// delivers -- the deferral's payoff. A verification landing inside the
+// retry horizon lets the job deliver itself; the old silent-skip behaviour
+// would have dropped the message unless someone noticed and re-dispatched,
+// and the attempt's refusal carries no record because there is no channel
+// to record under -- the gate refused before the contact's channel ever
+// resolved.
+func TestDelivery_PendingContactRefusalIsDeferredUntilVerification(t *testing.T) {
+	env := newDeliveryEnv(t)
+	ctx := tenantCtx(deliveryTenant)
+
+	// A double_opt_in create renders the module's verification-code copy,
+	// which the env's clinic fixture catalog does not carry, so the
+	// catalog is widened to the merged real bundle plus the clinic
+	// fixture (the shape Kernel.Bootstrap assembles for a host that ships
+	// both modules).
+	builder := i18n.NewBuilder()
+	if err := builder.AddModule(moduleName, locales.FS); err != nil {
+		t.Fatalf("AddModule(notification): %v", err)
+	}
+	if err := builder.AddModule("clinic", clinicFixtureFS); err != nil {
+		t.Fatalf("AddModule(clinic): %v", err)
+	}
+	env.host.catalog = builder.Build()
+
+	// A double_opt_in create: the row is pending and the verification code
+	// goes out by email, the one sanctioned pre-consent message.
+	contact, err := env.contacts.CreateContact(ctx, ContactCreateInput{
+		Channel: ChannelEmail,
+		Address: "wangfang@external.example.com",
+	})
+	if err != nil {
+		t.Fatalf("create the pending contact: %v", err)
+	}
+	mails := env.host.mailer.messages()
+	if len(mails) != 1 {
+		t.Fatalf("create sent %d mails, want the one verification code", len(mails))
+	}
+	code := lastCode(t, mails[0].Text)
+
+	d := Dispatch{
+		TypeKey: fixtureTypeAppointment,
+		Recipient: DispatchRecipient{
+			Class:     RecipientClassExternal,
+			ContactID: contact.ID,
+		},
+		Locale: "zh-CN",
+		Params: renderTestParams,
+	}
+	payload := env.enqueue(t, d)
+
+	if attemptErr := env.attempt(t, payload); attemptErr == nil {
+		t.Fatal("delivery to the pending contact succeeded, want the not-verified refusal back")
+	} else {
+		assertCode(t, attemptErr, ErrContactNotVerified.Code)
+	}
+	if got := len(env.host.mailer.messages()); got != 1 {
+		t.Errorf("mailer sent %d messages to the pending contact, want only the verification code", got)
+	}
+	if rec := env.sendRecordByChannel(t, ctx, d, ChannelEmail); rec != nil {
+		t.Errorf("the refused attempt settled a send record (%s: %s), want none", rec.Status, rec.Error)
+	}
+
+	// The recipient proves consent; the same job payload now delivers.
+	verified, err := env.contacts.VerifyCode(ctx, VerifyCodeInput{ContactID: contact.ID, Code: code})
+	if err != nil {
+		t.Fatalf("VerifyCode: %v", err)
+	}
+	if verified.Status != ContactStatusVerified {
+		t.Fatalf("verified contact status = %s, want %s", verified.Status, ContactStatusVerified)
+	}
+
+	if attemptErr := env.attempt(t, payload); attemptErr != nil {
+		t.Fatalf("delivery after the verification: %v", attemptErr)
+	}
+	rec := env.sendRecordByChannel(t, ctx, d, ChannelEmail)
+	if rec == nil || rec.Status != SendRecordStatusSucceeded {
+		t.Fatalf("record after the deferred delivery = %+v, want succeeded", rec)
+	}
+	if rec.RecipientClass != RecipientClassExternal || rec.ContactID != contact.ID {
+		t.Errorf("record recipient = (class %s, contact %q), want (external, %q)", rec.RecipientClass, rec.ContactID, contact.ID)
+	}
+	mails = env.host.mailer.messages()
+	if len(mails) != 2 {
+		t.Fatalf("mailer sent %d messages, want the verification code plus the one delivery", len(mails))
+	}
+	if mails[1].To[0] != "wangfang@external.example.com" {
+		t.Errorf("delivered mail To = %v, want the contact's address", mails[1].To)
 	}
 }
 
