@@ -65,7 +65,7 @@ graph BT
     sharing -.->|"ResourceResolver seam,无导入边(设计如此)"| storage
     integ --> jobs
     integ --> ratelimit
-    integ -.->|"MembershipChecker seam,无导入边(设计如此)"| authn
+    integ -.->|"MembershipChecker seam,无导入边,当前未接线(设计如此)"| org
     comp --> tenancy
     comp --> jobs
     comp --> storage
@@ -77,7 +77,7 @@ graph BT
     admin --> comp
 ```
 
-图中虚线边（`-.->`，带 seam 标注）表示两个模块之间存在真实的能力协作，但**刻意、永久不建立 import 关系**——协作方在自己包内声明一个结构化类型的接口（无导入方向的 seam），由宿主装配时注入具体实现，与 `org.FeatureGate`/`rbac.SubtreeResolver` 同一手法；这是设计决策，不是尚未补上的依赖。`ai-gateway`→`billing`/`metering`（`Entitlements`/`UsageRecorder` 两个 seam）、`sharing`→`storage`（`ResourceResolver` seam）、`integration`→`authn`（`MembershipChecker` seam）三条都是这一类——`go/ai-gateway/module.go`、`go/sharing/resolver.go`、`go/integration/seams.go` 各自的文档注释明确记录这一点为永久性质。这与图上其余的实线边不同：实线边是真实的 Go import（对应各模块 `go.mod` 的 `require`），一个模块与另一个模块之间画不出边，单纯意味着当前版本没有依赖，不代表刻意的边界——`admin` 尚未落地的 `billing`/`metering`/`cfg` 依赖（D9 用量看板等 round 2 工作）就是这种情况，属于尚未建设而非刻意不建，图上因此不画任何形式的边，包括虚线。
+图中虚线边（`-.->`，带 seam 标注）表示两个模块之间存在真实的能力协作，但**刻意、永久不建立 import 关系**——协作方在自己包内声明一个结构化类型的接口（无导入方向的 seam），由宿主装配时注入具体实现，与 `org.FeatureGate`/`rbac.SubtreeResolver` 同一手法；这是设计决策，不是尚未补上的依赖。`ai-gateway`→`billing`/`metering`（`Entitlements`/`UsageRecorder` 两个 seam）、`sharing`→`storage`（`ResourceResolver` seam）、`integration`→`org`（`MembershipChecker` seam）三条都是这一类——`go/ai-gateway/module.go`、`go/sharing/resolver.go`、`go/integration/seams.go` 各自的文档注释明确记录这一点为永久性质。这三条虚线边并不等重：`ai-gateway` 的两个 seam 各自的文档注释指名道姓地把 `*billing.EntitlementsService`/`go/metering` 点为宿主该注入的实现，`sharing` 的 `ResourceResolver` 在 `examples/reference-app/cmd/server/server.go` 里确有真实接线（`sharing.WithResourceResolver(&storageSharingResolver{...})`）；`integration` 的 `MembershipChecker` 不同——`go/integration/seams.go` 自己的文档注释只说明"谁维护租户成员关系"这件事本身应当模块无关（"whichever module actually tracks who belongs to a tenant"），本代码库里恰好是 `go/org` 的名册，但注释原话明确"nothing requires that"；而且全仓搜索 `WithMembershipChecker(` 只命中该接口自身的定义处，没有任何宿主代码调用它——图上这条边因此画向 `org` 只是"本代码库里唯一现成的候选实现"，不是像另外两条那样已经写死、已经接线的设计目标，读图时不应把它和另外两条一视同仁。这与图上其余的实线边不同：实线边是真实的 Go import（对应各模块 `go.mod` 的 `require`），一个模块与另一个模块之间画不出边，单纯意味着当前版本没有依赖，不代表刻意的边界——`admin` 尚未落地的 `billing`/`metering`/`cfg` 依赖（D9 用量看板等 round 2 工作）就是这种情况，属于尚未建设而非刻意不建，图上因此不画任何形式的边，包括虚线。
 
 **四条必须写进文档并由 code review 强制执行的纪律：**
 1. `rbac` 不依赖 `authn`。授权只认 `Subject{TenantID, UserID}`，由认证方自行拼装 Subject 后调用授权。
