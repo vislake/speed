@@ -418,10 +418,13 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
   let factorActive = false
 
   /** The bearer principal of a request, resolved from the access token
-   * the request carried; a request with no token (never a real one --
-   * every protected surface sits behind a signed-in session) resolves
-   * to the option-shaped default principal, keeping the answer
-   * vocabulary of the suites that predate token-aware answers. */
+   * the request carried. Every token a journey can hold was issued by
+   * this responder instance -- the app's suites sign in through the
+   * server's own login answer, never a hand-scripted one -- so an
+   * absent or unknown bearer on a principal-requiring endpoint is a
+   * harness bug: fail the test loudly rather than answer as a default
+   * principal, which would mask an app regression into fetching
+   * protected data without a token. */
   function principalOf(call: RealCall): IssuedPrincipal {
     const authorization = call.authorization
     const prefix = 'Bearer '
@@ -429,14 +432,15 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
       authorization !== null && authorization.startsWith(prefix)
         ? authorization.slice(prefix.length)
         : null
-    return (
-      (token !== null ? issued.get(token) : undefined) ?? {
-        user_id: userId,
-        tenant_id: tenantId,
-        session_id: sessionId,
-        elevated: false,
-      }
-    )
+    const principal = token !== null ? issued.get(token) : undefined
+    if (principal === undefined) {
+      const bearer =
+        token === null ? 'no bearer token' : 'an unknown bearer token'
+      throw new Error(
+        `demo-server: ${call.method} ${call.path} reached a principal-requiring endpoint with ${bearer}`,
+      )
+    }
+    return principal
   }
 
   /** Issues an access token for the principal, numbering it with the
