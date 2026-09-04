@@ -290,6 +290,30 @@ linters:
               desc: "the Prometheus client (promhttp included, as a subpackage of this import path) belongs to go/observability/exporter/prometheus alone; go/observability's own root package resolves a local metrics reader through the RegisterLocalMetricsReader seam instead of importing it directly"
             - pkg: go.opentelemetry.io/otel/exporters/prometheus
               desc: "the OTel-side Prometheus adapter is exporter-specific in exactly the same way as the client library above, and belongs alongside it in go/observability/exporter/prometheus alone"
+        # go/pki's Signer provider split (round 4): the vault and kmsaws
+        # subpackages are the first pki.Signer implementations that reach
+        # for a third-party client, so they follow the same
+        # narrowed-to-the-implementation-package shape the observability
+        # exporter rules above use, not the module-wide shape the
+        # redis/minio/asynq rules use -- go/pki's own root package (where
+        # the Signer interface and LocalSigner live) must not import either
+        # SDK either, which is the whole point of the split.
+        hashicorp-vault-only-in-pki-signer-vault:
+          files:
+            - "**/go/**"
+            - "!**/go/pki/signer/vault/**"
+          list-mode: lax
+          deny:
+            - pkg: github.com/hashicorp/vault/api
+              desc: "the Vault client belongs to go/pki/signer/vault alone; business code depends on the pki.Signer interface and resolves this implementation by name through pki.SignerRegistry, or by value through pki.WithSigner"
+        aws-sdk-only-in-pki-signer-kmsaws:
+          files:
+            - "**/go/**"
+            - "!**/go/pki/signer/kmsaws/**"
+          list-mode: lax
+          deny:
+            - pkg: github.com/aws/aws-sdk-go-v2
+              desc: "the AWS SDK for Go v2 (its service/kms and credentials subpackages included, as subpackages of this import path) belongs to go/pki/signer/kmsaws alone; business code depends on the pki.Signer interface and resolves this implementation by name through pki.SignerRegistry, or by value through pki.WithSigner"
 
   exclusions:
     generated: lax
