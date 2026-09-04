@@ -15,14 +15,20 @@ import (
 // comment), so this embeds dbkit.Repository[UsageSummary] and inherits all
 // three tenant-isolation layers, exactly like every other tenant-owned
 // repository in this codebase.
+//
+// db is kept alongside the embedded dbkit.Repository[UsageSummary]
+// (unexported, package-internal) so Aggregator.IngestBillingGrade can open
+// its own transaction on the SAME connection this repository's writes use
+// -- see IngestReceipt's doc comment for why that matters.
 type SummaryRepository struct {
 	*dbkit.Repository[UsageSummary]
+	db *gorm.DB
 }
 
 // NewSummaryRepository returns a SummaryRepository over db. db is expected
 // to come from dbkit.Open with this module's migrations applied.
 func NewSummaryRepository(db *gorm.DB) *SummaryRepository {
-	return &SummaryRepository{Repository: dbkit.NewRepository[UsageSummary](db)}
+	return &SummaryRepository{Repository: dbkit.NewRepository[UsageSummary](db), db: db}
 }
 
 // --- Outbox: plain *gorm.DB functions, platform-data pattern -------------

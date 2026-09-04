@@ -225,6 +225,74 @@ func TestDispatcher_CrashMidDelivery_RowIsRecoveredOnTheNextRun(t *testing.T) {
 	}
 }
 
+// TestDispatcher_RunOnce_RedeliveredRow_DoesNotDoubleCount is the
+// Dispatcher-level regression proof for the crash-recovery double-count
+// bug deliverOne's own doc comment (and IngestReceipt's) describes:
+// Aggregator.IngestBillingGrade's own database transaction can commit
+// while the SEPARATE markOutboxDelivered write that should follow it
+// fails or the process dies -- leaving the outbox row "pending" so the
+// next RunOnce cycle reclaims and redelivers it. This test reproduces
+// exactly that window without a second broken connection: it calls
+// IngestBillingGrade directly (simulating "the first delivery attempt's
+// aggregation already committed") while deliberately never calling
+// markOutboxDelivered (simulating "...but the write that should have
+// retired the row did not"), leaving the row genuinely still pending in
+// the database. RunOnce is then driven normally and must complete the
+// interrupted delivery (marking the row delivered) WITHOUT re-applying
+// the event's quantity a second time.
+func TestDispatcher_RunOnce_RedeliveredRow_DoesNotDoubleCount(t *testing.T) {
+	d, agg, db := newTestDispatcher(t)
+	ctx := context.Background()
+
+	event := UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 9, IdempotencyKey: "idem-interrupted", OccurredAt: time.Now()}
+	enqueued, err := Enqueue(ctx, db, event)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// Simulate "the first delivery attempt's IngestBillingGrade call
+	// already committed" by calling it directly -- deliberately skipping
+	// markOutboxDelivered, so enqueued stays "pending" exactly as it would
+	// after a crash (or a merely transient failure of that write) right
+	// after IngestBillingGrade's own transaction landed.
+	if ingestErr := agg.IngestBillingGrade(ctx, event); ingestErr != nil {
+		t.Fatalf("IngestBillingGrade (simulating the interrupted first attempt): %v", ingestErr)
+	}
+	stillPending, err := claimPendingOutboxRecords(ctx, db, 10)
+	if err != nil {
+		t.Fatalf("claimPendingOutboxRecords: %v", err)
+	}
+	if len(stillPending) != 1 || stillPending[0].ID != enqueued.ID {
+		t.Fatalf("outbox rows before RunOnce = %+v, want exactly enqueued row still pending", stillPending)
+	}
+
+	// The real recovery path: RunOnce reclaims the still-pending row and
+	// redelivers it.
+	delivered, err := d.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if delivered != 1 {
+		t.Fatalf("delivered = %d, want 1 (the interrupted row completes delivery)", delivered)
+	}
+
+	final, found, err := findOutboxByIdempotencyKey(ctx, db, "tenant-a", "idem-interrupted")
+	if err != nil {
+		t.Fatalf("findOutboxByIdempotencyKey: %v", err)
+	}
+	if !found || final.Status != outboxStatusDelivered {
+		t.Fatalf("final row = %+v (found=%v), want Status=%q", final, found, outboxStatusDelivered)
+	}
+
+	gotRealtime, err := agg.RealtimeCount("tenant-a", "ai.generation", event.OccurredAt)
+	if err != nil {
+		t.Fatalf("RealtimeCount: %v", err)
+	}
+	if gotRealtime != 9 {
+		t.Errorf("RealtimeCount after redelivery = %v, want 9 (applied exactly once, not 18)", gotRealtime)
+	}
+}
+
 // openAndMigrate opens a fresh *gorm.DB connection to the SQLite file at
 // dsn and applies this module's migrations through it (a no-op if they
 // were already applied by an earlier connection to the same file).

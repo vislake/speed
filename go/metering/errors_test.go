@@ -33,6 +33,20 @@ func TestErrors_AreAllInvalid(t *testing.T) {
 	}
 }
 
+// TestErrMetadataEncodeFailed_IsInternal pins ErrMetadataEncodeFailed's
+// kind: unlike every var TestErrors_AreAllInvalid checks, it reports an
+// encode failure of already-validated data (outbox.go's encodeMetadata),
+// never a malformed caller input, so it is deliberately apperr.Internal
+// (500), not apperr.Invalid (400) -- see the var's own doc comment.
+func TestErrMetadataEncodeFailed_IsInternal(t *testing.T) {
+	if ErrMetadataEncodeFailed.Status != http.StatusInternalServerError {
+		t.Errorf("ErrMetadataEncodeFailed.Status = %d, want %d (apperr.Internal)", ErrMetadataEncodeFailed.Status, http.StatusInternalServerError)
+	}
+	if ErrMetadataEncodeFailed.Code != "metering.metadata_encode_failed" {
+		t.Errorf("ErrMetadataEncodeFailed.Code = %q, want %q", ErrMetadataEncodeFailed.Code, "metering.metadata_encode_failed")
+	}
+}
+
 func TestHasCode(t *testing.T) {
 	base := apperr.NotFound("metering.some_not_found")
 	decorated := base.WithParam("id", "abc").WithCause(errors.New("boom"))

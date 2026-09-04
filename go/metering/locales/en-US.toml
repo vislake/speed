@@ -20,3 +20,5 @@
 "metering.metadata_too_large" = "Usage event metadata is too large."
 
 "metering.invalid_period_bucket" = "\"{{.bucket}}\" is not a valid period bucket."
+
+"metering.metadata_encode_failed" = "Usage event metadata could not be encoded for storage."

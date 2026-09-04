@@ -29,14 +29,20 @@
 //     indefinitely on failure -- see Enqueue's and Dispatcher's doc
 //     comments.
 //
-// Both tiers funnel into the same place: Aggregator.Ingest, which
-// increments an in-process real-time quota counter and upserts a
-// database-backed usage-summary row. This is the design doc's "same
-// pipeline" property -- a caller who later needs to move
-// billing-grade delivery onto a jobs-queue-driven poller, or add a
-// Redis/PostgreSQL-backed aggregation backend, changes what feeds
-// Aggregator.Ingest without touching how any business module calls Record
-// or Enqueue.
+// Both tiers funnel into the same aggregation pipeline -- an in-process
+// real-time quota counter plus a database-backed usage-summary row -- but
+// through two different entry points on Aggregator: the plain Ingest for
+// analytics-grade, and IngestBillingGrade for billing-grade, which
+// additionally records a durable idempotency receipt in the SAME database
+// transaction as the summary write, so Dispatcher redelivering a row whose
+// earlier delivery attempt already committed (a crash, or merely a
+// transient failure, between that commit and the outbox row's own
+// mark-delivered write) applies the event exactly once rather than
+// double-counting it. This is the design doc's "same pipeline" property --
+// a caller who later needs to move billing-grade delivery onto a
+// jobs-queue-driven poller, or add a Redis/PostgreSQL-backed aggregation
+// backend, changes what feeds Aggregator's ingest methods without touching
+// how any business module calls Record or Enqueue.
 //
 // # Round 1 of an unbounded number
 //

@@ -8,7 +8,6 @@ import (
 	"gorm.io/gorm"
 
 	obs "github.com/vislake/speed/go/observability"
-	"github.com/vislake/speed/go/pkgcore"
 )
 
 // Defaults for Dispatcher's poll loop, overridden by Module's
@@ -148,6 +147,14 @@ func (d *Dispatcher) RunOnce(ctx context.Context) (delivered int, err error) {
 // delivered, reporting whether it succeeded. Every failure along the way
 // is logged rather than propagated -- see RunOnce's own doc comment for
 // why.
+//
+// It calls Aggregator.IngestBillingGrade, never the plain Ingest: this is
+// the billing-grade delivery path, and markOutboxDelivered below (the
+// SEPARATE write that actually retires rec from "pending") can itself
+// fail, or the process can die between the two calls, leaving rec pending
+// for the next RunOnce cycle to reclaim and redeliver -- IngestBillingGrade
+// is what makes that redelivery a safe no-op instead of a silent double
+// count. See IngestReceipt's doc comment for the full argument.
 func (d *Dispatcher) deliverOne(ctx context.Context, rec OutboxRecord) bool {
 	event := UsageEvent{
 		TenantID:       rec.TenantID,
@@ -157,9 +164,8 @@ func (d *Dispatcher) deliverOne(ctx context.Context, rec OutboxRecord) bool {
 		OccurredAt:     rec.OccurredAt,
 		Metadata:       decodeMetadata(rec.Metadata),
 	}
-	tenantCtx := pkgcore.WithTenant(ctx, pkgcore.TenantID(rec.TenantID))
 
-	if err := d.aggregator.Ingest(tenantCtx, event); err != nil {
+	if err := d.aggregator.IngestBillingGrade(ctx, event); err != nil {
 		if markErr := markOutboxAttemptFailed(ctx, d.db, rec.ID, err.Error()); markErr != nil {
 			obs.FromContext(ctx).Warn("metering.outbox_mark_failed_attempt_error",
 				"error", markErr,

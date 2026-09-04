@@ -288,6 +288,159 @@ func TestAggregator_Ingest_OverageBusPublishFailure_DoesNotFailIngest(t *testing
 	}
 }
 
+// TestAggregator_IngestBillingGrade_UpsertsSummaryAndRealtimeCounter proves
+// IngestBillingGrade's happy path behaves exactly like Ingest: one call
+// folds the event into both the real-time counter and the persisted
+// UsageSummary row.
+func TestAggregator_IngestBillingGrade_UpsertsSummaryAndRealtimeCounter(t *testing.T) {
+	summaries := NewSummaryRepository(newTestDB(t))
+	agg := NewAggregator(summaries)
+	ctx := context.Background()
+	at := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+
+	event := UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 4, IdempotencyKey: "idem-billing-1", OccurredAt: at}
+	if err := agg.IngestBillingGrade(ctx, event); err != nil {
+		t.Fatalf("IngestBillingGrade: %v", err)
+	}
+
+	gotRealtime, err := agg.RealtimeCount("tenant-a", "ai.generation", at)
+	if err != nil {
+		t.Fatalf("RealtimeCount: %v", err)
+	}
+	if gotRealtime != 4 {
+		t.Errorf("RealtimeCount = %v, want 4", gotRealtime)
+	}
+
+	tenantCtx := pkgcore.WithTenant(ctx, "tenant-a")
+	start, _, err := periodBounds(at, defaultPeriodBucket)
+	if err != nil {
+		t.Fatalf("periodBounds: %v", err)
+	}
+	summary, err := summaries.FindByID(tenantCtx, summaryID("ai.generation", start))
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if summary.Quantity != 4 {
+		t.Errorf("summary Quantity = %v, want 4", summary.Quantity)
+	}
+}
+
+// TestAggregator_IngestBillingGrade_RedeliveredEvent_DoesNotDoubleCount is
+// the regression proof for the crash-recovery double-count bug
+// IngestReceipt exists to close: Dispatcher.deliverOne's own doc comment
+// (and IngestReceipt's) describes a process crash, or a merely transient
+// failure of markOutboxDelivered, landing between a successful delivery's
+// aggregation commit and the outbox row's own mark-delivered write --
+// which leaves the row "pending" and gets it redelivered by the next
+// Dispatcher.RunOnce cycle, calling the ingest path a SECOND time for the
+// identical event. This test reproduces that redelivery directly at the
+// Aggregator level: the SAME UsageEvent is handed to IngestBillingGrade
+// twice, standing in for "the outbox row was reclaimed and redelivered
+// after its first attempt already committed" -- and proves the second call
+// is a safe no-op rather than a second application, in both the
+// persisted UsageSummary row and the in-process real-time counter.
+func TestAggregator_IngestBillingGrade_RedeliveredEvent_DoesNotDoubleCount(t *testing.T) {
+	summaries := NewSummaryRepository(newTestDB(t))
+	agg := NewAggregator(summaries)
+	ctx := context.Background()
+	at := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+
+	event := UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 7, IdempotencyKey: "idem-redelivered", OccurredAt: at}
+
+	if err := agg.IngestBillingGrade(ctx, event); err != nil {
+		t.Fatalf("IngestBillingGrade (first delivery): %v", err)
+	}
+	// The redelivery: same event, same IdempotencyKey, standing in for the
+	// next Dispatcher.RunOnce cycle reclaiming the still-"pending" outbox
+	// row after the first delivery's own mark-delivered write failed or
+	// the process crashed.
+	if err := agg.IngestBillingGrade(ctx, event); err != nil {
+		t.Fatalf("IngestBillingGrade (redelivery): %v", err)
+	}
+
+	gotRealtime, err := agg.RealtimeCount("tenant-a", "ai.generation", at)
+	if err != nil {
+		t.Fatalf("RealtimeCount: %v", err)
+	}
+	if gotRealtime != 7 {
+		t.Errorf("RealtimeCount after redelivery = %v, want 7 (exactly one application, not 14)", gotRealtime)
+	}
+
+	tenantCtx := pkgcore.WithTenant(ctx, "tenant-a")
+	start, _, err := periodBounds(at, defaultPeriodBucket)
+	if err != nil {
+		t.Fatalf("periodBounds: %v", err)
+	}
+	summary, err := summaries.FindByID(tenantCtx, summaryID("ai.generation", start))
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if summary.Quantity != 7 {
+		t.Errorf("summary Quantity after redelivery = %v, want 7 (exactly one application, not 14)", summary.Quantity)
+	}
+}
+
+// TestAggregator_IngestBillingGrade_RedeliveredEvent_DoesNotRepublishOverage
+// proves the redelivery no-op extends to the overage-crossing side effect
+// too: a threshold that was already reported crossed by the first,
+// genuine delivery must not fire a second EventOverageThresholdCrossed
+// merely because the same event was redelivered.
+func TestAggregator_IngestBillingGrade_RedeliveredEvent_DoesNotRepublishOverage(t *testing.T) {
+	agg := newTestAggregator(t)
+	threshold := 5.0
+	agg.thresholds = OverageThresholds{Default: &threshold}
+	bus := pkgcore.NewMemoryEventBus()
+	var captured capturedEvents
+	bus.Subscribe(EventOverageThresholdCrossed, captured.handler)
+	agg.bus = bus
+
+	event := UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 7, IdempotencyKey: "idem-overage-redelivered"}
+	if err := agg.IngestBillingGrade(context.Background(), event); err != nil {
+		t.Fatalf("IngestBillingGrade (first delivery): %v", err)
+	}
+	if err := agg.IngestBillingGrade(context.Background(), event); err != nil {
+		t.Fatalf("IngestBillingGrade (redelivery): %v", err)
+	}
+
+	if len(captured.events) != 1 {
+		t.Fatalf("published %d overage event(s) across delivery+redelivery, want exactly 1", len(captured.events))
+	}
+}
+
+// TestAggregator_IngestBillingGrade_DifferentEvents_BothApply proves the
+// idempotency check is keyed by IdempotencyKey, not merely "has this
+// tenant/feature ever been ingested": two genuinely different events for
+// the same (tenant, feature, period) must both apply.
+func TestAggregator_IngestBillingGrade_DifferentEvents_BothApply(t *testing.T) {
+	agg := newTestAggregator(t)
+	at := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+
+	if err := agg.IngestBillingGrade(context.Background(), UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 3, IdempotencyKey: "idem-x", OccurredAt: at}); err != nil {
+		t.Fatalf("IngestBillingGrade(idem-x): %v", err)
+	}
+	if err := agg.IngestBillingGrade(context.Background(), UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 4, IdempotencyKey: "idem-y", OccurredAt: at}); err != nil {
+		t.Fatalf("IngestBillingGrade(idem-y): %v", err)
+	}
+
+	got, err := agg.RealtimeCount("tenant-a", "ai.generation", at)
+	if err != nil {
+		t.Fatalf("RealtimeCount: %v", err)
+	}
+	if got != 7 {
+		t.Errorf("RealtimeCount = %v, want 7 (both distinct events applied)", got)
+	}
+}
+
+// TestAggregator_IngestBillingGrade_InvalidEvent_ReturnsValidationError
+// mirrors Ingest's own identical proof: validation runs before anything
+// else, including the idempotency-receipt insert.
+func TestAggregator_IngestBillingGrade_InvalidEvent_ReturnsValidationError(t *testing.T) {
+	agg := newTestAggregator(t)
+	if err := agg.IngestBillingGrade(context.Background(), UsageEvent{}); err == nil {
+		t.Fatal("IngestBillingGrade(invalid event) = nil error, want a validation error")
+	}
+}
+
 // idem returns a distinct idempotency key for test index i.
 func idem(i int) string { return "idem-" + string(rune('a'+i)) }
 

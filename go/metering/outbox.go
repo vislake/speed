@@ -8,8 +8,6 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
-
-	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // Enqueue is the billing-grade tier's write half of the outbox pattern
@@ -103,7 +101,7 @@ func encodeMetadata(m map[string]string) (string, error) {
 	}
 	b, err := json.Marshal(m)
 	if err != nil {
-		return "", apperr.Internal("metering.metadata_encode_failed").WithCause(err)
+		return "", ErrMetadataEncodeFailed.WithCause(err)
 	}
 	return string(b), nil
 }

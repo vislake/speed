@@ -49,6 +49,17 @@ var (
 	// ErrInvalidPeriodBucket reports that a period-bucket size string was
 	// neither PeriodBucketDaily nor PeriodBucketMonthly.
 	ErrInvalidPeriodBucket = apperr.Invalid("metering.invalid_period_bucket")
+
+	// ErrMetadataEncodeFailed reports that a UsageEvent's Metadata could
+	// not be JSON-encoded for storage in OutboxRecord.Metadata
+	// (encodeMetadata's marshal-failure branch, outbox.go). Every value
+	// UsageEvent.Metadata can legally hold (map[string]string, already
+	// bounded by validate) always marshals successfully, so this is an
+	// apperr.Internal -- an unreachable-in-practice defensive branch, not
+	// a caller-input problem -- rather than an apperr.Invalid alongside
+	// this var block's other members, all of which are validate's own
+	// caller-error codes.
+	ErrMetadataEncodeFailed = apperr.Internal("metering.metadata_encode_failed")
 )
 
 // hasCode reports whether err is (or wraps, via apperr.As's Unwrap chain
