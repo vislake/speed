@@ -35,6 +35,14 @@ require golang.org/x/mod v0.38.0
 require gorm.io/gorm v1.31.2
 
 require (
+	filippo.io/edwards25519 v1.1.0 // indirect
+	github.com/go-sql-driver/mysql v1.8.1 // indirect
+	github.com/vislake/speed/go/jobs v0.0.0-00010101000000-000000000000 // indirect
+	gorm.io/datatypes v1.2.7 // indirect
+	gorm.io/driver/mysql v1.5.6 // indirect
+)
+
+require (
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -54,6 +62,7 @@ require (
 	github.com/nicksnyder/go-i18n/v2 v2.6.1 // indirect
 	github.com/oapi-codegen/runtime v1.7.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	github.com/vislake/speed/go/pki v0.0.0-00010101000000-000000000000
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect
@@ -93,3 +102,7 @@ replace github.com/vislake/speed/go/authn => ../authn
 replace github.com/vislake/speed/go/rbac => ../rbac
 
 replace github.com/vislake/speed/go/org => ../org
+
+replace github.com/vislake/speed/go/pki => ../pki
+
+replace github.com/vislake/speed/go/jobs => ../jobs

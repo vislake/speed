@@ -221,25 +221,25 @@ func TestSelectionServerGoMatchesSelectionKey(t *testing.T) {
 	}{
 		{
 			key:      "authn+org+rbac",
-			modules:  []string{"authnModule", "orgModule", "configModule", "rbacModule"},
-			contains: []string{"authn.NewModule(", "org.NewModule(", "rbac.NewModule(", "authnPreAuthAllowlist()", "authn.NewPrincipalResolver()", "authnModule.Service().Verifier()"},
+			modules:  []string{"pkiModule", "authnModule", "orgModule", "configModule", "rbacModule"},
+			contains: []string{"authn.NewModule(", "org.NewModule(", "rbac.NewModule(", "pki.NewModule(", "authnPreAuthAllowlist()", "authn.NewPrincipalResolver()", "authnModule.Service().Verifier()"},
 		},
 		{
 			key:      "authn+rbac",
-			modules:  []string{"authnModule", "configModule", "rbacModule"},
-			contains: []string{"authn.NewModule(", "rbac.NewModule(", "authnPreAuthAllowlist()", "authn.NewPrincipalResolver()", "authnModule.Service().Verifier()"},
+			modules:  []string{"pkiModule", "authnModule", "configModule", "rbacModule"},
+			contains: []string{"authn.NewModule(", "rbac.NewModule(", "pki.NewModule(", "authnPreAuthAllowlist()", "authn.NewPrincipalResolver()", "authnModule.Service().Verifier()"},
 			absent:   []string{"org.NewModule("},
 		},
 		{
 			key:      "authn+org",
-			modules:  []string{"authnModule", "orgModule", "configModule"},
-			contains: []string{"authn.NewModule(", "org.NewModule(", "authnPreAuthAllowlist()", "authn.NewPrincipalResolver()", "authnModule.Service().Verifier()"},
+			modules:  []string{"pkiModule", "authnModule", "orgModule", "configModule"},
+			contains: []string{"authn.NewModule(", "org.NewModule(", "pki.NewModule(", "authnPreAuthAllowlist()", "authn.NewPrincipalResolver()", "authnModule.Service().Verifier()"},
 			absent:   []string{"rbac.NewModule("},
 		},
 		{
 			key:      "authn",
-			modules:  []string{"authnModule", "configModule"},
-			contains: []string{"authn.NewModule(", "authnPreAuthAllowlist()", "authn.NewPrincipalResolver()", "authnModule.Service().Verifier()"},
+			modules:  []string{"pkiModule", "authnModule", "configModule"},
+			contains: []string{"authn.NewModule(", "pki.NewModule(", "authnPreAuthAllowlist()", "authn.NewPrincipalResolver()", "authnModule.Service().Verifier()"},
 			absent:   []string{"org.NewModule(", "rbac.NewModule("},
 		},
 		{

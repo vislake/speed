@@ -142,6 +142,40 @@ func TestMigrateFreshDatabaseAppliesTheWholeRequiredUniverse(t *testing.T) {
 	}
 }
 
+// TestMigrate_PKIRequired_MigratesPKITablesToo proves the opposite half of
+// buildAuthnAndPKI's own doc comment: a project whose go.mod genuinely
+// requires go/pki (full_with_pki.mod, the shape every saasctl-generated
+// authn-containing project's go.mod carries now that its templates wire a
+// pki-backed KeySource) gets pki's own tables migrated too, alongside
+// authn's -- not merely a working KeySource value authn's constructor
+// needs to succeed.
+func TestMigrate_PKIRequired_MigratesPKITablesToo(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "cli-app.db")
+	code, stdout, stderr := driveMigrate(t, []string{fixture(t, "full_with_pki.mod")},
+		map[string]string{appconfig.DBPathEnv: dbPath})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, stderr)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+	want := fmt.Sprintf("Migrated %s: applied 19 migration files (authn 9, config 1, org 3, pki 5, rbac 1)\n", dbPath)
+	if stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
+	}
+
+	gdb := openDB(t, dbPath)
+	wantLedger := map[string]int{"authn": 9, "config": 1, "org": 3, "pki": 5, "rbac": 1}
+	if got := ledgerCounts(t, gdb); !reflect.DeepEqual(got, wantLedger) {
+		t.Errorf("ledger = %v, want %v", got, wantLedger)
+	}
+	for _, table := range []string{"schema_migrations", "configs", "users", "org_nodes", "rbac_roles", "pki_signing_keys", "pki_local_keys"} {
+		if !gdb.Migrator().HasTable(table) {
+			t.Errorf("table %s does not exist after migrating", table)
+		}
+	}
+}
+
 // TestMigrateDefaultDatabaseAnchorsAtTheGoModArgument: with SPEED_DB_PATH
 // unset, the database defaults to <app name>.db, resolved -- by this
 // command -- next to the go.mod argument, not the caller's working

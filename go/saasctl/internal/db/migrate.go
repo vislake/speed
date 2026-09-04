@@ -24,6 +24,7 @@ import (
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pki"
 	"github.com/vislake/speed/go/rbac"
 	"github.com/vislake/speed/go/saasctl/internal/appconfig"
 	"github.com/vislake/speed/go/saasctl/internal/project"
@@ -43,7 +44,7 @@ Apply would: read the go.mod (the [go.mod] argument, defaulting to
 ./go.mod), resolve the project's bootstrap environment the way the
 generated app resolves it (SPEED_DEPLOYMENT_MODE, SPEED_DB_PATH, ...),
 construct every github.com/vislake/speed/go/* module the go.mod requires
-that ships its own migrations (authn, config, org and rbac), and apply
+that ships its own migrations (authn, config, org, pki and rbac), and apply
 their sqlite migration files through dbkit's MigrationRegistry -- one
 transaction per module, in dependency order, each file recorded in
 schema_migrations as it lands, so a re-run applies only what is not yet
@@ -100,30 +101,27 @@ type migrationModule struct {
 // deliberately not here: a consumer project that requires only those
 // applies its schema through its app's own startup Apply, which composes
 // whatever modules the app wires.
+// authnPKIName and pkiName are migrationUniverse's two entries whose
+// construct functions cannot be fully independent: authn's constructor
+// demands a KeySource, and pki's own *Module is what satisfies it (see
+// buildAuthnAndPKI's own doc comment for why the shared instance matters).
+// Declared as constants purely so the two special-cased branches in
+// buildSelectedModules below and their table entries cannot drift apart on
+// a rename.
+const (
+	authnModuleName = "authn"
+	pkiModuleName   = "pki"
+)
+
 var migrationUniverse = []migrationModule{
 	{
-		name:    "authn",
+		name:    authnModuleName,
 		modPath: modulePrefix + "authn",
-		construct: func(db *gorm.DB) (pkgcore.Module, error) {
-			// authn's constructor demands a signing key set and a
-			// blind-index key up front. Their values are irrelevant to
-			// migration application -- no token is ever issued or stored
-			// here -- so the command supplies throwaway development-shaped
-			// keys, the same shape the generated app's dev seed uses.
-			key, err := authn.GenerateTokenKey("saasctl db migrate")
-			if err != nil {
-				return nil, err
-			}
-			keySet, err := authn.NewKeySet(key)
-			if err != nil {
-				return nil, err
-			}
-			blindIndexKey := make([]byte, 32)
-			if _, err := rand.Read(blindIndexKey); err != nil {
-				return nil, err
-			}
-			return authn.NewModule(db, authn.WithSigningKeys(keySet), authn.WithBlindIndexKey(blindIndexKey))
-		},
+		// construct is unused for this entry -- see buildSelectedModules,
+		// which special-cases authn and pki together so the two share
+		// exactly one *pki.Module instance rather than each constructing
+		// (and each trying to register under the SAME "pki" name) its own.
+		construct: nil,
 	},
 	{
 		name:    "config",
@@ -140,12 +138,56 @@ var migrationUniverse = []migrationModule{
 		},
 	},
 	{
+		name:    pkiModuleName,
+		modPath: modulePrefix + "pki",
+		// construct is unused for this entry too -- see buildAuthnAndPKI.
+		// pki is not part of saasctl's --with selection set -- it follows
+		// authn silently (docs/internal/22-pki.md's section on where pki
+		// sits in saasctl's module selection set) -- but its own tables (pki_signing_keys and
+		// friends) still need migrating for any project that requires it,
+		// exactly like every other migration-shipping module here, so the
+		// CLI-then-boot and boot-only paths agree (a fresh app boot after
+		// `db migrate` must not find any module's schema still unapplied).
+		construct: nil,
+	},
+	{
 		name:    "rbac",
 		modPath: modulePrefix + "rbac",
 		construct: func(db *gorm.DB) (pkgcore.Module, error) {
 			return rbac.NewModule(db), nil
 		},
 	},
+}
+
+// buildAuthnAndPKI constructs authn's Module and pki's Module together,
+// sharing exactly one *pki.Module instance between them: authn's
+// constructor demands a KeySource, pki's own *Module.Service() satisfies
+// it, and pki's own migrations are still exactly the same *pki.Module's
+// Migrations() -- there is no second, independent pki instance to
+// register, which matters because dbkit.MigrationRegistry.Register keys
+// on Name(), and two DIFFERENT *pki.Module values would both report "pki"
+// and collide.
+//
+// This also simplified the file relative to before pki existed: the old
+// authn-only construct function fabricated a throwaway authn.KeySet (a
+// name, a real Ed25519 keypair, and its own error handling) purely to
+// satisfy authn.NewModule's requirement. pki.NewModule(db) needs none of
+// that -- it performs no I/O either, and neither module's own serializer
+// needs registering here, because migration application is raw versioned
+// SQL, never AutoMigrate, so it never parses either module's GORM model
+// structs (no token is ever issued or stored, and no signing key is ever
+// generated, by this command).
+func buildAuthnAndPKI(db *gorm.DB) (authnModule pkgcore.Module, pkiModule pkgcore.Module, err error) {
+	pm := pki.NewModule(db)
+	blindIndexKey := make([]byte, 32)
+	if _, readErr := rand.Read(blindIndexKey); readErr != nil {
+		return nil, nil, readErr
+	}
+	am, err := authn.NewModule(db, authn.WithKeySource(pm.Service()), authn.WithBlindIndexKey(blindIndexKey))
+	if err != nil {
+		return nil, nil, err
+	}
+	return am, pm, nil
 }
 
 // selectMigrationModules intersects a project's speed requires with the
@@ -277,7 +319,7 @@ func migrate(modPath string) (string, error) {
 		if len(proj.Requires) == 0 {
 			return "", fmt.Errorf("no github.com/vislake/speed/go/* requires found in %s; nothing to migrate", modPath)
 		}
-		return "", fmt.Errorf("none of the required speed modules ships its own migrations (requires: %s): db migrate applies the migrations of the authn, config, org and rbac modules; a project that requires only other speed modules applies its schema through its app's own startup Apply, not through saasctl", strings.Join(proj.Requires, ", "))
+		return "", fmt.Errorf("none of the required speed modules ships its own migrations (requires: %s): db migrate applies the migrations of the authn, config, org, pki and rbac modules; a project that requires only other speed modules applies its schema through its app's own startup Apply, not through saasctl", strings.Join(proj.Requires, ", "))
 	}
 
 	// The deployment mode and database path resolve from the same
@@ -349,14 +391,62 @@ func migrate(modPath string) (string, error) {
 		}
 	}
 
+	// pkiRequired is whether the project's own go.mod actually requires
+	// go/pki -- distinct from authn's unconditional NEED for a KeySource
+	// value to construct at all. buildAuthnAndPKI always builds a
+	// *pki.Module to hand authn's constructor a working Service(), since
+	// that costs nothing (pki.NewModule performs no I/O), but this command
+	// registers -- and therefore migrates -- pki's own tables only when the
+	// project genuinely declared that dependency, the same
+	// requires-driven selection every other entry in migrationUniverse
+	// gets. A project wiring authn with its own, non-pki-backed KeySource
+	// (a real possibility -- pki is the saasctl-generated default, not a
+	// hard requirement of authn itself) must not have this command create
+	// pki_signing_keys and friends in its database uninvited.
+	pkiRequired := slices.ContainsFunc(selected, func(m migrationModule) bool { return m.name == pkiModuleName })
+
+	// pkiRegistered tracks whether pki's *Module has already been
+	// registered -- either alongside authn (buildAuthnAndPKI, the ordinary
+	// case: migrationUniverse's declared order puts "authn" before "pki",
+	// so the authn case always runs first when both are selected) or, for
+	// a project that somehow requires pki without authn, on its own. Either
+	// way pki must never be registered twice: dbkit.MigrationRegistry.Register
+	// keys on Name(), and a second "pki" registration is a collision, not a
+	// no-op.
 	registry := dbkit.NewMigrationRegistry()
+	pkiRegistered := false
 	for _, mod := range selected {
-		m, modErr := mod.construct(gdb)
-		if modErr != nil {
-			return "", fmt.Errorf("construct the %s module: %w", mod.name, modErr)
-		}
-		if regErr := registry.Register(m); regErr != nil {
-			return "", fmt.Errorf("register the %s module: %w", mod.name, regErr)
+		switch mod.name {
+		case authnModuleName:
+			am, pm, buildErr := buildAuthnAndPKI(gdb)
+			if buildErr != nil {
+				return "", fmt.Errorf("construct the %s and %s modules: %w", authnModuleName, pkiModuleName, buildErr)
+			}
+			if regErr := registry.Register(am); regErr != nil {
+				return "", fmt.Errorf("register the %s module: %w", authnModuleName, regErr)
+			}
+			if pkiRequired && !pkiRegistered {
+				if regErr := registry.Register(pm); regErr != nil {
+					return "", fmt.Errorf("register the %s module: %w", pkiModuleName, regErr)
+				}
+				pkiRegistered = true
+			}
+		case pkiModuleName:
+			if pkiRegistered {
+				continue
+			}
+			if regErr := registry.Register(pki.NewModule(gdb)); regErr != nil {
+				return "", fmt.Errorf("register the %s module: %w", pkiModuleName, regErr)
+			}
+			pkiRegistered = true
+		default:
+			m, modErr := mod.construct(gdb)
+			if modErr != nil {
+				return "", fmt.Errorf("construct the %s module: %w", mod.name, modErr)
+			}
+			if regErr := registry.Register(m); regErr != nil {
+				return "", fmt.Errorf("register the %s module: %w", mod.name, regErr)
+			}
 		}
 	}
 	if applyErr := registry.Apply(ctx, gdb, dbkit.DialectSQLite); applyErr != nil {
