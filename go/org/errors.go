@@ -24,6 +24,12 @@ var (
 	// id anywhere" from "that id belongs to another tenant" -- the same
 	// reasoning dbkit.ErrRecordNotFound documents, since telling the two
 	// apart leaks the existence of another tenant's node.
+	//
+	// TreeService.Restore reports the identical code for a THIRD case it
+	// collapses into the same signal: an id that exists and belongs to this
+	// tenant, but is not currently mark-deleted, so there is nothing for
+	// Restore to undo -- mirroring dbkit.Repository[T].Restore's own doc
+	// comment.
 	ErrNodeNotFound = apperr.NotFound("org.node_not_found")
 
 	// ErrNodeNameRequired reports a create or rename with an empty (or
@@ -109,6 +115,10 @@ var (
 	// telling the two apart would let a caller probe another tenant's roster,
 	// and org does not know whether a user id exists at all -- the users table
 	// is authn's, and org never reads it.
+	//
+	// MemberService.Restore reports the identical code for a membership id
+	// that exists in this tenant but is not currently mark-deleted, mirroring
+	// dbkit.Repository[T].Restore's own collapsed not-found signal.
 	ErrMembershipNotFound = apperr.NotFound("org.membership_not_found")
 
 	// ErrMembershipExists reports an attempt to give a user a second
