@@ -32,6 +32,7 @@ import (
 
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/pkgcore"
+	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 )
 
 // startRedisClient starts a disposable Redis 7 container and returns a
@@ -75,8 +76,8 @@ func newRedisPeerPair(t *testing.T, ctx context.Context, client *redis.Client) (
 
 	db := openConfigPostgres(t, ctx, startPostgresContainer(t, ctx))
 	cipher := pgCipher(t)
-	busA := pkgcore.NewRedisEventBus(client)
-	busB := pkgcore.NewRedisEventBus(client)
+	busA := eventbusredis.NewEventBus(client)
+	busB := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
 		busA.Close()
 		busB.Close()

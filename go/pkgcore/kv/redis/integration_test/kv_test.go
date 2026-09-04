@@ -1,14 +1,14 @@
 //go:build integration
 
-package pkgcore_test
+package redis_test
 
-// Integration tests for NewRedisKVStore: each test drives the store through
-// the public KVStore interface against a real Redis, asserting the exact
-// semantics the in-memory store's unit tests pin -- TTL expiry, IncrByFloat
-// keeping a live key's expiry, CompareAndSwap as set-if-absent, expiry
-// untouched by a swap -- plus the atomicity properties only a shared server
-// can exercise. Where a semantic depends on the server's clock (expiry),
-// the raw client doubles as an oracle for what the server holds.
+// Integration tests for kvredis.NewKVStore: each test drives the store
+// through the public KVStore interface against a real Redis, asserting the
+// exact semantics pkgcore's in-memory store's unit tests pin -- TTL expiry,
+// IncrByFloat keeping a live key's expiry, CompareAndSwap as set-if-absent,
+// expiry untouched by a swap -- plus the atomicity properties only a shared
+// server can exercise. Where a semantic depends on the server's clock
+// (expiry), the raw client doubles as an oracle for what the server holds.
 
 import (
 	"context"
@@ -19,12 +19,13 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	kvredis "github.com/vislake/speed/go/pkgcore/kv/redis"
 	"github.com/vislake/speed/go/pkgcore/kvstoretest"
 )
 
-func TestRedisKVStore_SetGetDelete(t *testing.T) {
+func TestKVStore_SetGetDelete(t *testing.T) {
 	ctx := context.Background()
-	kv := pkgcore.NewRedisKVStore(startRedisClient(t, ctx))
+	kv := kvredis.NewKVStore(startRedisClient(t, ctx))
 
 	value, found, err := kv.Get(ctx, "billing:invoice:1042")
 	if err != nil {
@@ -56,10 +57,10 @@ func TestRedisKVStore_SetGetDelete(t *testing.T) {
 	}
 }
 
-func TestRedisKVStore_SetWithTTL_ExpiresTheKey(t *testing.T) {
+func TestKVStore_SetWithTTL_ExpiresTheKey(t *testing.T) {
 	ctx := context.Background()
 	client := startRedisClient(t, ctx)
-	kv := pkgcore.NewRedisKVStore(client)
+	kv := kvredis.NewKVStore(client)
 
 	const key = "session:u-1"
 	if err := kv.Set(ctx, key, []byte("token"), 200*time.Millisecond); err != nil {
@@ -81,10 +82,10 @@ func TestRedisKVStore_SetWithTTL_ExpiresTheKey(t *testing.T) {
 	}
 }
 
-func TestRedisKVStore_SetWithNonPositiveTTL_StoresForever_AndClearsAnExistingExpiry(t *testing.T) {
+func TestKVStore_SetWithNonPositiveTTL_StoresForever_AndClearsAnExistingExpiry(t *testing.T) {
 	ctx := context.Background()
 	client := startRedisClient(t, ctx)
-	kv := pkgcore.NewRedisKVStore(client)
+	kv := kvredis.NewKVStore(client)
 
 	const key = "config:retry-limit"
 	if err := kv.Set(ctx, key, []byte("3"), 200*time.Millisecond); err != nil {
@@ -109,10 +110,10 @@ func TestRedisKVStore_SetWithNonPositiveTTL_StoresForever_AndClearsAnExistingExp
 	}
 }
 
-func TestRedisKVStore_IncrByFloat_StartsMissingKeysAtZeroWithoutAnExpiry(t *testing.T) {
+func TestKVStore_IncrByFloat_StartsMissingKeysAtZeroWithoutAnExpiry(t *testing.T) {
 	ctx := context.Background()
 	client := startRedisClient(t, ctx)
-	kv := pkgcore.NewRedisKVStore(client)
+	kv := kvredis.NewKVStore(client)
 
 	const key = "quota:acme:credits"
 	result, err := kv.IncrByFloat(ctx, key, 2.5)
@@ -146,10 +147,10 @@ func TestRedisKVStore_IncrByFloat_StartsMissingKeysAtZeroWithoutAnExpiry(t *test
 	}
 }
 
-func TestRedisKVStore_IncrByFloat_KeepsALiveKeysExpiry(t *testing.T) {
+func TestKVStore_IncrByFloat_KeepsALiveKeysExpiry(t *testing.T) {
 	ctx := context.Background()
 	client := startRedisClient(t, ctx)
-	kv := pkgcore.NewRedisKVStore(client)
+	kv := kvredis.NewKVStore(client)
 
 	const key = "quota:acme:monthly"
 	if err := kv.Set(ctx, key, []byte("10"), 250*time.Millisecond); err != nil {
@@ -179,9 +180,9 @@ func TestRedisKVStore_IncrByFloat_KeepsALiveKeysExpiry(t *testing.T) {
 	}
 }
 
-func TestRedisKVStore_IncrByFloat_NonNumericValueFailsAndStaysUntouched(t *testing.T) {
+func TestKVStore_IncrByFloat_NonNumericValueFailsAndStaysUntouched(t *testing.T) {
 	ctx := context.Background()
-	kv := pkgcore.NewRedisKVStore(startRedisClient(t, ctx))
+	kv := kvredis.NewKVStore(startRedisClient(t, ctx))
 
 	tests := []struct {
 		name  string
@@ -216,9 +217,9 @@ func TestRedisKVStore_IncrByFloat_NonNumericValueFailsAndStaysUntouched(t *testi
 	}
 }
 
-func TestRedisKVStore_CompareAndSwap(t *testing.T) {
+func TestKVStore_CompareAndSwap(t *testing.T) {
 	ctx := context.Background()
-	kv := pkgcore.NewRedisKVStore(startRedisClient(t, ctx))
+	kv := kvredis.NewKVStore(startRedisClient(t, ctx))
 
 	// Set-if-absent: a missing key matches the empty expectation, whether it
 	// is nil or a zero-length slice.
@@ -267,10 +268,10 @@ func TestRedisKVStore_CompareAndSwap(t *testing.T) {
 	}
 }
 
-func TestRedisKVStore_CompareAndSwap_NeverChangesTheKeysExpiry(t *testing.T) {
+func TestKVStore_CompareAndSwap_NeverChangesTheKeysExpiry(t *testing.T) {
 	ctx := context.Background()
 	client := startRedisClient(t, ctx)
-	kv := pkgcore.NewRedisKVStore(client)
+	kv := kvredis.NewKVStore(client)
 
 	const key = "lock:acme:lease"
 	if err := kv.Set(ctx, key, []byte("holder-1"), 250*time.Millisecond); err != nil {
@@ -299,9 +300,9 @@ func TestRedisKVStore_CompareAndSwap_NeverChangesTheKeysExpiry(t *testing.T) {
 	}
 }
 
-func TestRedisKVStore_CarriesBinaryValues(t *testing.T) {
+func TestKVStore_CarriesBinaryValues(t *testing.T) {
 	ctx := context.Background()
-	kv := pkgcore.NewRedisKVStore(startRedisClient(t, ctx))
+	kv := kvredis.NewKVStore(startRedisClient(t, ctx))
 
 	const key = "crypto:blob"
 	blob := []byte{0x00, 0x01, 0xff, 0xfe, 0x00}
@@ -323,9 +324,9 @@ func TestRedisKVStore_CarriesBinaryValues(t *testing.T) {
 	}
 }
 
-func TestRedisKVStore_ConcurrentIncrementsLoseNoUpdates(t *testing.T) {
+func TestKVStore_ConcurrentIncrementsLoseNoUpdates(t *testing.T) {
 	ctx := context.Background()
-	kv := pkgcore.NewRedisKVStore(startRedisClient(t, ctx))
+	kv := kvredis.NewKVStore(startRedisClient(t, ctx))
 
 	const (
 		key        = "quota:acme:counter"
@@ -361,22 +362,22 @@ func TestRedisKVStore_ConcurrentIncrementsLoseNoUpdates(t *testing.T) {
 	}
 }
 
-// TestRedisKVStore_ConformsToKVStoreContract proves NewRedisKVStore
-// satisfies the shared contract kvstoretest.AssertConforms checks -- the
-// same suite go/pkgcore's own kv_conformance_test.go runs against
-// NewMemoryKVStore -- against a real Redis, so drift between the two
-// KVStore implementations under the deployment-composition retrofit's N
+// TestKVStore_ConformsToKVStoreContract proves kvredis.NewKVStore satisfies
+// the shared contract kvstoretest.AssertConforms checks -- the same suite
+// go/pkgcore's own kv_conformance_test.go runs against
+// pkgcore.NewMemoryKVStore -- against a real Redis, so drift between the
+// two KVStore implementations under the deployment-composition retrofit's N
 // registered implementations per seam is caught here once instead of
 // pairwise. Every store AssertConforms's subtests build shares one Redis
 // container and client (one container per test file), which is safe because
-// NewRedisKVStore holds no per-instance state of its own -- it is a thin
-// wrapper over the shared client, unlike RedisEventBus, which is why no
-// per-store cleanup is needed here.
-func TestRedisKVStore_ConformsToKVStoreContract(t *testing.T) {
+// NewKVStore holds no per-instance state of its own -- it is a thin wrapper
+// over the shared client, unlike EventBus, which is why no per-store cleanup
+// is needed here.
+func TestKVStore_ConformsToKVStoreContract(t *testing.T) {
 	ctx := context.Background()
 	client := startRedisClient(t, ctx)
 
 	kvstoretest.AssertConforms(t, func() pkgcore.KVStore {
-		return pkgcore.NewRedisKVStore(client)
+		return kvredis.NewKVStore(client)
 	})
 }

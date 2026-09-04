@@ -83,8 +83,8 @@ func TestValidateObjectKey(t *testing.T) {
 		segment,
 		atTheLimit,
 	} {
-		if err := validateObjectKey(key); err != nil {
-			t.Errorf("validateObjectKey(%q) error = %v, want nil", key, err)
+		if err := ValidateObjectKey(key); err != nil {
+			t.Errorf("ValidateObjectKey(%q) error = %v, want nil", key, err)
 		}
 	}
 
@@ -104,27 +104,24 @@ func TestValidateObjectKey(t *testing.T) {
 		strings.Repeat("a", maxObjectSegmentLength+1),
 		tooLong,
 	} {
-		if err := validateObjectKey(key); !errors.Is(err, ErrInvalidObjectKey) {
-			t.Errorf("validateObjectKey(%q) error = %v, want it to wrap ErrInvalidObjectKey", key, err)
+		if err := ValidateObjectKey(key); !errors.Is(err, ErrInvalidObjectKey) {
+			t.Errorf("ValidateObjectKey(%q) error = %v, want it to wrap ErrInvalidObjectKey", key, err)
 		}
 	}
 }
 
-// TestEveryStoreRejectsAnInvalidKey pins the shared grammar across every
-// implementation at the interface level: the checks run before an operation
-// touches the backend, so an invalid key is rejected identically by the local
-// store and by an S3 store whose service is unreachable, without a single
-// dial. No key value is echoed in the error text, so the message cannot leak
-// key-shaped data.
+// TestEveryStoreRejectsAnInvalidKey pins the shared grammar at the interface
+// level for the local store: the checks run before an operation touches the
+// backend, so an invalid key is rejected without a single dial. No key value
+// is echoed in the error text, so the message cannot leak key-shaped data.
+// The objectstore/s3 subpackage runs the identical table against its own
+// S3-backed store in its own test file, over ValidateObjectKey's shared
+// grammar this test also proves for the local implementation -- it cannot be
+// proven here too, because that subpackage imports this one and importing it
+// back would be a cycle.
 func TestEveryStoreRejectsAnInvalidKey(t *testing.T) {
 	stores := map[string]ObjectStore{
 		"local": NewLocalObjectStore(t.TempDir()),
-		"s3": NewS3ObjectStore(S3Config{
-			Endpoint:  "127.0.0.1:1", // closed port: any dial here would fail the test by hanging or erroring
-			Bucket:    "test",
-			AccessKey: "access",
-			SecretKey: "secret",
-		}),
 	}
 	operations := map[string]func(ObjectStore, string) error{
 		"put": func(store ObjectStore, key string) error {

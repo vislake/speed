@@ -6,32 +6,36 @@ import (
 	"os"
 	"strconv"
 	"strings"
-
-	"github.com/redis/go-redis/v9"
 )
 
 // ErrMissingSeamConfig is returned by a built-in Registration's constructor
 // when cfg lacks a key the implementation cannot run without and has no safe
-// default for -- an SMTP relay host, an S3 bucket and its credentials. It
-// never fires for the two Redis-backed seams, which fall back to a
-// bare-minimum "localhost:6379, no auth" default instead, or for the
-// in-process seams, which need no configuration at all.
+// default for -- an SMTP relay host, an S3 bucket and its credentials (the
+// latter registered by the objectstore/s3 subpackage, not here). It never
+// fires for the in-process seams, which need no configuration at all.
 var ErrMissingSeamConfig = errors.New("pkgcore: seam implementation is missing required configuration")
 
 // EventBusRegistry is the package-level SeamRegistry every Kernel resolves
 // the "eventbus" Preset key against, pre-populated below with pkgcore's
-// built-in implementations. A host registers its own implementation by
-// calling EventBusRegistry.Register before bootstrapping a Kernel whose
-// Preset names it.
+// in-process built-in implementation. A host registers its own
+// implementation -- including pkgcore's own Redis-backed one, which
+// registers "eventbus.redis" through the eventbus/redis subpackage's own
+// init(), not here -- by calling EventBusRegistry.Register before
+// bootstrapping a Kernel whose Preset names it.
 var EventBusRegistry = newBuiltinEventBusRegistry()
 
-// KVStoreRegistry mirrors EventBusRegistry for the "kv" seam.
+// KVStoreRegistry mirrors EventBusRegistry for the "kv" seam ("kv.redis"
+// registers through the kv/redis subpackage).
 var KVStoreRegistry = newBuiltinKVStoreRegistry()
 
-// MailerRegistry mirrors EventBusRegistry for the "mailer" seam.
+// MailerRegistry mirrors EventBusRegistry for the "mailer" seam. Both of its
+// built-ins, "mailer.console" and "mailer.smtp", register here: net/smtp is
+// standard library, so the SMTP mailer earns no dependency-isolation benefit
+// from a subpackage of its own (unlike the Redis and S3 implementations).
 var MailerRegistry = newBuiltinMailerRegistry()
 
-// ObjectStoreRegistry mirrors EventBusRegistry for the "objectstore" seam.
+// ObjectStoreRegistry mirrors EventBusRegistry for the "objectstore" seam
+// ("objectstore.s3" registers through the objectstore/s3 subpackage).
 var ObjectStoreRegistry = newBuiltinObjectStoreRegistry()
 
 // mustRegister adds r to registry and panics if that fails. It is only ever
@@ -39,7 +43,10 @@ var ObjectStoreRegistry = newBuiltinObjectStoreRegistry()
 // duplicate name -- is a programming error in this file, not a condition a
 // caller could hit or would want to recover from: the same unrecoverable
 // startup-error convention NewLocalObjectStore and NewSMTPMailer already use
-// for a wiring mistake that cannot be corrected at runtime.
+// for a wiring mistake that cannot be corrected at runtime. The three
+// split-out subpackages (eventbus/redis, kv/redis, objectstore/s3) each
+// carry an unexported copy of this same helper, since it cannot be exported
+// from here without exposing an implementation detail no other caller needs.
 func mustRegister[T any](registry *SeamRegistry[T], r Registration[T]) {
 	if err := registry.Register(r); err != nil {
 		panic(fmt.Sprintf("pkgcore: builtin implementation registration failed: %v", err))
@@ -53,17 +60,6 @@ func newBuiltinEventBusRegistry() *SeamRegistry[EventBus] {
 		Capabilities: 0,
 		New:          func(Config) (EventBus, error) { return NewMemoryEventBus(), nil },
 	})
-	mustRegister(r, Registration[EventBus]{
-		Name:         "eventbus.redis",
-		Capabilities: MultiReplicaSafe | SurvivesRestart,
-		New: func(cfg Config) (EventBus, error) {
-			client, err := redisClientFromConfig(cfg)
-			if err != nil {
-				return nil, fmt.Errorf("pkgcore: builtin eventbus.redis seam: %w", err)
-			}
-			return NewRedisEventBus(client), nil
-		},
-	})
 	return r
 }
 
@@ -73,17 +69,6 @@ func newBuiltinKVStoreRegistry() *SeamRegistry[KVStore] {
 		Name:         "kv.memory",
 		Capabilities: 0,
 		New:          func(Config) (KVStore, error) { return NewMemoryKVStore(), nil },
-	})
-	mustRegister(r, Registration[KVStore]{
-		Name:         "kv.redis",
-		Capabilities: MultiReplicaSafe | SurvivesRestart,
-		New: func(cfg Config) (KVStore, error) {
-			client, err := redisClientFromConfig(cfg)
-			if err != nil {
-				return nil, fmt.Errorf("pkgcore: builtin kv.redis seam: %w", err)
-			}
-			return NewRedisKVStore(client), nil
-		},
 	})
 	return r
 }
@@ -114,43 +99,7 @@ func newBuiltinObjectStoreRegistry() *SeamRegistry[ObjectStore] {
 		Capabilities: 0,
 		New:          localObjectStoreFromConfig,
 	})
-	mustRegister(r, Registration[ObjectStore]{
-		Name:         "objectstore.s3",
-		Capabilities: MultiReplicaSafe | SurvivesRestart,
-		New:          s3ObjectStoreFromConfig,
-	})
 	return r
-}
-
-// redisClientFromConfig builds the *redis.Client the eventbus.redis and
-// kv.redis Registrations adapt onto NewRedisEventBus and NewRedisKVStore.
-// Nothing is dialed here, mirroring those constructors' own "nothing is
-// dialed at construction" contract. addr falls back to "localhost:6379",
-// go-redis's own default and the only sensible default for a seam a
-// zero-configuration Preset must still be able to build something for; a
-// host that needs a real address, credentials or a non-zero database index
-// sets them in cfg, or bypasses the preset layer entirely with
-// WithEventBus(pkgcore.NewRedisEventBus(client), ...).
-func redisClientFromConfig(cfg Config) (*redis.Client, error) {
-	addr := cfg["addr"]
-	if addr == "" {
-		addr = "localhost:6379"
-	}
-
-	db := 0
-	if raw, ok := cfg["db"]; ok && raw != "" {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil {
-			return nil, fmt.Errorf("invalid \"db\" %q: %w", raw, err)
-		}
-		db = parsed
-	}
-
-	return redis.NewClient(&redis.Options{
-		Addr:     addr,
-		Password: cfg["password"],
-		DB:       db,
-	}), nil
 }
 
 // smtpMailerFromConfig adapts Config onto NewSMTPMailer. Host has no safe
@@ -204,32 +153,6 @@ func parseSMTPTLSMode(raw string) (SMTPTLSMode, error) {
 	default:
 		return 0, fmt.Errorf("invalid \"tls_mode\" %q: want one of \"auto\", \"starttls\", \"implicit\"", raw)
 	}
-}
-
-// s3ObjectStoreFromConfig adapts Config onto NewS3ObjectStore. Like
-// smtpMailerFromConfig, the fields NewS3ObjectStore itself panics on missing
-// are checked first and reported as ErrMissingSeamConfig instead, because
-// none of endpoint, bucket or the credential pair has a safe default.
-func s3ObjectStoreFromConfig(cfg Config) (ObjectStore, error) {
-	endpoint := cfg["endpoint"]
-	bucket := cfg["bucket"]
-	accessKey := cfg["access_key"]
-	secretKey := cfg["secret_key"]
-	if endpoint == "" || bucket == "" || accessKey == "" || secretKey == "" {
-		return nil, fmt.Errorf(
-			"pkgcore: builtin objectstore.s3 seam: %w: requires \"endpoint\", \"bucket\", \"access_key\" and \"secret_key\"",
-			ErrMissingSeamConfig,
-		)
-	}
-
-	return NewS3ObjectStore(S3Config{
-		Endpoint:  endpoint,
-		Bucket:    bucket,
-		AccessKey: accessKey,
-		SecretKey: secretKey,
-		Region:    cfg["region"],
-		UseSSL:    cfg["use_ssl"] == "true",
-	}), nil
 }
 
 // localObjectStoreFromConfig adapts Config onto NewLocalObjectStore. Unlike

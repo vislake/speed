@@ -61,12 +61,14 @@ func TestPresetStandalone_NoneOfItsImplementationsDeclareMultiReplicaSafe(t *tes
 // pins the complementary invariant: every seam PresetDistributed names must
 // resolve to an implementation declaring MultiReplicaSafe, or
 // WithPreset(PresetDistributed) alone could never satisfy
-// DeploymentModeDistributed's requirement. The Redis-backed seams build with
-// an empty Config (they fall back to a bare-minimum "localhost:6379"
-// default, per redisClientFromConfig's own doc comment); the SMTP and S3
-// seams need cfg fields with no safe default and are checked against a
-// minimally-populated Config here instead, purely to reach their declared
-// Capabilities -- constructing a live mailer or store is not this test's
+// DeploymentModeDistributed's requirement. The Redis-backed seams -- built
+// by the eventbus/redis and kv/redis subpackages this test binary's own
+// example_test.go blank-imports -- build with an empty Config (they fall
+// back to a bare-minimum "localhost:6379" default, per each subpackage's own
+// clientFromConfig doc comment); the SMTP and S3 seams need cfg fields with
+// no safe default and are checked against a minimally-populated Config here
+// instead, purely to reach their declared Capabilities -- constructing a
+// live mailer or store is not this test's
 // concern.
 func TestPresetDistributed_NamesAMultiReplicaSafeImplementationForEverySeam(t *testing.T) {
 	if _, caps, err := EventBusRegistry.Build(PresetDistributed[presetKeyEventBus], Config{}); err != nil {

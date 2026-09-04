@@ -95,6 +95,7 @@ import (
 	// does not reach it.
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/pkgcore"
+	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 )
 
 // startRedisClient starts a disposable Redis 7 container and returns a
@@ -192,9 +193,9 @@ func eventually(t *testing.T, what string, cond func() bool) {
 // the group's creation and lose it. Once receiver reports a marker, the
 // wait for one full read block (600ms) lets any other marker that was
 // already appended drain out, so clearing the recorder afterwards leaves
-// counts that only the test's own events move. Copied from pkgcore's
-// integration tier.
-func warmUp(t *testing.T, publisher *pkgcore.RedisEventBus, receiver *eventRecorder, eventType string) {
+// counts that only the test's own events move. Copied from
+// go/pkgcore/eventbus/redis's own integration tier.
+func warmUp(t *testing.T, publisher *eventbusredis.EventBus, receiver *eventRecorder, eventType string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for seq := 1; ; seq++ {
@@ -363,9 +364,9 @@ func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *
 	// own consumer group is created later, at the stream's live end, so
 	// the markers are history for it and never reach its audit persister
 	// (pkgcore pins that no-catch-up contract in its own tier).
-	observer := pkgcore.NewRedisEventBus(client)
+	observer := eventbusredis.NewEventBus(client)
 	t.Cleanup(observer.Close)
-	warmer := pkgcore.NewRedisEventBus(client)
+	warmer := eventbusredis.NewEventBus(client)
 	t.Cleanup(warmer.Close)
 	recorder := &eventRecorder{}
 	observer.Subscribe(audit.EventRecorded, recorder.handler())

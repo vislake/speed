@@ -95,11 +95,15 @@ type ObjectStore interface {
 	DeleteObject(ctx context.Context, key string) error
 }
 
-// validateObjectKey enforces the rules ErrInvalidObjectKey describes. It is
-// shared by every implementation so that a key accepted by one backend is
-// accepted by all of them, and the checks run before an operation touches
-// the backend.
-func validateObjectKey(key string) error {
+// ValidateObjectKey enforces the rules ErrInvalidObjectKey describes. It is
+// shared by every implementation -- the local store below and the S3-backed
+// one in the objectstore/s3 subpackage -- so that a key accepted by one
+// backend is accepted by all of them, and the checks run before an operation
+// touches the backend. Exported because the split-out subpackage cannot
+// otherwise share this package's own key grammar (see the implementation-
+// registry section of docs/internal/03-deployment-modes.md for why the
+// implementation lives in its own package rather than here).
+func ValidateObjectKey(key string) error {
 	if key == "" {
 		return fmt.Errorf("%w: the key is empty", ErrInvalidObjectKey)
 	}
@@ -220,7 +224,7 @@ func (s *localObjectStore) PutObject(ctx context.Context, key string, r io.Reade
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := validateObjectKey(key); err != nil {
+	if err := ValidateObjectKey(key); err != nil {
 		return err
 	}
 
@@ -406,7 +410,7 @@ func (s *localObjectStore) GetObject(ctx context.Context, key string) (io.ReadCl
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := validateObjectKey(key); err != nil {
+	if err := ValidateObjectKey(key); err != nil {
 		return nil, err
 	}
 
@@ -445,7 +449,7 @@ func (s *localObjectStore) GetObject(ctx context.Context, key string) (io.ReadCl
 	// the Lstat above looked at it, so the file the reader ends up streaming
 	// is the regular file that was just inspected.
 	//nolint:gosec // G304: the path is an Lstat-verified regular file under the store root
-	// (validateObjectKey rejects traversal), and O_NOFOLLOW makes the open
+	// (ValidateObjectKey rejects traversal), and O_NOFOLLOW makes the open
 	// refuse exactly the symlink swap gosec worries about.
 	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
@@ -470,7 +474,7 @@ func (s *localObjectStore) DeleteObject(ctx context.Context, key string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := validateObjectKey(key); err != nil {
+	if err := ValidateObjectKey(key); err != nil {
 		return err
 	}
 

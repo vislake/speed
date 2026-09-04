@@ -46,6 +46,7 @@ import (
 	_ "github.com/vislake/speed/go/observability/exporter/prometheus"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
+	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 	"github.com/vislake/speed/go/rbac"
 	"github.com/vislake/speed/go/storage"
 	"github.com/vislake/speed/go/tenancy"
@@ -728,14 +729,14 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// poll against a connection that is being torn down -- then the
 	// injected bus, stopping its readers so no remote event can still be
 	// delivered to a handler writing the database, then the client this
-	// host owns (RedisEventBus never closes it), and the database last.
-	// Every close is attempted even when an earlier one failed; the first
-	// error wins.
+	// host owns (eventbusredis.EventBus never closes it), and the database
+	// last. Every close is attempted even when an earlier one failed; the
+	// first error wins.
 	var (
 		configService   *config.Service
 		rbacService     *rbac.Service
 		standaloneQueue *jobs.StandaloneQueue
-		redisBus        *pkgcore.RedisEventBus
+		redisBus        *eventbusredis.EventBus
 		redisClient     *redis.Client
 	)
 
@@ -1104,8 +1105,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// composition is validated against; it never selects an implementation
 	// (docs/internal/03-deployment-modes.md's orthogonality rule). When
 	// SPEED_REDIS_ADDR is set, WithEventBus injects a REAL Redis-backed
-	// EventBus -- pkgcore.NewRedisEventBus over a go-redis client this host
-	// constructs and owns -- declaring MultiReplicaSafe|SurvivesRestart,
+	// EventBus -- eventbus/redis's NewEventBus over a go-redis client this
+	// host constructs and owns -- declaring MultiReplicaSafe|SurvivesRestart,
 	// the capabilities the Redis Streams implementation genuinely carries.
 	// The other three seams resolve from the Preset to their in-process
 	// implementations, so the assembled composition is a standalone
@@ -1119,14 +1120,13 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// same Redis streams receives the events too.
 	//
 	// go-redis is imported here -- and go.mod therefore requires it
-	// directly -- because the app is the assembly host that pkgcore's
-	// RedisEventBus contract names as the client's owner: NewRedisEventBus
-	// builds on a client the host constructs and keeps owning ("the client
-	// the bus was built on stays open, because the host owns it" -- Close's
-	// own doc comment), which is exactly why cleanup below closes
-	// redisClient itself. The no-concrete-infrastructure-implementation
-	// rule constrains business modules, not the application that assembles
-	// them.
+	// directly -- because the app is the assembly host that eventbus/redis's
+	// EventBus contract names as the client's owner: NewEventBus builds on a
+	// client the host constructs and keeps owning ("the client the bus was
+	// built on stays open, because the host owns it" -- Close's own doc
+	// comment), which is exactly why cleanup below closes redisClient
+	// itself. The no-concrete-infrastructure-implementation rule constrains
+	// business modules, not the application that assembles them.
 	//
 	// The cfg.Mailer override rides along as a second conditional option --
 	// the retrofit's WithMailer takes the capability its value declares,
@@ -1138,7 +1138,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	kernelOptions := []pkgcore.KernelOption{pkgcore.WithDeploymentMode(cfg.DeploymentMode)}
 	if cfg.RedisAddr != "" {
 		redisClient = redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
-		redisBus = pkgcore.NewRedisEventBus(redisClient)
+		redisBus = eventbusredis.NewEventBus(redisClient)
 		kernelOptions = append(kernelOptions,
 			pkgcore.WithEventBus(redisBus, pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
 	}

@@ -1,8 +1,9 @@
 // Package eventbustest verifies that a pkgcore.EventBus implementation
 // upholds the contract EventBus's own doc comment describes, independent of
 // which backend implements it. It exists so that every EventBus — built-in
-// (pkgcore.NewMemoryEventBus, pkgcore.NewRedisEventBus) or host-supplied
-// through pkgcore.WithEventBus — is checked against the same suite, the
+// (pkgcore.NewMemoryEventBus, the eventbus/redis subpackage's NewEventBus)
+// or host-supplied through pkgcore.WithEventBus — is checked against the
+// same suite, the
 // same role go/tenancy/tenancytest.AssertIsolated plays for
 // dbkit.Repository[T]: with N implementations per seam under the
 // composition retrofit (see docs/internal/03-deployment-modes.md), drift
@@ -23,7 +24,7 @@ import (
 // conformWait bounds every assertion that would otherwise hang rather than
 // fail if an implementation delivered nothing: a synchronous bus (the
 // in-memory one, and a broker-backed bus's own local subscribers, see
-// pkgcore.RedisEventBus's doc comment) satisfies these well within it, so a
+// eventbus/redis.EventBus's doc comment) satisfies these well within it, so a
 // generous margin never makes a genuinely broken implementation look like a
 // slow one.
 const conformWait = 5 * time.Second
@@ -41,7 +42,7 @@ const (
 // conformPayload is the payload AssertConforms publishes. It carries a
 // Sequence so ordering checks do not depend on wall-clock timing, and is a
 // plain struct with exported fields and no interface- or channel-typed
-// members, because pkgcore.RedisEventBus marshals every payload as JSON
+// members, because eventbus/redis.EventBus marshals every payload as JSON
 // (see its Publish doc comment) — a payload only pkgcore.NewMemoryEventBus
 // could carry would silently narrow this suite to one implementation.
 type conformPayload struct {
@@ -233,7 +234,7 @@ func subscript(base, suffix string) string {
 // check — that need every expected side effect to have landed before
 // inspecting shared state, without assuming synchronous delivery: a
 // broker-backed bus's own local subscribers are documented as synchronous
-// (see pkgcore.RedisEventBus), but polling keeps this suite from silently
+// (see eventbus/redis.EventBus), but polling keeps this suite from silently
 // depending on that being true forever.
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()

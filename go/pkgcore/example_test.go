@@ -3,7 +3,21 @@ package pkgcore_test
 // Runnable documentation for the pkgcore public API. Every example here is
 // compiled and executed by `go test`, so an API change that invalidates the
 // documented usage fails the build instead of silently rotting.
-
+//
+// The three blank imports below register "eventbus.redis", "kv.redis" and
+// "objectstore.s3" on pkgcore's shared seam registries as a side effect,
+// exactly as a distributed-mode host's own blank import would -- see each
+// subpackage's own doc comment. Nothing in pkgcore's root package imports
+// them (that would cycle back into the package these subpackages depend on),
+// but this external test package can, and doing so here is what makes
+// ExampleWithPreset below -- and this same test binary's internal tests in
+// preset_test.go and builtin_implementations_test.go that resolve
+// PresetDistributed's eventbus/kv/objectstore entries -- exercise the real,
+// split-out implementations instead of failing with ErrUnknownImplementation:
+// go test links the internal "pkgcore" test package and this external
+// "pkgcore_test" one into one binary, so an init() triggered by an import
+// here runs before any test in either package, and the registries it
+// populates are the very package-level vars those other tests read.
 import (
 	"context"
 	"embed"
@@ -16,6 +30,9 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	_ "github.com/vislake/speed/go/pkgcore/eventbus/redis"
+	_ "github.com/vislake/speed/go/pkgcore/kv/redis"
+	_ "github.com/vislake/speed/go/pkgcore/objectstore/s3"
 )
 
 // ExampleParseDeploymentMode shows how a host turns the SPEED_DEPLOYMENT_MODE
@@ -542,6 +559,21 @@ func ExampleNewLocalObjectStore() {
 	// delete: <nil>
 }
 
+// ExampleValidateObjectKey shows the shared key grammar every ObjectStore
+// implementation enforces before an operation touches its backend --
+// exported so that objectstore/s3 can share it without importing this
+// package's local store implementation back into itself.
+func ExampleValidateObjectKey() {
+	fmt.Println(pkgcore.ValidateObjectKey("invoices/2026/1042.pdf"))
+	fmt.Println(errors.Is(pkgcore.ValidateObjectKey(""), pkgcore.ErrInvalidObjectKey))
+	fmt.Println(errors.Is(pkgcore.ValidateObjectKey("a/../b"), pkgcore.ErrInvalidObjectKey))
+
+	// Output:
+	// <nil>
+	// true
+	// true
+}
+
 // ExampleObjectStore shows the three operations of the object seam as a
 // module's code sees them, on the standalone implementation. Objects are
 // whole streams under keys: there is no metadata, no listing and no
@@ -620,34 +652,6 @@ func ExampleWithObjectStore() {
 	// <nil> true
 }
 
-// ExampleNewS3ObjectStore shows the distributed deployment mode's object
-// store: an S3-compatible service (MinIO, Aliyun OSS or AWS S3) reached
-// through the bucket and credentials in S3Config, the counterpart of the
-// local store of ExampleNewLocalObjectStore. Nothing is dialed at
-// construction -- the service is contacted on the first operation -- so a
-// host can wire the store at startup whether or not the service is
-// reachable, and an unusable configuration (an empty endpoint, bucket or
-// credential) panics there instead, where the wiring error is visible.
-func ExampleNewS3ObjectStore() {
-	store := pkgcore.NewS3ObjectStore(pkgcore.S3Config{
-		Endpoint:  "s3.example.com:9000",
-		Bucket:    "objects",
-		AccessKey: "access-key",
-		SecretKey: "secret-key",
-		Region:    "us-east-1",
-		UseSSL:    true, // HTTPS: the setting for anything beyond a local MinIO
-	})
-	//nolint:staticcheck // QF1011: the assertion doubles as written doc that
-	// this constructor satisfies the ObjectStore interface -- the local-store
-	// counterpart of ExampleNewLocalObjectStore -- so it is kept rather than
-	// inlined, which would leave the value unused.
-	var _ pkgcore.ObjectStore = store // drop-in for the local store of ExampleNewLocalObjectStore
-
-	fmt.Println("store wired; the first operation contacts the service")
-	// Output:
-	// store wired; the first operation contacts the service
-}
-
 // ExampleCapability shows the bitmask deployment mode and implementation
 // composition compare: an implementation declares what it Has, a deployment
 // mode declares what it requires, and Kernel.Bootstrap checks the two
@@ -718,8 +722,9 @@ func ExampleWithPreset() {
 	// keeps the console Mailer, composes a Preset from the two built-in ones:
 	// PresetDistributed's eventbus/kv entries, PresetStandalone's mailer
 	// entry. Nothing is dialed by resolving "eventbus.redis"/"kv.redis" here
-	// (see NewRedisEventBus and NewRedisKVStore's own doc comments), so this
-	// example needs no real Redis to run.
+	// (see eventbus/redis's NewEventBus and kv/redis's NewKVStore, whose
+	// packages this file's own blank imports register onto the shared
+	// registries), so this example needs no real Redis to run.
 	custom := pkgcore.Preset{
 		"eventbus":    pkgcore.PresetDistributed["eventbus"],
 		"kv":          pkgcore.PresetDistributed["kv"],
@@ -750,7 +755,8 @@ func ExampleDeploymentMode_RequiredCapabilities() {
 // with an empty Config fails instead of building an unusable mailer or
 // store. A host that wants real credentials injects the implementation
 // directly with WithMailer or WithObjectStore instead (see
-// ExampleNewSMTPMailer and ExampleNewS3ObjectStore).
+// ExampleNewSMTPMailer and the objectstore/s3 subpackage's own
+// ExampleNewObjectStore).
 func ExampleErrMissingSeamConfig() {
 	_, _, err := pkgcore.MailerRegistry.Build("mailer.smtp", pkgcore.Config{})
 	fmt.Println(errors.Is(err, pkgcore.ErrMissingSeamConfig))

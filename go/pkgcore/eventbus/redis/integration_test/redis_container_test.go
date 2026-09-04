@@ -1,25 +1,20 @@
 //go:build integration
 
-// Package pkgcore_test holds go/pkgcore's integration tier: tests that
-// exercise the Redis-backed implementations of the KVStore and EventBus
-// seams against a real Redis server and the S3-backed implementation of the
-// ObjectStore seam against a real MinIO server. It is physically separate
-// from
-// go/pkgcore's unit tests (all of which live in package pkgcore itself, one
-// file per source file, per the backend coding standard's testing layout
-// rule) and carries the "integration" build tag: a plain "go test ./..."
-// never compiles or runs anything in this directory; it is invoked
-// explicitly with "go test -tags=integration ./...". This mirrors the
-// identical convention of go/jobs/integration_test and
-// go/dbkit/integration_test; the container lifecycle below follows
-// go/jobs/integration_test/redis_container_test.go almost line for line.
+// Package redis_test holds go/pkgcore/eventbus/redis's integration tier:
+// tests that exercise EventBus against a real Redis server. It is physically
+// separate from the package's unit tests (all of which live in package
+// redis itself, one file per source file, per the backend coding standard's
+// testing layout rule) and carries the "integration" build tag: a plain
+// "go test ./..." never compiles or runs anything in this directory; it is
+// invoked explicitly with "go test -tags=integration ./...". This mirrors
+// go/pkgcore's own (pre-split) integration tier, which this directory's
+// tests are moved out of, and go/jobs/integration_test's identical
+// convention.
 //
-// Every test here spins up its own disposable container -- a Redis for the
-// KVStore and EventBus tests, a MinIO for the ObjectStore tests -- and
-// requires a working Docker (or Docker-API-compatible) daemon; there is no
-// fallback or skip-on-missing-Docker path, matching go/jobs's own
-// integration tier.
-package pkgcore_test
+// Every test here spins up its own disposable Redis container and requires
+// a working Docker (or Docker-API-compatible) daemon; there is no fallback
+// or skip-on-missing-Docker path.
+package redis_test
 
 import (
 	"context"
@@ -36,6 +31,12 @@ import (
 // leaks past its owning test. Every integration test calls this for its own
 // container, keeping tests isolated from one another at the cost of a few
 // seconds of startup each.
+//
+// kv/redis's own integration tier carries an identical copy of this helper:
+// the two packages' integration tiers are independent of each other and
+// neither owns a shared package worth introducing just for a dozen lines
+// (go/pkgcore/AGENTS.md's packaging rule, the same reasoning behind
+// register.go's duplicated clientFromConfig).
 func startRedisClient(t *testing.T, ctx context.Context) *redis.Client {
 	t.Helper()
 

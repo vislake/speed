@@ -59,6 +59,7 @@ import (
 	"github.com/vislake/speed/go/notification/internal/testutil"
 	"github.com/vislake/speed/go/notification/migrations"
 	"github.com/vislake/speed/go/pkgcore"
+	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 )
 
 // convergenceDeadline bounds every wait for a remote delivery. Redis
@@ -192,7 +193,7 @@ func warmUp(t *testing.T, bus pkgcore.EventBus, spy *eventSpy) {
 // type) rides the same kernel as the module that delivers its type -- the
 // shape a real host assembles. The peer replica boots without them: it
 // only needs to run the module's own subscription machinery on its bus.
-func bootReplica(t *testing.T, ctx context.Context, db *gorm.DB, bus *pkgcore.RedisEventBus, extraModules ...pkgcore.Module) (*notification.Module, *stubQueue) {
+func bootReplica(t *testing.T, ctx context.Context, db *gorm.DB, bus *eventbusredis.EventBus, extraModules ...pkgcore.Module) (*notification.Module, *stubQueue) {
 	t.Helper()
 
 	queue := &stubQueue{}
@@ -225,8 +226,8 @@ func TestRedisBus_DeliveredInbox_AnnouncesAcrossReplicas(t *testing.T) {
 	registerContactSerializer()
 
 	client := startRedisClient(t, ctx)
-	writerBus := pkgcore.NewRedisEventBus(client)
-	peerBus := pkgcore.NewRedisEventBus(client)
+	writerBus := eventbusredis.NewEventBus(client)
+	peerBus := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
 		writerBus.Close()
 		peerBus.Close()

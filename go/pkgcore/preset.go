@@ -40,7 +40,15 @@ var PresetStandalone = Preset{
 // PresetDistributed names pkgcore's own multi-replica-safe implementation of
 // every seam: the composition WithPreset(PresetDistributed) selects for a
 // host that wants pkgcore's built-in Redis/SMTP/S3 implementations rather
-// than injecting its own. Because the preset layer carries no
+// than injecting its own. Three of the four names it points at --
+// "eventbus.redis", "kv.redis" and "objectstore.s3" -- are registered by
+// their own subpackages (eventbus/redis, kv/redis, objectstore/s3), not by
+// this package, so a host that wants them must import the matching
+// subpackage (a blank import is enough) before that seam resolves; an
+// unimported one fails Bootstrap with ErrUnknownImplementation naming the
+// seam and the implementation, the same "unknown driver" trade
+// database/sql's own drivers make (the implementation-registry section of
+// docs/internal/03-deployment-modes.md). Because the preset layer carries no
 // per-implementation configuration yet (see Config's doc comment, and the
 // deferred-scope note on real credential sourcing in this round's plan), the
 // two Redis-backed seams fall back to a bare-minimum default

@@ -1,10 +1,10 @@
 //go:build integration
 
-package pkgcore_test
+package redis_test
 
-// Integration tests for NewRedisEventBus: two bus instances sharing one
-// client stand in for two replicas of a deployment, and the tests pin the
-// delivery contract the implementation documents -- handlers on the
+// Integration tests for eventbusredis.NewEventBus: two bus instances sharing
+// one client stand in for two replicas of a deployment, and the tests pin
+// the delivery contract the implementation documents -- handlers on the
 // publishing instance run synchronously with the original payload, handlers
 // on every other instance eventually run exactly once with the
 // JSON-reconstructed payload shape, events never cross type streams, a
@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 	"github.com/vislake/speed/go/pkgcore/eventbustest"
 )
 
@@ -84,7 +85,7 @@ func (r *eventRecorder) clear() {
 
 // eventually polls cond until it holds or the deadline passes, failing the
 // test in the latter case. Cross-process delivery is asynchronous: a reader
-// goroutine wakes up at most every redisEventReaderBlock (500ms) to take new
+// goroutine wakes up at most every eventReaderBlock (500ms) to take new
 // entries off the stream, so remote delivery of an already-committed event
 // lands well inside this five-second window.
 func eventually(t *testing.T, what string, cond func() bool) {
@@ -108,7 +109,7 @@ func eventually(t *testing.T, what string, cond func() bool) {
 // it. Once receiver reports a marker, the wait for one full read block (600ms)
 // lets any other marker that was already appended drain out, so clearing both
 // recorders afterwards leaves counts that only the test's own events move.
-func warmUp(t *testing.T, publisher *pkgcore.RedisEventBus, receiver *eventRecorder, eventType string) {
+func warmUp(t *testing.T, publisher *eventbusredis.EventBus, receiver *eventRecorder, eventType string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for seq := 1; ; seq++ {
@@ -153,7 +154,7 @@ func requireRemoteInvoice(t *testing.T, evt pkgcore.Event, wantID string, wantAm
 	}
 }
 
-// streamKey mirrors pkgcore's unexported redisEventStreamKey: these tests
+// streamKey mirrors the package's unexported eventStreamKey: these tests
 // address the stream directly (XGROUP DESTROY, XINFO GROUPS, EXISTS), which
 // the external test package cannot do through the public API. The prefix is
 // part of the bus's wire format, which the implementation's Close docs quote
@@ -163,17 +164,17 @@ func streamKey(eventType string) string {
 	return "pkgcore:events:" + eventType
 }
 
-// TestRedisEventBus_DeliversExactlyOnceLocallyAndRemotely pins the core
-// contract in both directions: the publishing instance's handlers run
-// synchronously with the original payload, the other instance's handler runs
-// exactly once with the JSON shape, and nothing is delivered twice -- which
-// would happen if a reader failed to skip the events its own instance had
-// already delivered locally.
-func TestRedisEventBus_DeliversExactlyOnceLocallyAndRemotely(t *testing.T) {
+// TestEventBus_DeliversExactlyOnceLocallyAndRemotely pins the core contract
+// in both directions: the publishing instance's handlers run synchronously
+// with the original payload, the other instance's handler runs exactly once
+// with the JSON shape, and nothing is delivered twice -- which would happen
+// if a reader failed to skip the events its own instance had already
+// delivered locally.
+func TestEventBus_DeliversExactlyOnceLocallyAndRemotely(t *testing.T) {
 	ctx := context.Background()
 	client := startRedisClient(t, ctx)
-	busA := pkgcore.NewRedisEventBus(client)
-	busB := pkgcore.NewRedisEventBus(client)
+	busA := eventbusredis.NewEventBus(client)
+	busB := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
 		busA.Close()
 		busB.Close()
@@ -250,14 +251,14 @@ func TestRedisEventBus_DeliversExactlyOnceLocallyAndRemotely(t *testing.T) {
 	}
 }
 
-// TestRedisEventBus_RoutesEachTypeOnItsOwnStream checks that events of one
-// type never reach handlers subscribed to another, in either direction, on
-// the stream-per-type design.
-func TestRedisEventBus_RoutesEachTypeOnItsOwnStream(t *testing.T) {
+// TestEventBus_RoutesEachTypeOnItsOwnStream checks that events of one type
+// never reach handlers subscribed to another, in either direction, on the
+// stream-per-type design.
+func TestEventBus_RoutesEachTypeOnItsOwnStream(t *testing.T) {
 	ctx := context.Background()
 	client := startRedisClient(t, ctx)
-	busA := pkgcore.NewRedisEventBus(client)
-	busB := pkgcore.NewRedisEventBus(client)
+	busA := eventbusredis.NewEventBus(client)
+	busB := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
 		busA.Close()
 		busB.Close()
@@ -310,15 +311,15 @@ func TestRedisEventBus_RoutesEachTypeOnItsOwnStream(t *testing.T) {
 	}
 }
 
-// TestRedisEventBus_NonJSONPayload_FailsBeforeAnythingIsDelivered pins the
+// TestEventBus_NonJSONPayload_FailsBeforeAnythingIsDelivered pins the
 // all-or-nothing rule: a payload that cannot survive JSON encoding fails the
 // publish before the append, so neither the local handlers nor any remote
 // handler ever sees it, and the bus keeps working for events that do encode.
-func TestRedisEventBus_NonJSONPayload_FailsBeforeAnythingIsDelivered(t *testing.T) {
+func TestEventBus_NonJSONPayload_FailsBeforeAnythingIsDelivered(t *testing.T) {
 	ctx := context.Background()
 	client := startRedisClient(t, ctx)
-	busA := pkgcore.NewRedisEventBus(client)
-	busB := pkgcore.NewRedisEventBus(client)
+	busA := eventbusredis.NewEventBus(client)
+	busB := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
 		busA.Close()
 		busB.Close()
@@ -360,16 +361,16 @@ func TestRedisEventBus_NonJSONPayload_FailsBeforeAnythingIsDelivered(t *testing.
 	})
 }
 
-// TestRedisEventBus_PanickingRemoteHandler_DoesNotWedgeTheReader checks that
-// a handler on another instance cannot take the publishing instance down --
+// TestEventBus_PanickingRemoteHandler_DoesNotWedgeTheReader checks that a
+// handler on another instance cannot take the publishing instance down --
 // its panic is contained on the reader goroutine -- and, just as important,
 // cannot take the reader itself down: later events of the same type still get
 // delivered to the handlers that follow the panicking one.
-func TestRedisEventBus_PanickingRemoteHandler_DoesNotWedgeTheReader(t *testing.T) {
+func TestEventBus_PanickingRemoteHandler_DoesNotWedgeTheReader(t *testing.T) {
 	ctx := context.Background()
 	client := startRedisClient(t, ctx)
-	busA := pkgcore.NewRedisEventBus(client)
-	busB := pkgcore.NewRedisEventBus(client)
+	busA := eventbusredis.NewEventBus(client)
+	busB := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
 		busA.Close()
 		busB.Close()
@@ -403,15 +404,16 @@ func TestRedisEventBus_PanickingRemoteHandler_DoesNotWedgeTheReader(t *testing.T
 	})
 }
 
-// TestRedisEventBus_Close_StopsPublishAndRemoteDelivery pins what closing a
-// bus means: its Publish starts failing with ErrEventBusClosed, its reader
-// goroutines shut down, and events published afterwards by other instances
-// stop reaching it -- the closed instance is out of the deployment.
-func TestRedisEventBus_Close_StopsPublishAndRemoteDelivery(t *testing.T) {
+// TestEventBus_Close_StopsPublishAndRemoteDelivery pins what closing a bus
+// means: its Publish starts failing with eventbusredis.ErrEventBusClosed,
+// its reader goroutines shut down, and events published afterwards by other
+// instances stop reaching it -- the closed instance is out of the
+// deployment.
+func TestEventBus_Close_StopsPublishAndRemoteDelivery(t *testing.T) {
 	ctx := context.Background()
 	client := startRedisClient(t, ctx)
-	busA := pkgcore.NewRedisEventBus(client)
-	busB := pkgcore.NewRedisEventBus(client)
+	busA := eventbusredis.NewEventBus(client)
+	busB := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
 		busA.Close()
 		busB.Close()
@@ -427,7 +429,7 @@ func TestRedisEventBus_Close_StopsPublishAndRemoteDelivery(t *testing.T) {
 	busB.Close()
 
 	err := busB.Publish(ctx, pkgcore.Event{Type: paidType, Payload: invoicePaid{ID: "never", Amount: 0}})
-	if !errors.Is(err, pkgcore.ErrEventBusClosed) {
+	if !errors.Is(err, eventbusredis.ErrEventBusClosed) {
 		t.Fatalf("Publish on the closed bus error = %v, want ErrEventBusClosed", err)
 	}
 
@@ -446,15 +448,15 @@ func TestRedisEventBus_Close_StopsPublishAndRemoteDelivery(t *testing.T) {
 	}
 }
 
-// TestRedisEventBus_SubscribersNeverCatchUpOnHistory pins the live-end rule:
-// an event published before an instance subscribed is history for it and is
+// TestEventBus_SubscribersNeverCatchUpOnHistory pins the live-end rule: an
+// event published before an instance subscribed is history for it and is
 // never replayed -- a late subscriber only sees events published after its
 // consumer group was created.
-func TestRedisEventBus_SubscribersNeverCatchUpOnHistory(t *testing.T) {
+func TestEventBus_SubscribersNeverCatchUpOnHistory(t *testing.T) {
 	ctx := context.Background()
 	client := startRedisClient(t, ctx)
-	busA := pkgcore.NewRedisEventBus(client)
-	busB := pkgcore.NewRedisEventBus(client)
+	busA := eventbusredis.NewEventBus(client)
+	busB := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
 		busA.Close()
 		busB.Close()
@@ -513,18 +515,18 @@ func TestRedisEventBus_SubscribersNeverCatchUpOnHistory(t *testing.T) {
 	}
 }
 
-// TestRedisEventBus_ReaderRecoversFromALostGroup pins the recovery from a
+// TestEventBus_ReaderRecoversFromALostGroup pins the recovery from a
 // vanished stream or group: an operator's cleanup (XGROUP DESTROY, DEL), a
 // FLUSHALL or a failover can remove the stream or this instance's group
 // while the reader is between reads. XREADGROUP then answers NOGROUP
 // forever, and the reader must recreate the group -- treating NOGROUP as a
 // transient blip would wedge the reader silently, and every event published
 // after the removal would be lost for this subscriber.
-func TestRedisEventBus_ReaderRecoversFromALostGroup(t *testing.T) {
+func TestEventBus_ReaderRecoversFromALostGroup(t *testing.T) {
 	ctx := context.Background()
 	client := startRedisClient(t, ctx)
-	busA := pkgcore.NewRedisEventBus(client) // publisher only: subscribes no handler
-	busB := pkgcore.NewRedisEventBus(client)
+	busA := eventbusredis.NewEventBus(client) // publisher only: subscribes no handler
+	busB := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
 		busA.Close()
 		busB.Close()
@@ -584,18 +586,18 @@ func TestRedisEventBus_ReaderRecoversFromALostGroup(t *testing.T) {
 	})
 }
 
-// TestRedisEventBus_Close_LastReaderLeavesNothingBehind pins the graceful
+// TestEventBus_Close_LastReaderLeavesNothingBehind pins the graceful
 // shutdown cleanup: a closed bus destroys the consumer group its instance
 // created, and when it was the stream's only group the stream is deleted
 // with it -- a deployment that closes all its replicas leaves no accumulated
 // group metadata behind on the server. (A crashed instance, which never runs
 // Close, still leaks its group; the Close docs hand operators the XGROUP
 // DESTROY / DEL recipe for that case.)
-func TestRedisEventBus_Close_LastReaderLeavesNothingBehind(t *testing.T) {
+func TestEventBus_Close_LastReaderLeavesNothingBehind(t *testing.T) {
 	ctx := context.Background()
 	client := startRedisClient(t, ctx)
-	busA := pkgcore.NewRedisEventBus(client) // publisher only: subscribes no handler
-	busB := pkgcore.NewRedisEventBus(client)
+	busA := eventbusredis.NewEventBus(client) // publisher only: subscribes no handler
+	busB := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
 		busA.Close()
 		busB.Close()
@@ -624,17 +626,17 @@ func TestRedisEventBus_Close_LastReaderLeavesNothingBehind(t *testing.T) {
 	}
 }
 
-// TestRedisEventBus_Close_SparesAPeerGroup pins the boundary of the close
+// TestEventBus_Close_SparesAPeerGroup pins the boundary of the close
 // cleanup: only the closing instance's own group is destroyed, and a stream
 // that still carries another instance's group is not deleted -- a peer's
 // blocked reader must never lose its stream under it. The surviving reader
 // keeps delivering after the other instance closed.
-func TestRedisEventBus_Close_SparesAPeerGroup(t *testing.T) {
+func TestEventBus_Close_SparesAPeerGroup(t *testing.T) {
 	ctx := context.Background()
 	client := startRedisClient(t, ctx)
-	busA := pkgcore.NewRedisEventBus(client) // publisher only: subscribes no handler
-	busB := pkgcore.NewRedisEventBus(client)
-	busC := pkgcore.NewRedisEventBus(client)
+	busA := eventbusredis.NewEventBus(client) // publisher only: subscribes no handler
+	busB := eventbusredis.NewEventBus(client)
+	busC := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
 		busA.Close()
 		busB.Close()
@@ -672,22 +674,22 @@ func TestRedisEventBus_Close_SparesAPeerGroup(t *testing.T) {
 	})
 }
 
-// TestRedisEventBus_ConformsToEventBusContract proves NewRedisEventBus
+// TestEventBus_ConformsToEventBusContract proves eventbusredis.NewEventBus
 // satisfies the shared contract eventbustest.AssertConforms checks -- the
 // same suite go/pkgcore's own eventbus_conformance_test.go runs against
-// NewMemoryEventBus -- against a real Redis, so drift between the two
-// EventBus implementations under the deployment-composition retrofit's N
-// registered implementations per seam is caught here once instead of
+// pkgcore.NewMemoryEventBus -- against a real Redis, so drift between the
+// two EventBus implementations under the deployment-composition retrofit's
+// N registered implementations per seam is caught here once instead of
 // pairwise. Every bus AssertConforms's subtests build shares one Redis
 // container and client (one container per test file, per this package's own
 // doc comment) and is closed on this test's cleanup, mirroring how every
-// other test in this file manages a RedisEventBus's lifetime.
-func TestRedisEventBus_ConformsToEventBusContract(t *testing.T) {
+// other test in this file manages an EventBus's lifetime.
+func TestEventBus_ConformsToEventBusContract(t *testing.T) {
 	ctx := context.Background()
 	client := startRedisClient(t, ctx)
 
 	eventbustest.AssertConforms(t, func() pkgcore.EventBus {
-		bus := pkgcore.NewRedisEventBus(client)
+		bus := eventbusredis.NewEventBus(client)
 		t.Cleanup(bus.Close)
 		return bus
 	})

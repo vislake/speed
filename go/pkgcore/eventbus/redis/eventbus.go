@@ -1,4 +1,23 @@
-package pkgcore
+// Package redis is the distributed deployment mode's EventBus, delivering
+// events between the replicas of a deployment through Redis Streams. It is
+// split out of go/pkgcore's own package -- rather than living beside the
+// EventBus interface as pkgcore.RedisEventBus once did -- so that a consumer
+// which never wires a Redis-backed bus does not inherit go-redis in its
+// dependency graph: Go resolves dependencies per package, and an interface
+// package that also carries one implementation hands every importer that
+// implementation's whole dependency closure (docs/internal/03-deployment-
+// modes.md's implementation-registry section measures the cost and names the boundary).
+//
+// Importing this package registers "eventbus.redis" on pkgcore's shared
+// EventBusRegistry as a side effect (see register.go), the name
+// pkgcore.PresetDistributed already names for the "eventbus" seam -- the
+// same database/sql-style driver-registration pattern pkgcore's other
+// built-in implementations use, now applied across a package boundary. A
+// distributed-mode host that wants it either blank-imports this package
+// (`import _ ".../pkgcore/eventbus/redis"`) so WithPreset(PresetDistributed)
+// resolves it, or calls NewEventBus directly and wires it with
+// pkgcore.WithEventBus.
+package redis
 
 import (
 	"context"
@@ -12,60 +31,63 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/vislake/speed/go/pkgcore"
 )
 
-// ErrEventBusClosed is returned by Publish on an EventBus implementation that
-// has been closed. The in-memory bus cannot be closed and never returns it;
-// a bus backed by a broker can, because closing one has meaning there: it
-// stops the background delivery that keeps its goroutines alive.
-var ErrEventBusClosed = errors.New("pkgcore: event bus is closed")
+// ErrEventBusClosed is returned by Publish on an EventBus after Close. The
+// in-memory bus in pkgcore's root package cannot be closed and never returns
+// it -- this sentinel is Redis-specific because closing an EventBus only has
+// meaning for an implementation with something to stop: the background
+// delivery that keeps this bus's reader goroutines alive.
+var ErrEventBusClosed = errors.New("pkgcore/eventbus/redis: event bus is closed")
 
 const (
-	// redisEventStreamPrefix namespaces the per-type Redis Streams that back
-	// the bus. It is a convention, not a guarantee: the keys sit in the same
+	// eventStreamPrefix namespaces the per-type Redis Streams that back the
+	// bus. It is a convention, not a guarantee: the keys sit in the same
 	// Redis namespace the host stores in, and a host key that happens to
 	// equal pkgcore:events:<type> keeps that type's reader down -- the group
 	// creation fails with WRONGTYPE and retries until the bus is closed,
 	// exactly as if Redis were unreachable. The prefix is the protection;
 	// hosts must not store their own keys under pkgcore:*.
-	redisEventStreamPrefix = "pkgcore:events:"
+	eventStreamPrefix = "pkgcore:events:"
 
-	// redisEventGroupPrefix namespaces the consumer-group names the bus
-	// creates, one group per stream per bus instance.
-	redisEventGroupPrefix = "pkgcore:bus:"
+	// eventGroupPrefix namespaces the consumer-group names the bus creates,
+	// one group per stream per bus instance.
+	eventGroupPrefix = "pkgcore:bus:"
 
-	// redisEventStreamMaxLen bounds each stream, trimming it to this many
-	// entries (approximately) on every append. The bus never replays history
-	// to a subscriber -- a group starts at "$", the live end -- so trimming
-	// only ever discards messages a reader could not have received anyway...
+	// eventStreamMaxLen bounds each stream, trimming it to this many entries
+	// (approximately) on every append. The bus never replays history to a
+	// subscriber -- a group starts at "$", the live end -- so trimming only
+	// ever discards messages a reader could not have received anyway...
 	// unless a reader stays disconnected longer than the stream's capacity,
 	// which the delivery-semantics note below owns up to.
-	redisEventStreamMaxLen = 4096
+	eventStreamMaxLen = 4096
 
-	// redisEventReaderBatch is how many stream entries one reader loop takes
-	// off at once.
-	redisEventReaderBatch = 32
+	// eventReaderBatch is how many stream entries one reader loop takes off
+	// at once.
+	eventReaderBatch = 32
 
-	// redisEventReaderBlock is how long a reader blocks waiting for the next
+	// eventReaderBlock is how long a reader blocks waiting for the next
 	// entry before polling again. A short block keeps Close prompt: every
 	// reader wakes up and exits within one block of the bus being closed.
-	redisEventReaderBlock = 500 * time.Millisecond
+	eventReaderBlock = 500 * time.Millisecond
 
-	// redisEventRetryDelay backs off transient Redis failures (a restart, a
+	// eventRetryDelay backs off transient Redis failures (a restart, a
 	// network blip) before a reader tries again.
-	redisEventRetryDelay = 200 * time.Millisecond
+	eventRetryDelay = 200 * time.Millisecond
 
-	// redisEventGroupCleanupTimeout bounds the cleanup Close runs against
-	// Redis. Close must not hang a shutdown on a Redis that stopped
-	// answering; when the cleanup times out the groups are left behind,
-	// which the Close notes tell an operator how to remove.
-	redisEventGroupCleanupTimeout = time.Second
+	// eventGroupCleanupTimeout bounds the cleanup Close runs against Redis.
+	// Close must not hang a shutdown on a Redis that stopped answering; when
+	// the cleanup times out the groups are left behind, which the Close
+	// notes tell an operator how to remove.
+	eventGroupCleanupTimeout = time.Second
 )
 
-// RedisEventBus is the distributed deployment mode's EventBus, delivering
+// EventBus is the distributed deployment mode's pkgcore.EventBus, delivering
 // events between the replicas of a deployment through the Redis Streams they
 // share. A distributed-mode host passes one client for the whole deployment
-// to NewRedisEventBus and keeps owning it; the bus never closes it.
+// to NewEventBus and keeps owning it; the bus never closes it.
 //
 // How delivery works:
 //
@@ -103,8 +125,8 @@ const (
 //     no tenant, and their errors are not observable by any publisher: the
 //     publisher has already moved on in another process. A handler that
 //     needs tenant data must rebuild the tenant from the event with
-//     WithTenant, and a panic inside it is recovered so that one buggy
-//     handler cannot take down a replica. (On the publishing replica,
+//     pkgcore.WithTenant, and a panic inside it is recovered so that one
+//     buggy handler cannot take down a replica. (On the publishing replica,
 //     handlers run synchronously on the caller's goroutine and behave
 //     exactly as they do on the in-memory bus, errors included.)
 //   - A replica that subscribes late does not catch up: the consumer group
@@ -119,7 +141,7 @@ const (
 // The bus is safe for concurrent use by multiple goroutines. Publish after
 // Close returns ErrEventBusClosed, and Subscribe after Close is a no-op;
 // both are programming errors, detected rather than silently accepted.
-type RedisEventBus struct {
+type EventBus struct {
 	client     *redis.Client
 	instanceID string
 
@@ -129,36 +151,37 @@ type RedisEventBus struct {
 
 	mu       sync.RWMutex
 	closed   bool
-	handlers map[string][]EventHandler
+	handlers map[string][]pkgcore.EventHandler
 
 	readersMu sync.Mutex
 	readers   map[string]struct{}
 }
 
-// NewRedisEventBus returns an EventBus that delivers between replicas through
-// the given Redis client: events published on any bus sharing the client
-// reach the subscribers of every one of them. The in-memory bus covers the
-// standalone deployment mode; this is its distributed counterpart, and a
-// distributed-mode host wires it in with WithEventBus.
+// NewEventBus returns a pkgcore.EventBus that delivers between replicas
+// through the given Redis client: events published on any bus sharing the
+// client reach the subscribers of every one of them. pkgcore's in-memory bus
+// covers the standalone deployment mode; this is its distributed
+// counterpart, and a distributed-mode host wires it in with
+// pkgcore.WithEventBus.
 //
 // The returned bus starts no goroutine and touches no network until the
 // first Subscribe, and its readers stop at Close. A nil client panics: it is
 // an unrecoverable wiring error at startup.
-func NewRedisEventBus(client *redis.Client) *RedisEventBus {
+func NewEventBus(client *redis.Client) *EventBus {
 	if client == nil {
-		panic("pkgcore: NewRedisEventBus requires a non-nil *redis.Client")
+		panic("pkgcore/eventbus/redis: NewEventBus requires a non-nil *redis.Client")
 	}
 	//nolint:gosec // G118 would have this cancel deferred, but the bus's
 	// lifetime outlives this constructor: the cancel is stored on the bus and
 	// called exactly once by Close (see b.cancel under the once guard), which
 	// is what stops the reader goroutines.
 	ctx, cancel := context.WithCancel(context.Background())
-	return &RedisEventBus{
+	return &EventBus{
 		client:     client,
 		instanceID: newBusInstanceID(),
 		ctx:        ctx,
 		cancel:     cancel,
-		handlers:   make(map[string][]EventHandler),
+		handlers:   make(map[string][]pkgcore.EventHandler),
 		readers:    make(map[string]struct{}),
 	}
 }
@@ -174,12 +197,12 @@ func NewRedisEventBus(client *redis.Client) *RedisEventBus {
 //	XGROUP DESTROY pkgcore:events:<type> pkgcore:bus:<instance-id>
 //	DEL pkgcore:events:<type>  # once XINFO GROUPS reports no group left
 //
-// The cleanup is best-effort and bounded by redisEventGroupCleanupTimeout: a
+// The cleanup is best-effort and bounded by eventGroupCleanupTimeout: a
 // Redis that does not answer during Close leaves the groups in place, and
 // the same recipe removes them later. A closed bus must not be used again.
 // Close is idempotent and safe for concurrent use; the client the bus was
 // built on stays open, because the host owns it.
-func (b *RedisEventBus) Close() {
+func (b *EventBus) Close() {
 	b.once.Do(func() {
 		b.mu.Lock()
 		b.closed = true
@@ -197,7 +220,7 @@ func (b *RedisEventBus) Close() {
 // ever subscribed to are the whole scope, read under the readers lock; a
 // Subscribe that raced the Close can at worst start a reader whose group
 // creation immediately fails on the bus's cancelled context.
-func (b *RedisEventBus) destroyGroups() {
+func (b *EventBus) destroyGroups() {
 	b.readersMu.Lock()
 	eventTypes := make([]string, 0, len(b.readers))
 	for eventType := range b.readers {
@@ -208,12 +231,12 @@ func (b *RedisEventBus) destroyGroups() {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), redisEventGroupCleanupTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), eventGroupCleanupTimeout)
 	defer cancel()
 
-	group := redisEventGroupPrefix + b.instanceID
+	group := eventGroupPrefix + b.instanceID
 	for _, eventType := range eventTypes {
-		stream := redisEventStreamKey(eventType)
+		stream := eventStreamKey(eventType)
 		// Destroying this instance's group is the point; deleting the stream
 		// is the follow-through for when this instance was its last reader.
 		// The stream is deleted only when Redis confirms no group is left on
@@ -239,7 +262,7 @@ func (b *RedisEventBus) destroyGroups() {
 // Subscribe itself never blocks on the network and never fails -- an event
 // published while its only subscriber's Redis was unreachable is lost for
 // that subscriber, which the delivery note above owns up to.
-func (b *RedisEventBus) Subscribe(eventType string, h EventHandler) {
+func (b *EventBus) Subscribe(eventType string, h pkgcore.EventHandler) {
 	if h == nil {
 		return
 	}
@@ -265,7 +288,7 @@ func (b *RedisEventBus) Subscribe(eventType string, h EventHandler) {
 // The payload must survive JSON encoding, because that is how it crosses the
 // process boundary; a payload that does not (channels, funcs) fails the
 // publish before anything is appended or delivered.
-func (b *RedisEventBus) Publish(ctx context.Context, evt Event) error {
+func (b *EventBus) Publish(ctx context.Context, evt pkgcore.Event) error {
 	if b.isClosed() {
 		return ErrEventBusClosed
 	}
@@ -275,19 +298,19 @@ func (b *RedisEventBus) Publish(ctx context.Context, evt Event) error {
 
 	payload, err := json.Marshal(evt.Payload)
 	if err != nil {
-		return fmt.Errorf("pkgcore: redis event bus: payload of event %q is not JSON-serializable: %w", evt.Type, err)
+		return fmt.Errorf("pkgcore/eventbus/redis: payload of event %q is not JSON-serializable: %w", evt.Type, err)
 	}
 	if _, err := b.client.XAdd(ctx, &redis.XAddArgs{
-		Stream: redisEventStreamKey(evt.Type),
+		Stream: eventStreamKey(evt.Type),
 		Values: map[string]interface{}{
 			"src":     b.instanceID,
 			"tenant":  string(evt.TenantID),
 			"payload": string(payload),
 		},
-		MaxLen: redisEventStreamMaxLen,
+		MaxLen: eventStreamMaxLen,
 		Approx: true,
 	}).Result(); err != nil {
-		return fmt.Errorf("pkgcore: redis event bus: append event %q failed: %w", evt.Type, err)
+		return fmt.Errorf("pkgcore/eventbus/redis: append event %q failed: %w", evt.Type, err)
 	}
 
 	handlers := b.handlersFor(evt.Type)
@@ -297,14 +320,14 @@ func (b *RedisEventBus) Publish(ctx context.Context, evt Event) error {
 	failures := make([]error, 0, len(handlers))
 	for i, h := range handlers {
 		if err := h(ctx, evt); err != nil {
-			failures = append(failures, fmt.Errorf("pkgcore: handler %d for event %q failed: %w", i, evt.Type, err))
+			failures = append(failures, fmt.Errorf("pkgcore/eventbus/redis: handler %d for event %q failed: %w", i, evt.Type, err))
 		}
 	}
 	return errors.Join(failures...)
 }
 
 // isClosed reports whether Close has been called.
-func (b *RedisEventBus) isClosed() bool {
+func (b *EventBus) isClosed() bool {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.closed
@@ -313,7 +336,7 @@ func (b *RedisEventBus) isClosed() bool {
 // ensureReader starts the single reader goroutine that delivers remote
 // events of eventType on this instance. The first Subscribe of a type on an
 // instance owns the start; later ones find the reader already running.
-func (b *RedisEventBus) ensureReader(eventType string) {
+func (b *EventBus) ensureReader(eventType string) {
 	b.readersMu.Lock()
 	defer b.readersMu.Unlock()
 	if _, running := b.readers[eventType]; running {
@@ -327,13 +350,13 @@ func (b *RedisEventBus) ensureReader(eventType string) {
 // until the bus is closed. It first creates the group -- retrying in the
 // background until Redis answers, so a bus that starts before Redis does
 // comes up on its own -- and then reads entries in batches, blocking for
-// redisEventReaderBlock when the stream is quiet so that a Close is noticed
+// eventReaderBlock when the stream is quiet so that a Close is noticed
 // promptly. A stream or group that vanishes under the reader (an operator's
 // cleanup, FLUSHALL, a failover) is recreated on the first read that answers
 // NOGROUP, so a reader only ever dies with its bus.
-func (b *RedisEventBus) runReader(eventType string) {
-	stream := redisEventStreamKey(eventType)
-	group := redisEventGroupPrefix + b.instanceID
+func (b *EventBus) runReader(eventType string) {
+	stream := eventStreamKey(eventType)
+	group := eventGroupPrefix + b.instanceID
 
 	if err := b.createGroup(b.ctx, stream, group); err != nil {
 		return
@@ -347,8 +370,8 @@ func (b *RedisEventBus) runReader(eventType string) {
 			Group:    group,
 			Consumer: b.instanceID,
 			Streams:  []string{stream, ">"},
-			Count:    redisEventReaderBatch,
-			Block:    redisEventReaderBlock,
+			Count:    eventReaderBatch,
+			Block:    eventReaderBlock,
 		}).Result()
 		if err != nil {
 			// A quiet stream times the block out with no entries (redis.Nil),
@@ -371,7 +394,7 @@ func (b *RedisEventBus) runReader(eventType string) {
 				}
 				continue
 			}
-			time.Sleep(redisEventRetryDelay)
+			time.Sleep(eventRetryDelay)
 			continue
 		}
 		for _, streamEntries := range entries {
@@ -398,7 +421,7 @@ func (b *RedisEventBus) runReader(eventType string) {
 // exist, retrying until they do or the bus is closed. The group is created
 // at the live end of the stream ("$"), so a group never replays history: a
 // subscriber starts receiving events published after its subscription.
-func (b *RedisEventBus) createGroup(ctx context.Context, stream, group string) error {
+func (b *EventBus) createGroup(ctx context.Context, stream, group string) error {
 	for {
 		if err := b.client.XGroupCreateMkStream(ctx, stream, group, "$").Err(); err == nil {
 			return nil
@@ -411,7 +434,7 @@ func (b *RedisEventBus) createGroup(ctx context.Context, stream, group string) e
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(redisEventRetryDelay):
+		case <-time.After(eventRetryDelay):
 		}
 	}
 }
@@ -424,7 +447,7 @@ func (b *RedisEventBus) createGroup(ctx context.Context, stream, group string) e
 // even when Redis vanished mid-delivery: an entry that could not be
 // acknowledged stays pending in the group, which is exactly what an operator
 // wants to find when they inspect it.
-func (b *RedisEventBus) deliverRemote(ctx context.Context, eventType, stream, group string, entry redis.XMessage) {
+func (b *EventBus) deliverRemote(ctx context.Context, eventType, stream, group string, entry redis.XMessage) {
 	fields := entry.Values
 	src, _ := fields["src"].(string)
 	if src == b.instanceID {
@@ -442,7 +465,7 @@ func (b *RedisEventBus) deliverRemote(ctx context.Context, eventType, stream, gr
 		b.acknowledge(ctx, stream, group, entry.ID)
 		return
 	}
-	evt := Event{Type: eventType, TenantID: TenantID(tenant), Payload: payload}
+	evt := pkgcore.Event{Type: eventType, TenantID: pkgcore.TenantID(tenant), Payload: payload}
 
 	handlers := b.handlersFor(eventType)
 	for _, h := range handlers {
@@ -456,8 +479,8 @@ func (b *RedisEventBus) deliverRemote(ctx context.Context, eventType, stream, gr
 // process to receive a panic, so letting it escape would crash the whole
 // replica from a reader goroutine. The handler's error is not observable by
 // any publisher either; it is dropped by design, see the delivery note on
-// RedisEventBus.
-func (b *RedisEventBus) runRemoteHandler(ctx context.Context, evt Event, h EventHandler) {
+// EventBus.
+func (b *EventBus) runRemoteHandler(ctx context.Context, evt pkgcore.Event, h pkgcore.EventHandler) {
 	defer func() {
 		_ = recover()
 	}()
@@ -467,7 +490,7 @@ func (b *RedisEventBus) runRemoteHandler(ctx context.Context, evt Event, h Event
 // acknowledge removes the entry from the group's pending set. Failures are
 // ignored: the entry then simply stays pending, visible to an operator, and
 // this reader never reads the pending set again.
-func (b *RedisEventBus) acknowledge(ctx context.Context, stream, group, id string) {
+func (b *EventBus) acknowledge(ctx context.Context, stream, group, id string) {
 	_ = b.client.XAck(ctx, stream, group, id).Err()
 }
 
@@ -475,7 +498,7 @@ func (b *RedisEventBus) acknowledge(ctx context.Context, stream, group, id strin
 // eventType on this instance, copied under the lock so a handler is free to
 // call Subscribe or Publish re-entrantly and a concurrent Subscribe cannot
 // mutate the slice being iterated.
-func (b *RedisEventBus) handlersFor(eventType string) []EventHandler {
+func (b *EventBus) handlersFor(eventType string) []pkgcore.EventHandler {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
@@ -483,14 +506,14 @@ func (b *RedisEventBus) handlersFor(eventType string) []EventHandler {
 	if len(registered) == 0 {
 		return nil
 	}
-	snapshot := make([]EventHandler, len(registered))
+	snapshot := make([]pkgcore.EventHandler, len(registered))
 	copy(snapshot, registered)
 	return snapshot
 }
 
-// redisEventStreamKey names the stream that carries events of eventType.
-func redisEventStreamKey(eventType string) string {
-	return redisEventStreamPrefix + eventType
+// eventStreamKey names the stream that carries events of eventType.
+func eventStreamKey(eventType string) string {
+	return eventStreamPrefix + eventType
 }
 
 // newBusInstanceID returns the random identifier that distinguishes one bus
@@ -502,7 +525,7 @@ func newBusInstanceID() string {
 	if _, err := rand.Read(raw[:]); err != nil {
 		// crypto/rand failing means the host's entropy source is gone; every
 		// later draw would fail the same way, so fail at construction.
-		panic(fmt.Sprintf("pkgcore: crypto/rand unavailable: %v", err))
+		panic(fmt.Sprintf("pkgcore/eventbus/redis: crypto/rand unavailable: %v", err))
 	}
 	return hex.EncodeToString(raw[:])
 }

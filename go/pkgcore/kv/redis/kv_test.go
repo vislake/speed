@@ -1,11 +1,11 @@
-package pkgcore
+package redis
 
 // Hermetic unit tests for the Redis-backed KVStore: everything here runs
 // without a Redis server. Behaviour that needs a real server lives in the
-// integration tier (integration_test/redis_kv_test.go); what belongs here is
-// what is local to the store itself -- a nil client is a wiring error
-// reported at construction, and a cancelled context fails every operation
-// with the context's error before any command reaches the wire.
+// integration tier (integration_test/kv_test.go); what belongs here is what
+// is local to the store itself -- a nil client is a wiring error reported at
+// construction, and a cancelled context fails every operation with the
+// context's error before any command reaches the wire.
 
 import (
 	"context"
@@ -15,36 +15,35 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// TestNewRedisKVStore_PanicsOnNilClient pins that a nil client is a wiring
-// error reported at construction, not a failure deferred to the first
-// operation.
-func TestNewRedisKVStore_PanicsOnNilClient(t *testing.T) {
+// TestNewKVStore_PanicsOnNilClient pins that a nil client is a wiring error
+// reported at construction, not a failure deferred to the first operation.
+func TestNewKVStore_PanicsOnNilClient(t *testing.T) {
 	t.Parallel()
 
 	defer func() {
 		if r := recover(); r == nil {
-			t.Fatal("NewRedisKVStore(nil) did not panic, want it to")
+			t.Fatal("NewKVStore(nil) did not panic, want it to")
 		}
 	}()
-	NewRedisKVStore(nil)
+	NewKVStore(nil)
 }
 
-// TestRedisKVStore_CancelledContext pins the contract that no operation runs
-// on a cancelled context: every method returns the context's error instead of
-// performing the operation, mirroring TestMemoryKVStore_CancelledContext for
-// the distributed-mode store. The client points at a closed port (the
-// 127.0.0.1:1 address the package's own examples use), so an operation that
+// TestKVStore_CancelledContext pins the contract that no operation runs on a
+// cancelled context: every method returns the context's error instead of
+// performing the operation, mirroring pkgcore's in-memory store for the
+// distributed-mode store. The client points at a closed port (the
+// 127.0.0.1:1 address this package's own example uses), so an operation that
 // ignored the context and reached for the server would have to fail with a
 // connection error, never the context's error this table asserts. go-redis
 // honours a cancelled context before dialing too, so what the test pins is
 // the store's early return as the public contract: a store that swapped in a
 // context-less operation would turn it red.
-func TestRedisKVStore_CancelledContext(t *testing.T) {
+func TestKVStore_CancelledContext(t *testing.T) {
 	t.Parallel()
 
 	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"})
 	t.Cleanup(func() { client.Close() })
-	store := NewRedisKVStore(client)
+	store := NewKVStore(client)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

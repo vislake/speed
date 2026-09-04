@@ -4,9 +4,10 @@ package storage_test
 
 // This file is the MinIO/S3 leg of the storage module's integration tier:
 // the module's full object lifecycle driven against a real S3-compatible
-// object store, through pkgcore.NewS3ObjectStore, the implementation the
-// distributed deployment mode composes. It exists because the seam's own
-// contract is proven in pkgcore's tier (minio_container_test.go); what
+// object store, through the objectstore/s3 subpackage's NewObjectStore, the
+// implementation the distributed deployment mode composes. It exists
+// because the seam's own contract is proven in that subpackage's own
+// integration tier (go/pkgcore/objectstore/s3/integration_test); what
 // needs a real store here is the module's use of the seam -- that the
 // bytes an uploader streams really land under the object's key on an S3
 // server, and that a delete really removes them from it. The metadata
@@ -52,6 +53,7 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/objectstore/s3"
 	"github.com/vislake/speed/go/storage"
 	"github.com/vislake/speed/go/storage/internal/testutil"
 	"github.com/vislake/speed/go/storage/migrations"
@@ -84,9 +86,10 @@ var _ jobs.Queue = noopQueue{}
 // header promises) and the bucket name. The container is terminated via
 // t.Cleanup on test completion, pass or fail. The bucket is created here
 // rather than by the store: provisioning a bucket is a hosting operation,
-// and pkgcore.NewS3ObjectStore deliberately never provisions its own.
-// The shape mirrors pkgcore's startMinioObjectStore helper; the raw
-// client is the addition this leg needs.
+// and s3.NewObjectStore deliberately never provisions its own. The shape
+// mirrors go/pkgcore/objectstore/s3/integration_test's own
+// startMinioObjectStore helper; the raw client is the addition this leg
+// needs.
 func startMinioStore(t *testing.T, ctx context.Context) (pkgcore.ObjectStore, *minio.Client, string) {
 	t.Helper()
 
@@ -120,7 +123,7 @@ func startMinioStore(t *testing.T, ctx context.Context) (pkgcore.ObjectStore, *m
 		t.Fatalf("create bucket %q on the minio testcontainer: %v", bucket, err)
 	}
 
-	return pkgcore.NewS3ObjectStore(pkgcore.S3Config{
+	return s3.NewObjectStore(s3.Config{
 		Endpoint:  endpoint,
 		Bucket:    bucket,
 		AccessKey: container.Username,

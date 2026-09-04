@@ -103,15 +103,31 @@ linters:
         # collection -- so examples/reference-app, a CONSUMER that wires
         # its own kernel at the command-entry layer, is never constrained
         # by these rules. The allowlist is the files list -- everything
-        # under go/ except the module that owns the implementation -- and
+        # under go/ except the package that owns the implementation -- and
         # the deny list names the client family by prefix, so subpackages
         # (minio-go's pkg/credentials) are covered as well. Depguard
-        # denies whole import paths per file: the one or two modules whose
-        # code legitimately owns an implementation could not be singled
-        # out any other way. Paths are resolved relative to this config
-        # file, so the same rule is live whether golangci-lint runs from
-        # the workspace root or from inside a module directory (the
+        # denies whole import paths per file: the one or a few packages
+        # whose code legitimately owns an implementation could not be
+        # singled out any other way. Paths are resolved relative to this
+        # config file, so the same rule is live whether golangci-lint runs
+        # from the workspace root or from inside a module directory (the
         # go-module-ci shape: working-directory go/<module>).
+        #
+        # redis-only-in-pkgcore-and-jobs and minio-only-in-pkgcore exempt a
+        # package, not a module: the Redis and S3 implementations that used
+        # to sit in go/pkgcore's own root package (redis_eventbus.go,
+        # redis_kv.go, s3_objectstore.go) moved into
+        # go/pkgcore/eventbus/redis, go/pkgcore/kv/redis and
+        # go/pkgcore/objectstore/s3 (issue #1 site 2), so the exemption
+        # narrowed with them -- a redis or minio-go import anywhere else
+        # under go/pkgcore, including a sibling implementation package, now
+        # fails exactly like it would in any business module. This is the
+        # acceptance criterion the split's own issue named: depguard was
+        # structurally blind to "an implementation must not share a package
+        # with a different seam's implementation" while the exemption
+        # covered the whole module; it is not blind to it now.
+        # asynq-only-in-jobs stays module-scoped -- go/jobs' own asynq
+        # split, if it lands, is a separate round's job.
         #
         # Deliberately NOT encoded as depguard rules yet, each waiting for
         # its own round or for modules to exist to lint:
@@ -144,22 +160,23 @@ linters:
           # it always has for go/pkgcore.
           files:
             - "**/go/**"
-            - "!**/go/pkgcore/**"
+            - "!**/go/pkgcore/eventbus/redis/**"
+            - "!**/go/pkgcore/kv/redis/**"
             - "!**/go/jobs/queue/asynq/**"
           list-mode: lax
           deny:
             - pkg: github.com/redis/go-redis
-              desc: "concrete Redis client imports belong to go/pkgcore (the KVStore/EventBus implementations) and go/jobs/queue/asynq (the asynq Queue implementation) alone; business code depends on the pkgcore KVStore/EventBus interfaces or the jobs.Queue interface"
+              desc: "concrete Redis client imports belong to go/pkgcore/eventbus/redis, go/pkgcore/kv/redis and go/jobs/queue/asynq (the asynq Queue implementation) alone; business code depends on the pkgcore KVStore/EventBus interfaces or the jobs.Queue interface"
             - pkg: github.com/go-redis/redis
               desc: "legacy go-redis module path (archived) -- same ban as github.com/redis/go-redis"
         minio-only-in-pkgcore:
           files:
             - "**/go/**"
-            - "!**/go/pkgcore/**"
+            - "!**/go/pkgcore/objectstore/s3/**"
           list-mode: lax
           deny:
             - pkg: github.com/minio/minio-go
-              desc: "the S3 client -- S3ObjectStore and its pkg/credentials subpackage -- belongs to go/pkgcore alone; business code depends on the pkgcore ObjectStore interface"
+              desc: "the S3 client -- go/pkgcore/objectstore/s3's ObjectStore implementation and its pkg/credentials subpackage -- belongs there alone; business code depends on the pkgcore ObjectStore interface"
         asynq-only-in-jobs:
           # Narrowed from the whole go/jobs module to its queue/asynq
           # subpackage by the jobs/asynq packaging-isolation round: asynq

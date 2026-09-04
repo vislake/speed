@@ -42,6 +42,7 @@ import (
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 
 	"github.com/vislake/speed/go/pkgcore"
+	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 	"github.com/vislake/speed/go/rbac"
 )
 
@@ -85,13 +86,13 @@ func startRedisClient(t *testing.T, ctx context.Context) *redis.Client {
 // RedisEventBus, sharing the PostgreSQL connection the way two replicas
 // share a database. The peer bus is returned too, so a test can subscribe
 // a spy alongside the Service's own invalidation handler.
-func replicas(t *testing.T, ctx context.Context) (writer, peer *rbac.Service, writerBus, peerBus *pkgcore.RedisEventBus) {
+func replicas(t *testing.T, ctx context.Context) (writer, peer *rbac.Service, writerBus, peerBus *eventbusredis.EventBus) {
 	t.Helper()
 
 	db := openRBACPostgres(t, ctx, startPostgresContainer(t, ctx))
 	client := startRedisClient(t, ctx)
-	writerBus = pkgcore.NewRedisEventBus(client)
-	peerBus = pkgcore.NewRedisEventBus(client)
+	writerBus = eventbusredis.NewEventBus(client)
+	peerBus = eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
 		writerBus.Close()
 		peerBus.Close()

@@ -1,20 +1,21 @@
 //go:build integration
 
-package pkgcore_test
+package s3_test
 
-// Integration tests for NewS3ObjectStore: each test drives the store through
-// the public ObjectStore interface against a real MinIO, asserting the exact
-// semantics the local store's unit tests pin -- a missing key surfaces as
-// ErrObjectNotFound, an empty object exists and is distinct from a missing
-// one, overwrites replace the object whole, DeleteObject is idempotent -- plus
-// the properties only a shared service can exercise: a multi-megabyte object
-// streaming through the multipart machinery intact, a mid-upload cancellation
-// leaving no object behind, a cancellation cutting an open reader's stream
-// with the context's error, and a prefix-overlapping pair of keys -- accepted
-// by the service where the local store refuses the clash -- showing that
-// deleting the shorter key can take the longer key's object with it.
-// Everything the tests assert is observable through the ObjectStore interface
-// itself, so no raw client doubles as an oracle here.
+// Integration tests for s3.NewObjectStore: each test drives the store
+// through the public ObjectStore interface against a real MinIO, asserting
+// the exact semantics pkgcore's local store's unit tests pin -- a missing
+// key surfaces as pkgcore.ErrObjectNotFound, an empty object exists and is
+// distinct from a missing one, overwrites replace the object whole,
+// DeleteObject is idempotent -- plus the properties only a shared service
+// can exercise: a multi-megabyte object streaming through the multipart
+// machinery intact, a mid-upload cancellation leaving no object behind, a
+// cancellation cutting an open reader's stream with the context's error, and
+// a prefix-overlapping pair of keys -- accepted by the service where the
+// local store refuses the clash -- showing that deleting the shorter key can
+// take the longer key's object with it. Everything the tests assert is
+// observable through the ObjectStore interface itself, so no raw client
+// doubles as an oracle here.
 
 import (
 	"bytes"
@@ -48,7 +49,7 @@ func readObject(t *testing.T, store pkgcore.ObjectStore, ctx context.Context, ke
 	return content
 }
 
-func TestS3ObjectStore_PutGetDelete_RoundTrip(t *testing.T) {
+func TestObjectStore_PutGetDelete_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 	store := startMinioObjectStore(t, ctx)
 
@@ -110,7 +111,7 @@ func TestS3ObjectStore_PutGetDelete_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestS3ObjectStore_StreamsAMultiMegabyteObjectIntact(t *testing.T) {
+func TestObjectStore_StreamsAMultiMegabyteObjectIntact(t *testing.T) {
 	ctx := context.Background()
 	store := startMinioObjectStore(t, ctx)
 
@@ -129,7 +130,7 @@ func TestS3ObjectStore_StreamsAMultiMegabyteObjectIntact(t *testing.T) {
 	}
 }
 
-func TestS3ObjectStore_CancelledMidUpload_LeavesNoObjectBehind(t *testing.T) {
+func TestObjectStore_CancelledMidUpload_LeavesNoObjectBehind(t *testing.T) {
 	ctx := context.Background()
 	store := startMinioObjectStore(t, ctx)
 
@@ -171,7 +172,7 @@ func TestS3ObjectStore_CancelledMidUpload_LeavesNoObjectBehind(t *testing.T) {
 	}
 }
 
-func TestS3ObjectStore_ReaderFailsItsReadsOnceTheContextIsCancelled(t *testing.T) {
+func TestObjectStore_ReaderFailsItsReadsOnceTheContextIsCancelled(t *testing.T) {
 	// The interface promises that a GetObject reader whose context is
 	// cancelled fails its reads with the context's error, the property the
 	// local store pins by checking its context before every file read.
@@ -216,7 +217,7 @@ func TestS3ObjectStore_ReaderFailsItsReadsOnceTheContextIsCancelled(t *testing.T
 	}
 }
 
-func TestS3ObjectStore_PrefixOverlap_DeletingTheShorterKeyTakesTheLongerKeyWithIt(t *testing.T) {
+func TestObjectStore_PrefixOverlap_DeletingTheShorterKeyTakesTheLongerKeyWithIt(t *testing.T) {
 	// The interface's keyspace-tree rule (no key may be a proper prefix of
 	// another stored key) is caller discipline: the local store refuses the
 	// put that would create the clash, while the service accepts both keys.
@@ -289,18 +290,18 @@ func (r *abortingReader) Read(p []byte) (int, error) {
 	return 0, r.ctx.Err()
 }
 
-// TestS3ObjectStore_ConformsToObjectStoreContract proves NewS3ObjectStore
+// TestObjectStore_ConformsToObjectStoreContract proves s3.NewObjectStore
 // satisfies the shared contract objectstoretest.AssertConforms checks --
 // the same suite go/pkgcore's own objectstore_conformance_test.go runs
-// against NewLocalObjectStore -- against a real MinIO, so drift between the
-// two ObjectStore implementations under the deployment-composition
-// retrofit's N registered implementations per seam is caught here once
-// instead of pairwise. Every subtest AssertConforms runs shares the one
-// bucket startMinioObjectStore provisions for this test (one container per
-// test file); this is safe because AssertConforms derives a distinct key
-// per subtest from the subtest name (see its own conformKey), so concurrent
-// subtests never collide on an object key.
-func TestS3ObjectStore_ConformsToObjectStoreContract(t *testing.T) {
+// against pkgcore.NewLocalObjectStore -- against a real MinIO, so drift
+// between the two ObjectStore implementations under the deployment-
+// composition retrofit's N registered implementations per seam is caught
+// here once instead of pairwise. Every subtest AssertConforms runs shares
+// the one bucket startMinioObjectStore provisions for this test (one
+// container per test file); this is safe because AssertConforms derives a
+// distinct key per subtest from the subtest name (see its own conformKey),
+// so concurrent subtests never collide on an object key.
+func TestObjectStore_ConformsToObjectStoreContract(t *testing.T) {
 	ctx := context.Background()
 	store := startMinioObjectStore(t, ctx)
 

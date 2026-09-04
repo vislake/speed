@@ -3,8 +3,8 @@
 // of which backend implements it. It plays the same role for ObjectStore
 // that go/tenancy/tenancytest.AssertIsolated plays for dbkit.Repository[T]
 // and go/pkgcore/eventbustest.AssertConforms plays for EventBus: one suite
-// every implementation — built-in (pkgcore.NewLocalObjectStore,
-// pkgcore.NewS3ObjectStore) or host-supplied through
+// every implementation — built-in (pkgcore.NewLocalObjectStore, the
+// objectstore/s3 subpackage's NewObjectStore) or host-supplied through
 // pkgcore.WithObjectStore — must pass, so drift between implementations is
 // caught here once instead of pairwise (see
 // docs/internal/03-deployment-modes.md).
