@@ -168,9 +168,9 @@ func TestTenantSlotReservation_ConcurrentAccessIsRaceFree(t *testing.T) {
 // TestExecute_EmptyTenantID_FailsClosedWithoutCallingHandle is the
 // regression test for the review finding that execute called
 // handler.Handle for a jobRecord whose TenantID column was empty, instead
-// of refusing the attempt the way AsynqQueue's processTaskUncancelled
-// already does for the identical case (errAsynqTaskMissingTenant,
-// asynq_worker.go). Task.validate blocks Enqueue itself from ever creating
+// of refusing the attempt the way asynq.Queue's processTaskUncancelled
+// already does for the identical case (errTaskMissingTenant,
+// queue/asynq/worker.go). Task.validate blocks Enqueue itself from ever creating
 // such a row, so the corrupted row here is seeded directly through q.db --
 // simulating a row written by anything other than Enqueue: a migration
 // bug, a manual SQL fixup, or a future writer that bypasses this package's
@@ -244,7 +244,7 @@ var _ Handler = panickingHandler{}
 // TestExecute_HandlerPanic_RecoversInsteadOfCrashingProcess is the
 // regression test for the review finding that execute had no recover() of
 // its own around handler.Handle, unlike asynq's own processor.perform,
-// which protects the equivalent call for AsynqQueue for free. Before the
+// which protects the equivalent call for asynq.Queue for free. Before the
 // fix, this test crashes the ENTIRE test binary rather than merely failing
 // one assertion -- exactly as an unrecovered panic crashes the entire
 // worker-pool process in production, taking every OTHER tenant's in-flight

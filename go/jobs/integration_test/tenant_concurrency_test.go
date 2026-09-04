@@ -98,7 +98,7 @@ func TestRedisQueue_PerTenantConcurrencyLimiting(t *testing.T) {
 
 	// A second tenant-a job must NOT start while the first is still
 	// running: tenant-a is at its concurrency limit of 1. This window
-	// (500ms) is generous relative to WithAsynqThrottleRetryDelay's 20ms
+	// (500ms) is generous relative to asynq.WithThrottleRetryDelay's 20ms
 	// base configured by newTestAsynqQueue -- long enough that a bounced
 	// job would have been redelivered and re-bounced several times over if
 	// the gate were not actually holding.

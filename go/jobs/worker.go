@@ -31,8 +31,8 @@ var ErrHandlerNotRegistered = apperr.Internal("jobs.handler_not_registered")
 // that reached the jobs table by some path other than Enqueue: a migration
 // bug, a manual SQL fixup, or a future writer that bypasses this package's
 // own API. Checked before calling Handle, exactly mirroring
-// errAsynqTaskMissingTenant's identical defense for AsynqQueue
-// (asynq_worker.go's processTaskUncancelled) — without this guard, Handle
+// errTaskMissingTenant's identical defense for asynq.Queue
+// (queue/asynq/worker.go's processTaskUncancelled) — without this guard, Handle
 // would run on a context reporting no usable tenant at all
 // (pkgcore.TenantFromContext returning ok=false), and only a Handler
 // implementation that routes every tenant-sensitive operation through
@@ -41,7 +41,7 @@ var ErrHandlerNotRegistered = apperr.Internal("jobs.handler_not_registered")
 // charge, a notification dispatch, even just a log line) would silently
 // run under a blank tenant identity instead of being refused. Deliberately
 // its own sentinel rather than a reuse of ErrHandlerNotRegistered, for the
-// same reason errAsynqTaskMissingTenant's own doc comment gives: the two
+// same reason errTaskMissingTenant's own doc comment gives: the two
 // causes are operationally distinct and would send an operator chasing the
 // wrong fix.
 var errStandaloneJobMissingTenant = apperr.Internal("jobs.standalone_job_missing_tenant")
@@ -196,7 +196,7 @@ func (q *StandaloneQueue) runWorker(dispatch <-chan jobRecord) {
 // inside it into an ordinary error instead of letting it propagate out of
 // the worker goroutine that called execute. asynq's own processor.perform
 // (github.com/hibiken/asynq) already wraps the equivalent call in its own
-// defer/recover, which is what protects AsynqQueue for free; StandaloneQueue
+// defer/recover, which is what protects asynq.Queue for free; StandaloneQueue
 // hand-rolls its own worker loop (runWorker, this file), so it must do the
 // same here. Without this, a bug in any ONE tenant's Handler implementation
 // — a nil dereference, an out-of-range slice index against a malformed

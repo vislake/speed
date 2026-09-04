@@ -275,7 +275,7 @@ The distributed deployment mode's equivalent — same `Task`/`EnqueueOption`s, s
 
 ```go
 redisOpt := asynq.RedisClientOpt{Addr: cfg.RedisAddr, Password: cfg.RedisPassword}
-queue := jobs.asynq.NewQueue(redisOpt, jobs.asynq.WithConcurrency(8), jobs.asynq.WithTenantConcurrencyLimit(2))
+queue := asynq.NewQueue(redisOpt, asynq.WithConcurrency(8), asynq.WithTenantConcurrencyLimit(2))
 if err := queue.RegisterHandler(&ImageGenHandler{svc: svc}); err != nil {
     // handle err
 }
@@ -353,7 +353,7 @@ See `example_test.go`'s `Example`/`ExampleNewHandlerFunc` (compiled and run, `St
 - **The dispatcher is a single goroutine.**
 
 **`asynq.Queue`-specific:**
-- **Only `jobs.queue.depth` is wired; `jobs.job.duration`/`jobs.job.attempts`/`jobs.job.dead_letter` (see "Observability" above) are not.** `docs/internal/09-observability.md`'s must-instrument table requires execution-duration percentiles, failure rate, retry count and dead-letter count for the task-queue domain on every deployment mode, and today only `StandaloneQueue` produces them (`worker.go`'s `recordJobMetrics`/`recordDeadLetter`); `asynq.Queue`'s `queue/asynq/worker.go` (`processTaskUncancelled`/`handleErrorAttempt`) only logs the equivalent events structurally. This is a real, tracked gap, not a deliberate design choice — the fix is the same Counter/Histogram pattern `StandaloneQueue` now uses, recorded at the same points asynq_worker.go already logs `attempts`/`duration_ms`/`error`, and is the intended fast-follow.
+- **Only `jobs.queue.depth` is wired; `jobs.job.duration`/`jobs.job.attempts`/`jobs.job.dead_letter` (see "Observability" above) are not.** `docs/internal/09-observability.md`'s must-instrument table requires execution-duration percentiles, failure rate, retry count and dead-letter count for the task-queue domain on every deployment mode, and today only `StandaloneQueue` produces them (`worker.go`'s `recordJobMetrics`/`recordDeadLetter`); `asynq.Queue`'s `queue/asynq/worker.go` (`processTaskUncancelled`/`handleErrorAttempt`) only logs the equivalent events structurally. This is a real, tracked gap, not a deliberate design choice — the fix is the same Counter/Histogram pattern `StandaloneQueue` now uses, recorded at the same points `queue/asynq/worker.go` already logs `attempts`/`duration_ms`/`error`, and is the intended fast-follow.
 - **Idempotency is bounded by asynq's own retention windows, not permanent** — see "Idempotency" above for exactly which windows and why.
 - **A succeeded Job's visibility to `Get()` is bounded by `completedRetention` (default 24h), and a cancelled Job's by `cancelledRetention` (default 30 days)** — unlike `StandaloneQueue`'s SQLite rows, which are kept forever. Both are configurable (`asynq.WithCompletedRetention`/`asynq.WithCancelledRetention`) but neither can be made literally infinite without unbounded Redis growth becoming the operator's problem instead.
 - **`Priority` is collapsed onto three fixed queues, not a continuous ordering** — see "Priority → queue mapping" above. `asynq.WithQueueWeights` retunes the three; it cannot add a fourth.

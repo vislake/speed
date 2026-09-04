@@ -71,7 +71,7 @@ func (jobRecord) TableName() string { return jobsTable }
 // same chicken-and-egg reason (this table has no bootstrapping problem),
 // but because this table is an implementation detail specific to the
 // standalone deployment mode, with no other consumer: the distributed
-// deployment mode's Queue implementation (AsynqQueue) is Redis/asynq-backed
+// deployment mode's Queue implementation (asynq.Queue) is Redis/asynq-backed
 // and never creates this table at all, so
 // routing it through dbkit.MigrationRegistry's cross-module,
 // Atlas-generated, versioned migration machinery — built for schema that
