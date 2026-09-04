@@ -303,11 +303,11 @@ func TestScopeService_MemberNodeIDs_RestoredMembershipOnDeadNode_FailsClosed(t *
 	if err != nil {
 		t.Fatalf("Add(leaving): %v", err)
 	}
-	if err := m.Members().Remove(ctx, "u-leaving"); err != nil {
-		t.Fatalf("Remove: %v", err)
+	if removeErr := m.Members().Remove(ctx, "u-leaving"); removeErr != nil {
+		t.Fatalf("Remove: %v", removeErr)
 	}
-	if err := m.Tree().Delete(ctx, left.ID, false); err != nil {
-		t.Fatalf("Delete(left) after its only member left: %v, want success", err)
+	if deleteErr := m.Tree().Delete(ctx, left.ID, false); deleteErr != nil {
+		t.Fatalf("Delete(left) after its only member left: %v, want success", deleteErr)
 	}
 
 	restored, err := m.Members().Restore(ctx, leaving.ID)

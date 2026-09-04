@@ -516,8 +516,8 @@ func (s *TreeService) Restore(ctx context.Context, nodeID string) (*OrgNode, err
 		}
 	}
 
-	if err := s.repo.Restore(ctx, nodeID); err != nil {
-		return nil, mapFindError(err, ErrNodeNotFound, nodeID)
+	if restoreErr := s.repo.Restore(ctx, nodeID); restoreErr != nil {
+		return nil, mapFindError(restoreErr, ErrNodeNotFound, nodeID)
 	}
 	node, err := s.Get(ctx, nodeID)
 	if err != nil {
