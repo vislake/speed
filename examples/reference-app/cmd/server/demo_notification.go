@@ -243,11 +243,18 @@ func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 	//
 	// The route takes no subject and checks no permission of its own: in
 	// this app every authenticated member of a tenant may trigger a demo
-	// reminder, and the module's own send-time gates -- the contact must
-	// be verified, the tenant's delivery channels must not be blacklisted
-	// -- are what actually protect the recipient. A real deployment would
-	// gate its own trigger route however its staff model requires; the
-	// dispatch call itself is all the notification module asks of it.
+	// reminder, and the module's own send-time gates -- re-checked by the
+	// delivery job after enqueue -- are what actually protect the
+	// recipient: the named contact is resolved inside the caller's tenant
+	// and must be verified (an unknown or still-pending contact is refused,
+	// and one that has since unsubscribed or bounced is settled as a
+	// skipped send before any transport is touched), and the send travels
+	// only on the contact's own verified channel. The platform blacklist
+	// is not among those gates this round: nothing in the delivery
+	// pipeline consults it (go/notification/AGENTS.md's "Platform-blacklist
+	// writers and bounce remediation"). A real deployment would gate its
+	// own trigger route however its staff model requires; the dispatch
+	// call itself is all the notification module asks of it.
 	mux.HandleFunc(http.MethodPost+" "+demoPatientMessagePath, func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			ContactID string `json:"contact_id"`
