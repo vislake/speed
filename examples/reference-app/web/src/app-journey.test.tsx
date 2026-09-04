@@ -26,7 +26,9 @@
  * sign-in surface's register turn, and the created account's own
  * sign-in answers the membership refusal of a registered-but-unseeded
  * account -- the honest display of the server's 403 code text, not a
- * fabricated state (demo_users_test.go:162/:233 pin the refusal);
+ * fabricated state (demo_users_test.go:297 pins the refusal for the
+ * browser's no-tenant sign-in shape; :162/:233 are its named-tenant
+ * siblings);
  * the owner signs in (access-1) and the day runs: notes read and
  * written under the token's tenant, the tenant switch away and back
  * proving per-tenant lists and the eviction discipline, the account

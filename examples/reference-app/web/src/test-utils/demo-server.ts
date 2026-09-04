@@ -35,9 +35,12 @@
  * server_test.go:335). An account registration answers 201 and records
  * the identifier, and a later sign-in of a recorded identifier answers
  * the membership refusal of a registered-but-unseeded account -- 403
- * authn.tenant_membership_required, the answer demo_users_test.go:162
- * and :233 pin (an account the seed never granted membership to cannot
- * sign in, on a fresh boot or a restarted one). Registering twice
+ * authn.tenant_membership_required, in the browser's own shape: the
+ * sign-in body names no tenant_id (the login form has no tenant
+ * field), the shape the composed stack pins at demo_users_test.go:297
+ * -- an account the register route created, granted nowhere, drawing
+ * the no-membership-anywhere form of the code; :162 and :233 are its
+ * named-tenant siblings. Registering twice
  * answers the same 409 authn.email_already_registered a real handler
  * answers (go/authn/errors.go's ErrEmailAlreadyRegistered).
  *
@@ -142,9 +145,10 @@ export const DEMO_READER_USER_ID = 'user-2'
 export const DEMO_READER_SESSION_ID = 'session-4'
 
 /** The code a sign-in of a registered-but-unseeded account answers with
- * (go/authn/errors.go's ErrTenantMembershipRequired; the registered
- * account's refusal the Go suite pins at demo_users_test.go:162 and
- * :233). */
+ * (go/authn/errors.go's ErrTenantMembershipRequired; the browser-shaped
+ * refusal -- a sign-in body with no tenant_id -- the composed stack
+ * pins at demo_users_test.go:297, whose named-tenant siblings sit at
+ * :162 and :233). */
 export const MEMBERSHIP_REQUIRED_CODE = 'authn.tenant_membership_required'
 
 /** The TOTP secret every enroll answer serves -- scripted once so the
@@ -472,10 +476,10 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
         const identifier =
           typeof body.identifier === 'string' ? body.identifier : undefined
         // A registered account has no seeded membership: its sign-in
-        // answers the refusal the Go suite pins for an account the seed
-        // never granted membership to. The browser-shaped sign-in sends
-        // no tenant_id, so the answer is the no-membership-anywhere
-        // form of that refusal, never a tenant the caller named.
+        // answers the refusal the Go suite pins in the browser's own
+        // shape -- no tenant_id in the body -- at demo_users_test.go:297
+        // (an account the register route created, granted nowhere); the
+        // named-tenant form of the same refusal sits at :162 and :233.
         if (identifier !== undefined && registeredEmails.has(identifier)) {
           return errorResponse(403, MEMBERSHIP_REQUIRED_CODE)
         }

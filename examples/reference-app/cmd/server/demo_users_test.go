@@ -235,3 +235,67 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabaseFailsClosed(t *testing.T) {
 			status, code, "authn.tenant_membership_required")
 	}
 }
+
+// TestDemoUsers_RegisteredButMemberless_BrowserShapedSignInRefused pins
+// the refusal the web demo rig answers for its registered-but-unseeded
+// account: an account the register route just created -- the same route
+// the app's register form drives -- holds no membership anywhere
+// (registration alone grants none), and the browser-shaped sign-in, a
+// body naming an identifier and a password with no tenant_id field at
+// all, answers 403 authn.tenant_membership_required. The named-tenant
+// refusals the seed tests pin leave this shape open: they prove an
+// account without a membership in the tenant it asked for is refused,
+// while this one proves the no-tenant form of the same refusal -- the
+// tenant a sign-in may act in is derived from the account's own
+// memberships, never from a field the caller typed, so an account with
+// no membership in any tenant is refused for every tenant at once.
+func TestDemoUsers_RegisteredButMemberless_BrowserShapedSignInRefused(t *testing.T) {
+	srv, _ := buildTestServer(t)
+
+	// Register a fresh account through authn's real register route. The
+	// answer is 201, and a membership nowhere.
+	resp, err := srv.Client().Post(srv.URL+"/api/v1/authn/register", "application/json",
+		strings.NewReader(`{"email":"fresh@example.test","password":"fresh memberless passphrase"}`))
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	func() {
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusCreated {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("register: status = %d, want %d; body = %s", resp.StatusCode, http.StatusCreated, body)
+		}
+	}()
+
+	// The browser-shaped sign-in that follows: identifier and password
+	// only. With no tenant_id the membership question is "which tenant
+	// may this account act in", answered from the account's memberships;
+	// the reader is present and answers none, so this is the
+	// required-code refusal, never the unavailable one.
+	body, err := json.Marshal(map[string]string{
+		"identifier": "fresh@example.test",
+		"password":   "fresh memberless passphrase",
+	})
+	if err != nil {
+		t.Fatalf("login: marshal body: %v", err)
+	}
+	loginResp, err := srv.Client().Post(srv.URL+"/api/v1/authn/login/password", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	defer loginResp.Body.Close()
+	raw, err := io.ReadAll(loginResp.Body)
+	if err != nil {
+		t.Fatalf("login: read body: %v", err)
+	}
+	var answer struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(raw, &answer); err != nil {
+		t.Fatalf("login: decoding %s: %v", raw, err)
+	}
+	if loginResp.StatusCode != http.StatusForbidden || answer.Code != "authn.tenant_membership_required" {
+		t.Fatalf("browser-shaped sign-in of the memberless account: status = %d, code = %q, want 403 %q",
+			loginResp.StatusCode, answer.Code, "authn.tenant_membership_required")
+	}
+}
