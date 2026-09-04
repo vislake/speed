@@ -26,10 +26,10 @@ type SMS struct {
 // live inside go/authn and cannot be imported (this module never imports
 // authn). The interface below is structurally identical to authn's own
 // sender, so a host's wiring can hand the same implementation to both
-// modules without either importing the other -- see the R3 adjudication's
-// note in the round journal: promoting SMS to a pkgcore seam alongside
-// Mailer is a later-round pkgcore change, recorded as a deferral in
-// AGENTS.md.
+// modules without either importing the other -- AGENTS.md's "SMS stays an
+// in-package seam" adjudication. Promoting SMS to a pkgcore seam alongside
+// Mailer is a later-round pkgcore change (AGENTS.md's "SMS as a pkgcore
+// seam" deferral lists it).
 //
 // Send must honour a cancelled context by returning its context's error
 // instead of sending, must not retain the SMS after returning, and must be

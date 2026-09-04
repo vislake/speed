@@ -19,12 +19,12 @@
 -- make independently released migrations and cascading deletes
 -- unmanageable.
 --
--- The column is named "group" verbatim from the R2 design, even though
--- GROUP is a reserved word on PostgreSQL: it is quoted in the DDL here,
--- gorm quotes every identifier it generates itself, and any hand-written
--- SQL in later blocks must quote it too ("group"). Do not rename it to
--- dodge the quoting -- the design's name carries meaning for the inbox
--- grouping feature, and SQLite accepts the quoted form as well.
+-- The column is named "group" after the inbox grouping it serves, even
+-- though GROUP is a reserved word on PostgreSQL: it is quoted in the DDL
+-- here, gorm quotes every identifier it generates itself, and any
+-- hand-written SQL in later blocks must quote it too ("group"). Do not
+-- rename it to dodge the quoting -- the name carries meaning for the
+-- inbox grouping feature, and SQLite accepts the quoted form as well.
 --
 -- title and body are what the recipient sees, rendered by the producer
 -- before the row is written; the row is a snapshot of the delivery, not a

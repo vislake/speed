@@ -120,7 +120,8 @@ var (
 	// ErrContactBounced reports an operation on a contact whose address
 	// has proven unable to receive messages (a hard delivery failure).
 	// Terminal in this round: re-proving a bounced address is a later
-	// round's remediation, and AGENTS.md records the deferral.
+	// round's remediation (AGENTS.md's "Platform-blacklist writers and
+	// bounce remediation" deferral).
 	ErrContactBounced = apperr.Conflict("notification.contact_bounced")
 
 	// ErrContactNotVerified reports a delivery attempt (EnsureDeliverable)

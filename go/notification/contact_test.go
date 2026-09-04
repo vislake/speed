@@ -26,9 +26,10 @@ import (
 
 // The consent ledger's three dev keys, all deliberately distinct: the
 // cipher key that encrypts the address column at rest, the email index
-// key, and the phone index key. F8's rule is that an index key must never
-// double as the encryption key; the constants stand apart so no fixture
-// can accidentally share bytes.
+// key, and the phone index key. An index key must never double as the
+// encryption key (AGENTS.md's "Separate index keys from the cipher key"
+// adjudication); the constants stand apart so no fixture can accidentally
+// share bytes.
 const (
 	testCipherKey     = "0123456789abcdef0123456789abcdef"
 	testEmailIndexKey = "abcdef0123456789abcdef0123456789"
@@ -824,8 +825,9 @@ func TestContact_AttestationNeverOverwritesPendingRow(t *testing.T) {
 // once per actual transition (an idempotent repeat emits nothing), the
 // deliverability gate and every code path refuse the address afterwards,
 // and re-registering the address resolves to the unsubscribed row -- an
-// unsubscribe is permanent for the contact as a whole, never silently
-// undone by a fresh create (the R8 rule).
+// unsubscribe is permanent for the contact as a whole (AGENTS.md's
+// "Unsubscribe is permanent for the contact as a whole" adjudication),
+// never silently undone by a fresh create.
 func TestContact_Unsubscribe_PermanentAndIdempotent(t *testing.T) {
 	env := newContactEnv(t)
 	ctx := tenantCtx("tenant-acme")

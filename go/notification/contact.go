@@ -30,10 +30,11 @@ const tableVerifiedContacts = "verified_contacts"
 //	pending --resend--> pending           --hard failure--> bounced
 //	pending --attest--> verified (business-attested, no code)
 //
-// unsubscribed and bounced are terminal per contact: the R8 adjudication
-// makes an unsubscribe permanent for the contact as a whole (type-scoped
-// opt-out is a deferred later-round shape and verified_contacts has no
-// type_key column), and a bounced contact has proven its address cannot
+// unsubscribed and bounced are terminal per contact: an unsubscribe is
+// permanent for the contact as a whole (see AGENTS.md's "Unsubscribe is
+// permanent for the contact as a whole" adjudication; type-scoped opt-out
+// is a deferred later-round shape and verified_contacts has no type_key
+// column), and a bounced contact has proven its address cannot
 // receive messages at all. Delivery refuses both before any transport is
 // touched (EnsureDeliverable).
 const (
@@ -62,9 +63,10 @@ const (
 //
 // The blind-index key that makes the encrypted address queryable lives on
 // the indexers the host injects through WithContactEmailIndexer /
-// WithContactPhoneIndexer, and must never be the encryption key (the F8
-// design rule: separate index key and cipher key, because a key compromise
-// must not silently hand over both confidentiality and queryability).
+// WithContactPhoneIndexer, and must never be the encryption key: index
+// keys and the cipher key stay separate bytes (AGENTS.md's "Separate
+// index keys from the cipher key" adjudication), because a key compromise
+// must not silently hand over both confidentiality and queryability.
 const ContactAddressSerializerName = "notification_address_enc"
 
 // VerifiedContact is one external recipient's consent-gated address inside
@@ -98,9 +100,9 @@ const ContactAddressSerializerName = "notification_address_enc"
 // is the HMAC-SHA256 blind index of the canonical address form (see
 // dbkit.NewBlindIndexer), the only thing lookups, the dedupe unique index
 // and the rate limiter ever touch -- the rate-limiter keys name the index
-// hex, never the plaintext address (the F8 design rule, mirrored from
-// go/authn and go/org). The encryption key and the index keys are separate
-// and must never be the same bytes.
+// hex, never the plaintext address -- the separate index/cipher key
+// discipline go/authn and go/org already follow. The encryption key and
+// the index keys are separate and must never be the same bytes.
 //
 // Channel is the closed vocabulary of types.go -- ChannelEmail or
 // ChannelSMS. A contact is one address on one channel; the in-app channel
@@ -450,9 +452,11 @@ type ContactCreateInput struct {
 // resolves by returning the existing row unchanged, whatever status it
 // holds -- nothing is ever re-sent to an address that already has a consent
 // record, an unsubscribed address is not silently re-registered (its
-// unsubscribe is permanent; the R8 per-contact rule), and a bounced address
-// is not given a fresh flow until a later round ships re-proving
-// (AGENTS.md records the deferral). A host that attests an address which
+// unsubscribe is permanent -- the per-contact rule of AGENTS.md's
+// "Unsubscribe is permanent for the contact as a whole" adjudication), and
+// a bounced address is not given a fresh flow until a later round ships
+// re-proving (AGENTS.md's "Platform-blacklist writers and bounce
+// remediation" deferral records it). A host that attests an address which
 // already exists as a pending double-opt-in row gets that pending row back,
 // unchanged: an attestation never overwrites an in-flight verification.
 //
@@ -739,7 +743,8 @@ func (s *ContactService) ResendCode(ctx context.Context, in ResendCodeInput) err
 // channel, synchronously. The stamp happens first; the code is rendered at
 // send time in the platform default locale (see renderContactCode -- the
 // recipient's own locale is a later-round shape, as the contact row has no
-// locale column and AGENTS.md records the deferral); a send that fails
+// locale column; AGENTS.md's "Per-contact locale negotiation" deferral
+// records it); a send that fails
 // leaves the fresh hash on the row as the doc comment of ResendCode
 // explains.
 func (s *ContactService) sendCode(ctx context.Context, contact *VerifiedContact) error {
@@ -812,10 +817,11 @@ type UnsubscribeInput struct {
 // exists; the audit event fires once per actual transition, never on the
 // idempotent repeat.
 //
-// The R8 permanence rule: an unsubscribe is for the contact as a whole, on
-// every channel it might later be registered on, and it is not reversible
-// through this API. Type-scoped opt-out is a deferred later-round shape
-// (verified_contacts has no type_key column).
+// The permanence rule (AGENTS.md's "Unsubscribe is permanent for the
+// contact as a whole" adjudication): an unsubscribe is for the contact as
+// a whole, on every channel it might later be registered on, and it is
+// not reversible through this API. Type-scoped opt-out is a deferred
+// later-round shape (verified_contacts has no type_key column).
 func (s *ContactService) Unsubscribe(ctx context.Context, in UnsubscribeInput) (*VerifiedContact, error) {
 	contact, err := s.repo.FindByID(ctx, in.ContactID)
 	if err != nil {
@@ -876,8 +882,9 @@ func (s *ContactService) markUnsubscribed(ctx context.Context, id string) (bool,
 // mailbox). Delivery gate-checks contact status before every send (see
 // EnsureDeliverable), so a bounced contact stops receiving anything
 // immediately. Bounced is terminal in this round: re-proving an address
-// that bounced is a later-round remediation (AGENTS.md records the
-// deferral). The call is idempotent for a contact that already bounced.
+// that bounced is a later-round remediation, recorded under AGENTS.md's
+// "Platform-blacklist writers and bounce remediation" deferral. The call
+// is idempotent for a contact that already bounced.
 func (s *ContactService) MarkBounced(ctx context.Context, contactID string) error {
 	contact, err := s.repo.FindByID(ctx, contactID)
 	if err != nil {
@@ -919,9 +926,10 @@ func (s *ContactService) markBounced(ctx context.Context, id string) (bool, erro
 }
 
 // EnsureDeliverable is the consent gate delivery re-checks before every
-// send to an external contact -- the send-time status recheck of the R8
-// adjudication, and the seam the notification.deliver job calls with every
-// message it is about to transport. Only a verified contact passes; every
+// send to an external contact -- the send-time status recheck AGENTS.md's
+// "Every consent and address decision is re-checked at send time"
+// adjudication describes, and the seam the notification.deliver job calls
+// with every message it is about to transport. Only a verified contact passes; every
 // other status refuses with its own error, so a message can never ride to a
 // transport on consent that lapsed between enqueue and delivery:
 //
@@ -975,8 +983,8 @@ func (s *ContactService) EnsureDeliverable(ctx context.Context, contactID string
 // convention for declared types.
 //
 // The locale is fixed at the platform default: the contact row carries no
-// locale, and negotiating the recipient's language is deferred to the
-// later-round reconciliation R10 records (AGENTS.md carries the deferral).
+// locale, and negotiating the recipient's language is deferred (AGENTS.md's
+// "Per-contact locale negotiation" deferral records the later-round shape).
 // Every failure -- a nil catalog, an unknown locale, a missing id -- is
 // ErrInternal.WithCause, never a fallback to another language.
 func renderContactCode(catalog *i18n.Catalog, channel, code string) (subject, body string, err error) {
@@ -1175,8 +1183,9 @@ func normalizeContactAddress(channel, address string) (string, error) {
 // outlives it did not land, and the caller must treat the operation as
 // failed and investigate. This differs from the reference app's notes
 // handler, which logs an emit failure and returns success: notification has
-// no logger to hand the failure to (it does not import observability, per
-// AGENTS.md's dependency note), so the caller is the only sink. A known
+// no logger to hand the failure to (it does not import observability --
+// see AGENTS.md's "No service logging" rule), so the caller is the only
+// sink. A known
 // limitation of this round follows from the same shape: an operation that
 // hits the idempotent return path of Unsubscribe (already unsubscribed)
 // emits nothing, which is correct -- the idempotent repeat is not a state

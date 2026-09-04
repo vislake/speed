@@ -36,7 +36,7 @@
 -- dbkit.NormalizeEmail / NormalizePhoneE164), the only form of the address
 -- that is ever queryable, deduplicated on or rate-limited on. The
 -- encryption key and the index keys are separate and never the same bytes
--- (the F8 design rule; see go/notification/contact.go).
+-- (AGENTS.md's "Separate index keys from the cipher key" adjudication).
 --
 -- verified_contacts' status column carries the consent state machine
 -- (pending / verified / unsubscribed / bounced -- contact.go's

@@ -213,8 +213,10 @@ var _ deliveryHost = (*pkgcore.Registry)(nil)
 //     inbox write, an email, an SMS -- so one channel's failure never
 //     starves the others;
 //   - an external contact's deliverability is re-checked through
-//     ContactService.EnsureDeliverable (the R8 send-time consent recheck);
-//     the verification-code exception that created the contact is long
+//     ContactService.EnsureDeliverable (the send-time consent recheck;
+//     see AGENTS.md's "Every consent and address decision is re-checked
+//     at send time"); the verification-code exception that created the
+//     contact is long
 //     past, so every delivery to it stands behind verified consent;
 //   - every send attempt is recorded in send_records under a derived
 //     delivery key (deriveDeliveryKey), and the record's succeeded state is
@@ -617,9 +619,10 @@ func (s *DeliveryService) deliverUserSMS(ctx context.Context, tenantID string, d
 // deliverToContact is the external-contact delivery path, standing behind
 // the module's own consent ledger: ContactService.EnsureDeliverable is the
 // send-time recheck that refuses a delivery whose consent lapsed between
-// enqueue and delivery (docs/internal/07-platform-services.md's R8 rule --
-// the module never sends to an unverified address, the verification message
-// itself being the only exception, and delivery is not it).
+// enqueue and delivery (AGENTS.md's "Every consent and address decision
+// is re-checked at send time" adjudication -- the module never sends to
+// an unverified address, the verification message itself being the only
+// exception, and delivery is not it).
 //
 // The refusal mapping follows the ledger's statuses, split on whether a
 // retry can change the answer: a pending contact (consent never proved) and

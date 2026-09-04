@@ -21,8 +21,9 @@ const tablePlatformBlacklist = "platform_blacklist"
 // (hard_bounce). The writers that produce these records -- the complaint
 // webhook and the delivery job's hard-failure leg -- belong to later rounds
 // (the delivery job of this round marks the tenant's own contact bounced
-// without touching the platform list; see contact.go's MarkBounced), and
-// AGENTS.md records the deferral. In this round the table exists so the
+// without touching the platform list; see contact.go's MarkBounced), under
+// AGENTS.md's "Platform-blacklist writers and bounce remediation"
+// deferral. In this round the table exists so the
 // platform-level record of a bad address has a home and an isolation proof
 // before any writer needs it.
 const (

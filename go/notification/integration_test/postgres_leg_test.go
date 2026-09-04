@@ -77,9 +77,10 @@ import (
 
 // The fixture keys mirror the unit tier's byte for byte (contact_test.go's
 // constants): a host's address-encryption key and its two blind-index keys
-// must never share bytes (the F8 design rule contact.go's doc comment
-// spells out), and the constants stand apart so no fixture can
-// accidentally conflate them. This binary is a separate process from the
+// must never share bytes (AGENTS.md's "Separate index keys from the cipher
+// key" adjudication, spelled out in contact.go's doc comment), and the
+// constants stand apart so no fixture can accidentally conflate them. This
+// binary is a separate process from the
 // unit tier's, so the values being identical to the unit tier's matters
 // only for the reader's familiarity.
 const (

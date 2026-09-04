@@ -168,8 +168,9 @@ func WithMailFrom(from string) Option {
 // dbkit.NormalizeEmail). It is REQUIRED: Register returns
 // ErrContactEmailIndexerRequired without one, so a module that cannot index
 // an email address can never store one. The indexer's key must never be the
-// encryption key of the module's address cipher (the F8 design rule;
-// contact.go's doc comment spells it out).
+// encryption key of the module's address cipher (AGENTS.md's "Separate
+// index keys from the cipher key" adjudication; contact.go's doc comment
+// spells it out).
 func WithContactEmailIndexer(indexer *dbkit.BlindIndexer) Option {
 	return func(m *Module) { m.emailIndexer = indexer }
 }
