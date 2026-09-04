@@ -86,24 +86,23 @@
  * session's confirm while one is pending answers 409
  * authn.mfa_already_enrolled to an unelevated caller), answering the
  * show-once recovery codes -- DEMO_MFA_RECOVERY_CODES on the first
- * setup, a replacement set when an elevated caller confirms over an
- * active factor.
+ * setup, DEMO_MFA_REPLACEMENT_RECOVERY_CODES when an elevated caller
+ * confirms over an active factor, both exported so a journey can pin
+ * the rendered rows verbatim.
  *
- * One deliberate scope limit, recorded rather than half-built: every
- * journey in this round signs in as the owner -- signInWithPassword
- * uses the rig's owner identifier, and no suite scripts the `reader`
- * option. The account-domain state (the session list, the bound
- * identities, the active factor) belongs to the owner story for that
- * reason: the demo seeds no reader-shaped account state, because a
- * reader journey into the account surface would answer the owner's
- * rows. The notes journeys are owner journeys too; their read-denied
- * and write-refused states are the deny switches' answers, standing
- * in for the rbac gate's 403s -- denyNotesWrite the refusal a caller
- * without notes:write meets, the shape the reader's own grants
- * produce (the Go suite pins the read-only member: its list served,
- * demo_users_test.go:135-153, its create refused, server_test.go:
- * 335), and denyNotesRead the refusal of a caller without notes:read,
- * a shape no seeded account carries.
+ * One deliberate scope limit, recorded rather than half-built: the
+ * account-domain state (the session list, the bound identities, the
+ * active factor) belongs to the owner story -- the demo seeds no
+ * reader-shaped account state, because a reader journey into the
+ * account surface would answer the owner's rows. The `reader`
+ * option's own day (the app-journey suite scripts it) therefore
+ * stays on notes, the exact surface where the seed's grant asymmetry
+ * lives: the list served like any member's, a create refused with
+ * the rbac write gate's 403 -- the answers the Go suite pins for the
+ * read-only member (its list served, demo_users_test.go:135-153, its
+ * create refused, server_test.go:335). The read-denied refusal of a
+ * caller without notes:read is the denyNotesRead switch's answer, a
+ * shape no seeded account carries.
  *
  * Anything else fails the test loudly: an unpinned request means the
  * journey under test reached an endpoint the demo does not serve.
@@ -174,8 +173,10 @@ export const DEMO_MFA_RECOVERY_CODES: readonly string[] = [
   'kite-orchard-2638',
 ]
 /** The set a confirm over an active factor (the elevated replacement
- * path) answers -- a fresh set, as the replacing server would issue. */
-const REPLACEMENT_RECOVERY_CODES: readonly string[] = [
+ * path) answers -- a fresh set, as the replacing server would issue,
+ * scripted once here so a journey can pin rendered rows verbatim the
+ * way it pins DEMO_MFA_RECOVERY_CODES' on the first setup. */
+export const DEMO_MFA_REPLACEMENT_RECOVERY_CODES: readonly string[] = [
   'lumen-delta-1495',
   'meadow-sparrow-2830',
   'nimbus-raven-3764',
@@ -641,7 +642,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
           return errorResponse(400, 'authn.mfa_invalid_code')
         }
         const answered = factorActive
-          ? REPLACEMENT_RECOVERY_CODES
+          ? DEMO_MFA_REPLACEMENT_RECOVERY_CODES
           : DEMO_MFA_RECOVERY_CODES
         factorActive = true
         return jsonResponse(200, { recovery_codes: [...answered] })

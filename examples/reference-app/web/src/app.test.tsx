@@ -38,7 +38,6 @@
 
 import { act, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { UserEvent } from '@testing-library/user-event'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { switchLanguage } from '@speed/i18n'
 import accountUiZhCN from '../../../../web/packages/account-ui/src/locales/zh-CN.json' with { type: 'json' }
@@ -46,65 +45,17 @@ import authUiEnUS from '../../../../web/packages/auth-ui/src/locales/en-US.json'
 import authUiZhCN from '../../../../web/packages/auth-ui/src/locales/zh-CN.json' with { type: 'json' }
 import zhCN from './locales/zh-CN.json' with { type: 'json' }
 import enUS from './locales/en-US.json' with { type: 'json' }
-import { AppView, parseHashFragment } from './app.js'
+import { parseHashFragment } from './app.js'
+import {
+  BRAND,
+  configGets,
+  makeAppRig,
+  navigateTo,
+  rendered,
+  signInWithPasswordUi,
+} from './test-utils/app-harness.js'
 import { demoServer } from './test-utils/demo-server.js'
-import { makeRealClientRig, type RealClientRig } from './test-utils/real-client.js'
-import { renderWithAppServices } from './test-utils/render.js'
-
-/** The demo server's served brand, scripted as Public config data. */
-const BRAND = 'Demo Smile Lab'
-
-/** A rig answering the demo's endpoints with one served brand and no
- * enabled features (feature-matrix coverage lives in home-view's own
- * suite; here the frame's chrome is the subject). */
-function makeAppRig(): RealClientRig {
-  return makeRealClientRig(
-    demoServer({
-      publicConfig: { config: { 'brand.site_name': BRAND }, features: [] },
-    }),
-  )
-}
-
-function configGets(rig: RealClientRig): number {
-  return rig.calls.filter((call) => call.path === '/api/config/public').length
-}
-
-function rendered(rig: RealClientRig) {
-  return renderWithAppServices(<AppView />, {
-    session: rig.session,
-    api: rig.api,
-  })
-}
-
-/** Drives the sign-in surface of a rendered AppView through a password
- * sign-in, returning once the frame is up (the nav is frame chrome). */
-async function signInWithPasswordUi(
-  view: ReturnType<typeof rendered>,
-  user: UserEvent,
-): Promise<void> {
-  await user.type(
-    view.getByLabelText(authUiZhCN.passwordSignIn.identifierLabel),
-    'owner@example.test',
-  )
-  await user.type(
-    view.getByLabelText(authUiZhCN.passwordSignIn.passwordLabel),
-    'correct-horse-battery-staple',
-  )
-  await user.click(
-    view.getByRole('button', { name: authUiZhCN.passwordSignIn.submit }),
-  )
-}
-
-/** Fragment navigation the way a user's click on a nav anchor drives it
- * (the anchors are plain #-links; the app's one routed state is the
- * fragment). Assigning the hash and dispatching the event inside act
- * keeps the resulting re-render inside the act window. */
-function navigateTo(hash: string): void {
-  act(() => {
-    window.location.hash = hash
-    window.dispatchEvent(new HashChangeEvent('hashchange'))
-  })
-}
+import { makeRealClientRig } from './test-utils/real-client.js'
 
 describe('parseHashFragment', () => {
   it('parses the three routes, with or without a leading slash', () => {
