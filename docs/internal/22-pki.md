@@ -92,7 +92,9 @@ type Signer interface {
     //                 crypto.Signer 对它的约定也是传消息、opts 取 crypto.Hash(0)
     //   ecdsa-p256 -> 消息的 SHA-256 摘要
     // 这个差异同时影响 KMS 直签的调用形状：Vault Transit 的 ed25519
-    // 接口收完整消息，而 ECDSA 类接口收摘要。
+    // 接口收完整消息；AWS KMS 要 ED25519_SHA_512 配 MessageType:RAW
+    // （PureEdDSA，JWT 的 EdDSA 即此），配成 MessageType:DIGEST 的
+    // ED25519_PH_SHA_512 会签出验不过的签名。
     Sign(ctx context.Context, keyRef string, input []byte) ([]byte, error)
 
     Public(ctx context.Context, keyRef string) (crypto.PublicKey, error)
@@ -157,27 +159,32 @@ pki.NewModule(db, pki.WithSigner("kms.aws", cfg))
 
 `local` 不具备该能力；`vault`/`aws-kms` 在**直签模式**下具备，在信封模式下不具备。高安全部署可在装配时声明要求它，由 `Kernel.Bootstrap` 在启动时校验，而不是等事故后才发现。
 
-### 一个必须记录的算法限制
+### Ed25519 在三套实现上都能直签（2026-09-04 核实）
 
-**AWS KMS 不支持 Ed25519。** 其非对称密钥类型只有 RSA、ECC-NIST（P-256/384/521）、secp256k1 与国区 SM2。Vault Transit 支持 ed25519。
+`local` 用标准库；Vault Transit 支持 `ed25519`；**AWS KMS 也支持**——密钥规格 `ECC_NIST_EDWARDS25519`，仅用于签名验签，两个签名算法：
 
-后果：Ed25519 密钥在 AWS KMS 上**只能走信封模式**，拿不到 `KeyNeverLeavesBoundary`。这个限制直接催生了下一节的算法决策。
+| 签名算法 | `MessageType` | 对应 |
+|---|---|---|
+| `ED25519_SHA_512` | `RAW`（完整消息） | FIPS 186-5 §7.6，PureEdDSA——正是 RFC 8037 定义的 JWT `EdDSA` |
+| `ED25519_PH_SHA_512` | `DIGEST` | FIPS 186-5 §7.8，HashEdDSA（Ed25519ph） |
 
-## authn 的算法放松：由密钥决定，不由 token 决定
+**`aws-kms` 实现必须用 `ED25519_SHA_512` + `MessageType:RAW`**，因为 JWT 的 `EdDSA` 是 PureEdDSA。AWS 文档明确警告两种 `MessageType` 不可互换；选错的表现是签名能生成但验不过。
 
-`go/authn` 当前把 JWT 签名算法钉死为 EdDSA，`token.go` 的注释说明了理由：防止算法混淆攻击——`alg: none`，以及把非对称公钥当作 HMAC 密钥去签（公钥不是秘密）。
+结论：Ed25519 密钥在三套实现上都能**直签**，都拿得到 `KeyNeverLeavesBoundary`，不必退回信封模式。
 
-**这个理由成立，但"只允许一种算法"不是它的必要条件。** 防御的本质是**不让 token 自己声称的 `alg` 决定用什么算法验签**。因此放松的正确方式是：
+## authn 的签名算法：保持 EdDSA 单一，但让算法由密钥决定
 
-1. 允许列表从 `{EdDSA}` 扩为 `{EdDSA, ES256}`，**绝不含任何 HMAC 家族**——非对称与对称混列才是算法混淆的必要条件；
-2. `kid` 必须存在且能查到对应密钥；
-3. **新增一道现在没有的检查**：token header 的 `alg` 必须等于该密钥自己声明的算法，不等即拒。
+> **本节已被一次核实推翻并重写（2026-09-04）。** 早先的版本主张把 `authn` 的 JWT 算法允许列表从 `{EdDSA}` 放松为 `{EdDSA, ES256}`，唯一的必要性论据是"AWS KMS 不支持 Ed25519，所以 AWS 部署签不出 EdDSA"。**该前提不成立**（见上节）：AWS KMS 有 `ECC_NIST_EDWARDS25519` 密钥规格。放松的必要性随之消失，因此**不放松**。
 
-放松后是三道闸而非现在的两道，安全性**高于**现状：现在若 allowlist 被误改，攻击面立刻打开；改后即使 allowlist 被误改，密钥算法不匹配这道闸仍然拦得住。
+`go/authn` 把 JWT 签名算法钉死为 EdDSA，`token.go` 的注释说明了理由：防止算法混淆攻击——`alg: none`，以及把非对称公钥当作 HMAC 密钥去签（公钥不是秘密）。**这条保持不变。**
 
-选 **ES256**（ECDSA P-256 + SHA-256）而非 RS256 的理由：AWS KMS 原生支持；签名 64 字节而 RSA-2048 需 256 字节，token 更小；KMS 调用更快；RSA-2048 的安全边际低于 P-256。
+保持单一算法此刻是纯收益：三套 `Signer` 实现都能直签 Ed25519，没有任何部署形态被它挡住；而 Ed25519 相对 ECDSA P-256 还更好——签名与验签更快，且不依赖每次签名的随机数（ECDSA 的 nonce 一旦重复或可预测就直接泄漏私钥，这是它最经典的实现陷阱）。多一种算法就是多一份攻击面和多一条要维护的代码路径，在没有任何部署需要它的情况下不值得。
 
-默认仍是 EdDSA（`local`/`vault` 部署）；部署在 AWS KMS 直签模式下时用 ES256。**国密 SM2 不在本轮范围**——它不是 JWT 标准算法（仅有草案），等真实的密评需求出现时再议。
+**但有一件事仍然要做**：`pki_signing_keys` 有 `algorithm` 列，验签时**必须检查 token header 的 `alg` 等于该 `kid` 对应密钥自己声明的算法**，不等即拒。
+
+这道检查在单一算法下是冗余的——parser 的允许列表已经只放行 EdDSA。仍然加它，是因为它把安全性从"依赖允许列表这一处配置"变成"依赖允许列表**和**密钥声明两处一致"：将来若真的需要加第二种算法，那道闸已经在位，不必在改允许列表的同时想起来补它。冗余的防御在这里成本接近零，而遗漏的代价是算法混淆攻击。
+
+将来若确有部署需要第二种算法（例如某个 HSM 只支持 ECDSA），加进允许列表即可，前提是**绝不混入任何 HMAC 家族**——非对称与对称同列才是算法混淆的必要条件。国密 SM2 同样不在本轮范围：它不是 JWT 标准算法（仅有草案），等真实密评需求出现时再议。
 
 ## 数据模型
 
@@ -191,7 +198,7 @@ pki.NewModule(db, pki.WithSigner("kms.aws", cfg))
 |---|---|
 | `id` | 即 JWT 的 `kid` |
 | `purpose` | 用途标识，如 `authn.access_token`。同一 purpose 同时只能有一把 `active` |
-| `algorithm` | `ed25519` / `ecdsa-p256`；验签时与 token header 的 `alg` 比对 |
+| `algorithm` | 目前只有 `ed25519`；列本身为将来的第二种算法预留，验签时必须与 token header 的 `alg` 比对（见"authn 的签名算法"） |
 | `signer_name` / `key_ref` | 私钥归哪套 `Signer` 管、句柄是什么。**没有私钥列** |
 | `status` | `pending` / `active` / `retiring` / `retired` / `revoked` |
 | `public_key` | 公钥（DER），验签用，不敏感 |
