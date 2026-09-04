@@ -87,7 +87,7 @@
 | **套餐权益** | `billing.Entitlements` | 这个租户**买没买** | 随订阅变化 |
 
 **模块开关**
-- CLI 生成骨架时按需引入，未选择的模块不进依赖、不进二进制。这是最彻底的禁用，也让不需要计费的项目不必背上三家支付 SDK 的依赖树。
+- CLI 生成骨架时按需引入，未选择的模块不进依赖、不进二进制。**`billing/gateway` 是子包而非模块，排除机制相应地从「不选这个模块」变成「不 import 这个包」，效果等价**——不接支付的项目不空白导入 `billing/gateway`，三家支付 SDK 同样不进它的 `go.mod`、`go.sum` 与二进制（依赖方向的单向约束见 [06 计费与计量](06-billing-and-metering.md)）。这是最彻底的禁用，也让不需要计费的项目不必背上三家支付 SDK 的依赖树。
 - 模块间有依赖关系（`billing` 依赖 `metering`、`admin` 依赖 `rbac`），CLI 需要做依赖闭包解析并在选择冲突时明确报错。
 
   > **实现状态注记（2026-09-03，saasctl 轮）：** `saasctl new --with=…` 按本节的"正向选择 + 依赖闭包 + 冲突报错"落地，v0.1 的可选范围是 `{authn, rbac, org}`——即下方分级表里"底座型"中已经实现、且能构成最小可用组合的三件；`jobs`、`storage`、`notification` 与下方"业务能力型"各行等其模块实现轮次后再扩展（切换范围不是本轮的承诺，见 `go/saasctl/AGENTS.md` Known limitations）。落地形态与表格措辞的三点对应：`--with` 是**正向选择**，不存在 `--without`——"不要 authn"的表达是列出其余模块；向下闭包规则是选择 `rbac` 或 `org` 而不选 `authn` 时报错并点名 `authn` 是被隐含的依赖（它们的路由需要一个认证层），未知名字报错时列出合法集合；默认值是 `authn,rbac,org` 全选，`--with=""` 显式表达只带必需五件（`pkgcore`/`dbkit`/`tenancy`/`config`/`observability` 无关闭选项，与分级表"必需"行一致），恰好就是 99 行"最小可用组合"的两种形态。表格里"底座型——关闭 jobs 意味着 storage/notification/… 全部不可用，CLI 必须在关闭前明确列出连带影响并要求确认"这一句的确认交互，在 v0.1 无对应模块可关，等可选范围扩大到有连带的模块时再定。CI 只测三种典型组合（109 行）在 v0.1 落到脚手架侧为：`new` 的每个合法选择都有 golden 钉死 + 端到端 proof 至少跑默认与 `--with=authn` 两个选择，三组合全矩阵的流水线形态属 scaffold-verify 的 M4 门（见 [18 CI/CD](18-cicd.md) 实施状态注记）。
@@ -98,7 +98,7 @@
 |---|---|---|
 | **必需** | `pkgcore`、`dbkit`、`tenancy`、`config`、`observability` | 所有模块的底座，不提供关闭选项 |
 | **底座型**（可关，但会连带关闭依赖方） | `jobs`、`storage`、`notification`、`authn`、`rbac`、`org` | 例如关闭 `jobs` 意味着 `storage`/`notification`/`billing`/`ai-gateway`/`integration`/`compliance` 全部不可用——CLI 必须在关闭前明确列出连带影响并要求确认 |
-| **业务能力型**（自由关闭） | `billing`、`billing-gateway`、`metering`、`ai-gateway`、`sharing`、`integration`、`compliance`、`admin` | 关掉不影响其他模块，只是少一块能力 |
+| **业务能力型**（自由关闭） | `billing`（含 `gateway` 子包，见下方注）、`metering`、`ai-gateway`、`sharing`、`integration`、`compliance`、`admin` | 关掉不影响其他模块，只是少一块能力 |
 
 典型的"最小可用组合"是：必需五件 + `authn` + `rbac` + `org`——即一个有多租户、认证与组织管理但不收费的应用。
 

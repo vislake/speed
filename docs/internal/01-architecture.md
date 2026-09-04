@@ -23,8 +23,7 @@ graph BT
     rbac["rbac<br/>自建RBAC/domain=租户/子树范围"]
     metering["metering<br/>用量采集/聚合/配额"]
     org["org<br/>组织树(多层级)/工作空间/成员/邀请"]
-    billing["billing<br/>订阅/账单/信用点(credits)"]
-    bgw["billing-gateway<br/>Stripe/支付宝/微信适配"]
+    billing["billing<br/>订阅/账单/信用点(credits)<br/>gateway 子包: Stripe/支付宝/微信适配"]
     ai["ai-gateway<br/>LLM + 图像生成/异步作业"]
     sharing["sharing<br/>公开分享链接/令牌/访问统计"]
     integ["integration<br/>API Key/限流/外发Webhook"]
@@ -57,7 +56,6 @@ graph BT
     billing --> metering
     billing --> cfg
     billing --> jobs
-    bgw --> billing
     ai --> metering
     ai --> jobs
     ai --> storage

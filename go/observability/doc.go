@@ -12,7 +12,7 @@
 // must-instrument-metrics table describes (queue depth, metering outbox
 // lag, notification delivery rate, payment callback success, ...) belongs
 // to the modules that own those domains (jobs, metering, notification,
-// billing-gateway, ai-gateway), none of which exist yet (root CLAUDE.md's
+// ai-gateway), none of which exist yet (root CLAUDE.md's
 // M0 status) -- this package does not speculatively build instrumentation
 // for them.
 //

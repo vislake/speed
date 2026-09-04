@@ -7,7 +7,7 @@ context-aware structured logger, and generic HTTP instrumentation. See
 the per-domain "must-instrument metrics" table (queue depth, metering
 outbox lag, notification delivery rate, payment callback success, ...),
 which belongs to the modules that own those domains (`jobs`, `metering`,
-`notification`, `billing-gateway`, `ai-gateway`) once they exist. None of
+`notification`, `ai-gateway`) once they exist. None of
 them exist yet (root `CLAUDE.md`'s M0 status), so this module does not
 speculatively build instrumentation for them.
 

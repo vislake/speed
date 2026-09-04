@@ -6,7 +6,6 @@ use (
 	./go/ai-gateway
 	./go/authn
 	./go/billing
-	./go/billing-gateway
 	./go/compliance
 	./go/config
 	./go/dbkit

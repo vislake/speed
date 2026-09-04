@@ -52,7 +52,7 @@ Follows [Conventional Commits](https://www.conventionalcommits.org/), enforced b
 
 ### Backend Go modules (`go/<scope>/`)
 
-`pkgcore`, `dbkit`, `observability`, `tenancy`, `ratelimit`, `config`, `jobs`, `storage`, `notification`, `authn`, `rbac`, `org`, `metering`, `billing`, `billing-gateway`, `ai-gateway`, `sharing`, `integration`, `compliance`, `admin`, `saasctl`
+`pkgcore`, `dbkit`, `observability`, `tenancy`, `ratelimit`, `config`, `jobs`, `storage`, `notification`, `authn`, `rbac`, `org`, `metering`, `billing`, `ai-gateway`, `sharing`, `integration`, `compliance`, `admin`, `saasctl`
 
 ### Frontend npm packages (`web/packages/<scope>/`)
 

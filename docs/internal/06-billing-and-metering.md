@@ -59,9 +59,12 @@ type Decision struct {
 - **回调必须幂等**（支付集成最经典的坑）：所有渠道都会重复投递同一事件（网络重试、对方超时重发），重复处理会导致重复发货或重复入账。以渠道事件 ID 作唯一键落 `payment_events` 表，**先insert去重、再处理**；处理逻辑本身也设计成可重入。
 - **回调不可信**：回调内容只作为"去查一次"的触发信号，金额与状态一律以主动调用渠道查询接口的结果为准，不直接采信回调报文中的金额。
 - **回调可能先于下单响应到达**，也可能永远不到达：必须有主动轮询兜底（走 `jobs` 定时任务扫描处于中间态的订单）。
-- `billing-gateway` 拆成独立 module，业务方不接支付时不必被拉入三家 SDK 的依赖树。
+- 三家渠道适配放在 `billing/gateway` **子包**，业务方不接支付、不 import 该包时，三家 SDK 不进它的依赖树。
 
-> **注记（2026-09-04）：这条的理由需要按新原则重估。** [03 部署模式与实现组装](03-deployment-modes.md) 的约束 6 确立了"分包优先用子包而非新开模块"——因为子包的依赖隔离已经穿透 `go.mod`、`go.sum` 与 MVS，与独立模块完全等效，而模块是发布单元、应按领域内聚性划分。若 `billing-gateway` 独立成模块的理由**仅仅是**上面这句依赖隔离，那么按新原则它应当是 `billing/gateway/stripe` 一类的子包；若还有领域内聚性上的独立理由（支付网关自成一域、与订阅账单的领域边界清晰），模块形态依然成立。该模块目前是 `go.work` 里的占位 stub，尚无实现，因此重估的成本此刻最低——决定应在它的实现轮开始前做出，不要等到有代码之后。
+- **依赖方向必须单向：`billing/gateway` 可以 import `billing`，`billing` 根包不得 import `billing/gateway`。** 网关子包需要 `billing` 的领域类型才能把渠道事件归一化成 `NormalizedEvent`；反向则不行。`billing` 通过定义在自己根包里的接口消费网关，具体实现由 `gateway` 子包提供并在 `init()` 中注册，宿主按需空白导入——与 `Signer`/`SeamRegistry` 同一模式。
+  这条不是洁癖，它同时守着两件事：其一，**依赖隔离完全取决于它**——`billing` 根包一旦 import `gateway`，所有用 `billing` 的项目都会重新背上三家 SDK，子包就白拆了；其二，**它是本节开头「Subscription 是内部领域概念、支付渠道只是收款执行者」的强制手段**。`billing-gateway` 还是独立模块时，这个解耦由 [01 整体架构](01-architecture.md) 的纪律 2（业务模块之间禁止 import 对方的 struct）兜底；改成子包后同模块内的包可以自由互引，那层强制消失了，必须由这条单向规则接手，否则 `stripe.Subscription` 这类渠道类型迟早会渗进领域模型。执行手段与 issue #1 中各实现子包的做法相同：depguard 把三家支付 SDK 的放行路径限定在 `**/go/billing/gateway/**`，写回根包即 CI 失败。
+
+> **注记（2026-09-04）：由独立 module 改为子包。** 早先的写法是"`billing-gateway` 拆成独立 module"，理由只有依赖隔离一条。按 [03 部署模式与实现组装](03-deployment-modes.md) 的约束 6，这个理由指向子包而非模块——子包的依赖隔离已经穿透 `go.mod`、`go.sum` 与 MVS，与独立模块完全等效，而模块是发布单元、应按领域内聚性划分，lockstep 下每个模块还要额外付 `go.work` 条目、CI 矩阵行、`AGENTS.md` 与版本标签。审查时它尚是无实现的 stub，改动成本为零，因此就地裁决：`go/billing-gateway` 模块取消，代码位置为 `go/billing/gateway`，`go.work` 条目移除。渠道适配将来仍可各自再分子包（`billing/gateway/stripe` 等），让只接一家渠道的项目不必背上另外两家的 SDK。
 
 ## 计量计费：同一管道，可替换的后端
 

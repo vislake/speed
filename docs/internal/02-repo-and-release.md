@@ -10,7 +10,7 @@ speed/
   go/
     pkgcore/  dbkit/  observability/  ratelimit/  tenancy/  config/
     jobs/  storage/  notification/  authn/  rbac/  org/  metering/
-    billing/  billing-gateway/  ai-gateway/  sharing/
+    billing/  ai-gateway/  sharing/          # billing/gateway/ 是子包，不是模块
     integration/  compliance/  admin/  saasctl/
                                               # 各含独立 go.mod
                                               # 每个模块内含 docs/、AGENTS.md、
