@@ -165,8 +165,13 @@ type UserAddresses struct {
 //
 // The resolver is consulted at SEND time, never at enqueue time: an address
 // added or removed between Dispatch and the job's run is honoured by the
-// delivery, which is what makes a dispatch to a user with no address yet a
-// retryable event rather than a permanently failed one.
+// delivery. A dispatch to a user with no address on file is not a retryable
+// event -- the channels skip (see Resolve) and the attempt settles into
+// send_records as a deliberate non-send whose skip reason names the gap, so
+// nothing retries an address that is simply not there. What the send-time
+// consultation buys instead is freshness: an address that arrives after the
+// job ran is picked up by the NEXT dispatch, and one removed before the job
+// runs is never sent to. Only a resolver failure is retried (see Resolve).
 type UserAddressResolver interface {
 	// Resolve returns the outbound addresses on file for userID. A user
 	// with no addresses returns an empty UserAddresses and nil -- absence
