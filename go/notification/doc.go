@@ -6,16 +6,19 @@
 // # What notification owns
 //
 //   - The in-app inbox: per-tenant rows in in_app_messages that a user
-//     reads inside the product. This is the module's first-class channel —
-//     it has zero external dependencies, so it works in every deployment
-//     composition, and it is the only channel that is fully built in this
-//     round (see "Current status" below).
+//     reads inside the product, plus the realtime hub that wakes a signed-in
+//     recipient's stream connection the moment an inbox row lands. This is
+//     the module's first-class channel — it has zero external dependencies,
+//     so it works in every deployment composition.
 //   - The per-type channel preference matrix that decides which channels a
 //     type of notification may use, and the consent ledger that decides
 //     whether a given external recipient may be messaged at all.
-//   - Delivery: the subscriber that turns a published domain event into one
-//     rendered, deduplicated, rate-limited message per recipient, per
-//     selected channel.
+//   - Delivery: the queue-backed pipeline (Deliveries().Dispatch plus the
+//     registered queue handler) that produces one rendered, deduplicated,
+//     rate-limited message per recipient, per selected channel, with a send
+//     record per attempt as the replay-safe outcome log. The pipeline's
+//     input is a host's Dispatch call — hosts wire their own module events
+//     to it — and its in-app arm writes the inbox row the hub wakes on.
 //
 // # What notification deliberately does NOT own
 //
@@ -25,9 +28,12 @@
 // Notification's own model files cite this for every id they store.
 //
 // Business modules never depend on notification either: they publish
-// domain events, and notification subscribes. That direction is what keeps
-// the module a leaf of the dependency graph rather than a hub every other
-// module must import.
+// domain events, and notification's consumption of them is the host's
+// wiring, never the module's — a host subscribes to its own events and
+// calls Deliveries().Dispatch, while this module's Register subscribes to
+// nothing but its inbox-created event for the local hub fan-out. That
+// direction is what keeps the module a leaf of the dependency graph rather
+// than a hub every other module must import.
 //
 // # Tenant and recipient model
 //
@@ -36,28 +42,16 @@
 // never one inbox shared across them. External recipients (a patient of a
 // dental group, say) exist only inside the tenant that verified them.
 //
-// # Current status
+// # Status
 //
-// The round's first block shipped the module skeleton and the in-app
-// inbox's storage: the InboxMessage model, its dual-dialect migration, the
-// Repository that reads and writes inbox rows, and the module's first
-// declared domain event (notification.inbox.created).
-//
-// This block ships the preference matrix end to end at the service level
-// (no HTTP surface yet -- the handler is a later block, like org's
-// first-round shape): the NotificationPreference model and its dual-dialect
-// migration, whose core semantics are that absence means a type's declared
-// defaults apply (never materialized into rows) and a stored empty array is
-// a deliberate, only-sometimes-legal opt-out; the PreferenceRepository that
-// reads and writes rows; the PreferenceService -- the module's first
-// concrete service -- which validates every write against the live
-// notification-type taxonomy attached from the host registry during
-// Register, refuses what a type cannot honor (error codes and bilingual
-// copy in errors.go and locales/), and resolves the delivery question
-// ("which channels for this recipient and type") by folding defaults under
-// absent rows; and render.go's template-render seam, which pins the
-// convention that a type's title/body copy ships in the declaring module's
-// own locale files under <type_key>.title/.body. The consent ledger and
-// the delivery subscriber are the round's remaining blocks; the latter
-// builds on exactly this service and this render seam.
+// Implemented end to end: the in-app inbox and its stream, the per-type
+// channel preference matrix, the external-contact consent ledger with
+// double opt-in and business attestation, the async delivery pipeline with
+// its per-attempt send records, the platform-blacklist table (schema and
+// read path — the writers that feed it are deferred), the module's own
+// OpenAPI fragment with a generated, compile-checked HTTP handler, and the
+// dual-dialect migration set. The reference app is the mandatory first
+// consumer of the whole surface. What this round deliberately does not
+// ship is recorded, complete and honest, in go/notification/AGENTS.md's
+// "Deferred to later rounds" section.
 package notification
