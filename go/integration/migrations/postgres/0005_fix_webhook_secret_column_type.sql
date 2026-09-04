@@ -1,0 +1,50 @@
+-- Fixes integration_webhook_subscriptions.secret's PostgreSQL column type.
+-- It was declared VARCHAR(512) by 0002_create_integration_webhook_
+-- subscriptions.sql, but the column stores CIPHERTEXT written through
+-- WebhookSecretSerializerName's GORM serializer (webhook_model.go), never
+-- plaintext -- AES-256-GCM ciphertext is effectively random binary data,
+-- which fails to be valid UTF-8 text almost every time it is generated.
+-- PostgreSQL enforces its configured client/server encoding (UTF8, this
+-- project's only supported one) on every VARCHAR/TEXT value, so writing a
+-- genuine encrypted secret through this column failed with "invalid byte
+-- sequence for encoding \"UTF8\"" the very first time this round's own new
+-- PostgreSQL integration tier (integration_test/postgres_softdelete_test.go)
+-- actually exercised it -- exactly the kind of bug a first real-database
+-- proof exists to catch, and one this module could not have caught before,
+-- since it had no PostgreSQL integration tier at all until this round (see
+-- go/integration/AGENTS.md's "Soft deletion" section for the round-level
+-- record).
+--
+-- go/org's identical WebhookSecretSerializerName-shaped precedent --
+-- org_invitations.email, encrypted under EmailSerializerName the exact same
+-- way -- already gets this right: BYTEA on PostgreSQL
+-- (go/org/migrations/postgres/0003_create_org_invitations.sql), BLOB on
+-- SQLite (go/org/migrations/sqlite/0003_create_org_invitations.sql). This
+-- migration brings integration_webhook_subscriptions.secret in line with
+-- that precedent on PostgreSQL.
+--
+-- No sqlite/ sibling accompanies this file, unlike every other migration in
+-- this module: SQLite's TEXT/VARCHAR columns have no fixed encoding to
+-- violate (SQLite's dynamic type system already stores arbitrary binary
+-- through a VARCHAR-declared column without error, which is exactly why
+-- this module's own unit test suite -- SQLite only -- never caught this),
+-- so nothing on that dialect needs to change. This is the first migration
+-- in this module (and, as far as this round's own review of the repository
+-- found, in the whole codebase) that genuinely does not need identical DDL
+-- on both dialects, because the bug it fixes is itself dialect-specific
+-- rather than a schema addition common to both -- dbkit.MigrationRegistry.
+-- Apply reads each dialect's own subdirectory independently and has no
+-- cross-dialect pairing requirement (go/dbkit/migrations.go's own
+-- migrationFiles), so an asymmetric fix like this one applies cleanly.
+--
+-- This column has never held real data outside this module's own test
+-- suites (go/integration has no reference-app consumer yet -- see
+-- AGENTS.md's "No reference-app consumer yet" section -- and this round's
+-- own tier is this module's first-ever PostgreSQL run of any kind), so the
+-- column is dropped and re-added rather than converted in place with a
+-- USING cast: there is no existing ciphertext on this dialect a cast would
+-- need to preserve correctly, and a cast's own encoding assumptions would
+-- be exactly as fragile as the bug this migration fixes.
+ALTER TABLE integration_webhook_subscriptions DROP COLUMN secret;
+ALTER TABLE integration_webhook_subscriptions ADD COLUMN secret BYTEA NOT NULL DEFAULT '';
+ALTER TABLE integration_webhook_subscriptions ALTER COLUMN secret DROP DEFAULT;

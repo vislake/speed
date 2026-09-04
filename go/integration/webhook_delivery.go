@@ -291,11 +291,19 @@ func (s *Service) handleDeliveryJob(ctx context.Context, job *jobs.Job) (jobs.Re
 
 	sub, err := s.webhookRepo.FindByID(ctx, delivery.SubscriptionID)
 	if err != nil {
-		// The subscription was deleted after this delivery was enqueued
-		// (webhook_service.go's DeleteWebhookSubscription deliberately
-		// leaves past delivery rows in place). There is no URL and no
-		// secret to deliver with any more, and none will reappear by
-		// retrying, so this is terminal.
+		// The subscription was mark-deleted after this delivery was
+		// enqueued (webhook_service.go's DeleteWebhookSubscription
+		// deliberately leaves past delivery rows in place, and dbkit's
+		// soft-delete auto-scope plugin hides the mark-deleted row from
+		// this very FindByID call exactly as a physical DELETE always did
+		// before this module adopted dbkit.SoftDeletable). There is no URL
+		// and no secret to deliver with any more, and none will reappear
+		// within this job's own bounded retry horizon (webhookMaxRetries)
+		// by retrying, so this is terminal -- a caller wanting delivery to
+		// resume calls RestoreWebhookSubscription (plus, per its own doc
+		// comment, an explicit UpdateWebhookSubscription to reactivate it),
+		// which produces a FRESH delivery off the next matching domain
+		// event rather than reviving this already-settled row.
 		return jobs.Result{}, s.settleTerminal(ctx, delivery, "webhook subscription no longer exists")
 	}
 	if !sub.Active {

@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"testing"
 
+	"gorm.io/gorm"
+
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -226,6 +229,187 @@ func TestService_DeleteWebhookSubscription_RemovesIt(t *testing.T) {
 	}
 	if err := svc.DeleteWebhookSubscription(ctxFor(testTenant), created.ID); !apperrIs(err, ErrWebhookSubscriptionNotFound) {
 		t.Errorf("second delete error = %v, want ErrWebhookSubscriptionNotFound", err)
+	}
+}
+
+// TestService_DeleteWebhookSubscription_MarksInsteadOfPhysicallyRemoving
+// proves DeleteWebhookSubscription is now a mark-delete: the row survives
+// in the table (findable through the unscoped repository) with deleted_at
+// set, rather than vanishing, the property a physical DELETE could never
+// have offered.
+func TestService_DeleteWebhookSubscription_MarksInsteadOfPhysicallyRemoving(t *testing.T) {
+	m, svc := newWebhookTestService(t)
+	created, err := svc.CreateWebhookSubscription(ctxFor(testTenant), CreateWebhookSubscriptionInput{
+		URL: "https://example.com/hook", EventTypes: []string{"test.thing.happened"}, CreatedBy: "user-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateWebhookSubscription: %v", err)
+	}
+	if err := svc.DeleteWebhookSubscription(ctxFor(testTenant), created.ID); err != nil {
+		t.Fatalf("DeleteWebhookSubscription: %v", err)
+	}
+
+	var count int64
+	if err := dbkit.WithTenantSession(ctxFor(testTenant), m.db, func(tx *gorm.DB) error {
+		return tx.Unscoped().Model(&WebhookSubscription{}).
+			Where("id = ? AND deleted_at IS NOT NULL", created.ID).
+			Count(&count).Error
+	}); err != nil {
+		t.Fatalf("counting the mark-deleted row: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("mark-deleted row count = %d, want exactly 1 -- Delete must mark, never physically remove", count)
+	}
+}
+
+// TestService_RestoreWebhookSubscription_UndoesTheDelete proves the round
+// trip: delete, verify invisible everywhere a normal read looks, restore,
+// verify visible again with URL/EventTypes/CreatedBy intact and Active
+// forced false regardless of its value before deletion (see
+// RestoreWebhookSubscription's own doc comment for why).
+func TestService_RestoreWebhookSubscription_UndoesTheDelete(t *testing.T) {
+	_, svc := newWebhookTestService(t)
+	created, err := svc.CreateWebhookSubscription(ctxFor(testTenant), CreateWebhookSubscriptionInput{
+		URL: "https://example.com/hook", EventTypes: []string{"test.thing.happened"}, CreatedBy: "user-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateWebhookSubscription: %v", err)
+	}
+	if deleteErr := svc.DeleteWebhookSubscription(ctxFor(testTenant), created.ID); deleteErr != nil {
+		t.Fatalf("DeleteWebhookSubscription: %v", deleteErr)
+	}
+	list, err := svc.ListWebhookSubscriptions(ctxFor(testTenant))
+	if err != nil {
+		t.Fatalf("ListWebhookSubscriptions (after delete): %v", err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("len(list) = %d after delete, want 0", len(list))
+	}
+
+	if restoreErr := svc.RestoreWebhookSubscription(ctxFor(testTenant), created.ID); restoreErr != nil {
+		t.Fatalf("RestoreWebhookSubscription: %v", restoreErr)
+	}
+
+	list, err = svc.ListWebhookSubscriptions(ctxFor(testTenant))
+	if err != nil {
+		t.Fatalf("ListWebhookSubscriptions (after restore): %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("len(list) = %d after restore, want exactly 1", len(list))
+	}
+	restored := list[0]
+	if restored.ID != created.ID || restored.URL != created.URL {
+		t.Errorf("restored = %+v, want it to match the created subscription's id and URL", restored)
+	}
+	if len(restored.EventTypes) != 1 || restored.EventTypes[0] != "test.thing.happened" {
+		t.Errorf("EventTypes = %v, want the original selection intact", restored.EventTypes)
+	}
+	if restored.CreatedBy != created.CreatedBy {
+		t.Errorf("CreatedBy = %q, want %q", restored.CreatedBy, created.CreatedBy)
+	}
+	if restored.Active {
+		t.Error("Active = true after Restore, want false -- Restore must always land a subscription paused")
+	}
+}
+
+// TestService_RestoreWebhookSubscription_ForcesActiveFalse_EvenIfActiveAtDelete
+// pins the exact scenario RestoreWebhookSubscription's own doc comment
+// argues about: a subscription that was ACTIVE at the moment of deletion
+// must not resume fan-out just because it was restored.
+func TestService_RestoreWebhookSubscription_ForcesActiveFalse_EvenIfActiveAtDelete(t *testing.T) {
+	fq := &fakeQueue{}
+	_, svc := newWebhookTestService(t, WithWebhookQueue(fq))
+	created, err := svc.CreateWebhookSubscription(ctxFor(testTenant), CreateWebhookSubscriptionInput{
+		URL: "https://example.com/hook", EventTypes: []string{"test.thing.happened"}, CreatedBy: "user-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateWebhookSubscription: %v", err)
+	}
+	if !created.Active {
+		t.Fatal("a freshly created subscription must start Active, this test's premise")
+	}
+	if err := svc.DeleteWebhookSubscription(ctxFor(testTenant), created.ID); err != nil {
+		t.Fatalf("DeleteWebhookSubscription: %v", err)
+	}
+	if err := svc.RestoreWebhookSubscription(ctxFor(testTenant), created.ID); err != nil {
+		t.Fatalf("RestoreWebhookSubscription: %v", err)
+	}
+
+	// A domain event matching the restored subscription's own EventTypes
+	// must NOT be fanned out to it: it is live again, but paused.
+	if err := svc.handleDomainEvent(ctxFor(testTenant), pkgcore.Event{Type: testMapping.InternalType, TenantID: testTenant}); err != nil {
+		t.Fatalf("handleDomainEvent: %v", err)
+	}
+	if len(fq.tasks) != 0 {
+		t.Fatalf("len(fq.tasks) = %d, want 0 -- a restored-but-not-reactivated subscription must never be fanned out to", len(fq.tasks))
+	}
+}
+
+// TestService_RestoreWebhookSubscription_UnknownID_ReturnsNotFound mirrors
+// go/rbac's TestService_RestoreRole_NothingToRestore_IsReported and
+// go/org's TestMemberService_Restore_UnknownID_ReturnsMembershipNotFound.
+func TestService_RestoreWebhookSubscription_UnknownID_ReturnsNotFound(t *testing.T) {
+	_, svc := newWebhookTestService(t)
+	if err := svc.RestoreWebhookSubscription(ctxFor(testTenant), "no-such-id"); !apperrIs(err, ErrWebhookSubscriptionNotFound) {
+		t.Errorf("error = %v, want ErrWebhookSubscriptionNotFound", err)
+	}
+}
+
+// TestService_RestoreWebhookSubscription_LiveSubscription_ReturnsNotFound
+// mirrors go/org's TestMemberService_Restore_LiveMembership_ReturnsMembershipNotFound:
+// restoring a subscription that was never deleted reports the identical
+// collapsed not-found signal as an id that never existed at all.
+func TestService_RestoreWebhookSubscription_LiveSubscription_ReturnsNotFound(t *testing.T) {
+	_, svc := newWebhookTestService(t)
+	created, err := svc.CreateWebhookSubscription(ctxFor(testTenant), CreateWebhookSubscriptionInput{
+		URL: "https://example.com/hook", EventTypes: []string{"test.thing.happened"}, CreatedBy: "user-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateWebhookSubscription: %v", err)
+	}
+	if err := svc.RestoreWebhookSubscription(ctxFor(testTenant), created.ID); !apperrIs(err, ErrWebhookSubscriptionNotFound) {
+		t.Errorf("error = %v, want ErrWebhookSubscriptionNotFound", err)
+	}
+}
+
+// TestService_RestoreWebhookSubscription_Twice_SecondCallReturnsNotFound
+// mirrors go/org's TestMemberService_Restore_Twice_SecondCallReturnsMembershipNotFound.
+func TestService_RestoreWebhookSubscription_Twice_SecondCallReturnsNotFound(t *testing.T) {
+	_, svc := newWebhookTestService(t)
+	created, err := svc.CreateWebhookSubscription(ctxFor(testTenant), CreateWebhookSubscriptionInput{
+		URL: "https://example.com/hook", EventTypes: []string{"test.thing.happened"}, CreatedBy: "user-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateWebhookSubscription: %v", err)
+	}
+	if err := svc.DeleteWebhookSubscription(ctxFor(testTenant), created.ID); err != nil {
+		t.Fatalf("DeleteWebhookSubscription: %v", err)
+	}
+	if err := svc.RestoreWebhookSubscription(ctxFor(testTenant), created.ID); err != nil {
+		t.Fatalf("first RestoreWebhookSubscription: %v", err)
+	}
+	if err := svc.RestoreWebhookSubscription(ctxFor(testTenant), created.ID); !apperrIs(err, ErrWebhookSubscriptionNotFound) {
+		t.Errorf("second RestoreWebhookSubscription error = %v, want ErrWebhookSubscriptionNotFound", err)
+	}
+}
+
+// TestService_RestoreWebhookSubscription_CrossTenant_NotFound mirrors this
+// file's own TestService_UpdateWebhookSubscription_CrossTenant_NotFound:
+// restoring another tenant's mark-deleted row must be indistinguishable
+// from restoring nothing at all.
+func TestService_RestoreWebhookSubscription_CrossTenant_NotFound(t *testing.T) {
+	_, svc := newWebhookTestService(t)
+	created, err := svc.CreateWebhookSubscription(ctxFor(testTenant), CreateWebhookSubscriptionInput{
+		URL: "https://example.com/hook", EventTypes: []string{"test.thing.happened"}, CreatedBy: "user-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateWebhookSubscription: %v", err)
+	}
+	if err := svc.DeleteWebhookSubscription(ctxFor(testTenant), created.ID); err != nil {
+		t.Fatalf("DeleteWebhookSubscription: %v", err)
+	}
+	if err := svc.RestoreWebhookSubscription(ctxFor("tenant-other"), created.ID); !apperrIs(err, ErrWebhookSubscriptionNotFound) {
+		t.Errorf("error = %v, want ErrWebhookSubscriptionNotFound (cross-tenant indistinguishable from absent)", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package integration
 
 import (
 	"testing"
+	"time"
 
 	"gorm.io/datatypes"
 
@@ -12,6 +13,24 @@ func TestWebhookSubscription_ImplementsTenantScoped(t *testing.T) {
 	s := WebhookSubscription{TenantModel: dbkit.TenantModel{TenantID: "tenant-1"}}
 	if got := s.GetTenantID(); string(got) != "tenant-1" {
 		t.Errorf("GetTenantID() = %q, want %q", got, "tenant-1")
+	}
+}
+
+// TestWebhookSubscription_GetDeletedAt_ReturnsFieldValue is a no-database
+// sanity check that WebhookSubscription's GetDeletedAt method returns
+// exactly the DeletedAt field it satisfies dbkit.SoftDeletable with,
+// mirroring examples/reference-app/internal/notes's
+// TestNote_GetDeletedAt_ReturnsFieldValue precedent.
+func TestWebhookSubscription_GetDeletedAt_ReturnsFieldValue(t *testing.T) {
+	if got := (WebhookSubscription{}).GetDeletedAt(); got != nil {
+		t.Fatalf("GetDeletedAt() on a zero-valued WebhookSubscription = %v, want nil", got)
+	}
+
+	now := time.Now()
+	s := WebhookSubscription{DeletedAt: &now}
+	got := s.GetDeletedAt()
+	if got == nil || !got.Equal(now) {
+		t.Fatalf("GetDeletedAt() = %v, want %v", got, now)
 	}
 }
 

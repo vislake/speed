@@ -1,0 +1,29 @@
+-- Adds WebhookSubscription's dbkit.SoftDeletable pair (deleted_at/
+-- deleted_by) to integration_webhook_subscriptions, following dbkit's own
+-- soft-delete design (docs/internal/04-data-and-tenancy.md, delete-semantics
+-- section): a mark-delete is a plain UPDATE setting these two columns, never
+-- a physical DELETE, and both columns stay dialect-portable (kept identical
+-- to the sqlite/ copy of this file) -- no PostgreSQL-only type, no
+-- gen_random_uuid(), no NOW().
+--
+-- WebhookSubscription is the only one of this module's models this round
+-- touches. Service.DeleteWebhookSubscription's
+-- webhookRepo.Delete(ctx, id) call is the only real delete-shaped operation
+-- this module has ever had against a table without its own domain-specific
+-- revocation mark -- APIKey already carries RevokedAt and never calls
+-- Delete at all (see go/integration/AGENTS.md's "Soft deletion" section),
+-- and WebhookDelivery is a transient, append-only attempt log with no
+-- Delete operation of its own, so integration_api_keys and
+-- integration_webhook_deliveries are untouched by this migration.
+--
+-- Unlike go/org's and go/rbac's identically-purposed migrations,
+-- integration_webhook_subscriptions carries no unique index beyond its
+-- primary key (id) -- see idx_integration_webhook_subscriptions_tenant_active
+-- in 0002_create_integration_webhook_subscriptions.sql, which is a plain,
+-- non-unique index and needs no partial-index rewrite: a soft-deleted row
+-- occupying a non-unique index reserves nothing another row would need. This
+-- migration therefore adds only the two columns, with no index change at
+-- all. This is standard SQL, not a PostgreSQL-specific feature -- the
+-- identical DDL string runs on SQLite too (see the sqlite/ sibling).
+ALTER TABLE integration_webhook_subscriptions ADD COLUMN deleted_at TIMESTAMP NULL;
+ALTER TABLE integration_webhook_subscriptions ADD COLUMN deleted_by VARCHAR(64) NOT NULL DEFAULT '';

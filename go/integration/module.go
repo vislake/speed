@@ -88,8 +88,16 @@ const (
 	AuditActionWebhookSubscriptionUpdate = "integration.webhook_subscription.update"
 
 	// AuditActionWebhookSubscriptionDelete is emitted after
-	// Service.DeleteWebhookSubscription removes a subscription.
+	// Service.DeleteWebhookSubscription mark-deletes a subscription.
 	AuditActionWebhookSubscriptionDelete = "integration.webhook_subscription.delete"
+
+	// AuditActionWebhookSubscriptionRestore is emitted after
+	// Service.RestoreWebhookSubscription undoes a mark-delete -- the
+	// symmetric counterpart AuditActionWebhookSubscriptionDelete's own
+	// adoption of dbkit.SoftDeletable makes possible, following go/org's
+	// and go/rbac's identical Create/Update/Delete-plus-Restore audit
+	// symmetry.
+	AuditActionWebhookSubscriptionRestore = "integration.webhook_subscription.restore"
 )
 
 // auditActionDecls is every audit action this module declares through
@@ -102,6 +110,7 @@ var auditActionDecls = []string{
 	AuditActionWebhookSubscriptionCreate,
 	AuditActionWebhookSubscriptionUpdate,
 	AuditActionWebhookSubscriptionDelete,
+	AuditActionWebhookSubscriptionRestore,
 }
 
 // ErrAlreadyAttached reports a second Attach call on one Module.

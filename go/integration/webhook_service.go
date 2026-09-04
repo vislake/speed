@@ -206,11 +206,29 @@ func (s *Service) UpdateWebhookSubscription(ctx context.Context, in UpdateWebhoo
 	return &summary, nil
 }
 
-// DeleteWebhookSubscription permanently removes one subscription of the
-// caller's tenant. Its past WebhookDelivery rows are left in place as
-// history -- see that field's own doc comment in webhook_model.go for why
-// this module never cascades the delete (no cross-module-style foreign
-// keys, even within this module's own two tables).
+// DeleteWebhookSubscription mark-deletes one subscription of the caller's
+// tenant -- WebhookSubscription's dbkit.SoftDeletable adoption
+// (webhook_model.go's own doc comment) is what makes the promoted
+// webhookRepo.Delete(ctx, id) call below an UPDATE setting deleted_at/
+// deleted_by rather than a physical DELETE. Its past WebhookDelivery rows
+// are left in place as history either way -- see that field's own doc
+// comment in webhook_model.go for why this module never cascades the
+// delete (no cross-module-style foreign keys, even within this module's
+// own two tables) -- and a delivery already enqueued before this call
+// settles exactly as it always did: handleDeliveryJob's own
+// webhookRepo.FindByID lookup on the subscription is hidden from a
+// mark-deleted row by dbkit's soft-delete auto-scope plugin exactly as it
+// was made impossible by a physical DELETE before this round, so an
+// in-flight delivery still resolves ErrRecordNotFound and settles terminal
+// with "webhook subscription no longer exists" (webhook_delivery.go's
+// handleDeliveryJob), unchanged.
+//
+// See RestoreWebhookSubscription for undoing this, and
+// go/integration/AGENTS.md's "Soft deletion" section for the round's full
+// design record, including why "webhook subscription no longer exists" no
+// longer means the row can never reappear the way it did before a Restore
+// existed -- see handleDeliveryJob's own doc comment for the current
+// wording.
 func (s *Service) DeleteWebhookSubscription(ctx context.Context, id string) error {
 	row, err := s.webhookRepo.FindByID(ctx, id)
 	if err != nil {
@@ -220,6 +238,77 @@ func (s *Service) DeleteWebhookSubscription(ctx context.Context, id string) erro
 		return ErrInternal.WithCause(err)
 	}
 	return s.emitWebhookAudit(ctx, AuditActionWebhookSubscriptionDelete, row)
+}
+
+// RestoreWebhookSubscription undoes the mark-delete DeleteWebhookSubscription
+// made to the subscription named by id, in the caller's tenant, wrapping the
+// promoted dbkit.Repository[WebhookSubscription].Restore -- symmetric with
+// DeleteWebhookSubscription's own (ctx, id) shape, since a subscription's
+// natural key genuinely is its own opaque id (unlike, say, go/rbac's
+// RoleBinding, whose RestoreRole instead takes the tuple that identifies a
+// grant, because a caller revoking a grant is not expected to have kept the
+// binding's own row id around -- see that method's doc comment). It reports
+// ErrWebhookSubscriptionNotFound both for an id with nothing to restore and
+// for an id that exists but is not currently mark-deleted -- the identical
+// collapsed not-found signal dbkit.Repository[T].Restore's own doc comment
+// describes, matching go/org's MemberService.Restore and go/rbac's
+// RestoreRole precedent, so a caller cannot learn which case it hit from the
+// error shape alone.
+//
+// # Restore always lands the subscription PAUSED (Active = false),
+// regardless of what Active held at the moment it was deleted
+//
+// This is a deliberate divergence from go/org's and go/rbac's own Restore
+// methods, both of which change nothing about the restored row but its two
+// soft-delete columns (see go/org/AGENTS.md's and go/rbac/AGENTS.md's "Soft
+// deletion" sections, and rbac's RestoreRole doc comment, for the reasoning
+// behind that choice in THEIR domains). The reason this round does not
+// follow that precedent unchanged is that org's and rbac's Restore calls
+// resume a purely INTERNAL fact -- an organization membership, an
+// authorization grant -- evaluated fresh against the rest of the system on
+// every read. Restoring a WebhookSubscription with Active still true is
+// different in kind: webhook_delivery.go's handleDomainEvent fans out to
+// every ACTIVE subscription automatically, on every matching domain event,
+// entirely without further human action -- so an unconditional restore
+// would silently resume POSTing the tenant's live event data to an
+// external, third-party URL nobody has looked at again since the
+// subscription was deleted, however long ago that was and however stale
+// its URL or receiving system might now be. That is a real-world side
+// effect leaving this process, not an internal state change this codebase
+// can fully reason about the safety of the way it can for an org membership
+// or an rbac grant. Forcing Active = false here costs the caller exactly
+// one extra explicit step -- an UpdateWebhookSubscription call setting
+// Active back to true -- to resume delivery, which is the same "no implicit
+// side effect on a structural edit" discipline this codebase already
+// applies elsewhere (see go/org/AGENTS.md's identical framing for why
+// TreeService.Delete does not re-parent orphans and does not cascade
+// Restore). A caller wanting the subscription resumed in one round trip
+// simply follows Restore with such a call; nothing here prevents that.
+//
+// Restore does not re-validate the restored row against
+// CreateWebhookSubscription's own preconditions beyond the collapsed
+// not-found check above (its URL is not re-run through ValidateWebhookURL,
+// for instance): it changes nothing about the row but its two soft-delete
+// columns and, per the paragraph above, Active. A caller wanting every
+// modern invariant re-checked calls UpdateWebhookSubscription afterward.
+func (s *Service) RestoreWebhookSubscription(ctx context.Context, id string) error {
+	if err := s.webhookRepo.Restore(ctx, id); err != nil {
+		return translateWebhookRepoErr(err)
+	}
+
+	row, err := s.webhookRepo.FindByID(ctx, id)
+	if err != nil {
+		return translateWebhookRepoErr(err)
+	}
+
+	if row.Active {
+		row.Active = false
+		if updateErr := s.webhookRepo.Update(ctx, row); updateErr != nil {
+			return ErrInternal.WithCause(updateErr)
+		}
+	}
+
+	return s.emitWebhookAudit(ctx, AuditActionWebhookSubscriptionRestore, row)
 }
 
 // WebhookDeliverySummary is what Service.ListRecentWebhookDeliveries exposes

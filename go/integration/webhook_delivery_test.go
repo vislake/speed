@@ -11,6 +11,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"gorm.io/gorm"
+
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 )
@@ -263,6 +266,75 @@ func TestService_handleDeliveryJob_SubscriptionDeleted_TerminatesWithoutRetry(t 
 		t.Fatalf("handleDeliveryJob = %v, want nil (a deleted subscription is terminal, not retried)", err)
 	}
 
+	deliveries, err := svc.ListRecentWebhookDeliveries(ctxFor(testTenant), subID, 10)
+	if err != nil {
+		t.Fatalf("ListRecentWebhookDeliveries: %v", err)
+	}
+	if len(deliveries) != 1 || deliveries[0].Status != DeliveryStatusDeadLetter {
+		t.Fatalf("deliveries = %+v, want exactly one DeadLetter row", deliveries)
+	}
+}
+
+// TestService_handleDeliveryJob_SubscriptionMarkDeleted_DeliveryRowUnaffected
+// is this round's own proof for the mark-delete adoption: a WebhookDelivery
+// enqueued before its subscription was mark-deleted settles exactly as
+// TestService_handleDeliveryJob_SubscriptionDeleted_TerminatesWithoutRetry
+// already proves for the identical scenario (that test is unaffected by
+// this round precisely because it exercises the ordinary Service.
+// DeleteWebhookSubscription call, which is now a mark-delete) -- and this
+// test additionally reaches under the Service to confirm WHY: the
+// subscription row still physically exists, mark-deleted, and the delivery
+// row -- an id reference only, per this module's own no-cross-table-FK
+// discipline (webhook_model.go's WebhookDelivery.SubscriptionID doc
+// comment) -- is completely untouched by the subscription's own
+// soft-delete columns, since WebhookDelivery does not implement
+// dbkit.SoftDeletable at all.
+func TestService_handleDeliveryJob_SubscriptionMarkDeleted_DeliveryRowUnaffected(t *testing.T) {
+	m, svc := newWebhookTestService(t)
+	subID, _ := createTestSubscription(t, svc, "https://example.com/hook")
+	delivery := createPendingDelivery(t, svc, subID)
+
+	if err := svc.DeleteWebhookSubscription(ctxFor(testTenant), subID); err != nil {
+		t.Fatalf("DeleteWebhookSubscription: %v", err)
+	}
+
+	// The subscription row is mark-deleted, not gone.
+	var subCount int64
+	if err := dbkit.WithTenantSession(ctxFor(testTenant), m.db, func(tx *gorm.DB) error {
+		return tx.Unscoped().Model(&WebhookSubscription{}).
+			Where("id = ? AND deleted_at IS NOT NULL", subID).
+			Count(&subCount).Error
+	}); err != nil {
+		t.Fatalf("counting the mark-deleted subscription row: %v", err)
+	}
+	if subCount != 1 {
+		t.Fatalf("mark-deleted subscription row count = %d, want exactly 1", subCount)
+	}
+
+	// The delivery row is untouched: no deleted_at/deleted_by columns exist
+	// on WebhookDelivery at all, and its own fields are exactly what
+	// createPendingDelivery produced.
+	var deliveryRow WebhookDelivery
+	if err := dbkit.WithTenantSession(ctxFor(testTenant), m.db, func(tx *gorm.DB) error {
+		return tx.Unscoped().Where("id = ?", delivery.ID).First(&deliveryRow).Error
+	}); err != nil {
+		t.Fatalf("reading the delivery row back: %v", err)
+	}
+	if deliveryRow.Status != DeliveryStatusPending {
+		t.Errorf("delivery Status = %q, want unchanged %q", deliveryRow.Status, DeliveryStatusPending)
+	}
+	if deliveryRow.SubscriptionID != subID {
+		t.Errorf("delivery SubscriptionID = %q, want unchanged %q", deliveryRow.SubscriptionID, subID)
+	}
+
+	// The already-enqueued job still settles terminal without retrying,
+	// exactly as it did before this round -- handleDeliveryJob's own
+	// FindByID lookup on the now mark-deleted subscription is hidden from
+	// it by dbkit's soft-delete auto-scope plugin exactly as a physical
+	// DELETE always hid it before.
+	if _, err := svc.handleDeliveryJob(ctxFor(testTenant), deliveryJob(delivery.ID, subID)); err != nil {
+		t.Fatalf("handleDeliveryJob = %v, want nil (a mark-deleted subscription is terminal, not retried)", err)
+	}
 	deliveries, err := svc.ListRecentWebhookDeliveries(ctxFor(testTenant), subID, 10)
 	if err != nil {
 		t.Fatalf("ListRecentWebhookDeliveries: %v", err)

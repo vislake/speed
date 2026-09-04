@@ -101,7 +101,18 @@ type WebhookSubscription struct {
 	// rule (model.go's own file comment), even though (unlike an API key
 	// hash) this column can, by construction, be decrypted again: nothing
 	// in this module ever serves it back out after creation.
-	Secret string `gorm:"column:secret;size:512;serializer:integration_webhook_secret_enc;not null"`
+	//
+	// No `size:...` tag, deliberately, matching go/org's identically
+	// encrypted Invitation.Email: the stored value is CIPHERTEXT, whose
+	// column type is BYTEA on PostgreSQL and VARCHAR(512) on SQLite (see
+	// migrations/postgres/0005_fix_webhook_secret_column_type.sql for why
+	// the two dialects diverge here -- a bug that migration's own doc
+	// comment records in full, found and fixed by this round's own new
+	// PostgreSQL integration tier), so no single size hint describes both.
+	// AutoMigrate is never used in this codebase, so this Go struct tag
+	// never drives the actual column type either way; the versioned SQL
+	// migrations are the only source of truth for it.
+	Secret string `gorm:"column:secret;serializer:integration_webhook_secret_enc;not null"`
 
 	// Active gates delivery: an event matching a subscription whose Active
 	// is false is never fanned out to it (webhook_delivery.go's
@@ -119,13 +130,54 @@ type WebhookSubscription struct {
 	// autoUpdateTime, never by application code or a database default.
 	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
 	UpdatedAt time.Time `gorm:"column:updated_at;autoUpdateTime"`
+
+	// DeletedAt and DeletedBy are dbkit.SoftDeletable's required pair
+	// (go/dbkit/soft_delete.go): implementing that interface below is what
+	// makes dbkit.Repository[WebhookSubscription].Delete -- promoted
+	// unchanged and called by Service.DeleteWebhookSubscription -- a
+	// mark-delete instead of a physical DELETE, and what makes
+	// dbkit.Repository[WebhookSubscription].Restore -- and
+	// Service.RestoreWebhookSubscription, which wraps it -- meaningful for
+	// this model. Neither field is ever set by application code directly:
+	// both writes go through dbkit's own reflection-based field access,
+	// exactly as TenantID does.
+	//
+	// WebhookSubscription is this module's only model to adopt
+	// dbkit.SoftDeletable: it is the only one with a real delete-shaped
+	// operation to retrofit (DeleteWebhookSubscription's
+	// webhookRepo.Delete(ctx, id) call) -- APIKey already has its own
+	// domain-specific Revoke/RevokedAt mark, so it never called Delete at
+	// all, and WebhookDelivery is a transient, append-only attempt log with
+	// no Delete operation of its own. See go/integration/AGENTS.md's "Soft
+	// deletion" section for the full round, including the deliberate
+	// Restore-time decision to always land a restored subscription paused
+	// (Active = false) rather than reusing whatever Active held at the
+	// moment of deletion.
+	//
+	// This table carries no unique index beyond its primary key, so unlike
+	// go/org's and go/rbac's identical adoptions, this round's migration
+	// needs no partial-index conversion alongside these two columns.
+	DeletedAt *time.Time `gorm:"column:deleted_at"`
+	DeletedBy string     `gorm:"column:deleted_by;not null;default:''"`
 }
 
 // TableName names the integration_webhook_subscriptions table.
 func (WebhookSubscription) TableName() string { return tableWebhookSubscriptions }
 
-// compile-time check that WebhookSubscription satisfies dbkit.TenantScoped.
-var _ dbkit.TenantScoped = WebhookSubscription{}
+// GetDeletedAt returns WebhookSubscription's soft-delete marker, satisfying
+// dbkit.SoftDeletable. Like GetTenantID, this is never called by dbkit's
+// soft-delete auto-scope plugin or by Repository[WebhookSubscription]
+// itself -- it is a pure marker used only for the capability check that
+// routes dbkit.Repository[WebhookSubscription].Delete onto the mark-delete
+// path; the actual field writes go through reflection on fixed field names.
+func (s WebhookSubscription) GetDeletedAt() *time.Time { return s.DeletedAt }
+
+// compile-time checks that WebhookSubscription satisfies dbkit.TenantScoped
+// and dbkit.SoftDeletable.
+var (
+	_ dbkit.TenantScoped  = WebhookSubscription{}
+	_ dbkit.SoftDeletable = WebhookSubscription{}
+)
 
 // eventTypesJSON marshals an event-type selection into the form the
 // event_types column stores, the identical contract scopesJSON documents
