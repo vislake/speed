@@ -48,10 +48,10 @@ const createWidgetFixtureTableSQL = `CREATE TABLE widget_fixtures (
 //
 // Like its StandaloneQueue counterpart, the Handler performs a genuine
 // tenant-scoped dbkit.Repository[T] call, and the Task is enqueued from a
-// context.Background() carrying NO tenant at all: if AsynqQueue's worker
+// context.Background() carrying NO tenant at all: if Queue's worker
 // ever regressed to calling Handle with asynq's own bare per-task context
 // instead of pkgcore.WithTenant(ctx, tenantID) built from the Task's own
-// stored tenant_id header (asynq_worker.go's processTask), this
+// stored tenant_id header (go/jobs/queue/asynq's worker.go's processTask), this
 // Repository[T] call would fail closed with pkgcore.ErrNoTenant instead of
 // finding the seeded row, and this test would fail with that error
 // surfacing as the Job's own Error field -- exactly like the StandaloneQueue
@@ -73,7 +73,7 @@ func TestRedisQueue_RebuildsTenantContext(t *testing.T) {
 	}
 
 	h := jobs.NewHandlerFunc("widget.lookup", func(ctx context.Context, _ *jobs.Job, _ jobs.ProgressFn) (jobs.Result, error) {
-		// ctx here comes ONLY from AsynqQueue's own worker rebuild --
+		// ctx here comes ONLY from Queue's own worker rebuild --
 		// Repository[T].FindByID fails closed with pkgcore.ErrNoTenant if
 		// that rebuild is ever skipped, which is exactly what makes this a
 		// meaningful proof rather than a tautology.

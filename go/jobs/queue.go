@@ -67,36 +67,39 @@ const (
 	DefaultTimeout = 5 * time.Minute
 )
 
-// enqueueOptions collects what the EnqueueOption functions configure.
-// Unexported: callers only ever see the With* constructors below, matching
-// this codebase's established functional-options convention (see
+// ResolvedEnqueueOptions collects what the EnqueueOption functions
+// configure, resolved against a set of defaults by ResolveEnqueueOptions.
+// Exported so the queue/asynq subpackage's Queue.Enqueue can resolve
+// EnqueueOptions the exact same way StandaloneQueue.Enqueue does — callers
+// otherwise only ever see the With* constructors below, matching this
+// codebase's established functional-options convention (see
 // observability.Option).
-type enqueueOptions struct {
-	priority       Priority
-	delay          time.Duration
-	scheduledAt    time.Time
-	hasScheduledAt bool
-	maxRetries     int
-	timeout        time.Duration
+type ResolvedEnqueueOptions struct {
+	Priority       Priority
+	Delay          time.Duration
+	ScheduledAt    time.Time
+	HasScheduledAt bool
+	MaxRetries     int
+	Timeout        time.Duration
 }
 
 // EnqueueOption configures one Enqueue call. See WithPriority, WithDelay,
 // WithScheduledAt, WithMaxRetries and WithTimeout.
-type EnqueueOption func(*enqueueOptions)
+type EnqueueOption func(*ResolvedEnqueueOptions)
 
 // WithPriority sets the Job's dispatch priority. Enqueue defaults to
 // PriorityNormal when this option is not given.
 func WithPriority(p Priority) EnqueueOption {
-	return func(o *enqueueOptions) { o.priority = p }
+	return func(o *ResolvedEnqueueOptions) { o.Priority = p }
 }
 
 // WithDelay makes the Job ineligible to run until d has elapsed from the
 // Enqueue call. It is mutually exclusive with WithScheduledAt: whichever is
 // passed to Enqueue LAST wins.
 func WithDelay(d time.Duration) EnqueueOption {
-	return func(o *enqueueOptions) {
-		o.delay = d
-		o.hasScheduledAt = false
+	return func(o *ResolvedEnqueueOptions) {
+		o.Delay = d
+		o.HasScheduledAt = false
 	}
 }
 
@@ -105,9 +108,9 @@ func WithDelay(d time.Duration) EnqueueOption {
 // Enqueue LAST wins. A time at or before Enqueue's own call time makes the
 // Job eligible immediately, identical to omitting both options.
 func WithScheduledAt(t time.Time) EnqueueOption {
-	return func(o *enqueueOptions) {
-		o.scheduledAt = t
-		o.hasScheduledAt = true
+	return func(o *ResolvedEnqueueOptions) {
+		o.ScheduledAt = t
+		o.HasScheduledAt = true
 	}
 }
 
@@ -115,7 +118,7 @@ func WithScheduledAt(t time.Time) EnqueueOption {
 // clamped to zero (no retries: a single failed attempt dead-letters
 // immediately).
 func WithMaxRetries(n int) EnqueueOption {
-	return func(o *enqueueOptions) { o.maxRetries = n }
+	return func(o *ResolvedEnqueueOptions) { o.MaxRetries = n }
 }
 
 // WithTimeout overrides the default per-attempt timeout for one Job. A
@@ -123,31 +126,31 @@ func WithMaxRetries(n int) EnqueueOption {
 // rather than honored literally, since a zero or negative context.
 // WithTimeout deadline would expire before the Handler ever ran.
 func WithTimeout(d time.Duration) EnqueueOption {
-	return func(o *enqueueOptions) { o.timeout = d }
+	return func(o *ResolvedEnqueueOptions) { o.Timeout = d }
 }
 
-// resolveEnqueueOptions applies opts over a set of defaults seeded from
+// ResolveEnqueueOptions applies opts over a set of defaults seeded from
 // fallbackTimeout (StandaloneQueue's configured default, itself falling back to
 // DefaultTimeout), clamps out-of-range values, and computes the Job's
-// initial ScheduledAt from whichever of delay/scheduledAt was given,
+// initial ScheduledAt from whichever of Delay/ScheduledAt was given,
 // relative to now.
-func resolveEnqueueOptions(now time.Time, fallbackTimeout time.Duration, opts []EnqueueOption) enqueueOptions {
-	resolved := enqueueOptions{
-		priority:   PriorityNormal,
-		maxRetries: DefaultMaxRetries,
-		timeout:    fallbackTimeout,
+func ResolveEnqueueOptions(now time.Time, fallbackTimeout time.Duration, opts []EnqueueOption) ResolvedEnqueueOptions {
+	resolved := ResolvedEnqueueOptions{
+		Priority:   PriorityNormal,
+		MaxRetries: DefaultMaxRetries,
+		Timeout:    fallbackTimeout,
 	}
 	for _, opt := range opts {
 		opt(&resolved)
 	}
-	if resolved.maxRetries < 0 {
-		resolved.maxRetries = 0
+	if resolved.MaxRetries < 0 {
+		resolved.MaxRetries = 0
 	}
-	if resolved.timeout <= 0 {
-		resolved.timeout = fallbackTimeout
+	if resolved.Timeout <= 0 {
+		resolved.Timeout = fallbackTimeout
 	}
-	if !resolved.hasScheduledAt {
-		resolved.scheduledAt = now.Add(resolved.delay)
+	if !resolved.HasScheduledAt {
+		resolved.ScheduledAt = now.Add(resolved.Delay)
 	}
 	return resolved
 }

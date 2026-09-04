@@ -49,8 +49,11 @@ type Task struct {
 // empty Type or an empty TenantID.
 var ErrInvalidTask = apperr.Invalid("jobs.invalid_task")
 
-// validate reports ErrInvalidTask when t is missing a required field.
-func (t Task) validate() error {
+// Validate reports ErrInvalidTask when t is missing a required field.
+// Exported so the queue/asynq subpackage's Queue.Enqueue can run the exact
+// same check StandaloneQueue.Enqueue does, rather than a second
+// hand-maintained copy of it.
+func (t Task) Validate() error {
 	switch {
 	case t.Type == "":
 		return ErrInvalidTask.WithParam("field", "type")

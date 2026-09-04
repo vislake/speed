@@ -1,0 +1,690 @@
+// Package asynq is the distributed deployment mode's Queue implementation:
+// backed by Redis via github.com/hibiken/asynq, per docs/internal/07-
+// platform-services.md's jobs section ("the distributed deployment mode =
+// Redis (hibiken/asynq, mature and ships its own retry/delay/scheduling/Web
+// UI, not worth reimplementing ourselves)"). It exists as its own
+// subpackage, separate from github.com/vislake/speed/go/jobs's root
+// package, so a consumer that only ever runs the standalone deployment
+// mode's jobs.StandaloneQueue never pulls in asynq or go-redis at all --
+// see AGENTS.md's dependency-cost measurement and root CLAUDE.md's "Do not
+// put a backend implementation in the same package as the interface it
+// implements" rule.
+//
+// Queue implements the exact same jobs.Queue interface jobs.StandaloneQueue
+// does -- see this module's AGENTS.md "Distributed: asynq.Queue" section
+// for the full mapping from every jobs.Task/jobs.Job/jobs.EnqueueOption
+// concept onto asynq's own client/server/inspector primitives, including
+// the two places (per-tenant concurrency, progress reporting) where asynq's
+// own primitives needed a thin layer on top rather than a direct
+// configuration.
+package asynq
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+
+	asynqlib "github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
+	"github.com/google/uuid"
+
+	"github.com/vislake/speed/go/jobs"
+	obs "github.com/vislake/speed/go/observability"
+	"github.com/vislake/speed/go/pkgcore"
+)
+
+// Queue is the distributed deployment mode's jobs.Queue implementation --
+// see the package doc comment above. Like jobs.StandaloneQueue, Queue is
+// returned as its own concrete exported type, not the narrower jobs.Queue
+// interface, for the same reason: RegisterHandler/Start/Close are not part
+// of jobs.Queue's portable surface (jobs' own queue.go doc comment reserves
+// exactly this freedom for the distributed deployment mode's own
+// Redis/asynq-backed implementation). Code that only needs the portable
+// surface should still depend on jobs.Queue, not this type; see the
+// compile-time assertion at the bottom of this file.
+type Queue struct {
+	client    *asynqlib.Client
+	inspector *asynqlib.Inspector
+	server    *asynqlib.Server
+	rdb       redis.UniversalClient // shared with client/inspector/server; also backs our own cancellation markers (store.go's cancelMarkerKey).
+
+	concurrency              int
+	tenantConcurrency        int
+	defaultTimeout           time.Duration
+	completedRetention       time.Duration
+	cancelledRetention       time.Duration
+	throttleRetryDelay       time.Duration
+	queueWeights             map[string]int
+	businessRetryDelayFunc   asynqlib.RetryDelayFunc
+	taskCheckInterval        time.Duration
+	delayedTaskCheckInterval time.Duration
+
+	handlersMu sync.RWMutex
+	handlers   map[string]jobs.Handler
+
+	tenantMu         sync.Mutex
+	runningPerTenant map[pkgcore.TenantID]int
+
+	startOnce    sync.Once
+	closeRDBOnce sync.Once
+
+	// stopCh is the queue-depth gauge callback's lifecycle signal: it is
+	// closed when Close releases the shared Redis client, under
+	// depthGaugeMu. Unlike StandaloneQueue, Queue has no dispatcher
+	// goroutines of its own to stop -- asynqlib.Server's Shutdown covers
+	// those -- so this channel exists solely for the gauge callback's
+	// stopped-answer contract (see registerQueueDepthGauge's doc comment).
+	// On Close's ctx.Done path the queue keeps running and the channel
+	// stays open, which is correct: the data source is still alive there,
+	// so the callback may keep answering.
+	stopCh chan struct{}
+
+	// depthGaugeMu orders the queue-depth gauge callback against Close,
+	// identically to StandaloneQueue's own field: the callback holds the
+	// read lock across its stopped-check and its Redis queries, and Close
+	// holds the write lock while closing stopCh and closing the shared
+	// Redis client, so once Close returns no callback can still be
+	// querying a closed client.
+	depthGaugeMu sync.RWMutex
+}
+
+// Defaults for Queue's construction Options, applied when the corresponding
+// With* option is not given. Named package-level constants per the backend
+// coding standard's configuration rule (§10), mirroring
+// jobs.StandaloneQueue's own Default* constants in spirit.
+const (
+	// DefaultTenantConcurrencyLimit matches jobs.StandaloneQueue's own
+	// DefaultTenantConcurrencyLimit -- see AGENTS.md for why the SAME
+	// default is used despite the two deployment modes enforcing it at
+	// different points in the pipeline.
+	DefaultTenantConcurrencyLimit = 2
+
+	// DefaultCompletedRetention bounds how long a succeeded Job remains
+	// visible to Get() after it completes. Unlike StandaloneQueue, whose
+	// SQLite row for a succeeded Job is never deleted, asynq deletes a
+	// completed task immediately unless told to retain it (asynqlib.
+	// Retention) -- Queue always passes this value on every Enqueue call;
+	// see AGENTS.md's "Get() after a Job succeeds" section for why
+	// omitting it would silently break Get()'s contract for the success
+	// path.
+	DefaultCompletedRetention = 24 * time.Hour
+
+	// DefaultCancelledRetention bounds how long a cancellation marker
+	// (store.go's cancelMarkerKey) survives in Redis, and so how long
+	// Get() keeps reporting StatusCancelled for a cancelled Job once its
+	// underlying asynq task record has itself expired or been evicted.
+	// Unlike StandaloneQueue's SQLite row, this is not forever -- see
+	// AGENTS.md's Known limitations.
+	DefaultCancelledRetention = 30 * 24 * time.Hour
+
+	// DefaultThrottleRetryDelay is the base of the short, jittered delay
+	// used when a Job is bounced back for redelivery because its tenant is
+	// at its concurrency limit -- deliberately much shorter than
+	// asynqlib.DefaultRetryDelayFunc's exponential business-failure
+	// backoff. See errTenantAtCapacity's own doc comment (worker.go).
+	DefaultThrottleRetryDelay = 200 * time.Millisecond
+)
+
+// defaultQueueWeights is the Config.Queues Queue uses unless overridden by
+// WithQueueWeights -- the exact 6/3/1 ratio server.go's own Config.Queues
+// doc comment uses as its illustrative example, applied here to our fixed
+// critical/default/low tiers (store.go).
+var defaultQueueWeights = map[string]int{
+	queueCritical: 6,
+	queueDefault:  3,
+	queueLow:      1,
+}
+
+// Option configures a Queue at construction time, mirroring
+// jobs.StandaloneQueue's own Option -- a distinct type (not a reuse of
+// StandaloneQueue's Option) since the two constructors configure
+// structurally different fields, but the same functional-options
+// convention throughout this codebase (see observability.Option,
+// StandaloneQueue's Option).
+type Option func(*Queue)
+
+// WithConcurrency sets asynqlib.Config.Concurrency: the maximum number of
+// Jobs Queue executes concurrently across all tenants and queues combined,
+// the direct analog of StandaloneQueue's WithWorkerCount. Zero or negative
+// (the default here) leaves asynqlib.Config.Concurrency at its own zero
+// value, which asynqlib.NewServer resolves to runtime.NumCPU().
+func WithConcurrency(n int) Option {
+	return func(q *Queue) { q.concurrency = n }
+}
+
+// WithTenantConcurrencyLimit caps how many Jobs belonging to any one tenant
+// may be running at once, the direct analog of StandaloneQueue's
+// WithTenantConcurrencyLimit -- see AGENTS.md for how this is enforced
+// differently (a bounce-and-redeliver inside processTask, not a
+// pre-dequeue skip) given what asynq itself offers. Defaults to
+// DefaultTenantConcurrencyLimit.
+func WithTenantConcurrencyLimit(n int) Option {
+	return func(q *Queue) { q.tenantConcurrency = n }
+}
+
+// WithQueueWeights overrides the relative weight asynq gives each of the
+// three fixed priority queues (store.go's queueForPriority) when choosing
+// which to service next -- passed straight through to asynqlib.
+// Config.Queues, so asynq's own documented behavior for a zero or negative
+// weight (that tier is never serviced) applies unmodified. Defaults to
+// 6/3/1 (critical/default/low), server.go's own Config.Queues example
+// ratio.
+func WithQueueWeights(critical, normal, low int) Option {
+	return func(q *Queue) {
+		q.queueWeights = map[string]int{
+			queueCritical: critical,
+			queueDefault:  normal,
+			queueLow:      low,
+		}
+	}
+}
+
+// WithJobTimeout sets the per-attempt timeout applied to an Enqueue call
+// that does not use jobs.WithTimeout, the direct analog of StandaloneQueue's
+// WithJobTimeout. Defaults to jobs.DefaultTimeout.
+func WithJobTimeout(d time.Duration) Option {
+	return func(q *Queue) { q.defaultTimeout = d }
+}
+
+// WithCompletedRetention overrides DefaultCompletedRetention.
+func WithCompletedRetention(d time.Duration) Option {
+	return func(q *Queue) { q.completedRetention = d }
+}
+
+// WithCancelledRetention overrides DefaultCancelledRetention.
+func WithCancelledRetention(d time.Duration) Option {
+	return func(q *Queue) { q.cancelledRetention = d }
+}
+
+// WithThrottleRetryDelay overrides DefaultThrottleRetryDelay.
+func WithThrottleRetryDelay(d time.Duration) Option {
+	return func(q *Queue) { q.throttleRetryDelay = d }
+}
+
+// WithRetryDelayFunc overrides the backoff formula applied to a genuine
+// Handler failure (never to a tenant-concurrency bounce, which always uses
+// WithThrottleRetryDelay's short delay regardless -- see worker.go's
+// retryDelay). Defaults to asynqlib.DefaultRetryDelayFunc, letting asynq's
+// own exponential-backoff formula stand in for StandaloneQueue's
+// hand-rolled backoffDelay rather than reimplementing one; WithBackoff
+// (StandaloneQueue's equivalent knob) configures a formula, not a
+// pluggable function, only because StandaloneQueue rolls its own -- this
+// is the same tuning knob shifted to asynq's own extension point.
+func WithRetryDelayFunc(fn asynqlib.RetryDelayFunc) Option {
+	return func(q *Queue) { q.businessRetryDelayFunc = fn }
+}
+
+// WithTaskCheckInterval sets asynqlib.Config.TaskCheckInterval: how often
+// the processor polls a queue it just found empty. Left at zero (the
+// default here), asynqlib.NewServer applies its own default of 1 second.
+// Lowering it (integration_test/ uses a few tens of milliseconds) trades
+// Redis polling load for faster pickup -- the same trade-off
+// StandaloneQueue's WithPollInterval documents for its own dispatcher.
+func WithTaskCheckInterval(d time.Duration) Option {
+	return func(q *Queue) { q.taskCheckInterval = d }
+}
+
+// WithDelayedTaskCheckInterval sets asynqlib.Config.
+// DelayedTaskCheckInterval: how often asynq's forwarder checks scheduled
+// and retry tasks for ones now ready to run and moves them to pending.
+// Left at zero (the default here), asynqlib.NewServer applies its own
+// default of 5 seconds -- long enough that a test asserting on WithDelay/
+// WithScheduledAt or on retry timing should lower this, exactly as
+// integration_test/ does, the same way it lowers WithThrottleRetryDelay
+// and StandaloneQueue's own tests lower WithPollInterval/WithBackoff.
+func WithDelayedTaskCheckInterval(d time.Duration) Option {
+	return func(q *Queue) { q.delayedTaskCheckInterval = d }
+}
+
+// NewQueue returns a Queue connected via redisOpt (typically
+// asynqlib.RedisClientOpt for a single Redis instance; asynq also defines
+// RedisFailoverClientOpt and RedisClusterClientOpt for sentinel/cluster
+// deployments, both accepted unmodified since RedisConnOpt is asynq's own
+// interface). Like jobs.NewStandaloneQueue, NewQueue performs no I/O of its
+// own: the underlying redis.UniversalClient (go-redis) dials lazily on
+// first command, exactly as asynqlib.NewClient/NewServer/NewInspector
+// already rely on when constructed this same way.
+//
+// The SAME redis.UniversalClient backs the asynqlib.Client,
+// asynqlib.Inspector and asynqlib.Server this constructs (via
+// *FromRedisClient, not separate RedisConnOpt.MakeRedisClient() calls) plus
+// Queue's own cancellation-marker bookkeeping -- one shared connection
+// pool, not four. Close (below) is therefore the only place any of them
+// are closed; per asynq's own documented "shared connection" contract,
+// Client.Close/Inspector.Close would simply error if called, so this
+// package never calls them.
+func NewQueue(redisOpt asynqlib.RedisConnOpt, opts ...Option) *Queue {
+	q := &Queue{
+		tenantConcurrency:      DefaultTenantConcurrencyLimit,
+		defaultTimeout:         jobs.DefaultTimeout,
+		completedRetention:     DefaultCompletedRetention,
+		cancelledRetention:     DefaultCancelledRetention,
+		throttleRetryDelay:     DefaultThrottleRetryDelay,
+		queueWeights:           defaultQueueWeights,
+		businessRetryDelayFunc: asynqlib.DefaultRetryDelayFunc,
+		handlers:               make(map[string]jobs.Handler),
+		runningPerTenant:       make(map[pkgcore.TenantID]int),
+		stopCh:                 make(chan struct{}),
+	}
+	for _, opt := range opts {
+		opt(q)
+	}
+
+	// Same panic-on-unsupported-RedisConnOpt-type this exact type
+	// assertion triggers inside asynqlib.NewClient/NewServer/NewInspector
+	// -- reproduced here (rather than delegated to one of them) only
+	// because constructing the shared client ourselves is what lets
+	// client/inspector/server/our own bookkeeping share one pool.
+	rdb, ok := redisOpt.MakeRedisClient().(redis.UniversalClient)
+	if !ok {
+		panic(fmt.Sprintf("jobs/queue/asynq: unsupported asynq.RedisConnOpt type %T", redisOpt))
+	}
+	q.rdb = rdb
+	q.client = asynqlib.NewClientFromRedisClient(rdb)
+	q.inspector = asynqlib.NewInspectorFromRedisClient(rdb)
+	q.server = asynqlib.NewServerFromRedisClient(rdb, asynqlib.Config{
+		Concurrency:              q.concurrency,
+		Queues:                   q.queueWeights,
+		RetryDelayFunc:           q.retryDelay,
+		IsFailure:                isFailure,
+		ErrorHandler:             asynqlib.ErrorHandlerFunc(q.handleError),
+		TaskCheckInterval:        q.taskCheckInterval,
+		DelayedTaskCheckInterval: q.delayedTaskCheckInterval,
+	})
+	return q
+}
+
+// RegisterHandler adds h to the set this Queue dispatches to, keyed by
+// h.Type(). Identical contract to StandaloneQueue.RegisterHandler,
+// including jobs.ErrDuplicateHandlerType (the same sentinel, reused rather
+// than redeclared) and remaining safe to call after Start.
+func (q *Queue) RegisterHandler(h jobs.Handler) error {
+	q.handlersMu.Lock()
+	defer q.handlersMu.Unlock()
+	if _, exists := q.handlers[h.Type()]; exists {
+		return jobs.ErrDuplicateHandlerType.WithParam("type", h.Type())
+	}
+	q.handlers[h.Type()] = h
+	return nil
+}
+
+// handler returns the Handler registered for jobType, or nil.
+func (q *Queue) handler(jobType string) jobs.Handler {
+	q.handlersMu.RLock()
+	defer q.handlersMu.RUnlock()
+	return q.handlers[jobType]
+}
+
+// Start wires the jobs.queue.depth metric (best-effort, exactly like
+// StandaloneQueue.Start -- a registration failure is logged and does not
+// prevent the server from starting) and launches asynq's own background
+// processor goroutines via asynqlib.Server.Start. Like Server.Start (and
+// unlike Server.Run), this returns immediately once processing has
+// launched; it does not block waiting for shutdown. Safe to call only once
+// per Queue -- a second call is a no-op, matching StandaloneQueue.Start's
+// own contract, though enforced here by asynqlib.Server.Start's own
+// "already running" error rather than a second sync.Once layer, since
+// NewServer itself has no such guard.
+func (q *Queue) Start(ctx context.Context) error {
+	var startErr error
+	q.startOnce.Do(func() {
+		if err := q.registerQueueDepthGauge(otel.Meter(jobs.InstrumentationName)); err != nil {
+			obs.FromContext(ctx).Warn("jobs: registering queue depth gauge failed", "error", err)
+		}
+		startErr = q.server.Start(asynqlib.HandlerFunc(q.processTask))
+	})
+	return startErr
+}
+
+// Close gracefully shuts down asynq's Server -- waiting for in-flight
+// attempts to finish naturally, up to ctx's deadline -- then closes the
+// shared redis.UniversalClient. See asynqlib.Server.Shutdown's own doc
+// comment for the one behavioral nuance from StandaloneQueue.Close worth
+// calling out: Shutdown's own internal wait is bounded by asynqlib.Config.
+// ShutdownTimeout (default 8s, a construction-time setting, not a per-call
+// parameter), not directly by ctx; ctx here bounds how long THIS call
+// waits for that to finish, exactly like StandaloneQueue.Close, but does
+// not itself cancel an in-flight Handle call either way -- see AGENTS.md's
+// "Close/Shutdown" section for the full comparison. Idempotent and safe to
+// call more than once, or without a prior Start, exactly like
+// StandaloneQueue.Close: asynqlib.Server.Shutdown is itself safe to invoke
+// repeatedly and before any Start (server.go's own state-machine check),
+// and this package's own addition -- closing the shared redis client -- is
+// guarded separately so a second call cannot double-close it.
+//
+// The done path also stops the queue-depth gauge, under the same lock that
+// orders it against the client close: stopCh is closed and the shared
+// client closed inside depthGaugeMu's write section, after which the gauge
+// callback answers nil instead of touching the closed client (see
+// registerQueueDepthGauge's doc comment). On the ctx.Done path neither
+// happens -- the queue is still running and its data source still open --
+// so the gauge keeps answering there.
+func (q *Queue) Close(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		q.server.Shutdown()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		q.depthGaugeMu.Lock()
+		q.closeRDBOnce.Do(func() {
+			close(q.stopCh)
+			_ = q.rdb.Close()
+		})
+		q.depthGaugeMu.Unlock()
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Enqueue implements jobs.Queue.
+func (q *Queue) Enqueue(ctx context.Context, task jobs.Task, opts ...jobs.EnqueueOption) (jobs.JobID, error) {
+	if err := task.Validate(); err != nil {
+		return "", err
+	}
+
+	now := time.Now()
+	resolved := jobs.ResolveEnqueueOptions(now, q.defaultTimeout, opts)
+
+	taskID := uuid.NewString()
+	if task.IdempotencyKey != "" {
+		// Deterministic per (tenant, idempotency key) -- see AGENTS.md's
+		// idempotency section: asynq's own TaskID-uniqueness check (below)
+		// is what makes a second Enqueue for the same pair return the
+		// first call's JobID rather than creating a second task, mapping
+		// our idempotency contract onto a primitive asynq already has
+		// rather than a bespoke check-then-insert.
+		taskID = "idem:" + string(task.TenantID) + ":" + task.IdempotencyKey
+	}
+
+	asynqTask := asynqlib.NewTaskWithHeaders(task.Type, task.Payload, buildTaskHeaders(task, now))
+	info, err := q.client.EnqueueContext(ctx, asynqTask,
+		asynqlib.TaskID(taskID),
+		asynqlib.Queue(queueForPriority(resolved.Priority)),
+		asynqlib.MaxRetry(resolved.MaxRetries),
+		asynqlib.Timeout(resolved.Timeout),
+		// Always set -- see DefaultCompletedRetention's own doc comment
+		// for why omitting this would break Get() for a succeeded Job
+		// almost immediately.
+		asynqlib.Retention(q.completedRetention),
+		asynqlib.ProcessAt(resolved.ScheduledAt),
+	)
+	if err != nil {
+		if errors.Is(err, asynqlib.ErrTaskIDConflict) {
+			existing, ferr := q.findTaskInfo(taskID)
+			if ferr != nil {
+				return "", fmt.Errorf("jobs: look up existing job for idempotency key after conflict: %w", ferr)
+			}
+			return jobs.JobID(existing.ID), nil
+		}
+		return "", fmt.Errorf("jobs: enqueue job: %w", err)
+	}
+
+	// See StandaloneQueue.Enqueue's identical fix for the full rationale:
+	// derive the logger's tenant from task.TenantID -- the Job's own
+	// owner -- rather than layering an explicit "tenant_id" kv on top of
+	// whatever obs.FromContext(ctx) already auto-attaches from ctx's own
+	// ambient tenant, which AGENTS.md documents as legitimately different
+	// (or absent) for both Queue.Enqueue and StandaloneQueue.Enqueue alike.
+	obs.FromContext(pkgcore.WithTenant(ctx, task.TenantID)).Info("job enqueued", "job_id", info.ID, "job_type", task.Type)
+	return jobs.JobID(info.ID), nil
+}
+
+// Get implements jobs.Queue.
+func (q *Queue) Get(ctx context.Context, id jobs.JobID) (*jobs.Job, error) {
+	info, err := q.findTaskInfo(string(id))
+	if err != nil {
+		return nil, err
+	}
+	tenantID := pkgcore.TenantID(info.Headers[headerTenantID])
+	if !jobs.CallerMayAccess(ctx, tenantID) {
+		return nil, jobs.ErrJobNotFound
+	}
+
+	cancelledAt, cerr := q.readCancelMarker(ctx, string(id))
+	if cerr != nil {
+		obs.FromContext(ctx).Warn("jobs: reading cancellation marker failed", "job_id", string(id), "error", cerr)
+	}
+	return jobFromTaskInfo(info, cancelledAt), nil
+}
+
+// Cancel implements jobs.Queue. See AGENTS.md's "Cancel" section: the
+// cancellation marker (store.go) is the ONLY authoritative, permanent
+// effect -- Get() reports StatusCancelled from it unconditionally,
+// exactly mirroring StandaloneQueue's own markCancelled +
+// completeSucceeded/completeRetrying/completeDeadLetter no-op-when-not-
+// running guard.
+//
+// Cancel deliberately does NOT call Inspector.DeleteTask for a not-yet-
+// running Job, even though that looks like the obvious way to stop asynq
+// from ever processing it: DeleteTask removes the task's entire TaskInfo
+// record, and Get() would then have nothing left to combine the
+// cancellation marker with -- id would look exactly like an id that never
+// existed, i.e. jobs.ErrJobNotFound, breaking Get()'s contract for a
+// cancelled Job (this was a genuine bug in an earlier version of this
+// method, caught specifically by integration_test/cancel_test.go's
+// TestRedisQueue_Cancel_PendingJobNeverRuns running against a real Redis --
+// a unit test built on a hand-constructed *asynqlib.TaskInfo, never having
+// actually exercised a real delete, could not have caught it -- the
+// concrete reason this task's own instructions required real-backend
+// testing here rather than mocks). Instead:
+//
+//  1. Cancel leaves the task's own asynq record alone, and just writes the
+//     marker (plus, for an already-Active Job, a best-effort
+//     Inspector.CancelProcessing signal -- see "The tenant context trap"
+//     above for why that can actually interrupt a running Handle call for
+//     Queue, unlike StandaloneQueue).
+//  2. processTask checks for exactly this same marker as the very FIRST
+//     thing it does whenever this task is next dequeued -- returning nil
+//     without ever calling Handle if a marker exists, which asynq records
+//     as an ordinary successful completion (retained for
+//     completedRetention, same as a real success) rather than a retry or
+//     an archive.
+//  3. Get()'s marker-overlay (step 0 above) then reports StatusCancelled
+//     for that Job regardless, using the still-fully-intact TaskInfo for
+//     every other field (Type, Payload, TenantID, etc.).
+//
+// This correctly satisfies "cancelling a StatusPending/StatusRetrying Job
+// prevents it from ever being dispatched" (Handle never runs) without ever
+// breaking Get()'s visibility contract. The accepted cost: every dispatched
+// task now costs one extra Redis round trip (the marker check) even when
+// never cancelled, and asynq's own internal processed/failed counters
+// (visible via Inspector.GetQueueInfo or asynqmon) count a
+// cancelled-before-dispatch Job as "processed" -- asynq has no third
+// bucket for "revoked."
+//
+// For an already-Active Job, Cancel also best-effort signals
+// Inspector.CancelProcessing -- strictly better than, and not in tension
+// with, StandaloneQueue's own documented "does not preempt" limitation
+// (jobs.Queue.Cancel's doc comment only ever promises a running Job "is
+// allowed to" keep executing, never that it is guaranteed to). Its failure
+// is logged, never returned, since the marker alone already satisfies the
+// contract either way.
+func (q *Queue) Cancel(ctx context.Context, id jobs.JobID) error {
+	info, err := q.findTaskInfo(string(id))
+	if err != nil {
+		return err
+	}
+	tenantID := pkgcore.TenantID(info.Headers[headerTenantID])
+	if !jobs.CallerMayAccess(ctx, tenantID) {
+		return jobs.ErrJobNotFound
+	}
+
+	if already, _ := q.readCancelMarker(ctx, string(id)); already != nil {
+		return nil // idempotent: already cancelled.
+	}
+	if info.State == asynqlib.TaskStateCompleted || info.State == asynqlib.TaskStateArchived {
+		return nil // idempotent: already otherwise terminal.
+	}
+
+	if info.State == asynqlib.TaskStateActive {
+		if cerr := q.inspector.CancelProcessing(string(id)); cerr != nil {
+			obs.FromContext(ctx).Warn("jobs: best-effort CancelProcessing signal failed", "job_id", string(id), "error", cerr)
+		}
+	}
+
+	if merr := q.writeCancelMarker(ctx, string(id)); merr != nil {
+		return fmt.Errorf("jobs: record cancellation: %w", merr)
+	}
+	return nil
+}
+
+// DeadLetterJobs returns every archived (dead-lettered) Job ctx may access,
+// across all three priority queues -- the asynq-backed analog of
+// StandaloneQueue.DeadLetterJobs, mapping onto asynq's own archived-task
+// mechanism (Inspector.ListArchivedTasks) rather than a parallel one; see
+// AGENTS.md's dead-letter mapping section. Not part of the jobs.Queue
+// interface, exactly like StandaloneQueue's version. Fully drains each
+// queue's archive (paginating internally) rather than truncating at one
+// page, though it still exposes no pagination of its own to the caller --
+// the same "no pagination" shape StandaloneQueue.DeadLetterJobs documents
+// as a known limitation.
+func (q *Queue) DeadLetterJobs(ctx context.Context) ([]*jobs.Job, error) {
+	const pageSize = 100
+	var result []*jobs.Job
+	for _, queueName := range priorityQueues {
+		for page := 1; ; page++ {
+			infos, err := q.inspector.ListArchivedTasks(queueName, asynqlib.PageSize(pageSize), asynqlib.Page(page))
+			if err != nil {
+				if errors.Is(err, asynqlib.ErrQueueNotFound) {
+					break
+				}
+				return nil, fmt.Errorf("jobs: list archived jobs in queue %s: %w", queueName, err)
+			}
+			for _, info := range infos {
+				tenantID := pkgcore.TenantID(info.Headers[headerTenantID])
+				if !jobs.CallerMayAccess(ctx, tenantID) {
+					continue
+				}
+				cancelledAt, _ := q.readCancelMarker(ctx, info.ID)
+				result = append(result, jobFromTaskInfo(info, cancelledAt))
+			}
+			if len(infos) < pageSize {
+				break
+			}
+		}
+	}
+	return result, nil
+}
+
+// findTaskInfo locates id by probing each of priorityQueues in turn --
+// asynqlib.Inspector.GetTaskInfo requires a queue name and offers no
+// search-by-id-alone primitive, so this bounded, three-probe fan-out
+// (never more, since Queue only ever enqueues into these three) is how
+// every Get/Cancel/idempotency-conflict lookup in this file finds a Job
+// without the caller having to remember which priority it used.
+func (q *Queue) findTaskInfo(id string) (*asynqlib.TaskInfo, error) {
+	for _, queueName := range priorityQueues {
+		info, err := q.inspector.GetTaskInfo(queueName, id)
+		switch {
+		case err == nil:
+			return info, nil
+		case errors.Is(err, asynqlib.ErrTaskNotFound), errors.Is(err, asynqlib.ErrQueueNotFound):
+			continue
+		default:
+			return nil, fmt.Errorf("jobs: look up job: %w", err)
+		}
+	}
+	return nil, jobs.ErrJobNotFound
+}
+
+// cancelMarkerKey namespaces Queue's own cancellation-marker keys clearly
+// apart from every key asynq itself owns (all under "asynq:...", per
+// internal/base) to eliminate any collision risk on the shared
+// redis.UniversalClient.
+func cancelMarkerKey(id string) string { return "asynqjobs:cancelled:" + id }
+
+// writeCancelMarker records that id has been cancelled, expiring after
+// q.cancelledRetention -- see DefaultCancelledRetention's own doc comment
+// for why this is bounded rather than permanent.
+func (q *Queue) writeCancelMarker(ctx context.Context, id string) error {
+	return q.rdb.Set(ctx, cancelMarkerKey(id), time.Now().UTC().Format(time.RFC3339Nano), q.cancelledRetention).Err()
+}
+
+// readCancelMarker reports id's cancellation time, or nil if it was never
+// cancelled (or its marker has since expired).
+func (q *Queue) readCancelMarker(ctx context.Context, id string) (*time.Time, error) {
+	val, err := q.rdb.Get(ctx, cancelMarkerKey(id)).Result()
+	switch {
+	case errors.Is(err, redis.Nil):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+	t, perr := time.Parse(time.RFC3339Nano, val)
+	if perr != nil {
+		return nil, fmt.Errorf("jobs: parse cancellation marker: %w", perr)
+	}
+	return &t, nil
+}
+
+// registerQueueDepthGauge wires the same "jobs.queue.depth" instrument name
+// StandaloneQueue.registerQueueDepthGauge does (docs/internal/09-
+// observability.md's must-instrument table), reusing jobs.
+// InstrumentationName so both implementations share one instrumentation
+// scope. The label set differs from StandaloneQueue's, and deliberately so
+// -- see AGENTS.md's observability section: asynq's Inspector.GetQueueInfo
+// reports backlog per QUEUE (one of our three priority tiers), not per job
+// TYPE the way StandaloneQueue's own SQL GROUP BY can, so this gauge is
+// labeled (queue, status) instead of (job_type, status). Both label sets
+// are low-cardinality and neither ever includes tenant_id, per root
+// CLAUDE.md's Prometheus-cardinality rule.
+//
+// The gauge's callback carries the same unregisterable-lifecycle contract
+// StandaloneQueue.registerQueueDepthGauge's own doc comment records: it
+// holds depthGaugeMu's read lock across its stopped-check AND its Redis
+// queries, and Close holds the write lock while closing stopCh and the
+// shared Redis client, so once Close returns no callback is mid-query and
+// every later callback answers nil. One nuance is Queue-specific: Close's
+// ctx.Done path stops nothing -- the server is still processing and the
+// Redis client is still open -- so the callback legitimately keeps
+// answering there; only the done path releases the data source and stops
+// the gauge.
+func (q *Queue) registerQueueDepthGauge(meter metric.Meter) error {
+	_, err := meter.Int64ObservableGauge(
+		"jobs.queue.depth",
+		metric.WithDescription("Number of jobs waiting to run (pending or retrying), by queue and status."),
+		metric.WithUnit("{job}"),
+		metric.WithInt64Callback(func(ctx context.Context, o metric.Int64Observer) error {
+			q.depthGaugeMu.RLock()
+			defer q.depthGaugeMu.RUnlock()
+			select {
+			case <-q.stopCh:
+				return nil
+			default:
+			}
+			for _, queueName := range priorityQueues {
+				info, err := q.inspector.GetQueueInfo(queueName)
+				if err != nil {
+					if errors.Is(err, asynqlib.ErrQueueNotFound) {
+						continue
+					}
+					return err
+				}
+				o.Observe(int64(info.Pending), metric.WithAttributes(
+					attribute.String("queue", queueName),
+					attribute.String("status", string(jobs.StatusPending)),
+				))
+				o.Observe(int64(info.Retry), metric.WithAttributes(
+					attribute.String("queue", queueName),
+					attribute.String("status", string(jobs.StatusRetrying)),
+				))
+			}
+			return nil
+		}),
+	)
+	return err
+}
+
+// compile-time check that *Queue satisfies jobs.Queue, mirroring
+// StandaloneQueue's identical assertion.
+var _ jobs.Queue = (*Queue)(nil)

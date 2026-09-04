@@ -16,12 +16,16 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
-// instrumentationName identifies StandaloneQueue's own tracer/meter, mirroring
+// InstrumentationName identifies this package's own tracer/meter, mirroring
 // observability.Middleware's identical use of its own package path for the
-// same purpose.
-const instrumentationName = "github.com/vislake/speed/go/jobs"
+// same purpose. Exported so the queue/asynq subpackage's Queue can register
+// its own "jobs.queue.depth" gauge under the SAME instrumentation scope
+// StandaloneQueue uses (see that subpackage's own Start) — the two
+// implementations share one metric namespace by design, differing only in
+// their label sets (AGENTS.md's Observability section).
+const InstrumentationName = "github.com/vislake/speed/go/jobs"
 
-// Metric instrument names StandaloneQueue registers under instrumentationName,
+// Metric instrument names StandaloneQueue registers under InstrumentationName,
 // beyond "jobs.queue.depth" (registerQueueDepthGauge's own literal, kept
 // inline there since it has no other reference site): the execution-
 // duration-percentiles, failure-rate/retry-count and dead-letter-count
@@ -235,7 +239,7 @@ func (q *StandaloneQueue) Start(ctx context.Context) error {
 			startErr = fmt.Errorf("jobs: recover interrupted jobs: %w", err)
 			return
 		}
-		if err := q.registerQueueDepthGauge(otel.Meter(instrumentationName)); err != nil {
+		if err := q.registerQueueDepthGauge(otel.Meter(InstrumentationName)); err != nil {
 			// A metrics wiring failure must not prevent the queue itself
 			// from running -- see this method's own doc comment; only
 			// ensureJobsSchema/resetInterruptedRecords failures abort
@@ -286,12 +290,12 @@ func (q *StandaloneQueue) Close(ctx context.Context) error {
 
 // Enqueue implements Queue.
 func (q *StandaloneQueue) Enqueue(ctx context.Context, task Task, opts ...EnqueueOption) (JobID, error) {
-	if err := task.validate(); err != nil {
+	if err := task.Validate(); err != nil {
 		return "", err
 	}
 
 	now := time.Now()
-	resolved := resolveEnqueueOptions(now, q.defaultTimeout, opts)
+	resolved := ResolveEnqueueOptions(now, q.defaultTimeout, opts)
 	rec := newRecord(newJobID(), task, resolved, now)
 
 	id, err := insertRecord(ctx, q.db, rec)
@@ -322,7 +326,7 @@ func (q *StandaloneQueue) Get(ctx context.Context, id JobID) (*Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !callerMayAccess(ctx, pkgcore.TenantID(rec.TenantID)) {
+	if !CallerMayAccess(ctx, pkgcore.TenantID(rec.TenantID)) {
 		return nil, ErrJobNotFound
 	}
 	return toJob(rec), nil
@@ -334,7 +338,7 @@ func (q *StandaloneQueue) Cancel(ctx context.Context, id JobID) error {
 	if err != nil {
 		return err
 	}
-	if !callerMayAccess(ctx, pkgcore.TenantID(rec.TenantID)) {
+	if !CallerMayAccess(ctx, pkgcore.TenantID(rec.TenantID)) {
 		return ErrJobNotFound
 	}
 	return markCancelled(ctx, q.db, string(id), time.Now())
@@ -342,7 +346,7 @@ func (q *StandaloneQueue) Cancel(ctx context.Context, id JobID) error {
 
 // DeadLetterJobs returns every Job currently StatusDeadLetter that ctx may
 // access — the tenant in ctx, or every tenant under a system context (see
-// callerMayAccess). It is not part of the Queue interface: a convenience
+// CallerMayAccess). It is not part of the Queue interface: a convenience
 // for operating this one implementation, not a portable contract every
 // deployment mode need offer identically.
 func (q *StandaloneQueue) DeadLetterJobs(ctx context.Context) ([]*Job, error) {
@@ -352,7 +356,7 @@ func (q *StandaloneQueue) DeadLetterJobs(ctx context.Context) ([]*Job, error) {
 	}
 	result := make([]*Job, 0, len(recs))
 	for i := range recs {
-		if !callerMayAccess(ctx, pkgcore.TenantID(recs[i].TenantID)) {
+		if !CallerMayAccess(ctx, pkgcore.TenantID(recs[i].TenantID)) {
 			continue
 		}
 		result = append(result, toJob(&recs[i]))
@@ -360,13 +364,16 @@ func (q *StandaloneQueue) DeadLetterJobs(ctx context.Context) ([]*Job, error) {
 	return result, nil
 }
 
-// callerMayAccess reports whether ctx may see a Job owned by owner: either
+// CallerMayAccess reports whether ctx may see a Job owned by owner: either
 // ctx carries owner as its tenant, or ctx carries a system context
 // (pkgcore.WithSystemContext) — the same two legitimate paths
 // dbkit.Repository[T] and the tenant-scoping plugin recognize elsewhere in
 // this codebase (docs/internal/04-data-and-tenancy.md names jobs' own
 // system tasks as one of the whitelisted WithSystemContext callers).
-func callerMayAccess(ctx context.Context, owner pkgcore.TenantID) bool {
+// Exported so the queue/asynq subpackage's Queue.Get/Cancel/DeadLetterJobs
+// share this exact access rule with StandaloneQueue's own -- see AGENTS.md's
+// "The persistence model is platform data, not tenant data" section.
+func CallerMayAccess(ctx context.Context, owner pkgcore.TenantID) bool {
 	if _, ok := pkgcore.SystemReasonFromContext(ctx); ok {
 		return true
 	}
@@ -443,7 +450,7 @@ func (q *StandaloneQueue) registerQueueDepthGauge(meter metric.Meter) error {
 // "did this attempt fail" are events, not a value that can be sampled on
 // demand from q.db.
 func (q *StandaloneQueue) registerJobMetrics() error {
-	meter := otel.Meter(instrumentationName)
+	meter := otel.Meter(InstrumentationName)
 
 	duration, err := meter.Float64Histogram(
 		jobDurationMetricName,

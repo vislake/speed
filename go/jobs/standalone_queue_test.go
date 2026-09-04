@@ -18,13 +18,14 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
+	"github.com/vislake/speed/go/jobs/internal/testutil"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // testSystemPurpose is the pkgcore.SystemPurpose these tests declare for
-// exercising the pkgcore.WithSystemContext branch of callerMayAccess.
+// exercising the pkgcore.WithSystemContext branch of CallerMayAccess.
 const testSystemPurpose = pkgcore.SystemPurpose("jobs.test_system_access")
 
 // newTestQueue returns a StandaloneQueue backed by a private, per-test temp-file
@@ -676,7 +677,7 @@ func TestRegisterQueueDepthGauge_Smoke(t *testing.T) {
 	// registration path with none of the cross-test coupling.
 	mp := sdkmetric.NewMeterProvider()
 	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
-	if err := q.registerQueueDepthGauge(mp.Meter(instrumentationName)); err != nil {
+	if err := q.registerQueueDepthGauge(mp.Meter(InstrumentationName)); err != nil {
 		t.Errorf("registerQueueDepthGauge() error = %v, want nil", err)
 	}
 }
@@ -711,7 +712,7 @@ func TestStandaloneQueue_DepthGauge_StopsQueryingAfterClose(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
-	if err := q.registerQueueDepthGauge(mp.Meter(instrumentationName)); err != nil {
+	if err := q.registerQueueDepthGauge(mp.Meter(InstrumentationName)); err != nil {
 		t.Fatalf("registerQueueDepthGauge() error = %v", err)
 	}
 
@@ -721,8 +722,8 @@ func TestStandaloneQueue_DepthGauge_StopsQueryingAfterClose(t *testing.T) {
 	if err := reader.Collect(context.Background(), &rm); err != nil {
 		t.Fatalf("Collect #1 (queue alive) error = %v, want nil", err)
 	}
-	if depth := metricByName(t, rm, "jobs.queue.depth"); depth == nil {
-		t.Fatalf("Collect #1 missing %q while a job is pending; metrics present: %v", "jobs.queue.depth", metricNames(rm))
+	if depth := testutil.MetricByName(t, rm, "jobs.queue.depth"); depth == nil {
+		t.Fatalf("Collect #1 missing %q while a job is pending; metrics present: %v", "jobs.queue.depth", testutil.MetricNames(rm))
 	} else if g, ok := depth.Data.(metricdata.Gauge[int64]); !ok || len(g.DataPoints) == 0 {
 		t.Fatalf("Collect #1 metric %q has no data points, want the pending-job backlog", "jobs.queue.depth")
 	}
@@ -746,34 +747,9 @@ func TestStandaloneQueue_DepthGauge_StopsQueryingAfterClose(t *testing.T) {
 	if err := reader.Collect(context.Background(), &rm); err != nil {
 		t.Fatalf("Collect #2 (after Close) error = %v, want nil; a closed queue's gauge callback must not touch its closed database", err)
 	}
-	if depth := metricByName(t, rm, "jobs.queue.depth"); depth != nil {
+	if depth := testutil.MetricByName(t, rm, "jobs.queue.depth"); depth != nil {
 		t.Errorf("Collect #2 still reports %q after Close, want the stopped queue to answer nothing", "jobs.queue.depth")
 	}
-}
-
-// metricByName returns the metric named name within rm, or nil when rm
-// carries no such metric.
-func metricByName(t *testing.T, rm metricdata.ResourceMetrics, name string) *metricdata.Metrics {
-	t.Helper()
-	for _, sm := range rm.ScopeMetrics {
-		for i := range sm.Metrics {
-			if sm.Metrics[i].Name == name {
-				return &sm.Metrics[i]
-			}
-		}
-	}
-	return nil
-}
-
-// metricNames lists every metric name present in rm, for failure messages.
-func metricNames(rm metricdata.ResourceMetrics) []string {
-	var names []string
-	for _, sm := range rm.ScopeMetrics {
-		for _, m := range sm.Metrics {
-			names = append(names, m.Name)
-		}
-	}
-	return names
 }
 
 // TestEnqueue_LogsSingleCorrectTenantID_EvenWhenCtxTenantDiffers is the
@@ -841,7 +817,7 @@ func setupTestMeterProvider(t *testing.T) *sdkmetric.ManualReader {
 // registerQueueDepthGauge doc comments) made one impossible. This test
 // process runs every test in package jobs in one binary sharing one
 // process-wide OTel global MeterProvider, and go.opentelemetry.io/otel's
-// global package queues every otel.Meter(instrumentationName) call made
+// global package queues every otel.Meter(InstrumentationName) call made
 // before the first-ever otel.SetMeterProvider (every OTHER lifecycle test
 // in this file that calls Start, none of which install a real provider of
 // their own) and replays them onto whatever provider IS eventually

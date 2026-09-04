@@ -23,20 +23,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hibiken/asynq"
+	asynqlib "github.com/hibiken/asynq"
 	"github.com/testcontainers/testcontainers-go"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 
 	"github.com/vislake/speed/go/jobs"
+	"github.com/vislake/speed/go/jobs/queue/asynq"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
 // startRedisContainer starts a disposable Redis 7 container and returns an
-// asynq.RedisConnOpt connected to it, already terminated via t.Cleanup on
-// test completion (pass or fail), so no container ever leaks past its
+// asynqlib.RedisConnOpt connected to it, already terminated via t.Cleanup
+// on test completion (pass or fail), so no container ever leaks past its
 // owning test -- the same lifecycle dbkit's startPostgresContainer gives
 // its own containers.
-func startRedisContainer(t *testing.T, ctx context.Context) asynq.RedisConnOpt {
+func startRedisContainer(t *testing.T, ctx context.Context) asynqlib.RedisConnOpt {
 	t.Helper()
 
 	container, err := tcredis.Run(ctx, "redis:7-alpine")
@@ -53,49 +54,50 @@ func startRedisContainer(t *testing.T, ctx context.Context) asynq.RedisConnOpt {
 	if err != nil {
 		t.Fatalf("redis testcontainer connection string: %v", err)
 	}
-	connOpt, err := asynq.ParseRedisURI(uri)
+	connOpt, err := asynqlib.ParseRedisURI(uri)
 	if err != nil {
-		t.Fatalf("asynq.ParseRedisURI(%q): %v", uri, err)
+		t.Fatalf("asynqlib.ParseRedisURI(%q): %v", uri, err)
 	}
 	return connOpt
 }
 
-// newTestAsynqQueue returns an AsynqQueue connected to a fresh Redis
-// container, with polling intervals and the tenant-throttle delay all
-// turned down so tests observe outcomes in tens of milliseconds rather than
-// asynq's own multi-second defaults (TaskCheckInterval defaults to 1s,
-// DelayedTaskCheckInterval to 5s) -- the same "short intervals for fast,
-// deterministic tests" convention go/jobs's own newTestQueue helper
-// (standalone_queue_test.go, parent package) applies to StandaloneQueue's
-// WithPollInterval/WithBackoff. Registers handlers and calls Start; Close
-// is registered via t.Cleanup, bounded so a stuck test cannot hang forever.
-func newTestAsynqQueue(t *testing.T, ctx context.Context, opts ...jobs.AsynqOption) *jobs.AsynqQueue {
+// newTestAsynqQueue returns an asynq.Queue (go/jobs/queue/asynq) connected
+// to a fresh Redis container, with polling intervals and the
+// tenant-throttle delay all turned down so tests observe outcomes in tens
+// of milliseconds rather than asynq's own multi-second defaults
+// (TaskCheckInterval defaults to 1s, DelayedTaskCheckInterval to 5s) --
+// the same "short intervals for fast, deterministic tests" convention
+// go/jobs's own newTestQueue helper (standalone_queue_test.go, parent
+// module) applies to StandaloneQueue's WithPollInterval/WithBackoff.
+// Registers handlers and calls Start; Close is registered via t.Cleanup,
+// bounded so a stuck test cannot hang forever.
+func newTestAsynqQueue(t *testing.T, ctx context.Context, opts ...asynq.Option) *asynq.Queue {
 	t.Helper()
 	connOpt := startRedisContainer(t, ctx)
 
-	defaults := []jobs.AsynqOption{
-		jobs.WithAsynqTaskCheckInterval(20 * time.Millisecond),
-		jobs.WithAsynqDelayedTaskCheckInterval(50 * time.Millisecond),
-		jobs.WithAsynqThrottleRetryDelay(20 * time.Millisecond),
-		// asynq.DefaultRetryDelayFunc is tuned for real production traffic
-		// (its first-retry delay alone is 15-44 SECONDS -- see
+	defaults := []asynq.Option{
+		asynq.WithTaskCheckInterval(20 * time.Millisecond),
+		asynq.WithDelayedTaskCheckInterval(50 * time.Millisecond),
+		asynq.WithThrottleRetryDelay(20 * time.Millisecond),
+		// asynqlib.DefaultRetryDelayFunc is tuned for real production
+		// traffic (its first-retry delay alone is 15-44 SECONDS -- see
 		// server.go's DefaultRetryDelayFunc: n=0 gives
 		// 0 + 15 + rand.IntN(30)), the same reason StandaloneQueue's own tests
 		// override WithBackoff instead of using DefaultBackoffBase/
 		// DefaultBackoffMax. Every test in this package that exercises a
 		// genuine retry needs this fast instead, or it would spend most
 		// of its runtime asleep waiting on asynq's own default backoff.
-		jobs.WithAsynqRetryDelayFunc(func(n int, err error, task *asynq.Task) time.Duration {
+		asynq.WithRetryDelayFunc(func(n int, err error, task *asynqlib.Task) time.Duration {
 			return 20 * time.Millisecond
 		}),
 	}
-	q := jobs.NewAsynqQueue(connOpt, append(defaults, opts...)...)
+	q := asynq.NewQueue(connOpt, append(defaults, opts...)...)
 
 	t.Cleanup(func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := q.Close(closeCtx); err != nil {
-			t.Errorf("AsynqQueue.Close() error = %v", err)
+			t.Errorf("Queue.Close() error = %v", err)
 		}
 	})
 	return q
@@ -106,11 +108,11 @@ func newTestAsynqQueue(t *testing.T, ctx context.Context, opts ...jobs.AsynqOpti
 // TestPriorityOrdering does (asynq's own task-check-interval polling means
 // there is no equivalent "before the dispatcher's first tick" race to avoid
 // here).
-func startTestAsynqQueue(t *testing.T, ctx context.Context, opts ...jobs.AsynqOption) *jobs.AsynqQueue {
+func startTestAsynqQueue(t *testing.T, ctx context.Context, opts ...asynq.Option) *asynq.Queue {
 	t.Helper()
 	q := newTestAsynqQueue(t, ctx, opts...)
 	if err := q.Start(ctx); err != nil {
-		t.Fatalf("AsynqQueue.Start() error = %v", err)
+		t.Fatalf("Queue.Start() error = %v", err)
 	}
 	return q
 }

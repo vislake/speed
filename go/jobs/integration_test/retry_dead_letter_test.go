@@ -90,7 +90,7 @@ func (h *countingFailureHandler) OnFailure(_ context.Context, job *jobs.Job, _ e
 // retries is archived by asynq (Inspector.ListArchivedTasks / DeadLetterJobs
 // -- this package's mapping of StandaloneQueue.DeadLetterJobs onto asynq's own
 // archived-task mechanism, AGENTS.md's dead-letter mapping section) and
-// that FailureHook.OnFailure fires exactly once, built from AsynqQueue's own
+// that FailureHook.OnFailure fires exactly once, built from Queue's own
 // Config.ErrorHandler replicating asynq's archive-boundary decision -- the
 // distributed deployment mode's counterpart of standalone_queue_test.go's
 // TestDeadLetter_ExhaustsRetries_And_InvokesFailureHook.

@@ -133,14 +133,23 @@ linters:
         #     rule needs lint targets to be live (the go-module-ci matrix
         #     lints only real modules).
         redis-only-in-pkgcore-and-jobs:
+          # go/jobs' own exemption is narrowed to its queue/asynq
+          # subpackage, not the whole module: the deployment-composition
+          # retrofit's dependency-cost rule (root CLAUDE.md's "Do not put a
+          # backend implementation in the same package as the interface it
+          # implements") moved every go-redis import in go/jobs into
+          # queue/asynq, so a business file dropped directly under
+          # go/jobs/ (outside that subpackage) that reached for go-redis
+          # again would now be a regression this rule catches, exactly as
+          # it always has for go/pkgcore.
           files:
             - "**/go/**"
             - "!**/go/pkgcore/**"
-            - "!**/go/jobs/**"
+            - "!**/go/jobs/queue/asynq/**"
           list-mode: lax
           deny:
             - pkg: github.com/redis/go-redis
-              desc: "concrete Redis client imports belong to go/pkgcore (the KVStore/EventBus implementations) and go/jobs (AsynqQueue) alone; business code depends on the pkgcore KVStore/EventBus interfaces"
+              desc: "concrete Redis client imports belong to go/pkgcore (the KVStore/EventBus implementations) and go/jobs/queue/asynq (the asynq Queue implementation) alone; business code depends on the pkgcore KVStore/EventBus interfaces or the jobs.Queue interface"
             - pkg: github.com/go-redis/redis
               desc: "legacy go-redis module path (archived) -- same ban as github.com/redis/go-redis"
         minio-only-in-pkgcore:
@@ -152,13 +161,35 @@ linters:
             - pkg: github.com/minio/minio-go
               desc: "the S3 client -- S3ObjectStore and its pkg/credentials subpackage -- belongs to go/pkgcore alone; business code depends on the pkgcore ObjectStore interface"
         asynq-only-in-jobs:
+          # Narrowed from the whole go/jobs module to its queue/asynq
+          # subpackage by the jobs/asynq packaging-isolation round: asynq
+          # (and go-redis, above) now sit in their own subpackage precisely
+          # so a consumer that only ever runs jobs.StandaloneQueue never
+          # pulls either in -- see go/jobs/AGENTS.md's dependency-cost
+          # measurement. The exemption follows the implementation, not the
+          # module, per root CLAUDE.md's "Do not put a backend
+          # implementation in the same package as the interface it
+          # implements" packaging rule.
+          #
+          # go/jobs/integration_test/ keeps its own exemption too: it is the
+          # one other sanctioned place that legitimately drives the real
+          # asynq library directly (building an asynq.RedisConnOpt from a
+          # disposable testcontainer, tuning asynq.Config knobs for fast
+          # tests) rather than through jobs.Queue -- exactly as it did
+          # before this split, when the whole module shared one exemption.
+          # Every file there carries `//go:build integration`, so this rule
+          # never actually sees them in the default `golangci-lint run
+          # ./...` CI leg (go-module-ci.yml never passes -tags=integration);
+          # the exemption only matters for someone running the linter
+          # locally with that tag set, matching `go test`'s own convention.
           files:
             - "**/go/**"
-            - "!**/go/jobs/**"
+            - "!**/go/jobs/queue/asynq/**"
+            - "!**/go/jobs/integration_test/**"
           list-mode: lax
           deny:
             - pkg: github.com/hibiken/asynq
-              desc: "asynq is go/jobs' distributed Queue implementation; business code depends on the jobs/Queue interface"
+              desc: "asynq is go/jobs/queue/asynq's distributed Queue implementation; business code depends on the jobs.Queue interface"
         # dbkit's two SQL dialect drivers are split into their own
         # dbkit/dialect subpackages (open.go's RegisterDialect / dialectRegistry,
         # mirroring database/sql's own driver-registration pattern -- see

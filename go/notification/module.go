@@ -88,7 +88,7 @@ type Module struct {
 	// handled by (the delivery handler Register registers). REQUIRED: a
 	// Module without one fails Register with ErrDeliveryQueueRequired. The
 	// queue seam of a standalone host is jobs' StandaloneQueue; of a
-	// distributed host, its AsynqQueue.
+	// distributed host, go/jobs/queue/asynq's Queue.
 	queue jobs.Queue
 
 	// resolver supplies a user delivery's addresses at send time (see
@@ -189,9 +189,9 @@ func WithContactPhoneIndexer(indexer *dbkit.BlindIndexer) Option {
 // executed by its workers. It is REQUIRED: Register returns
 // ErrDeliveryQueueRequired without one, so a module with no queue fails at
 // boot rather than have every dispatch refuse at run time. The queue of a
-// standalone host is jobs' StandaloneQueue; of a distributed host, its
-// AsynqQueue -- whichever the host's own wiring chose, passed straight
-// through.
+// standalone host is jobs' StandaloneQueue; of a distributed host,
+// go/jobs/queue/asynq's Queue -- whichever the host's own wiring chose,
+// passed straight through.
 func WithDeliveryQueue(queue jobs.Queue) Option {
 	return func(m *Module) { m.queue = queue }
 }

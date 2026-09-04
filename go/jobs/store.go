@@ -140,7 +140,7 @@ func ensureJobsSchema(ctx context.Context, db *gorm.DB) error {
 func newJobID() string { return uuid.NewString() }
 
 // newRecord builds the jobRecord Enqueue inserts for task, resolved.
-func newRecord(id string, task Task, resolved enqueueOptions, now time.Time) *jobRecord {
+func newRecord(id string, task Task, resolved ResolvedEnqueueOptions, now time.Time) *jobRecord {
 	return &jobRecord{
 		ID:             id,
 		Type:           task.Type,
@@ -148,10 +148,10 @@ func newRecord(id string, task Task, resolved enqueueOptions, now time.Time) *jo
 		Payload:        task.Payload,
 		IdempotencyKey: task.IdempotencyKey,
 		Status:         string(StatusPending),
-		Priority:       int(resolved.priority),
-		MaxRetries:     resolved.maxRetries,
-		TimeoutNanos:   int64(resolved.timeout),
-		ScheduledAt:    resolved.scheduledAt,
+		Priority:       int(resolved.Priority),
+		MaxRetries:     resolved.MaxRetries,
+		TimeoutNanos:   int64(resolved.Timeout),
+		ScheduledAt:    resolved.ScheduledAt,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}

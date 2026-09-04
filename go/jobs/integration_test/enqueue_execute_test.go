@@ -12,10 +12,10 @@ import (
 )
 
 // TestRedisQueue_EnqueueExecuteRoundTrip is this suite's core proof: a Task
-// enqueued through AsynqQueue.Enqueue is genuinely persisted to Redis (not
+// enqueued through Queue.Enqueue is genuinely persisted to Redis (not
 // just handed to an in-process channel), dequeued and executed by a real
 // asynq.Server/worker goroutine, and its outcome (status, attempts,
-// progress, result) is observable through AsynqQueue.Get -- the same
+// progress, result) is observable through Queue.Get -- the same
 // contract go/jobs's own example_test.go proves for StandaloneQueue, exercised
 // here against a real backend per this task's own testing instructions.
 func TestRedisQueue_EnqueueExecuteRoundTrip(t *testing.T) {

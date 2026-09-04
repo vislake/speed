@@ -82,7 +82,7 @@ func TestRedisQueue_Cancel_RunningJob(t *testing.T) {
 		select {
 		case <-release:
 		case <-ctx.Done():
-			// AsynqQueue.Cancel's best-effort CancelProcessing signal may
+			// Queue.Cancel's best-effort CancelProcessing signal may
 			// interrupt this ctx before the test releases it -- either
 			// path is acceptable; what this test actually asserts is
 			// Get()'s reported Status, not how Handle itself exits.

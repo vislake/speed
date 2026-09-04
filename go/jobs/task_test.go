@@ -40,23 +40,23 @@ func TestTask_Validate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.task.validate()
+			err := tt.task.Validate()
 			if !tt.wantErr {
 				if err != nil {
-					t.Fatalf("validate() = %v, want nil", err)
+					t.Fatalf("Validate() = %v, want nil", err)
 				}
 				return
 			}
 
 			appErr, ok := apperr.As(err)
 			if !ok {
-				t.Fatalf("validate() error = %v, want an *apperr.Error", err)
+				t.Fatalf("Validate() error = %v, want an *apperr.Error", err)
 			}
 			if appErr.Code != ErrInvalidTask.Code {
-				t.Errorf("validate() code = %q, want %q", appErr.Code, ErrInvalidTask.Code)
+				t.Errorf("Validate() code = %q, want %q", appErr.Code, ErrInvalidTask.Code)
 			}
 			if got := appErr.Params["field"]; got != tt.wantField {
-				t.Errorf("validate() field param = %v, want %q", got, tt.wantField)
+				t.Errorf("Validate() field param = %v, want %q", got, tt.wantField)
 			}
 		})
 	}
