@@ -103,10 +103,36 @@ type SigningKey struct {
 	NotAfter  time.Time `gorm:"column:not_after;not null"`
 
 	ActivatedAt *time.Time `gorm:"column:activated_at"`
-	RetiredAt   *time.Time `gorm:"column:retired_at"`
-	RevokedAt   *time.Time `gorm:"column:revoked_at"`
+	// RetiringAt is when this key was demoted from SigningKeyStatusActive to
+	// SigningKeyStatusRetiring -- nil until that transition happens. It is
+	// the reference point RetiringOverlap is measured from: a key becomes
+	// eligible for the retiring->retired transition once
+	// time.Now() >= *RetiringAt + RetiringOverlap. See RetiringOverlap's own
+	// doc comment for where the duration itself comes from.
+	RetiringAt *time.Time `gorm:"column:retiring_at"`
+	RetiredAt  *time.Time `gorm:"column:retired_at"`
+	RevokedAt  *time.Time `gorm:"column:revoked_at"`
 	// RevocationReason is "" until RevokedAt is set.
 	RevocationReason string `gorm:"column:revocation_reason;size:255;not null;default:''"`
+
+	// RetiringOverlap is how long this key stays in SigningKeyStatusRetiring
+	// (verifiable but not selected as ActiveSigner) once it is demoted from
+	// active, before the expiry scan retires it for good.
+	//
+	// docs/internal/22-pki.md's "retiring overlap period" section is
+	// explicit that pki does not know this number -- the consumer that
+	// knows the maximum lifetime of a credential signed under this key
+	// declares it, once, as EnsurePurpose's maxCredentialLifetime
+	// parameter. Recording it HERE, on the key row itself, rather than in a
+	// separate purpose-policy table, is what lets the jobs-driven expiry
+	// scan (which runs on a schedule, with no caller supplying
+	// maxCredentialLifetime on each tick) demote an active key into
+	// retiring without having to ask anyone: it reads the value the key
+	// already carries. A key EnsurePurpose creates copies
+	// maxCredentialLifetime directly; a key the expiry scan stages ahead of
+	// rotation copies it from the active key it will eventually replace,
+	// since one purpose's overlap requirement does not change key to key.
+	RetiringOverlap time.Duration `gorm:"column:retiring_overlap;not null;default:0"`
 
 	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
 	UpdatedAt time.Time `gorm:"column:updated_at;autoUpdateTime"`
@@ -319,18 +345,23 @@ var _ dbkit.TenantScoped = Certificate{}
 //
 // # NotAfter
 //
-// Nullable, and NOT populated by this round's code paths: LocalSigner's
-// GenerateKey (the only write path this round drives) takes no expiry
-// parameter, by the Signer interface's own frozen shape -- the caller that
-// knows a key's intended lifetime is the key-lifecycle layer (Service),
-// which records NotAfter on the OWNING row (pki_signing_keys /
-// pki_authorities / pki_certificates) instead. This column and its index
-// exist now, ahead of any writer, because docs/internal/22-pki.md is
-// explicit that round 2's expiry-scan job depends on scanning
-// pki_local_keys directly (across every owning table at once, without a
-// three-way join) -- "get the table structure right now or round 2 has to
-// be redone". Populating it is round 2's job; leaving the column and index
-// unused until then is the deliberately accepted state.
+// Nullable, and still NOT populated by any of this round's code paths, even
+// though round 2 does add the expiry-scan job docs/internal/22-pki.md
+// anticipated when this column and its index were built ahead of any
+// writer: LocalSigner.GenerateKey (the only write path that would set it)
+// still takes no expiry parameter, by the Signer interface's own frozen
+// shape, and round 2's Service (the caller that DOES know a key's intended
+// lifetime) has no signer-specific channel back to LocalSigner to hand that
+// lifetime to without Service acquiring knowledge of which Signer
+// implementation "local" actually is -- exactly the kind of business-code-
+// depends-on-concrete-implementation coupling this codebase's architecture
+// discipline forbids. Round 2's expiry scan (lifecycle.go) therefore reads
+// only the owning rows' own NotAfter (pki_signing_keys, unconditionally;
+// pki_authorities/pki_certificates are round 3's scope, since their
+// lifecycle is revocation-and-CRL shaped, not pending/active/retiring/
+// retired), never pki_local_keys directly. This column and its index remain
+// unused until a future round finds a shape for the Signer/Service boundary
+// that does not require this coupling -- see AGENTS.md's Known limitations.
 type LocalKey struct {
 	// KeyRef is the opaque handle LocalSigner.GenerateKey returns, and the
 	// same value a SigningKey/Authority/Certificate row's KeyRef names when

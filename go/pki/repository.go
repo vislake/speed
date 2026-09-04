@@ -3,6 +3,7 @@ package pki
 import (
 	"context"
 	"errors"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -59,17 +60,152 @@ func (r *SigningKeyRepository) FindActiveByPurpose(ctx context.Context, purpose 
 	return &key, nil
 }
 
-// ListVerifiableByPurpose returns every row for purpose whose Status is not
-// SigningKeyStatusRevoked, in no particular order. This is the query
-// Service.VerificationKeys reads: "all still-verifiable keys", which today
-// (round 1, only the pending->active transition wired) means every key ever
-// created for purpose except one a later round revoked.
+// ListVerifiableByPurpose returns every row for purpose whose Status is
+// SigningKeyStatusPending, SigningKeyStatusActive or
+// SigningKeyStatusRetiring, in no particular order. This is the query
+// Service.VerificationKeys reads: "all still-verifiable keys". A pending
+// key's public key is included per docs/internal/22-pki.md's "pending
+// exists for the distributed race" section -- it is safe to publish for
+// verification before it ever signs anything -- while a retired (or
+// revoked) key is excluded: the whole point of the retiring overlap period
+// is that it ends, and a key past it must stop being offered for
+// verification, not merely stop being selected as ActiveSigner.
 func (r *SigningKeyRepository) ListVerifiableByPurpose(ctx context.Context, purpose string) ([]SigningKey, error) {
 	var keys []SigningKey
 	err := r.db.WithContext(ctx).
-		Where("purpose = ? AND status <> ?", purpose, SigningKeyStatusRevoked).
+		Where("purpose = ? AND status IN ?", purpose, []string{
+			SigningKeyStatusPending,
+			SigningKeyStatusActive,
+			SigningKeyStatusRetiring,
+		}).
 		Find(&keys).Error
 	return keys, err
+}
+
+// Update persists every field of key, including its Status transition and
+// the lifecycle timestamps (ActivatedAt/RetiringAt/RetiredAt) that go with
+// it. Callers are expected to have loaded key from this repository (or
+// built it fresh via Create) rather than constructing a partial row by
+// hand, since Save writes every column.
+func (r *SigningKeyRepository) Update(ctx context.Context, key *SigningKey) error {
+	return r.db.WithContext(ctx).Save(key).Error
+}
+
+// PromoteToActive atomically promotes the pending key pendingID to
+// SigningKeyStatusActive and, when previousActiveID is non-empty, demotes
+// that other row from SigningKeyStatusActive to SigningKeyStatusRetiring in
+// the SAME transaction -- the pending->active and active->retiring
+// transitions docs/internal/22-pki.md's lifecycle diagram draws as one
+// arrow (a new key's activation causing the old one's demotion into
+// retiring), which is also why this
+// module publishes no separate ".retiring" event: EventSigningKeyActivated
+// communicates both halves of this one atomic write.
+//
+// The demotion runs FIRST, deliberately: uq_pki_signing_keys_active_purpose
+// (migration 0001) is a partial unique index checked at each statement, not
+// deferred to commit, so promoting pendingID to active before previousActiveID
+// has left SigningKeyStatusActive would momentarily leave two active rows
+// for the same purpose inside this very transaction and be refused by the
+// database it is trying to write to. Demoting first briefly leaves the
+// purpose with NO active row instead, which the index has nothing to say
+// about.
+//
+// now is used for both RetiringAt (the demoted key) and ActivatedAt (the
+// promoted key), so the two rows agree on exactly when the rotation
+// happened.
+func (r *SigningKeyRepository) PromoteToActive(ctx context.Context, pendingID string, previousActiveID string, now time.Time) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if previousActiveID != "" {
+			// A struct (not a map) as the Updates argument, with no .Model()
+			// call: GORM infers the table from the struct type and, since
+			// every other field is left at its zero value, writes only
+			// Status and RetiringAt -- the same partial-update shape the
+			// map form gave, without the raw-GORM-bypass entry point
+			// (tools/semgrep_rules/raw-gorm-bypass.yml).
+			if err := tx.Where("id = ? AND status = ?", previousActiveID, SigningKeyStatusActive).
+				Updates(&SigningKey{
+					Status:     SigningKeyStatusRetiring,
+					RetiringAt: &now,
+				}).Error; err != nil {
+				return err
+			}
+		}
+		res := tx.Where("id = ? AND status = ?", pendingID, SigningKeyStatusPending).
+			Updates(&SigningKey{
+				Status:      SigningKeyStatusActive,
+				ActivatedAt: &now,
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return ErrKeyNotFound
+		}
+		return nil
+	})
+}
+
+// RetireRetiring marks the retiring key id as SigningKeyStatusRetired.
+func (r *SigningKeyRepository) RetireRetiring(ctx context.Context, id string, now time.Time) error {
+	// See PromoteToActive's comment: a struct Updates argument replaces the
+	// map-plus-.Model() form to stay clear of the raw-GORM-bypass entry
+	// point.
+	res := r.db.WithContext(ctx).
+		Where("id = ? AND status = ?", id, SigningKeyStatusRetiring).
+		Updates(&SigningKey{
+			Status:    SigningKeyStatusRetired,
+			RetiredAt: &now,
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrKeyNotFound
+	}
+	return nil
+}
+
+// ListByStatus returns every row in status, in no particular order. The
+// expiry scan uses it for both the pending set (promotion candidates) and
+// the retiring set (retirement candidates) -- both are expected to stay
+// small (at most one row per purpose in the common case), so loading them
+// in full is not a scan-scale concern the way ListActiveNearingExpiry's own
+// not_after-indexed query is.
+func (r *SigningKeyRepository) ListByStatus(ctx context.Context, status string) ([]SigningKey, error) {
+	var keys []SigningKey
+	err := r.db.WithContext(ctx).Where("status = ?", status).Find(&keys).Error
+	return keys, err
+}
+
+// ListActiveNearingExpiry returns every SigningKeyStatusActive row whose
+// NotAfter is at or before before -- the expiry scan's staging query, read
+// through idx_pki_signing_keys_not_after.
+func (r *SigningKeyRepository) ListActiveNearingExpiry(ctx context.Context, before time.Time) ([]SigningKey, error) {
+	var keys []SigningKey
+	err := r.db.WithContext(ctx).
+		Where("status = ? AND not_after <= ?", SigningKeyStatusActive, before).
+		Find(&keys).Error
+	return keys, err
+}
+
+// ExistsByPurposeAndStatus reports whether purpose already has a row in
+// status. The expiry scan's staging step uses it to avoid staging a second
+// pending key for a purpose that already has one in flight.
+func (r *SigningKeyRepository) ExistsByPurposeAndStatus(ctx context.Context, purpose, status string) (bool, error) {
+	// Count needs .Model() to know the table when nothing else in the chain
+	// carries a struct type; a bounded Find into a typed slice gets the same
+	// existence answer -- at most one row is ever fetched -- without the
+	// raw-GORM-bypass entry point (tools/semgrep_rules/raw-gorm-bypass.yml).
+	var keys []SigningKey
+	err := r.db.WithContext(ctx).
+		Where("purpose = ? AND status = ?", purpose, status).
+		Limit(1).
+		Find(&keys).Error
+	if err != nil {
+		return false, err
+	}
+	count := int64(len(keys))
+	return count > 0, nil
 }
 
 // AuthorityRepository is the plain, non-tenant-scoped accessor for

@@ -10,7 +10,9 @@ func newTestService(t *testing.T) *Service {
 	t.Helper()
 	db := newTestDB(t)
 	signer := NewLocalSigner(db)
-	return NewService(signer, "local", NewSigningKeyRepository(db))
+	svc := NewService(signer, "local", NewSigningKeyRepository(db), DefaultCacheTTL, DefaultPropagationWindow, DefaultRenewalLeadTime)
+	t.Cleanup(func() { _ = svc.Close() })
+	return svc
 }
 
 func TestService_EnsurePurpose_RejectsEmptyPurpose(t *testing.T) {

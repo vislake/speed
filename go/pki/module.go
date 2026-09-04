@@ -6,6 +6,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 
 	"github.com/vislake/speed/go/pki/locales"
@@ -43,10 +44,21 @@ const (
 	AuditActionCertificateIssue = "pki.certificate.issue"
 )
 
-// The configuration keys pki contributes: only what round 1's own code
-// paths consult. The propagation window (round 2) and the CRL distribution
-// point URL (round 3) belong to the rounds that implement what they
-// configure.
+// The configuration keys pki contributes. The CRL distribution point URL
+// (round 3) belongs to the round that implements it.
+//
+// ConfigPropagationWindow and ConfigRenewalLeadTime are round 2's additions.
+// Neither duplicates the retiring overlap period: docs/internal/22-pki.md's
+// section on why the retiring overlap period's length is declared by the
+// consumer is explicit that pki does not know a credential's maximum
+// lifetime -- the consumer declares it, once,
+// through EnsurePurpose's maxCredentialLifetime parameter, and it is
+// recorded per-key (SigningKey.RetiringOverlap), never as a global setting.
+// The propagation window and the rotation lead time are the opposite case
+// -- docs/internal/22-pki.md's own words describe the rotation cadence as
+// something the consumer has no way to know, that belongs to pki's own
+// configuration -- genuinely pki's own settings, with no consumer
+// that could supply them.
 const (
 	// ConfigCADefaultValidity is how long a CA certificate (root or
 	// intermediate) is valid for when a caller does not specify one.
@@ -60,10 +72,17 @@ const (
 	// ConfigCertificateMaxValidity bounds how long an end-entity
 	// certificate may be issued for, regardless of what a caller requests.
 	ConfigCertificateMaxValidity = "pki.certificate_max_validity"
+	// ConfigPropagationWindow is how long a newly staged pending key waits
+	// before the expiry scan promotes it to active -- see
+	// DefaultPropagationWindow.
+	ConfigPropagationWindow = "pki.propagation_window"
+	// ConfigRenewalLeadTime is how far ahead of a signing key's expiry the
+	// expiry scan stages its replacement -- see DefaultRenewalLeadTime.
+	ConfigRenewalLeadTime = "pki.renewal_lead_time"
 )
 
-// Default validity periods backing the config items above. None of this
-// round's issuance methods (CreateRootCA, CreateIntermediateCA,
+// Default validity periods backing the CA/certificate config items above.
+// None of this round's issuance methods (CreateRootCA, CreateIntermediateCA,
 // IssueCertificate) reads these through the config schema yet -- Register
 // only declares the schema, per pkgcore.Module.Register's own "must not
 // perform I/O; it only declares" contract, and pki carries no config.Service
@@ -71,6 +90,14 @@ const (
 // passes NotAfter directly (see RootCAParams/IntermediateCAParams/
 // CertificateParams); wiring these declared config keys into that decision
 // is left to the host, or to a later round.
+//
+// ConfigPropagationWindow and ConfigRenewalLeadTime follow the identical
+// declare-but-do-not-read discipline: their defaults are
+// DefaultPropagationWindow and DefaultRenewalLeadTime (lifecycle.go), read
+// by NewModule (via WithPropagationWindow/WithRenewalLeadTime, or those
+// package defaults when the host passes neither) rather than through a live
+// config lookup, for the same reason -- no config.Service dependency exists
+// this round to read one with.
 const (
 	defaultCADefaultValidity          = 10 * 365 * 24 * time.Hour
 	defaultCAMaxValidity              = 15 * 365 * 24 * time.Hour
@@ -109,6 +136,20 @@ var configItemDecls = []pkgcore.ConfigItem{
 		Description: "Maximum validity period an end-entity certificate may be issued for, regardless of what the caller requests.",
 		Group:       "pki",
 	},
+	{
+		Key:         ConfigPropagationWindow,
+		Type:        "duration",
+		Default:     DefaultPropagationWindow,
+		Description: "How long a newly staged pending signing key waits before the expiry scan promotes it to active.",
+		Group:       "pki",
+	},
+	{
+		Key:         ConfigRenewalLeadTime,
+		Type:        "duration",
+		Default:     DefaultRenewalLeadTime,
+		Description: "How far ahead of a signing key's expiry the expiry scan stages its replacement.",
+		Group:       "pki",
+	},
 }
 
 // Module implements pkgcore.Module for go/pki.
@@ -134,6 +175,19 @@ type Module struct {
 	signer     Signer
 	signerName string
 
+	// queue is the jobs.Queue the expiry scan's task handler registers
+	// against (WithQueue). Nil is a legitimate configuration -- see
+	// Service.queue's own doc comment.
+	queue jobs.Queue
+
+	// cacheTTL, propagationWindow and renewalLeadTime are Service's
+	// constructor arguments, defaulted to DefaultCacheTTL/
+	// DefaultPropagationWindow/DefaultRenewalLeadTime and overridable via
+	// WithCacheTTL/WithPropagationWindow/WithRenewalLeadTime.
+	cacheTTL          time.Duration
+	propagationWindow time.Duration
+	renewalLeadTime   time.Duration
+
 	signingKeys  *SigningKeyRepository
 	authorities  *AuthorityRepository
 	certificates *CertificateRepository
@@ -157,6 +211,39 @@ func WithSigner(name string, signer Signer) Option {
 	}
 }
 
+// WithQueue wires the jobs.Queue the expiry-scan task (job.go) is scheduled
+// on and claimed from. Without it, Module still works in full for the
+// key-lifecycle layer's synchronous surface (EnsurePurpose, ActiveSigner,
+// VerificationKeys) and for the X.509 layer -- only automatic rotation is
+// unavailable: Register skips claiming the task handler, and
+// Service.EnqueueExpiryScan reports a plain error, the same optional-queue
+// shape storage.WithQueue's absence produces for its own expiry sweep.
+func WithQueue(queue jobs.Queue) Option {
+	return func(m *Module) { m.queue = queue }
+}
+
+// WithCacheTTL overrides DefaultCacheTTL for the key-set cache
+// (Service.ActiveSigner/VerificationKeys' hot-path cache, cache.go). A
+// value <=0 disables the cache outright -- useful for a test that wants to
+// observe every write immediately without waiting out a TTL.
+func WithCacheTTL(ttl time.Duration) Option {
+	return func(m *Module) { m.cacheTTL = ttl }
+}
+
+// WithPropagationWindow overrides DefaultPropagationWindow: how long a
+// newly staged pending key waits before the expiry scan promotes it to
+// active. See lifecycle.go's "pending" state doc comment for why the wait
+// exists at all.
+func WithPropagationWindow(d time.Duration) Option {
+	return func(m *Module) { m.propagationWindow = d }
+}
+
+// WithRenewalLeadTime overrides DefaultRenewalLeadTime: how far ahead of a
+// signing key's expiry the expiry scan stages its replacement.
+func WithRenewalLeadTime(d time.Duration) Option {
+	return func(m *Module) { m.renewalLeadTime = d }
+}
+
 // NewModule returns a Module whose tables live in db, signing through
 // LocalSigner unless overridden by WithSigner. Constructing a Module
 // performs no I/O: opening and migrating db, and registering
@@ -164,8 +251,11 @@ func WithSigner(name string, signer Signer) Option {
 // the host's responsibility, done before Bootstrap ever calls Register.
 func NewModule(db *gorm.DB, opts ...Option) *Module {
 	m := &Module{
-		db:         db,
-		signerName: "local",
+		db:                db,
+		signerName:        "local",
+		cacheTTL:          DefaultCacheTTL,
+		propagationWindow: DefaultPropagationWindow,
+		renewalLeadTime:   DefaultRenewalLeadTime,
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -179,9 +269,17 @@ func NewModule(db *gorm.DB, opts ...Option) *Module {
 	m.certificates = NewCertificateRepository(db)
 	m.localKeys = NewLocalKeyRepository(db)
 
-	m.service = NewService(m.signer, m.signerName, m.signingKeys)
+	m.service = NewService(m.signer, m.signerName, m.signingKeys, m.cacheTTL, m.propagationWindow, m.renewalLeadTime)
 	m.ca = NewCAService(m.signer, m.signerName, m.authorities, m.certificates)
 	return m
+}
+
+// Close releases the module's background resources -- today, exactly the
+// key-set cache's janitor goroutine (Service.Close). Idempotent, and the
+// module stays correct, if slower to reclaim memory, if a host never calls
+// it.
+func (m *Module) Close() error {
+	return m.service.Close()
 }
 
 // Service returns the module's key-lifecycle Service.
@@ -219,12 +317,14 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // that touches m.db.
 //
 // It declares pki's permissions, its round-1 audit vocabulary and its
-// round-1 configuration schema. It does not mount any HTTP route (no
-// OpenAPI fragment exists yet), does not declare any domain event (none of
-// this round's code paths publish one -- pki.signing_key.staged and its
-// siblings are round 2/3), and does not register any jobs.Queue handler
-// (the expiry scan and CRL regeneration jobs are round 2/3 work; pki does
-// not even depend on go/jobs yet).
+// configuration schema, and declares the three signing-key lifecycle events
+// (events.go). It hands the registry's EventBus to Service so the key-set
+// cache can invalidate itself on its own published events (attachBus), and,
+// when the host wired a queue via WithQueue, hands Service that queue too
+// and claims the expiry-scan task's handler (job.go) so a host draining
+// reg.Jobs.Handlers() onto its jobs.Queue gets a worker that advances the
+// lifecycle state machine. It does not mount any HTTP route -- no OpenAPI
+// fragment exists yet, still round 3's job.
 func (m *Module) Register(reg *pkgcore.Registry) error {
 	if err := reg.Permissions.Add(
 		PermissionRead,
@@ -240,6 +340,16 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	}
 	if err := reg.Config.Add(configItemDecls...); err != nil {
 		return err
+	}
+	if err := reg.Events.Publishes(eventDecls...); err != nil {
+		return err
+	}
+	m.service.attachBus(reg)
+	if m.queue != nil {
+		m.service.attachQueue(m.queue)
+		if err := reg.Jobs.Handle(taskTypeExpiryScan, expiryScanHandler{svc: m.service}); err != nil {
+			return err
+		}
 	}
 	return nil
 }

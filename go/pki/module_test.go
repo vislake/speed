@@ -6,6 +6,7 @@ import (
 	"embed"
 	"testing"
 
+	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -133,6 +134,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 		assertContainsAll(t, keys, []string{
 			ConfigCADefaultValidity, ConfigCAMaxValidity,
 			ConfigCertificateDefaultValidity, ConfigCertificateMaxValidity,
+			ConfigPropagationWindow, ConfigRenewalLeadTime,
 		})
 	})
 
@@ -146,14 +148,48 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 		}
 	})
 
-	t.Run("no events are declared", func(t *testing.T) {
-		// pki.signing_key.staged and its siblings are round 2/3 work; an
-		// undeclared-but-unused event is dead catalog weight, not forward
-		// compatibility (this module's own Register doc comment).
-		if got := reg.Events.Published(); len(got) != 0 {
-			t.Errorf("Register declared %d event(s), want 0 this round", len(got))
+	t.Run("events", func(t *testing.T) {
+		// The three signing-key lifecycle events this round's expiry scan
+		// drives -- see events.go's doc comment for why there is no fourth
+		// (.revoked) or any pki.certificate.*/pki.authority.* event yet.
+		var types []string
+		for _, decl := range reg.Events.Published() {
+			types = append(types, decl.Type)
+		}
+		assertContainsAll(t, types, []string{
+			EventSigningKeyStaged, EventSigningKeyActivated, EventSigningKeyRetired,
+		})
+		if len(types) != 3 {
+			t.Errorf("Register declared %d event(s), want exactly 3 this round: %v", len(types), types)
 		}
 	})
+
+	t.Run("no jobs handler without a queue", func(t *testing.T) {
+		// NewModule(db) above was built with no WithQueue -- Register must
+		// not claim the expiry-scan task handler when there is no queue to
+		// run it on.
+		if _, ok := reg.Jobs.Handlers()[taskTypeExpiryScan]; ok {
+			t.Errorf("Register claimed the expiry-scan job handler despite no WithQueue")
+		}
+	})
+}
+
+// TestModule_Register_WithQueue_ClaimsTheExpiryScanHandler proves the
+// opposite of the "no jobs handler without a queue" case above: WithQueue
+// makes Register claim taskTypeExpiryScan on reg.Jobs, so a host draining
+// reg.Jobs.Handlers() onto its jobs.Queue gets a worker for it.
+func TestModule_Register_WithQueue_ClaimsTheExpiryScanHandler(t *testing.T) {
+	db := newTestDB(t)
+	m := NewModule(db, WithQueue(stubQueue{}))
+	t.Cleanup(func() { _ = m.Close() })
+
+	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), m)
+	if err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	if _, ok := reg.Jobs.Handlers()[taskTypeExpiryScan]; !ok {
+		t.Errorf("Register did not claim taskTypeExpiryScan despite WithQueue")
+	}
 }
 
 // TestModule_Register_CoexistsWithAnotherModule proves pki bootstraps
@@ -229,3 +265,18 @@ func (*fakeSigner) Public(ctx context.Context, keyRef string) (crypto.PublicKey,
 func (*fakeSigner) Destroy(ctx context.Context, keyRef string) error { return nil }
 
 var _ Signer = (*fakeSigner)(nil)
+
+// stubQueue is a do-nothing jobs.Queue, used only to prove Register claims
+// (or does not claim) the expiry-scan task handler -- it is never actually
+// drained in this file, mirroring storage's identical module_test.go
+// stubQueue.
+type stubQueue struct{}
+
+func (stubQueue) Enqueue(context.Context, jobs.Task, ...jobs.EnqueueOption) (jobs.JobID, error) {
+	return "", nil
+}
+func (stubQueue) Get(context.Context, jobs.JobID) (*jobs.Job, error) { return nil, nil }
+func (stubQueue) Cancel(context.Context, jobs.JobID) error           { return nil }
+
+// compile-time check that stubQueue satisfies jobs.Queue.
+var _ jobs.Queue = stubQueue{}
