@@ -80,10 +80,11 @@ graph BT
     admin --> comp
 ```
 
-**三条必须写进文档并由 code review 强制执行的纪律：**
+**四条必须写进文档并由 code review 强制执行的纪律：**
 1. `rbac` 不依赖 `authn`。授权只认 `Subject{TenantID, UserID}`，由认证方自行拼装 Subject 后调用授权。
 2. 业务模块之间禁止 import 对方的 struct 做数据库关联，一律用 **ID 引用 + 领域事件**。例：`authn` 发布 `UserCreated`，`org` 订阅后建默认工作空间；而不是 `org` import `authn.User`。这是多模块独立发版下避免版本耦合地狱的关键。
-3. `authn` 不 import `pki`。图上没有 `authn --> pki` 这条边是刻意的：`authn` 在自己这边声明 `KeySource` 接口，由 `pki` 的服务结构化满足，宿主在装配时注入——与 `org`/`rbac` 之间那套无 import 接缝同一手法。`pki` 因此是**装配层面**的必需依赖（不注入则 `NewModule` 失败），不是编译层面的依赖。此外 `authn` 不得触及 `pki` 的 X.509 层：JWT 验签只要公钥和 kid，证书链对它没有价值，只会引入证书解析与链校验的攻击面。详见 [22 密钥与证书生命周期](22-pki.md)。
+3. **实现的依赖不得落到接口消费者头上。** 纪律 2 管的是源码层面，这一条管的是打包层面：Go 按**包**解析依赖，所以一套后端实现只要与它的接口同包，任何 import 该包的模块就继承了它的全部依赖——哪怕一个实现都没用到。现实后果可实测：`go/ratelimit` 非测试代码里零第三方 import，消费者却要背 24 个 indirect 依赖，其中含 S3 SDK。内置实现清单的取舍、量化方法与三条适用边界见 [03 部署模式与实现组装](03-deployment-modes.md) 的"实现注册表"节与约束 6。
+4. `authn` 不 import `pki`。图上没有 `authn --> pki` 这条边是刻意的：`authn` 在自己这边声明 `KeySource` 接口，由 `pki` 的服务结构化满足，宿主在装配时注入——与 `org`/`rbac` 之间那套无 import 接缝同一手法。`pki` 因此是**装配层面**的必需依赖（不注入则 `NewModule` 失败），不是编译层面的依赖。此外 `authn` 不得触及 `pki` 的 X.509 层：JWT 验签只要公钥和 kid，证书链对它没有价值，只会引入证书解析与链校验的攻击面。详见 [22 密钥与证书生命周期](22-pki.md)。
 
 ---
 
