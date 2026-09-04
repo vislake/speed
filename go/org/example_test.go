@@ -111,6 +111,27 @@ func Example() {
 		}
 	}
 
+	// A leaf node deletes cleanly -- and a delete is a mark-delete, not a
+	// physical DELETE: the row survives, hidden from ordinary reads, and
+	// Restore brings it back with its original data intact. This is the
+	// "oops, get it back" scenario mark-delete exists for; see
+	// go/org/AGENTS.md's "Soft deletion" section.
+	if delErr := tree.Delete(ctx, store.ID, false); delErr != nil {
+		fmt.Println("delete store:", delErr)
+		return
+	}
+	if _, getErr := tree.Get(ctx, store.ID); getErr != nil {
+		if appErr, ok := apperr.As(getErr); ok {
+			fmt.Println("get after delete:", appErr.Code)
+		}
+	}
+	restored, restoreErr := tree.Restore(ctx, store.ID)
+	if restoreErr != nil {
+		fmt.Println("restore store:", restoreErr)
+		return
+	}
+	fmt.Println("restored:", restored.Name)
+
 	// Output:
 	// subtree of the group:
 	//   depth 0  Acme Dental    (group)
@@ -120,6 +141,8 @@ func Example() {
 	//   Acme Dental
 	//   North Region
 	// delete without cascade: org.node_has_children
+	// get after delete: org.node_not_found
+	// restored: Store 7
 }
 
 // Example_membershipAndScope walks the flow a dental group actually goes

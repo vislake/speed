@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
@@ -62,6 +63,22 @@ func TestMembership_IsActive(t *testing.T) {
 				t.Errorf("Membership{Status: %q}.IsActive() = %t, want %t", tc.status, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestMembership_GetDeletedAt_ReturnsFieldValue is a no-database sanity
+// check, matching examples/reference-app/internal/notes' identical
+// precedent, that Membership's GetDeletedAt method returns exactly the
+// DeletedAt field it reads.
+func TestMembership_GetDeletedAt_ReturnsFieldValue(t *testing.T) {
+	if got := (Membership{}).GetDeletedAt(); got != nil {
+		t.Fatalf("GetDeletedAt() on a zero-valued Membership = %v, want nil", got)
+	}
+	now := time.Now()
+	m := Membership{DeletedAt: &now}
+	got := m.GetDeletedAt()
+	if got != &now {
+		t.Fatalf("GetDeletedAt() = %v, want %v", got, &now)
 	}
 }
 
@@ -429,10 +446,11 @@ func TestMemberService_NoTenantContext_EveryOperationFailsClosed(t *testing.T) {
 	ctx := context.Background()
 
 	operations := map[string]func() error{
-		"Get":    func() error { _, err := m.Members().Get(ctx, "u-1"); return err },
-		"Add":    func() error { _, err := m.Members().Add(ctx, "u-1", "n-1"); return err },
-		"List":   func() error { _, err := m.Members().List(ctx, "n-1"); return err },
-		"Remove": func() error { return m.Members().Remove(ctx, "u-1") },
+		"Get":     func() error { _, err := m.Members().Get(ctx, "u-1"); return err },
+		"Add":     func() error { _, err := m.Members().Add(ctx, "u-1", "n-1"); return err },
+		"List":    func() error { _, err := m.Members().List(ctx, "n-1"); return err },
+		"Remove":  func() error { return m.Members().Remove(ctx, "u-1") },
+		"Restore": func() error { _, err := m.Members().Restore(ctx, "m-1"); return err },
 	}
 	for name, op := range operations {
 		t.Run(name, func(t *testing.T) {
@@ -440,5 +458,157 @@ func TestMemberService_NoTenantContext_EveryOperationFailsClosed(t *testing.T) {
 				t.Errorf("%s without a tenant in context succeeded; it must fail closed", name)
 			}
 		})
+	}
+}
+
+// TestMemberService_Remove_ThenAdd_SameUser_Succeeds is the round's own proof
+// that uq_memberships_tenant_user's replacement by its WHERE deleted_at IS
+// NULL partial-index equivalent
+// (migrations/{sqlite,postgres}/0004_add_soft_delete.sql) actually frees a
+// removed member's seat for reuse. Against the pre-round full unique index
+// this Add would fail with ErrMembershipExists -- a real functional
+// regression the migration exists to avoid.
+func TestMemberService_Remove_ThenAdd_SameUser_Succeeds(t *testing.T) {
+	m, _ := newTestModule(t)
+	ctx := tenantCtx("tenant-a")
+	root, left, _ := seedTree(t, m.Tree(), ctx)
+
+	if _, err := m.Members().Add(ctx, "u-owner", root.ID); err != nil {
+		t.Fatalf("Add(owner): %v", err)
+	}
+	original, err := m.Members().Add(ctx, "u-returning", left.ID)
+	if err != nil {
+		t.Fatalf("Add(returning): %v", err)
+	}
+	if err = m.Members().Remove(ctx, "u-returning"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	readded, err := m.Members().Add(ctx, "u-returning", root.ID)
+	if err != nil {
+		t.Fatalf("Add after Remove of the same user: %v, want success", err)
+	}
+	if readded.ID == original.ID {
+		t.Fatal("Add returned the soft-deleted row instead of creating a new one")
+	}
+	if readded.NodeID != root.ID {
+		t.Errorf("re-added membership NodeID = %q, want %q (Add never re-binds an existing row -- this is a fresh one)",
+			readded.NodeID, root.ID)
+	}
+
+	// The seat is still exclusive among LIVE rows: a second Add for the same
+	// user is still refused, exactly as before this round.
+	if _, err := m.Members().Add(ctx, "u-returning", left.ID); !hasCode(err, ErrMembershipExists.Code) {
+		t.Errorf("second live Add error = %v, want org.membership_exists", err)
+	}
+}
+
+// TestMemberService_Restore_UnknownID_ReturnsMembershipNotFound covers the id
+// half of Restore's collapsed not-found signal.
+func TestMemberService_Restore_UnknownID_ReturnsMembershipNotFound(t *testing.T) {
+	m, _ := newTestModule(t)
+	ctx := tenantCtx("tenant-a")
+	seedTree(t, m.Tree(), ctx)
+
+	_, err := m.Members().Restore(ctx, "nope")
+	if !hasCode(err, ErrMembershipNotFound.Code) {
+		t.Errorf("Restore(unknown id) error = %v, want org.membership_not_found", err)
+	}
+}
+
+// TestMemberService_Restore_LiveMembership_ReturnsMembershipNotFound covers
+// the other half: a membership that was never removed has nothing for
+// Restore to undo.
+func TestMemberService_Restore_LiveMembership_ReturnsMembershipNotFound(t *testing.T) {
+	m, _ := newTestModule(t)
+	ctx := tenantCtx("tenant-a")
+	root, _, _ := seedTree(t, m.Tree(), ctx)
+	live, err := m.Members().Add(ctx, "u-owner", root.ID)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	_, err = m.Members().Restore(ctx, live.ID)
+	if !hasCode(err, ErrMembershipNotFound.Code) {
+		t.Errorf("Restore(live membership) error = %v, want org.membership_not_found", err)
+	}
+}
+
+// TestMemberService_Restore_RoundTrip proves the full lifecycle: Add,
+// Remove, Restore brings the exact same row back with its original data
+// intact and visible to ordinary reads again.
+func TestMemberService_Restore_RoundTrip(t *testing.T) {
+	m, host := newTestModule(t)
+	ctx := tenantCtx("tenant-a")
+	root, left, _ := seedTree(t, m.Tree(), ctx)
+
+	if _, err := m.Members().Add(ctx, "u-owner", root.ID); err != nil {
+		t.Fatalf("Add(owner): %v", err)
+	}
+	original, err := m.Members().Add(ctx, "u-leaving", left.ID)
+	if err != nil {
+		t.Fatalf("Add(leaving): %v", err)
+	}
+	if err = m.Members().Remove(ctx, "u-leaving"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err = m.Members().Get(ctx, "u-leaving"); !hasCode(err, ErrMembershipNotFound.Code) {
+		t.Fatalf("Get after Remove error = %v, want org.membership_not_found", err)
+	}
+
+	restored, err := m.Members().Restore(ctx, original.ID)
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if restored.ID != original.ID || restored.UserID != original.UserID || restored.NodeID != original.NodeID {
+		t.Errorf("Restore returned %+v, want the original row %+v", restored, original)
+	}
+
+	back, err := m.Members().Get(ctx, "u-leaving")
+	if err != nil {
+		t.Fatalf("Get after Restore: %v, want the membership visible again", err)
+	}
+	if back.ID != original.ID || back.NodeID != left.ID {
+		t.Errorf("Get after Restore = %+v, want the original membership at %q", back, left.ID)
+	}
+
+	restoredEvents := host.bus.events(EventMemberRestored)
+	if len(restoredEvents) != 1 {
+		t.Fatalf("published %d member-restored events, want 1", len(restoredEvents))
+	}
+	payload, ok := restoredEvents[0].Payload.(MemberRestored)
+	if !ok {
+		t.Fatalf("payload is %T, want org.MemberRestored", restoredEvents[0].Payload)
+	}
+	if payload.UserID != "u-leaving" || payload.MembershipID != original.ID || payload.NodeID != left.ID {
+		t.Errorf("payload = %+v, want the restored membership %q", payload, original.ID)
+	}
+	if restoredEvents[0].TenantID != "tenant-a" {
+		t.Errorf("event tenant = %q, want tenant-a", restoredEvents[0].TenantID)
+	}
+}
+
+// TestMemberService_Restore_Twice_SecondCallReturnsMembershipNotFound pins
+// that Restore's WHERE deleted_at IS NOT NULL check is what it is: a second
+// Restore of an already-restored row has nothing to undo.
+func TestMemberService_Restore_Twice_SecondCallReturnsMembershipNotFound(t *testing.T) {
+	m, _ := newTestModule(t)
+	ctx := tenantCtx("tenant-a")
+	root, _, _ := seedTree(t, m.Tree(), ctx)
+	if _, err := m.Members().Add(ctx, "u-owner", root.ID); err != nil {
+		t.Fatalf("Add(owner): %v", err)
+	}
+	original, err := m.Members().Add(ctx, "u-leaving", root.ID)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := m.Members().Remove(ctx, "u-leaving"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := m.Members().Restore(ctx, original.ID); err != nil {
+		t.Fatalf("first Restore: %v", err)
+	}
+	if _, err := m.Members().Restore(ctx, original.ID); !hasCode(err, ErrMembershipNotFound.Code) {
+		t.Errorf("second Restore error = %v, want org.membership_not_found", err)
 	}
 }

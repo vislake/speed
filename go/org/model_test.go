@@ -2,6 +2,7 @@ package org
 
 import (
 	"testing"
+	"time"
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
@@ -34,6 +35,23 @@ func TestOrgNode_GetTenantID_ReadsTheEmbeddedTenantModel(t *testing.T) {
 				t.Errorf("GetTenantID() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestOrgNode_GetDeletedAt_ReturnsFieldValue is a no-database sanity check,
+// matching examples/reference-app/internal/notes' identical precedent, that
+// OrgNode's GetDeletedAt method returns exactly the DeletedAt field it
+// reads -- the marker dbkit's capability check routes Repository[OrgNode].
+// Delete onto the mark-delete path with.
+func TestOrgNode_GetDeletedAt_ReturnsFieldValue(t *testing.T) {
+	if got := (OrgNode{}).GetDeletedAt(); got != nil {
+		t.Fatalf("GetDeletedAt() on a zero-valued OrgNode = %v, want nil", got)
+	}
+	now := time.Now()
+	n := OrgNode{DeletedAt: &now}
+	got := n.GetDeletedAt()
+	if got != &now {
+		t.Fatalf("GetDeletedAt() = %v, want %v", got, &now)
 	}
 }
 

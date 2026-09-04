@@ -109,7 +109,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 				t.Errorf("event %q is declared without a payload type or description", decl.Type)
 			}
 		}
-		assertContainsAll(t, types, []string{EventNodeCreated, EventNodeMoved, EventNodeDeleted})
+		assertContainsAll(t, types, []string{EventNodeCreated, EventNodeMoved, EventNodeDeleted, EventNodeRestored})
 	})
 
 	t.Run("routes", func(t *testing.T) {
@@ -347,7 +347,10 @@ func TestModule_Register_DeclaresTheMembershipSurface(t *testing.T) {
 	for _, decl := range reg.Events.Published() {
 		events[decl.Type] = true
 	}
-	for _, want := range []string{EventNodeCreated, EventNodeMoved, EventNodeDeleted, EventMemberInvited, EventMemberJoined, EventMemberRemoved} {
+	for _, want := range []string{
+		EventNodeCreated, EventNodeMoved, EventNodeDeleted, EventNodeRestored,
+		EventMemberInvited, EventMemberJoined, EventMemberRemoved, EventMemberRestored,
+	} {
 		if !events[want] {
 			t.Errorf("event %q was not declared", want)
 		}

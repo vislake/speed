@@ -518,6 +518,38 @@ func TestTreeService_PublishesNodeEvents(t *testing.T) {
 	}
 }
 
+// TestTreeService_PublishesNodeRestoredEvent closes the loop for the fourth
+// tree event this round adds: org.node.restored has a publisher, and it
+// carries the payload EventNodeRestored's own EventDecl names.
+func TestTreeService_PublishesNodeRestoredEvent(t *testing.T) {
+	m, host := newTestModule(t)
+	ctx := tenantCtx("tenant-a")
+	_, left, _ := seedTree(t, m.Tree(), ctx)
+
+	if err := m.Tree().Delete(ctx, left.ID, false); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	restoredNode, err := m.Tree().Restore(ctx, left.ID)
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+
+	restored := host.bus.events(EventNodeRestored)
+	if len(restored) != 1 {
+		t.Fatalf("published %d node-restored events, want 1", len(restored))
+	}
+	payload, ok := restored[0].Payload.(NodeRestored)
+	if !ok {
+		t.Fatalf("node-restored payload is %T, want org.NodeRestored", restored[0].Payload)
+	}
+	if payload.NodeID != left.ID || payload.Path != restoredNode.Path {
+		t.Errorf("node-restored payload = %+v, want node %q at %q", payload, left.ID, restoredNode.Path)
+	}
+	if restored[0].TenantID != "tenant-a" {
+		t.Errorf("event tenant = %q, want tenant-a", restored[0].TenantID)
+	}
+}
+
 // TestEventPayloads_CarryJSONTags pins the wire contract: a payload crossing
 // the distributed mode's Redis bus arrives at the subscriber as a map keyed
 // by these names, so the tags are public API rather than a serialization
@@ -528,9 +560,11 @@ func TestEventPayloads_CarryJSONTags(t *testing.T) {
 		NodeCreated{},
 		NodeMoved{},
 		NodeDeleted{},
+		NodeRestored{},
 		MemberInvited{},
 		MemberJoined{},
 		MemberRemoved{},
+		MemberRestored{},
 	}
 	for _, payload := range payloads {
 		typ := reflect.TypeOf(payload)

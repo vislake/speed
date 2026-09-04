@@ -711,6 +711,56 @@ func TestTreeService_Delete_WithCascade_RemovesTheWholeSubtree(t *testing.T) {
 	assertIDSet(t, remaining, []string{root.ID, south.ID})
 }
 
+// TestTreeService_Delete_WithCascade_MarksEveryLevelSoftDeletedAndRestorable
+// is the round's own proof for the cascade rewrite from a physical DELETE to
+// a mark-delete: a 3-level subtree (north -> store -> room) cascade-deleted
+// in one call leaves every one of the three levels invisible to Get (proven
+// above by TestTreeService_Delete_WithCascade_RemovesTheWholeSubtree already)
+// AND individually restorable, with its original data -- parent, path,
+// depth, name -- intact. "Restorable" is the property a real physical DELETE
+// could never have: this test would fail against the pre-round
+// implementation with dbkit.ErrRecordNotFound, since there would be no row
+// left for Restore to find.
+func TestTreeService_Delete_WithCascade_MarksEveryLevelSoftDeletedAndRestorable(t *testing.T) {
+	tree := newTestTree(t)
+	ctx := tenantCtx("tenant-a")
+
+	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
+	north := mustCreateChild(t, tree, ctx, root.ID, "North Region")
+	store := mustCreateChild(t, tree, ctx, north.ID, "Store 7")
+	room := mustCreateChild(t, tree, ctx, store.ID, "Room 1")
+
+	if err := tree.Delete(ctx, north.ID, true); err != nil {
+		t.Fatalf("Delete cascade: %v", err)
+	}
+	for _, id := range []string{north.ID, store.ID, room.ID} {
+		if _, err := tree.Get(ctx, id); err == nil {
+			t.Fatalf("node %q survived a cascading delete", id)
+		}
+	}
+
+	for _, want := range []*OrgNode{north, store, room} {
+		restored, err := tree.Restore(ctx, want.ID)
+		if err != nil {
+			t.Fatalf("Restore(%q): %v", want.Name, err)
+		}
+		if restored.ParentID != want.ParentID || restored.Path != want.Path ||
+			restored.Depth != want.Depth || restored.Name != want.Name {
+			t.Errorf("Restore(%q) = %+v, want the original parent/path/depth/name of %+v",
+				want.Name, restored, want)
+		}
+		// The row is visible to an ordinary Get again, exactly as if it had
+		// never been deleted.
+		got, err := tree.Get(ctx, want.ID)
+		if err != nil {
+			t.Fatalf("Get(%q) after Restore: %v", want.Name, err)
+		}
+		if got.Name != want.Name {
+			t.Errorf("Get(%q) after Restore = %+v, want the original row back", want.Name, got)
+		}
+	}
+}
+
 func TestTreeService_Delete_Root_ReturnsRootNotDeletable(t *testing.T) {
 	tree := newTestTree(t)
 	ctx := tenantCtx("tenant-a")
@@ -1122,5 +1172,107 @@ func TestTreeService_MaxDepth_IsPerServiceNotGlobal(t *testing.T) {
 	deep := NewTreeService(newTestDB(t))
 	if deep.maxDepth != maxDepth {
 		t.Errorf("a second service's maxDepth = %d, want the package default %d", deep.maxDepth, maxDepth)
+	}
+}
+
+// TestTreeService_Delete_ThenCreateChild_SameSiblingName_Succeeds is the
+// round's own proof that uq_org_nodes_sibling_name's replacement by its
+// WHERE deleted_at IS NULL partial-index equivalent
+// (migrations/{sqlite,postgres}/0004_add_soft_delete.sql) actually frees a
+// mark-deleted node's (parent_id, name) slot for reuse. Against the
+// pre-round full unique index this Create would fail with
+// ErrDuplicateSiblingName -- a real functional regression the migration
+// exists to avoid, per its own header comment and
+// docs/internal/04-data-and-tenancy.md's delete-semantics section.
+func TestTreeService_Delete_ThenCreateChild_SameSiblingName_Succeeds(t *testing.T) {
+	tree := newTestTree(t)
+	ctx := tenantCtx("tenant-a")
+
+	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
+	original := mustCreateChild(t, tree, ctx, root.ID, "North Region")
+
+	if err := tree.Delete(ctx, original.ID, false); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	recreated, err := tree.CreateChild(ctx, root.ID, "North Region", "region")
+	if err != nil {
+		t.Fatalf("CreateChild with a mark-deleted sibling's name: %v, want success", err)
+	}
+	if recreated.ID == original.ID {
+		t.Fatal("CreateChild returned the soft-deleted row instead of inserting a new one")
+	}
+
+	// The recreated node behaves like any other live node: it is readable,
+	// and it in turn blocks a THIRD node of the same name -- proving the
+	// index still enforces uniqueness among LIVE rows, it only stopped
+	// counting the mark-deleted one.
+	if _, err = tree.Get(ctx, recreated.ID); err != nil {
+		t.Errorf("Get(recreated): %v", err)
+	}
+	_, err = tree.CreateChild(ctx, root.ID, "North Region", "region")
+	if !hasCode(err, ErrDuplicateSiblingName.Code) {
+		t.Errorf("a second live sibling with the same name error = %v, want org.duplicate_sibling_name", err)
+	}
+}
+
+// TestTreeService_Restore_UnknownID_ReturnsNodeNotFound covers the id half of
+// Restore's collapsed not-found signal: an id nothing ever created.
+func TestTreeService_Restore_UnknownID_ReturnsNodeNotFound(t *testing.T) {
+	tree := newTestTree(t)
+	ctx := tenantCtx("tenant-a")
+	mustCreateRoot(t, tree, ctx, "Acme Dental")
+
+	_, err := tree.Restore(ctx, "nope")
+	if !hasCode(err, ErrNodeNotFound.Code) {
+		t.Errorf("Restore(unknown id) error = %v, want org.node_not_found", err)
+	}
+}
+
+// TestTreeService_Restore_LiveNode_ReturnsNodeNotFound covers the other half:
+// an id that exists but was never deleted has nothing for Restore to undo,
+// and Restore does not silently treat that as a no-op success.
+func TestTreeService_Restore_LiveNode_ReturnsNodeNotFound(t *testing.T) {
+	tree := newTestTree(t)
+	ctx := tenantCtx("tenant-a")
+	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
+
+	_, err := tree.Restore(ctx, root.ID)
+	if !hasCode(err, ErrNodeNotFound.Code) {
+		t.Errorf("Restore(live node) error = %v, want org.node_not_found", err)
+	}
+}
+
+// TestTreeService_Restore_IsNotCascading pins the round's design decision
+// (go/org/AGENTS.md's "Soft deletion" section): restoring an ancestor never
+// resurrects its cascade-deleted descendants. The caller restores each node
+// explicitly by id.
+func TestTreeService_Restore_IsNotCascading(t *testing.T) {
+	tree := newTestTree(t)
+	ctx := tenantCtx("tenant-a")
+
+	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
+	north := mustCreateChild(t, tree, ctx, root.ID, "North Region")
+	store := mustCreateChild(t, tree, ctx, north.ID, "Store 7")
+
+	if err := tree.Delete(ctx, north.ID, true); err != nil {
+		t.Fatalf("Delete cascade: %v", err)
+	}
+
+	if _, err := tree.Restore(ctx, north.ID); err != nil {
+		t.Fatalf("Restore(north): %v", err)
+	}
+	if _, err := tree.Get(ctx, north.ID); err != nil {
+		t.Errorf("Get(north) after its own Restore: %v", err)
+	}
+	// store was cascade-deleted alongside north, but restoring north must not
+	// have restored it too.
+	if _, err := tree.Get(ctx, store.ID); err == nil {
+		t.Error("Restore(north) also resurrected store; restore must be per-node, not cascading")
+	}
+	// store is independently restorable, exactly as the design decision
+	// documents.
+	if _, err := tree.Restore(ctx, store.ID); err != nil {
+		t.Errorf("Restore(store) after Restore(north): %v, want success", err)
 	}
 }
