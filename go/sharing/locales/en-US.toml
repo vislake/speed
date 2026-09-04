@@ -1,0 +1,22 @@
+# sharing's message bundle, American English.
+#
+# One flat top-level entry per error code go/sharing/errors.go declares; the
+# id is the whole quoted code. zh-CN.toml must carry exactly the same id
+# set.
+#
+# Interpolated names are the error's own apperr parameter keys, verbatim and
+# snake_case: the message is rendered from the structured parameters the API
+# returned, so a mismatch between the two would render an empty slot rather
+# than a value.
+
+"sharing.resource_ref_required" = "A share must name the resource it exposes."
+
+"sharing.expiry_required" = "A share link must have an expiry; links that never expire are not allowed."
+
+"sharing.invalid_max_views" = "The view limit {{.max_views}} is not valid; it must be a positive number."
+
+"sharing.not_accessible" = "This share link is not accessible."
+
+"sharing.share_not_found" = "That share does not exist."
+
+"sharing.internal_error" = "Something went wrong. Please try again."
