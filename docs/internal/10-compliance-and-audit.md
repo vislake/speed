@@ -2,7 +2,7 @@
 
 > 范围已明确：提供通用合规能力（同时满足 GDPR、国内个保法与医疗类项目的基础要求），不做 HIPAA 认证。
 >
-> **注意交付分期**：本文档描述的能力不全在 `compliance` 模块、也不全在同一个阶段交付。**加密与脱敏的机制在 `dbkit`（M0）**，**标记删除（软删除）与彻底删除（硬删除）的机制同样在 `dbkit`**——机制两半都已落地为代码：软删除轮次落地 `SoftDeletable` 标记接口与 `Repository[T].Restore`，硬删除轮次（2026-09-03）落地系统上下文门禁的 `Repository[T].HardDelete`（普通租户上下文在触碰数据库前即被拒绝、门禁通过后租户仍绑定不越界、跨租户不可擦除性质连 RLS 集成测试一并钉死），设计出处与语义细节见 [04 数据层与多租户隔离](04-data-and-tenancy.md) 的"删除语义"一节，残余风险见 [17 风险登记](17-risks.md)——**审计采集在 M1**，`compliance` 模块（M4）承担的是治理层——保留策略（含标记删除的保留窗口配置，以及窗口到期后调用 `HardDelete` 的清理编排）、归档、检索报表、被遗忘权（触发 `HardDelete`）、数据可携带。这样安排是因为数据保护必须早于数据产生，详见 [15 里程碑](15-roadmap.md)。
+> **注意交付分期**：本文档描述的能力不全在 `compliance` 模块、也不全在同一个阶段交付。**加密与脱敏的机制在 `dbkit`（M0）**，**标记删除（软删除）与彻底删除（硬删除）的机制同样在 `dbkit`**——机制两半都已落地为代码：软删除轮次落地 `SoftDeletable` 标记接口与 `Repository[T].Restore`，硬删除轮次（2026-09-03）落地系统上下文门禁的 `Repository[T].HardDelete`（普通租户上下文在触碰数据库前即被拒绝、门禁通过后租户仍绑定不越界、跨租户不可擦除性质连 RLS 集成测试一并钉死），设计出处与语义细节见 [04 数据层与多租户隔离](04-data-and-tenancy.md) 的"删除语义"一节，残余风险见 [17 风险登记](17-risks.md)——**审计采集在 M1**。`compliance` 模块承担的治理层**已经落地（round 1 + round 2）而非仍在 M4 排期**：`RetentionService`（保留策略——含标记删除的保留窗口配置，按租户可覆盖，以及窗口到期后调用 `HardDelete` 的清理编排，`jobs` 定时任务驱动）、`ErasureService`（被遗忘权，跳过保留窗口按主体立即触发 `HardDelete`）、`ExportService`（数据导出的收集、落盘，并在 round 2 经 `go/sharing` 投递一个限次、短期的分享链接给主体）、`AuditQuery`（按操作者/资源/动作/时间范围/结果的只读检索，单租户与跨租户两条路径）均为真实、经测试的代码；真正仍未落地、留给后续轮次的，是 `go/compliance/AGENTS.md`"Known limitations"记录的那几项——数据库角色/触发器层面的仅追加强制、可选哈希链、按分区归档、格式化（CSV/JSON）报表导出，以及 compliance 自己的 HTTP 面。这样安排是因为数据保护必须早于数据产生，详见 [15 里程碑](15-roadmap.md)。
 
 ## 数据治理能力
 
@@ -22,7 +22,7 @@
 
 ## 操作审计：记录用户与管理员的所有操作
 
-> **实现状态注记（2026-09-03，M1 审计基础设施轮）**：本节描述的采集与落库机制已实现，落在 `go/dbkit/audit`（模型、双方言迁移、`Repository`、`Emit`）与 `go/dbkit` 根包（`audit_capture.go` 的自动写捕获插件），而不是 `compliance` 模块——与本文档顶部"注意交付分期"一致。`examples/reference-app` 作为首个消费方：notes 模块在创建笔记后显式调用 `audit.Emit` 落一条 `notes.note.create` 审计记录，`cmd/server/server_test.go` 的端到端测试真实发起 HTTP 请求后经第二条数据库连接读回该记录。自动捕获机制（`Options.AuditBus`）实现已具备，但接入 reference-app 时发现一个真实的时机限制：当审计落库方与被审计写入共用同一个 SQLite 文件、且落库发生在同一个 goroutine 的同一次 GORM 回调链中（写事务尚未提交）时会发生 `SQLITE_BUSY` 死锁——SQLite 单文件同一时刻只允许一个写者。详见 `go/dbkit/AGENTS.md`"Audit trail collection"一节的 Known limitation；本节所写的"采集经事件总线异步落库，不阻塞主流程"仍是设计目标，但当前自动捕获机制在"落库方与被审计写入共享同一连接/文件"这一具体场景下尚未满足这条约束，留待后续轮次修复（大概率是把插件的发布动作推迟到外层事务真正提交之后）。查询与留存、导出报告、哈希链、按分区归档等能力仍未实现，保持 M4（`compliance`）范围不变。
+> **实现状态注记（2026-09-03，M1 审计基础设施轮）**：本节描述的采集与落库机制已实现，落在 `go/dbkit/audit`（模型、双方言迁移、`Repository`、`Emit`）与 `go/dbkit` 根包（`audit_capture.go` 的自动写捕获插件），而不是 `compliance` 模块——与本文档顶部"注意交付分期"一致。`examples/reference-app` 作为首个消费方：notes 模块在创建笔记后显式调用 `audit.Emit` 落一条 `notes.note.create` 审计记录，`cmd/server/server_test.go` 的端到端测试真实发起 HTTP 请求后经第二条数据库连接读回该记录。自动捕获机制（`Options.AuditBus`）实现已具备，但接入 reference-app 时发现一个真实的时机限制：当审计落库方与被审计写入共用同一个 SQLite 文件、且落库发生在同一个 goroutine 的同一次 GORM 回调链中（写事务尚未提交）时会发生 `SQLITE_BUSY` 死锁——SQLite 单文件同一时刻只允许一个写者。详见 `go/dbkit/AGENTS.md`"Audit trail collection"一节的 Known limitation；本节所写的"采集经事件总线异步落库，不阻塞主流程"仍是设计目标，但当前自动捕获机制在"落库方与被审计写入共享同一连接/文件"这一具体场景下尚未满足这条约束，留待后续轮次修复（大概率是把插件的发布动作推迟到外层事务真正提交之后）。**查询、导出编排本身已经落地，不再是 M4 范围**：`compliance.AuditQuery`（`Query`/`QueryAcrossTenants`/`Get`，round 1）与 `compliance.ExportService`（收集/落盘 round 1，经 `go/sharing` 投递 round 2）都是真实代码——`go/admin` 的 D7 是 `AuditQuery` 的真实第二消费者（`admin.AuditService`，见下"查询与留存"一节）。真正仍未实现、保持后续轮次范围的是：格式化（CSV/JSON）的下载报表生成、哈希链、按分区归档，以及数据库角色/触发器层面的仅追加强制。
 
 **先划清边界**（与 [09 可观测性](09-observability.md) 的运维日志是两回事，不能互相替代）：审计日志是**业务合规资产**——长期保留、结构化可检索、可作为追责证据、租户自己也要能看；运维日志是排障用的，短期留存、面向工程师。用 Loki 存审计日志是错的，反之亦然。
 
@@ -56,7 +56,7 @@ type AuditEvent struct {
 - 可选**哈希链**：每条记录包含前一条的哈希，任何篡改都会断链，提供校验工具。默认关闭（有写入成本），对合规要求高的项目开启。
 
 **查询与留存**
-- 按操作者 / 资源 / 动作 / 时间范围 / 结果检索；租户管理员只能看本租户，平台管理员可跨租户。
-- 审计量大，按时间分区 + 冷热分离；保留期可配置（默认 1 年），过期归档到对象存储而非直接删除。
-- 支持导出审计报告（CSV/JSON），走 `jobs` 异步生成 + `sharing` 下发。
+- 按操作者 / 资源 / 动作 / 时间范围 / 结果检索；租户管理员只能看本租户，平台管理员可跨租户——这条检索能力（`compliance.AuditQuery.Query`/`QueryAcrossTenants`/`Get`）已经落地。**`go/admin` 是它的真实第二消费者**：D7 的 `admin.AuditService` 是一层薄 HTTP 外壳（`GET /api/v1/admin/audit-events`），单租户走 `Query`、跨租户走 `QueryAcrossTenants`，本身不做任何过滤/存储逻辑，只把请求参数翻译成 `compliance.QueryFilter`。`go/admin` 的模拟登录（D5）同时是本文档"模拟登录期间双重身份"这条设计的第一个真实落地者：`admin.ImpersonationService.Start`/`End` 显式调用 `pkgcore.WithActor(target)` + `pkgcore.WithOnBehalfOf(admin)` 后再 `audit.Emit`，产出的正是"`Actor`=被模拟用户、`OnBehalfOf`=真实管理员"的双身份记录。
+- 审计量大，按时间分区 + 冷热分离；保留期可配置（默认 1 年），过期归档到对象存储而非直接删除——**这一条仍未落地**，`AuditQuery` 今天是应用层按 `ListByTenant` 全量取回再过滤，没有分区与冷热分离。
+- 支持导出审计报告（CSV/JSON），走 `jobs` 异步生成 + `sharing` 下发——**导出的收集与投递机制已经落地**（`compliance.ExportService`，round 1 收集落盘、round 2 经 `go/sharing` 投递一个限次短期分享链接），但那是"导出全部个人数据"的数据可携带路径；本条特指的、面向审计检索结果的**格式化 CSV/JSON 报表生成仍未实现**，`go/admin` 的 D7 也明确记录自己这一轮只做只读检索、不含导出腿。
 

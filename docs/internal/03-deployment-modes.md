@@ -49,6 +49,7 @@
 | `MultiReplicaSafe` | 多个副本共享同一份状态 | 进程内 channel 总线：每个副本各发各的；内存 `KVStore`：配额各算各的；本地目录 `ObjectStore`：每个副本一块私有盘 |
 | `SurvivesRestart` | 进程重启后数据仍在 | 内存 `KVStore`、进程内事件总线、临时目录 `ObjectStore` |
 | `Stateless` | 实现不承载任何跨调用状态——进程死亡不损失数据，横幅警告（约束 5）对它是空洞的 | 内存 `KVStore`：它持有键值状态，只是不跨重启；Redis 总线：状态在服务端，声明的是 `SurvivesRestart` |
+| `KeyNeverLeavesBoundary` | 该实现保护的私钥从不以明文形式存在于本进程内存 | `go/pki` 的 `LocalSigner`：签名时把私钥解密进本进程内存；同一套 KMS/Vault 实现在信封模式下（真实密钥在外部加密、本地解密后签名）同样不满足，只有直签模式（密钥在外部服务内生成且从不离开）才满足 |
 
 部署模式声明所需能力：
 
@@ -59,7 +60,7 @@
 
 **校验失败即启动失败**，错误信息点名"哪个 seam 的哪套实现不满足哪条能力"。这取代了早期按模式硬编码的那批错误（`ErrMissingDistributedEventBus` 之类）——在 N 套实现下，"缺少分布式实现"这个说法本身就不成立。
 
-能力表是可扩展的，而且这个扩展点已经实践过——`Stateless` 位（见上表）是改造落地后追加的第三位：横幅警告（约束 5）对 `mailer.console` 这类无状态实现是空洞的，于是加一个「无状态」位来豁免，警告只对有状态却不持久的实现打出。将来若需要区分投递顺序保证、消费者组语义等维度，照旧是往表里加行，不是加开关。
+能力表是可扩展的，而且这个扩展点已经实践过两次——`Stateless` 位（见上表）是改造落地后追加的第三位：横幅警告（约束 5）对 `mailer.console` 这类无状态实现是空洞的，于是加一个「无状态」位来豁免，警告只对有状态却不持久的实现打出。第四位 `KeyNeverLeavesBoundary`（见上表）是 `go/pki` 轮次追加的，形状不太一样：它不描述四个内置 seam 中任何一个的状态，而是由 `go/pki` 自己的 `Signer` 实现通过同一套 `pkgcore.SeamRegistry[Signer]` 机制声明；`Kernel.Bootstrap` 今天也**不**对它做任何校验——`resolveKernelSeam`/`validateSeamCapability` 只认 `EventBus`/`KVStore`/`Mailer`/`ObjectStore` 这四个固定内置 seam，`pki.Module.WithSigner` 没有能力位要求参数，`SignerRegistry.Build` 只是把注册时声明的能力位原样交还，从不比对——所以一个宿主如果误装了一个不满足这个位的 `Signer` 到本该要求它的场景，今天不会报错（详见 `go/pki/AGENTS.md` 的 Known limitations）。将来若需要区分投递顺序保证、消费者组语义等维度，照旧是往表里加行，不是加开关。
 
 ## 组装的表达：preset 与逐项覆盖
 

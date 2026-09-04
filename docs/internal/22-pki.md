@@ -190,7 +190,7 @@ pki.NewModule(db, pki.WithSigner("kms.aws", cfg))
 
 ## 数据模型
 
-四张表，分属两个数据域（数据域定义见 [04 数据层与多租户](04-data-and-tenancy.md)）。**一张表不得混装两个数据域**——`TenantScoped` 是接口，要么实现要么不实现，这正是诊断对象把平台 CA 与租户证书塞进同一张表所犯的错。
+五张表，分属两个数据域（数据域定义见 [04 数据层与多租户](04-data-and-tenancy.md)）。**一张表不得混装两个数据域**——`TenantScoped` 是接口，要么实现要么不实现，这正是诊断对象把平台 CA 与租户证书塞进同一张表所犯的错。（`pki_signing_keys`/`pki_authorities`/`pki_certificates`/`pki_local_keys` 四张是轮 1 落地的；第五张 `pki_certificate_revocations` 是轮 3 随吊销机制新增的，见下文。）
 
 ### `pki_signing_keys` — 平台数据
 
@@ -209,7 +209,7 @@ pki.NewModule(db, pki.WithSigner("kms.aws", cfg))
 
 ### `pki_authorities` — 平台数据
 
-CA 链。`type` 为 `root` / `intermediate`，`parent_id` 指向签发者，同样只存 `signer_name` + `key_ref`，无私钥列。其余为 `subject` / `serial` / `certificate_pem` / `status` / 有效期与吊销字段。
+CA 链。`type` 为 `root` / `intermediate`，`parent_id` 指向签发者，同样只存 `signer_name` + `key_ref`，无私钥列。其余为 `subject` / `serial` / `certificate_pem` / `status` / 有效期与吊销字段。**轮 3** 为 CRL 生成新增五列：`crl_distribution_point`（本机构 CRL 的分发点 URL，CA 创建时确定，签发的每张证书都嵌入这个值）、`crl_number`（RFC 5280 §5.2.3 的 CRL 序号，每次 `CAService.GenerateCRL` 单调递增）、`crl_pem` / `crl_issued_at` / `crl_next_update`（最近一次生成的 CRL 本体与时间戳，使读取是取缓存文档而非每次现算）。
 
 ### `pki_certificates` — 租户数据
 
@@ -222,6 +222,10 @@ CA 链。`type` 为 `root` / `intermediate`，`parent_id` 指向签发者，同�
 | `key_delivered` | 私钥是否已交付消费方。为真时平台侧不再持有私钥，吊销是唯一的收回手段 |
 
 `key_delivered` 这一列记录了一个重要事实：某些场景下私钥**必须**离开平台（诊断对象就要把私钥打进 JWKS 下发给数据面集群）。这类密钥的 KMS 保护没有意义，真正的改善手段是**缩短有效期加上能轮转**，而不是加密强度。
+
+### `pki_certificate_revocations` — 平台数据（轮 3 新增）
+
+去规范化的、只追加的吊销台账：`CAService.RevokeCertificate` 每次调用落一行，让 `CAService.GenerateCRL` 能枚举一个 CA 吊销过的全部证书，而不必对租户数据表 `pki_certificates` 发起跨租户读取。列为 `id` / `certificate_id` / `authority_id` / `serial` / `tenant_id`（真实存在但不做隔离强制的信息列，与 `go/notification` 的 `send_records`/`platform_blacklist`、`go/dbkit/audit` 的 `AuditEvent` 同一处理）/ `revoked_at` / `revocation_reason` / `created_at`，`tenancytest.AssertNotTenantScoped` 覆盖。
 
 ### `pki_local_keys` — 平台数据
 
@@ -283,14 +287,16 @@ err := keySource.EnsurePurpose(ctx, "authn.access_token", "ed25519", cfg.ttl)
 
 ## 轮转：模块管状态机，宿主管下发
 
-`jobs` 上的周期任务扫描 `not_after` 将至的密钥与证书，按 purpose 声明的策略提前续期，推进状态机，并在每个转换点发布事件。
+> **实现状态注记**：本节最初把到期驱动的生命周期描述成密钥和证书/CA 共用的一套机制，但真实落地的 `lifecycle.go`（`Service.ScanExpiry`，由 `PromoteDuePending`/`RetireDueRetiring`/`StageDueRotations` 三步组成）**只操作 `pki_signing_keys` 一张表**——签名密钥这一层。证书与 CA（X.509 层）的生命周期推进目前**只有吊销**这一条路径（见下"吊销"一节），没有到期驱动的续期/轮转扫描，也没有 `pki.certificate.renewed`/`pki.certificate.expiring`/`pki.authority.expiring` 这几个事件——`go/pki/events.go` 真实声明的事件只有 `pki.signing_key.staged`/`.activated`/`.retired`/`.revoked` 与 `pki.certificate.revoked` 五个，下文出现的 `pki.certificate.renewed` 是本节写作时设想、从未落地的事件名。是否要给 X.509 层补一条到期驱动路径是尚未排期的未来工作。
+
+`jobs` 上的周期任务扫描签名密钥 `not_after` 将至的记录，按 purpose 声明的策略提前续期，推进密钥状态机，并在每个转换点发布事件。
 
 **边界必须明确：本模块不做证书下发。** speed 是库，不知道消费者的下发目标——诊断对象的目标是 K8s Secret 加数据面集群重载，另一个消费者可能完全不同。因此：
 
 ```
-jobs 扫描到期
-  -> 生成新密钥/证书 (进入 pending 状态)
-  -> 发事件 pki.signing_key.staged / pki.certificate.renewed
+jobs 扫描到期(仅签名密钥)
+  -> 生成新密钥 (进入 pending 状态)
+  -> 发事件 pki.signing_key.staged
   -> [宿主订阅事件] 自行完成下发
   -> 传播窗口届满 -> active -> 旧的转 retiring
 ```
@@ -299,7 +305,7 @@ jobs 扫描到期
 
 这个划分意味着诊断对象最痛的那部分（下发回路）仍需自己实现。这是对的：通用的是状态机、重叠期、扫描、密钥保护与审计，下发本就属于宿主。
 
-到期未能续期时发布 `pki.certificate.expiring` 事件供 `notification` 订阅告警。**本模块不依赖 `notification`**——业务模块发事件、`notification` 订阅，这是既有范式。
+证书与 CA 的生命周期目前止步于"吊销"（见下一节）——没有到期扫描，也没有到期未续期时的告警事件；证书/CA 的到期监控与提前续期仍是留白，不是已经存在但本文档懒得写的细节。
 
 ## 吊销
 
@@ -430,9 +436,9 @@ type KeySource interface {
 
 **权限**（`rbac`）：`pki:read` / `pki:issue` / `pki:revoke` / `pki:rotate`。
 
-**审计动作**：`pki.authority.create` / `pki.key.rotate` / `pki.key.revoke` / `pki.certificate.issue` / `pki.certificate.revoke` / `pki.private_key.deliver`。最后一项对应 `key_delivered` 的场景，是必须留痕的高危操作。
+**审计动作**：真实声明并落地的只有四个——`pki.authority.create` / `pki.certificate.issue` / `pki.key.revoke` / `pki.certificate.revoke`。`pki.key.rotate` 与 `pki.private_key.deliver` 是**刻意永久不声明**，不是尚未补齐的待办：`go/pki/module.go` 自己的注释说明轮转是系统驱动的后台过程，没有审计模型 Actor/Resource 要回答的那种单一"谁做的"人类操作者（`Service.PromoteNow` 这个手动触发接口也只是操作者覆盖一个既有的系统过程，不是新增了一种需要审计的动作类型）；密钥/私钥下发则完全在本轮范围之外——`key_delivered` 这个交付场景本身还没有实现，谈不上要不要审计它。
 
-**事件**：`pki.signing_key.staged` / `.activated` / `.retired` / `.revoked`，`pki.certificate.issued` / `.renewed` / `.revoked` / `.expiring`，`pki.authority.expiring`。事件名一律用过去式，与仓库既有惯例一致（`authn.session.revoked` 是事件，`authn.session.revoke` 是审计动作）——这也是没有 `.pending` / `.retiring` 这两个事件的原因：它们是状态名而非已发生的事，进入 `retiring` 由 `.activated` 同时表达（新密钥启用即旧密钥转入重叠期）。
+**事件**：真实声明的是 `pki.signing_key.staged` / `.activated` / `.retired` / `.revoked`（密钥生命周期层）与 `pki.certificate.revoked`（X.509 层，轮 3 新增），共五个。`pki.certificate.issued` / `.renewed` / `.expiring` 与 `pki.authority.expiring` **不存在于代码中**——证书/CA 层目前只有吊销这一条生命周期路径（见"轮转"一节的实现状态注记），到期驱动的续期/告警从未落地，这几个事件名是设计阶段的占位，尚未排期。事件名一律用过去式，与仓库既有惯例一致（`authn.session.revoked` 是事件，`authn.session.revoke` 是审计动作）——这也是没有 `.pending` / `.retiring` 这两个事件的原因：它们是状态名而非已发生的事，进入 `retiring` 由 `.activated` 同时表达（新密钥启用即旧密钥转入重叠期）。
 
 **任务处理器**（`jobs`）：到期扫描、状态推进、CRL 重新生成。
 

@@ -61,6 +61,11 @@ type Authorizer interface {
 - **密码存储用 argon2id**（不用 bcrypt：argon2id 是当前 OWASP 首选，抗 GPU 破解更强），参数随硬件可配；密码策略走动态配置（最小长度、复杂度、常见弱口令字典校验），默认值遵循 NIST 建议——长度优先于强制符号组合。
 - **前后端契约**：`rbac` 必须提供 `ListPermissions(ctx, subject) []string`，在 `/me` 接口返回**扁平化有效权限列表**。前端不重新实现策略引擎，`usePermission` 只做集合查找。切换租户时重新拉取 `/me` 获得新权限集。
 
+**实现状态注记**：
+
+- **跨租户用户检索 `authn.Service.SearchUsers`（安全敏感，无内部鉴权）**——为配合 `go/admin` D6 落地的纯新增方法：按邮箱/手机号盲索引精确匹配，或按 `DisplayName` 做大小写不敏感的前缀匹配，无 tenant 概念（`users` 本就是身份数据）。它不做任何内部权限判定——`authn` 从不 import `rbac`——调用方（`go/admin` 的 HTTP handler）必须自己在到达这个方法之前完成 `admin:search_users` 权限判定；缺三个查询条件时返回 `authn.search_criteria_required`（`ErrSearchCriteriaRequired`），从不默默返回全平台用户。详见 `go/authn/AGENTS.md` 的"Platform search"一节。
+- **`rbac.RoleBinding` 的标记删除与 `RestoreRole`**：`RevokeRole` 已经从物理 `DELETE` 换成标记删除（`RoleBinding` 实现 `dbkit.SoftDeletable`），`Service.RestoreRole(ctx, sub, role, scope)` 撤销一次匹配的 `RevokeRole`；同一 `(tenant, user, role, node)` 元组的唯一索引已改写成局部索引（`WHERE deleted_at IS NULL`），使撤销后立刻用同一范围重新授权不再被占位挡住。一处刻意的安全决策与 `org` 的"死父节点拒绝恢复"相反：**`RestoreRole` 允许恢复一个所指节点已经不存在的绑定**——`RoleBinding` 是叶子行而非结构，`DataScope` 本来就把"解析不出节点"的绑定当作"这条授权对范围没有贡献"处理（拒绝该行的可见范围，绝不放宽到整租户），恢复一个悬空引用不过是复现了这个模块一直能安全处理的既有状态，不是新增的失败模式。详见 `go/rbac/AGENTS.md` 的"Soft deletion"一节。
+
 ## 第三方账号登录与注册
 
 **先区分两个容易混淆的能力**——它们的配置层级、目标用户、接入方式都不同：

@@ -68,7 +68,7 @@ type Object struct {
 
 ```go
 type Share struct {
-    Token       string     // 高熵随机串，不可枚举（≥128 bit）
+    TokenHash   string     // 高熵随机串（≥128 bit）的哈希，从不存明文（见下方实现状态注记）
     ResourceRef string     // 资源引用，不暴露内部 ID
     ExpiresAt   *time.Time // 可选过期时间
     MaxViews    *int       // 可选访问次数上限
@@ -87,6 +87,8 @@ type Share struct {
 6. **敏感资源的分享需要二次确认**：涉及个人敏感信息的资源，创建分享链接本身是一条审计事件（见 [10 合规与审计](10-compliance-and-audit.md)）。
 
 **与其他模块的关系**：分享的资源内容通过 `storage` 取得；访问统计经事件总线流入 `compliance` 审计；到期清理走 `jobs` 定时任务。
+
+**实现状态**：本节是目标设计；`go/sharing` 已作为独立模块轮落地（round 1、round 2 均已进入本历史），reference-app 端到端接入是第一个消费者（`examples/reference-app/cmd/server/sharing_flow_test.go`）。round 1 落地了 `Share` 领域模型与访问日志、创建/访问/撤销的 `Service`、`jobs` 驱动的到期清理，以及模块的 `pkgcore.Module` 接线；round 2 补齐了未认证访问者的租户解析（`Service.AccessPublic`）、模块唯一的公开 HTTP 路由、把 `ResourceRef` 解析成真实字节的 `ResourceResolver` seam，以及 `Create`/`AccessPublic` 两处的 `go/ratelimit` 限流。逐项差异与已知限制以 `go/sharing/AGENTS.md` 为准——例如本节"令牌模型"代码示例里的明文 `Token` 字段，真实模型上只有 `TokenHash`（见该文件已自行记录的偏差）。
 
 ## 通知系统（notification）：站内信 + 按类型选渠道
 
@@ -209,7 +211,7 @@ type APIKey struct {
 - 租户可自助创建 API Key（前缀可识别 + 仅创建时明文展示一次 + 存哈希）、按 Key 设置权限范围（复用 RBAC 的 permission 集合）与到期时间、支持轮换与吊销。
 - **Key 归属租户，不归属个人**：创建者只是记录在案的责任人，成员离职删除账号时 Key 不会随之失效——集成会因为某人离职而中断是不可接受的。但离职流程必须提醒接管，且 Key 列表显示"创建者已离职"标记。
 - **Key 的权限是创建者权限的子集且不随之变化**：创建时从创建者当前权限中选取，之后创建者权限变化不影响已发出的 Key（否则权限会在无人察觉时悄悄扩大或失效）。需要变更只能重新签发。
-- 强制**到期时间上限**（默认 1 年），到期前通过通知提醒轮换；长期不过期的 Key 是最常见的凭证泄漏面。
+- 强制**到期时间上限**（默认 1 年）；长期不过期的 Key 是最常见的凭证泄漏面。**"到期前通过通知提醒轮换"仍是尚未实现的设计目标**——当前 `go/integration` 没有任何到期扫描/提醒任务，`go/integration/AGENTS.md` 明确记录这是延期项（`idx_integration_api_keys_tenant_expires_at` 索引已经建好，但本轮没有任何代码消费它）。
 - **限流三层，基于 `go/ratelimit`**：全局、租户级、Key 级三层，分别对应一次 `go/ratelimit.Allow(ctx, key, limit)`（单 key 判定）调用，由 `integration` 自行组合三层、任意一层拒绝即整体拒绝——多维度组合是调用方职责，不是共享原语内置的能力；滑动窗口算法本身与 `KVStore` 契约细节见 [11 横切能力](11-cross-cutting.md) 的"限流"一节，不在此重复。
 - **HTTP 语义翻译是 `integration` 自己的职责**：`go/ratelimit` 返回的 `Decision` 是协议无关的纯数据，由 `integration` 的 handler 层负责把被拒绝的 `Decision` 翻译成 `429` 响应，带 `Retry-After` 与配额响应头。
 - API 调用同样接入 `metering`，可作为计费维度。
@@ -218,5 +220,8 @@ type APIKey struct {
 - 租户可订阅事件类型并配置接收地址。事件源来自领域事件总线，业务模块无需额外写代码。
 - **但内部领域事件不能直接外发**：内部事件带着内部字段结构，一旦外发就成了事实上的公开 API，此后任何内部重构都会破坏客户的接收端。必须有一层**内部事件 → 公开事件 schema 的显式映射**，只暴露刻意选择的字段。
 - **公开事件独立版本化**：负载 schema 用 `event.type` + `event.version` 标识（如 `billing.subscription.created` / `v1`），schema 定义随版本发布（见 [21 API 契约](21-api-contract.md) 的覆盖范围说明）。破坏性变更走新版本号并保留旧版本一段时间，而不是原地改。
-- 必备：**HMAC 签名 + 时间戳**（接收方可验真、防重放）、指数退避重试（走 `jobs`）、死信与手动重投、投递日志、**出站地址 SSRF 防护**（禁止内网地址段，这是外发 Webhook 最常见的安全漏洞）。
+- 必备：**HMAC 签名 + 时间戳**（接收方可验真、防重放）、指数退避重试（走 `jobs`）、死信、投递日志、**出站地址 SSRF 防护**（禁止内网地址段，这是外发 Webhook 最常见的安全漏洞）。
+- **手动重投尚未实现，属延期项，不在必备清单内**：死信（`DeliveryStatusDeadLetter`）本身已落地，但没有任何接口把一条已死信的投递重新入队——`go/integration/AGENTS.md` 明确把它列为后续轮次的工作，同时说明这条路径需要的字段（`Payload`、`SubscriptionID`、`EventType`/`EventVersion`）已经都在行上，后续实现不需要新迁移。
+
+**实现状态**：本节是目标设计；`go/integration` 已作为独立模块轮落地至 round 3（round 1：API Key 签发/列表/轮换/吊销 + 三层限流与 429 翻译；round 2：外发 Webhook 全链路——租户订阅、内部→公开事件 schema 映射、经 `jobs` 的事件驱动投递、HMAC 签名、创建期与拨号期双重 SSRF 防护、带死信的重试；round 3：`WebhookSubscription` 接入 `dbkit.SoftDeletable` 与 `RestoreWebhookSubscription`，并新增该模块首个 PostgreSQL 集成测试层）。逐项差异与已知限制以 `go/integration/AGENTS.md` 为准。
 

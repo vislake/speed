@@ -2,7 +2,7 @@
 
 > `go/admin` 提供运营后台的后端能力：跨租户检索、模拟登录、审计检索、角色与配置管理、用量与账单汇总。前端对应包是 `admin-shell`（M3，见 [12 前端架构](12-frontend.md)）。本篇是该模块动工前的需求与设计细化，对齐 [15 里程碑](15-roadmap.md) M3 行的出口条件——"运营后台可跨租户检索、模拟登录、查审计"——以及 [10 合规与审计](10-compliance-and-audit.md)、[05 身份与访问](05-identity-and-access.md) 里已经写过、但尚未落地成机制的段落。
 >
-> **写作时的状态**：`go/admin` 目前只有 `go.mod` + `doc.go` + 占位 `AGENTS.md`，没有一行实现。本篇因此是纯设计文档，不描述任何已落地的代码；凡引用其他模块的方法签名，均已对照当前 `main` 分支的真实代码核实（核实时间见文末）。
+> **实现状态注记**：本篇最初写作时 `go/admin` 只有 `go.mod` + `doc.go` + 占位 `AGENTS.md`，是纯设计文档；**这一状态已过时**——`go/admin` round 1 现已落地并有真实测试：D3（租户台账，事件驱动惰性建档 + 手工 CRUD）、D5 全量（模拟登录的完整管道：发起/结束/列表、请求管道身份替换中间件、五条强制性质、双身份审计、强制不可退订通知）、D6（跨租户用户检索 + 成员关系拼装）、D7 读侧（`compliance.AuditQuery` 的 HTTP 外壳，不含导出）。reference-app 已作为强制第一消费者接入。round 2（D4 强制暂停、D8 角色管理、D9 用量看板、D10 通知发送记录检索、D7 导出腿）**尚未**落地。以代码为准，不要假设本句时效——详见 `go/admin/AGENTS.md`。本篇正文仍按设计文档的语态书写、并保留原有的"被否决方案"讨论，但第 3/4/6 节里与真实代码有出入的具体机制描述（D2 代码示例、D5 的中间件机制、第 6 节的 CI 接线说法）已按下方"对照代码修正"更新；凡引用其他模块的方法签名，均已对照当前 `main` 分支的真实代码重新核实。
 
 ## 1. 定位与边界
 
@@ -49,11 +49,12 @@ admin 复用[01 整体架构](01-architecture.md)里说的"声明式注册的三
 
 ```go
 ctx, err := tenancy.WithSystemContext(ctx, bus, pkgcore.SystemReason{
-    Actor:   pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: staffID},
+    Actor:   staffID, // 真实签名是裸 string，不是 pkgcore.Actor 结构体
     Purpose: purposeAdminCrossTenantRead, // 在 admin.Register 里注册
-    Detail:  "tenant=" + targetTenantID,
 })
 ```
+
+（`pkgcore.SystemReason` 的真实字段是 `Actor string; Purpose SystemPurpose; Ticket string`——见 `go/pkgcore/tenant.go`；没有 `Detail` 字段，第三个字段是可选的 `Ticket`，本例未使用。）
 
 再用这个 `ctx` 调用下游模块**已经存在**的、按租户查询的方法（`org.TreeService.Root`、`notification` 的按租户列表、`billing.CreditService.Balance`……）。跨多个租户时在应用层循环，从不要求下游模块开一个"忽略 tenant_id 过滤"的旁路查询接口。
 
@@ -93,11 +94,11 @@ func WithTenantStatusResolver(r TenantStatusResolver) MiddlewareOption
 
 未装配这个 seam 的宿主（没有引入 `admin` 的项目）行为零变化，这是它能作为一条"可选、纯增量"的低层改动被接受的前提。
 
-### D5：模拟登录——admin 自建授权凭据 + `PrincipalResolver` 装饰器，绝不铸造目标用户的真实会话
+### D5：模拟登录——admin 自建授权凭据 + 请求管道中间件，绝不铸造目标用户的真实会话
 
 这是本设计的核心机制，单独用第 4 节展开。这里先给决策摘要：
 
-**选定**：admin 不给"被模拟的用户"签发一个和真实登录无法区分的 access/refresh token；而是签发一个**绑定在管理员自己已验证会话之上、随时可吊销、只在被模拟用户的租户内有效**的模拟授权凭据，配合中间件链里插入一个 `authn.PrincipalResolver` 装饰器完成身份替换。判定权限时按**被模拟用户自己的权限**走（"看到用户看到的东西"），管理员不会因为模拟登录而获得比该用户更多的权限。
+**选定**：admin 不给"被模拟的用户"签发一个和真实登录无法区分的 access/refresh token；而是签发一个**绑定在管理员自己已验证会话之上、随时可吊销、只在被模拟用户的租户内有效**的模拟授权凭据，配合请求管道里插入一个普通的 `net/http` 中间件（`admin.ImpersonationMiddleware`，插在 `authn.Middleware` 与 `tenancy.Middleware` 之间，读取 `authn.Middleware` 已验证的真实 `Principal`，调用 `authn.WithPrincipal` 替换成目标用户）完成身份替换——**不是** `tenancy.Resolver` 装饰器（见第 4.2 节的修正说明：`tenancy.Resolver.Resolve` 只返回一个裸的 tenant id，没有任何通道可以顺带替换"这次请求以谁的名义处理"）。判定权限时按**被模拟用户自己的权限**走（"看到用户看到的东西"），管理员不会因为模拟登录而获得比该用户更多的权限。
 
 **被否决**：让 `authn` 新增"以管理员身份代表某用户签发一对正常的 access/refresh token"的能力。否决理由：
 
@@ -163,7 +164,7 @@ sequenceDiagram
 
     Staff->>Biz: 后续请求带 X-Admin-Impersonation: grant_id<br/>Authorization 仍是管理员自己的 access token
     Biz->>Biz: authn.Middleware 验证管理员自己的 token（真实身份不变）
-    Biz->>Biz: PrincipalResolver 装饰器：查到有效 grant →<br/>Principal 替换为目标用户，tenant 替换为目标租户<br/>真实管理员 Actor 存进 ctx 供 OnBehalfOf 使用
+    Biz->>Biz: admin.ImpersonationMiddleware（普通 net/http 中间件，插在<br/>authn.Middleware 与 tenancy.Middleware 之间）：查到有效 grant →<br/>调 authn.WithPrincipal 把 Principal 替换为目标用户/目标租户<br/>真实管理员 Actor 存进 ctx 供 OnBehalfOf 使用
     Biz->>Biz: tenancy.Middleware 按替换后的 tenant 注入
     Biz->>Biz: rbac.RequirePermission 按目标用户自己的权限判定
     Biz->>Biz: dbkit 自动审计写捕获：Actor=目标用户, OnBehalfOf=管理员
@@ -171,22 +172,26 @@ sequenceDiagram
 
 关键点逐条对应 [10 合规与审计](10-compliance-and-audit.md) 和 [16 验证方式](16-verification.md) 已经写死的要求：
 
-- **双重身份**：请求真正携带的凭据始终是管理员自己的 access token（`authn.Middleware` 验证的是管理员的真实身份，不是伪造的目标用户身份），只是在验证通过后，一个新的 `PrincipalResolver` 装饰器把"这次请求要以谁的名义、在哪个租户内被处理"替换成目标用户/目标租户，同时把管理员的真实身份单独存进 `pkgcore.WithOnBehalfOf`（已落地，独立于 `WithActor` 分层，不会互相覆盖）。这样 `dbkit` 现有的自动审计写捕获**不需要任何修改**就能产出"`Actor`=被模拟用户、`OnBehalfOf`=管理员"的记录——这正是 M1 审计基础设施轮特意把 `Actor`/`OnBehalfOf` 分离设计的原因，模拟登录是它一直在等的消费者。
+- **双重身份**：请求真正携带的凭据始终是管理员自己的 access token（`authn.Middleware` 验证的是管理员的真实身份，不是伪造的目标用户身份），只是在验证通过后，插在 `authn.Middleware` 与 `tenancy.Middleware` 之间的一个普通 `net/http` 中间件（`admin.ImpersonationMiddleware`）调用 `authn.WithPrincipal` 把"这次请求要以谁的名义、在哪个租户内被处理"替换成目标用户/目标租户，同时把管理员的真实身份单独存进 `pkgcore.WithOnBehalfOf`（已落地，独立于 `WithActor` 分层，不会互相覆盖）。这样 `dbkit` 现有的自动审计写捕获**不需要任何修改**就能产出"`Actor`=被模拟用户、`OnBehalfOf`=管理员"的记录——这正是 M1 审计基础设施轮特意把 `Actor`/`OnBehalfOf` 分离设计的原因，模拟登录是它一直在等的消费者。
 - **权限不放大**：`rbac.RequirePermission` 判定时用的 `Subject` 是目标用户，不是管理员——管理员不会因为发起了模拟登录就获得比该用户更多的权限，只是"以这个人的视角看系统"，这与真实客服场景里"复现用户看到的问题"的需求吻合，也避免了"模拟登录变成一条绕过权限的后门"的风险。
 - **可随时吊销、时效绑定**：grant 是 admin 自己一张表里的一行，有 `expires_at`，管理员或另一个更高权限的运营人员可以随时 `DELETE` 结束它；一旦管理员自己的 access token 失效（登出、被吊销），装饰器查证的仍然是管理员的真实身份先通过验证，所以模拟状态天然跟着管理员自己的会话生死,不会变成一个孤儿凭据。
 - **开始/结束都是审计事件 + 强制通知**：`impersonation.started`/`impersonation.ended` 用显式 `audit.Emit`（不是自动写捕获——因为需要同时写双 Actor，自动捕获拿不到 `OnBehalfOf`），且开始时必须给被模拟用户发一条不可退订的安全类通知（[07 平台服务](07-platform-services.md) 的"不可关闭的安全类通知"分类,`notification` 的类型注册表里声明为不可退订）。
 
 ### 4.2 中间件链的插入点，不改变既有顺序
 
-[01 整体架构](01-architecture.md) 写死的链路是 `authn.Middleware → tenancy.Middleware(authn.NewPrincipalResolver())`。模拟登录**不重排**这条链——它是往 `authn.NewPrincipalResolver()` 这一步的输入上叠一层装饰器：
+> **对照代码修正**：本节最初把这个机制描述成一个 `tenancy.Resolver` 装饰器（`admin.ImpersonationAwareResolver` "包装" `authn.NewPrincipalResolver()`），与 `org.FeatureGate`/`rbac.SubtreeResolver` 归为同一类无导入 seam。真实的 `tenancy.Resolver` 接口是 `Resolve(r *http.Request) (pkgcore.TenantID, error)`——只返回一个裸的 tenant id，没有任何通道可以顺带告诉下游"这次请求该以谁的名义处理"（`tenancy.Middleware` 唯一的副作用是 `pkgcore.WithTenant`，从不触碰 `authn.Middleware` 已经装好的 `authn.Principal`）。真实机制因此是下面这个普通的 `net/http` 中间件，`go/admin/pipeline.go` 的 `ImpersonationMiddleware`：
+
+[01 整体架构](01-architecture.md) 写死的链路是 `authn.Middleware → tenancy.Middleware(authn.NewPrincipalResolver())`。模拟登录**不重排**这条链——它是在这两者之间插入一层中间件：
 
 ```go
-tenancy.Middleware(
-    admin.ImpersonationAwareResolver(authn.NewPrincipalResolver(), grantLookup),
+authn.Middleware(verifier)(
+    admin.ImpersonationMiddleware(adminModule.Impersonation())(
+        tenancy.Middleware(authn.NewPrincipalResolver(), ...)(mux),
+    ),
 )
 ```
 
-`admin.ImpersonationAwareResolver` 先调用被包装的 `authn.NewPrincipalResolver()` 拿到管理员的真实 `Principal`；如果请求带了有效的模拟授权凭据（凭据本身在 `grantLookup` 里查证，从不信任客户端声称的目标身份），就把返回的 `Principal` 换成目标用户/目标租户，并把管理员的真实身份塞进一个独立的 context key（`pkgcore.WithOnBehalfOf`）供下游审计使用。这跟 `org.FeatureGate`、`rbac.SubtreeResolver` 是同一种"结构化类型、无导入方向"的 seam 手法——`authn` 不需要知道 `admin` 存在，也不需要为它新增任何 API。
+`ImpersonationMiddleware` 读取 `authn.Middleware` 已经验证好、挂在 `ctx` 上的管理员真实 `Principal`；如果请求带了有效的模拟授权凭据（凭据本身在自己的存储里查证，从不信任客户端声称的目标身份），就调用 `authn.WithPrincipal` 把 `ctx` 上的 `Principal` 换成目标用户/目标租户，再往下交给 `tenancy.Middleware` 按替换后的身份解析 tenant；同时把管理员的真实身份塞进 `pkgcore.WithOnBehalfOf` 供下游审计使用。一个不带 `X-Admin-Impersonation` 头、或者头里的凭据缺失/过期/已结束/属于别的管理员的请求，原样透传、完全不受影响（fail-closed）。这仍然是"宿主装配一层可插拔行为，被装配对象不需要知道装配者是谁"的同一种精神——`authn`/`tenancy` 都不需要知道 `admin` 存在，也不需要为它新增任何 API——只是承载它的机制是请求管道中间件，不是 `tenancy.Resolver` 装饰器：`admin` 自己的路由不挂在这条被装饰的链后面，装饰只影响链上除 admin 自己以外的其余路由。
 
 ## 5. 数据模型
 
@@ -225,7 +230,9 @@ type ImpersonationGrant struct {
 
 ## 6. HTTP 面草案
 
-沿用 notes/org/authn/storage/notification 的既有模式：`go/admin/api/openapi.yaml` 是第六个 spec 片段，pinned oapi-codegen 生成 `admin-server.gen.go`，`Handler` 背后有 `var _ api.ServerInterface` 编译期断言，纳入 `api-contract.yml` 与 Taskfile `api:gen`。所有路由都要求 `rbac.RequirePermission(..., domain=system)` 且**不**走常规的 `tenancy.Middleware` 租户解析——这些是平台运营对"跨租户"这件事本身的操作，请求本身没有单一租户可言（除非落到模拟登录场景，见第 4 节）：
+沿用 notes/org/authn/storage/notification 的既有模式：`go/admin/api/openapi.yaml` 是第六个 spec 片段，pinned oapi-codegen 生成 `admin-server.gen.go`，`Handler` 背后有 `var _ api.ServerInterface` 编译期断言。所有路由都要求 `rbac.RequirePermission(..., domain=system)` 且**不**走常规的 `tenancy.Middleware` 租户解析——这些是平台运营对"跨租户"这件事本身的操作，请求本身没有单一租户可言（除非落到模拟登录场景，见第 4 节）：
+
+> **对照代码修正**：本节最初说这个 spec 片段"纳入 `api-contract.yml` 与 Taskfile `api:gen`"，这句话目前不成立——`Taskfile.yml` 的 `api:gen` 任务命令列表与 `.github/workflows/api-contract.yml` 里都没有任何一处提到 `admin`（`grep admin` 两个文件均为零命中），`admin` 的生成产物今天只能靠手动在 `go/admin/api` 目录下运行 `oapi-codegen` 来保持与 spec 同步，spec 改了但忘记手跑生成、忘记提交新的 `admin-server.gen.go` 不会被任何 CI 挡下来。这与 `go/pki` 自己 `AGENTS.md` 记录的同类缺口是同一种诚实披露而非疏漏：pki 的 `Taskfile.yml` 那一半已经补上了（`task api:gen` 能正确重新生成 `pki-server.gen.go`），但 `.github/workflows/api-contract.yml` 的"重新生成再 diff"闸门这一轮没有跟着扩展覆盖 pki；`admin` 目前两边都还没有接线，是比 pki 更靠后一步的同一类缺口。接入这两处闸门留给后续轮次；`Handler` 编译期实现的接口一致性目前只靠 reference-app（已经 import `go/admin`）的普通 build 间接兜底，不是这条专门的 spec-vs-生成产物 diff 闸门。
 
 | 方法 | 路径 | 对应决策 |
 |---|---|---|

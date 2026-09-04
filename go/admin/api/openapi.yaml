@@ -7,10 +7,17 @@ info:
     cross-tenant user search (D6) and the audit-query HTTP shell (D7's read
     side). This fragment follows the operationId (admin_<action><Resource>)
     and schema-name (Admin<Type>) conventions from
-    .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
-    regenerates admin-server.gen.go (in this directory) from this file, with
-    oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
-    .github/workflows/api-contract.yml.
+    .claude/skills/backend-coding-standards/SKILL.md §6.1. Regenerating
+    admin-server.gen.go (in this directory) from this file with oapi-codegen
+    pinned at v2.8.0 uses this directory's own oapi-codegen.yaml -- see that
+    file for the exact command. Neither Taskfile.yml's api:gen task nor
+    .github/workflows/api-contract.yml includes this fragment yet (a known
+    gap, not an oversight -- mirrored after go/pki's own honest disclosure
+    of the identical shape of gap for its api-contract.yml leg, before that
+    was closed for pki's Taskfile side): today the generated file must be
+    regenerated and diffed against openapi.yaml by hand, and a spec change
+    committed without a matching regeneration will not be caught by CI. A
+    future round should add this directory to both.
 
     Every operation here is a platform-operations action gated on a
     rbac.SystemDomain permission (admin:access, admin:tenants_manage,

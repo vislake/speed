@@ -60,6 +60,14 @@ import in the other direction is a merge blocker rather than a style note.
 | `WithClock`, `WithIssuer`, `WithAccessTokenTTL`, `WithRefreshTokenTTL`, `WithSessionTTL`, `WithRevocationMode`, `WithPasswordParams`, `WithPasswordPolicy` | Everything else. A nil or non-positive value leaves the default in place. |
 | `WithSMSSender`, `WithDeploymentMode`, `WithSMSCodeTTL`, `WithSMSCodeMaxAttempts` | The phone-login transport and its lifetime/attempt budget. See "A distributed deployment must wire an `SMSSender`" below for what `WithDeploymentMode` is for. |
 
+### Platform search: `SearchUsers` does no authorization of its own
+
+`Service.SearchUsers(ctx, UserSearchQuery) ([]User, error)` (`search.go`) is authn's one cross-tenant, platform-operator search entry point, added purely additively for `go/admin`'s D6 (no existing signature in this module changed). Unlike `FindByID`/`FindByEmail`/`FindByPhone`, which answer "does this one identifier resolve to an account" for ordinary business code that already knows which tenant it is asking about, `SearchUsers` answers "which account (if any) does this identifier or name fragment belong to" with no tenant in scope at all -- `users` is identity data, not tenant data, so only a platform-wide search makes sense here.
+
+`UserSearchQuery` takes exactly one of `Email` (exact match via the email blind index), `Phone` (exact match via the E.164 phone blind index) or `DisplayNamePrefix` (case-insensitive prefix match, the only criterion that can return more than one row, bounded by `Limit` -- zero uses a small default, anything above a hard ceiling is clamped to it). Naming none of the three returns `ErrSearchCriteriaRequired` (`authn.search_criteria_required`, an `apperr.Invalid`) rather than silently answering with every user on the platform.
+
+**`Service` has no opinion on who may call it, by design.** This module never imports `rbac` (root `CLAUDE.md`'s module-boundary rule), so `SearchUsers` performs no internal permission check of any kind -- the caller (`go/admin`'s HTTP handler, gating on `admin:search_users`, in the round that consumes it) is entirely responsible for authorizing the call before it ever reaches here. Treat this the same way as any other security-sensitive, no-internal-authz method in this codebase: never expose it behind a route that is not already gated by the caller's own permission check.
+
 ### Authentication
 
 | Symbol | Purpose |
