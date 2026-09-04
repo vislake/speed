@@ -17,9 +17,11 @@
  * produced by redocly's `join` of the module fragments (Taskfile's
  * api:merge task -- `task api:gen` depends on it, so a fragment edit can
  * never regenerate from a stale committed merge). The merge currently
- * covers the notes and authn fragments; org's fragment is deliberately
- * not part of it (docs/internal/21-api-contract.md's org note -- it
- * predates the merge machinery). Output covers types AND TanStack Query
+ * covers the notes, authn and notification fragments (notification's
+ * fragment grew the merge a third member when its recipient-facing
+ * surface shipped); org's fragment is deliberately not part of it
+ * (docs/internal/21-api-contract.md's org note -- it predates the merge
+ * machinery). Output covers types AND TanStack Query
  * hooks (client: react-query), written to src/index.ts; generated
  * files carry the DO-NOT-EDIT header below.
  *

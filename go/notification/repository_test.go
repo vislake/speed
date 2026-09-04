@@ -379,3 +379,465 @@ func TestRepository_FindByID_OtherTenant_ReportsRecordNotFound(t *testing.T) {
 		t.Errorf("error code = %q, want %q", appErr.Code, dbkit.ErrRecordNotFound.Code)
 	}
 }
+
+// messageAt returns a fresh inbox row for recipient with its CreatedAt
+// pinned to at, so ordering tests do not depend on the clock's resolution.
+// gorm's autoCreateTime fills CreatedAt only when it is zero, so a pinned
+// value survives Create.
+func messageAt(id, recipient, group string, at time.Time) *InboxMessage {
+	msg := testMessage(id)
+	msg.RecipientUserID = recipient
+	msg.Group = group
+	msg.CreatedAt = at
+	return msg
+}
+
+// TestRepository_ListForRecipient_OwnRowsOnly_NewestFirst pins the two
+// scoping axes and the ordering of the list operation: the page holds only
+// recipientUserID's own rows in the tenant of ctx, newest first (created_at
+// DESC with id DESC as the tiebreak). Another recipient's newer row and the
+// same recipient's row in another tenant must both stay out of the page.
+func TestRepository_ListForRecipient_OwnRowsOnly_NewestFirst(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewRepository(db)
+	ctx := tenantCtx("tenant-acme")
+
+	t1 := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	t3 := time.Date(2026, 9, 1, 11, 0, 0, 0, time.UTC)
+	rows := []*InboxMessage{
+		messageAt("inbox-a1", "user-7", "", t1),
+		messageAt("inbox-a2", "user-7", "", t2),
+		messageAt("inbox-a3", "user-7", "", t3),
+		messageAt("inbox-a4", "user-9", "", t3.Add(time.Hour)), // newer, but user-9's
+	}
+	for _, row := range rows {
+		if err := repo.Create(ctx, row); err != nil {
+			t.Fatalf("Create(%s): %v", row.ID, err)
+		}
+	}
+	if err := repo.Create(tenantCtx("tenant-bright"), messageAt("inbox-b1", "user-7", "", t3.Add(2*time.Hour))); err != nil {
+		t.Fatalf("Create(other tenant): %v", err)
+	}
+
+	got, err := repo.ListForRecipient(ctx, "user-7", "", 50, 0)
+	if err != nil {
+		t.Fatalf("ListForRecipient: %v", err)
+	}
+	want := []string{"inbox-a3", "inbox-a2", "inbox-a1"}
+	if len(got) != len(want) {
+		t.Fatalf("ListForRecipient returned %d rows %v, want %d (%v)", len(got), idsOf(got), len(want), want)
+	}
+	for i, id := range want {
+		if got[i].ID != id {
+			t.Errorf("row %d = %q, want %q (newest first)", i, got[i].ID, id)
+		}
+	}
+}
+
+// idsOf is the string form of a row slice's ids, for failure messages.
+func idsOf(rows []InboxMessage) []string {
+	ids := make([]string, len(rows))
+	for i := range rows {
+		ids[i] = rows[i].ID
+	}
+	return ids
+}
+
+// TestRepository_ListForRecipient_SameCreatedAt_IdDescTiebreak pins the
+// tiebreak half of the ordering contract: two rows written in the same
+// instant (the same created_at value) list deterministically by id DESC, so
+// a page boundary can never split two same-instant rows ambiguously.
+func TestRepository_ListForRecipient_SameCreatedAt_IdDescTiebreak(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewRepository(db)
+	ctx := tenantCtx("tenant-acme")
+
+	same := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	for _, id := range []string{"inbox-1", "inbox-2"} {
+		if err := repo.Create(ctx, messageAt(id, "user-7", "", same)); err != nil {
+			t.Fatalf("Create(%s): %v", id, err)
+		}
+	}
+
+	got, err := repo.ListForRecipient(ctx, "user-7", "", 50, 0)
+	if err != nil {
+		t.Fatalf("ListForRecipient: %v", err)
+	}
+	if len(got) != 2 || got[0].ID != "inbox-2" || got[1].ID != "inbox-1" {
+		t.Errorf("ListForRecipient = %v, want [inbox-2 inbox-1]: same created_at must break ties by id DESC", idsOf(got))
+	}
+}
+
+// TestRepository_ListForRecipient_ExpiredRowsStillListed pins the spec's
+// line between listing and counting: expiry governs only the unread
+// predicate (UnreadCount), never list membership -- an unread message whose
+// expiry passed is still a row of the recipient's inbox, still listed, its
+// expiry_at carried on the row so the rendering side drops the unread
+// affordance itself.
+func TestRepository_ListForRecipient_ExpiredRowsStillListed(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewRepository(db)
+	ctx := tenantCtx("tenant-acme")
+
+	expired := time.Now().UTC().Add(-time.Hour)
+	msg := messageAt("inbox-expired", "user-7", "", time.Now().UTC())
+	msg.ExpiryAt = &expired
+	if err := repo.Create(ctx, msg); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := repo.ListForRecipient(ctx, "user-7", "", 50, 0)
+	if err != nil {
+		t.Fatalf("ListForRecipient: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "inbox-expired" {
+		t.Fatalf("ListForRecipient = %v, want the expired row still listed", idsOf(got))
+	}
+	if got[0].ExpiryAt == nil {
+		t.Error("ExpiryAt is nil on the listed row; the response cannot show why it should render as expired")
+	}
+}
+
+// TestRepository_ListForRecipient_GroupFilterAndPaging drives the listing's
+// group restriction and its paging: group "" lists every group, a named
+// group only its own rows, an unknown group an empty list (never an error),
+// and limit/offset page the filtered result in the same newest-first order.
+func TestRepository_ListForRecipient_GroupFilterAndPaging(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewRepository(db)
+	ctx := tenantCtx("tenant-acme")
+
+	base := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	rows := []*InboxMessage{
+		messageAt("inbox-c1", "user-7", "collaboration", base.Add(1*time.Hour)),
+		messageAt("inbox-c2", "user-7", "collaboration", base.Add(2*time.Hour)),
+		messageAt("inbox-b1", "user-7", "billing", base.Add(3*time.Hour)),
+		messageAt("inbox-x1", "user-7", "", base.Add(4*time.Hour)),
+	}
+	for _, row := range rows {
+		if err := repo.Create(ctx, row); err != nil {
+			t.Fatalf("Create(%s): %v", row.ID, err)
+		}
+	}
+
+	collab, err := repo.ListForRecipient(ctx, "user-7", "collaboration", 50, 0)
+	if err != nil {
+		t.Fatalf("ListForRecipient(collaboration): %v", err)
+	}
+	if want := []string{"inbox-c2", "inbox-c1"}; len(collab) != 2 || collab[0].ID != want[0] || collab[1].ID != want[1] {
+		t.Errorf("collaboration page = %v, want %v", idsOf(collab), want)
+	}
+
+	unknown, err := repo.ListForRecipient(ctx, "user-7", "no.such.group", 50, 0)
+	if err != nil {
+		t.Fatalf("ListForRecipient(unknown group): %v", err)
+	}
+	if len(unknown) != 0 {
+		t.Errorf("unknown group returned %d rows, want an empty list", len(unknown))
+	}
+
+	page1, err := repo.ListForRecipient(ctx, "user-7", "", 2, 0)
+	if err != nil {
+		t.Fatalf("ListForRecipient(page 1): %v", err)
+	}
+	page2, err := repo.ListForRecipient(ctx, "user-7", "", 2, 2)
+	if err != nil {
+		t.Fatalf("ListForRecipient(page 2): %v", err)
+	}
+	if want1, want2 := []string{"inbox-x1", "inbox-b1"}, []string{"inbox-c2", "inbox-c1"}; !equalIDs(page1, want1) || !equalIDs(page2, want2) {
+		t.Errorf("pages = %v then %v, want %v then %v", idsOf(page1), idsOf(page2), want1, want2)
+	}
+
+	tail, err := repo.ListForRecipient(ctx, "user-7", "", 50, 8)
+	if err != nil {
+		t.Fatalf("ListForRecipient(past the end): %v", err)
+	}
+	if len(tail) != 0 {
+		t.Errorf("offset past the end returned %d rows, want an empty list", len(tail))
+	}
+}
+
+// equalIDs reports whether rows' ids equal want, in order.
+func equalIDs(rows []InboxMessage, want []string) bool {
+	got := idsOf(rows)
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestRepository_ListForRecipient_OtherTenant_Invisible completes the
+// listing's isolation: the page is scoped by the tenant of ctx, so the same
+// recipient's rows under another tenant never leak into it.
+func TestRepository_ListForRecipient_OtherTenant_Invisible(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewRepository(db)
+
+	base := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	if err := repo.Create(tenantCtx("tenant-acme"), messageAt("inbox-acme-1", "user-7", "", base)); err != nil {
+		t.Fatalf("Create(acme): %v", err)
+	}
+	if err := repo.Create(tenantCtx("tenant-bright"), messageAt("inbox-bright-1", "user-7", "", base.Add(time.Hour))); err != nil {
+		t.Fatalf("Create(bright): %v", err)
+	}
+
+	for _, tc := range []struct{ tenant, wantID string }{
+		{"tenant-acme", "inbox-acme-1"},
+		{"tenant-bright", "inbox-bright-1"},
+	} {
+		got, err := repo.ListForRecipient(tenantCtx(tc.tenant), "user-7", "", 50, 0)
+		if err != nil {
+			t.Fatalf("ListForRecipient(%s): %v", tc.tenant, err)
+		}
+		if len(got) != 1 || got[0].ID != tc.wantID {
+			t.Errorf("ListForRecipient(%s) = %v, want only %s", tc.tenant, idsOf(got), tc.wantID)
+		}
+	}
+}
+
+// TestRepository_UnreadCount_AppliesTheUnreadPredicate pins the spec's
+// unread predicate exactly: read_at still nil AND expiry_at -- when set --
+// still in the future, judged against the server clock at query time.
+// Read rows, expired-but-unread rows, rows of another recipient and rows of
+// another tenant all stay out of the count; rows in the count vanish from it
+// once marked read.
+func TestRepository_UnreadCount_AppliesTheUnreadPredicate(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewRepository(db)
+	ctx := tenantCtx("tenant-acme")
+
+	now := time.Now().UTC()
+	build := func(id string, markRead, expired bool) *InboxMessage {
+		msg := messageAt(id, "user-7", "", now)
+		if expired {
+			past := now.Add(-time.Hour)
+			msg.ExpiryAt = &past
+		}
+		if markRead {
+			msg.ReadAt = &now
+		}
+		return msg
+	}
+	unreadFresh := build("inbox-unread", false, false)
+	unreadExpired := build("inbox-unread-expired", false, true)
+	readFresh := build("inbox-read", true, false)
+	readExpired := build("inbox-read-expired", true, true)
+	for _, row := range []*InboxMessage{unreadFresh, unreadExpired, readFresh, readExpired} {
+		if err := repo.Create(ctx, row); err != nil {
+			t.Fatalf("Create(%s): %v", row.ID, err)
+		}
+	}
+	otherRecipient := messageAt("inbox-user9", "user-9", "", now)
+	if err := repo.Create(ctx, otherRecipient); err != nil {
+		t.Fatalf("Create(other recipient): %v", err)
+	}
+	if err := repo.Create(tenantCtx("tenant-bright"), messageAt("inbox-bright", "user-7", "", now)); err != nil {
+		t.Fatalf("Create(other tenant): %v", err)
+	}
+
+	got, err := repo.UnreadCount(ctx, "user-7")
+	if err != nil {
+		t.Fatalf("UnreadCount: %v", err)
+	}
+	if got != 1 {
+		t.Errorf("UnreadCount = %d, want 1: only the unread, unexpired row counts", got)
+	}
+}
+
+// TestRepository_MarkRead_FlipsAndIsIdempotent drives the single mark-read
+// contract: the first call stamps read_at, the second answers nil without
+// touching the row, so the first read's timestamp survives as the read
+// time.
+func TestRepository_MarkRead_FlipsAndIsIdempotent(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewRepository(db)
+	ctx := tenantCtx("tenant-acme")
+
+	msg := testMessage("inbox-000001")
+	if err := repo.Create(ctx, msg); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	before := time.Now().UTC()
+
+	if err := repo.MarkRead(ctx, "user-7", msg.ID); err != nil {
+		t.Fatalf("MarkRead(first): %v", err)
+	}
+	got, err := repo.FindByID(ctx, msg.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if got.ReadAt == nil || got.ReadAt.Before(before) {
+		t.Fatalf("ReadAt after first mark = %v, want a stamp at or after %v", got.ReadAt, before)
+	}
+	firstReadAt := *got.ReadAt
+
+	if markErr := repo.MarkRead(ctx, "user-7", msg.ID); markErr != nil {
+		t.Fatalf("MarkRead(second): %v", markErr)
+	}
+	again, err := repo.FindByID(ctx, msg.ID)
+	if err != nil {
+		t.Fatalf("FindByID after second mark: %v", err)
+	}
+	if again.ReadAt == nil || !again.ReadAt.Equal(firstReadAt) {
+		t.Errorf("ReadAt after the idempotent second mark = %v, want the first stamp %v untouched", again.ReadAt, firstReadAt)
+	}
+}
+
+// TestRepository_MarkRead_UnknownForeignAndOtherTenant_OneRefusal pins the
+// collapse ErrMessageNotFound documents: an id that is unknown, that
+// belongs to another recipient of the same tenant, or that belongs to
+// another tenant altogether is the same refusal carrying the id -- one
+// recipient can never learn whether another recipient's message id exists
+// by probing it.
+func TestRepository_MarkRead_UnknownForeignAndOtherTenant_OneRefusal(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewRepository(db)
+
+	acmeMsg := testMessage("inbox-acme-1") // user-7's, in tenant-acme
+	if err := repo.Create(tenantCtx("tenant-acme"), acmeMsg); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	user9Msg := testMessage("inbox-acme-user9")
+	user9Msg.RecipientUserID = "user-9"
+	if err := repo.Create(tenantCtx("tenant-acme"), user9Msg); err != nil {
+		t.Fatalf("Create(user-9's): %v", err)
+	}
+	brightMsg := testMessage("inbox-bright-1")
+	if err := repo.Create(tenantCtx("tenant-bright"), brightMsg); err != nil {
+		t.Fatalf("Create(tenant-bright): %v", err)
+	}
+
+	probe := func(name string, ctx context.Context, recipient, id string) {
+		t.Helper()
+		err := repo.MarkRead(ctx, recipient, id)
+		if err == nil {
+			t.Fatalf("%s: MarkRead succeeded, want ErrMessageNotFound", name)
+		}
+		appErr, ok := apperr.As(err)
+		if !ok {
+			t.Fatalf("%s: error %v is not an *apperr.Error", name, err)
+		}
+		if appErr.Code != ErrMessageNotFound.Code {
+			t.Errorf("%s: code = %q, want %q", name, appErr.Code, ErrMessageNotFound.Code)
+		}
+		if appErr.Params["message_id"] != id {
+			t.Errorf("%s: message_id param = %v, want %q", name, appErr.Params["message_id"], id)
+		}
+	}
+	probe("unknown id", tenantCtx("tenant-acme"), "user-7", "inbox-nope")
+	probe("other recipient's id", tenantCtx("tenant-acme"), "user-7", user9Msg.ID)
+	probe("other tenant's id", tenantCtx("tenant-acme"), "user-7", brightMsg.ID)
+	probe("right id, right recipient, other tenant", tenantCtx("tenant-bright"), "user-7", acmeMsg.ID)
+}
+
+// TestRepository_MarkRead_ExpiredRow_StillMarkable pins the other half of
+// the expiry line: marking read is not gated on expiry either -- an unread
+// message whose expiry passed is still the caller's own row, and marking it
+// read is what keeps the unread predicate monotone.
+func TestRepository_MarkRead_ExpiredRow_StillMarkable(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewRepository(db)
+	ctx := tenantCtx("tenant-acme")
+
+	expired := time.Now().UTC().Add(-time.Hour)
+	msg := messageAt("inbox-expired", "user-7", "", expired)
+	msg.ExpiryAt = &expired
+	if err := repo.Create(ctx, msg); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := repo.MarkRead(ctx, "user-7", msg.ID); err != nil {
+		t.Fatalf("MarkRead(expired row): %v", err)
+	}
+	got, err := repo.FindByID(ctx, msg.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if got.ReadAt == nil {
+		t.Error("ReadAt is nil; the expired row was not marked read")
+	}
+}
+
+// TestRepository_ReadAll_FlipsOnlyTheCallerOwnsUnreadAndCounts drives the
+// mark-all-read contract: every row the recipient still holds unread --
+// expired or not -- flips in one call, the answer is how many flipped, a
+// recipient with nothing unread gets (0, nil), and neither another
+// recipient's rows nor another tenant's rows move.
+func TestRepository_ReadAll_FlipsOnlyTheCallerOwnsUnreadAndCounts(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewRepository(db)
+	ctx := tenantCtx("tenant-acme")
+
+	now := time.Now().UTC()
+	build := func(id string, markRead, expired bool) *InboxMessage {
+		msg := messageAt(id, "user-7", "", now)
+		if expired {
+			past := now.Add(-time.Hour)
+			msg.ExpiryAt = &past
+		}
+		if markRead {
+			msg.ReadAt = &now
+		}
+		return msg
+	}
+	unreadFresh := build("inbox-unread", false, false)
+	unreadExpired := build("inbox-unread-expired", false, true)
+	readFresh := build("inbox-read", true, false)
+	for _, row := range []*InboxMessage{unreadFresh, unreadExpired, readFresh} {
+		if err := repo.Create(ctx, row); err != nil {
+			t.Fatalf("Create(%s): %v", row.ID, err)
+		}
+	}
+	otherRecipient := messageAt("inbox-user9-unread", "user-9", "", now)
+	if err := repo.Create(ctx, otherRecipient); err != nil {
+		t.Fatalf("Create(other recipient): %v", err)
+	}
+	if err := repo.Create(tenantCtx("tenant-bright"), messageAt("inbox-bright-unread", "user-7", "", now)); err != nil {
+		t.Fatalf("Create(other tenant): %v", err)
+	}
+
+	flipped, err := repo.ReadAll(ctx, "user-7")
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if flipped != 2 {
+		t.Errorf("ReadAll flipped %d rows, want 2: the unread rows, expired one included, and nothing already read", flipped)
+	}
+
+	got, err := repo.UnreadCount(ctx, "user-7")
+	if err != nil {
+		t.Fatalf("UnreadCount after ReadAll: %v", err)
+	}
+	if got != 0 {
+		t.Errorf("UnreadCount after ReadAll = %d, want 0", got)
+	}
+
+	again, err := repo.ReadAll(ctx, "user-7")
+	if err != nil {
+		t.Fatalf("ReadAll(second): %v", err)
+	}
+	if again != 0 {
+		t.Errorf("ReadAll(second) flipped %d rows, want 0", again)
+	}
+
+	user9Rows, err := repo.ListForRecipient(ctx, "user-9", "", 50, 0)
+	if err != nil {
+		t.Fatalf("ListForRecipient(user-9): %v", err)
+	}
+	if len(user9Rows) != 1 || user9Rows[0].ReadAt != nil {
+		t.Errorf("user-9's unread row was touched: %+v", user9Rows)
+	}
+	brightRows, err := repo.ListForRecipient(tenantCtx("tenant-bright"), "user-7", "", 50, 0)
+	if err != nil {
+		t.Fatalf("ListForRecipient(bright): %v", err)
+	}
+	if len(brightRows) != 1 || brightRows[0].ReadAt != nil {
+		t.Errorf("tenant-bright's unread row was touched: %+v", brightRows)
+	}
+}

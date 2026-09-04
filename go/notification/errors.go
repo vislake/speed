@@ -23,11 +23,16 @@ import (
 // group (this file's first block) belongs to the preference matrix; the
 // contact group belongs to the consent ledger ContactService owns; the
 // delivery group belongs to the outbound-delivery pipeline DeliveryService
-// owns; the wiring group reports a Module whose required seams were not
-// supplied before Register validated them -- boot-time failures a caller
-// cannot trigger once the module is registered, listed here because an
-// *apperr sentinel per code is this module's convention for every error it
-// can surface, however unreachable at request time.
+// owns; the inbox group (between the delivery and wiring groups) belongs to
+// the in-app inbox's read surface -- the Repository methods of repository.go
+// and the HTTP handler over them, which share this package; the wiring group
+// reports a Module whose required seams were not supplied before Register
+// validated them; and the HTTP-transport group (after the wiring group)
+// reports a request that failed before any service was reached. The wiring
+// entries are boot-time failures a caller cannot trigger once the module is
+// registered, listed here because an *apperr sentinel per code is this
+// module's convention for every error it can surface, however unreachable at
+// request time.
 var (
 	// ErrRecipientRequired reports a preference write whose recipient is
 	// missing. A preference row is meaningless without the user it applies
@@ -148,6 +153,57 @@ var (
 	// hands it, so a malformed payload dies at the API boundary or dead-
 	// letters, never half-delivers.
 	ErrDispatchInvalid = apperr.Invalid("notification.dispatch_invalid")
+)
+
+// The inbox group: every error the in-app inbox's read surface can return --
+// the Repository methods of repository.go and the HTTP handler built over
+// them. The group exists because the inbox's rows are per-recipient tenant
+// data: a message id that names no message of the caller's own inbox --
+// another recipient's message, another tenant's row, or nothing at all -- is
+// one refusal, never an existence-disclosing distinction.
+var (
+	// ErrMessageNotFound reports a read or mark-read naming a message id no
+	// row of the caller's own inbox holds. The three cases are deliberately
+	// one code (see the group comment): telling the caller which part failed
+	// would let one recipient probe another recipient's message ids, and the
+	// tenant-isolation rules already make a foreign row indistinguishable
+	// from a missing one. The refusal carries the offending id in its
+	// message_id parameter.
+	ErrMessageNotFound = apperr.NotFound("notification.message_not_found")
+)
+
+// The HTTP-transport group: every error the module's HTTP handler (handler.go)
+// can return before a service is reached. The statuses are the caller's whole
+// answer on how to treat the failure. The first two mirror org's own pair
+// (go/org/errors.go), keeping the two modules' HTTP surfaces uniform; the
+// third is notification's alone because the inbox list is the first
+// paginated surface either module serves -- org has no list operation whose
+// parameters could fall outside bounds.
+var (
+	// ErrInvalidRequestBody reports a request whose body was missing or not
+	// the JSON the operation's schema requires. The body is refused whole --
+	// never partially decoded -- so a malformed payload changes nothing.
+	ErrInvalidRequestBody = apperr.Invalid("notification.invalid_request_body")
+
+	// ErrSubjectUnresolved reports a request whose caller identity the host's
+	// subject seam could not resolve: the seam is unwired, or it failed. The
+	// handler fails closed (handler.go's resolveSubject): an anonymous caller
+	// gets this refusal rather than a default user or an empty identity, the
+	// same refusal org's handler returns when its own subject seam is
+	// unwired or failing (org.subject_unresolved).
+	ErrSubjectUnresolved = apperr.Unauthorized("notification.subject_unresolved")
+
+	// ErrInvalidListParams reports a list request whose limit or offset
+	// falls outside the bounds the module serves: a limit below the spec's
+	// minimum of 1 or above its cap of 200, or a negative offset (see
+	// openapi.yaml's list operation, "refused rather than silently
+	// truncated"). The Repository's own doc comment repeats the promise
+	// from its side -- the HTTP surface resolves the bounds before the
+	// repository is reached and nothing is silently clamped anywhere -- so
+	// a client whose page size drifted is told so in one refusal instead
+	// of being served less than it asked for. The refusal names the
+	// offending parameter ("limit" or "offset") and the value it was given.
+	ErrInvalidListParams = apperr.Invalid("notification.invalid_list_params")
 )
 
 // The wiring group: a Module whose Register-time validation failed because

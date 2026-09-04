@@ -44,6 +44,8 @@
 
 "notification.dispatch_invalid" = "That notification request is not valid: {{.field}}."
 
+"notification.message_not_found" = "That message does not exist."
+
 "notification.sms_sender_required" = "The notification service has no SMS sender configured."
 
 "notification.mail_from_required" = "The notification service has no mail From address configured."
@@ -55,6 +57,12 @@
 "notification.delivery_queue_required" = "The notification service has no delivery queue configured."
 
 "notification.user_address_resolver_required" = "The notification service has no user-address source configured."
+
+"notification.invalid_request_body" = "The request body is missing or not valid JSON."
+
+"notification.subject_unresolved" = "The request could not be attributed to a user."
+
+"notification.invalid_list_params" = "The {{.field}} parameter ({{.value}}) is outside the range this API serves."
 
 "notification.contact.verify_code.sms" = "Your verification code is {{.code}}. It is valid for {{.minutes}} minutes."
 

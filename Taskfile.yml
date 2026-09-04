@@ -221,37 +221,41 @@ tasks:
     silent: true
 
   api:gen:
-    desc: Regenerate the generated API surface of every module that ships an OpenAPI fragment -- backend (oapi-codegen types + ServerInterface) for notes, org, storage and authn, plus the frontend SDK for every fragment in the merged document (orval -> @speed/api-sdk, notes + authn).
+    desc: Regenerate the generated API surface of every module that ships an OpenAPI fragment -- backend (oapi-codegen types + ServerInterface) for notes, org, storage, authn and notification, plus the frontend SDK for every fragment in the merged document (orval -> @speed/api-sdk, notes + authn + notification).
     # The backend half of the contract-change flow (docs/internal/
     # 21-api-contract.md's order: edit the spec, regenerate, compile
-    # failures reveal every handler to fix) is real for the four modules
+    # failures reveal every handler to fix) is real for the five modules
     # that ship a fragment: this task runs oapi-codegen, pinned at
     # v2.8.0, over each module's own api/openapi.yaml with that
     # directory's own oapi-codegen.yaml -- rewriting
     # examples/reference-app/internal/notes/api/notes-server.gen.go,
-    # go/org/api/org-server.gen.go, go/storage/api/storage-server.gen.go
-    # and go/authn/api/authn-server.gen.go respectively. Each generated
-    # ServerInterface's growth is what makes an un-updated handler stop
-    # compiling (the compile-time assertions live in
-    # internal/notes/handler.go, go/org/handler.go,
-    # go/storage/handler.go and go/authn/handler.go).
+    # go/org/api/org-server.gen.go, go/storage/api/storage-server.gen.go,
+    # go/authn/api/authn-server.gen.go and
+    # go/notification/api/notification-server.gen.go respectively. Each
+    # generated ServerInterface's growth is what makes an un-updated
+    # handler stop compiling (the compile-time assertions live in
+    # internal/notes/handler.go, go/org/handler.go, go/storage/handler.go,
+    # go/authn/handler.go and go/notification/handler.go).
     #
     # The frontend half of the api:gen promise is live for every fragment
     # in the merged document: the api:merge dependency below joins the
-    # notes and authn fragments into build/openapi/speed.yaml, and the
-    # orval leg below regenerates the @speed/api-sdk package from that
-    # merged document -- orval pinned at 8.17.0 and run from web/ via
+    # notes, authn and notification fragments into build/openapi/speed.yaml,
+    # and the orval leg below regenerates the @speed/api-sdk package from
+    # that merged document -- orval pinned at 8.17.0 and run from web/ via
     # pnpm dlx (orval is never a workspace dependency), followed by
     # web/scripts/orval-nodenext-fixup.mjs -- see that package's
-    # AGENTS.md for the seam and the fixup's why. org's fragment feeds
-    # neither the merge nor orval: it predates the merge machinery, and
-    # its frontend leg defers to the M1 org-web round that joins org
-    # into the merged document (go/org/AGENTS.md's deferrals table and
-    # docs/internal/21-api-contract.md's implementation-status note).
-    # storage's fragment feeds neither either: it ships its backend leg
-    # now and defers its frontend leg to that same future extension of
-    # the merged document -- org's fragment is queued first, storage's
-    # would ride the same regeneration (go/storage/AGENTS.md's deferrals
+    # AGENTS.md for the seam and the fixup's why. notification joined the
+    # merged document when its recipient-facing HTTP surface shipped (the
+    # notification round): its fragment feeds the merge and orval like
+    # authn's, because its operations are self-service surfaces a
+    # consumer shell's SDK calls. org's and storage's fragments feed
+    # neither the merge nor orval: org's frontend leg defers to the M1
+    # org-web round that joins org into the merged document
+    # (go/org/AGENTS.md's deferrals table and
+    # docs/internal/21-api-contract.md's implementation-status note);
+    # storage's frontend leg defers to that same future extension of the
+    # merged document -- org's fragment is queued first, storage's would
+    # ride the same regeneration (go/storage/AGENTS.md's deferrals
     # table). authn's fragment, by
     # contrast, has no "no consumer shell" deferral left: its generated
     # surface has been compile-consumed by @speed/auth-core since the
@@ -293,6 +297,10 @@ tasks:
         cd go/authn/api && \
         go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
           -config oapi-codegen.yaml openapi.yaml
+      - |
+        cd go/notification/api && \
+        go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
+          -config oapi-codegen.yaml openapi.yaml
 
   api:merge:
     desc: Merge every module's OpenAPI fragment into build/openapi/speed.yaml, stamp its info block, and lint the result against redocly.yaml's naming-convention rules.
@@ -301,11 +309,12 @@ tasks:
     # artifacts independently, but the MERGED document is a real release
     # artifact (build/openapi/speed.yaml, committed -- see .gitignore's
     # carve-out) in its own right once two or more fragments exist (which
-    # happened when authn's fragment landed alongside notes'), and it is
-    # also the frontend leg's input: api:gen depends on this task (see
-    # above), so a fragment edit regenerates through a fresh merge rather
-    # than a stale committed speed.yaml. The merge itself stays
-    # independent -- api:merge never depends on api:gen.
+    # happened when authn's fragment landed alongside notes', and grew a
+    # third member when notification's recipient-facing surface shipped),
+    # and it is also the frontend leg's input: api:gen depends on this
+    # task (see above), so a fragment edit regenerates through a fresh
+    # merge rather than a stale committed speed.yaml. The merge itself
+    # stays independent -- api:merge never depends on api:gen.
     #
     # `join`, not `bundle`: bundle expects one root document with $refs into
     # the others; these fragments are peers, each a complete document with
@@ -326,6 +335,7 @@ tasks:
         pnpm --package=@redocly/cli@2.51.1 dlx redocly join
         examples/reference-app/internal/notes/api/openapi.yaml
         go/authn/api/openapi.yaml
+        go/notification/api/openapi.yaml
         -o build/openapi/speed.yaml
       - node web/scripts/redocly-join-fixup.mjs
       - pnpm --package=@redocly/cli@2.51.1 dlx redocly lint build/openapi/speed.yaml --config redocly.yaml

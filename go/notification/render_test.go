@@ -22,7 +22,9 @@ import (
 // text -- so render tests can drive the per-channel part table in every
 // direction; clinic.reminder_only carries an in-app title alone, so a
 // render that asks for its missing body gets the coded failure the
-// convention promises.
+// convention promises. The three fixture types also ship their
+// "<type_key>.description" id in both languages, the copy the type
+// directory (handler.go's NotificationListTypes) renders from.
 func testClinicCatalog(t *testing.T) *i18n.Catalog {
 	t.Helper()
 	fs := fstest.MapFS{
@@ -32,6 +34,9 @@ func testClinicCatalog(t *testing.T) *i18n.Catalog {
 "clinic.appointment_reminder.email.subject" = "预约提醒"
 "clinic.appointment_reminder.email.body_text" = "{{.patient_name}} 您好，您预约的 {{.appointment_time}} 快到了。详情请登录查看。"
 "clinic.appointment_reminder.sms.text" = "{{.patient_name}} 您好，您预约的 {{.appointment_time}} 快到了。"
+"clinic.appointment_reminder.description" = "在您的预约时间临近时发送的就诊提醒。"
+"clinic.result_ready.description" = "在检查结果就绪时通知您。"
+"clinic.security_alert.description" = "与您账户安全相关的重要通知。"
 "clinic.reminder_only.in_app.title" = "只有标题的提醒"
 `)},
 		"en-US.toml": &fstest.MapFile{Data: []byte(`
@@ -40,6 +45,9 @@ func testClinicCatalog(t *testing.T) *i18n.Catalog {
 "clinic.appointment_reminder.email.subject" = "Appointment reminder"
 "clinic.appointment_reminder.email.body_text" = "Hi {{.patient_name}}, your appointment at {{.appointment_time}} is coming up. Sign in for details."
 "clinic.appointment_reminder.sms.text" = "Hi {{.patient_name}}, your appointment at {{.appointment_time}} is coming up."
+"clinic.appointment_reminder.description" = "An appointment reminder sent as your visit approaches."
+"clinic.result_ready.description" = "Lets you know when a result is ready."
+"clinic.security_alert.description" = "Alerts about the security of your account."
 "clinic.reminder_only.in_app.title" = "A reminder with no body copy"
 `)},
 	}

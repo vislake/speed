@@ -263,6 +263,22 @@ func (r *VerifiedContactRepository) ByChannelAndAddressIndex(ctx context.Context
 	return &contact, nil
 }
 
+// ListForTenant returns the tenant's whole contact roster in the tenant of
+// ctx, newest first. The ordering is created_at DESC with id DESC as the
+// tiebreak, so two contacts created in the same instant still list
+// deterministically -- the roster page the contacts API serves (the spec's
+// list-contacts operation) is not paged, so the order is the entire
+// contract, and it is the tenant's roster, not one user's: a contact
+// belongs to the tenant that verified it, so any identified caller of the
+// tenant sees the roster the tenant's staff manages.
+func (r *VerifiedContactRepository) ListForTenant(ctx context.Context) ([]VerifiedContact, error) {
+	var contacts []VerifiedContact
+	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Order("created_at DESC, id DESC").Find(&contacts).Error
+	})
+	return contacts, err
+}
+
 // ContactService is the consent-gated external contact ledger: creation
 // (double opt-in and business-attested), verification, resend,
 // unsubscribe, the bounced marking delivery calls after a hard failure,
@@ -384,6 +400,26 @@ func auditResourceContact(c *VerifiedContact) audit.Resource {
 		ID:          c.ID,
 		DisplayName: c.Channel + ":" + c.AddressIndex,
 	}
+}
+
+// List returns the tenant's whole verified-contact roster in the tenant of
+// ctx, newest first -- the service half of the contacts API's list
+// operation (openapi.yaml). The tenant comes from ctx, never from the
+// caller, and the answer is the tenant's roster, not one user's (a contact
+// is consent the tenant holds, so any identified caller of the tenant sees
+// it). No pagination and no filters exist: the roster is the tenant's
+// full external-recipient ledger.
+//
+// The returned rows still carry their decrypted Address -- the service
+// works on the model, whose serializer decrypts the column on read -- so a
+// caller rendering an API response must strip it (the handler's
+// toContactResponse drops it; the address is PII the API never echoes).
+func (s *ContactService) List(ctx context.Context) ([]VerifiedContact, error) {
+	contacts, err := s.repo.ListForTenant(ctx)
+	if err != nil {
+		return nil, errInternal(err)
+	}
+	return contacts, nil
 }
 
 // ContactCreateInput is the host's request to register a contact.

@@ -42,6 +42,10 @@ var channelRenderParts = map[string][]string{
 // an email body is paragraphs, and the i18n id space must be able to
 // express both without one template stretching to serve two shapes.
 //
+// The type directory's copy -- the description each type serves alongside
+// its key -- is a second id space sharing this convention's shape; see
+// renderTypeDescription below.
+//
 // # Callers
 //
 // The delivery job renders here at send time -- never at enqueue time --
@@ -80,4 +84,42 @@ func renderContent(catalog *i18n.Catalog, locale, typeKey, channel string, param
 		out[part] = text
 	}
 	return out, nil
+}
+
+// renderTypeDescription renders one notification type's directory copy --
+// the Description the type directory (handler.go's NotificationListTypes)
+// serves alongside each declared type -- in the locale the request
+// negotiated, from the host's merged message catalog.
+//
+// # Description-id convention
+//
+// The directory copy lives in the same id space as the channel templates
+// renderContent resolves, under the id the type key and ".description"
+// spell: a business module that declares "billing.invoice_paid" ships
+// "billing.invoice_paid.description" in both languages of its own bundle,
+// next to the type's channel templates, under the same AddModule id
+// constraint. The copy renders with no parameters -- the directory serves
+// the type itself, never an instance of it, so no per-message params exist
+// to interpolate -- and a description template that nevertheless references
+// one is a loud render failure like any other, never an empty slot: the
+// producer forgot that directory copy must stand alone, and the coded
+// failure names the type so the gap is traceable.
+//
+// # Failure mode
+//
+// The strictness is renderContent's own: a nil catalog or a missing
+// description id is ErrInternal.WithCause -- never a fallback to another
+// language and never a hole in the directory listing. A type whose
+// declaring module shipped no directory copy fails the whole listing
+// (handler.go's NotificationListTypes), so the gap cannot hide as a
+// missing row a client renders around.
+func renderTypeDescription(catalog *i18n.Catalog, locale, typeKey string) (string, error) {
+	if catalog == nil {
+		return "", ErrInternal.WithCause(errors.New("notification: render called with no catalog"))
+	}
+	text, err := catalog.Lookup(locale, typeKey+".description", map[string]any{})
+	if err != nil {
+		return "", ErrInternal.WithCause(fmt.Errorf("notification: render %s.description: %w", typeKey, err))
+	}
+	return text, nil
 }

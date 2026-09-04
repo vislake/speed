@@ -207,6 +207,201 @@ export interface AuthnError {
   params?: AuthnErrorParams;
 }
 
+/**
+ * The template parameters that produced title and body, keyed by the names the templates' placeholders spell out.
+ */
+export type NotificationMessageParams = { [key: string]: unknown };
+
+/**
+ * One inbox row: a message rendered for this recipient at delivery time, in the recipient's locale. title and body are the rendered text -- never template ids, which a client cannot resolve -- and params is the interpolation map that produced them, for a client that renders its own richer copy from the type directory.
+ */
+export interface NotificationMessage {
+  /** The message's id. */
+  id: string;
+  /** The notification type this message was rendered from, <module>.<entity>.<action>. */
+  type_key: string;
+  /** The message's group classification, taken from its type at delivery time. */
+  group: string;
+  /** The rendered headline of the message. */
+  title: string;
+  /** The rendered body of the message. */
+  body: string;
+  /** The template parameters that produced title and body, keyed by the names the templates' placeholders spell out. */
+  params: NotificationMessageParams;
+  /** The optional deep link the message points at; empty when the message has none. */
+  link: string;
+  /**
+     * When the message stops counting as unread, server time; null when it never expires.
+     * @nullable
+     */
+  expiry_at?: string | null;
+  /**
+     * When the recipient read the message; null while it is unread.
+     * @nullable
+     */
+  read_at?: string | null;
+  /** When the message was delivered into the inbox. */
+  created_at: string;
+}
+
+/**
+ * One page of the caller's inbox.
+ */
+export interface NotificationListMessagesResponse {
+  /** The page's messages, newest first. */
+  items: NotificationMessage[];
+}
+
+/**
+ * The caller's unread message count.
+ */
+export interface NotificationUnreadCountResponse {
+  /** The number of unread messages. */
+  count: number;
+}
+
+/**
+ * The outcome of a mark-all-read call.
+ */
+export interface NotificationReadAllResponse {
+  /** The number of messages this call marked read. */
+  read_count: number;
+}
+
+/**
+ * One declared notification type. Unsubscribable=false marks delivery the host guarantees: the recipient cannot switch these channels off through a preference.
+ */
+export interface NotificationType {
+  /** The type key, <module>.<entity>.<action>. */
+  type_key: string;
+  /** The type's inbox classification group. */
+  group: string;
+  /** The channels a recipient gets by default, before expressing any preference. The closed vocabulary: in_app, email, sms. */
+  default_channels: string[];
+  /** Whether the recipient may opt out of this type's channels. */
+  unsubscribable: boolean;
+  /** The type's copy, rendered from the declaring module's locale bundle in the negotiated language. */
+  description: string;
+}
+
+/**
+ * The deployment's declared notification types.
+ */
+export interface NotificationListTypesResponse {
+  /** The declared types, in declaration order. */
+  items: NotificationType[];
+}
+
+/**
+ * The caller's effective channel state for one notification type: the set of channels the caller currently receives, the type's defaults reduced by the caller's opt-outs.
+ */
+export interface NotificationPreference {
+  /** The type key this state belongs to. */
+  type_key: string;
+  /** The channels currently enabled for the caller, a subset of the type's vocabulary. */
+  channels: string[];
+}
+
+/**
+ * The caller's channel preferences per declared type.
+ */
+export interface NotificationListPreferencesResponse {
+  /** One entry per declared type, effective channels merged with defaults. */
+  items: NotificationPreference[];
+}
+
+/**
+ * One channel toggle for one notification type.
+ */
+export interface NotificationUpdatePreferenceRequest {
+  /** Whether the caller wants this type over this channel. */
+  enabled: boolean;
+}
+
+/**
+ * The address's channel.
+ */
+export type NotificationContactChannel = typeof NotificationContactChannel[keyof typeof NotificationContactChannel];
+
+
+export const NotificationContactChannel = {
+  email: 'email',
+  sms: 'sms',
+} as const;
+
+/**
+ * The contact's consent status: pending (code issued, awaiting verification), verified (consent proven), unsubscribed (consent withdrawn), or bounced (delivery failed hard).
+ */
+export type NotificationContactStatus = typeof NotificationContactStatus[keyof typeof NotificationContactStatus];
+
+
+export const NotificationContactStatus = {
+  pending: 'pending',
+  verified: 'verified',
+  unsubscribed: 'unsubscribed',
+  bounced: 'bounced',
+} as const;
+
+/**
+ * One contact row. The address itself never appears in this document's responses: plaintext addresses are PII and the blind-index would be an offline brute-force surface, so the API serves id, channel, status and timestamps only.
+ */
+export interface NotificationContact {
+  /** The contact's id. */
+  id: string;
+  /** The address's channel. */
+  channel: NotificationContactChannel;
+  /** The contact's consent status: pending (code issued, awaiting verification), verified (consent proven), unsubscribed (consent withdrawn), or bounced (delivery failed hard). */
+  status: NotificationContactStatus;
+  /** When the contact was added. */
+  created_at: string;
+}
+
+/**
+ * The tenant's contacts, newest first.
+ */
+export interface NotificationListContactsResponse {
+  items: NotificationContact[];
+}
+
+/**
+ * The address's channel.
+ */
+export type NotificationCreateContactRequestChannel = typeof NotificationCreateContactRequestChannel[keyof typeof NotificationCreateContactRequestChannel];
+
+
+export const NotificationCreateContactRequestChannel = {
+  email: 'email',
+  sms: 'sms',
+} as const;
+
+/**
+ * A new contact address to register through double opt-in.
+ */
+export interface NotificationCreateContactRequest {
+  /** The address's channel. */
+  channel: NotificationCreateContactRequestChannel;
+  /** The address itself: an email address, or a phone number in a form the module can normalize to E.164. Never logged; stored encrypted. */
+  address: string;
+}
+
+/**
+ * The code the contact's address received.
+ */
+export interface NotificationVerifyContactRequest {
+  /** The verification code from the contact's message. */
+  code: string;
+}
+
+export type NotificationErrorParams = { [key: string]: unknown };
+
+/**
+ * The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md) -- a client resolves code through its own i18n catalog, populated from this module's Locales() resources for the codes documented in its error index.
+ */
+export interface NotificationError {
+  code?: string;
+  params?: NotificationErrorParams;
+}
+
 export type AuthnSocialAuthorizeParams = {
 redirect_uri: string;
 };
@@ -217,6 +412,24 @@ export type AuthnListLoginHistoryParams = {
  * @maximum 200
  */
 limit?: number;
+};
+
+export type NotificationListMessagesParams = {
+/**
+ * Return only messages of this notification group.
+ */
+group?: string;
+/**
+ * The maximum number of rows to return. The module's read surface caps the page at 200 rows; larger limits are refused rather than silently truncated.
+ * @minimum 1
+ * @maximum 200
+ */
+limit?: number;
+/**
+ * The number of rows to skip before the returned page.
+ * @minimum 0
+ */
+offset?: number;
 };
 
 /**
@@ -1654,3 +1867,747 @@ export function useAuthnListLoginHistory<TData = Awaited<ReturnType<typeof authn
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+
+
+
+
+
+
+/**
+ * Returns the caller's own inbox rows (recipient_user_id matches the subject seam's caller), newest first, ordered by created_at then id so paging is stable. Messages whose expiry passed are still listed -- expiry governs the unread predicate only (read_at IS NULL AND expiry not passed), never list membership -- but a message that reached its expiry_at renders with the unread affordance already gone, which is what the frontend's per-row state derives from read_at. group filters to one notification group (a type-classification namespace like "appointments"); unknown groups answer an empty list, never an error.
+ * @summary List the caller's inbox messages, newest first.
+ */
+export const notificationListMessages = (
+    params?: NotificationListMessagesParams,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<NotificationListMessagesResponse>(
+      {url: `/api/v1/notifications/messages`, method: 'GET',
+        params, signal
+    },
+      );
+    }
+
+
+
+
+export const getNotificationListMessagesQueryKey = (params?: NotificationListMessagesParams,) => {
+    return [
+    `/api/v1/notifications/messages`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getNotificationListMessagesQueryOptions = <TData = Awaited<ReturnType<typeof notificationListMessages>>, TError = NotificationError>(params?: NotificationListMessagesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof notificationListMessages>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getNotificationListMessagesQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof notificationListMessages>>> = ({ signal }) => notificationListMessages(params, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof notificationListMessages>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type NotificationListMessagesQueryResult = NonNullable<Awaited<ReturnType<typeof notificationListMessages>>>
+export type NotificationListMessagesQueryError = NotificationError
+
+
+/**
+ * @summary List the caller's inbox messages, newest first.
+ */
+
+export function useNotificationListMessages<TData = Awaited<ReturnType<typeof notificationListMessages>>, TError = NotificationError>(
+ params?: NotificationListMessagesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof notificationListMessages>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getNotificationListMessagesQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * The number of the caller's inbox rows whose read_at is still nil and whose expiry_at -- when set -- has not passed (the module's unread predicate, applied with the server's own clock). A message that is unread but expired does not count, and a read-then-expired message never counts twice.
+ * @summary Count the caller's unread inbox messages.
+ */
+export const notificationGetUnreadCount = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<NotificationUnreadCountResponse>(
+      {url: `/api/v1/notifications/messages/unread-count`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getNotificationGetUnreadCountQueryKey = () => {
+    return [
+    `/api/v1/notifications/messages/unread-count`
+    ] as const;
+    }
+
+
+export const getNotificationGetUnreadCountQueryOptions = <TData = Awaited<ReturnType<typeof notificationGetUnreadCount>>, TError = NotificationError>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof notificationGetUnreadCount>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getNotificationGetUnreadCountQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof notificationGetUnreadCount>>> = ({ signal }) => notificationGetUnreadCount(signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof notificationGetUnreadCount>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type NotificationGetUnreadCountQueryResult = NonNullable<Awaited<ReturnType<typeof notificationGetUnreadCount>>>
+export type NotificationGetUnreadCountQueryError = NotificationError
+
+
+/**
+ * @summary Count the caller's unread inbox messages.
+ */
+
+export function useNotificationGetUnreadCount<TData = Awaited<ReturnType<typeof notificationGetUnreadCount>>, TError = NotificationError>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof notificationGetUnreadCount>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getNotificationGetUnreadCountQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * Applies the same unread predicate as the unread count to the caller's own rows: every message that was still unread becomes read, expired or not (marking read is not gated on expiry, only counting is). The answer names how many rows the call actually flipped, so a client can distinguish "nothing was unread" from "everything was already read" without a second round trip.
+ * @summary Mark every unread message of the caller as read.
+ */
+export const notificationMarkAllMessagesRead = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<NotificationReadAllResponse>(
+      {url: `/api/v1/notifications/messages/read-all`, method: 'POST', signal
+    },
+      );
+    }
+
+
+
+export const getNotificationMarkAllMessagesReadMutationOptions = <TError = NotificationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof notificationMarkAllMessagesRead>>, TError,void, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof notificationMarkAllMessagesRead>>, TError,void, TContext> => {
+
+const mutationKey = ['notificationMarkAllMessagesRead'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof notificationMarkAllMessagesRead>>, void> = () => {
+
+
+          return  notificationMarkAllMessagesRead()
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type NotificationMarkAllMessagesReadMutationResult = NonNullable<Awaited<ReturnType<typeof notificationMarkAllMessagesRead>>>
+
+    export type NotificationMarkAllMessagesReadMutationError = NotificationError
+
+    /**
+ * @summary Mark every unread message of the caller as read.
+ */
+export const useNotificationMarkAllMessagesRead = <TError = NotificationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof notificationMarkAllMessagesRead>>, TError,void, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof notificationMarkAllMessagesRead>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getNotificationMarkAllMessagesReadMutationOptions(options));
+    }
+
+/**
+ * Marks the named message read. Idempotent: a message already read answers 204 exactly like a first read. The row must be the caller's own and exist in the caller's tenant; a message id that is unknown, expired into a different tenant, or belongs to another recipient answers 404 -- never another user's message state.
+ * @summary Mark one of the caller's messages as read.
+ */
+export const notificationMarkMessageRead = (
+    messageId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<void>(
+      {url: `/api/v1/notifications/messages/${messageId}/read`, method: 'POST', signal
+    },
+      );
+    }
+
+
+
+export const getNotificationMarkMessageReadMutationOptions = <TError = NotificationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof notificationMarkMessageRead>>, TError,{messageId: string}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof notificationMarkMessageRead>>, TError,{messageId: string}, TContext> => {
+
+const mutationKey = ['notificationMarkMessageRead'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof notificationMarkMessageRead>>, {messageId: string}> = (props) => {
+          const {messageId} = props ?? {};
+
+          return  notificationMarkMessageRead(messageId,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type NotificationMarkMessageReadMutationResult = NonNullable<Awaited<ReturnType<typeof notificationMarkMessageRead>>>
+
+    export type NotificationMarkMessageReadMutationError = NotificationError
+
+    /**
+ * @summary Mark one of the caller's messages as read.
+ */
+export const useNotificationMarkMessageRead = <TError = NotificationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof notificationMarkMessageRead>>, TError,{messageId: string}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof notificationMarkMessageRead>>,
+        TError,
+        {messageId: string},
+        TContext
+      > => {
+      return useMutation(getNotificationMarkMessageReadMutationOptions(options));
+    }
+
+/**
+ * The live type directory: every notification type every module of the host declared at bootstrap (the registry's frozen taxonomy -- new types arrive with a new release, never at runtime), each with its group classification, its default channel set for a recipient who has expressed no preference, and whether the recipient may opt out of it at all (the module's non-unsubscribable types carry delivery the host guarantees, such as security or billing receipts). description is the type's copy rendered from the declaring module's own locale bundle in the language the request negotiates (Accept-Language; zh-CN is the default when nothing negotiates), the same catalog delivery renders from -- the directory a client renders must be the copy its recipient would have received.
+ * @summary List the notification types this tenant's deployment declares.
+ */
+export const notificationListTypes = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<NotificationListTypesResponse>(
+      {url: `/api/v1/notifications/types`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getNotificationListTypesQueryKey = () => {
+    return [
+    `/api/v1/notifications/types`
+    ] as const;
+    }
+
+
+export const getNotificationListTypesQueryOptions = <TData = Awaited<ReturnType<typeof notificationListTypes>>, TError = NotificationError>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof notificationListTypes>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getNotificationListTypesQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof notificationListTypes>>> = ({ signal }) => notificationListTypes(signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof notificationListTypes>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type NotificationListTypesQueryResult = NonNullable<Awaited<ReturnType<typeof notificationListTypes>>>
+export type NotificationListTypesQueryError = NotificationError
+
+
+/**
+ * @summary List the notification types this tenant's deployment declares.
+ */
+
+export function useNotificationListTypes<TData = Awaited<ReturnType<typeof notificationListTypes>>, TError = NotificationError>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof notificationListTypes>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getNotificationListTypesQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * The caller's effective channel preference for every declared notification type: a type the caller never touched answers with its default channel set, one they opted out of on some channels answers the surviving set. Every declared type appears exactly once, so a client renders one row per type without merging against the type directory. Channel vocabulary is the module's closed set: in_app, email, sms.
+ * @summary List the caller's channel preferences per notification type.
+ */
+export const notificationListPreferences = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<NotificationListPreferencesResponse>(
+      {url: `/api/v1/notifications/preferences`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getNotificationListPreferencesQueryKey = () => {
+    return [
+    `/api/v1/notifications/preferences`
+    ] as const;
+    }
+
+
+export const getNotificationListPreferencesQueryOptions = <TData = Awaited<ReturnType<typeof notificationListPreferences>>, TError = NotificationError>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof notificationListPreferences>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getNotificationListPreferencesQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof notificationListPreferences>>> = ({ signal }) => notificationListPreferences(signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof notificationListPreferences>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type NotificationListPreferencesQueryResult = NonNullable<Awaited<ReturnType<typeof notificationListPreferences>>>
+export type NotificationListPreferencesQueryError = NotificationError
+
+
+/**
+ * @summary List the caller's channel preferences per notification type.
+ */
+
+export function useNotificationListPreferences<TData = Awaited<ReturnType<typeof notificationListPreferences>>, TError = NotificationError>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof notificationListPreferences>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getNotificationListPreferencesQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * Sets whether the caller wants delivery over channel for typeKey. enabled=true restores a channel the caller had opted out of; enabled=false is the opt-out, refused for a type whose unsubscribable flag is false (delivery the host guarantees must not be switched off through a preference). The answer is the type's updated effective state (channels), so a client applying a toggle can overwrite its row from the response without recomputing the merge. Channel vocabulary is the module's closed set: in_app, email, sms.
+ * @summary Enable or disable one channel of one notification type for the caller.
+ */
+export const notificationUpdatePreference = (
+    typeKey: string,
+    channel: 'in_app' | 'email' | 'sms',
+    notificationUpdatePreferenceRequest: NotificationUpdatePreferenceRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<NotificationPreference>(
+      {url: `/api/v1/notifications/preferences/${typeKey}/${channel}`, method: 'PUT',
+      headers: {'Content-Type': 'application/json', },
+      data: notificationUpdatePreferenceRequest, signal
+    },
+      );
+    }
+
+
+
+export const getNotificationUpdatePreferenceMutationOptions = <TError = NotificationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof notificationUpdatePreference>>, TError,{typeKey: string;channel: 'in_app' | 'email' | 'sms';data: NotificationUpdatePreferenceRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof notificationUpdatePreference>>, TError,{typeKey: string;channel: 'in_app' | 'email' | 'sms';data: NotificationUpdatePreferenceRequest}, TContext> => {
+
+const mutationKey = ['notificationUpdatePreference'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof notificationUpdatePreference>>, {typeKey: string;channel: 'in_app' | 'email' | 'sms';data: NotificationUpdatePreferenceRequest}> = (props) => {
+          const {typeKey,channel,data} = props ?? {};
+
+          return  notificationUpdatePreference(typeKey,channel,data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type NotificationUpdatePreferenceMutationResult = NonNullable<Awaited<ReturnType<typeof notificationUpdatePreference>>>
+    export type NotificationUpdatePreferenceMutationBody = NotificationUpdatePreferenceRequest
+    export type NotificationUpdatePreferenceMutationError = NotificationError
+
+    /**
+ * @summary Enable or disable one channel of one notification type for the caller.
+ */
+export const useNotificationUpdatePreference = <TError = NotificationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof notificationUpdatePreference>>, TError,{typeKey: string;channel: 'in_app' | 'email' | 'sms';data: NotificationUpdatePreferenceRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof notificationUpdatePreference>>,
+        TError,
+        {typeKey: string;channel: 'in_app' | 'email' | 'sms';data: NotificationUpdatePreferenceRequest},
+        TContext
+      > => {
+      return useMutation(getNotificationUpdatePreferenceMutationOptions(options));
+    }
+
+/**
+ * The tenant's external-recipient roster, newest first: every address this tenant has put through the module's consent flow. The list is tenant-scoped, not per-user -- a contact belongs to the tenant that verified it, so any identified caller of the tenant sees the roster the tenant's staff manages. A contact row never echoes its address: the plaintext address is PII and the blind-index column would be an offline brute-force surface, so a list consumer sees id, channel, status and timestamps only -- which is all the UI's manage-addresses surface needs (the address itself is shown at the moment of submission, never re-served).
+ * @summary List the tenant's verified and pending contacts.
+ */
+export const notificationListContacts = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<NotificationListContactsResponse>(
+      {url: `/api/v1/notifications/contacts`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getNotificationListContactsQueryKey = () => {
+    return [
+    `/api/v1/notifications/contacts`
+    ] as const;
+    }
+
+
+export const getNotificationListContactsQueryOptions = <TData = Awaited<ReturnType<typeof notificationListContacts>>, TError = NotificationError>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof notificationListContacts>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getNotificationListContactsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof notificationListContacts>>> = ({ signal }) => notificationListContacts(signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof notificationListContacts>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type NotificationListContactsQueryResult = NonNullable<Awaited<ReturnType<typeof notificationListContacts>>>
+export type NotificationListContactsQueryError = NotificationError
+
+
+/**
+ * @summary List the tenant's verified and pending contacts.
+ */
+
+export function useNotificationListContacts<TData = Awaited<ReturnType<typeof notificationListContacts>>, TError = NotificationError>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof notificationListContacts>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getNotificationListContactsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * Registers channel address as a contact of the tenant and starts the module's consent flow: the row is created pending and a verification code is sent to the address (the one message the module's security rule allows to an unverified address -- the verification message itself -- rate limited per tenant and per recipient). The address is normalized before storage (email lowercased, phone to E.164) and encrypted at rest under a blind-index column for exact-match dedupe. Submitting an address already on file (any status) answers the existing contact unchanged and sends nothing -- re-adding is not a resend, resend is its own operation. Codes expire; delivery to the address is refused until the contact is verified, by the delivery pipeline's send-time recheck, never only at enqueue time.
+ * @summary Add a contact address to the tenant's roster through double opt-in.
+ */
+export const notificationCreateContact = (
+    notificationCreateContactRequest: NotificationCreateContactRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<NotificationContact>(
+      {url: `/api/v1/notifications/contacts`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: notificationCreateContactRequest, signal
+    },
+      );
+    }
+
+
+
+export const getNotificationCreateContactMutationOptions = <TError = NotificationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof notificationCreateContact>>, TError,{data: NotificationCreateContactRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof notificationCreateContact>>, TError,{data: NotificationCreateContactRequest}, TContext> => {
+
+const mutationKey = ['notificationCreateContact'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof notificationCreateContact>>, {data: NotificationCreateContactRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  notificationCreateContact(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type NotificationCreateContactMutationResult = NonNullable<Awaited<ReturnType<typeof notificationCreateContact>>>
+    export type NotificationCreateContactMutationBody = NotificationCreateContactRequest
+    export type NotificationCreateContactMutationError = NotificationError
+
+    /**
+ * @summary Add a contact address to the tenant's roster through double opt-in.
+ */
+export const useNotificationCreateContact = <TError = NotificationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof notificationCreateContact>>, TError,{data: NotificationCreateContactRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof notificationCreateContact>>,
+        TError,
+        {data: NotificationCreateContactRequest},
+        TContext
+      > => {
+      return useMutation(getNotificationCreateContactMutationOptions(options));
+    }
+
+/**
+ * Answers the code that was sent to the contact's address. A correct code within its expiry verifies the contact -- the consent record the delivery pipeline's send-time recheck demands -- and answers the verified row; a wrong or expired code leaves the contact pending and answers 400. The contact must be the tenant's own and still pending: resubmitting to one already verified answers 400 just like a wrong code -- wrong, expired, replayed and already-verified are deliberately one answer -- while an unsubscribed or bounced contact answers 409, its address never messaged again. Attempts are rate limited.
+ * @summary Verify a pending contact with its code.
+ */
+export const notificationVerifyContact = (
+    contactId: string,
+    notificationVerifyContactRequest: NotificationVerifyContactRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<NotificationContact>(
+      {url: `/api/v1/notifications/contacts/${contactId}/verify`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: notificationVerifyContactRequest, signal
+    },
+      );
+    }
+
+
+
+export const getNotificationVerifyContactMutationOptions = <TError = NotificationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof notificationVerifyContact>>, TError,{contactId: string;data: NotificationVerifyContactRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof notificationVerifyContact>>, TError,{contactId: string;data: NotificationVerifyContactRequest}, TContext> => {
+
+const mutationKey = ['notificationVerifyContact'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof notificationVerifyContact>>, {contactId: string;data: NotificationVerifyContactRequest}> = (props) => {
+          const {contactId,data} = props ?? {};
+
+          return  notificationVerifyContact(contactId,data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type NotificationVerifyContactMutationResult = NonNullable<Awaited<ReturnType<typeof notificationVerifyContact>>>
+    export type NotificationVerifyContactMutationBody = NotificationVerifyContactRequest
+    export type NotificationVerifyContactMutationError = NotificationError
+
+    /**
+ * @summary Verify a pending contact with its code.
+ */
+export const useNotificationVerifyContact = <TError = NotificationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof notificationVerifyContact>>, TError,{contactId: string;data: NotificationVerifyContactRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof notificationVerifyContact>>,
+        TError,
+        {contactId: string;data: NotificationVerifyContactRequest},
+        TContext
+      > => {
+      return useMutation(getNotificationVerifyContactMutationOptions(options));
+    }
+
+/**
+ * Re-issues the verification code of a pending contact -- the flow for a code that expired before it was entered. Only a pending contact can be resent to: an unsubscribed or bounced contact answers 409, its address never messaged again, and one already verified answers 400 like a wrong code (deliberately one answer). The fresh code replaces the old one; rate limited like the original send.
+ * @summary Issue a fresh verification code to a still-pending contact.
+ */
+export const notificationResendContactCode = (
+    contactId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<void>(
+      {url: `/api/v1/notifications/contacts/${contactId}/resend`, method: 'POST', signal
+    },
+      );
+    }
+
+
+
+export const getNotificationResendContactCodeMutationOptions = <TError = NotificationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof notificationResendContactCode>>, TError,{contactId: string}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof notificationResendContactCode>>, TError,{contactId: string}, TContext> => {
+
+const mutationKey = ['notificationResendContactCode'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof notificationResendContactCode>>, {contactId: string}> = (props) => {
+          const {contactId} = props ?? {};
+
+          return  notificationResendContactCode(contactId,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type NotificationResendContactCodeMutationResult = NonNullable<Awaited<ReturnType<typeof notificationResendContactCode>>>
+
+    export type NotificationResendContactCodeMutationError = NotificationError
+
+    /**
+ * @summary Issue a fresh verification code to a still-pending contact.
+ */
+export const useNotificationResendContactCode = <TError = NotificationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof notificationResendContactCode>>, TError,{contactId: string}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof notificationResendContactCode>>,
+        TError,
+        {contactId: string},
+        TContext
+      > => {
+      return useMutation(getNotificationResendContactCodeMutationOptions(options));
+    }

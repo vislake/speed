@@ -43,6 +43,9 @@ var errorCatalog = []struct {
 	// The delivery group (delivery.go).
 	{"ErrDispatchInvalid", ErrDispatchInvalid, "notification.dispatch_invalid", http.StatusBadRequest},
 
+	// The inbox group (repository.go and handler.go).
+	{"ErrMessageNotFound", ErrMessageNotFound, "notification.message_not_found", http.StatusNotFound},
+
 	// The Register-time wiring group (module.go).
 	{"ErrSMSSenderRequired", ErrSMSSenderRequired, "notification.sms_sender_required", http.StatusInternalServerError},
 	{"ErrMailFromRequired", ErrMailFromRequired, "notification.mail_from_required", http.StatusInternalServerError},
@@ -50,6 +53,11 @@ var errorCatalog = []struct {
 	{"ErrContactPhoneIndexerRequired", ErrContactPhoneIndexerRequired, "notification.contact_phone_indexer_required", http.StatusInternalServerError},
 	{"ErrDeliveryQueueRequired", ErrDeliveryQueueRequired, "notification.delivery_queue_required", http.StatusInternalServerError},
 	{"ErrUserAddressResolverRequired", ErrUserAddressResolverRequired, "notification.user_address_resolver_required", http.StatusInternalServerError},
+
+	// The HTTP-transport group (handler.go), mirroring org's own pair.
+	{"ErrInvalidRequestBody", ErrInvalidRequestBody, "notification.invalid_request_body", http.StatusBadRequest},
+	{"ErrSubjectUnresolved", ErrSubjectUnresolved, "notification.subject_unresolved", http.StatusUnauthorized},
+	{"ErrInvalidListParams", ErrInvalidListParams, "notification.invalid_list_params", http.StatusBadRequest},
 }
 
 // TestErrorCatalog_IsComplete is what makes the promise at the top of

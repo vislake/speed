@@ -1155,3 +1155,142 @@ func TestContact_CreateCodeSendFailure_DeletesRow(t *testing.T) {
 		t.Errorf("mails = %d, want exactly the retry's 1 (a leftover row would have deduped and sent 0)", len(mails))
 	}
 }
+
+// contactRowAt returns a directly constructed verified_contacts row with its
+// CreatedAt pinned to at, so ordering tests do not depend on the clock's
+// resolution (gorm's autoCreateTime fills CreatedAt only when it is zero).
+// Rows are built by hand because the list surface under test is read-only:
+// seeding through the full create flow would smuggle consent machinery into
+// a listing test.
+func contactRowAt(t *testing.T, env *contactEnv, id, address string, at time.Time) *VerifiedContact {
+	return &VerifiedContact{
+		ID:           id,
+		Channel:      ChannelEmail,
+		Address:      address,
+		AddressIndex: mustIndex(t, env.svc.emailIndexer, address),
+		Status:       ContactStatusVerified,
+		ConsentBy:    ContactConsentByBusinessAttested,
+		ConsentRef:   "consent-doc-1",
+		CreatedAt:    at,
+	}
+}
+
+// TestContact_ListForTenant_NewestFirst_TenantScoped pins the roster
+// listing's contract: the tenant of ctx owns the answer (another tenant's
+// newer contact never appears), and within the tenant the order is newest
+// first -- created_at DESC, the order the contacts API's list operation
+// serves without pagination.
+func TestContact_ListForTenant_NewestFirst_TenantScoped(t *testing.T) {
+	env := newContactEnv(t)
+	ctx := tenantCtx("tenant-acme")
+
+	t1 := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	t3 := time.Date(2026, 9, 1, 11, 0, 0, 0, time.UTC)
+	rows := []*VerifiedContact{
+		contactRowAt(t, env, "contact-a1", "first@example.com", t1),
+		contactRowAt(t, env, "contact-a2", "second@example.com", t2),
+		contactRowAt(t, env, "contact-a3", "third@example.com", t3),
+	}
+	for _, row := range rows {
+		if err := env.svc.repo.Create(ctx, row); err != nil {
+			t.Fatalf("Create(%s): %v", row.ID, err)
+		}
+	}
+	other := contactRowAt(t, env, "contact-b1", "other-tenant@example.com", t3.Add(time.Hour))
+	if err := env.svc.repo.Create(tenantCtx("tenant-bright"), other); err != nil {
+		t.Fatalf("Create(other tenant): %v", err)
+	}
+
+	got, err := env.svc.repo.ListForTenant(ctx)
+	if err != nil {
+		t.Fatalf("ListForTenant: %v", err)
+	}
+	want := []string{"contact-a3", "contact-a2", "contact-a1"}
+	if len(got) != len(want) {
+		t.Fatalf("ListForTenant returned %d rows %v, want %d (%v)", len(got), contactIDsOf(got), len(want), want)
+	}
+	for i, id := range want {
+		if got[i].ID != id {
+			t.Errorf("row %d = %q, want %q (newest first)", i, got[i].ID, id)
+		}
+	}
+}
+
+// contactIDsOf is the string form of a contact slice's ids, for failure
+// messages.
+func contactIDsOf(rows []VerifiedContact) []string {
+	ids := make([]string, len(rows))
+	for i := range rows {
+		ids[i] = rows[i].ID
+	}
+	return ids
+}
+
+// TestContact_ListForTenant_SameCreatedAt_IdDescTiebreak pins the tiebreak
+// half of the roster ordering: two contacts created in the same instant
+// list deterministically by id DESC, so the unpaged roster never presents
+// same-instant rows in an order that can change between reads.
+func TestContact_ListForTenant_SameCreatedAt_IdDescTiebreak(t *testing.T) {
+	env := newContactEnv(t)
+	ctx := tenantCtx("tenant-acme")
+
+	same := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	for _, tc := range []struct{ id, address string }{
+		{"contact-1", "one@example.com"},
+		{"contact-2", "two@example.com"},
+	} {
+		if err := env.svc.repo.Create(ctx, contactRowAt(t, env, tc.id, tc.address, same)); err != nil {
+			t.Fatalf("Create(%s): %v", tc.id, err)
+		}
+	}
+
+	got, err := env.svc.repo.ListForTenant(ctx)
+	if err != nil {
+		t.Fatalf("ListForTenant: %v", err)
+	}
+	if len(got) != 2 || got[0].ID != "contact-2" || got[1].ID != "contact-1" {
+		t.Errorf("ListForTenant = %v, want [contact-2 contact-1]: same created_at must break ties by id DESC", contactIDsOf(got))
+	}
+}
+
+// TestContactService_List_ReturnsTheRosterNewestFirst is the service face of
+// the same contract: List answers the tenant's whole roster, newest first,
+// and returns the model rows -- whose Address field carries the decrypted
+// plaintext (the serializer decrypts on read). Stripping the address is the
+// response layer's job; this test pins that the service itself is where the
+// roster ends and the plaintext begins.
+func TestContactService_List_ReturnsTheRosterNewestFirst(t *testing.T) {
+	env := newContactEnv(t)
+	ctx := tenantCtx("tenant-acme")
+
+	t1 := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	const older, newer = "older@example.com", "newer@example.com"
+	for _, row := range []*VerifiedContact{
+		contactRowAt(t, env, "contact-old", older, t1),
+		contactRowAt(t, env, "contact-new", newer, t2),
+	} {
+		if err := env.svc.repo.Create(ctx, row); err != nil {
+			t.Fatalf("Create(%s): %v", row.ID, err)
+		}
+	}
+	if err := env.svc.repo.Create(tenantCtx("tenant-bright"), contactRowAt(t, env, "contact-other", "other@example.com", t2.Add(time.Hour))); err != nil {
+		t.Fatalf("Create(other tenant): %v", err)
+	}
+
+	got, err := env.svc.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("List returned %d rows %v, want the owning tenant's 2", len(got), contactIDsOf(got))
+	}
+	if got[0].ID != "contact-new" || got[1].ID != "contact-old" {
+		t.Errorf("List = %v, want [contact-new contact-old]", contactIDsOf(got))
+	}
+	if got[0].Address != newer || got[1].Address != older {
+		t.Errorf("List returned addresses %q and %q, want the decrypted plaintext %q and %q",
+			got[0].Address, got[1].Address, newer, older)
+	}
+}

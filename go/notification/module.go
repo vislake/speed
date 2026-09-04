@@ -13,9 +13,25 @@ import (
 	"github.com/vislake/speed/go/notification/migrations"
 )
 
+//go:embed api/openapi.yaml
+var openAPISpecYAML []byte
+
 // moduleName is notification's pkgcore.Module.Name(). It is also the key
 // dbkit.MigrationRegistry.Register builds its dependency graph on.
 const moduleName = "notification"
+
+// apiPath is the common prefix notification's HTTP routes are mounted at
+// (see Register below). It must agree with the "paths:" keys of this
+// module's own OpenAPI fragment (api/openapi.yaml): every one of them
+// starts with this prefix, and Handler's inner mux (built by
+// api.HandlerFromMux, see handler.go) registers each spec path as an
+// ABSOLUTE net/http pattern -- mounting at apiPath here only tells the
+// host's outer mux which requests to hand to Handler at all. One path under
+// this prefix is deliberately absent from the fragment: the inbox stream,
+// GET /api/v1/notifications/stream -- server-sent events are not an
+// OpenAPI 3.0 media type, the fragment's header records the omission, and
+// handler.go mounts it on the inner mux by hand alongside the spec paths.
+const apiPath = "/api/v1/notifications"
 
 // Module implements pkgcore.Module for go/notification: the tenant's
 // notification inbox, its per-type channel preference matrix, the
@@ -98,6 +114,31 @@ type Module struct {
 	mailFrom     string
 	emailIndexer *dbkit.BlindIndexer
 	phoneIndexer *dbkit.BlindIndexer
+
+	// inbox is the in-app inbox's repository, built at construction over db.
+	// The delivery pipeline (delivery.go's DeliveryService) holds the SAME
+	// instance -- Module constructs it once and hands it to newDeliveryService
+	// -- so the HTTP surface Handler reads and marks is the very repository
+	// the pipeline writes, one data path for the inbox rather than two
+	// wrappers over one connection that documentation must explain away.
+	inbox *Repository
+
+	// subject resolves the HTTP caller's identity for the endpoints
+	// handler.go serves (WithSubjectResolver) -- the same seam org declares
+	// under the same name, satisfied structurally by whatever
+	// authenticating layer the host wires. Nil is a legal, if unusable,
+	// wiring: the module's whole HTTP surface is own-data self-service
+	// (handler.go's file comment), so every endpoint fails closed with
+	// ErrSubjectUnresolved rather than Register refusing to boot -- a host
+	// that has not wired an identity layer yet can still boot notification
+	// and exercise its Go service faces (Deliveries, Contacts,
+	// Preferences) until the seam arrives.
+	subject SubjectResolver
+
+	// handler serves notification's HTTP surface. Built by Register, once
+	// every Option has already run -- see Register's own doc comment for why
+	// this cannot happen in NewModule.
+	handler *Handler
 }
 
 // Option configures a Module at construction time.
@@ -163,6 +204,21 @@ func WithUserAddressResolver(resolver UserAddressResolver) Option {
 	return func(m *Module) { m.resolver = resolver }
 }
 
+// WithSubjectResolver injects the seam Handler uses to identify the HTTP
+// caller (see SubjectResolver's own doc comment in handler.go), mirroring
+// org's option of the same name. The module's whole HTTP surface is
+// own-data self-service, so the seam gates every endpoint the handler
+// serves -- the per-recipient inbox and preference rows, and the contact
+// operations, whose roster is tenant-wide and uses the resolved id as an
+// identification gate only (handler.go's file comment). That is exactly
+// why an unwired resolver fails every endpoint closed with
+// ErrSubjectUnresolved instead of Register refusing to boot: a host
+// without an identity layer yet can still boot notification and exercise
+// its Go service faces (Deliveries, Contacts, Preferences).
+func WithSubjectResolver(resolver SubjectResolver) Option {
+	return func(m *Module) { m.subject = resolver }
+}
+
 // NewModule returns a Module whose tables live in db. Constructing a Module
 // performs no I/O: opening and migrating db is the host's responsibility,
 // done once at startup before Bootstrap ever calls Register. The required
@@ -173,13 +229,14 @@ func WithUserAddressResolver(resolver UserAddressResolver) Option {
 func NewModule(db *gorm.DB, opts ...Option) *Module {
 	m := &Module{
 		db:       db,
+		inbox:    NewRepository(db),
 		prefs:    NewPreferenceService(db),
 		contacts: NewContactService(db),
 	}
 	for _, opt := range opts {
 		opt(m)
 	}
-	m.deliveries = newDeliveryService(db, m.prefs, m.contacts)
+	m.deliveries = newDeliveryService(m.inbox, m.prefs, m.contacts)
 	m.deliveries.queue = m.queue
 	m.deliveries.resolver = m.resolver
 	m.deliveries.sms = m.sms
@@ -246,15 +303,16 @@ func (m *Module) Migrations() embed.FS { return migrations.FS }
 // declaring modules' own bundles (see render.go's template-id convention).
 func (m *Module) Locales() embed.FS { return locales.FS }
 
-// OpenAPISpec implements pkgcore.Module: nil.
-//
-// notification has no OpenAPI fragment yet, because it has no HTTP surface
-// yet: the module's routes arrive in a later round's HTTP block, and the
-// fragment -- go/notification/api/openapi.yaml, joining the spec-first
-// pipeline of docs/internal/21-api-contract.md -- ships with them. Until
-// then a nil spec contributes nothing to the merged document, which is the
-// same nothing every fragment-less module contributes today.
-func (m *Module) OpenAPISpec() []byte { return nil }
+// OpenAPISpec implements pkgcore.Module: it returns notification's own
+// OpenAPI fragment, embedded from api/openapi.yaml. That fragment is the
+// single source of this module's API surface -- the api package's generated
+// types and ServerInterface (api/notification-server.gen.go, regenerated by
+// task api:gen) derive from it, and Handler implements that interface (see
+// handler.go) -- per docs/internal/21-api-contract.md's spec-first decision.
+// The one route this module serves that the fragment deliberately does not
+// carry, the inbox stream, is documented in the fragment's own header and
+// mounted by handler.go.
+func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 
 // Register implements pkgcore.Module. Per the interface's contract it only
 // declares and wires -- no database call, no outbound call, nothing that
@@ -299,10 +357,17 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 //     announces it on this replica's bus. Every attachment only passes
 //     already-validated references down; nothing is re-validated here.
 //
-// No permissions or routes are declared yet: the module has no caller-scoped
-// operation and no request path until a later round builds its HTTP surface,
-// and each declaration arrives with the producer that needs it, exactly as
-// errors.go's doc comment says of error codes.
+// No permissions are declared: notification's routes carry no permission
+// gate of their own -- who may read a recipient's inbox or a tenant's
+// contact roster is a host-side authorization decision (the fixed
+// middleware chain's rbac layer), and the module declares no resource its
+// consumer would have to invent a permission for. The HTTP surface itself
+// is declared here, as Handler's construction and one route mount: built in
+// Register -- never in NewModule -- because every Option a caller passed to
+// NewModule (WithSubjectResolver above all) has already run by the time
+// Register is called, so the handler is built from the host's final
+// wiring, and each declaration arrives with the producer that needs it,
+// exactly as errors.go's doc comment says of error codes.
 func (m *Module) Register(reg *pkgcore.Registry) error {
 	if m.sms == nil {
 		return ErrSMSSenderRequired
@@ -348,6 +413,20 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	m.contacts.attachHost(reg, reg.AuditActions)
 	m.deliveries.attachHost(reg)
 	reg.Events.Subscribe(EventInboxCreated, m.hub.HandleEvent)
+
+	// Handler is built here, not in NewModule, deliberately: every Option a
+	// caller passed to NewModule -- WithSubjectResolver above all -- has
+	// already run by the time Register is called (Bootstrap calls Register
+	// only after NewModule has returned), so the resolver Handler is given
+	// is whichever one the host actually configured, never a nil one
+	// captured before the option ran. The registry slice the handler reads
+	// at request time (its catalog, for type-description rendering) is
+	// attached under the same rule delivery.go's attachHost documents: read
+	// from the registry at call time, never captured here, when
+	// reg.Locales() is still nil.
+	m.handler = NewHandler(m.inbox, m.prefs, m.contacts, m.hub, m.subject)
+	m.handler.attachHost(reg)
+	reg.Routes.Mount(apiPath, m.handler)
 	return nil
 }
 

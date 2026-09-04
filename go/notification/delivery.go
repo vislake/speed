@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
-	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
@@ -260,17 +259,21 @@ type DeliveryService struct {
 	host     deliveryHost
 }
 
-// newDeliveryService returns a DeliveryService over db and the module's two
-// decision services. The queue, address resolver and host seams are filled
-// in later -- the queue and resolver by Module's options, the host by
-// Register -- exactly as ContactService's seams arrive; before then,
-// Dispatch refuses on the missing queue and the job cannot be registered.
-func newDeliveryService(db *gorm.DB, prefs *PreferenceService, contacts *ContactService) *DeliveryService {
+// newDeliveryService returns a DeliveryService over the module's inbox
+// repository and its two decision services. The inbox repository is
+// constructed by Module -- once, at NewModule -- and the SAME instance
+// reaches both the pipeline and the HTTP surface, so delivery writes and
+// handler reads are one data path, not two wrappers over one connection.
+// The queue, address resolver and host seams are filled in later -- the
+// queue and resolver by Module's options, the host by Register -- exactly
+// as ContactService's seams arrive; before then, Dispatch refuses on the
+// missing queue and the job cannot be registered.
+func newDeliveryService(inbox *Repository, prefs *PreferenceService, contacts *ContactService) *DeliveryService {
 	return &DeliveryService{
 		prefs:    prefs,
 		contacts: contacts,
-		inbox:    NewRepository(db),
-		sendRecs: NewSendRecordRepository(db),
+		inbox:    inbox,
+		sendRecs: NewSendRecordRepository(inbox.db),
 	}
 }
 

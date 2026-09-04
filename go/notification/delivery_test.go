@@ -137,7 +137,7 @@ func newDeliveryEnv(t *testing.T) *deliveryEnv {
 	contacts.host = host
 	contacts.audit = reg.AuditActions
 
-	svc := newDeliveryService(db, prefs, contacts)
+	svc := newDeliveryService(NewRepository(db), prefs, contacts)
 	svc.queue = queue
 	svc.resolver = resolver
 	svc.sms = sms
