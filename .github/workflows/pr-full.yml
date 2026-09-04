@@ -19,12 +19,15 @@ name: pr-full
 # the label gate, for manual full-matrix runs.
 #
 # COVERAGE -- what genuinely runs today
-#   * go-modules job: the same seventeen-module matrix as pr-check through the
-#     reusable go-module-ci workflow (golangci-lint, go vet, unit tests
+#   * go-modules job: the same eighteen-module matrix as pr-check through
+#     the reusable go-module-ci workflow (golangci-lint, go vet, unit tests
 #     under -race, a workspace-context build and a GOWORK=off standalone
 #     build) -- the full matrix runs the unit tier too. Per 18-cicd's
 #     reusable-workflow design rule, this file adds one matrix row per
-#     module and copies no legs.
+#     module and copies no legs. go/billing ships no Docker-backed
+#     integration_test/ tier this round, so it is deliberately absent from
+#     the integration-tiers matrix below, the same absence go/pki's and
+#     go/metering's own rounds recorded for themselves.
 #   * integration-tiers job: the Docker-backed integration tiers
 #     (-tags=integration), one matrix row per module that ships a tier, run
 #     from inside the module: go test -race -tags=integration ./... -- the
@@ -149,6 +152,7 @@ jobs:
           - go/integration
           - go/metering
           - go/sharing
+          - go/billing
     uses: ./.github/workflows/reusable/go-module-ci.yml
     with:
       module: ${{ matrix.module }}
