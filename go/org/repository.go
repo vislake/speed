@@ -3,10 +3,12 @@ package org
 import (
 	"context"
 	"errors"
+	"time"
 
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/pkgcore"
 )
 
 // Repository is org's tenant-scoped data-access type for OrgNode.
@@ -156,24 +158,67 @@ func (r *Repository) byIDs(ctx context.Context, ids []string) ([]OrgNode, error)
 // org-level error the row count implies.
 var errSubtreeSizeUnexpected = errors.New("org: subtree delete matched an unexpected number of rows")
 
-// deleteLeaf removes the single node whose path is exactly prefix, and
-// refuses -- rolling the whole statement back -- if that prefix turns out to
-// match anything else.
+// softDeleteActor resolves the acting identity from ctx for a bulk
+// mark-delete's deleted_by column, mirroring dbkit.Repository[T]'s own
+// unexported softDelete exactly: pkgcore.ActorFromContext's ID when ctx
+// carries one, the empty string otherwise -- which is not itself an error,
+// the same convention audit_capture.go uses for a missing Actor.
 //
-// The row count is checked INSIDE the transaction on purpose. A check-then-
-// delete pair would leave a window in which another request adds a child to
-// the node between the two statements, and the delete would then orphan that
-// child: its parent_id would point at a removed row and its path would name a
-// node that no longer exists. There is no foreign key to catch that (a
-// self-referencing FK is unenforced on SQLite unless foreign_keys is turned
-// on, which would make the two dialects behave differently), so the guard has
-// to be the transaction itself.
+// deleteLeaf and deleteSubtree below need their own copy of this rather than
+// reaching dbkit.Repository[OrgNode].Delete's promoted, single-row
+// mark-delete: both are a bulk write over a whole subtree, in one statement
+// inside one transaction, a shape the promoted single-row Delete cannot
+// express -- see deleteSubtree's own doc comment for why row-by-row is not
+// an acceptable substitute.
+func softDeleteActor(ctx context.Context) string {
+	if actor, ok := pkgcore.ActorFromContext(ctx); ok {
+		return actor.ID
+	}
+	return ""
+}
+
+// deleteLeaf mark-deletes the single node whose path is exactly prefix, and
+// refuses -- rolling the whole statement back -- if that prefix turns out to
+// match more than one currently-live row.
+//
+// It is a bulk write, not the single-row dbkit.Repository[OrgNode].Delete
+// promoted onto Repository: it follows the exact shape dbkit's own
+// unexported softDelete uses (see dbkit's repository.go and AGENTS.md's
+// "Soft deletion" section) -- a real *OrgNode built and written through
+// tx.Where(...).Select(...).Updates(&m), never a map payload, so gorm's
+// SetupUpdateReflectValue resolves Model == Dest == &m and any audit
+// capture a host wires reads the real written values rather than a
+// zero-valued struct.
+//
+// The row count is checked INSIDE the transaction on purpose, exactly as it
+// was before this round switched the statement from DELETE to UPDATE. A
+// check-then-update pair would leave a window in which another request adds
+// a child to the node between the two statements, and this call would then
+// orphan that child: its parent_id would point at a soft-deleted row and its
+// path would name a node no ordinary read can see. There is no foreign key
+// to catch that (a self-referencing FK is unenforced on SQLite unless
+// foreign_keys is turned on, which would make the two dialects behave
+// differently), so the guard has to be the transaction itself.
+//
+// The WHERE clause explicitly requires deleted_at IS NULL: only currently-
+// live rows count toward "does this node have children". A node whose only
+// remaining "descendant" is itself already soft-deleted (from some earlier,
+// independent mark-delete) is correctly treated as a leaf -- its hidden
+// descendant is not resurrected or re-touched by this call, and does not
+// block the delete the way a live one would.
 //
 // It reports the number of rows the prefix matched, so the caller can turn
 // "more than one" into org.node_has_children with a real count.
 func (r *Repository) deleteLeaf(ctx context.Context, prefix string) (matched int64, err error) {
+	now := time.Now()
+	deletedBy := softDeleteActor(ctx)
 	err = dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
-		res := tx.Where("path LIKE ?", prefix+"%").Delete(&OrgNode{})
+		m := OrgNode{DeletedAt: &now, DeletedBy: deletedBy}
+		res := tx.
+			Where("path LIKE ?", prefix+"%").
+			Where("deleted_at IS NULL").
+			Select("DeletedAt", "DeletedBy").
+			Updates(&m)
 		if res.Error != nil {
 			return res.Error
 		}
@@ -192,18 +237,36 @@ func (r *Repository) deleteLeaf(ctx context.Context, prefix string) (matched int
 	return matched, nil
 }
 
-// deleteSubtree removes the node whose path is exactly prefix and every node
-// beneath it, in one statement inside one transaction, and reports how many
-// rows it removed. Deleting a subtree row by row would leave a partially
-// deleted tree behind on any failure; one DELETE cannot.
+// deleteSubtree mark-deletes the node whose path is exactly prefix and every
+// currently-live node beneath it, in one statement inside one transaction,
+// and reports how many rows it touched. Mark-deleting a subtree row by row
+// -- for instance by calling the promoted, single-row
+// dbkit.Repository[OrgNode].Delete once per descendant -- would leave a
+// partially soft-deleted tree behind on any mid-loop failure, and would
+// abandon the very atomicity go/org/AGENTS.md's "Known limitations" already
+// flags as missing for Move; one UPDATE cannot leave that window.
 //
-// The statement is a plain Delete against a TenantScoped model, so the
-// isolation plugin injects the tenant filter here exactly as it does for a
-// query.
+// It follows dbkit's own unexported softDelete shape exactly, the same way
+// deleteLeaf's doc comment describes: a real *OrgNode, Model == Dest == &m,
+// never a map payload.
+//
+// The statement is a plain Updates against a TenantScoped model, so the
+// isolation plugin injects the tenant filter here exactly as it did for the
+// Delete this replaces. The added "deleted_at IS NULL" leaves an
+// already-soft-deleted descendant (from some earlier, independent
+// mark-delete) untouched rather than re-stamping its deleted_at/deleted_by
+// with this call's own attribution.
 func (r *Repository) deleteSubtree(ctx context.Context, prefix string) (int64, error) {
+	now := time.Now()
+	deletedBy := softDeleteActor(ctx)
 	var affected int64
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
-		res := tx.Where("path LIKE ?", prefix+"%").Delete(&OrgNode{})
+		m := OrgNode{DeletedAt: &now, DeletedBy: deletedBy}
+		res := tx.
+			Where("path LIKE ?", prefix+"%").
+			Where("deleted_at IS NULL").
+			Select("DeletedAt", "DeletedBy").
+			Updates(&m)
 		affected = res.RowsAffected
 		return res.Error
 	})

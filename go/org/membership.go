@@ -108,6 +108,24 @@ type Membership struct {
 	// autoUpdateTime, never by application code and never by a NOW() default.
 	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
 	UpdatedAt time.Time `gorm:"column:updated_at;autoUpdateTime"`
+
+	// DeletedAt and DeletedBy are dbkit.SoftDeletable's required pair
+	// (go/dbkit/soft_delete.go): implementing that interface below is what
+	// makes dbkit.Repository[Membership].Delete -- promoted unchanged and
+	// called by MemberService.Remove -- a mark-delete instead of a
+	// physical DELETE, and what makes dbkit.Repository[Membership].Restore
+	// -- and MemberService.Restore, which wraps it -- meaningful for this
+	// model. Neither field is ever set by application code directly: both
+	// writes go through dbkit's own reflection-based field access, exactly
+	// as TenantID does.
+	//
+	// uq_memberships_tenant_user became a partial index scoped
+	// WHERE deleted_at IS NULL in the same migration that adds these two
+	// columns (migrations/{postgres,sqlite}/0004_add_soft_delete.sql), so a
+	// removed member's seat frees up immediately for a fresh Add, instead
+	// of staying reserved by a row nobody can see.
+	DeletedAt *time.Time `gorm:"column:deleted_at"`
+	DeletedBy string     `gorm:"column:deleted_by;not null;default:''"`
 }
 
 // TableName names the memberships table.
@@ -116,8 +134,19 @@ func (Membership) TableName() string { return tableMemberships }
 // IsActive reports whether the membership grants visibility right now.
 func (m Membership) IsActive() bool { return m.Status == MembershipStatusActive }
 
+// GetDeletedAt returns Membership's soft-delete marker, satisfying
+// dbkit.SoftDeletable. Like GetTenantID, this is never called by dbkit's
+// soft-delete auto-scope plugin or by Repository[Membership] itself -- it is
+// a pure marker used only for the capability check that routes
+// dbkit.Repository[Membership].Delete onto the mark-delete path; the actual
+// field writes go through reflection on fixed field names.
+func (m Membership) GetDeletedAt() *time.Time { return m.DeletedAt }
+
 // compile-time check that Membership satisfies dbkit.TenantScoped.
 var _ dbkit.TenantScoped = Membership{}
+
+// compile-time check that Membership satisfies dbkit.SoftDeletable.
+var _ dbkit.SoftDeletable = Membership{}
 
 // MembershipRepository is org's tenant-scoped data-access type for
 // Membership.
