@@ -64,6 +64,49 @@ func hashSharePassword(password string) (string, error) {
 	return encodeSharePasswordPHC(salt, digest), nil
 }
 
+// dummySharePasswordHash is a fixed-parameter, fixed-content PHC string that
+// decodes cleanly but names no real password -- its salt and digest are
+// both all-zero byte slices of the same lengths a real hash uses, computed
+// deterministically at package init rather than drawn from crypto/rand, so
+// it costs nothing to construct and can never fail to construct.
+//
+// burnSharePasswordCheck runs verifySharePassword against this hash on
+// every Service.Access refusal path that would otherwise skip password
+// verification entirely -- see burnSharePasswordCheck's own doc comment.
+var dummySharePasswordHash = encodeSharePasswordPHC(
+	make([]byte, sharePasswordSaltLen),
+	make([]byte, sharePasswordKeyLen),
+)
+
+// burnSharePasswordCheck runs one argon2id verification at the same cost
+// parameters a real Service.Access password check uses, against
+// dummySharePasswordHash, and discards the result.
+//
+// Service.Access must call this on every refusal path that would otherwise
+// return without ever calling verifySharePassword: an unrecognized token
+// (no Share row to check a password against at all), a share with no
+// password configured, and a password-protected share accessed with no
+// password supplied. Without it, those paths return in the time a single
+// map/index lookup takes while a real password attempt against a
+// password-protected share pays argon2id's tens-of-milliseconds cost,
+// letting an external prober distinguish "this token names a
+// password-protected share" from every other refusal reason purely by
+// response latency -- undermining rule 5's outward-identical-answer
+// property (AGENTS.md's "The five mandatory rules" section) even though
+// every refusal already answers with the identical ErrNotAccessible.
+//
+// guess, when non-nil, is hashed as the attacker-supplied password would
+// be, so a probe that supplies a password guess against an unprotected
+// share or an unknown token pays the identical argon2id cost a guess
+// against a real password-protected share pays.
+func burnSharePasswordCheck(guess *string) {
+	attempt := ""
+	if guess != nil {
+		attempt = *guess
+	}
+	_, _ = verifySharePassword(dummySharePasswordHash, attempt)
+}
+
 // verifySharePassword reports whether password matches the PHC-encoded hash
 // in encoded.
 //

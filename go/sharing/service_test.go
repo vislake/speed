@@ -460,6 +460,90 @@ func TestService_Access_EveryRefusalReasonIsOutwardlyIdentical(t *testing.T) {
 	}
 }
 
+// TestService_Access_RefusalPathsPayEqualPasswordCheckCost closes the
+// timing side channel TestService_Access_EveryRefusalReasonIsOutwardlyIdentical
+// cannot see: that test only asserts Code/Status/Params equality, never
+// latency, so it passed even when a prior version of Access answered three
+// refusal paths -- an unknown token, a share with no password configured,
+// and a password-protected share accessed with no password at all -- in
+// roughly the time a lookup takes, while a refusal driven by an actual
+// (right-or-wrong) password guess paid argon2id's real, tens-of-milliseconds
+// cost. That gap let an external prober tell "this token names a
+// password-protected share" apart from every other refusal purely by
+// response latency, even though every refusal already answers with the
+// identical ErrNotAccessible (rule 5). This test fails on that unfixed
+// code, where the three burnable paths return far faster than the real
+// check, and passes once every path burns an equivalent argon2id check
+// (password.go's burnSharePasswordCheck).
+func TestService_Access_RefusalPathsPayEqualPasswordCheckCost(t *testing.T) {
+	if testing.Short() {
+		t.Skip("timing measurement is slow under -short")
+	}
+
+	svc, _ := newTestService(t, nil)
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc.now = fixedClock(now)
+
+	password := "correct-horse-battery-staple"
+	wrong := "an incorrect guess"
+	protected, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r", Password: &password})
+	if err != nil {
+		t.Fatalf("Create(password-protected): %v", err)
+	}
+	unprotected, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r"})
+	if err != nil {
+		t.Fatalf("Create(no password): %v", err)
+	}
+
+	const samples = 7
+
+	// minDuration runs run samples times and keeps the fastest
+	// observation -- scheduling noise (GC, OS preemption) only ever adds
+	// latency on top of a call's real cost, so the minimum across several
+	// runs is the most faithful estimate of that deterministic cost.
+	minDuration := func(run func()) time.Duration {
+		t.Helper()
+		best := time.Duration(1<<63 - 1)
+		for i := 0; i < samples; i++ {
+			start := time.Now()
+			run()
+			if d := time.Since(start); d < best {
+				best = d
+			}
+		}
+		return best
+	}
+
+	realCheck := minDuration(func() {
+		_, _ = svc.Access(testCtx(), protected.Token, AccessParams{Password: &wrong})
+	})
+
+	cases := map[string]func(){
+		"unknown token": func() {
+			_, _ = svc.Access(testCtx(), "no-such-token-ever", AccessParams{})
+		},
+		"no password configured": func() {
+			_, _ = svc.Access(testCtx(), unprotected.Token, AccessParams{})
+		},
+		"missing password on a protected share": func() {
+			_, _ = svc.Access(testCtx(), protected.Token, AccessParams{})
+		},
+	}
+
+	// The unfixed code answered these three paths in a small fraction of
+	// the real check's time (a lookup vs. a real argon2id call).
+	// Requiring at least half the real check's duration leaves ample
+	// margin for scheduling noise while still failing hard against the
+	// effectively-instant unfixed fast paths.
+	const minFraction = 0.5
+	for name, run := range cases {
+		got := minDuration(run)
+		if float64(got) < float64(realCheck)*minFraction {
+			t.Errorf("%s: took %v, want at least %.0f%% of the real password check's %v -- a refusal path is skipping the argon2id burn and reopening the timing side channel", name, got, minFraction*100, realCheck)
+		}
+	}
+}
+
 // TestService_Access_LogsEveryAttempt pins rule 4's leave-a-trail half: a
 // resource owner can read back who viewed a share, and how many times,
 // through ListAccessLog -- including denied attempts.

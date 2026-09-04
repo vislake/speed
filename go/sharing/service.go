@@ -314,18 +314,29 @@ func (s *Service) emitSensitiveAudit(ctx context.Context, share *Share) error {
 }
 
 // Access resolves token into the share it names, for the caller's tenant
-// (read from ctx -- see AGENTS.md's "Tenant resolution for an
-// unauthenticated viewer" section for why this API requires ctx to already
-// carry the tenant, exactly as org.InviteService.Accept requires of its own
-// unauthenticated-token flow), recording exactly one AccessLogEntry and
-// publishing exactly one EventShareAccessed regardless of outcome.
+// (read from ctx). See AGENTS.md's "Tenant resolution for an
+// unauthenticated viewer" section for a known, unresolved gap this leaves
+// for a genuinely anonymous external visitor: unlike
+// org.InvitationRepository's otherwise similar byTokenHash construction,
+// whose caller (org.InviteService.Accept) is already authenticated and
+// already tenant-resolved before it is called, this module's actual
+// intended caller holds no access token and therefore no tenant claim to
+// resolve ctx's tenant from -- this round does not solve that, and the
+// round that adds the HTTP surface must.
+//
+// Access records exactly one AccessLogEntry and publishes exactly one
+// EventShareAccessed regardless of outcome.
 //
 // Every refusal reason -- an unrecognized token hash, a revoked share, an
 // expired one, a view-exhausted one, a missing password, or a wrong one --
 // answers with the identical ErrNotAccessible and nothing else, per rule 5
 // (docs/internal/07-platform-services.md's "the share surface must leak
 // nothing about the tenant" rule): an outside caller who cannot tell these
-// apart learns nothing by probing.
+// apart learns nothing by probing, including by timing the response --
+// every path below that would otherwise skip password verification
+// entirely instead burns an equivalent argon2id check against a dummy hash
+// (see burnSharePasswordCheck), so a caller cannot use response latency to
+// learn that a token names a password-protected share either.
 //
 // A granted access is recorded through recordView's compare-and-swap retry
 // loop before this method returns success, so the row Access hands back
@@ -341,17 +352,29 @@ func (s *Service) Access(ctx context.Context, token string, p AccessParams) (*Sh
 	if err != nil {
 		// No row to log against -- nothing in this tenant matches the
 		// token at all, so there is no ShareID to attribute a log entry
-		// to.
+		// to. Still pay the argon2id cost a real password check would
+		// pay, so an unrecognized token is not distinguishable by timing
+		// from a known, password-protected share.
+		burnSharePasswordCheck(p.Password)
 		return nil, ErrNotAccessible
 	}
 
 	passwordOK := true
 	if share.PasswordHash != nil {
 		if p.Password == nil {
+			// Pay the same argon2id cost a supplied guess would pay,
+			// rather than returning in the time a missing-field check
+			// takes.
+			burnSharePasswordCheck(nil)
 			passwordOK = false
 		} else if ok, verr := verifySharePassword(*share.PasswordHash, *p.Password); verr != nil || !ok {
 			passwordOK = false
 		}
+	} else {
+		// No password configured at all -- still burn the check so a
+		// prober cannot tell "no password required" apart from "wrong
+		// password" by response latency.
+		burnSharePasswordCheck(p.Password)
 	}
 
 	var (
