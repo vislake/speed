@@ -27,7 +27,7 @@ import (
 // mailer and object-store cases this validation cannot happen inside
 // pkgcore.Kernel -- WithDeploymentMode records the one fact this module
 // needs from the host to enforce it itself, at the same wiring-time moment
-// NewModule already validates WithSigningKeys and WithBlindIndexKey.
+// NewModule already validates WithKeySource and WithBlindIndexKey.
 var ErrMissingDistributedSMSSender = errors.New("authn: distributed deployment mode requires an explicit SMS sender")
 
 // SMS is one message to deliver to a phone number.

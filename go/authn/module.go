@@ -188,7 +188,7 @@ const (
 // options accumulates everything NewService and NewModule can be configured
 // with.
 type options struct {
-	keys           *KeySet
+	keySource      KeySource
 	blindIndexKey  []byte
 	membership     MembershipReader
 	now            func() time.Time
@@ -222,12 +222,19 @@ type options struct {
 // Option configures the authn module and the service inside it.
 type Option func(*options)
 
-// WithSigningKeys supplies the access-token key set. It is REQUIRED: there is
-// no safe default, and a key generated at startup would invalidate every
-// outstanding session on every restart and give each replica of a distributed
-// deployment a different one.
-func WithSigningKeys(keys *KeySet) Option {
-	return func(o *options) { o.keys = keys }
+// WithKeySource supplies the signing-key lifecycle provider access tokens
+// are minted and verified through. It is REQUIRED: there is no safe
+// default, and there is deliberately no second, static-injection path
+// (docs/internal/22-pki.md's "no second path" section) -- a fallback path
+// is exactly the failure mode the diagnosed system that motivated go/pki
+// had (an implicit "generate one myself if nothing was configured" route
+// that nobody could say for certain was or wasn't taken in production).
+//
+// A production deployment wires a *pki.Service here (structurally, with no
+// import of go/pki from this package -- see KeySource's own doc comment);
+// a unit test wires a minimal fake.
+func WithKeySource(keySource KeySource) Option {
+	return func(o *options) { o.keySource = keySource }
 }
 
 // WithBlindIndexKey supplies the 32-byte HMAC key the email and phone
@@ -470,8 +477,8 @@ func newOptions(opts []Option) (options, error) {
 		}
 	}
 
-	if cfg.keys == nil {
-		return options{}, errors.New("authn: a signing key set is required; supply one with WithSigningKeys")
+	if cfg.keySource == nil {
+		return options{}, errors.New("authn: a KeySource is required; supply one with WithKeySource")
 	}
 	if len(cfg.blindIndexKey) != blindIndexKeySize {
 		return options{}, errors.New("authn: a 32-byte blind-index key is required; supply one with WithBlindIndexKey")

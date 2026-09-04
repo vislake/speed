@@ -97,9 +97,9 @@ func TestHTTPSMSSender_PrivateEndpoint_Refused(t *testing.T) {
 func TestNewOptions_DistributedModeWithoutSMSSender_Fails(t *testing.T) {
 	t.Parallel()
 
-	keys, _ := newTestKeySet(t)
+	keys := testutil.NewKeySource(t, "kid-active")
 	_, err := newOptions([]Option{
-		WithSigningKeys(keys),
+		WithKeySource(keys),
 		WithBlindIndexKey(testutil.BlindIndexKey()),
 		WithDeploymentMode(pkgcore.DeploymentModeDistributed),
 	})
@@ -113,9 +113,9 @@ func TestNewOptions_DistributedModeWithoutSMSSender_Fails(t *testing.T) {
 func TestNewOptions_DistributedModeWithSMSSender_Succeeds(t *testing.T) {
 	t.Parallel()
 
-	keys, _ := newTestKeySet(t)
+	keys := testutil.NewKeySource(t, "kid-active")
 	cfg, err := newOptions([]Option{
-		WithSigningKeys(keys),
+		WithKeySource(keys),
 		WithBlindIndexKey(testutil.BlindIndexKey()),
 		WithDeploymentMode(pkgcore.DeploymentModeDistributed),
 		WithSMSSender(NewConsoleSMSSender(&bytes.Buffer{})),
@@ -135,9 +135,9 @@ func TestNewOptions_DistributedModeWithSMSSender_Succeeds(t *testing.T) {
 func TestNewOptions_StandaloneModeWithoutSMSSender_DefaultsToConsole(t *testing.T) {
 	t.Parallel()
 
-	keys, _ := newTestKeySet(t)
+	keys := testutil.NewKeySource(t, "kid-active")
 	cfg, err := newOptions([]Option{
-		WithSigningKeys(keys),
+		WithKeySource(keys),
 		WithBlindIndexKey(testutil.BlindIndexKey()),
 	})
 	if err != nil {

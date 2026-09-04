@@ -28,7 +28,7 @@ type serviceFixture struct {
 	clock   *testutil.Clock
 	members *testutil.Memberships
 	events  *testutil.EventRecorder
-	keys    *KeySet
+	keys    *testutil.KeySource
 }
 
 // newServiceFixture builds a fixture over a fresh in-memory KVStore. Tests
@@ -46,14 +46,7 @@ func newServiceFixtureWithKV(t *testing.T, kv pkgcore.KVStore, extra ...Option) 
 	clock := testutil.NewClock(time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC))
 	members := testutil.NewMemberships()
 
-	key, err := GenerateTokenKey("kid-test")
-	if err != nil {
-		t.Fatalf("GenerateTokenKey() error = %v", err)
-	}
-	keys, err := NewKeySet(key)
-	if err != nil {
-		t.Fatalf("NewKeySet() error = %v", err)
-	}
+	keys := testutil.NewKeySource(t, "kid-test")
 
 	bus := pkgcore.NewMemoryEventBus()
 	events := testutil.NewEventRecorder()
@@ -62,7 +55,7 @@ func newServiceFixtureWithKV(t *testing.T, kv pkgcore.KVStore, extra ...Option) 
 		EventIdentityBound, EventIdentityUnbound, EventMFAEnrolled, EventMFARecoveryCodesRegenerated)
 
 	opts := append([]Option{
-		WithSigningKeys(keys),
+		WithKeySource(keys),
 		WithBlindIndexKey(testutil.BlindIndexKey()),
 		WithMembershipReader(members),
 		WithClock(clock.Now),
@@ -118,7 +111,7 @@ func TestService_RegisterAndLogin(t *testing.T) {
 		t.Error("Login() returned no refresh token")
 	}
 
-	verified, err := f.svc.Verifier().Verify(pair.AccessToken)
+	verified, err := f.svc.Verifier().Verify(t.Context(), pair.AccessToken)
 	if err != nil {
 		t.Fatalf("the access token Login() issued does not verify: %v", err)
 	}
@@ -316,7 +309,7 @@ func TestService_Login_FailsClosedWithoutAMembershipReader(t *testing.T) {
 	// Now the same database through a service wired with no reader at all,
 	// which is what a host that forgot to inject one produces.
 	unwired, err := NewService(f.db, pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(),
-		WithSigningKeys(f.keys),
+		WithKeySource(f.keys),
 		WithBlindIndexKey(testutil.BlindIndexKey()),
 		WithClock(f.clock.Now),
 		WithPasswordParams(testParams()),
@@ -427,7 +420,7 @@ func TestService_SwitchTenant_ReusesTheSessionAndItsRefreshToken(t *testing.T) {
 		t.Fatal("SwitchTenant() returned the same access token")
 	}
 
-	verified, err := f.svc.Verifier().Verify(switched.AccessToken)
+	verified, err := f.svc.Verifier().Verify(t.Context(), switched.AccessToken)
 	if err != nil {
 		t.Fatalf("the switched access token does not verify: %v", err)
 	}
@@ -632,7 +625,7 @@ func TestService_Login_UpgradesAStaleHash(t *testing.T) {
 func newServiceOverDB(t *testing.T, f *serviceFixture, params PasswordParams) *Service {
 	t.Helper()
 	svc, err := NewService(f.db, pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(),
-		WithSigningKeys(f.keys),
+		WithKeySource(f.keys),
 		WithBlindIndexKey(testutil.BlindIndexKey()),
 		WithMembershipReader(f.members),
 		WithClock(f.clock.Now),
@@ -651,15 +644,8 @@ func TestNewService_RejectsAnIncompleteWiring(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
 	kv := pkgcore.NewMemoryKVStore()
 
-	key, err := GenerateTokenKey("kid-test")
-	if err != nil {
-		t.Fatalf("GenerateTokenKey() error = %v", err)
-	}
-	keys, err := NewKeySet(key)
-	if err != nil {
-		t.Fatalf("NewKeySet() error = %v", err)
-	}
-	good := []Option{WithSigningKeys(keys), WithBlindIndexKey(testutil.BlindIndexKey())}
+	keys := testutil.NewKeySource(t, "kid-test")
+	good := []Option{WithKeySource(keys), WithBlindIndexKey(testutil.BlindIndexKey())}
 
 	cases := []struct {
 		name string
@@ -672,8 +658,8 @@ func TestNewService_RejectsAnIncompleteWiring(t *testing.T) {
 		{name: "no event bus", db: db, kv: kv, opts: good},
 		{name: "no key-value store", db: db, bus: bus, opts: good},
 		{name: "no signing keys", db: db, bus: bus, kv: kv, opts: []Option{WithBlindIndexKey(testutil.BlindIndexKey())}},
-		{name: "no blind-index key", db: db, bus: bus, kv: kv, opts: []Option{WithSigningKeys(keys)}},
-		{name: "blind-index key of the wrong length", db: db, bus: bus, kv: kv, opts: []Option{WithSigningKeys(keys), WithBlindIndexKey([]byte("too short"))}},
+		{name: "no blind-index key", db: db, bus: bus, kv: kv, opts: []Option{WithKeySource(keys)}},
+		{name: "blind-index key of the wrong length", db: db, bus: bus, kv: kv, opts: []Option{WithKeySource(keys), WithBlindIndexKey([]byte("too short"))}},
 	}
 
 	for _, tc := range cases {

@@ -220,11 +220,11 @@ func NewService(db *gorm.DB, bus pkgcore.EventBus, kv pkgcore.KVStore, opts ...O
 		WithTokenIssuer(cfg.issuer),
 		WithTokenClock(cfg.now),
 	}
-	signer, err := NewSigner(cfg.keys, tokenOpts...)
+	signer, err := NewSigner(cfg.keySource, tokenOpts...)
 	if err != nil {
 		return nil, err
 	}
-	verifier, err := NewVerifier(cfg.keys, tokenOpts...)
+	verifier, err := NewVerifier(cfg.keySource, tokenOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -476,7 +476,7 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*TokenPair, error) 
 		return nil, err
 	}
 
-	pair, err := s.mintPair(user, session, tenantID, issued)
+	pair, err := s.mintPair(ctx, user, session, tenantID, issued)
 	if err != nil {
 		return nil, err
 	}
@@ -532,7 +532,7 @@ func (s *Service) Refresh(ctx context.Context, presented string) (*TokenPair, er
 		return nil, ErrInvalidCredentials
 	}
 
-	return s.mintPair(user, session, tenantID, issued)
+	return s.mintPair(ctx, user, session, tenantID, issued)
 }
 
 // SwitchTenant issues a new access token for a different tenant, REUSING the
@@ -584,7 +584,7 @@ func (s *Service) SwitchTenant(ctx context.Context, principal Principal, target 
 	}
 	session.CurrentTenantID = string(target)
 
-	pair, err := s.mintPair(user, session, target, IssuedRefreshToken{})
+	pair, err := s.mintPair(ctx, user, session, target, IssuedRefreshToken{})
 	if err != nil {
 		return nil, err
 	}
@@ -615,8 +615,8 @@ func (s *Service) Logout(ctx context.Context, sessionID string) error {
 // response, using the session's OWN authentication methods. issued.Secret is
 // empty for a tenant switch, which reuses the caller's existing refresh
 // token rather than minting one.
-func (s *Service) mintPair(user *User, session *Session, tenantID pkgcore.TenantID, issued IssuedRefreshToken) (*TokenPair, error) {
-	return s.mintPairWithAMR(user, session, tenantID, issued, session.AMRList())
+func (s *Service) mintPair(ctx context.Context, user *User, session *Session, tenantID pkgcore.TenantID, issued IssuedRefreshToken) (*TokenPair, error) {
+	return s.mintPairWithAMR(ctx, user, session, tenantID, issued, session.AMRList())
 }
 
 // mintPairWithAMR is mintPair generalized to an explicit amr, which
@@ -625,7 +625,7 @@ func (s *Service) mintPair(user *User, session *Session, tenantID pkgcore.Tenant
 // persisting that enrichment back to the session row. See VerifyStepUp's
 // own doc comment for why not persisting it is what bounds the elevation to
 // one access-token lifetime.
-func (s *Service) mintPairWithAMR(user *User, session *Session, tenantID pkgcore.TenantID, issued IssuedRefreshToken, amr []string) (*TokenPair, error) {
+func (s *Service) mintPairWithAMR(ctx context.Context, user *User, session *Session, tenantID pkgcore.TenantID, issued IssuedRefreshToken, amr []string) (*TokenPair, error) {
 	principal := Principal{
 		UserID:    user.ID,
 		TenantID:  tenantID,
@@ -634,7 +634,7 @@ func (s *Service) mintPairWithAMR(user *User, session *Session, tenantID pkgcore
 	}
 	principal.Email = user.Email
 
-	access, expiresAt, err := s.signer.Issue(principal)
+	access, expiresAt, err := s.signer.Issue(ctx, principal)
 	if err != nil {
 		return nil, err
 	}

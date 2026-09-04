@@ -116,7 +116,7 @@ func Middleware(verifier *Verifier, opts ...MiddlewareOption) func(http.Handler)
 				return
 			}
 
-			principal, err := verifier.Verify(raw)
+			principal, err := verifier.Verify(r.Context(), raw)
 			if err != nil {
 				writeAppError(w, err)
 				return

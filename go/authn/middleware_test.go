@@ -23,7 +23,7 @@ type middlewareFixture struct {
 func newMiddlewareFixture(t *testing.T) *middlewareFixture {
 	t.Helper()
 
-	keys, _ := newTestKeySet(t)
+	keys := testutil.NewKeySource(t, "kid-active")
 	clock := testutil.NewClock(time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC))
 	signer, err := NewSigner(keys, WithTokenClock(clock.Now), WithTokenTTL(testAccessTTL))
 	if err != nil {
@@ -38,7 +38,7 @@ func newMiddlewareFixture(t *testing.T) *middlewareFixture {
 
 func (f *middlewareFixture) token(t *testing.T, p Principal) string {
 	t.Helper()
-	token, _, err := f.signer.Issue(p)
+	token, _, err := f.signer.Issue(context.Background(), p)
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}

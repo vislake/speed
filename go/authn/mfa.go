@@ -473,7 +473,7 @@ func (s *Service) VerifyStepUp(ctx context.Context, principal Principal, code, i
 
 	amr := appendAMR(session.AMRList(), method)
 	tenantID := pkgcore.TenantID(session.CurrentTenantID)
-	return s.mintPairWithAMR(user, session, tenantID, IssuedRefreshToken{}, amr)
+	return s.mintPairWithAMR(ctx, user, session, tenantID, IssuedRefreshToken{}, amr)
 }
 
 // verifySecondFactor tries code as a TOTP code when it looks like one (six

@@ -1,7 +1,9 @@
 package authn
 
 import (
+	"context"
 	"crypto/ed25519"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -12,19 +14,11 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// newTestKeySet returns a key set with one active key, for the common case.
-func newTestKeySet(t *testing.T) (*KeySet, TokenKey) {
-	t.Helper()
-	key, err := GenerateTokenKey("kid-active")
-	if err != nil {
-		t.Fatalf("GenerateTokenKey() error = %v", err)
-	}
-	keys, err := NewKeySet(key)
-	if err != nil {
-		t.Fatalf("NewKeySet() error = %v", err)
-	}
-	return keys, key
-}
+// compile-time check that testutil.KeySource satisfies this package's own
+// KeySource interface -- it is declared structurally in testutil (which
+// cannot import authn, see that package's own doc comment), so this
+// assignment is the actual proof the two agree.
+var _ KeySource = (*testutil.KeySource)(nil)
 
 // testPrincipal is the principal the token tests round-trip.
 func testPrincipal() Principal {
@@ -39,8 +33,9 @@ func testPrincipal() Principal {
 func TestSignerVerifier_RoundTrip(t *testing.T) {
 	t.Parallel()
 
-	keys, _ := newTestKeySet(t)
+	keys := testutil.NewKeySource(t, "kid-active")
 	clock := testutil.NewClock(time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC))
+	ctx := context.Background()
 
 	signer, err := NewSigner(keys, WithTokenClock(clock.Now), WithTokenTTL(15*time.Minute))
 	if err != nil {
@@ -52,7 +47,7 @@ func TestSignerVerifier_RoundTrip(t *testing.T) {
 	}
 
 	want := testPrincipal()
-	token, expiresAt, err := signer.Issue(want)
+	token, expiresAt, err := signer.Issue(ctx, want)
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}
@@ -60,7 +55,7 @@ func TestSignerVerifier_RoundTrip(t *testing.T) {
 		t.Errorf("expiry = %v, want %v", got, exp)
 	}
 
-	got, err := verifier.Verify(token)
+	got, err := verifier.Verify(ctx, token)
 	if err != nil {
 		t.Fatalf("Verify() error = %v", err)
 	}
@@ -79,14 +74,15 @@ func TestSignerVerifier_RoundTrip(t *testing.T) {
 func TestVerify_NoEmailClaimIsMinted(t *testing.T) {
 	t.Parallel()
 
-	keys, _ := newTestKeySet(t)
+	keys := testutil.NewKeySource(t, "kid-active")
+	ctx := context.Background()
 	signer, _ := NewSigner(keys)
 	verifier, _ := NewVerifier(keys)
 
 	principal := testPrincipal()
 	principal.Email = "someone@example.com"
 
-	token, _, err := signer.Issue(principal)
+	token, _, err := signer.Issue(ctx, principal)
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}
@@ -94,7 +90,7 @@ func TestVerify_NoEmailClaimIsMinted(t *testing.T) {
 		t.Fatal("the signed token contains the email address")
 	}
 
-	got, err := verifier.Verify(token)
+	got, err := verifier.Verify(ctx, token)
 	if err != nil {
 		t.Fatalf("Verify() error = %v", err)
 	}
@@ -106,22 +102,23 @@ func TestVerify_NoEmailClaimIsMinted(t *testing.T) {
 func TestVerify_ExpiredTokenIsRejected(t *testing.T) {
 	t.Parallel()
 
-	keys, _ := newTestKeySet(t)
+	keys := testutil.NewKeySource(t, "kid-active")
 	clock := testutil.NewClock(time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC))
+	ctx := context.Background()
 	signer, _ := NewSigner(keys, WithTokenClock(clock.Now), WithTokenTTL(time.Minute))
 	verifier, _ := NewVerifier(keys, WithTokenClock(clock.Now))
 
-	token, _, err := signer.Issue(testPrincipal())
+	token, _, err := signer.Issue(ctx, testPrincipal())
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}
 
-	if _, freshErr := verifier.Verify(token); freshErr != nil {
+	if _, freshErr := verifier.Verify(ctx, token); freshErr != nil {
 		t.Fatalf("Verify() error = %v while the token is still fresh", freshErr)
 	}
 
 	clock.Advance(2 * time.Minute)
-	_, err = verifier.Verify(token)
+	_, err = verifier.Verify(ctx, token)
 	if !hasCode(err, ErrTokenExpired.Code) {
 		t.Fatalf("Verify() error = %v, want code %q", err, ErrTokenExpired.Code)
 	}
@@ -133,7 +130,8 @@ func TestVerify_ExpiredTokenIsRejected(t *testing.T) {
 func TestVerify_RejectsAlgNone(t *testing.T) {
 	t.Parallel()
 
-	keys, key := newTestKeySet(t)
+	keys := testutil.NewKeySource(t, "kid-active")
+	ctx := context.Background()
 	verifier, _ := NewVerifier(keys)
 
 	claims := &accessClaims{
@@ -147,13 +145,13 @@ func TestVerify_RejectsAlgNone(t *testing.T) {
 		SessionID: "session-1",
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodNone, claims)
-	token.Header["kid"] = key.ID
+	token.Header["kid"] = "kid-active"
 	unsigned, err := token.SignedString(jwt.UnsafeAllowNoneSignatureType)
 	if err != nil {
 		t.Fatalf("build the alg=none token: %v", err)
 	}
 
-	if _, err := verifier.Verify(unsigned); !hasCode(err, ErrTokenInvalid.Code) {
+	if _, err := verifier.Verify(ctx, unsigned); !hasCode(err, ErrTokenInvalid.Code) {
 		t.Fatalf("Verify() error = %v, want code %q: an unsigned token must be refused", err, ErrTokenInvalid.Code)
 	}
 }
@@ -166,8 +164,18 @@ func TestVerify_RejectsAlgNone(t *testing.T) {
 func TestVerify_RejectsHMACSignedWithThePublicKey(t *testing.T) {
 	t.Parallel()
 
-	keys, key := newTestKeySet(t)
+	keys := testutil.NewKeySource(t, "kid-active")
+	ctx := context.Background()
 	verifier, _ := NewVerifier(keys)
+
+	verificationKeys, err := keys.VerificationKeys(ctx, AccessTokenKeyPurpose)
+	if err != nil || len(verificationKeys) != 1 {
+		t.Fatalf("VerificationKeys() = %v, %v, want exactly one entry", verificationKeys, err)
+	}
+	pub, ok := verificationKeys[0].Public.(ed25519.PublicKey)
+	if !ok {
+		t.Fatalf("VerificationKeys()[0].Public is %T, want ed25519.PublicKey", verificationKeys[0].Public)
+	}
 
 	claims := &accessClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -180,13 +188,13 @@ func TestVerify_RejectsHMACSignedWithThePublicKey(t *testing.T) {
 		SessionID: "session-1",
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	token.Header["kid"] = key.ID
-	forged, err := token.SignedString([]byte(key.Public))
+	token.Header["kid"] = "kid-active"
+	forged, err := token.SignedString([]byte(pub))
 	if err != nil {
 		t.Fatalf("build the HMAC-forged token: %v", err)
 	}
 
-	if _, err := verifier.Verify(forged); !hasCode(err, ErrTokenInvalid.Code) {
+	if _, err := verifier.Verify(ctx, forged); !hasCode(err, ErrTokenInvalid.Code) {
 		t.Fatalf("Verify() error = %v, want code %q: an HMAC token signed with the public verification key must be refused", err, ErrTokenInvalid.Code)
 	}
 }
@@ -194,24 +202,18 @@ func TestVerify_RejectsHMACSignedWithThePublicKey(t *testing.T) {
 func TestVerify_RejectsUnknownAndMissingKid(t *testing.T) {
 	t.Parallel()
 
-	keys, _ := newTestKeySet(t)
+	keys := testutil.NewKeySource(t, "kid-active")
+	ctx := context.Background()
 	verifier, _ := NewVerifier(keys)
 
 	// A token signed by a completely different, unregistered key.
-	other, err := GenerateTokenKey("kid-unregistered")
-	if err != nil {
-		t.Fatalf("GenerateTokenKey() error = %v", err)
-	}
-	otherSet, err := NewKeySet(other)
-	if err != nil {
-		t.Fatalf("NewKeySet() error = %v", err)
-	}
-	otherSigner, _ := NewSigner(otherSet)
-	foreign, _, err := otherSigner.Issue(testPrincipal())
+	other := testutil.NewKeySource(t, "kid-unregistered")
+	otherSigner, _ := NewSigner(other)
+	foreign, _, err := otherSigner.Issue(ctx, testPrincipal())
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}
-	if _, foreignErr := verifier.Verify(foreign); !hasCode(foreignErr, ErrTokenInvalid.Code) {
+	if _, foreignErr := verifier.Verify(ctx, foreign); !hasCode(foreignErr, ErrTokenInvalid.Code) {
 		t.Errorf("Verify(unknown kid) error = %v, want code %q", foreignErr, ErrTokenInvalid.Code)
 	}
 
@@ -226,55 +228,42 @@ func TestVerify_RejectsUnknownAndMissingKid(t *testing.T) {
 	}
 	unkeyed := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
 	delete(unkeyed.Header, "kid")
-	signed, err := unkeyed.SignedString(other.Private)
+	sstr, err := unkeyed.SigningString()
 	if err != nil {
-		t.Fatalf("build the kid-less token: %v", err)
+		t.Fatalf("build the kid-less token's signing string: %v", err)
 	}
-	if _, err := verifier.Verify(signed); !hasCode(err, ErrTokenInvalid.Code) {
+	signed := sstr + "." + unkeyed.EncodeSegment(other.SignRaw([]byte(sstr)))
+	if _, err := verifier.Verify(ctx, signed); !hasCode(err, ErrTokenInvalid.Code) {
 		t.Errorf("Verify(no kid) error = %v, want code %q", err, ErrTokenInvalid.Code)
 	}
 }
 
-// TestKeySet_RetiredKeyVerifiesButDoesNotSign is the rotation property: a
-// token minted before the rotation keeps working, and every NEW token is
-// signed with the new key. Without it, rotating a key would sign every
-// outstanding session out at once.
-func TestKeySet_RetiredKeyVerifiesButDoesNotSign(t *testing.T) {
+// TestSignerVerifier_TokenSignedBeforeRotationStillVerifies is the rotation
+// property: a token minted before the rotation keeps working, and every NEW
+// token is signed with the new key. Without it, rotating a key would sign
+// every outstanding session out at once. The rotation itself happens inside
+// the shared KeySource -- exactly go/pki's own PromoteToActive shape,
+// mirrored by testutil.KeySource.Rotate without depending on go/pki.
+func TestSignerVerifier_TokenSignedBeforeRotationStillVerifies(t *testing.T) {
 	t.Parallel()
 
-	oldKey, err := GenerateTokenKey("kid-old")
-	if err != nil {
-		t.Fatalf("GenerateTokenKey() error = %v", err)
-	}
-	newKey, err := GenerateTokenKey("kid-new")
-	if err != nil {
-		t.Fatalf("GenerateTokenKey() error = %v", err)
-	}
+	keys := testutil.NewKeySource(t, "kid-old")
+	ctx := context.Background()
+	signer, _ := NewSigner(keys)
+	verifier, _ := NewVerifier(keys)
 
-	before, err := NewKeySet(oldKey)
-	if err != nil {
-		t.Fatalf("NewKeySet() error = %v", err)
-	}
-	oldSigner, _ := NewSigner(before)
-	oldToken, _, err := oldSigner.Issue(testPrincipal())
+	oldToken, _, err := signer.Issue(ctx, testPrincipal())
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}
 
-	// Rotate: the new key becomes active, the old one is kept for
-	// verification only.
-	after, err := NewKeySet(newKey, TokenKey{ID: oldKey.ID, Public: oldKey.Public})
-	if err != nil {
-		t.Fatalf("NewKeySet() error = %v", err)
-	}
-	rotatedSigner, _ := NewSigner(after)
-	rotatedVerifier, _ := NewVerifier(after)
+	keys.Rotate(t, "kid-new")
 
-	if _, oldErr := rotatedVerifier.Verify(oldToken); oldErr != nil {
+	if _, oldErr := verifier.Verify(ctx, oldToken); oldErr != nil {
 		t.Errorf("a token signed before the rotation no longer verifies: %v", oldErr)
 	}
 
-	freshToken, _, err := rotatedSigner.Issue(testPrincipal())
+	freshToken, _, err := signer.Issue(ctx, testPrincipal())
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}
@@ -282,52 +271,16 @@ func TestKeySet_RetiredKeyVerifiesButDoesNotSign(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the fresh token's header: %v", err)
 	}
-	if kid := parsed.Header["kid"]; kid != newKey.ID {
-		t.Errorf("new tokens are signed under kid %v, want the active key %q", kid, newKey.ID)
-	}
-
-	// The retired key must not be usable for signing: a set whose ACTIVE
-	// key has no private half is rejected outright.
-	if _, err := NewKeySet(TokenKey{ID: oldKey.ID, Public: oldKey.Public}); err == nil {
-		t.Error("NewKeySet() accepted a verification-only key as the active signing key")
-	}
-}
-
-func TestNewKeySet_RejectsMalformedKeys(t *testing.T) {
-	t.Parallel()
-
-	good, err := GenerateTokenKey("kid-good")
-	if err != nil {
-		t.Fatalf("GenerateTokenKey() error = %v", err)
-	}
-
-	cases := []struct {
-		name    string
-		active  TokenKey
-		retired []TokenKey
-	}{
-		{name: "active key with no id", active: TokenKey{Private: good.Private, Public: good.Public}},
-		{name: "active key with no private half", active: TokenKey{ID: "x", Public: good.Public}},
-		{name: "active key with no public half", active: TokenKey{ID: "x", Private: good.Private}},
-		{name: "active key with a truncated private half", active: TokenKey{ID: "x", Private: ed25519.PrivateKey("short"), Public: good.Public}},
-		{name: "retired key with no id", active: good, retired: []TokenKey{{Public: good.Public}}},
-		{name: "retired key with no public half", active: good, retired: []TokenKey{{ID: "r"}}},
-		{name: "duplicate kid", active: good, retired: []TokenKey{{ID: good.ID, Public: good.Public}}},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if _, err := NewKeySet(tc.active, tc.retired...); err == nil {
-				t.Error("NewKeySet() error = nil, want a rejection")
-			}
-		})
+	if kid := parsed.Header["kid"]; kid != "kid-new" {
+		t.Errorf("new tokens are signed under kid %v, want the active key %q", kid, "kid-new")
 	}
 }
 
 func TestIssue_RefusesAnIncompletePrincipal(t *testing.T) {
 	t.Parallel()
 
-	keys, _ := newTestKeySet(t)
+	keys := testutil.NewKeySource(t, "kid-active")
+	ctx := context.Background()
 	signer, _ := NewSigner(keys)
 
 	cases := []struct {
@@ -341,7 +294,7 @@ func TestIssue_RefusesAnIncompletePrincipal(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, _, err := signer.Issue(tc.principal); err == nil {
+			if _, _, err := signer.Issue(ctx, tc.principal); err == nil {
 				t.Error("Issue() error = nil, want a refusal")
 			}
 		})
@@ -354,15 +307,16 @@ func TestIssue_RefusesAnIncompletePrincipal(t *testing.T) {
 func TestVerify_RejectsAForeignIssuer(t *testing.T) {
 	t.Parallel()
 
-	keys, _ := newTestKeySet(t)
+	keys := testutil.NewKeySource(t, "kid-active")
+	ctx := context.Background()
 	signer, _ := NewSigner(keys, WithTokenIssuer("some-other-service"))
 	verifier, _ := NewVerifier(keys)
 
-	token, _, err := signer.Issue(testPrincipal())
+	token, _, err := signer.Issue(ctx, testPrincipal())
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}
-	if _, err := verifier.Verify(token); !hasCode(err, ErrTokenInvalid.Code) {
+	if _, err := verifier.Verify(ctx, token); !hasCode(err, ErrTokenInvalid.Code) {
 		t.Fatalf("Verify() error = %v, want code %q", err, ErrTokenInvalid.Code)
 	}
 }
@@ -372,19 +326,105 @@ func TestVerify_RejectsAForeignIssuer(t *testing.T) {
 func TestIssue_EveryTokenCarriesADistinctJTI(t *testing.T) {
 	t.Parallel()
 
-	keys, _ := newTestKeySet(t)
+	keys := testutil.NewKeySource(t, "kid-active")
 	clock := testutil.NewClock(time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC))
+	ctx := context.Background()
 	signer, _ := NewSigner(keys, WithTokenClock(clock.Now))
 
-	first, _, err := signer.Issue(testPrincipal())
+	first, _, err := signer.Issue(ctx, testPrincipal())
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}
-	second, _, err := signer.Issue(testPrincipal())
+	second, _, err := signer.Issue(ctx, testPrincipal())
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}
 	if first == second {
 		t.Fatal("two tokens issued at the same instant are byte-identical; the jti is not per-token")
+	}
+}
+
+// TestVerify_RejectsAlgorithmMismatch is the new gate
+// docs/internal/22-pki.md's "authn's signing algorithm" section requires: a token
+// header's alg must match the algorithm the kid's KeySource entry itself
+// declares, even though the token is a completely genuine, correctly
+// verifying Ed25519/EdDSA signature and the parser's own allowlist (single
+// EdDSA) has already passed it. This is deliberately redundant with that
+// allowlist today -- it becomes load-bearing the day a second algorithm is
+// ever added, and the whole point is that the gate is already in place
+// before that day arrives.
+func TestVerify_RejectsAlgorithmMismatch(t *testing.T) {
+	t.Parallel()
+
+	keys := testutil.NewKeySource(t, "kid-active")
+	ctx := context.Background()
+	signer, _ := NewSigner(keys)
+	verifier, _ := NewVerifier(keys)
+
+	token, _, err := signer.Issue(ctx, testPrincipal())
+	if err != nil {
+		t.Fatalf("Issue() error = %v", err)
+	}
+
+	// The token above is a real, validly signed EdDSA token. Only the
+	// KeySource's own record of what algorithm "kid-active" is changes.
+	keys.SetAlgorithm("kid-active", "some-other-algorithm")
+
+	if _, err := verifier.Verify(ctx, token); !hasCode(err, ErrTokenInvalid.Code) {
+		t.Fatalf("Verify() with a mismatched declared algorithm error = %v, want code %q", err, ErrTokenInvalid.Code)
+	}
+}
+
+// TestSigner_EnsurePurposeFailureIsSurfaced proves a KeySource that cannot
+// provision the access-token purpose fails Issue loudly rather than minting
+// a token some other way.
+func TestSigner_EnsurePurposeFailureIsSurfaced(t *testing.T) {
+	t.Parallel()
+
+	keys := testutil.NewKeySource(t, "kid-active")
+	keys.EnsureErr = fmt.Errorf("boom")
+	ctx := context.Background()
+	signer, _ := NewSigner(keys)
+
+	if _, _, err := signer.Issue(ctx, testPrincipal()); err == nil {
+		t.Fatal("Issue() with a failing EnsurePurpose succeeded, want an error")
+	}
+}
+
+// countingKeySource wraps a *testutil.KeySource purely to count
+// EnsurePurpose calls, since testutil.KeySource's own EnsurePurpose is a
+// plain field read with nothing to instrument from outside the package.
+type countingKeySource struct {
+	*testutil.KeySource
+	calls *int
+}
+
+func (c *countingKeySource) EnsurePurpose(ctx context.Context, purpose, algorithm string, maxCredentialLifetime time.Duration) error {
+	*c.calls++
+	return c.KeySource.EnsurePurpose(ctx, purpose, algorithm, maxCredentialLifetime)
+}
+
+var _ KeySource = (*countingKeySource)(nil)
+
+// TestSigner_EnsurePurposeRunsExactlyOnce proves EnsurePurpose is not paid
+// on every Issue call -- Signer.ensureOnce's own doc comment explains why.
+func TestSigner_EnsurePurposeRunsExactlyOnce(t *testing.T) {
+	t.Parallel()
+
+	keys := testutil.NewKeySource(t, "kid-active")
+	ctx := context.Background()
+
+	var calls int
+	counting := &countingKeySource{KeySource: keys, calls: &calls}
+	signer, _ := NewSigner(counting)
+
+	if _, _, err := signer.Issue(ctx, testPrincipal()); err != nil {
+		t.Fatalf("Issue() (1st): %v", err)
+	}
+	if _, _, err := signer.Issue(ctx, testPrincipal()); err != nil {
+		t.Fatalf("Issue() (2nd): %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("EnsurePurpose was called %d times across two Issue calls, want exactly 1", calls)
 	}
 }

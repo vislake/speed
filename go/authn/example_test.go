@@ -3,6 +3,9 @@ package authn_test
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,6 +20,82 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy"
 )
+
+// exampleKeySource is a minimal, self-contained authn.KeySource for these
+// examples, so they need no live go/pki module: a production deployment
+// wires a *pki.Service here instead (docs/internal/22-pki.md's "authn's
+// integration" section), satisfying authn.KeySource structurally with zero import
+// edge between the two packages -- exactly the property this example
+// package's own freedom from a go/pki dependency demonstrates in practice.
+type exampleKeySource struct {
+	activeKID string
+	active    ed25519.PrivateKey
+	verify    map[string]ed25519.PublicKey
+}
+
+// newExampleKeySource returns an exampleKeySource with one freshly
+// generated active key under kid.
+func newExampleKeySource(kid string) *exampleKeySource {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	return &exampleKeySource{activeKID: kid, active: priv, verify: map[string]ed25519.PublicKey{kid: pub}}
+}
+
+// EnsurePurpose implements authn.KeySource. This example source is always
+// already provisioned, so there is nothing to do.
+func (k *exampleKeySource) EnsurePurpose(context.Context, string, string, time.Duration) error {
+	return nil
+}
+
+// ActiveSigner implements authn.KeySource.
+func (k *exampleKeySource) ActiveSigner(_ context.Context, _ string) (string, string, func(context.Context, []byte) ([]byte, error), error) {
+	kid, priv := k.activeKID, k.active
+	sign := func(_ context.Context, input []byte) ([]byte, error) {
+		return ed25519.Sign(priv, input), nil
+	}
+	return kid, "ed25519", sign, nil
+}
+
+// VerificationKeys implements authn.KeySource.
+func (k *exampleKeySource) VerificationKeys(_ context.Context, _ string) ([]struct {
+	KID       string
+	Algorithm string
+	Public    crypto.PublicKey
+}, error,
+) {
+	out := make([]struct {
+		KID       string
+		Algorithm string
+		Public    crypto.PublicKey
+	}, 0, len(k.verify))
+	for kid, pub := range k.verify {
+		out = append(out, struct {
+			KID       string
+			Algorithm string
+			Public    crypto.PublicKey
+		}{KID: kid, Algorithm: "ed25519", Public: pub})
+	}
+	return out, nil
+}
+
+// rotate promotes a freshly generated key under newKID to active, keeping
+// the previous active key around for verification only -- the same
+// pending->active/previous->retiring shape go/pki's Service drives for
+// real, illustrated here without depending on go/pki.
+func (k *exampleKeySource) rotate(newKID string) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	k.activeKID = newKID
+	k.active = priv
+	k.verify[newKID] = pub
+}
+
+// compile-time check that exampleKeySource satisfies authn.KeySource.
+var _ authn.KeySource = (*exampleKeySource)(nil)
 
 // exampleParams keeps these examples fast. Real deployments use
 // authn.DefaultPasswordParams(), or stronger.
@@ -85,45 +164,38 @@ func ExamplePasswordPolicy_Validate() {
 	// <nil>
 }
 
-// ExampleNewKeySet rotates the access-token signing key. The retired key
-// keeps verifying tokens signed before the rotation, so outstanding sessions
-// survive it.
-func ExampleNewKeySet() {
-	oldKey, err := authn.GenerateTokenKey("2026-01")
+// ExampleKeySource rotates the access-token signing key through a
+// KeySource. The retired key keeps verifying tokens signed before the
+// rotation, so outstanding sessions survive it -- the same property
+// go/pki's own Service provides for real; this example uses a minimal
+// hand-rolled KeySource so it needs no live pki module (see
+// exampleKeySource's own doc comment).
+func ExampleKeySource() {
+	ctx := context.Background()
+	keys := newExampleKeySource("2026-01")
+
+	signer, err := authn.NewSigner(keys)
 	if err != nil {
 		panic(err)
 	}
-	newKey, err := authn.GenerateTokenKey("2026-07")
+	verifier, err := authn.NewVerifier(keys)
 	if err != nil {
 		panic(err)
 	}
 
-	before, err := authn.NewKeySet(oldKey)
-	if err != nil {
-		panic(err)
-	}
-	signer, err := authn.NewSigner(before)
-	if err != nil {
-		panic(err)
-	}
-	token, _, err := signer.Issue(authn.Principal{
+	token, _, err := signer.Issue(ctx, authn.Principal{
 		UserID: "user-1", TenantID: pkgcore.TenantID("tenant-a"), SessionID: "session-1",
 	})
 	if err != nil {
 		panic(err)
 	}
 
-	// Rotate: the new key signs, the old one is kept for verification.
-	after, err := authn.NewKeySet(newKey, authn.TokenKey{ID: oldKey.ID, Public: oldKey.Public})
-	if err != nil {
-		panic(err)
-	}
-	verifier, err := authn.NewVerifier(after)
-	if err != nil {
-		panic(err)
-	}
+	// Rotate: the new key signs, the old one is kept for verification --
+	// signer and verifier share the same KeySource, so both see the
+	// rotation immediately.
+	keys.rotate("2026-07")
 
-	principal, err := verifier.Verify(token)
+	principal, err := verifier.Verify(ctx, token)
 	if err != nil {
 		panic(err)
 	}
@@ -173,14 +245,7 @@ func ExampleNewProviderRegistry() {
 // because tenancy.Resolver returns a tenant and no context, so a resolver
 // that verified the token would have nowhere to hand the claims.
 func ExampleNewPrincipalResolver() {
-	key, err := authn.GenerateTokenKey("example")
-	if err != nil {
-		panic(err)
-	}
-	keys, err := authn.NewKeySet(key)
-	if err != nil {
-		panic(err)
-	}
+	keys := newExampleKeySource("example")
 	signer, err := authn.NewSigner(keys)
 	if err != nil {
 		panic(err)
@@ -207,7 +272,7 @@ func ExampleNewPrincipalResolver() {
 		)(handler),
 	)
 
-	token, _, err := signer.Issue(authn.Principal{
+	token, _, err := signer.Issue(context.Background(), authn.Principal{
 		UserID: "user-1", TenantID: pkgcore.TenantID("tenant-a"), SessionID: "session-1",
 	})
 	if err != nil {
@@ -247,13 +312,10 @@ func ExampleNewModule() {
 		panic(err)
 	}
 
-	keys, err := authn.NewKeySet(mustKey("example"))
-	if err != nil {
-		panic(err)
-	}
+	keys := newExampleKeySource("example")
 
 	module, err := authn.NewModule(db,
-		authn.WithSigningKeys(keys),
+		authn.WithKeySource(keys),
 		authn.WithBlindIndexKey(exampleBlindIndexKey()),
 		authn.WithMembershipReader(exampleMemberships{}),
 		authn.WithRevocationMode(authn.RevocationModeImmediate),
@@ -275,16 +337,6 @@ func ExampleNewModule() {
 	// module: authn
 	// published events: 10
 	// service wired: true
-}
-
-// mustKey panics on a key-generation failure, which an example may do and
-// production code may not.
-func mustKey(id string) authn.TokenKey {
-	key, err := authn.GenerateTokenKey(id)
-	if err != nil {
-		panic(err)
-	}
-	return key
 }
 
 // exampleMemberships is the smallest possible stand-in for the org module's
@@ -338,14 +390,11 @@ func exampleModule(ctx context.Context) (*authn.Module, *pkgcore.Registry) {
 		panic(err)
 	}
 
-	keys, err := authn.NewKeySet(mustKey("example-mfa"))
-	if err != nil {
-		panic(err)
-	}
+	keys := newExampleKeySource("example-mfa")
 
 	var sms bytes.Buffer
 	module, err := authn.NewModule(db,
-		authn.WithSigningKeys(keys),
+		authn.WithKeySource(keys),
 		authn.WithBlindIndexKey(exampleBlindIndexKey()),
 		authn.WithMembershipReader(exampleMemberships{}),
 		authn.WithPasswordParams(exampleParams),

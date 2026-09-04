@@ -1,10 +1,11 @@
 package authn
 
 import (
-	"crypto/ed25519"
-	"crypto/rand"
+	"context"
+	"crypto"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -83,83 +84,63 @@ type Principal struct {
 	AMR []string
 }
 
-// TokenKey is one Ed25519 keypair the token layer signs or verifies with.
-type TokenKey struct {
-	// ID is the key's "kid", carried in every token's header so a verifier
-	// picks the right key instead of trying all of them.
-	ID string
-	// Private signs. It is nil on a retired, verification-only key.
-	Private ed25519.PrivateKey
-	// Public verifies. It is required on every key, active or retired.
-	Public ed25519.PublicKey
-}
+// AccessTokenKeyPurpose is the KeySource purpose access tokens are signed
+// and verified under -- the exact string docs/internal/22-pki.md's
+// "authn's integration" section names in its own EnsurePurpose example.
+const AccessTokenKeyPurpose = "authn.access_token" //nolint:gosec // a KeySource purpose name, not a credential.
 
-// GenerateTokenKey returns a fresh Ed25519 keypair under the given kid. It is
-// the convenient way to produce a development or test key; a production
-// deployment injects key material from its own secret manager.
-func GenerateTokenKey(id string) (TokenKey, error) {
-	if id == "" {
-		return TokenKey{}, errors.New("authn: token key id must not be empty")
-	}
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return TokenKey{}, fmt.Errorf("authn: generate token key %q: %w", id, err)
-	}
-	return TokenKey{ID: id, Private: priv, Public: pub}, nil
-}
+// accessTokenKeyAlgorithm is the key algorithm Signer asks KeySource to
+// provision for AccessTokenKeyPurpose. Its value ("ed25519") deliberately
+// matches go/pki's AlgorithmEd25519 constant's own value -- authn does not
+// import go/pki (the whole point of the KeySource seam below), so this is
+// authn's own copy of the same string, kept in step by the KeySource
+// contract itself rather than by an import edge: whatever a KeySource
+// implementation returns from VerificationKeys as a kid's Algorithm is
+// compared against this constant by keyFunc's algorithm-consistency check
+// (see Verifier.keyFunc), which is what actually keeps the two in sync at
+// runtime, not a shared symbol.
+const accessTokenKeyAlgorithm = "ed25519"
 
-// KeySet holds the one key new tokens are signed with plus any number of
-// retired keys that are still accepted for verification.
+// KeySource is what Signer and Verifier need from a signing-key lifecycle
+// provider. It is declared here, in go/authn, rather than imported from
+// go/pki: docs/internal/22-pki.md's "authn's integration" section is
+// explicit that authn must not import pki -- key-material lifecycle and "who is calling"
+// are unrelated concerns, and pki's X.509 layer in particular has no
+// business anywhere near JWT verification. go/pki's *Service satisfies this
+// interface STRUCTURALLY, with zero import edge in either direction: every
+// method below is declared using ONLY standard-library types, because two
+// packages' own named types are never the same type, so structural
+// satisfaction across a package boundary requires literal signature
+// equality (this is also why VerificationKeys' return element is an
+// anonymous struct rather than a named one -- a named type here would
+// silently break the match). See go/pki/service.go's keySourceShape for the
+// identical compile-time proof kept on that side of the boundary.
 //
-// The shape mirrors dbkit.NewCipher(activeKey, retiredKeys...) on purpose, so
-// key rotation has ONE shape in this codebase: promote the new key to active,
-// pass the outgoing key as retired, and tokens signed before the rotation
-// keep verifying until they expire on their own. A rotation scheme that
-// simply replaced the key would invalidate every outstanding session at the
-// moment of the change.
-type KeySet struct {
-	active TokenKey
-	verify map[string]ed25519.PublicKey
-}
+// A production deployment supplies a *pki.Service (WithKeySource,
+// module.go); a unit test supplies a minimal fake -- neither needs the
+// other package's types.
+type KeySource interface {
+	// EnsurePurpose declares that purpose needs a signing key of algorithm,
+	// with a retiring overlap period that must eventually cover
+	// maxCredentialLifetime. Signer calls it lazily, once, on its first
+	// Issue (see Signer.ensureOnce) -- not from Module.Register, which per
+	// pkgcore.Module's own contract may perform no I/O, and this call
+	// necessarily does (it may create a signing key on first boot).
+	EnsurePurpose(ctx context.Context, purpose, algorithm string, maxCredentialLifetime time.Duration) error
 
-// NewKeySet builds a KeySet whose active signing key is active and whose
-// retired keys verify but never sign.
-//
-// It rejects an active key without a private half, any key without a public
-// half or an id, and duplicate ids -- each of which would otherwise surface
-// much later as a token that cannot be verified by the very process that
-// signed it.
-func NewKeySet(active TokenKey, retired ...TokenKey) (*KeySet, error) {
-	if active.ID == "" {
-		return nil, errors.New("authn: active token key must have an id")
-	}
-	if len(active.Private) != ed25519.PrivateKeySize {
-		return nil, fmt.Errorf("authn: active token key %q must carry an ed25519 private key", active.ID)
-	}
-	if len(active.Public) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("authn: active token key %q must carry an ed25519 public key", active.ID)
-	}
+	// ActiveSigner returns the kid, algorithm and a context-aware signing
+	// function for purpose's currently active key. Signer.Issue calls it on
+	// every token issuance.
+	ActiveSigner(ctx context.Context, purpose string) (kid string, algorithm string, sign func(context.Context, []byte) ([]byte, error), err error)
 
-	ks := &KeySet{active: active, verify: map[string]ed25519.PublicKey{active.ID: active.Public}}
-	for _, key := range retired {
-		if key.ID == "" {
-			return nil, errors.New("authn: retired token key must have an id")
-		}
-		if len(key.Public) != ed25519.PublicKeySize {
-			return nil, fmt.Errorf("authn: retired token key %q must carry an ed25519 public key", key.ID)
-		}
-		if _, exists := ks.verify[key.ID]; exists {
-			return nil, fmt.Errorf("authn: duplicate token key id %q", key.ID)
-		}
-		ks.verify[key.ID] = key.Public
-	}
-	return ks, nil
-}
-
-// publicKey returns the verification key registered under kid.
-func (k *KeySet) publicKey(kid string) (ed25519.PublicKey, bool) {
-	key, ok := k.verify[kid]
-	return key, ok
+	// VerificationKeys returns every key for purpose that is still safe to
+	// verify against. Verifier.keyFunc calls it on every token
+	// verification.
+	VerificationKeys(ctx context.Context, purpose string) ([]struct {
+		KID       string
+		Algorithm string
+		Public    crypto.PublicKey
+	}, error)
 }
 
 // tokenConfig accumulates the options shared by Signer and Verifier.
@@ -215,16 +196,32 @@ func newTokenConfig(opts []TokenOption) tokenConfig {
 
 // Signer issues access tokens. It is safe for concurrent use.
 type Signer struct {
-	keys *KeySet
-	cfg  tokenConfig
+	keySource KeySource
+	purpose   string
+	cfg       tokenConfig
+
+	// ensureOnce/ensureErr make the first Issue call responsible for
+	// EnsurePurpose (KeySource's own doc comment explains why it cannot
+	// happen in Module.Register). Every later Issue call skips straight to
+	// ActiveSigner: EnsurePurpose only ever does real work on a purpose's
+	// very first bootstrap (KeySource.EnsurePurpose's own contract is
+	// idempotent no-op once an active key exists), so paying its cost on
+	// every token issuance would be pure waste. A failure is cached and
+	// returned on every subsequent call too, rather than retried silently --
+	// a signing key that failed to provision is a startup-shaped problem an
+	// operator needs to see, not one that should keep failing quietly
+	// forever behind a swallowed error.
+	ensureOnce sync.Once
+	ensureErr  error
 }
 
-// NewSigner returns a Signer that mints tokens with keys' active key.
-func NewSigner(keys *KeySet, opts ...TokenOption) (*Signer, error) {
-	if keys == nil {
-		return nil, errors.New("authn: NewSigner requires a key set")
+// NewSigner returns a Signer that mints tokens for AccessTokenKeyPurpose
+// through keySource.
+func NewSigner(keySource KeySource, opts ...TokenOption) (*Signer, error) {
+	if keySource == nil {
+		return nil, errors.New("authn: NewSigner requires a KeySource")
 	}
-	return &Signer{keys: keys, cfg: newTokenConfig(opts)}, nil
+	return &Signer{keySource: keySource, purpose: AccessTokenKeyPurpose, cfg: newTokenConfig(opts)}, nil
 }
 
 // TTL reports how long tokens this Signer issues stay valid. Callers that
@@ -232,12 +229,27 @@ func NewSigner(keys *KeySet, opts ...TokenOption) (*Signer, error) {
 // access tokens read it here rather than assuming the default.
 func (s *Signer) TTL() time.Duration { return s.cfg.ttl }
 
+// ensure runs EnsurePurpose exactly once for this Signer's lifetime, using
+// ctx's cancellation/deadline/trace for that one call -- see the ensureOnce
+// field's own doc comment for why this happens here rather than at
+// construction. maxCredentialLifetime is this Signer's own configured TTL:
+// docs/internal/22-pki.md's section on why the retiring overlap period's
+// length is declared by the consumer is explicit that the retiring overlap
+// period must cover an access token's full lifetime, and TTL is exactly
+// that number.
+func (s *Signer) ensure(ctx context.Context) error {
+	s.ensureOnce.Do(func() {
+		s.ensureErr = s.keySource.EnsurePurpose(ctx, s.purpose, accessTokenKeyAlgorithm, s.cfg.ttl)
+	})
+	return s.ensureErr
+}
+
 // Issue mints a signed access token for p and returns it with its expiry.
 //
 // Every token carries a fresh "jti", so two tokens issued in the same second
 // for the same principal are still distinct values -- which matters for
 // anything that wants to reference one individually.
-func (s *Signer) Issue(p Principal) (string, time.Time, error) {
+func (s *Signer) Issue(ctx context.Context, p Principal) (string, time.Time, error) {
 	if p.UserID == "" {
 		return "", time.Time{}, errors.New("authn: cannot issue a token without a user id")
 	}
@@ -246,6 +258,17 @@ func (s *Signer) Issue(p Principal) (string, time.Time, error) {
 	}
 	if p.TenantID == "" {
 		return "", time.Time{}, errors.New("authn: cannot issue a token without a tenant id")
+	}
+	if err := s.ensure(ctx); err != nil {
+		return "", time.Time{}, fmt.Errorf("authn: ensure signing key purpose %q: %w", s.purpose, err)
+	}
+
+	kid, algorithm, sign, err := s.keySource.ActiveSigner(ctx, s.purpose)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("authn: no active signing key for purpose %q: %w", s.purpose, err)
+	}
+	if algorithm != accessTokenKeyAlgorithm {
+		return "", time.Time{}, fmt.Errorf("authn: active signing key %q for purpose %q declares algorithm %q, want %q", kid, s.purpose, algorithm, accessTokenKeyAlgorithm)
 	}
 
 	issuedAt := s.cfg.now()
@@ -266,31 +289,49 @@ func (s *Signer) Issue(p Principal) (string, time.Time, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
-	token.Header["kid"] = s.keys.active.ID
+	token.Header["kid"] = kid
 
-	signed, err := token.SignedString(s.keys.active.Private)
+	// SigningString, not SignedString: sign is KeySource's context-aware
+	// signing function, not a raw ed25519.PrivateKey jwt.Token.SignedString
+	// could take directly (a KMS-backed KeySource's Sign is a network call
+	// with no room for a context in that method's own signature -- see
+	// KeySource's own doc comment). jwt's own SigningMethodEd25519.Sign
+	// signs the signing string's raw bytes with crypto.Hash(0) (PureEdDSA,
+	// no pre-hash) -- exactly the "input is the complete message" contract
+	// go/pki's Signer.Sign documents for AlgorithmEd25519, so handing sign
+	// the signing string's bytes directly, unmodified, is correct.
+	signingString, err := token.SigningString()
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("authn: build access token signing string: %w", err)
+	}
+	sig, err := sign(ctx, []byte(signingString))
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("authn: sign access token: %w", err)
 	}
+	signed := signingString + "." + token.EncodeSegment(sig)
 	return signed, expiresAt, nil
 }
 
 // Verifier validates access tokens. It is safe for concurrent use.
 type Verifier struct {
-	keys   *KeySet
-	cfg    tokenConfig
-	parser *jwt.Parser
+	keySource KeySource
+	purpose   string
+	cfg       tokenConfig
+	parser    *jwt.Parser
 }
 
-// NewVerifier returns a Verifier for tokens signed under keys.
-func NewVerifier(keys *KeySet, opts ...TokenOption) (*Verifier, error) {
-	if keys == nil {
-		return nil, errors.New("authn: NewVerifier requires a key set")
+// NewVerifier returns a Verifier for tokens signed under
+// AccessTokenKeyPurpose, resolving verification keys through keySource on
+// every call.
+func NewVerifier(keySource KeySource, opts ...TokenOption) (*Verifier, error) {
+	if keySource == nil {
+		return nil, errors.New("authn: NewVerifier requires a KeySource")
 	}
 	cfg := newTokenConfig(opts)
 	return &Verifier{
-		keys: keys,
-		cfg:  cfg,
+		keySource: keySource,
+		purpose:   AccessTokenKeyPurpose,
+		cfg:       cfg,
 		parser: jwt.NewParser(
 			// The algorithm allowlist is the single most important
 			// line in this file. Without it a verifier honours the
@@ -298,6 +339,14 @@ func NewVerifier(keys *KeySet, opts ...TokenOption) (*Verifier, error) {
 			// hands over one saying "none" -- or one HMAC-signed with
 			// the public key, which is not secret. With it, both are
 			// refused before any key lookup happens.
+			//
+			// docs/internal/22-pki.md's "authn's signing algorithm" section
+			// keeps this allowlist single-EdDSA deliberately: every
+			// Signer implementation (local today; vault/kmsaws in
+			// round 4) can direct-sign Ed25519, so nothing forces a
+			// second algorithm into the allowlist, and a second
+			// algorithm here is a second attack surface for no
+			// deployment that needs it.
 			jwt.WithValidMethods([]string{tokenSigningAlgorithm}),
 			jwt.WithIssuer(cfg.issuer),
 			jwt.WithExpirationRequired(),
@@ -311,16 +360,16 @@ func NewVerifier(keys *KeySet, opts ...TokenOption) (*Verifier, error) {
 //
 // The returned Principal's Email is always empty: no email claim is minted
 // (see Principal.Email). Verify also does NOT consult the revocation list --
-// that is Middleware's job, because it needs a context and an I/O-capable
-// store, while a Verifier is a pure function of the token and the keys.
+// that is Middleware's job, because it needs an I/O-capable store beyond
+// what a Verifier holds.
 //
 // Failures come back as this module's structured errors:
 // ErrTokenExpired for a well-formed token past its expiry, ErrTokenInvalid
 // for everything else, each wrapping the underlying cause so it is available
 // to a log without ever reaching a response body.
-func (v *Verifier) Verify(raw string) (Principal, error) {
+func (v *Verifier) Verify(ctx context.Context, raw string) (Principal, error) {
 	claims := &accessClaims{}
-	token, err := v.parser.ParseWithClaims(raw, claims, v.keyFunc)
+	token, err := v.parser.ParseWithClaims(raw, claims, v.keyFunc(ctx))
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenExpired) {
 			return Principal{}, ErrTokenExpired.WithCause(err)
@@ -342,28 +391,48 @@ func (v *Verifier) Verify(raw string) (Principal, error) {
 	}, nil
 }
 
-// keyFunc resolves a token's "kid" header to the public key that must have
-// signed it.
+// keyFunc returns a jwt.Keyfunc closed over ctx -- jwt.Keyfunc's own
+// signature carries no context.Context, and KeySource.VerificationKeys
+// needs one, so Verify builds a fresh closure per call rather than Verifier
+// holding a jwt.Keyfunc field.
 //
-// It re-checks the signing method even though the parser's allowlist has
-// already run. The redundancy is intentional: this function hands back an
-// ed25519.PublicKey, and if it were ever reached with an HMAC method that
-// public key would be used as an HMAC secret -- so the check lives next to
-// the key that would be misused, not only in the parser configuration
-// somebody might later edit.
-func (v *Verifier) keyFunc(token *jwt.Token) (any, error) {
-	if _, ok := token.Method.(*jwt.SigningMethodEd25519); !ok {
-		return nil, fmt.Errorf("authn: unexpected signing method %q", token.Method.Alg())
-	}
-	kid, ok := token.Header["kid"].(string)
-	if !ok || kid == "" {
-		return nil, errors.New("authn: token has no kid header")
-	}
-	key, found := v.keys.publicKey(kid)
-	if !found {
+// The returned function re-checks the signing method even though the
+// parser's allowlist has already run: it hands back a public key that, if
+// this were ever reached with an HMAC method, would be used as an HMAC
+// secret -- so the check lives next to the key that would be misused, not
+// only in the parser configuration somebody might later edit. It also
+// enforces docs/internal/22-pki.md's "authn's signing algorithm" defense-in-depth
+// rule: the kid's own declared Algorithm (from VerificationKeys) must equal
+// accessTokenKeyAlgorithm, the algorithm this Verifier was built to trust --
+// redundant while the parser allowlist admits only EdDSA, but a real second
+// gate rather than documentation of one, so a future algorithm addition
+// that forgets to update this check fails closed instead of silently
+// trusting a key that never should have been offered for this purpose.
+func (v *Verifier) keyFunc(ctx context.Context) jwt.Keyfunc {
+	return func(token *jwt.Token) (any, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodEd25519); !ok {
+			return nil, fmt.Errorf("authn: unexpected signing method %q", token.Method.Alg())
+		}
+		kid, ok := token.Header["kid"].(string)
+		if !ok || kid == "" {
+			return nil, errors.New("authn: token has no kid header")
+		}
+
+		keys, err := v.keySource.VerificationKeys(ctx, v.purpose)
+		if err != nil {
+			return nil, fmt.Errorf("authn: load verification keys for purpose %q: %w", v.purpose, err)
+		}
+		for _, key := range keys {
+			if key.KID != kid {
+				continue
+			}
+			if key.Algorithm != accessTokenKeyAlgorithm {
+				return nil, fmt.Errorf("authn: kid %q declares algorithm %q, want %q", kid, key.Algorithm, accessTokenKeyAlgorithm)
+			}
+			return key.Public, nil
+		}
 		return nil, fmt.Errorf("authn: no verification key registered under kid %q", kid)
 	}
-	return key, nil
 }
 
 // accessClaims is the claim set of an access token: the registered claims

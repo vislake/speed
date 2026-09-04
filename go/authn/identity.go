@@ -473,7 +473,7 @@ func (s *Service) startExternalSession(
 		return nil, err
 	}
 
-	pair, err := s.mintPair(user, session, tenantID, issued)
+	pair, err := s.mintPair(ctx, user, session, tenantID, issued)
 	if err != nil {
 		return nil, err
 	}

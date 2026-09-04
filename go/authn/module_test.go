@@ -16,9 +16,9 @@ import (
 func newTestModule(t *testing.T, extra ...Option) *Module {
 	t.Helper()
 
-	keys, _ := newTestKeySet(t)
+	keys := testutil.NewKeySource(t, "kid-active")
 	opts := append([]Option{
-		WithSigningKeys(keys),
+		WithKeySource(keys),
 		WithBlindIndexKey(testutil.BlindIndexKey()),
 		WithPasswordParams(testParams()),
 	}, extra...)
@@ -286,7 +286,7 @@ func TestModule_RegisterDoesNoIO(t *testing.T) {
 func TestNewModule_RejectsAnIncompleteConfiguration(t *testing.T) {
 	t.Parallel()
 
-	keys, _ := newTestKeySet(t)
+	keys := testutil.NewKeySource(t, "kid-active")
 	db := testutil.NewDB(t)
 
 	cases := []struct {
@@ -294,8 +294,8 @@ func TestNewModule_RejectsAnIncompleteConfiguration(t *testing.T) {
 		opts []Option
 	}{
 		{name: "no signing keys", opts: []Option{WithBlindIndexKey(testutil.BlindIndexKey())}},
-		{name: "no blind-index key", opts: []Option{WithSigningKeys(keys)}},
-		{name: "a short blind-index key", opts: []Option{WithSigningKeys(keys), WithBlindIndexKey([]byte("nope"))}},
+		{name: "no blind-index key", opts: []Option{WithKeySource(keys)}},
+		{name: "a short blind-index key", opts: []Option{WithKeySource(keys), WithBlindIndexKey([]byte("nope"))}},
 	}
 
 	for _, tc := range cases {
@@ -306,7 +306,7 @@ func TestNewModule_RejectsAnIncompleteConfiguration(t *testing.T) {
 		})
 	}
 
-	if _, err := NewModule(nil, WithSigningKeys(keys), WithBlindIndexKey(testutil.BlindIndexKey())); err == nil {
+	if _, err := NewModule(nil, WithKeySource(keys), WithBlindIndexKey(testutil.BlindIndexKey())); err == nil {
 		t.Error("NewModule(nil db) error = nil, want a rejection")
 	}
 }
@@ -317,9 +317,9 @@ func TestNewModule_RejectsAnIncompleteConfiguration(t *testing.T) {
 func TestOptions_IgnoreMeaninglessValues(t *testing.T) {
 	t.Parallel()
 
-	keys, _ := newTestKeySet(t)
+	keys := testutil.NewKeySource(t, "kid-active")
 	cfg, err := newOptions([]Option{
-		WithSigningKeys(keys),
+		WithKeySource(keys),
 		WithBlindIndexKey(testutil.BlindIndexKey()),
 		WithClock(nil),
 		WithIssuer(""),
@@ -359,10 +359,10 @@ func TestOptions_IgnoreMeaninglessValues(t *testing.T) {
 func TestWithBlindIndexKey_CopiesTheCallersSlice(t *testing.T) {
 	t.Parallel()
 
-	keys, _ := newTestKeySet(t)
+	keys := testutil.NewKeySource(t, "kid-active")
 	key := testutil.BlindIndexKey()
 
-	cfg, err := newOptions([]Option{WithSigningKeys(keys), WithBlindIndexKey(key)})
+	cfg, err := newOptions([]Option{WithKeySource(keys), WithBlindIndexKey(key)})
 	if err != nil {
 		t.Fatalf("newOptions() error = %v", err)
 	}

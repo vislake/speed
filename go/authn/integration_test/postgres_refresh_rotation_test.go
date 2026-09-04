@@ -42,17 +42,10 @@ const testPassword = "a perfectly fine passphrase"
 func newIntegrationService(t *testing.T, db *gorm.DB, members *testutil.Memberships) *authn.Service {
 	t.Helper()
 
-	key, err := authn.GenerateTokenKey("kid-integration")
-	if err != nil {
-		t.Fatalf("GenerateTokenKey() error = %v", err)
-	}
-	keys, err := authn.NewKeySet(key)
-	if err != nil {
-		t.Fatalf("NewKeySet() error = %v", err)
-	}
+	keys := testutil.NewKeySource(t, "kid-integration")
 
 	svc, err := authn.NewService(db, pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(),
-		authn.WithSigningKeys(keys),
+		authn.WithKeySource(keys),
 		authn.WithBlindIndexKey(testutil.BlindIndexKey()),
 		authn.WithMembershipReader(members),
 		authn.WithPasswordParams(authn.PasswordParams{Memory: 64, Iterations: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32}),
