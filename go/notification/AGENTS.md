@@ -35,9 +35,13 @@ complete, honest list of what this round deliberately does not ship.
   the consent ledger (`verified_contacts`) that decides whether a given
   external recipient may be messaged at all.
 - Delivery: the queue job that turns a published domain event (or a direct
-  `Deliveries().Dispatch` call) into one rendered, deduplicated,
-  rate-limited message per recipient per selected channel, with one
-  `send_records` row per attempt as the replay-safe outcome log.
+  `Deliveries().Dispatch` call) into one rendered message per recipient
+  per selected channel, with one `send_records` row per attempt as the
+  replay-safe outcome log. Replay dedupe collapses an identical
+  re-dispatch onto the already-settled record; nothing aggregates or
+  rate-limits routine deliveries this round (the module's rate limits
+  cover verification-code sends and the consent-create path only) --
+  those delivery-path shapes are deferred below.
 - The module's own HTTP surface under `/api/v1/notifications`, served by a
   handler compiled against the generated interface of its own OpenAPI
   fragment, plus the realtime inbox stream.
@@ -369,11 +373,14 @@ missing at ENQUEUE time: enqueue validates only what the payload itself
 requires (type key, recipient class and id, the user recipient's locale).
 Everything the delivery depends on that lives outside the payload -- the
 host's address resolution for a user, the contact's status and consent for
-an external recipient, the recipient's channel preferences, the platform
-blacklist when a writer exists -- is read by the delivery job at SEND time.
-This is what makes a static-table demo resolver and a real profile-store
-resolver interchangeable for the module, and what makes the module's own
-gates the ones that actually protect the recipient.
+an external recipient, the recipient's channel preferences -- is read by
+the delivery job at SEND time. The platform blacklist is deliberately not
+among them this round: its writers are deferred and nothing in the
+delivery pipeline consults it (see "Platform-blacklist writers and bounce
+remediation" under "Deferred to later rounds"). This is what makes a
+static-table demo resolver and a real profile-store resolver
+interchangeable for the module, and what makes the module's own gates the
+ones that actually protect the recipient.
 
 ### The verification code rides on the contact row
 

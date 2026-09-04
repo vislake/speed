@@ -14,11 +14,14 @@
 //     type of notification may use, and the consent ledger that decides
 //     whether a given external recipient may be messaged at all.
 //   - Delivery: the queue-backed pipeline (Deliveries().Dispatch plus the
-//     registered queue handler) that produces one rendered, deduplicated,
-//     rate-limited message per recipient, per selected channel, with a send
-//     record per attempt as the replay-safe outcome log. The pipeline's
-//     input is a host's Dispatch call — hosts wire their own module events
-//     to it — and its in-app arm writes the inbox row the hub wakes on.
+//     registered queue handler) that produces one rendered message per
+//     recipient, per selected channel, with a send record per attempt as
+//     the replay-safe outcome log — an identical re-dispatch converges on
+//     the settled record, while aggregation and delivery-path rate
+//     limiting are deferred (go/notification/AGENTS.md's "Deferred to
+//     later rounds"). The pipeline's input is a host's Dispatch call —
+//     hosts wire their own module events to it — and its in-app arm
+//     writes the inbox row the hub wakes on.
 //
 // # What notification deliberately does NOT own
 //
