@@ -21,9 +21,9 @@ const moduleName = "integration"
 // MaxAPIKeyLifetime is both the forced expiry ceiling Service.Create
 // enforces on every request (ErrExpiryExceedsMaximum past it) and the
 // default it applies when a request names no ExpiresAt at all, per the
-// design doc's "强制到期时间上限（默认 1 年）" -- the ceiling and the
-// unspecified-request default are declared as the same one year, not two
-// numbers that happen to agree.
+// design doc's forced-expiry-ceiling rule (defaulting to one year) -- the
+// ceiling and the unspecified-request default are declared as the same one
+// year, not two numbers that happen to agree.
 //
 // It is a package-level named constant, not a dynamic configuration item,
 // for the identical reason go/rbac's DefaultCacheTTL gives: reading one

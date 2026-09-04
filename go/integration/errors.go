@@ -46,12 +46,12 @@ var (
 
 	// ErrExpiryExceedsMaximum reports a Create call whose requested
 	// ExpiresAt is further out than MaxAPIKeyLifetime from now. The design
-	// doc requires a forced expiry ceiling -- "强制到期时间上限（默认 1
-	// 年）" -- specifically because a key that never expires is the most
-	// common credential-leak surface, so this is refused rather than
-	// silently clamped: a caller that asked for ten years should learn its
-	// request was rejected, not discover a year-long key it never agreed
-	// to.
+	// doc (docs/internal/07-platform-services.md) requires a forced expiry
+	// ceiling, defaulting to one year, specifically because a key that
+	// never expires is the most common credential-leak surface, so this is
+	// refused rather than silently clamped: a caller that asked for ten
+	// years should learn its request was rejected, not discover a
+	// year-long key it never agreed to.
 	ErrExpiryExceedsMaximum = apperr.Invalid("integration.expiry_exceeds_maximum")
 
 	// ErrExpiryInPast reports a Create call whose requested ExpiresAt is
@@ -60,9 +60,10 @@ var (
 	ErrExpiryInPast = apperr.Invalid("integration.expiry_in_past")
 
 	// ErrScopeNotHeldByCreator reports a Create call requesting a scope the
-	// creator does not currently hold as a permission, per the design doc's
-	// "权限范围，创建时从创建者权限中选取的子集" rule. WithParam("scope", ...)
-	// names the offending scope.
+	// creator does not currently hold as a permission, per the design
+	// doc's rule that a key's scope is chosen from the creator's own
+	// permissions at issuance time. WithParam("scope", ...) names the
+	// offending scope.
 	ErrScopeNotHeldByCreator = apperr.Forbidden("integration.scope_not_held_by_creator")
 
 	// ErrPermissionListerUnavailable reports a Create call requesting one

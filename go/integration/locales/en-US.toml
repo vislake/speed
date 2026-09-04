@@ -1,0 +1,30 @@
+# integration's message bundle, American English.
+#
+# One flat top-level entry per error code go/integration/errors.go declares;
+# the id is the whole quoted code. zh-CN.toml must carry exactly the same id
+# set.
+#
+# Interpolated names are the error's own apperr parameter keys, verbatim and
+# snake_case: the message is rendered from the structured parameters the API
+# returned, so a mismatch between the two would render an empty slot rather
+# than a value.
+
+"integration.key_not_found" = "That API key does not exist."
+
+"integration.key_already_revoked" = "That API key has already been revoked."
+
+"integration.created_by_required" = "An API key must have a creator."
+
+"integration.expiry_exceeds_maximum" = "The requested expiry is further out than the maximum allowed key lifetime."
+
+"integration.expiry_in_past" = "The requested expiry must be in the future."
+
+"integration.scope_not_held_by_creator" = "The requested scope {{.scope}} is not one of the creator's own permissions."
+
+"integration.permission_lister_unavailable" = "This deployment cannot validate API key scopes right now."
+
+"integration.rate_limited" = "Too many requests. Try again in {{.retry_after_seconds}} seconds."
+
+"integration.already_attached" = "This module has already been attached."
+
+"integration.internal_error" = "Something went wrong. Please try again."

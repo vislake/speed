@@ -16,8 +16,8 @@
 //
 // # Design
 //
-// See docs/internal/07-platform-services.md's "对外集成：API 开放与外发
-// Webhook（integration）" section for the target design and
-// go/integration/AGENTS.md for what has actually landed, its adjudications,
-// and its known limitations.
+// See docs/internal/07-platform-services.md's integration section (the
+// module's target design, covering both API key management and outbound
+// webhooks) and go/integration/AGENTS.md for what has actually landed, its
+// adjudications, and its known limitations.
 package integration

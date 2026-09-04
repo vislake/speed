@@ -49,21 +49,27 @@ const tableAPIKeys = "integration_api_keys"
 // seam, see seams.go). It is stored, not re-derived: a later change to the
 // creator's own permissions -- promoted, demoted, or removed from the
 // tenant entirely -- never widens or shrinks an already-issued key, per
-// the design doc's explicit "不随之变化" rule. Changing what a key may do
+// the design doc's explicit rule that a key's scope does not change along
+// with its creator's later permission changes. Changing what a key may do
 // means issuing a new one; nothing in this module ever rewrites Scopes
 // after Create.
 //
 // # The creator leaving does not revoke the key
 //
 // CreatedBy is the responsible party on record, not an ownership tie: the
-// design doc is explicit that a key must not go dark because its creator's
-// account was later removed ("集成会因为某人离职而中断是不可接受的"). What
-// the doc does ask for is visibility -- APIKeySummary.CreatorLeft, computed
-// at List time through the optional MembershipChecker seam -- so a tenant
-// administrator notices a key needs a new owner of record, without the key
-// itself being touched.
+// design doc is explicit that it is unacceptable for an integration to
+// break just because someone left the tenant. What the doc does ask for is
+// visibility -- APIKeySummary.CreatorLeft, computed at List time through
+// the optional MembershipChecker seam -- so a tenant administrator notices
+// a key needs a new owner of record, without the key itself being touched.
 type APIKey struct {
-	// ID is an application-generated UUID.
+	// ID is an application-generated UUID (uuid.NewString, in
+	// Service.Create), globally unique on its own -- which is what lets the
+	// primary key be (id) alone, tenant_id riding along as a plain,
+	// non-key column promoted by the embedded TenantModel below. This
+	// mirrors go/storage's Object precedent (see that type's own "Primary
+	// key" doc comment section) rather than the composite (tenant_id, id)
+	// shape a module-local id would need.
 	ID string `gorm:"column:id;primaryKey;size:36"`
 
 	// TenantModel promotes the tenant_id column and the GetTenantID method

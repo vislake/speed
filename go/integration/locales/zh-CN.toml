@@ -1,0 +1,27 @@
+# integration 模块的消息包，简体中文。
+#
+# 每个 go/integration/errors.go 声明的错误码对应一个顶层条目，id 即完整的错误码
+# 字符串。en-US.toml 必须携带完全相同的 id 集合。
+#
+# 插值变量名与错误自身的 apperr 参数键保持一致（原样、snake_case）：消息由 API
+# 返回的结构化参数渲染，键名不一致会渲染出空位而不是实际值。
+
+"integration.key_not_found" = "该 API Key 不存在。"
+
+"integration.key_already_revoked" = "该 API Key 已被撤销。"
+
+"integration.created_by_required" = "创建 API Key 必须指定创建者。"
+
+"integration.expiry_exceeds_maximum" = "请求的到期时间超过了允许的最长有效期。"
+
+"integration.expiry_in_past" = "请求的到期时间必须晚于当前时间。"
+
+"integration.scope_not_held_by_creator" = "请求的权限范围 {{.scope}} 不属于创建者当前拥有的权限。"
+
+"integration.permission_lister_unavailable" = "当前部署无法校验 API Key 的权限范围。"
+
+"integration.rate_limited" = "请求过于频繁，请在 {{.retry_after_seconds}} 秒后重试。"
+
+"integration.already_attached" = "该模块已经完成过一次装配。"
+
+"integration.internal_error" = "出现了一些问题，请稍后重试。"

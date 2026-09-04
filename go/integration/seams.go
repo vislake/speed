@@ -5,8 +5,9 @@ import "context"
 // PermissionLister lists every permission a subject currently holds, inside
 // one tenant. Service.Create calls it exactly once per request, to validate
 // that the Scopes a new key is being issued with are a genuine subset of
-// its creator's own permissions right now
-// (docs/internal/07-platform-services.md: "Key 的权限是创建者权限的子集").
+// its creator's own permissions right now, per
+// docs/internal/07-platform-services.md's rule that a key's permission
+// scope is a subset of its creator's own permissions.
 //
 // # Why this is a seam rather than an import of go/rbac
 //
@@ -70,8 +71,9 @@ func (f PermissionListerFunc) ListPermissions(ctx context.Context, tenantID, use
 
 // MembershipChecker answers whether userID is still an active member of
 // tenantID, the one fact Service.List needs to surface the design doc's
-// "creator has left" flag ("Key 列表显示创建者已离职标记") on
-// APIKeySummary.CreatorLeft.
+// "creator has left" flag on APIKeySummary.CreatorLeft (the design doc's
+// own rule that a key list must display a mark when its creator has left
+// the tenant).
 //
 // # Why this is a seam, and why it is optional where PermissionLister is not
 //
