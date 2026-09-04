@@ -278,6 +278,55 @@ func TestScopeService_MemberNodeIDs_DanglingMembership_FailsClosed(t *testing.T)
 	}
 }
 
+// TestScopeService_MemberNodeIDs_RestoredMembershipOnDeadNode_FailsClosed
+// pins the SAME safe reading as
+// TestScopeService_MemberNodeIDs_DanglingMembership_FailsClosed, but reached
+// through a legitimate, in-band application sequence rather than a
+// hand-seeded row: remove a membership (soft-delete, so assertNoMembers no
+// longer sees it), delete its node (now memberless, so the delete succeeds),
+// then restore the earlier membership. MemberService.Restore does not
+// re-validate the restored row against Add's own rules -- "the tenant's
+// node still existing" among them, by its own doc comment -- so the
+// restored membership comes back active and pointing at a node that is now
+// mark-deleted, with no table written behind org's back anywhere in the
+// sequence. MemberNodeIDs must still resolve it to an empty set rather than
+// an error.
+func TestScopeService_MemberNodeIDs_RestoredMembershipOnDeadNode_FailsClosed(t *testing.T) {
+	m, _ := newTestModule(t)
+	ctx := tenantCtx("tenant-a")
+	root, left, _ := seedTree(t, m.Tree(), ctx)
+
+	if _, err := m.Members().Add(ctx, "u-owner", root.ID); err != nil {
+		t.Fatalf("Add(owner): %v", err)
+	}
+	leaving, err := m.Members().Add(ctx, "u-leaving", left.ID)
+	if err != nil {
+		t.Fatalf("Add(leaving): %v", err)
+	}
+	if err := m.Members().Remove(ctx, "u-leaving"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if err := m.Tree().Delete(ctx, left.ID, false); err != nil {
+		t.Fatalf("Delete(left) after its only member left: %v, want success", err)
+	}
+
+	restored, err := m.Members().Restore(ctx, leaving.ID)
+	if err != nil {
+		t.Fatalf("Restore: %v, want success -- Restore does not re-check the node", err)
+	}
+	if !restored.IsActive() || restored.NodeID != left.ID {
+		t.Fatalf("Restore returned %+v, want an active membership still at the deleted node %q", restored, left.ID)
+	}
+
+	got, err := m.scope.MemberNodeIDs(ctx, "u-leaving")
+	if err != nil {
+		t.Fatalf("MemberNodeIDs = %v, want a nil error", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("a membership restored onto a dead node resolved to %v, want nothing", got)
+	}
+}
+
 // TestScopeService_MemberNodeIDs_AfterAMove_FollowsTheSubtree pins that the
 // scope is derived from the tree at read time rather than cached: moving a
 // member's node changes what they see, which is exactly why org.node.moved

@@ -94,9 +94,22 @@ func (s *ScopeService) DescendantIDs(ctx context.Context, nodeID string) ([]stri
 // A membership whose node no longer exists yields an empty set and a Warn
 // line rather than an error: the safe reading of a dangling row is "sees
 // nothing", never "sees everything", and a visibility question must not fail
-// the caller's request. TreeService refuses to delete a node with members
-// bound inside it, so the row can only dangle if something wrote the tables
-// behind org's back.
+// the caller's request.
+//
+// TreeService.Delete refuses to delete a node with LIVE members bound inside
+// it, but that guard alone no longer makes a dangling row impossible in
+// band: MemberService.Restore (membership.go) can reintroduce exactly this
+// state without touching a table directly. Its own doc comment records why
+// -- it deliberately does not re-validate the restored row against Add's
+// rules, "the tenant's node still existing" among them -- so the ordinary
+// remove-then-delete-then-restore sequence (remove a membership at node A,
+// which assertNoMembers no longer sees; delete node A; restore the earlier
+// membership) leaves an active row whose NodeID names a node that is now
+// mark-deleted, with no table written behind org's back anywhere in the
+// sequence. This method's fail-closed reading is what keeps that reachable
+// state safe rather than a hole -- see membership.go's Restore doc comment
+// for the full trace and go/org/AGENTS.md's "Soft deletion" section for the
+// recorded limitation.
 func (s *ScopeService) MemberNodeIDs(ctx context.Context, userID string) ([]string, error) {
 	membership, err := s.members.byUser(ctx, userID)
 	switch {
