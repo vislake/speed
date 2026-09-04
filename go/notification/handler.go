@@ -639,9 +639,22 @@ func (h *Handler) NotificationUpdatePreference(w http.ResponseWriter, r *http.Re
 // latency, and a frame dropped for a slow or disconnected consumer loses
 // nothing (hub.go's doc comment). There is no replay and no resume: a
 // client that reconnects starts reading announcements from that moment and
-// catches up over the list surface. Requests that cannot flush (a response
-// writer without http.Flusher) are refused before the stream opens; a
-// write that fails mid-stream (the client went away) ends the stream.
+// catches up over the list surface.
+//
+// The stream sends no heartbeat. A connection that survives with no
+// announcements is indistinguishable from a dead one until a proxy or the
+// client times it out, and the cadence that would keep one alive is a
+// deployment-tuned value -- what a proxy keeps alive differs per
+// installation -- so none is guessed at here. The absence is a deliberate
+// non-goal of this round: the loss a heartbeat would mask, a connection a
+// proxy already dropped, is recovered by the same reconnect-and-catch-up
+// path any disconnection takes, and hardening the stream with a heartbeat
+// is deferred alongside the platform-staff push consumer of a later round
+// (AGENTS.md's Known limitations records the deferral).
+//
+// Requests that cannot flush (a response writer without http.Flusher) are
+// refused before the stream opens; a write that fails mid-stream (the
+// client went away) ends the stream.
 func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request) {
 	tenant, ok := h.mustTenant(w, r)
 	if !ok {
