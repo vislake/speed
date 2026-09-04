@@ -1,0 +1,17 @@
+# pki's message bundle, American English.
+#
+# One flat top-level entry per error code go/pki/errors.go declares; the id
+# is the whole quoted code. zh-CN.toml must carry exactly the same id set.
+#
+# Interpolated names are the error's own apperr parameter keys, verbatim and
+# snake_case: the message is rendered from the structured parameters the API
+# returned, so a mismatch between the two would render an empty slot rather
+# than a value.
+
+"pki.authority_not_found" = "That certificate authority does not exist."
+
+"pki.key_not_found" = "That key does not exist."
+
+"pki.no_active_key" = "There is no active signing key for that purpose."
+
+"pki.algorithm_unsupported_by_signer" = "The configured signer does not support the {{.algorithm}} algorithm."

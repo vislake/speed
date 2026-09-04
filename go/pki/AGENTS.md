@@ -1,0 +1,118 @@
+# pki
+
+go/pki owns key material that needs a lifecycle: signing keys and X.509 certificates, from generation through rotation to revocation. This file is the module-level discipline that ships with `go/pki` to consuming projects; the design rationale is `docs/internal/22-pki.md`, and the repository-wide rules are the root `CLAUDE.md` plus `.claude/skills/backend-coding-standards`.
+
+**Status: round 1 of 4 (docs/internal/22-pki.md's own "delivery rounds" table).** This round ships the four tables and their dual-dialect migrations, the `Signer` seam and its zero-external-dependency `LocalSigner` implementation, internal CA issuance (root, intermediate, end-entity certificates), the tenant-isolation proofs, and the key-lifecycle layer's public API shape (`Service`) with a deliberately simplified, synchronous implementation. Round 2 adds the real state machine (propagation window, overlap period, jobs-driven expiry scan, events) and switches `authn` onto `Service` through its own `KeySource` interface. Round 3 adds revocation and CRL generation plus the HTTP surface. Round 4 adds the `vault` and `kmsaws` `Signer` subpackages. Judge what exists by the code, not by this sentence.
+
+## Scope
+
+**In scope this round.** Four tables (`pki_signing_keys`, `pki_authorities`, `pki_certificates`, `pki_local_keys`) with dual-dialect versioned SQL migrations, registered through `dbkit.MigrationRegistry` the same way every other module does. The `Signer` interface and `LocalSigner`, the local, zero-external-dependency implementation `task dev` runs and every unit test in this module (and its eventual consumers) can use as a test double. Internal CA issuance: `CAService.CreateRootCA`, `CreateIntermediateCA` and `IssueCertificate`, all through `crypto/x509`, with 16-byte `crypto/rand` serial numbers -- never a timestamp. `Service`, the key-lifecycle layer's public entry point, whose method signatures already match the shape `authn`'s round-2 `KeySource` interface will require, structurally, with no import edge in either direction. `pkgcore.Module` wiring: permissions (`pki:read`, `pki:issue`), audit actions (`pki.authority.create`, `pki.certificate.issue`), configuration items for CA/certificate validity periods, and the bilingual locale bundle for this round's four error codes.
+
+**Deliberately not in scope this round** (see docs/internal/22-pki.md's round table for the full rationale):
+
+| Not here | Where it belongs | Why |
+|---|---|---|
+| The pending → active → retiring → retired state machine's actual transition logic | Round 2 | `EnsurePurpose` creates a key and marks it `active` synchronously; the column already carries all five status values, the transition logic for four of them does not exist yet |
+| `jobs`-driven expiry scan, propagation window, overlap period | Round 2 | pki does not depend on `go/jobs` yet; `pki_local_keys.not_after` and `pki_signing_keys`/`pki_authorities`/`pki_certificates.not_after` are indexed now so the scan needs no migration of its own when it lands |
+| `authn`'s switch to `KeySource` | Round 2 | This module ships `Service`'s shape; `authn` importing nothing from `pki` and declaring its own structurally-identical interface is the whole point of the no-import seam (docs/internal/22-pki.md, "authn's integration") |
+| Revocation, CRL generation | Round 3 | `pki.certificate_revoked` / `pki.signer_unavailable` / `pki.propagation_window_not_elapsed` are not declared yet -- an error code for a code path that cannot fire is dead weight |
+| JWKS export | Round 3 | Same reasoning |
+| An HTTP surface / OpenAPI fragment | Round 3 | `Module.OpenAPISpec()` returns `nil` this round, the same "no fragment yet" answer `go/config`'s `Module` gives |
+| `go/pki/signer/vault`, `go/pki/signer/kmsaws` | Round 4 | Provider subpackages, each self-registering into a `SignerRegistry` this round does not build -- see "Known limitations" below |
+| `pki:revoke`, `pki:rotate` permissions | Rounds 2/3 | A permission for an operation the module cannot yet perform is speculative, not forward-compatible |
+| `pki.signing_key.staged`/`.activated`/`.retired`/`.revoked`, `pki.certificate.issued`/`.renewed`/`.revoked`/`.expiring`, `pki.authority.expiring` events | Rounds 2/3 | An undeclared-but-unused event is dead catalog weight, not forward compatibility (this module's own `Register` doc comment) |
+| TLS certificates for transport, ACME, OCSP responder, Certificate Transparency logs, cross-deployment CA federation, a generic "export private key" API, SM2 | Never (by design) | docs/internal/22-pki.md's "deliberately out of scope" section |
+
+## Data model
+
+Four tables spanning three of the four data domains (`docs/internal/04-data-and-tenancy.md`). **One table never mixes two data domains** -- this is round 1's central schema decision, directly answering the diagnosed system's central defect (a platform CA and per-tenant certificates sharing one table under one weak key):
+
+| Table | Domain | Repository shape | Isolation proof |
+|---|---|---|---|
+| `pki_signing_keys` | Platform | `SigningKeyRepository`, plain `*gorm.DB` | `tenancytest.AssertNotTenantScoped` |
+| `pki_authorities` | Platform | `AuthorityRepository`, plain `*gorm.DB` | `tenancytest.AssertNotTenantScoped` |
+| `pki_certificates` | **Tenant** | `CertificateRepository`, embeds `dbkit.Repository[Certificate]` | `tenancytest.AssertIsolated` |
+| `pki_local_keys` | Platform | `LocalKeyRepository`, plain `*gorm.DB` | `tenancytest.AssertNotTenantScoped` |
+
+**No business table ever holds a private key, and this is a schema fact, not a documentation promise.** `pki_signing_keys`, `pki_authorities` and `pki_certificates` carry only `signer_name` + `key_ref` -- an opaque pointer to whichever `Signer` implementation actually owns the key. `pki_local_keys` is `LocalSigner`'s own, separate store, read and written by no other code in this module.
+
+**`pki_signing_keys.status` carries the full five-value lifecycle vocabulary from day one** (`pending`/`active`/`retiring`/`retired`/`revoked`) even though this round's code only ever writes `pending → active` directly, and does so synchronously rather than through the two-step propagation-window dance round 2 will add. Getting the column's value set right now is what lets round 2 avoid a migration -- see `docs/internal/22-pki.md`'s own warning that round 1 must get the table shape right or round 2's state machine has to be redone.
+
+**`pki_signing_keys` enforces "at most one active key per purpose" at the database, not just in application code**: `uq_pki_signing_keys_active_purpose` is a partial unique index (`WHERE status = 'active'`), the same technique `go/dbkit`'s soft-delete round uses for "a value can repeat across states but not within one". `TestSigningKeyRepository_ActivePurposeUniqueness_IsEnforcedByTheDatabase` proves a second `Create` for an already-active purpose is refused by SQLite; this is standard SQL (no PostgreSQL-only feature), so the same index works unmodified on both dialects.
+
+**`pki_local_keys.not_after` is nullable and unpopulated by any of this round's code paths.** `LocalSigner.GenerateKey` takes no expiry parameter -- the `Signer` interface's frozen shape (see below) has no room for one, and the key-lifecycle layer that does know a key's intended lifetime records it on the *owning* row (`pki_signing_keys`/`pki_authorities`/`pki_certificates`), not on `pki_local_keys`. The column and its index exist now, ahead of any writer, because round 2's jobs-driven expiry scan needs to scan `pki_local_keys` directly -- across whichever table actually owns a given `key_ref` -- without a three-way join. Populating it is round 2's job.
+
+**`pki_authorities.parent_id` is a genuine nullable column, not an empty-string sentinel.** Unlike `org_nodes.parent_id` or `configs.tenant_id`, no unique index is keyed on it (an authority may issue any number of intermediates), so there is no NULL-vs-empty-string collision to design around, and a real `NULL` for a root authority is the honest representation.
+
+## Signer seam
+
+The single most important interface-shape decision in this module (docs/internal/22-pki.md, "Signer seam"): `Signer` exposes signing *operations* (`GenerateKey`/`Sign`/`Public`/`Destroy`), never a way to read a private key back out. A `Protect(key)`/`Unprotect(ref)` shape was considered and rejected -- its semantics require the private key to exist in plaintext inside this process's memory at some point, which defeats the entire point of a KMS-backed implementation. See `signer.go`'s doc comment for the full argument, including why `Sign` does not reuse the standard library's `crypto.Signer` (no `context.Context` parameter, which a KMS-backed direct-sign implementation genuinely needs for timeout/cancellation/trace propagation on a path a login walks through).
+
+`input`'s meaning in `Sign` is algorithm-dependent and is never normalized to "always a digest": for `AlgorithmEd25519` (the only algorithm this round ships), `input` is the *complete message* -- PureEdDSA hashes internally, and this is also exactly RFC 8037's JWT `EdDSA`. Getting this wrong for a KMS-backed implementation is not cosmetic (AWS KMS's `MessageType: RAW` vs. `DIGEST` select genuinely different signature algorithms), which is why the doc comment spells this out even though `LocalSigner` (the only implementation that exists yet) has no `MessageType` parameter to get wrong.
+
+`LocalSigner` does **not** have the `KeyNeverLeavesBoundary` capability docs/internal/22-pki.md describes for the `vault`/`kmsaws` implementations in direct-sign mode: a `Sign` call decrypts the private key into this process's memory for the duration of the `crypto/ed25519` call. That is the deliberate, documented cost of a zero-dependency signer.
+
+## `Service`: the key-lifecycle layer's public shape
+
+`Service.EnsurePurpose`/`ActiveSigner`/`VerificationKeys` are declared using **only standard-library types** in every signature, including an anonymous struct as `VerificationKeys`'s return-slice element type. This is not a style choice: `docs/internal/22-pki.md`'s "authn's integration" section explains that structural interface satisfaction across two packages' own named types requires exact, literal signature equality, since two packages' named structs are never the same type. `authn`'s round-2 `KeySource` interface will be declared independently, in `go/authn`, with **zero import of `go/pki`** -- and `*Service` must already satisfy it structurally today. `service.go`'s `keySourceShape` is the compile-time proof of that conformance, kept in this module (not in a test file) specifically so it fails to compile the moment a future edit accidentally breaks the shape, rather than waiting for round 2 to discover it.
+
+**What round 1's `Service` implementation does NOT do**, despite matching the eventual interface shape exactly:
+
+- `EnsurePurpose` does not stage a key into `pending` and wait for a propagation window. It creates a key and marks it `active` in the same call, synchronously. There is no multi-replica cache-propagation race to protect against yet, because nothing in this round reads a cached key set across replicas.
+- There is no `retiring`/`retired` transition and no overlap-period logic. `maxCredentialLifetime` is accepted and validated (must be positive) but not yet used to size anything.
+- There is no revocation transition. `SigningKeyStatusRevoked` is a real column value; no code path in this round ever writes it (a revoked row can only appear in this round's tests by direct repository seeding, exactly as `TestService_VerificationKeys_ReturnsNonRevokedKeys` does).
+- `EnsurePurpose` does not verify that an already-active key's `Algorithm` matches the requested one on a repeated call -- a second call with a different algorithm for the same purpose silently keeps the first key. This is a real gap, not a subtle one; it is safe today only because nothing in this round's own tests or the (nonexistent) consumer ever does this. A future round should decide what a mismatch means (error? rotate?) rather than this round guessing.
+- There is no jobs-driven expiry scan and no rotation: a key `EnsurePurpose` created stays `active` until a future round adds the state machine that can move it. `defaultKeyValidity` (`service.go`) is a generous, un-configurable placeholder standing in for a real rotation policy.
+
+This is a deliberate "keep the column, skip the transition" choice, not a half-built state machine -- see docs/internal/22-pki.md's own instruction that round 1 must get the table's value set right, not the transition logic.
+
+## X.509 layer: no real consumer yet
+
+**reference-app is a dental SaaS; it does not issue certificates.** Per docs/internal/22-pki.md's "the X.509 layer has no real consumer yet" section, this is a deliberate, documented exception to the repository's mandatory-first-consumer rule, made because the requirements behind the X.509 layer were diagnosed from a real, already-shipped production system (a DBaaS platform's certificate subsystem), not invented. The exception carries three compensating obligations, all discharged this round:
+
+1. **A godoc `Example` covering the full main path** -- `example_test.go`'s `Example` issues a root CA, an intermediate signed by the root, and an end-entity certificate signed by the intermediate, and verifies the resulting chain with the standard library's own `crypto/x509.Verify`. CI compiles and runs it inside this module's unit suite, which is the strongest guarantee available without a real consumer: the API compiles and works from an external caller's own import.
+2. **This section, stating plainly that the X.509 layer is unverified by any real consumer.** It is not "done" in the sense every other layer in this codebase is done -- no project has ever tried to integrate against it and found a parameter it could not actually supply.
+3. **This layer's public API is NOT frozen** the way the rest of this codebase's public API is (root `CLAUDE.md`: "treat public API as frozen unless intentionally shipping a breaking change"). The first real consumer's integration is explicitly permitted to break `CAService`'s signatures, `RootCAParams`/`IntermediateCAParams`/`CertificateParams`'s shapes, or anything else in `ca.go`, without that being a design failure -- speed has not shipped v1.0 yet, so this concession costs nothing today, but it is written here so a future reader understands the break is expected, not a mistake.
+
+**The key-lifecycle layer (`Service`, `Signer`, `LocalSigner`) does NOT get this exception.** It has a real, if indirect, consumer: `authn` will consume it through `KeySource` once round 2 lands, and reference-app assembles `authn`. Its public API is held to the ordinary frozen-API standard.
+
+## Known limitations
+
+- **No `SignerRegistry`.** `docs/internal/22-pki.md` describes a `database/sql`-driver-style registry the `vault`/`kmsaws` provider subpackages (round 4) will self-register into via `init()`, built on `pkgcore.SeamRegistry[T]` — the exact pattern `go/pkgcore`'s own `EventBusRegistry`/`KVStoreRegistry`/`MailerRegistry`/`ObjectStoreRegistry` follow. This round does not build it: with exactly one implementation (`LocalSigner`), a registry has nothing to select between yet. `Module.WithSigner(name string, signer Signer)` is the option a host uses today to override the default; round 4 is expected to either keep this option as the escape hatch alongside a registry, or replace it -- that decision is explicitly deferred, not pre-committed here.
+- **No `KeyNeverLeavesBoundary` pkgcore.Capability bit.** `docs/internal/22-pki.md`'s "capability declarations" section names a new capability this module introduces beyond the three `docs/internal/03-deployment-modes.md` already defines. Declaring it requires editing `go/pkgcore/capability.go`, which is out of this round's scope (this round touches no file outside `go/pki`, `go.work`, and the CI workflow files this document names). `LocalSigner` would not have this capability regardless, and no implementation that has it exists yet, so nothing is blocked by its absence today; it is round 4's job, alongside the provider subpackages that would actually assert it.
+- **`Service.EnsurePurpose` does not detect an algorithm mismatch on a repeated call.** See "`Service`: the key-lifecycle layer's public shape" above.
+- **The X.509 layer is unverified by any real consumer**, and its public API is not frozen. See "X.509 layer: no real consumer yet" above. Do not treat `CAService`'s current shape as a stable contract.
+- **No PostgreSQL integration tier.** `go/pki/internal/testutil.NewPostgres` exists (mirroring `NewSQLite`) so a later round's `integration_test/` package needs no `db.go` of its own, but no such package is shipped yet -- `docs/internal/22-pki.md`'s testing strategy names a PostgreSQL leg (dual-dialect migrations from zero, `pki_certificates`'s `AssertIsolated` and the other three tables' `AssertNotTenantScoped`, all against a real server) as this module's eventual requirement, not this round's. This round's SQLite-backed unit suite runs the identical assertions against SQLite only.
+- **No `jobs` dependency.** `go.mod` requires `pkgcore`, `dbkit`, `tenancy` (for `tenancytest`, test-only) and `observability` (for structured logging) and nothing above them. The expiry-scan and CRL-regeneration job handlers `docs/internal/22-pki.md`'s "module contract" section describes are round 2/3 additions that will need `go/jobs` as a new dependency then.
+- **No caching.** `docs/internal/22-pki.md`'s "caching" section describes a process-local, event-invalidated key-set cache for the high-frequency sign/verify path. This round queries the database on every `ActiveSigner`/`VerificationKeys` call; a real consumer at meaningful load will need round 2's cache before that matters.
+
+## Testing
+
+- **Unit tests**: `LocalSigner` + SQLite, no Docker required. `go/pki/internal/testutil` provides `NewSQLite`/`NewPostgres`/`Migrate`, mirroring `go/org/internal/testutil`'s exact shape, so every test in this module applies the real, versioned migration files from zero rather than an `AutoMigrate` or a hand-written `CREATE TABLE` -- a broken migration file fails a test here, not in a later consumer.
+- `repository_test.go` covers every repository's CRUD paths plus the two isolation suites (`tenancytest.AssertIsolated` for `CertificateRepository`, `tenancytest.AssertNotTenantScoped` for the other three), and the database-enforced active-purpose uniqueness.
+- `local_signer_test.go` covers `GenerateKey`'s algorithm rejection, the sign/verify round trip against `crypto/ed25519.Verify`, the unknown-`keyRef` failure, and `Destroy`.
+- `service_test.go` covers `EnsurePurpose`'s validation and idempotence, `ActiveSigner`'s no-key failure, and `VerificationKeys`'s revoked-key exclusion.
+- `ca_test.go` covers serial-number uniqueness and shape, root/intermediate/end-entity issuance, and chain verification through the standard library's own `crypto/x509.Verify` -- never a hand-rolled verifier.
+- `module_test.go` covers `pkgcore.Module` identity, the dual-dialect migration layout, locale-file parity, `Register`'s full declared surface (bootstrapped through a real `pkgcore.Kernel`, which also proves the locale bundle survives `i18n.Builder.AddModule`'s parity check), coexistence with another module, and the no-I/O contract of `Register`.
+- **Vault / AWS KMS integration legs**: not applicable this round -- those implementations do not exist yet (round 4). `docs/internal/22-pki.md`'s testing-strategy section already records that AWS KMS gets no integration leg even once it ships (LocalStack's KMS implementation is known to diverge from the real service), a decision this round defers to but does not implement.
+
+## Error index
+
+| Code | `apperr` kind | Raised by |
+|---|---|---|
+| `pki.authority_not_found` | `NotFound` | `AuthorityRepository.FindByID`, and transitively `CAService.CreateIntermediateCA`/`IssueCertificate`'s parent lookup |
+| `pki.key_not_found` | `NotFound` | `SigningKeyRepository.FindByID`, `LocalKeyRepository.FindByKeyRef`/`Delete`, and `LocalSigner.Sign`/`Public`/`Destroy` for an unrecognized `keyRef` |
+| `pki.no_active_key` | `NotFound` | `SigningKeyRepository.FindActiveByPurpose`, and transitively `Service.ActiveSigner` |
+| `pki.algorithm_unsupported_by_signer` | `Invalid` | `LocalSigner.GenerateKey` for any algorithm other than `AlgorithmEd25519` |
+
+`pki.certificate_revoked` / `pki.signer_unavailable` / `pki.propagation_window_not_elapsed` are declared by the rounds that implement what they signal (revocation, a KMS-backed signer, the propagation window) -- they do not exist in this round's `errors.go`.
+
+Every code above has a matching description entry in `locales/{zh-CN,en-US}.toml` under the identical id, per this codebase's i18n convention.
+
+## Adjudications a reviewer should not "correct"
+
+**pki is not part of `saasctl new`'s `--with` selection set.** `docs/internal/22-pki.md`'s "where pki sits in saasctl's module selection set" section is explicit: `pki` follows `authn` rather than being independently selectable. This module does not implement that wiring (it is `authn`'s round-2 change plus a `saasctl` template update), but a reviewer should not expect a `pki` entry in `go/saasctl`'s `--with` universe to appear in this round or to ever appear as an independent selection.
+
+**`pki_authorities`/`pki_certificates` are not linked by a foreign key**, even though `Certificate.AuthorityID` names an `Authority` row. Cross-module foreign keys are forbidden in this codebase (`docs/internal/04-data-and-tenancy.md` rule 4); here the two tables additionally sit in different data domains (platform vs. tenant), so a single FK constraint could not express the boundary correctly even if the module-boundary rule did not already forbid it.
+
+**Serial numbers are 16 bytes of `crypto/rand`, not validated for global uniqueness across independent CAs.** A collision is cryptographically negligible (2^128 space) and is not the failure mode the diagnosed system actually had -- that system used millisecond timestamps, which collide constantly under concurrent issuance from a single CA. This round indexes `serial` for lookup but does not add a uniqueness constraint on it; a future round adding CRL support may want one scoped to `(signer_name, key_ref)` or similar, once the actual query shape that needs it exists.
