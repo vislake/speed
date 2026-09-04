@@ -11,9 +11,10 @@
  * both demo tenants and demo-acme-only@example.com in tenant-acme
  * alone, and the real server refuses a switch into a tenant the
  * signed-in account lacks (authn.tenant_membership_required). The
- * web rig's journeys, all owner journeys (owner@example.test),
- * never cross that refusal. The current tenant comes from the
- * auth-core hook
+ * web rig's journeys never cross that refusal: the owner day
+ * (owner@example.test) is the one that switches tenants, while the
+ * reader day (app-journey.test.tsx) stays on notes, where its grant
+ * asymmetry lives. The current tenant comes from the auth-core hook
  * (the principal's own claim), never from local memory of a previous
  * switch, and a completed switch evicts the previous tenant's query
  * data -- the tenant-namespaced-query-key discipline: after switching,
