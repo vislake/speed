@@ -1,0 +1,22 @@
+# metering's message bundle, American English.
+#
+# One flat top-level entry per error code go/metering/errors.go declares;
+# the id is the whole quoted code. zh-CN.toml must carry exactly the same
+# id set.
+#
+# Interpolated names are the error's own apperr parameter keys, verbatim
+# and snake_case: the message is rendered from the structured parameters
+# the API returned, so a mismatch between the two would render an empty
+# slot rather than a value.
+
+"metering.missing_tenant_id" = "A usage event must have a tenant."
+
+"metering.missing_feature" = "A usage event must have a feature."
+
+"metering.missing_idempotency_key" = "A usage event must have an idempotency key."
+
+"metering.invalid_quantity" = "Usage quantity {{.quantity}} is invalid; it must be a non-negative, finite number."
+
+"metering.metadata_too_large" = "Usage event metadata is too large."
+
+"metering.invalid_period_bucket" = "\"{{.bucket}}\" is not a valid period bucket."

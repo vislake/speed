@@ -1,3 +1,108 @@
 # metering
 
-Not yet implemented. See docs/internal/06-billing-and-metering.md for the design.
+go/metering is speed's usage-metering module: a single `Recorder` interface (plus a billing-grade `Enqueue` helper) business modules call to report usage, decoupled entirely from which backend stores and aggregates it. This file is the module-level discipline that ships with `go/metering` to consuming projects; the design rationale is `docs/internal/06-billing-and-metering.md`, and the repository-wide rules are the root `CLAUDE.md` plus `.claude/skills/backend-coding-standards`.
+
+**Status: round 1, a deliberately bounded foundation round.** This round ships the `Recorder`/`Enqueue` pipeline end to end (both reliability tiers), the in-process aggregation backend only (real-time `sync.Map` counters plus SQLite/PostgreSQL usage-summary tables), and an overage-threshold-crossing event published on `pkgcore.EventBus`. It does NOT ship the Plan/Feature/Entitlement domain model, credits, actual quota enforcement, or a distributed aggregation backend. Judge what exists by the code, not by this sentence.
+
+## Scope
+
+**In scope this round.** `UsageEvent` and the `Recorder` interface (`recorder.go`). `AnalyticsRecorder`, the analytics-grade (fail-open) tier: an in-process bounded channel plus a background flush goroutine (`analytics.go`). `Enqueue` and `Dispatcher`, the billing-grade (must-not-silently-drop) tier's write and delivery halves: a caller-transaction outbox write plus a background poller retrying indefinitely (`outbox.go`, `dispatcher.go`, `repository.go`'s outbox functions). `Aggregator`, the in-process aggregation backend both tiers feed: real-time counters, database-backed summary rows, and overage-threshold detection (`aggregator.go`, `overage.go`). Two tables with dual-dialect versioned SQL migrations (`metering_usage_summaries`, `metering_outbox_records`). `pkgcore.Module` wiring: configuration items for the period-bucket size and a default overage threshold, and the one published domain event.
+
+**Deliberately not in scope this round:**
+
+| Not here | Where it belongs | Why |
+|---|---|---|
+| Plan/Feature/Entitlement domain model, `Entitlements.Check` | `go/billing` (unstarted) | docs/internal/06-billing-and-metering.md's own domain-model section places this there; metering measures and signals, it does not decide |
+| Credits (`credit_balance`/`credit_transaction`, reserve/confirm/refund) | `go/billing` (unstarted) | The design doc is explicit credits are a separate, synchronous path, not the metering pipeline |
+| Actual blocking of over-quota calls | `go/billing` (unstarted) | `OverageThresholdCrossedEvent` is a signal; `Plan.Grants.OverageMode`'s Block/AllowAndBill/Notify decision needs the domain model above to exist first |
+| Redis Streams / PostgreSQL atomic-increment aggregation backend, TimescaleDB raw-detail storage | A later round | This round ships the in-process backend only, per the design doc's own "MVP now, split into its own container once volume grows" framing |
+| A `jobs`-queue-driven `Dispatcher` | A later round's hardening | This round's Dispatcher is an in-process goroutine; the task's own scope explicitly allows this as later-round work |
+| An HTTP surface / OpenAPI fragment | A later round | metering is a Go-level API business modules call in-process, not a service reached over HTTP, this round |
+| `metering:*` permissions, an audit action | A later round | No HTTP surface to gate, and no operation privileged enough to warrant an audit trail entry this round; inventing either speculatively is exactly what the round-boundary discipline forbids |
+| Live reading of `ConfigDefaultOverageThreshold`/`ConfigPeriodBucketSize` through `config.Service` | A later round | See "Overage thresholds" below |
+| A reference-app consumer | A later round | Explicitly out of scope per this round's own instructions -- go/billing driving a real AI-generation credit flow is the natural first consumer, and go/billing does not exist yet |
+
+## Data model
+
+Two tables, deliberately in **different** data domains (`docs/internal/04-data-and-tenancy.md`):
+
+| Table | Domain | Repository shape | Isolation proof |
+|---|---|---|---|
+| `metering_usage_summaries` | Tenant | `SummaryRepository`, embeds `dbkit.Repository[UsageSummary]` | `tenancytest.AssertIsolated` |
+| `metering_outbox_records` | Platform | plain `*gorm.DB` functions (`repository.go`) | `tenancytest.AssertNotTenantScoped` |
+
+### Outbox table: platform data, not tenant-scoped
+
+This is the module's one deliberate departure from a literal "every table this round writes must be tenant-scoped" reading, and it is worth stating plainly since it looks, at first glance, like it should be tenant data (every row genuinely belongs to one tenant).
+
+`OutboxRecord` does **not** implement `dbkit.TenantScoped`. The reason is `Dispatcher`: outbox delivery is a background process that must find every tenant's pending rows to retry them. `dbkit.Repository[T]` has no cross-tenant read path -- `tenancy.WithSystemContext` elevates *who may ask* for the escape hatch, not *what `dbkit.Repository[T]` itself can see* (see that function's own doc comment: "granting a system context does not widen what `dbkit.Repository[T]` ... can see or touch"). A genuinely tenant-scoped `OutboxRecord` would leave `Dispatcher` with no sanctioned way to scan pending rows across tenants at all.
+
+This is not a novel problem or a novel answer: it is the exact shape `go/jobs`' own `jobRecord` already solves the identical way, and root `CLAUDE.md`'s Repository Status census names two more precedents doing the same thing (`go/dbkit`'s `AuditEvent`, `go/config`'s `row`) -- "platform data with a real, non-enforced `tenant_id` column ... never `dbkit.TenantScoped`". `tenant_id` on `metering_outbox_records` is real and populated; it is simply not the database-enforced kind, and `tenancytest.AssertNotTenantScoped` (not `AssertIsolated`) is the correct suite for it, run in `repository_test.go`.
+
+`UsageSummary`, by contrast, has no such cross-tenant reader: every caller who ever needs a summary row already knows which tenant it is asking about (an event's own `TenantID`, or a tenant's own dashboard request), so it stays genuinely tenant-scoped through `SummaryRepository`.
+
+### `UsageSummary.ID` is deterministic
+
+`ID` is `summaryID(Feature, PeriodStart)` -- not a random ULID/UUID -- so `Aggregator.upsertSummary` can reach the one row for a given `(tenant, feature, period)` through `dbkit.Repository[T].FindByID` rather than a hand-written query, which this codebase's raw-GORM-bypass discipline forbids outside `dbkit`'s own internals. Because `ID` is derived from `Feature` and `PeriodStart` alone, it is **not** globally unique across tenants -- two different tenants both measuring `"ai.generation"` in the same calendar month get the same `ID` string -- so `UsageSummary` declares `TenantID` as a second `primaryKey` column directly (a true composite key `(id, tenant_id)`, the same shape `go/config`'s `row` uses for its own non-globally-unique key), rather than embedding `dbkit.TenantModel` the way a globally-unique-ID model (`go/pki`'s `Certificate`, say) safely can.
+
+## Reliability tiers
+
+Both tiers are documented in full on their own types (`Recorder`, `AnalyticsRecorder`, `Enqueue`, `Dispatcher`); this section is the map between them and `docs/internal/06-billing-and-metering.md`'s "reliability tiers" split:
+
+- **Analytics-grade** (`AnalyticsRecorder.Record`): fail-open. A full channel drops the event, increments a counter (`Dropped()`), and logs a warning. No idempotency dedup this round -- see Known limitations.
+- **Billing-grade** (`Enqueue` + `Dispatcher`): must not silently drop. `Enqueue` writes a row in the caller's own transaction (never inside the caller's transaction does the row commit without the caller's own write, or vice versa -- proved by `TestEnqueue_SharesTheCallerTransaction_CommitLandsTheRow`/`_RollbackDiscardsTheRow`), deduped at the database level by a unique index on `(tenant_id, idempotency_key)`. `Dispatcher.RunOnce` claims pending rows and delivers each into `Aggregator.Ingest`, leaving a failed row pending (with `Attempts`/`LastError` recorded) for the next cycle rather than dropping or dead-lettering it -- proved recoverable-after-crash by `TestDispatcher_CrashMidDelivery_RowIsRecoveredOnTheNextRun`.
+
+Both tiers converge on `Aggregator.Ingest` -- the "same pipeline, swappable backend" property `doc.go` describes.
+
+## Overage thresholds: declared config schema, Go-level values
+
+`Module.Register` declares `ConfigPeriodBucketSize` and `ConfigDefaultOverageThreshold` on `reg.Config` -- schema only. Nothing in this round's code paths reads either through a live `config.Service` call: `Aggregator`'s actual period bucket and thresholds come from `Module`'s own `WithPeriodBucket`/`WithOverageThresholds` Go-level options, defaulted at construction.
+
+This mirrors `go/pki`'s identical, already-accepted simplification for its own CA/certificate validity periods (`go/pki/AGENTS.md`: "Register only declares the schema ... wiring these declared config keys into that decision is left to the host, or to a later round"). The reason it is the right simplification here too, not a shortcut: reading a *live, per-tenant* config value would require metering to depend on `go/config` (a real module-to-module import this codebase's established convention avoids in favor of a structurally-typed, no-import seam -- see `org`'s `FeatureGate`/`Scope` for the pattern) purely to serve a round whose thresholds are themselves a stand-in for `go/billing`'s eventual real, per-plan entitlement values. Building that seam now, before `go/billing` exists to give it a real caller, would be exactly the kind of "prepare for later" this codebase's round-boundary discipline forbids.
+
+## Known limitations
+
+- **Summary writes are serialized by a single process-wide mutex** (`Aggregator.mu`), not a real atomic database upsert. `dbkit.Repository[T]`'s `Create`/`FindByID`/`Update` each open their own transaction, so a naive read-modify-write sequence is a lost-update race under concurrent `Ingest` calls for the same `(tenant, feature, period)` key without external coordination; the mutex closes that race for exactly one process, which is this round's whole story (the in-process aggregation backend). A distributed backend (Redis `INCRBYFLOAT`, or a PostgreSQL `INSERT ... ON CONFLICT`) would replace the mutex with a real cross-process atomic upsert; it does not need to reuse this one. Proved race-free within one process by `TestAggregator_Ingest_ConcurrentSameKey_NoLostUpdates` under `-race`.
+- **`AnalyticsRecorder` does not deduplicate a retried `Record` call against `IdempotencyKey`.** Doing so would require persisting every seen key somewhere durable, which contradicts this tier's whole cheap, in-memory, best-effort positioning. The billing-grade `Enqueue` path does dedupe (database-level unique index), because that path already pays for durable storage on every call.
+- **`Dispatcher` assumes exactly one process runs against a database at a time.** `claimPendingOutboxRecords` is a read, not an atomic claim-and-lock -- it never marks a row "in flight" before attempting delivery. Two concurrent `Dispatcher` processes racing the same pending row could both deliver it (a double-count in the aggregator, not a lost event). Safe today because this round's `Dispatcher` is a single in-process goroutine; a `jobs`-queue-driven poller (explicitly allowed as later-round hardening) would need a real claim step -- an atomic `status: pending -> processing` transition with a visibility timeout, the same shape `go/jobs`' own `claimOne` already implements for `jobRecord` -- before running more than one worker safely.
+- **No per-row backoff.** A failing outbox row is retried at the same fixed poll interval as every pending row, regardless of how many times it has already failed (`Attempts` is recorded but not consulted). A real backoff curve is future hardening.
+- **`isUniqueViolation` depends on `dbkit.Open`'s `gorm.Config.TranslateError: true`.** It checks `errors.Is(err, gorm.ErrDuplicatedKey)` rather than matching a dialect-specific error string, which is correct and portable for any `*gorm.DB` this codebase's own `dbkit.Open` returns, but would silently stop detecting duplicates against a `*gorm.DB` opened some other way with error translation off. Every call site in this module passes a `dbkit.Open`-sourced `*gorm.DB` (or `internal/testutil`'s identical wiring), so this is not a gap in practice today.
+- **No PostgreSQL integration tier.** `go/metering/internal/testutil.NewPostgres` exists (mirroring `NewSQLite`) so a later round's `integration_test/` package needs no `db.go` of its own, but no such package is shipped yet. This round's SQLite-backed unit suite runs the identical assertions against SQLite only.
+- **No reference-app consumer.** Per this round's own stated scope: a real consumer (`go/billing` driving reference-app's AI-generation credit flow, or similar) is later-round work, since `go/billing` -- the module that would actually call this one for something reference-app does -- does not exist yet.
+- **No `jobs` dependency.** `go.mod` requires `pkgcore`, `dbkit`, `observability` and `tenancy` (test-only, for `tenancytest`) and nothing above them. A `jobs`-queue-driven `Dispatcher` (the explicitly allowed later hardening) will need `go/jobs` as a new dependency then.
+
+## Testing
+
+- **Unit tests**: SQLite only, no Docker required. `go/metering/internal/testutil` provides `NewSQLite`/`NewPostgres`/`Migrate`, mirroring `go/pki/internal/testutil`'s exact shape, so every test in this module applies the real, versioned migration files from zero rather than an `AutoMigrate`.
+- `repository_test.go` covers `SummaryRepository`'s CRUD paths and `tenancytest.AssertIsolated`, plus every outbox plain-function (`insertOutboxRecord`, `findOutboxByIdempotencyKey`, `claimPendingOutboxRecords`, `markOutboxDelivered`, `markOutboxAttemptFailed`) and `tenancytest.AssertNotTenantScoped`.
+- `outbox_test.go` covers `Enqueue`'s validation, its idempotent-retry guarantee, its transactional atomicity in both directions (commit lands the row, rollback discards it), `isUniqueViolation`, and metadata encode/decode round-tripping.
+- `aggregator_test.go` covers real-time counter increments, period isolation, summary-row upserts, the overage-threshold edge-triggered publish (exactly one event per crossing, never one per subsequent event), the best-effort publish-failure contract, and a `-race` concurrency proof against the single-mutex serialization the Known limitations section documents.
+- `dispatcher_test.go` covers the delivery happy path, batch-size limiting, a per-cycle delivery-failure proof (row stays pending with `Attempts` recorded), and the round's mandated crash-recovery proof (`TestDispatcher_CrashMidDelivery_RowIsRecoveredOnTheNextRun`): a "crashed" aggregator (a closed database connection standing in for a mid-`Ingest` process death) leaves the enqueued row recoverable and pending, never lost, and a fresh healthy `Dispatcher` completes delivery on its next run.
+- `analytics_test.go` covers the fail-open drop contract (a full buffer never blocks `Record`) and the background flush loop reaching `Aggregator.Ingest`.
+- `module_test.go` covers `pkgcore.Module` identity, the dual-dialect migration layout, locale-file parity, `Register`'s full declared surface (bootstrapped through a real `pkgcore.Kernel`, which also proves the locale bundle survives `i18n.Builder.AddModule`'s parity check), coexistence with another module, and the no-I/O contract of `Register`.
+- **PostgreSQL integration leg**: not applicable this round -- see Known limitations.
+
+## Error index
+
+| Code | `apperr` kind | Raised by |
+|---|---|---|
+| `metering.missing_tenant_id` | `Invalid` | `UsageEvent.validate` |
+| `metering.missing_feature` | `Invalid` | `UsageEvent.validate` |
+| `metering.missing_idempotency_key` | `Invalid` | `UsageEvent.validate` |
+| `metering.invalid_quantity` | `Invalid` | `UsageEvent.validate`, for a negative, NaN or infinite `Quantity` |
+| `metering.metadata_too_large` | `Invalid` | `UsageEvent.validate`, for `Metadata` exceeding its entry-count or per-field-length bound |
+| `metering.invalid_period_bucket` | `Invalid` | `periodBounds`, for a bucket string that is neither `PeriodBucketDaily` nor `PeriodBucketMonthly` |
+
+There is no `metering.unknown_feature`: this round has no feature catalog to check an event's `Feature` against (that belongs to `go/billing`'s Plan/Feature/Entitlement model), so a code for a check nothing performs would be dead catalog weight, not forward compatibility -- the same discipline `go/pki`'s error index documents for its own round boundary.
+
+Every code above has a matching description entry in `locales/{zh-CN,en-US}.toml` under the identical id.
+
+## Adjudications a reviewer should not "correct"
+
+**`metering_outbox_records` is platform data, not tenant-scoped**, even though every row genuinely belongs to one tenant. See "Outbox table: platform data, not tenant-scoped" above -- this is a deliberate, precedented choice (matching `go/jobs`' `jobRecord`, `go/config`'s `row`, `go/dbkit`'s `AuditEvent`), not an isolation gap. A reviewer expecting `dbkit.Repository[OutboxRecord]` here should read that section before flagging it.
+
+**`Enqueue` is not behind the `Recorder` interface.** `Recorder.Record(ctx, event)`'s signature has no room for the caller's transaction handle `Enqueue(ctx, tx, event)` requires, and forcing billing-grade delivery through a shape designed for fire-and-forget analytics would be the wrong abstraction, not a missing one. Billing-grade callers use the package-level `Enqueue` function directly.
+
+**`ConfigDefaultOverageThreshold`'s `Type` is `"int"`, not a float type.** `pkgcore.ConfigItem.Type`'s vocabulary is closed to `"string"`, `"int"`, `"bool"` and `"duration"` -- there is no float type to declare. This is consistent with `UsageEvent.Quantity`/`OverageThresholds` staying `float64` at the Go level (a caller may well meter fractional units); the config item is a coarse, integer-only stand-in exactly because it is not live-read this round anyway (see "Overage thresholds" above).
+
+**Serial numbers of outbox rows are UUIDs (`github.com/google/uuid`), and `metering.mod`'s one third-party dependency is deliberately this narrow.** `go.mod` requires only `google/uuid` beyond this codebase's own modules -- no float/decimal library, no cron/scheduling library for `Dispatcher`'s poll loop (`time.Ticker` is enough), no JSON library beyond the standard library's `encoding/json` for `OutboxRecord.Metadata`. Consumers of this module pay for exactly one small, dependency-free third-party package.
