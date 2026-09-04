@@ -7,9 +7,12 @@
  * session's own refreshAccessToken: () => session.refresh() -- bound
  * into the api-sdk runtime seam (bindRequestFn, the same seam the app's
  * own bootstrap binds). Because the transport is real api-client
- * machinery, the 401-refresh leg a journey scripts (a refused request
- * answered 401, a silent credential-less refresh, one retry) is
- * exercised by the client itself rather than scripted around.
+ * machinery, a request answered 401 would drive the client's own
+ * single-flight refresh and one retry rather than a scripted leg --
+ * but no journey at this tier scripts one today: the demo-server
+ * answers no 401, so the refresh leg stays dormant here, its in-form
+ * exercise living in the packages' own usage-example suites, where a
+ * scripted responder answers 401.
  *
  * This is the app layer's own copy of the same rig the account-ui
  * package's suite ships (same fetcher shape, same jsonResponse over
