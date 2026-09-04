@@ -51,6 +51,15 @@ replace github.com/vislake/speed/go/notification => ../../go/notification
 // transitive, without relying on the workspace.
 replace github.com/vislake/speed/go/ratelimit => ../../go/ratelimit
 
+// go/sharing is imported directly by this app: buildServer wires it as the
+// round's mandatory-first-consumer proof (see server.go, sharing_resolver.go
+// and sharing_flow_test.go). Like every other workspace-local module it
+// carries no published version, so this app's own go.mod needs its own
+// replace for it too -- root CLAUDE.md's per-module standalone-build rule
+// (`GOWORK=off go build`) means `go mod tidy` must resolve every
+// dependency without relying on the workspace.
+replace github.com/vislake/speed/go/sharing => ../../go/sharing
+
 require (
 	github.com/google/uuid v1.6.0
 	github.com/redis/go-redis/v9 v9.14.1
@@ -66,6 +75,7 @@ require (
 	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/pki v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/rbac v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/sharing v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/storage v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/tenancy v0.0.0-00010101000000-000000000000
 	go.opentelemetry.io/otel/sdk v1.44.0

@@ -11,6 +11,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/rbac"
+	"github.com/vislake/speed/go/sharing"
 	"github.com/vislake/speed/go/storage"
 
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
@@ -224,6 +225,16 @@ var demoRouteGuards = map[string]string{
 	// path here.
 	config.PathPublic:         routePublic,
 	config.PathSystemFeatures: routePublic,
+	// sharing's one route is routePublic for the same structural reason
+	// config's two are: it is a genuinely unauthenticated surface by
+	// design (go/sharing's Handler doc comment), gated on nothing an rbac
+	// permission check could evaluate -- an anonymous visitor holding a
+	// bearer share token has no Subject at all. sharing.Service.AccessPublic
+	// is where this route's real gate lives (the token itself, and the
+	// tenant-and-share state it resolves to), exactly as authn's and org's
+	// own per-operation checks are where their routePublic entries' real
+	// gates live.
+	sharing.PathAccess: routePublic,
 }
 
 // notesResource is the resource half of notes' permission strings. It is

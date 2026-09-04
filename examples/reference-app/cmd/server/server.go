@@ -47,6 +47,7 @@ import (
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 	"github.com/vislake/speed/go/pki"
 	"github.com/vislake/speed/go/rbac"
+	"github.com/vislake/speed/go/sharing"
 	"github.com/vislake/speed/go/storage"
 	"github.com/vislake/speed/go/tenancy"
 
@@ -986,6 +987,19 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// pool before the shared database closes.
 	storageModule := storage.NewModule(db, storage.WithQueue(standaloneQueue))
 
+	// sharingModule is the reference app's first real consumer of
+	// go/sharing end to end (sharing_flow_test.go), the round-2 mandatory
+	// first-consumer proof AGENTS.md's "No real consumer yet" section named
+	// as the compensating obligation round 1 carried. Its one public route
+	// resolves a Share's ResourceRef through storageSharingResolver
+	// (sharing_resolver.go), the structurally-typed adapter over
+	// storageModule's own ObjectService -- sharing never imports go/storage
+	// itself (resolver.go's own doc comment explains why), so this
+	// composition is entirely this app's own, the same way every other
+	// no-import-edge seam in this file (orgFeatureGate,
+	// demoOrgSubjectResolver, ...) is wired.
+	sharingModule := sharing.NewModule(db, sharing.WithResourceResolver(&storageSharingResolver{svc: storageModule.ObjectService()}))
+
 	// notificationModule is the reference app's first consumer of
 	// go/notification, wired as the round's mandatory-first-consumer proof
 	// (see cmd/server/demo_notification.go for the host-side glue that
@@ -1058,6 +1072,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
 	if regErr := migrationRegistry.Register(storageModule); regErr != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	}
+	if regErr := migrationRegistry.Register(sharingModule); regErr != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
@@ -1160,7 +1178,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	if cfg.Mailer != nil {
 		kernelOptions = append(kernelOptions, pkgcore.WithMailer(cfg.Mailer, pkgcore.Stateless))
 	}
-	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, pkiModule, authnModule, notesModule, orgModule, configModule, rbacModule, storageModule, demoModule, notificationModule, auditModule)
+	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, pkiModule, authnModule, notesModule, orgModule, configModule, rbacModule, storageModule, sharingModule, demoModule, notificationModule, auditModule)
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: bootstrap kernel: %w", err)
@@ -1281,6 +1299,15 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			tenancy.WithAllowlist(http.MethodHead, config.PathPublic),
 			tenancy.WithAllowlist(http.MethodGet, config.PathSystemFeatures),
 			tenancy.WithAllowlist(http.MethodHead, config.PathSystemFeatures),
+			// sharing.PathAccess is the one genuinely public, unauthenticated
+			// route this app mounts: an anonymous visitor holding a bearer
+			// share token carries no Principal and therefore no tenant claim
+			// at all, by design (go/sharing's Handler doc comment) --
+			// sharing.Service.AccessPublic resolves the tenant itself, from
+			// the token alone, once this allowlist entry lets the request
+			// reach it at all. GET only: the fragment defines no other
+			// method on this path.
+			tenancy.WithAllowlist(http.MethodGet, sharing.PathAccess),
 		}, authnPreAuthAllowlist()...)...)(mux),
 	)
 	// The demo-user seed runs last, once the composed handler exists: it
