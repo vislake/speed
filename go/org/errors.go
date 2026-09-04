@@ -97,6 +97,20 @@ var (
 	// case-sensitive. See path.go's own doc comment.
 	ErrInvalidNodeID = apperr.Invalid("org.invalid_node_id")
 
+	// ErrRestoreParentNotLive reports a Restore whose target's stored parent
+	// is not currently live -- mark-deleted itself, most commonly because it
+	// was cascade-deleted alongside the node being restored. Restoring the
+	// node anyway would land it in a structurally broken position: a
+	// Subtree scan under a live ancestor above the gap would surface it
+	// (the prefix-match LIKE scan does not care that an intermediate row is
+	// invisible), while Ancestors and every Children()-based walk down from
+	// the root could not reach it -- exactly the "path disagrees with
+	// reality" state path.go's own doc comment calls corrupt, not a
+	// supported one. Restore each ancestor first, root to leaf, so the node
+	// a Restore call lands on is always live; see TreeService.Restore's own
+	// doc comment and go/org/AGENTS.md's "Soft deletion" section.
+	ErrRestoreParentNotLive = apperr.Conflict("org.restore_parent_not_live")
+
 	// ErrInternal reports a failure org cannot classify -- a storage error,
 	// or a stored row that violates an invariant this module maintains. It
 	// wraps the underlying error as its cause so the trace carries it; the

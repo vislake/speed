@@ -31,6 +31,8 @@
 
 "org.internal_error" = "组织服务未能完成本次请求。"
 
+"org.restore_parent_not_live" = "该节点的上级节点尚未恢复,请先恢复上级节点后再试。"
+
 "org.node_has_members" = "该节点下还有成员,请先把他们调整到其他节点再删除。"
 
 "org.membership_not_found" = "此人不是该组织的成员。"

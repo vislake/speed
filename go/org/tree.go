@@ -479,7 +479,43 @@ func (s *TreeService) publishDeleted(ctx context.Context, node OrgNode, cascade 
 //
 // Restore is deliberately not exposed over HTTP this round; see
 // go/org/AGENTS.md's "Soft deletion" section for why.
+//
+// # Restore refuses to land a node on a dead parent
+//
+// Per-node-not-cascading (above) means a restored node's PARENT can still be
+// mark-deleted -- most commonly because a cascading Delete took both down
+// together, and only the descendant has been restored so far. Restoring
+// nodeID in that state would silently create a structurally broken tree that
+// is NOT fail-closed the way the rest of this module is: Subtree scans down
+// from a live ancestor above the gap would surface the restored node (the
+// prefix-match LIKE scan cannot see that an intermediate row is invisible),
+// CreateChild would let a caller grow a fresh subtree hanging off it, and
+// Ancestors/byIDs would silently drop the invisible parent from the chain
+// rather than reporting a corrupt read. That directly contradicts path.go's
+// own invariant that a node whose Path disagrees with its ParentID chain is
+// "corrupt, not a supported state," so Restore checks the immediate parent's
+// liveness BEFORE writing anything and reports ErrRestoreParentNotLive
+// instead. The caller restores top-down, ancestor before descendant, exactly
+// as TestTreeService_Restore_IsNotCascading already does for the
+// still-live-ancestor case; restoring the tenant root itself needs no such
+// check, since a root's ParentID is always the empty-string sentinel and it
+// is never itself deletable (ErrRootNotDeletable).
 func (s *TreeService) Restore(ctx context.Context, nodeID string) (*OrgNode, error) {
+	existing, err := s.repo.findByIDIncludingDeleted(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	if !existing.IsRoot() {
+		if _, parentErr := s.Get(ctx, existing.ParentID); parentErr != nil {
+			if hasCode(parentErr, ErrNodeNotFound.Code) {
+				return nil, ErrRestoreParentNotLive.
+					WithParam("node_id", nodeID).
+					WithParam("parent_id", existing.ParentID)
+			}
+			return nil, parentErr
+		}
+	}
+
 	if err := s.repo.Restore(ctx, nodeID); err != nil {
 		return nil, mapFindError(err, ErrNodeNotFound, nodeID)
 	}

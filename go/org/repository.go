@@ -152,6 +152,37 @@ func (r *Repository) byIDs(ctx context.Context, ids []string) ([]OrgNode, error)
 	return nodes, nil
 }
 
+// findByIDIncludingDeleted returns the node with the given id within ctx's
+// tenant, whether it is currently live or mark-deleted -- unlike the
+// promoted FindByID and every other read in this file, which the soft-delete
+// auto-scope plugin silently hides a mark-deleted row from.
+//
+// TreeService.Restore needs exactly this: to read a node's stored ParentID
+// BEFORE deciding whether restoring it is safe, and a mark-deleted node's
+// own row is precisely the one an ordinary, scoped read cannot see.
+//
+// db.Unscoped() is GORM's own general query-scope bypass (the same one
+// soft_delete.go's plugin checks and skips); it disables only the
+// soft-delete scope here, never tenant isolation -- the tenant-scope plugin
+// does not consult it (tenant_scope.go), so this call is fully tenant-scoped
+// exactly like every other method in this file. It reports ErrNodeNotFound
+// for an id with no row at all in this tenant, live or mark-deleted,
+// collapsing "never existed" and "belongs to another tenant" the same way
+// FindByID already does.
+func (r *Repository) findByIDIncludingDeleted(ctx context.Context, id string) (*OrgNode, error) {
+	var node OrgNode
+	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Unscoped().Where("id = ?", id).First(&node).Error
+	})
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return nil, ErrNodeNotFound
+	case err != nil:
+		return nil, ErrInternal.WithCause(err)
+	}
+	return &node, nil
+}
+
 // errSubtreeSizeUnexpected aborts deleteLeaf's transaction when the prefix
 // matched a number of rows other than the single node the caller meant to
 // remove. It never escapes this file: deleteLeaf translates it into the

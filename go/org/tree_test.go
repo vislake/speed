@@ -1276,3 +1276,45 @@ func TestTreeService_Restore_IsNotCascading(t *testing.T) {
 		t.Errorf("Restore(store) after Restore(north): %v, want success", err)
 	}
 }
+
+// TestTreeService_Restore_DeadParent_RefusesRestore reproduces the tree
+// corruption a bare, bottom-up Restore used to produce: cascade-delete
+// root -> north -> store, then restore ONLY store, leaving north still
+// mark-deleted. Before the ErrRestoreParentNotLive guard this call
+// succeeded and left store reachable from Subtree(root) (the prefix scan
+// does not care that north is invisible) yet unreachable from Get(north) or
+// any Children()-based walk, and let a caller CreateChild beneath it --
+// exactly the "path disagrees with the parent chain" state path.go calls
+// corrupt, not supported. Restore must now refuse instead.
+func TestTreeService_Restore_DeadParent_RefusesRestore(t *testing.T) {
+	tree := newTestTree(t)
+	ctx := tenantCtx("tenant-a")
+
+	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
+	north := mustCreateChild(t, tree, ctx, root.ID, "North Region")
+	store := mustCreateChild(t, tree, ctx, north.ID, "Store 7")
+
+	if err := tree.Delete(ctx, north.ID, true); err != nil {
+		t.Fatalf("Delete cascade: %v", err)
+	}
+
+	_, err := tree.Restore(ctx, store.ID)
+	if !hasCode(err, ErrRestoreParentNotLive.Code) {
+		t.Fatalf("Restore(store) with north still dead error = %v, want org.restore_parent_not_live", err)
+	}
+
+	// The refusal must be a pure read: store stays exactly as dead as it
+	// was, never half-restored.
+	if _, getErr := tree.Get(ctx, store.ID); getErr == nil {
+		t.Fatal("Restore(store) mutated store despite refusing, store is now visible")
+	}
+
+	// Restoring the ancestor first, then the descendant -- the order the
+	// module's own docs prescribe -- must still succeed.
+	if _, err := tree.Restore(ctx, north.ID); err != nil {
+		t.Fatalf("Restore(north): %v", err)
+	}
+	if _, err := tree.Restore(ctx, store.ID); err != nil {
+		t.Fatalf("Restore(store) after Restore(north): %v, want success", err)
+	}
+}

@@ -34,6 +34,7 @@ var errorCatalog = []struct {
 	{"ErrDuplicateSiblingName", ErrDuplicateSiblingName, "org.duplicate_sibling_name", http.StatusConflict},
 	{"ErrInvalidNodeID", ErrInvalidNodeID, "org.invalid_node_id", http.StatusBadRequest},
 	{"ErrNodeHasMembers", ErrNodeHasMembers, "org.node_has_members", http.StatusConflict},
+	{"ErrRestoreParentNotLive", ErrRestoreParentNotLive, "org.restore_parent_not_live", http.StatusConflict},
 	{"ErrInternal", ErrInternal, "org.internal_error", http.StatusInternalServerError},
 
 	{"ErrMembershipNotFound", ErrMembershipNotFound, "org.membership_not_found", http.StatusNotFound},

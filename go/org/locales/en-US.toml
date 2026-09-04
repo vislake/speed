@@ -32,6 +32,8 @@
 
 "org.internal_error" = "The organization service could not complete the request."
 
+"org.restore_parent_not_live" = "This node's parent has not been restored yet. Restore the parent first, then try again."
+
 "org.node_has_members" = "That node still has members. Move them elsewhere before deleting it."
 
 "org.membership_not_found" = "That person is not a member of this organization."
