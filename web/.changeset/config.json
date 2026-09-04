@@ -10,6 +10,7 @@
       "@speed/layout-kit",
       "@speed/auth-core",
       "@speed/auth-ui",
+      "@speed/account-ui",
       "@speed/tenancy-ui",
       "@speed/product-shell"
     ]
