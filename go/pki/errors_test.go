@@ -5,8 +5,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/vislake/speed/go/pki/locales"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pki/locales"
 )
 
 // TestErrors_HaveTheExpectedCodesAndStatuses pins every error this module
