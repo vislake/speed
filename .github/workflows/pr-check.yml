@@ -8,8 +8,10 @@ name: pr-check
 #
 # COVERAGE -- what genuinely runs today
 #   * go-modules job: the fourteen modules with real, tested implementation
-#     (root CLAUDE.md, Repository Status -- go/pki is this round's
-#     addition, joining the thirteen the census already records) each run
+#     (the thirteen root CLAUDE.md's Repository Status census already
+#     records, plus go/pki -- this round's addition, documented in
+#     go/pki/AGENTS.md; the root CLAUDE.md census entry for it is
+#     follow-up work outside this round's stated scope) each run
 #     through the reusable go-module-ci workflow: golangci-lint (the
 #     project-standard lint leg, .golangci.yml at the repo root -- pinned,
 #     checksummed binary and analysis cache from setup-go-env), go vet,

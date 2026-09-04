@@ -364,4 +364,4 @@ func (LocalKey) TableName() string { return tableLocalKeys }
 // dbkit.TenantScoped -- the negative half of the data-domain split this
 // file's doc comments describe. Go has no negative interface assertion, so
 // that property is proven instead by tenancytest.AssertNotTenantScoped in
-// model_test.go for all three.
+// repository_test.go for all three.
