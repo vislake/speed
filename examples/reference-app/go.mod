@@ -30,6 +30,16 @@ replace github.com/vislake/speed/go/jobs => ../../go/jobs
 
 replace github.com/vislake/speed/go/storage => ../../go/storage
 
+// go/notification is imported directly by this app: buildServer wires
+// the notification module as the round's mandatory-first-consumer proof
+// (see server.go and demo_notification.go). Like every other
+// workspace-local module it carries no published version, so this app's
+// own go.mod needs its own replace for it too -- root CLAUDE.md's
+// per-module standalone-build rule (`GOWORK=off go build`) means
+// `go mod tidy` must resolve every dependency without relying on the
+// workspace.
+replace github.com/vislake/speed/go/notification => ../../go/notification
+
 // go/ratelimit is not imported directly by this app; it is a transitive
 // dependency of go/org (its invitation rate limiting, see
 // go/org/invite.go). Like every other workspace-local module it carries no
@@ -48,6 +58,7 @@ require (
 	github.com/vislake/speed/go/config v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/dbkit v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/jobs v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/notification v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/org v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000

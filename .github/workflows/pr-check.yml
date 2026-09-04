@@ -87,6 +87,11 @@ name: pr-check
 #         longer a floating version (see tools/README.md, execution status).
 #       - go build github.com/vislake/speed/go/... -- every module compiles
 #         in workspace context from the go.work root.
+#       - go build ./... (workspace context) then GOWORK=off go build ./...
+#         in examples/reference-app -- the app's module lives outside the
+#         go/... pattern, and the standalone leg proves its own go.mod is
+#         tidy enough to resolve every import without go.work (the shape
+#         the notification round's missing replace shipped as).
 #       - go work sync + git diff --exit-code -- the checked-in workspace
 #         sum files must be canonical. This repo has been bitten by a stale
 #         go.work.sum before; the fix discipline (Taskfile setup) is to
@@ -139,7 +144,13 @@ name: pr-check
 #     compilation is NOT deferred, though: repo-checks builds the app
 #     directly (the workspace-wide go/... build does not reach it -- the
 #     app's module path is outside that pattern), so a handler that no
-#     longer satisfies the generated ServerInterface fails here.
+#     longer satisfies the generated ServerInterface fails here. The app
+#     is also built standalone (GOWORK=off) here, mirroring the go/ module
+#     matrix's own standalone leg: the workspace-context build resolves
+#     the app's imports against go.work, so a missing require+replace
+#     pair in the app's own go.mod -- the shape the notification round
+#     shipped and that only a standalone build surfaces -- cannot slip
+#     through green.
 #   * Docker-backed integration tiers (-tags=integration): wired, but in
 #     pr-full -- 18-cicd's layered-triggering rule assigns them to the
 #     pre-merge full matrix (PRs labeled full-ci), not to the fast per-PR
@@ -265,6 +276,20 @@ jobs:
       # Go cache closes that.
       - name: Build the reference app (its module lives outside go/...)
         working-directory: examples/reference-app
+        run: go build ./...
+      # The workspace-context build above resolves the app's imports
+      # against go.work, so it cannot see a missing require+replace pair
+      # in the app's own go.mod -- a gap the notification round shipped
+      # and that only the standalone leg surfaces. The go/ module matrix
+      # runs the same standalone leg through go-module-ci; the app gets
+      # its own here so CLAUDE.md's per-module standalone-build rule
+      # (`GOWORK=off go build`, and a tidy that resolves without the
+      # workspace) genuinely covers every implemented module the app
+      # imports.
+      - name: Build the reference app standalone (GOWORK=off)
+        working-directory: examples/reference-app
+        env:
+          GOWORK: "off"
         run: go build ./...
       - name: Workspace integrity (go.work.sum must be canonical)
         # git status, not git diff: `git diff --exit-code` reports only
