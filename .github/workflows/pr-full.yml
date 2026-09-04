@@ -19,15 +19,15 @@ name: pr-full
 # the label gate, for manual full-matrix runs.
 #
 # COVERAGE -- what genuinely runs today
-#   * go-modules job: the same nineteen-module matrix as pr-check through
+#   * go-modules job: the same twenty-one-module matrix as pr-check through
 #     the reusable go-module-ci workflow (golangci-lint, go vet, unit tests
 #     under -race, a workspace-context build and a GOWORK=off standalone
 #     build) -- the full matrix runs the unit tier too. Per 18-cicd's
 #     reusable-workflow design rule, this file adds one matrix row per
-#     module and copies no legs. go/sharing, go/billing and go/compliance
-#     ship no Docker-backed integration_test/ tier this round, so they are
-#     deliberately absent from the integration-tiers matrix below, the
-#     same absence go/pki's and go/metering's own rounds recorded for
+#     module and copies no legs. go/sharing, go/billing, go/compliance and
+#     go/admin ship no Docker-backed integration_test/ tier this round, so
+#     they are deliberately absent from the integration-tiers matrix below,
+#     the same absence go/pki's and go/metering's own rounds recorded for
 #     themselves.
 #   * integration-tiers job: the Docker-backed integration tiers
 #     (-tags=integration), one matrix row per module that ships a tier, run
@@ -84,6 +84,14 @@ name: pr-full
 #                       database, a delivery written on one replica
 #                       announcing its inbox row on the bus the other
 #                       replica reads)
+#       go/integration  PostgreSQL -- its integration_test/
+#                       (postgres_softdelete_test.go, added in the
+#                       soft-delete-adoption round) applies the module's
+#                       migrations from zero and re-proves
+#                       WebhookSubscription's mark-delete/restore
+#                       mechanism against a real server, a PostgreSQL-
+#                       specific mistake the unit tier's SQLite-only
+#                       proof cannot rule out
 #   * reference-app job: examples/reference-app's golangci-lint leg, unit
 #     suite under -race, and its Docker-backed integration tier
 #     (-tags=integration -- testcontainers Redis) -- reference-app is its
@@ -156,6 +164,7 @@ jobs:
           - go/billing
           - go/ai-gateway
           - go/compliance
+          - go/admin
     uses: ./.github/workflows/reusable/go-module-ci.yml
     with:
       module: ${{ matrix.module }}
@@ -183,6 +192,7 @@ jobs:
           - go/authn
           - go/storage
           - go/notification
+          - go/integration
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

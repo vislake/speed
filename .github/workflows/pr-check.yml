@@ -7,15 +7,14 @@ name: pr-check
 # cancelled via concurrency (18-cicd cost-control rules 4 and 5).
 #
 # COVERAGE -- what genuinely runs today
-#   * go-modules job: the nineteen modules with real, tested implementation
+#   * go-modules job: the twenty-one modules with real, tested implementation
 #     (the thirteen root CLAUDE.md's Repository Status census already
 #     records, plus go/pki, go/integration, go/metering, go/sharing,
-#     go/billing and go/compliance -- their own rounds' additions,
-#     documented in go/pki/AGENTS.md, go/integration/AGENTS.md,
-#     go/metering/AGENTS.md, go/sharing/AGENTS.md, go/billing/AGENTS.md and
-#     go/compliance/AGENTS.md respectively; the root CLAUDE.md census entry
-#     for any of the six is follow-up work outside each round's stated
-#     scope) each run through the reusable
+#     go/billing, go/ai-gateway, go/compliance and go/admin -- their own
+#     rounds' additions, documented in go/pki/AGENTS.md,
+#     go/integration/AGENTS.md, go/metering/AGENTS.md, go/sharing/AGENTS.md,
+#     go/billing/AGENTS.md, go/ai-gateway/AGENTS.md, go/compliance/AGENTS.md
+#     and go/admin/AGENTS.md respectively) each run through the reusable
 #     go-module-ci workflow: golangci-lint (the
 #     project-standard lint leg, .golangci.yml at the repo root -- pinned,
 #     checksummed binary and analysis cache from setup-go-env), go vet,
@@ -207,6 +206,7 @@ jobs:
           - go/billing
           - go/ai-gateway
           - go/compliance
+          - go/admin
     uses: ./.github/workflows/reusable/go-module-ci.yml
     with:
       module: ${{ matrix.module }}
