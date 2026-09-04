@@ -18,6 +18,7 @@ graph BT
     jobs["jobs<br/>异步任务队列/重试/进度/定时任务"]
     storage["storage<br/>对象存储/媒体处理/预签名直传"]
     notify["notification<br/>邮件/短信/站内信/模板/双语"]
+    pki["pki<br/>签名密钥与X.509证书生命周期/轮转/Signer seam"]
     authn["authn<br/>密码+JWT+OIDC RP+社交登录+手机号"]
     rbac["rbac<br/>自建RBAC/domain=租户/子树范围"]
     metering["metering<br/>用量采集/聚合/配额"]
@@ -43,6 +44,9 @@ graph BT
     storage --> jobs
     notify --> tenancy
     notify --> jobs
+    pki --> tenancy
+    pki --> jobs
+    pki --> cfg
     authn --> tenancy
     authn --> notify
     authn --> ratelimit
@@ -76,9 +80,10 @@ graph BT
     admin --> comp
 ```
 
-**两条必须写进文档并由 code review 强制执行的纪律：**
+**三条必须写进文档并由 code review 强制执行的纪律：**
 1. `rbac` 不依赖 `authn`。授权只认 `Subject{TenantID, UserID}`，由认证方自行拼装 Subject 后调用授权。
 2. 业务模块之间禁止 import 对方的 struct 做数据库关联，一律用 **ID 引用 + 领域事件**。例：`authn` 发布 `UserCreated`，`org` 订阅后建默认工作空间；而不是 `org` import `authn.User`。这是多模块独立发版下避免版本耦合地狱的关键。
+3. `authn` 不 import `pki`。图上没有 `authn --> pki` 这条边是刻意的：`authn` 在自己这边声明 `KeySource` 接口，由 `pki` 的服务结构化满足，宿主在装配时注入——与 `org`/`rbac` 之间那套无 import 接缝同一手法。`pki` 因此是**装配层面**的必需依赖（不注入则 `NewModule` 失败），不是编译层面的依赖。此外 `authn` 不得触及 `pki` 的 X.509 层：JWT 验签只要公钥和 kid，证书链对它没有价值，只会引入证书解析与链校验的攻击面。详见 [22 密钥与证书生命周期](22-pki.md)。
 
 ---
 

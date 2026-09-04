@@ -64,6 +64,7 @@
 | [08 AI 网关](08-ai-gateway.md) | 多厂商 LLM 与图像生成抽象 |
 | [09 可观测性](09-observability.md) | OTel + LGTM 栈，租户维度的高基数处理 |
 | [10 合规与审计](10-compliance-and-audit.md) | 字段加密、操作审计、数据保留与删除 |
+| [22 密钥与证书生命周期](22-pki.md) | 签名密钥与 X.509 证书的签发/轮转/吊销、`Signer` seam 与 KMS 接入 |
 | [11 横切能力](11-cross-cutting.md) | 国际化、配置管理、功能开关、限流 |
 
 ### 前端与示例
