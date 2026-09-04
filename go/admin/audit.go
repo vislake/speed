@@ -86,7 +86,11 @@ func (s *AuditService) Query(ctx context.Context, actorUserID string, filter Aud
 		return s.query.Query(tenantCtx, qf)
 	}
 
-	ledger, err := s.tenants.List(ctx, TenantFilter{Limit: maxTenantListLimit})
+	// ListAllIDs pages through the FULL ledger rather than one call capped
+	// at maxTenantListLimit -- a cross-tenant audit search is meant to
+	// cover "every tenant admin knows about", and a ledger past 500 rows
+	// must not make that silently partial.
+	ledger, err := s.tenants.ListAllIDs(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -95,9 +99,7 @@ func (s *AuditService) Query(ctx context.Context, actorUserID string, filter Aud
 	// of admin's own tenant ledger -- it is included explicitly here.
 	tenantIDs := make([]string, 0, len(ledger)+1)
 	tenantIDs = append(tenantIDs, "")
-	for _, row := range ledger {
-		tenantIDs = append(tenantIDs, row.TenantID)
-	}
+	tenantIDs = append(tenantIDs, ledger...)
 
 	sysCtx, err := tenancy.WithSystemContext(ctx, s.bus, reason)
 	if err != nil {

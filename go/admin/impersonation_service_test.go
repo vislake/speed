@@ -92,6 +92,36 @@ func TestImpersonationService_Start_SelfTarget_Refused(t *testing.T) {
 	}
 }
 
+// TestImpersonationService_Start_SystemDomainTarget_Refused reproduces the
+// privilege-escalation bug Start() used to have with no target validation
+// at all: an operator holding only admin:impersonate could name
+// rbac.SystemDomain ("system") as TargetTenantID against another
+// platform-staff account's user id, and the substituted Principal
+// ImpersonationMiddleware installs would then be evaluated against every
+// admin:* permission THAT account holds -- not merely whatever an
+// ordinary impersonation target should ever grant. This must be refused
+// before any grant row is ever written.
+func TestImpersonationService_Start_SystemDomainTarget_Refused(t *testing.T) {
+	svc, _ := newTestImpersonationService(t, nil)
+	_, err := svc.Start(context.Background(), StartInput{
+		AdminUserID:    "admin-1",
+		TargetUserID:   "platform-staff-2",
+		TargetTenantID: "system", // rbac.SystemDomain's literal value
+		Reason:         "x",
+	})
+	if !isCode(err, ErrImpersonationTargetForbidden.Code) {
+		t.Fatalf("Start() error = %v, want ErrImpersonationTargetForbidden", err)
+	}
+
+	active, listErr := svc.ListActive(context.Background())
+	if listErr != nil {
+		t.Fatalf("ListActive() error = %v", listErr)
+	}
+	if len(active) != 0 {
+		t.Fatalf("ListActive() = %+v, want no grant ever written for a refused system-domain target", active)
+	}
+}
+
 // --- Property (d): dual-identity audit on start and end -----------------
 
 func TestImpersonationService_Start_RecordsDualIdentityAuditEvent(t *testing.T) {

@@ -58,16 +58,19 @@ func (s *SearchService) Users(ctx context.Context, q authn.UserSearchQuery) ([]a
 // membership" aborts the whole call rather than silently omitting that
 // tenant from the answer, so a storage outage is reported as an error
 // instead of masquerading as "this person belongs to fewer tenants than
-// they actually do".
+// they actually do". The candidate tenant list itself comes from
+// TenantService.ListAllIDs, which pages through the FULL ledger rather
+// than one capped List call, for the identical no-silent-omission reason
+// -- a ledger past 500 rows must not make this answer quietly incomplete.
 func (s *SearchService) MembershipsOf(ctx context.Context, userID, actorUserID string) ([]pkgcore.TenantID, error) {
-	ledger, err := s.tenants.List(ctx, TenantFilter{Limit: maxTenantListLimit})
+	ledger, err := s.tenants.ListAllIDs(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	var found []pkgcore.TenantID
-	for _, row := range ledger {
-		tenantID := pkgcore.TenantID(row.TenantID)
+	for _, id := range ledger {
+		tenantID := pkgcore.TenantID(id)
 		tenantCtx, err := tenancy.WithSystemContext(
 			pkgcore.WithTenant(ctx, tenantID),
 			s.bus,

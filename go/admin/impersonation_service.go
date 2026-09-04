@@ -10,6 +10,7 @@ import (
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/rbac"
 	"github.com/vislake/speed/go/tenancy"
 )
 
@@ -90,12 +91,13 @@ type StartInput struct {
 
 // Start opens a new impersonation grant, exactly as docs/internal/23-admin.md
 // section 4 describes: it is refused (ErrImpersonationReasonRequired,
-// ErrImpersonationTargetRequired, ErrImpersonationSelfNotAllowed) before
-// anything is written, records admin.impersonation.started as an explicit
-// dual-identity audit event once the grant row commits, and dispatches the
-// mandatory, non-unsubscribable security notification to the target user.
-// Both the audit record and the notification are best-effort side effects
-// of an already-successful write (see recordAudit's and notifyStarted's own
+// ErrImpersonationTargetRequired, ErrImpersonationSelfNotAllowed,
+// ErrImpersonationTargetForbidden) before anything is written, records
+// admin.impersonation.started as an explicit dual-identity audit event
+// once the grant row commits, and dispatches the mandatory,
+// non-unsubscribable security notification to the target user. Both the
+// audit record and the notification are best-effort side effects of an
+// already-successful write (see recordAudit's and notifyStarted's own
 // doc comments) -- a failure in either is logged and never turns a
 // successfully started grant into an error response.
 func (s *ImpersonationService) Start(ctx context.Context, in StartInput) (*ImpersonationGrant, error) {
@@ -107,6 +109,18 @@ func (s *ImpersonationService) Start(ctx context.Context, in StartInput) (*Imper
 	}
 	if in.TargetUserID == in.AdminUserID {
 		return nil, ErrImpersonationSelfNotAllowed
+	}
+	// rbac.SystemDomain is the platform-operations pseudo-tenant every
+	// admin:* permission is evaluated in (D1) -- see
+	// ErrImpersonationTargetForbidden's own doc comment for why a grant
+	// scoped to it is refused unconditionally rather than merely gated on
+	// a stricter permission: this is the fix for a real, previously
+	// unguarded privilege-escalation path (an operator holding only
+	// admin:impersonate could otherwise pick a MORE-privileged
+	// platform-staff account as the target and reach every admin:*
+	// permission that account holds).
+	if in.TargetTenantID == rbac.SystemDomain {
+		return nil, ErrImpersonationTargetForbidden
 	}
 
 	now := s.now()

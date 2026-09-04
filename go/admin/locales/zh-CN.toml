@@ -13,6 +13,7 @@
 "admin.impersonation_reason_required" = "发起模拟登录必须填写原因。"
 "admin.impersonation_target_required" = "必须同时提供目标用户 ID 和目标租户 ID。"
 "admin.impersonation_self_not_allowed" = "不能对自己的账号发起模拟登录。"
+"admin.impersonation_target_forbidden" = "不能发起作用域为平台运维域的模拟登录。"
 "admin.impersonation_grant_ended" = "该模拟登录授权已结束。"
 "admin.authn_service_required" = "本次部署缺少 authn 服务，跨租户用户检索不可用。"
 "admin.org_module_required" = "本次部署缺少 org 模块，成员身份组合查询不可用。"

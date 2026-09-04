@@ -46,6 +46,21 @@ var (
 	// same-identity OnBehalfOf record that means nothing.
 	ErrImpersonationSelfNotAllowed = apperr.Invalid("admin.impersonation_self_not_allowed")
 
+	// ErrImpersonationTargetForbidden refuses a start-impersonation request
+	// naming rbac.SystemDomain -- the platform-operations pseudo-tenant --
+	// as TargetTenantID. admin's own routes evaluate every admin:*
+	// permission in exactly that domain (D1), so a grant scoped to it would
+	// let the substituted Principal ImpersonationMiddleware installs reach
+	// whatever admin:* permissions the TARGET happens to hold there --
+	// turning the very mechanism meant to cap an impersonating admin at
+	// the target's own access (D5 property (b)) into a path for picking a
+	// MORE privileged target instead. This is refused unconditionally,
+	// never merely gated on a stricter permission: no round-1 permission
+	// is fine-grained enough to distinguish "may impersonate an ordinary
+	// business-tenant user" from "may impersonate a fellow platform
+	// operator", so the only safe default is refusing the latter outright.
+	ErrImpersonationTargetForbidden = apperr.Invalid("admin.impersonation_target_forbidden")
+
 	// ErrImpersonationGrantEnded is returned by EndGrant when the grant
 	// named was already ended (by an earlier DELETE, or by having expired
 	// and been observed as such).
@@ -100,6 +115,7 @@ var errorCodes = []string{
 	ErrImpersonationReasonRequired.Code,
 	ErrImpersonationTargetRequired.Code,
 	ErrImpersonationSelfNotAllowed.Code,
+	ErrImpersonationTargetForbidden.Code,
 	ErrImpersonationGrantEnded.Code,
 	ErrPrincipalRequired.Code,
 	ErrAuthnServiceRequired.Code,

@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/vislake/speed/go/admin/internal/testutil"
@@ -165,6 +166,54 @@ func TestTenantService_HandleOrgNodeCreated_Redelivery_IsIdempotent(t *testing.T
 	}
 	if len(rows) != 1 {
 		t.Fatalf("List() returned %d rows after 3 redeliveries, want exactly 1", len(rows))
+	}
+}
+
+// TestTenantService_ListAllIDs_PagesPastSingleCallLimit reproduces the bug
+// a single List(ctx, TenantFilter{Limit: maxTenantListLimit}) call has:
+// silently dropping every ledger row past the 500th. It seeds
+// maxTenantListLimit+5 rows -- more than one page -- and asserts every one
+// of them comes back, proving ListAllIDs actually pages through
+// TenantRepository.List's Cursor mechanism instead of stopping at the
+// first page the way D6's MembershipsOf and D7's AuditService.Query used
+// to (both now call this method instead of List directly).
+func TestTenantService_ListAllIDs_PagesPastSingleCallLimit(t *testing.T) {
+	db := testutil.NewDB(t)
+	repo := NewTenantRepository(db)
+	svc := NewTenantService(repo)
+	ctx := context.Background()
+
+	const seeded = maxTenantListLimit + 5
+	want := make(map[string]bool, seeded)
+	for i := 0; i < seeded; i++ {
+		// Zero-padded so lexicographic TenantID ordering (List's own
+		// Cursor contract) matches numeric order, keeping this
+		// deterministic regardless of how many digits maxTenantListLimit
+		// needs.
+		id := fmt.Sprintf("tenant-page-%05d", i)
+		if err := repo.Create(ctx, &Tenant{TenantID: id}); err != nil {
+			t.Fatalf("seed tenant %d: %v", i, err)
+		}
+		want[id] = true
+	}
+
+	got, err := svc.ListAllIDs(ctx)
+	if err != nil {
+		t.Fatalf("ListAllIDs() error = %v", err)
+	}
+	if len(got) != seeded {
+		t.Fatalf("ListAllIDs() returned %d ids, want %d (a single-page List call would silently cap at %d)",
+			len(got), seeded, maxTenantListLimit)
+	}
+	seen := make(map[string]bool, len(got))
+	for _, id := range got {
+		if !want[id] {
+			t.Fatalf("ListAllIDs() returned unexpected id %q", id)
+		}
+		if seen[id] {
+			t.Fatalf("ListAllIDs() returned id %q more than once", id)
+		}
+		seen[id] = true
 	}
 }
 

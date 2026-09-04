@@ -26,6 +26,8 @@ replace github.com/vislake/speed/go/compliance => ../compliance
 
 replace github.com/vislake/speed/go/notification => ../notification
 
+replace github.com/vislake/speed/go/rbac => ../rbac
+
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/oapi-codegen/runtime v1.7.0
@@ -37,6 +39,7 @@ require (
 	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/org v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/rbac v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/tenancy v0.0.0-00010101000000-000000000000
 	gorm.io/gorm v1.31.2
 )

@@ -59,6 +59,43 @@ func (s *TenantService) List(ctx context.Context, filter TenantFilter) ([]Tenant
 	return s.repo.List(ctx, filter)
 }
 
+// ListAllIDs returns EVERY tenant id in the ledger, paging through
+// TenantRepository.List's own Cursor mechanism rather than issuing a
+// single call capped at maxTenantListLimit.
+//
+// This exists because D6's MembershipsOf and D7's cross-tenant
+// AuditService.Query both need "every tenant the platform knows about" as
+// their candidate list, and a single List(ctx, TenantFilter{Limit:
+// maxTenantListLimit}) call silently drops every ledger row past the
+// 500th once the platform has grown beyond that -- an omission neither
+// caller's own contract allows (MembershipsOf's doc comment: a failure
+// aborts the call rather than silently omitting a tenant; the same
+// no-silent-omission expectation applies to an audit search meant to
+// cover "every tenant"). Paging here, once, is what lets both callers
+// keep their own single-call simplicity while still seeing the whole
+// ledger.
+func (s *TenantService) ListAllIDs(ctx context.Context) ([]string, error) {
+	var ids []string
+	cursor := ""
+	for {
+		rows, err := s.repo.List(ctx, TenantFilter{Limit: maxTenantListLimit, Cursor: cursor})
+		if err != nil {
+			return nil, err
+		}
+		if len(rows) == 0 {
+			break
+		}
+		for _, row := range rows {
+			ids = append(ids, row.TenantID)
+		}
+		if len(rows) < maxTenantListLimit {
+			break
+		}
+		cursor = rows[len(rows)-1].TenantID
+	}
+	return ids, nil
+}
+
 // SetStatus applies patch (rename, suspend/resume, notes) to tenantID's
 // ledger row and, when the write succeeds, records an explicit
 // admin.tenant.status_changed audit event carrying actor as the Actor --
