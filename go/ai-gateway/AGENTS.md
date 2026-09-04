@@ -207,6 +207,16 @@ conditional job-handler claim -- see "What round 2 adds" below.
   `WithImageGeneration`) registers no job handler at all, and
   `Gateway.GenerateImage` on such a Gateway always fails with
   `ErrImageGenerationUnavailable`.
+- Runnable documentation (`example_test.go`): `Example_generateImage` walks
+  the whole async pipeline this section describes -- a real
+  `jobs.StandaloneQueue`, a real `storage.ObjectService` (both required by
+  `WithImageGeneration`), `Gateway.GenerateImage`, draining
+  `reg.Jobs.Handlers()` onto the queue exactly as `examples/reference-app`'s
+  own `cmd/server/server.go` does, and polling the enqueued job to
+  completion against a fake OpenAI-compatible images endpoint -- alongside
+  round 1's chat-only `Example`, per root `CLAUDE.md`'s rule that a new
+  public API ships with a compilable godoc `Example` in the same pull
+  request.
 
 ## Reference-app consumer
 
@@ -282,3 +292,26 @@ real, separate, completed go/storage object.
   the handler receives is never called) -- a single vendor HTTP call has no
   natural intermediate progress point the way a multi-step pipeline would,
   unlike go/storage's own derive task.
+- **Known, non-flaky WARN under `examples/reference-app`'s own smile-simulation
+  flow test: transient `SQLITE_BUSY` contention between this round's
+  `ai-gateway.image.generate` job and storage's own
+  `storage.object.derive.thumbnail` job for the same request, both landing
+  on the app's one shared `jobs.StandaloneQueue` (`WorkerCount` 4 by
+  default) against one file-backed SQLite database.** This is ordinary
+  multi-goroutine single-writer contention, not the same-goroutine
+  self-deadlock `go/dbkit/AGENTS.md`'s "Known limitation" section describes
+  for `AuditBus` (that one, by its own doc comment, is NOT fixed by a busy
+  timeout; this one would be, since the losing writer's transaction really
+  does commit and free the lock) -- `go/jobs`' own retry/backoff is the
+  existing, working mitigation: the losing attempt logs "job attempt
+  failed, scheduling retry" and succeeds on its immediate next attempt, so
+  `cmd/server/smilesim_flow_test.go`'s own assertions still pass
+  deterministically. Actually silencing the WARN would need either a
+  dbkit-wide SQLite DSN change (a `busy_timeout` pragma on every
+  `dbkit.Open` caller) or a queue-concurrency change in the reference app's
+  own wiring (`cmd/server/server.go`'s shared `StandaloneQueue`) -- both
+  cross-cutting changes outside this module's own round, so it is recorded
+  here (and at the point it is observed, `cmd/server/smilesim_flow_test.go`'s
+  own doc comment) rather than silently worked around inside this round's
+  tests. Tracked as a follow-up for whichever round next touches
+  `go/dbkit`'s SQLite `Open` path or `go/jobs`' `StandaloneQueue` defaults.

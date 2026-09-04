@@ -66,3 +66,32 @@ func TestModule_GatewayAndCredentials_EndToEnd(t *testing.T) {
 		t.Fatalf("Chat response = %+v", resp)
 	}
 }
+
+// newTestRegistry returns a fresh *pkgcore.Registry over in-memory
+// infrastructure -- enough for Register to run against without a real
+// event bus, KV store or mailer.
+func newTestRegistry() *pkgcore.Registry {
+	return pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+}
+
+func TestModule_Register_ImageJobHandler_RegisteredOnlyWhenWired(t *testing.T) {
+	db := newTestDB(t)
+	moduleWithImages := NewModule(db, WithImageGeneration(&recordingImageQueue{}, newTestStorageObjectService(t)))
+	reg := newTestRegistry()
+	if err := moduleWithImages.Register(reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if _, ok := reg.Jobs.Handlers()[TaskTypeImageGenerate]; !ok {
+		t.Fatalf("Register with WithImageGeneration did not claim %q on reg.Jobs", TaskTypeImageGenerate)
+	}
+
+	chatOnlyDB := newTestDB(t)
+	chatOnlyModule := NewModule(chatOnlyDB)
+	chatOnlyReg := newTestRegistry()
+	if err := chatOnlyModule.Register(chatOnlyReg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if _, ok := chatOnlyReg.Jobs.Handlers()[TaskTypeImageGenerate]; ok {
+		t.Fatal("a chat-only Module (no WithImageGeneration) must not claim an image job handler")
+	}
+}
