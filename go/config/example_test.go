@@ -7,6 +7,14 @@ import (
 
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
+
+	// Blank-imported for its init side effect: registers dbkit.DialectSQLite
+	// so every dbkit.Open call in this package's test binary (this file and
+	// its siblings -- http_test.go, model_test.go, module_test.go,
+	// service_test.go, store_test.go) has a driver to build from. One
+	// package-wide import suffices, since go test links every *_test.go
+	// file in this directory into a single binary.
+	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/pkgcore"
 )
 

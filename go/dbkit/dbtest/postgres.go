@@ -11,6 +11,14 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
+	// Blank-imported for its init side effect: registers
+	// dbkit.DialectPostgres with dbkit's dialect registry so the dbkit.Open
+	// call below has a driver to build a gorm.Dialector from. dbtest is a
+	// test-only package every module's tests import, so bundling the
+	// driver here is correct and intentional -- test binaries are never a
+	// consumer's production dependency (see go/dbkit/AGENTS.md's "One
+	// dependency" section).
+	_ "github.com/vislake/speed/go/dbkit/dialect/postgres"
 )
 
 // NewPostgres returns a *gorm.DB (via dbkit.Open) backed by a real,

@@ -17,6 +17,11 @@ import (
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
+
+	// Blank-imported for its init side effect: registers dbkit.DialectSQLite
+	// so dbkit.Open below has a driver to build from -- saasctl's db migrate
+	// command runs only against a project's standalone SQLite database.
+	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/rbac"

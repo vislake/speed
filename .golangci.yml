@@ -159,6 +159,56 @@ linters:
           deny:
             - pkg: github.com/hibiken/asynq
               desc: "asynq is go/jobs' distributed Queue implementation; business code depends on the jobs/Queue interface"
+        # dbkit's two SQL dialect drivers are split into their own
+        # dbkit/dialect subpackages (open.go's RegisterDialect / dialectRegistry,
+        # mirroring database/sql's own driver-registration pattern -- see
+        # go/dbkit/AGENTS.md's "One dependency, and why there is only one"
+        # section). dbkit's root package no longer imports either driver
+        # directly, so a caller wanting one blank-imports its subpackage,
+        # e.g. `_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"`. These
+        # two rules are the acceptance gate for that split (issue #1): the
+        # driver import stays denied everywhere under go/ except the one
+        # subpackage that owns it, the same shape as the redis/minio/asynq
+        # rules above.
+        #
+        # A handful of pre-existing dbkit-internal test-support files are
+        # also excluded, for a reason unrelated to the split: they call
+        # gorm.Open with the driver directly to get a plugin-less *gorm.DB
+        # (migrations_test.go, audit/migrations_test.go --
+        # MigrationRegistry.Apply's own subject is a raw connection;
+        # encryption_test.go and internal/testutil/sqlite.go need one with
+        # no tenant-scoping plugin installed and pinned to a single pooled
+        # connection; integration_test/postgres_tenant_session_test.go opens
+        # its own plain gorm.Open(postgres.Open(...)) connection, deliberately
+        # bypassing dbkit.Open so its RLS test's restricted-role connection
+        # carries no tenant-scoping plugin) or a short opportunistic-connect
+        # timeout dbkit.Open does not expose (migrations_test.go's
+        # openLocalPostgresForTest). None of them goes through dbkit.Open's
+        # dialect registry at all, so the split gives them nothing to opt
+        # into.
+        sqlite-driver-only-in-dbkit-dialect-sqlite:
+          files:
+            - "**/go/**"
+            - "!**/go/dbkit/dialect/sqlite/**"
+            - "!**/go/dbkit/migrations_test.go"
+            - "!**/go/dbkit/encryption_test.go"
+            - "!**/go/dbkit/audit/migrations_test.go"
+            - "!**/go/dbkit/internal/testutil/sqlite.go"
+          list-mode: lax
+          deny:
+            - pkg: github.com/glebarez/sqlite
+              desc: "the SQLite driver belongs to go/dbkit/dialect/sqlite alone; every other caller depends on dbkit.Open with dbkit.DialectSQLite and blank-imports that subpackage for its init side effect"
+        postgres-driver-only-in-dbkit-dialect-postgres:
+          files:
+            - "**/go/**"
+            - "!**/go/dbkit/dialect/postgres/**"
+            - "!**/go/dbkit/migrations_test.go"
+            - "!**/go/dbkit/audit/migrations_test.go"
+            - "!**/go/dbkit/integration_test/postgres_tenant_session_test.go"
+          list-mode: lax
+          deny:
+            - pkg: gorm.io/driver/postgres
+              desc: "the PostgreSQL driver belongs to go/dbkit/dialect/postgres alone; every other caller depends on dbkit.Open with dbkit.DialectPostgres and blank-imports that subpackage for its init side effect"
 
   exclusions:
     generated: lax

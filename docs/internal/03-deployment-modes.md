@@ -103,7 +103,7 @@
 
 分包要接受一处代价：它把"忘了提供实现"从编译期错误变成启动期错误（`database/sql` 的 `unknown driver` 是同一个交易）。因此解析失败的报错必须点名补救方式——"preset 需要 `eventbus.redis`，但没有任何包注册过它，请 import ×××"，而不是一句"实现未找到"。
 
-现存的违反实例、实测数字与修复方案在 issue 中跟踪，不在本文展开——本文只确立原则。
+现存的违反实例、实测数字与修复方案在 issue 中跟踪，不在本文展开——本文只确立原则。**issue #1 的四个站点中，站点二已落地**：`dbkit` 的两个 SQL 方言驱动拆分为 `dbkit/dialect/sqlite`、`dbkit/dialect/postgres` 子包，`dbkit.Open` 改为通过一个模仿 `database/sql` 的注册表（`RegisterDialect`）按方言名查找驱动，未 blank-import 对应子包时报错并点名补救方式；只 import `dbkit` 根包的消费者实测少背 14 个 indirect 依赖（41 降到 27），细节见 `go/dbkit/AGENTS.md`。其余三个站点仍在 issue 中跟踪。
 
 ## 契约测试
 

@@ -88,6 +88,12 @@ import (
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
+	// Blank-imported for its init side effect: registers dbkit.DialectSQLite
+	// so this file's own dbkit.Open call (the second connection reading the
+	// audit row back) has a driver to build from -- this test binary is a
+	// separate package from cmd/server, so server.go's own blank import
+	// does not reach it.
+	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/pkgcore"
 )
 

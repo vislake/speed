@@ -2,10 +2,9 @@ package dbkit
 
 import (
 	"context"
+	"sync"
 	"time"
 
-	"github.com/glebarez/sqlite"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
@@ -169,20 +168,64 @@ func Open(ctx context.Context, opts Options) (*gorm.DB, error) {
 	return db, nil
 }
 
+// dialectMu guards dialectRegistry.
+var dialectMu sync.RWMutex
+
+// dialectRegistry maps a Dialect to the factory that builds its
+// gorm.Dialector from a DSN. It starts empty: dbkit's own go.mod no longer
+// imports either driver directly (see "One dependency, and why there is
+// only one" in AGENTS.md), so a driver is only registered when its
+// dbkit/dialect subpackage is blank-imported.
+var dialectRegistry = map[Dialect]func(dsn string) gorm.Dialector{}
+
+// RegisterDialect registers factory as the gorm.Dialector builder for
+// dialect, mirroring database/sql.Register's driver-registration pattern.
+// It is called from a dbkit/dialect subpackage's own init() — never
+// directly by a business module or application — so that dbkit's own
+// go.mod carries neither database driver as a direct dependency, and a
+// consumer that wants only one dialect's dependencies imports only that
+// dialect's subpackage:
+//
+//	import _ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
+//
+// RegisterDialect panics if dialect is already registered. A duplicate
+// registration can only be a programming error — two packages registering
+// the same Dialect name — never a runtime condition a caller could
+// encounter or would want to recover from, the same unrecoverable-wiring-
+// error convention pkgcore/builtin_implementations.go's mustRegister
+// documents for the identical situation.
+func RegisterDialect(dialect Dialect, factory func(dsn string) gorm.Dialector) {
+	dialectMu.Lock()
+	defer dialectMu.Unlock()
+
+	if _, exists := dialectRegistry[dialect]; exists {
+		panic("dbkit: RegisterDialect called twice for dialect " + string(dialect))
+	}
+	dialectRegistry[dialect] = factory
+}
+
 // newDialector returns the gorm.Dialector matching dialect, or an
 // apperr.Invalid error when dialect is neither DialectPostgres nor
-// DialectSQLite. This is the single point where Dialect is validated, so
-// every path through Open rejects an unknown dialect the same way.
+// DialectSQLite, or when the matching dialect subpackage was never
+// blank-imported. This is the single point where Dialect is validated, so
+// every path through Open rejects an unknown or unregistered dialect the
+// same way.
 func newDialector(dialect Dialect, dsn string) (gorm.Dialector, error) {
-	switch dialect {
-	case DialectPostgres:
-		return postgres.Open(dsn), nil
-	case DialectSQLite:
-		return sqlite.Open(dsn), nil
-	default:
+	if dialect != DialectPostgres && dialect != DialectSQLite {
 		return nil, apperr.Invalid("dbkit.invalid_dialect").
 			WithParam("dialect", string(dialect))
 	}
+
+	dialectMu.RLock()
+	factory, ok := dialectRegistry[dialect]
+	dialectMu.RUnlock()
+
+	if !ok {
+		return nil, apperr.Invalid("dbkit.invalid_dialect").
+			WithParam("dialect", string(dialect)).
+			WithParam("hint", "no driver registered for this dialect -- blank-import its package, e.g. _ \"github.com/vislake/speed/go/dbkit/dialect/sqlite\" or _ \"github.com/vislake/speed/go/dbkit/dialect/postgres\"")
+	}
+	return factory(dsn), nil
 }
 
 // wrapConnectError wraps a driver- or connectivity-level failure from Open

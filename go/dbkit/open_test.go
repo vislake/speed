@@ -10,6 +10,13 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
+// This file (package dbkit, an internal white-box test file) cannot
+// blank-import a dbkit/dialect subpackage itself -- dialect/postgres and
+// dialect/sqlite both import dbkit, so that would be an import cycle. Both
+// dialects it needs are instead registered by example_test.go, an external
+// (package dbkit_test) file in this same directory whose test binary this
+// file is linked into.
+
 func TestOpen_SQLiteTempFileDSN_OpensAndPings(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "dbkit-open-test.db")
 

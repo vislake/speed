@@ -13,6 +13,10 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit/migrations"
+
+	// Blank-imported for its init side effect: registers dbkit.DialectSQLite
+	// so the dbkit.Open call below has a driver to build from.
+	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/pkgcore"
 )
 

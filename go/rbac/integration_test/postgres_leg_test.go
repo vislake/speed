@@ -40,6 +40,10 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
+	// Blank-imported for its init side effect: registers
+	// dbkit.DialectPostgres so the dbkit.Open(DialectPostgres) call below
+	// has a driver to build from.
+	_ "github.com/vislake/speed/go/dbkit/dialect/postgres"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/rbac"
 	"github.com/vislake/speed/go/tenancy/tenancytest"

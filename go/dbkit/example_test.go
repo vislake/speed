@@ -20,6 +20,13 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
+	// Blank-imported for their init side effect: registers
+	// dbkit.DialectSQLite and dbkit.DialectPostgres so every dbkit.Open call
+	// in this package's test binary -- including open_test.go's, an internal
+	// (package dbkit) file that cannot import either dialect subpackage
+	// itself without an import cycle -- has a driver to build from.
+	_ "github.com/vislake/speed/go/dbkit/dialect/postgres"
+	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )

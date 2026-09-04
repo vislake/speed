@@ -15,6 +15,10 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
+	// Blank-imported for its init side effect: registers dbkit.DialectSQLite
+	// so the dbkit.Open call in openAuditCaptureTestDB has a driver to build
+	// from.
+	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/dbkit/internal/testutil"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"

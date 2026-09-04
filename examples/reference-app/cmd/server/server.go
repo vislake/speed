@@ -25,6 +25,13 @@ import (
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
+
+	// Blank-imported for its init side effect: registers dbkit.DialectSQLite
+	// so dbkit.Open below has a driver to build from -- the reference app
+	// runs its own database in standalone deployment mode's SQLite dialect
+	// regardless of which deployment mode its other infrastructure seams
+	// compose under.
+	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/notification"
 	obs "github.com/vislake/speed/go/observability"
