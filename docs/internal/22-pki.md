@@ -93,21 +93,25 @@ type Signer interface {
 
 做成 `Protect/Unprotect` 会把直签模式从架构上永久排除，而直签模式恰恰是保护根 CA 私钥的唯一正确方式。
 
-### 三套实现，各自独立 module
+### 三套实现，各自独立成子包
 
-| module | 模式 | 私钥所在 | 说明 |
+| 包 | 模式 | 私钥所在 | 说明 |
 |---|---|---|---|
-| `go/pki`（内置 `local`） | — | 本地库，`dbkit` 字段级加密 | 零外部依赖，`task dev` 用它，兼作测试替身 |
-| `go/pki-vault` | 信封 + 直签 | Vault Transit 引擎内 | 私有化部署的主力选择 |
-| `go/pki-kms-aws` | 信封 + 直签 | AWS KMS 内 | 公有云部署 |
+| `go/pki`（根包，内置 `local`） | — | 本地库，`dbkit` 字段级加密 | 零外部依赖，`task dev` 用它，兼作测试替身 |
+| `go/pki/signer/vault` | 信封 + 直签 | Vault Transit 引擎内 | 私有化部署的主力选择 |
+| `go/pki/signer/kmsaws` | 信封 + 直签 | AWS KMS 内 | 公有云部署 |
 
-**每套供应商实现是独立的 Go module**，在 `init()` 中向 `SignerRegistry` 注册自己，宿主 import 哪个就有哪个：
+**每套供应商实现是 `go/pki` 模块内的一个独立子包**，在 `init()` 中向 `SignerRegistry` 注册自己，宿主 import 哪个就有哪个：
 
 ```go
-import _ "github.com/vislake/speed/go/pki-kms-aws"   // 只有这一行带来 AWS SDK
+import _ "github.com/vislake/speed/go/pki/signer/kmsaws"   // 只有这一行带来 AWS SDK
 
 pki.NewModule(db, pki.WithSigner("kms.aws", cfg))
 ```
+
+**子包而非独立 module**，因为子包已经足够——Go 按包解析依赖，隔离一路穿透到 `go.sum` 与 MVS 版本选择。同一模块内实测：只 import `pkgcore` 根包的消费者，`go.mod` 与 `go.sum` 里都没有 `koanf` 的任何条目（它只被 `pkgcore/config` 子包使用），而 import 该子包的消费者 `go.sum` 里有 10 条。既然隔离效果相同，就没有理由为它多开一个模块：**模块是发布单元，应当按领域内聚性划分，不该被打包机制的需求扯变形。** lockstep 下每多一个模块就要多一份 `go.work` 条目、CI 矩阵行、`AGENTS.md`、changesets 固定版本组条目与版本标签，而子包这些全都不要。
+
+只有当某套实现需要独立于 `pki` 的发布节奏、或消费者会绕开 `pki` 单独使用它时，才值得升格为模块——在 lockstep 版本策略下，这两种情况都不成立。
 
 这正是 `database/sql` 的驱动模式，也是 `pkgcore` 的 `SeamRegistry` 当初照着它设计的原因。**没 import 的项目，`go.mod` 里不出现这个名字。**
 
@@ -121,7 +125,7 @@ pki.NewModule(db, pki.WithSigner("kms.aws", cfg))
 | import `pkgcore` 根包，只用内存 KVStore | **23** |
 | import `authn`（真实业务项目形态） | **82** |
 
-从 0 到 23 全部来自根包内联的那两套实现。KMS 供应商有 6 家以上，把它们内联进 pki 的主包就是把这个代价再叠加六份——所以每家一个独立 module，宿主 import 谁才拿到谁。
+从 0 到 23 全部来自根包内联的那两套实现。KMS 供应商有 6 家以上，把它们内联进 pki 的根包就是把这个代价再叠加六份——所以每家一个子包，宿主 import 谁才拿到谁。
 
 （顺带澄清一个容易做出的错误归因：`testcontainers-go` 虽然出现在 `pkgcore` 与 `authn` 的 `go.mod` 主 require 块里，但它**不会**传染给消费者。Go 1.17+ 的模块图裁剪只加载"构建被 import 的包"所需的依赖，上游模块自身测试的依赖不在其中；`pkgcore` 的 testcontainers 只被两个 `integration_test` 文件 import，`authn` 的则来自 `authn/internal/testutil` → `dbkit/dbtest` 这条**测试专用**链路。上表第三行 82 个 indirect 里没有任何 testcontainers、docker、moby 或 containerd 条目，而 `authn/go.mod` 自己列了 108 个——差出来的 26 个正是它自己测试用的，业务项目拿不到。`pkgcore` 根包内联实现的问题不在本模块范围内，记录于此供后续处理。）
 
@@ -426,6 +430,6 @@ type KeySource interface {
 | 轮 1 | 四张表与双方言迁移、内部 CA 签发、`Signer` seam 与 `local` 实现、租户隔离套件、密钥生命周期层接口定义 |
 | 轮 2 | 生命周期状态机、`jobs` 到期扫描、传播窗口与重叠期、事件；**`authn` 切换到 `KeySource`**（含 saasctl 四套模板与 golden 文件） |
 | 轮 3 | 吊销与 CRL、JWKS 导出、HTTP 面与 OpenAPI 片段 |
-| 轮 4 | `go/pki-vault` 与 `go/pki-kms-aws` 两个独立 module |
+| 轮 4 | `go/pki/signer/vault` 与 `go/pki/signer/kmsaws` 两个子包 |
 
 轮 1 必须把表结构砌对，否则轮 2 的状态机要推倒重来——诊断对象就是活例子：`CertificateType` 枚举存在却没有落库，导致连"哪些证书快到期了"都查不出分类。
