@@ -466,6 +466,45 @@ claims it works.
   to browsers or devices; that consumer is a later round's work. What ships
   is the hub itself, its `EventInboxCreated` subscription, and the HTTP
   stream that reads it per replica.
+- **Tenant-enforced preference tiers.** The preference matrix ships two of
+  the design's three tiers (docs/internal/07's preference-precedence row:
+  personal settings > tenant-enforced policy > type default): a
+  recipient's own per-type channel choices, and the type's declared
+  defaults when a recipient has none. The middle tier -- a tenant
+  administrator forcing a channel for a type across all of that tenant's
+  recipients (security alerts, billing overdues), where personal settings
+  must not win -- is a later round's shape: a tenant-scoped override
+  table, the merge at preference-read time, and the write surface the
+  current single-key update would grow into. Until it lands, the matrix's
+  own two tiers are all the rows express, and a type that must reach its
+  recipients is declared unsubscribable.
+- **Same-type aggregation and delivery rate limiting.** Nothing aggregates
+  or rate-limits the delivery path this round: the module's rate limits
+  gate verification-code sends and the consent-create path, and the
+  delivery job sends every dispatch through as rendered (replay dedupe
+  collapses identical re-dispatches only). The design's same-type
+  aggregation -- a short burst of one type coalescing into few messages, a
+  bulk-import failure must not mean five hundred emails -- and the
+  per-type delivery limits that go with it are a later round's work on
+  the pipeline: the aggregation window, the merged message shape, and
+  where the limits sit are all unsettled.
+- **Admin template editing.** A type's channel templates live in its
+  declaring module's own locale files (see the Copy rule above), declared
+  next to the type and rendered from the host's merged catalog at send
+  time; nothing stores them here for an operator to edit. The design's
+  operations-console editing and preview surface for that copy is a later
+  round's work: it needs a template store the declaration ids can be
+  re-pointed at, and the registry-driven preview that goes with it. The
+  registry's other two driven surfaces -- the preference page's automatic
+  rendering and the documentation generation -- are likewise deferred
+  with the frontend below.
+- **The `@speed/notification-ui` frontend.** The design's notification
+  center -- the bell with the unread badge, the drop-down list, the
+  message-center page, and the preference-matrix table -- is a later web
+  round's package, consuming this module's HTTP surface through the
+  api-sdk operations that already ride in the merged document. Nothing in
+  this round is a stub of it: the module's generated client half and the
+  reference app's Go-side flows are what ship.
 
 ## Rules
 
