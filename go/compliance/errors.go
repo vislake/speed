@@ -78,6 +78,28 @@ var (
 	// alongside the manifest built so far, when at least one
 	// participant's Export callback failed.
 	ErrExportPartialFailure = apperr.Internal("compliance.export_partial_failure")
+
+	// ErrSharingRequired is returned by ExportService.Export when no
+	// SharingCreator was wired through WithSharing. Unlike
+	// ErrQueueRequired (checked at Module.Register, since a registered job
+	// handler with no queue can never run at all), this is a call-time
+	// refusal: RetentionService and ErasureService have nothing to do with
+	// export delivery, so a host that never constructs a Module with
+	// WithSharing can still boot and use them -- only an actual Export
+	// call needs go/sharing wired, mirroring go/sharing's own
+	// ErrQueueRequiredForSweep, which is likewise a call-time-only
+	// refusal for an optional seam.
+	ErrSharingRequired = apperr.Internal("compliance.sharing_required")
+
+	// ErrExportDeliveryFailed wraps a failed go/sharing.Service.Create
+	// call once ExportService.Export has already gathered and stored the
+	// manifest. The manifest itself is not lost -- the caller still gets
+	// the object key and manifest back alongside this error -- but no
+	// share link exists for the subject to retrieve it with, so this is
+	// reported as its own coded failure rather than folded into
+	// ErrExportPartialFailure, which describes a participant gathering
+	// failure, not a delivery failure.
+	ErrExportDeliveryFailed = apperr.Internal("compliance.export_delivery_failed")
 )
 
 // hasCode reports whether err is (or wraps, via apperr.As's Unwrap chain

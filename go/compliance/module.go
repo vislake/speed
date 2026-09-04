@@ -8,6 +8,7 @@ import (
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/sharing"
 
 	"github.com/vislake/speed/go/compliance/locales"
 )
@@ -47,8 +48,8 @@ const (
 	PermissionExportExecute = "compliance:export:execute"
 )
 
-// configItemDecls is the catalog entry for compliance's one configuration
-// item, declared in Register.
+// configItemDecls is the catalog entry for compliance's configuration
+// items, declared in Register.
 var configItemDecls = []pkgcore.ConfigItem{
 	{
 		Key:         ConfigDefaultRetentionWindow,
@@ -57,6 +58,15 @@ var configItemDecls = []pkgcore.ConfigItem{
 		Description: "How long a soft-deleted (mark-deleted) row survives before the periodic retention sweep hard-deletes it.",
 		Group:       "compliance",
 		Min:         time.Hour,
+	},
+	{
+		Key:         ConfigExportDeliveryExpiry,
+		Type:        "duration",
+		Default:     defaultExportDeliveryExpiry,
+		Description: "How long a data-export download link (minted through go/sharing) stays valid. Deliberately much shorter than a general-purpose share's own default expiry, since an export bundles a subject's complete personal data.",
+		Group:       "compliance",
+		Min:         time.Hour,
+		Max:         72 * time.Hour,
 	},
 }
 
@@ -111,6 +121,17 @@ func WithTenantLister(lister TenantLister) Option {
 	return func(m *Module) { m.retention.lister = lister }
 }
 
+// WithSharing wires the SharingCreator ExportService.Export mints a
+// delivery share through -- typically a host's real *sharing.Service,
+// which satisfies SharingCreator structurally (module.go's compile-time
+// assertion). Without it, RetentionService and ErasureService are
+// unaffected, but Export refuses every call with ErrSharingRequired: see
+// that error's own doc comment for why this is a call-time refusal rather
+// than one Register enforces the way WithQueue's ErrQueueRequired does.
+func WithSharing(s SharingCreator) Option {
+	return func(m *Module) { m.export.sharing = s }
+}
+
 // NewModule returns a Module reading and writing audit events through
 // auditRepo -- the same *audit.Repository instance the host's dbkit/audit
 // wiring already constructs over its own database connection, sharing it
@@ -147,14 +168,23 @@ func (m *Module) AuditQuery() *AuditQuery { return m.auditQuery }
 func (m *Module) Name() string { return moduleName }
 
 // DependsOn implements pkgcore.Module: nothing. compliance sits above
-// every business module in docs/internal/01-architecture.md's graph
-// (just below admin), but it never imports a business module's own
-// package -- every one of its dependencies on a business module's
-// participation arrives through the host-populated
+// every business module in docs/internal/01-architecture.md's graph (just
+// below admin), and every one of its dependencies on a *business module's*
+// participation -- notes, storage's objects, or any other future
+// pkgcore.RetentionParticipant -- arrives through the host-populated
 // pkgcore.Registry.Retention registrar at call time, never through a
 // construction-time requirement DependsOn would express -- mirroring
 // go/storage's and go/metering's identical answer for the identical
-// reason.
+// reason. go/sharing is different: it is a lower-level *platform* module
+// (docs/internal/01-architecture.md places it below compliance, alongside
+// billing/ai-gateway/integration), imported directly for its Go API the
+// same sanctioned way go/billing imports go/metering (SharingCreator's own
+// doc comment) -- but that is a compile-time package import, not a
+// pkgcore.Module the bootstrap set must contain in a particular order, so
+// it still does not belong in DependsOn (which is reserved for "this
+// module's Register call requires another module to have registered
+// first" -- compliance's own Register never reads anything go/sharing's
+// Register declares).
 func (m *Module) DependsOn() []string { return nil }
 
 // Migrations implements pkgcore.Module. compliance owns no table of its
@@ -191,7 +221,11 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // Retention registrar onto all three orchestration services plus the
 // registry's resolved ObjectStore onto ExportService. It refuses to
 // proceed without a queue (ErrQueueRequired) -- see WithQueue's doc
-// comment.
+// comment. ExportService's SharingCreator is not part of this: it is not
+// a pkgcore.Registry seam, so WithSharing wires it directly at Module
+// construction time (NewModule's own Option application), and its absence
+// is never a reason to refuse Register -- see WithSharing's own doc
+// comment for why that check is Export's own, call-time responsibility.
 func (m *Module) Register(reg *pkgcore.Registry) error {
 	if m.queue == nil {
 		return ErrQueueRequired
@@ -238,3 +272,10 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 
 // compile-time check that *Module satisfies pkgcore.Module.
 var _ pkgcore.Module = (*Module)(nil)
+
+// compile-time check that *sharing.Service satisfies SharingCreator
+// structurally, so a host constructing a Module with WithSharing can pass
+// a real sharing.Module's Service() straight through with no adapter to
+// write -- the identical proof go/billing/module.go gives for
+// *metering.Aggregator satisfying its own UsageReader.
+var _ SharingCreator = (*sharing.Service)(nil)

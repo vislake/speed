@@ -21,3 +21,7 @@
 "compliance.erasure_partial_failure" = "At least one participant failed during the erasure request; see the erasure result for details."
 
 "compliance.export_partial_failure" = "At least one participant failed to contribute data to the export; see the export manifest for details."
+
+"compliance.sharing_required" = "A sharing service must be wired (WithSharing) before an export can be delivered."
+
+"compliance.export_delivery_failed" = "The export was gathered and stored, but could not be delivered as a share link."

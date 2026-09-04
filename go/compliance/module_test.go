@@ -162,6 +162,20 @@ func TestModule_Register_WiresServicesFromTheRegistry(t *testing.T) {
 	}
 }
 
+// TestModule_WithSharing_WiresExportServiceSharing proves WithSharing
+// attaches the given SharingCreator onto ExportService directly at
+// construction time -- unlike the registry-derived seams
+// TestModule_Register_WiresServicesFromTheRegistry checks, this one needs
+// no Bootstrap at all, since WithSharing is not a pkgcore.Registry seam
+// (module.go's Register doc comment explains why).
+func TestModule_WithSharing_WiresExportServiceSharing(t *testing.T) {
+	fake := &fakeSharingCreator{}
+	m := NewModule(newTestAuditRepo(t), WithQueue(&recordingQueue{}), WithSharing(fake))
+	if m.Export().sharing != SharingCreator(fake) {
+		t.Error("WithSharing should wire ExportService.sharing to the given SharingCreator")
+	}
+}
+
 // TestModule_NameAndOpenAPISpec pins the module's simple identity methods.
 func TestModule_NameAndOpenAPISpec(t *testing.T) {
 	m := NewModule(newTestAuditRepo(t))

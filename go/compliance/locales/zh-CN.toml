@@ -20,3 +20,7 @@
 "compliance.erasure_partial_failure" = "本次擦除请求中至少有一个参与方失败,详情见擦除结果。"
 
 "compliance.export_partial_failure" = "本次导出中至少有一个参与方未能提供数据,详情见导出清单。"
+
+"compliance.sharing_required" = "导出结果下发前必须先接入分享服务(WithSharing)。"
+
+"compliance.export_delivery_failed" = "导出已收集并存储完成,但未能生成分享链接下发。"

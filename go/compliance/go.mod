@@ -14,6 +14,8 @@ replace github.com/vislake/speed/go/jobs => ../jobs
 
 replace github.com/vislake/speed/go/config => ../config
 
+replace github.com/vislake/speed/go/sharing => ../sharing
+
 require (
 	github.com/google/uuid v1.6.0
 	github.com/vislake/speed/go/config v0.0.0-00010101000000-000000000000
@@ -21,6 +23,7 @@ require (
 	github.com/vislake/speed/go/jobs v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/sharing v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/tenancy v0.0.0-00010101000000-000000000000
 	gorm.io/gorm v1.31.2
 )

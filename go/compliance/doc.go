@@ -46,11 +46,12 @@
 //   - ErasureService: Erase, the right-to-erasure entry point, bypassing
 //     the retention window and calling every participant's Erase callback
 //     under an audited system context.
-//   - ExportService: Export, the data-portability gathering half only --
+//   - ExportService: Export, the data-portability capability in full --
 //     every participant's Export data is aggregated into one JSON
-//     document and stored through the pkgcore.ObjectStore seam. Delivery
-//     to the requesting subject (go/sharing) is an explicit, named
-//     follow-up: go/sharing has not landed in this round's module graph.
+//     document, stored through the pkgcore.ObjectStore seam, and
+//     delivered to the requesting subject as a short-lived, single-view
+//     go/sharing.Share (round 2, once go/sharing had landed on main --
+//     see ExportDelivery and SharingCreator's own doc comments).
 //   - AuditQuery: a read-only query layer over dbkit/audit.Repository's
 //     existing, deliberately thin ListByTenant/Get surface, adding
 //     actor/resource/action/time-range/result filtering and (under a
@@ -61,8 +62,7 @@
 //
 // It does NOT ship append-only enforcement via database role privilege
 // revocation or triggers, the optional hash chain, time-partitioned audit
-// archival, formatted CSV/JSON report export, an HTTP surface, or
-// go/sharing-based export delivery. See AGENTS.md's Known limitations for
-// the complete boundary and the compensating godoc Example this round
-// ships in its place.
+// archival, formatted CSV/JSON report export, or an HTTP surface. See
+// AGENTS.md's Known limitations for the complete boundary and the
+// compensating godoc Example this round ships in its place.
 package compliance
