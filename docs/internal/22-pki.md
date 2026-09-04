@@ -111,7 +111,19 @@ pki.NewModule(db, pki.WithSigner("kms.aws", cfg))
 
 这正是 `database/sql` 的驱动模式，也是 `pkgcore` 的 `SeamRegistry` 当初照着它设计的原因。**没 import 的项目，`go.mod` 里不出现这个名字。**
 
-这一点必须严格执行，因为仓库里已有反例：`go/pkgcore/go.mod` 的主 require 块里有 `minio-go`、`go-redis` 与 `testcontainers-go`，最后一个把整个 docker/moby 客户端树拖进了每一个消费者的 `go.sum`——`go/authn/go.mod` 的 indirect 块因此有 108 行。KMS 供应商有 6 家以上，重复这个错误就是把它放大六倍。（`pkgcore` 自身的这个问题不在本模块范围内，记录于此供后续处理。）
+这一点必须严格执行，因为仓库里已有一个可实测的反例：**`pkgcore` 根包内联了 Redis 与 S3 两套实现**（`redis_kv.go` / `redis_eventbus.go` / `s3_object_store.go` 与 `package pkgcore` 的其余文件同包），因此任何 import 该根包的消费者都无条件继承 `go-redis` 与 `minio-go` 及其传递依赖——**哪怕它只调用 `NewMemoryKVStore()`**。Go 的依赖分析是按包而非按符号做的，同包内的 import 无法按需裁剪。
+
+实测（新建空模块 + `go mod tidy`，`GOWORK=off`）：
+
+| 消费形态 | indirect 依赖数 |
+|---|---|
+| 只 import `pkgcore/apperr` 子包 | **0** |
+| import `pkgcore` 根包，只用内存 KVStore | **23** |
+| import `authn`（真实业务项目形态） | **82** |
+
+从 0 到 23 全部来自根包内联的那两套实现。KMS 供应商有 6 家以上，把它们内联进 pki 的主包就是把这个代价再叠加六份——所以每家一个独立 module，宿主 import 谁才拿到谁。
+
+（顺带澄清一个容易做出的错误归因：`testcontainers-go` 虽然出现在 `pkgcore` 与 `authn` 的 `go.mod` 主 require 块里，但它**不会**传染给消费者。Go 1.17+ 的模块图裁剪只加载"构建被 import 的包"所需的依赖，上游模块自身测试的依赖不在其中；`pkgcore` 的 testcontainers 只被两个 `integration_test` 文件 import，`authn` 的则来自 `authn/internal/testutil` → `dbkit/dbtest` 这条**测试专用**链路。上表第三行 82 个 indirect 里没有任何 testcontainers、docker、moby 或 containerd 条目，而 `authn/go.mod` 自己列了 108 个——差出来的 26 个正是它自己测试用的，业务项目拿不到。`pkgcore` 根包内联实现的问题不在本模块范围内，记录于此供后续处理。）
 
 ### 能力声明
 
