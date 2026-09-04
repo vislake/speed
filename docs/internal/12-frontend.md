@@ -78,7 +78,7 @@ M0 的"核心组件"指下面第一组。组件全部受控、props 驱动、不
 
 `FileUploader`（M2，配合 storage）、`StatCard` / `Sparkline`（M2，用量展示）、`StatusBadge`、`SearchInput`、`ToastProvider`、`LoadingOverlay`、`JobProgress`（M1，配合 jobs 的进度展示）。
 
-> **已落地**（file-uploader round）：本组首项 `FileUploader` 已提前于 M2 计划窗口交付（排期注见 [15 里程碑](15-roadmap.md)）：完全受控的队列组件——队列就是 host 的 `rows` 状态，每行状态与进度按 props 原样渲染，每次 pick/取消/重试/移除经 `onSelectFiles`/`onCancel`/`onRetry`/`onRemove` 回调上报；**上传传输是 host 自己的代码，组件零 HTTP**——host 的传输就是组件的网络边界，大小/类型/数量预校验与并发上限都是 host 传输代码的职责；首版曾把「队列内驻 + `execute` 注入」当作 interaction-local 例外放行，评审后 redesign 为与全家一致的全受控形态，「组件全部受控」一条不再有具名例外，组件与全家的关系见 ui-kit AGENTS.md。host 的传输正是 storage 前端操作就位后要接的位置：api-sdk 的 storage 调用仍随 consumer-shell round 从 `go/storage/api/openapi.yaml` 生成，[21 API 契约](21-api-contract.md) 的该轮注记与 ui-kit AGENTS.md 的 deferral 条目同记该延期。
+> **已落地**（file-uploader round）：本组首项 `FileUploader` 已提前于 M2 计划窗口交付（排期注见 [15 里程碑](15-roadmap.md)）：完全受控的队列组件——队列就是 host 的 `rows` 状态，每行状态与进度按 props 原样渲染，每次 pick/取消/重试/移除经 `onSelectFiles`/`onCancel`/`onRetry`/`onRemove` 回调上报；**上传传输是 host 自己的代码，组件零 HTTP**——host 的传输就是组件的网络边界，大小/类型/数量预校验与并发上限都是 host 传输代码的职责；首版曾把「队列内驻 + `execute` 注入」当作 interaction-local 例外放行，评审后 redesign 为与全家一致的全受控形态，「组件全部受控」一条不再有具名例外，组件与全家的关系见 ui-kit AGENTS.md。host 的传输正是 storage 前端操作就位后要接的位置：api-sdk 的 storage 调用从 `go/storage/api/openapi.yaml` 生成的前提是该片段进入合并文档——orval 只跑合并文档（notes + authn），下一次扩展是 org 片段先排队的 org-web 轮（[21 API 契约](21-api-contract.md) 的实现状态注记同指），storage 搭同一班再生进入；该片段对应例外表行与 ui-kit AGENTS.md 的 deferral 条目同记该延期。
 
 **表单方案**：react-hook-form + zod 校验。zod schema 优先从 OpenAPI 生成的类型推导，避免前后端校验规则各写一套。
 

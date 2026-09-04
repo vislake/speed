@@ -356,16 +356,19 @@ the `speed/no-literal-text` rule enforces the namespace discipline over
 
 ## Deferrals and recorded decisions
 
-- **Reference-app consumer**: `examples/reference-app` has no frontend
-  directory yet (Go-only today). The runtime end-to-end consumption of
-  the switch endpoint is discharged in form at the package level --
-  `src/usage-example.test.tsx` drives the composed switcher over a real
-  `@speed/api-client` bound through the same seam a host binds, with a
-  scripted fetch answering genuine `Response` objects -- the same
-  honesty standard every package here used before a shell consumer
-  existed. The remaining leg, a browser driving a real server (and the
-  shell's tenant list itself, which the product-shell rounds wire),
-  lands with the reference-app shells.
+- **Reference-app consumer**: consumed by the reference app's consumer
+  shell (`examples/reference-app/web`): the shell's user menu renders
+  `TenantSwitcher` inside product-shell's frame over the demo's two
+  seeded tenants (the shell's own static roster -- there is no roster
+  endpoint, so host data by contract, exactly as this package's rules
+  require), a switch committing through the session on the bound
+  client, with the shell suites driving the journey against the
+  demo-server double. The package-level proof remains the in-form leg
+  -- `src/usage-example.test.tsx` drives the composed switcher over a
+  real `@speed/api-client` bound through the same seam a host binds,
+  with a scripted fetch answering genuine `Response` objects. The
+  remaining leg, a browser driving a real server, is M4's
+  html-runner/e2e work.
 - **The tenant list has no in-package source.** No endpoint answers
   "which tenants may this principal switch between" in the shipped
   surface, so the list is host data by contract. When a membership

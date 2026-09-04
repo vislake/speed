@@ -176,11 +176,14 @@ bind one explicitly before rendering.
 - **Platform-facing shell.** `admin-shell` is the same tier for platform
   staff, a later round; this package must stay free of anything
   platform-shaped so the two shells can share their foundations.
-- **Reference-app consumer.** `examples/reference-app` has no frontend
-  directory yet (Go-only today); the required consumer proof is satisfied
-  at the package level (`src/usage-example.test.tsx`), the same honesty
-  standard `ui-kit` and `layout-kit` used before any shell consumer
-  existed.
+- **Reference-app consumer.** The reference app's consumer shell
+  (`examples/reference-app/web`) mounts this package: `main.tsx`'s
+  bootstrap renders `ProductShell` as the app's view machine over the
+  real session and client composition, making the shell this package's
+  composed consumer; the required consumer proof stays at the package
+  level (`src/usage-example.test.tsx`), the same honesty standard
+  `ui-kit` and `layout-kit` used before any shell consumer existed.
+  The browser page leg is M4's html-runner/e2e work.
 - **Storybook.** No preview-harness round exists yet; components are
   covered by jsdom tests + axe, and color-contrast verification awaits a
   browser-side visual round, same as the packages below.

@@ -619,16 +619,19 @@ absent from the rule's one whitelist, `packages/api-client`); the
 
 ## Deferrals and recorded decisions
 
-- **Reference-app consumer**: `examples/reference-app` has no frontend
-  directory yet (Go-only today). The runtime end-to-end consumption of
-  the account surface of authn is discharged in form at the package
-  level -- `src/usage-example.test.tsx` drives the composed family over
-  a real `@speed/api-client` bound through the same seam a host binds,
-  with a scripted fetch answering genuine `Response` objects, the same
-  honesty standard every package here used before a shell consumer
-  existed. The remaining leg, a browser driving a real server, lands
-  with the reference-app shells; the M4 e2e pipeline covers the full
-  stack.
+- **Reference-app consumer**: consumed by the reference app's consumer
+  shell (`examples/reference-app/web`): its account view renders this
+  family's four sections under the shell's QueryClient, every list read
+  and mutation going through the generated hooks over the client the
+  bootstrap bound; the binding-completion handler is composed on the
+  shell's binding subroute but never exercised (the shell serves no
+  real callback route, so the add-area journeys never click). The
+  package-level proof remains the in-form leg --
+  `src/usage-example.test.tsx` drives the composed family over a real
+  `@speed/api-client` bound through the same seam a host binds, with a
+  scripted fetch answering genuine `Response` objects. The remaining
+  leg, a browser driving a real server, is M4's html-runner/e2e work;
+  the M4 e2e pipeline covers the full stack.
 - **Reads deliberately go through generated react-query hooks, not
   session operations.** The account surfaces read lists (sessions,
   history, identities) that are cacheable shared state and invalidate

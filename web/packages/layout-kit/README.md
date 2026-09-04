@@ -195,11 +195,16 @@ package -- see the AGENTS.md non-negotiable rules.
   shell's children and feeding it a status it computes from the
   role lists it attached, exactly the host-injected-status contract
   this package's rules require.
-- **Reference-app consumer**: `examples/reference-app` has no frontend
-  directory yet (Go-only today), so the consumer proof required by the
-  root CLAUDE.md's Documentation rule is satisfied at the package
-  level -- `src/usage-example.test.tsx` -- the same honesty standard
-  `ui-kit` used before any shell consumer existed.
+- **Reference-app consumer**: the reference app's consumer shell
+  (`examples/reference-app/web`) composes both exports as host
+  composition -- product-shell's `ProductShell` renders `AppShell` as
+  its authenticated frame, and the shell's notes view mounts
+  `RouteGuard` with a status the host derives from the served
+  notes-list query (the server's rbac layer answers a caller without
+  `notes:read` with 403, failing the gate closed to `denied`) -- the
+  exact host-injected shape this package's rules require; the
+  package-level proof (`src/usage-example.test.tsx`) remains the
+  in-form leg, and the browser page leg is M4's html-runner/e2e work.
 - **Storybook / browser-side visual verification**: no preview-harness
   round exists yet, same deferral `ui-kit` carries; `color-contrast`
   stays axe-disabled for the same jsdom reason.

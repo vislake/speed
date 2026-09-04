@@ -125,24 +125,33 @@ creates one.
 
 ## Status vs. the roadmap
 
-Compile consumption is live; runtime end-to-end consumption is not.
+Compile consumption is live, and runtime end-to-end consumption now
+has its real host: the consumer shell.
 
-- **Compile-consumed today.** `@speed/auth-core` is the package's first
-  in-workspace consumer: it type-checks against the generated authn
-  surface, and its unit suite drives the session operations through a
-  scripted `RequestFn` bound with `bindRequestFn` -- the same seam a
-  host's real client binds. The notes endpoints remain placeholder
-  fragments of the reference app, exercised by the package's own unit
-  tests; the merged document is covered by `api-contract.yml`'s
+- **Compile-consumed in-workspace.** `@speed/auth-core` type-checks
+  against the generated authn surface, and its unit suite drives the
+  session operations through a scripted `RequestFn` bound with
+  `bindRequestFn` -- the same seam a host's real client binds.
+  `@speed/account-ui` is the second in-workspace compile consumer and
+  the first to render generated hooks into a component tree. The
+  merged document is covered by `api-contract.yml`'s
   regeneration-and-diff gates.
-- **Runtime end-to-end consumption lands with the reference-app
-  shells.** Real UI consumers drive real logins against a real server
-  in the M1 consumer-shell round; the reference-app
-  mandatory-first-consumer premise is met at the test-and-type level
-  today. Release-time packaging of the published SDK (generated from
-  the merged `speed.yaml`, versioned alongside the doc site) is M4
-  machinery (`docs/internal/18-cicd.md`), deferred with
-  release-foundation.
+- **Runtime-consumed by the reference app's consumer shell.** The shell
+  (`examples/reference-app/web`, an external member of the web
+  workspace and never versioned) is the mandatory first consumer: its
+  bootstrap binds one real `@speed/api-client` through this package's
+  `bindRequestFn` seam, and its surfaces drive the generated
+  operations through the composed tree -- the notes operations through
+  the generated react-query hooks behind a real permission gate, the
+  authn operations through the auth-core session and the auth-ui /
+  account-ui / tenancy-ui component families. Its vitest suites run
+  that composition over a scripted demo-server double whose mirrored
+  facts the round's Go-side suites pin against the real composed
+  server; the browser-page leg -- a browser driving the real server --
+  lands with M4's html-runner/e2e work. Release-time packaging of the
+  published SDK (generated from the merged `speed.yaml`, versioned
+  alongside the doc site) is M4 machinery
+  (`docs/internal/18-cicd.md`), deferred with release-foundation.
 
 ## Development
 

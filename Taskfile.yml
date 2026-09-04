@@ -196,8 +196,8 @@ tasks:
         echo
         echo "What IS runnable today: the reference-app server in standalone deployment"
         echo "mode (single process, SQLite, zero external dependencies), built on the"
-        echo "real modules -- pkgcore, dbkit, tenancy, observability, config (and,"
-        echo "once their rounds land, the rest). See examples/reference-app/README.md."
+        echo "real modules -- pkgcore, dbkit, tenancy, observability, config, jobs,"
+        echo "authn, rbac, org and storage. See examples/reference-app/README.md."
         echo "Run it directly:"
         echo "    cd examples/reference-app && go run ./cmd/server"
         echo "It listens on :8080 (override with PORT) and stores to ./reference-app.db"
@@ -205,11 +205,11 @@ tasks:
         echo
         echo "This task itself does not run that: the 'task dev' target promises backend"
         echo "+ frontend in standalone deployment mode with hot reload. The web/ pnpm"
-        echo "workspace does exist now, but it ships libraries only (five packages --"
-        echo "see web/README.md): there is no frontend application shell, no hot-reload"
-        echo "runner, and no composed dev loop in this repository yet"
-        echo "(docs/internal/19-dev-workflow.md,"
-        echo "docs/internal/15-roadmap.md) -- those land in later rounds."
+        echo "workspace does exist now -- eleven versioned packages today (web/README.md)"
+        echo "plus the reference app's consumer shell at examples/reference-app/web --"
+        echo "but none of it is wired into a hot-reload runner or a composed dev loop"
+        echo "yet (docs/internal/19-dev-workflow.md,"
+        echo "docs/internal/15-roadmap.md)."
         exit 1
     # Without silent, task echoes the whole script block above back as the
     # command line (task: [dev] | ...) before running it, doubling every
@@ -245,11 +245,14 @@ tasks:
     # web/scripts/orval-nodenext-fixup.mjs -- see that package's
     # AGENTS.md for the seam and the fixup's why. org's fragment feeds
     # neither the merge nor orval: it predates the merge machinery, and
-    # its frontend leg defers to the M1 org-web / consumer-shell round
-    # (go/org/AGENTS.md's deferrals table). storage's fragment, this
-    # round's addition, feeds neither either: it ships its backend leg
-    # now and defers its frontend leg the same way
-    # (go/storage/AGENTS.md's deferrals table). authn's fragment, by
+    # its frontend leg defers to the M1 org-web round that joins org
+    # into the merged document (go/org/AGENTS.md's deferrals table and
+    # docs/internal/21-api-contract.md's implementation-status note).
+    # storage's fragment feeds neither either: it ships its backend leg
+    # now and defers its frontend leg to that same future extension of
+    # the merged document -- org's fragment is queued first, storage's
+    # would ride the same regeneration (go/storage/AGENTS.md's deferrals
+    # table). authn's fragment, by
     # contrast, has no "no consumer shell" deferral left: its generated
     # surface has been compile-consumed by @speed/auth-core since the
     # auth-core round. The redocly merge of the fragments into

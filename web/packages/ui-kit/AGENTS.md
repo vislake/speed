@@ -142,8 +142,11 @@ workspace's `no-direct-http` rule keeps every fetch out of `src`.
   literals.
 - **The storage frontend leg** — storage operations generated into
   `@speed/api-sdk` from the `go/storage` OpenAPI fragment, the natural
-  transport for a host's upload code — waits for the consumer-shell
-  round. Until then the wire contract's authority is
+  transport for a host's upload code — waits for the merged document
+  to gain that fragment: orval runs over the merged document only
+  (notes and authn today), and the round that first extends it is the
+  M1 `org-web` round joining org's fragment, storage's riding that
+  same regeneration. Until then the wire contract's authority is
   `go/storage/api/openapi.yaml` itself; hosts run their own transport
   and this package ships none. The deferral is recorded three ways so
   no single doc owns the claim: `go/storage/AGENTS.md`'s deferral

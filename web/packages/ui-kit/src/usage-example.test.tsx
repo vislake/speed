@@ -15,9 +15,10 @@
  * state FileUploader renders. FileUploader itself holds no rows, no
  * Files and no transport: every abort (cancel, unmount) is the host's
  * AbortController doing the aborting. The stub stands in for the host's
- * generated api-sdk storage call: storage hooks publish in the
- * consumer-shell round (go/storage/AGENTS.md), so ui-kit itself ships no
- * endpoint, and the placeholder URL below is labelled as such.
+ * generated api-sdk storage call: the hooks publish only when the
+ * merged document gains the storage fragment (deferred alongside
+ * org's, see go/storage/AGENTS.md), so ui-kit itself ships no endpoint,
+ * and the placeholder URL below is labelled as such.
  *
  * Host-content strings (titles, headers, the transport's error text) are
  * English fixtures on purpose: they stand in for a host's own
@@ -108,11 +109,11 @@ function MembersPage() {
 /**
  * The upload endpoint the host's transport sends its one round trip
  * per file to. A real host's upload code calls a generated api-sdk
- * storage operation here -- storage hooks publish in the
- * consumer-shell round (go/storage/AGENTS.md) -- so this is an
- * explicitly labelled fixture placeholder: ui-kit ships no endpoint,
- * and the suite pins the transport shape without pretending to know a
- * wire protocol.
+ * storage operation here -- the hooks publish only when the merged
+ * document gains the storage fragment (deferred alongside org's, see
+ * go/storage/AGENTS.md) -- so this is an explicitly labelled fixture
+ * placeholder: ui-kit ships no endpoint, and the suite pins the
+ * transport shape without pretending to know a wire protocol.
  */
 const STORAGE_UPLOAD_URL = 'https://uploads.example.test/objects'
 

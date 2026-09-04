@@ -235,20 +235,24 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
 
 - **Uploads and SSE** -- outside this package's scope
   (docs/internal/21-api-contract.md).
-- **A real first consumer** -- `@speed/api-sdk`, the orval-generated
-  typed surface, has landed and calls into this package through its
-  `src/runtime.ts` seam, and `@speed/auth-core` compile-consumes both
-  in-workspace (its session layer imports this package's
-  `AccessTokenStore` seam and calls the generated authn operations
-  through the bound request function). `usePublicConfig`/`useFeature`
-  have landed too (`@speed/api-client/react`, Config hooks section
-  above). The runtime first consumer is still to come:
-  `examples/reference-app` has no frontend shell yet (it is
-  backend-only today), so the reference app's mandatory first-consumer
-  status arrives with the M1 consumer shells that bind a real
-  `createClient` against a real server and, for the hooks, with the
-  first shell that builds a `NavItem`-style `requiredFeature` consumer
-  per `docs/internal/11-cross-cutting.md`.
+- **A consumer is not packaged here** -- `@speed/api-sdk`, the
+  orval-generated typed surface, has landed and calls into this package
+  through its `src/runtime.ts` seam, and `@speed/auth-core`
+  compile-consumes both in-workspace (its session layer imports this
+  package's `AccessTokenStore` seam and calls the generated authn
+  operations through the bound request function).
+  `usePublicConfig`/`useFeature` have landed too
+  (`@speed/api-client/react`, Config hooks section above). The runtime
+  first consumer is real and lives in the reference app's consumer
+  shell (`examples/reference-app/web`, an external member of the web
+  workspace, never versioned): its bootstrap binds one real
+  `createClient` over the environment's own fetch into the api-sdk
+  seam, and its home view reads the server's effective Public values
+  and feature flags through `usePublicConfig`/`useFeature` on that same
+  bound client -- the `requiredFeature` consumer
+  `docs/internal/11-cross-cutting.md` describes. The browser page
+  leg -- a browser driving the real server -- is M4's html-runner/e2e
+  work.
 - **i18n resources** -- error codes map to bilingual text in the
   consuming package's catalogs; nothing here emits user-facing text.
 

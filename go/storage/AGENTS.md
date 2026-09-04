@@ -450,13 +450,16 @@ invocation pr-full.yml's integration-tiers job runs for this module:
 ## Deferred and not shipped (with reasons)
 
 - **Frontend `@speed/api-sdk` generation for this module's fragment.** The
-  frontend orval leg of `task api:gen` covers notes only: storage's fragment
-  does not feed orval, because the frontend generation targets a single spec
-  source today and no storage consumer shell exists yet to type-check the
-  generated hooks against — deferred to the M1 consumer-shell round, exactly
-  as org's fragment (Taskfile.yml's api:gen comments and
-  docs/internal/21-api-contract.md record the same deferral). The backend
-  half (`api/storage-server.gen.go`) and its api-contract.yml diff gate ship
+  frontend orval leg of `task api:gen` runs over the merged document only
+  (`build/openapi/speed.yaml` — today the notes and authn fragments), so a
+  fragment reaches `@speed/api-sdk` by entering that merge; storage's
+  fragment feeds neither the merge nor orval, and the reference app's
+  consumer shell has no upload surface yet to exercise generated storage
+  hooks against. Deferred to the merged document's next extension: org's
+  fragment is queued first (the M1 `org-web` round —
+  docs/internal/21-api-contract.md's implementation-status note), and
+  storage's would enter through the same regeneration. The backend half
+  (`api/storage-server.gen.go`) and its api-contract.yml diff gate ship
   regardless.
 - **Audit emission.** The three audit actions are declared; the services log
   their transitions (`object completed`, `object deleted`, `expired upload

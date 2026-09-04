@@ -531,22 +531,25 @@ the `speed/no-literal-text` rule enforces the namespace discipline over
 
 ## Deferrals and recorded decisions
 
-- **Reference-app consumer**: `examples/reference-app` has no frontend
-  directory yet (Go-only today). The runtime end-to-end consumption of
-  the authn surface is discharged in form at the package level --
+- **Reference-app consumer**: consumed by the reference app's consumer
+  shell (`examples/reference-app/web`): its sign-in view renders this
+  family inside product-shell's three-branch view machine, over the
+  session the shell's bootstrap binds to one real `@speed/api-client`
+  (the shell suites drive that composed tree against the demo-server
+  double). The shell is also where generated TanStack Query hooks and
+  tenant query-key namespacing first appear, and where `RouteGuard` --
+  its host-composition shape proven in form by `product-shell`'s
+  gated-journey suite, which mounts the gate inside the shell's
+  children and feeds it a status the fixture host computes from the
+  role lists it attached -- first wires behind real permission answers
+  and a router (the shell's notes view derives its gate status from
+  the served notes-list query, 403 being the server's permission
+  answer). The package-level proof remains the in-form leg --
   `src/usage-example.test.tsx` drives the composed family over a real
   `@speed/api-client` bound through the same seam a host binds, with a
-  scripted fetch answering genuine `Response` objects -- the same
-  honesty standard every package here used before a shell consumer
-  existed. The remaining leg, a browser driving a real server, lands
-  with the reference-app shells (which will also be where generated
-  TanStack Query hooks and tenant query-key namespacing first appear,
-  and where `RouteGuard` -- its host-composition shape already proven
-  in form by `product-shell`'s gated-journey suite, which mounts the
-  gate inside the shell's children and feeds it a status the fixture
-  host computes from the role lists it attached -- first wires behind
-  real permission fetches and a router); the M4 e2e pipeline covers
-  the full stack.
+  scripted fetch answering genuine `Response` objects. The remaining
+  leg, a browser driving a real server, is M4's html-runner/e2e work;
+  the M4 e2e pipeline covers the full stack.
 - **Auth-core hooks stay host-side by design.** Components in this
   family take the session as a prop and fire callbacks; the host
   observes session transitions with `useAuthState` and friends. A

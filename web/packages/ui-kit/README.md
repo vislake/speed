@@ -88,11 +88,11 @@ import type { FileUploaderRow } from '@speed/ui-kit'
 /**
  * The upload endpoint the host's transport sends its one round trip
  * per file to. A real host's upload code calls a generated api-sdk
- * storage operation here -- storage hooks publish in the
- * consumer-shell round (go/storage/AGENTS.md) -- so this is an
- * explicitly labelled fixture placeholder: ui-kit ships no endpoint,
- * and the suite pins the transport shape without pretending to know a
- * wire protocol.
+ * storage operation here -- the hooks publish only when the merged
+ * document gains the storage fragment (deferred alongside org's, see
+ * go/storage/AGENTS.md) -- so this is an explicitly labelled fixture
+ * placeholder: ui-kit ships no endpoint, and the suite pins the
+ * transport shape without pretending to know a wire protocol.
  */
 const STORAGE_UPLOAD_URL = 'https://uploads.example.test/objects'
 
@@ -491,9 +491,10 @@ text is host-written and host-translated (the same contract as the form
 family's validation-error text); pre-flight validation (size, type,
 count) is the host's job, done before its transport starts. A real
 host's transport typically calls a generated api-sdk storage operation
-(storage hooks publish in the consumer-shell round --
-`go/storage/AGENTS.md`); ui-kit ships no endpoint, and the usage
-example's scripted fetch stub stands in for that call.
+(the hooks publish only when the merged document gains the storage
+fragment -- deferred alongside org's, see `go/storage/AGENTS.md`);
+ui-kit ships no endpoint, and the usage example's scripted fetch stub
+stands in for that call.
 
 Other props: `multiple` (several files per selection; false by
 default), `accept` (forwarded to the picker; advisory only -- real

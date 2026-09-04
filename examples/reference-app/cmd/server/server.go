@@ -682,8 +682,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			if !ok {
 				return "", fmt.Errorf("reference-app: no host configured for tenant %q", tenant)
 			}
-			// This app ships no frontend invitation-acceptance page (M1
-			// scope, root CLAUDE.md): the link names org's real
+			// This app ships no frontend invitation-acceptance page: its
+			// consumer shell (examples/reference-app/web) carries no org
+			// views, org's accept flow being demoed at the API level. The
+			// link names org's real
 			// POST /api/v1/org/invitations/accept endpoint and carries the
 			// token as a query parameter purely so it is one recognizable
 			// string a person (or, in server_test.go's end-to-end suite, a
