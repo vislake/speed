@@ -19,7 +19,7 @@ name: pr-full
 # the label gate, for manual full-matrix runs.
 #
 # COVERAGE -- what genuinely runs today
-#   * go-modules job: the same twelve-module matrix as pr-check through the
+#   * go-modules job: the same thirteen-module matrix as pr-check through the
 #     reusable go-module-ci workflow (golangci-lint, go vet, unit tests
 #     under -race, a workspace-context build and a GOWORK=off standalone
 #     build) -- the full matrix runs the unit tier too. Per 18-cicd's
@@ -67,6 +67,19 @@ name: pr-full
 #                    the tenant-scoped repositories' AssertIsolated suite,
 #                    minio_leg_test.go for object-store round-trips against
 #                    MinIO through pkgcore.NewS3ObjectStore)
+#       go/notification PostgreSQL and Redis -- its integration_test/
+#                       runs both legs (postgres_leg_test.go for the
+#                       schema and isolation semantics of the five
+#                       tables -- migrations zero to head,
+#                       AssertIsolated against a real server, and the
+#                       consent-ledger single-winner verify whose
+#                       compare-and-swap SQLite cannot even put at
+#                       risk -- and redis_leg_test.go for the
+#                       cross-replica inbox delivery: two booted
+#                       modules over one shared Redis client and
+#                       database, a delivery written on one replica
+#                       announcing its inbox row on the bus the other
+#                       replica reads)
 #   * reference-app job: examples/reference-app's golangci-lint leg, unit
 #     suite under -race, and its Docker-backed integration tier
 #     (-tags=integration -- testcontainers Redis) -- reference-app is its
@@ -131,6 +144,7 @@ jobs:
           - go/authn
           - go/saasctl
           - go/storage
+          - go/notification
     uses: ./.github/workflows/reusable/go-module-ci.yml
     with:
       module: ${{ matrix.module }}
@@ -157,6 +171,7 @@ jobs:
           - go/org
           - go/authn
           - go/storage
+          - go/notification
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
