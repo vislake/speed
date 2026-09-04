@@ -9,27 +9,36 @@ import (
 // The domain events this module publishes, named <module>.<entity>.<action>
 // per backend coding standard §8.
 //
-// Only three of the eventual signing-key lifecycle events exist this round
-// -- staged, activated, retired -- matching exactly the three transitions
-// round 2's expiry scan drives (docs/internal/22-pki.md's "delivery rounds"
-// table). There is deliberately NO ".pending" event (a key enters pending
-// at the moment it is staged, so EventSigningKeyStaged already communicates
-// it) and NO ".retiring" event (a key enters retiring at the moment its
+// Round 2 declared three of the eventual signing-key lifecycle events --
+// staged, activated, retired -- matching exactly the three transitions its
+// expiry scan drives (docs/internal/22-pki.md's "delivery rounds" table).
+// There is deliberately NO ".pending" event (a key enters pending at the
+// moment it is staged, so EventSigningKeyStaged already communicates it)
+// and NO ".retiring" event (a key enters retiring at the moment its
 // replacement is activated, so EventSigningKeyActivated already
 // communicates both halves of that one atomic transition -- see
-// SigningKeyRepository.PromoteToActive's own doc comment). EventSigning
-// KeyRevoked and every pki.certificate.*/pki.authority.* event stay
-// undeclared: revocation and CRL generation are round 3's job, and this
-// module's own round-1 table already established the discipline that an
-// undeclared-but-unused event is dead catalog weight, not forward
-// compatibility.
+// SigningKeyRepository.PromoteToActive's own doc comment).
 //
-// Two consumers exist for each event, exactly like rbac's own grant-change
-// events (go/rbac/events.go): this module's own process-local key-set cache
-// (cache.go), which drops or refreshes the affected purpose's entry so a
-// rotation on one replica is visible on every other replica without
-// waiting for the cache's fallback poll, and an eventual audit/notification
-// consumer this round does not build.
+// Round 3 (this round) adds the fourth signing-key event,
+// EventSigningKeyRevoked, plus the module's first pki.certificate.* event,
+// EventCertificateRevoked -- revocation.go's Service.RevokeSigningKey and
+// CAService.RevokeCertificate respectively. Every other
+// pki.certificate.*/pki.authority.* event named in docs/internal/22-pki.md's
+// module-contract section (.issued/.renewed/.expiring, .expiring) stays
+// undeclared: this module's own round-1 table already established the
+// discipline that an undeclared-but-unused event is dead catalog weight,
+// not forward compatibility, and only .revoked has a real emitter this
+// round.
+//
+// Consumers: this module's own process-local key-set cache (cache.go)
+// subscribes to every signing-key event, including the new .revoked one --
+// see attachBus in service.go, which is what makes "the process-local
+// cache must be invalidated on revocation" true through the SAME mechanism
+// round 2 built, never a second cache-clearing path. EventCertificateRevoked
+// has no in-module subscriber (CAService keeps no cache), and exists for an
+// eventual audit/notification consumer this round does not build, matching
+// the identical reasoning SigningKeyLifecycleEvent's own doc comment
+// already gives for KID/OccurredAt.
 const (
 	// EventSigningKeyStaged is published when the expiry scan generates a
 	// new SigningKeyStatusPending key ahead of an approaching expiry (see
@@ -50,7 +59,26 @@ const (
 	// EventSigningKeyRetired is published when a retiring key is retired
 	// past its overlap period.
 	EventSigningKeyRetired = "pki.signing_key.retired"
+
+	// EventSigningKeyRevoked is published when Service.RevokeSigningKey
+	// (revocation.go) transitions a key -- of any prior status -- to
+	// SigningKeyStatusRevoked. Round 3's addition.
+	EventSigningKeyRevoked = "pki.signing_key.revoked"
+
+	// EventCertificateRevoked is published when CAService.RevokeCertificate
+	// (revocation.go) transitions a tenant certificate to
+	// CertificateStatusRevoked. Round 3's addition, and this module's first
+	// pki.certificate.* event.
+	EventCertificateRevoked = "pki.certificate.revoked"
 )
+
+// certificateEventPayloadType names the payload EventCertificateRevoked
+// carries, for EventDecl.PayloadType -- the pki.certificate.* counterpart
+// of signingKeyEventPayloadType above. A single named constant even though
+// only one event uses it today, matching that same precedent (a second
+// pki.certificate.* event, when one is declared, reuses this type rather
+// than inventing a new payload shape for the same entity).
+const certificateEventPayloadType = "pki.CertificateRevokedEvent"
 
 // signingKeyEventPayloadType names the payload every signing-key lifecycle
 // event above carries, for EventDecl.PayloadType. One shape serves all
@@ -79,11 +107,21 @@ var eventDecls = []pkgcore.EventDecl{
 		PayloadType: signingKeyEventPayloadType,
 		Description: "Published when a retiring signing key is retired past its overlap period.",
 	},
+	{
+		Type:        EventSigningKeyRevoked,
+		PayloadType: signingKeyEventPayloadType,
+		Description: "Published when a signing key is revoked, of any prior status.",
+	},
+	{
+		Type:        EventCertificateRevoked,
+		PayloadType: certificateEventPayloadType,
+		Description: "Published when a tenant certificate is revoked.",
+	},
 }
 
 // SigningKeyLifecycleEvent is the payload of EventSigningKeyStaged,
-// EventSigningKeyActivated and EventSigningKeyRetired --
-// signingKeyEventPayloadType's shape.
+// EventSigningKeyActivated, EventSigningKeyRetired and (round 3)
+// EventSigningKeyRevoked -- signingKeyEventPayloadType's shape.
 //
 // Its first job is this module's own cache invalidation (cache.go): Purpose
 // is the only field the cache strictly needs, since it drops (or refreshes)
@@ -140,4 +178,33 @@ func signingKeyLifecycleEventFromWire(payload any) (SigningKeyLifecycleEvent, bo
 	default:
 		return SigningKeyLifecycleEvent{}, false
 	}
+}
+
+// CertificateRevokedEvent is the payload of EventCertificateRevoked --
+// certificateEventPayloadType's shape. Unlike SigningKeyLifecycleEvent,
+// this module keeps no cache over certificates, so no in-module subscriber
+// ever needs to decode this payload back out of a distributed bus's
+// map[string]any -- it exists purely for CAService.RevokeCertificate's
+// publish call and an eventual audit/notification consumer, per this
+// file's own doc comment.
+type CertificateRevokedEvent struct {
+	// TenantID is the certificate's owning tenant.
+	TenantID string
+
+	// CertificateID is the revoked pki_certificates row's id.
+	CertificateID string
+
+	// AuthorityID is the Authority that issued the revoked certificate.
+	AuthorityID string
+
+	// Serial is the revoked certificate's serial number, lower-case hex --
+	// the same encoding Certificate.Serial and CertificateRevocation.Serial
+	// use.
+	Serial string
+
+	// RevocationReason is the reason RevokeCertificate was given.
+	RevocationReason string
+
+	// OccurredAt is when the revocation was written.
+	OccurredAt time.Time
 }

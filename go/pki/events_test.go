@@ -94,24 +94,28 @@ func TestSigningKeyLifecycleEventFromWire_RejectsAnUnrecognizedShape(t *testing.
 }
 
 // TestEventDecls_MatchTheDeclaredConstants pins eventDecls (what Register
-// declares) against the exported event-name constants, so a rename of one
-// without the other is caught here rather than by a mismatched catalog
-// entry at bootstrap.
+// declares) against the exported event-name constants, and against each
+// event's expected PayloadType, so a rename of one without the other is
+// caught here rather than by a mismatched catalog entry at bootstrap.
 func TestEventDecls_MatchTheDeclaredConstants(t *testing.T) {
-	want := map[string]bool{
-		EventSigningKeyStaged:    true,
-		EventSigningKeyActivated: true,
-		EventSigningKeyRetired:   true,
+	want := map[string]string{
+		EventSigningKeyStaged:    signingKeyEventPayloadType,
+		EventSigningKeyActivated: signingKeyEventPayloadType,
+		EventSigningKeyRetired:   signingKeyEventPayloadType,
+		EventSigningKeyRevoked:   signingKeyEventPayloadType,
+		EventCertificateRevoked:  certificateEventPayloadType,
 	}
 	if len(eventDecls) != len(want) {
 		t.Fatalf("eventDecls has %d entries, want %d", len(eventDecls), len(want))
 	}
 	for _, decl := range eventDecls {
-		if !want[decl.Type] {
+		wantPayload, ok := want[decl.Type]
+		if !ok {
 			t.Errorf("eventDecls declares unexpected type %q", decl.Type)
+			continue
 		}
-		if decl.PayloadType != signingKeyEventPayloadType {
-			t.Errorf("eventDecls[%q].PayloadType = %q, want %q", decl.Type, decl.PayloadType, signingKeyEventPayloadType)
+		if decl.PayloadType != wantPayload {
+			t.Errorf("eventDecls[%q].PayloadType = %q, want %q", decl.Type, decl.PayloadType, wantPayload)
 		}
 		if decl.Description == "" {
 			t.Errorf("eventDecls[%q] has no Description", decl.Type)

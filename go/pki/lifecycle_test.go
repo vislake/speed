@@ -452,3 +452,129 @@ func TestService_ScanExpiry_FallsBackToServiceDefaults(t *testing.T) {
 		t.Errorf("report.Activated = %v, want the pending key promoted using the Service's own 1-hour propagation window default", report.Activated)
 	}
 }
+
+// --- PromoteNow (round 3) ----------------------------------------------
+
+// TestService_PromoteNow_PropagationWindowNotElapsed proves PromoteNow
+// honors the identical safety window PromoteDuePending itself waits out,
+// rather than offering a bypass -- see PromoteNow's own doc comment for why
+// that is deliberate.
+func TestService_PromoteNow_PropagationWindowNotElapsed(t *testing.T) {
+	svc, rec := newTestServiceWithClock(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	svc.now = func() time.Time { return now }
+
+	pending := newTestSigningKey("kid-pending", "authn.access_token", SigningKeyStatusPending)
+	pending.CreatedAt = now
+	if err := svc.signingKeys.Create(ctx, pending); err != nil {
+		t.Fatalf("seed pending key: %v", err)
+	}
+
+	if _, err := svc.PromoteNow(ctx, "authn.access_token", time.Hour); !apperrIs(err, ErrPropagationWindowNotElapsed) {
+		t.Errorf("PromoteNow(window not elapsed) error = %v, want ErrPropagationWindowNotElapsed", err)
+	}
+	if len(rec.events) != 0 {
+		t.Errorf("PromoteNow published %d event(s) despite refusing to promote", len(rec.events))
+	}
+
+	got, err := svc.signingKeys.FindByID(ctx, "kid-pending")
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if got.Status != SigningKeyStatusPending {
+		t.Errorf("status = %q, want still %q", got.Status, SigningKeyStatusPending)
+	}
+}
+
+// TestService_PromoteNow_PromotesPastTheWindow_AndDemotesThePrevious mirrors
+// PromoteDuePending's identical proof, exercised through the manual trigger
+// instead of ScanExpiry.
+func TestService_PromoteNow_PromotesPastTheWindow_AndDemotesThePrevious(t *testing.T) {
+	svc, rec := newTestServiceWithClock(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	svc.now = func() time.Time { return now }
+
+	previous := newTestSigningKey("kid-previous", "authn.access_token", SigningKeyStatusActive)
+	if err := svc.signingKeys.Create(ctx, previous); err != nil {
+		t.Fatalf("seed previous active key: %v", err)
+	}
+	pending := newTestSigningKey("kid-pending", "authn.access_token", SigningKeyStatusPending)
+	pending.CreatedAt = now.Add(-2 * time.Hour)
+	if err := svc.signingKeys.Create(ctx, pending); err != nil {
+		t.Fatalf("seed pending key: %v", err)
+	}
+
+	kid, err := svc.PromoteNow(ctx, "authn.access_token", time.Hour)
+	if err != nil {
+		t.Fatalf("PromoteNow: %v", err)
+	}
+	if kid != "kid-pending" {
+		t.Errorf("PromoteNow returned kid %q, want %q", kid, "kid-pending")
+	}
+
+	active, err := svc.signingKeys.FindByID(ctx, "kid-pending")
+	if err != nil {
+		t.Fatalf("FindByID(kid-pending): %v", err)
+	}
+	if active.Status != SigningKeyStatusActive {
+		t.Errorf("kid-pending status = %q, want %q", active.Status, SigningKeyStatusActive)
+	}
+	demoted, err := svc.signingKeys.FindByID(ctx, "kid-previous")
+	if err != nil {
+		t.Fatalf("FindByID(kid-previous): %v", err)
+	}
+	if demoted.Status != SigningKeyStatusRetiring {
+		t.Errorf("kid-previous status = %q, want %q", demoted.Status, SigningKeyStatusRetiring)
+	}
+	if got := rec.typesOf(); len(got) != 1 || got[0] != EventSigningKeyActivated {
+		t.Errorf("published events = %v, want exactly one EventSigningKeyActivated", got)
+	}
+
+	// ActiveSigner must now serve kid-pending -- proving the cache was
+	// invalidated by the manual promotion exactly as it is by ScanExpiry.
+	gotKID, _, _, err := svc.ActiveSigner(ctx, "authn.access_token")
+	if err != nil {
+		t.Fatalf("ActiveSigner: %v", err)
+	}
+	if gotKID != "kid-pending" {
+		t.Errorf("ActiveSigner = %q, want %q", gotKID, "kid-pending")
+	}
+}
+
+// TestService_PromoteNow_NoPendingKey_ErrKeyNotFound proves PromoteNow
+// refuses a purpose with no pending key at all, distinct from
+// ErrPropagationWindowNotElapsed -- there is nothing to wait out.
+func TestService_PromoteNow_NoPendingKey_ErrKeyNotFound(t *testing.T) {
+	svc := newTestService(t)
+	if _, err := svc.PromoteNow(context.Background(), "authn.access_token", time.Hour); !apperrIs(err, ErrKeyNotFound) {
+		t.Errorf("PromoteNow(no pending key) error = %v, want ErrKeyNotFound", err)
+	}
+}
+
+// TestService_PromoteNow_ZeroPropagationWindow_FallsBackToServiceDefault
+// mirrors ScanExpiry's identical per-call-override-with-fallback proof.
+func TestService_PromoteNow_ZeroPropagationWindow_FallsBackToServiceDefault(t *testing.T) {
+	db := newTestDB(t)
+	signer := NewLocalSigner(db)
+	svc := NewService(signer, "local", NewSigningKeyRepository(db), DefaultCacheTTL, time.Hour, time.Hour)
+	t.Cleanup(func() { _ = svc.Close() })
+	ctx := context.Background()
+	now := time.Now().UTC()
+	svc.now = func() time.Time { return now }
+
+	pending := newTestSigningKey("kid-pending", "authn.access_token", SigningKeyStatusPending)
+	pending.CreatedAt = now.Add(-2 * time.Hour)
+	if err := svc.signingKeys.Create(ctx, pending); err != nil {
+		t.Fatalf("seed pending key: %v", err)
+	}
+
+	kid, err := svc.PromoteNow(ctx, "authn.access_token", 0)
+	if err != nil {
+		t.Fatalf("PromoteNow(zero propagationWindow): %v", err)
+	}
+	if kid != "kid-pending" {
+		t.Errorf("PromoteNow returned kid %q, want %q", kid, "kid-pending")
+	}
+}

@@ -17,7 +17,9 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
 
+	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/observability"
+	"github.com/vislake/speed/go/pkgcore"
 )
 
 // serialNumberBytes is the width of a certificate serial number: 16 bytes
@@ -115,17 +117,68 @@ type CAService struct {
 	signerName   string
 	authorities  *AuthorityRepository
 	certificates *CertificateRepository
+
+	// revocations is the round-3 revocation ledger repository
+	// RevokeCertificate writes to and GenerateCRL reads from (revocation.go,
+	// crl.go).
+	revocations *CertificateRevocationRepository
+
+	// bus is the pkgcore.EventBus CAService publishes pki.certificate.*
+	// events on -- nil until attachBus runs (Module.Register), mirroring
+	// Service.bus's identical field and the identical "silently drop before
+	// attachBus runs" tolerance (revocation.go's publish).
+	bus pkgcore.EventBus
+
+	// queue is the jobs.Queue EnqueueCRLRegenerate schedules the periodic
+	// CRL-regeneration task on (crl.go) -- nil until attachQueue runs
+	// (Module.Register, only when the host supplied one via WithQueue),
+	// mirroring Service.queue's identical field and optional-queue
+	// contract.
+	queue jobs.Queue
 }
 
 // NewCAService returns a CAService that signs through signer (recorded on
-// every issued row under signerName) and persists through authorities and
-// certificates.
-func NewCAService(signer Signer, signerName string, authorities *AuthorityRepository, certificates *CertificateRepository) *CAService {
+// every issued row under signerName) and persists through authorities,
+// certificates and (round 3) the revocation ledger revocations.
+func NewCAService(signer Signer, signerName string, authorities *AuthorityRepository, certificates *CertificateRepository, revocations *CertificateRevocationRepository) *CAService {
 	return &CAService{
 		signer:       signer,
 		signerName:   signerName,
 		authorities:  authorities,
 		certificates: certificates,
+		revocations:  revocations,
+	}
+}
+
+// attachQueue hands CAService the jobs.Queue the host wired via WithQueue,
+// so EnqueueCRLRegenerate (crl.go) has somewhere to schedule onto. Called
+// from Module.Register only when the host supplied one -- a plain field
+// assignment, exactly like Service.attachQueue.
+func (s *CAService) attachQueue(queue jobs.Queue) {
+	s.queue = queue
+}
+
+// attachBus hands CAService the registry's EventBus, mirroring
+// Service.attachBus (service.go) but with no subscription: CAService keeps
+// no cache to invalidate, so it only ever publishes, never subscribes.
+// Called from Module.Register, which performs no I/O -- a plain field
+// assignment, exactly like Service.attachBus.
+func (s *CAService) attachBus(reg *pkgcore.Registry) {
+	s.bus = reg.Events.Bus()
+}
+
+// publish sends evt on s.bus when one is attached, mirroring Service.publish
+// (service.go) exactly, including the "silently drop before attachBus runs"
+// behavior that method's own doc comment explains.
+func (s *CAService) publish(ctx context.Context, evt pkgcore.Event) {
+	if s.bus == nil {
+		return
+	}
+	if err := s.bus.Publish(ctx, evt); err != nil {
+		observability.FromContext(ctx).Error("pki: publish certificate event failed",
+			"event_type", evt.Type,
+			"error", err,
+		)
 	}
 }
 
@@ -136,6 +189,19 @@ type RootCAParams struct {
 	// NotAfter is when the root certificate stops being valid. NotBefore is
 	// always time.Now() at issuance.
 	NotAfter time.Time
+	// CRLDistributionPoint is the URL this authority's own CRL will be
+	// served at, recorded on the resulting Authority row and read at
+	// issuance time by CreateIntermediateCA/IssueCertificate to populate
+	// each certificate THIS authority signs with a CRLDistributionPoints
+	// extension pointing back here -- round 3's addition. Empty means no
+	// extension is ever written into a child certificate, never a broken
+	// placeholder URL, matching every other unset-value convention this
+	// module already follows (see Authority.CRLDistributionPoint's own
+	// model.go doc comment for the full "child cert names ITS issuer's CRL"
+	// argument). The root certificate's OWN CertificatePEM never carries
+	// this extension -- nothing signs the root, so it has no meaningful "my
+	// issuer's CRL" to name.
+	CRLDistributionPoint string
 }
 
 // CreateRootCA generates a new key pair and issues a self-signed root CA
@@ -173,17 +239,18 @@ func (s *CAService) CreateRootCA(ctx context.Context, params RootCAParams) (*Aut
 	}
 
 	authority := &Authority{
-		ID:             uuid.NewString(),
-		Type:           AuthorityTypeRoot,
-		ParentID:       nil,
-		Subject:        params.Subject.String(),
-		Serial:         serialHex(serial),
-		CertificatePEM: encodeCertificatePEM(der),
-		SignerName:     s.signerName,
-		KeyRef:         keyRef,
-		Status:         AuthorityStatusActive,
-		NotBefore:      notBefore,
-		NotAfter:       params.NotAfter,
+		ID:                   uuid.NewString(),
+		Type:                 AuthorityTypeRoot,
+		ParentID:             nil,
+		Subject:              params.Subject.String(),
+		Serial:               serialHex(serial),
+		CertificatePEM:       encodeCertificatePEM(der),
+		SignerName:           s.signerName,
+		KeyRef:               keyRef,
+		Status:               AuthorityStatusActive,
+		NotBefore:            notBefore,
+		NotAfter:             params.NotAfter,
+		CRLDistributionPoint: params.CRLDistributionPoint,
 	}
 	if err := s.authorities.Create(ctx, authority); err != nil {
 		return nil, fmt.Errorf("pki: store root CA: %w", err)
@@ -202,6 +269,14 @@ type IntermediateCAParams struct {
 	Subject pkix.Name
 	// NotAfter is when the intermediate certificate stops being valid.
 	NotAfter time.Time
+	// CRLDistributionPoint is where THIS intermediate's own CRL will be
+	// served -- recorded on the resulting Authority row exactly like
+	// RootCAParams.CRLDistributionPoint, and read at issuance time for
+	// certificates this new intermediate itself signs. It is unrelated to
+	// the parent's CRLDistributionPoint, which is what gets embedded into
+	// the intermediate CERTIFICATE this call issues (see CreateIntermediateCA's
+	// own doc comment).
+	CRLDistributionPoint string
 }
 
 // CreateIntermediateCA generates a new key pair and issues a CA certificate
@@ -210,6 +285,17 @@ type IntermediateCAParams struct {
 // but never a further intermediate, keeping the chain to the three levels
 // docs/internal/22-pki.md's diagnosed system used (root / intermediate /
 // end-entity).
+//
+// # CRL distribution point
+//
+// When parent.CRLDistributionPoint is non-empty, the issued intermediate
+// CERTIFICATE carries a CRLDistributionPoints extension naming it -- "if
+// you want to know whether this intermediate has been revoked by its
+// parent, fetch the parent's CRL", per Authority.CRLDistributionPoint's own
+// model.go doc comment. An empty parent.CRLDistributionPoint omits the
+// extension entirely, never a broken placeholder URL. This is unrelated to
+// params.CRLDistributionPoint, which names where the NEW intermediate's own
+// CRL will be served, for certificates IT goes on to sign.
 func (s *CAService) CreateIntermediateCA(ctx context.Context, parentID string, params IntermediateCAParams) (*Authority, error) {
 	parent, err := s.authorities.FindByID(ctx, parentID)
 	if err != nil {
@@ -242,6 +328,9 @@ func (s *CAService) CreateIntermediateCA(ctx context.Context, parentID string, p
 		MaxPathLenZero:        true,
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 	}
+	if parent.CRLDistributionPoint != "" {
+		template.CRLDistributionPoints = []string{parent.CRLDistributionPoint}
+	}
 
 	parentSigner := signerAdapter{ctx: ctx, signer: s.signer, keyRef: parent.KeyRef, public: parentCert.PublicKey}
 	der, err := x509.CreateCertificate(rand.Reader, template, parentCert, pub, parentSigner)
@@ -250,17 +339,18 @@ func (s *CAService) CreateIntermediateCA(ctx context.Context, parentID string, p
 	}
 
 	authority := &Authority{
-		ID:             uuid.NewString(),
-		Type:           AuthorityTypeIntermediate,
-		ParentID:       &parent.ID,
-		Subject:        params.Subject.String(),
-		Serial:         serialHex(serial),
-		CertificatePEM: encodeCertificatePEM(der),
-		SignerName:     s.signerName,
-		KeyRef:         keyRef,
-		Status:         AuthorityStatusActive,
-		NotBefore:      notBefore,
-		NotAfter:       params.NotAfter,
+		ID:                   uuid.NewString(),
+		Type:                 AuthorityTypeIntermediate,
+		ParentID:             &parent.ID,
+		Subject:              params.Subject.String(),
+		Serial:               serialHex(serial),
+		CertificatePEM:       encodeCertificatePEM(der),
+		SignerName:           s.signerName,
+		KeyRef:               keyRef,
+		Status:               AuthorityStatusActive,
+		NotBefore:            notBefore,
+		NotAfter:             params.NotAfter,
+		CRLDistributionPoint: params.CRLDistributionPoint,
 	}
 	if err := s.authorities.Create(ctx, authority); err != nil {
 		return nil, fmt.Errorf("pki: store intermediate CA: %w", err)
@@ -328,6 +418,14 @@ func (s *CAService) IssueCertificate(ctx context.Context, authorityID string, pa
 		NotAfter:     params.NotAfter,
 		IsCA:         false,
 		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	// See CreateIntermediateCA's identical CRL-distribution-point paragraph:
+	// authority.CRLDistributionPoint names where THIS certificate's issuer's
+	// CRL is served, embedded so a verifier knows where to check whether
+	// this specific certificate has been revoked. Empty omits the
+	// extension, never a broken placeholder URL.
+	if authority.CRLDistributionPoint != "" {
+		template.CRLDistributionPoints = []string{authority.CRLDistributionPoint}
 	}
 
 	issuerSigner := signerAdapter{ctx: ctx, signer: s.signer, keyRef: authority.KeyRef, public: issuerCert.PublicKey}

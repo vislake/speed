@@ -168,6 +168,43 @@ func TestSigningKeyRepository_ListVerifiableByPurpose_ExcludesRevoked(t *testing
 	}
 }
 
+// TestSigningKeyRepository_ListByPurposeAndStatuses_FiltersByExactStatusSet
+// proves round 3's ExportJWKS query: given active/retiring/pending/revoked
+// rows for the same purpose, asking for exactly {active, retiring} returns
+// those two and excludes both pending and revoked -- the JWKS-export
+// statement set is narrower than ListVerifiableByPurpose's own (which
+// includes pending), per this method's own doc comment.
+func TestSigningKeyRepository_ListByPurposeAndStatuses_FiltersByExactStatusSet(t *testing.T) {
+	repo := NewSigningKeyRepository(newTestDB(t))
+	ctx := context.Background()
+
+	for _, k := range []*SigningKey{
+		newTestSigningKey("kid-active", "authn.access_token", SigningKeyStatusActive),
+		newTestSigningKey("kid-retiring", "authn.access_token", SigningKeyStatusRetiring),
+		newTestSigningKey("kid-pending", "authn.access_token", SigningKeyStatusPending),
+		newTestSigningKey("kid-revoked", "authn.access_token", SigningKeyStatusRevoked),
+	} {
+		if err := repo.Create(ctx, k); err != nil {
+			t.Fatalf("Create(%s): %v", k.ID, err)
+		}
+	}
+
+	got, err := repo.ListByPurposeAndStatuses(ctx, "authn.access_token", SigningKeyStatusActive, SigningKeyStatusRetiring)
+	if err != nil {
+		t.Fatalf("ListByPurposeAndStatuses: %v", err)
+	}
+	ids := make(map[string]bool, len(got))
+	for _, k := range got {
+		ids[k.ID] = true
+	}
+	if len(ids) != 2 || !ids["kid-active"] || !ids["kid-retiring"] {
+		t.Errorf("ListByPurposeAndStatuses = %v, want exactly kid-active and kid-retiring", ids)
+	}
+	if ids["kid-pending"] || ids["kid-revoked"] {
+		t.Errorf("ListByPurposeAndStatuses returned pending or revoked, want neither: %v", ids)
+	}
+}
+
 // TestSigningKeyRepository_AssertNotTenantScoped proves pki_signing_keys is
 // platform data (docs/internal/04-data-and-tenancy.md): the tenant-scoping
 // plugin must never filter it, and a row is visible regardless of which (or
@@ -247,6 +284,74 @@ func TestAuthorityRepository_AssertNotTenantScoped(t *testing.T) {
 		return count, err
 	}
 	tenancytest.AssertNotTenantScoped(t, db, Authority{}, createFn, findFn)
+}
+
+// TestAuthorityRepository_Update_PersistsCRLFields proves round 3's
+// GenerateCRL persistence path: a full-Save Update round-trips the CRL*
+// fields FindByID loaded and GenerateCRL would mutate.
+func TestAuthorityRepository_Update_PersistsCRLFields(t *testing.T) {
+	repo := NewAuthorityRepository(newTestDB(t))
+	ctx := context.Background()
+
+	authority := newTestAuthority("auth-crl", AuthorityTypeRoot, nil)
+	if err := repo.Create(ctx, authority); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	loaded, err := repo.FindByID(ctx, "auth-crl")
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	now := time.Now().UTC()
+	loaded.CRLNumber = 1
+	loaded.CRLPEM = "-----BEGIN X509 CRL-----\ntest\n-----END X509 CRL-----\n"
+	loaded.CRLIssuedAt = &now
+	loaded.CRLNextUpdate = &now
+	if err = repo.Update(ctx, loaded); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	got, err := repo.FindByID(ctx, "auth-crl")
+	if err != nil {
+		t.Fatalf("FindByID(after update): %v", err)
+	}
+	if got.CRLNumber != 1 || got.CRLPEM != loaded.CRLPEM {
+		t.Errorf("FindByID(after update) = %+v, want CRLNumber=1 and CRLPEM=%q", got, loaded.CRLPEM)
+	}
+	if got.CRLIssuedAt == nil || got.CRLNextUpdate == nil {
+		t.Errorf("FindByID(after update) CRLIssuedAt/CRLNextUpdate = %v/%v, want both set", got.CRLIssuedAt, got.CRLNextUpdate)
+	}
+}
+
+// TestAuthorityRepository_ListAll_ReturnsEveryAuthority proves round 3's
+// RegenerateAllCRLs query: every authority, regardless of type.
+func TestAuthorityRepository_ListAll_ReturnsEveryAuthority(t *testing.T) {
+	repo := NewAuthorityRepository(newTestDB(t))
+	ctx := context.Background()
+
+	root := newTestAuthority("auth-root", AuthorityTypeRoot, nil)
+	if err := repo.Create(ctx, root); err != nil {
+		t.Fatalf("Create(root): %v", err)
+	}
+	intermediate := newTestAuthority("auth-intermediate", AuthorityTypeIntermediate, &root.ID)
+	if err := repo.Create(ctx, intermediate); err != nil {
+		t.Fatalf("Create(intermediate): %v", err)
+	}
+
+	got, err := repo.ListAll(ctx)
+	if err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListAll returned %d authorities, want 2", len(got))
+	}
+	ids := map[string]bool{}
+	for _, a := range got {
+		ids[a.ID] = true
+	}
+	if !ids["auth-root"] || !ids["auth-intermediate"] {
+		t.Errorf("ListAll = %v, want auth-root and auth-intermediate", ids)
+	}
 }
 
 // --- LocalKeyRepository -----------------------------------------------------
@@ -330,6 +435,80 @@ func TestCertificateRepository_AssertIsolated(t *testing.T) {
 			NotAfter:       now.Add(24 * time.Hour),
 		}
 	})
+}
+
+// --- CertificateRevocationRepository -----------------------------------------
+
+// TestCertificateRevocationRepository_CreateAndListByAuthority proves round
+// 3's ledger write and its per-authority read -- the query GenerateCRL
+// (crl.go) drives.
+func TestCertificateRevocationRepository_CreateAndListByAuthority(t *testing.T) {
+	repo := NewCertificateRevocationRepository(newTestDB(t))
+	ctx := context.Background()
+
+	for _, rev := range []*CertificateRevocation{
+		{ID: "rev-1", CertificateID: "cert-1", AuthorityID: "auth-1", Serial: "aa01", TenantID: "tenant-acme", RevokedAt: time.Now().UTC(), RevocationReason: "compromised"},
+		{ID: "rev-2", CertificateID: "cert-2", AuthorityID: "auth-1", Serial: "aa02", TenantID: "tenant-acme", RevokedAt: time.Now().UTC(), RevocationReason: "superseded"},
+		{ID: "rev-3", CertificateID: "cert-3", AuthorityID: "auth-2", Serial: "aa03", TenantID: "tenant-other", RevokedAt: time.Now().UTC(), RevocationReason: "compromised"},
+	} {
+		if err := repo.Create(ctx, rev); err != nil {
+			t.Fatalf("Create(%s): %v", rev.ID, err)
+		}
+	}
+
+	got, err := repo.ListByAuthority(ctx, "auth-1")
+	if err != nil {
+		t.Fatalf("ListByAuthority: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListByAuthority(auth-1) returned %d rows, want 2", len(got))
+	}
+	serials := map[string]bool{}
+	for _, r := range got {
+		serials[r.Serial] = true
+		if r.AuthorityID != "auth-1" {
+			t.Errorf("ListByAuthority(auth-1) returned a row for authority %q", r.AuthorityID)
+		}
+	}
+	if !serials["aa01"] || !serials["aa02"] {
+		t.Errorf("ListByAuthority(auth-1) = %v, want serials aa01 and aa02", serials)
+	}
+
+	empty, err := repo.ListByAuthority(ctx, "auth-unknown")
+	if err != nil {
+		t.Fatalf("ListByAuthority(unknown): %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("ListByAuthority(unknown authority) = %d rows, want 0", len(empty))
+	}
+}
+
+// TestCertificateRevocationRepository_AssertNotTenantScoped proves
+// pki_certificate_revocations is platform data despite carrying a TenantID
+// column -- CertificateRevocation's own model.go doc comment explains why
+// that column is informational only, the identical treatment
+// send_records/platform_blacklist/AuditEvent already get.
+func TestCertificateRevocationRepository_AssertNotTenantScoped(t *testing.T) {
+	db := newTestDB(t)
+	n := 0
+	createFn := func(db *gorm.DB) error {
+		n++
+		return db.Create(&CertificateRevocation{
+			ID:               fmt.Sprintf("rev-scope-%d", n),
+			CertificateID:    fmt.Sprintf("cert-scope-%d", n),
+			AuthorityID:      "auth-1",
+			Serial:           fmt.Sprintf("serial-scope-%d", n),
+			TenantID:         "tenant-acme",
+			RevokedAt:        time.Now().UTC(),
+			RevocationReason: "test",
+		}).Error
+	}
+	findFn := func(db *gorm.DB) (int64, error) {
+		var count int64
+		err := db.Model(&CertificateRevocation{}).Count(&count).Error
+		return count, err
+	}
+	tenancytest.AssertNotTenantScoped(t, db, CertificateRevocation{}, createFn, findFn)
 }
 
 // apperrIs reports whether err is (a decorated instance of) want, matching

@@ -221,7 +221,7 @@ tasks:
     silent: true
 
   api:gen:
-    desc: Regenerate the generated API surface of every module that ships an OpenAPI fragment -- backend (oapi-codegen types + ServerInterface) for notes, org, storage, authn, notification and sharing, plus the frontend SDK for every fragment in the merged document (orval -> @speed/api-sdk, notes + authn + notification).
+    desc: Regenerate the generated API surface of every module that ships an OpenAPI fragment -- backend (oapi-codegen types + ServerInterface) for notes, org, storage, authn, notification, sharing and pki, plus the frontend SDK for every fragment in the merged document (orval -> @speed/api-sdk, notes + authn + notification).
     # The backend half of the contract-change flow (docs/internal/
     # 21-api-contract.md's order: edit the spec, regenerate, compile
     # failures reveal every handler to fix) is real for the six modules
@@ -231,13 +231,14 @@ tasks:
     # examples/reference-app/internal/notes/api/notes-server.gen.go,
     # go/org/api/org-server.gen.go, go/storage/api/storage-server.gen.go,
     # go/authn/api/authn-server.gen.go,
-    # go/notification/api/notification-server.gen.go and
-    # go/sharing/api/sharing-server.gen.go respectively. Each generated
-    # ServerInterface's growth is what makes an un-updated handler stop
-    # compiling (the compile-time assertions live in
-    # internal/notes/handler.go, go/org/handler.go, go/storage/handler.go,
-    # go/authn/handler.go, go/notification/handler.go and
-    # go/sharing/handler.go).
+    # go/notification/api/notification-server.gen.go,
+    # go/sharing/api/sharing-server.gen.go and go/pki/api/pki-server.gen.go
+    # respectively. Each generated ServerInterface's growth is what makes
+    # an un-updated handler stop compiling (the compile-time assertions
+    # live in internal/notes/handler.go, go/org/handler.go,
+    # go/storage/handler.go, go/authn/handler.go,
+    # go/notification/handler.go, go/sharing/handler.go and
+    # go/pki/handler.go).
     #
     # The frontend half of the api:gen promise is live for every fragment
     # in the merged document: the api:merge dependency below joins the
@@ -265,7 +266,10 @@ tasks:
     # make (go/sharing/AGENTS.md's Deferred list). authn's fragment, by
     # contrast, has no "no consumer shell" deferral left: its generated
     # surface has been compile-consumed by @speed/auth-core since the
-    # auth-core round. The redocly merge of the fragments into
+    # auth-core round. pki's fragment (round 3) is the same shape as
+    # org's/storage's: no in-workspace web consumer, its frontend leg
+    # deferred for the identical reason -- see go/pki/AGENTS.md's Known
+    # limitations. The redocly merge of the fragments into
     # build/openapi/speed.yaml, and its spec lint, live in the api:merge
     # task below -- api:gen DEPENDS on api:merge (deps above), because
     # the merged document is the frontend leg's input: a fragment edit
@@ -277,7 +281,7 @@ tasks:
     #
     # Keep the commands in lockstep with
     # .github/workflows/api-contract.yml's regeneration steps: the same
-    # go run from the same five backend directories, and the same pnpm
+    # go run from the same seven backend directories, and the same pnpm
     # dlx orval + fixup pair from web/, then a git diff there fails any
     # PR whose spec change was not committed with its regenerated
     # artifact.
@@ -310,6 +314,10 @@ tasks:
           -config oapi-codegen.yaml openapi.yaml
       - |
         cd go/sharing/api && \
+        go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
+          -config oapi-codegen.yaml openapi.yaml
+      - |
+        cd go/pki/api && \
         go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
           -config oapi-codegen.yaml openapi.yaml
 

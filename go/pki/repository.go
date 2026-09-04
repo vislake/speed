@@ -240,6 +240,27 @@ func (r *SigningKeyRepository) ExistsByPurposeAndStatus(ctx context.Context, pur
 	return count > 0, nil
 }
 
+// ListByPurposeAndStatuses returns every row for purpose whose Status is one
+// of statuses, in no particular order. Round 3's addition, for
+// Service.ExportJWKS (jwks.go): the key-lifecycle layer's JWKS export
+// deliberately carries only SigningKeyStatusActive and
+// SigningKeyStatusRetiring keys, per docs/internal/22-pki.md's own
+// distinction -- NOT SigningKeyStatusPending, unlike
+// ListVerifiableByPurpose's internal-verification query above. A pending
+// key's public key is safe to trust for THIS process's own verification
+// path before the propagation window elapses (ListVerifiableByPurpose's own
+// doc comment explains why), but an external verifier pulling a JWKS
+// document has no such relationship to the propagation window at all -- it
+// simply should not be told about a key this deployment has not started
+// using yet.
+func (r *SigningKeyRepository) ListByPurposeAndStatuses(ctx context.Context, purpose string, statuses ...string) ([]SigningKey, error) {
+	var keys []SigningKey
+	err := r.db.WithContext(ctx).
+		Where("purpose = ? AND status IN ?", purpose, statuses).
+		Find(&keys).Error
+	return keys, err
+}
+
 // AuthorityRepository is the plain, non-tenant-scoped accessor for
 // pki_authorities. Authority is platform data, for the identical reason
 // SigningKeyRepository above documents.
@@ -270,6 +291,25 @@ func (r *AuthorityRepository) FindByID(ctx context.Context, id string) (*Authori
 	return &authority, nil
 }
 
+// Update persists every field of authority -- the same full-Save shape
+// SigningKeyRepository.Update documents. Round 3's addition: GenerateCRL
+// (crl.go) loads an Authority via FindByID, mutates only its CRL* fields,
+// and calls this to write the refreshed CRL back.
+func (r *AuthorityRepository) Update(ctx context.Context, authority *Authority) error {
+	return r.db.WithContext(ctx).Save(authority).Error
+}
+
+// ListAll returns every authority, in no particular order. Round 3's
+// addition, for CAService.RegenerateAllCRLs (crl.go): the periodic CRL
+// job has no per-tenant or per-purpose scope to iterate -- pki_authorities
+// is platform data, and every authority's CRL is refreshed on the same
+// schedule -- so it needs the full set rather than a filtered query.
+func (r *AuthorityRepository) ListAll(ctx context.Context) ([]Authority, error) {
+	var authorities []Authority
+	err := r.db.WithContext(ctx).Find(&authorities).Error
+	return authorities, err
+}
+
 // CertificateRepository is the tenant-scoped accessor for pki_certificates.
 // Certificate is tenant data, so this embeds dbkit.Repository[Certificate]
 // and inherits all three tenant-isolation layers, exactly like every other
@@ -282,4 +322,36 @@ type CertificateRepository struct {
 // expected to come from dbkit.Open (for isolation layer 1 underneath).
 func NewCertificateRepository(db *gorm.DB) *CertificateRepository {
 	return &CertificateRepository{Repository: dbkit.NewRepository[Certificate](db)}
+}
+
+// CertificateRevocationRepository is the plain, non-tenant-scoped accessor
+// for pki_certificate_revocations. CertificateRevocation is platform data
+// (see its own model.go doc comment for the full "why this table exists at
+// all" argument), so this wraps a bare *gorm.DB, the identical shape
+// SigningKeyRepository and AuthorityRepository use. Round 3's addition.
+type CertificateRevocationRepository struct {
+	db *gorm.DB
+}
+
+// NewCertificateRevocationRepository returns a
+// CertificateRevocationRepository over db.
+func NewCertificateRevocationRepository(db *gorm.DB) *CertificateRevocationRepository {
+	return &CertificateRevocationRepository{db: db}
+}
+
+// Create inserts rev. Called once per CAService.RevokeCertificate call, as
+// the second (non-atomic) write CertificateRevocation's own doc comment
+// describes.
+func (r *CertificateRevocationRepository) Create(ctx context.Context, rev *CertificateRevocation) error {
+	return r.db.WithContext(ctx).Create(rev).Error
+}
+
+// ListByAuthority returns every revocation ledger entry for authorityID, in
+// no particular order -- the query CAService.GenerateCRL reads to build one
+// authority's revoked-certificate list, through
+// idx_pki_certificate_revocations_authority_id.
+func (r *CertificateRevocationRepository) ListByAuthority(ctx context.Context, authorityID string) ([]CertificateRevocation, error) {
+	var revocations []CertificateRevocation
+	err := r.db.WithContext(ctx).Where("authority_id = ?", authorityID).Find(&revocations).Error
+	return revocations, err
 }

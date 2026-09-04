@@ -15,3 +15,13 @@
 "pki.no_active_key" = "There is no active signing key for that purpose."
 
 "pki.algorithm_unsupported_by_signer" = "The configured signer does not support the {{.algorithm}} algorithm."
+
+"pki.certificate_revoked" = "That certificate -- or an authority in its issuing chain -- has been revoked."
+
+"pki.signer_unavailable" = "The signer is temporarily unavailable. Try again later."
+
+"pki.propagation_window_not_elapsed" = "The propagation window has not elapsed yet; that pending key cannot be promoted now."
+
+"pki.crl_not_generated" = "That certificate authority has never had a CRL generated."
+
+"pki.internal_error" = "An internal error occurred. Try again later."

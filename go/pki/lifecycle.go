@@ -165,6 +165,95 @@ func (s *Service) PromoteDuePending(ctx context.Context, propagationWindow time.
 	return promoted, nil
 }
 
+// PromoteNow attempts to promote purpose's pending key to active right now,
+// rather than waiting for the next ScanExpiry tick, honoring the SAME
+// propagationWindow gate PromoteDuePending applies above -- round 3's
+// addition.
+//
+// # Why this lives next to revocation, without being part of it
+//
+// PromoteNow exists as a companion to Service.RevokeSigningKey
+// (revocation.go): revoking a purpose's active key in an emergency leaves
+// that purpose with no active signer at all until a replacement is
+// promoted, and docs/internal/22-pki.md's own design deliberately never has
+// revocation auto-promote a waiting successor -- getting a working signer
+// back online is a host's explicit decision, never a side effect the
+// module makes for it. A host that already has a pending key staged for
+// the purpose (StageDueRotations having run ahead of the incident) calls
+// PromoteNow to skip waiting for the next scheduled ScanExpiry tick, while
+// still going through the exact same safety window ScanExpiry itself
+// honors -- PromoteNow is deliberately NOT a way to bypass the window: the
+// incident that makes an operator want to skip it is exactly the scenario
+// the window exists to protect against being made worse by (see
+// PromoteDuePending's own doc comment for the distributed-replica race the
+// window prevents). This is also this round's home for
+// ErrPropagationWindowNotElapsed -- round 1/2's AGENTS.md reserved that
+// code for "the propagation window" without a caller that used it yet; see
+// errors.go's own doc comment for the full accounting of where each of the
+// three originally-reserved codes actually landed.
+//
+// ErrKeyNotFound if purpose has no pending key at all.
+// ErrPropagationWindowNotElapsed if one exists but was staged less than
+// propagationWindow ago. A zero propagationWindow argument falls back to
+// s.propagationWindow (the Service's own configured default), the same
+// per-call-override-with-fallback shape ScanExpiry itself uses.
+func (s *Service) PromoteNow(ctx context.Context, purpose string, propagationWindow time.Duration) (string, error) {
+	if propagationWindow <= 0 {
+		propagationWindow = s.propagationWindow
+	}
+	if propagationWindow <= 0 {
+		propagationWindow = DefaultPropagationWindow
+	}
+
+	pendingRows, err := s.signingKeys.ListByPurposeAndStatuses(ctx, purpose, SigningKeyStatusPending)
+	if err != nil {
+		return "", err
+	}
+	if len(pendingRows) == 0 {
+		return "", ErrKeyNotFound.WithParam("purpose", purpose)
+	}
+	// At most one pending key per purpose in the common case --
+	// StageDueRotations refuses to stage a second one while one is already
+	// pending (ExistsByPurposeAndStatus's own doc comment) -- so the first
+	// row is the pending key.
+	pending := pendingRows[0]
+
+	now := s.now()
+	if now.Sub(pending.CreatedAt) < propagationWindow {
+		return "", ErrPropagationWindowNotElapsed.
+			WithParam("kid", pending.ID).
+			WithParam("purpose", purpose)
+	}
+
+	previousActiveID := ""
+	if active, err := s.signingKeys.FindActiveByPurpose(ctx, purpose); err == nil {
+		previousActiveID = active.ID
+	} else if !isNoActiveKey(err) {
+		return "", err
+	}
+
+	if err := s.signingKeys.PromoteToActive(ctx, pending.ID, previousActiveID, now); err != nil {
+		return "", fmt.Errorf("pki: promote pending key %q for purpose %q: %w", pending.ID, purpose, err)
+	}
+	s.cache.invalidate(purpose)
+
+	observability.FromContext(ctx).Info("pki signing key activated",
+		"kid", pending.ID,
+		"purpose", purpose,
+		"previous_kid", previousActiveID,
+	)
+	s.publish(ctx, pkgcore.Event{
+		Type: EventSigningKeyActivated,
+		Payload: SigningKeyLifecycleEvent{
+			Purpose:     purpose,
+			KID:         pending.ID,
+			PreviousKID: previousActiveID,
+			OccurredAt:  now,
+		},
+	})
+	return pending.ID, nil
+}
+
 // RetireDueRetiring retires every SigningKeyStatusRetiring key whose
 // overlap period (RetiringAt + RetiringOverlap) has elapsed, publishing
 // EventSigningKeyRetired once per retirement.

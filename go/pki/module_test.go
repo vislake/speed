@@ -19,8 +19,8 @@ func TestModule_Identity(t *testing.T) {
 	if got := m.DependsOn(); got != nil {
 		t.Errorf("DependsOn() = %v, want nil -- pki depends on no other pkgcore.Module in the bootstrap set", got)
 	}
-	if got := m.OpenAPISpec(); got != nil {
-		t.Errorf("OpenAPISpec() = %v, want nil -- pki has no HTTP surface this round", got)
+	if got := m.OpenAPISpec(); len(got) == 0 {
+		t.Errorf("OpenAPISpec() = %v, want the embedded api/openapi.yaml bytes -- round 3 gives pki an HTTP surface", got)
 	}
 }
 
@@ -113,11 +113,16 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	}
 
 	t.Run("permissions", func(t *testing.T) {
-		assertContainsAll(t, reg.Permissions.Permissions(), []string{PermissionRead, PermissionIssue})
+		assertContainsAll(t, reg.Permissions.Permissions(), []string{
+			PermissionRead, PermissionIssue, PermissionRevoke, PermissionRotate,
+		})
 	})
 
 	t.Run("audit actions", func(t *testing.T) {
-		assertContainsAll(t, reg.AuditActions.Actions(), []string{AuditActionAuthorityCreate, AuditActionCertificateIssue})
+		assertContainsAll(t, reg.AuditActions.Actions(), []string{
+			AuditActionAuthorityCreate, AuditActionCertificateIssue,
+			AuditActionKeyRevoke, AuditActionCertificateRevoke,
+		})
 	})
 
 	t.Run("config items", func(t *testing.T) {
@@ -135,49 +140,56 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 			ConfigCADefaultValidity, ConfigCAMaxValidity,
 			ConfigCertificateDefaultValidity, ConfigCertificateMaxValidity,
 			ConfigPropagationWindow, ConfigRenewalLeadTime,
+			ConfigCRLDistributionPoint, ConfigCRLValidity,
 		})
 	})
 
-	t.Run("no routes are mounted", func(t *testing.T) {
-		// pki has no HTTP surface this round -- see AGENTS.md's Known
-		// limitations. Mounting nothing is asserted rather than left
-		// implicit, so a stray Routes.Mount call in a future edit is
-		// caught here.
-		if got := reg.Routes.Routes(); len(got) != 0 {
-			t.Errorf("Register mounted %d route(s), want 0", len(got))
+	t.Run("HTTP surface is mounted", func(t *testing.T) {
+		// Round 3 gives pki an HTTP surface -- see AGENTS.md's Known
+		// limitations for the round-1/2 history this supersedes.
+		routes := reg.Routes.Routes()
+		if len(routes) != 1 {
+			t.Fatalf("Register mounted %d route(s), want exactly 1 (apiPath)", len(routes))
+		}
+		if routes[0].Path != apiPath {
+			t.Errorf("Register mounted path %q, want %q", routes[0].Path, apiPath)
 		}
 	})
 
 	t.Run("events", func(t *testing.T) {
-		// The three signing-key lifecycle events this round's expiry scan
-		// drives -- see events.go's doc comment for why there is no fourth
-		// (.revoked) or any pki.certificate.*/pki.authority.* event yet.
+		// The five signing-key/certificate lifecycle events this round's
+		// expiry scan and revocation drive -- see events.go's doc comment.
 		var types []string
 		for _, decl := range reg.Events.Published() {
 			types = append(types, decl.Type)
 		}
 		assertContainsAll(t, types, []string{
 			EventSigningKeyStaged, EventSigningKeyActivated, EventSigningKeyRetired,
+			EventSigningKeyRevoked, EventCertificateRevoked,
 		})
-		if len(types) != 3 {
-			t.Errorf("Register declared %d event(s), want exactly 3 this round: %v", len(types), types)
+		if len(types) != 5 {
+			t.Errorf("Register declared %d event(s), want exactly 5 this round: %v", len(types), types)
 		}
 	})
 
 	t.Run("no jobs handler without a queue", func(t *testing.T) {
 		// NewModule(db) above was built with no WithQueue -- Register must
-		// not claim the expiry-scan task handler when there is no queue to
-		// run it on.
+		// not claim the expiry-scan or CRL-regenerate task handlers when
+		// there is no queue to run them on.
 		if _, ok := reg.Jobs.Handlers()[taskTypeExpiryScan]; ok {
 			t.Errorf("Register claimed the expiry-scan job handler despite no WithQueue")
+		}
+		if _, ok := reg.Jobs.Handlers()[taskTypeCRLRegenerate]; ok {
+			t.Errorf("Register claimed the CRL-regenerate job handler despite no WithQueue")
 		}
 	})
 }
 
 // TestModule_Register_WithQueue_ClaimsTheExpiryScanHandler proves the
 // opposite of the "no jobs handler without a queue" case above: WithQueue
-// makes Register claim taskTypeExpiryScan on reg.Jobs, so a host draining
-// reg.Jobs.Handlers() onto its jobs.Queue gets a worker for it.
+// makes Register claim taskTypeExpiryScan AND (round 3) taskTypeCRLRegenerate
+// on reg.Jobs, so a host draining reg.Jobs.Handlers() onto its jobs.Queue
+// gets a worker for both.
 func TestModule_Register_WithQueue_ClaimsTheExpiryScanHandler(t *testing.T) {
 	db := newTestDB(t)
 	m := NewModule(db, WithQueue(stubQueue{}))
@@ -189,6 +201,9 @@ func TestModule_Register_WithQueue_ClaimsTheExpiryScanHandler(t *testing.T) {
 	}
 	if _, ok := reg.Jobs.Handlers()[taskTypeExpiryScan]; !ok {
 		t.Errorf("Register did not claim taskTypeExpiryScan despite WithQueue")
+	}
+	if _, ok := reg.Jobs.Handlers()[taskTypeCRLRegenerate]; !ok {
+		t.Errorf("Register did not claim taskTypeCRLRegenerate despite WithQueue")
 	}
 }
 

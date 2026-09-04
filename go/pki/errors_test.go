@@ -21,6 +21,11 @@ func TestErrors_HaveTheExpectedCodesAndStatuses(t *testing.T) {
 		{"ErrKeyNotFound", ErrKeyNotFound, "pki.key_not_found", 404},
 		{"ErrNoActiveKey", ErrNoActiveKey, "pki.no_active_key", 404},
 		{"ErrAlgorithmUnsupportedBySigner", ErrAlgorithmUnsupportedBySigner, "pki.algorithm_unsupported_by_signer", 400},
+		{"ErrCertificateRevoked", ErrCertificateRevoked, "pki.certificate_revoked", 409},
+		{"ErrSignerUnavailable", ErrSignerUnavailable, "pki.signer_unavailable", 500},
+		{"ErrPropagationWindowNotElapsed", ErrPropagationWindowNotElapsed, "pki.propagation_window_not_elapsed", 409},
+		{"ErrCRLNotGenerated", ErrCRLNotGenerated, "pki.crl_not_generated", 404},
+		{"ErrInternal", ErrInternal, "pki.internal_error", 500},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

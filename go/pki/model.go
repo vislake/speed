@@ -11,10 +11,10 @@ import (
 // Table names, shared between the model TableName methods and the
 // migrations' own header comments.
 const (
-	tableSigningKeys           = "pki_signing_keys"
-	tableAuthorities           = "pki_authorities"
-	tableCertificates          = "pki_certificates"
-	tableLocalKeys             = "pki_local_keys"
+	tableSigningKeys            = "pki_signing_keys"
+	tableAuthorities            = "pki_authorities"
+	tableCertificates           = "pki_certificates"
+	tableLocalKeys              = "pki_local_keys"
 	tableCertificateRevocations = "pki_certificate_revocations"
 )
 

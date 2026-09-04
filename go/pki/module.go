@@ -19,33 +19,80 @@ const moduleName = "pki"
 
 // The permissions pki contributes to the platform's permission catalog.
 // Enforcement belongs to rbac; pki only declares that these exist and what
-// they are called. pki:revoke and pki:rotate are round 3/round 2
-// permissions respectively and are deliberately not declared here yet --
-// declaring a permission for an operation the module cannot perform is
-// exactly the kind of "prepare for later" the round split's own boundary
-// forbids (see this file's Register doc comment).
+// they are called.
+//
+// PermissionRevoke and PermissionRotate are round 3's additions -- round
+// 1's AGENTS.md reserved both names ahead of time, deliberately undeclared
+// while the module could not yet perform either operation. Both now have a
+// real operation behind them: PermissionRevoke gates the HTTP revoke
+// operations (handler.go), and PermissionRotate names the rotation this
+// module has performed automatically since round 2 (lifecycle.go's
+// ScanExpiry) and can now also perform on demand (Service.PromoteNow) --
+// neither permission is enforced by anything in this module (rbac's job,
+// per this file's own doc comment), so declaring PermissionRotate now, with
+// no HTTP operation gated by it yet, is not the same "prepare for later"
+// round 1 refused: the capability itself is real and already running, only
+// a manual, permission-gated trigger for it is still future work.
 const (
 	// PermissionRead covers reading signing keys, authorities and
 	// certificates.
 	PermissionRead = "pki:read"
 	// PermissionIssue covers creating CAs and issuing certificates.
 	PermissionIssue = "pki:issue"
+	// PermissionRevoke covers revoking a signing key or a certificate.
+	PermissionRevoke = "pki:revoke"
+	// PermissionRotate covers manually triggering key rotation
+	// (Service.PromoteNow) -- automatic rotation (the expiry scan) needs no
+	// permission check, since nothing external calls it.
+	PermissionRotate = "pki:rotate"
 )
 
-// The audit actions pki contributes. pki.key.rotate, pki.key.revoke,
-// pki.certificate.revoke and pki.private_key.deliver are declared by the
-// rounds that implement rotation, revocation and key delivery -- an
-// audit action nothing ever emits is dead catalog weight, not forward
-// compatibility.
+// The audit actions pki contributes. pki.key.rotate and
+// pki.private_key.deliver stay undeclared -- rotation is a system-driven
+// background process with no single human "who did this" the audit trail's
+// Actor/Resource shape is built to answer (round 2 deliberately left it
+// out for the identical reason, and PromoteNow's manual trigger above is
+// still an operator overriding a system process, not a new kind of
+// action), and key delivery is not this round's scope. pki.key.revoke and
+// pki.certificate.revoke ARE round 3's job -- see AuditActionKeyRevoke/
+// AuditActionCertificateRevoke below.
 const (
 	// AuditActionAuthorityCreate covers CreateRootCA and CreateIntermediateCA.
 	AuditActionAuthorityCreate = "pki.authority.create"
 	// AuditActionCertificateIssue covers IssueCertificate.
 	AuditActionCertificateIssue = "pki.certificate.issue"
+	// AuditActionKeyRevoke covers Service.RevokeSigningKey, recorded by
+	// handler.go's PkiRevokeSigningKey -- the same "record at the HTTP
+	// boundary, after the write has committed" placement
+	// examples/reference-app/internal/notes/handler.go's
+	// recordNoteCreatedAudit documents, so this module's own Go API stays
+	// free of an audit.Emit dependency it does not otherwise need.
+	AuditActionKeyRevoke = "pki.key.revoke"
+	// AuditActionCertificateRevoke covers CAService.RevokeCertificate,
+	// recorded the identical way by handler.go's PkiRevokeCertificate.
+	AuditActionCertificateRevoke = "pki.certificate.revoke"
 )
 
-// The configuration keys pki contributes. The CRL distribution point URL
-// (round 3) belongs to the round that implements it.
+// The configuration keys pki contributes.
+//
+// ConfigCRLDistributionPoint and ConfigCRLValidity are round 3's additions,
+// completing docs/internal/22-pki.md's module-contract configuration list
+// (this file's own doc comment already covered every other item on it).
+// Neither is read by this round's own code, the identical declare-but-do-
+// not-read discipline every config item in this file already follows (see
+// this const block's own doc comment on that pattern) --
+// ConfigCRLDistributionPoint's own value is never consulted anywhere: a
+// caller passes CRLDistributionPoint directly on RootCAParams/
+// IntermediateCAParams (ca.go), so this item exists purely as the
+// declared, admin-visible schema entry docs/internal/22-pki.md's
+// configuration-item list requires, for a host that wants to show or
+// validate the value before passing it through its own wiring.
+// ConfigCRLValidity's real default lives as DefaultCRLValidity (crl.go),
+// which GenerateCRL actually falls back to; a caller wanting the config
+// value honored passes it through GenerateCRL's own validity parameter,
+// exactly as ConfigPropagationWindow/ConfigRenewalLeadTime's callers pass
+// through WithPropagationWindow/WithRenewalLeadTime rather than pki reading
+// config itself.
 //
 // ConfigPropagationWindow and ConfigRenewalLeadTime are round 2's additions.
 // Neither duplicates the retiring overlap period: docs/internal/22-pki.md's
@@ -79,6 +126,15 @@ const (
 	// ConfigRenewalLeadTime is how far ahead of a signing key's expiry the
 	// expiry scan stages its replacement -- see DefaultRenewalLeadTime.
 	ConfigRenewalLeadTime = "pki.renewal_lead_time"
+	// ConfigCRLDistributionPoint is the default CRL distribution point URL
+	// a host may want to show or validate before passing it through
+	// RootCAParams/IntermediateCAParams.CRLDistributionPoint -- see this
+	// const block's own doc comment for why this round's code never reads
+	// it directly.
+	ConfigCRLDistributionPoint = "pki.crl_distribution_point"
+	// ConfigCRLValidity is how long a generated CRL claims to be current --
+	// see DefaultCRLValidity.
+	ConfigCRLValidity = "pki.crl_validity"
 )
 
 // Default validity periods backing the CA/certificate config items above.
@@ -150,6 +206,20 @@ var configItemDecls = []pkgcore.ConfigItem{
 		Description: "How far ahead of a signing key's expiry the expiry scan stages its replacement.",
 		Group:       "pki",
 	},
+	{
+		Key:         ConfigCRLDistributionPoint,
+		Type:        "string",
+		Default:     "",
+		Description: "Default CRL distribution point URL for newly created authorities. Empty means no CRLDistributionPoints extension is written into certificates by default.",
+		Group:       "pki",
+	},
+	{
+		Key:         ConfigCRLValidity,
+		Type:        "duration",
+		Default:     DefaultCRLValidity,
+		Description: "How long a generated CRL claims to be current (NextUpdate minus ThisUpdate) before it should be regenerated.",
+		Group:       "pki",
+	},
 }
 
 // Module implements pkgcore.Module for go/pki.
@@ -192,9 +262,19 @@ type Module struct {
 	authorities  *AuthorityRepository
 	certificates *CertificateRepository
 	localKeys    *LocalKeyRepository
+	// revocations is round 3's revocation-ledger repository -- see
+	// CertificateRevocation's own model.go doc comment.
+	revocations *CertificateRevocationRepository
 
 	service *Service
 	ca      *CAService
+
+	// handler is round 3's HTTP surface, built and mounted in Register (not
+	// NewModule) so it serves the service/repository instances every
+	// Option has already configured by the time Register runs -- the same
+	// "build the handler in Register" reasoning storage.Module.Register's
+	// own doc comment gives.
+	handler *Handler
 }
 
 // Option configures a Module at construction time.
@@ -268,9 +348,10 @@ func NewModule(db *gorm.DB, opts ...Option) *Module {
 	m.authorities = NewAuthorityRepository(db)
 	m.certificates = NewCertificateRepository(db)
 	m.localKeys = NewLocalKeyRepository(db)
+	m.revocations = NewCertificateRevocationRepository(db)
 
 	m.service = NewService(m.signer, m.signerName, m.signingKeys, m.cacheTTL, m.propagationWindow, m.renewalLeadTime)
-	m.ca = NewCAService(m.signer, m.signerName, m.authorities, m.certificates)
+	m.ca = NewCAService(m.signer, m.signerName, m.authorities, m.certificates, m.revocations)
 	return m
 }
 
@@ -307,34 +388,65 @@ func (m *Module) Migrations() embed.FS { return migrations.FS }
 // in both supported languages with identical id sets.
 func (m *Module) Locales() embed.FS { return locales.FS }
 
-// OpenAPISpec implements pkgcore.Module. pki has no HTTP surface this
-// round -- see AGENTS.md's Known limitations -- so this returns nil, the
-// same "no fragment yet" answer go/config's Module gives.
-func (m *Module) OpenAPISpec() []byte { return nil }
+// apiPath is the common prefix pki's HTTP routes are mounted at (see
+// Register below). It must agree with the "paths:" keys of
+// api/openapi.yaml: api.HandlerFromMux registers the fragment's full
+// method+path patterns on Handler's inner mux, and mounting at this prefix
+// here only tells the host's outer mux which requests to hand to Handler at
+// all -- exactly as every other module fragment's identical constant does.
+const apiPath = "/api/v1/pki"
+
+// openAPISpecYAML is pki's OpenAPI fragment, embedded from api/ so the spec
+// -- and the generated ServerInterface and types derived from it -- travels
+// inside the module binary. Round 3's addition: the sixth module fragment
+// overall, after notes, org, authn, storage and notification.
+//
+//go:embed api/openapi.yaml
+var openAPISpecYAML []byte
+
+// OpenAPISpec implements pkgcore.Module: pki's own OpenAPI fragment,
+// embedded from api/openapi.yaml. Round 3's addition -- the fragment is the
+// single source of this module's HTTP surface, and Handler implements the
+// api package's generated ServerInterface (see handler.go), per
+// docs/internal/21-api-contract.md's spec-first decision.
+func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 
 // Register implements pkgcore.Module. Per the interface's own contract it
 // only declares and wires -- no database call, no outbound call, nothing
 // that touches m.db.
 //
-// It declares pki's permissions, its round-1 audit vocabulary and its
-// configuration schema, and declares the three signing-key lifecycle events
-// (events.go). It hands the registry's EventBus to Service so the key-set
-// cache can invalidate itself on its own published events (attachBus), and,
-// when the host wired a queue via WithQueue, hands Service that queue too
-// and claims the expiry-scan task's handler (job.go) so a host draining
-// reg.Jobs.Handlers() onto its jobs.Queue gets a worker that advances the
-// lifecycle state machine. It does not mount any HTTP route -- no OpenAPI
-// fragment exists yet, still round 3's job.
+// It declares pki's permissions (round 3 adding PermissionRevoke and
+// PermissionRotate to round 1's PermissionRead/PermissionIssue), its audit
+// vocabulary (round 3 adding AuditActionKeyRevoke/
+// AuditActionCertificateRevoke) and its configuration schema, and declares
+// the five signing-key/certificate lifecycle events (events.go). It hands
+// the registry's EventBus to both Service and CAService (attachBus) so the
+// key-set cache can invalidate itself on its own published events and
+// CAService can publish pki.certificate.* ones, and, when the host wired a
+// queue via WithQueue, hands both the same queue too and claims BOTH the
+// expiry-scan (job.go) and, round 3's addition, the CRL-regenerate (crl.go)
+// task handlers, so a host draining reg.Jobs.Handlers() onto its
+// jobs.Queue gets workers for both. It also builds and mounts pki's HTTP
+// surface, round 3's addition: Handler is built here, not in NewModule, so
+// it serves the service and repository instances every Option has already
+// configured by the time Register runs (Bootstrap calls Register only
+// after NewModule has returned) -- the same reasoning storage.Module's
+// identical placement documents. Routes.Mount is a plain registration, no
+// I/O, so Register's no-I/O contract stands.
 func (m *Module) Register(reg *pkgcore.Registry) error {
 	if err := reg.Permissions.Add(
 		PermissionRead,
 		PermissionIssue,
+		PermissionRevoke,
+		PermissionRotate,
 	); err != nil {
 		return err
 	}
 	if err := reg.AuditActions.Add(
 		AuditActionAuthorityCreate,
 		AuditActionCertificateIssue,
+		AuditActionKeyRevoke,
+		AuditActionCertificateRevoke,
 	); err != nil {
 		return err
 	}
@@ -345,12 +457,20 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		return err
 	}
 	m.service.attachBus(reg)
+	m.ca.attachBus(reg)
 	if m.queue != nil {
 		m.service.attachQueue(m.queue)
+		m.ca.attachQueue(m.queue)
 		if err := reg.Jobs.Handle(taskTypeExpiryScan, expiryScanHandler{svc: m.service}); err != nil {
 			return err
 		}
+		if err := reg.Jobs.Handle(taskTypeCRLRegenerate, crlRegenerateHandler{ca: m.ca}); err != nil {
+			return err
+		}
 	}
+
+	m.handler = NewHandler(m.service, m.ca, reg.Events.Bus(), reg.AuditActions)
+	reg.Routes.Mount(apiPath, m.handler)
 	return nil
 }
 

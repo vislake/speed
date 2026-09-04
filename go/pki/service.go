@@ -131,6 +131,10 @@ func (s *Service) attachBus(reg *pkgcore.Registry) {
 	reg.Events.Subscribe(EventSigningKeyStaged, s.onSigningKeyLifecycleEvent)
 	reg.Events.Subscribe(EventSigningKeyActivated, s.onSigningKeyLifecycleEvent)
 	reg.Events.Subscribe(EventSigningKeyRetired, s.onSigningKeyLifecycleEvent)
+	// Round 3: revocation must invalidate the key-set cache through this
+	// SAME event-subscription mechanism, never a second cache-clearing
+	// path -- see RevokeSigningKey's own doc comment (revocation.go).
+	reg.Events.Subscribe(EventSigningKeyRevoked, s.onSigningKeyLifecycleEvent)
 }
 
 // attachQueue hands Service the jobs.Queue the host wired via WithQueue, so

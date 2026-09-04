@@ -15,7 +15,7 @@ func newTestCAService(t *testing.T) *CAService {
 	t.Helper()
 	db := newTestDB(t)
 	signer := NewLocalSigner(db)
-	return NewCAService(signer, "local", NewAuthorityRepository(db), NewCertificateRepository(db))
+	return NewCAService(signer, "local", NewAuthorityRepository(db), NewCertificateRepository(db), NewCertificateRevocationRepository(db))
 }
 
 func TestNewSerialNumber_Is16BytesAndUnique(t *testing.T) {
@@ -215,5 +215,106 @@ func TestCAService_IssueCertificate_RequiresTenant(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("IssueCertificate(no tenant in ctx) succeeded, want pkgcore.ErrNoTenant")
+	}
+}
+
+// TestCAService_CreateIntermediateCA_EmbedsParentsCRLDistributionPoint
+// proves round 3's CRLDP-extension wiring: when the parent authority
+// declares a CRLDistributionPoint, the CHILD certificate (the intermediate
+// this call issues) carries a CRLDistributionPoints extension naming it --
+// "fetch the parent's CRL to check whether this intermediate has been
+// revoked" -- per CreateIntermediateCA's own doc comment.
+func TestCAService_CreateIntermediateCA_EmbedsParentsCRLDistributionPoint(t *testing.T) {
+	ca := newTestCAService(t)
+	ctx := context.Background()
+
+	root, err := ca.CreateRootCA(ctx, RootCAParams{
+		Subject:              pkix.Name{CommonName: "speed Root CA"},
+		NotAfter:             time.Now().Add(24 * time.Hour),
+		CRLDistributionPoint: "https://pki.example.com/root.crl",
+	})
+	if err != nil {
+		t.Fatalf("CreateRootCA: %v", err)
+	}
+
+	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, IntermediateCAParams{
+		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
+		NotAfter: time.Now().Add(12 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("CreateIntermediateCA: %v", err)
+	}
+
+	cert, err := parseCertificatePEM(intermediate.CertificatePEM)
+	if err != nil {
+		t.Fatalf("parse intermediate certificate: %v", err)
+	}
+	if len(cert.CRLDistributionPoints) != 1 || cert.CRLDistributionPoints[0] != "https://pki.example.com/root.crl" {
+		t.Errorf("intermediate certificate CRLDistributionPoints = %v, want [%q]", cert.CRLDistributionPoints, "https://pki.example.com/root.crl")
+	}
+}
+
+// TestCAService_CreateIntermediateCA_NoParentCRLDistributionPoint_OmitsExtension
+// proves the "empty means omit the extension, never a broken placeholder"
+// convention every other unset-value field in this module already follows.
+func TestCAService_CreateIntermediateCA_NoParentCRLDistributionPoint_OmitsExtension(t *testing.T) {
+	ca := newTestCAService(t)
+	ctx := context.Background()
+
+	root, err := ca.CreateRootCA(ctx, RootCAParams{
+		Subject:  pkix.Name{CommonName: "speed Root CA"},
+		NotAfter: time.Now().Add(24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("CreateRootCA: %v", err)
+	}
+
+	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, IntermediateCAParams{
+		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
+		NotAfter: time.Now().Add(12 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("CreateIntermediateCA: %v", err)
+	}
+
+	cert, err := parseCertificatePEM(intermediate.CertificatePEM)
+	if err != nil {
+		t.Fatalf("parse intermediate certificate: %v", err)
+	}
+	if len(cert.CRLDistributionPoints) != 0 {
+		t.Errorf("intermediate certificate CRLDistributionPoints = %v, want none (parent declared no CRLDistributionPoint)", cert.CRLDistributionPoints)
+	}
+}
+
+// TestCAService_IssueCertificate_EmbedsAuthoritysCRLDistributionPoint mirrors
+// the intermediate-certificate proof above, for an end-entity certificate.
+func TestCAService_IssueCertificate_EmbedsAuthoritysCRLDistributionPoint(t *testing.T) {
+	ca := newTestCAService(t)
+	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-acme"))
+
+	root, err := ca.CreateRootCA(ctx, RootCAParams{
+		Subject:              pkix.Name{CommonName: "speed Root CA"},
+		NotAfter:             time.Now().Add(24 * time.Hour),
+		CRLDistributionPoint: "https://pki.example.com/root.crl",
+	})
+	if err != nil {
+		t.Fatalf("CreateRootCA: %v", err)
+	}
+
+	certRow, err := ca.IssueCertificate(ctx, root.ID, CertificateParams{
+		Purpose:  "tenant.jwt_signing",
+		Subject:  pkix.Name{CommonName: "tenant leaf"},
+		NotAfter: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("IssueCertificate: %v", err)
+	}
+
+	cert, err := parseCertificatePEM(certRow.CertificatePEM)
+	if err != nil {
+		t.Fatalf("parse certificate: %v", err)
+	}
+	if len(cert.CRLDistributionPoints) != 1 || cert.CRLDistributionPoints[0] != "https://pki.example.com/root.crl" {
+		t.Errorf("certificate CRLDistributionPoints = %v, want [%q]", cert.CRLDistributionPoints, "https://pki.example.com/root.crl")
 	}
 }

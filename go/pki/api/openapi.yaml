@@ -1,0 +1,328 @@
+openapi: 3.0.3
+info:
+  title: pki
+  description: >-
+    Round 3 of go/pki's HTTP surface: revocation, CRL fetch and JWKS
+    export -- the operations docs/internal/22-pki.md's "revocation" and
+    "JWKS export" sections describe. Rounds 1/2's Go-only surface (CA/
+    certificate issuance, EnsurePurpose/ActiveSigner/VerificationKeys)
+    stays Go-only; this fragment covers only what round 3 adds. This
+    fragment follows the operationId (pki_<verb><Resource>) and
+    schema-name (Pki<Type>) conventions from
+    .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
+    regenerates pki-server.gen.go (in this directory) from this file, with
+    oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
+    .github/workflows/api-contract.yml.
+
+    There is deliberately no tenant_id anywhere on this surface, in any
+    path, query, header or request/response body: the tenant is always the
+    one tenancy.Middleware already resolved from the request
+    (docs/internal/04-data-and-tenancy.md; root CLAUDE.md's multi-tenant
+    isolation rule) -- read only by the certificate-revoke operation, since
+    pki_certificates is this module's one tenant-scoped table. The
+    signing-key revoke, JWKS and CRL operations read platform data
+    (pki_signing_keys, pki_authorities) that has no tenant at all; the
+    caller's tenant, if any, plays no part in them.
+
+    Merging this fragment into the application-wide build/openapi/speed.yaml
+    stays future work, the identical deferral org's and storage's own
+    fragments already record (docs/internal/21-api-contract.md's
+    implementation-status note): pki has no in-workspace web consumer yet
+    (root CLAUDE.md's "no real consumer yet" note on the X.509 layer, which
+    this fragment's revoke-certificate/authority operations belong to, and
+    the key-lifecycle revoke/JWKS operations have none either).
+  version: 0.0.0
+paths:
+  /api/v1/pki/signing-keys/{kid}/revoke:
+    post:
+      operationId: pki_revokeSigningKey
+      summary: Revoke a signing key.
+      description: >-
+        Transitions the signing key to revoked, of any prior status
+        (pending, active or retiring), publishing pki.signing_key.revoked
+        and immediately excluding the key from every future ActiveSigner
+        and VerificationKeys answer. Idempotent: revoking an
+        already-revoked key still answers 200 with its current (unchanged)
+        state.
+      parameters:
+        - $ref: '#/components/parameters/KID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PkiRevokeSigningKeyRequest'
+      responses:
+        '200':
+          description: The signing key's current state, now revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PkiSigningKey'
+        '400':
+          description: reason was missing or empty.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PkiError'
+        '404':
+          description: kid does not name a signing key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PkiError'
+  /api/v1/pki/certificates/{certificateId}/revoke:
+    post:
+      operationId: pki_revokeCertificate
+      summary: Revoke a certificate.
+      description: >-
+        Transitions the caller's tenant's certificate to revoked, records
+        a revocation-ledger entry consumed by the issuing authority's next
+        CRL generation, and publishes pki.certificate.revoked. Idempotent:
+        revoking an already-revoked certificate still answers 200 with its
+        current (unchanged) state.
+      parameters:
+        - $ref: '#/components/parameters/CertificateID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PkiRevokeCertificateRequest'
+      responses:
+        '200':
+          description: The certificate's current state, now revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PkiCertificate'
+        '400':
+          description: reason was missing or empty.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PkiError'
+        '404':
+          description: certificateId does not name a certificate of the caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PkiError'
+  /api/v1/pki/jwks:
+    get:
+      operationId: pki_getKeyJwks
+      summary: Fetch the key-lifecycle layer's JWKS for one purpose.
+      description: >-
+        The active and retiring public keys of purpose, as an RFC 7517
+        JSON Web Key Set, for an external verifier of tokens this
+        deployment signs. Never includes a pending key, and never a
+        private key or key reference. A purpose with no active or
+        retiring key answers 200 with an empty key set, never an error.
+      parameters:
+        - name: purpose
+          in: query
+          required: true
+          description: The signing-key purpose to export, e.g. "authn.access_token".
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The purpose's key-lifecycle JWKS.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PkiJwks'
+  /api/v1/pki/authorities/{authorityId}/jwks:
+    get:
+      operationId: pki_getAuthorityJwks
+      summary: Fetch an authority's certificate-chain JWKS.
+      description: >-
+        authorityId's own public key plus every ancestor authority's, up
+        to and including the root, one JWK per authority keyed by its id,
+        as an RFC 7517 JSON Web Key Set -- the X.509 layer's JWKS export,
+        for pushing to an external system such as a data-plane cluster.
+        Never a private key.
+      parameters:
+        - $ref: '#/components/parameters/AuthorityID'
+      responses:
+        '200':
+          description: The authority's certificate-chain JWKS.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PkiJwks'
+        '404':
+          description: authorityId does not name an authority.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PkiError'
+  /api/v1/pki/authorities/{authorityId}/crl:
+    get:
+      operationId: pki_getAuthorityCrl
+      summary: Fetch an authority's current CRL.
+      description: >-
+        The most recently generated Certificate Revocation List for
+        authorityId, PEM encoded, exactly as CAService.GenerateCRL (or the
+        periodic pki.crl_regenerate job) last wrote it -- this operation
+        never generates one itself, it only serves the stored document.
+      parameters:
+        - $ref: '#/components/parameters/AuthorityID'
+      responses:
+        '200':
+          description: The authority's current CRL, PEM encoded.
+          content:
+            application/x-pem-file:
+              schema:
+                type: string
+        '404':
+          description: >-
+            authorityId does not name an authority, or that authority has
+            never had a CRL generated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PkiError'
+components:
+  parameters:
+    KID:
+      name: kid
+      in: path
+      required: true
+      description: A signing key's id (JWT kid).
+      schema:
+        type: string
+    CertificateID:
+      name: certificateId
+      in: path
+      required: true
+      description: An application-generated UUID naming a certificate of the caller's tenant.
+      schema:
+        type: string
+    AuthorityID:
+      name: authorityId
+      in: path
+      required: true
+      description: An application-generated UUID naming a certificate authority.
+      schema:
+        type: string
+  schemas:
+    PkiSigningKey:
+      type: object
+      description: One pki_signing_keys row's public state -- never a private key or key reference.
+      properties:
+        kid:
+          type: string
+        purpose:
+          type: string
+        algorithm:
+          type: string
+        status:
+          type: string
+          description: '"pending", "active", "retiring", "retired" or "revoked".'
+        notBefore:
+          type: string
+          format: date-time
+        notAfter:
+          type: string
+          format: date-time
+        activatedAt:
+          type: string
+          format: date-time
+        retiringAt:
+          type: string
+          format: date-time
+        retiredAt:
+          type: string
+          format: date-time
+        revokedAt:
+          type: string
+          format: date-time
+        revocationReason:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    PkiRevokeSigningKeyRequest:
+      type: object
+      required:
+        - reason
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          description: Why this key is being revoked. Recorded on the row and in the audit trail.
+    PkiCertificate:
+      type: object
+      description: One pki_certificates row's public state -- never a private key or key reference.
+      properties:
+        id:
+          type: string
+        authorityId:
+          type: string
+        purpose:
+          type: string
+        subject:
+          type: string
+        sans:
+          type: array
+          items:
+            type: string
+        serial:
+          type: string
+        status:
+          type: string
+          description: '"active" or "revoked".'
+        keyDelivered:
+          type: boolean
+        notBefore:
+          type: string
+          format: date-time
+        notAfter:
+          type: string
+          format: date-time
+        revokedAt:
+          type: string
+          format: date-time
+        revocationReason:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    PkiRevokeCertificateRequest:
+      type: object
+      required:
+        - reason
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          description: Why this certificate is being revoked. Recorded on the ledger and in the audit trail.
+    PkiJwks:
+      type: object
+      description: >-
+        An RFC 7517 JSON Web Key Set. Each entry's shape depends on its
+        key type ("kty") per the JWK spec, so individual key fields are
+        deliberately not enumerated here.
+      properties:
+        keys:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    PkiError:
+      type: object
+      description: >-
+        The structured {code, params} error envelope every speed API
+        returns instead of localized text (backend coding standard §6.2;
+        docs/internal/11-cross-cutting.md) -- a client resolves code
+        through its own i18n catalog, populated from this module's
+        Locales() resources for the codes documented in AGENTS.md's error
+        index.
+      properties:
+        code:
+          type: string
+          example: pki.certificate_revoked
+        params:
+          type: object
+          additionalProperties: true
