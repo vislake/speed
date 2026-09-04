@@ -231,10 +231,16 @@ func (s *Service) List(ctx context.Context) ([]APIKeySummary, error) {
 // for every row this module ever writes. Second, it is what makes Rotate's
 // own audit trail readable without inventing a "rotate" AuditEvent shape
 // distinct from create/revoke: two ordinary AuditActionAPIKeyCreate/
-// AuditActionAPIKeyRevoke events, linked only by the revoked predecessor's id
-// appearing as the new row's PredecessorID -- see the exported
-// RotatedAPIKey.PredecessorID field below -- rather than a bespoke event type
-// every audit consumer would need special-cased handling for.
+// AuditActionAPIKeyRevoke events, rather than a bespoke event type every
+// audit consumer would need special-cased handling for. Round 1 does NOT
+// link the two events to each other: Rotate returns *CreatedAPIKey, the
+// same type Create returns, with no PredecessorID field or equivalent, and
+// the AuditActionAPIKeyCreate event the Create call below emits carries no
+// reference to old.ID either. A reader correlating a rotation's create/
+// revoke pair today has only their timestamps and shared CreatedBy to go
+// on; a real linkage is a future round's work, needing a predecessor-id
+// field on both the audit event and, if it should be caller-visible, a
+// result type of its own.
 //
 // The two writes are NOT wrapped in one database transaction: dbkit.
 // Repository[T] exposes no cross-call transaction seam a business module can

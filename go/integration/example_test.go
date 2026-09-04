@@ -13,6 +13,7 @@ package integration_test
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
@@ -86,7 +87,15 @@ func Example() {
 		fmt.Println("create:", err)
 		return
 	}
-	fmt.Printf("issued a key, prefix length: %d\n", len(created.Prefix))
+	// created.Key is the raw plaintext credential -- Create's one and only
+	// return of it. Its value is random and therefore not itself printable
+	// as deterministic golden output, but its length (apiKeyLiteralPrefix
+	// plus the base64url encoding of apiKeyTokenBytes of entropy, always the
+	// same number of characters) and its literal prefix are fixed, so
+	// printing them still visibly exercises "the raw key came back" rather
+	// than only Prefix, the display-safe echo that List can also return.
+	fmt.Printf("issued a key, prefix length: %d, key length: %d, key has literal prefix: %v\n",
+		len(created.Prefix), len(created.Key), strings.HasPrefix(created.Key, "sk_"))
 
 	// Check an inbound request against the three-layer limiter before
 	// letting it through -- this module composes the three
@@ -110,7 +119,7 @@ func Example() {
 	fmt.Println("key revoked")
 
 	// Output:
-	// issued a key, prefix length: 11
+	// issued a key, prefix length: 11, key length: 46, key has literal prefix: true
 	// request allowed: true
 	// key revoked
 }
