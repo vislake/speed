@@ -37,6 +37,15 @@
 
 **关于 `pki` 的排期（2026-09-04 新增）**：`go/pki`（签名密钥与 X.509 证书的生命周期管理）是本表原有排期之外的计划外模块，设计见 [22 密钥与证书生命周期](22-pki.md)。它的需求来源不是 reference-app，而是对一套真实生产系统证书子系统的诊断——那套系统与 speed 无代码关系，只作需求镜子，不存在迁移需求。落地涉及对已交付的 M1 `authn` 的回头改造：删除 `WithSigningKeys`、签名密钥改由 `KeySource` 提供、并新增"token header 的 alg 必须与该 kid 对应密钥声明的算法一致"这道检查（JWT 算法允许列表**保持单一 EdDSA 不放松**——早先设计稿曾以"AWS KMS 不支持 Ed25519"为由主张放松到 `{EdDSA, ES256}`，2026-09-04 核实该前提不成立：AWS KMS 有 `ECC_NIST_EDWARDS25519` 规格，三套 Signer 实现都能直签 Ed25519）。连带影响 `saasctl` 的四套项目模板及其 golden 文件比对。分四轮交付，轮次划分见该文档末节。**一处明确破例**：该模块分两层，密钥生命周期层由 `authn` 消费、reference-app 间接消费，满足本表的强制消费者条件；X.509 层暂时没有真实消费者（reference-app 不签发证书，需求来源的那套 DBaaS 系统是 Java 的、不会成为 speed 消费者），仍然实现是因为需求已被真实系统验证过，但它按破例处理——必须有 CI 编译运行的 godoc `Example`、在 `AGENTS.md` 如实标注未经真实消费验证、并允许第一个真实消费者接入时做破坏性调整。理由与三条约束见该文档的"X.509 层暂时没有真实消费者"一节。
 
+**关于 `ai-gateway`/`integration`/`admin`/`compliance` 提前落地（2026-09-05 新增）**：M3 行点名的 `ai-gateway`、`integration`、`admin`，以及 M4 行点名的 `compliance`，均已提前于本表各自的里程碑窗口、在同一条持续实现流中真实落地——与上文 storage/notification 提前于 M2 窗口、`pki` 完全在计划外落地是同一种模式，本条据实核对代码与各模块 `AGENTS.md` 后记录，而非照抄任务描述。
+
+- `ai-gateway`（两轮）：第一轮是纯 Chat 网关——`ChatProvider`/`ChatProviderRegistry`、零外部依赖的默认实现 `OpenAICompatibleProvider`、仿 `config` 的 `configs` 表方案落地的按租户分层加密密钥台账；第二轮补全设计文档的多模态扩展——`ImageProvider`、`Gateway.GenerateImage` 全异步管线（与 Chat 的默认同步不同，图像生成没有同步入口）、经 `go/jobs` 落地的图像生成作业，对象引用/原始字节的边界被有意划在作业处理器一层，`ImageProvider` 接口本身从不携带存储对象引用。reference-app 的 `internal/consult`（问诊建议摘要）与 `internal/smilesim`（换牙模拟，图生图）分别是两轮各自的真实消费者。
+- `integration`（至少三轮）：第一轮是 API Key 签发/列表/轮换/吊销外加三层（全局/租户/密钥）限流；第二轮是外发 Webhook——订阅管理、内部事件到公开事件的映射接缝、创建时与拨号时两道 SSRF 防护、HMAC 签名、经 `jobs` 的重试与死信；第三轮（与 `org`/`rbac` 同批的跨模块软删除接入清单项）让 `WebhookSubscription` 接入 `dbkit` 的软删除机制并新增 `Restore`，其自带的首个 PostgreSQL 集成腿顺带揪出并修复了一处真实 bug（`Secret` 列声明为 `VARCHAR` 却存放密文，PostgreSQL 的 UTF-8 编码强制拒绝写入，改为 `BYTEA`）。尚无 reference-app 真实消费者，按本表强制消费者条款的具名破例处理（细节与补偿性义务见 `go/integration/AGENTS.md`）。
+- `admin`（计划两轮，落地第一轮）：跨租户用户检索、模拟登录全链路（短期可撤销授权凭证、请求管线级身份替换中间件、五条强制性质各有对应测试钉住、双重身份 `Actor`/`OnBehalfOf` 审计轨迹、强制不可退订的安全通知）、租户台账（事件驱动懒填充加手工增删改查，纯记录、无强制力）、只读审计检索 HTTP 薄壳（复用 `compliance.AuditQuery`，无导出腿）。**尚未进入 `pr-check.yml`（或 `pr-full.yml`）的模块矩阵**——本轮普查独立发现的一处真实 CI 缺口，不是文档记录疏漏；根 `CLAUDE.md` 普查条目已如实标注。
+- `compliance`（两轮）：第一轮是保留期清扫（`pkgcore.Registry.Retention` 这一新增第九类注册表承载）、被遗忘权即时擦除（跨租户不可擦除性已证明）、数据导出的收集与落盘、只读审计检索（在应用代码而非 SQL 层过滤，`AuditQuery` 自身不持有任何写路径）；第二轮把导出的落盘产物真实经由 `go/sharing.Service` 投递为一次性、24 小时短时效的分享链接。模块本身不拥有任何数据表——耐久记录复用 `dbkit/audit` 已有的表——尚无真实业务模块注册参与者，以受控假参与者验证契约、配合一个可编译运行的 godoc `Example` 作为补偿性证明。
+
+四者的根 `CLAUDE.md` Repository Status 普查条目均随本次提交补齐。`compliance` 的不可篡改数据库级强制、可选哈希链、报表导出、分区归档，以及 `admin` 的角色管理、用量看板、按 D4 真正拥有强制力（当前台账「挂起」状态不阻拦任何请求），均仍是各自计划内的后续轮次，尚未落地——判断以代码为准，不以本条笔记为准。
+
 **建议的中途试点（重要）**：虽然对外一次性发布 v1.0，但强烈建议在 **M2 结束时**（认证、组织、计费、存储、通知齐备）就找一个真实小项目试点接入，而不是等到 v1.0。理由：那时地基已经稳定但尚未大面积铺开，发现 API 问题的修改成本最低；等到 v1.0 之后再发现，改动要同时波及脚手架和已交付项目。reference-app 能验证"能不能用"，只有真实项目能验证"好不好用"。
 
 **排期风险提示**：M2 因为国内外支付双通道都在 MVP 内，比原估多 1-2 周（微信/支付宝的商户资质申请、沙箱联调、回调验签往往比预期慢）。建议提前启动商户资质申请，不要等到 M2 才开始。
