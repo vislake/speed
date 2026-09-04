@@ -57,6 +57,7 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/consult"
 	"github.com/vislake/speed/examples/reference-app/internal/demo"
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
+	"github.com/vislake/speed/examples/reference-app/internal/smilesim"
 )
 
 const (
@@ -560,6 +561,21 @@ type serverConfig struct {
 	// default.
 	AIGatewayBaseURL string
 	AIGatewayAPIKey  string
+
+	// AIGatewayImageBaseURL and AIGatewayImageAPIKey are the image-side
+	// mirror of AIGatewayBaseURL/AIGatewayAPIKey, above: when
+	// AIGatewayImageAPIKey is non-empty, buildServer writes a second
+	// platform-wide ai-gateway credential for
+	// aigateway.ProviderOpenAICompatibleImage at boot, so the smilesim
+	// module's routes (cmd/server/smilesim.go) can actually reach an image
+	// provider. The two credentials are deliberately independent rows of
+	// the SAME ai_gateway_credentials table (keyed by provider name) --
+	// see go/ai-gateway/AGENTS.md's round-2 section on why chat and image
+	// credentials need no schema change to coexist. configFromEnv never
+	// sets either, the identical zero-setup posture AIGatewayAPIKey's own
+	// doc comment describes; smilesim_flow_test.go is what sets both.
+	AIGatewayImageBaseURL string
+	AIGatewayImageAPIKey  string
 }
 
 // configFromEnv reads serverConfig from the environment, defaulting to the
@@ -1088,8 +1104,23 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// deployment, an httptest.Server in consult_flow_test.go) -- and never
 	// seen by consult's own code, per aigateway.ChatRequest.Model's own
 	// doc comment on why business code never hardcodes a vendor model id.
+	// aiGatewayModule additionally wires round 2's image-generation
+	// pipeline: the internal/smilesim service (wired below, after
+	// Bootstrap) calls Gateway.GenerateImage under smilesim.LogicalModel
+	// ("image:smile-simulation"), routed to the module's own
+	// zero-external-dependency default image provider,
+	// aigateway.ProviderOpenAICompatibleImage. WithImageGeneration shares
+	// this app's own standaloneQueue -- the same pool storage's
+	// thumbnail-derive task and notification's delivery task already run
+	// on -- and storageModule's own ObjectService, so the job handler
+	// go/ai-gateway registers on reg.Jobs (drained onto standaloneQueue
+	// below, alongside every other module's job handlers) reads the
+	// patient photo and writes the generated simulation back through the
+	// very same storage this app's other consumers use.
 	aiGatewayModule := aigateway.NewModule(db,
 		aigateway.WithModelRoute(consult.LogicalModel, aigateway.ProviderOpenAICompatible, "gpt-4o-mini"),
+		aigateway.WithModelRoute(smilesim.LogicalModel, aigateway.ProviderOpenAICompatibleImage, "dall-e-3"),
+		aigateway.WithImageGeneration(standaloneQueue, storageModule.ObjectService()),
 	)
 
 	// complianceModule is the reference app's first consumer of
@@ -1332,6 +1363,26 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			return nil, nil, fmt.Errorf("reference-app: set the ai-gateway platform credential: %w", credErr)
 		}
 	}
+	// The ai-gateway image-generation platform credential -- the same
+	// system-context path as the chat credential above, written only when
+	// cfg.AIGatewayImageAPIKey is set (see its own doc comment on
+	// serverConfig).
+	if cfg.AIGatewayImageAPIKey != "" {
+		sysCtx, sysErr := pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
+			Actor:   "reference-app-boot",
+			Purpose: aigateway.SystemPurposeCredentialWrite,
+		})
+		if sysErr != nil {
+			_ = cleanup()
+			return nil, nil, fmt.Errorf("reference-app: build the ai-gateway image credential system context: %w", sysErr)
+		}
+		if credErr := aiGatewayModule.Credentials().SetPlatformCredential(
+			sysCtx, aigateway.ProviderOpenAICompatibleImage, cfg.AIGatewayImageAPIKey, cfg.AIGatewayImageBaseURL,
+		); credErr != nil {
+			_ = cleanup()
+			return nil, nil, fmt.Errorf("reference-app: set the ai-gateway image platform credential: %w", credErr)
+		}
+	}
 
 	// Drain the registry's job handlers onto the standalone queue and
 	// start the pool. Only now -- after Bootstrap -- can the handlers be
@@ -1393,6 +1444,17 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// does returns an error.
 	consultService := consult.NewService(notes.NewRepository(db), aiGatewayModule.Gateway())
 	wireConsult(mux, consultService)
+
+	// wireSmileSim mounts go/ai-gateway round 2's mandatory-first-consumer
+	// routes (cmd/server/smilesim.go): smileSimService asks
+	// aiGatewayModule's own Gateway -- the same instance
+	// aiGatewayModule.Register validated -- to run an async smile
+	// simulation over a patient photo already uploaded through
+	// storageModule's own HTTP surface, and the job-status route polls the
+	// same standaloneQueue every other async task in this app shares. The
+	// call cannot fail: nothing it does returns an error.
+	smileSimService := smilesim.NewService(aiGatewayModule.Gateway())
+	wireSmileSim(mux, smileSimService, standaloneQueue)
 
 	// The middleware chain: authn.Middleware(verifier) FIRST, then
 	// tenancy.Middleware(authn.NewPrincipalResolver()) -- the deliberate
