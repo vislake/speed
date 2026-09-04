@@ -1,0 +1,178 @@
+openapi: 3.0.3
+info:
+  title: sharing
+  description: >-
+    The one genuinely public, unauthenticated route this module mounts: an
+    external visitor's entry point onto the resource a Share exposes (see
+    the module's own AGENTS.md and docs/internal/07-platform-services.md's
+    sharing section). This fragment follows the operationId
+    (sharing_<verb><Resource>) and schema-name (Sharing<Type>) conventions
+    from .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
+    regenerates sharing-server.gen.go (in this directory) from this file,
+    with oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
+    .github/workflows/api-contract.yml.
+
+    This is deliberately NOT downstream of tenancy.Middleware's ordinary
+    tenant resolution: the request that reaches this route carries no
+    tenant claim at all, by design -- a genuinely anonymous visitor holds no
+    access token to resolve one from. Handler resolves the tenant itself,
+    from the token alone, before calling into Service.AccessPublic
+    (service.go) -- see that method's own doc comment, and
+    repository.go's tenantForTokenHash for the narrow lookup this depends
+    on. A host MUST allowlist this exact (GET, path) pair with
+    tenancy.WithAllowlist, the same mechanism go/config's two pre-auth
+    display endpoints already use (config.PathPublic,
+    config.PathSystemFeatures) -- module.go's exported PathAccess constant
+    is what a host's allowlist call names, so a path change here cannot
+    silently drift out of sync with it.
+
+    Every response this route writes -- success or refusal alike -- carries
+    Cache-Control: no-store. docs/internal/07-platform-services.md's
+    revocation rule names CDN or shared-cache caching as the single most
+    common way revocation silently fails to take effect, and this route is
+    the first place this module has an actual HTTP response to set that
+    header on.
+
+    Merging this fragment into the application-wide build/openapi/speed.yaml
+    stays future work, following the same precedent org's and storage's
+    fragments already set (docs/internal/21-api-contract.md's
+    implementation-status note): this route serves raw bytes, not a typed
+    JSON operation a frontend SDK would meaningfully wrap, so there is no
+    pressure to join the merge in the way notes', authn's and
+    notification's JSON-shaped fragments have.
+  version: 0.0.0
+paths:
+  /api/v1/sharing/access:
+    get:
+      operationId: sharing_accessShare
+      summary: Access a share's content by bearer token.
+      description: >-
+        Resolves token into the share it names -- through
+        Service.AccessPublic, which resolves the request's tenant from the
+        token itself before Service.Access's own ordinary rules ever run --
+        and, when access is granted, streams the resource behind the
+        share's ResourceRef (resolved through the host's own
+        sharing.ResourceResolver seam; see module.go's WithResourceResolver).
+
+
+        Every refusal reason -- an unrecognized token, a revoked, expired or
+        view-exhausted share, or a missing or wrong password -- answers
+        with the exact same 404 body, per this module's rule 5 (outward-
+        identical answers, AGENTS.md's "The five mandatory rules" section):
+        probing this endpoint teaches an outside caller nothing about which
+        of those reasons actually applied. A resource that could not be
+        opened AFTER access was already granted is a distinct, undisguised
+        502 -- see SharingError's own description and
+        sharing.ErrResourceUnavailable's doc comment for why that case must
+        not be folded into the same 404.
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+          description: >-
+            The share's bearer token, exactly as returned once by the
+            owner-facing Service.Create call. Never the share's own id, and
+            never accepted from anywhere but this query parameter (root
+            CLAUDE.md's multi-tenant isolation rule's spirit extended to
+            this module's own bearer credential: there is exactly one
+            legitimate source for it).
+        - name: X-Sharing-Password
+          in: header
+          required: false
+          schema:
+            type: string
+          description: >-
+            The share's access password, presented only when the share
+            requires one (Share.PasswordHash set). Carried as a header,
+            deliberately not a second query parameter: a query parameter
+            routinely lands in server access logs and in a subsequently
+            loaded page's Referer header, and this module's own established
+            rule (repository.go's byTokenHash doc comment) is that a
+            credential this module verifies never travels anywhere past the
+            caller who presented it. The bearer token itself is this
+            module's one already-accepted exception to that rule -- it is
+            the URL itself, by round-1's own design (Share's doc comment) --
+            so putting the SECOND credential a share may require in the URL
+            too would be a strictly weaker property than what this module
+            already ships, not merely an equally weak one.
+      responses:
+        '200':
+          description: >-
+            Access was granted and the resource behind the share's
+            ResourceRef was read successfully. Content-Type reflects the
+            resource's own resolved media type (or application/octet-stream
+            when it could not be determined); Content-Length is present
+            when the resolver reported a known size.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: Always "no-store" on every response this route writes.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: >-
+            The token is unrecognized, or the share it names is revoked,
+            expired, view-exhausted, or password-protected and the
+            presented password (or its absence) did not match --
+            deliberately indistinguishable from one another. code is always
+            sharing.not_accessible.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: Always "no-store" on every response this route writes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharingError'
+        '429':
+          description: >-
+            The caller's IP address or the presented token has exceeded
+            this module's rate-limit budget (ratelimit.go). code is always
+            sharing.rate_limited, with a "dimension" parameter naming which
+            of the two tripped and a "retry_after_seconds" parameter.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: Always "no-store" on every response this route writes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharingError'
+        '502':
+          description: >-
+            Access to the share itself was granted -- a real view was
+            already recorded -- but the resource behind its ResourceRef
+            could not be read: no ResourceResolver was wired, or the wired
+            one failed to open it. code is always sharing.resource_unavailable.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: Always "no-store" on every response this route writes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharingError'
+components:
+  schemas:
+    SharingError:
+      type: object
+      required:
+        - code
+      properties:
+        code:
+          type: string
+          description: The structured error code, one of this module's error index entries (AGENTS.md).
+        params:
+          type: object
+          additionalProperties: true
+          description: Structured parameters for the code, when any apply.

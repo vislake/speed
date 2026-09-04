@@ -12,6 +12,7 @@ import (
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/ratelimit"
 )
 
 // defaultShareExpiry is the ceiling rule 2
@@ -146,6 +147,12 @@ type Service struct {
 	// call time; see events.go's attach.
 	host         hostSeams
 	auditActions pkgcore.AuditActionRegistrar
+
+	// limiter overrides ratelimit.go's rateLimiter for tests that need a
+	// deterministic KVStore or a fake Limiter without going through
+	// Module.Register at all -- never set in production, where
+	// rateLimiter always builds one over s.host.KVStore() instead.
+	limiter ratelimit.Limiter
 }
 
 // NewService returns a Service whose tables live in db. cfg may be nil; see
@@ -174,6 +181,13 @@ func (s *Service) AccessLogs() *AccessLogRepository { return s.accessLogs }
 // returns it together with the raw bearer token -- returned exactly once,
 // per CreateResult's own doc comment.
 //
+// Create first checks the caller tenant's share-creation rate limit
+// (ratelimit.go's checkCreateRateLimit, ErrRateLimited on denial) -- the
+// round-2 answer to AGENTS.md's former "Create or Access has no rate
+// limiting" known limitation -- before any other validation runs, so a
+// tenant already over budget pays no further work for a request that was
+// never going through.
+//
 // Every one of rule 1's, rule 2's and rule 4's checks runs here, in this
 // order: ResourceRef must be non-empty (ErrResourceRefRequired); a
 // never-expiring request is refused outright (ErrExpiryRequired,
@@ -182,7 +196,10 @@ func (s *Service) AccessLogs() *AccessLogRepository { return s.accessLogs }
 // back to defaultShareExpiry; MaxViews, if given, must be positive
 // (ErrInvalidMaxViews); an optional Password is hashed, never stored
 // plaintext (password.go); the token is drawn fresh from crypto/rand
-// (token.go) and only its hash is persisted. Once the row is committed,
+// (token.go) and only its hash is persisted, alongside the narrow
+// shareTokenIndex row that lets Service.AccessPublic resolve this share's
+// tenant from that hash alone (repository.go's createWithTokenIndex writes
+// both in one transaction). Once the row is committed,
 // EventShareCreated is published (best-effort; a failure is logged, never
 // returned -- the share itself is already durable) and, when Sensitive is
 // true, the sensitive-share audit action fires through the declarative
@@ -193,6 +210,9 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*CreateResult, er
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if rlErr := s.checkCreateRateLimit(ctx, string(tenant)); rlErr != nil {
+		return nil, rlErr
 	}
 
 	ref := strings.TrimSpace(p.ResourceRef)
@@ -235,7 +255,7 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*CreateResult, er
 		PasswordHash: passwordHash,
 		Sensitive:    p.Sensitive,
 	}
-	if err := s.shares.Create(ctx, share); err != nil {
+	if err := s.shares.createWithTokenIndex(ctx, share); err != nil {
 		return nil, err
 	}
 
@@ -401,6 +421,47 @@ func (s *Service) Access(ctx context.Context, token string, p AccessParams) (*Sh
 		return nil, ErrNotAccessible
 	}
 	return result, nil
+}
+
+// AccessPublic is Access's genuinely unauthenticated entry point: the round-2
+// answer to AGENTS.md's former "Tenant resolution for an unauthenticated
+// viewer" gap. A caller here holds no tenant claim at all -- that is the
+// whole point of this method existing separately from Access -- so ctx is
+// not expected to carry one; AccessPublic resolves the tenant itself, from
+// the token alone, before anything else runs.
+//
+// It does exactly two things and nothing more: resolve tenant via
+// repository.go's tenantForTokenHash (the narrow, deliberately
+// non-tenant-scoped lookup that method's own doc comment justifies in
+// full), then re-enter the ordinary, unchanged Service.Access with that
+// tenant attached to ctx via pkgcore.WithTenant -- every one of Access's
+// own guarantees (rule 3's immediate revocation, rule 4's access logging,
+// rule 5's outward-identical answers, the constant-time password check)
+// therefore holds for an anonymous caller exactly as they already hold for
+// an authenticated one, because this method does not reimplement any of
+// them.
+//
+// Before Access is ever reached, this method checks the caller's rate-limit
+// budget (ratelimit.go's checkAccessRateLimit, keyed on p.IP and the
+// hashed token, ErrRateLimited on denial) and resolves the tenant. An
+// unrecognized token hash at this stage burns one password check
+// (burnSharePasswordCheck) and answers ErrNotAccessible immediately,
+// without ever calling Access -- there is no tenant to attach and nothing
+// downstream could do with one anyway. See tenantForTokenHash's own doc
+// comment for the one timing property this collapsing does NOT hide (an
+// unrecognized token is cheaper to refuse than a recognized-but-refused
+// one), and why that is not a rule-5 violation.
+func (s *Service) AccessPublic(ctx context.Context, token string, p AccessParams) (*Share, error) {
+	if err := s.checkAccessRateLimit(ctx, p.IP, hashShareToken(token)); err != nil {
+		return nil, err
+	}
+
+	tenant, err := s.shares.tenantForTokenHash(ctx, hashShareToken(token))
+	if err != nil {
+		burnSharePasswordCheck(p.Password)
+		return nil, ErrNotAccessible
+	}
+	return s.Access(pkgcore.WithTenant(ctx, tenant), token, p)
 }
 
 // recordView drives ShareRepository.tryRecordView's compare-and-swap guard

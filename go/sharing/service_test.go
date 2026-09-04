@@ -342,6 +342,120 @@ func TestService_Access_UnknownToken_Denied(t *testing.T) {
 	assertCode(t, err, ErrNotAccessible.Code)
 }
 
+// --- AccessPublic ----------------------------------------------------
+
+// TestService_AccessPublic_ResolvesTenantFromTokenAlone is the direct
+// round-2 proof of AGENTS.md's former "Tenant resolution for an
+// unauthenticated viewer" gap being closed: a caller supplying NO tenant
+// at all (context.Background(), not testCtx()) still reaches a granted
+// access, because AccessPublic resolves the tenant from the token itself
+// before re-entering the ordinary Access path.
+func TestService_AccessPublic_ResolvesTenantFromTokenAlone(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	share, err := svc.AccessPublic(context.Background(), created.Token, AccessParams{IP: "203.0.113.9"})
+	if err != nil {
+		t.Fatalf("AccessPublic(no tenant in context) error = %v, want success", err)
+	}
+	if share.ID != created.Share.ID {
+		t.Errorf("AccessPublic returned share %q, want %q", share.ID, created.Share.ID)
+	}
+	if share.ViewCount != 1 {
+		t.Errorf("ViewCount = %d, want 1", share.ViewCount)
+	}
+}
+
+// TestService_AccessPublic_UnknownToken_Denied proves an unrecognized token
+// refuses through AccessPublic's own tenant-resolution failure path
+// (tenantForTokenHash), never reaching Access at all -- and still answers
+// the identical ErrNotAccessible rule 5 requires.
+func TestService_AccessPublic_UnknownToken_Denied(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	_, err := svc.AccessPublic(context.Background(), "this-token-was-never-issued", AccessParams{})
+	assertCode(t, err, ErrNotAccessible.Code)
+}
+
+// TestService_AccessPublic_RevokedShare_ImmediatelyDenied re-proves rule 3
+// through the genuinely-anonymous entry point, mirroring
+// TestService_Access_RevokedShare_ImmediatelyDenied's authenticated-caller
+// version exactly.
+func TestService_AccessPublic_RevokedShare_ImmediatelyDenied(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, accessErr := svc.AccessPublic(context.Background(), created.Token, AccessParams{}); accessErr != nil {
+		t.Fatalf("AccessPublic (before revoke): %v", accessErr)
+	}
+	if revokeErr := svc.Revoke(testCtx(), created.Share.ID); revokeErr != nil {
+		t.Fatalf("Revoke: %v", revokeErr)
+	}
+	_, err = svc.AccessPublic(context.Background(), created.Token, AccessParams{})
+	assertCode(t, err, ErrNotAccessible.Code)
+}
+
+// TestService_AccessPublic_Password mirrors TestService_Access_Password
+// through the genuinely-anonymous entry point: a correct password grants,
+// a wrong one refuses with the identical ErrNotAccessible.
+func TestService_AccessPublic_Password(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	password := "s3cret"
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-1", Password: &password})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	wrong := "wrong"
+	if _, err := svc.AccessPublic(context.Background(), created.Token, AccessParams{Password: &wrong}); !hasCode(err, ErrNotAccessible.Code) {
+		t.Errorf("AccessPublic(wrong password) error = %v, want ErrNotAccessible", err)
+	}
+
+	if _, err := svc.AccessPublic(context.Background(), created.Token, AccessParams{Password: &password}); err != nil {
+		t.Errorf("AccessPublic(correct password) error = %v, want success", err)
+	}
+}
+
+// TestService_AccessPublic_CrossTenantTokenNeverResolvesToTheWrongTenant
+// proves the narrow tenant-resolution lookup cannot be tricked into
+// resolving a token minted under one tenant to a different one: it always
+// resolves to the tenant that actually created the share, and a second
+// tenant's own share is entirely unaffected by the first's existence.
+func TestService_AccessPublic_CrossTenantTokenNeverResolvesToTheWrongTenant(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	ctxA := pkgcore.WithTenant(context.Background(), "tenant-a")
+	ctxB := pkgcore.WithTenant(context.Background(), "tenant-b")
+
+	createdA, err := svc.Create(ctxA, CreateParams{ResourceRef: "a-resource"})
+	if err != nil {
+		t.Fatalf("Create(tenant-a): %v", err)
+	}
+	createdB, err := svc.Create(ctxB, CreateParams{ResourceRef: "b-resource"})
+	if err != nil {
+		t.Fatalf("Create(tenant-b): %v", err)
+	}
+
+	shareA, err := svc.AccessPublic(context.Background(), createdA.Token, AccessParams{})
+	if err != nil {
+		t.Fatalf("AccessPublic(tenant-a's token): %v", err)
+	}
+	if shareA.ResourceRef != "a-resource" {
+		t.Errorf("AccessPublic(tenant-a's token) resolved ResourceRef %q, want %q", shareA.ResourceRef, "a-resource")
+	}
+
+	shareB, err := svc.AccessPublic(context.Background(), createdB.Token, AccessParams{})
+	if err != nil {
+		t.Fatalf("AccessPublic(tenant-b's token): %v", err)
+	}
+	if shareB.ResourceRef != "b-resource" {
+		t.Errorf("AccessPublic(tenant-b's token) resolved ResourceRef %q, want %q", shareB.ResourceRef, "b-resource")
+	}
+}
+
 func TestService_Access_Password(t *testing.T) {
 	svc, _ := newTestService(t, nil)
 	password := "s3cret"

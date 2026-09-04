@@ -5,15 +5,17 @@
 // section for the design this module implements, and this module's own
 // AGENTS.md for what round 1 ships and what it deliberately does not.
 //
-// # Round 1 scope
+// # Scope
 //
-// This round ships the Share domain model, the Service that creates,
+// Round 1 shipped the Share domain model, the Service that creates,
 // accesses and revokes share links, the access log a resource owner reads
-// back, and the jobs-driven expiry sweep -- the Service/Access API only. It
-// does not mount an HTTP surface (no unauthenticated public endpoint exists
-// yet -- a later round adds one) and it is not wired into the reference app
-// as a live consumer; see AGENTS.md's "No real consumer yet" section for the
-// compensating obligations that carries.
+// back, and the jobs-driven expiry sweep. Round 2 added Service.AccessPublic
+// (tenant resolution for a genuinely unauthenticated visitor), the module's
+// one public HTTP route (api/openapi.yaml, handler.go), the ResourceResolver
+// seam that turns a Share's ResourceRef into actual bytes, go/ratelimit
+// applied to Create and AccessPublic, and reference-app wiring as a real,
+// end-to-end HTTP consumer -- see AGENTS.md for the full account of what
+// each round shipped and why.
 //
 // # The five mandatory rules
 //

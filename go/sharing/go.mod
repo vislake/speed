@@ -12,12 +12,16 @@ replace github.com/vislake/speed/go/observability => ../observability
 
 replace github.com/vislake/speed/go/jobs => ../jobs
 
+replace github.com/vislake/speed/go/ratelimit => ../ratelimit
+
 require (
 	github.com/google/uuid v1.6.0
+	github.com/oapi-codegen/runtime v1.7.0
 	github.com/vislake/speed/go/dbkit v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/jobs v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/ratelimit v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/tenancy v0.0.0-00010101000000-000000000000
 	golang.org/x/crypto v0.55.0
 	gorm.io/gorm v1.31.2
@@ -29,6 +33,7 @@ require (
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
+	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/containerd/errdefs v1.0.0 // indirect

@@ -1,8 +1,12 @@
 package sharing
 
 import (
+	"bytes"
 	"context"
 	"embed"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -16,8 +20,12 @@ func TestModule_Identity(t *testing.T) {
 	if got := m.DependsOn(); got != nil {
 		t.Errorf("DependsOn() = %v, want nil -- sharing depends on no other pkgcore.Module in the bootstrap set", got)
 	}
-	if got := m.OpenAPISpec(); got != nil {
-		t.Errorf("OpenAPISpec() = %v, want nil -- sharing has no HTTP surface this round", got)
+	spec := m.OpenAPISpec()
+	if len(spec) == 0 {
+		t.Errorf("OpenAPISpec() is empty, want sharing's embedded api/openapi.yaml fragment")
+	}
+	if !bytes.Contains(spec, []byte(PathAccess)) {
+		t.Errorf("OpenAPISpec() does not mention PathAccess (%q); it should be this fragment's one operation path", PathAccess)
 	}
 }
 
@@ -116,11 +124,51 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 		}
 	})
 
-	t.Run("no routes are mounted", func(t *testing.T) {
-		if got := reg.Routes.Routes(); len(got) != 0 {
-			t.Errorf("Register mounted %d route(s), want 0 -- sharing has no HTTP surface this round", len(got))
+	t.Run("the public access route is mounted", func(t *testing.T) {
+		routes := reg.Routes.Routes()
+		if len(routes) != 1 {
+			t.Fatalf("Register mounted %d route(s), want exactly 1 (PathAccess)", len(routes))
+		}
+		if routes[0].Path != PathAccess {
+			t.Errorf("mounted route path = %q, want %q", routes[0].Path, PathAccess)
+		}
+		if routes[0].Handler == nil {
+			t.Errorf("mounted route carries a nil Handler")
 		}
 	})
+}
+
+// TestModule_Register_MountsHandlerBuiltAfterOptions proves Register builds
+// Handler from the module's final, post-Option state -- WithResourceResolver
+// included -- not from whatever NewModule saw before every Option had run.
+// A resolver injected this way must be the one a request reaching the
+// mounted route actually uses.
+func TestModule_Register_MountsHandlerBuiltAfterOptions(t *testing.T) {
+	db := newTestDB(t)
+	resolver := fakeResourceResolver{mime: "text/plain", body: "hello"}
+	m := NewModule(db, WithResourceResolver(resolver))
+	if _, err := pkgcore.NewKernel().Bootstrap(context.Background(), m); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	if m.Handler() == nil {
+		t.Fatalf("Handler() = nil after Register")
+	}
+
+	tenantCtx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-a"))
+	created, err := m.Service().Create(tenantCtx, CreateParams{ResourceRef: "ref-1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, PathAccess+"?token="+url.QueryEscape(created.Token), nil)
+	rec := httptest.NewRecorder()
+	m.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s, want 200 (the mounted Handler should use the resolver WithResourceResolver injected)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Body.String(); got != "hello" {
+		t.Errorf("body = %q, want %q", got, "hello")
+	}
 }
 
 // TestModule_Register_CoexistsWithAnotherModule proves sharing bootstraps

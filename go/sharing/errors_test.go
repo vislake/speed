@@ -27,6 +27,7 @@ func TestErrorIndex_EveryCodeIsWellFormed(t *testing.T) {
 	all := []*apperr.Error{
 		ErrResourceRefRequired, ErrExpiryRequired, ErrInvalidMaxViews,
 		ErrNotAccessible, ErrShareNotFound, ErrInternal,
+		ErrRateLimited, ErrResourceUnavailable,
 	}
 	seen := map[string]bool{}
 	for _, e := range all {

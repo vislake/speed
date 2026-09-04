@@ -20,3 +20,7 @@
 "sharing.share_not_found" = "That share does not exist."
 
 "sharing.internal_error" = "Something went wrong. Please try again."
+
+"sharing.rate_limited" = "Too many attempts. Please wait and try again."
+
+"sharing.resource_unavailable" = "This share is valid, but the shared resource could not be read right now."

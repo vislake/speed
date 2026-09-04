@@ -17,3 +17,7 @@
 "sharing.share_not_found" = "该分享不存在。"
 
 "sharing.internal_error" = "出现问题,请稍后重试。"
+
+"sharing.rate_limited" = "尝试次数过多,请稍后再试。"
+
+"sharing.resource_unavailable" = "该分享有效,但暂时无法读取被分享的资源。"

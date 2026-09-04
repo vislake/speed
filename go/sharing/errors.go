@@ -1,6 +1,10 @@
 package sharing
 
-import "github.com/vislake/speed/go/pkgcore/apperr"
+import (
+	"net/http"
+
+	"github.com/vislake/speed/go/pkgcore/apperr"
+)
 
 // The error index of the sharing module. Every exported error is an
 // *apperr.Error builder whose Code follows the <module>.<reason> convention
@@ -55,6 +59,23 @@ var (
 	// module maintains. It wraps the underlying error as its cause so the
 	// trace carries it; the cause never reaches an API response body.
 	ErrInternal = apperr.Internal("sharing.internal_error")
+
+	// ErrResourceUnavailable reports that Handler's public access route
+	// (handler.go) reached a share whose Access already granted -- a real
+	// view was already recorded -- but the resource behind its ResourceRef
+	// could not actually be read: no ResourceResolver was wired
+	// (Handler.resolver nil) or the wired one returned an error opening it.
+	// This is deliberately a distinct, undisguised failure from
+	// ErrNotAccessible: rule 5's outward-identical-answer property covers
+	// the question "is this token/password valid", which Access has
+	// already answered yes to by the time this error can occur, so there is
+	// nothing left to hide by collapsing this into the same 404 -- doing so
+	// would instead hide a real operational fault (a broken resolver, a
+	// resource genuinely gone from its own store) behind a code that means
+	// "check your token", which is actively misleading to whoever operates
+	// this deployment. Status 502: the share surface itself worked: the
+	// resource behind it did not.
+	ErrResourceUnavailable = &apperr.Error{Code: "sharing.resource_unavailable", Status: http.StatusBadGateway}
 )
 
 // hasCode reports whether err is, or wraps, an *apperr.Error with the given

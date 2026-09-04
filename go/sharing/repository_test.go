@@ -199,6 +199,96 @@ func TestShareRepository_ListExpiredOrExhausted(t *testing.T) {
 	}
 }
 
+// --- shareTokenIndex / createWithTokenIndex / tenantForTokenHash --------
+
+// TestShareTokenIndex_AssertNotTenantScoped proves shareTokenIndex is
+// genuinely platform data, not tenant data: a row written with no tenant
+// in context is visible under an arbitrary one, and a row written under one
+// tenant is visible under another -- the exact opposite of AssertIsolated,
+// and the correct property for a table dbkit's tenant-scope GORM plugin
+// must never engage on (model.go's shareTokenIndex doc comment explains
+// why).
+func TestShareTokenIndex_AssertNotTenantScoped(t *testing.T) {
+	db := newTestDB(t)
+	i := 0
+	tenancytest.AssertNotTenantScoped(t, db, shareTokenIndex{},
+		func(tx *gorm.DB) error {
+			i++
+			return tx.Create(&shareTokenIndex{
+				TokenHash: hashShareToken("probe-token-" + uuid.NewString()),
+				TenantID:  "irrelevant",
+			}).Error
+		},
+		func(tx *gorm.DB) (int64, error) {
+			var n int64
+			err := tx.Model(&shareTokenIndex{}).Count(&n).Error
+			return n, err
+		},
+	)
+}
+
+func TestShareRepository_CreateWithTokenIndex_WritesBothRowsUnderTheSameTenant(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	now := time.Now().UTC()
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	share := newTestShare("share-1", now)
+	if err := repo.createWithTokenIndex(ctx, share); err != nil {
+		t.Fatalf("createWithTokenIndex: %v", err)
+	}
+
+	// The ordinary tenant-scoped lookup finds the Share row, under the
+	// tenant createWithTokenIndex resolved from ctx.
+	got, err := repo.byTokenHash(ctx, share.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash: %v", err)
+	}
+	if got.ID != share.ID {
+		t.Errorf("byTokenHash = %+v, want ID %q", got, share.ID)
+	}
+
+	// The narrow, tenant-less lookup resolves the same tenant from the same
+	// hash, with no tenant anywhere in ctx.
+	tenant, err := repo.tenantForTokenHash(context.Background(), share.TokenHash)
+	if err != nil {
+		t.Fatalf("tenantForTokenHash: %v", err)
+	}
+	if tenant != "tenant-a" {
+		t.Errorf("tenantForTokenHash = %q, want %q", tenant, "tenant-a")
+	}
+}
+
+func TestShareRepository_TenantForTokenHash_UnknownHashReportsNotAccessible(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	if _, err := repo.tenantForTokenHash(context.Background(), "does-not-exist"); !errors.Is(err, ErrNotAccessible) {
+		t.Errorf("tenantForTokenHash(unknown hash) error = %v, want ErrNotAccessible", err)
+	}
+}
+
+// TestShareRepository_TenantForTokenHash_NeedsNoTenantInContext is the
+// direct proof of this method's whole reason to exist: a genuinely
+// anonymous caller -- context.Background(), nothing attached to it at all
+// -- can still resolve a tenant from a token hash. A regression that
+// silently made this method call pkgcore.MustTenantFromContext (or route
+// through dbkit.WithTenantSession, which does the same) would fail this
+// test with pkgcore.ErrNoTenant instead of a real answer.
+func TestShareRepository_TenantForTokenHash_NeedsNoTenantInContext(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	now := time.Now().UTC()
+	share := newTestShare("share-1", now)
+	if err := repo.createWithTokenIndex(pkgcore.WithTenant(context.Background(), "tenant-b"), share); err != nil {
+		t.Fatalf("createWithTokenIndex: %v", err)
+	}
+
+	tenant, err := repo.tenantForTokenHash(context.Background(), share.TokenHash)
+	if err != nil {
+		t.Fatalf("tenantForTokenHash(no tenant in ctx) error = %v, want success", err)
+	}
+	if tenant != "tenant-b" {
+		t.Errorf("tenantForTokenHash = %q, want %q", tenant, "tenant-b")
+	}
+}
+
 // --- AccessLogRepository -----------------------------------------------
 
 func newTestAccessLogEntry(id, shareID string, now time.Time) *AccessLogEntry {

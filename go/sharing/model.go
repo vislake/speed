@@ -9,8 +9,9 @@ import (
 // Table names, shared between the models' TableName methods and the
 // migrations' own header comments.
 const (
-	tableShares    = "sharing_shares"
-	tableAccessLog = "sharing_access_log"
+	tableShares     = "sharing_shares"
+	tableAccessLog  = "sharing_access_log"
+	tableTokenIndex = "sharing_token_index"
 )
 
 // The AccessOutcome vocabulary access log rows record. Kept in Go, not a
@@ -243,3 +244,77 @@ func (AccessLogEntry) TableName() string { return tableAccessLog }
 
 // compile-time check that AccessLogEntry satisfies dbkit.TenantScoped.
 var _ dbkit.TenantScoped = AccessLogEntry{}
+
+// shareTokenIndex is the narrow, deliberately non-tenant-scoped row that
+// resolves a bearer token's owning tenant before any tenant is known at
+// all -- the round-2 answer to AGENTS.md's former "Tenant resolution for an
+// unauthenticated viewer" gap (see that section's replacement for the full
+// reasoning, and repository.go's (*ShareRepository).tenantForTokenHash for
+// the one method that reads it).
+//
+// # Data domain
+//
+// Platform data (docs/internal/04-data-and-tenancy.md's data-domain table),
+// NOT tenant data, and deliberately so: a genuinely unauthenticated visitor
+// holds no tenant claim for dbkit's tenant-scope GORM plugin to filter by,
+// and that plugin fails every tenant-scoped query closed when the context
+// carries none (go/dbkit's tenant_scope.go, tenantScopeBeforeQuery) --
+// correctly, since it has no way to tell "this caller is allowed to look
+// this up with no tenant" apart from an ordinary forgotten-tenant bug. The
+// same repository-wide rule root CLAUDE.md states for identity/platform
+// data applies here without exception: this table implements no
+// dbkit.TenantScoped, is reached through dbkit.Open()'s plain *gorm.DB
+// (never dbkit.Repository[T], whose generic constraint requires
+// TenantScoped, which this type must NOT implement), and its isolation
+// suite is tenancytest.AssertNotTenantScoped, not AssertIsolated -- the
+// identical treatment go/authn's users table, go/jobs's jobRecord and
+// go/config's row already get for the same reason: something that must be
+// resolvable before a tenant is known cannot itself be tenant-scoped.
+//
+// # Deliberately narrow
+//
+// This is NOT a general cross-tenant query capability, and carries nothing
+// that would make it one: two columns, a token hash and the tenant it
+// belongs to, nothing else -- no ResourceRef, no ShareID, no ViewCount, no
+// password state. A row here answers exactly one question ("which tenant
+// does this hash belong to") and nothing further; every other question
+// about the share it names -- is it revoked, expired, view-exhausted,
+// password-protected -- is still answered exclusively by the ordinary
+// tenant-scoped Share row, reached only after this lookup hands back a
+// tenant to attach to ctx. Compare repository.go's byTokenHash, which reads
+// the full, tenant-scoped Share row and remains the only path that can ever
+// grant access to a share's content.
+//
+// # Written alongside its Share, read only by AccessPublic
+//
+// (*ShareRepository).createWithTokenIndex inserts this row in the same
+// database transaction as its Share, so a share is never left reachable by
+// its owner (an authenticated tenant caller, via Get/Revoke/ListAccessLog)
+// while being permanently unreachable by an anonymous visitor holding the
+// same token -- an inconsistency a two-step, non-transactional write could
+// otherwise leave behind indefinitely, since nothing else in this module
+// ever repairs a missing index row. It is never updated: Revoke sets only
+// Share.RevokedAt, leaving this row in place, because Service.AccessPublic
+// needs it to resolve a tenant and reach the ordinary Access path even for
+// a token whose share has since been revoked, expired or exhausted --
+// exactly how Access is meant to answer that case (ErrNotAccessible, not a
+// dead end before Access is ever reached).
+type shareTokenIndex struct {
+	// TokenHash is the hex-encoded SHA-256 of the share token -- the exact
+	// same value Share.TokenHash stores, and the primary key here: two
+	// tokens hashing to the same value is cryptographically negligible (see
+	// token.go), so the constraint is cheap insurance, not a meaningfully
+	// defended invariant.
+	TokenHash string `gorm:"column:token_hash;primaryKey;size:64"`
+
+	// TenantID is the plain, unenforced tenant identifier this row exists
+	// to answer -- unenforced in the identical sense every other
+	// platform-data table's tenant_id column is (go/jobs's jobRecord,
+	// go/config's row, go/dbkit/audit's AuditEvent): a real column, never
+	// filtered or populated by dbkit's tenant-scope plugin, because this
+	// type implements no TenantScoped.
+	TenantID string `gorm:"column:tenant_id;size:64;not null"`
+}
+
+// TableName names the sharing_token_index table.
+func (shareTokenIndex) TableName() string { return tableTokenIndex }

@@ -28,6 +28,17 @@ type hostSeams interface {
 	// EventBus returns the bus the registry's Events registrar installs
 	// subscriptions on.
 	EventBus() pkgcore.EventBus
+
+	// KVStore returns the resolved KVStore implementation the registry's
+	// seam wiring picked for the running deployment mode -- what
+	// ratelimit.go's rateLimiter builds a go/ratelimit.Limiter over, the
+	// identical seam org.InviteService.rateLimiter reads through the same
+	// hostSeams-shaped interface for its own two rate-limited dimensions.
+	// Reading it here, rather than caching a Limiter at construction, keeps
+	// rate limiting bound to whichever KVStore the deployment mode actually
+	// resolved (in-memory standalone, Redis distributed) instead of one
+	// captured before Bootstrap ever ran.
+	KVStore() pkgcore.KVStore
 }
 
 // compile-time check that the concrete registry satisfies the seam.
@@ -42,6 +53,7 @@ var (
 	errShareNoHostRegistry = errors.New("sharing: no host registry wired")
 	errShareNoEventBus     = errors.New("sharing: registry carries no event bus")
 	errShareNoAuditActions = errors.New("sharing: registry carries no audit action registrar")
+	errShareNoKVStore      = errors.New("sharing: registry carries no KVStore")
 )
 
 // attach wires the registry Module.Register attached against into Service.

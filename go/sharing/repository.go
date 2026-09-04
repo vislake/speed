@@ -8,6 +8,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/pkgcore"
 )
 
 // ShareRepository is the tenant-scoped data-access type for Share. It
@@ -89,6 +90,88 @@ func (r *ShareRepository) tryRecordView(ctx context.Context, share *Share, now t
 		return false, ErrInternal.WithCause(dbErr)
 	}
 	return rowsAffected == 1, nil
+}
+
+// createWithTokenIndex inserts share and its shareTokenIndex row in one
+// database transaction, so a share is never left reachable by its owner
+// (an authenticated tenant caller) while being permanently unreachable by
+// an anonymous visitor holding the same token -- the inconsistency a
+// two-step, non-transactional write could otherwise leave behind
+// indefinitely, since nothing else in this module ever repairs a missing
+// index row. Service.Create calls this instead of the embedded
+// Repository[Share].Create.
+//
+// The two writes share dbkit.WithTenantSession's single transaction rather
+// than two separate calls: the tenant-scope GORM plugin still forces
+// share's tenant_id on the first Create exactly as Repository[Share].Create
+// itself relies on (it does not touch shareTokenIndex at all, since that
+// type implements no dbkit.TenantScoped -- see its own doc comment), and a
+// failure on either write rolls back both, never leaving one committed
+// without the other.
+func (r *ShareRepository) createWithTokenIndex(ctx context.Context, share *Share) error {
+	tenant, err := pkgcore.MustTenantFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		if err := tx.Create(share).Error; err != nil {
+			return err
+		}
+		idx := &shareTokenIndex{TokenHash: share.TokenHash, TenantID: string(tenant)}
+		return tx.Create(idx).Error
+	})
+}
+
+// tenantForTokenHash resolves the tenant a token hash belongs to, with NO
+// tenant predicate anywhere in the query -- the one deliberately narrow
+// exception to this module's "every query is tenant-scoped" rule, and the
+// mechanism AGENTS.md's "Tenant resolution for an unauthenticated viewer"
+// section chose to close round 1's documented gap: a genuinely
+// unauthenticated visitor holds no tenant claim, so nothing about their
+// request can scope this lookup by tenant before it runs -- that is
+// precisely the property this method exists to establish, not violate.
+//
+// This is not a second byTokenHash and not a general cross-tenant query
+// capability: it reads shareTokenIndex, a table that was never tenant-
+// scoped to begin with (see that type's own doc comment for the full data-
+// domain reasoning), through an ordinary, unfiltered query -- dbkit's
+// tenant-scope GORM plugin never engages here at all, because the plugin
+// only ever acts on a model implementing dbkit.TenantScoped, and
+// shareTokenIndex deliberately does not. Nothing here reaches for raw SQL,
+// pkgcore.WithSystemContext, or any other escape hatch around a tenant-
+// scoped query -- there is no tenant-scoped query to escape, because this
+// method touches a different, narrower table than byTokenHash does. It
+// returns a tenant id and nothing else: no ResourceRef, no ShareID, no
+// Share row at all, so a caller cannot use this method to learn anything
+// about a share beyond which tenant a token's hash belongs to.
+//
+// Service.AccessPublic is this method's only caller: it resolves the
+// tenant here, attaches it to ctx with pkgcore.WithTenant, and re-enters
+// the ordinary tenant-scoped Service.Access unchanged -- Access itself
+// still performs its own byTokenHash lookup, its own password check, and
+// its own outward-identical-answer handling exactly as it always has. An
+// unrecognized hash here returns ErrNotAccessible, the same sentinel
+// byTokenHash returns for an unrecognized hash under a known tenant, so a
+// caller cannot distinguish "no such token anywhere" from "no such token
+// in the tenant it otherwise resolved to" -- though AccessPublic's own doc
+// comment records the one property this method does NOT hide: a genuinely
+// unrecognized token costs one repository read here plus one burned
+// password check, while a recognized-but-refused token costs one extra
+// repository read (Access's own byTokenHash) on top of that -- a timing
+// difference AGENTS.md's "The five mandatory rules" section's rule 5 was
+// never written to cover, since it protects "which of these refusal
+// reasons applied", not "does this token exist at all", which a valid
+// token's own successful use already discloses to whoever holds it.
+func (r *ShareRepository) tenantForTokenHash(ctx context.Context, hash string) (pkgcore.TenantID, error) {
+	var idx shareTokenIndex
+	err := r.db.WithContext(ctx).Where("token_hash = ?", hash).First(&idx).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return "", ErrNotAccessible
+	case err != nil:
+		return "", ErrInternal.WithCause(err)
+	}
+	return pkgcore.TenantID(idx.TenantID), nil
 }
 
 // listExpiredOrExhausted returns every live (not yet revoked) row of the
