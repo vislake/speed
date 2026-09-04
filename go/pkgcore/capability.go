@@ -69,10 +69,19 @@ const (
 	// same implementation running in envelope mode (the real key encrypted
 	// externally but decrypted locally to sign) does not have it either, for
 	// the same reason LocalSigner does not. No deployment mode requires this
-	// capability the way DeploymentModeDistributed requires MultiReplicaSafe
-	// -- a high-security deployment declares it wants it when assembling
-	// go/pki, and Kernel.Bootstrap's ordinary ErrCapabilityUnsatisfied check
-	// is what enforces that, exactly as it does for the three bits above.
+	// capability the way DeploymentModeDistributed requires MultiReplicaSafe.
+	//
+	// Unlike the three bits above, this one is NOT enforced by
+	// Kernel.Bootstrap today: Bootstrap's resolveKernelSeam/
+	// validateSeamCapability machinery only ever runs over the four fixed
+	// built-in seams (EventBus, KVStore, Mailer, ObjectStore); it has no
+	// knowledge of pki.SignerRegistry or pki.Signer, and go/pki calls no
+	// equivalent check of its own -- pki.Module.WithSigner takes no
+	// Capability/requirement parameter, and SignerRegistry.Build merely
+	// returns the Capability a registration declared without comparing it to
+	// anything. So a host that wires go/pki with an implementation lacking
+	// this bit where it intended to require it gets no error today. See
+	// go/pki/AGENTS.md's Known limitations for the gap and its follow-up.
 	KeyNeverLeavesBoundary
 )
 

@@ -157,7 +157,9 @@ pki.NewModule(db, pki.WithSigner("kms.aws", cfg))
 |---|---|
 | `KeyNeverLeavesBoundary` | 私钥从不以明文进入应用进程内存 |
 
-`local` 不具备该能力；`vault`/`aws-kms` 在**直签模式**下具备，在信封模式下不具备。高安全部署可在装配时声明要求它，由 `Kernel.Bootstrap` 在启动时校验，而不是等事故后才发现。
+`local` 不具备该能力；`vault`/`aws-kms` 在**直签模式**下具备，在信封模式下不具备。
+
+**尚未落地：这项声明目前不被任何地方校验。** `Kernel.Bootstrap` 对能力的解析与校验（`resolveKernelSeam`/`validateSeamCapability`）只覆盖四个固定的内建 seam（`EventBus`/`KVStore`/`Mailer`/`ObjectStore`），完全不知道 `pki.SignerRegistry` 或 `pki.Signer` 的存在；`go/pki` 一侧也没有等价的校验——`pki.Module.WithSigner` 不接收 `Capability`/需求参数，`SignerRegistry.Build` 只是把注册时声明的 `Capability` 原样返回，不与任何期望值比较。也就是说，宿主即便装配了一个不具备 `KeyNeverLeavesBoundary` 的实现，即便本意是要求它，今天也不会得到任何错误——高安全部署的"声明即校验"目前只是意图，不是实现。这项差距记录在 `go/pki/AGENTS.md` 的 Known limitations 中。
 
 ### Ed25519 在三套实现上都能直签（2026-09-04 核实）
 
