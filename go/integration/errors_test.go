@@ -31,6 +31,15 @@ func TestErrors_EveryVarIsAnAppErrorWithTheModulePrefix(t *testing.T) {
 		ErrPermissionListerUnavailable,
 		ErrRateLimited,
 		ErrInternal,
+		ErrWebhookSubscriptionNotFound,
+		ErrWebhookURLRequired,
+		ErrWebhookURLInvalid,
+		ErrWebhookURLUnresolvable,
+		ErrWebhookURLBlocked,
+		ErrEventTypesRequired,
+		ErrWebhookEventTypeUnknown,
+		ErrInvalidEventMapping,
+		ErrDuplicateEventMapping,
 	} {
 		if err.Code == "" {
 			t.Errorf("error has an empty Code: %+v", err)

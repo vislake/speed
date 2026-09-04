@@ -28,3 +28,21 @@
 "integration.already_attached" = "This module has already been attached."
 
 "integration.internal_error" = "Something went wrong. Please try again."
+
+"integration.webhook_subscription_not_found" = "That webhook subscription does not exist."
+
+"integration.webhook_url_required" = "A webhook receiving URL is required."
+
+"integration.webhook_url_invalid" = "That webhook URL is not valid."
+
+"integration.webhook_url_unresolvable" = "That webhook URL's host could not be resolved."
+
+"integration.webhook_url_blocked" = "That webhook URL resolves to a private or local address and was refused for security reasons."
+
+"integration.event_types_required" = "At least one event type must be selected."
+
+"integration.webhook_event_type_unknown" = "The event type {{.event_type}} is unknown and cannot be subscribed to."
+
+"integration.invalid_event_mapping" = "The event mapping declaration is missing its required {{.field}} field."
+
+"integration.duplicate_event_mapping" = "The internal event type {{.internal_type}} is already declared by another mapping."

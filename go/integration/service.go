@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"net/http"
 	"slices"
 	"time"
 
@@ -9,13 +10,15 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
+	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
-// Service is go/integration's runtime entry point for API key management:
-// the four operations round 1 ships (Create, List, Rotate, Revoke),
-// documented in AGENTS.md's own "API surface" section. It is built by
+// Service is go/integration's runtime entry point: round 1's four API key
+// operations (Create, List, Rotate, Revoke) plus round 2's outbound-webhook
+// surface -- subscription management (webhook_service.go) and the
+// event-driven delivery pipeline (webhook_delivery.go). It is built by
 // Module.Attach, never constructed directly by a host.
 type Service struct {
 	repo         *APIKeyRepository
@@ -24,6 +27,19 @@ type Service struct {
 	bus          pkgcore.EventBus
 	auditActions pkgcore.AuditActionRegistrar
 	now          func() time.Time
+
+	// The round-2 fields below back webhook_service.go and
+	// webhook_delivery.go; see those files for how each is used.
+	webhookRepo  *WebhookSubscriptionRepository
+	deliveryRepo *WebhookDeliveryRepository
+	queue        jobs.Queue
+	mappings     eventMappingIndex
+	httpClient   *http.Client
+
+	// urlValidator overrides ValidateWebhookURL for this module's own tests
+	// (withWebhookURLValidator, module.go). Nil in every production Service
+	// -- see validateWebhookURL in webhook_service.go.
+	urlValidator func(ctx context.Context, url string) error
 }
 
 // CreateInput is what a caller passes to Service.Create.

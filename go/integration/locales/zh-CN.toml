@@ -25,3 +25,21 @@
 "integration.already_attached" = "该模块已经完成过一次装配。"
 
 "integration.internal_error" = "出现了一些问题，请稍后重试。"
+
+"integration.webhook_subscription_not_found" = "该 Webhook 订阅不存在。"
+
+"integration.webhook_url_required" = "必须提供 Webhook 接收地址。"
+
+"integration.webhook_url_invalid" = "该 Webhook 接收地址无效。"
+
+"integration.webhook_url_unresolvable" = "该 Webhook 接收地址的主机名无法解析。"
+
+"integration.webhook_url_blocked" = "该 Webhook 接收地址指向内网或本地地址，出于安全原因被拒绝。"
+
+"integration.event_types_required" = "必须至少选择一种事件类型。"
+
+"integration.webhook_event_type_unknown" = "事件类型 {{.event_type}} 未知，无法订阅。"
+
+"integration.invalid_event_mapping" = "事件映射声明缺少必填字段 {{.field}}。"
+
+"integration.duplicate_event_mapping" = "内部事件类型 {{.internal_type}} 已经被另一个映射声明过。"

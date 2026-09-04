@@ -92,4 +92,56 @@ var (
 	// surfaced past this module: an *apperr.Error's cause chain does not
 	// reach an HTTP response body (backend coding standard §6.2).
 	ErrInternal = apperr.Internal("integration.internal_error")
+
+	// The round-2 error index: outbound webhook subscriptions and their
+	// event-mapping mechanism (webhook_service.go, webhook_delivery.go,
+	// eventmapping.go, ssrf.go).
+
+	// ErrWebhookSubscriptionNotFound reports a subscription id that does not
+	// exist in the caller's tenant. Like ErrKeyNotFound, it never
+	// distinguishes "no such subscription" from "belongs to another
+	// tenant".
+	ErrWebhookSubscriptionNotFound = apperr.NotFound("integration.webhook_subscription_not_found")
+
+	// ErrWebhookURLRequired reports a Create/Update call with an empty URL.
+	ErrWebhookURLRequired = apperr.Invalid("integration.webhook_url_required")
+
+	// ErrWebhookURLInvalid reports a webhook URL that is malformed, missing
+	// a host, or uses a scheme other than http/https. WithParam("reason",
+	// ...) names which. See ssrf.go's ValidateWebhookURL.
+	ErrWebhookURLInvalid = apperr.Invalid("integration.webhook_url_invalid")
+
+	// ErrWebhookURLUnresolvable reports a webhook URL whose host could not
+	// be resolved to any address at all -- WithParam("host", ...) names it.
+	// See ssrf.go's ValidateWebhookURL.
+	ErrWebhookURLUnresolvable = apperr.Invalid("integration.webhook_url_unresolvable")
+
+	// ErrWebhookURLBlocked reports a webhook URL that resolves to a
+	// private, loopback, link-local, multicast or otherwise
+	// never-a-legitimate-receiver address -- the SSRF refusal
+	// docs/internal/07-platform-services.md names as the most common
+	// outbound-webhook security hole. WithParam("ip", ...) names the
+	// blocked address. See ssrf.go's isBlockedIP.
+	ErrWebhookURLBlocked = apperr.Invalid("integration.webhook_url_blocked")
+
+	// ErrEventTypesRequired reports a Create/Update call with an empty
+	// EventTypes selection: a subscription that would never match anything
+	// is refused rather than silently created inert.
+	ErrEventTypesRequired = apperr.Invalid("integration.event_types_required")
+
+	// ErrWebhookEventTypeUnknown reports a requested event type that no
+	// EventMapping declares as its PublicType -- WithParam("event_type",
+	// ...) names it. A subscription may only be configured for a public
+	// event type this deployment can actually produce.
+	ErrWebhookEventTypeUnknown = apperr.Invalid("integration.webhook_event_type_unknown")
+
+	// ErrInvalidEventMapping reports a WithEventMapping declaration missing
+	// a required field -- WithParam("field", ...) names it. See
+	// eventmapping.go's EventMapping.validate.
+	ErrInvalidEventMapping = apperr.Invalid("integration.invalid_event_mapping")
+
+	// ErrDuplicateEventMapping reports two EventMapping declarations
+	// sharing one InternalType -- WithParam("internal_type", ...) names it.
+	// See eventmapping.go's buildEventMappingIndex.
+	ErrDuplicateEventMapping = apperr.Invalid("integration.duplicate_event_mapping")
 )

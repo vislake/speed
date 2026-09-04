@@ -77,3 +77,42 @@ func hashAPIKeyToken(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
 }
+
+// webhookSecretLiteralPrefix is the fixed literal every raw webhook secret
+// starts with, so a value found in a log line or a receiver's config file
+// is recognizable on sight -- the identical reasoning apiKeyLiteralPrefix's
+// own doc comment gives, following Stripe's "whsec_" convention for the
+// same kind of secret.
+const webhookSecretLiteralPrefix = "whsec_"
+
+// webhookSecretBytes is the entropy of a raw webhook secret: 32 bytes from
+// crypto/rand, the same strength apiKeyTokenBytes and go/org's invitation
+// token use -- this secret is an HMAC key, not a bearer credential
+// presented on the wire the way an API key is, but it is still the entire
+// basis of the authenticity guarantee webhook_signature.go's signature
+// gives a receiver, so it gets the identical entropy budget.
+const webhookSecretBytes = 32
+
+// newWebhookSecret returns a fresh raw webhook signing secret,
+// base64url-encoded (RawURLEncoding, matching newAPIKeyToken) and prefixed
+// with webhookSecretLiteralPrefix.
+//
+// Unlike an API key, a webhook secret is never hashed for storage: it is
+// stored reversibly encrypted (WebhookSecretSerializerName, webhook_model.go)
+// because every delivery attempt must read it back in plaintext to compute
+// that attempt's HMAC signature. newWebhookSecret itself has no opinion on
+// that -- it only generates the value -- but its doc comment records the
+// contrast because a reviewer used to round 1's "never store the raw value"
+// API key rule should not "fix" webhook_model.go's Secret column into a
+// hash by analogy.
+//
+// A crypto/rand failure is fatal to the operation and is reported, never
+// worked around with a weaker source, matching newAPIKeyToken's identical
+// posture.
+func newWebhookSecret() (string, error) {
+	buf := make([]byte, webhookSecretBytes)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("integration: generating a webhook secret: %w", err)
+	}
+	return webhookSecretLiteralPrefix + base64.RawURLEncoding.EncodeToString(buf), nil
+}

@@ -10,9 +10,15 @@ replace github.com/vislake/speed/go/tenancy => ../tenancy
 
 replace github.com/vislake/speed/go/ratelimit => ../ratelimit
 
+replace github.com/vislake/speed/go/jobs => ../jobs
+
+replace github.com/vislake/speed/go/observability => ../observability
+
 require (
 	github.com/google/uuid v1.6.0
 	github.com/vislake/speed/go/dbkit v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/jobs v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/ratelimit v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/tenancy v0.0.0-00010101000000-000000000000
@@ -82,7 +88,11 @@ require (
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect
+	go.opentelemetry.io/otel/exporters/stdout/stdoutmetric v1.44.0 // indirect
+	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.44.0 // indirect
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
+	go.opentelemetry.io/otel/sdk v1.44.0 // indirect
+	go.opentelemetry.io/otel/sdk/metric v1.44.0 // indirect
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect

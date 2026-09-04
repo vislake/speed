@@ -91,3 +91,27 @@ func TestHashAPIKeyToken_OutputShape(t *testing.T) {
 		}
 	}
 }
+
+func TestNewWebhookSecret_StartsWithLiteralPrefix(t *testing.T) {
+	secret, err := newWebhookSecret()
+	if err != nil {
+		t.Fatalf("newWebhookSecret: %v", err)
+	}
+	if !strings.HasPrefix(secret, webhookSecretLiteralPrefix) {
+		t.Errorf("secret = %q, want it to start with %q", secret, webhookSecretLiteralPrefix)
+	}
+}
+
+func TestNewWebhookSecret_TwoCallsProduceDistinctValues(t *testing.T) {
+	first, err := newWebhookSecret()
+	if err != nil {
+		t.Fatalf("newWebhookSecret (1): %v", err)
+	}
+	second, err := newWebhookSecret()
+	if err != nil {
+		t.Fatalf("newWebhookSecret (2): %v", err)
+	}
+	if first == second {
+		t.Error("two calls produced the identical webhook secret")
+	}
+}

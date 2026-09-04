@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -35,8 +36,10 @@ func TestModule_Register_DeclaresPermissionsAndAuditActions(t *testing.T) {
 	}
 
 	perms := reg.Permissions.Permissions()
-	if !contains(perms, PermissionRead) || !contains(perms, PermissionManage) {
-		t.Errorf("Permissions() = %v, want %q and %q present", perms, PermissionRead, PermissionManage)
+	for _, want := range []string{PermissionRead, PermissionManage, PermissionWebhookRead, PermissionWebhookManage} {
+		if !contains(perms, want) {
+			t.Errorf("Permissions() = %v, want %q present", perms, want)
+		}
 	}
 
 	actions := reg.AuditActions.Actions()
@@ -44,6 +47,70 @@ func TestModule_Register_DeclaresPermissionsAndAuditActions(t *testing.T) {
 		if !contains(actions, want) {
 			t.Errorf("Actions() = %v, want %q present", actions, want)
 		}
+	}
+}
+
+// TestModule_Register_RegistersWebhookDeliveryJobHandler proves round 2's
+// job-handler wiring: exactly one handler is registered, under
+// jobTypeWebhookDeliver, matching storage's and notification's identical
+// "job handlers" Register assertion shape.
+func TestModule_Register_RegistersWebhookDeliveryJobHandler(t *testing.T) {
+	m := NewModule(newTestDB(t))
+	reg := newTestRegistry(t)
+	if err := m.Register(reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	handlers := reg.Jobs.Handlers()
+	if len(handlers) != 1 {
+		t.Fatalf("len(handlers) = %d, want 1", len(handlers))
+	}
+	if _, ok := handlers[jobTypeWebhookDeliver]; !ok {
+		t.Errorf("handlers = %v, want %q present", handlers, jobTypeWebhookDeliver)
+	}
+}
+
+// TestModule_Register_SubscribesEveryDeclaredEventMapping proves
+// WithEventMapping's InternalType actually reaches reg.Events.Subscribe: a
+// domain event published on the host's own bus, after Register but before
+// Attach, is observed (Module.handleDomainEvent's own nil-Service guard
+// logs and swallows it rather than panicking -- this test only proves the
+// SUBSCRIPTION happened, not delivery, which webhook_delivery_test.go
+// covers against a real Attach-ed Service).
+func TestModule_Register_SubscribesEveryDeclaredEventMapping(t *testing.T) {
+	published := make(chan struct{}, 1)
+	mapping := EventMapping{
+		InternalType:  "test.subscribe.proof",
+		PublicType:    "test.subscribe.proof",
+		PublicVersion: "v1",
+		Transform:     fixedTransform(nil),
+	}
+	m := NewModule(newTestDB(t), WithEventMapping(mapping))
+	reg := newTestRegistry(t)
+	if err := m.Register(reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	reg.Events.Subscribe(mapping.InternalType, func(context.Context, pkgcore.Event) error {
+		published <- struct{}{}
+		return nil
+	})
+	if err := reg.EventBus().Publish(context.Background(), pkgcore.Event{Type: mapping.InternalType}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	select {
+	case <-published:
+	default:
+		t.Error("the second subscriber never observed the event -- Module's own subscription may not have registered on the same bus")
+	}
+}
+
+func TestModule_Register_DuplicateEventMapping_Refused(t *testing.T) {
+	dup := EventMapping{InternalType: "x", PublicType: "y", PublicVersion: "v1", Transform: fixedTransform(nil)}
+	m := NewModule(newTestDB(t), WithEventMapping(dup, dup))
+	reg := newTestRegistry(t)
+	if err := m.Register(reg); !apperrIs(err, ErrDuplicateEventMapping) {
+		t.Errorf("Register error = %v, want ErrDuplicateEventMapping", err)
 	}
 }
 
