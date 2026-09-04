@@ -10,14 +10,11 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	dto "github.com/prometheus/client_model/go"
-
-	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
@@ -25,33 +22,85 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// The Prometheus names the metrics in middleware.go end up under, once the
-// exporter appends its unit/counter-suffix translation. Confirmed against
-// the pinned go.opentelemetry.io/otel/exporters/prometheus version rather
-// than assumed -- see the package's implementation comment on
-// requestCountName / requestDurationName for the OTel-side names these
-// derive from.
+// The OTel instrument names middleware.go's Middleware records under.
+// Mirrored here as literals -- rather than referencing the package's own
+// unexported requestCountName / requestDurationName constants, which this
+// external observability_test package cannot see -- matching how this
+// file has always pinned the metric names it asserts on independently of
+// middleware.go's own implementation constants.
 const (
-	promRequestCountFamily    = "http_server_request_count_total"
-	promRequestDurationFamily = "http_server_request_duration_seconds"
+	requestCountMetricName    = "http.server.request.count"
+	requestDurationMetricName = "http.server.request.duration"
 )
 
 // setupMeterProvider installs, as OTel's global MeterProvider for the
-// duration of the test, a real SDK MeterProvider backed by a private
-// Prometheus registry (never prometheus.DefaultRegisterer, so repeated
-// calls across this file's tests never collide on "duplicate metrics
-// collector registration"). It returns the registry to Gather() from.
-func setupMeterProvider(t *testing.T) *prometheus.Registry {
+// duration of the test, a real SDK MeterProvider backed by a
+// sdkmetric.ManualReader -- a pull-on-demand reader the OTel SDK itself
+// provides, needing no exporter or third-party dependency of any kind
+// (this file deliberately does not import a Prometheus exporter: doing so
+// would defeat go/observability's own root-package/exporter-subpackage
+// isolation this repository's depguard rules enforce -- see
+// .golangci.yml's prometheus-only-in-observability-exporter-prometheus
+// rule). It returns the reader to collect() from.
+func setupMeterProvider(t *testing.T) *sdkmetric.ManualReader {
 	t.Helper()
-	reg := prometheus.NewRegistry()
-	exp, err := otelprom.New(otelprom.WithRegisterer(reg))
-	if err != nil {
-		t.Fatalf("build prometheus exporter: %v", err)
-	}
-	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exp))
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
 	otel.SetMeterProvider(mp)
-	return reg
+	return reader
+}
+
+// collect pulls a fresh snapshot from reader -- the ManualReader
+// equivalent of a Prometheus Gather() call, since nothing pushes to a
+// ManualReader on its own.
+func collect(t *testing.T, reader *sdkmetric.ManualReader) metricdata.ResourceMetrics {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	return rm
+}
+
+// findMetric returns the metric named name across every scope in rm,
+// failing the test if none matches.
+func findMetric(t *testing.T, rm metricdata.ResourceMetrics, name string) metricdata.Metrics {
+	t.Helper()
+	var got []string
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name == name {
+				return m
+			}
+			got = append(got, m.Name)
+		}
+	}
+	t.Fatalf("metric %q not found; metrics present: %v", name, got)
+	return metricdata.Metrics{}
+}
+
+// findSum type-asserts m.Data as a Sum[int64] (what Middleware's
+// Int64Counter always produces), failing the test if m is not one.
+func findSum(t *testing.T, m metricdata.Metrics) metricdata.Sum[int64] {
+	t.Helper()
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	if !ok {
+		t.Fatalf("metric %q data = %T, want metricdata.Sum[int64]", m.Name, m.Data)
+	}
+	return sum
+}
+
+// findHistogram type-asserts m.Data as a Histogram[float64] (what
+// Middleware's Float64Histogram always produces), failing the test if m
+// is not one.
+func findHistogram(t *testing.T, m metricdata.Metrics) metricdata.Histogram[float64] {
+	t.Helper()
+	hist, ok := m.Data.(metricdata.Histogram[float64])
+	if !ok {
+		t.Fatalf("metric %q data = %T, want metricdata.Histogram[float64]", m.Name, m.Data)
+	}
+	return hist
 }
 
 // setupTracerProvider installs, as OTel's global TracerProvider for the
@@ -66,52 +115,46 @@ func setupTracerProvider(t *testing.T) *tracetest.InMemoryExporter {
 	return exp
 }
 
-// findFamily returns the metric family named name, failing the test if it
-// is missing.
-func findFamily(t *testing.T, families []*dto.MetricFamily, name string) *dto.MetricFamily {
-	t.Helper()
-	for _, mf := range families {
-		if mf.GetName() == name {
-			return mf
-		}
-	}
-	var got []string
-	for _, mf := range families {
-		got = append(got, mf.GetName())
-	}
-	t.Fatalf("metric family %q not found; families present: %v", name, got)
-	return nil
-}
-
-// labelMap flattens a gathered metric's label pairs into a map, dropping
-// the otel_scope_* bookkeeping labels the Prometheus exporter attaches to
-// every series (they identify the meter, not this middleware's request
-// attributes, and are irrelevant to what this file asserts on).
-func labelMap(m *dto.Metric) map[string]string {
-	out := make(map[string]string, len(m.GetLabel()))
-	for _, lp := range m.GetLabel() {
-		if lp.GetName() == "otel_scope_name" || lp.GetName() == "otel_scope_schema_url" || lp.GetName() == "otel_scope_version" {
-			continue
-		}
-		out[lp.GetName()] = lp.GetValue()
+// labelMap flattens a data point's attribute set into a map. Unlike the
+// Prometheus exporter this file used to gather through, a ManualReader's
+// metricdata carries no exporter-specific bookkeeping labels (no
+// otel_scope_* noise to filter out): every attribute here is one
+// Middleware itself attached.
+func labelMap(attrs attribute.Set) map[string]string {
+	kvs := attrs.ToSlice()
+	out := make(map[string]string, len(kvs))
+	for _, kv := range kvs {
+		out[string(kv.Key)] = kv.Value.String()
 	}
 	return out
 }
 
 // assertNoTenantLabelAnywhere is the blanket negative control this whole
-// file is built around: no metric family Middleware feeds, under any
-// circumstance, may carry a tenant_id label. This is checked independently
-// of, and in addition to, the more specific series-count assertions below,
-// so a future attribute this middleware grows cannot reintroduce tenant_id
-// through a code path the more targeted assertions do not happen to cover.
-func assertNoTenantLabelAnywhere(t *testing.T, families []*dto.MetricFamily) {
+// file is built around: no metric Middleware feeds, under any
+// circumstance, may carry a tenant_id attribute. This is checked
+// independently of, and in addition to, the more specific series-count
+// assertions below, so a future attribute this middleware grows cannot
+// reintroduce tenant_id through a code path the more targeted assertions
+// do not happen to cover.
+func assertNoTenantLabelAnywhere(t *testing.T, rm metricdata.ResourceMetrics) {
 	t.Helper()
-	for _, mf := range families {
-		for _, m := range mf.GetMetric() {
-			for _, lp := range m.GetLabel() {
-				if lp.GetName() == obs.TenantIDKey {
-					t.Fatalf("metric family %q carries a %q label (value %q): tenant_id must never be a Prometheus metric label (CLAUDE.md, docs/internal/09-observability.md)",
-						mf.GetName(), obs.TenantIDKey, lp.GetValue())
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			var dataPointAttrs []attribute.Set
+			switch data := m.Data.(type) {
+			case metricdata.Sum[int64]:
+				for _, dp := range data.DataPoints {
+					dataPointAttrs = append(dataPointAttrs, dp.Attributes)
+				}
+			case metricdata.Histogram[float64]:
+				for _, dp := range data.DataPoints {
+					dataPointAttrs = append(dataPointAttrs, dp.Attributes)
+				}
+			}
+			for _, attrs := range dataPointAttrs {
+				if v, ok := attrs.Value(attribute.Key(obs.TenantIDKey)); ok {
+					t.Fatalf("metric %q carries a %q attribute (value %q): tenant_id must never be a metric label (CLAUDE.md, docs/internal/09-observability.md)",
+						m.Name, obs.TenantIDKey, v.String())
 				}
 			}
 		}
@@ -127,40 +170,37 @@ func newTestRequest(method, path string, tenant pkgcore.TenantID) *http.Request 
 }
 
 func TestMiddleware_RecordsRequestCountAndDuration(t *testing.T) {
-	reg := setupMeterProvider(t)
+	reader := setupMeterProvider(t)
 	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
 	handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, "/api/v1/notes", ""))
 
-	families, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("gather: %v", err)
-	}
-	assertNoTenantLabelAnywhere(t, families)
+	rm := collect(t, reader)
+	assertNoTenantLabelAnywhere(t, rm)
 
-	counter := findFamily(t, families, promRequestCountFamily)
-	if got := len(counter.GetMetric()); got != 1 {
+	counter := findSum(t, findMetric(t, rm, requestCountMetricName))
+	if got := len(counter.DataPoints); got != 1 {
 		t.Fatalf("expected exactly 1 counter series, got %d", got)
 	}
 	wantLabels := map[string]string{
-		"http_request_method":       "GET",
-		"http_route":                "/api/v1/notes",
-		"http_response_status_code": "200",
+		"http.request.method":       "GET",
+		"http.route":                "/api/v1/notes",
+		"http.response.status_code": "200",
 	}
-	if got := labelMap(counter.GetMetric()[0]); !mapsEqual(got, wantLabels) {
+	if got := labelMap(counter.DataPoints[0].Attributes); !mapsEqual(got, wantLabels) {
 		t.Errorf("counter labels = %v, want %v", got, wantLabels)
 	}
-	if got := counter.GetMetric()[0].GetCounter().GetValue(); got != 1 {
+	if got := counter.DataPoints[0].Value; got != 1 {
 		t.Errorf("counter value = %v, want 1", got)
 	}
 
-	duration := findFamily(t, families, promRequestDurationFamily)
-	if got := len(duration.GetMetric()); got != 1 {
+	duration := findHistogram(t, findMetric(t, rm, requestDurationMetricName))
+	if got := len(duration.DataPoints); got != 1 {
 		t.Fatalf("expected exactly 1 duration series, got %d", got)
 	}
-	if got := duration.GetMetric()[0].GetHistogram().GetSampleCount(); got != 1 {
+	if got := duration.DataPoints[0].Count; got != 1 {
 		t.Errorf("duration sample count = %v, want 1", got)
 	}
 }
@@ -175,7 +215,7 @@ func TestMiddleware_RecordsRequestCountAndDuration(t *testing.T) {
 // docs/internal/09-observability.md warns about: a few thousand tenants
 // multiplying every HTTP metric series by a few thousand.
 func TestMiddleware_MetricsExcludeTenant_NoPerTenantSeries(t *testing.T) {
-	reg := setupMeterProvider(t)
+	reader := setupMeterProvider(t)
 	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -184,26 +224,23 @@ func TestMiddleware_MetricsExcludeTenant_NoPerTenantSeries(t *testing.T) {
 		handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, "/api/v1/notes", tenant))
 	}
 
-	families, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("gather: %v", err)
-	}
-	assertNoTenantLabelAnywhere(t, families)
+	rm := collect(t, reader)
+	assertNoTenantLabelAnywhere(t, rm)
 
-	counter := findFamily(t, families, promRequestCountFamily)
-	if got := len(counter.GetMetric()); got != 1 {
+	counter := findSum(t, findMetric(t, rm, requestCountMetricName))
+	if got := len(counter.DataPoints); got != 1 {
 		t.Fatalf("expected the two tenants' requests to collapse into exactly 1 series, got %d series: %v",
-			got, counter.GetMetric())
+			got, counter.DataPoints)
 	}
-	if got := counter.GetMetric()[0].GetCounter().GetValue(); got != 2 {
+	if got := counter.DataPoints[0].Value; got != 2 {
 		t.Errorf("expected the single series to aggregate both tenants' requests (value 2), got %v", got)
 	}
 
-	duration := findFamily(t, families, promRequestDurationFamily)
-	if got := len(duration.GetMetric()); got != 1 {
+	duration := findHistogram(t, findMetric(t, rm, requestDurationMetricName))
+	if got := len(duration.DataPoints); got != 1 {
 		t.Fatalf("expected the two tenants' requests to collapse into exactly 1 duration series, got %d", got)
 	}
-	if got := duration.GetMetric()[0].GetHistogram().GetSampleCount(); got != 2 {
+	if got := duration.DataPoints[0].Count; got != 2 {
 		t.Errorf("expected the single duration series to aggregate both tenants' requests (2 samples), got %v", got)
 	}
 }
@@ -214,7 +251,7 @@ func TestMiddleware_MetricsExcludeTenant_NoPerTenantSeries(t *testing.T) {
 // collapsed to nothing either -- a middleware that dropped every
 // attribute would also pass a "no forking" check vacuously.
 func TestMiddleware_DifferentRouteOrStatus_ProducesSeparateSeries(t *testing.T) {
-	reg := setupMeterProvider(t)
+	reader := setupMeterProvider(t)
 	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/missing" {
 			w.WriteHeader(http.StatusNotFound)
@@ -226,13 +263,10 @@ func TestMiddleware_DifferentRouteOrStatus_ProducesSeparateSeries(t *testing.T) 
 	handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, "/api/v1/notes", ""))
 	handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, "/missing", ""))
 
-	families, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("gather: %v", err)
-	}
-	counter := findFamily(t, families, promRequestCountFamily)
-	if got := len(counter.GetMetric()); got != 2 {
-		t.Fatalf("expected 2 distinct series for 2 distinct (route, status) pairs, got %d: %v", got, counter.GetMetric())
+	rm := collect(t, reader)
+	counter := findSum(t, findMetric(t, rm, requestCountMetricName))
+	if got := len(counter.DataPoints); got != 2 {
+		t.Fatalf("expected 2 distinct series for 2 distinct (route, status) pairs, got %d: %v", got, counter.DataPoints)
 	}
 }
 
@@ -248,7 +282,7 @@ func TestMiddleware_DifferentRouteOrStatus_ProducesSeparateSeries(t *testing.T) 
 // one overflow bucket -- rather than growing with the number of distinct
 // paths sent.
 func TestMiddleware_UnboundedRoutePaths_CardinalityIsBounded(t *testing.T) {
-	reg := setupMeterProvider(t)
+	reader := setupMeterProvider(t)
 	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		// A real mux would 404 an unregistered path; the exact status is
 		// irrelevant to what this test checks (route-label cardinality),
@@ -268,41 +302,38 @@ func TestMiddleware_UnboundedRoutePaths_CardinalityIsBounded(t *testing.T) {
 	}
 	wg.Wait()
 
-	families, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("gather: %v", err)
-	}
-	assertNoTenantLabelAnywhere(t, families)
+	rm := collect(t, reader)
+	assertNoTenantLabelAnywhere(t, rm)
 
-	counter := findFamily(t, families, promRequestCountFamily)
-	metrics := counter.GetMetric()
+	counter := findSum(t, findMetric(t, rm, requestCountMetricName))
+	dataPoints := counter.DataPoints
 	wantSeries := obs.MaxRouteLabelValues + 1
-	if got := len(metrics); got != wantSeries {
-		t.Fatalf("got %d distinct http_route series for %d distinct attacker paths, want exactly %d (%d tracked + 1 overflow bucket): route-label cardinality is not bounded",
+	if got := len(dataPoints); got != wantSeries {
+		t.Fatalf("got %d distinct http.route series for %d distinct attacker paths, want exactly %d (%d tracked + 1 overflow bucket): route-label cardinality is not bounded",
 			got, attackerRequests, wantSeries, obs.MaxRouteLabelValues)
 	}
 
 	var overflowFound bool
-	var totalRecorded float64
-	for _, m := range metrics {
-		v := m.GetCounter().GetValue()
+	var totalRecorded int64
+	for _, dp := range dataPoints {
+		v := dp.Value
 		totalRecorded += v
-		if labelMap(m)["http_route"] == obs.RouteLabelOverflowValue {
+		if labelMap(dp.Attributes)["http.route"] == obs.RouteLabelOverflowValue {
 			overflowFound = true
-			if want := float64(attackerRequests - obs.MaxRouteLabelValues); v != want {
-				t.Errorf("overflow bucket (http_route=%q) recorded %v requests, want %v (%d total attacker requests - %d tracked distinct paths)",
+			if want := int64(attackerRequests - obs.MaxRouteLabelValues); v != want {
+				t.Errorf("overflow bucket (http.route=%q) recorded %v requests, want %v (%d total attacker requests - %d tracked distinct paths)",
 					obs.RouteLabelOverflowValue, v, want, attackerRequests, obs.MaxRouteLabelValues)
 			}
 			continue
 		}
 		if v != 1 {
-			t.Errorf("tracked route %q recorded %v requests, want exactly 1 (each attacker path in this test was requested once)", labelMap(m)["http_route"], v)
+			t.Errorf("tracked route %q recorded %v requests, want exactly 1 (each attacker path in this test was requested once)", labelMap(dp.Attributes)["http.route"], v)
 		}
 	}
 	if !overflowFound {
-		t.Fatalf("expected one series labeled http_route=%q (the overflow bucket) among the %d gathered series, found none", obs.RouteLabelOverflowValue, len(metrics))
+		t.Fatalf("expected one series labeled http.route=%q (the overflow bucket) among the %d gathered series, found none", obs.RouteLabelOverflowValue, len(dataPoints))
 	}
-	if totalRecorded != float64(attackerRequests) {
+	if totalRecorded != int64(attackerRequests) {
 		t.Errorf("sum of all recorded requests = %v, want %v (total attacker requests actually sent): a request was lost or double-counted", totalRecorded, attackerRequests)
 	}
 }
@@ -380,7 +411,7 @@ func longAttackerPath(suffix byte) string {
 // -- then restoring it makes the test pass again. This was verified by
 // hand while writing this test, not merely asserted here.
 func TestMiddleware_LongRoutePaths_LabelLengthIsBounded(t *testing.T) {
-	reg := setupMeterProvider(t)
+	reader := setupMeterProvider(t)
 	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		// A real mux would 404 an unregistered path, exactly like
 		// TestMiddleware_UnboundedRoutePaths_CardinalityIsBounded's handler
@@ -403,29 +434,26 @@ func TestMiddleware_LongRoutePaths_LabelLengthIsBounded(t *testing.T) {
 	handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, pathA, ""))
 	handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, pathB, ""))
 
-	families, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("gather: %v", err)
-	}
-	assertNoTenantLabelAnywhere(t, families)
+	rm := collect(t, reader)
+	assertNoTenantLabelAnywhere(t, rm)
 
-	counter := findFamily(t, families, promRequestCountFamily)
-	metrics := counter.GetMetric()
-	if got := len(metrics); got != 1 {
-		t.Fatalf("got %d distinct http_route series for 2 attacker paths sharing an identical %d-byte prefix (past obs.MaxRouteLabelLength=%d bytes), want exactly 1: routeLabelLimiter's internal map key is not bounded to MaxRouteLabelLength",
+	counter := findSum(t, findMetric(t, rm, requestCountMetricName))
+	dataPoints := counter.DataPoints
+	if got := len(dataPoints); got != 1 {
+		t.Fatalf("got %d distinct http.route series for 2 attacker paths sharing an identical %d-byte prefix (past obs.MaxRouteLabelLength=%d bytes), want exactly 1: routeLabelLimiter's internal map key is not bounded to MaxRouteLabelLength",
 			got, longAttackerPathPrefixLen, obs.MaxRouteLabelLength)
 	}
 
-	m := metrics[0]
-	gotLabel := labelMap(m)["http_route"]
+	dp := dataPoints[0]
+	gotLabel := labelMap(dp.Attributes)["http.route"]
 	if got := len(gotLabel); got != obs.MaxRouteLabelLength {
-		t.Fatalf("recorded http_route label is %d bytes, want exactly %d (obs.MaxRouteLabelLength): a %d-byte attacker path was not truncated",
+		t.Fatalf("recorded http.route label is %d bytes, want exactly %d (obs.MaxRouteLabelLength): a %d-byte attacker path was not truncated",
 			got, obs.MaxRouteLabelLength, longAttackerPathTotalLen)
 	}
 	if want := pathA[:obs.MaxRouteLabelLength]; gotLabel != want {
-		t.Errorf("recorded http_route label = %q, want the attacker path's first %d bytes (%q)", gotLabel, obs.MaxRouteLabelLength, want)
+		t.Errorf("recorded http.route label = %q, want the attacker path's first %d bytes (%q)", gotLabel, obs.MaxRouteLabelLength, want)
 	}
-	if got := m.GetCounter().GetValue(); got != 2 {
+	if got := dp.Value; got != 2 {
 		t.Errorf("the single collapsed series recorded %v requests, want 2 (both attacker paths counted under the same truncated label)", got)
 	}
 }
@@ -476,7 +504,7 @@ const multiByteRune = "😀"
 // slice of it is confirmed invalid UTF-8 -- so this test genuinely
 // exercises the backward scan rather than landing on a boundary by luck.
 func TestMiddleware_MultiByteRoutePath_TruncatesOnRuneBoundary(t *testing.T) {
-	reg := setupMeterProvider(t)
+	reader := setupMeterProvider(t)
 	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		// A real mux would 404 an unregistered path, exactly like
 		// TestMiddleware_LongRoutePaths_LabelLengthIsBounded's handler --
@@ -511,27 +539,24 @@ func TestMiddleware_MultiByteRoutePath_TruncatesOnRuneBoundary(t *testing.T) {
 	}
 	handler.ServeHTTP(httptest.NewRecorder(), req)
 
-	families, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("gather: %v", err)
-	}
-	assertNoTenantLabelAnywhere(t, families)
+	rm := collect(t, reader)
+	assertNoTenantLabelAnywhere(t, rm)
 
-	counter := findFamily(t, families, promRequestCountFamily)
-	metrics := counter.GetMetric()
-	if got := len(metrics); got != 1 {
-		t.Fatalf("got %d distinct http_route series for a single request, want exactly 1", got)
+	counter := findSum(t, findMetric(t, rm, requestCountMetricName))
+	dataPoints := counter.DataPoints
+	if got := len(dataPoints); got != 1 {
+		t.Fatalf("got %d distinct http.route series for a single request, want exactly 1", got)
 	}
 
-	gotLabel := labelMap(metrics[0])["http_route"]
+	gotLabel := labelMap(dataPoints[0].Attributes)["http.route"]
 	if !utf8.ValidString(gotLabel) {
-		t.Fatalf("recorded http_route label %q is not valid UTF-8: truncateRouteLabel cut the straddling multi-byte rune in half", gotLabel)
+		t.Fatalf("recorded http.route label %q is not valid UTF-8: truncateRouteLabel cut the straddling multi-byte rune in half", gotLabel)
 	}
 	if got := len(gotLabel); got != multiByteRoutePathPrefixLen {
-		t.Fatalf("recorded http_route label is %d bytes, want exactly %d: truncateRouteLabel should back up to the byte immediately before the straddling rune, no further and no less", got, multiByteRoutePathPrefixLen)
+		t.Fatalf("recorded http.route label is %d bytes, want exactly %d: truncateRouteLabel should back up to the byte immediately before the straddling rune, no further and no less", got, multiByteRoutePathPrefixLen)
 	}
 	if want := path[:multiByteRoutePathPrefixLen]; gotLabel != want {
-		t.Errorf("recorded http_route label = %q, want the ASCII prefix before the straddling rune (%q)", gotLabel, want)
+		t.Errorf("recorded http.route label = %q, want the ASCII prefix before the straddling rune (%q)", gotLabel, want)
 	}
 }
 
@@ -658,20 +683,17 @@ func TestMiddleware_ServerError_SetsSpanErrorStatus(t *testing.T) {
 // statusRecorder records the implicit 200 net/http itself sends when a
 // handler calls Write without ever calling WriteHeader.
 func TestMiddleware_ImplicitOK_WhenHandlerNeverCallsWriteHeader(t *testing.T) {
-	reg := setupMeterProvider(t)
+	reader := setupMeterProvider(t)
 	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	}))
 	handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, "/api/v1/notes", ""))
 
-	families, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("gather: %v", err)
-	}
-	counter := findFamily(t, families, promRequestCountFamily)
-	got := labelMap(counter.GetMetric()[0])
-	if got["http_response_status_code"] != "200" {
-		t.Errorf("status_code label = %q, want %q (implicit OK)", got["http_response_status_code"], "200")
+	rm := collect(t, reader)
+	counter := findSum(t, findMetric(t, rm, requestCountMetricName))
+	got := labelMap(counter.DataPoints[0].Attributes)
+	if got["http.response.status_code"] != "200" {
+		t.Errorf("status_code label = %q, want %q (implicit OK)", got["http.response.status_code"], "200")
 	}
 }
 

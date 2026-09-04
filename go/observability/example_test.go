@@ -29,15 +29,20 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
-	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
+	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	colmetricpb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 
 	observability "github.com/vislake/speed/go/observability"
+	// Blank-imported so ExampleInit's WithOTLPEndpoint call below has a
+	// registered exporter factory to succeed against -- exactly what a
+	// real host does. See go/observability/exporter/otlp's own doc
+	// comment.
+	_ "github.com/vislake/speed/go/observability/exporter/otlp"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -214,18 +219,13 @@ func ExampleRedactedValue() {
 // middleware_test.go's TestMiddleware_MetricsExcludeTenant_NoPerTenantSeries
 // for the same negative control against the package's own tests.
 func ExampleMiddleware() {
-	// A private Prometheus registry, mirroring what a host's real
-	// no-endpoint Init wires up internally (see init.go's
-	// initLocalExporters), so this example can inspect exactly what
-	// Middleware recorded without depending on Init or touching
-	// os.Stdout.
-	reg := prometheus.NewRegistry()
-	exp, err := otelprom.New(otelprom.WithRegisterer(reg))
-	if err != nil {
-		fmt.Println("build exporter:", err)
-		return
-	}
-	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exp))
+	// A ManualReader -- the OTel SDK's own on-demand reader, needing no
+	// exporter or third-party dependency -- so this example can inspect
+	// exactly what Middleware recorded without depending on Init,
+	// touching os.Stdout, or pulling in an exporter package this root
+	// package must not import (see go/observability/exporter/prometheus).
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	defer func() { _ = mp.Shutdown(context.Background()) }()
 	otel.SetMeterProvider(mp)
 
@@ -239,35 +239,32 @@ func ExampleMiddleware() {
 		handler.ServeHTTP(httptest.NewRecorder(), req)
 	}
 
-	families, err := reg.Gather()
-	if err != nil {
-		fmt.Println("gather:", err)
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		fmt.Println("collect:", err)
 		return
 	}
 
 	var sawTenantLabel bool
-	for _, mf := range families {
-		for _, m := range mf.GetMetric() {
-			for _, lp := range m.GetLabel() {
-				if lp.GetName() == observability.TenantIDKey {
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				continue
+			}
+			for _, dp := range sum.DataPoints {
+				if _, ok := dp.Attributes.Value(attribute.Key(observability.TenantIDKey)); ok {
 					sawTenantLabel = true
 				}
 			}
-		}
-		if mf.GetName() != "http_server_request_count_total" {
-			continue
-		}
-		fmt.Println("series:", len(mf.GetMetric()))
-		fmt.Println("requests recorded:", mf.GetMetric()[0].GetCounter().GetValue())
-		for _, lp := range mf.GetMetric()[0].GetLabel() {
-			// otel_scope_* are the exporter's own bookkeeping labels
-			// (which meter produced this series), not a Middleware
-			// request attribute -- irrelevant to what this example
-			// demonstrates.
-			if strings.HasPrefix(lp.GetName(), "otel_scope_") {
+			if m.Name != "http.server.request.count" {
 				continue
 			}
-			fmt.Printf("%s=%s\n", lp.GetName(), lp.GetValue())
+			fmt.Println("series:", len(sum.DataPoints))
+			fmt.Println("requests recorded:", sum.DataPoints[0].Value)
+			for _, kv := range sum.DataPoints[0].Attributes.ToSlice() {
+				fmt.Printf("%s=%s\n", kv.Key, kv.Value.String())
+			}
 		}
 	}
 	fmt.Println("tenant_id ever a label:", sawTenantLabel)
@@ -275,9 +272,9 @@ func ExampleMiddleware() {
 	// Output:
 	// series: 1
 	// requests recorded: 2
-	// http_request_method=GET
-	// http_response_status_code=200
-	// http_route=/api/v1/notes
+	// http.request.method=GET
+	// http.response.status_code=200
+	// http.route=/api/v1/notes
 	// tenant_id ever a label: false
 }
 

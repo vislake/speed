@@ -209,6 +209,39 @@ linters:
           deny:
             - pkg: gorm.io/driver/postgres
               desc: "the PostgreSQL driver belongs to go/dbkit/dialect/postgres alone; every other caller depends on dbkit.Open with dbkit.DialectPostgres and blank-imports that subpackage for its init side effect"
+        # go/observability's exporter split (issue #1 site 3): unlike the
+        # three rules above, these two narrow their exemption to the
+        # IMPLEMENTATION PACKAGE, not the owning module -- go/observability's
+        # own root package (init.go) must not import either SDK either,
+        # which is the whole point of the split (root CLAUDE.md's "do not
+        # put a backend implementation in the same package as the interface
+        # it implements"). Without this narrower shape, go/observability's
+        # own root-package files would be exempt the same way pkgcore's and
+        # jobs' are above, and depguard would never have caught the
+        # regression this split fixes in the first place -- see issue #1's
+        # own "depguard is currently blind to this" comment for the general
+        # version of this finding, applying to all four of that issue's
+        # sites.
+        otlp-only-in-observability-exporter-otlp:
+          files:
+            - "**/go/**"
+            - "!**/go/observability/exporter/otlp/**"
+          list-mode: lax
+          deny:
+            - pkg: go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc
+              desc: "the OTLP/gRPC metric exporter belongs to go/observability/exporter/otlp alone; go/observability's own root package resolves it through the RegisterOTLPExporters seam instead of importing it directly"
+            - pkg: go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc
+              desc: "the OTLP/gRPC trace exporter belongs to go/observability/exporter/otlp alone; go/observability's own root package resolves it through the RegisterOTLPExporters seam instead of importing it directly"
+        prometheus-only-in-observability-exporter-prometheus:
+          files:
+            - "**/go/**"
+            - "!**/go/observability/exporter/prometheus/**"
+          list-mode: lax
+          deny:
+            - pkg: github.com/prometheus/client_golang
+              desc: "the Prometheus client (promhttp included, as a subpackage of this import path) belongs to go/observability/exporter/prometheus alone; go/observability's own root package resolves a local metrics reader through the RegisterLocalMetricsReader seam instead of importing it directly"
+            - pkg: go.opentelemetry.io/otel/exporters/prometheus
+              desc: "the OTel-side Prometheus adapter is exporter-specific in exactly the same way as the client library above, and belongs alongside it in go/observability/exporter/prometheus alone"
 
   exclusions:
     generated: lax

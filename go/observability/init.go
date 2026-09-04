@@ -9,14 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -114,6 +108,90 @@ func WithOTLPInsecure(insecure bool) Option {
 	return func(c *Config) { c.OTLPInsecure = insecure }
 }
 
+// errOTLPExporterNotRegistered is what Init returns when a caller supplies
+// WithOTLPEndpoint but nothing has called RegisterOTLPExporters -- the
+// actionable fix it names is exactly what go/observability/exporter/otlp's
+// init() function does the moment a host blank-imports that subpackage.
+var errOTLPExporterNotRegistered = errors.New(`observability: OTLP endpoint configured but no OTLP exporter registered -- blank-import "github.com/vislake/speed/go/observability/exporter/otlp"`)
+
+// otlpFactory is the constructor Init calls to build the OTLP/gRPC
+// exporter set once a caller supplies WithOTLPEndpoint. It starts out nil
+// -- Init's own doc comment on WithOTLPEndpoint's actionable error
+// describes the consequence -- and is installed by
+// RegisterOTLPExporters, which go/observability/exporter/otlp's init()
+// function calls as its own side effect. See RegisterOTLPExporters' doc
+// comment for why this is a single registration slot, not a name-keyed
+// registry.
+var otlpFactory func(ctx context.Context, cfg Config, res *resource.Resource) (func(context.Context) error, error)
+
+// RegisterOTLPExporters installs f as the constructor Init calls when a
+// caller supplies a non-empty WithOTLPEndpoint. It mirrors database/sql's
+// driver-registration pattern (also the shape go/pkgcore's SeamRegistry
+// follows, though this package's needs are simpler: there is exactly one
+// OTLP exporter implementation this repository ships, so a single package
+// variable, not a name-keyed registry, is enough): exactly one subpackage,
+// go/observability/exporter/otlp, calls this from its own init() function
+// in any real binary, which is what a host importing that subpackage
+// purely for its side effect --
+//
+//	import _ "github.com/vislake/speed/go/observability/exporter/otlp"
+//
+// -- actually arranges. Doing so is what keeps otlptracegrpc,
+// otlpmetricgrpc, and everything they pull in (gRPC, protobuf, and their
+// own transitive trees) out of this root package's own import graph: a
+// consumer that never imports that subpackage carries none of it, proven
+// by this module's measured indirect-dependency count (see this package's
+// AGENTS.md).
+//
+// Last registration wins, matching database/sql's own documented
+// convention for a second driver registered under a name already taken.
+// This is deliberately not safe against two different OTLP exporter
+// packages both registering in the same binary -- the second call silently
+// replaces the first, with no error and no panic -- which is an accepted
+// limitation given a real binary is expected to blank-import exactly one
+// such subpackage, exactly as database/sql accepts for a duplicate driver
+// name.
+func RegisterOTLPExporters(f func(ctx context.Context, cfg Config, res *resource.Resource) (func(context.Context) error, error)) {
+	otlpFactory = f
+}
+
+// metricsReaderFactory is the constructor initLocalExporters calls to
+// build a pull-based local metrics reader and its HTTP scrape handler. It
+// starts out nil -- in which case initLocalExporters wires no local
+// scrape endpoint at all, and MetricsHandler answers the same
+// not-configured 404 the OTLP path uses -- and is installed by
+// RegisterLocalMetricsReader, which
+// go/observability/exporter/prometheus's init() function calls as its own
+// side effect.
+var metricsReaderFactory func() (sdkmetric.Reader, http.Handler, error)
+
+// RegisterLocalMetricsReader installs f as the constructor
+// initLocalExporters calls to build a local, pull-based metrics reader
+// (registered on the MeterProvider Init assembles) and the http.Handler
+// that serves it -- what MetricsHandler returns once registered. See
+// RegisterOTLPExporters' doc comment for the registration convention this
+// mirrors (single slot, last registration wins, not safe against two
+// different implementations registering at once).
+//
+// This is the mechanism that makes local Prometheus scraping opt-in
+// rather than Init's unconditional default: go/observability/exporter/prometheus
+// is the one subpackage that calls this today, from its own init()
+// function, so a host that wants a local /metrics endpoint blank-imports
+// it --
+//
+//	import _ "github.com/vislake/speed/go/observability/exporter/prometheus"
+//
+// -- and a host that does not never pulls github.com/prometheus/client_golang
+// into its import graph at all. Without any registration, Init's
+// no-endpoint default still wires the stdout trace and metric exporters
+// (the OTel SDK's own stdout exporters are not a third-party dependency
+// for a package that already requires the OTel SDK core), so a host with
+// nothing registered is never left with no local telemetry at all --
+// only with no local *pull-based scrape* endpoint.
+func RegisterLocalMetricsReader(f func() (sdkmetric.Reader, http.Handler, error)) {
+	metricsReaderFactory = f
+}
+
 // metricsHandlerMu guards currentMetricsHandler. Init runs once per
 // process in normal operation, but this package's own tests call it
 // repeatedly, so the handler is mutex-protected rather than a bare package
@@ -124,13 +202,16 @@ var (
 )
 
 // MetricsHandler returns the http.Handler the most recent Init call wired
-// up for /metrics: a real Prometheus scrape endpoint when Init wired the
-// local exporters (no OTLP endpoint configured), and a 404 explaining that
-// metrics are pushed via OTLP instead of pulled locally when it wired the
-// OTLP exporters -- or before Init has run at all.
+// up for /metrics: a real local scrape endpoint when Init wired the local
+// exporters AND a metrics reader was registered via
+// RegisterLocalMetricsReader (see go/observability/exporter/prometheus),
+// and a 404 explaining why not otherwise -- the OTLP exporters were wired
+// instead (metrics are pushed, not pulled), no local reader was
+// registered, or Init has not run at all yet.
 //
 // See examples/reference-app/cmd/server/server.go for where a host mounts
-// this at /metrics.
+// this at /metrics, and blank-imports go/observability/exporter/prometheus
+// to get a real answer from it.
 func MetricsHandler() http.Handler {
 	metricsHandlerMu.Lock()
 	defer metricsHandlerMu.Unlock()
@@ -144,9 +225,14 @@ func setMetricsHandler(h http.Handler) {
 	currentMetricsHandler = h
 }
 
-// metricsUnavailableBody is the response body MetricsHandler serves when
-// the OTLP exporters are wired, and before Init has run.
-const metricsUnavailableBody = "observability: no local /metrics endpoint; metrics are pushed via OTLP to the configured collector\n"
+// metricsUnavailableBody is the response body MetricsHandler serves
+// whenever there is no local scrape endpoint to answer with: the OTLP
+// exporters are wired (metrics are pushed, not pulled), the local
+// exporters are wired but no metrics reader was registered via
+// RegisterLocalMetricsReader, or Init has not run at all yet. It names
+// both ways forward rather than picking one, since which applies depends
+// on which of those three states the caller is actually in.
+const metricsUnavailableBody = "observability: no local /metrics endpoint; either metrics are pushed via OTLP to a configured collector, or no local scrape reader is registered -- blank-import \"github.com/vislake/speed/go/observability/exporter/prometheus\" for a local scrape endpoint, or configure WithOTLPEndpoint for push-based metrics\n"
 
 // metricsUnavailable is the handler installed whenever there is no local
 // Prometheus registry to serve -- see metricsUnavailableBody.
@@ -177,15 +263,27 @@ func metricsUnavailable(w http.ResponseWriter, _ *http.Request) {
 //
 // With no WithOTLPEndpoint option, Init wires the local exporters. They
 // need no configuration and no external process: traces are written to
-// stdout (stdouttrace), and metrics are written both to stdout
-// (stdoutmetric, periodically, for a developer tailing the process) and to
-// an in-process Prometheus registry exposed through MetricsHandler for the
-// host to mount at /metrics.
+// stdout (stdouttrace), and metrics are written to stdout too
+// (stdoutmetric, periodically, for a developer tailing the process) --
+// this much is Init's true zero-third-party-dependency default (the OTel
+// SDK's own stdout exporters, not a third-party dependency for a package
+// that already requires the OTel SDK core). A local, pull-based
+// Prometheus scrape endpoint at MetricsHandler is an OPT-IN addition on
+// top of that default, wired only when a metrics reader has been
+// registered via RegisterLocalMetricsReader -- which
+// go/observability/exporter/prometheus's init() function does, so a host
+// that wants one blank-imports that subpackage. Without it,
+// MetricsHandler answers a 404 explaining both ways forward (see
+// metricsUnavailableBody).
 //
 // With a non-empty endpoint supplied via WithOTLPEndpoint, Init wires the
-// OTLP/gRPC exporters instead: both signals are pushed to that endpoint,
-// and MetricsHandler reports 404, since there is no local Prometheus
-// registry to scrape.
+// OTLP/gRPC exporters instead -- built by the constructor registered
+// through RegisterOTLPExporters, which go/observability/exporter/otlp's
+// init() function installs, so a host that wants OTLP export
+// blank-imports that subpackage. Without it, Init itself fails with an
+// actionable error naming the same import. Once wired, both signals are
+// pushed to that endpoint, and MetricsHandler reports 404, since there is
+// no local registry to scrape.
 func Init(ctx context.Context, opts ...Option) (func(context.Context) error, error) {
 	cfg := Config{ServiceName: defaultServiceName}
 	for _, opt := range opts {
@@ -202,14 +300,24 @@ func Init(ctx context.Context, opts ...Option) (func(context.Context) error, err
 	}
 
 	if cfg.OTLPEndpoint != "" {
-		return initOTLPExporters(ctx, cfg, res)
+		if otlpFactory == nil {
+			return nil, errOTLPExporterNotRegistered
+		}
+		shutdown, err := otlpFactory(ctx, cfg, res)
+		if err != nil {
+			return nil, err
+		}
+		setMetricsHandler(http.HandlerFunc(metricsUnavailable))
+		return shutdown, nil
 	}
 	return initLocalExporters(res)
 }
 
-// initLocalExporters wires the local exporter set: traces to stdout and
-// metrics both to stdout and to an in-process Prometheus registry. See
-// Init's own doc comment.
+// initLocalExporters wires the local exporter set: traces to stdout
+// always, metrics to stdout always plus, when metricsReaderFactory has
+// been registered, a local pull-based reader as well. See Init's own doc
+// comment for why the local scrape endpoint is opt-in rather than
+// unconditional.
 func initLocalExporters(res *resource.Resource) (func(context.Context) error, error) {
 	traceExporter, err := stdouttrace.New(stdouttrace.WithWriter(os.Stdout))
 	if err != nil {
@@ -231,76 +339,39 @@ func initLocalExporters(res *resource.Resource) (func(context.Context) error, er
 		return nil, fmt.Errorf("observability: build stdout metric exporter: %w", err)
 	}
 
-	// A registry of this Init call's own, rather than
-	// prometheus.DefaultRegisterer: the default registerer is a single
-	// process-wide global, so a second Init call in the same process --
-	// every test in this package that exercises Init's no-endpoint path
-	// does exactly this -- would panic with "duplicate metrics collector
-	// registration" the moment it tried to register the same instrument
-	// names again. A fresh registry per call sidesteps that entirely and
-	// keeps repeated Init calls independent.
-	registry := prometheus.NewRegistry()
-	promExporter, err := otelprom.New(otelprom.WithRegisterer(registry))
-	if err != nil {
-		_ = tp.Shutdown(context.Background())
-		return nil, fmt.Errorf("observability: build prometheus metric exporter: %w", err)
-	}
-
-	mp := sdkmetric.NewMeterProvider(
+	mpOpts := []sdkmetric.Option{
 		sdkmetric.WithResource(res),
 		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(stdoutExporter, sdkmetric.WithInterval(localStdoutMetricInterval))),
-		// promExporter is itself an sdkmetric.Reader: registering it
-		// directly, rather than wrapping it in a PeriodicReader, is what
-		// makes it pull-based -- see this function's own doc comment on
-		// MetricsHandler's freshness above.
-		sdkmetric.WithReader(promExporter),
-	)
+	}
+
+	// metricsHandler defaults to the not-configured 404: a host that never
+	// registered a local metrics reader (never blank-imported
+	// go/observability/exporter/prometheus, or any future alternative
+	// implementation) gets exactly that answer from MetricsHandler, per
+	// Init's own doc comment.
+	metricsHandler := http.Handler(http.HandlerFunc(metricsUnavailable))
+	if metricsReaderFactory != nil {
+		reader, handler, err := metricsReaderFactory()
+		if err != nil {
+			_ = tp.Shutdown(context.Background())
+			return nil, fmt.Errorf("observability: build local metrics reader: %w", err)
+		}
+		// reader is itself an sdkmetric.Reader: registering it directly,
+		// rather than wrapping it in a PeriodicReader, is what makes it
+		// pull-based -- collected synchronously on every scrape, per
+		// MetricsHandler's own doc comment on freshness.
+		mpOpts = append(mpOpts, sdkmetric.WithReader(reader))
+		metricsHandler = handler
+	}
+
+	mp := sdkmetric.NewMeterProvider(mpOpts...)
 
 	otel.SetTracerProvider(tp)
 	otel.SetMeterProvider(mp)
-	setMetricsHandler(promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
+	setMetricsHandler(metricsHandler)
 
 	shutdown := func(shutdownCtx context.Context) error {
 		setMetricsHandler(http.HandlerFunc(metricsUnavailable))
-		return errors.Join(tp.Shutdown(shutdownCtx), mp.Shutdown(shutdownCtx))
-	}
-	return shutdown, nil
-}
-
-// initOTLPExporters wires the OTLP/gRPC exporter set: both signals are
-// pushed to the configured endpoint. See Init's own doc comment.
-func initOTLPExporters(ctx context.Context, cfg Config, res *resource.Resource) (func(context.Context) error, error) {
-	traceOpts := []otlptracegrpc.Option{otlptracegrpc.WithEndpoint(cfg.OTLPEndpoint)}
-	metricOpts := []otlpmetricgrpc.Option{otlpmetricgrpc.WithEndpoint(cfg.OTLPEndpoint)}
-	if cfg.OTLPInsecure {
-		traceOpts = append(traceOpts, otlptracegrpc.WithInsecure())
-		metricOpts = append(metricOpts, otlpmetricgrpc.WithInsecure())
-	}
-
-	traceExporter, err := otlptracegrpc.New(ctx, traceOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("observability: build OTLP trace exporter: %w", err)
-	}
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(traceExporter),
-		sdktrace.WithResource(res),
-	)
-
-	metricExporter, err := otlpmetricgrpc.New(ctx, metricOpts...)
-	if err != nil {
-		_ = tp.Shutdown(context.Background())
-		return nil, fmt.Errorf("observability: build OTLP metric exporter: %w", err)
-	}
-	mp := sdkmetric.NewMeterProvider(
-		sdkmetric.WithResource(res),
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter)),
-	)
-
-	otel.SetTracerProvider(tp)
-	otel.SetMeterProvider(mp)
-	setMetricsHandler(http.HandlerFunc(metricsUnavailable))
-
-	shutdown := func(shutdownCtx context.Context) error {
 		return errors.Join(tp.Shutdown(shutdownCtx), mp.Shutdown(shutdownCtx))
 	}
 	return shutdown, nil

@@ -35,6 +35,15 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/notification"
 	obs "github.com/vislake/speed/go/observability"
+
+	// Blank-imported for its init() side effect: obs.Init's local
+	// exporters wire a real /metrics scrape endpoint only when a local
+	// metrics reader has been registered (go/observability's own doc
+	// comment on Init and RegisterLocalMetricsReader) -- this is what
+	// metricsHandler below actually serves once main.go's run has called
+	// obs.Init. Without this import, obs.Init still runs (traces and
+	// metrics both go to stdout), but MetricsHandler answers 404.
+	_ "github.com/vislake/speed/go/observability/exporter/prometheus"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/rbac"

@@ -3,12 +3,10 @@ package observability_test
 import (
 	"context"
 	"errors"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,16 +19,28 @@ import (
 	"go.opentelemetry.io/otel"
 
 	obs "github.com/vislake/speed/go/observability"
+	// Blank-imported so this file's own OTLP-endpoint tests below (which
+	// call obs.Init with WithOTLPEndpoint) have a registered exporter
+	// factory to succeed against -- exactly what a real host does. This
+	// import has no bearing on TestInit_NoEndpoint_* below, which stay on
+	// Init's stdout-only default: registering the OTLP factory does not
+	// register a local metrics reader.
+	_ "github.com/vislake/speed/go/observability/exporter/otlp"
 )
 
-// TestInit_NoEndpoint_WiresWorkingLocalExporters is the task's own
-// acceptance bar for Init's no-endpoint path: hit MetricsHandler and
-// confirm real Prometheus-format output appears after a recorded request,
-// using nothing but Init and Middleware exactly as a real host would wire
-// them.
-func TestInit_NoEndpoint_WiresWorkingLocalExporters(t *testing.T) {
-	ctx := context.Background()
-	shutdown, err := obs.Init(ctx)
+// TestInit_NoEndpoint_MetricsHandlerIsNotConfiguredByDefault is the
+// acceptance bar for Init's true zero-third-party-dependency default,
+// proportionate to go/observability/exporter/prometheus's own
+// TestBuildReader_WiresWorkingLocalMetricsEndpoint, which proves the
+// opposite (opted-in) half of the same behavior. This package's own tests
+// never blank-import that subpackage, so nothing here ever registers a
+// local metrics reader via obs.RegisterLocalMetricsReader -- if that ever
+// stopped being true (a future test file in this package added such an
+// import), this test would start failing, which is the point: it is
+// meant to fail loudly the moment this package's own root import graph
+// gains a dependency on the opt-in subpackage it exists to keep optional.
+func TestInit_NoEndpoint_MetricsHandlerIsNotConfiguredByDefault(t *testing.T) {
+	shutdown, err := obs.Init(context.Background())
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -40,71 +50,10 @@ func TestInit_NoEndpoint_WiresWorkingLocalExporters(t *testing.T) {
 		}
 	})
 
-	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/notes", nil)
-	handler.ServeHTTP(httptest.NewRecorder(), req)
-
-	metricsReq := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	metricsRR := httptest.NewRecorder()
-	obs.MetricsHandler().ServeHTTP(metricsRR, metricsReq)
-
-	if metricsRR.Code != http.StatusOK {
-		t.Fatalf("GET /metrics status = %d, want 200", metricsRR.Code)
-	}
-	body, err := io.ReadAll(metricsRR.Result().Body)
-	if err != nil {
-		t.Fatalf("read /metrics body: %v", err)
-	}
-
-	// A real Prometheus exposition-format line for the request this test
-	// just issued: the counter's family name, in the "_total" form the
-	// exporter appends, carrying a value of (at least) 1.
-	if !strings.Contains(string(body), "http_server_request_count_total{") {
-		t.Errorf("expected /metrics body to contain the request counter family after a recorded request; body:\n%s", body)
-	}
-	if !strings.Contains(string(body), `http_route="/api/v1/notes"`) {
-		t.Errorf("expected /metrics body to contain the recorded route label; body:\n%s", body)
-	}
-}
-
-// TestInit_NoEndpoint_MetricsHandlerIsIsolatedAcrossCalls proves the
-// fresh-registry-per-Init design actually holds: a second Init call in
-// the same process (exactly what happens across this file's own tests)
-// must not panic with Prometheus's "duplicate metrics collector
-// registration" and must not carry over the previous call's recorded data
-// into the new registry.
-func TestInit_NoEndpoint_MetricsHandlerIsIsolatedAcrossCalls(t *testing.T) {
-	ctx := context.Background()
-
-	shutdown1, err := obs.Init(ctx)
-	if err != nil {
-		t.Fatalf("first Init: %v", err)
-	}
-	obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/first", nil))
-	if shutdownErr := shutdown1(ctx); shutdownErr != nil {
-		t.Fatalf("first shutdown: %v", shutdownErr)
-	}
-
-	// A second Init call is exactly what this test is for: it must not
-	// panic on re-registering the same Prometheus collector names.
-	shutdown2, err := obs.Init(ctx)
-	if err != nil {
-		t.Fatalf("second Init: %v", err)
-	}
-	t.Cleanup(func() { _ = shutdown2(context.Background()) })
-
 	rr := httptest.NewRecorder()
 	obs.MetricsHandler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	body, err := io.ReadAll(rr.Result().Body)
-	if err != nil {
-		t.Fatalf("read /metrics body: %v", err)
-	}
-	if strings.Contains(string(body), `http_route="/first"`) {
-		t.Errorf("expected the second Init's registry to start empty, but it still carries the first call's data:\n%s", body)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("MetricsHandler() with no metrics reader registered: status = %d, want 404 (a local scrape endpoint is opt-in -- see go/observability/exporter/prometheus)", rr.Code)
 	}
 }
 
