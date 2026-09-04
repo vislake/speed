@@ -276,8 +276,14 @@ func TestHandler_SharingAccessShare_ResolverSeesTheShareOwningTenant(t *testing.
 }
 
 // TestHandler_SharingAccessShare_MissingTokenParam_Answers400 proves an
-// absent required token query parameter fails through oapi-codegen's own
-// parameter-binding error path rather than reaching Service at all.
+// absent required token query parameter fails through the spec-generated
+// parameter-binding error path rather than reaching Service at all -- and
+// that NewHandler's own ErrorHandlerFunc (bindingErrorHandler, handler.go),
+// not oapi-codegen's default http.Error, is what answers it: the response
+// must still carry Cache-Control: no-store (AGENTS.md's "Revocation and
+// caching" section names this as binding on every response this route can
+// produce, binding failures included) and the module's own SharingError
+// JSON envelope, never a plain-text body.
 func TestHandler_SharingAccessShare_MissingTokenParam_Answers400(t *testing.T) {
 	h := newTestHandler(t, nil)
 	req := httptest.NewRequest(http.MethodGet, PathAccess, nil)
@@ -285,6 +291,45 @@ func TestHandler_SharingAccessShare_MissingTokenParam_Answers400(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 for a missing required token parameter", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want %q for a binding-error refusal", got, "no-store")
+	}
+	var envelope api.SharingError
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("body did not decode as api.SharingError: %v (body: %s)", err, rec.Body.String())
+	}
+	if envelope.Code != ErrInvalidRequest.Code {
+		t.Errorf("envelope.Code = %q, want %q", envelope.Code, ErrInvalidRequest.Code)
+	}
+}
+
+// TestHandler_SharingAccessShare_DuplicatePasswordHeader_Answers400 covers
+// the finding's other named binding failure -- a duplicated
+// X-Sharing-Password header, which SharingAccessShareParams's underlying
+// bind rejects as TooManyValuesForParamError -- through the same
+// ErrorHandlerFunc path as the missing-token case above, so the fix is
+// pinned against more than the one parameter oapi-codegen happens to bind
+// first.
+func TestHandler_SharingAccessShare_DuplicatePasswordHeader_Answers400(t *testing.T) {
+	h := newTestHandler(t, nil)
+	req := accessRequest("some-token", nil)
+	req.Header.Add(HeaderSharePassword, "first")
+	req.Header.Add(HeaderSharePassword, "second")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for a duplicated %s header", rec.Code, HeaderSharePassword)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want %q for a binding-error refusal", got, "no-store")
+	}
+	var envelope api.SharingError
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("body did not decode as api.SharingError: %v (body: %s)", err, rec.Body.String())
+	}
+	if envelope.Code != ErrInvalidRequest.Code {
+		t.Errorf("envelope.Code = %q, want %q", envelope.Code, ErrInvalidRequest.Code)
 	}
 }
 

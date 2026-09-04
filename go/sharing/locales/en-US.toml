@@ -15,6 +15,8 @@
 
 "sharing.invalid_max_views" = "The view limit {{.max_views}} is not valid; it must be a positive number."
 
+"sharing.invalid_request" = "The request could not be understood; check the share link and try again."
+
 "sharing.not_accessible" = "This share link is not accessible."
 
 "sharing.share_not_found" = "That share does not exist."

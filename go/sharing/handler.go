@@ -67,11 +67,38 @@ type Handler struct {
 // ErrResourceUnavailable rather than serving bytes it has no way to reach
 // -- a host that mounts this route without wiring a resolver gets a route
 // that always fails past the access-decision stage, never one that panics.
+//
+// Unlike every other module's handler in this codebase, this one cannot
+// wire the mux with the bare api.HandlerFromMux: that helper installs
+// oapi-codegen's default ErrorHandlerFunc (plain http.Error) for a request
+// the spec-generated parameter binder itself rejects -- a missing or
+// malformed token query parameter, a duplicated X-Sharing-Password header
+// -- and that path returns before SharingAccessShare, the method that sets
+// Cache-Control: no-store, ever runs. AGENTS.md's "Revocation and caching"
+// section is explicit that EVERY response this route can produce must
+// carry that header, so NewHandler instead calls api.HandlerWithOptions
+// with a custom ErrorHandlerFunc (bindingErrorHandler below) that sets the
+// header and writes the module's own SharingError envelope itself.
 func NewHandler(svc *Service, resolver ResourceResolver) *Handler {
 	h := &Handler{svc: svc, resolver: resolver}
 	h.mux = http.NewServeMux()
-	api.HandlerFromMux(h, h.mux)
+	api.HandlerWithOptions(h, api.StdHTTPServerOptions{
+		BaseRouter:       h.mux,
+		ErrorHandlerFunc: bindingErrorHandler,
+	})
 	return h
+}
+
+// bindingErrorHandler is NewHandler's ErrorHandlerFunc: it runs in place of
+// api.HandlerFromMux's default (a bare http.Error) whenever the
+// spec-generated parameter binder rejects a request before Handler's own
+// method is ever called. It sets Cache-Control: no-store first -- matching
+// SharingAccessShare's own ordering discipline -- then answers the same
+// SharingError JSON envelope every other refusal on this route produces,
+// via ErrInvalidRequest wrapping the binder's own error as its cause.
+func bindingErrorHandler(w http.ResponseWriter, _ *http.Request, err error) {
+	w.Header().Set("Cache-Control", "no-store")
+	writeError(w, ErrInvalidRequest.WithCause(err))
 }
 
 // ServeHTTP implements http.Handler.
