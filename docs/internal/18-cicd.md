@@ -18,6 +18,10 @@
 | `release` | 手动触发（指定版本号） | lockstep 全量发布：Go module 逐个打 tag + npm 包逐个发布 + 镜像 + CLI 二进制 | < 30 分钟 |
 | `nightly` | 每日 | 全量矩阵 + 性能基准回归 + flaky test 检测 | 不限 |
 
+> **注记（2026-09-04）：这条规则的放行粒度目前是模块级，而问题出在包级。** `.golangci.yml` 里三条 SDK 规则的放行写法是 `!**/go/pkgcore/**` 与 `!**/go/jobs/**`——放行**整个模块连同它的全部子包**。后果是：`pkgcore` 根包内联 Redis 与 S3 实现（`redis_kv.go`、`s3_objectstore.go` 与接口同包），在这条规则下完全合规，于是"每个消费者无条件继承 go-redis 与 minio-go"这件事从未被任何检查报出来。规则本身没错，错在放行的粒度——它守住了"别的模块不许 import SDK"，却守不住"实现不许和接口同包"（[03 部署模式与实现组装](03-deployment-modes.md) 的约束 6）。
+>
+> 修法与拆分是同一件事：实现移入子包后，放行路径收紧到 `!**/go/pkgcore/kv/redis/**` 这样的实现包，depguard 随即成为防回退的闸门——谁再把 SDK import 写回根包，CI 直接失败。这也是拆分工作的验收条件之一。现存实例与进度见 issue #1。
+
 > **实施状态注记（2026-09，security 轮次）**：上表是设计规格，不是现状。当前真实落地的流水线：`pr-check`（每个 PR）、`pr-full`（打 `full-ci` 标签的 PR）、`docs-check` 与 `api-contract`（按路径过滤触发），以及本轮由 gated stub 转正的 `security`（每个 PR + 每日 05:37 UTC 定时；触发、职责与暂缓项的解除条件见 `.github/workflows/security.yml` 文件头）。`release` 在 release-foundation 轮次转正（此后手动触发）；`e2e`、`nightly`、`scaffold-verify` 仍是 gated stub，由各自轮次接手——scaffold-verify 的文件头已由 saasctl 轮更新：`go/saasctl` v0.1 交付了该流水线的生成侧，`saasctl new` 的真实离线端到端证明（生成→tidy→build→boot→冒烟）逐项记录在 `go/saasctl/AGENTS.md` Testing 章节，但两种部署模式各 boot 一次与每日/发布后触发仍是 M4 门，stub guard 保持原样（见 `.github/workflows/scaffold-verify.yml` 文件头与 [16 验证方式](16-verification.md) §5 的注记）。security 行的设计内容逐项核对：pnpm audit、gitleaks、CodeQL 与许可证扫描已接线；依赖漏洞扫描（Go 侧 govulncheck）与镜像扫描（trivy）暂缓——govulncheck 在当前树有两处独立原因必然失败（标准库公告属于 go.work `go 1.25.0` 工具链线、需 toolchain-pinning 轮抬升 go 指令才能清零；模块类公告经 testcontainers 的测试支撑依赖与 exporter 依赖触达、属各模块自己的升级轮），trivy 在仓库产出镜像前无物可扫——两处的证据与解除条件都在 security.yml 文件头的 DEFERRED 节。
 
 ## 成本控制：不是每个 PR 都跑全量
@@ -59,7 +63,7 @@
 | 业务逻辑中禁止 `if mode == "standalone"` 分支 | `semgrep` 规则（残余风险探测器；文件级 allowlist 仅两个 kernel 装配模式决策点：`deployment_mode.go` 的必需能力分发与 reference-app 入口的 env 读取） |
 | 业务模块间禁止跨模块 import struct | `go-arch-lint` 或 `depguard`（golangci-lint 插件） |
 | `rbac` 不得依赖 `authn` | `depguard` 依赖白名单 |
-| 业务代码不得 import 具体基础设施 SDK | `depguard`（禁止 `go-redis`、S3 SDK 等出现在业务模块） |
+| 业务代码不得 import 具体基础设施 SDK | `depguard`（禁止 `go-redis`、S3 SDK 等出现在业务模块）。**放行路径必须是实现所在的包，不是它归属的模块**——理由见下方注记 |
 | `tenant_id` 不得作为 Prometheus label | `semgrep` 规则 + 运行时断言测试 |
 | UI 包内禁止裸文本节点 | `eslint-plugin-i18next` 或自定义 ESLint 规则 |
 | 中英资源 key 集合必须一致 | 自研脚本，diff 两份 JSON/TOML 的 key 集合 |
