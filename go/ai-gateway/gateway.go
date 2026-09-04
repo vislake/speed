@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/vislake/speed/go/jobs"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/storage"
 )
 
 // usageFeatureChatTokens is the Feature dimension Gateway reports for every
@@ -20,6 +22,10 @@ const usageFeatureChatTokens = "ai.chat_tokens"
 // never a ChatProvider directly. See this package's own doc comment for
 // the full six-step pipeline every call runs.
 //
+// Round 2 adds Gateway.GenerateImage, the async-only counterpart for image
+// generation -- see image_gateway.go for its own pipeline and the
+// ImageProvider/storage boundary it documents.
+//
 // The zero value is not ready to use; construct one with NewGateway.
 type Gateway struct {
 	credentials *CredentialService
@@ -31,6 +37,22 @@ type Gateway struct {
 	// either means.
 	entitlements Entitlements
 	usage        UsageRecorder
+
+	// imageRegistry is the package-level ImageProviderRegistry a Gateway
+	// resolves ImageProvider implementations from, by default -- see
+	// image_registry.go. WithImageProviderRegistry overrides it, mirroring
+	// WithChatProviderRegistry above.
+	imageRegistry *pkgcore.SeamRegistry[ImageProvider]
+
+	// imageQueue and objectService are the two seams Gateway.GenerateImage
+	// needs to run at all: the jobs.Queue the generated task is enqueued on,
+	// and the go/storage ObjectService the job handler reads input images
+	// from and writes generated output images to. Both are nil until
+	// WithImageGeneration is applied -- see image_gateway.go's own doc
+	// comment for why importing storage and jobs directly here is an
+	// ordinary downward dependency, unlike Entitlements/UsageRecorder.
+	imageQueue    jobs.Queue
+	objectService *storage.ObjectService
 }
 
 // GatewayOption configures a Gateway at construction time.
@@ -69,9 +91,10 @@ func WithChatProviderRegistry(registry *pkgcore.SeamRegistry[ChatProvider]) Gate
 // use, or every call for that key fails with ErrUnroutedModel.
 func NewGateway(credentials *CredentialService, opts ...GatewayOption) *Gateway {
 	g := &Gateway{
-		credentials: credentials,
-		registry:    ChatProviderRegistry,
-		routes:      make(map[string]ModelRoute),
+		credentials:   credentials,
+		registry:      ChatProviderRegistry,
+		routes:        make(map[string]ModelRoute),
+		imageRegistry: ImageProviderRegistry,
 	}
 	for _, opt := range opts {
 		opt(g)

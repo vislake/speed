@@ -26,17 +26,20 @@ const SystemPurposeCredentialWrite pkgcore.SystemPurpose = "ai-gateway.credentia
 
 // Module implements pkgcore.Module for go/ai-gateway.
 //
-// Unlike most modules in this codebase, Module.Register declares nothing
-// this round: this module ships no HTTP surface (the design doc frames it
-// entirely as an in-process library business code calls directly, per the
-// task's own scope note), no permission (nothing to gate over HTTP), no
-// notification type, no domain event, and -- per route.go's own doc
-// comment -- no dynamic config item either, since model routing is a
-// construction-time Go option rather than a tenant-tunable config value in
-// this round. What Module contributes is its migrations (the
-// ai_gateway_credentials table) and its Gateway/CredentialService
-// accessors, which a host wires directly into whatever business code needs
-// AI chat.
+// Unlike most modules in this codebase, Module.Register declares almost
+// nothing: this module ships no HTTP surface (the design doc frames it
+// entirely as an in-process library business code calls directly), no
+// permission (nothing to gate over HTTP), no notification type, no domain
+// event, and -- per route.go's own doc comment -- no dynamic config item
+// either, since model routing is a construction-time Go option rather than
+// a tenant-tunable config value. The one thing Register does declare,
+// added in round 2, is the image-generation job handler on reg.Jobs, and
+// only when the Module's Gateway was built with WithImageGeneration (see
+// image_gateway.go) -- a chat-only Gateway registers no job handler at
+// all. What Module otherwise contributes is its migrations (the
+// ai_gateway_credentials table, shared by chat and image credentials
+// alike) and its Gateway/CredentialService accessors, which a host wires
+// directly into whatever business code needs AI chat or image generation.
 //
 // The zero value is not ready to use; construct one with NewModule.
 type Module struct {
@@ -93,13 +96,23 @@ func (m *Module) Locales() embed.FS { return embed.FS{} }
 func (m *Module) OpenAPISpec() []byte { return nil }
 
 // Register implements pkgcore.Module. Per the interface's own contract it
-// performs no I/O; the one thing it declares is
-// SystemPurposeCredentialWrite (pkgcore.RegisterSystemPurpose is a pure
-// in-memory registration, not I/O) so a host's system context can name it --
-// everything else is deliberately absent this round; see this type's own
-// doc comment for what and why.
+// performs no I/O; it declares SystemPurposeCredentialWrite
+// (pkgcore.RegisterSystemPurpose is a pure in-memory registration, not I/O)
+// so a host's system context can name it, and -- new this round -- claims
+// the image-generation job handler on reg.Jobs whenever the Module's
+// Gateway was built with WithImageGeneration (image_gateway.go's
+// imageJobHandler): reg.Jobs.Handle is itself a plain catalog insertion, no
+// I/O, so Register's no-I/O contract stands either way. A Gateway built for
+// chat-only use (no WithImageGeneration) registers no job handler at all --
+// nothing else changes from round 1; see this type's own doc comment for
+// what else remains deliberately absent.
 func (m *Module) Register(reg *pkgcore.Registry) error {
 	pkgcore.RegisterSystemPurpose(SystemPurposeCredentialWrite)
+	if handler, ok := m.gateway.imageJobHandler(); ok {
+		if err := reg.Jobs.Handle(TaskTypeImageGenerate, handler); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

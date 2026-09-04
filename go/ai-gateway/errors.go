@@ -64,4 +64,54 @@ var (
 	// from a ChatProvider's upstream vendor endpoint that could not be
 	// parsed as the expected wire shape.
 	ErrProviderResponseInvalid = apperr.Internal("aigateway.provider_response_invalid")
+
+	// ErrEmptyPrompt reports an ImageRequest whose Prompt is empty. Every
+	// ImageOperation requires one.
+	ErrEmptyPrompt = apperr.Invalid("aigateway.empty_prompt")
+
+	// ErrInvalidImageOperation reports an ImageRequest.Operation that is
+	// none of the declared ImageOperation constants.
+	ErrInvalidImageOperation = apperr.Invalid("aigateway.invalid_image_operation")
+
+	// ErrImageInputRequired reports an ImageOperationImageToImage or
+	// ImageOperationInpaint request whose InputObjectID is empty.
+	ErrImageInputRequired = apperr.Invalid("aigateway.image_input_required")
+
+	// ErrImageMaskRequired reports an ImageOperationInpaint request whose
+	// MaskObjectID is empty.
+	ErrImageMaskRequired = apperr.Invalid("aigateway.image_mask_required")
+
+	// ErrImageInputNotAllowed reports an ImageRequest carrying
+	// InputObjectID or MaskObjectID fields its own Operation does not use
+	// -- for example a MaskObjectID on an ImageOperationImageToImage
+	// request, or either field on an ImageOperationTextToImage one. Never a
+	// silent ignore: a caller populating a field its operation cannot use
+	// is almost always a mistake worth surfacing.
+	ErrImageInputNotAllowed = apperr.Invalid("aigateway.image_input_not_allowed")
+
+	// ErrImageGenerationUnavailable reports Gateway.GenerateImage called on
+	// a Gateway never given WithImageGeneration -- a Gateway built for
+	// chat-only use has no queue or storage seam to run the design doc's
+	// async-only image pipeline on.
+	ErrImageGenerationUnavailable = apperr.Internal("aigateway.image_generation_unavailable")
+
+	// ErrImageRequiresTenant reports Gateway.GenerateImage called on a
+	// context that carries no tenant. Every jobs.Task must carry a tenant
+	// (jobs.Task.TenantID's own doc comment), so an image-generation call
+	// with no tenant to attribute the resulting job to fails closed before
+	// anything is enqueued. The cause is pkgcore.ErrNoTenant, mirroring
+	// ErrTenantScopeRequiresTenant's identical shape.
+	ErrImageRequiresTenant = apperr.Invalid("aigateway.image_requires_tenant").
+				WithCause(pkgcore.ErrNoTenant)
+
+	// ErrImageObjectUnavailable reports the image-generation job handler
+	// failing to read InputObjectID or MaskObjectID's bytes from go/storage
+	// -- the object does not exist, is not yet completed, or the store
+	// refused the read.
+	ErrImageObjectUnavailable = apperr.Internal("aigateway.image_object_unavailable")
+
+	// ErrImageOutputWriteFailed reports the image-generation job handler
+	// failing to write a provider's generated image bytes back into
+	// go/storage as a new object.
+	ErrImageOutputWriteFailed = apperr.Internal("aigateway.image_output_write_failed")
 )
