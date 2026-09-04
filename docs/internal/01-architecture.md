@@ -73,6 +73,13 @@ graph BT
     comp --> storage
     admin --> rbac
     admin --> authn
+    admin --> tenancy
+    admin --> org
+    admin --> cfg
+    admin --> notify
+    admin --> billing
+    admin --> metering
+    admin --> comp
     admin --> org
     admin --> billing
     admin --> comp
