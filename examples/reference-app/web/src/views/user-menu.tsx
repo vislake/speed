@@ -3,10 +3,17 @@
  * switcher over the demo's two tenants and auth-ui's SignOutButton,
  * both host-composed over the session from app services.
  *
- * The demo has no roster endpoint -- the server seeds exactly two
- * tenants and grants every demo user membership in both -- so the
- * roster is the app's own static data, its display names app
- * namespace keys. The current tenant comes from the auth-core hook
+ * The demo has no roster endpoint, so the roster is the app's own
+ * static data over the two seeded demo tenants, its display names
+ * app namespace keys. The roster lists tenants only; membership is
+ * the server's own fact, never inferred here -- of the accounts the
+ * seed registers, demo-owner and demo-reader hold membership in
+ * both demo tenants and demo-acme-only@example.com in tenant-acme
+ * alone, and the real server refuses a switch into a tenant the
+ * signed-in account lacks (authn.tenant_membership_required). The
+ * web rig's journeys, all owner journeys (owner@example.test),
+ * never cross that refusal. The current tenant comes from the
+ * auth-core hook
  * (the principal's own claim), never from local memory of a previous
  * switch, and a completed switch evicts the previous tenant's query
  * data -- the tenant-namespaced-query-key discipline: after switching,
