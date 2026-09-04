@@ -226,9 +226,12 @@ var _ deliveryHost = (*pkgcore.Registry)(nil)
 //   - every send attempt is recorded in send_records under a derived
 //     delivery key (deriveDeliveryKey), and the record's succeeded state is
 //     probed before any attempt -- a retried job finds its own earlier
-//     success and stops, which is what makes the whole pipeline
+//     success and stops, which makes replay convergence best-effort
 //     at-most-once per (tenant, key) despite the queue's at-least-once
-//     delivery;
+//     delivery. Best-effort, not absolute: a crash between the transport's
+//     accept and the record's settle, or two attempts probing before
+//     either settles, can still double-send (deliverUserChannel's doc
+//     below spells the windows out);
 //   - an inbox delivery additionally publishes EventInboxCreated after the
 //     row is committed, announcing it to every replica's Hub.
 //
@@ -398,11 +401,17 @@ func (s *DeliveryService) deliverToUser(ctx context.Context, tenantID string, d 
 // deliverUserChannel delivers one Dispatch over one resolved channel: the
 // per-channel replay probe, then the channel's own delivery path.
 //
-// The probe is the at-most-once backstop: every attempt settles a send
-// record under the same derived key, so an attempt that follows a succeeded
-// record -- a retry after a crash that landed between transport and record,
-// a duplicate enqueue, a concurrent replica racing the same dispatch -- has
-// nothing left to do. A probe failure is returned without sending: the
+// The probe is the replay-convergence backstop: every attempt settles a
+// send record under the same derived key, so an attempt that follows a
+// succeeded record -- a retry arriving after the previous attempt's settle,
+// a duplicate enqueue, a concurrent replica -- stops before the transport.
+// It is best-effort, not a transport-side dedupe, and two windows can
+// double-send despite it: a crash between the transport's accept and the
+// record's settle leaves no succeeded record for the retry to find, and two
+// attempts probing before either settles both pass it (the UNIQUE
+// (tenant_id, idempotency_key) index and settle's race handling converge
+// the RECORDS of racing attempts onto one row; they cannot unsend a second
+// transport call). A probe failure is returned without sending: the
 // record's state is unknown, and sending on unknown state is exactly the
 // double-delivery this probe exists to prevent.
 func (s *DeliveryService) deliverUserChannel(ctx context.Context, tenantID string, d Dispatch, group, channel string) error {

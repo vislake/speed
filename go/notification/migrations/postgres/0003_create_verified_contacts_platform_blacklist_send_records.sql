@@ -119,9 +119,11 @@ CREATE TABLE send_records (
     PRIMARY KEY (id)
 );
 
--- The delivery job's at-most-once guarantee is scoped per tenant: the
--- idempotency key is derived from the business event plus the recipient
--- and channel, and re-enqueues of the same delivery must not write a
--- second record.
+-- The index is the record-level half of the delivery job's best-effort
+-- at-most-once convergence, scoped per tenant: the idempotency key is
+-- derived from the business event plus the recipient and channel, so
+-- re-enqueues and racing attempts of the same delivery never write a
+-- second record (what the index governs is the record set, never the
+-- transport sends themselves).
 CREATE UNIQUE INDEX uq_send_records_tenant_idempotency
     ON send_records (tenant_id, idempotency_key);

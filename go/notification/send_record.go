@@ -35,10 +35,13 @@ const (
 // after a deliberate non-send -- no address on file, an external contact
 // whose consent lapsed (unsubscribed or bounced) -- whose reason will not
 // change by retrying. The record is upserted on every attempt, so its final
-// status reflects the last attempt; the at-most-once property of the whole
-// pipeline rests on the delivery job checking this record's succeeded state
-// before any attempt, and on the UNIQUE (tenant_id, idempotency_key) index
-// the migration creates.
+// status reflects the last attempt; replay convergence is best-effort
+// at-most-once -- the delivery job checks this record's succeeded state
+// before any attempt, and the UNIQUE (tenant_id, idempotency_key) index
+// keeps the record set under one key singular while attempts race -- but a
+// crash between the transport's accept and this record's settle, or two
+// attempts probing before either settles, can still double-send
+// (delivery.go's deliverUserChannel doc spells the windows out).
 const (
 	SendRecordStatusSucceeded = "succeeded"
 	SendRecordStatusFailed    = "failed"
@@ -65,10 +68,12 @@ const (
 // send produced the record, and unenforced: it exists so an operator can
 // see each tenant's sending behaviour at a glance, the same treatment
 // jobs and audit give their own real tenant columns. The schema defaults
-// it to the empty-string sentinel (the audit convention); reads never
-// filter on it. The UNIQUE (tenant_id, idempotency_key) index the
-// migration creates is scoped uniqueness: the same delivery key may
-// legitimately recur across tenants, never within one.
+// it to the empty-string sentinel (the audit convention); exactly one read
+// filters on it -- ByTenantAndKey, whose hand-written tenant filter mirrors
+// the UNIQUE index's scoped-uniqueness semantics (see that method's doc).
+// The UNIQUE (tenant_id, idempotency_key) index the migration creates is
+// scoped uniqueness: the same delivery key may legitimately recur across
+// tenants, never within one.
 //
 // # Shape
 //
@@ -88,7 +93,8 @@ type SendRecord struct {
 	ID string `gorm:"column:id;primaryKey;size:36"`
 
 	// TenantID is the owning tenant of the delivery that produced the
-	// record, unenforced and never filtered on -- see the doc comment above.
+	// record, unenforced and filtered on only by the ByTenantAndKey probe
+	// -- see the doc comment above.
 	TenantID string `gorm:"column:tenant_id;size:64;not null"`
 
 	// TypeKey is the notification type key the delivery was rendered from.
