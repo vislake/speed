@@ -121,15 +121,17 @@ func NewSubscriptionRepository(db *gorm.DB) *SubscriptionRepository {
 // this tenant's active subscription" for EntitlementsService.
 type SubscriptionService struct {
 	repo   *SubscriptionRepository
+	plans  *PlanStore
 	events pkgcore.EventBus
 }
 
-// NewSubscriptionService returns a SubscriptionService over repo, publishing
-// status-transition events on bus. bus may be nil, in which case
+// NewSubscriptionService returns a SubscriptionService over repo, validating
+// CreateInput.PlanID against plans (see Create's own doc comment), and
+// publishing status-transition events on bus. bus may be nil, in which case
 // transitions publish nothing (used by tests that do not wire an
 // EventBus) -- Module.Register attaches the real bus (see module.go).
-func NewSubscriptionService(repo *SubscriptionRepository, bus pkgcore.EventBus) *SubscriptionService {
-	return &SubscriptionService{repo: repo, events: bus}
+func NewSubscriptionService(repo *SubscriptionRepository, plans *PlanStore, bus pkgcore.EventBus) *SubscriptionService {
+	return &SubscriptionService{repo: repo, plans: plans, events: bus}
 }
 
 // CreateInput names a new Subscription's starting shape. It is always
@@ -140,7 +142,37 @@ type CreateInput struct {
 
 // Create inserts a new Subscription for the tenant in ctx, at
 // SubscriptionStatusCreated.
+//
+// in.PlanID must resolve, through plans, to a Plan the calling tenant may
+// actually subscribe to: either a platform-wide Plan (Plan.IsPlatformWide)
+// or a tenant-custom Plan owned by the ctx tenant itself. Plan is a
+// dual-domain table reached through a plain PlanStore with no ambient
+// tenant filter of its own (Plan's own doc comment) -- nothing else in the
+// write path stops a caller-supplied PlanID from naming another tenant's
+// private, negotiated Plan, and EntitlementsService.Check would then
+// silently apply that other tenant's Grants/quota limits to this tenant.
+// A PlanID that fails this check -- because it does not exist at all, or
+// exists but names a Plan outside the ctx tenant's own scope -- is refused
+// with the same ErrPlanNotFound either way, so a caller cannot use this
+// call to probe for another tenant's Plan ids.
 func (s *SubscriptionService) Create(ctx context.Context, in CreateInput) (*Subscription, error) {
+	tenant, err := pkgcore.MustTenantFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	plan, err := s.plans.Get(ctx, in.PlanID)
+	if err != nil {
+		return nil, err
+	}
+	if !plan.IsPlatformWide() && plan.TenantID != string(tenant) {
+		// Exists, but not visible to this tenant -- answer identically to
+		// "does not exist" (ErrPlanNotFound), never a distinguishing
+		// Forbidden, so this cannot be used to enumerate other tenants'
+		// Plan ids.
+		return nil, ErrPlanNotFound.WithParam("id", in.PlanID)
+	}
+
 	sub := &Subscription{
 		ID:     uuid.NewString(),
 		PlanID: in.PlanID,

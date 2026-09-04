@@ -32,7 +32,7 @@ func newEntitlementsFixture(t *testing.T, grants []Grant, usage float64) (*Entit
 		t.Fatalf("create plan: %v", err)
 	}
 
-	subs := NewSubscriptionService(NewSubscriptionRepository(db), nil)
+	subs := NewSubscriptionService(NewSubscriptionRepository(db), plans, nil)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
 	sub, err := subs.Create(ctx, CreateInput{PlanID: plan.ID})
 	if err != nil {
@@ -47,8 +47,9 @@ func newEntitlementsFixture(t *testing.T, grants []Grant, usage float64) (*Entit
 
 func TestEntitlementsService_Check_NoSubscription(t *testing.T) {
 	db := newTestDB(t)
-	subs := NewSubscriptionService(NewSubscriptionRepository(db), nil)
-	svc := NewEntitlementsService(subs, NewPlanStore(db), fakeUsageReader{})
+	plans := NewPlanStore(db)
+	subs := NewSubscriptionService(NewSubscriptionRepository(db), plans, nil)
+	svc := NewEntitlementsService(subs, plans, fakeUsageReader{})
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
 
 	decision, err := svc.Check(ctx, "anything", 1)

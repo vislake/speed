@@ -79,7 +79,7 @@ type Module struct {
 func NewModule(db *gorm.DB, usage UsageReader) *Module {
 	plans := NewPlanStore(db)
 	subscriptions := NewSubscriptionRepository(db)
-	subService := NewSubscriptionService(subscriptions, nil)
+	subService := NewSubscriptionService(subscriptions, plans, nil)
 	return &Module{
 		db:            db,
 		plans:         plans,

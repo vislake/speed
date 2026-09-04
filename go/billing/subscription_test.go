@@ -10,9 +10,20 @@ import (
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
+// newSubscriptionService returns a SubscriptionService wired over a fresh
+// test database that already holds one platform-wide Plan, id "plan-1" --
+// the id every case below passes as CreateInput.PlanID. Create validates
+// PlanID against the PlanStore (see Create's own doc comment), so a
+// SubscriptionService under test needs a real, visible Plan row to
+// reference, not just an opaque string.
 func newSubscriptionService(t *testing.T) *SubscriptionService {
 	t.Helper()
-	return NewSubscriptionService(NewSubscriptionRepository(newTestDB(t)), nil)
+	db := newTestDB(t)
+	plans := NewPlanStore(db)
+	if err := plans.Create(context.Background(), &Plan{ID: "plan-1", Key: "plan-1", Name: "Plan One"}); err != nil {
+		t.Fatalf("create plan-1: %v", err)
+	}
+	return NewSubscriptionService(NewSubscriptionRepository(db), plans, nil)
 }
 
 func TestSubscriptionService_Create_StartsAtCreated(t *testing.T) {
@@ -149,7 +160,12 @@ func TestSubscriptionService_Transition_PublishesEvent(t *testing.T) {
 		return nil
 	})
 
-	svc := NewSubscriptionService(NewSubscriptionRepository(newTestDB(t)), bus)
+	db := newTestDB(t)
+	plans := NewPlanStore(db)
+	if err := plans.Create(context.Background(), &Plan{ID: "plan-1", Key: "plan-1", Name: "Plan One"}); err != nil {
+		t.Fatalf("create plan-1: %v", err)
+	}
+	svc := NewSubscriptionService(NewSubscriptionRepository(db), plans, bus)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
 
 	sub, err := svc.Create(ctx, CreateInput{PlanID: "plan-1"})
@@ -172,6 +188,66 @@ func TestSubscriptionService_Transition_PublishesEvent(t *testing.T) {
 		}
 	default:
 		t.Fatal("EventSubscriptionStatusChanged was not published")
+	}
+}
+
+// TestSubscriptionService_Create_RejectsAnotherTenantsCustomPlan reproduces
+// the cross-tenant entitlement leak: without this check, a tenant could
+// point its own Subscription at another tenant's private, tenant-custom
+// Plan (PlanStore has no ambient tenant filter of its own -- Plan's own
+// doc comment) and silently inherit that other tenant's negotiated
+// Grants/quota limits through EntitlementsService.Check.
+func TestSubscriptionService_Create_RejectsAnotherTenantsCustomPlan(t *testing.T) {
+	db := newTestDB(t)
+	plans := NewPlanStore(db)
+	victimsPlan := &Plan{TenantID: "tenant-victim", Key: "negotiated", Name: "Victim's Deal"}
+	if err := plans.Create(context.Background(), victimsPlan); err != nil {
+		t.Fatalf("create victim's tenant-custom plan: %v", err)
+	}
+
+	svc := NewSubscriptionService(NewSubscriptionRepository(db), plans, nil)
+	attackerCtx := pkgcore.WithTenant(context.Background(), "tenant-attacker")
+
+	_, err := svc.Create(attackerCtx, CreateInput{PlanID: victimsPlan.ID})
+	if !hasCode(err, ErrPlanNotFound.Code) {
+		t.Fatalf("Create with another tenant's custom PlanID: err = %v, want %s (never allowed, never a distinguishing error)", err, ErrPlanNotFound.Code)
+	}
+}
+
+// TestSubscriptionService_Create_AllowsOwnTenantCustomPlan is the positive
+// counterpart of the rejection test above: a tenant may still subscribe to
+// its OWN tenant-custom Plan.
+func TestSubscriptionService_Create_AllowsOwnTenantCustomPlan(t *testing.T) {
+	db := newTestDB(t)
+	plans := NewPlanStore(db)
+	ownPlan := &Plan{TenantID: "tenant-a", Key: "negotiated", Name: "Tenant A's Deal"}
+	if err := plans.Create(context.Background(), ownPlan); err != nil {
+		t.Fatalf("create tenant-a's own custom plan: %v", err)
+	}
+
+	svc := NewSubscriptionService(NewSubscriptionRepository(db), plans, nil)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	sub, err := svc.Create(ctx, CreateInput{PlanID: ownPlan.ID})
+	if err != nil {
+		t.Fatalf("Create with the ctx tenant's own custom PlanID: %v", err)
+	}
+	if sub.PlanID != ownPlan.ID {
+		t.Errorf("PlanID = %q, want %q", sub.PlanID, ownPlan.ID)
+	}
+}
+
+// TestSubscriptionService_Create_UnknownPlanID_Refused pins that a PlanID
+// naming no Plan row at all is refused with the same ErrPlanNotFound the
+// cross-tenant case above uses, rather than being accepted and left to
+// fail later inside EntitlementsService.Check.
+func TestSubscriptionService_Create_UnknownPlanID_Refused(t *testing.T) {
+	svc := newSubscriptionService(t)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	_, err := svc.Create(ctx, CreateInput{PlanID: "does-not-exist"})
+	if !hasCode(err, ErrPlanNotFound.Code) {
+		t.Errorf("Create with an unknown PlanID: err = %v, want %s", err, ErrPlanNotFound.Code)
 	}
 }
 

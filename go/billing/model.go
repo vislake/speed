@@ -125,9 +125,14 @@ type Decision struct {
 	// Remaining is the quota units left in the current period, for a
 	// FeatureKindQuota feature. It is DecisionRemainingUnbounded for
 	// Boolean and Unlimited features, since "remaining" has no meaning
-	// for either. It may be negative for an OverageModeAllowAndBill /
-	// OverageModeNotify grant whose usage has gone past its limit -- the
-	// magnitude of the overage.
+	// for either. It may be negative -- for an OverageModeAllowAndBill /
+	// OverageModeNotify grant whose usage has gone past its limit, the
+	// magnitude of the overage; and, identically, for an OverageModeBlock
+	// (or unrecognized-mode, fail-closed) grant refused with
+	// DecisionReasonQuotaExceeded when usage was already past the limit
+	// before this request -- Allowed is false in that case, but Remaining
+	// still reports the raw (negative) headroom rather than being clamped
+	// to zero.
 	Remaining int64
 	// Reason names why Allowed has its value: "ok", "feature_disabled",
 	// "quota_exceeded" or "no_subscription".
