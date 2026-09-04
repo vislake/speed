@@ -4,6 +4,8 @@ go 1.25.0
 
 replace github.com/vislake/speed/go/pkgcore => ../../go/pkgcore
 
+replace github.com/vislake/speed/go/ai-gateway => ../../go/ai-gateway
+
 replace github.com/vislake/speed/go/dbkit => ../../go/dbkit
 
 replace github.com/vislake/speed/go/tenancy => ../../go/tenancy
