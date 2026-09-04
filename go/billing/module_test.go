@@ -8,6 +8,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 
 	"github.com/vislake/speed/go/billing/internal/testutil"
@@ -65,6 +66,24 @@ func TestModule_Accessors_ReturnWiredPieces(t *testing.T) {
 	}
 	if m.Entitlements() == nil {
 		t.Error("Entitlements() = nil")
+	}
+	if m.PaymentEvents() == nil {
+		t.Error("PaymentEvents() = nil")
+	}
+	if m.Polling() == nil {
+		t.Error("Polling() = nil")
+	}
+}
+
+// TestWithGateways_WiresThePollingServicesGatewayMap proves WithGateways'
+// value reaches PollingService -- the identical WithSigner-style direct-
+// injection seam gateway.go's own doc comment describes.
+func TestWithGateways_WiresThePollingServicesGatewayMap(t *testing.T) {
+	gw := &fakeRegistryGateway{}
+	m := NewModule(nil, stubUsage{}, WithGateways(map[string]PaymentGateway{"stripe": gw}))
+
+	if got := m.Polling().gateways["stripe"]; got != gw {
+		t.Errorf("Polling().gateways[\"stripe\"] = %v, want the *fakeRegistryGateway WithGateways was given", got)
 	}
 }
 
@@ -189,7 +208,45 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 			t.Error("planService.events is nil after Register; a plan write could never publish")
 		}
 	})
+
+	t.Run("no jobs handler without a queue", func(t *testing.T) {
+		// NewModule(db, usage) above was built with no WithQueue -- Register
+		// must not claim the poll task handler when there is no queue to run
+		// it on -- see go/pki's identical proof for its own expiry-scan task.
+		if _, ok := reg.Jobs.Handlers()[taskTypePoll]; ok {
+			t.Errorf("Register claimed the poll job handler despite no WithQueue")
+		}
+	})
 }
+
+// TestModule_Register_WithQueue_ClaimsThePollHandler proves the opposite of
+// the "no jobs handler without a queue" case above: WithQueue makes
+// Register claim taskTypePoll on reg.Jobs, so a host draining
+// reg.Jobs.Handlers() onto its jobs.Queue gets a worker for the
+// active-polling fallback.
+func TestModule_Register_WithQueue_ClaimsThePollHandler(t *testing.T) {
+	m := NewModule(newTestDB(t), stubUsage{}, WithQueue(stubQueue{}))
+	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), m)
+	if err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	if _, ok := reg.Jobs.Handlers()[taskTypePoll]; !ok {
+		t.Errorf("Register did not claim taskTypePoll despite WithQueue")
+	}
+}
+
+// stubQueue is a no-op jobs.Queue, sufficient for WithQueue tests that only
+// need Register to see a non-nil queue -- it is never actually enqueued to
+// or drained by these tests.
+type stubQueue struct{}
+
+func (stubQueue) Enqueue(context.Context, jobs.Task, ...jobs.EnqueueOption) (jobs.JobID, error) {
+	return "", nil
+}
+func (stubQueue) Get(context.Context, jobs.JobID) (*jobs.Job, error) { return nil, nil }
+func (stubQueue) Cancel(context.Context, jobs.JobID) error           { return nil }
+
+var _ jobs.Queue = stubQueue{}
 
 // TestModule_Register_CoexistsWithAnotherModule proves billing bootstraps
 // alongside a module that declares its own permission -- the real host

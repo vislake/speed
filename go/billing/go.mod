@@ -12,15 +12,21 @@ replace github.com/vislake/speed/go/observability => ../observability
 
 replace github.com/vislake/speed/go/metering => ../metering
 
+replace github.com/vislake/speed/go/jobs => ../jobs
+
 require (
 	github.com/google/uuid v1.6.0
 	github.com/vislake/speed/go/dbkit v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/jobs v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/metering v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/tenancy v0.0.0-00010101000000-000000000000
 	gorm.io/datatypes v1.2.7
 	gorm.io/gorm v1.31.2
 )
+
+require github.com/stripe/stripe-go/v82 v82.5.1
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
@@ -80,7 +86,6 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
-	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect

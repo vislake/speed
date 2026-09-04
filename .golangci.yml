@@ -314,6 +314,52 @@ linters:
           deny:
             - pkg: github.com/aws/aws-sdk-go-v2
               desc: "the AWS SDK for Go v2 (its service/kms and credentials subpackages included, as subpackages of this import path) belongs to go/pki/signer/kmsaws alone; business code depends on the pki.Signer interface and resolves this implementation by name through pki.SignerRegistry, or by value through pki.WithSigner"
+        # go/billing's PaymentGateway provider split (the gateway round):
+        # stripe, alipay and wechat each reach for their own SDK/HTTP-client
+        # material, and each rule is narrowed to its own implementation
+        # subpackage, the identical shape the observability exporter rules
+        # and go/pki's own vault/kmsaws rules above use -- go/billing's own
+        # root package (where PaymentGateway and PaymentGatewayRegistry live,
+        # gateway.go) must not import any of the three either, which is the
+        # whole point of the split (docs/internal/06-billing-and-metering.md's
+        # dependency-direction-must-be-one-way paragraph).
+        stripe-sdk-only-in-billing-gateway-stripe:
+          files:
+            - "**/go/**"
+            - "!**/go/billing/gateway/stripe/**"
+          list-mode: lax
+          deny:
+            - pkg: github.com/stripe/stripe-go
+              desc: "the Stripe Go SDK belongs to go/billing/gateway/stripe alone; business code depends on the billing.PaymentGateway interface and resolves this implementation by name through billing.PaymentGatewayRegistry, or by value through billing.WithGateways"
+        alipay-sdk-only-in-billing-gateway-alipay:
+          files:
+            - "**/go/**"
+            - "!**/go/billing/gateway/alipay/**"
+          list-mode: lax
+          deny:
+            # alipay has no Go SDK maintained by Ant Group and no single
+            # dominant community package (see go/billing/gateway/AGENTS.md's
+            # own rationale for implementing directly against Alipay's
+            # published API/signature documentation instead) -- this entry
+            # exists so a future contributor who DOES pull in a third-party
+            # Alipay SDK is stopped at the same boundary every other
+            # provider's real SDK is, rather than the boundary silently
+            # having no rule to catch it.
+            - pkg: github.com/smartwalle/alipay
+              desc: "a third-party Alipay SDK belongs to go/billing/gateway/alipay alone, if one is ever adopted; business code depends on the billing.PaymentGateway interface and resolves this implementation by name through billing.PaymentGatewayRegistry, or by value through billing.WithGateways"
+        wechat-sdk-only-in-billing-gateway-wechat:
+          files:
+            - "**/go/**"
+            - "!**/go/billing/gateway/wechat/**"
+          list-mode: lax
+          deny:
+            # Same rationale as alipay-sdk-only-in-billing-gateway-alipay
+            # above: no third-party WeChat Pay SDK is used by this round
+            # (go/billing/gateway/AGENTS.md), but the most commonly reached-
+            # for community package is denied here in advance of the
+            # boundary being needed for real.
+            - pkg: github.com/wechatpay-apiv3/wechatpay-go
+              desc: "a third-party WeChat Pay SDK belongs to go/billing/gateway/wechat alone, if one is ever adopted; business code depends on the billing.PaymentGateway interface and resolves this implementation by name through billing.PaymentGatewayRegistry, or by value through billing.WithGateways"
 
   exclusions:
     generated: lax

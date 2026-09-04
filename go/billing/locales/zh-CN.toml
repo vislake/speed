@@ -29,3 +29,11 @@
 "billing.credit_transaction_already_resolved" = "信用点交易 \"{{.idempotency_key}}\" 已被处理为 \"{{.status}}\"。"
 
 "billing.credit_balance_inconsistent" = "交易 \"{{.idempotency_key}}\" 的信用点余额与其流水记录不一致。"
+
+"billing.webhook_signature_invalid" = "支付渠道回调的签名验证失败。"
+
+"billing.webhook_payload_unrecognized" = "支付渠道回调签名有效，但报文内容无法识别。"
+
+"billing.channel_reference_not_found" = "支付渠道未找到该渠道引用 \"{{.channel_reference}}\" 对应的记录。"
+
+"billing.payment_event_not_found" = "未找到 id 为 \"{{.id}}\" 的支付事件。"

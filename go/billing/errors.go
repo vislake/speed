@@ -11,11 +11,11 @@ import "github.com/vislake/speed/go/pkgcore/apperr"
 // org, pki and metering already document.
 //
 // Only the codes this round's own code paths can actually return are
-// declared here. In particular there is no code for a payment-channel or
-// webhook failure: that machinery is billing/gateway's, a later round, and
-// a code for a check nothing performs would be dead catalog weight, not
-// forward compatibility -- the same discipline go/pki's and go/metering's
-// error indexes document for their own round boundaries.
+// declared here. The gateway round added the four codes
+// PaymentGateway.VerifyWebhook/QueryStatus and PaymentEventRepository can
+// actually return; a code for a check nothing performs would still be dead
+// catalog weight, not forward compatibility -- the same discipline go/pki's
+// and go/metering's error indexes document for their own round boundaries.
 var (
 	// ErrPlanNotFound reports that neither a tenant-custom nor a
 	// platform-wide Plan exists for the requested key.
@@ -81,6 +81,30 @@ var (
 	// complete, the same discipline go/metering's ErrMetadataEncodeFailed
 	// documents for its own unreachable-in-practice defensive branch.
 	ErrCreditBalanceInconsistent = apperr.Internal("billing.credit_balance_inconsistent")
+
+	// ErrWebhookSignatureInvalid reports that PaymentGateway.VerifyWebhook
+	// could not authenticate an inbound webhook delivery against its
+	// channel's own signature scheme -- the delivery must be refused, never
+	// processed, since an unverified body could have been forged by anyone
+	// who can reach the endpoint.
+	ErrWebhookSignatureInvalid = apperr.Invalid("billing.webhook_signature_invalid")
+
+	// ErrWebhookPayloadUnrecognized reports that a webhook delivery's
+	// signature verified, but PaymentGateway.VerifyWebhook could not parse
+	// its payload into a known, identifiable NormalizedEvent -- including a
+	// payload missing the tenant/subscription/invoice metadata
+	// PaymentGateway.CreateCharge attached when it created the channel-side
+	// object.
+	ErrWebhookPayloadUnrecognized = apperr.Invalid("billing.webhook_payload_unrecognized")
+
+	// ErrChannelReferenceNotFound reports that PaymentGateway.QueryStatus
+	// was asked about a ChannelReference its channel has no record of at
+	// all.
+	ErrChannelReferenceNotFound = apperr.NotFound("billing.channel_reference_not_found")
+
+	// ErrPaymentEventNotFound reports that no PaymentEvent row exists for
+	// the requested id, for the requesting tenant.
+	ErrPaymentEventNotFound = apperr.NotFound("billing.payment_event_not_found")
 )
 
 // hasCode reports whether err is (or wraps, via apperr.As's Unwrap chain

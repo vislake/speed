@@ -5,6 +5,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/metering"
 	"github.com/vislake/speed/go/pkgcore"
 
@@ -68,6 +69,50 @@ type Module struct {
 	invoices      *InvoiceRepository
 	credits       *CreditService
 	entitlements  *EntitlementsService
+
+	paymentEvents *PaymentEventRepository
+	gateways      map[string]PaymentGateway
+	// queue is the jobs.Queue the active-polling fallback task (job.go) is
+	// scheduled against (WithQueue). Nil is a legitimate configuration --
+	// see PollingService's own doc comment.
+	queue   jobs.Queue
+	polling *PollingService
+}
+
+// Option configures a Module at construction time. See go/pki's and
+// go/storage's identical Option pattern -- this round is billing's first
+// use of it, added additively (NewModule's own signature keeps its
+// existing two positional parameters) rather than displacing db/usage into
+// options themselves, since every existing call site must keep compiling
+// unchanged.
+type Option func(*Module)
+
+// WithQueue wires the jobs.Queue the active-polling fallback task
+// (taskTypePoll) is scheduled on and claimed from. Without it, Module still
+// works in full for every synchronous surface (Plans, Subscriptions,
+// Invoices, Credits, Entitlements, and PaymentEventRepository's own
+// insert-first-dedup path) -- only the periodic re-query of stuck
+// PaymentEvent rows is unavailable: Register skips claiming the task
+// handler, and PollingService.EnqueuePoll reports a plain error, the same
+// optional-queue shape go/storage's WithQueue and go/pki's WithQueue give
+// their own periodic tasks.
+func WithQueue(queue jobs.Queue) Option {
+	return func(m *Module) { m.queue = queue }
+}
+
+// WithGateways wires the PaymentGateway implementations the active-polling
+// fallback re-queries, keyed by NormalizedEvent.Channel/PaymentEvent.Channel
+// (e.g. "stripe", "alipay", "wechat") -- an already-constructed value per
+// channel, exactly the WithSigner half of the WithSigner-vs-SignerRegistry
+// duality PaymentGatewayRegistry's own doc comment describes (gateway.go):
+// a host builds each PaymentGateway once, typically via
+// PaymentGatewayRegistry.Build(name, cfg) against a blank-imported provider
+// subpackage, and hands the resulting map here. Without it (nil or an
+// empty map, NewModule's own default), PollingService.Poll finds every
+// stuck row's channel unwired and skips each one with a logged warning,
+// rather than failing the pass -- see Poll's own doc comment.
+func WithGateways(gateways map[string]PaymentGateway) Option {
+	return func(m *Module) { m.gateways = gateways }
 }
 
 // NewModule returns a Module whose tables live in db, with
@@ -76,11 +121,11 @@ type Module struct {
 // comment for why go/billing importing go/metering directly is sanctioned
 // here). Constructing a Module performs no I/O: opening and migrating db
 // is the host's responsibility, done before Bootstrap ever calls Register.
-func NewModule(db *gorm.DB, usage UsageReader) *Module {
+func NewModule(db *gorm.DB, usage UsageReader, opts ...Option) *Module {
 	plans := NewPlanStore(db)
 	subscriptions := NewSubscriptionRepository(db)
 	subService := NewSubscriptionService(subscriptions, plans, nil)
-	return &Module{
+	m := &Module{
 		db:            db,
 		plans:         plans,
 		planService:   NewPlanService(plans, nil),
@@ -89,7 +134,13 @@ func NewModule(db *gorm.DB, usage UsageReader) *Module {
 		invoices:      NewInvoiceRepository(db),
 		credits:       NewCreditService(db),
 		entitlements:  NewEntitlementsService(subService, plans, usage),
+		paymentEvents: NewPaymentEventRepository(db),
 	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	m.polling = newPollingService(m.paymentEvents, m.gateways, m.queue)
+	return m
 }
 
 // Plans returns the module's PlanService, the write-side, event-publishing
@@ -113,6 +164,16 @@ func (m *Module) Credits() *CreditService { return m.credits }
 // single judgment entry point business code calls to learn whether a
 // tenant's current subscription permits a feature.
 func (m *Module) Entitlements() Entitlements { return m.entitlements }
+
+// PaymentEvents returns the module's PaymentEventRepository -- the
+// insert-first-dedup surface a later round's live webhook endpoint calls
+// before processing any inbound delivery (payment_event.go's own doc
+// comment).
+func (m *Module) PaymentEvents() *PaymentEventRepository { return m.paymentEvents }
+
+// Polling returns the module's PollingService -- the active-polling
+// fallback for a PaymentEvent stuck at ChannelStatusPending (job.go).
+func (m *Module) Polling() *PollingService { return m.polling }
 
 // Name implements pkgcore.Module.
 func (m *Module) Name() string { return moduleName }
@@ -173,6 +234,12 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	bus := reg.EventBus()
 	m.planService.events = bus
 	m.subService.events = bus
+
+	if m.queue != nil {
+		if err := reg.Jobs.Handle(taskTypePoll, pollHandler{svc: m.polling}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

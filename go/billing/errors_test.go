@@ -24,6 +24,10 @@ func TestErrors_HaveDistinctCodes(t *testing.T) {
 		ErrCreditTransactionNotFound,
 		ErrCreditTransactionAlreadyResolved,
 		ErrCreditBalanceInconsistent,
+		ErrWebhookSignatureInvalid,
+		ErrWebhookPayloadUnrecognized,
+		ErrChannelReferenceNotFound,
+		ErrPaymentEventNotFound,
 	}
 	seen := make(map[string]bool, len(errs))
 	for _, e := range errs {

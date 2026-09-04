@@ -32,3 +32,11 @@
 "billing.credit_transaction_already_resolved" = "Credit transaction \"{{.idempotency_key}}\" was already resolved as \"{{.status}}\"."
 
 "billing.credit_balance_inconsistent" = "The credit balance for transaction \"{{.idempotency_key}}\" is inconsistent with its ledger entry."
+
+"billing.webhook_signature_invalid" = "The payment channel webhook's signature could not be verified."
+
+"billing.webhook_payload_unrecognized" = "The payment channel webhook's signature verified, but its payload could not be recognized."
+
+"billing.channel_reference_not_found" = "The payment channel has no record for channel reference \"{{.channel_reference}}\"."
+
+"billing.payment_event_not_found" = "No payment event was found with id \"{{.id}}\"."
