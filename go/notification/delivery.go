@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"gorm.io/datatypes"
 
 	"github.com/vislake/speed/go/jobs"
@@ -25,6 +28,24 @@ import (
 // string is deliberately not the name of a notification type -- one handler
 // delivers every declared type, deciding what to do per payload.
 const jobTypeDeliver = "notification.deliver"
+
+// InstrumentationName identifies this package's own tracer/meter, mirroring
+// go/jobs/standalone_queue.go's identical use of its own package path for the
+// same purpose (see that file's own doc comment on InstrumentationName).
+const InstrumentationName = "github.com/vislake/speed/go/notification"
+
+// Metric instrument names registerDeliveryMetrics wires under
+// InstrumentationName -- the "各渠道投递成功率、延迟、退信率"
+// (per-channel delivery success rate, latency, bounce rate) row
+// docs/internal/09-observability.md's must-instrument table requires for the
+// notification domain. Bounce rate is derivable from
+// deliveryCountMetricName's own status attribute: a transport's permanent
+// failure settles as SendRecordStatusFailed through failAndStop (see
+// ContactService's bounce marking), so no separate bounce instrument exists.
+const (
+	deliveryCountMetricName    = "notification.delivery.count"
+	deliveryDurationMetricName = "notification.delivery.duration"
+)
 
 // Dispatch is the module's public delivery request: "deliver this
 // notification type's message copy to this recipient, rendered in this
@@ -267,6 +288,18 @@ type DeliveryService struct {
 	sms      SMSSender
 	mailFrom string
 	host     deliveryHost
+
+	// deliveryCount and deliveryDuration back the
+	// "notification.delivery.count"/"notification.delivery.duration"
+	// instruments registerDeliveryMetrics wires from newDeliveryService.
+	// settle (the single write funnel every delivery path -- success,
+	// failure and skip alike -- runs through) records both, guarded against
+	// their nil zero value the same way jobs' own
+	// recordJobMetrics/recordDeadLetter guard registerJobMetrics's fields --
+	// a metrics-registration failure must never turn into a nil-pointer
+	// panic on the delivery path itself.
+	deliveryCount    metric.Int64Counter
+	deliveryDuration metric.Float64Histogram
 }
 
 // newDeliveryService returns a DeliveryService over the module's inbox
@@ -279,12 +312,41 @@ type DeliveryService struct {
 // as ContactService's seams arrive; before then, Dispatch refuses on the
 // missing queue and the job cannot be registered.
 func newDeliveryService(inbox *Repository, prefs *PreferenceService, contacts *ContactService) *DeliveryService {
+	count, duration := registerDeliveryMetrics()
 	return &DeliveryService{
-		prefs:    prefs,
-		contacts: contacts,
-		inbox:    inbox,
-		sendRecs: NewSendRecordRepository(inbox.db),
+		prefs:            prefs,
+		contacts:         contacts,
+		inbox:            inbox,
+		sendRecs:         NewSendRecordRepository(inbox.db),
+		deliveryCount:    count,
+		deliveryDuration: duration,
 	}
+}
+
+// registerDeliveryMetrics wires the "notification.delivery.count" Counter
+// and "notification.delivery.duration" Histogram this file's own
+// deliveryCountMetricName/deliveryDurationMetricName doc comment names.
+// Mirrors go/observability/middleware.go's Middleware, which registers its
+// two HTTP instruments once at construction and ignores the (in practice
+// unreachable, since the global otel API returns a working no-op instrument
+// alongside any error) registration error the same way -- unlike
+// go/jobs/standalone_queue.go's registerJobMetrics, which has a live ctx/
+// logger available at its own call site (Start) to warn on failure and
+// deliberately does not have one here (newDeliveryService is a plain
+// constructor, called once per Module before any request context exists).
+func registerDeliveryMetrics() (metric.Int64Counter, metric.Float64Histogram) {
+	meter := otel.Meter(InstrumentationName)
+	count, _ := meter.Int64Counter(
+		deliveryCountMetricName,
+		metric.WithDescription("Number of notification delivery attempts settled, by notification type, channel and resulting status (succeeded, failed or skipped). Failure rate and bounce rate are both derivable from this by status."),
+		metric.WithUnit("{delivery}"),
+	)
+	duration, _ := meter.Float64Histogram(
+		deliveryDurationMetricName,
+		metric.WithDescription("Duration of one delivery attempt's transport call, in seconds, by notification type, channel and resulting status. Zero for a channel with no transport call (in-app)."),
+		metric.WithUnit("s"),
+	)
+	return count, duration
 }
 
 // attachHost binds the host registry to the service. Module.Register calls
@@ -937,6 +999,8 @@ func (s *DeliveryService) alreadyDelivered(ctx context.Context, tenantID, key st
 // record write itself failed, which is what makes a lost succeeded record a
 // retried delivery rather than a silent gap in the log.
 func (s *DeliveryService) settle(ctx context.Context, tenantID string, rec *SendRecord) error {
+	s.recordDeliveryMetrics(ctx, rec)
+
 	if len(rec.Error) > sendRecordErrorBudget {
 		rec.Error = rec.Error[:sendRecordErrorBudget]
 	}
@@ -968,6 +1032,39 @@ func (s *DeliveryService) settle(ctx context.Context, tenantID string, rec *Send
 		return s.sendRecs.Save(ctx, rec)
 	}
 	return nil
+}
+
+// recordDeliveryMetrics records one delivery attempt's outcome onto the
+// "notification.delivery.count" Counter and "notification.delivery.duration"
+// Histogram, labeled by notification type, channel and resulting status
+// only -- deliberately never tenant_id, for the identical cardinality reason
+// go/jobs/standalone_queue.go's registerJobMetrics doc comment gives (all
+// three label values are bounded, declared vocabularies: a type key from the
+// host's type registry, one of the three channel constants, one of the
+// three SendRecordStatus* values). Called from settle -- the single write
+// funnel every delivery path (success, failure and skip alike) runs through
+// -- so the recorded outcome always matches the record actually persisted,
+// even across settle's own id-race retry. rec.DurationMs is 0 for a channel
+// with no transport call (deliverInbox never sets it), which the histogram
+// simply records as a zero-duration observation rather than skipping.
+//
+// Guarded against s.deliveryCount/s.deliveryDuration being nil -- the same
+// fail-open contract StandaloneQueue's own metric fields document -- so a
+// registerDeliveryMetrics failure (in practice unreachable; see that
+// function's own doc comment) never turns a metrics gap into a panic on the
+// delivery path itself.
+func (s *DeliveryService) recordDeliveryMetrics(ctx context.Context, rec *SendRecord) {
+	attrs := metric.WithAttributes(
+		attribute.String("type_key", rec.TypeKey),
+		attribute.String("channel", rec.Channel),
+		attribute.String("status", rec.Status),
+	)
+	if s.deliveryCount != nil {
+		s.deliveryCount.Add(ctx, 1, attrs)
+	}
+	if s.deliveryDuration != nil {
+		s.deliveryDuration.Record(ctx, float64(rec.DurationMs)/1000, attrs)
+	}
 }
 
 // failAndRetry records the attempt as a failed send record carrying cause,

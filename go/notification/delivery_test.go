@@ -35,6 +35,10 @@ import (
 	"sync"
 	"testing"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/jobs"
@@ -1256,5 +1260,159 @@ func TestDelivery_RunDeliveryRefusesAnUnknownRecipientClass(t *testing.T) {
 	appErr, _ := apperr.As(err)
 	if got := appErr.Params["field"]; got != "recipient.class" {
 		t.Errorf("field parameter = %v, want %q", got, "recipient.class")
+	}
+}
+
+// setupTestMeterProvider installs, as OTel's global MeterProvider for the
+// duration of the test, a real SDK MeterProvider backed by a ManualReader --
+// never a Prometheus/OTLP exporter, since this file only needs to read back
+// exactly what was recorded -- mirroring
+// go/jobs/standalone_queue_test.go's own helper of the same name. Must be
+// called BEFORE newDeliveryEnv(t) so registerDeliveryMetrics (run from
+// newDeliveryService) registers its instruments against this provider
+// rather than the process-global one another test may have already
+// installed; see that test file's own collectMetric doc comment for why a
+// late otel.SetMeterProvider still works; this file simply avoids relying
+// on it.
+func setupTestMeterProvider(t *testing.T) *sdkmetric.ManualReader {
+	t.Helper()
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	otel.SetMeterProvider(mp)
+	return reader
+}
+
+// collectMetric runs a fresh Collect and returns the single metric named
+// name, failing the test if it is missing -- name is always one of
+// deliveryCountMetricName/deliveryDurationMetricName.
+func collectMetric(t *testing.T, reader *sdkmetric.ManualReader, name string) metricdata.Metrics {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect() error = %v, want nil", err)
+	}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name == name {
+				return m
+			}
+		}
+	}
+	var got []string
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			got = append(got, m.Name)
+		}
+	}
+	t.Fatalf("metric %q not found; metrics present: %v", name, got)
+	return metricdata.Metrics{}
+}
+
+// deliveryAttrString reads key out of attrs as a plain string, for comparing
+// against a metric data point's own Attributes.
+func deliveryAttrString(attrs attribute.Set, key string) string {
+	v, _ := attrs.Value(attribute.Key(key))
+	return v.AsString()
+}
+
+// deliveryCounterValue returns the int64 Sum value of m's data point labeled
+// exactly by typeKey/channel/status, failing the test if m is not a
+// Sum[int64] or no matching data point exists.
+func deliveryCounterValue(t *testing.T, m metricdata.Metrics, typeKey, channel, status string) int64 {
+	t.Helper()
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	if !ok {
+		t.Fatalf("metric %q Data = %T, want metricdata.Sum[int64]", m.Name, m.Data)
+	}
+	for _, dp := range sum.DataPoints {
+		if deliveryAttrString(dp.Attributes, "type_key") != typeKey {
+			continue
+		}
+		if deliveryAttrString(dp.Attributes, "channel") != channel {
+			continue
+		}
+		if deliveryAttrString(dp.Attributes, "status") != status {
+			continue
+		}
+		return dp.Value
+	}
+	t.Fatalf("metric %q has no data point for type_key=%q channel=%q status=%q", m.Name, typeKey, channel, status)
+	return 0
+}
+
+// deliveryHistogramCount returns the observation Count of m's data point
+// labeled exactly by typeKey/channel/status, failing the test if m is not a
+// Histogram[float64] or no matching data point exists.
+func deliveryHistogramCount(t *testing.T, m metricdata.Metrics, typeKey, channel, status string) uint64 {
+	t.Helper()
+	hist, ok := m.Data.(metricdata.Histogram[float64])
+	if !ok {
+		t.Fatalf("metric %q Data = %T, want metricdata.Histogram[float64]", m.Name, m.Data)
+	}
+	for _, dp := range hist.DataPoints {
+		if deliveryAttrString(dp.Attributes, "type_key") == typeKey &&
+			deliveryAttrString(dp.Attributes, "channel") == channel &&
+			deliveryAttrString(dp.Attributes, "status") == status {
+			return dp.Count
+		}
+	}
+	t.Fatalf("metric %q has no data point for type_key=%q channel=%q status=%q; data points: %+v", m.Name, typeKey, channel, status, hist.DataPoints)
+	return 0
+}
+
+// TestDelivery_MetricsRecordCountAndDurationByChannelAndStatus is the
+// regression proof that DeliveryService actually emits the
+// docs/internal/09-observability.md must-instrument row for the
+// notification domain -- per-channel delivery success rate, latency and
+// (derived from the same counter's status attribute) bounce rate -- rather
+// than only writing send_records. Before registerDeliveryMetrics/
+// recordDeliveryMetrics existed, both collectMetric calls below would fail
+// with "metric ... not found", which is the negative control this test
+// relies on.
+//
+// One delivery whose email channel fails permanently while its SMS and
+// in-app channels succeed exercises both outcomes settle can reach in a
+// single attempt, across all three channel labels.
+func TestDelivery_MetricsRecordCountAndDurationByChannelAndStatus(t *testing.T) {
+	reader := setupTestMeterProvider(t)
+	env := newDeliveryEnv(t)
+	env.resolver.byUser[deliveryUser] = deliveryAddresses
+	d := deliveryDispatch()
+	payload := env.enqueue(t, d)
+
+	env.host.mailer.failWith = fmt.Errorf("550 mailbox unavailable: %w", ErrTransportPermanent)
+	if err := env.attempt(t, payload); err != nil {
+		t.Fatalf("attempt with a permanent transport failure returned %v, want nil (stop, not retry)", err)
+	}
+
+	count := collectMetric(t, reader, deliveryCountMetricName)
+	if got := deliveryCounterValue(t, count, d.TypeKey, ChannelEmail, SendRecordStatusFailed); got != 1 {
+		t.Errorf("%s{type_key=%s,channel=email,status=failed} = %d, want 1", deliveryCountMetricName, d.TypeKey, got)
+	}
+	if got := deliveryCounterValue(t, count, d.TypeKey, ChannelSMS, SendRecordStatusSucceeded); got != 1 {
+		t.Errorf("%s{type_key=%s,channel=sms,status=succeeded} = %d, want 1", deliveryCountMetricName, d.TypeKey, got)
+	}
+	if got := deliveryCounterValue(t, count, d.TypeKey, ChannelInApp, SendRecordStatusSucceeded); got != 1 {
+		t.Errorf("%s{type_key=%s,channel=in_app,status=succeeded} = %d, want 1", deliveryCountMetricName, d.TypeKey, got)
+	}
+
+	duration := collectMetric(t, reader, deliveryDurationMetricName)
+	if got := deliveryHistogramCount(t, duration, d.TypeKey, ChannelEmail, SendRecordStatusFailed); got != 1 {
+		t.Errorf("%s{type_key=%s,channel=email,status=failed} count = %d, want 1", deliveryDurationMetricName, d.TypeKey, got)
+	}
+	if got := deliveryHistogramCount(t, duration, d.TypeKey, ChannelSMS, SendRecordStatusSucceeded); got != 1 {
+		t.Errorf("%s{type_key=%s,channel=sms,status=succeeded} count = %d, want 1", deliveryDurationMetricName, d.TypeKey, got)
+	}
+}
+
+// TestRegisterDeliveryMetrics_Smoke is registerDeliveryMetrics's own
+// equivalent of go/jobs/standalone_queue_test.go's
+// TestRegisterJobMetrics_Smoke: registration alone (no delivery ever
+// attempted) must not error or panic.
+func TestRegisterDeliveryMetrics_Smoke(t *testing.T) {
+	count, duration := registerDeliveryMetrics()
+	if count == nil || duration == nil {
+		t.Fatalf("registerDeliveryMetrics() = (%v, %v), want two non-nil instruments", count, duration)
 	}
 }
