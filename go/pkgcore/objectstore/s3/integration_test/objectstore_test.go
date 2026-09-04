@@ -24,6 +24,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/objectstoretest"
@@ -203,11 +204,35 @@ func TestObjectStore_ReaderFailsItsReadsOnceTheContextIsCancelled(t *testing.T) 
 		t.Fatalf("Read() before cancellation = (%d, %v), want bytes and no error", n, err)
 	}
 
-	// Cancelling the context kills the stream: the next read fails with the
-	// context's error, exactly as the local store's reader does.
+	// Cancelling the context kills the stream: reads fail with the context's
+	// error, exactly as the local store's reader does. minio-go checks the
+	// request context against its already-buffered HTTP response bytes, so a
+	// Read() issued immediately after cancel() can still hand back bytes it
+	// had buffered before the cancellation took effect -- observed at a
+	// 40-50% rate under Docker-backed MinIO. Poll a bounded number of reads
+	// instead of asserting on the very first one, so the test pins "the
+	// cancellation is eventually observed" rather than "observed on read
+	// number one". The payload is sized well beyond what a buffered chunk
+	// could plausibly hold, so a total read count that reaches the object's
+	// remaining bytes without ever seeing the cancellation error is itself
+	// a failure worth reporting, not an infinite spin.
 	cancel()
-	if n, err := reader.Read(buffer); n != 0 || !errors.Is(err, context.Canceled) {
-		t.Errorf("Read() after cancellation = (%d, %v), want (0, context.Canceled)", n, err)
+	const pollBudget = 5 * time.Second
+	deadline := time.Now().Add(pollBudget)
+	remaining := len(payload) - 32 // bytes already consumed by the pre-cancellation read above
+	var (
+		n         int
+		totalRead int
+	)
+	for attempt := 0; time.Now().Before(deadline) && totalRead < remaining; attempt++ {
+		n, err = reader.Read(buffer)
+		totalRead += n
+		if err != nil {
+			break
+		}
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Read() after cancellation = (%d, %v), want (0, context.Canceled) within %s of polling (or before exhausting the object's remaining %d bytes)", n, err, pollBudget, remaining)
 	}
 
 	// The cancelled read does not disturb the object: a fresh request with a
