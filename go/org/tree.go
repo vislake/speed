@@ -439,6 +439,66 @@ func (s *TreeService) publishDeleted(ctx context.Context, node OrgNode, cascade 
 	})
 }
 
+// Restore makes a previously mark-deleted node visible again, wrapping the
+// promoted dbkit.Repository[OrgNode].Restore -- the mark-delete inverse
+// Repository.deleteLeaf/deleteSubtree's own doc comments point to -- and
+// re-reading the row so the caller gets its current data back, exactly as
+// Rename does after its own write.
+//
+// It reports ErrNodeNotFound both for an id with nothing to restore (never
+// existed, belongs to another tenant) and for an id that exists but is not
+// currently mark-deleted -- the identical collapsed signal
+// dbkit.Repository[T].Restore's own doc comment describes and mapFindError
+// already applies everywhere else in this file, so a caller cannot learn
+// which case it hit from the error shape alone.
+//
+// # Restore is per-node, never cascading
+//
+// Restoring nodeID undoes exactly the mark-delete of nodeID itself. It does
+// NOT restore any descendant a cascading TreeService.Delete soft-deleted
+// alongside it, and does not attempt to distinguish "deleted in that same
+// cascade" from "independently soft-deleted earlier for an unrelated
+// reason" -- the two are indistinguishable without inventing a batch marker
+// this round does not add. That is a deliberate design decision, not an
+// oversight: it is the same "no implicit side effect on a structural edit"
+// discipline this file already applies elsewhere -- Delete does not
+// re-parent orphans to the grandparent (that would silently widen a
+// member's data scope) and does not delete memberships along with a node
+// (assertNoMembers refuses instead) -- and a cascading Restore would carry
+// the identical failure mode Delete's own doc comments warn against:
+// resurrecting a descendant that was independently, deliberately removed
+// for a reason of its own, just because some ancestor happened to be
+// restored later. A node restored here may therefore have descendants that
+// stay invisible, mark-deleted, exactly as Delete's cascade left them (or
+// as their own, earlier, unrelated delete left them); the caller restores
+// each such descendant explicitly by id. See go/org/AGENTS.md's "Soft
+// deletion" section for the full rationale and the resulting known
+// limitation -- org exposes no query today that lists a node's
+// mark-deleted descendants, which a future admin restore surface would
+// need.
+//
+// Restore is deliberately not exposed over HTTP this round; see
+// go/org/AGENTS.md's "Soft deletion" section for why.
+func (s *TreeService) Restore(ctx context.Context, nodeID string) (*OrgNode, error) {
+	if err := s.repo.Restore(ctx, nodeID); err != nil {
+		return nil, mapFindError(err, ErrNodeNotFound, nodeID)
+	}
+	node, err := s.Get(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	s.publishRestored(ctx, *node)
+	return node, nil
+}
+
+// publishRestored announces one node made visible again by Restore.
+func (s *TreeService) publishRestored(ctx context.Context, node OrgNode) {
+	publishEvent(ctx, s.host, EventNodeRestored, NodeRestored{
+		NodeID: node.ID,
+		Path:   node.Path,
+	})
+}
+
 // Ancestors returns nodeID's ancestors, root first, excluding nodeID itself.
 // The tenant root has no ancestors and yields an empty slice.
 //

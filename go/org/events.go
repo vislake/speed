@@ -47,6 +47,13 @@ const (
 	// .md requires the removed user's tokens for that tenant to be revoked,
 	// and the session state those tokens live in is authn's, never org's.
 	EventMemberRemoved = "org.member.removed"
+
+	// EventMemberRestored announces a mark-deleted membership made visible
+	// again by MemberService.Restore. It is org's own job to publish this,
+	// never authn's or any other module's: nothing outside org holds the
+	// removed membership's id, since it stopped being findable by user id the
+	// moment Remove hid it.
+	EventMemberRestored = "org.member.restored"
 )
 
 // The payloads carried by org's events.
@@ -91,6 +98,15 @@ type (
 		RemovedCount int64 `json:"removed_count"`
 	}
 
+	// NodeRestored is the payload of org.node.restored. It carries only the
+	// one node TreeService.Restore made visible again -- restore is
+	// deliberately not cascading, so there is no descendant count to report
+	// the way NodeDeleted's RemovedCount does.
+	NodeRestored struct {
+		NodeID string `json:"node_id"`
+		Path   string `json:"path"`
+	}
+
 	// MemberInvited is the payload of org.member.invited.
 	//
 	// It carries the blind index of the invitee's address, NEVER the address
@@ -121,6 +137,13 @@ type (
 		UserID       string `json:"user_id"`
 		NodeID       string `json:"node_id"`
 	}
+
+	// MemberRestored is the payload of org.member.restored.
+	MemberRestored struct {
+		MembershipID string `json:"membership_id"`
+		UserID       string `json:"user_id"`
+		NodeID       string `json:"node_id"`
+	}
 )
 
 // memberEventDecls is the catalog entry for each roster event, declared in
@@ -140,6 +163,11 @@ var memberEventDecls = []pkgcore.EventDecl{
 		Type:        EventMemberRemoved,
 		PayloadType: "org.MemberRemoved",
 		Description: "A person's membership of a tenant was removed; their sessions for it should be revoked.",
+	},
+	{
+		Type:        EventMemberRestored,
+		PayloadType: "org.MemberRestored",
+		Description: "A previously mark-deleted membership was restored and is visible again.",
 	},
 }
 

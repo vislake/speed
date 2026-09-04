@@ -124,14 +124,21 @@ const (
 	EventNodeCreated = "org.node.created"
 	EventNodeMoved   = "org.node.moved"
 	EventNodeDeleted = "org.node.deleted"
+
+	// EventNodeRestored announces a mark-deleted node made visible again by
+	// TreeService.Restore. It is deliberately NOT published for any
+	// descendant a cascading delete soft-deleted alongside the restored
+	// node -- see TreeService.Restore's own doc comment and go/org/AGENTS.md's
+	// "Soft deletion" section for why restore is per-node, never cascading.
+	EventNodeRestored = "org.node.restored"
 )
 
-// nodeEventDecls is the catalog entry for each of the three tree events.
+// nodeEventDecls is the catalog entry for each of the four tree events.
 //
 // They are declared here, in the module's single Register call, because
 // pkgcore.Registry is where the platform's event catalog is assembled --
 // observability, compliance and integration enumerate the declarations
-// without subscribing to any of them. TreeService publishes all three, on the
+// without subscribing to any of them. TreeService publishes all four, on the
 // bus the registry hands over during Register.
 var nodeEventDecls = []pkgcore.EventDecl{
 	{
@@ -148,6 +155,11 @@ var nodeEventDecls = []pkgcore.EventDecl{
 		Type:        EventNodeDeleted,
 		PayloadType: "org.NodeDeleted",
 		Description: "A node, and any subtree beneath it, was removed from a tenant's organization tree.",
+	},
+	{
+		Type:        EventNodeRestored,
+		PayloadType: "org.NodeRestored",
+		Description: "A previously mark-deleted node was restored and is visible again.",
 	},
 }
 

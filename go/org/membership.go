@@ -433,6 +433,56 @@ func (s *MemberService) Remove(ctx context.Context, userID string) error {
 	return nil
 }
 
+// Restore makes a previously removed membership visible again, wrapping the
+// promoted dbkit.Repository[Membership].Restore and re-reading the row so
+// the caller gets its current data back, exactly as MemberService's own
+// write methods return the roster row they touched.
+//
+// It takes the membership's own id, never a user id: Remove hides the row
+// from byUser's ordinary, scope-filtered lookup the moment it mark-deletes
+// it, so "restore this user's membership" is not answerable by user id alone
+// once a person has been removed and possibly re-added since -- each
+// removal leaves its own, separately soft-deleted row, and only the id names
+// one of them unambiguously. The id is available from the Add/ensure call
+// that created the row, or from the org.member.removed event's own
+// MembershipID field.
+//
+// It reports ErrMembershipNotFound both for an id with nothing to restore
+// and for an id that exists but is not currently mark-deleted -- the
+// identical collapsed signal dbkit.Repository[T].Restore's own doc comment
+// describes, so a caller cannot learn which case it hit from the error shape
+// alone.
+//
+// Restore does not re-validate the restored membership against Add's own
+// rules (a live membership already at the same node, the tenant's node
+// still existing): those were true when the row was created and Restore
+// changes nothing about the row but its two soft-delete columns. A caller
+// wanting the modern invariants re-checked calls Add instead of Restore.
+//
+// Restore is deliberately not exposed over HTTP this round; see
+// go/org/AGENTS.md's "Soft deletion" section for why.
+func (s *MemberService) Restore(ctx context.Context, membershipID string) (*Membership, error) {
+	if err := s.repo.Restore(ctx, membershipID); err != nil {
+		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+			return nil, ErrMembershipNotFound.WithParam("membership_id", membershipID)
+		}
+		return nil, err
+	}
+	m, err := s.repo.FindByID(ctx, membershipID)
+	if err != nil {
+		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+			return nil, ErrMembershipNotFound.WithParam("membership_id", membershipID)
+		}
+		return nil, err
+	}
+	s.publish(ctx, EventMemberRestored, MemberRestored{
+		MembershipID: m.ID,
+		UserID:       m.UserID,
+		NodeID:       m.NodeID,
+	})
+	return m, nil
+}
+
 // publish emits one member event on the host's bus, if a host is wired.
 //
 // A failed publish is logged and swallowed on purpose: the roster change is
