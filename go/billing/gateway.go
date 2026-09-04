@@ -32,8 +32,11 @@ import (
 // comment) to whichever channel happened to be imported first. The
 // depguard rules this round adds to .golangci.yml (stripe-sdk-only-in-
 // billing-gateway-stripe and its two siblings) are the CI-enforced half of
-// this rule; this file, and the fact that no provider SDK appears in this
-// package's own go.mod, are the other half.
+// this rule; this file, and the fact that no provider SDK's import ever
+// appears in this package's own go.mod requirement list as anything other
+// than what a subpackage needs (go/billing/gateway/AGENTS.md's Compile-time
+// / packaging section has the precise claim and the pruned-module-graph
+// mechanism behind it), are the other half.
 
 // ChannelReference identifies one channel-side collection object: a Stripe
 // Checkout Session id, an Alipay/WeChat out_trade_no, or whatever else a
@@ -250,8 +253,9 @@ type PaymentGateway interface {
 	// NormalizedEvent. It performs no network call of its own: signature
 	// verification and payload parsing only, which is what makes it fully
 	// unit-testable offline against a known-good fixture (every provider
-	// subpackage in this round does exactly that -- see each one's own
-	// signer_test.go / verify_test.go).
+	// subpackage in this round does exactly that -- see stripe's own
+	// gateway_test.go, alipay's notify_test.go, and wechat's notify_test.go
+	// plus decrypt_test.go for the payload-decryption leg).
 	//
 	// A signature that does not verify is ErrWebhookSignatureInvalid. A
 	// signature that verifies but whose payload this implementation cannot
@@ -287,8 +291,13 @@ type PaymentGateway interface {
 // register themselves here from their own init() under "gateway.stripe",
 // "gateway.alipay" and "gateway.wechat" -- a host that never imports a
 // provider subpackage never resolves that name, and PaymentGatewayRegistry
-// itself carries none of the three SDKs (see this package's own go.mod,
-// which names none of them).
+// itself carries none of the three SDKs: go.mod's require list does name
+// github.com/stripe/stripe-go/v82 directly (it is a non-indirect
+// requirement, since go/billing/gateway/stripe is a subpackage of this same
+// module), but never as an import of this package's own code -- only as
+// what that subpackage needs, the pruned-module-graph distinction
+// go/billing/gateway/AGENTS.md's Compile-time / packaging section states
+// precisely.
 //
 // No built-in implementation is pre-registered here the way pkgcore's own
 // EventBusRegistry ships "eventbus.memory" -- unlike an infrastructure seam,
