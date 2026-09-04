@@ -273,7 +273,23 @@ var demoRouteGuards = map[string]string{
 	// tenant-scoped certificate revoke and the platform-wide signing-key
 	// one) rather than relying on this router-level gate alone.
 	pkiRoutePath: pkiResource,
+
+	// admin's path is the one entry in this table whose value is never
+	// read as a "resource": guardModuleRoute special-cases it to
+	// guardAdminRoute (demo_admin.go), which gates by SUB-PATH (tenants,
+	// users, impersonation, audit-events), not by one resource's
+	// read/write split. adminRouteSentinel exists purely so this map
+	// stays exhaustive -- mountModuleRoutes still refuses to start for any
+	// mounted path this table does not name at all.
+	adminRoutePath: adminRouteSentinel,
 }
+
+// adminRouteSentinel marks demoRouteGuards' one entry that guardModuleRoute
+// dispatches to guardAdminRoute instead of the generic
+// demoPermissionFor(resource) gate. It is a value distinct from
+// routePublic and from any real resource string, so a reader (and
+// guardModuleRoute's own switch) cannot confuse it with either.
+const adminRouteSentinel = "ADMIN_SPECIAL_CASED_ROUTE"
 
 // notesResource is the resource half of notes' permission strings. It is
 // derived from the module's own exported constants rather than retyped, so
@@ -445,6 +461,9 @@ func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler) (ht
 	}
 	if resource == routePublic {
 		return handler, nil
+	}
+	if resource == adminRouteSentinel {
+		return guardAdminRoute(az, handler), nil
 	}
 	// pki needs its own action selector, not demoPermissionFor's generic
 	// read/write split -- see pkiPermissionFor's own doc comment.

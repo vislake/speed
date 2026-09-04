@@ -62,13 +62,27 @@ replace github.com/vislake/speed/go/ratelimit => ../../go/ratelimit
 // dependency without relying on the workspace.
 replace github.com/vislake/speed/go/sharing => ../../go/sharing
 
+// go/compliance and go/admin are imported directly by this app: buildServer
+// wires them as go/admin round 1's mandatory-first-consumer proof (see
+// server.go, demo_admin.go and admin_flow_test.go). Like every other
+// workspace-local module they carry no published version, so this app's
+// own go.mod needs its own replace for them too -- root CLAUDE.md's
+// per-module standalone-build rule (`GOWORK=off go build`) means
+// `go mod tidy` must resolve every dependency without relying on the
+// workspace.
+replace github.com/vislake/speed/go/compliance => ../../go/compliance
+
+replace github.com/vislake/speed/go/admin => ../../go/admin
+
 require (
 	github.com/google/uuid v1.6.0
 	github.com/redis/go-redis/v9 v9.14.1
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/redis v0.44.0
 	github.com/vislake/speed/go/ai-gateway v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/admin v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/authn v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/compliance v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/config v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/dbkit v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/jobs v0.0.0-00010101000000-000000000000

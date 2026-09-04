@@ -19,8 +19,10 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"github.com/vislake/speed/go/admin"
 	aigateway "github.com/vislake/speed/go/ai-gateway"
 	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/compliance"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
@@ -1090,6 +1092,35 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		aigateway.WithModelRoute(consult.LogicalModel, aigateway.ProviderOpenAICompatible, "gpt-4o-mini"),
 	)
 
+	// complianceModule is the reference app's first consumer of
+	// go/compliance: admin's D7 audit-query HTTP shell reads through
+	// complianceModule.AuditQuery(), which itself is a read-only wrapper
+	// over the SAME audit.Repository (over this same database connection)
+	// auditModule's own write-capture persister already writes into --
+	// sharing one connection to one audit_events table, exactly as
+	// auditModule shares notesModule's own connection above. WithQueue is
+	// the same standaloneQueue every other module's asynchronous work
+	// already shares; this app never calls the retention/erasure/export
+	// services WithQueue backs, but compliance.Module.Register refuses to
+	// proceed without one (ErrQueueRequired) regardless of whether a
+	// caller happens to use that half of the module.
+	complianceAuditRepo := audit.NewRepository(db)
+	complianceModule := compliance.NewModule(complianceAuditRepo, compliance.WithQueue(standaloneQueue))
+
+	// adminModule is the reference app's mandatory first consumer of
+	// go/admin's round 1 (docs/internal/23-admin.md): D3's tenant ledger,
+	// D5's impersonation pipeline, D6's cross-tenant user search and D7's
+	// audit-query shell. WithAuthn takes the *authn.Module itself, not its
+	// Service() -- see go/admin/AGENTS.md's wiring-contract section for
+	// why, and admin.Module.DependsOn()'s own doc comment for the
+	// resulting "authn" dependency Kernel.Bootstrap's sort honors below.
+	adminModule := admin.NewModule(db,
+		admin.WithAuthn(authnModule),
+		admin.WithOrg(orgModule),
+		admin.WithCompliance(complianceModule),
+		admin.WithNotification(notificationModule),
+	)
+
 	migrationRegistry := dbkit.NewMigrationRegistry()
 	if regErr := migrationRegistry.Register(pkiModule); regErr != nil {
 		_ = cleanup()
@@ -1138,6 +1169,14 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
+	// complianceModule is deliberately absent from this registry too: it
+	// ships no migrations of its own (Migrations() is an empty FS) --
+	// every row it reads or writes lives in auditModule's own
+	// audit_events table, already registered above.
+	if regErr := migrationRegistry.Register(adminModule); regErr != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	}
 	if applyErr := migrationRegistry.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: apply migrations: %w", applyErr)
@@ -1174,7 +1213,15 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// SystemPurposeCredentialWrite system purpose (go/ai-gateway/module.go's
 	// Register doc comment), which the platform-credential write below
 	// only needs registered before it runs, not before any other module's
-	// Register. audit last is not load-bearing order -- its Module.DependsOn
+	// Register. complianceModule follows for the same not-load-bearing
+	// reason (it ships no migrations and validates only its own queue seam);
+	// adminModule follows it and IS load-bearing in one respect --
+	// admin.Module.DependsOn() names "authn", so Bootstrap's own dependency
+	// sort (sortModulesByDependency) runs authn's Register before admin's
+	// regardless of argument order, which is what makes
+	// authnModule.Service() non-nil by the time admin's Register reads it
+	// (go/admin/AGENTS.md's wiring-contract section has the detail). audit
+	// last is not load-bearing order -- its Module.DependsOn
 	// is nil, and its subscriptions are valid to install before or after
 	// any publisher registers (see audit's Module.DependsOn doc comment)
 	// -- it simply reads naturally as "the business-facing modules, then
@@ -1235,7 +1282,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	if cfg.Mailer != nil {
 		kernelOptions = append(kernelOptions, pkgcore.WithMailer(cfg.Mailer, pkgcore.Stateless))
 	}
-	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, pkiModule, authnModule, notesModule, orgModule, configModule, rbacModule, storageModule, sharingModule, demoModule, notificationModule, aiGatewayModule, auditModule)
+	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, pkiModule, authnModule, notesModule, orgModule, configModule, rbacModule, storageModule, sharingModule, demoModule, notificationModule, aiGatewayModule, complianceModule, adminModule, auditModule)
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: bootstrap kernel: %w", err)
@@ -1383,26 +1430,40 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// exemption the same way -- its own doc comment says so explicitly.
 	// Allowlisting GET alone would leave HEAD one middleware change away
 	// from a 403 the moment anything probes it with HEAD instead of GET.
+	// admin.ImpersonationMiddleware sits between authn.Middleware and
+	// tenancy.Middleware, exactly as go/admin/AGENTS.md's wiring-contract
+	// section (and pipeline.go's own doc comment) describes: it never
+	// reorders this chain, it reads the real, already-verified
+	// authn.Principal authn.Middleware just installed, and -- only when
+	// the request carries a valid X-Admin-Impersonation grant id -- it
+	// substitutes a Principal naming the impersonation target for
+	// everything downstream, including tenancy.Middleware's own tenant
+	// resolution. A request with no such header, or an invalid one, is
+	// unaffected: this decorator is a no-op for every route notes/org/
+	// storage/etc. serve today unless an operator has actually started an
+	// impersonation session.
 	handler := authn.Middleware(authnModule.Service().Verifier())(
-		tenancy.Middleware(authn.NewPrincipalResolver(), append([]tenancy.MiddlewareOption{
-			tenancy.WithAllowlist(http.MethodGet, healthzPath),
-			tenancy.WithAllowlist(http.MethodHead, healthzPath),
-			tenancy.WithAllowlist(http.MethodGet, metricsPath),
-			tenancy.WithAllowlist(http.MethodHead, metricsPath),
-			tenancy.WithAllowlist(http.MethodGet, config.PathPublic),
-			tenancy.WithAllowlist(http.MethodHead, config.PathPublic),
-			tenancy.WithAllowlist(http.MethodGet, config.PathSystemFeatures),
-			tenancy.WithAllowlist(http.MethodHead, config.PathSystemFeatures),
-			// sharing.PathAccess is the one genuinely public, unauthenticated
-			// route this app mounts: an anonymous visitor holding a bearer
-			// share token carries no Principal and therefore no tenant claim
-			// at all, by design (go/sharing's Handler doc comment) --
-			// sharing.Service.AccessPublic resolves the tenant itself, from
-			// the token alone, once this allowlist entry lets the request
-			// reach it at all. GET only: the fragment defines no other
-			// method on this path.
-			tenancy.WithAllowlist(http.MethodGet, sharing.PathAccess),
-		}, authnPreAuthAllowlist()...)...)(mux),
+		admin.ImpersonationMiddleware(adminModule.Impersonation())(
+			tenancy.Middleware(authn.NewPrincipalResolver(), append([]tenancy.MiddlewareOption{
+				tenancy.WithAllowlist(http.MethodGet, healthzPath),
+				tenancy.WithAllowlist(http.MethodHead, healthzPath),
+				tenancy.WithAllowlist(http.MethodGet, metricsPath),
+				tenancy.WithAllowlist(http.MethodHead, metricsPath),
+				tenancy.WithAllowlist(http.MethodGet, config.PathPublic),
+				tenancy.WithAllowlist(http.MethodHead, config.PathPublic),
+				tenancy.WithAllowlist(http.MethodGet, config.PathSystemFeatures),
+				tenancy.WithAllowlist(http.MethodHead, config.PathSystemFeatures),
+				// sharing.PathAccess is the one genuinely public, unauthenticated
+				// route this app mounts: an anonymous visitor holding a bearer
+				// share token carries no Principal and therefore no tenant claim
+				// at all, by design (go/sharing's Handler doc comment) --
+				// sharing.Service.AccessPublic resolves the tenant itself, from
+				// the token alone, once this allowlist entry lets the request
+				// reach it at all. GET only: the fragment defines no other
+				// method on this path.
+				tenancy.WithAllowlist(http.MethodGet, sharing.PathAccess),
+			}, authnPreAuthAllowlist()...)...)(mux),
+		),
 	)
 	// The demo-user seed runs last, once the composed handler exists: it
 	// registers the demo accounts through the same register route a browser
@@ -1411,6 +1472,15 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// leaves everything above exactly as it was.
 	if cfg.DemoUsersPassword != "" {
 		if seedErr := seedDemoUsers(ctx, handler, memberships, rbacService, cfg.HostTenants, cfg.DemoUsersPassword); seedErr != nil {
+			_ = cleanup()
+			return nil, nil, seedErr
+		}
+		// seedDemoPlatformStaff is admin's own first-consumer demo account
+		// (demo_admin.go): a real registered user whose ONLY membership is
+		// rbac.SystemDomain, holding BuiltinRoleOwner there -- every
+		// admin:* permission included, since owner carries every
+		// permission any module declared.
+		if _, seedErr := seedDemoPlatformStaff(ctx, handler, memberships, rbacService, cfg.DemoUsersPassword); seedErr != nil {
 			_ = cleanup()
 			return nil, nil, seedErr
 		}

@@ -477,18 +477,21 @@ func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 		return len(mailsTo(mailer, "user-creator-1@demo.example")) != 1
 	})
 
-	// The type directory answers with both declared types and their
+	// The type directory answers with every declared type and its
 	// unsubscribable flags -- the copy of the very distinction this test
 	// leaned on (notes' type may be switched off entirely; the demo type
-	// below may not, and its refusal leg lives in the next test).
+	// below may not, and its refusal leg lives in the next test). Three
+	// types now, not two: go/admin's round 1 registers its own
+	// admin.impersonation_started security notification alongside notes'
+	// and demo's (see demo_admin.go's wiring in server.go).
 	var types notifListTypes
 	notifRequest(t, srv, http.MethodGet, "/api/v1/notifications/types", token, subject, nil, http.StatusOK, &types)
 	byKey := make(map[string]notifType, len(types.Items))
 	for _, item := range types.Items {
 		byKey[item.TypeKey] = item
 	}
-	if len(types.Items) != 2 {
-		t.Fatalf("type directory carries %d types, want the two this app declares", len(types.Items))
+	if len(types.Items) != 3 {
+		t.Fatalf("type directory carries %d types, want the three this app declares", len(types.Items))
 	}
 	notesType, ok := byKey[noteTypeKey]
 	if !ok || !notesType.Unsubscribable || !equalStrings(notesType.DefaultChannels, []string{"in_app", "email", "sms"}) {
@@ -497,6 +500,10 @@ func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 	demoType, ok := byKey["demo.patient_reminder"]
 	if !ok || demoType.Unsubscribable || !equalStrings(demoType.DefaultChannels, []string{"email", "sms"}) {
 		t.Errorf("demo type directory row = %+v, want non-unsubscribable with default_channels [email sms]", demoType)
+	}
+	adminType, ok := byKey["admin.impersonation_started"]
+	if !ok || !adminType.Unsubscribable || !equalStrings(adminType.DefaultChannels, []string{"in_app", "email"}) {
+		t.Errorf("admin impersonation-started type directory row = %+v, want unsubscribable with default_channels [in_app email]", adminType)
 	}
 
 	// The module's own identity gate: an authenticated caller without an
