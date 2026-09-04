@@ -408,6 +408,93 @@ func TestAdminFlow_Impersonation_EndToEnd(t *testing.T) {
 	}
 }
 
+// TestAdminFlow_OrdinaryTenantOwner_CannotAccessAdminConsole reproduces a
+// real privilege-escalation bug found in review: rbac.BuiltinRoleOwner
+// grants every permission ANY module declared, with no domain
+// partitioning at all (go/rbac/builtin.go) -- so admin:* is among them --
+// and demo-owner@example.com holds exactly that role in every configured
+// tenant (seedDemoUsers' own demoSeedAccounts table). Before this fix,
+// admin's own router-level gate (guardAdminRoute) built its rbac.Subject
+// from demoSubjectResolver, which reads TenantID from whatever tenant the
+// caller's OWN session happens to be scoped to -- so demo-owner's
+// perfectly ordinary tenant-acme session passed admin's gate purely
+// because "owner" happens to carry admin:*'s permission strings in the
+// shared global catalog. admin's gate must evaluate ONLY
+// Subject{rbac.SystemDomain, callerID}, which demo-owner holds no grant
+// in at all, so every admin:* request from this account must be refused
+// regardless of how privileged its OWN tenant's role is.
+func TestAdminFlow_OrdinaryTenantOwner_CannotAccessAdminConsole(t *testing.T) {
+	srv, _, _ := buildAdminTestServer(t)
+
+	status, code, ownerToken := demoLogin(t, srv, demoOwnerEmail, demoSeedPassword, "tenant-acme")
+	if status != http.StatusOK || ownerToken == "" {
+		t.Fatalf("demo-owner login status = %d code = %q, want 200 with a token", status, code)
+	}
+
+	// D6: cross-tenant user search, gated on admin:search_users.
+	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/users?email="+demoOwnerEmail, ownerToken, nil, http.StatusForbidden, nil, nil)
+
+	// D3: the tenant ledger, gated on admin:access.
+	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/tenants/tenant-acme", ownerToken, nil, http.StatusForbidden, nil, nil)
+
+	// D5: starting an impersonation grant, gated on admin:impersonate --
+	// the most consequential of the five, since a false grant here would
+	// let this ordinary tenant owner act as ANY other user platform-wide.
+	adminRequest(t, srv, http.MethodPost, "/api/v1/admin/impersonation", ownerToken,
+		map[string]string{
+			"targetUserId":   "does-not-matter",
+			"targetTenantId": "tenant-acme",
+			"reason":         "should never be reached",
+			"locale":         "en-US",
+		}, http.StatusForbidden, nil, nil)
+
+	// D7: the audit-query shell, gated on admin:audit_read.
+	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/audit-events", ownerToken, nil, http.StatusForbidden, nil, nil)
+}
+
+// TestAdminFlow_AdminRoutes_IgnoreActiveImpersonation proves the other
+// half of this round's fix: admin's own mounted route deliberately does
+// NOT sit behind admin.ImpersonationMiddleware (go/admin/AGENTS.md's
+// wiring-contract section: "admin's OWN routes ... do not sit behind
+// ImpersonationMiddleware -- that decorator's effect is on the REST of
+// the application's routes only"). A request to admin's own console still
+// carries the operator's OWN real, verified Principal even while an
+// X-Admin-Impersonation grant they themselves started is active on the
+// request, never the substituted target identity.
+func TestAdminFlow_AdminRoutes_IgnoreActiveImpersonation(t *testing.T) {
+	srv, _, _ := buildAdminTestServer(t)
+	staffToken := platformStaffToken(t, srv)
+
+	var searched adminSearchUsersResponse
+	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/users?email="+demoOwnerEmail, staffToken, nil, http.StatusOK, &searched, nil)
+	if len(searched.Users) != 1 {
+		t.Fatalf("search for %q = %+v, want exactly one seeded account", demoOwnerEmail, searched.Users)
+	}
+	targetID := searched.Users[0].ID
+
+	var grant adminGrant
+	adminRequest(t, srv, http.MethodPost, "/api/v1/admin/impersonation", staffToken,
+		map[string]string{
+			"targetUserId":   targetID,
+			"targetTenantId": "tenant-acme",
+			"reason":         "prove admin's own console ignores active impersonation",
+			"locale":         "en-US",
+		}, http.StatusCreated, &grant, nil)
+
+	// The same staff token, now carrying an active grant's id in
+	// X-Admin-Impersonation, still reaches admin's OWN console as the
+	// real staff identity. If this middleware branch were wrongly wired
+	// behind ImpersonationMiddleware, the substituted Principal (an
+	// ordinary tenant-acme user holding no admin:* permission under
+	// rbac.SystemDomain) would make this request fail with 403 instead.
+	impersonationHeaders := map[string]string{"X-Admin-Impersonation": grant.ID}
+	var searchedAgain adminSearchUsersResponse
+	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/users?email="+demoPlatformStaffEmail, staffToken, nil, http.StatusOK, &searchedAgain, impersonationHeaders)
+	if len(searchedAgain.Users) != 1 {
+		t.Fatalf("search for the platform-staff account while impersonating = %+v, want exactly one", searchedAgain.Users)
+	}
+}
+
 // searchStaffID resolves the platform-staff account's own user id, for
 // asserting an audit event's OnBehalfOf against it -- found the same way
 // any operator would, through D6's own search endpoint, rather than a

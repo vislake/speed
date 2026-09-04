@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/vislake/speed/go/admin"
+	"github.com/vislake/speed/go/authn"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/rbac"
@@ -79,13 +80,58 @@ func adminPermissionFor(r *http.Request) string {
 	}
 }
 
+// adminSubjectResolver is admin's OWN subject resolver -- deliberately NOT
+// demoSubjectResolver, and the fix for a real privilege-escalation gap
+// found in review: every admin:* permission is evaluated in
+// rbac.SystemDomain (docs/internal/23-admin.md's D1; go/admin/AGENTS.md's
+// wiring-contract section restates it as "does NOT go through ordinary
+// tenancy.Middleware tenant resolution"), so TenantID here is HARD-CODED
+// to rbac.SystemDomain rather than read from pkgcore.TenantFromContext the
+// way demoSubjectResolver does for every other module's route.
+//
+// Reading the ambient tenant would be wrong in both directions:
+//   - An operator who ALSO belongs to an ordinary customer tenant, signed
+//     into THAT tenant's session, would be evaluated as Subject{that
+//     tenant, staffID} -- a false negative, since their admin:* grants
+//     live only under rbac.SystemDomain.
+//   - Far worse, rbac.BuiltinRoleOwner grants every permission ANY module
+//     declared with no domain partitioning at all (go/rbac/builtin.go),
+//     so an ordinary tenant's own Owner (a ubiquitous, unprivileged role
+//     in this app's demo data) would be evaluated as Subject{their own
+//     tenant, ownerID} and pass admin's gate purely because "owner"
+//     happens to also carry admin:*'s permission strings in the shared
+//     global catalog -- a real cross-tenant-isolation break, not a
+//     hypothetical one.
+//
+// This also never reads demoUserHeader (unlike demoSubjectResolver): this
+// file's own header comment already documents that admin's routes accept
+// only a verified authn.Principal, never the header. And unlike
+// demoSubjectResolver, it is safe regardless of what tenancy.Middleware or
+// admin.ImpersonationMiddleware may or may not have done to the request
+// context, because buildServer mounts admin's own route entirely outside
+// both of them (see buildServer's own composition comment) -- this
+// resolver reads ONLY the caller's real, unsubstituted Principal.
+func adminSubjectResolver(r *http.Request) (rbac.Subject, bool) {
+	principal, ok := authn.PrincipalFromContext(r.Context())
+	if !ok {
+		return rbac.Subject{}, false
+	}
+	sub := rbac.Subject{TenantID: rbac.SystemDomain, UserID: principal.UserID}
+	if !sub.Valid() {
+		return rbac.Subject{}, false
+	}
+	return sub, true
+}
+
 // guardAdminRoute wraps admin's mounted subtree in rbac's permission gate,
 // keyed by adminPermissionFor rather than a single resource -- the one
 // mounted path this app gates differently from every other module's route,
-// per adminPermissionFor's own doc comment.
+// per adminPermissionFor's own doc comment. It uses adminSubjectResolver,
+// never demoSubjectResolver -- see that resolver's own doc comment for
+// why sharing the generic one was a privilege-escalation bug.
 func guardAdminRoute(az rbac.Authorizer, handler http.Handler) http.Handler {
 	return rbac.RequirePermissionFunc(az, adminPermissionFor,
-		rbac.WithSubjectResolver(demoSubjectResolver),
+		rbac.WithSubjectResolver(adminSubjectResolver),
 	)(handler)
 }
 

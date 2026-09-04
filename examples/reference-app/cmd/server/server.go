@@ -1363,7 +1363,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	mux := http.NewServeMux()
 	mux.HandleFunc(http.MethodGet+" "+healthzPath, healthzHandler)
 	mux.HandleFunc(http.MethodGet+" "+metricsPath, metricsHandler)
-	if mountErr := mountModuleRoutes(mux, reg, rbacService); mountErr != nil {
+	adminHandler, mountErr := mountModuleRoutes(mux, reg, rbacService)
+	if mountErr != nil {
 		_ = cleanup()
 		return nil, nil, mountErr
 	}
@@ -1442,29 +1443,53 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// unaffected: this decorator is a no-op for every route notes/org/
 	// storage/etc. serve today unless an operator has actually started an
 	// impersonation session.
-	handler := authn.Middleware(authnModule.Service().Verifier())(
-		admin.ImpersonationMiddleware(adminModule.Impersonation())(
-			tenancy.Middleware(authn.NewPrincipalResolver(), append([]tenancy.MiddlewareOption{
-				tenancy.WithAllowlist(http.MethodGet, healthzPath),
-				tenancy.WithAllowlist(http.MethodHead, healthzPath),
-				tenancy.WithAllowlist(http.MethodGet, metricsPath),
-				tenancy.WithAllowlist(http.MethodHead, metricsPath),
-				tenancy.WithAllowlist(http.MethodGet, config.PathPublic),
-				tenancy.WithAllowlist(http.MethodHead, config.PathPublic),
-				tenancy.WithAllowlist(http.MethodGet, config.PathSystemFeatures),
-				tenancy.WithAllowlist(http.MethodHead, config.PathSystemFeatures),
-				// sharing.PathAccess is the one genuinely public, unauthenticated
-				// route this app mounts: an anonymous visitor holding a bearer
-				// share token carries no Principal and therefore no tenant claim
-				// at all, by design (go/sharing's Handler doc comment) --
-				// sharing.Service.AccessPublic resolves the tenant itself, from
-				// the token alone, once this allowlist entry lets the request
-				// reach it at all. GET only: the fragment defines no other
-				// method on this path.
-				tenancy.WithAllowlist(http.MethodGet, sharing.PathAccess),
-			}, authnPreAuthAllowlist()...)...)(mux),
-		),
+	//
+	// admin's OWN mounted route is deliberately excluded from that branch
+	// entirely -- topMux below dispatches it straight from
+	// authn.Middleware's own output, through guardAdminRoute's
+	// adminSubjectResolver (demo_admin.go) and nothing else. This is what
+	// go/admin/AGENTS.md's wiring-contract section requires and what
+	// mountModuleRoutes' own doc comment explains: admin's five
+	// permissions are evaluated in rbac.SystemDomain against the CALLER'S
+	// OWN real, unsubstituted Principal, regardless of whichever tenant
+	// their session happens to be currently scoped to and regardless of
+	// any impersonation grant that may be active on the request -- neither
+	// tenancy.Middleware's tenant resolution nor
+	// admin.ImpersonationMiddleware's identity substitution has anything
+	// to contribute to that decision, and letting either run first was a
+	// real privilege-escalation gap found in review (an ordinary tenant's
+	// own Owner role, or an impersonated identity, could otherwise reach
+	// admin's console purely because rbac.BuiltinRoleOwner and the shared
+	// global permission catalog carry no domain partitioning of their
+	// own).
+	restOfAppChain := admin.ImpersonationMiddleware(adminModule.Impersonation())(
+		tenancy.Middleware(authn.NewPrincipalResolver(), append([]tenancy.MiddlewareOption{
+			tenancy.WithAllowlist(http.MethodGet, healthzPath),
+			tenancy.WithAllowlist(http.MethodHead, healthzPath),
+			tenancy.WithAllowlist(http.MethodGet, metricsPath),
+			tenancy.WithAllowlist(http.MethodHead, metricsPath),
+			tenancy.WithAllowlist(http.MethodGet, config.PathPublic),
+			tenancy.WithAllowlist(http.MethodHead, config.PathPublic),
+			tenancy.WithAllowlist(http.MethodGet, config.PathSystemFeatures),
+			tenancy.WithAllowlist(http.MethodHead, config.PathSystemFeatures),
+			// sharing.PathAccess is the one genuinely public, unauthenticated
+			// route this app mounts: an anonymous visitor holding a bearer
+			// share token carries no Principal and therefore no tenant claim
+			// at all, by design (go/sharing's Handler doc comment) --
+			// sharing.Service.AccessPublic resolves the tenant itself, from
+			// the token alone, once this allowlist entry lets the request
+			// reach it at all. GET only: the fragment defines no other
+			// method on this path.
+			tenancy.WithAllowlist(http.MethodGet, sharing.PathAccess),
+		}, authnPreAuthAllowlist()...)...)(mux),
 	)
+
+	topMux := http.NewServeMux()
+	topMux.Handle(adminRoutePath, adminHandler)
+	topMux.Handle(adminRoutePath+"/", adminHandler)
+	topMux.Handle("/", restOfAppChain)
+
+	handler := authn.Middleware(authnModule.Service().Verifier())(topMux)
 	// The demo-user seed runs last, once the composed handler exists: it
 	// registers the demo accounts through the same register route a browser
 	// would use, which needs the whole chain above it. It is opt-in
@@ -1529,7 +1554,20 @@ func authnPreAuthAllowlist() []tenancy.MiddlewareOption {
 	return opts
 }
 
-// mountModuleRoutes copies every route reg's modules mounted onto mux.
+// mountModuleRoutes copies every route reg's modules mounted onto mux,
+// with ONE deliberate exception: admin's own mounted route (adminRoutePath)
+// is never added to mux at all. admin's HTTP surface must not sit behind
+// ordinary tenancy.Middleware tenant resolution, and must not sit behind
+// admin.ImpersonationMiddleware's identity substitution either --
+// go/admin/AGENTS.md's wiring-contract section states both explicitly
+// ("admin's OWN routes ... do not sit behind ImpersonationMiddleware --
+// that decorator's effect is on the REST of the application's routes
+// only"; "does NOT go through ordinary tenancy.Middleware tenant
+// resolution"). buildServer therefore composes admin's own gated handler
+// on a separate middleware branch that sits directly behind
+// authn.Middleware and nothing else -- see buildServer's own composition
+// comment -- and mountModuleRoutes returns that handler as its second
+// value instead of mounting it into mux.
 //
 // net/http's ServeMux (since Go 1.22) distinguishes an exact-match pattern
 // ("/api/v1/notes") from a subtree pattern ("/api/v1/notes/", matching
@@ -1543,25 +1581,33 @@ func authnPreAuthAllowlist() []tenancy.MiddlewareOption {
 // registered explicitly here, pointing at the same Handler, instead of
 // relying on ServeMux's implicit redirect-on-missing-slash behavior.
 //
-// Every route also passes through guardModuleRoute on the way to the mux,
-// which is where rbac's permission gate is applied -- see
-// demo_subject.go's demoRouteGuards. Mounting is the right place for it:
-// a route that reaches the mux ungated is served ungated, so the check
-// that every mounted path has a declared guard belongs on the only path
-// that can mount one. A path the table does not name fails the build here
-// rather than being served.
-func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Authorizer) error {
+// Every route also passes through guardModuleRoute on the way out, which
+// is where rbac's permission gate is applied -- see demo_subject.go's
+// demoRouteGuards. guardModuleRoute still runs for admin's own path too
+// (dispatching to guardAdminRoute, per demoRouteGuards' adminRouteSentinel
+// entry), so the table's exhaustiveness check keeps covering it; only the
+// DESTINATION of the resulting handler differs. A path the table does not
+// name fails the build here rather than being served.
+func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Authorizer) (http.Handler, error) {
+	var adminHandler http.Handler
 	for _, route := range reg.Routes.Routes() {
 		handler, err := guardModuleRoute(az, route.Path, route.Handler)
 		if err != nil {
-			return err
+			return nil, err
+		}
+		if route.Path == adminRoutePath {
+			adminHandler = handler
+			continue
 		}
 		mux.Handle(route.Path, handler)
 		if !strings.HasSuffix(route.Path, "/") {
 			mux.Handle(route.Path+"/", handler)
 		}
 	}
-	return nil
+	if adminHandler == nil {
+		return nil, fmt.Errorf("reference-app: no module mounted %q; admin.Module.Register must run for this app to compose its dedicated middleware branch", adminRoutePath)
+	}
+	return adminHandler, nil
 }
 
 // healthzHandler always returns 200 with no tenant required. It is
