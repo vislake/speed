@@ -10,6 +10,7 @@ import (
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pki"
 	"github.com/vislake/speed/go/rbac"
 	"github.com/vislake/speed/go/sharing"
 	"github.com/vislake/speed/go/storage"
@@ -146,6 +147,10 @@ const storageRoutePath = "/api/v1/storage"
 // comment explains.
 const notificationRoutePath = "/api/v1/notifications"
 
+// pkiRoutePath is where the pki module mounts its routes -- the same
+// unexported-path situation notesRoutePath's own comment explains.
+const pkiRoutePath = "/api/v1/pki"
+
 // demoRouteGuards declares, for every path a module mounts, the resource
 // whose permissions gate it -- or routePublic when the path is
 // deliberately reachable without one.
@@ -235,6 +240,39 @@ var demoRouteGuards = map[string]string{
 	// own per-operation checks are where their routePublic entries' real
 	// gates live.
 	sharing.PathAccess: routePublic,
+	// pki's path was a KNOWN, PRE-EXISTING GAP (routePublic) when this
+	// table first grew an entry for it: pki mounts a real, fine-grained
+	// permission vocabulary (pki.PermissionRead/Issue/Revoke/Rotate) and
+	// its handler performs no identity check of its own -- the
+	// storage-style shape this table's own doc comment describes, which
+	// normally means router gating -- but demoPermissionFor's binary
+	// read/write split cannot express four distinct permissions, so this
+	// router-level gate was simply never added when pki's HTTP surface
+	// landed. It is gated for real now: pkiResource marks the path
+	// non-public, and guardModuleRoute substitutes pkiPermissionFor (see
+	// its own doc comment) for demoPermissionFor specifically for this
+	// path, since GET (JWKS/CRL export) and POST (the two round-3 revoke
+	// operations -- signing-key and certificate) need pki's own
+	// Read/Revoke permissions, not a generic write bucket pki never
+	// declares.
+	//
+	// What this narrower fix does NOT reach, left as follow-up for
+	// whoever owns pki's reference-app wiring: PermissionIssue and
+	// PermissionRotate are declared but have no HTTP operation in this
+	// round's fragment at all (issuance and manual rotation stay Go-only
+	// per go/pki/api/openapi.yaml's own header), so there is nothing yet
+	// to gate for either; and pki_revokeSigningKey acts on
+	// pki_signing_keys, which is platform data with no tenant column at
+	// all (its own openapi.yaml description), so granting PermissionRevoke
+	// to a tenant's BuiltinRoleOwner -- as seedDemoGrants does, purely to
+	// demonstrate the gate closing on someone who lacks it -- hands that
+	// tenant's owner a lever that reaches every OTHER tenant's signing
+	// material too. A real deployment should restrict PermissionRevoke to
+	// a platform-admin role instead, and a follow-up round should give
+	// pki a genuine per-operation check (or a DataScope split between the
+	// tenant-scoped certificate revoke and the platform-wide signing-key
+	// one) rather than relying on this router-level gate alone.
+	pkiRoutePath: pkiResource,
 }
 
 // notesResource is the resource half of notes' permission strings. It is
@@ -247,6 +285,36 @@ var notesResource = mustResourceOf(notes.PermissionRead, notes.PermissionWrite)
 // derived from notes' -- so this example cannot drift from the
 // permissions storage actually declares either.
 var storageResource = mustResourceOf(storage.PermissionRead, storage.PermissionWrite)
+
+// pkiResource is the resource half of pki's permission strings, derived the
+// same way notesResource and storageResource are. It exists only to give
+// demoRouteGuards[pkiRoutePath] a non-routePublic value; guardModuleRoute
+// never calls demoPermissionFor(pkiResource) for this path -- it uses
+// pkiPermissionFor instead, since pki's real action vocabulary
+// (Read/Issue/Revoke/Rotate) is not the generic read/write pair
+// demoPermissionFor assumes.
+var pkiResource = mustResourceOf(pki.PermissionRead, pki.PermissionRevoke)
+
+// pkiPermissionFor selects the permission a pki request must hold, mirroring
+// demoPermissionFor's GET/HEAD-vs-everything-else split but naming pki's own
+// two round-3 HTTP-reachable permissions directly rather than a generic
+// write bucket pki never declares. Of pki's four declared permissions, only
+// PermissionRead and PermissionRevoke have an HTTP operation in this
+// round's fragment at all (go/pki/api/openapi.yaml): the three GET
+// operations export a JWKS or a CRL (PermissionRead), and the two POST
+// operations both revoke something -- a signing key or a certificate
+// (PermissionRevoke). PermissionIssue and PermissionRotate stay ungated
+// here because nothing under this path invokes them over HTTP yet -- see
+// demoRouteGuards' own pkiRoutePath entry for the full reasoning and what
+// remains open.
+func pkiPermissionFor(r *http.Request) string {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		return pki.PermissionRead
+	default:
+		return pki.PermissionRevoke
+	}
+}
 
 // mustResourceOf returns the shared resource half of the given permission
 // strings, and panics when they do not agree on one.
@@ -378,7 +446,13 @@ func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler) (ht
 	if resource == routePublic {
 		return handler, nil
 	}
-	return rbac.RequirePermissionFunc(az, demoPermissionFor(resource),
+	// pki needs its own action selector, not demoPermissionFor's generic
+	// read/write split -- see pkiPermissionFor's own doc comment.
+	permissionFor := demoPermissionFor(resource)
+	if path == pkiRoutePath {
+		permissionFor = pkiPermissionFor
+	}
+	return rbac.RequirePermissionFunc(az, permissionFor,
 		rbac.WithSubjectResolver(demoSubjectResolver),
 	)(handler), nil
 }

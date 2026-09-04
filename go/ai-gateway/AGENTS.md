@@ -1,10 +1,10 @@
 # ai-gateway
 
-Round 1 of `docs/internal/08-ai-gateway.md`'s "统一抽象层" (unified
-abstraction layer): a chat-only LLM gateway. Image generation ("多模态扩展")
-is explicitly out of scope for this round and deferred to a later one --
-there is no `ImageProvider`, no jobs-based async image task, and no storage
-integration anywhere in this module yet.
+Round 1 of `docs/internal/08-ai-gateway.md`'s unified-abstraction-layer
+section: a chat-only LLM gateway. Image generation -- the design doc's
+multi-modal-expansion section -- is explicitly out of scope for this round
+and deferred to a later one -- there is no `ImageProvider`, no jobs-based
+async image task, and no storage integration anywhere in this module yet.
 
 ## What this round ships
 
@@ -112,5 +112,5 @@ used.
   change.
 - No `ImageProvider`, no image generation, no `jobs`/`storage` integration --
   out of scope for this round by the task's own instruction; see
-  `docs/internal/08-ai-gateway.md`'s "多模态扩展" section for the target
-  shape a later round implements.
+  `docs/internal/08-ai-gateway.md`'s multi-modal-expansion section for the
+  target shape a later round implements.

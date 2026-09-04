@@ -125,6 +125,19 @@ type ChatResponse struct {
 // closes and treat the last-seen non-zero Usage as authoritative, checking
 // Err on each chunk to detect the error path.
 //
+// # A known, deliberate exception
+//
+// A ChatProvider whose underlying vendor closes a stream cleanly without
+// ever reporting usage (some self-hosted/open-weight OpenAI-compatible
+// hosts do this -- see OpenAICompatibleProvider's warnIfNoUsage) closes the
+// channel with NEITHER terminal shape rather than fabricating a zero Usage
+// or turning already-successfully-delivered content into a terminal error.
+// A consumer ranging for the final answer is unaffected (it already has
+// every Delta that arrived); a consumer relying on this channel alone for
+// usage/billing data will see none for that stream, and the implementation
+// logs a warning explaining why -- see OpenAICompatibleProvider's own
+// warnIfNoUsage doc comment for the full reasoning.
+//
 // This is a deliberate design choice among the alternatives (a second error
 // return from ChatStream itself cannot report a failure that only manifests
 // mid-stream, after the HTTP response has already started; a separate error

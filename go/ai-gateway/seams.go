@@ -140,8 +140,9 @@ type UsageEvent struct {
 // wired still works, it just reports no usage anywhere. Business code never
 // calls a metering API of its own for a call that went through this
 // Gateway -- automatic reporting is the whole point (docs/internal/
-// 08-ai-gateway.md's "AI 计量是内置行为不需手动上报" rule) -- so a host that
-// wants metering for AI usage MUST wire this seam; there is no other path.
+// 08-ai-gateway.md's rule that AI metering is a built-in behavior needing
+// no manual reporting) -- so a host that wants metering for AI usage MUST
+// wire this seam; there is no other path.
 type UsageRecorder interface {
 	// Record reports event. Whether a failed Record call is retried,
 	// buffered, or simply dropped is entirely a property of the wired

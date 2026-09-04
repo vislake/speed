@@ -67,6 +67,7 @@ require (
 	github.com/redis/go-redis/v9 v9.14.1
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/redis v0.44.0
+	github.com/vislake/speed/go/ai-gateway v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/authn v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/config v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/dbkit v0.0.0-00010101000000-000000000000

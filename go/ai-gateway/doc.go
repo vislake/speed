@@ -5,11 +5,12 @@
 //
 // # Scope of this round
 //
-// This round implements only the "统一抽象层" (unified abstraction layer)
-// section of docs/internal/08-ai-gateway.md: chat, not image generation.
-// Image generation ("多模态扩展") -- ImageProvider, jobs-based async image
-// tasks, storage integration -- is out of scope and deferred to a later
-// round; nothing in this package's public API commits to a shape for it.
+// This round implements only the unified-abstraction-layer section of
+// docs/internal/08-ai-gateway.md: chat, not image generation. Image
+// generation -- the design doc's multi-modal-expansion section --
+// ImageProvider, jobs-based async image tasks, storage integration -- is
+// out of scope and deferred to a later round; nothing in this package's
+// public API commits to a shape for it.
 //
 // # The pipeline
 //

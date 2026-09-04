@@ -174,7 +174,9 @@ type testListNotesResponse struct {
 // createNoteAs POSTs a note with the given text to srv, authenticated as
 // token -- the bearer access token is the ONLY thing that selects the
 // tenant a note is created under (registerAndAuthenticate's own doc
-// comment explains why Host does not).
+// comment explains why Host does not) -- and returns the created note's id,
+// for a caller that needs to act on that exact note afterward (consult_flow_test.go's
+// suggestion requests, keyed on note_id).
 //
 // Two demo headers ride along, each naming a different thing:
 //
@@ -185,7 +187,7 @@ type testListNotesResponse struct {
 //   - X-Demo-User-Id names the creating user for notes' own SubjectResolver
 //     (demoNotesSubjectResolver in server.go) -- the value that lands in the
 //     note's CreatorUserID; see demoNotesCreatorUserID above.
-func createNoteAs(t *testing.T, srv *httptest.Server, token, text string) {
+func createNoteAs(t *testing.T, srv *httptest.Server, token, text string) string {
 	t.Helper()
 
 	body, err := json.Marshal(map[string]string{"text": text})
@@ -213,6 +215,15 @@ func createNoteAs(t *testing.T, srv *httptest.Server, token, text string) {
 		t.Fatalf("POST /api/v1/notes status = %d, want %d; body = %s",
 			resp.StatusCode, http.StatusCreated, respBody)
 	}
+
+	var created testNote
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create-note response: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatal("create-note response carried no id")
+	}
+	return created.ID
 }
 
 // listNotesAs GETs the notes visible to the tenant token authenticates for.

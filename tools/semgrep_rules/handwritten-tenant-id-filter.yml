@@ -38,6 +38,15 @@
 #     plan.go's own doc comment), reached through a plain *gorm.DB
 #     (PlanStore) whose (tenant_id, plan_key) lookups are the actual
 #     lookup-precedence mechanism, not a bypass of an injected guard.
+#   * go/ai-gateway/store.go -- ai_gateway_credentials is the same
+#     scope-tiered shape go/config's configs table establishes: a
+#     platform-wide credential row (scope = "system", tenant_id = "")
+#     falls back for every tenant's Resolve lookup, a tenant's own BYOK
+#     row (scope = "tenant") is that tenant's private data, and the model
+#     deliberately implements no TenantScoped either (see model.go's own
+#     doc comment) -- reached through a plain *gorm.DB (credentialStore)
+#     whose (provider, scope, tenant_id) lookups are the actual
+#     lookup-precedence mechanism, not a bypass of an injected guard.
 #
 # Residual gap: only the first-argument literal form is matched -- a
 # clause assembled dynamically (fmt.Sprintf into the clause, or a
@@ -52,7 +61,8 @@ rules:
       Tenant filtering is injected by the GORM plugin and the Repository;
       writing WHERE tenant_id = ? by hand bypasses the guard. Legitimate
       sites are allowlisted in the rule header (go/dbkit internals,
-      go/jobs/store.go, go/config/store.go, go/billing/plan.go).
+      go/jobs/store.go, go/config/store.go, go/billing/plan.go,
+      go/ai-gateway/store.go).
     languages:
       - go
     severity: WARNING
@@ -74,3 +84,4 @@ rules:
         - "**/go/jobs/store.go"
         - "**/go/config/store.go"
         - "**/go/billing/plan.go"
+        - "**/go/ai-gateway/store.go"

@@ -189,11 +189,19 @@ func (g *Gateway) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 		return ChatResponse{}, err
 	}
 
+	// The attribute keys below are deliberately "prompt_units"/
+	// "completion_units", never "prompt_tokens"/"completion_tokens":
+	// go/observability's on-by-default redaction (redact.go's
+	// sensitiveStems) redacts any attribute key containing the substring
+	// "token" -- including as part of a longer word -- wholesale, which
+	// would silently mask these integer counts as "[REDACTED]" in every
+	// deployment. See relayStream's identical rename below for the
+	// streaming path.
 	obs.FromContext(ctx).Info("aigateway: chat completed",
 		"model", logicalModel,
 		"provider", route.Provider,
-		"prompt_tokens", resp.Usage.PromptTokens,
-		"completion_tokens", resp.Usage.CompletionTokens,
+		"prompt_units", resp.Usage.PromptTokens,
+		"completion_units", resp.Usage.CompletionTokens,
 	)
 	g.recordUsage(ctx, logicalModel, resp.Usage)
 	return resp, nil
@@ -242,11 +250,14 @@ func (g *Gateway) relayStream(ctx context.Context, logicalModel, provider string
 
 	for chunk := range upstream {
 		if chunk.Usage != nil {
+			// See the identical rename note in Chat above: "_units", never
+			// "_tokens", to dodge go/observability's key-substring
+			// redaction of anything containing "token".
 			obs.FromContext(ctx).Info("aigateway: chat stream completed",
 				"model", logicalModel,
 				"provider", provider,
-				"prompt_tokens", chunk.Usage.PromptTokens,
-				"completion_tokens", chunk.Usage.CompletionTokens,
+				"prompt_units", chunk.Usage.PromptTokens,
+				"completion_units", chunk.Usage.CompletionTokens,
 			)
 			g.recordUsage(ctx, logicalModel, *chunk.Usage)
 		}

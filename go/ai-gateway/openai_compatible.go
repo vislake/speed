@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	obs "github.com/vislake/speed/go/observability"
 )
 
 // chatCompletionsPath is the OpenAI-compatible chat-completions endpoint
@@ -130,9 +132,8 @@ func buildRequestBody(req ChatRequest, stream bool, streamUsage bool) ([]byte, e
 			// compatible streaming response carry a final chunk with real
 			// token usage -- without it, a streaming response never
 			// reports usage at all. This is exactly the design doc's rule
-			// that "流式响应在最后一个 chunk 处理真实用量" (streaming
-			// responses handle real usage at the last chunk), made real by
-			// asking for it explicitly.
+			// that streaming responses handle real usage at the last
+			// chunk, made real by asking for it explicitly.
 			body["stream_options"] = map[string]any{"include_usage": true}
 		}
 	}
@@ -302,6 +303,12 @@ func streamChunks(ctx context.Context, body io.ReadCloser, out chan<- ChatChunk)
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, streamScannerBufferBytes), streamScannerMaxBytes)
 
+	// sawUsage tracks whether a usage-bearing chunk was ever sent on out.
+	// It is the sole input to warnIfNoUsage below -- see that function's
+	// doc comment for why a vendor that never reports usage gets a log
+	// line rather than a fabricated Usage or a terminal error chunk.
+	sawUsage := false
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, sseDataPrefix) {
@@ -312,6 +319,7 @@ func streamChunks(ctx context.Context, body io.ReadCloser, out chan<- ChatChunk)
 			continue
 		}
 		if data == sseDoneSentinel {
+			warnIfNoUsage(ctx, sawUsage)
 			return
 		}
 
@@ -339,6 +347,7 @@ func streamChunks(ctx context.Context, body io.ReadCloser, out chan<- ChatChunk)
 			}
 			chunk.Usage = &usage
 			hasContent = true
+			sawUsage = true
 		}
 		if hasContent {
 			if !send(chunk) {
@@ -349,6 +358,7 @@ func streamChunks(ctx context.Context, body io.ReadCloser, out chan<- ChatChunk)
 
 	if err := scanner.Err(); err != nil {
 		send(ChatChunk{Err: ErrProviderRequestFailed.WithCause(err)})
+		return
 	}
 	// A scanner that stops with no error and no [DONE] line (the vendor
 	// closed the connection cleanly without sending the sentinel) is
@@ -356,4 +366,31 @@ func streamChunks(ctx context.Context, body io.ReadCloser, out chan<- ChatChunk)
 	// OpenAI-compatible hosts omit the literal sentinel line. This
 	// matches real-world OpenAI-compatible server behavior better than
 	// failing a stream that otherwise delivered every chunk correctly.
+	warnIfNoUsage(ctx, sawUsage)
+}
+
+// warnIfNoUsage logs a warning when a ChatStream call is about to end
+// cleanly (no transport error, no malformed chunk) without ever having sent
+// a usage-bearing chunk -- reached from both clean-exit paths in
+// streamChunks, the [DONE] sentinel and a clean EOF alike.
+//
+// buildRequestBody always requests stream_options.include_usage, but some
+// self-hosted/open-weight OpenAI-compatible hosts (many llama.cpp/vLLM
+// front ends among them) silently drop unknown request fields and never
+// report usage for a streaming response at all. The content already sent
+// on out is real and successfully delivered, so this is deliberately not
+// turned into a terminal error chunk (that would make a consumer discard or
+// distrust content that in fact arrived correctly) and Usage is
+// deliberately never fabricated as a zero value (ChatChunk's own doc
+// comment requires a success terminal chunk's Usage to be the stream's
+// REAL final token usage, and a fabricated zero would misreport actual
+// usage to a wired UsageRecorder as if the call had truly cost nothing).
+// The one thing this function does is make the gap visible in the logs --
+// without it, Gateway.recordUsage (gateway.go) simply never fires for this
+// stream, with nothing anywhere indicating why.
+func warnIfNoUsage(ctx context.Context, sawUsage bool) {
+	if sawUsage {
+		return
+	}
+	obs.FromContext(ctx).Warn("aigateway: chat stream ended without vendor usage data")
 }

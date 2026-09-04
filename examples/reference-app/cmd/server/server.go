@@ -19,6 +19,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	aigateway "github.com/vislake/speed/go/ai-gateway"
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
@@ -51,6 +52,7 @@ import (
 	"github.com/vislake/speed/go/storage"
 	"github.com/vislake/speed/go/tenancy"
 
+	"github.com/vislake/speed/examples/reference-app/internal/consult"
 	"github.com/vislake/speed/examples/reference-app/internal/demo"
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
 )
@@ -538,6 +540,24 @@ type serverConfig struct {
 	SocialProviders   []authn.SocialProvider
 	RedirectAllowlist authn.RedirectAllowlist
 	TrustedProviders  []string
+
+	// AIGatewayBaseURL and AIGatewayAPIKey, when AIGatewayAPIKey is
+	// non-empty, make buildServer write a platform-wide ai-gateway
+	// credential (aigateway.CredentialService.SetPlatformCredential) for
+	// aigateway.ProviderOpenAICompatible at boot, so the consult module's
+	// one route (cmd/server/consult.go) can actually reach a provider.
+	// configFromEnv never sets either -- there is no real OpenAI-compatible
+	// key committed to this repository, the same posture SocialProviders'
+	// own doc comment above describes -- so the zero-setup `go run
+	// ./cmd/server` experience leaves the consult route permanently
+	// answering aigateway.ErrCredentialNotFound until an operator wires a
+	// real key. consult_flow_test.go is what sets both: AIGatewayBaseURL to
+	// an httptest.Server standing in for the OpenAI-compatible endpoint,
+	// and AIGatewayAPIKey to a fixed test value, exactly the way cfg.Mailer
+	// is a test-only override of a seam production leaves on its real
+	// default.
+	AIGatewayBaseURL string
+	AIGatewayAPIKey  string
 }
 
 // configFromEnv reads serverConfig from the environment, defaulting to the
@@ -644,15 +664,16 @@ func configFromEnv() (serverConfig, error) {
 }
 
 // buildServer wires the reference app's Kernel -- the authn, notes, org,
-// config, rbac, storage, demo, notification and audit Modules -- their
-// migrations, the job queue the storage and notification modules share,
-// the demo notification glue (cmd/server/demo_notification.go), and the
-// authn+tenancy middleware chain into a single http.Handler. It is the
-// one place that wiring logic lives -- main() and the end-to-end tests
-// (server_test.go, authn_e2e_test.go, org_flow_test.go,
-// storage_flow_test.go and notification_flow_test.go) all call it, so the
-// two can never drift into testing a different wiring than the one that
-// actually runs.
+// config, rbac, storage, demo, notification, ai-gateway and audit Modules --
+// their migrations, the job queue the storage and notification modules
+// share, the demo notification glue (cmd/server/demo_notification.go), the
+// consult glue (cmd/server/consult.go, go/ai-gateway's mandatory first
+// consumer), and the authn+tenancy middleware chain into a single
+// http.Handler. It is the one place that wiring logic lives -- main() and
+// the end-to-end tests (server_test.go, authn_e2e_test.go,
+// org_flow_test.go, storage_flow_test.go, notification_flow_test.go and
+// consult_flow_test.go) all call it, so the two can never drift into
+// testing a different wiring than the one that actually runs.
 //
 // It returns the composed handler and a cleanup function that closes
 // everything buildServer opened (the services, the injected Redis bus and
@@ -827,6 +848,17 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: build the notification contact phone indexer: %w", err)
 	}
+
+	// ai-gateway's ai_gateway_credentials.api_key column is encrypted at
+	// rest under this same config cipher, registered here for the identical
+	// "before anything touches the model" reason as org's and notification's
+	// registrations immediately above. Unlike those two, no separate HMAC
+	// key is needed: a credential is only ever looked up by (provider,
+	// scope, tenant_id), never by its own value, so reusing cfg.ConfigKey's
+	// cipher carries none of the AES-key-doubling-as-an-HMAC-key risk their
+	// comments warn about -- there is no second, HMAC construction here to
+	// double as.
+	dbkit.RegisterEncryptedSerializer(aigateway.CredentialAPIKeySerializerName, cipher)
 
 	// hostByTenant is demoHostTenants' reverse index: which demo Host
 	// belongs to a given tenant, which is what an invitation's accept link
@@ -1042,6 +1074,22 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// package comment says so at length).
 	demoModule := demo.NewModule()
 
+	// aiGatewayModule is the reference app's mandatory first consumer of
+	// go/ai-gateway (root CLAUDE.md's "Reference App" section): the
+	// internal/consult service (wired below, after Bootstrap) calls its
+	// Gateway.Chat under consult.LogicalModel ("chat:default"), which
+	// WithModelRoute routes to the module's own zero-external-dependency
+	// default provider, aigateway.ProviderOpenAICompatible. The vendor
+	// model id ("gpt-4o-mini") is opaque to this app -- it is passed
+	// through to whatever OpenAI-compatible endpoint the resolved
+	// credential's base URL actually names (the real OpenAI API in a real
+	// deployment, an httptest.Server in consult_flow_test.go) -- and never
+	// seen by consult's own code, per aigateway.ChatRequest.Model's own
+	// doc comment on why business code never hardcodes a vendor model id.
+	aiGatewayModule := aigateway.NewModule(db,
+		aigateway.WithModelRoute(consult.LogicalModel, aigateway.ProviderOpenAICompatible, "gpt-4o-mini"),
+	)
+
 	migrationRegistry := dbkit.NewMigrationRegistry()
 	if regErr := migrationRegistry.Register(pkiModule); regErr != nil {
 		_ = cleanup()
@@ -1086,12 +1134,16 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
+	if regErr := migrationRegistry.Register(aiGatewayModule); regErr != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	}
 	if applyErr := migrationRegistry.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: apply migrations: %w", applyErr)
 	}
 
-	// Bootstrap registers all nine modules in argument order -- authn
+	// Bootstrap registers all ten modules in argument order -- authn
 	// first of all, so its Register-time declarations (its config items,
 	// its permissions, its events) precede the modules that lean on them,
 	// then notes and org before config, so the configuration items and
@@ -1117,7 +1169,12 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// every dispatch (the demo patient-reminder copy included) from that
 	// frozen catalog, so a demo whose templates lived outside the set
 	// could never render (internal/demo module.go's package comment says
-	// so at length). audit last is not load-bearing order -- its Module.DependsOn
+	// so at length). aiGatewayModule follows notification for the same
+	// not-load-bearing reason: its own Register declares nothing but the
+	// SystemPurposeCredentialWrite system purpose (go/ai-gateway/module.go's
+	// Register doc comment), which the platform-credential write below
+	// only needs registered before it runs, not before any other module's
+	// Register. audit last is not load-bearing order -- its Module.DependsOn
 	// is nil, and its subscriptions are valid to install before or after
 	// any publisher registers (see audit's Module.DependsOn doc comment)
 	// -- it simply reads naturally as "the business-facing modules, then
@@ -1178,7 +1235,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	if cfg.Mailer != nil {
 		kernelOptions = append(kernelOptions, pkgcore.WithMailer(cfg.Mailer, pkgcore.Stateless))
 	}
-	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, pkiModule, authnModule, notesModule, orgModule, configModule, rbacModule, storageModule, sharingModule, demoModule, notificationModule, auditModule)
+	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, pkiModule, authnModule, notesModule, orgModule, configModule, rbacModule, storageModule, sharingModule, demoModule, notificationModule, aiGatewayModule, auditModule)
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: bootstrap kernel: %w", err)
@@ -1201,6 +1258,32 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	if seedErr := seedDemoGrants(ctx, rbacService, cfg.HostTenants); seedErr != nil {
 		_ = cleanup()
 		return nil, nil, seedErr
+	}
+
+	// The ai-gateway platform credential: written only when cfg.AIGatewayAPIKey
+	// is set (see its own doc comment on serverConfig for why the default is
+	// empty). This must run after Bootstrap, because aiGatewayModule.Register
+	// is what calls pkgcore.RegisterSystemPurpose(aigateway.SystemPurposeCredentialWrite)
+	// -- WithSystemContext below refuses an unregistered purpose -- and the
+	// write itself needs the module's own CredentialService, which
+	// aiGatewayModule.Credentials() exposes regardless of Bootstrap having
+	// run (constructing a Module performs no I/O), so nothing here strictly
+	// needs to wait for Bootstrap except the purpose registration.
+	if cfg.AIGatewayAPIKey != "" {
+		sysCtx, sysErr := pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
+			Actor:   "reference-app-boot",
+			Purpose: aigateway.SystemPurposeCredentialWrite,
+		})
+		if sysErr != nil {
+			_ = cleanup()
+			return nil, nil, fmt.Errorf("reference-app: build the ai-gateway credential system context: %w", sysErr)
+		}
+		if credErr := aiGatewayModule.Credentials().SetPlatformCredential(
+			sysCtx, aigateway.ProviderOpenAICompatible, cfg.AIGatewayAPIKey, cfg.AIGatewayBaseURL,
+		); credErr != nil {
+			_ = cleanup()
+			return nil, nil, fmt.Errorf("reference-app: set the ai-gateway platform credential: %w", credErr)
+		}
 	}
 
 	// Drain the registry's job handlers onto the standalone queue and
@@ -1251,6 +1334,17 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// contracts, and notification_flow_test.go for the end-to-end legs).
 	// The call cannot fail: nothing it does returns an error.
 	wireDemoNotification(mux, reg.EventBus(), notificationModule)
+
+	// wireConsult mounts go/ai-gateway's mandatory-first-consumer route
+	// (cmd/server/consult.go): consultService shares notesModule's own
+	// database connection through a fresh notes.Repository, exactly the way
+	// auditModule shares it above -- no new infrastructure dependency is
+	// needed for this app to have a real consult surface -- and asks
+	// aiGatewayModule's own Gateway, the same instance
+	// aiGatewayModule.Register validated. The call cannot fail: nothing it
+	// does returns an error.
+	consultService := consult.NewService(notes.NewRepository(db), aiGatewayModule.Gateway())
+	wireConsult(mux, consultService)
 
 	// The middleware chain: authn.Middleware(verifier) FIRST, then
 	// tenancy.Middleware(authn.NewPrincipalResolver()) -- the deliberate

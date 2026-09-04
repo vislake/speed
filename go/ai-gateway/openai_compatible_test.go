@@ -1,13 +1,18 @@
 package aigateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	obs "github.com/vislake/speed/go/observability"
 )
 
 // --- Chat (non-streaming) --------------------------------------------------
@@ -330,5 +335,112 @@ func TestOpenAICompatibleProvider_ChatStream_NoDoneSentinel_EndsCleanly(t *testi
 	}
 	if chunks[1].Err != nil {
 		t.Fatalf("last chunk = %+v, want a clean terminal success chunk with no error", chunks[1])
+	}
+}
+
+// TestOpenAICompatibleProvider_ChatStream_NoUsageEverSent_WarnsAndEndsCleanly
+// reproduces the bug: a vendor that ignores
+// stream_options.include_usage (real self-hosted/open-weight
+// OpenAI-compatible gateways do this) and closes the connection cleanly
+// after content, with no usage chunk and no [DONE] sentinel either, used to
+// leave the channel with no terminal chunk at all and nothing in the logs
+// to explain the metering gap. It must now: (1) still deliver the content
+// chunk that genuinely arrived, (2) never fabricate a Usage or turn the
+// already-successful content into a terminal error, and (3) log a warning
+// so the omission is not silent.
+func TestOpenAICompatibleProvider_ChatStream_NoUsageEverSent_WarnsAndEndsCleanly(t *testing.T) {
+	srv := httptest.NewServer(sseHandler(
+		`{"choices":[{"delta":{"content":"Hi"}}]}`,
+	))
+	defer srv.Close()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+	ctx := obs.WithLogger(context.Background(), logger)
+
+	p := NewOpenAICompatibleProvider(srv.URL, "sk-test")
+	ch, err := p.ChatStream(ctx, ChatRequest{
+		Model:    "gpt-4o-mini",
+		Messages: []ChatMessage{{Role: RoleUser, Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	chunks := drainStream(t, ch)
+	if len(chunks) != 1 {
+		t.Fatalf("got %d chunks, want 1 (just the content that genuinely arrived): %+v", len(chunks), chunks)
+	}
+	if chunks[0].Delta != "Hi" {
+		t.Fatalf("content chunk = %+v", chunks[0])
+	}
+	if chunks[0].Err != nil {
+		t.Fatalf("content chunk carries an error %v, want the already-delivered content left untouched", chunks[0].Err)
+	}
+	if chunks[0].Usage != nil {
+		t.Fatalf("content chunk carries fabricated Usage %+v, want none", chunks[0].Usage)
+	}
+	if !strings.Contains(logBuf.String(), "aigateway: chat stream ended without vendor usage data") {
+		t.Fatalf("log output = %q, want a warning naming the missing vendor usage data", logBuf.String())
+	}
+}
+
+// TestOpenAICompatibleProvider_ChatStream_DoneWithNoUsage_WarnsAndEndsCleanly
+// is the same gap reached through the other clean-exit path: a vendor that
+// terminates with the literal "[DONE]" sentinel but never sent a
+// usage-bearing chunk before it.
+func TestOpenAICompatibleProvider_ChatStream_DoneWithNoUsage_WarnsAndEndsCleanly(t *testing.T) {
+	srv := httptest.NewServer(sseHandler(
+		`{"choices":[{"delta":{"content":"Hi"}}]}`,
+		`[DONE]`,
+	))
+	defer srv.Close()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+	ctx := obs.WithLogger(context.Background(), logger)
+
+	p := NewOpenAICompatibleProvider(srv.URL, "sk-test")
+	ch, err := p.ChatStream(ctx, ChatRequest{
+		Model:    "gpt-4o-mini",
+		Messages: []ChatMessage{{Role: RoleUser, Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	chunks := drainStream(t, ch)
+	if len(chunks) != 1 {
+		t.Fatalf("got %d chunks, want 1: %+v", len(chunks), chunks)
+	}
+	if !strings.Contains(logBuf.String(), "aigateway: chat stream ended without vendor usage data") {
+		t.Fatalf("log output = %q, want a warning naming the missing vendor usage data", logBuf.String())
+	}
+}
+
+// TestOpenAICompatibleProvider_ChatStream_UsageSent_NoWarning is the
+// negative case pinning that the warning added above never fires on the
+// ordinary, correctly-behaving path.
+func TestOpenAICompatibleProvider_ChatStream_UsageSent_NoWarning(t *testing.T) {
+	srv := httptest.NewServer(sseHandler(
+		`{"choices":[{"delta":{"content":"Hi"}}]}`,
+		`{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`,
+		`[DONE]`,
+	))
+	defer srv.Close()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+	ctx := obs.WithLogger(context.Background(), logger)
+
+	p := NewOpenAICompatibleProvider(srv.URL, "sk-test")
+	ch, err := p.ChatStream(ctx, ChatRequest{
+		Model:    "gpt-4o-mini",
+		Messages: []ChatMessage{{Role: RoleUser, Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	drainStream(t, ch)
+	if strings.Contains(logBuf.String(), "chat stream ended without vendor usage data") {
+		t.Fatalf("log output = %q, want no missing-usage warning when the vendor did report usage", logBuf.String())
 	}
 }

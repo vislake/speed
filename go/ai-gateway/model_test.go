@@ -14,6 +14,7 @@ package aigateway
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -112,4 +113,57 @@ func TestCredentialRow_IsNotTenantScoped(t *testing.T) {
 	}
 
 	tenancytest.AssertNotTenantScoped(t, newTestDB(t), credentialRow{}, createFn, findFn)
+}
+
+// TestCredentialRow_APIKeyIsEncryptedAtRest proves the api_key column holds
+// ciphertext rather than the plaintext vendor key, mirroring
+// go/authn/model_test.go's TestUser_EmailIsEncryptedAtRest and
+// go/authn/oidc_test.go's equivalent proof for tenant_sso_configs.
+// client_secret. Every other test in this package reads the column back
+// through CredentialService.Resolve or a plain *gorm.DB read, both of which
+// round-trip through the same serializer that encrypted it on write -- so
+// none of them would fail even if CredentialAPIKeySerializerName were a
+// no-op serializer storing the key in plaintext. This test goes around the
+// serializer entirely with a raw SELECT, the only way to actually observe
+// what is on disk.
+func TestCredentialRow_APIKeyIsEncryptedAtRest(t *testing.T) {
+	db := newTestDB(t)
+	plaintext := "sk-live-super-secret-key"
+	row := &credentialRow{
+		Provider:  "chat.openai-compatible",
+		Scope:     string(CredentialScopeSystem),
+		TenantID:  "",
+		APIKey:    plaintext,
+		BaseURL:   "https://example.test/v1",
+		UpdatedAt: time.Now(),
+	}
+	if err := db.Create(row).Error; err != nil {
+		t.Fatalf("create credentialRow: %v", err)
+	}
+
+	var stored []byte
+	if err := db.Raw(
+		"SELECT api_key FROM ai_gateway_credentials WHERE provider = ? AND scope = ? AND tenant_id = ?",
+		row.Provider, row.Scope, row.TenantID,
+	).Row().Scan(&stored); err != nil {
+		t.Fatalf("read the raw api_key column: %v", err)
+	}
+	if len(stored) == 0 {
+		t.Fatal("the raw api_key column is empty; nothing was stored")
+	}
+	if string(stored) == plaintext {
+		t.Fatal("the raw api_key column holds the plaintext key; the encrypted serializer is not applied")
+	}
+	if strings.Contains(string(stored), plaintext) {
+		t.Fatal("the raw api_key column embeds the plaintext key inside a longer value")
+	}
+
+	var readBack credentialRow
+	if err := db.Where("provider = ? AND scope = ? AND tenant_id = ?", row.Provider, row.Scope, row.TenantID).
+		First(&readBack).Error; err != nil {
+		t.Fatalf("read the credential back: %v", err)
+	}
+	if readBack.APIKey != plaintext {
+		t.Fatalf("decrypted api_key = %q, want %q", readBack.APIKey, plaintext)
+	}
 }
