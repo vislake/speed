@@ -188,6 +188,38 @@ func (r *SigningKeyRepository) ListActiveNearingExpiry(ctx context.Context, befo
 	return keys, err
 }
 
+// Revoke marks the signing key id as SigningKeyStatusRevoked, recording
+// revokedAt and reason -- the same guarded, status-checked update shape
+// PromoteToActive/RetireRetiring use, so a concurrent revoke can never
+// silently race a rotation and leave the row in an inconsistent state.
+//
+// Reports (true, nil) when this call performed the transition, and (false,
+// nil) when id exists but was already SigningKeyStatusRevoked -- an
+// idempotent no-op Service.RevokeSigningKey relies on to avoid publishing a
+// second EventSigningKeyRevoked for an already-revoked key. Reports (false,
+// ErrKeyNotFound) when id does not exist at all.
+func (r *SigningKeyRepository) Revoke(ctx context.Context, id, reason string, now time.Time) (bool, error) {
+	res := r.db.WithContext(ctx).
+		Where("id = ? AND status != ?", id, SigningKeyStatusRevoked).
+		Updates(&SigningKey{
+			Status:           SigningKeyStatusRevoked,
+			RevokedAt:        &now,
+			RevocationReason: reason,
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	if res.RowsAffected > 0 {
+		return true, nil
+	}
+	// RowsAffected == 0 is ambiguous on its own -- either id does not exist,
+	// or it does but was already revoked. FindByID tells the two apart.
+	if _, err := r.FindByID(ctx, id); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
 // ExistsByPurposeAndStatus reports whether purpose already has a row in
 // status. The expiry scan's staging step uses it to avoid staging a second
 // pending key for a purpose that already has one in flight.

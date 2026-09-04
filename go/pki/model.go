@@ -11,10 +11,11 @@ import (
 // Table names, shared between the model TableName methods and the
 // migrations' own header comments.
 const (
-	tableSigningKeys  = "pki_signing_keys"
-	tableAuthorities  = "pki_authorities"
-	tableCertificates = "pki_certificates"
-	tableLocalKeys    = "pki_local_keys"
+	tableSigningKeys           = "pki_signing_keys"
+	tableAuthorities           = "pki_authorities"
+	tableCertificates          = "pki_certificates"
+	tableLocalKeys             = "pki_local_keys"
+	tableCertificateRevocations = "pki_certificate_revocations"
 )
 
 // The Algorithm vocabulary. Only Ed25519 exists today -- every Signer
@@ -147,10 +148,13 @@ const (
 	AuthorityTypeIntermediate = "intermediate"
 )
 
-// The AuthorityStatus vocabulary. Only AuthorityStatusActive is ever written
-// this round -- revocation is round 3 -- but the column carries the full,
-// eventual value set from day one, the same discipline SigningKey's Status
-// column follows.
+// The AuthorityStatus vocabulary. AuthorityStatusActive was the only value
+// round 1 ever wrote; round 3 (this round) does not add a public API that
+// writes AuthorityStatusRevoked either -- see ca.go's VerifyCertificate doc
+// comment for why the chain-verification path still defends against it
+// (a revoked authority can only appear in this round's own tests by direct
+// repository seeding, matching round 1's identical precedent for
+// SigningKeyStatusRevoked).
 const (
 	AuthorityStatusActive  = "active"
 	AuthorityStatusRevoked = "revoked"
@@ -212,6 +216,38 @@ type Authority struct {
 
 	RevokedAt        *time.Time `gorm:"column:revoked_at"`
 	RevocationReason string     `gorm:"column:revocation_reason;size:255;not null;default:''"`
+
+	// CRLDistributionPoint is the URL this authority's own CRL is served
+	// at -- round 3's addition (migration 0006). Empty means "no CRL
+	// extension is written into certificates this authority signs", the
+	// same convention every NotAfter/validity field in this module already
+	// follows for an unset value: never a broken placeholder URL. It is
+	// set once, at CreateRootCA/CreateIntermediateCA time (RootCAParams/
+	// IntermediateCAParams.CRLDistributionPoint), and read at issuance
+	// time by CreateIntermediateCA/IssueCertificate to populate the
+	// CHILD certificate's CRLDistributionPoints extension -- a
+	// certificate's CRLDP names where to fetch the CRL that lists ITS
+	// OWN revocation, i.e. the CRL of the authority that signed it, never
+	// the certificate's own (an end-entity certificate has no CRL of its
+	// own to distribute).
+	CRLDistributionPoint string `gorm:"column:crl_distribution_point;size:500;not null;default:''"`
+
+	// CRLNumber is the CRL sequence number (RFC 5280 §5.2.3) of the most
+	// recently generated CRL, monotonically increasing across every call to
+	// CAService.GenerateCRL for this authority. 0 means no CRL has been
+	// generated yet.
+	CRLNumber int64 `gorm:"column:crl_number;not null;default:0"`
+
+	// CRLPEM is the most recently generated CRL, PEM encoded ("X509 CRL"
+	// block) -- empty until GenerateCRL runs at least once. Stored here,
+	// rather than recomputed on every fetch, because a CRL is meant to be a
+	// stable, periodically-refreshed document a verifier caches, not a
+	// live query result; see crl.go's GenerateCRL for how it is produced
+	// and job.go's crlRegenerateHandler for how a host schedules refreshes.
+	CRLPEM string `gorm:"column:crl_pem"`
+
+	CRLIssuedAt   *time.Time `gorm:"column:crl_issued_at"`
+	CRLNextUpdate *time.Time `gorm:"column:crl_next_update"`
 
 	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
 	UpdatedAt time.Time `gorm:"column:updated_at;autoUpdateTime"`
@@ -391,8 +427,99 @@ type LocalKey struct {
 // TableName names the pki_local_keys table.
 func (LocalKey) TableName() string { return tableLocalKeys }
 
-// SigningKey, Authority and LocalKey deliberately do NOT implement
-// dbkit.TenantScoped -- the negative half of the data-domain split this
-// file's doc comments describe. Go has no negative interface assertion, so
-// that property is proven instead by tenancytest.AssertNotTenantScoped in
-// repository_test.go for all three.
+// CertificateRevocation is one row of pki_certificate_revocations
+// (migration 0007, round 3): a denormalized, append-only ledger entry
+// written whenever CAService.RevokeCertificate revokes a certificate.
+//
+// # Why this table exists at all -- the cross-tenant CRL problem
+//
+// pki_certificates is tenant data (Certificate's own doc comment):
+// dbkit.Repository[Certificate] filters every read by the caller's ctx
+// tenant, with no cross-tenant escape -- see
+// tenancy.WithSystemContext's own doc comment, which is explicit that
+// granting a system context does NOT by itself unlock a cross-tenant
+// Repository[T] read. But a CRL is a property of the ISSUING AUTHORITY,
+// which is platform data: "the CRL for authority X" genuinely means every
+// revoked certificate that authority ever signed, regardless of which
+// tenant it was issued to. Enumerating that with dbkit.Repository[T] would
+// require iterating every tenant the platform has ever provisioned, which
+// this module has no way to enumerate (it does not depend on org or any
+// tenant directory) and would not scale as one grows.
+//
+// This table is the same accommodation the codebase already makes
+// elsewhere for exactly this shape of problem: `send_records` and
+// `platform_blacklist` (go/notification) and `AuditEvent` (go/dbkit/audit)
+// are all platform data carrying a real, deliberately UNENFORCED tenant_id
+// column, precisely so a platform-wide scan needs no tenant loop. This
+// table follows the identical convention: TenantID here is informational
+// only (which tenant the revoked certificate happened to belong to, for
+// an eventual audit view), never filtered on, and CertificateRevocation
+// does NOT implement dbkit.TenantScoped -- proven negatively by
+// tenancytest.AssertNotTenantScoped in repository_test.go, the same way
+// SigningKey/Authority/LocalKey are proven above.
+//
+// # Not a foreign key
+//
+// CertificateID and AuthorityID name rows of pki_certificates and
+// pki_authorities respectively, but neither is a real FK constraint: this
+// row spans two different data domains (platform vs. tenant) the same way
+// Certificate.AuthorityID already does not carry one, for the identical
+// reason (this file's own repository-boundary discipline; root CLAUDE.md's
+// cross-module-FK rule, which applies here even though this is all one
+// module because the two tables sit in different domains).
+//
+// # Not atomic with the pki_certificates write
+//
+// RevokeCertificate (ca.go) writes this row as a SECOND statement after
+// updating pki_certificates, not inside one shared transaction --
+// dbkit.Repository[T] exposes no hook to compose its own transaction with
+// a plain *gorm.DB write, and building one by hand would mean reaching
+// around Repository[T] with a raw *gorm.DB.Transaction, the exact
+// bypass this codebase's multi-tenant isolation discipline forbids for a
+// tenant-scoped write. The accepted risk is narrow: a crash between the
+// two writes leaves the certificate correctly marked revoked but
+// (temporarily) missing from this ledger, so a CRL generated before the
+// gap is noticed and retried would omit that one certificate. Both writes
+// are individually idempotent (RevokeCertificate treats an
+// already-revoked certificate as a no-op, and a lost ledger row is fixed
+// by revoking again, which is safe), so the failure mode is bounded
+// staleness, never an incorrect "not revoked" answer inside
+// pki_certificates itself, which is the record CAService.VerifyCertificate
+// actually trusts.
+type CertificateRevocation struct {
+	// ID is an application-generated UUID.
+	ID string `gorm:"column:id;primaryKey;size:36"`
+
+	// CertificateID names the pki_certificates row this entry records the
+	// revocation of.
+	CertificateID string `gorm:"column:certificate_id;size:36;not null"`
+
+	// AuthorityID names the pki_authorities row that issued the revoked
+	// certificate -- CRLRepository.ListByAuthority's query key, and the
+	// whole reason this table exists rather than a query against
+	// pki_certificates directly.
+	AuthorityID string `gorm:"column:authority_id;size:36;not null"`
+
+	// Serial is the revoked certificate's serial number, the same
+	// lower-case hex encoding Certificate.Serial stores -- what actually
+	// goes into the generated CRL's revoked-certificate entry.
+	Serial string `gorm:"column:serial;size:64;not null"`
+
+	// TenantID is informational only -- see the type's own doc comment
+	// above. Never filtered on, never enforced.
+	TenantID string `gorm:"column:tenant_id;size:64;not null"`
+
+	RevokedAt        time.Time `gorm:"column:revoked_at;not null"`
+	RevocationReason string    `gorm:"column:revocation_reason;size:255;not null"`
+
+	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
+}
+
+// TableName names the pki_certificate_revocations table.
+func (CertificateRevocation) TableName() string { return tableCertificateRevocations }
+
+// SigningKey, Authority, LocalKey and CertificateRevocation deliberately do
+// NOT implement dbkit.TenantScoped -- the negative half of the data-domain
+// split this file's doc comments describe. Go has no negative interface
+// assertion, so that property is proven instead by
+// tenancytest.AssertNotTenantScoped in repository_test.go for all four.
