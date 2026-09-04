@@ -22,8 +22,13 @@ import { useTranslation } from '@speed/i18n'
 import { useAppServices, useBrandName } from '../app-services.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
 
-/** The demo flag keys, as go/config declares them (the config module's
- * own key strings, reused by tests that script feature lists). */
+/** The demo flag keys, as the reference app's own notes module declares
+ * them -- a hand-kept host copy of internal/notes/module.go's exported
+ * FeatureFlagSmilePreview / FeatureFlagPremiumUpsell constants, reused
+ * by the suites that script feature lists. No cross-language import
+ * exists to pin the mirror, so drift is fail-closed by direction only:
+ * a server-side rename would hide the card silently (useFeature answers
+ * false), surfacing only against the real server on the M4 leg. */
 export const FEATURE_SMILE_PREVIEW = 'ai.smile_preview'
 export const FEATURE_PREMIUM_UPSELL = 'ai.premium_upsell'
 
