@@ -18,6 +18,8 @@ replace github.com/vislake/speed/go/org => ../../go/org
 
 replace github.com/vislake/speed/go/authn => ../../go/authn
 
+replace github.com/vislake/speed/go/pki => ../../go/pki
+
 // go/jobs and go/storage are imported directly by this app: buildServer
 // wires the storage module's asynchronous object work onto a
 // jobs.StandaloneQueue sharing the app's own database (see server.go).
@@ -62,6 +64,7 @@ require (
 	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/org v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/pki v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/rbac v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/storage v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/tenancy v0.0.0-00010101000000-000000000000

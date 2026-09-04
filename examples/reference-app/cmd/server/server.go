@@ -7,9 +7,7 @@ package main
 
 import (
 	"context"
-	"crypto/ed25519"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -47,6 +45,7 @@ import (
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
+	"github.com/vislake/speed/go/pki"
 	"github.com/vislake/speed/go/rbac"
 	"github.com/vislake/speed/go/storage"
 	"github.com/vislake/speed/go/tenancy"
@@ -175,24 +174,31 @@ var devOrgIndexKey = []byte{
 	0xe7, 0xe6, 0xe5, 0xe4, 0xe3, 0xe2, 0xe1, 0xe0,
 }
 
-// devSigningKeySeed, devBlindIndexKey and devPIICipherKey are authn's own
-// committed-key placeholders, the same documented trade-off as devConfigKey
-// immediately above -- a real deployment must replace every one of them
-// with real secret-manager material, never commit real keys the way this
-// demo commits these.
+// devPKILocalKeyCipherKey, devBlindIndexKey and devPIICipherKey are authn's
+// (and pki's) own committed-key placeholders, the same documented trade-off
+// as devConfigKey immediately above -- a real deployment must replace every
+// one of them with real secret-manager material, never commit real keys the
+// way this demo commits these.
 //
 // Each protects something different and each MUST stay stable across
-// restarts for a different reason: authn.WithSigningKeys has no safe
-// generated-at-startup default (a fresh key on every restart invalidates
-// every outstanding session); authn.WithBlindIndexKey's key must stay
-// IDENTICAL across restarts or every already-stored email/phone blind index
-// becomes unfindable; and devPIICipherKey seals authn's encrypted PII
-// columns (email, phone, TOTP secrets) via authn.RegisterPIISerializer,
-// deliberately a DIFFERENT key from devConfigKey -- dbkit's own
-// key-separation rule (never let one key double as two different AEAD
-// constructions) applies across modules, not only within one.
+// restarts for a different reason: devPKILocalKeyCipherKey seals go/pki's
+// LocalSigner private-key column (pki_local_keys, via
+// pki.RegisterLocalKeySerializer) -- authn's signing key itself needs no
+// separate dev-seed derivation the way the deleted authn.KeySet default
+// once did (this var occupies the byte range devSigningKeySeed used to,
+// freed by that deletion): it is generated once by pki.Service.EnsurePurpose
+// (this file's authn.WithKeySource wiring below) and PERSISTS in
+// cfg.SQLitePath across restarts, exactly the durability
+// docs/internal/22-pki.md's post-integration column describes; authn.WithBlindIndexKey's
+// key must stay IDENTICAL across restarts or every already-stored
+// email/phone blind index becomes unfindable; and devPIICipherKey seals
+// authn's encrypted PII columns (email, phone, TOTP secrets) via
+// authn.RegisterPIISerializer, deliberately a DIFFERENT key from
+// devConfigKey -- dbkit's own key-separation rule (never let one key double
+// as two different AEAD constructions) applies across modules, not only
+// within one.
 var (
-	devSigningKeySeed = []byte{
+	devPKILocalKeyCipherKey = []byte{
 		0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
 		0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
 		0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
@@ -226,20 +232,6 @@ var devNotificationIndexKey = []byte{
 	0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f,
 	0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97,
 	0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f,
-}
-
-// devSigningKeySet derives a stable Ed25519 signing key from
-// devSigningKeySeed. It builds the TokenKey by hand (ed25519.NewKeyFromSeed)
-// rather than through authn.GenerateTokenKey, which always draws from
-// crypto/rand and so could never be reproducible across restarts the way
-// this demo default needs to be.
-func devSigningKeySet() (*authn.KeySet, error) {
-	priv := ed25519.NewKeyFromSeed(devSigningKeySeed)
-	pub, ok := priv.Public().(ed25519.PublicKey)
-	if !ok {
-		return nil, errors.New("reference-app: derive the dev signing key's public half")
-	}
-	return authn.NewKeySet(authn.TokenKey{ID: "reference-app-dev", Private: priv, Public: pub})
 }
 
 // demoHostTenants is a hard-coded, obviously-temporary Host -> TenantID
@@ -714,6 +706,19 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return nil, nil, fmt.Errorf("reference-app: register authn's PII serializer: %w", regErr)
 	}
 
+	// go/pki's LocalSigner private-key column needs its own serializer
+	// registered before dbkit.Open too, for the identical reason
+	// authn.RegisterPIISerializer does -- GORM resolves a model's serializer
+	// while it parses the schema (pki.RegisterLocalKeySerializer's own doc
+	// comment).
+	pkiLocalKeyCipher, err := dbkit.NewCipher(devPKILocalKeyCipherKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reference-app: build pki's local-key cipher: %w", err)
+	}
+	if regErr := pki.RegisterLocalKeySerializer(pkiLocalKeyCipher); regErr != nil {
+		return nil, nil, fmt.Errorf("reference-app: register pki's local-key serializer: %w", regErr)
+	}
+
 	db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: cfg.SQLitePath})
 	if err != nil {
 		return nil, nil, fmt.Errorf("reference-app: open database: %w", err)
@@ -866,11 +871,17 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		}),
 	)
 
-	signingKeys, err := devSigningKeySet()
-	if err != nil {
-		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: build authn's signing key set: %w", err)
-	}
+	// pki owns authn's signing-key lifecycle: LocalSigner (its own
+	// zero-external-dependency default) generates and stores the key in
+	// cfg.SQLitePath, so it persists across restarts with no dev-seed
+	// derivation required -- see devPKILocalKeyCipherKey's own doc comment.
+	// pki is not part of saasctl's --with selection set
+	// (docs/internal/22-pki.md's section on where pki sits in saasctl's
+	// module selection set),
+	// but the reference app assembles authn directly rather than through
+	// saasctl, so it wires pki here exactly as any authn-containing
+	// generated project's own server.go now does.
+	pkiModule := pki.NewModule(db)
 
 	memberships := cfg.Memberships
 	if memberships == nil {
@@ -882,7 +893,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	}
 
 	authnModule, err := authn.NewModule(db,
-		authn.WithSigningKeys(signingKeys),
+		authn.WithKeySource(pkiModule.Service()),
 		authn.WithBlindIndexKey(devBlindIndexKey),
 		authn.WithMembershipReader(memberships),
 		authn.WithSMSSender(authn.NewConsoleSMSSender(smsOutput)),
@@ -1018,6 +1029,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	demoModule := demo.NewModule()
 
 	migrationRegistry := dbkit.NewMigrationRegistry()
+	if regErr := migrationRegistry.Register(pkiModule); regErr != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	}
 	if regErr := migrationRegistry.Register(authnModule); regErr != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
@@ -1145,7 +1160,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	if cfg.Mailer != nil {
 		kernelOptions = append(kernelOptions, pkgcore.WithMailer(cfg.Mailer, pkgcore.Stateless))
 	}
-	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, authnModule, notesModule, orgModule, configModule, rbacModule, storageModule, demoModule, notificationModule, auditModule)
+	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, pkiModule, authnModule, notesModule, orgModule, configModule, rbacModule, storageModule, demoModule, notificationModule, auditModule)
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: bootstrap kernel: %w", err)
