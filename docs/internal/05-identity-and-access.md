@@ -236,3 +236,16 @@ type Membership struct {
 > - **设备列表与两种下线按本文形状交付。** 会话列表来自 authn 的 sessions 面，当前设备由服务端答的 `is_current` 明确标记（行内 badge，非客户端推断）；单设备下线走行内操作（被下线会话的 refresh 立即失败仍由服务端保证，`authn_e2e_test.go` 已端到端验证），一键下线其他设备走双确认的危险对话框，以服务端答的 `revoked_count` 播报结果。authn 轮注记里"前端页面尚未存在"的括号对这三者不再准确。
 > - **登录历史、社交绑定/解绑、TOTP 注册一并交付**：登录历史列表渲染服务端记录的 method/result/failure_reason（裸 token 走组件内已知清单，清单外渲染通用文案）；社交绑定走与登录同款的 authorize URL + 回调路由，回调按应答形状分派（绑定形→刷新绑定列表并通知宿主，登录形→渲染"已在别处登录"面板且不回调宿主——该交换把某个账号登了进来）；step-up 门控的 TOTP 更换与恢复码再生成走 `session.verifyStepUp`，"注册成功只活在单个 access token 寿命内"在组件层不承诺重问豁免。"解绑不能致账号无路可登"（`authn.last_login_method`，解绑 409 拒绝并留在页面上）是前端可见的服务端规则之一。
 > - **修改密码时询问"是否同时下线其他设备"仍未落地。** authn 的 spec 至今没有 change-password operation——登录面与账号面上没有任何一处能触发密码修改，联动下线因此无从发生，与上一条注记记录的原因相同。留给 spec 长出 change-password operation 的轮次，届时该行一并实现（服务端"改密即撤销"的会话族行为已有 `authn_e2e_test.go` 同款端到端验证可对照）。
+
+---
+
+> **实现状态注记（2026-09-04，pki 轮：上文 authn 轮注记"令牌"一条的 `KeySet` 描述已成历史）——本注记不是设计正文，设计正文保持原样；当前实现状态以根目录 CLAUDE.md 的 Repository Status 为准。**
+>
+> authn 轮注记"令牌"一条描述的"一把当前签名密钥 + 任意把只验证的历史密钥（`KeySet`，形状照抄 `dbkit.NewCipher(activeKey, retiredKeys...)`）"是静态注入的旧形状，已在本轮被整体替换，**不再是当前实现**：
+>
+> - **`KeySet`/`TokenKey`/`GenerateTokenKey`/`NewKeySet`/`WithSigningKeys` 已从 `go/authn/token.go` 删除，不留回退路径。** 取而代之的是 `authn.KeySource` 接口（结构化声明，与实现方无 import 边）：`Signer.Issue`/`Verifier.Verify` 现在每次调用都从注入的 `KeySource` 现取签名/验证密钥，而不再持有一份固定密钥集；`WithKeySource` 是唯一、强制的注入点。
+> - **`go/pki` 的 `Service` 是这个接口目前唯一的真实实现**，结构上满足 `KeySource`（同样无 import 边），其背后是真正的密钥生命周期状态机——`pending → active → retiring → retired`——而不是 authn 自己维护的"当前+历史"两态列表；密钥的签发、轮换、过期由 `go/pki` 一侧的 `lifecycle.go`/`job.go`（一个 `go/jobs` 驱动的到期扫描任务）负责，`go/authn` 只消费结果，不再自己管理密钥寿命。细节见 `go/pki/AGENTS.md` 的 round-2 条目与 `docs/internal/22-pki.md`。
+> - **`examples/reference-app` 与 `go/saasctl` 的四个含 authn 模板均已改接。** 参考应用不再注入 dev 种子静态密钥，而是 `pkiModule := pki.NewModule(db)` 后把 `pkiModule.Service()` 传给 `authn.WithKeySource`；`LocalSigner`（`go/pki` 自带、零外部依赖的默认签名实现）把密钥持久化进同一个 SQLite 文件，跨重启无需重新派生种子。
+> - **签名算法校验加了一道防线。** `Verifier.Verify` 的 `keyFunc` 除了解析器本身的单一 EdDSA 白名单外，额外核对令牌头部 `alg` 与签名密钥自身在 `KeySource` 侧声明的 `Algorithm` 是否一致，使未来引入第二种算法时不会因疏忽绕过这层检查。
+>
+> 上文"令牌"一条其余描述（access token 默认 15 分钟、携带 `sub`/`tid`/`sid`/`amr`、refresh token 高熵随机值存哈希、`family_id`/`rotated_from` 支持重放检测）未受本轮影响，继续准确。
