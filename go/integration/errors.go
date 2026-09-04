@@ -18,12 +18,13 @@ import (
 // API never returns the localized prose: it returns the code plus
 // parameters and the client resolves the text.
 //
-// Deliberately absent: any code naming a capability round 1 does not build
-// (webhook delivery, HMAC signature verification, SSRF-checked outbound
-// addresses, and so on). Declaring a code for a feature that does not exist
-// yet is a lying vocabulary the same way an undeclared config schema would
-// be; see go/integration/AGENTS.md's "Deferred to a later round" section
-// for what those round(s) will need to add here instead.
+// Round 2 adds the webhook subscription and event-mapping codes below
+// (ErrWebhookURLBlocked, ErrWebhookURLInvalid, ErrWebhookURLUnresolvable,
+// ErrInvalidEventMapping, ErrDuplicateEventMapping, and so on) alongside
+// round 1's API-key codes. Declaring a code for a feature that does not
+// exist yet is a lying vocabulary the same way an undeclared config schema
+// would be; see go/integration/AGENTS.md's "Deliberately not in scope round
+// 2 either" section for what a later round will still need to add here.
 var (
 	// ErrKeyNotFound reports an API key id that does not exist in the
 	// caller's tenant. Like dbkit.ErrRecordNotFound it never distinguishes
