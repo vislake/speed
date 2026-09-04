@@ -53,6 +53,27 @@ const (
 	// and stays silent about the former, whose warning would name no loss at
 	// all (see warnIfNotDurable).
 	Stateless
+
+	// KeyNeverLeavesBoundary means a private key this implementation
+	// protects never exists in plaintext inside this process's memory --
+	// docs/internal/22-pki.md's "capability declarations" section names it
+	// in exactly those terms. Unlike the three bits above, this one is not
+	// about an infrastructure seam's own state; it is declared by go/pki's
+	// Signer implementations,
+	// which self-register through a pkgcore.SeamRegistry[Signer] the
+	// identical way EventBus/KVStore/Mailer/ObjectStore implementations do.
+	// go/pki's LocalSigner does not have it: Sign decrypts the private key
+	// into this process's memory for the duration of one signing call. A
+	// KMS- or Vault-backed Signer has it only in direct-sign mode, where the
+	// key is generated inside, and never leaves, the external service -- the
+	// same implementation running in envelope mode (the real key encrypted
+	// externally but decrypted locally to sign) does not have it either, for
+	// the same reason LocalSigner does not. No deployment mode requires this
+	// capability the way DeploymentModeDistributed requires MultiReplicaSafe
+	// -- a high-security deployment declares it wants it when assembling
+	// go/pki, and Kernel.Bootstrap's ordinary ErrCapabilityUnsatisfied check
+	// is what enforces that, exactly as it does for the three bits above.
+	KeyNeverLeavesBoundary
 )
 
 // capabilityNames lists every named bit in declaration order, so String
@@ -65,6 +86,7 @@ var capabilityNames = []struct {
 	{MultiReplicaSafe, "MultiReplicaSafe"},
 	{SurvivesRestart, "SurvivesRestart"},
 	{Stateless, "Stateless"},
+	{KeyNeverLeavesBoundary, "KeyNeverLeavesBoundary"},
 }
 
 // Has reports whether c declares every bit set in want. An empty want (the
