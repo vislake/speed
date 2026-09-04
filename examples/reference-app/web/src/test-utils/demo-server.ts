@@ -7,22 +7,31 @@
  * The demo facts this script mirrors (the server seeds them, never an
  * app choice): two tenants whose ids are tenant-acme and tenant-globex
  * (their display names are host copy -- no roster endpoint exists, so
- * names live in the app namespace), a membership store granting every
- * seeded demo user membership in both, a Public config carrying
- * brand.site_name plus the dependency-resolved feature list for the
- * request's tenant, and an authn surface that issues tokens on login
- * and tenant switch.
+ * names live in the app namespace), membership grants matching the
+ * seed's per-account model -- the accounts a journey can sign in (the
+ * owner, and the reader behind its option) can reach both demo
+ * tenants, the counterpart of the every-tenant grants the seed's
+ * demo-owner and demo-reader get, while the seed's third account
+ * (demo-acme-only@example.com, a tenant-acme member alone) has no web
+ * counterpart: no journey drives a member whose switch into
+ * tenant-globex the real server refuses (authn.tenant_membership_
+ * required) -- a Public config carrying brand.site_name plus the
+ * dependency-resolved feature list for the request's tenant, and an
+ * authn surface that issues tokens on login and tenant switch.
  *
- * Two demo accounts stand in for the Go server's seeded users, whose
- * behaviour the server's own tests pin (cmd/server/demo_users_test.go):
- * the owner account (DEMO_OWNER_IDENTIFIER, every suite's default
- * principal) and -- behind the `reader` option -- the read-only member
+ * Two demo accounts model the seeded accounts a journey can drive,
+ * whose answers the server's own tests pin
+ * (cmd/server/demo_users_test.go): the owner account
+ * (DEMO_OWNER_IDENTIFIER, every suite's default principal -- the web
+ * rig's own account, never a seed mirror: the Go seed's
+ * demo-owner@example.com has no web counterpart, because no journey
+ * reads it) and -- behind the `reader` option -- the read-only member
  * (DEMO_READER_IDENTIFIER, the web mirror of the demo-reader@example.com
  * seed): its sign-in answers a principal of its own user and session,
- * the notes list serves it like any member's (the suite pins a reader's
- * list as served, demo_users_test.go:135-153), and a note create from
- * that principal answers the rbac write gate's 403 the suite pins for
- * callers without notes:write (rbac.permission_denied, asserted at
+ * the notes list serves it like any member's (the Go suite pins a
+ * reader's list as served, demo_users_test.go:135-153), and a note
+ * create from that principal answers the 403 the write gate gives a
+ * caller without notes:write (rbac.permission_denied, asserted at
  * server_test.go:335). An account registration answers 201 and records
  * the identifier, and a later sign-in of a recorded identifier answers
  * the membership refusal of a registered-but-unseeded account -- 403
@@ -80,14 +89,21 @@
  * setup, a replacement set when an elevated caller confirms over an
  * active factor.
  *
- * One deliberate scope limit, recorded rather than half-built: the
- * account-domain state (the session list, the bound identities, the
- * active factor) belongs to the owner story alone. The reader's list
- * answers would show the owner's rows if a journey drove the reader
- * into the account surface -- the demo seeds no reader-shaped account
- * state, because no journey in this round crosses that line; the
- * account journeys are owner journeys, the notes journeys are the
- * reader's.
+ * One deliberate scope limit, recorded rather than half-built: every
+ * journey in this round signs in as the owner -- signInWithPassword
+ * uses the rig's owner identifier, and no suite scripts the `reader`
+ * option. The account-domain state (the session list, the bound
+ * identities, the active factor) belongs to the owner story for that
+ * reason: the demo seeds no reader-shaped account state, because a
+ * reader journey into the account surface would answer the owner's
+ * rows. The notes journeys are owner journeys too; their read-denied
+ * and write-refused states are the deny switches' answers, standing
+ * in for the rbac gate's 403s -- denyNotesWrite the refusal a caller
+ * without notes:write meets, the shape the reader's own grants
+ * produce (the Go suite pins the read-only member: its list served,
+ * demo_users_test.go:135-153, its create refused, server_test.go:
+ * 335), and denyNotesRead the refusal of a caller without notes:read,
+ * a shape no seeded account carries.
  *
  * Anything else fails the test loudly: an unpinned request means the
  * journey under test reached an endpoint the demo does not serve.
