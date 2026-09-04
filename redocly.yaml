@@ -90,7 +90,7 @@ rules:
 # schema's key -- `type: PathItem` recurses into the item's nested string
 # fields (summary, description, ...) instead, which was verified empirically
 # to produce false positives against real, correctly-prefixed paths rather
-# than checking the path itself. Both fragments already follow the
+# than checking the path itself. All fragments already follow the
 # convention (visible in the spec files themselves), and the operationId
 # rule above indirectly reinforces it, since the module prefix is the same
 # token in both places. A real path-prefix check is left to code review

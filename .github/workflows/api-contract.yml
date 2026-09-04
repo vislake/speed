@@ -3,7 +3,7 @@ name: api-contract
 # API-contract discipline pipeline -- docs/internal/18-cicd.md's pipeline
 # table, api-contract row: both halves implemented, backend
 # (oapi-codegen) and frontend (orval -> @speed/api-sdk), plus the
-# multi-fragment merge (redocly) now that a second fragment exists -- the
+# multi-fragment merge (redocly) now that a third fragment exists -- the
 # merged document doubles as orval's input, which is why this file's
 # steps run the merge before the frontend regeneration. Backs the root
 # CLAUDE.md API-contract discipline and docs/internal/21-api-contract.md's
@@ -43,15 +43,22 @@ name: api-contract
 #     failure is unambiguous in the job log.
 #   * Regeneration consistency (storage): the same check runs a third
 #     time for storage's fragment (go/storage/api/openapi.yaml ->
-#     go/storage/api/storage-server.gen.go), this round's addition to the
-#     fragment set -- same pinned oapi-codegen invocation, same git diff
+#     go/storage/api/storage-server.gen.go), the third module to carry a
+#     fragment -- same pinned oapi-codegen invocation, same git diff
 #     --exit-code gate, its own step so each fragment's failure is
 #     unambiguous in the job log.
+#   * Regeneration consistency (notification): the same check runs a
+#     fourth time for notification's fragment (go/notification/api/
+#     openapi.yaml -> go/notification/api/notification-server.gen.go),
+#     this round's addition to the fragment set -- same pinned
+#     oapi-codegen invocation, same git diff --exit-code gate, its own
+#     step so each fragment's failure is unambiguous in the job log.
 #   * Spec merge + info stamp + naming-convention lint: the pinned
 #     redocly CLI (2.51.1, the same
 #     `pnpm --package=@redocly/cli@2.51.1 dlx redocly ...` invocation as
-#     Taskfile's api:merge task) `join`s both fragments into
-#     build/openapi/speed.yaml, then the deterministic
+#     Taskfile's api:merge task) `join`s the three fragments -- notes,
+#     authn and notification -- into build/openapi/speed.yaml, then the
+#     deterministic
 #     `web/scripts/redocly-join-fixup.mjs` stamp rewrites the merged
 #     document's info block (join keeps the FIRST fragment's info;
 #     without the stamp the application-wide document -- and through
@@ -61,10 +68,10 @@ name: api-contract
 #     format, component schema-name format, tag format --
 #     docs/internal/21-api-contract.md's naming conventions that avoid
 #     merge conflicts), then a `git diff --exit-code` fails the job if
-#     the committed build/openapi/speed.yaml is not what the two
+#     the committed build/openapi/speed.yaml is not what the three
 #     fragments merge -- plus the stamp -- to today -- the
 #     generated-artifact consistency check for the merged document,
-#     same shape as the three artifact checks above. These steps sit
+#     same shape as the four artifact checks above. These steps sit
 #     before the frontend regeneration below because the merged
 #     document is that leg's input: order-dependent gates must see the
 #     fresh merge first, not a merged document the job itself will
@@ -73,27 +80,33 @@ name: api-contract
 #     orval (8.17.0 -- the exact same `pnpm dlx orval` + nodenext-fixup
 #     pair as Taskfile's api:gen frontend leg, run from web/) regenerates
 #     @speed/api-sdk's src/index.ts from build/openapi/speed.yaml -- the
-#     document merged in the step above, covering the notes and authn
-#     fragments; org's and storage's fragments are deliberately not part
-#     of the merge -- org's because it predates the merge machinery and
-#     storage's because it ships its backend leg this round, both
-#     fragments' frontend halves deferring to the M1 consumer-shell
-#     round -- then a `git diff --exit-code` fails the job if
+#     document merged in the step above, covering the notes, authn and
+#     notification fragments; org's and storage's fragments are
+#     deliberately not part of the merge -- org's because it predates
+#     the merge machinery and storage's because it ships its backend leg
+#     only, both fragments' frontend halves deferring to their own
+#     module AGENTS.md deferrals -- while notification's fragment joined
+#     the merged document when its recipient-facing HTTP surface
+#     shipped: its operations are self-service surfaces a consumer
+#     shell's SDK calls, the same reason authn's fragment is in the
+#     merge -- then a `git diff --exit-code` fails the job if
 #     the committed generated package is not what the spec generates --
 #     the generated-artifact consistency check for the frontend half.
 #     orval itself is never a workspace dependency (pnpm dlx, no lockfile
 #     entry); a version bump is visible in the regenerated header and
 #     must land in Taskfile, web/orval.config.ts and this file together.
-#   * Compile enforcement (notes, org and storage): `go build ./...` of
-#     examples/reference-app. This is what makes "spec changed, handler
-#     not updated" fail here for ANY of the three fragments:
-#     examples/reference-app imports go/org and go/storage (root
-#     CLAUDE.md's mandatory-first-consumer rule), so a regenerated
-#     api.ServerInterface that outgrows any Handler's compile-time
-#     assertion (internal/notes/handler.go, go/org/handler.go,
-#     go/storage/handler.go) fails this one build step, transitively,
-#     with no separate step needed for org's or storage's own module
-#     build. Without this leg a spec+artifact PR whose handler lagged
+#   * Compile enforcement (notes, org, storage and notification):
+#     `go build ./...` of examples/reference-app. This is what makes
+#     "spec changed, handler not updated" fail here for ANY of the four
+#     fragments: examples/reference-app imports go/org, go/storage and
+#     go/notification (root CLAUDE.md's mandatory-first-consumer rule),
+#     so a regenerated api.ServerInterface that outgrows any Handler's
+#     compile-time assertion (internal/notes/handler.go,
+#     go/org/handler.go, go/storage/handler.go,
+#     go/notification/handler.go) fails this one build step,
+#     transitively, with no separate step needed for org's, storage's or
+#     notification's own module build. Without this leg a spec+artifact
+#     PR whose handler lagged
 #     would pass both this pipeline and pr-check (which does not build
 #     the reference app). Precise only for a parameter-free operation,
 #     though: an operation carrying a path or query parameter makes the
@@ -109,10 +122,10 @@ name: api-contract
 #     invocation over go/authn/api/openapi.yaml, then its own
 #     `git diff --exit-code` on go/authn/api/authn-server.gen.go -- the
 #     backend half only. authn's frontend half needs no separate leg: it
-#     is generated together with notes' from the merged document above,
-#     and @speed/auth-core has compile-consumed the generated surface
-#     since the auth-core round (runtime consumption stays with the
-#     consumer shells).
+#     is generated together with notes' and notification's from the
+#     merged document above, and @speed/auth-core has compile-consumed
+#     the generated surface since the auth-core round (runtime
+#     consumption stays with the consumer shells).
 #   * Compile enforcement (authn): `go build ./...` of go/authn, the same
 #     "spec changed, handler not updated" guarantee notes' reference-app
 #     build gives, against go/authn/handler.go's own compile-time
@@ -127,7 +140,7 @@ name: api-contract
 #   * a redocly rule enforcing the "/api/v1/<module>" path-prefix
 #     convention -- redocly has no subject type that exposes a PathItem's
 #     own map key to an assertion (verified empirically against a real
-#     merge of both fragments; see redocly.yaml's own trailing comment),
+#     merge of the fragments; see redocly.yaml's own trailing comment),
 #     so it stays a code-review concern rather than a rule that would not
 #     actually check what its name claims.
 #   * cross-fragment merge-conflict checks as a gate of their own -- the
@@ -167,6 +180,10 @@ name: api-contract
 #                                                  generator config and its
 #                                                  backend generated
 #                                                  artifact
+#   go/notification/api/**                          notification's fragment,
+#                                                  its generator config and
+#                                                  its backend generated
+#                                                  artifact
 #   redocly.yaml                                   the merge/lint naming-
 #                                                  convention rules
 #   build/openapi/**                               the committed merged
@@ -187,6 +204,7 @@ on:
       - web/scripts/**
       - web/packages/api-sdk/**
       - go/authn/api/**
+      - go/notification/api/**
       - redocly.yaml
       - build/openapi/**
       - Taskfile.yml
@@ -276,6 +294,29 @@ jobs:
             echo "artifact + implementation ship in the same PR."
             exit 1
           }
+      - name: Regenerate notification's API surface (pinned oapi-codegen v2.8.0)
+        # The same command as Taskfile.yml's api:gen task's notification
+        # leg -- keep the two in lockstep (both pin the generator at
+        # v2.8.0). Run from the fragment's own directory, where
+        # oapi-codegen.yaml's paths are relative, mirroring the notes,
+        # org and storage steps above exactly.
+        run: |
+          cd go/notification/api
+          go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
+            -config oapi-codegen.yaml openapi.yaml
+      - name: Notification's generated artifact must match the committed spec
+        run: |
+          git diff --exit-code || {
+            echo "error: regenerating from the committed spec left the tree"
+            echo "dirty. The checked-in go/notification/api/"
+            echo "notification-server.gen.go is not what"
+            echo "go/notification/api/openapi.yaml generates -- did you"
+            echo "change the spec without running 'task api:gen' and"
+            echo "committing the result?"
+            echo "Per docs/internal/21-api-contract.md, spec + generated"
+            echo "artifact + implementation ship in the same PR."
+            exit 1
+          }
       - name: Set up pinned Node.js, pnpm and the pnpm store cache
         # Mirrors the npm CI jobs (reusable/npm-package-ci.yml): the same
         # composite action, the same single version sources (web/.nvmrc,
@@ -298,6 +339,7 @@ jobs:
           pnpm --package=@redocly/cli@2.51.1 dlx redocly join \
             examples/reference-app/internal/notes/api/openapi.yaml \
             go/authn/api/openapi.yaml \
+            go/notification/api/openapi.yaml \
             -o build/openapi/speed.yaml
       - name: Stamp the merged document's info block (deterministic post-join fixup)
         # redocly's join keeps the FIRST input's info block, so without
@@ -319,16 +361,18 @@ jobs:
       - name: Generated merged document must match the committed spec
         run: |
           git diff --exit-code || {
-            echo "error: merging both fragments (plus the info-block"
+            echo "error: merging the three fragments (plus the info-block"
             echo "stamp) left the tree dirty. The checked-in"
-            echo "build/openapi/speed.yaml is not what"
-            echo "examples/reference-app/internal/notes/api/openapi.yaml and"
-            echo "go/authn/api/openapi.yaml merge -- and"
-            echo "web/scripts/redocly-join-fixup.mjs stamps -- to today:"
-            echo "did a fragment change without running 'task api:merge'"
-            echo "and committing the result? Per"
-            echo "docs/internal/21-api-contract.md, spec + generated"
-            echo "artifact + implementation ship in the same PR."
+            echo "build/openapi/speed.yaml is not what the notes, authn"
+            echo "and notification fragments"
+            echo "(examples/reference-app/internal/notes/api/openapi.yaml,"
+            echo "go/authn/api/openapi.yaml and go/notification/api/"
+            echo "openapi.yaml) merge -- and web/scripts/redocly-join-"
+            echo "fixup.mjs stamps -- to today: did a fragment change"
+            echo "without running 'task api:merge' and committing the"
+            echo "result? Per docs/internal/21-api-contract.md, spec +"
+            echo "generated artifact + implementation ship in the same"
+            echo "PR."
             exit 1
           }
       - name: Install web workspace dependencies (frozen lockfile)
@@ -344,9 +388,10 @@ jobs:
         # Run from web/ with the relative config path, then the
         # nodenext fixup rewrites the mutator import to its explicit .js
         # form (why: @speed/api-sdk's AGENTS.md). The input is the merged
-        # document produced above -- notes + authn fragments; org's
-        # fragment is deliberately not part of it (see the api:merge task
-        # and docs/internal/21-api-contract.md's org note).
+        # document produced above -- notes, authn and notification
+        # fragments; org's and storage's fragments are deliberately not
+        # part of it (see the api:merge task and docs/internal/
+        # 21-api-contract.md).
         run: |
           pnpm dlx orval@8.17.0 --config orval.config.ts
           node scripts/orval-nodenext-fixup.mjs
@@ -356,19 +401,20 @@ jobs:
           git diff --exit-code || {
             echo "error: regenerating from the committed spec left the tree"
             echo "dirty. The checked-in web/packages/api-sdk/src/index.ts is"
-            echo "not what the merged document (notes + authn fragments)"
-            echo "generates -- did you change the spec or web/orval.config.ts"
-            echo "without running 'task api:gen' and committing the result?"
+            echo "not what the merged document (notes, authn and"
+            echo "notification fragments) generates -- did you change the"
+            echo "spec or web/orval.config.ts without running 'task api:gen'"
+            echo "and committing the result?"
             echo "Per docs/internal/21-api-contract.md, spec + generated"
             echo "artifact + implementation ship in the same PR."
             exit 1
           }
       - name: Handler must still implement the generated ServerInterface
         # The compile-enforcement half: if a spec change (and with it the
-        # generated interface) outgrew its Handler -- notes', org's or
-        # storage's -- this build of the reference app fails on the owning
-        # handler.go's compile-time assertion and shows exactly which
-        # method is missing.
+        # generated interface) outgrew its Handler -- notes', org's,
+        # storage's or notification's -- this build of the reference app
+        # fails on the owning handler.go's compile-time assertion and
+        # shows exactly which method is missing.
         run: |
           cd examples/reference-app
           go build ./...
