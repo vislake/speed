@@ -1,0 +1,24 @@
+# demo module's English (en-US) copy.
+#
+# Like its Chinese sibling this file carries one family of ids: the template
+# copy of the demo.patient_reminder notification type this module declares,
+# following the template-id convention go/notification/render.go documents --
+# type key, channel and part in order (<type_key>.<channel>.<part>, e.g.
+# demo.patient_reminder.email.subject), plus one "<type_key>.description" row
+# for the type catalog. The type's templates take no parameters: the demo
+# patient-message route (cmd/server's demo_notification.go) only triggers the
+# send, and the copy itself is a fixed appointment reminder.
+#
+# The copy is rendered by the notification module out of the merged catalog
+# Kernel.Bootstrap assembles from each module's Locales() -- which is exactly
+# why demo must exist as a member of the bootstrap module set (see the
+# package comment in module.go) -- and demo itself never reads these files.
+#
+# File contract (see go/pkgcore/i18n): every message is one flat top-level
+# entry -- no grouped sections -- and zh-CN.toml and en-US.toml must carry
+# identical id sets.
+
+"demo.patient_reminder.email.subject" = "Your check-up reminder"
+"demo.patient_reminder.email.body_text" = "This is Smile Studio's reminder that your smile check-up appointment is coming up. If the time no longer suits you, simply reply to this email to reschedule."
+"demo.patient_reminder.sms.text" = "Smile Studio reminder: your smile check-up appointment is coming up. Reply to this message if you need to reschedule."
+"demo.patient_reminder.description" = "Sent when a contact's check-up appointment is drawing near."

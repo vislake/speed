@@ -74,6 +74,21 @@ const (
 	// and there is deliberately no cross-tenant template to copy from.
 	demoReaderRoleKey = "note-reader"
 
+	// demoNotesCreatorUserID is the X-Demo-User-Id header value the flow
+	// helpers that create notes send on every request. X-Demo-User-Id is a
+	// different namespace from X-Demo-User (the header this file's earlier
+	// const names): the latter names the seeded rbac grant the gate
+	// decides against (demo-owner and friends above), while the former
+	// names the user id notes' own SubjectResolver (demoOrgSubjectResolver
+	// in server.go) attributes the CREATE to -- the value that lands in a
+	// note's CreatorUserID and in the NoteCreatedPayload event every
+	// subscriber reads. The value is a real-user-style id (org_flow_test's
+	// "user-owner-1" is the same shape), not an rbac demo identity, exactly
+	// as a real deployment's access-token subject claim would be -- which
+	// is also why demo_notification.go's address table keys on it: it is
+	// the only user id a note-created event can name in this app.
+	demoNotesCreatorUserID = "user-creator-1"
+
 	// demoSingleTenantUserID holds demoReaderRoleKey in ONE tenant only,
 	// which is what makes this example demonstrate the single most
 	// important property of a grant: it is a fact about a (tenant, user)
@@ -118,6 +133,11 @@ const orgRoutePath = "/api/v1/org"
 // storageRoutePath is where the storage module mounts its routes -- the
 // same unexported-path situation notesRoutePath's own comment explains.
 const storageRoutePath = "/api/v1/storage"
+
+// notificationRoutePath is where the notification module mounts its
+// routes -- the same unexported-path situation notesRoutePath's own
+// comment explains.
+const notificationRoutePath = "/api/v1/notifications"
 
 // demoRouteGuards declares, for every path a module mounts, the resource
 // whose permissions gate it -- or routePublic when the path is
@@ -165,10 +185,27 @@ const storageRoutePath = "/api/v1/storage"
 // reader holds notes:read and nothing else -- which storage_flow_test.go
 // relies on to prove the gate closes on a user who holds another module's
 // permissions: a per-module permission is not a blanket role.
+//
+// notification's path is routePublic for the same structural reason org's
+// and authn's are: notification.Handler resolves and requires its own
+// caller identity per operation through SubjectResolver
+// (demoOrgSubjectResolver in server.go -- the same seam instance org and
+// notes use, its comment naming all three modules it serves). Every one
+// of the module's operations, the realtime stream included, refuses an
+// unidentifiable caller with ErrSubjectUnresolved; the module declares no
+// permissions at all -- its endpoints are a user's own inbox, contacts
+// and preferences, never a cross-tenant surface -- so there is no rbac
+// permission a router gate could meaningfully require, and its own
+// per-operation subject check is where its gate lives, exactly as org's
+// invitation endpoints' gate lives inside org.
 var demoRouteGuards = map[string]string{
 	notesRoutePath:   notesResource,
 	storageRoutePath: storageResource,
 	orgRoutePath:     routePublic,
+	// notification's path constant mirrors the module's unexported
+	// apiPath; naming it here through the local constant keeps the two in
+	// sync the way the config entries do.
+	notificationRoutePath: routePublic,
 	// authn's path constant lives in server.go, which owns the pre-auth
 	// (method, path) allowlist under it; naming the path here through that
 	// same constant keeps the two in sync the way config's entries do.

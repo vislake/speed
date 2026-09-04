@@ -26,6 +26,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/jobs"
+	"github.com/vislake/speed/go/notification"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
@@ -33,6 +34,7 @@ import (
 	"github.com/vislake/speed/go/storage"
 	"github.com/vislake/speed/go/tenancy"
 
+	"github.com/vislake/speed/examples/reference-app/internal/demo"
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
 )
 
@@ -93,6 +95,22 @@ const (
 	// this one additional key, distinct from the cipher key, is what keeps
 	// that rule real rather than aspirational in this app's own wiring.
 	orgIndexKeyEnv = "SPEED_ORG_INDEX_KEY"
+
+	// notificationIndexKeyEnv names the environment variable holding the
+	// hex-encoded 32-byte HMAC key the blind indexers over the notification
+	// module's encrypted contact addresses are built from
+	// (dbkit.NewBlindIndexer). It is a SEPARATE bootstrap secret from
+	// configKeyEnv for the same reason orgIndexKeyEnv's doc comment above
+	// gives: this app reuses the config cipher to also encrypt
+	// notification's Contact.Address column (registered under
+	// notification.ContactAddressSerializerName below), and dbkit's own rule
+	// is that an AES key must never double as an HMAC key. One HMAC key
+	// serves both the email and the phone indexers, exactly as authn's
+	// single blind-index key serves both of its indexers (devBlindIndexKey's
+	// comment says so) -- the two normalizers keep the two index columns'
+	// inputs in disjoint canonical forms, so a shared key leaks nothing
+	// between them.
+	notificationIndexKeyEnv = "SPEED_NOTIFICATION_INDEX_KEY"
 
 	// redisAddrEnv names the environment variable holding the Redis server
 	// address ("host:port") the injected EventBus connects to. Empty -- the
@@ -176,6 +194,22 @@ var (
 		0x78, 0x79, 0x7a, 0x7b, 0x7c, 0x7d, 0x7e, 0x7f,
 	}
 )
+
+// devNotificationIndexKey is the HMAC key used when
+// SPEED_NOTIFICATION_INDEX_KEY is unset -- the ascending 0x80..0x9f byte
+// sequence, the next free 32-byte region of this file's recognizable
+// constants and chosen so it is visibly a DIFFERENT 32 bytes from every key
+// above it (see notificationIndexKeyEnv's own doc comment for why the
+// notification index key and the config cipher key must never be the same
+// secret). Like its siblings, this is a recognizable constant for
+// zero-setup standalone development, never a secret a real deployment
+// should keep.
+var devNotificationIndexKey = []byte{
+	0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
+	0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f,
+	0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97,
+	0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f,
+}
 
 // devSigningKeySet derives a stable Ed25519 signing key from
 // devSigningKeySeed. It builds the TokenKey by hand (ed25519.NewKeyFromSeed)
@@ -301,12 +335,14 @@ var _ authn.MembershipReader = (*demoMemberships)(nil)
 const demoOrgUserHeader = "X-Demo-User-Id"
 
 // demoOrgSubjectResolver stands in for the SubjectResolver authn will
-// eventually supply from a verified access token's claims, serving both
-// modules that declare the same structurally identical seam: org's two
-// caller-scoped endpoints (creating and accepting an invitation) and
+// eventually supply from a verified access token's claims, serving all
+// three modules that declare the same structurally identical seam: org's
+// two caller-scoped endpoints (creating and accepting an invitation),
 // notes' create handler, which attributes the note to a creator through
-// it. It exists only so this reference app has *some* way to demonstrate
-// those endpoints end to end before authn exists.
+// it, and every notification endpoint, which resolves its caller's inbox,
+// contacts and preferences through it. It exists only so this reference
+// app has *some* way to demonstrate those endpoints end to end before
+// authn exists.
 //
 // This is a placeholder, not a pattern to copy into a real deployment: a
 // real SubjectResolver must derive the caller from a source the server
@@ -316,16 +352,20 @@ const demoOrgUserHeader = "X-Demo-User-Id"
 // requirement.
 type demoOrgSubjectResolver struct{}
 
-// Subject implements org.SubjectResolver and notes.SubjectResolver.
+// Subject implements org.SubjectResolver, notes.SubjectResolver and
+// notification.SubjectResolver.
 func (demoOrgSubjectResolver) Subject(r *http.Request) (string, bool) {
 	userID := r.Header.Get(demoOrgUserHeader)
 	return userID, userID != ""
 }
 
 // compile-time checks that demoOrgSubjectResolver satisfies the identical
-// SubjectResolver seam both org and notes declare.
-var _ org.SubjectResolver = demoOrgSubjectResolver{}
-var _ notes.SubjectResolver = demoOrgSubjectResolver{}
+// SubjectResolver seam all three of org, notes and notification declare.
+var (
+	_ org.SubjectResolver          = demoOrgSubjectResolver{}
+	_ notes.SubjectResolver        = demoOrgSubjectResolver{}
+	_ notification.SubjectResolver = demoOrgSubjectResolver{}
+)
 
 // orgFeatureGate adapts a *config.Service that is filled in AFTER this
 // app's org.Module is constructed into org.FeatureGate, read lazily -- the
@@ -370,13 +410,14 @@ var _ org.FeatureGate = orgFeatureGate{}
 // dynamic configuration" -- it is main.go's own wiring, which never goes
 // through Module.Register either.
 type serverConfig struct {
-	DeploymentMode pkgcore.DeploymentMode
-	Port           string
-	SQLitePath     string
-	ConfigKey      []byte
-	OrgIndexKey    []byte
-	RedisAddr      string
-	HostTenants    map[string]pkgcore.TenantID
+	DeploymentMode       pkgcore.DeploymentMode
+	Port                 string
+	SQLitePath           string
+	ConfigKey            []byte
+	OrgIndexKey          []byte
+	NotificationIndexKey []byte
+	RedisAddr            string
+	HostTenants          map[string]pkgcore.TenantID
 
 	// Mailer overrides the console mailer the standalone Preset resolves
 	// for the "mailer" seam when set. configFromEnv never sets it --
@@ -495,14 +536,34 @@ func configFromEnv() (serverConfig, error) {
 		orgIndexKey = decoded
 	}
 
+	// The notification contact-address blind-index key:
+	// SPEED_NOTIFICATION_INDEX_KEY when set, devNotificationIndexKey
+	// otherwise -- same parsing and same failure shape as configKey above,
+	// and see notificationIndexKeyEnv's own doc comment for why this must
+	// be a key distinct from configKey rather than the same one reused.
+	notificationIndexKey := devNotificationIndexKey
+	if encoded := os.Getenv(notificationIndexKeyEnv); encoded != "" {
+		if len(encoded) != configKeyHexLength {
+			return serverConfig{}, fmt.Errorf(
+				"reference-app: %s must hold %d hex characters (a 32-byte key), got %d",
+				notificationIndexKeyEnv, configKeyHexLength, len(encoded))
+		}
+		decoded, err := hex.DecodeString(encoded)
+		if err != nil {
+			return serverConfig{}, fmt.Errorf("reference-app: %s: %w", notificationIndexKeyEnv, err)
+		}
+		notificationIndexKey = decoded
+	}
+
 	return serverConfig{
-		DeploymentMode: deploymentMode,
-		Port:           port,
-		SQLitePath:     dbPath,
-		ConfigKey:      configKey,
-		OrgIndexKey:    orgIndexKey,
-		RedisAddr:      redisAddr,
-		HostTenants:    demoHostTenants,
+		DeploymentMode:       deploymentMode,
+		Port:                 port,
+		SQLitePath:           dbPath,
+		ConfigKey:            configKey,
+		OrgIndexKey:          orgIndexKey,
+		NotificationIndexKey: notificationIndexKey,
+		RedisAddr:            redisAddr,
+		HostTenants:          demoHostTenants,
 		// Empty when unset: the demo-user seed is opt-in (its own doc
 		// comment in demo_users.go says why the default skips it).
 		DemoUsersPassword: os.Getenv(demoUsersPasswordEnv),
@@ -510,12 +571,15 @@ func configFromEnv() (serverConfig, error) {
 }
 
 // buildServer wires the reference app's Kernel -- the authn, notes, org,
-// config, rbac, audit and storage Modules -- their migrations, the
-// storage queue, and the authn+tenancy middleware chain into a single
-// http.Handler. It is the one place that wiring logic lives -- main() and
-// the end-to-end tests (server_test.go, authn_e2e_test.go and
-// storage_flow_test.go) all call it, so the two can never drift into
-// testing a different wiring than the one that actually runs.
+// config, rbac, storage, demo, notification and audit Modules -- their
+// migrations, the job queue the storage and notification modules share,
+// the demo notification glue (cmd/server/demo_notification.go), and the
+// authn+tenancy middleware chain into a single http.Handler. It is the
+// one place that wiring logic lives -- main() and the end-to-end tests
+// (server_test.go, authn_e2e_test.go, org_flow_test.go,
+// storage_flow_test.go and notification_flow_test.go) all call it, so the
+// two can never drift into testing a different wiring than the one that
+// actually runs.
 //
 // It returns the composed handler and a cleanup function that closes
 // everything buildServer opened (the services, the injected Redis bus and
@@ -655,6 +719,27 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: build the org email indexer: %w", err)
+	}
+
+	// notification's Contact.Address column is encrypted at rest under this
+	// same config cipher (registered here, before anything touches the
+	// Contact model, since GORM resolves a named serializer at struct-parse
+	// time) and made queryable by a SEPARATE HMAC key -- see
+	// notificationIndexKeyEnv's own doc comment for why reusing
+	// cfg.ConfigKey for both would be exactly the AES-key-doubling-as-an-
+	// HMAC-key weakness dbkit warns against. One key serves the email and
+	// the phone indexers alike (authn's single blind-index key precedent),
+	// each named so an error message tells which column it failed on.
+	dbkit.RegisterEncryptedSerializer(notification.ContactAddressSerializerName, cipher)
+	contactEmailIndexer, err := dbkit.NewBlindIndexer("contact_email_index", cfg.NotificationIndexKey, dbkit.NormalizeEmail)
+	if err != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: build the notification contact email indexer: %w", err)
+	}
+	contactPhoneIndexer, err := dbkit.NewBlindIndexer("contact_phone_index", cfg.NotificationIndexKey, dbkit.NormalizePhoneE164)
+	if err != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: build the notification contact phone indexer: %w", err)
 	}
 
 	// hostByTenant is demoHostTenants' reverse index: which demo Host
@@ -806,6 +891,48 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// pool before the shared database closes.
 	storageModule := storage.NewModule(db, storage.WithQueue(standaloneQueue))
 
+	// notificationModule is the reference app's first consumer of
+	// go/notification, wired as the round's mandatory-first-consumer proof
+	// (see cmd/server/demo_notification.go for the host-side glue that
+	// drives it -- the note-created subscription and the demo
+	// patient-message route -- and notification_flow_test.go for the
+	// end-to-end legs). Its six required seams are all host-supplied here:
+	// the console SMS sender writes to the same smsOutput the authn module's
+	// sender writes to (the standalone deployment mode's transport,
+	// go/notification/sms.go); the mail transport is whatever the "mailer"
+	// seam resolves to -- the console mailer in production, cfg.Mailer in
+	// tests; the two blind indexers built above make a contact's encrypted
+	// email and phone address queryable by exact match; the delivery queue
+	// is the same standaloneQueue storage's derive task runs on, so a
+	// completed note-created or patient-reminder dispatch is drained by the
+	// same worker pool (its Register call declares the delivery job handler
+	// on the registry, and the drain loop below moves every handler onto
+	// the queue); and the user-address resolver is the demo directory that
+	// demo_notification.go owns. WithSubjectResolver hands the HTTP surface
+	// the same demo identity layer org's and notes' handlers use, so a
+	// caller is whoever the X-Demo-User-Id header says -- the module
+	// resolves identity per operation and never reads it from the request
+	// otherwise.
+	notificationModule := notification.NewModule(db,
+		notification.WithSMSSender(notification.NewConsoleSMSSender(smsOutput)),
+		notification.WithMailFrom("notifications@reference-app.example"),
+		notification.WithContactEmailIndexer(contactEmailIndexer),
+		notification.WithContactPhoneIndexer(contactPhoneIndexer),
+		notification.WithDeliveryQueue(standaloneQueue),
+		notification.WithUserAddressResolver(demoUserAddressResolver{}),
+		notification.WithSubjectResolver(demoOrgSubjectResolver{}),
+	)
+
+	// demoModule is the carrier of the app's demo notification type
+	// (demo.patient_reminder) and nothing else. It must sit inside the
+	// Bootstrap module set for the same reason every message-shipping
+	// module must: Kernel.Bootstrap freezes the merged catalog from the
+	// Locales() of the modules it is given, and the notification module
+	// renders every dispatch from that frozen catalog -- a type whose copy
+	// lives outside the set can never render (internal/demo module.go's
+	// package comment says so at length).
+	demoModule := demo.NewModule()
+
 	migrationRegistry := dbkit.NewMigrationRegistry()
 	if regErr := migrationRegistry.Register(authnModule); regErr != nil {
 		_ = cleanup()
@@ -835,12 +962,19 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
+	// demoModule is deliberately absent from this registry: it ships no
+	// migrations (its Migrations() is an empty FS -- see internal/demo's
+	// module doc), so there is nothing to register or apply for it.
+	if regErr := migrationRegistry.Register(notificationModule); regErr != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	}
 	if applyErr := migrationRegistry.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: apply migrations: %w", applyErr)
 	}
 
-	// Bootstrap registers all seven modules in argument order -- authn
+	// Bootstrap registers all nine modules in argument order -- authn
 	// first of all, so its Register-time declarations (its config items,
 	// its permissions, its events) precede the modules that lean on them,
 	// then notes and org before config, so the configuration items and
@@ -857,7 +991,16 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// not load-bearing: its DependsOn is nil, the queue its Register
 	// validates is the host seam built above, and the permissions it
 	// declares are folded into rbac's Attach snapshot no matter where it
-	// sits. audit last is not load-bearing order -- its Module.DependsOn
+	// sits. demo and notification follow storage for the same reason:
+	// neither's position is load-bearing -- demo's Register only declares
+	// its notification type, and notification's Register only validates
+	// its host seams and registers its delivery job handler -- but both
+	// must sit inside this set, and together: the merged catalog freezes
+	// once after every module has registered, and notification renders
+	// every dispatch (the demo patient-reminder copy included) from that
+	// frozen catalog, so a demo whose templates lived outside the set
+	// could never render (internal/demo module.go's package comment says
+	// so at length). audit last is not load-bearing order -- its Module.DependsOn
 	// is nil, and its subscriptions are valid to install before or after
 	// any publisher registers (see audit's Module.DependsOn doc comment)
 	// -- it simply reads naturally as "the business-facing modules, then
@@ -919,7 +1062,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	if cfg.Mailer != nil {
 		kernelOptions = append(kernelOptions, pkgcore.WithMailer(cfg.Mailer, pkgcore.Stateless))
 	}
-	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, authnModule, notesModule, orgModule, configModule, rbacModule, storageModule, auditModule)
+	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, authnModule, notesModule, orgModule, configModule, rbacModule, storageModule, demoModule, notificationModule, auditModule)
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: bootstrap kernel: %w", err)
@@ -978,6 +1121,20 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		_ = cleanup()
 		return nil, nil, mountErr
 	}
+
+	// wireDemoNotification adds the reference app's demo glue on top of the
+	// mounted module routes: the subscription that turns notes' note-created
+	// event into a notification dispatch for the note's creator, and the
+	// hand-written demo patient-message route that dispatches the demo
+	// module's patient-reminder type to a verified external contact. The
+	// bus is reg.EventBus() -- the same bus Bootstrap gave every module, so
+	// the note-created subscription hears exactly what notesModule's handler
+	// publishes on that bus -- and the notificationModule services are the
+	// module's own accessors, the same instances its Register validated and
+	// its HTTP handler drives (see demo_notification.go for the seam
+	// contracts, and notification_flow_test.go for the end-to-end legs).
+	// The call cannot fail: nothing it does returns an error.
+	wireDemoNotification(mux, reg.EventBus(), notificationModule)
 
 	// The middleware chain: authn.Middleware(verifier) FIRST, then
 	// tenancy.Middleware(authn.NewPrincipalResolver()) -- the deliberate

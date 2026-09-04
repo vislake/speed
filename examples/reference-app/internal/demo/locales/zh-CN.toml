@@ -1,0 +1,22 @@
+# demo 模块面向用户的中文（zh-CN）文案。
+#
+# 本文件只携带一种 id：demo 模块声明的 notification 类型
+# demo.patient_reminder 的模板文案，遵循 go/notification/render.go 文档化的
+# 模板 id 约定——类型 key、渠道、部件依次排列（<type_key>.<channel>.<part>，
+# 如 demo.patient_reminder.email.subject），另加一条
+# "<type_key>.description" 供类型目录展示；面向收件人的参数以 {{.snake_case}}
+# 占位符拼写。本类型的模板不带参数：demo 病人提醒路由（cmd/server 的
+# demo_notification.go）只触发发送，文案本身是固定的复诊提醒。
+#
+# 这些文案在 dispatch 时由 notification 模块从合并目录渲染（Kernel.Bootstrap
+# 把 demo 模块的 Locales() 收进目录后冻结），demo 模块自身从不读取它们——
+# 这正是 demo 必须作为 bootstrap 模块集一员存在的原因（见 module.go 的包
+# 注释）。
+#
+# 文件契约（见 go/pkgcore/i18n）：每条消息是扁平的一条顶层条目——不允许
+# 分组 section——且 zh-CN.toml 与 en-US.toml 必须携带完全相同的 id 集合。
+
+"demo.patient_reminder.email.subject" = "您的复诊提醒"
+"demo.patient_reminder.email.body_text" = "这是 Smile Studio 给您的复诊提醒：您预约的微笑检查即将到来。如需改期，请直接回复本邮件。"
+"demo.patient_reminder.sms.text" = "Smile Studio 复诊提醒：您预约的微笑检查即将到来。如需改期，请回复短信说明。"
+"demo.patient_reminder.description" = "当联系人的预约复诊临近时发送。"

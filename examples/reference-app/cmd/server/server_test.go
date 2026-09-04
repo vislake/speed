@@ -27,17 +27,13 @@ import (
 // policy default (go/authn/password.go) accepts it.
 const testPassword = "a perfectly fine passphrase"
 
-// demoNotesCreatorUserID is the X-Demo-User-Id header value the helpers that
-// create notes send on every request. X-Demo-User-Id is a different namespace
-// from X-Demo-User (demo_subject.go): the latter names the seeded rbac grant
-// the gate decides against (demo-owner and friends), while the former names
-// the user id notes' own SubjectResolver (demoOrgSubjectResolver in server.go)
-// attributes the CREATE to -- the value that lands in a note's CreatorUserID
-// and in the NoteCreatedPayload event every subscriber reads. The value is a
-// real-user-style id (org_flow_test's "user-owner-1" is the same shape), not
-// an rbac demo identity, exactly as a real deployment's access-token subject
-// claim would be.
-const demoNotesCreatorUserID = "user-creator-1"
+// demoNotesCreatorUserID is declared in demo_subject.go, next to the other
+// demo identity constants, because the running server's own glue reads it
+// too (demo_notification.go's demo address table keys on it); the test
+// helpers here and in notification_flow_test.go reference the same constant
+// so a test's X-Demo-User-Id header always names the user the server's
+// subscription will dispatch to. See demo_subject.go's comment there for
+// what the id means.
 
 // testConfig returns a serverConfig backed by a fresh, per-test temp-file
 // SQLite database, so tests never share state and never touch a real file
@@ -46,16 +42,23 @@ const demoNotesCreatorUserID = "user-creator-1"
 // explicitly via registerAndAuthenticate below, keeping the same reference
 // buildServer itself wires so a test's grant is visible to the running
 // server.
+//
+// NotificationIndexKey is set because every boot wires the notification
+// module's two contact indexers from the struct field directly -- the
+// SPEED_NOTIFICATION_INDEX_KEY environment default only exists on the
+// configFromEnv path, which this helper never takes -- and an empty key
+// fails the boot before the first request.
 func testConfig(t *testing.T) serverConfig {
 	t.Helper()
 	return serverConfig{
-		DeploymentMode: pkgcore.DeploymentModeStandalone,
-		Port:           "0",
-		SQLitePath:     filepath.Join(t.TempDir(), "reference-app-test.db"),
-		ConfigKey:      devConfigKey,
-		OrgIndexKey:    devOrgIndexKey,
-		HostTenants:    demoHostTenants,
-		Memberships:    newDemoMemberships(),
+		DeploymentMode:       pkgcore.DeploymentModeStandalone,
+		Port:                 "0",
+		SQLitePath:           filepath.Join(t.TempDir(), "reference-app-test.db"),
+		ConfigKey:            devConfigKey,
+		OrgIndexKey:          devOrgIndexKey,
+		NotificationIndexKey: devNotificationIndexKey,
+		HostTenants:          demoHostTenants,
+		Memberships:          newDemoMemberships(),
 	}
 }
 
