@@ -1,11 +1,22 @@
 # English (en-US) user-facing text for the notes module.
 #
-# Keys match the apperr.Error.Code values notes' HTTP handlers return (see
-# internal/notes/handler.go) -- APIs themselves never return this text
-# directly; per the backend coding standard's error-handling rule (§6.2)
-# they return the structured code plus parameters, and a client resolves
-# the code through its own i18n catalog, of which this file is notes' own
-# contribution.
+# Two kinds of ids live here. First, the apperr.Error.Code values notes'
+# HTTP handlers return (see internal/notes/handler.go) -- APIs themselves
+# never return this text directly; per the backend coding standard's
+# error-handling rule (§6.2) they return the structured code plus
+# parameters, and a client resolves the code through its own i18n catalog,
+# of which this file is notes' own contribution. Second, this module's
+# notification-type copy (the "notes.note.created.*" ids below), following
+# the template-id convention go/notification/render.go documents: the
+# type key, then the channel, then the part
+# (<type_key>.<channel>.<part>, e.g. notes.note.created.email.subject),
+# plus a "<type_key>.description" id for the type directory, with
+# recipient-facing params spelled out as {{.snake_case}} placeholders.
+# notes is this module's own notification publisher (the fact it declares
+# under EventNoteCreated in module.go), so its copy ships in its own
+# locale file, rendered by the notification module from the merged catalog
+# at dispatch time -- see noteCreatedNotificationType's doc comment in
+# module.go.
 #
 # File contract (see go/pkgcore/i18n): every entry is one flat top-level
 # message -- no [errors]-style grouping sections, which go-i18n would fold
@@ -15,3 +26,10 @@
 "notes.text_too_long" = "Note text must not exceed 4000 characters."
 "notes.invalid_request_body" = "The request body is not valid JSON."
 "notes.internal_error" = "An internal error occurred. Please try again later."
+"notes.subject_unresolved" = "The request could not be attributed to a user."
+"notes.note.created.in_app.title" = "New note added"
+"notes.note.created.in_app.body" = "A note ({{.note_id}}) was added to your workspace."
+"notes.note.created.email.subject" = "A note was added to your workspace"
+"notes.note.created.email.body_text" = "A note ({{.note_id}}) was added to your workspace. Sign in to view it."
+"notes.note.created.sms.text" = "A note ({{.note_id}}) was added to your workspace."
+"notes.note.created.description" = "Sent when someone adds a note to the workspace."

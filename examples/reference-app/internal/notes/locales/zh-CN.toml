@@ -1,9 +1,17 @@
 # notes 模块面向用户的中文（zh-CN）文案。
 #
-# key 与 notes 模块 HTTP 处理器返回的 apperr.Error.Code 一一对应（见
-# internal/notes/handler.go）——接口本身从不直接返回这段文案：按后端编码规范
-# §6.2 的错误处理规则，接口只返回结构化错误码与参数，由客户端根据错误码在自己
-# 的 i18n 目录中查找文案，本文件就是 notes 模块为该目录提供的一份资源。
+# 这里的 id 分两类。第一类与 notes 模块 HTTP 处理器返回的 apperr.Error.Code
+# 一一对应（见 internal/notes/handler.go）——接口本身从不直接返回这段文案：按
+# 后端编码规范 §6.2 的错误处理规则，接口只返回结构化错误码与参数，由客户端根据
+# 错误码在自己的 i18n 目录中查找文案，本文件就是 notes 模块为该目录提供的一份
+# 资源。第二类是本模块的 notification 类型文案（下面的 "notes.note.created.*"
+# id），遵循 go/notification/render.go 文档化的模板 id 约定：类型 key、渠道、
+# 部件依次排列（<type_key>.<channel>.<part>，如
+# notes.note.created.email.subject），另加一条 "<type_key>.description" 供类型
+# 目录展示；面向收件人的参数以 {{.snake_case}} 占位符拼写。notes 是它自己声明的
+# 这一 notification 事实的发布方（module.go 的 EventNoteCreated），所以文案由
+# notes 自己的 locale 文件托管，dispatch 时由 notification 模块从合并目录渲染
+# ——见 module.go 中 noteCreatedNotificationType 的注释。
 #
 # 文件契约（见 go/pkgcore/i18n）：每条消息是扁平的一条顶层条目——不允许
 # [errors] 这类分组 section（go-i18n 会把 section 名折进消息 id）——且
@@ -13,3 +21,10 @@
 "notes.text_too_long" = "笔记内容不能超过 4000 个字符。"
 "notes.invalid_request_body" = "请求体不是合法的 JSON。"
 "notes.internal_error" = "服务器内部发生错误，请稍后重试。"
+"notes.subject_unresolved" = "无法识别该请求对应的用户。"
+"notes.note.created.in_app.title" = "新笔记已添加"
+"notes.note.created.in_app.body" = "笔记 {{.note_id}} 已添加到您的工作区。"
+"notes.note.created.email.subject" = "您的工作区有新笔记"
+"notes.note.created.email.body_text" = "笔记 {{.note_id}} 已添加到您的工作区。请登录查看。"
+"notes.note.created.sms.text" = "笔记 {{.note_id}} 已添加到您的工作区。"
+"notes.note.created.description" = "当工作区新增笔记时发送。"

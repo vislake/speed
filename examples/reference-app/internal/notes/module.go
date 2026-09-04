@@ -139,6 +139,16 @@ type NoteCreatedPayload struct {
 	// string since the payload is a wire-shaped event type, not a
 	// pkgcore-typed one.
 	TenantID string
+
+	// CreatorUserID is the creating user's id, resolved by the host's
+	// SubjectResolver seam from the create request (see handler.go's
+	// resolveSubject). Subscribers route on it: the notification module's
+	// UserAddressResolver consults the same user id at dispatch time, so a
+	// note-created fact with an empty CreatorUserID could never reach a
+	// recipient -- which is exactly why NotesCreateNote refuses an
+	// unresolvable request with ErrSubjectUnresolved before creating
+	// anything, rather than publishing a creator-less fact.
+	CreatorUserID string
 }
 
 // Module implements pkgcore.Module for notes, examples/reference-app's
@@ -148,6 +158,51 @@ type NoteCreatedPayload struct {
 type Module struct {
 	repo    *Repository
 	handler *Handler
+	subject SubjectResolver
+}
+
+// options carries NewModule's optional wiring. notes keeps exactly one
+// option so far -- the creator resolver -- and the struct exists so adding
+// another never breaks existing call sites (the option pattern every
+// module in this workspace uses).
+type options struct {
+	subject SubjectResolver
+}
+
+// Option configures a Module constructed by NewModule.
+type Option func(*options)
+
+// WithSubjectResolver wires the seam NotesCreateNote reads the creating
+// user's id from (see handler.go's SubjectResolver). Unwired -- the
+// default -- every create request fails closed with ErrSubjectUnresolved,
+// never producing a creator-less note-created event.
+func WithSubjectResolver(r SubjectResolver) Option {
+	return func(o *options) { o.subject = r }
+}
+
+// noteCreatedNotificationType is EventNoteCreated's entry in the
+// notification preference matrix (pkgcore.NotificationType, registered by
+// Register below). Declaring it makes the type visible to the module that
+// renders the recipient-facing preference UI -- the notification module --
+// and marks it Unsubscribable: true, the "recipient may opt out of this
+// kind of notification" choice (contrast demo.patient_reminder, the
+// reference app's unsubscribable-false type; see cmd/server's wiring).
+//
+// The channel strings are the notification module's own channel vocabulary
+// ("in_app", "email", "sms" -- notification.ChannelInApp and siblings):
+// notes deliberately does not import notification -- business modules
+// publish domain facts, notification subscribes, and the dependency never
+// points the other way (backend coding standard §8) -- so the vocabulary
+// is written out here against that module's contract, exactly as org
+// writes out authn's event name rather than importing authn. notification
+// ships the channel constants and pins them in its own tests; a rename
+// there is caught when this registration stops matching the preference
+// matrix it renders into.
+var noteCreatedNotificationType = pkgcore.NotificationType{
+	Key:             EventNoteCreated,
+	Group:           "collaboration",
+	DefaultChannels: []string{"in_app", "email", "sms"},
+	Unsubscribable:  true,
 }
 
 // NewModule returns a Module whose repository is backed by db. db is
@@ -157,8 +212,12 @@ type Module struct {
 // cmd/server's wiring for the exact sequence, and Register's own doc
 // comment below for why Register itself still must not touch the
 // database).
-func NewModule(db *gorm.DB) *Module {
-	return &Module{repo: NewRepository(db)}
+func NewModule(db *gorm.DB, opts ...Option) *Module {
+	o := options{}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return &Module{repo: NewRepository(db), subject: o.subject}
 }
 
 // Name implements pkgcore.Module.
@@ -188,11 +247,13 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // Register implements pkgcore.Module. Per the interface's own doc comment
 // ("It must not perform I/O; it only declares"), this method never touches
 // the database or the network: constructing m.handler wires together
-// already-built, in-memory values (m.repo, and the EventBus reference
-// reg.EventBus() returns) -- obtaining that reference is not itself an I/O
-// operation, it is just reading a field off reg. The bus is not actually
-// called (no Publish) until a real HTTP request creates a note; see
-// handler.go's NotesCreateNote method.
+// already-built, in-memory values (m.repo, m.subject -- wired by NewModule's
+// option, or nil for NotesCreateNote to refuse on, see
+// ErrSubjectUnresolved -- and the EventBus reference reg.EventBus()
+// returns); obtaining that reference is not itself an I/O operation, it is
+// just reading a field off reg. The bus is not actually called (no
+// Publish) until a real HTTP request creates a note; see handler.go's
+// NotesCreateNote method.
 func (m *Module) Register(reg *pkgcore.Registry) error {
 	if err := reg.AuditActions.Add(AuditActionNoteCreate); err != nil {
 		return err
@@ -203,7 +264,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// was just declared on -- Emit itself validates the action string against
 	// it before publishing (see audit.Emit's own doc comment), which is what
 	// requires the declaration above to run before this line, not after it.
-	m.handler = NewHandler(m.repo, reg.EventBus(), reg.AuditActions)
+	m.handler = NewHandler(m.repo, reg.EventBus(), reg.AuditActions, m.subject)
 	reg.Routes.Mount(apiPath, m.handler)
 
 	if err := reg.Permissions.Add(PermissionRead, PermissionWrite); err != nil {
@@ -214,6 +275,17 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		PayloadType: eventNoteCreatedPayloadType,
 		Description: "Published whenever a new note is created for a tenant.",
 	}); err != nil {
+		return err
+	}
+	// The notification-type declaration rides along with the event it
+	// describes: publishing notes.note.created as a fact and declaring it as
+	// a notification kind are two views of the same domain action, so they
+	// live in the same Register call, keyed by the same constant
+	// (EventNoteCreated). m.subject may be nil here -- a module without a
+	// creator resolver still declares its type, and its create endpoint
+	// then fails closed (see ErrSubjectUnresolved) rather than this
+	// declaration being conditional on wiring.
+	if err := reg.Notifications.Add(noteCreatedNotificationType); err != nil {
 		return err
 	}
 

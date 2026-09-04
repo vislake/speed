@@ -300,11 +300,13 @@ var _ authn.MembershipReader = (*demoMemberships)(nil)
 // in any real deployment.
 const demoOrgUserHeader = "X-Demo-User-Id"
 
-// demoOrgSubjectResolver stands in for the org.SubjectResolver authn will
-// eventually supply from a verified access token's claims. It exists only
-// so this reference app has *some* way to demonstrate org's two
-// caller-scoped endpoints (creating and accepting an invitation) end to
-// end before authn exists.
+// demoOrgSubjectResolver stands in for the SubjectResolver authn will
+// eventually supply from a verified access token's claims, serving both
+// modules that declare the same structurally identical seam: org's two
+// caller-scoped endpoints (creating and accepting an invitation) and
+// notes' create handler, which attributes the note to a creator through
+// it. It exists only so this reference app has *some* way to demonstrate
+// those endpoints end to end before authn exists.
 //
 // This is a placeholder, not a pattern to copy into a real deployment: a
 // real SubjectResolver must derive the caller from a source the server
@@ -314,14 +316,16 @@ const demoOrgUserHeader = "X-Demo-User-Id"
 // requirement.
 type demoOrgSubjectResolver struct{}
 
-// Subject implements org.SubjectResolver.
+// Subject implements org.SubjectResolver and notes.SubjectResolver.
 func (demoOrgSubjectResolver) Subject(r *http.Request) (string, bool) {
 	userID := r.Header.Get(demoOrgUserHeader)
 	return userID, userID != ""
 }
 
-// compile-time check that demoOrgSubjectResolver satisfies org.SubjectResolver.
+// compile-time checks that demoOrgSubjectResolver satisfies the identical
+// SubjectResolver seam both org and notes declare.
 var _ org.SubjectResolver = demoOrgSubjectResolver{}
+var _ notes.SubjectResolver = demoOrgSubjectResolver{}
 
 // orgFeatureGate adapts a *config.Service that is filled in AFTER this
 // app's org.Module is constructed into org.FeatureGate, read lazily -- the
@@ -727,7 +731,14 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return nil, nil, fmt.Errorf("reference-app: build the authn module: %w", err)
 	}
 
-	notesModule := notes.NewModule(db)
+	// notes' creator seam is demoOrgSubjectResolver, the same resolver org's
+	// caller-scoped endpoints use: notes' create handler reads the creating
+	// user's id through it and stamps it on the note and the event it
+	// publishes (internal/notes module.go's NoteCreatedPayload), so an
+	// unwired resolver -- NewModule's default -- would fail every create
+	// closed, with notes.subject_unresolved (see internal/notes handler.go's
+	// ErrSubjectUnresolved).
+	notesModule := notes.NewModule(db, notes.WithSubjectResolver(demoOrgSubjectResolver{}))
 
 	// auditModule is go/dbkit/audit's persister. It shares notesModule's
 	// own database connection -- no new infra dependency is needed for

@@ -69,6 +69,21 @@ var ErrTextTooLong = apperr.Invalid("notes.text_too_long")
 // that is not itself an *apperr.Error -- see writeError.
 var errInternal = apperr.Internal("notes.internal_error")
 
+// ErrSubjectUnresolved is returned when a create-note request cannot be
+// attributed to a user: no SubjectResolver is wired, or the wired resolver
+// could not name the request's creator. NotesCreateNote needs the creator's
+// user id to carry in the note-created event it publishes (see
+// NoteCreatedPayload.CreatorUserID), so an unattributable request is
+// refused with a 401 before any note is created -- never served an empty
+// or invented creator -- mirroring the rule org's own SubjectResolver seam
+// documents ("a resolver that returns ok=false -- or is not wired at all
+// -- fails every endpoint closed"; see the SubjectResolver declaration at
+// the bottom of this file). Its localized text lives in this module's
+// Locales() resources (locales/{zh-CN,en-US}.toml, key
+// "notes.subject_unresolved"), never hardcoded here -- see ErrTextRequired's
+// doc comment for the same rule.
+var ErrSubjectUnresolved = apperr.Unauthorized("notes.subject_unresolved")
+
 // Handler serves notes' HTTP endpoints by implementing the spec-generated
 // api.ServerInterface (see api/notes-server.gen.go, regenerated from this
 // module's api/openapi.yaml by task api:gen -- the compile-time assertion
@@ -84,12 +99,23 @@ type Handler struct {
 	repo         *Repository
 	bus          pkgcore.EventBus
 	auditActions pkgcore.AuditActionRegistrar
-	mux          *http.ServeMux
+	// subject answers "who created this note" for NotesCreateNote -- the
+	// creator's user id travels in the note-created event (see
+	// NoteCreatedPayload.CreatorUserID) so a subscriber such as the
+	// notification module can route to the right recipient. Nil means
+	// unwired: NotesCreateNote then refuses every request with
+	// ErrSubjectUnresolved (see resolveSubject).
+	subject SubjectResolver
+	mux     *http.ServeMux
 }
 
 // NewHandler returns a Handler serving repo's notes, publishing
 // EventNoteCreated on bus and recording an AuditEvent through
 // audit.Emit (validated against auditActions) whenever a note is created.
+// subject resolves the creating user for each create request (see
+// SubjectResolver at the bottom of this file); nil fails every
+// NotesCreateNote closed with ErrSubjectUnresolved -- never an invented
+// creator in the published event.
 // bus may be nil, in which case creating the note still succeeds but
 // nothing is published -- see the NotesCreateNote method. auditActions
 // must not be nil when bus is non-nil: NotesCreateNote calls audit.Emit
@@ -111,8 +137,8 @@ type Handler struct {
 // before. The spec's path and module.go's apiPath (the mount point, and
 // the path tests request) must keep agreeing -- see apiPath's doc
 // comment in module.go.
-func NewHandler(repo *Repository, bus pkgcore.EventBus, auditActions pkgcore.AuditActionRegistrar) *Handler {
-	h := &Handler{repo: repo, bus: bus, auditActions: auditActions}
+func NewHandler(repo *Repository, bus pkgcore.EventBus, auditActions pkgcore.AuditActionRegistrar, subject SubjectResolver) *Handler {
+	h := &Handler{repo: repo, bus: bus, auditActions: auditActions, subject: subject}
 	h.mux = http.NewServeMux()
 	api.HandlerFromMux(h, h.mux)
 	return h
@@ -158,6 +184,20 @@ func (h *Handler) NotesCreateNote(w http.ResponseWriter, r *http.Request) {
 	// itself cannot do this at its own layer.
 	obs.AnnotateTenant(ctx)
 
+	// The creator is resolved up front, before the body is even read: the
+	// creator's user id is a required ingredient of the event NotesCreateNote
+	// publishes below (see NoteCreatedPayload.CreatorUserID), so a request
+	// no resolver can attribute is refused with 401 here -- before any
+	// validation, before any side effect -- never half-processed. Like the
+	// tenant, the creator never comes from the request body: it is resolved
+	// exclusively through the host's SubjectResolver seam (see its
+	// declaration at the bottom of this file), which in a real deployment
+	// reads the caller's identity from whatever the server itself verified.
+	creatorUserID, ok := h.resolveSubject(w, r)
+	if !ok {
+		return
+	}
+
 	var req api.NotesCreateNoteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, apperr.Invalid("notes.invalid_request_body").WithCause(err))
@@ -181,7 +221,7 @@ func (h *Handler) NotesCreateNote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.recordNoteCreatedAudit(ctx, note)
-	h.publishNoteCreated(ctx, tenant, note)
+	h.publishNoteCreated(ctx, tenant, note, creatorUserID)
 
 	// obs.FromContext(ctx) attaches tenant_id (and trace_id/span_id, once
 	// this request's span carries an active one) automatically -- see
@@ -193,6 +233,29 @@ func (h *Handler) NotesCreateNote(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", jsonContentType)
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(toNoteResponse(note))
+}
+
+// resolveSubject resolves the HTTP caller's user id through the host's
+// SubjectResolver seam (declared at the bottom of this file), refusing
+// with ErrSubjectUnresolved -- a 401 -- when no resolver is wired, when
+// the resolver cannot attribute the request, or when it returns an empty
+// user id: an empty id is treated exactly like no id, so a seam bug can
+// never smuggle an empty creator into the published event. It is the
+// handler's one and only source of the creator: neither the request body,
+// a header read here, nor the context ever names the creator directly
+// (only the seam -- which the host may of course back with whatever it
+// verifies -- may).
+func (h *Handler) resolveSubject(w http.ResponseWriter, r *http.Request) (string, bool) {
+	if h.subject == nil {
+		writeError(w, ErrSubjectUnresolved)
+		return "", false
+	}
+	userID, ok := h.subject.Subject(r)
+	if !ok || userID == "" {
+		writeError(w, ErrSubjectUnresolved)
+		return "", false
+	}
+	return userID, true
 }
 
 // recordNoteCreatedAudit records an AuditEvent for note's creation through
@@ -246,13 +309,17 @@ func (h *Handler) recordNoteCreatedAudit(ctx context.Context, note *Note) {
 // publishNoteCreated publishes EventNoteCreated for note, using the
 // EventBus the Module obtained from the Registry at wiring time (see
 // module.go's Register) -- this is the "actual event publish happens
-// later, inside the handler" half of that split. A publish failure is
+// later, inside the handler" half of that split. creatorUserID is the
+// creating user's id resolveSubject resolved from the request (see
+// NotesCreateNote), and it is exactly the value subscribers need to route
+// the fact to the right recipient -- notification's UserAddressResolver
+// consults the same user id at dispatch time. A publish failure is
 // logged, not returned: the note itself was already committed by the time
 // this runs, so a subscriber's failure must not turn an otherwise
 // successful create into a 500 for the caller. See recordNoteCreatedAudit
 // above for the identical reasoning applied to this handler's other
 // log-not-return call.
-func (h *Handler) publishNoteCreated(ctx context.Context, tenant pkgcore.TenantID, note *Note) {
+func (h *Handler) publishNoteCreated(ctx context.Context, tenant pkgcore.TenantID, note *Note, creatorUserID string) {
 	if h.bus == nil {
 		return
 	}
@@ -260,8 +327,9 @@ func (h *Handler) publishNoteCreated(ctx context.Context, tenant pkgcore.TenantI
 		Type:     EventNoteCreated,
 		TenantID: tenant,
 		Payload: NoteCreatedPayload{
-			NoteID:   note.ID,
-			TenantID: string(tenant),
+			NoteID:        note.ID,
+			TenantID:      string(tenant),
+			CreatorUserID: creatorUserID,
 		},
 	}
 	if err := h.bus.Publish(ctx, evt); err != nil {
@@ -369,6 +437,38 @@ func writeError(w http.ResponseWriter, err error) {
 	w.Header().Set("Content-Type", jsonContentType)
 	w.WriteHeader(appErr.Status)
 	_ = json.NewEncoder(w).Encode(envelope)
+}
+
+// SubjectResolver is the seam that answers "who created this note" for
+// every create request NotesCreateNote serves. It is declared here -- in
+// the file whose only consumer (resolveSubject) reads it -- the way org
+// declares its own seam in org's handler package, and it is structurally
+// identical to org's SubjectResolver (and notification's, which declares
+// the same single method over stdlib types only): any type a host wired
+// for org's seam satisfies notes' too, and none of the modules imports
+// another.
+//
+// The implementation is the host's to supply: in the reference app, the
+// demo identity layer reads the demo acting user's id from the request
+// (cmd/server's demo_subject.go); in a host running the authn module,
+// whatever connects a verified principal to the request answers here. The
+// module itself never reads the creator's identity from a header, the
+// context or the request body, and it never imports an authenticating
+// module's types -- the seam is the whole of its knowledge of who its
+// callers are. NotesCreateNote is the only operation that resolves: notes
+// list without one, because listing needs no creator.
+//
+// A resolver that returns ok=false -- or is not wired at all -- fails
+// every create request closed with ErrSubjectUnresolved (see
+// resolveSubject): an unattributable request is refused, never served a
+// default user or an empty creator in the published event.
+type SubjectResolver interface {
+	// Subject returns the creating user's id for the request, and whether
+	// the request could be attributed to a user at all. A nil seam, a
+	// failing seam and a seam that cannot attribute the request all answer
+	// ok=false; the handler refuses with ErrSubjectUnresolved in every such
+	// case, and treats an empty user id the same as no user.
+	Subject(r *http.Request) (userID string, ok bool)
 }
 
 // compile-time check that *Handler implements the api.ServerInterface

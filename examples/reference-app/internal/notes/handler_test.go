@@ -21,6 +21,20 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
+// stubSubjectResolver is a fixed-answer SubjectResolver for handler tests:
+// NotesCreateNote reads the creating user's id through the seam, and these
+// tests exercise Handler in isolation from any real authenticating layer
+// (cmd/server's demoOrgSubjectResolver is the composed-stack equivalent),
+// so the stub simply answers userID with ok=true -- the exact value
+// newTestHandler's callers pin CreatorUserID assertions against.
+type stubSubjectResolver struct {
+	userID string
+}
+
+func (s stubSubjectResolver) Subject(r *http.Request) (string, bool) {
+	return s.userID, true
+}
+
 // newTestHandler returns a Handler backed by a freshly migrated SQLite
 // database and a real in-memory pkgcore.EventBus, so tests can assert on
 // both the HTTP response and the event actually published -- not a mock of
@@ -29,8 +43,20 @@ import (
 // exactly as module.go's Register does before ever constructing a Handler
 // -- not a hand-rolled fake -- so a test exercising audit.Emit's own
 // action-validation path (TestHandler_Create_ValidText_RecordsAuditEvent)
-// runs against the identical registrar shape production wiring uses.
+// runs against the identical registrar shape production wiring uses. The
+// SubjectResolver is a stub answering "test-creator", matching the caller
+// identity org's own handler tests stub with; newTestHandlerWithoutSubject
+// below is the deliberate nil-seam variant the fail-closed test needs.
 func newTestHandler(t *testing.T) (*Handler, pkgcore.EventBus) {
+	t.Helper()
+	return newTestHandlerWithSubject(t, stubSubjectResolver{userID: "test-creator"})
+}
+
+// newTestHandlerWithSubject is newTestHandler's parameterized core: the
+// resolver to hand NewHandler is the caller's choice, so the fail-closed
+// test can construct a Handler whose NotesCreateNote must refuse every
+// create request (see TestHandler_Create_UnresolvedSubject_ReturnsUnauthorized).
+func newTestHandlerWithSubject(t *testing.T, subject SubjectResolver) (*Handler, pkgcore.EventBus) {
 	t.Helper()
 	repo := newMigratedRepository(t)
 	bus := pkgcore.NewMemoryEventBus()
@@ -38,7 +64,7 @@ func newTestHandler(t *testing.T) (*Handler, pkgcore.EventBus) {
 	if err := reg.AuditActions.Add(AuditActionNoteCreate); err != nil {
 		t.Fatalf("declare %q on a fresh AuditActionRegistrar: %v", AuditActionNoteCreate, err)
 	}
-	return NewHandler(repo, bus, reg.AuditActions), bus
+	return NewHandler(repo, bus, reg.AuditActions, subject), bus
 }
 
 // doRequest issues req against h and returns the recorded response. When
@@ -108,6 +134,69 @@ func TestHandler_Create_ValidText_ReturnsCreatedNoteAndPublishesEvent(t *testing
 	}
 	if payload.TenantID != "tenant-acme" {
 		t.Fatalf("published event TenantID = %q, want %q", payload.TenantID, "tenant-acme")
+	}
+	// CreatorUserID is the value newTestHandler's stub resolver answered:
+	// subscribers (the notification module routing on the creator's address)
+	// read this field, so an empty or wrong creator here would strand the
+	// event with no route to a recipient.
+	if payload.CreatorUserID != "test-creator" {
+		t.Fatalf("published event CreatorUserID = %q, want %q", payload.CreatorUserID, "test-creator")
+	}
+}
+
+// TestHandler_Create_UnresolvedSubject_ReturnsUnauthorized pins NotesCreateNote's
+// fail-closed behaviour on the creator-resolver seam: a request whose user
+// the SubjectResolver cannot attribute (here, the seam deliberately left
+// nil -- the shape every unwired module ships, exactly what module.go's
+// WithSubjectResolver doc comment describes as the default) must be refused
+// with ErrSubjectUnresolved before any side effect: no note persisted, no
+// event published, no audit event recorded -- a creator-less note-created
+// fact would be undeliverable by any recipient-routing subscriber, so
+// producing one is worse than refusing the request.
+func TestHandler_Create_UnresolvedSubject_ReturnsUnauthorized(t *testing.T) {
+	h, bus := newTestHandlerWithSubject(t, nil)
+
+	var published []pkgcore.Event
+	bus.Subscribe(EventNoteCreated, func(ctx context.Context, evt pkgcore.Event) error {
+		published = append(published, evt)
+		return nil
+	})
+	var recorded []pkgcore.Event
+	bus.Subscribe(audit.EventRecorded, func(ctx context.Context, evt pkgcore.Event) error {
+		recorded = append(recorded, evt)
+		return nil
+	})
+
+	req := httptest.NewRequest(http.MethodPost, apiPath, strings.NewReader(`{"text":"buy milk"}`))
+	rec := doRequest(h, req, "tenant-acme")
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+	var got api.NotesError
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if got.Code == nil || *got.Code != ErrSubjectUnresolved.Code {
+		t.Fatalf("error code = %v, want %q", got.Code, ErrSubjectUnresolved.Code)
+	}
+
+	// The refusal must happen before the database is touched: resolving the
+	// subject is NotesCreateNote's first step, ahead of validation and
+	// Create -- a handler that created the note and then failed would leave
+	// a note behind with no event to account for it.
+	notes, err := h.repo.List(pkgcore.WithTenant(context.Background(), "tenant-acme"))
+	if err != nil {
+		t.Fatalf("list notes: %v", err)
+	}
+	if len(notes) != 0 {
+		t.Fatalf("got %d notes persisted for tenant-acme, want 0 (unresolved subject must be refused before Create)", len(notes))
+	}
+	if len(published) != 0 {
+		t.Fatalf("published %d notes.note.created events, want 0", len(published))
+	}
+	if len(recorded) != 0 {
+		t.Fatalf("recorded %d audit events, want 0", len(recorded))
 	}
 }
 

@@ -27,6 +27,18 @@ import (
 // policy default (go/authn/password.go) accepts it.
 const testPassword = "a perfectly fine passphrase"
 
+// demoNotesCreatorUserID is the X-Demo-User-Id header value the helpers that
+// create notes send on every request. X-Demo-User-Id is a different namespace
+// from X-Demo-User (demo_subject.go): the latter names the seeded rbac grant
+// the gate decides against (demo-owner and friends), while the former names
+// the user id notes' own SubjectResolver (demoOrgSubjectResolver in server.go)
+// attributes the CREATE to -- the value that lands in a note's CreatorUserID
+// and in the NoteCreatedPayload event every subscriber reads. The value is a
+// real-user-style id (org_flow_test's "user-owner-1" is the same shape), not
+// an rbac demo identity, exactly as a real deployment's access-token subject
+// claim would be.
+const demoNotesCreatorUserID = "user-creator-1"
+
 // testConfig returns a serverConfig backed by a fresh, per-test temp-file
 // SQLite database, so tests never share state and never touch a real file
 // outside t.TempDir(). Memberships is always a fresh, empty demoMemberships
@@ -161,11 +173,15 @@ type testListNotesResponse struct {
 // tenant a note is created under (registerAndAuthenticate's own doc
 // comment explains why Host does not).
 //
-// The demo user header is a different thing entirely and must not be
-// confused with the token: it names WHO is acting, which the rbac gate
-// needs (see demo_subject.go's demoUserHeader). demoOwnerUserID holds
-// every permission, so these two helpers exercise the happy path; the
-// tests that exercise the gate itself send other users, or none.
+// Two demo headers ride along, each naming a different thing:
+//
+//   - X-Demo-User names WHO is acting for the rbac gate (demo_subject.go's
+//     demoUserHeader). demoOwnerUserID holds every permission, so these two
+//     helpers exercise the happy path; the tests that exercise the gate
+//     itself send other users, or none.
+//   - X-Demo-User-Id names the creating user for notes' own SubjectResolver
+//     (demoOrgSubjectResolver in server.go) -- the value that lands in the
+//     note's CreatorUserID; see demoNotesCreatorUserID above.
 func createNoteAs(t *testing.T, srv *httptest.Server, token, text string) {
 	t.Helper()
 
@@ -181,6 +197,7 @@ func createNoteAs(t *testing.T, srv *httptest.Server, token, text string) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(demoUserHeader, demoOwnerUserID)
+	req.Header.Set(demoOrgUserHeader, demoNotesCreatorUserID)
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -287,6 +304,12 @@ func TestBuildServer_MultiTenantIsolation_EndToEnd(t *testing.T) {
 // returning the raw response for the caller to assert on. An empty user
 // sends no demo user header at all, which is how a request with a
 // resolvable tenant (the token) but no identity is expressed.
+//
+// A non-empty user additionally sends X-Demo-User-Id (demoNotesCreatorUserID):
+// a request that survives the rbac gate to reach notes' own create handler
+// must carry a creator the handler's SubjectResolver can attribute the note
+// to, and one the gate denies never gets that far -- so the two headers
+// travel together whenever any identity is present at all.
 func notesRequestAs(t *testing.T, srv *httptest.Server, method, token, user string, body io.Reader) *http.Response {
 	t.Helper()
 
@@ -299,6 +322,7 @@ func notesRequestAs(t *testing.T, srv *httptest.Server, method, token, user stri
 	}
 	if user != "" {
 		req.Header.Set(demoUserHeader, user)
+		req.Header.Set(demoOrgUserHeader, demoNotesCreatorUserID)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -820,7 +844,13 @@ func TestBuildServer_DistributedDeploymentMode_InjectedEventBus_StillFailsOnKV(t
 // token (empty means no Authorization header at all) and optional body,
 // returning the raw response for the caller to assert on -- unlike
 // createNoteAs/listNotesAs above, which assert success internally, this is
-// for tests that expect the request to be rejected.
+// mostly for tests that expect the request to be rejected.
+//
+// It always carries X-Demo-User-Id too (demoNotesCreatorUserID): one POST
+// caller -- the tenant-hint forgery test below -- expects 201 and reaches
+// notes' create handler, which resolves the creator through the same seam,
+// while every rejection here dies upstream of that handler, where the
+// additional header is inert.
 func notesRequest(t *testing.T, srv *httptest.Server, method, token string, body io.Reader) *http.Response {
 	t.Helper()
 
@@ -832,6 +862,7 @@ func notesRequest(t *testing.T, srv *httptest.Server, method, token string, body
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	req.Header.Set(demoUserHeader, demoOwnerUserID)
+	req.Header.Set(demoOrgUserHeader, demoNotesCreatorUserID)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
