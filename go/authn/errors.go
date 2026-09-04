@@ -48,6 +48,15 @@ var (
 	// canonical form.
 	ErrInvalidPhone = apperr.Invalid("authn.invalid_phone")
 
+	// ErrSearchCriteriaRequired is returned by SearchUsers when a
+	// UserSearchQuery names none of Email, Phone or DisplayNamePrefix. A
+	// query that could only ever mean "every user in the platform" is
+	// refused rather than silently answering it: SearchUsers is the
+	// platform-operator search entry point (see search.go), and an
+	// unbounded scan of every identity-domain user is never the intended
+	// operation behind an empty query.
+	ErrSearchCriteriaRequired = apperr.Invalid("authn.search_criteria_required")
+
 	// ErrEmailAlreadyRegistered is returned when a registration would
 	// collide with an existing account's email blind index.
 	ErrEmailAlreadyRegistered = apperr.Conflict("authn.email_already_registered")
@@ -269,6 +278,7 @@ var errorCodes = []string{
 	ErrIdentifierRequired.Code,
 	ErrInvalidEmail.Code,
 	ErrInvalidPhone.Code,
+	ErrSearchCriteriaRequired.Code,
 	ErrEmailAlreadyRegistered.Code,
 	ErrPhoneAlreadyRegistered.Code,
 	ErrPasswordTooShort.Code,

@@ -511,3 +511,43 @@ func ExampleNewHandler() {
 	// login status: 200
 	// sessions status: 200
 }
+
+// ExampleService_SearchUsers drives the platform-operator search entry
+// point D6 of docs/internal/23-admin.md adds: unlike FindByID/FindByEmail/
+// FindByPhone, which answer for one already-known identifier, SearchUsers
+// finds an account with no tenant in scope at all. authn itself performs no
+// authorization check here -- go/admin's HTTP handler is what gates this
+// call behind a platform permission such as admin:search_users before it
+// ever reaches this method.
+func ExampleService_SearchUsers() {
+	ctx := context.Background()
+	module, _ := exampleModule(ctx)
+	svc := module.Service()
+
+	if _, err := svc.Register(ctx, authn.RegisterInput{
+		Email: "search-demo@example.com", Password: "a perfectly fine passphrase",
+		DisplayName: "Search Demo",
+	}); err != nil {
+		panic(err)
+	}
+
+	byEmail, err := svc.SearchUsers(ctx, authn.UserSearchQuery{Email: "search-demo@example.com"})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("found by email:", len(byEmail), byEmail[0].DisplayName)
+
+	byPrefix, err := svc.SearchUsers(ctx, authn.UserSearchQuery{DisplayNamePrefix: "search"})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("found by prefix:", len(byPrefix))
+
+	_, err = svc.SearchUsers(ctx, authn.UserSearchQuery{})
+	fmt.Println("empty query error:", err)
+
+	// Output:
+	// found by email: 1 Search Demo
+	// found by prefix: 1
+	// empty query error: authn.search_criteria_required
+}

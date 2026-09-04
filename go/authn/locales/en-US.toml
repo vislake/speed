@@ -15,6 +15,7 @@
 "authn.invalid_credentials" = "The sign-in details are incorrect."
 "authn.identifier_required" = "Enter an email address or a phone number."
 "authn.invalid_email" = "That email address is not valid."
+"authn.search_criteria_required" = "Provide an email, a phone number, or a name prefix to search for."
 "authn.invalid_phone" = "That phone number is not valid."
 "authn.email_already_registered" = "An account already uses that email address."
 "authn.phone_already_registered" = "An account already uses that phone number."

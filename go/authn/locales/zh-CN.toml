@@ -13,6 +13,7 @@
 "authn.invalid_credentials" = "登录信息有误。"
 "authn.identifier_required" = "请输入邮箱地址或手机号。"
 "authn.invalid_email" = "邮箱地址格式不正确。"
+"authn.search_criteria_required" = "请提供邮箱、手机号或姓名前缀作为检索条件。"
 "authn.invalid_phone" = "手机号格式不正确。"
 "authn.email_already_registered" = "该邮箱地址已被注册。"
 "authn.phone_already_registered" = "该手机号已被注册。"

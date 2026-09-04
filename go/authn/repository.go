@@ -33,6 +33,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -194,6 +195,82 @@ func (r *UserRepository) FindByPhone(ctx context.Context, raw string) (*User, er
 		return nil, translate(err)
 	}
 	return &u, nil
+}
+
+// Search implements SearchUsers' data access: exactly one of q.Email,
+// q.Phone or q.DisplayNamePrefix is honored, in that precedence order (see
+// UserSearchQuery's own doc comment for why this is a single-criterion
+// lookup rather than a composed filter). It returns ErrSearchCriteriaRequired
+// when q names none of the three.
+//
+// The Email and Phone paths reuse the exact same blind-index equality
+// condition FindByEmail/FindByPhone build, so they can never return more
+// than one row and never confuse two accounts.
+//
+// The DisplayNamePrefix path is the one genuinely new query this method
+// adds: a case-insensitive prefix match written as a portable
+// LOWER(display_name) LIKE ? ESCAPE '\' condition, which runs unchanged on
+// both dialects (LOWER and LIKE...ESCAPE are ANSI SQL, not a
+// PostgreSQL-only feature). The prefix is lowercased and its own LIKE
+// metacharacters ('%', '_', '\') are escaped in Go before being bound as a
+// parameter, so a display name that happens to contain one of those
+// characters is searched for literally rather than as a wildcard -- unlike
+// org's node-id prefix scan, a person's display name is arbitrary text and
+// cannot be assumed free of them.
+func (r *UserRepository) Search(ctx context.Context, q UserSearchQuery) ([]User, error) {
+	switch {
+	case q.Email != "":
+		u, err := r.FindByEmail(ctx, q.Email)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		return []User{*u}, nil
+
+	case q.Phone != "":
+		u, err := r.FindByPhone(ctx, q.Phone)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		return []User{*u}, nil
+
+	case q.DisplayNamePrefix != "":
+		limit := q.Limit
+		if limit <= 0 {
+			limit = defaultSearchLimit
+		}
+		if limit > maxSearchLimit {
+			limit = maxSearchLimit
+		}
+		pattern := strings.ToLower(escapeLikePattern(q.DisplayNamePrefix)) + "%"
+		var users []User
+		err := r.db.WithContext(ctx).
+			Where("LOWER(display_name) LIKE ? ESCAPE '\\'", pattern).
+			Order("display_name").
+			Limit(limit).
+			Find(&users).Error
+		if err != nil {
+			return nil, err
+		}
+		return users, nil
+
+	default:
+		return nil, ErrSearchCriteriaRequired
+	}
+}
+
+// escapeLikePattern escapes the three characters that are special inside a
+// SQL LIKE pattern ('\', '%', '_') so raw is matched literally rather
+// than interpreted as wildcards. The backslash is escaped first, so
+// escaping the characters it introduces does not double-escape them.
+func escapeLikePattern(raw string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return replacer.Replace(raw)
 }
 
 // SessionRepository reads and writes the sessions table.
