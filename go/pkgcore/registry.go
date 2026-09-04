@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/vislake/speed/go/pkgcore/i18n"
 )
@@ -45,6 +46,10 @@ var ErrDuplicateEventType = errors.New("pkgcore: duplicate published event type"
 
 // ErrDuplicateAuditAction is returned when the same audit action is registered twice.
 var ErrDuplicateAuditAction = errors.New("pkgcore: duplicate audit action")
+
+// ErrDuplicateRetentionParticipant is returned when two RetentionParticipant
+// registrations share the same Name.
+var ErrDuplicateRetentionParticipant = errors.New("pkgcore: duplicate retention participant")
 
 // ErrDuplicateModuleName is returned when two modules in a bootstrap set report the same Name.
 var ErrDuplicateModuleName = errors.New("pkgcore: duplicate module name")
@@ -319,6 +324,90 @@ type AuditActionRegistrar interface {
 	Actions() []string
 }
 
+// SubjectRef identifies whose data a right-to-erasure request names: one
+// subject inside exactly one tenant. Both fields are mandatory -- an
+// erasure request with no tenant could never be scoped correctly by a
+// RetentionParticipant.Erase callback, whose own dbkit.Repository[T].
+// HardDelete stays strictly tenant-bound even past its system-context gate
+// (see go/dbkit's hard_delete.go), and an erasure request with no subject
+// has nothing to erase.
+type SubjectRef struct {
+	// TenantID is the tenant the subject belongs to.
+	TenantID TenantID
+	// SubjectID is the subject's identifier within TenantID -- typically a
+	// user id, in whatever form the registering participant's own model
+	// stores it as a foreign reference (an ID reference per this
+	// repository's cross-module-FK rule, never a struct import).
+	SubjectID string
+}
+
+// RetentionParticipant is one business module's contribution to compliance
+// orchestration: a Name plus callbacks a compliance-layer caller invokes --
+// never the other way around, and never compliance code touching the
+// participant's own table directly. Sweep hard-deletes the participant's
+// own model's soft-deleted rows past a cutoff for one tenant (the
+// retention-window sweep); Erase hard-deletes the participant's own rows
+// for one subject immediately, bypassing the retention window (a
+// right-to-erasure request); Export, optional, returns the participant's
+// own JSON-serializable data for one tenant (data-portability gathering).
+//
+// Every callback is expected to already carry its own safety: a
+// participant implements Sweep/Erase by calling its own
+// dbkit.Repository[T].HardDelete (already tenant-bound and
+// system-context-gated), rather than compliance reaching into another
+// module's table directly. This is why the registrar lives on
+// pkgcore.Registry rather than as a method compliance calls on some other
+// module's exported type: every business module above compliance in the
+// dependency graph can register a participant without compliance ever
+// importing it, and compliance never needs to import a business module's
+// own repository type either -- the same "no cross-module struct imports,
+// only ID references and callbacks" shape the rest of this codebase's
+// module-boundary rule already requires.
+type RetentionParticipant struct {
+	// Name identifies the participant for logging, audit records and
+	// duplicate-registration errors -- conventionally the owning module's
+	// own Name() plus the model, for example "notes.note".
+	Name string
+
+	// Sweep hard-deletes tenant's own soft-deleted rows whose deletion
+	// happened at or before cutoff, and reports how many rows it removed.
+	// It runs once per (tenant, participant) pair per sweep run, under a
+	// context that already carries both tenant and system context -- the
+	// participant's own dbkit.Repository[T].HardDelete calls read both
+	// straight from ctx, never from a parameter this signature would have
+	// to carry separately.
+	Sweep func(ctx context.Context, tenant TenantID, cutoff time.Time) (reaped int, err error)
+
+	// Erase immediately hard-deletes every row belonging to subject,
+	// bypassing the retention window entirely, and reports how many rows it
+	// removed. It runs under a context that already carries subject.
+	// TenantID and system context. A participant with no data for subject
+	// returns (0, nil) -- never an error -- so that re-running an erasure
+	// already partially applied elsewhere converges instead of failing
+	// forever; a genuine erasure failure (a transient database error, for
+	// example) is the only case that should return a non-nil err.
+	Erase func(ctx context.Context, subject SubjectRef) (erased int, err error)
+
+	// Export returns the participant's own JSON-serializable data for
+	// tenant, for the compliance data-export gathering step. Nil when the
+	// participant has not opted into export -- a nil Export is a legal,
+	// common value, not a misconfiguration.
+	Export func(ctx context.Context, tenant TenantID) (data any, err error)
+}
+
+// RetentionRegistrar collects the RetentionParticipant contributions
+// business modules register for compliance's retention-sweep,
+// right-to-erasure and data-export orchestration.
+type RetentionRegistrar interface {
+	// Add registers participants. It returns an error wrapping
+	// ErrDuplicateRetentionParticipant on a repeated Name. Nothing is
+	// registered when the call returns an error.
+	Add(participants ...RetentionParticipant) error
+	// Participants returns every registered participant, in registration
+	// order.
+	Participants() []RetentionParticipant
+}
+
 // Registry aggregates every registration surface a module can contribute to.
 // New cross-cutting mechanisms are added as a field here rather than as a
 // method on Module, so that adding one does not force all modules to
@@ -342,6 +431,11 @@ type Registry struct {
 	Events EventRegistrar
 	// AuditActions receives the audit action enumeration modules define.
 	AuditActions AuditActionRegistrar
+	// Retention receives the retention-sweep, right-to-erasure and
+	// data-export participants modules register (go/compliance's
+	// orchestration mechanism, still a stub module until this field's own
+	// implementing round).
+	Retention RetentionRegistrar
 
 	// kv is the KVStore the registry was built with. EventBus is derived from
 	// the Events registrar because Events.Subscribe must install handlers on
@@ -416,6 +510,7 @@ func NewRegistry(bus EventBus, kv KVStore, mailer Mailer) *Registry {
 		Notifications: &memoryNotificationRegistrar{keys: make(map[string]struct{})},
 		Events:        &memoryEventRegistrar{bus: bus, types: make(map[string]struct{})},
 		AuditActions:  &memoryAuditActionRegistrar{actions: make(map[string]struct{})},
+		Retention:     &memoryRetentionRegistrar{names: make(map[string]struct{})},
 		kv:            kv,
 		mailer:        mailer,
 	}
@@ -709,6 +804,35 @@ func (r *memoryAuditActionRegistrar) Actions() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Sorted(maps.Keys(r.actions))
+}
+
+// memoryRetentionRegistrar is the in-memory default implementation of
+// RetentionRegistrar, mirroring memoryNotificationRegistrar's exact shape
+// (a name-uniqueness map plus an append-only, registration-ordered slice).
+type memoryRetentionRegistrar struct {
+	mu    sync.Mutex
+	names map[string]struct{}
+	items []RetentionParticipant
+}
+
+func (r *memoryRetentionRegistrar) Add(participants ...RetentionParticipant) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	keyOf := func(p RetentionParticipant) string { return p.Name }
+	if err := checkUnique(r.names, participants, keyOf, ErrDuplicateRetentionParticipant); err != nil {
+		return err
+	}
+	for _, p := range participants {
+		r.names[p.Name] = struct{}{}
+		r.items = append(r.items, p)
+	}
+	return nil
+}
+
+func (r *memoryRetentionRegistrar) Participants() []RetentionParticipant {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.items)
 }
 
 // Kernel assembles modules into a running application for one deployment
