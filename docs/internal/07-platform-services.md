@@ -179,6 +179,16 @@ type VerifiedContact struct {
 - 同类通知的**聚合与限频**：短时间内的重复通知合并发送，避免把用户淹没（如批量导入失败不该发 500 封邮件）。
 - **每个发送通道各有多套实现**：邮件是 `ConsoleMailer` / SMTP，短信是控制台输出 / 各短信网关，推送同理。选哪套由装配决定，与部署成几个副本无关——单进程部署照样可以走真实 SMTP。站内信落库不依赖任何外部服务，在任何组装下都完全可用。
 
+**实现状态（2026-09-04，notification 模块轮）**：本节是目标设计；`go/notification` 已作为独立模块轮提前于 M2 计划窗口落地（排期注见 [15 里程碑](15-roadmap.md)），reference-app 端到端接入是第一个消费者（`cmd/server/notification_flow_test.go`）。逐项对照如下；能力边界、已知限制与延期项以 `go/notification/AGENTS.md` 为准：
+
+- **偏好矩阵**：核心机制已落地——`notification_preferences` 按类型 × 渠道存用户选择，`Set` 只接受活声明的类型与渠道（未知声明直接拒绝），`ResolveForDelivery` 对未设置的行缺省为类型默认值；安全类不可退订由声明的类型标记（声明不可退订的类型拒绝全关）保证。**"租户强制策略"中间层未落地**——没有管理员面，偏好优先级实际是两级（用户行 → 类型默认值）。
+- **通知类型注册表**：声明方在 `Register` 时经 `reg.Notifications.Add`（key、默认渠道、是否可退订）声明，taxonomy 是**活的注册表**、解析时读取而非冻结快照——发送前的合法性校验与偏好设置的校验共用同一份声明。文案模板不经通知模块存储：类型 key `<module>.<entity>.<action>` 的文案由**声明模块自己的双语资源**按 `<type_key>.<channel>.<part>` 约定提供（站内信 title/body、邮件 subject/body_text、短信 text），投递时按收件人 locale 从 host 合并的 i18n 目录渲染——与本节"注册表驱动偏好页自动渲染 / 文档自动生成"对应的前端与文档生成未落地，运营后台模板编辑亦未落地。
+- **两类收件人与外部联系人台账**：已落地且与设计一致——用户收件人的渠道地址是身份数据，由 host 经 `UserAddressResolver` seam 在投递时解析（模块无用户表）；外部联系人的地址与同意落在租户自己的 `verified_contacts`（加密落库 + 盲索引查询），两条同意路径齐备：`double_opt_in` 经验证码（代码哈希存于行上、验证消息是唯一允许发给未验证地址的消息、发送前于行上盖章再同步发出，`VerifyCode` 单赢家收敛在集成层以 PostgreSQL 腿证明——该比较并交换语义是 SQLite 串行化无法置于风险下的）、`business_attested` 要求 `ConsentRef`。`unsubscribed` 与 `bounced` 是终态，投递任务执行时二次校验状态。**平台级黑名单**：`platform_blacklist` 表与读路径（`IsBlacklisted`）已落地，**写者（投诉回调与投递硬失败腿）与恢复流程延期**；**类型级退订**（"这个类型不发"）、按联系人的 locale 协商亦在延期清单。
+- **站内信一等渠道**：已落地——`in_app_messages` 表（跳转链接、过期时间字段随模型）与未读计数、单个/全部标记已读、按类型筛选读取的 HTTP 面；实时推送是 SSE `GET /api/v1/notifications/stream`（行先落库、后发 `notification.inbox.created` 事件，订阅者可读回而不与写者竞争；模块 `Register` 订阅自己的该事件扇出给本副本的连接，多副本经总线扇出由集成层 Redis 腿证明）。前端 `@speed/notification-ui`（铃铛、未读角标、偏好矩阵页面）未交付，属 M2 的 web round。
+- **触发方式**：事件驱动原则照落地，但**接线在 host 而不是映射表订阅**——业务模块只声明类型、发领域事件；host 订阅自己的事件并调 `Deliveries().Dispatch`（notification 的 `Register` 只订阅自身的 inbox-created 事件），通知模块保持依赖图叶子位置，host 也因此能决定"什么事件发什么通知"而不改业务代码。**验证码例外**按设计只留给外部联系人验证消息（notification 自己同步发出）；`authn` 未依赖 notification——登录验证码走 authn 自己的短信发送器，设计正文"authn 对 notification 的依赖显式标注"未按原文落地。
+- **异步投递与发送记录**：已落地——一次 `Dispatch` 每个收件人每渠道一个 `jobs` 队列任务，渲染后投递；`send_records` 记录每次尝试（渠道、状态、耗时、错误、供应商回执 id——`provider_receipt_id` 列已留），投递键由业务事件 + 收件人 + 渠道派生，`UNIQUE (tenant_id, idempotency_key)` 限定记录集，尽力而至多一次的收敛以"先查记录、再尝试、再落账"实现。同类通知**聚合未落地**（与限频同属延期清单或后续轮，以 AGENTS.md 为准）。
+- **每通道多套实现**：站内信落库零外部依赖 ✓（任何组装可用）；邮件走 pkgcore `Mailer` seam（host 注入，`WithMailFrom` 必填）；短信是包内 `SMSSender` seam 的 `NewConsoleSMSSender`（单进程装配与测试双用）——短信升格为 pkgcore 级 seam（连同 authn 的 HTTP 发送器进 seam registry）在延期清单。
+
 ## 对外集成：API 开放与外发 Webhook（integration）
 
 **API Key 与限流**
