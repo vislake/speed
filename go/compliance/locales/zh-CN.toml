@@ -1,0 +1,22 @@
+# compliance 的消息包,简体中文。
+#
+# 每条 go/compliance/errors.go 声明的错误码对应一条扁平的顶层条目,id 就是带引号的
+# 完整错误码。en-US.toml 必须携带完全相同的 id 集合。
+
+"compliance.queue_required" = "compliance 模块注册前必须先接入任务队列(WithQueue)。"
+
+"compliance.tenant_lister_required" = "要让一次定时任务扫遍所有租户,必须先接入租户列举器(WithTenantLister)。"
+
+"compliance.config_service_required" = "要解析某个租户自定义的保留期限,必须先接入配置服务(WithConfigService)。"
+
+"compliance.audit_record_failed" = "操作本身已完成,但对应的审计记录写入失败,需要人工介入处理。"
+
+"compliance.audit_query_requires_system_context" = "跨租户查询审计事件需要系统上下文。"
+
+"compliance.empty_subject_ref" = "发起擦除请求必须同时指定租户与主体。"
+
+"compliance.sweep_partial_failure" = "本次保留期清理中至少有一个参与方失败,详情见清理结果。"
+
+"compliance.erasure_partial_failure" = "本次擦除请求中至少有一个参与方失败,详情见擦除结果。"
+
+"compliance.export_partial_failure" = "本次导出中至少有一个参与方未能提供数据,详情见导出清单。"

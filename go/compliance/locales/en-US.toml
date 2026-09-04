@@ -1,0 +1,23 @@
+# compliance's message bundle, American English.
+#
+# One flat top-level entry per error code go/compliance/errors.go
+# declares; the id is the whole quoted code. zh-CN.toml must carry exactly
+# the same id set.
+
+"compliance.queue_required" = "A jobs queue must be wired (WithQueue) before the compliance module can register."
+
+"compliance.tenant_lister_required" = "A tenant lister must be wired (WithTenantLister) before every tenant can be swept from one scheduled task."
+
+"compliance.config_service_required" = "A config service must be wired (WithConfigService) to resolve a tenant's retention-window override."
+
+"compliance.audit_record_failed" = "The operation completed, but its audit record failed to write; this needs manual attention."
+
+"compliance.audit_query_requires_system_context" = "Querying audit events across tenants requires a system context."
+
+"compliance.empty_subject_ref" = "An erasure request must name both a tenant and a subject."
+
+"compliance.sweep_partial_failure" = "At least one participant failed during the retention sweep; see the sweep result for details."
+
+"compliance.erasure_partial_failure" = "At least one participant failed during the erasure request; see the erasure result for details."
+
+"compliance.export_partial_failure" = "At least one participant failed to contribute data to the export; see the export manifest for details."
