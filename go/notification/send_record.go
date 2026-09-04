@@ -81,13 +81,14 @@ const (
 // one of RecipientUserID / ContactID names the recipient (the other stays
 // the empty-string sentinel), Channel is a channel key, Status one of the
 // SendRecordStatus* values, DurationMs the transport call's wall time, and
-// Error a truncated transport message on failed records -- never a stack
-// trace, never a PII payload. IdempotencyKey is the derived delivery key
-// (delivery.go's deriveDeliveryKey) that makes the whole record a
-// replay-checkable unit. ProviderReceiptID is reserved for the transport
-// provider's own message id (SES's message id, say), which no transport in
-// this round returns; the column exists so a later transport round does
-// not migrate.
+// Error the attempt's outcome text -- the raw cause text on failed
+// records, a short reason on skipped ones, the empty-string sentinel on
+// succeeded ones (the field's comment spells the contents out).
+// IdempotencyKey is the derived delivery key (delivery.go's
+// deriveDeliveryKey) that makes the whole record a replay-checkable unit.
+// ProviderReceiptID is reserved for the transport provider's own message
+// id (SES's message id, say), which no transport in this round returns;
+// the column exists so a later transport round does not migrate.
 type SendRecord struct {
 	// ID is an application-generated UUID, never a database-generated one.
 	ID string `gorm:"column:id;primaryKey;size:36"`
@@ -121,11 +122,14 @@ type SendRecord struct {
 	// attempt never reached the transport.
 	DurationMs int64 `gorm:"column:duration_ms;not null"`
 
-	// Error is a truncated transport message on failed records, a short
-	// reason on skipped records (delivery.go's skipReason* constants), the
-	// empty-string sentinel otherwise -- never a stack trace, never a PII
-	// payload. Truncation happens at the write site, to the column's
-	// 4000-char budget.
+	// Error is the attempt's outcome text: the raw text of the cause error
+	// on failed records (a transport message, a render failure, a host-seam
+	// error -- the wrap sites may interpolate identifiers such as a user
+	// id, so the text is not a sanitized payload and operators treat it as
+	// untrusted diagnostic text), a short reason on skipped records
+	// (delivery.go's skipReason* constants), the empty-string sentinel
+	// otherwise -- never a stack trace. Truncation happens at the write
+	// site, to the column's 4000-char budget.
 	Error string `gorm:"column:error;size:4000;not null"`
 
 	// ProviderReceiptID is the transport provider's own message id, empty
