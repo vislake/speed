@@ -31,7 +31,6 @@
 -- disk are AES-256-GCM output and a database backup leaks no addresses.
 -- The column type is the dialect's binary type -- this is the one place
 -- the file differs from its sqlite/ sibling (BYTEA here, BLOB there);
--- every other line is byte-identical.
 -- every other line is byte-identical. address_index is the HMAC-SHA256
 -- blind index of the canonical address form (dbkit.NewBlindIndexer over
 -- dbkit.NormalizeEmail / NormalizePhoneE164), the only form of the address
