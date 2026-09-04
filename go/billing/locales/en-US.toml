@@ -1,0 +1,34 @@
+# billing's message bundle, American English.
+#
+# One flat top-level entry per error code go/billing/errors.go declares;
+# the id is the whole quoted code. zh-CN.toml must carry exactly the same
+# id set.
+#
+# Interpolated names are the error's own apperr parameter keys, verbatim
+# and snake_case: the message is rendered from the structured parameters
+# the API returned, so a mismatch between the two would render an empty
+# slot rather than a value.
+
+"billing.plan_not_found" = "No plan was found for key \"{{.key}}\"."
+
+"billing.plan_key_required" = "A plan must have a key."
+
+"billing.duplicate_plan_key" = "A plan already exists for tenant \"{{.tenant_id}}\" with key \"{{.key}}\"."
+
+"billing.subscription_not_found" = "No subscription was found with id \"{{.id}}\"."
+
+"billing.invalid_subscription_transition" = "A subscription cannot move from \"{{.from}}\" to \"{{.to}}\"."
+
+"billing.invoice_not_found" = "No invoice was found with id \"{{.id}}\"."
+
+"billing.invalid_amount" = "Amount {{.amount}} is invalid; it must be a positive number."
+
+"billing.idempotency_key_required" = "An idempotency key is required."
+
+"billing.insufficient_credits" = "The tenant's available credit balance cannot cover {{.amount}} credits."
+
+"billing.credit_transaction_not_found" = "No pending credit transaction was found for idempotency key \"{{.idempotency_key}}\"."
+
+"billing.credit_transaction_already_resolved" = "Credit transaction \"{{.idempotency_key}}\" was already resolved as \"{{.status}}\"."
+
+"billing.credit_balance_inconsistent" = "The credit balance for transaction \"{{.idempotency_key}}\" is inconsistent with its ledger entry."
