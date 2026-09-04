@@ -79,14 +79,20 @@ const (
 	// different namespace from X-Demo-User (the header this file's earlier
 	// const names): the latter names the seeded rbac grant the gate
 	// decides against (demo-owner and friends above), while the former
-	// names the user id notes' own SubjectResolver (demoOrgSubjectResolver
+	// names the user id notes' own SubjectResolver (demoNotesSubjectResolver
 	// in server.go) attributes the CREATE to -- the value that lands in a
 	// note's CreatorUserID and in the NoteCreatedPayload event every
 	// subscriber reads. The value is a real-user-style id (org_flow_test's
 	// "user-owner-1" is the same shape), not an rbac demo identity, exactly
 	// as a real deployment's access-token subject claim would be -- which
-	// is also why demo_notification.go's address table keys on it: it is
-	// the only user id a note-created event can name in this app.
+	// is also why demo_notification.go's address table keys on it: every
+	// note-created event this app's own flow helpers publish names it. An
+	// event can instead name a seeded account's real user id, when the
+	// account acts through its access token with no demo header at all --
+	// demoNotesSubjectResolver falls back to the verified Principal, the
+	// same fallback the rbac gate's demoSubjectResolver makes -- and that
+	// id, absent from the address table, resolves to no addresses: an
+	// ordinary miss, never an error.
 	demoNotesCreatorUserID = "user-creator-1"
 
 	// demoSingleTenantUserID holds demoReaderRoleKey in ONE tenant only,
@@ -189,8 +195,11 @@ const notificationRoutePath = "/api/v1/notifications"
 // notification's path is routePublic for the same structural reason org's
 // and authn's are: notification.Handler resolves and requires its own
 // caller identity per operation through SubjectResolver
-// (demoOrgSubjectResolver in server.go -- the same seam instance org and
-// notes use, its comment naming all three modules it serves). Every one
+// (demoOrgSubjectResolver in server.go -- the same seam instance org's
+// own caller-scoped endpoints use; notes' create handler resolves through
+// its own demoNotesSubjectResolver, which additionally accepts the
+// verified Principal, its comment saying why notes alone gets that
+// second source). Every one
 // of the module's operations, the realtime stream included, refuses an
 // unidentifiable caller with ErrSubjectUnresolved; the module declares no
 // permissions at all -- its endpoints are a user's own inbox, contacts

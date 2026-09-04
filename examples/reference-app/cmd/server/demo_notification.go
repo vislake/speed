@@ -55,18 +55,25 @@ import (
 // demoUserAddresses maps the demo user ids this app's flows act as (see
 // demo_subject.go's demo user constants and demoNotesCreatorUserID) to the
 // outbound addresses a real host would hold in its own address store. The
-// map is this app's stand-in for that store -- and nothing more: demo users
-// exist only as header values, so there is no address table to read.
+// map is this app's stand-in for that store -- and nothing more: the users
+// this app's own flows act as exist only as header values, so there is no
+// address table to read.
 //
-// Only demoNotesCreatorUserID carries an email: it is the only demo user a
-// note-created event can name (notes' create handler resolves the creator
-// from the X-Demo-User-Id header, and every helper in the flow tests sends
-// demoNotesCreatorUserID), and the email is what lets a note-created
-// delivery reach the email channel. It carries no phone, which the flow
-// tests use deliberately: a user delivery whose SMS channel finds no phone
-// address is skipped with a recorded send record, never failed (see
-// UserAddresses' own doc comment). Every other demo user resolves to no
-// addresses -- an ordinary state, not an error.
+// Only demoNotesCreatorUserID carries an email: it is the only id a
+// note-created event this app's flow helpers publish can name (every
+// helper sends it as the X-Demo-User-Id header notes' create handler
+// attributes through), and the email is what lets a note-created delivery
+// reach the email channel. A note-created event can instead name a seeded
+// account's real user id, when the account acts through its access token
+// with no demo header -- demoNotesSubjectResolver's Principal fallback,
+// the shape of demo_users_test.go's own requests; that id has no entry
+// here, so its delivery resolves to no addresses, the same ordinary skip
+// as any other user with no addresses. demoNotesCreatorUserID carries no
+// phone,
+// which the flow tests use deliberately: a user delivery whose SMS channel
+// finds no phone address is skipped with a recorded send record, never
+// failed (see UserAddresses' own doc comment). Every other demo user
+// resolves to no addresses -- an ordinary state, not an error.
 var demoUserAddresses = map[string]notification.UserAddresses{
 	demoNotesCreatorUserID: {Email: "user-creator-1@demo.example"},
 }

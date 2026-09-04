@@ -183,7 +183,7 @@ type testListNotesResponse struct {
 //     helpers exercise the happy path; the tests that exercise the gate
 //     itself send other users, or none.
 //   - X-Demo-User-Id names the creating user for notes' own SubjectResolver
-//     (demoOrgSubjectResolver in server.go) -- the value that lands in the
+//     (demoNotesSubjectResolver in server.go) -- the value that lands in the
 //     note's CreatorUserID; see demoNotesCreatorUserID above.
 func createNoteAs(t *testing.T, srv *httptest.Server, token, text string) {
 	t.Helper()
@@ -309,10 +309,13 @@ func TestBuildServer_MultiTenantIsolation_EndToEnd(t *testing.T) {
 // resolvable tenant (the token) but no identity is expressed.
 //
 // A non-empty user additionally sends X-Demo-User-Id (demoNotesCreatorUserID):
-// a request that survives the rbac gate to reach notes' own create handler
-// must carry a creator the handler's SubjectResolver can attribute the note
-// to, and one the gate denies never gets that far -- so the two headers
-// travel together whenever any identity is present at all.
+// notes' create handler attributes the note through its own SubjectResolver
+// (demoNotesSubjectResolver in server.go), which reads that header first and
+// falls back to the verified Principal when no demo header is present -- so
+// the requests that carry a demo user carry the creator header the demo
+// flows were built around, while a token-only request (demo_users_test.go,
+// the seeded accounts acting as real users) is attributed through the
+// Principal instead.
 func notesRequestAs(t *testing.T, srv *httptest.Server, method, token, user string, body io.Reader) *http.Response {
 	t.Helper()
 

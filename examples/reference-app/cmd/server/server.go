@@ -335,14 +335,28 @@ var _ authn.MembershipReader = (*demoMemberships)(nil)
 const demoOrgUserHeader = "X-Demo-User-Id"
 
 // demoOrgSubjectResolver stands in for the SubjectResolver authn will
-// eventually supply from a verified access token's claims, serving all
-// three modules that declare the same structurally identical seam: org's
-// two caller-scoped endpoints (creating and accepting an invitation),
-// notes' create handler, which attributes the note to a creator through
-// it, and every notification endpoint, which resolves its caller's inbox,
-// contacts and preferences through it. It exists only so this reference
-// app has *some* way to demonstrate those endpoints end to end before
-// authn exists.
+// eventually supply from a verified access token's claims, serving the
+// two modules that declare the same structurally identical seam and keep
+// their caller identity header-only in this app: org's two caller-scoped
+// endpoints (creating and accepting an invitation) and every notification
+// endpoint, which resolves its caller's inbox, contacts and preferences
+// through it. It exists only so this reference app has *some* way to
+// demonstrate those endpoints end to end before authn exists.
+//
+// Who a caller is is the X-Demo-User-Id header value, and nothing else:
+// this resolver deliberately never falls back to the verified Principal
+// authn.Middleware leaves in the request context. The org-web round's own
+// rule governs -- an endpoint that resolves its caller from an
+// unauthenticated, client-supplied header is scaffold, and a browser
+// whose requests carry no demo header is refused until the resolver reads
+// a real token -- and this app's flows pinned that refusal as the
+// notification surface's identity gate (notification_flow_test.go's
+// subject-less leg; demoRouteGuards names the path routePublic for the
+// same reason): an authenticated caller with no demo header gets the
+// module's own per-operation 401 (notification.subject_unresolved and
+// org's sibling), never a fabricated user id. Notes' create handler is
+// the one seam that additionally accepts principals -- it resolves
+// through demoNotesSubjectResolver below, not through this type.
 //
 // This is a placeholder, not a pattern to copy into a real deployment: a
 // real SubjectResolver must derive the caller from a source the server
@@ -352,20 +366,69 @@ const demoOrgUserHeader = "X-Demo-User-Id"
 // requirement.
 type demoOrgSubjectResolver struct{}
 
-// Subject implements org.SubjectResolver, notes.SubjectResolver and
-// notification.SubjectResolver.
+// Subject implements org.SubjectResolver and notification.SubjectResolver.
+// It fails closed: no header reports ("", false), and the module's own
+// per-operation refusal (notification.subject_unresolved, org's sibling)
+// is what a caller then sees.
 func (demoOrgSubjectResolver) Subject(r *http.Request) (string, bool) {
 	userID := r.Header.Get(demoOrgUserHeader)
 	return userID, userID != ""
 }
 
 // compile-time checks that demoOrgSubjectResolver satisfies the identical
-// SubjectResolver seam all three of org, notes and notification declare.
+// SubjectResolver seam the two modules it serves declare.
 var (
 	_ org.SubjectResolver          = demoOrgSubjectResolver{}
-	_ notes.SubjectResolver        = demoOrgSubjectResolver{}
 	_ notification.SubjectResolver = demoOrgSubjectResolver{}
 )
+
+// demoNotesSubjectResolver is what notes' create handler resolves the
+// creating user from -- the notes.NewModule option buildServer wires
+// below. It is demoOrgSubjectResolver's behavior plus one source: like
+// its sibling it reads the X-Demo-User-Id header first, the attribution
+// affordance every flow helper in this package sends and the namespace
+// demo_notification.go's address table keys on; and only when no header
+// is present does it fall back to the verified Principal authn.Middleware
+// left in the request context. The fallback is what lets a browser-shaped
+// caller with no demo header create notes: the accounts demo_users.go
+// seeds (real users acting through their access tokens) are attributed
+// through it, exactly as they pass the rbac gate through demoSubjectResolver's
+// own fallback, and the note-created events their creates publish name
+// their real user ids -- which resolve to no notification addresses, an
+// ordinary skip (see demo_notification.go's demoUserAddresses).
+//
+// Only notes' creator seam gets this second source. Org's and the
+// notification module's caller-scoped endpoints keep demoOrgSubjectResolver's
+// header-only read -- notification because its subject-less refusal is a
+// pinned behaviour of this app's rig (see demoOrgSubjectResolver's own
+// comment), org because its browser-shaped flows are the org-web round's
+// work -- and a request that reaches those surfaces without the header
+// stays refused rather than acting as the principal's user id.
+//
+// This is a placeholder, not a pattern to copy into a real deployment:
+// the header is exactly as unverifiable here as in demoOrgSubjectResolver,
+// and a real deployment's resolver reads the creating user from the
+// verified token the notes create handler already stands behind.
+type demoNotesSubjectResolver struct{}
+
+// Subject implements notes.SubjectResolver. It fails closed: no header
+// and no Principal reports ("", false), and the module's own per-operation
+// refusal (notes.subject_unresolved) is what a caller then sees.
+func (demoNotesSubjectResolver) Subject(r *http.Request) (string, bool) {
+	userID := r.Header.Get(demoOrgUserHeader)
+	if userID == "" {
+		principal, ok := authn.PrincipalFromContext(r.Context())
+		if !ok || principal.UserID == "" {
+			return "", false
+		}
+		userID = principal.UserID
+	}
+	return userID, true
+}
+
+// compile-time check that demoNotesSubjectResolver satisfies notes' own
+// copy of the seam.
+var _ notes.SubjectResolver = demoNotesSubjectResolver{}
 
 // orgFeatureGate adapts a *config.Service that is filled in AFTER this
 // app's org.Module is constructed into org.FeatureGate, read lazily -- the
@@ -816,14 +879,18 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return nil, nil, fmt.Errorf("reference-app: build the authn module: %w", err)
 	}
 
-	// notes' creator seam is demoOrgSubjectResolver, the same resolver org's
-	// caller-scoped endpoints use: notes' create handler reads the creating
-	// user's id through it and stamps it on the note and the event it
-	// publishes (internal/notes module.go's NoteCreatedPayload), so an
-	// unwired resolver -- NewModule's default -- would fail every create
-	// closed, with notes.subject_unresolved (see internal/notes handler.go's
-	// ErrSubjectUnresolved).
-	notesModule := notes.NewModule(db, notes.WithSubjectResolver(demoOrgSubjectResolver{}))
+	// notes' creator seam is demoNotesSubjectResolver (declared above):
+	// notes' create handler reads the creating user's id through it and
+	// stamps it on the note and the event it publishes (internal/notes
+	// module.go's NoteCreatedPayload), so an unwired resolver -- NewModule's
+	// default -- would fail every create closed, with notes.subject_unresolved
+	// (see internal/notes handler.go's ErrSubjectUnresolved). The resolver
+	// reads the X-Demo-User-Id header first and falls back to the verified
+	// Principal only when no header is present -- the fallback that lets the
+	// seeded accounts of demo_users.go create notes through their access
+	// tokens alone (see its own doc comment, and demo_subject.go's
+	// demoNotesCreatorUserID).
+	notesModule := notes.NewModule(db, notes.WithSubjectResolver(demoNotesSubjectResolver{}))
 
 	// auditModule is go/dbkit/audit's persister. It shares notesModule's
 	// own database connection -- no new infra dependency is needed for
