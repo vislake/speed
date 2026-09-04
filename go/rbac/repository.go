@@ -186,6 +186,65 @@ func (r *RoleBindingRepository) Find(ctx context.Context, userID, roleID, nodeID
 	return &binding, nil
 }
 
+// findMostRecentlyRevoked returns the most recently mark-deleted binding
+// matching (userID, roleID, nodeID) inside the tenant ctx carries -- the
+// "undo my last revoke" row Service.RestoreRole needs.
+//
+// RoleBinding's soft-delete auto-scope plugin hides every mark-deleted row
+// from an ordinary Find (go/dbkit/soft_delete.go), so recovering one at all
+// needs db.Unscoped() -- GORM's own general query-scope bypass, which the
+// tenant-scope plugin does not consult (tenant_scope.go), so this read
+// stays fully tenant-scoped exactly like every other method in this file,
+// re-verified in Go afterwards the same defense-in-depth way
+// findWithinTenant is.
+//
+// More than one soft-deleted row can share this exact tuple: the partial
+// unique index (migrations/{postgres,sqlite}/0002_add_soft_delete.sql)
+// frees a revoked binding's slot immediately, so a
+// revoke-then-reassign-then-revoke-again sequence leaves TWO soft-deleted
+// rows under the identical (tenant, user, role, node) tuple, one from each
+// revoke. Ordering by deleted_at DESC picks the most recent one --
+// "restore exactly what I just revoked," never an earlier occupant of the
+// same scope -- with id DESC as a stable tiebreak for two rows revoked in
+// the same instant, since deleted_at alone gives no meaningful order there.
+//
+// It reports ErrBindingNotFound when no soft-deleted row matches: the tuple
+// was never granted, or every past grant at it is still live. That is the
+// same collapsed "nothing to restore" signal RevokeRole's own Find already
+// gives for "nothing to revoke".
+func (r *RoleBindingRepository) findMostRecentlyRevoked(ctx context.Context, userID, roleID, nodeID string) (*RoleBinding, error) {
+	tenant, err := pkgcore.MustTenantFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var rows []RoleBinding
+	err = dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.
+			Unscoped().
+			Where("user_id = ?", userID).
+			Where("role_id = ?", roleID).
+			Where("node_id = ?", nodeID).
+			Where("deleted_at IS NOT NULL").
+			Order("deleted_at DESC, id DESC").
+			Limit(1).
+			Find(&rows).Error
+	})
+	switch {
+	case errors.Is(err, pkgcore.ErrNoTenant):
+		return nil, err
+	case err != nil:
+		return nil, ErrStorage.WithCause(err)
+	}
+	if len(rows) == 0 || rows[0].GetTenantID() != tenant {
+		return nil, ErrBindingNotFound.
+			WithParam("role_id", roleID).
+			WithParam("node_id", nodeID)
+	}
+	binding := rows[0]
+	return &binding, nil
+}
+
 // CreateWithPermissions inserts a role and the permission rows it grants
 // in ONE tenant-scoped transaction, so a role never becomes visible
 // holding a partial permission set.

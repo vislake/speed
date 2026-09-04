@@ -326,8 +326,12 @@ func containsString(haystack []string, needle string) bool {
 }
 
 // onRoleBindingChanged is the subscriber Attach installs for
-// EventRoleBindingAssigned and EventRoleBindingRevoked. It drops the one
-// subject's cached grants, wherever in the deployment the change happened.
+// EventRoleBindingAssigned, EventRoleBindingRevoked and
+// EventRoleBindingRestored. It drops the one subject's cached grants,
+// wherever in the deployment the change happened -- a restore on one
+// replica must converge the others through this exact path, or they would
+// keep serving the stale "revoked" decision the earlier event cached until
+// the anti-loss TTL caught up.
 //
 // It never returns an error. On the in-memory bus this handler runs
 // synchronously inside the publishing AssignRole/RevokeRole call, so a

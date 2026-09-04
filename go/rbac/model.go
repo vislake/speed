@@ -161,6 +161,33 @@ type RoleBinding struct {
 
 	// CreatedAt is populated by gorm's autoCreateTime (see Role.CreatedAt).
 	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
+
+	// DeletedAt and DeletedBy are dbkit.SoftDeletable's required pair
+	// (go/dbkit/soft_delete.go): implementing that interface below is what
+	// makes dbkit.Repository[RoleBinding].Delete -- promoted unchanged and
+	// called by Service.RevokeRole -- a mark-delete instead of a physical
+	// DELETE, and what makes dbkit.Repository[RoleBinding].Restore -- and
+	// Service.RestoreRole, which wraps it -- meaningful for this model.
+	// Neither field is ever set by application code directly: both writes
+	// go through dbkit's own reflection-based field access, exactly as
+	// TenantID does.
+	//
+	// RoleBinding is the only one of this module's three models that
+	// adopted dbkit.SoftDeletable: it is the only one with a real
+	// delete-shaped operation to retrofit (RevokeRole's
+	// bindings.Delete(ctx, binding.ID) call) -- rbac.Role has no delete
+	// path at all today, so there is nothing on Role or RolePermission for
+	// mark-delete to change. See go/rbac/AGENTS.md's "Soft deletion"
+	// section for the full round.
+	//
+	// uq_rbac_role_bindings_tenant_user_role_node became a partial index
+	// scoped WHERE deleted_at IS NULL in the same migration that adds these
+	// two columns (migrations/{postgres,sqlite}/0002_add_soft_delete.sql),
+	// so a revoked binding's (tenant, user, role, node) tuple frees up
+	// immediately for a fresh AssignRole, instead of staying reserved by a
+	// row nobody can see.
+	DeletedAt *time.Time `gorm:"column:deleted_at"`
+	DeletedBy string     `gorm:"column:deleted_by;not null;default:''"`
 }
 
 // TableName pins RoleBinding to rbac_role_bindings.
@@ -171,6 +198,14 @@ func (RoleBinding) TableName() string { return "rbac_role_bindings" }
 // an incoming grant request, asked of a stored row.
 func (b RoleBinding) IsTenantWide() bool { return b.NodeID == "" }
 
+// GetDeletedAt returns RoleBinding's soft-delete marker, satisfying
+// dbkit.SoftDeletable. Like GetTenantID, this is never called by dbkit's
+// soft-delete auto-scope plugin or by Repository[RoleBinding] itself -- it
+// is a pure marker used only for the capability check that routes
+// dbkit.Repository[RoleBinding].Delete onto the mark-delete path; the
+// actual field writes go through reflection on fixed field names.
+func (b RoleBinding) GetDeletedAt() *time.Time { return b.DeletedAt }
+
 // Compile-time checks that all three models satisfy dbkit.TenantScoped, the
 // constraint dbkit.Repository[T] requires.
 var (
@@ -178,6 +213,11 @@ var (
 	_ dbkit.TenantScoped = RolePermission{}
 	_ dbkit.TenantScoped = RoleBinding{}
 )
+
+// Compile-time check that RoleBinding satisfies dbkit.SoftDeletable -- see
+// the DeletedAt/DeletedBy field comment above for why RoleBinding alone,
+// among this module's three models, carries this capability.
+var _ dbkit.SoftDeletable = RoleBinding{}
 
 // newID returns the primary key a new row in this module gets.
 //

@@ -92,10 +92,10 @@ func TestModule_Register_DeclaresItsEventsAndAuditActions(t *testing.T) {
 	}
 
 	published := reg.Events.Published()
-	if len(published) != 3 {
-		t.Fatalf("declared %d events, want 3", len(published))
+	if len(published) != 4 {
+		t.Fatalf("declared %d events, want 4", len(published))
 	}
-	wantTypes := []string{EventRoleBindingAssigned, EventRoleBindingRevoked, EventRoleChanged}
+	wantTypes := []string{EventRoleBindingAssigned, EventRoleBindingRevoked, EventRoleBindingRestored, EventRoleChanged}
 	for i, want := range wantTypes {
 		if published[i].Type != want {
 			t.Fatalf("event %d = %q, want %q", i, published[i].Type, want)

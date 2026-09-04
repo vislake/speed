@@ -206,6 +206,7 @@ func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
 	// path to get right rather than two that could drift.
 	reg.Events.Subscribe(EventRoleBindingAssigned, svc.onRoleBindingChanged)
 	reg.Events.Subscribe(EventRoleBindingRevoked, svc.onRoleBindingChanged)
+	reg.Events.Subscribe(EventRoleBindingRestored, svc.onRoleBindingChanged)
 	reg.Events.Subscribe(EventRoleChanged, svc.onRoleChanged)
 
 	m.service = svc

@@ -25,6 +25,16 @@ const (
 	// EventRoleBindingRevoked is published when such a grant is withdrawn.
 	EventRoleBindingRevoked = "rbac.role_binding.revoked"
 
+	// EventRoleBindingRestored is published when a previously withdrawn
+	// grant is restored through Service.RestoreRole, undoing exactly the
+	// mark-delete EventRoleBindingRevoked announced. It exists so that a
+	// restore on one replica converges the others through the bus exactly
+	// like a revoke already does: without it, a replica other than the one
+	// that called RestoreRole would keep answering from the cache entry
+	// EventRoleBindingRevoked invalidated, silently serving a stale
+	// "revoked" decision until its TTL expired.
+	EventRoleBindingRestored = "rbac.role_binding.restored"
+
 	// EventRoleChanged is published when a role's own definition changes --
 	// it is created, or the permissions it grants are edited. Every user
 	// bound to that role is affected, so subscribers invalidate by role
@@ -33,12 +43,13 @@ const (
 )
 
 const (
-	// eventRoleBindingPayloadType names the concrete payload both binding
-	// events carry, for EventDecl.PayloadType, so a subscriber (and the
-	// future event catalog) knows what to expect in Event.Payload without
-	// importing this package just to read a string. The two events share
-	// one payload shape because they describe the same fact in opposite
-	// directions.
+	// eventRoleBindingPayloadType names the concrete payload all three
+	// binding events carry, for EventDecl.PayloadType, so a subscriber (and
+	// the future event catalog) knows what to expect in Event.Payload
+	// without importing this package just to read a string. The three
+	// events share one payload shape because they describe the same fact
+	// (this user, this role, this scope) in different directions --
+	// granted, withdrawn, or a withdrawal undone.
 	eventRoleBindingPayloadType = "rbac.RoleBindingChangedEvent"
 
 	// eventRoleChangedPayloadType names EventRoleChanged's payload.
@@ -75,6 +86,11 @@ var eventDecls = []pkgcore.EventDecl{
 		Type:        EventRoleBindingRevoked,
 		PayloadType: eventRoleBindingPayloadType,
 		Description: "Published when a user's role grant is withdrawn.",
+	},
+	{
+		Type:        EventRoleBindingRestored,
+		PayloadType: eventRoleBindingPayloadType,
+		Description: "Published when a previously withdrawn role grant is restored.",
 	},
 	{
 		Type:        EventRoleChanged,

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
 )
@@ -35,7 +36,7 @@ func (r *eventRecorder) ofType(eventType string) []pkgcore.Event {
 // recordEvents subscribes a recorder to every event this module publishes.
 func recordEvents(reg *pkgcore.Registry) *eventRecorder {
 	rec := &eventRecorder{}
-	for _, eventType := range []string{EventRoleBindingAssigned, EventRoleBindingRevoked, EventRoleChanged} {
+	for _, eventType := range []string{EventRoleBindingAssigned, EventRoleBindingRevoked, EventRoleBindingRestored, EventRoleChanged} {
 		reg.Events.Subscribe(eventType, rec.record)
 	}
 	return rec
@@ -467,4 +468,252 @@ func TestService_RevokeRole_IncompleteSubject_IsRejected(t *testing.T) {
 	if !hasCode(err, ErrSubjectRequired.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrSubjectRequired.Code)
 	}
+}
+
+// TestService_RevokeRole_ThenAssignRole_SameScope_Succeeds is this round's
+// own proof that uq_rbac_role_bindings_tenant_user_role_node's partial
+// index (WHERE deleted_at IS NULL) actually narrows what counts, mirroring
+// go/org/tree_test.go's TestTreeService_Delete_ThenCreateChild_
+// SameSiblingName_Succeeds and membership_test.go's equivalent. Before this
+// round's migration the second AssignRole would have hit the FULL unique
+// index -- occupied forever by the revoked row -- and failed; a partial
+// index frees the (tenant, user, role, node) tuple the instant the row
+// becomes mark-deleted.
+func TestService_RevokeRole_ThenAssignRole_SameScope_Succeeds(t *testing.T) {
+	svc := newTestService(t)
+	ctx := tenantCtx("tenant-a")
+	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
+	grant(t, svc, sub, "reader", Scope{NodeID: "node-7"}, "notes:read")
+
+	if err := svc.RevokeRole(ctx, sub, "reader", Scope{NodeID: "node-7"}); err != nil {
+		t.Fatalf("RevokeRole: %v", err)
+	}
+	if err := svc.AssignRole(ctx, sub, "reader", Scope{NodeID: "node-7"}); err != nil {
+		t.Fatalf("AssignRole immediately after RevokeRole at the identical scope: %v", err)
+	}
+
+	bindings, err := svc.bindings.ByUser(ctx, sub.UserID)
+	if err != nil {
+		t.Fatalf("ByUser: %v", err)
+	}
+	if len(bindings) != 1 {
+		t.Fatalf("got %d live bindings after revoke-then-reassign, want exactly 1", len(bindings))
+	}
+	if ok, err := svc.Can(context.Background(), sub, "read", "notes"); err != nil || !ok {
+		t.Fatalf("Can after reassign = %v, %v; want the fresh grant to hold", ok, err)
+	}
+}
+
+// TestService_RestoreRole_UndoesTheRevokeAndAnnouncesIt is the round's core
+// mark-delete/restore lifecycle proof: revoke, verify the grant is gone
+// from the DECISION path (not merely from a raw repository read), restore,
+// then verify the grant is back with its original data intact and a
+// convergence event on the bus.
+func TestService_RestoreRole_UndoesTheRevokeAndAnnouncesIt(t *testing.T) {
+	svc, reg := newTestServiceWithRegistry(t)
+	ctx := tenantCtx("tenant-a")
+	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
+	grant(t, svc, sub, "reader", Scope{NodeID: "node-7"}, "notes:read")
+
+	if err := svc.RevokeRole(ctx, sub, "reader", Scope{NodeID: "node-7"}); err != nil {
+		t.Fatalf("RevokeRole: %v", err)
+	}
+	if ok, err := svc.Can(context.Background(), sub, "read", "notes"); err != nil || ok {
+		t.Fatalf("Can after revoke = %v, %v; want denied", ok, err)
+	}
+	if perms, err := svc.ListPermissions(context.Background(), sub); err != nil || len(perms) != 0 {
+		t.Fatalf("ListPermissions after revoke = %v, %v; want none", perms, err)
+	}
+
+	rec := recordEvents(reg)
+	if err := svc.RestoreRole(ctx, sub, "reader", Scope{NodeID: "node-7"}); err != nil {
+		t.Fatalf("RestoreRole: %v", err)
+	}
+
+	if ok, err := svc.Can(context.Background(), sub, "read", "notes"); err != nil || !ok {
+		t.Fatalf("Can after restore = %v, %v; want the grant back", ok, err)
+	}
+	bindings, err := svc.bindings.ByUser(ctx, sub.UserID)
+	if err != nil {
+		t.Fatalf("ByUser: %v", err)
+	}
+	if len(bindings) != 1 || bindings[0].NodeID != "node-7" {
+		t.Fatalf("restored bindings = %+v, want exactly one at node-7", bindings)
+	}
+
+	published := rec.ofType(EventRoleBindingRestored)
+	if len(published) != 1 {
+		t.Fatalf("published %d restored events, want 1", len(published))
+	}
+	payload := published[0].Payload.(RoleBindingChangedEvent)
+	if payload.UserID != "user-1" || payload.RoleKey != "reader" || payload.NodeID != "node-7" {
+		t.Fatalf("payload = %+v", payload)
+	}
+}
+
+// TestService_RestoreRole_NothingToRestore_IsReported mirrors
+// RevokeRole's own strictness: a tuple that was never granted has nothing
+// to restore, which is the identical "not found" fact RevokeRole's own
+// not-found path reports for "nothing to revoke".
+func TestService_RestoreRole_NothingToRestore_IsReported(t *testing.T) {
+	svc := newTestService(t)
+	ctx := tenantCtx("tenant-a")
+	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
+	if _, err := svc.DefineRole(ctx, RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
+		t.Fatalf("DefineRole: %v", err)
+	}
+
+	err := svc.RestoreRole(ctx, sub, "reader", Scope{})
+	if !hasCode(err, ErrBindingNotFound.Code) {
+		t.Fatalf("error = %v, want %s", err, ErrBindingNotFound.Code)
+	}
+}
+
+// TestService_RestoreRole_AlreadyLiveAtThisScope_IsANoOp is RestoreRole's
+// AssignRole-shaped idempotence, not RevokeRole's strictness: a live
+// binding already at this exact scope (here, because AssignRole re-granted
+// it after the revoke) means the desired end state already holds, so
+// RestoreRole must succeed without touching the row underneath -- an
+// attempted write would collide with the partial unique index instead.
+func TestService_RestoreRole_AlreadyLiveAtThisScope_IsANoOp(t *testing.T) {
+	svc, reg := newTestServiceWithRegistry(t)
+	ctx := tenantCtx("tenant-a")
+	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
+	grant(t, svc, sub, "reader", Scope{}, "notes:read")
+
+	if err := svc.RevokeRole(ctx, sub, "reader", Scope{}); err != nil {
+		t.Fatalf("RevokeRole: %v", err)
+	}
+	if err := svc.AssignRole(ctx, sub, "reader", Scope{}); err != nil {
+		t.Fatalf("AssignRole after revoke: %v", err)
+	}
+	live, err := svc.bindings.Find(ctx, sub.UserID, mustRoleID(t, svc, ctx, "reader"), "")
+	if err != nil {
+		t.Fatalf("Find: %v", err)
+	}
+
+	rec := recordEvents(reg)
+	if restoreErr := svc.RestoreRole(ctx, sub, "reader", Scope{}); restoreErr != nil {
+		t.Fatalf("RestoreRole while a live binding already occupies the scope: %v", restoreErr)
+	}
+
+	if got := len(rec.ofType(EventRoleBindingRestored)); got != 0 {
+		t.Fatalf("published %d restored events for a no-op, want 0", got)
+	}
+	after, err := svc.bindings.Find(ctx, sub.UserID, live.RoleID, "")
+	if err != nil {
+		t.Fatalf("Find after the no-op restore: %v", err)
+	}
+	if after.ID != live.ID {
+		t.Fatalf("the no-op restore touched the live binding: id changed from %q to %q", live.ID, after.ID)
+	}
+}
+
+// TestService_RestoreRole_RestoresTheMostRecentRevoke pins
+// findMostRecentlyRevoked's ordering: a revoke-then-reassign-then-revoke
+// sequence leaves TWO soft-deleted rows under the identical (tenant, user,
+// role, node) tuple, and RestoreRole must bring back the SECOND one --
+// "restore exactly what I just revoked" -- never the first, earlier
+// occupant of the same scope.
+func TestService_RestoreRole_RestoresTheMostRecentRevoke(t *testing.T) {
+	svc := newTestService(t)
+	ctx := tenantCtx("tenant-a")
+	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
+	grant(t, svc, sub, "reader", Scope{}, "notes:read")
+	roleID := mustRoleID(t, svc, ctx, "reader")
+
+	first, err := svc.bindings.Find(ctx, sub.UserID, roleID, "")
+	if err != nil {
+		t.Fatalf("Find (first): %v", err)
+	}
+	if revokeErr := svc.RevokeRole(ctx, sub, "reader", Scope{}); revokeErr != nil {
+		t.Fatalf("first RevokeRole: %v", revokeErr)
+	}
+	// A short, deterministic gap so the two revokes' deleted_at values are
+	// guaranteed distinct regardless of the underlying timestamp column's
+	// storage precision -- the ordering findMostRecentlyRevoked relies on.
+	time.Sleep(2 * time.Millisecond)
+
+	if assignErr := svc.AssignRole(ctx, sub, "reader", Scope{}); assignErr != nil {
+		t.Fatalf("AssignRole (reassign): %v", assignErr)
+	}
+	second, err := svc.bindings.Find(ctx, sub.UserID, roleID, "")
+	if err != nil {
+		t.Fatalf("Find (second): %v", err)
+	}
+	if second.ID == first.ID {
+		t.Fatalf("reassign reused the revoked row's id; the test setup is not exercising two distinct rows")
+	}
+	if revokeErr := svc.RevokeRole(ctx, sub, "reader", Scope{}); revokeErr != nil {
+		t.Fatalf("second RevokeRole: %v", revokeErr)
+	}
+
+	if restoreErr := svc.RestoreRole(ctx, sub, "reader", Scope{}); restoreErr != nil {
+		t.Fatalf("RestoreRole: %v", restoreErr)
+	}
+	restored, err := svc.bindings.Find(ctx, sub.UserID, roleID, "")
+	if err != nil {
+		t.Fatalf("Find after restore: %v", err)
+	}
+	if restored.ID != second.ID {
+		t.Fatalf("restored binding id = %q, want %q (the most recently revoked)", restored.ID, second.ID)
+	}
+}
+
+// TestService_RestoreRole_UnknownRole_IsRejected mirrors
+// TestService_AssignRole_UnknownRole_IsRejected: RestoreRole re-resolves
+// the role by key exactly the way AssignRole and RevokeRole both do.
+func TestService_RestoreRole_UnknownRole_IsRejected(t *testing.T) {
+	svc := newTestService(t)
+	err := svc.RestoreRole(tenantCtx("tenant-a"), Subject{TenantID: "tenant-a", UserID: "user-1"}, "ghost", Scope{})
+	if !hasCode(err, ErrRoleNotFound.Code) {
+		t.Fatalf("error = %v, want %s", err, ErrRoleNotFound.Code)
+	}
+}
+
+// TestService_RestoreRole_IncompleteSubject_IsRejected mirrors the
+// identical AssignRole/RevokeRole guard.
+func TestService_RestoreRole_IncompleteSubject_IsRejected(t *testing.T) {
+	svc := newTestService(t)
+	err := svc.RestoreRole(tenantCtx("tenant-a"), Subject{TenantID: "tenant-a"}, "reader", Scope{})
+	if !hasCode(err, ErrSubjectRequired.Code) {
+		t.Fatalf("error = %v, want %s", err, ErrSubjectRequired.Code)
+	}
+}
+
+// TestService_RestoreRole_AnotherTenantsBinding_IsNotFound mirrors
+// TestService_RevokeRole_AnotherTenantsBinding_IsNotFound: a soft-deleted
+// row in one tenant must never be restorable through another tenant's
+// context, exactly as tenancytest.AssertIsolated already requires for a
+// live row.
+func TestService_RestoreRole_AnotherTenantsBinding_IsNotFound(t *testing.T) {
+	svc := newTestService(t)
+	inA := Subject{TenantID: "tenant-a", UserID: "user-1"}
+	grant(t, svc, inA, "reader", Scope{}, "notes:read")
+	if err := svc.RevokeRole(tenantCtx("tenant-a"), inA, "reader", Scope{}); err != nil {
+		t.Fatalf("RevokeRole in tenant-a: %v", err)
+	}
+	// The same role key in tenant-b, so the lookup gets past the role and
+	// reaches the binding search: the binding is what must not be found.
+	if _, err := svc.DefineRole(tenantCtx("tenant-b"), RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
+		t.Fatalf("DefineRole in tenant-b: %v", err)
+	}
+
+	inB := Subject{TenantID: "tenant-b", UserID: "user-1"}
+	if err := svc.RestoreRole(tenantCtx("tenant-b"), inB, "reader", Scope{}); !hasCode(err, ErrBindingNotFound.Code) {
+		t.Fatalf("error = %v, want %s", err, ErrBindingNotFound.Code)
+	}
+}
+
+// mustRoleID resolves roleKey's id inside ctx's tenant, failing the test on
+// error. It exists so the RestoreRole tests above can address
+// svc.bindings.Find directly, which the module's own AssignRole/RevokeRole
+// do too, without repeating the ByKey call inline everywhere.
+func mustRoleID(t *testing.T, svc *Service, ctx context.Context, roleKey string) string {
+	t.Helper()
+	role, err := svc.roles.ByKey(ctx, roleKey)
+	if err != nil {
+		t.Fatalf("ByKey(%q): %v", roleKey, err)
+	}
+	return role.ID
 }

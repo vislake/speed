@@ -213,6 +213,7 @@ func TestEventDecls_MatchTheDeclaredTypesAndPayloads(t *testing.T) {
 	wantPayload := map[string]string{
 		EventRoleBindingAssigned: reflect.TypeOf(RoleBindingChangedEvent{}).String(),
 		EventRoleBindingRevoked:  reflect.TypeOf(RoleBindingChangedEvent{}).String(),
+		EventRoleBindingRestored: reflect.TypeOf(RoleBindingChangedEvent{}).String(),
 		EventRoleChanged:         reflect.TypeOf(RoleChangedEvent{}).String(),
 	}
 	if len(eventDecls) != len(wantPayload) {

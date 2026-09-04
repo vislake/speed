@@ -229,6 +229,53 @@ func TestRedisBus_RevokeOnOneReplica_ConvergesTheOther(t *testing.T) {
 	})
 }
 
+// TestRedisBus_RestoreOnOneReplica_ConvergesTheOther is
+// TestRedisBus_RevokeOnOneReplica_ConvergesTheOther's counterpart for
+// EventRoleBindingRestored: replica B has cached the revoked (denied)
+// decision, replica A restores the grant, and B must start granting it
+// again without waiting out its cache lifetime. Item 5 of this round's own
+// design record calls this a correctness requirement, not a nice-to-have --
+// a restore that only invalidated the writer's own local cache would leave
+// every other replica silently serving a stale "revoked" decision forever
+// (an hour, here), which is exactly the security failure this leg's sibling
+// test proves the revoke direction avoids.
+func TestRedisBus_RestoreOnOneReplica_ConvergesTheOther(t *testing.T) {
+	ctx := context.Background()
+	writer, peer, writerBus, peerBus := replicas(t, ctx)
+
+	spy := &eventSpy{}
+	peerBus.Subscribe(rbac.EventRoleChanged, spy.handler())
+	warmUp(t, writerBus, spy)
+
+	tenantCtx := tenantContext("tenant-a")
+	sub := rbac.Subject{TenantID: "tenant-a", UserID: "user-1"}
+	if _, err := writer.DefineRole(tenantCtx, rbac.RoleDefinition{
+		Key:            "reader",
+		DescriptionKey: "rbac.role.member",
+		Permissions:    []string{"notes:read"},
+	}); err != nil {
+		t.Fatalf("DefineRole: %v", err)
+	}
+	if err := writer.AssignRole(tenantCtx, sub, "reader", rbac.Scope{}); err != nil {
+		t.Fatalf("AssignRole: %v", err)
+	}
+	if err := writer.RevokeRole(tenantCtx, sub, "reader", rbac.Scope{}); err != nil {
+		t.Fatalf("RevokeRole: %v", err)
+	}
+
+	// The peer observes and caches the revoked (denied) decision first.
+	eventually(t, "the peer to observe the revoke", func() bool {
+		return !canRead(t, peer, sub, "notes", "read")
+	})
+
+	if err := writer.RestoreRole(tenantCtx, sub, "reader", rbac.Scope{}); err != nil {
+		t.Fatalf("RestoreRole: %v", err)
+	}
+	eventually(t, "the peer to observe the restored grant", func() bool {
+		return canRead(t, peer, sub, "notes", "read")
+	})
+}
+
 // TestRedisBus_AssignOnOneReplica_ConvergesTheOther is the widening
 // direction, which matters for a different reason: a user who was just
 // granted access and is told they have it must not be refused by whichever
