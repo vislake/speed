@@ -1,0 +1,28 @@
+# admin 的中文消息包。每个 id 在 en-US.toml 里都有完全对应的一份
+# （pkgcore/i18n 的 Builder.AddModule 在启动时强制校验一致性；
+# tools/check_i18n_keys.py 对原始文件做同样的校验）。这里包含两类 id：
+# 错误码描述（"admin.<reason>"，对应 errors.go 里的每个 *apperr.Error）
+# 以及 admin.impersonation_started 通知类型的双语模板
+# （"admin.impersonation_started.<channel>.<part>"，遵循
+# docs/internal/07-platform-services.md 的 id 约定）及其目录描述
+# （"admin.impersonation_started.description"）。
+"admin.tenant_not_found" = "未找到该租户的台账记录。"
+"admin.tenant_already_exists" = "该租户已存在台账记录。"
+"admin.tenant_id_required" = "必须提供租户 ID。"
+"admin.impersonation_grant_not_found" = "未找到该模拟登录授权凭据。"
+"admin.impersonation_reason_required" = "发起模拟登录必须填写原因。"
+"admin.impersonation_target_required" = "必须同时提供目标用户 ID 和目标租户 ID。"
+"admin.impersonation_self_not_allowed" = "不能对自己的账号发起模拟登录。"
+"admin.impersonation_grant_ended" = "该模拟登录授权已结束。"
+"admin.authn_service_required" = "本次部署缺少 authn 服务，跨租户用户检索不可用。"
+"admin.org_module_required" = "本次部署缺少 org 模块，成员身份组合查询不可用。"
+"admin.compliance_module_required" = "本次部署缺少 compliance 模块，审计检索不可用。"
+"admin.notification_module_required" = "本次部署缺少 notification 模块，模拟登录无法通知目标用户。"
+"admin.principal_required" = "该请求未携带已验证的身份。"
+"admin.internal" = "发生意外的内部错误。"
+
+"admin.impersonation_started.in_app.title" = "有管理员正在查看你的账号"
+"admin.impersonation_started.in_app.body" = "一名平台管理员对你的账号发起了模拟登录会话。如果你没有预期到这次操作，请联系客服。"
+"admin.impersonation_started.email.subject" = "有管理员正在查看你的账号"
+"admin.impersonation_started.email.body_text" = "一名平台管理员对你的账号发起了模拟登录会话，用于协助排查问题。如果你没有预期到这次操作，请联系客服。"
+"admin.impersonation_started.description" = "当平台管理员对某用户账号发起模拟登录会话时,发送给该用户的通知。这是一条强制性的安全类通知,不可退订。"

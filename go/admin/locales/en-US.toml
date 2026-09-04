@@ -1,0 +1,29 @@
+# admin's English message bundle. Every id here has an identical
+# counterpart in zh-CN.toml (pkgcore/i18n's Builder.AddModule enforces the
+# parity at bootstrap; tools/check_i18n_keys.py checks the same over the
+# raw files). Two id families live here: error-code descriptions
+# ("admin.<reason>", one per *apperr.Error in errors.go) and the
+# admin.impersonation_started notification type's bilingual templates
+# ("admin.impersonation_started.<channel>.<part>", per
+# docs/internal/07-platform-services.md's id convention) plus its
+# directory description ("admin.impersonation_started.description").
+"admin.tenant_not_found" = "No tenant ledger entry was found for this tenant id."
+"admin.tenant_already_exists" = "A tenant ledger entry already exists for this tenant id."
+"admin.tenant_id_required" = "A tenant id is required."
+"admin.impersonation_grant_not_found" = "No impersonation grant was found for this id."
+"admin.impersonation_reason_required" = "A reason is required to start an impersonation session."
+"admin.impersonation_target_required" = "A target user id and target tenant id are both required."
+"admin.impersonation_self_not_allowed" = "You cannot start an impersonation session against your own account."
+"admin.impersonation_grant_ended" = "This impersonation grant has already ended."
+"admin.authn_service_required" = "This deployment is missing its authn service; cross-tenant user search is unavailable."
+"admin.org_module_required" = "This deployment is missing its org module; membership composition is unavailable."
+"admin.compliance_module_required" = "This deployment is missing its compliance module; audit search is unavailable."
+"admin.notification_module_required" = "This deployment is missing its notification module; impersonation cannot notify its target."
+"admin.principal_required" = "This request carries no verified identity."
+"admin.internal" = "An unexpected internal error occurred."
+
+"admin.impersonation_started.in_app.title" = "An administrator is viewing your account"
+"admin.impersonation_started.in_app.body" = "A platform administrator started an impersonation session on your account. If you did not expect this, contact support."
+"admin.impersonation_started.email.subject" = "An administrator is viewing your account"
+"admin.impersonation_started.email.body_text" = "A platform administrator started an impersonation session on your account, to help diagnose an issue. If you did not expect this, contact support."
+"admin.impersonation_started.description" = "Sent to a user whenever a platform administrator starts an impersonation session against their account. This is a mandatory security notification and cannot be unsubscribed from."

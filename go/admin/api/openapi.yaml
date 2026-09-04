@@ -1,0 +1,518 @@
+openapi: 3.0.3
+info:
+  title: admin
+  description: >-
+    The operations-console backend: round 1 of docs/internal/23-admin.md --
+    the tenant ledger (D3, record-only), the impersonation pipeline (D5),
+    cross-tenant user search (D6) and the audit-query HTTP shell (D7's read
+    side). This fragment follows the operationId (admin_<action><Resource>)
+    and schema-name (Admin<Type>) conventions from
+    .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
+    regenerates admin-server.gen.go (in this directory) from this file, with
+    oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
+    .github/workflows/api-contract.yml.
+
+    Every operation here is a platform-operations action gated on a
+    rbac.SystemDomain permission (admin:access, admin:tenants_manage,
+    admin:search_users, admin:impersonate, admin:audit_read) -- it is
+    deliberately NOT downstream of the ordinary tenancy.Middleware tenant
+    resolution the way notes' or org's routes are, because these routes are
+    about tenants as data, not scoped to any one of them. The one exception
+    to "no ordinary tenant resolution" is impersonation's OWN downstream
+    effect on the REST of the application's routes, which is a request-
+    pipeline decorator (admin.ImpersonationMiddleware, pipeline.go) inserted
+    ahead of tenancy.Middleware for those other routes, not for admin's own.
+
+    Merging this fragment into the application-wide build/openapi/speed.yaml
+    stays future work, following storage's own precedent of shipping a
+    backend-only fragment first.
+  version: 0.0.0
+paths:
+  /api/v1/admin/tenants:
+    get:
+      operationId: admin_listTenants
+      summary: List the operator-facing tenant ledger (D3).
+      description: >-
+        Record-only: this ledger is an operator convenience, never the
+        authoritative source of tenant existence (see D3's own doc
+        comment in tenant_service.go).
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AdminTenantStatus'
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: The matching ledger rows.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminListTenantsResponse'
+    post:
+      operationId: admin_createTenant
+      summary: Manually register a tenant ledger row (D3's second population path).
+      description: >-
+        For pre-registering a tenant's name before any business write has
+        happened (for example, before an operator opens an account for a
+        new customer).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCreateTenantRequest'
+      responses:
+        '201':
+          description: The ledger row was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminTenant'
+        '400':
+          description: tenantId was empty.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminError'
+        '409':
+          description: A ledger row for this tenantId already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminError'
+  /api/v1/admin/tenants/{id}:
+    get:
+      operationId: admin_getTenant
+      summary: Read one tenant ledger row.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The ledger row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminTenant'
+        '404':
+          description: No ledger row exists for this tenant id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminError'
+    patch:
+      operationId: admin_updateTenant
+      summary: Rename, suspend or resume a tenant ledger row (D3 + D4's record-only half).
+      description: >-
+        Writing status=suspended here only records the ledger's opinion --
+        it does not, by itself, block a single request against the tenant.
+        D4, the enforcement seam, is round 2's work.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminUpdateTenantRequest'
+      responses:
+        '200':
+          description: The updated ledger row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminTenant'
+        '404':
+          description: No ledger row exists for this tenant id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminError'
+  /api/v1/admin/users:
+    get:
+      operationId: admin_searchUsers
+      summary: Cross-tenant user search (D6).
+      description: >-
+        Exactly one of email, phone or displayNamePrefix must be given, in
+        that precedence order when more than one is present -- see
+        authn.UserSearchQuery's own doc comment.
+      parameters:
+        - name: email
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: phone
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: displayNamePrefix
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: The matching users.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminSearchUsersResponse'
+        '400':
+          description: The query named none of email, phone or displayNamePrefix.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminError'
+  /api/v1/admin/users/{id}/memberships:
+    get:
+      operationId: admin_listUserMemberships
+      summary: List every tenant a user currently has an active membership in (D6 + D2).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The tenants this user belongs to.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminListUserMembershipsResponse'
+  /api/v1/admin/impersonation:
+    get:
+      operationId: admin_listImpersonationGrants
+      summary: List currently-active impersonation grants (D5's self-audit listing).
+      responses:
+        '200':
+          description: The active grants.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminListImpersonationGrantsResponse'
+    post:
+      operationId: admin_startImpersonation
+      summary: Start an impersonation session (D5).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminStartImpersonationRequest'
+      responses:
+        '201':
+          description: The grant was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminImpersonationGrant'
+        '400':
+          description: >-
+            reason was empty, targetUserId/targetTenantId was empty, or
+            targetUserId named the caller themselves.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminError'
+  /api/v1/admin/impersonation/{id}:
+    delete:
+      operationId: admin_endImpersonation
+      summary: End an impersonation session early (D5).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The ended grant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminImpersonationGrant'
+        '404':
+          description: No grant exists for this id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminError'
+        '409':
+          description: The grant was already ended.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminError'
+  /api/v1/admin/audit-events:
+    get:
+      operationId: admin_listAuditEvents
+      summary: Query the audit trail, single-tenant or cross-tenant (D7).
+      description: >-
+        A thin HTTP shell over compliance.AuditQuery -- see AuditService's
+        own doc comment. tenantId absent means "every tenant this operator
+        is entitled to see" (the cross-tenant, system-context-gated path);
+        present means the single-tenant path.
+      parameters:
+        - name: tenantId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: actor
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: resource
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: action
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: success
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: The matching audit events.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminListAuditEventsResponse'
+components:
+  schemas:
+    AdminTenantStatus:
+      type: string
+      enum: [active, suspended]
+    AdminTenant:
+      type: object
+      required: [tenantId, displayName, status, createdAt, createdBy, notes]
+      properties:
+        tenantId:
+          type: string
+        displayName:
+          type: string
+        status:
+          $ref: '#/components/schemas/AdminTenantStatus'
+        suspendedReason:
+          type: string
+        suspendedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+        notes:
+          type: string
+    AdminListTenantsResponse:
+      type: object
+      required: [tenants]
+      properties:
+        tenants:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminTenant'
+    AdminCreateTenantRequest:
+      type: object
+      required: [tenantId]
+      properties:
+        tenantId:
+          type: string
+        displayName:
+          type: string
+        notes:
+          type: string
+    AdminUpdateTenantRequest:
+      type: object
+      properties:
+        displayName:
+          type: string
+        status:
+          $ref: '#/components/schemas/AdminTenantStatus'
+        suspendedReason:
+          type: string
+        notes:
+          type: string
+    AdminUser:
+      type: object
+      required: [id, displayName]
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+    AdminSearchUsersResponse:
+      type: object
+      required: [users]
+      properties:
+        users:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminUser'
+    AdminListUserMembershipsResponse:
+      type: object
+      required: [tenantIds]
+      properties:
+        tenantIds:
+          type: array
+          items:
+            type: string
+    AdminImpersonationGrant:
+      type: object
+      required: [id, adminUserId, targetUserId, targetTenantId, reason, createdAt, expiresAt]
+      properties:
+        id:
+          type: string
+        adminUserId:
+          type: string
+        targetUserId:
+          type: string
+        targetTenantId:
+          type: string
+        reason:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        endedAt:
+          type: string
+          format: date-time
+          nullable: true
+        endedBy:
+          type: string
+    AdminListImpersonationGrantsResponse:
+      type: object
+      required: [grants]
+      properties:
+        grants:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminImpersonationGrant'
+    AdminStartImpersonationRequest:
+      type: object
+      required: [targetUserId, targetTenantId, reason]
+      properties:
+        targetUserId:
+          type: string
+        targetTenantId:
+          type: string
+        reason:
+          type: string
+        locale:
+          type: string
+    AdminAuditEvent:
+      type: object
+      required: [id, actorType, actorId, action, resourceType, resourceId, success, occurredAt]
+      properties:
+        id:
+          type: string
+        actorType:
+          type: string
+        actorId:
+          type: string
+        actorDisplayName:
+          type: string
+        onBehalfOfType:
+          type: string
+        onBehalfOfId:
+          type: string
+        action:
+          type: string
+        resourceType:
+          type: string
+        resourceId:
+          type: string
+        success:
+          type: boolean
+        failureReason:
+          type: string
+        tenantId:
+          type: string
+        occurredAt:
+          type: string
+          format: date-time
+    AdminListAuditEventsResponse:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminAuditEvent'
+    AdminError:
+      type: object
+      description: >-
+        The structured {code, params} error envelope every speed API
+        returns instead of localized text (backend coding standard §6.2;
+        docs/internal/11-cross-cutting.md).
+      properties:
+        code:
+          type: string
+          example: admin.tenant_not_found
+        params:
+          type: object
+          additionalProperties: true
