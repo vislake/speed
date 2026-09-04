@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"sync"
@@ -108,11 +109,15 @@ func WithOTLPInsecure(insecure bool) Option {
 	return func(c *Config) { c.OTLPInsecure = insecure }
 }
 
-// errOTLPExporterNotRegistered is what Init returns when a caller supplies
+// ErrOTLPExporterNotRegistered is what Init returns when a caller supplies
 // WithOTLPEndpoint but nothing has called RegisterOTLPExporters -- the
 // actionable fix it names is exactly what go/observability/exporter/otlp's
-// init() function does the moment a host blank-imports that subpackage.
-var errOTLPExporterNotRegistered = errors.New(`observability: OTLP endpoint configured but no OTLP exporter registered -- blank-import "github.com/vislake/speed/go/observability/exporter/otlp"`)
+// init() function does the moment a host blank-imports that subpackage. It
+// is exported (rather than a package-private sentinel) so a caller -- and
+// this package's own tests, which must prove this path from a test binary
+// that never blank-imports exporter/otlp -- can assert on it with
+// errors.Is instead of matching its message text.
+var ErrOTLPExporterNotRegistered = errors.New(`observability: OTLP endpoint configured but no OTLP exporter registered -- blank-import "github.com/vislake/speed/go/observability/exporter/otlp"`)
 
 // otlpFactory is the constructor Init calls to build the OTLP/gRPC
 // exporter set once a caller supplies WithOTLPEndpoint. It starts out nil
@@ -301,7 +306,7 @@ func Init(ctx context.Context, opts ...Option) (func(context.Context) error, err
 
 	if cfg.OTLPEndpoint != "" {
 		if otlpFactory == nil {
-			return nil, errOTLPExporterNotRegistered
+			return nil, ErrOTLPExporterNotRegistered
 		}
 		shutdown, err := otlpFactory(ctx, cfg, res)
 		if err != nil {
@@ -348,7 +353,19 @@ func initLocalExporters(res *resource.Resource) (func(context.Context) error, er
 	// registered a local metrics reader (never blank-imported
 	// go/observability/exporter/prometheus, or any future alternative
 	// implementation) gets exactly that answer from MetricsHandler, per
-	// Init's own doc comment.
+	// Init's own doc comment. Unlike the OTLP path above -- which fails
+	// Init outright the moment WithOTLPEndpoint is set with no registered
+	// exporter -- this default-behavior break cannot fail Init itself: the
+	// no-local-reader case is Init's own advertised default, not a
+	// misconfiguration, so the signal is a startup log line instead, on
+	// the same convention pkgcore's warnIfNotDurable uses for its own
+	// non-fatal startup banner (root CLAUDE.md's deployment-composition
+	// section) -- a constant message plus key-value attributes via
+	// log/slog directly, since nothing has called Init yet to give this
+	// package a context-scoped logger of its own (obs.FromContext needs a
+	// context already carrying one). Without this line, a host that
+	// forgot the blank import had no signal at process start; discovery
+	// depended entirely on someone eventually probing /metrics.
 	metricsHandler := http.Handler(http.HandlerFunc(metricsUnavailable))
 	if metricsReaderFactory != nil {
 		reader, handler, err := metricsReaderFactory()
@@ -362,6 +379,10 @@ func initLocalExporters(res *resource.Resource) (func(context.Context) error, er
 		// MetricsHandler's own doc comment on freshness.
 		mpOpts = append(mpOpts, sdkmetric.WithReader(reader))
 		metricsHandler = handler
+	} else {
+		slog.Default().Warn("observability: no local metrics reader registered; /metrics will answer 404 until one is",
+			"hint", `blank-import "github.com/vislake/speed/go/observability/exporter/prometheus" for a local scrape endpoint, or configure WithOTLPEndpoint for push-based metrics`,
+		)
 	}
 
 	mp := sdkmetric.NewMeterProvider(mpOpts...)

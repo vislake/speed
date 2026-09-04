@@ -1,12 +1,15 @@
 package observability_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -54,6 +57,49 @@ func TestInit_NoEndpoint_MetricsHandlerIsNotConfiguredByDefault(t *testing.T) {
 	obs.MetricsHandler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if rr.Code != http.StatusNotFound {
 		t.Errorf("MetricsHandler() with no metrics reader registered: status = %d, want 404 (a local scrape endpoint is opt-in -- see go/observability/exporter/prometheus)", rr.Code)
+	}
+}
+
+// TestInit_NoEndpoint_NoLocalMetricsReader_LogsStartupWarning proves the
+// no-local-scrape-endpoint default is no longer silent: with nothing
+// registered via RegisterLocalMetricsReader, Init now logs a one-time
+// startup warning naming both ways forward, mirroring go/pkgcore's own
+// non-fatal warnIfNotDurable startup-banner convention (root CLAUDE.md's
+// deployment-composition section) rather than leaving discovery entirely
+// to whoever eventually probes /metrics or notices a scrape-failure
+// dashboard. This package's own test binary never blank-imports
+// exporter/prometheus (see
+// TestInit_NoEndpoint_MetricsHandlerIsNotConfiguredByDefault's own
+// comment on why), so metricsReaderFactory is genuinely nil here.
+//
+// The slog default logger is process-global, so the test swaps it for a
+// capture handler and restores it on the way out -- the same pattern
+// go/pkgcore's TestBootstrap_WarnsOncePerNonSurvivingStatefulSeam uses for
+// the sibling banner it proves. This package's tests never run in
+// parallel (no t.Parallel call anywhere in this package), so there is no
+// concurrent Init call that could observe the swapped-out default.
+func TestInit_NoEndpoint_NoLocalMetricsReader_LogsStartupWarning(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(previous)
+
+	shutdown, err := obs.Init(context.Background())
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	t.Cleanup(func() {
+		if shutdownErr := shutdown(context.Background()); shutdownErr != nil {
+			t.Errorf("shutdown: %v", shutdownErr)
+		}
+	})
+
+	out := buf.String()
+	if !strings.Contains(out, "no local metrics reader registered") {
+		t.Errorf("Init with no local metrics reader registered logged %q, want a startup warning naming the gap", out)
+	}
+	if !strings.Contains(out, "exporter/prometheus") {
+		t.Errorf("Init with no local metrics reader registered logged %q, want it to name the blank import that fixes it", out)
 	}
 }
 
