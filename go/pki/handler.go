@@ -103,7 +103,7 @@ func mustTenant(w http.ResponseWriter, r *http.Request) (pkgcore.TenantID, bool)
 // reporting false on any decode failure.
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
-		writeError(w, apperr.Invalid("pki.invalid_request_body").WithCause(err))
+		writeError(w, ErrInvalidRequestBody.WithCause(err))
 		return false
 	}
 	return true
@@ -118,7 +118,7 @@ func (h *Handler) PkiRevokeSigningKey(w http.ResponseWriter, r *http.Request, ki
 		return
 	}
 	if req.Reason == "" {
-		writeError(w, apperr.Invalid("pki.revocation_reason_required"))
+		writeError(w, ErrRevocationReasonRequired)
 		return
 	}
 
@@ -149,7 +149,7 @@ func (h *Handler) PkiRevokeCertificate(w http.ResponseWriter, r *http.Request, c
 		return
 	}
 	if req.Reason == "" {
-		writeError(w, apperr.Invalid("pki.revocation_reason_required"))
+		writeError(w, ErrRevocationReasonRequired)
 		return
 	}
 

@@ -23,3 +23,7 @@
 "pki.crl_not_generated" = "该证书颁发机构尚未生成过吊销列表(CRL)。"
 
 "pki.internal_error" = "服务器内部错误,请稍后重试。"
+
+"pki.invalid_request_body" = "无法解析请求内容,请检查后重试。"
+
+"pki.revocation_reason_required" = "必须填写吊销原因。"

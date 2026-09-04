@@ -153,6 +153,8 @@ This is a deliberate "keep the column, skip the transition" choice, not a half-b
 | `pki.propagation_window_not_elapsed` | `Conflict` | `Service.PromoteNow`, for a pending key staged less than `propagationWindow` ago (round 3) |
 | `pki.crl_not_generated` | `NotFound` | `Handler.PkiGetAuthorityCrl`, when the authority's `CRLPEM` is still empty (round 3) |
 | `pki.internal_error` | `Internal` | `Handler`'s catch-all for any non-`*apperr.Error` failure (round 3) |
+| `pki.invalid_request_body` | `Invalid` | `decodeJSON`, when the request body fails to decode (round 3) |
+| `pki.revocation_reason_required` | `Invalid` | `Handler.PkiRevokeSigningKey`/`PkiRevokeCertificate`, when `Reason` is empty (round 3) |
 
 Round 1/2's AGENTS.md reserved `pki.certificate_revoked`/`pki.signer_unavailable`/`pki.propagation_window_not_elapsed` for "revocation, a KMS-backed signer, the propagation window" respectively -- round 3 declares and genuinely uses all three, though `pki.signer_unavailable`'s real trigger (CRL signing) and `pki.propagation_window_not_elapsed`'s real trigger (`PromoteNow`, a manual promotion companion to revocation, not revocation itself) both deviate from that original parenthetical; see errors.go's own doc comment for the full accounting of the deviation.
 

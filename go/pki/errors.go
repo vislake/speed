@@ -46,6 +46,11 @@ import "github.com/vislake/speed/go/pkgcore/apperr"
 //     same role every other module's own ErrInternal plays (see
 //     storage.ErrInternal, notification.ErrInternal); no round before this
 //     one needed one because no round before this one had an HTTP surface.
+//   - ErrInvalidRequestBody and ErrRevocationReasonRequired are the two
+//     request-validation codes this round's HTTP Handler answers with --
+//     see decodeJSON and PkiRevokeSigningKey/PkiRevokeCertificate in
+//     handler.go -- matching the identical storage.ErrInvalidRequestBody
+//     sibling-module pattern.
 var (
 	// ErrAuthorityNotFound reports that no authority with the requested id
 	// exists -- CAService.CreateIntermediateCA and IssueCertificate's
@@ -107,4 +112,33 @@ var (
 	// failure into before writing a response body -- see this var block's
 	// own doc comment above.
 	ErrInternal = apperr.Internal("pki.internal_error")
+
+	// ErrInvalidRequestBody reports that decodeJSON failed to decode the
+	// request body -- Handler's shared JSON-decode helper (handler.go).
+	ErrInvalidRequestBody = apperr.Invalid("pki.invalid_request_body")
+
+	// ErrRevocationReasonRequired reports that PkiRevokeSigningKey or
+	// PkiRevokeCertificate was called with an empty Reason field
+	// (handler.go).
+	ErrRevocationReasonRequired = apperr.Invalid("pki.revocation_reason_required")
 )
+
+// errorCodes lists every code this module can return, in catalog order. It
+// exists so errors_test.go can prove -- in code, not only by manual review
+// of this file and the two locale files -- that every code declared here
+// carries a matching locales/{zh-CN,en-US}.toml entry, and that neither
+// locale file carries a message no code here returns. Keep this in step by
+// hand: nothing generates it.
+var errorCodes = []string{
+	ErrAuthorityNotFound.Code,
+	ErrKeyNotFound.Code,
+	ErrNoActiveKey.Code,
+	ErrAlgorithmUnsupportedBySigner.Code,
+	ErrCertificateRevoked.Code,
+	ErrSignerUnavailable.Code,
+	ErrPropagationWindowNotElapsed.Code,
+	ErrCRLNotGenerated.Code,
+	ErrInternal.Code,
+	ErrInvalidRequestBody.Code,
+	ErrRevocationReasonRequired.Code,
+}
