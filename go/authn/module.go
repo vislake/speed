@@ -736,6 +736,17 @@ func configItems() []pkgcore.ConfigItem {
 
 // socialCredentialItems is the per-channel credential schema, one client id
 // and one Sensitive client secret each.
+//
+// The secretKey field below holds a CONFIG-ITEM KEY NAME string constant
+// (e.g. ConfigKeyGoogleClientSecret = "authn.social.google.client_secret",
+// already //nolint:gosec'd at its declaration) -- never the secret's actual
+// value, which lives encrypted in the configs table and is never held in
+// this function at all. CodeQL's go/clear-text-logging traces this field
+// name into an eventual log call in the reference app's main.go and flags
+// it; reviewed and confirmed a false positive on both ends of that flow (see
+// main.go's comment at the flagged log call for the full trace). If this
+// struct's field is ever renamed, re-check that alert rather than assuming
+// the reasoning still lines up.
 func socialCredentialItems() []pkgcore.ConfigItem {
 	channels := []struct {
 		idKey, secretKey, label, idName, secretName string
