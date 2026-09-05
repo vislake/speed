@@ -36,6 +36,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/go/admin"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/rbac"
 )
@@ -619,10 +620,171 @@ func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 // second identity channel this test would otherwise have to invent.
 func searchStaffID(t *testing.T, srv *httptest.Server, staffToken string) string {
 	t.Helper()
+	return searchUserID(t, srv, staffToken, demoPlatformStaffEmail)
+}
+
+// searchUserID resolves one account's user id by email through D6's own
+// cross-tenant search endpoint, generalizing searchStaffID for the probe
+// accounts the round-2 permission tests below register.
+func searchUserID(t *testing.T, srv *httptest.Server, staffToken, email string) string {
+	t.Helper()
 	var searched adminSearchUsersResponse
-	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/users?email="+demoPlatformStaffEmail, staffToken, nil, http.StatusOK, &searched, nil)
+	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/users?email="+email, staffToken, nil, http.StatusOK, &searched, nil)
 	if len(searched.Users) != 1 {
-		t.Fatalf("search for the platform-staff account = %+v, want exactly one", searched.Users)
+		t.Fatalf("search for %q = %+v, want exactly one", email, searched.Users)
 	}
 	return searched.Users[0].ID
+}
+
+// adminRole/adminRoleBinding mirror admin's own AdminRole/AdminRoleBinding
+// wire shapes (go/admin/api/openapi.yaml), the same field-named-not-
+// imported posture every wire shape in this file takes.
+type (
+	adminRole struct {
+		ID             string   `json:"id"`
+		TenantID       string   `json:"tenantId"`
+		Key            string   `json:"key"`
+		DescriptionKey string   `json:"descriptionKey"`
+		Permissions    []string `json:"permissions"`
+	}
+	adminRoleBinding struct {
+		TenantID string `json:"tenantId"`
+		UserID   string `json:"userId"`
+		Role     string `json:"role"`
+	}
+	adminListDeclaredPermissionsResponse struct {
+		Permissions []string `json:"permissions"`
+	}
+	adminListSendRecordsResponse struct {
+		Records []map[string]any `json:"records"`
+	}
+	adminExportAuditEventsResponse struct {
+		JobID string `json:"jobId"`
+	}
+)
+
+// defineAdminRole calls staffToken's admin:roles_manage-gated POST
+// /api/v1/admin/roles to create a role scoped to tenant carrying exactly
+// permissions, and binds it to userID -- the two-request sequence both
+// new tests below use to build a probe account holding exactly one
+// round-2 permission and nothing else, since registerAndAuthenticate
+// itself grants no rbac role at all (server_test.go's own doc comment).
+func defineAdminRole(t *testing.T, srv *httptest.Server, staffToken, tenant, key string, permissions []string) adminRole {
+	t.Helper()
+	var role adminRole
+	adminRequest(t, srv, http.MethodPost, "/api/v1/admin/roles", staffToken,
+		map[string]any{"tenantId": tenant, "key": key, "permissions": permissions},
+		http.StatusCreated, &role, nil)
+	if role.Key != key {
+		t.Fatalf("defineAdminRole(%q) response = %+v, want Key %q", key, role, key)
+	}
+	return role
+}
+
+func bindAdminRole(t *testing.T, srv *httptest.Server, staffToken, roleKey, tenant, userID string) {
+	t.Helper()
+	var binding adminRoleBinding
+	adminRequest(t, srv, http.MethodPost, "/api/v1/admin/roles/"+roleKey+"/bindings", staffToken,
+		map[string]string{"tenantId": tenant, "userId": userID},
+		http.StatusCreated, &binding, nil)
+	if binding.Role != roleKey || binding.UserID != userID {
+		t.Fatalf("bindAdminRole(%q, %q) response = %+v, want Role %q UserID %q", roleKey, userID, binding, roleKey, userID)
+	}
+}
+
+// TestAdminFlow_Round2Routes_ReachableForPlatformStaff reproduces the
+// review-flagged blocker directly: adminPermissionFor (demo_admin.go) was
+// never updated for round 2, so its switch fell through to the default
+// case for every one of D8's and D10's new sub-paths, returning "" --
+// which rbac.RequirePermissionFunc's own doc comment says unconditionally
+// denies the request, even for the platform-staff account holding
+// rbac.BuiltinRoleOwner (every permission any module declared). Before
+// the fix, every request below answered 403; after it, each reaches
+// admin's own Handler (a non-403 status, whatever that handler itself
+// then answers).
+func TestAdminFlow_Round2Routes_ReachableForPlatformStaff(t *testing.T) {
+	srv, _, _ := buildAdminTestServer(t)
+	staffToken := platformStaffToken(t, srv)
+
+	// D8, read half: the declared-permission catalog.
+	var perms adminListDeclaredPermissionsResponse
+	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/roles", staffToken, nil, http.StatusOK, &perms, nil)
+	found := false
+	for _, p := range perms.Permissions {
+		if p == admin.PermissionRolesManage {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("declared permissions = %v, want it to include %q", perms.Permissions, admin.PermissionRolesManage)
+	}
+
+	// D8, write half: define a role and bind it to the staff account
+	// itself (a real, already-known user id -- what it grants doesn't
+	// matter for this test, only that the two requests are reached at
+	// all rather than refused by an empty permission string).
+	defineAdminRole(t, srv, staffToken, "tenant-acme", "flow-test-role-reachability", []string{"notes:read"})
+	staffID := searchStaffID(t, srv, staffToken)
+	bindAdminRole(t, srv, staffToken, "flow-test-role-reachability", "tenant-acme", staffID)
+
+	// D10: cross-tenant notification send-record search.
+	var sendRecords adminListSendRecordsResponse
+	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/notifications/send-records", staffToken, nil, http.StatusOK, &sendRecords, nil)
+
+	// D9: the usage/billing dashboard. Deliberately NOT wired into this
+	// app (go/admin/AGENTS.md's Known limitations), so the platform-staff
+	// account -- which holds admin:usage_read via BuiltinRoleOwner --
+	// still answers 500 (ErrUsageModulesNotWired) rather than 200; the
+	// property this test actually needs is that it is no longer the
+	// fail-closed 403 an empty adminPermissionFor entry would have
+	// produced.
+	status, body := rawStatusRequest(t, srv, http.MethodGet, "/api/v1/admin/usage-summary", staffToken)
+	if status == http.StatusForbidden {
+		t.Fatalf("GET /api/v1/admin/usage-summary for platform-staff = 403 %+v, want it to reach admin's Handler (not be refused by an unmapped permission)", body)
+	}
+}
+
+// TestAdminFlow_AuditExport_RequiresExportPermission reproduces the
+// second review-flagged blocker directly: adminPermissionFor's switch
+// matched "/api/v1/admin/audit-events/export" against the existing
+// adminAuditEventsPath prefix case (both share that prefix), gating the
+// round-2 export leg on the weaker admin:audit_read instead of the
+// newly-declared, deliberately-stronger admin:audit_export
+// (module.go's own PermissionAuditExport doc comment: exporting a
+// tenant's complete audit trail is a materially stronger action than
+// merely reading it). Two probe accounts, each holding exactly one of
+// the two permissions under rbac.SystemDomain and nothing else, prove
+// both directions: audit_read alone must NOT reach the export route, and
+// audit_export alone must.
+func TestAdminFlow_AuditExport_RequiresExportPermission(t *testing.T) {
+	srv, cfg, _ := buildAdminTestServer(t)
+	staffToken := platformStaffToken(t, srv)
+
+	readOnlyToken := registerAndAuthenticate(t, srv, cfg, rbac.SystemDomain, "flow-audit-read-only-probe")
+	exportToken := registerAndAuthenticate(t, srv, cfg, rbac.SystemDomain, "flow-audit-export-probe")
+	readOnlyID := searchUserID(t, srv, staffToken, "flow-audit-read-only-probe@example.com")
+	exportID := searchUserID(t, srv, staffToken, "flow-audit-export-probe@example.com")
+
+	defineAdminRole(t, srv, staffToken, string(rbac.SystemDomain), "flow-audit-read-only", []string{admin.PermissionAuditRead})
+	defineAdminRole(t, srv, staffToken, string(rbac.SystemDomain), "flow-audit-export-only", []string{admin.PermissionAuditExport})
+	bindAdminRole(t, srv, staffToken, "flow-audit-read-only", string(rbac.SystemDomain), readOnlyID)
+	bindAdminRole(t, srv, staffToken, "flow-audit-export-only", string(rbac.SystemDomain), exportID)
+
+	// The audit_read-only probe reads the audit trail fine...
+	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/audit-events", readOnlyToken, nil, http.StatusOK, nil, nil)
+	// ...but MUST NOT reach the export leg: this is the exact regression
+	// the review flagged (before the fix, this answered 202).
+	adminRequest(t, srv, http.MethodPost, "/api/v1/admin/audit-events/export", readOnlyToken,
+		map[string]string{"tenantId": "tenant-acme"}, http.StatusForbidden, nil, nil)
+
+	// The audit_export-only probe is refused the plain read...
+	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/audit-events", exportToken, nil, http.StatusForbidden, nil, nil)
+	// ...but its own export request is genuinely accepted.
+	var exportResp adminExportAuditEventsResponse
+	adminRequest(t, srv, http.MethodPost, "/api/v1/admin/audit-events/export", exportToken,
+		map[string]string{"tenantId": "tenant-acme"}, http.StatusAccepted, &exportResp, nil)
+	if exportResp.JobID == "" {
+		t.Fatal("POST /api/v1/admin/audit-events/export for the audit_export-only probe returned no jobId")
+	}
 }

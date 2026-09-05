@@ -32,18 +32,30 @@ const demoPlatformStaffEmail = "demo-platform-staff@example.com"
 // keep demoRouteGuards and guardModuleRoute in step with it.
 const adminRoutePath = "/api/v1/admin"
 
-// The four admin sub-paths adminPermissionFor tells apart. admin mounts
+// The admin sub-paths adminPermissionFor tells apart. admin mounts
 // its whole surface as one Handler under adminRoutePath (mountModuleRoutes
 // wraps the WHOLE subtree in one guard), so distinguishing which
 // permission a specific request needs is this app's own job, done by
 // inspecting the request's own path and method -- never a header, a query
 // parameter or a body field, for the same reason demoPermissionFor's own
 // doc comment gives.
+//
+// adminAuditEventsExportPath MUST be checked before adminAuditEventsPath
+// in adminPermissionFor's switch: both are prefixes of
+// "/api/v1/admin/audit-events/export", and the round-2 export leg is
+// deliberately gated on the stronger PermissionAuditExport rather than
+// falling through to the plain-read PermissionAuditRead (module.go's own
+// PermissionAuditExport doc comment: exporting a tenant's complete audit
+// trail is a materially stronger action than merely reading it).
 const (
-	adminTenantsPath       = adminRoutePath + "/tenants"
-	adminUsersPath         = adminRoutePath + "/users"
-	adminImpersonationPath = adminRoutePath + "/impersonation"
-	adminAuditEventsPath   = adminRoutePath + "/audit-events"
+	adminTenantsPath                  = adminRoutePath + "/tenants"
+	adminUsersPath                    = adminRoutePath + "/users"
+	adminImpersonationPath            = adminRoutePath + "/impersonation"
+	adminAuditEventsExportPath        = adminRoutePath + "/audit-events/export"
+	adminAuditEventsPath              = adminRoutePath + "/audit-events"
+	adminRolesPath                    = adminRoutePath + "/roles"
+	adminUsageSummaryPath             = adminRoutePath + "/usage-summary"
+	adminNotificationsSendRecordsPath = adminRoutePath + "/notifications/send-records"
 )
 
 // adminPermissionFor chooses the admin:* permission a request against
@@ -51,11 +63,11 @@ const (
 //
 // This is deliberately NOT the generic demoPermissionFor(resource)
 // read/write split every other gated module route uses: admin declares
-// five permissions distinguished by SUB-RESOURCE (tenants, users,
-// impersonation, audit-events), not by one resource's read/write split,
-// so this app's own router-level gate has to know the sub-path shape --
-// exactly the same reason storageResource's whole-module gate does NOT
-// apply here.
+// nine permissions distinguished by SUB-RESOURCE (tenants, users,
+// impersonation, audit-events read vs. export, roles, usage, notification
+// send-records), not by one resource's read/write split, so this app's
+// own router-level gate has to know the sub-path shape -- exactly the
+// same reason storageResource's whole-module gate does NOT apply here.
 //
 // A path this function does not recognize returns "", which
 // rbac.RequirePermissionFunc's own doc comment says denies the request --
@@ -73,8 +85,18 @@ func adminPermissionFor(r *http.Request) string {
 		return admin.PermissionSearchUsers
 	case strings.HasPrefix(path, adminImpersonationPath):
 		return admin.PermissionImpersonate
+	case strings.HasPrefix(path, adminAuditEventsExportPath):
+		// Must be checked before adminAuditEventsPath below -- see the
+		// path constants' own doc comment.
+		return admin.PermissionAuditExport
 	case strings.HasPrefix(path, adminAuditEventsPath):
 		return admin.PermissionAuditRead
+	case strings.HasPrefix(path, adminRolesPath):
+		return admin.PermissionRolesManage
+	case strings.HasPrefix(path, adminUsageSummaryPath):
+		return admin.PermissionUsageRead
+	case strings.HasPrefix(path, adminNotificationsSendRecordsPath):
+		return admin.PermissionNotificationsRead
 	default:
 		return ""
 	}
