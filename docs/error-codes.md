@@ -345,7 +345,7 @@ Every code is a `*apperr.Error` built in Go source (`apperr.Invalid`, `apperr.No
 
 | Code | Status | Message | Triggering condition | Source |
 |---|---|---|---|---|
-| `smilesim.internal_error` | 500 | _(no locale message -- not user-facing)_ | smileSimErrInternal folds any error this file's handlers surface that is not itself an *apperr.Error into a stable code, the same fallback consult.go's own writeConsultError applies. | `examples/reference-app/cmd/server/smilesim.go:44` |
+| `smilesim.internal_error` | 500 | _(no locale message -- not user-facing)_ | smileSimErrInternal folds any error this file's handlers surface that is not itself an *apperr.Error into a stable code, the same fallback consult.go's own writeConsultError applies. | `examples/reference-app/cmd/server/smilesim.go:45` |
 
 ## storage
 
