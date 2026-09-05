@@ -63,7 +63,7 @@
 
 import { act, configure, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { switchLanguage } from '@speed/i18n'
 import accountUiZhCN from '../../../../web/packages/account-ui/src/locales/zh-CN.json' with { type: 'json' }
 import authUiZhCN from '../../../../web/packages/auth-ui/src/locales/zh-CN.json' with { type: 'json' }
@@ -173,18 +173,49 @@ describe('the app journey', () => {
   // real notes handler's rbac gate produces (server_test.go:335) --
   // there is no application-level bug for this failure to be hiding.
   //
-  // The fix stays the one applied here (raising both budgets, file-
-  // scoped so neither call reaches another suite) because it removes
-  // the one precondition this whole cascade depends on: a test in this
-  // file actually exceeding its timeout. At ~14x the measured CI
-  // slowdown, 30s leaves the owner-day journey (a couple of seconds
-  // locally) generous headroom, so no test here should come close to
-  // needing it -- if one ever does, that is worth treating as its own
-  // incident rather than raising the budget again, since a second test
-  // in this file paying for the first one's overrun is exactly the
-  // failure mode above.
+  // The first fix attempted here raised the budget from inside a
+  // `beforeAll(() => { vi.setConfig({ testTimeout: 30_000 }) })` call.
+  // That is a genuine no-op: vitest fixes each collected test's
+  // effective timeout at COLLECTION time, when `describe`'s factory
+  // runs and every `it(...)` call registers its task, which happens
+  // before ANY hook (`beforeAll` included) ever runs. A runtime
+  // `vi.setConfig` inside a hook lands too late to change a timeout
+  // already frozen onto the task. The real CI run confirmed this
+  // exactly -- the failing tests still reported the original "Test
+  // timed out in 5000ms" default, unchanged -- and a local
+  // reproduction (a temporary forced 6s delay in the owner-day test,
+  // run against this exact beforeAll-based code) reproduced the same
+  // failure on demand.
+  //
+  // The fix that actually works reaches vitest at collection time
+  // instead: a plain-number third argument to `describe` itself is a
+  // real, still-supported form of vitest 4.1.11's `SuiteOptions.timeout`
+  // (the identical shorthand `it('name', fn, 30_000)` uses per test --
+  // verified against this pinned version's own `@vitest/runner` source,
+  // since the object-options form as a *third* argument,
+  // `describe(name, fn, { timeout })`, was removed in Vitest 4 and
+  // throws at collection time: "Signature ... was deprecated in Vitest
+  // 3 and removed in Vitest 4"). The number is read while the suite is
+  // being built, before any test body or hook runs, and applies to
+  // every test collected under it -- proven against the same
+  // forced-delay reproduction above, which now passes. It removes the
+  // one precondition the cross-test
+  // cascade above depends on: a test in this file actually exceeding
+  // its timeout. At ~14x the measured CI slowdown, 30s leaves the
+  // owner-day journey (a couple of seconds locally) generous headroom,
+  // so no test here should come close to needing it -- if one ever
+  // does, that is worth treating as its own incident rather than
+  // raising the budget again, since a second test in this file paying
+  // for the first one's overrun is exactly the failure mode above.
+  //
+  // `asyncUtilTimeout` stays a `beforeAll`-set `configure()` call: unlike
+  // vitest's own per-task timeout, Testing Library's config is a plain
+  // runtime object (`@testing-library/dom`'s `config.js`) that
+  // `findBy*`/`waitFor` read via `getConfig()` at the moment they are
+  // called, which is always after `beforeAll` has run for every test in
+  // this file -- so, unlike `vi.setConfig`, it never had the collection-
+  // time problem to begin with.
   beforeAll(() => {
-    vi.setConfig({ testTimeout: 30_000 })
     configure({ asyncUtilTimeout: 5_000 })
   })
 
@@ -599,4 +630,4 @@ describe('the app journey', () => {
     ])
     expect(callOf(rig, 2).authorization).toBe('Bearer access-1')
   })
-})
+}, 30_000)
