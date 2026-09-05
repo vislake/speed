@@ -105,11 +105,11 @@
 
 **15. 数据分域与系统上下文**
 - 身份数据与平台数据跑 `AssertNotTenantScoped`：断言它们**不会**被误加租户过滤
-- 系统上下文：非白名单模块 import `WithSystemContext` 由 code review / CODEOWNERS 把关（`go/pkgcore`、`go/tenancy`）；每次进入系统上下文都产生审计记录
+- 系统上下文：非白名单模块 import `WithSystemContext` 由 code review 把关；每次进入系统上下文都产生审计记录
 - 分布式 PG 下用受 RLS 约束的角色执行跨租户查询必须返回空，切到 `BYPASSRLS` 角色才可见
 - 从租户移除成员后，该用户针对该租户的 access token 立即失效
 
-> **实施精确化（本轮核实，与 [04 数据层与多租户](04-data-and-tenancy.md) 的"实现落地更正"一致）：** 第二条原写"CI 拒绝"，已改为真实机制——depguard 只能按整个 import path 粒度放行/拒绝一个文件，做不到只挡 `WithSystemContext` 这一个符号（`pkgcore` 根包同时还装着 `TenantID`/`WithTenant`/`apperr`，把"仅白名单可 import `pkgcore`"接成 depguard 规则会连带拦下 `go/dbkit` 23 处无关合法导入），这条草稿规则因此未合入，完整推演见 `.golangci.yml` 自己的 depguard 注释。白名单目前靠 code review 与 `go/pkgcore`、`go/tenancy` 的 CODEOWNERS 加两个函数的文档注释把关，不是静态检查。
+> **实施精确化（本轮核实，与 [04 数据层与多租户](04-data-and-tenancy.md) 的"实现落地更正"一致）：** 第二条原写"CI 拒绝"，已改为真实机制——depguard 只能按整个 import path 粒度放行/拒绝一个文件，做不到只挡 `WithSystemContext` 这一个符号（`pkgcore` 根包同时还装着 `TenantID`/`WithTenant`/`apperr`，把"仅白名单可 import `pkgcore`"接成 depguard 规则会连带拦下 `go/dbkit` 23 处无关合法导入），这条草稿规则因此未合入，完整推演见 `.golangci.yml` 自己的 depguard 注释。白名单目前纯靠人工 code review 加 `pkgcore.WithSystemContext`/`tenancy.WithSystemContext` 两个函数自身的文档注释把关，不是静态检查——仓库里没有任何 CODEOWNERS 文件（`go/pkgcore`、`go/tenancy` 均无），这本身是一处已知的真实实现缺口，而非本节的文档措辞问题。
 
 **16. 外部联系人与同意**
 - 未验证地址除验证消息外一律拒绝发送
