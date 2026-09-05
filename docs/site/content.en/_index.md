@@ -28,5 +28,5 @@ This site is built with [Hugo](https://gohugo.io) and the
 [hugo-book](https://github.com/alex-shpak/hugo-book) theme — see
 [About](docs/about/) for the machinery decision and what is still
 deferred to a later milestone. A machine-readable
-[llms.txt](/speed/llms.txt) lives at this site's root, and a language switcher
+[llms.txt](/llms.txt) lives at this site's root, and a language switcher
 (English / 中文) sits in the header of every page.

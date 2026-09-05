@@ -25,5 +25,5 @@ speed 是一组以库形式分发的模块化单体：业务方通过 `go get` /
 
 本站基于 [Hugo](https://gohugo.io) 与 [hugo-book](https://github.com/alex-shpak/hugo-book)
 主题构建 —— 机制选型的理由与仍然推迟的部分见[关于](docs/about/)。
-站点根部有一份机器可读的 [llms.txt](/speed/llms.txt)，每一页的页眉都有语言切换
+站点根部有一份机器可读的 [llms.txt](/llms.txt)，每一页的页眉都有语言切换
 （English / 中文）。

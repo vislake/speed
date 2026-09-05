@@ -9,7 +9,7 @@ weight: 4
 上下文，这一页就是写给你的。speed 自己的文档规范把 Agent 和人类同等
 视为一等读者（见
 [docs/internal/13](https://github.com/vislake/speed/blob/main/docs/internal/13-documentation-standards.md)，
-中文设计说明）——这一页与站点根部的 [llms.txt](/speed/llms.txt) 就是本站对
+中文设计说明）——这一页与站点根部的 [llms.txt](/llms.txt) 就是本站对
 这条规范的回应。
 
 ## 先按这个顺序读
@@ -125,6 +125,6 @@ PostgreSQL、真实的 Stripe、真实的 SMTP，是小客户生产环境的正�
 
 ## 机器可读的入口
 
-站点根部的 [/llms.txt](/speed/llms.txt) 按照 [llms.txt](https://llmstxt.org/)
+站点根部的 [/llms.txt](/llms.txt) 按照 [llms.txt](https://llmstxt.org/)
 约定，列出了本站的同一批页面，以及上面提到的仓库文件，供直接抓取本
 域名的爬虫或 Agent 使用。

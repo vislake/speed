@@ -11,7 +11,7 @@ documentation standard treats agents and humans as first-class readers
 equally (see
 [docs/internal/13](https://github.com/vislake/speed/blob/main/docs/internal/13-documentation-standards.md),
 Chinese-language design rationale) — this page and
-[llms.txt](/speed/llms.txt) at the site root are this site's own answer to
+[llms.txt](/llms.txt) at the site root are this site's own answer to
 that.
 
 ## Read this first, in this order
@@ -148,6 +148,6 @@ versus genuinely CI-enforced today — is root `CLAUDE.md`'s
 
 ## Machine-readable entry point
 
-[/llms.txt](/speed/llms.txt) at this site's root lists the same pages plus the
+[/llms.txt](/llms.txt) at this site's root lists the same pages plus the
 repository files above in the [llms.txt](https://llmstxt.org/)
 convention, for a crawler or agent fetching this domain directly.

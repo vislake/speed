@@ -8,11 +8,14 @@
 # multilingual mode -- not a theme feature -- is what provides the
 # bilingual (en / zh-cn) support this site needs).
 #
-# baseURL assumes the ordinary GitHub Pages project-site URL for a
-# repository named "speed" under the "vislake" account/org (no custom
-# domain is configured anywhere in this repository as of this writing --
-# verified by grep). Update this if a CNAME is ever added.
-baseURL = 'https://vislake.github.io/speed/'
+# baseURL is the site's real, verified custom domain (GitHub Pages
+# `pages.cname` = "speed.vislake.com", HTTPS certificate approved). The
+# custom domain serves from its own root, unlike a github.io project
+# page, so this carries no "/speed" path suffix. A static/CNAME file
+# (Hugo copies static/ verbatim into public/, the same mechanism
+# static/llms.txt already uses) makes the custom domain durable even if
+# the Pages settings are ever reset.
+baseURL = 'https://speed.vislake.com/'
 title = 'speed documentation'
 theme = 'hugo-book'
 
