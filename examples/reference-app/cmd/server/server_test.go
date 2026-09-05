@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
@@ -792,6 +793,15 @@ func TestMetricsAllowlist_GETOnlyAllowlist_LeavesHEADExposed(t *testing.T) {
 	}
 }
 
+// fakeSMSGatewayURL is a never-dialed HTTP endpoint used by every
+// distributed-mode test below that needs authn's own wiring-time "SMS
+// sender" validation to pass (so the Kernel-level assertion the test
+// actually pins is what runs) without touching a network:
+// authn.NewHTTPSMSSender's own construction never dials anything, and none
+// of these tests exercises the phone-login flow that would actually POST
+// to it.
+const fakeSMSGatewayURL = "http://127.0.0.1:1/sms"
+
 // TestBuildServer_DistributedDeploymentMode_FailsCapabilityValidation pins
 // what requesting the distributed deployment mode means since the retrofit
 // removed buildServer's hard refusal of it: the composition is no longer
@@ -804,9 +814,17 @@ func TestMetricsAllowlist_GETOnlyAllowlist_LeavesHEADExposed(t *testing.T) {
 // this test needs no Docker and never touches a network, and it guarantees
 // the mode can never silently degrade into a SQLite-and-in-memory run
 // under a "distributed" label.
+//
+// cfg.SMSGatewayURL is set to fakeSMSGatewayURL so that authn's own
+// wiring-time SMS-sender validation, which buildServer reaches BEFORE
+// Kernel.Bootstrap (see buildServer's authn wiring comment), does not mask
+// the Kernel-level failure this test actually pins;
+// TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed below
+// is what proves that earlier validation on its own.
 func TestBuildServer_DistributedDeploymentMode_FailsCapabilityValidation(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.DeploymentMode = pkgcore.DeploymentModeDistributed
+	cfg.SMSGatewayURL = fakeSMSGatewayURL
 
 	_, _, err := buildServer(context.Background(), cfg)
 	if err == nil {
@@ -822,40 +840,94 @@ func TestBuildServer_DistributedDeploymentMode_FailsCapabilityValidation(t *test
 	}
 }
 
-// TestBuildServer_DistributedDeploymentMode_InjectedEventBus_StillFailsOnKV
-// is the second half of the distributed-mode pin: even with a real
-// Redis-backed EventBus injected (capabilities MultiReplicaSafe and
-// SurvivesRestart -- exactly the composition the file's README worked
-// example demonstrates in standalone mode), a distributed deployment still
-// fails capability validation, now on the next seam: the "kv" seam's
-// "kv.memory" implementation also lacks MultiReplicaSafe, and the Preset
-// has no Redis-backed KVStore to swap in. An event bus alone does not make
-// a distributed deployment viable -- every seam must satisfy the mode's
-// requirements. Validation precedes module registration, so no Subscribe
-// is ever reached, and the cleanup buildServer runs on this error path is
-// equally network-free: RedisEventBus starts no goroutine and touches no
-// network until the first Subscribe (its group-destroy sweep returns early
-// with nothing subscribed), and a go-redis client dials lazily, so the
-// unreachable 127.0.0.1:6379 address is never contacted -- this test needs
-// no Docker.
-func TestBuildServer_DistributedDeploymentMode_InjectedEventBus_StillFailsOnKV(t *testing.T) {
+// TestBuildServer_DistributedDeploymentMode_RedisConfigured_StillFailsOnMailer
+// is the second half of the distributed-mode pin, rewritten for this
+// round's env-driven wiring: SPEED_REDIS_ADDR now composes BOTH the
+// "eventbus" and the "kv" seam onto one shared *redis.Client (buildServer's
+// kernel-options doc comment explains why one Redis instance backs both),
+// so a distributed deployment with only cfg.RedisAddr set no longer fails
+// on "kv" the way it used to before this round -- it clears both
+// "eventbus" and "kv" and now fails capability validation on the NEXT seam
+// Kernel.Bootstrap resolves: "mailer", whose Preset default
+// ("mailer.console") also lacks MultiReplicaSafe, and this test configures
+// no SPEED_SMTP_* composition to swap it for. This is exactly the "one
+// seam wired isn't enough" property root CLAUDE.md's distributed-mode
+// section documents, now demonstrated one seam later than before this
+// round. Validation precedes module registration, so no Subscribe is ever
+// reached, and the cleanup buildServer runs on this error path is equally
+// network-free: RedisEventBus starts no goroutine and touches no network
+// until the first Subscribe (its group-destroy sweep returns early with
+// nothing subscribed), a go-redis client dials lazily, and kv/redis.
+// NewKVStore's own first operation is what reaches for the server -- so the
+// unreachable 127.0.0.1:6379 address is never contacted by either seam,
+// and this test needs no Docker.
+func TestBuildServer_DistributedDeploymentMode_RedisConfigured_StillFailsOnMailer(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.DeploymentMode = pkgcore.DeploymentModeDistributed
 	cfg.RedisAddr = "127.0.0.1:6379"
+	cfg.SMSGatewayURL = fakeSMSGatewayURL
 
 	_, _, err := buildServer(context.Background(), cfg)
 	if err == nil {
-		t.Fatal("buildServer with DeploymentModeDistributed and an injected Redis EventBus: want error, got nil")
+		t.Fatal("buildServer with DeploymentModeDistributed and Redis configured: want error, got nil")
 	}
 	if !errors.Is(err, pkgcore.ErrCapabilityUnsatisfied) {
-		t.Fatalf("buildServer with DeploymentModeDistributed and an injected Redis EventBus: error = %v, want errors.Is(err, pkgcore.ErrCapabilityUnsatisfied)", err)
+		t.Fatalf("buildServer with DeploymentModeDistributed and Redis configured: error = %v, want errors.Is(err, pkgcore.ErrCapabilityUnsatisfied)", err)
 	}
-	for _, want := range []string{`seam "kv"`, `"kv.memory"`, "MultiReplicaSafe", `"distributed"`} {
+	for _, want := range []string{`seam "mailer"`, `"mailer.console"`, "MultiReplicaSafe", `"distributed"`} {
 		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("buildServer with DeploymentModeDistributed and an injected Redis EventBus: error %q does not mention %s", err, want)
+			t.Fatalf("buildServer with DeploymentModeDistributed and Redis configured: error %q does not mention %s", err, want)
 		}
 	}
 }
+
+// TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed proves
+// the negative half of this round's authn "SMS sender" wiring: a
+// distributed composition that forgets SPEED_SMS_GATEWAY_URL must fail
+// closed with authn.ErrMissingDistributedSMSSender, rather than silently
+// keeping the console transport nobody in a distributed replica pool is
+// reading -- the exact property docs/internal/03-deployment-modes.md's
+// authn round note describes and this app's own wiring never actually
+// exercised before this round, since it used to pass WithSMSSender(
+// NewConsoleSMSSender(...)) unconditionally regardless of deployment mode.
+// This is authn's OWN wiring-time validation (authn.NewModule's
+// newOptions), which buildServer reaches before it ever calls
+// pkgcore.NewKernel(...).Bootstrap -- so this failure fires regardless of
+// whether any other seam (Redis, S3, SMTP) is configured, and this test
+// configures none of them, needing no Docker and touching no network.
+func TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.DeploymentMode = pkgcore.DeploymentModeDistributed
+
+	_, _, err := buildServer(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("buildServer with DeploymentModeDistributed and no SPEED_SMS_GATEWAY_URL: want error, got nil")
+	}
+	if !errors.Is(err, authn.ErrMissingDistributedSMSSender) {
+		t.Fatalf("buildServer with DeploymentModeDistributed and no SPEED_SMS_GATEWAY_URL: error = %v, want errors.Is(err, authn.ErrMissingDistributedSMSSender)", err)
+	}
+}
+
+// A no-Docker "positive" counterpart to the three tests above -- one that
+// composes every seam onto a fake, unreachable address and asserts
+// buildServer succeeds -- was deliberately NOT added here, and this is a
+// real finding rather than a silent gap: this app's own seedDemoGrants
+// (demo_subject.go), which every buildServer call runs unconditionally
+// after Bootstrap to seed the demo tenants' built-in roles, makes a
+// SYNCHRONOUS rbac.Service call that publishes on whatever EventBus
+// Bootstrap resolved -- eventbus/redis.EventBus.Publish genuinely appends
+// to the Redis stream inline, unlike Subscribe's fire-and-forget background
+// reader. Pointing cfg.RedisAddr at a fake address therefore fails this
+// seeding step with a real "connection refused" the moment Redis is
+// unreachable, regardless of deployment mode -- proven empirically while
+// writing this round's tests. So the positive half of this property
+// (assembly succeeds when every seam is genuinely satisfied) cannot be
+// proven at the unit tier without either standing up real infrastructure
+// (which belongs in a Docker-backed integration tier, not here) or
+// special-casing seedDemoGrants for tests (which would test a different
+// wiring than main() runs, the exact anti-pattern buildServer's own doc
+// comment warns against). The genuine, real-infrastructure proof is
+// examples/reference-app/integration_test/distributed_mode_test.go.
 
 // notesRequest issues method against /api/v1/notes with the given bearer
 // token (empty means no Authorization header at all) and optional body,

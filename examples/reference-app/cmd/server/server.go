@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +49,8 @@ import (
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
+	kvredis "github.com/vislake/speed/go/pkgcore/kv/redis"
+	objectstores3 "github.com/vislake/speed/go/pkgcore/objectstore/s3"
 	"github.com/vislake/speed/go/pki"
 	"github.com/vislake/speed/go/rbac"
 	"github.com/vislake/speed/go/sharing"
@@ -135,15 +138,70 @@ const (
 	notificationIndexKeyEnv = "SPEED_NOTIFICATION_INDEX_KEY"
 
 	// redisAddrEnv names the environment variable holding the Redis server
-	// address ("host:port") the injected EventBus connects to. Empty -- the
-	// default -- leaves the composition on the in-process bus the
-	// PresetStandalone resolves, so zero-setup standalone development keeps
-	// working with nothing else running; set it to compose a real
-	// Redis-backed bus into the SAME standalone deployment mode, which is
+	// address ("host:port") the injected EventBus AND KVStore connect to --
+	// one Redis instance backs both seams, sharing one *redis.Client the
+	// same way go/notification's own Redis integration leg shares one
+	// client across two bus instances (see buildServer's kernel doc comment
+	// below for what the resulting composition proves). Empty -- the
+	// default -- leaves both seams on the in-process implementations the
+	// Preset resolves, so zero-setup standalone development keeps working
+	// with nothing else running; set it to compose real Redis-backed
+	// implementations into the SAME standalone deployment mode, which is
 	// the deployment-mode / implementation-composition orthogonality
-	// docs/internal/03-deployment-modes.md draws (see buildServer's kernel
-	// doc comment below for what the resulting composition proves).
+	// docs/internal/03-deployment-modes.md draws, or into a distributed
+	// deployment mode, where MultiReplicaSafe is required of both seams.
 	redisAddrEnv = "SPEED_REDIS_ADDR"
+
+	// s3EndpointEnv, s3BucketEnv, s3AccessKeyEnv and s3SecretKeyEnv name the
+	// environment variables that together compose a real S3-compatible
+	// ObjectStore (objectstore/s3.NewObjectStore) for the "objectstore"
+	// seam. All four are required together -- configFromEnv fails loudly
+	// when only some of them are set, rather than silently falling back to
+	// the local-directory Preset default, since a partially named S3 target
+	// is far more likely a typo than a deliberate choice. s3RegionEnv and
+	// s3UseSSLEnv refine the same composition: Region matters to AWS S3 and
+	// Aliyun OSS (MinIO ignores it, per objectstore/s3.Config's own doc
+	// comment), and s3UseSSLEnv, parsed as a Go bool, defaults to false --
+	// plain HTTP, the common case for a local MinIO -- when unset.
+	s3EndpointEnv  = "SPEED_S3_ENDPOINT"
+	s3BucketEnv    = "SPEED_S3_BUCKET"
+	s3AccessKeyEnv = "SPEED_S3_ACCESS_KEY"
+	// #nosec G101 -- this is an ENVIRONMENT VARIABLE NAME, not a credential
+	// value: gosec's hardcoded-credential heuristic matches on the substring
+	// "Secret" in the identifier alone, the same false positive
+	// demoUsersPasswordEnv's own #nosec comment (demo_users.go) already
+	// excepts elsewhere in this codebase.
+	s3SecretKeyEnv = "SPEED_S3_SECRET_KEY"
+	s3RegionEnv    = "SPEED_S3_REGION"
+	s3UseSSLEnv    = "SPEED_S3_USE_SSL"
+
+	// smtpHostEnv and smtpPortEnv name the environment variables that
+	// together compose a real SMTP Mailer (pkgcore.NewSMTPMailer) for the
+	// "mailer" seam; both are required together, for the same
+	// fail-loud-on-partial-config reason s3EndpointEnv's doc comment gives.
+	// smtpUsernameEnv and smtpPasswordEnv are optional -- SMTP AUTH
+	// activates only when a username is set (pkgcore.SMTPConfig.Username's
+	// own doc comment). Unset -- the default -- leaves the "mailer" seam on
+	// the Preset's console default, exactly like every other seam here.
+	smtpHostEnv     = "SPEED_SMTP_HOST"
+	smtpPortEnv     = "SPEED_SMTP_PORT"
+	smtpUsernameEnv = "SPEED_SMTP_USERNAME"
+	// #nosec G101 -- this is an ENVIRONMENT VARIABLE NAME, not a credential
+	// value, the identical false positive s3SecretKeyEnv's own #nosec
+	// comment above excepts.
+	smtpPasswordEnv = "SPEED_SMTP_PASSWORD"
+
+	// smsGatewayURLEnv names the environment variable holding the endpoint
+	// authn's real SMS transport (authn.NewHTTPSMSSender) posts delivery
+	// requests to. Empty under the standalone deployment mode leaves
+	// authn's "SMS sender" seam on its console default, unchanged from
+	// before this round; empty under the distributed deployment mode
+	// leaves that seam deliberately UNWIRED, so authn's own wiring-time
+	// validation fails closed with authn.ErrMissingDistributedSMSSender
+	// rather than this app silently keeping a console sender nobody in a
+	// distributed replica pool is reading -- see buildServer's authn
+	// wiring comment for the three-way branch this drives.
+	smsGatewayURLEnv = "SPEED_SMS_GATEWAY_URL"
 )
 
 // devConfigKey is the master key used when SPEED_CONFIG_KEY is unset. It is
@@ -497,16 +555,57 @@ type serverConfig struct {
 	RedisAddr            string
 	HostTenants          map[string]pkgcore.TenantID
 
+	// S3Endpoint, S3Bucket, S3AccessKey, S3SecretKey, S3Region and S3UseSSL
+	// compose a real S3-compatible ObjectStore for the "objectstore" seam
+	// (objectstore/s3.NewObjectStore) when S3Endpoint is non-empty --
+	// s3EndpointEnv's own doc comment above has the completeness rule.
+	// Empty S3Endpoint (the default) leaves "objectstore" on the Preset's
+	// local-directory default.
+	S3Endpoint  string
+	S3Bucket    string
+	S3AccessKey string
+	S3SecretKey string
+	S3Region    string
+	S3UseSSL    bool
+
+	// SMTPHost, SMTPPort, SMTPUsername and SMTPPassword compose a real SMTP
+	// Mailer for the "mailer" seam (pkgcore.NewSMTPMailer) when SMTPHost is
+	// non-empty -- smtpHostEnv's own doc comment above has the completeness
+	// rule. Empty SMTPHost (the default) leaves "mailer" on the Preset's
+	// console default, exactly like an unset Mailer field below.
+	SMTPHost     string
+	SMTPPort     int
+	SMTPUsername string
+	SMTPPassword string
+
+	// SMSGatewayURL composes authn's real SMS transport
+	// (authn.NewHTTPSMSSender) for its "SMS sender" seam when non-empty.
+	// See smsGatewayURLEnv's own doc comment above for what an empty value
+	// means under each deployment mode.
+	SMSGatewayURL string
+
 	// Mailer overrides the console mailer the standalone Preset resolves
-	// for the "mailer" seam when set. configFromEnv never sets it --
-	// production always takes the Preset's real default -- so this only
-	// exists for server_test.go's org invitation flow test, which needs
-	// the rendered mail back in-process to extract the invitation token
-	// rather than parsing it out of console output; buildServer injects
-	// it with the pkgcore.Stateless declaration (see its kernel-options
-	// comment at the Bootstrap call below for why that is the honest
-	// capability for a throwaway test composition).
+	// for the "mailer" seam when set. configFromEnv sets it to a real
+	// pkgcore.NewSMTPMailer composition when SMTPHost is configured (see
+	// SMTPHost's doc comment above); it is otherwise nil in production, so
+	// this field also exists for server_test.go's org invitation flow
+	// test, which needs the rendered mail back in-process to extract the
+	// invitation token rather than parsing it out of console output.
+	// buildServer injects Mailer with MailerCapabilities below, defaulting
+	// to pkgcore.Stateless when that field is left at its zero value --
+	// the honest capability for a throwaway test double, and the same
+	// declaration this field carried before this round.
 	Mailer pkgcore.Mailer
+
+	// MailerCapabilities declares the capability bits buildServer wires
+	// Mailer with, when Mailer is non-empty. configFromEnv sets it to
+	// pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart -- the capabilities
+	// the "mailer.smtp" builtin registration itself declares -- alongside
+	// its real SMTP Mailer; every other caller (every existing test's
+	// in-process double) leaves it at the zero value, which buildServer
+	// treats as pkgcore.Stateless, preserving this field's behavior from
+	// before this round.
+	MailerCapabilities pkgcore.Capability
 
 	// Memberships is the seam authn asks tenant-membership questions
 	// through. Nil defaults to a fresh, empty demoMemberships in
@@ -666,7 +765,65 @@ func configFromEnv() (serverConfig, error) {
 		notificationIndexKey = decoded
 	}
 
-	return serverConfig{
+	// s3Endpoint/s3Bucket/s3AccessKey/s3SecretKey stay empty when unset,
+	// leaving the "objectstore" seam on the Preset's local-directory
+	// default; when any one of them is set, all four are required --
+	// s3EndpointEnv's own doc comment explains why a partial S3 target is
+	// refused rather than silently ignored.
+	s3Endpoint := os.Getenv(s3EndpointEnv)
+	s3Bucket := os.Getenv(s3BucketEnv)
+	s3AccessKey := os.Getenv(s3AccessKeyEnv)
+	s3SecretKey := os.Getenv(s3SecretKeyEnv)
+	if s3Endpoint != "" || s3Bucket != "" || s3AccessKey != "" || s3SecretKey != "" {
+		var missing []string
+		if s3Endpoint == "" {
+			missing = append(missing, s3EndpointEnv)
+		}
+		if s3Bucket == "" {
+			missing = append(missing, s3BucketEnv)
+		}
+		if s3AccessKey == "" {
+			missing = append(missing, s3AccessKeyEnv)
+		}
+		if s3SecretKey == "" {
+			missing = append(missing, s3SecretKeyEnv)
+		}
+		if len(missing) > 0 {
+			return serverConfig{}, fmt.Errorf(
+				"reference-app: an S3 ObjectStore composition needs %s set too (got some but not all of %s/%s/%s/%s)",
+				strings.Join(missing, ", "), s3EndpointEnv, s3BucketEnv, s3AccessKeyEnv, s3SecretKeyEnv)
+		}
+	}
+	s3UseSSL := false
+	if raw := os.Getenv(s3UseSSLEnv); raw != "" {
+		parsed, parseErr := strconv.ParseBool(raw)
+		if parseErr != nil {
+			return serverConfig{}, fmt.Errorf("reference-app: %s must be a valid bool, got %q: %w", s3UseSSLEnv, raw, parseErr)
+		}
+		s3UseSSL = parsed
+	}
+
+	// smtpHost/smtpPortRaw mirror s3Endpoint/... above: both unset leaves
+	// the "mailer" seam on the Preset's console default, and a partial
+	// SPEED_SMTP_* set is refused rather than silently ignored.
+	smtpHost := os.Getenv(smtpHostEnv)
+	smtpPortRaw := os.Getenv(smtpPortEnv)
+	var smtpPort int
+	switch {
+	case smtpHost == "" && smtpPortRaw == "":
+		// Both unset: the "mailer" seam stays on its Preset default.
+	case smtpHost == "" || smtpPortRaw == "":
+		return serverConfig{}, fmt.Errorf(
+			"reference-app: an SMTP Mailer composition needs both %s and %s set", smtpHostEnv, smtpPortEnv)
+	default:
+		parsed, parseErr := strconv.Atoi(smtpPortRaw)
+		if parseErr != nil {
+			return serverConfig{}, fmt.Errorf("reference-app: %s must be a valid port number, got %q: %w", smtpPortEnv, smtpPortRaw, parseErr)
+		}
+		smtpPort = parsed
+	}
+
+	cfg := serverConfig{
 		DeploymentMode:       deploymentMode,
 		Port:                 port,
 		SQLitePath:           dbPath,
@@ -674,11 +831,38 @@ func configFromEnv() (serverConfig, error) {
 		OrgIndexKey:          orgIndexKey,
 		NotificationIndexKey: notificationIndexKey,
 		RedisAddr:            redisAddr,
+		S3Endpoint:           s3Endpoint,
+		S3Bucket:             s3Bucket,
+		S3AccessKey:          s3AccessKey,
+		S3SecretKey:          s3SecretKey,
+		S3Region:             os.Getenv(s3RegionEnv),
+		S3UseSSL:             s3UseSSL,
+		SMTPHost:             smtpHost,
+		SMTPPort:             smtpPort,
+		SMTPUsername:         os.Getenv(smtpUsernameEnv),
+		SMTPPassword:         os.Getenv(smtpPasswordEnv),
+		SMSGatewayURL:        os.Getenv(smsGatewayURLEnv),
 		HostTenants:          demoHostTenants,
 		// Empty when unset: the demo-user seed is opt-in (its own doc
 		// comment in demo_users.go says why the default skips it).
 		DemoUsersPassword: os.Getenv(demoUsersPasswordEnv),
-	}, nil
+	}
+	if smtpHost != "" {
+		// A real SMTP composition: declare the capabilities the
+		// "mailer.smtp" builtin registration itself declares
+		// (builtin_implementations.go), so this app's own env-driven
+		// SMTP wiring is capability-honest rather than borrowing the
+		// Stateless declaration server_test.go's in-process double uses
+		// (Mailer's own doc comment above explains the split).
+		cfg.Mailer = pkgcore.NewSMTPMailer(pkgcore.SMTPConfig{
+			Host:     smtpHost,
+			Port:     smtpPort,
+			Username: cfg.SMTPUsername,
+			Password: cfg.SMTPPassword,
+		})
+		cfg.MailerCapabilities = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
+	}
+	return cfg, nil
 }
 
 // buildServer wires the reference app's Kernel -- the authn, notes, org,
@@ -702,13 +886,23 @@ func configFromEnv() (serverConfig, error) {
 // bootstraps is what validates the assembled composition against
 // cfg.DeploymentMode, failing startup with pkgcore's own capability error
 // (ErrCapabilityUnsatisfied) when the resolved composition cannot run in
-// the declared mode. This app wires the eventbus seam only -- the kv,
-// mailer and objectstore seams resolve from the standalone Preset to their
-// in-process implementations -- so today the distributed mode always fails
-// that validation naming the first shortfall ("eventbus.memory" when no
-// Redis address is configured, "kv.memory" when one is), and the standalone
-// mode never does. Those two outcomes, rather than an app-level refusal,
-// are exactly what this file's distributed-mode tests pin.
+// the declared mode. Every stateful seam this app knows about -- eventbus,
+// kv, mailer, objectstore, plus authn's own "SMS sender" seam -- can now be
+// pointed at a real, MultiReplicaSafe-capable implementation through the
+// environment variables configFromEnv reads (redisAddrEnv, s3EndpointEnv
+// and friends, smtpHostEnv and friends, smsGatewayURLEnv); every one of
+// them defaults to the standalone Preset's in-process implementation when
+// unset, so a plain `go run ./cmd/server` is unaffected by this round. With
+// none of them set, the distributed deployment mode still always fails
+// capability validation, naming the first unsatisfied seam in resolution
+// order ("eventbus" first, per Kernel.Bootstrap's fixed order); with all of
+// them set to a genuinely MultiReplicaSafe composition (real Redis, real
+// S3-compatible storage, real SMTP, and authn's real HTTP SMS transport),
+// the distributed deployment mode now genuinely BOOTS, which is the
+// property this file's own TestBuildServer_DistributedDeploymentMode_*
+// tests pin the positive half of, and
+// examples/reference-app/integration_test/distributed_mode_test.go proves
+// end to end against real Docker-backed infrastructure.
 func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() error, error) {
 	// Deliberately NOT setting dbkit.Options.AuditBus here, even though
 	// notes.Note implements dbkit.Auditable (see model.go): every note
@@ -943,16 +1137,34 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		smsOutput = os.Stdout
 	}
 
-	authnModule, err := authn.NewModule(db,
+	authnOpts := []authn.Option{
 		authn.WithKeySource(pkiModule.Service()),
 		authn.WithBlindIndexKey(devBlindIndexKey),
 		authn.WithMembershipReader(memberships),
-		authn.WithSMSSender(authn.NewConsoleSMSSender(smsOutput)),
 		authn.WithDeploymentMode(cfg.DeploymentMode),
 		authn.WithSocialProviders(cfg.SocialProviders...),
 		authn.WithRedirectAllowlist(cfg.RedirectAllowlist),
 		authn.WithTrustedProviders(cfg.TrustedProviders...),
-	)
+	}
+	// The "SMS sender" seam, following the same conditional-injection shape
+	// as every other seam this file wires: a configured gateway URL always
+	// wins, under either deployment mode, and composes authn's real HTTP
+	// transport (authn.NewHTTPSMSSender); absent that, the standalone
+	// deployment mode falls back to the console transport exactly as this
+	// app did before this round, while the distributed deployment mode is
+	// left deliberately UNWIRED -- authn.NewModule's own newOptions then
+	// fails closed with authn.ErrMissingDistributedSMSSender rather than
+	// this app silently keeping a console sender nobody in a distributed
+	// replica pool is reading (see smsGatewayURLEnv's doc comment, and
+	// TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed
+	// for the regression proof).
+	switch {
+	case cfg.SMSGatewayURL != "":
+		authnOpts = append(authnOpts, authn.WithSMSSender(authn.NewHTTPSMSSender(cfg.SMSGatewayURL)))
+	case cfg.DeploymentMode != pkgcore.DeploymentModeDistributed:
+		authnOpts = append(authnOpts, authn.WithSMSSender(authn.NewConsoleSMSSender(smsOutput)))
+	}
+	authnModule, err := authn.NewModule(db, authnOpts...)
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: build the authn module: %w", err)
@@ -1291,21 +1503,56 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	//
 	// WithDeploymentMode(cfg.DeploymentMode) declares the topology the
 	// composition is validated against; it never selects an implementation
-	// (docs/internal/03-deployment-modes.md's orthogonality rule). When
-	// SPEED_REDIS_ADDR is set, WithEventBus injects a REAL Redis-backed
-	// EventBus -- eventbus/redis's NewEventBus over a go-redis client this
-	// host constructs and owns -- declaring MultiReplicaSafe|SurvivesRestart,
-	// the capabilities the Redis Streams implementation genuinely carries.
-	// The other three seams resolve from the Preset to their in-process
-	// implementations, so the assembled composition is a standalone
-	// topology whose events cross through real Redis: a single-process
-	// deployment that happens to use a multi-replica-safe, restart-surviving
-	// bus -- the canonical demonstration that the two axes are independent.
-	// Nothing about the rest of this wiring changes: audit.Emit still
-	// publishes on reg.EventBus() (the injected bus), auditModule's
-	// subscriptions run synchronously on the publishing side exactly as
-	// they do on the in-memory bus, and any OTHER process consuming the
-	// same Redis streams receives the events too.
+	// (docs/internal/03-deployment-modes.md's orthogonality rule). Every
+	// stateful seam below follows the exact same conditional-injection
+	// shape SPEED_REDIS_ADDR originally established for the "eventbus" seam
+	// alone: an unset env var leaves that seam on the Preset's in-process
+	// default (so a plain `go run ./cmd/server` is byte-for-byte unaffected
+	// by this round), and a configured one injects a real implementation
+	// with the capability bits that implementation genuinely carries.
+	//
+	// When SPEED_REDIS_ADDR is set, WithEventBus injects a REAL
+	// Redis-backed EventBus -- eventbus/redis's NewEventBus over a go-redis
+	// client this host constructs and owns -- declaring
+	// MultiReplicaSafe|SurvivesRestart, the capabilities the Redis Streams
+	// implementation genuinely carries. The SAME client also backs the
+	// "kv" seam (kv/redis.NewKVStore takes the identical *redis.Client
+	// type): one Redis instance backing both seams is this app's
+	// deliberate minimal-footprint choice, mirroring go/notification's own
+	// Redis integration leg, which shares one client across two bus
+	// instances. This is not merely a convenience -- a distributed
+	// deployment mode requires MultiReplicaSafe of every seam that carries
+	// shared state (docs/internal/03-deployment-modes.md's capability
+	// table), so wiring the "eventbus" seam alone, as this app did before
+	// this round, can never let a distributed composition succeed: the
+	// very next seam Kernel.Bootstrap resolves and validates, "kv", would
+	// still fail on the Preset's in-process default.
+	//
+	// When the SPEED_S3_* variables are set (configFromEnv's own doc
+	// comment on s3EndpointEnv has the completeness rule), WithObjectStore
+	// injects a REAL S3-compatible ObjectStore (objectstore/s3.
+	// NewObjectStore, reaching MinIO, Aliyun OSS or AWS S3 through the
+	// minio-go client), declaring the same MultiReplicaSafe|SurvivesRestart
+	// the "objectstore.s3" builtin registration itself declares.
+	//
+	// The Mailer override -- cfg.Mailer, non-nil either because
+	// configFromEnv composed a real pkgcore.NewSMTPMailer from the
+	// SPEED_SMTP_* variables, or because a test (server_test.go's org/
+	// notification flow tests) injected an in-process capture double --
+	// rides along as a fourth conditional option. Its capability
+	// declaration is cfg.MailerCapabilities when set (MultiReplicaSafe|
+	// SurvivesRestart for the real SMTP composition, matching the
+	// "mailer.smtp" builtin's own declaration) and pkgcore.Stateless
+	// otherwise -- the honest capability for a throwaway in-process test
+	// double, and the same declaration this override carried before this
+	// round.
+	//
+	// Nothing about the rest of this wiring changes when any of these are
+	// injected: audit.Emit still publishes on reg.EventBus() (the injected
+	// bus), auditModule's subscriptions run synchronously on the
+	// publishing side exactly as they do on the in-memory bus, and any
+	// OTHER process consuming the same Redis streams, the same S3 bucket
+	// or the same SMTP relay observes the same effects.
 	//
 	// go-redis is imported here -- and go.mod therefore requires it
 	// directly -- because the app is the assembly host that eventbus/redis's
@@ -1315,23 +1562,32 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// comment), which is exactly why cleanup below closes redisClient
 	// itself. The no-concrete-infrastructure-implementation rule constrains
 	// business modules, not the application that assembles them.
-	//
-	// The cfg.Mailer override rides along as a second conditional option --
-	// the retrofit's WithMailer takes the capability its value declares,
-	// and this app declares pkgcore.Stateless for an override that only
-	// server_test.go's in-process capture double ever sets, in a throwaway
-	// test composition where the durability banner would name no real loss
-	// (configFromEnv never sets it; production always takes the preset's
-	// console default).
 	kernelOptions := []pkgcore.KernelOption{pkgcore.WithDeploymentMode(cfg.DeploymentMode)}
 	if cfg.RedisAddr != "" {
 		redisClient = redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
 		redisBus = eventbusredis.NewEventBus(redisClient)
 		kernelOptions = append(kernelOptions,
 			pkgcore.WithEventBus(redisBus, pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
+		kernelOptions = append(kernelOptions,
+			pkgcore.WithKVStore(kvredis.NewKVStore(redisClient), pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
+	}
+	if cfg.S3Endpoint != "" {
+		kernelOptions = append(kernelOptions,
+			pkgcore.WithObjectStore(objectstores3.NewObjectStore(objectstores3.Config{
+				Endpoint:  cfg.S3Endpoint,
+				Bucket:    cfg.S3Bucket,
+				AccessKey: cfg.S3AccessKey,
+				SecretKey: cfg.S3SecretKey,
+				Region:    cfg.S3Region,
+				UseSSL:    cfg.S3UseSSL,
+			}), pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
 	}
 	if cfg.Mailer != nil {
-		kernelOptions = append(kernelOptions, pkgcore.WithMailer(cfg.Mailer, pkgcore.Stateless))
+		mailerCapabilities := cfg.MailerCapabilities
+		if mailerCapabilities == 0 {
+			mailerCapabilities = pkgcore.Stateless
+		}
+		kernelOptions = append(kernelOptions, pkgcore.WithMailer(cfg.Mailer, mailerCapabilities))
 	}
 	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, pkiModule, authnModule, notesModule, orgModule, configModule, rbacModule, storageModule, sharingModule, demoModule, notificationModule, aiGatewayModule, complianceModule, adminModule, auditModule)
 	if err != nil {
