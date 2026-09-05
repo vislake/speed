@@ -61,9 +61,9 @@
  * suite instead of drifting silently.
  */
 
-import { act, waitFor } from '@testing-library/react'
+import { act, configure, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { switchLanguage } from '@speed/i18n'
 import accountUiZhCN from '../../../../web/packages/account-ui/src/locales/zh-CN.json' with { type: 'json' }
 import authUiZhCN from '../../../../web/packages/auth-ui/src/locales/zh-CN.json' with { type: 'json' }
@@ -139,6 +139,24 @@ function revokeOf(device: string): string {
 }
 
 describe('the app journey', () => {
+  // These journeys drive dozens of real userEvent interactions and
+  // network round-trips end to end -- on a warm dev machine the whole
+  // file finishes in a few seconds, but a real GitHub Actions run
+  // (2026-09-05, pr-check run 2) measured a cold import alone at
+  // ~14s against ~0.8s locally, and the owner-day journey's own test
+  // then tripped vitest's 5000ms default per-test timeout while the
+  // read-only-member journey's `findByRole('alert')` separately
+  // tripped Testing Library's own, independent 1000ms default
+  // findBy/waitFor timeout. Both are raised here, file-scoped (vitest
+  // isolates each test file's module registry by default, so neither
+  // call reaches any other suite), with generous headroom over the
+  // worst CI timing observed rather than lowering what either
+  // assertion actually waits for.
+  beforeAll(() => {
+    vi.setConfig({ testTimeout: 30_000 })
+    configure({ asyncUtilTimeout: 5_000 })
+  })
+
   beforeEach(() => {
     window.location.hash = ''
   })
