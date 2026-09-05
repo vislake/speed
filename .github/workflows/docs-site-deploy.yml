@@ -2,12 +2,15 @@ name: docs-site-deploy
 
 # Publishes docs/site/ to GitHub Pages -- the public documentation site
 # for consuming teams and AI coding agents (docs/site/README.md,
-# docs/internal/13-documentation-standards.md). The site is a
-# hand-written static skeleton with no build step (no npm project, no
-# SSG) -- this workflow uploads docs/site/ exactly as committed via the
-# modern "build_type: workflow" Pages flow (actions/configure-pages +
-# actions/upload-pages-artifact + actions/deploy-pages), not the legacy
-# gh-pages-branch approach.
+# docs/internal/13-documentation-standards.md). The site is a real Hugo
+# project (theme: hugo-book, pinned as a git submodule under
+# docs/site/themes/hugo-book -- docs/site/README.md has the
+# machinery-decision rationale) built here with `hugo --minify` and
+# uploaded via the modern "build_type: workflow" Pages flow
+# (actions/configure-pages + actions/upload-pages-artifact +
+# actions/deploy-pages), not the legacy gh-pages-branch approach. The
+# uploaded artifact is Hugo's build output (docs/site/public/, gitignored
+# and never committed), not docs/site/ itself.
 #
 # TRIGGER: push to main touching docs/site/** or this workflow file
 # itself, plus workflow_dispatch for a manual re-run (e.g. after a Pages
@@ -25,6 +28,12 @@ name: docs-site-deploy
 # two concurrent deploys writing to the same Pages environment can
 # corrupt each other, so a second run queues rather than cancels the
 # first.
+#
+# HUGO VERSION: pinned by .github/actions/setup-hugo-env, the shared
+# composite action this workflow and docs-check.yml both call -- see
+# that action's own header for the version-source rationale (root
+# .mise.toml's `hugo` entry and tools/check_toolchain.py's drift gate
+# mirror its HUGO_VERSION).
 
 on:
   push:
@@ -32,6 +41,7 @@ on:
     paths:
       - docs/site/**
       - .github/workflows/docs-site-deploy.yml
+      - .github/actions/setup-hugo-env/**
   workflow_dispatch:
 
 permissions:
@@ -54,12 +64,21 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # hugo-book is a pinned git submodule (docs/site/.gitmodules) --
+          # without this the theme directory is empty and the build fails.
+          submodules: true
+      - name: Install pinned Hugo
+        uses: ./.github/actions/setup-hugo-env
+      - name: Build the site with Hugo
+        working-directory: docs/site
+        run: hugo --minify --gc
       - name: Configure Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d  # v6.0.0
-      - name: Upload docs/site as the Pages artifact
+      - name: Upload the built site as the Pages artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9  # v5.0.0
         with:
-          path: docs/site
+          path: docs/site/public
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346  # v5.0.1

@@ -1,0 +1,9 @@
+# Pinned to tag v0.15.0 (commit 027be3349d20785efeb93f6773872a35497d7258),
+# the latest stable release as of this writing -- see docs/site/README.md
+# for the theme-selection rationale (hugo-book over Docsy: no Node/npm/
+# Dart-Sass asset pipeline, Hugo's own multilingual mode provides the
+# bilingual support, not a theme feature). Bump this pin deliberately,
+# never implicitly via `git submodule update --remote`.
+[submodule "docs/site/themes/hugo-book"]
+	path = docs/site/themes/hugo-book
+	url = https://github.com/alex-shpak/hugo-book

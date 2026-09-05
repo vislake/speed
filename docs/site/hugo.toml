@@ -1,0 +1,79 @@
+# Hugo configuration for the speed documentation site.
+#
+# Machinery decision (docs/internal/13-documentation-standards.md,
+# docs/site/README.md): Hugo + the hugo-book theme, adopted ahead of its
+# originally planned M4 window at the user's explicit request. See
+# docs/site/README.md for the theme-selection rationale (hugo-book over
+# Docsy: zero Node/npm/Dart-Sass dependency, since Hugo's own
+# multilingual mode -- not a theme feature -- is what provides the
+# bilingual (en / zh-cn) support this site needs).
+#
+# baseURL assumes the ordinary GitHub Pages project-site URL for a
+# repository named "speed" under the "vislake" account/org (no custom
+# domain is configured anywhere in this repository as of this writing --
+# verified by grep). Update this if a CNAME is ever added.
+baseURL = 'https://vislake.github.io/speed/'
+title = 'speed documentation'
+theme = 'hugo-book'
+
+# docs/site/README.md's Publishing section names the deploy flow this
+# feeds: `hugo --minify` from this directory, output uploaded from
+# public/ (gitignored, never committed) by
+# .github/workflows/docs-site-deploy.yml.
+enableGitInfo = false
+disablePathToLower = true
+
+[markup]
+  [markup.goldmark.renderer]
+    unsafe = true
+  [markup.tableOfContents]
+    startLevel = 1
+    endLevel = 3
+
+# --- Multilingual mode (Hugo's own -- not a theme feature; either theme
+# candidate could have carried this identically). English is the
+# default/primary language per docs/internal/13's English-first rule for
+# this directory; defaultContentLanguageInSubdir is left at Hugo's own
+# default (false), so English pages render unprefixed
+# (https://vislake.github.io/speed/...) and zh-cn pages render under an
+# explicit /zh-cn/ prefix
+# (https://vislake.github.io/speed/zh-cn/...) -- verified against a real
+# `hugo --minify` build's public/ output, not assumed.
+defaultContentLanguage = 'en'
+defaultContentLanguageInSubdir = false
+
+[languages]
+  [languages.en]
+    label = 'English'
+    locale = 'en-US'
+    contentDir = 'content.en'
+    weight = 1
+  [languages.zh-cn]
+    label = '中文'
+    locale = 'zh-CN'
+    contentDir = 'content.zh-cn'
+    weight = 2
+
+[menu]
+  [[menu.after]]
+    name = 'GitHub'
+    url = 'https://github.com/vislake/speed'
+    weight = 10
+
+[params]
+  # (default light) / dark / auto.
+  BookTheme = 'auto'
+  # Every page under content.<lang>/docs/ renders in the left nav tree;
+  # each language's own _index.md (the migrated former index.html) sits
+  # outside that section as the site's landing/home page.
+  BookSection = 'docs'
+  BookRepo = 'https://github.com/vislake/speed'
+  BookEditLink = '{{ .Site.Params.BookRepo }}/edit/main/docs/site/{{ .Path }}'
+  BookSearch = true
+  BookComments = false
+  # Every language shows a switcher regardless of whether every page has
+  # a translation; every page in this site is translated in both
+  # languages as of this round, so this stays false (theme default) --
+  # a genuinely missing translation should be visibly missing, not
+  # silently hidden from the switcher.
+  BookTranslatedOnly = false

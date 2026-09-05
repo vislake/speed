@@ -385,22 +385,29 @@ tasks:
       - pnpm --package=@redocly/cli@2.51.1 dlx redocly lint build/openapi/speed.yaml --config redocly.yaml
 
   docs:serve:
-    desc: Preview the docs site (docs/site/) locally over HTTP.
-    # The docs-site skeleton is real -- docs/site/ is hand-written static
-    # HTML with no build step, no npm project and no network, so previewing
-    # it needs only the python3 standard-library HTTP server. What this is
-    # NOT yet is the full documentation-engineering deliverable of
-    # docs/internal/13-documentation-standards.md: per-version release
-    # directories, llms.txt at the site root once the site goes public,
-    # the complete M4 doc set and the machinery decision (a build step /
-    # SSG) all stay deferred -- docs/site/README.md names the split. The
-    # structural check keeping the skeleton honest in CI is
-    # tools/check_docs_site.py (docs-check pipeline). The underlying
-    # command is directly runnable without the task CLI:
-    #   python3 -m http.server 8000 -d docs/site
-    # Edit the port number to preview on another port; Ctrl-C stops it.
+    desc: Preview the docs site (docs/site/) locally with Hugo's live-reload server.
+    # docs/site/ is a real Hugo project (theme: hugo-book, pinned as a git
+    # submodule) as of this round's machinery decision -- this is no
+    # longer the buildless, no-npm, no-network skeleton the previous
+    # framing here described (docs/site/README.md's earlier "real
+    # skeleton, machinery deferred" note is superseded; see its current
+    # text and docs/internal/13-documentation-standards.md's own
+    # implementation-status note for what changed and why hugo-book was
+    # chosen over Docsy). Previewing now needs the pinned Hugo binary
+    # itself (root .mise.toml's `hugo` entry; `mise install` by way of
+    # the setup task's toolchain leg) and the theme submodule checked out
+    # (`git submodule update --init` if it is not already). The
+    # structural check keeping the built output honest in CI is
+    # tools/check_docs_site.py (docs-check pipeline), which now builds
+    # the site and checks docs/site/public/, not the Markdown source
+    # tree. The underlying command is directly runnable without the task
+    # CLI:
+    #   hugo server --minify --source docs/site
+    # `hugo server` watches content/config/layout changes and live-reloads
+    # the browser; Ctrl-C stops it. It binds 1313 by default -- pass
+    # --port to use another one.
     cmds:
-      - python3 -m http.server 8000 -d docs/site
+      - hugo server --minify --source docs/site
 
   seed:
     desc: Not implemented -- no demo-data seeding path exists in the reference app yet.

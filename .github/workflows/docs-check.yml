@@ -32,14 +32,20 @@ name: docs-check
 #     is dependency-free (tools/README.md): plain python3 -- no Go
 #     toolchain, no package install -- so this job needs no setup step.
 #     ubuntu-latest ships the Python >= 3.11 the checker needs (tomllib).
-#   * docs-site skeleton structure: python3 tools/check_docs_site.py from
-#     the repository root. The site is docs/site/, static HTML with no
-#     build step (docs/site/README.md), so the check validates the tree
-#     directly: the required entry files exist, every internal link on a
-#     page resolves inside the site, and the offline preview really
-#     serves (it spawns the python3 stdlib HTTP server on an ephemeral
-#     port and fetches the site root). Same dependency-free shape as the
-#     i18n checker above.
+#   * docs-site build: python3 tools/check_docs_site.py from the
+#     repository root. docs/site/ is a real Hugo project (theme:
+#     hugo-book, pinned as a git submodule -- docs/site/README.md has
+#     the machinery-decision rationale) as of the Hugo migration round,
+#     so the check runs a real `hugo --minify` build and validates the
+#     BUILT output (docs/site/public/, gitignored, never committed):
+#     the build itself produces no warnings, every required page is
+#     present in both languages (en default/unprefixed, zh-cn under
+#     /zh-cn/), llms.txt lands exactly once at the built root, every
+#     internal link on a built page resolves, and the offline preview
+#     really serves (it spawns the python3 stdlib HTTP server on an
+#     ephemeral port and fetches the site root). Needs the pinned Hugo
+#     binary (setup-hugo-env step below) and the theme submodule checked
+#     out, unlike the dependency-free i18n checker above.
 #
 # DELIBERATELY NOT WIRED HERE -- roadmap M0 docs-engineering items whose
 # tooling does not exist yet (wiring them now would be fake checks):
@@ -53,10 +59,8 @@ name: docs-check
 #     generates docs/error-codes.md from every apperr.* declaration plus
 #     each module's own locales/en-US.toml; its own --check mode exists
 #     (tools/README.md's own section on it) but is not run here yet.
-#   * the docs site machinery: docs/site/ itself is now real -- a static
-#     skeleton with structure checked here (COVERAGE above) -- but the
-#     per-version release directories, llms.txt at the site root once the
-#     site goes public, and a build step/SSG are still deferred
+#   * per-version release directories for docs/site/ (the site versioned
+#     like the code it documents) -- still a later (M4) milestone item
 #     (docs/site/README.md, docs/internal/13-documentation-standards.md).
 #   * a dedicated harness for prose-embedded documentation examples. Go
 #     example tests already compile and run inside the go-module-ci unit
@@ -64,13 +68,18 @@ name: docs-check
 #     examples embedded in docs prose and AGENTS.md files.
 #
 # PATH SET -- documentation or i18n/public-API changes only:
-#   docs/**                     the design docs this pipeline guards
+#   docs/**                     the design docs this pipeline guards, and
+#                                docs/site/ itself (Hugo source: hugo.toml,
+#                                content.en/, content.zh-cn/, static/, and
+#                                the theme submodule's pointer commit)
 #   .claude/**                  skill handbooks (standards documentation)
 #   **/AGENTS.md                per-module discipline docs (consumer-facing)
 #   **/locales/**               i18n resources -- the check's direct subject
 #   go/pkgcore/i18n/**          the catalog contract the checker mirrors
 #   tools/check_i18n_keys.py    the checker itself (self-test on change)
 #   tools/check_docs_site.py    the site checker (self-test on change)
+#   .github/actions/setup-hugo-env/**  the pinned Hugo install this job
+#                                needs (self-test on change)
 #   CLAUDE.md, README.md        root docs stating the rules and CI claims
 #   Taskfile.yml                dev-workflow docs of the checker commands
 
@@ -84,6 +93,7 @@ on:
       - go/pkgcore/i18n/**
       - tools/check_i18n_keys.py
       - tools/check_docs_site.py
+      - .github/actions/setup-hugo-env/**
       - CLAUDE.md
       - README.md
       - Taskfile.yml
@@ -104,7 +114,13 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # docs/site/themes/hugo-book is a pinned git submodule -- the
+          # docs-site build below needs it checked out.
+          submodules: true
       - name: i18n key-set parity (zh-CN vs en-US)
         run: python3 tools/check_i18n_keys.py
-      - name: Docs-site skeleton structure (check_docs_site)
+      - name: Install pinned Hugo
+        uses: ./.github/actions/setup-hugo-env
+      - name: Docs-site build (check_docs_site)
         run: python3 tools/check_docs_site.py

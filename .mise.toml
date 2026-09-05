@@ -19,6 +19,11 @@
 #   pnpm          web/package.json's packageManager field
 #   golangci-lint GOLANGCI_VERSION in
 #                 .github/actions/setup-go-env/action.yml
+#   hugo          HUGO_VERSION in
+#                 .github/actions/setup-hugo-env/action.yml -- the shared
+#                 composite action docs-site-deploy.yml and docs-check.yml
+#                 both call, mirrored here the same way every other tool's
+#                 CI-side pin is mirrored
 
 [tools]
 # Mirror of the Taskfile.yml header's task pin.
@@ -31,3 +36,5 @@ node = "24"
 pnpm = "11.1.2"
 # Mirror of GOLANGCI_VERSION in .github/actions/setup-go-env/action.yml.
 golangci-lint = "2.11.4"
+# Mirror of HUGO_VERSION in .github/actions/setup-hugo-env/action.yml.
+hugo = "0.165.0"

@@ -11,7 +11,7 @@
 
 ## Start here
 
-- [For AI Agents](ai-agents.html): what to read first, the architecture rules that most
+- [For AI Agents](https://vislake.github.io/speed/docs/ai-agents/): what to read first, the architecture rules that most
   often matter (module dependency direction, API-contract spec-first order, the four
   data domains, deployment mode vs. implementation composition), and where the
   authoritative implementation status lives.
@@ -23,18 +23,23 @@
 
 ## Site pages
 
-- [Home](index.html): landing page and site map.
-- [Quickstart](quickstart.html): generate a starter project with `saasctl new`, the four
+- [Home](https://vislake.github.io/speed/): landing page and site map.
+- [Quickstart](https://vislake.github.io/speed/docs/quickstart/): generate a starter project with `saasctl new`, the four
   `saasctl` commands (`new`, `upgrade`, `db migrate`, `config print`), and how to run Go
   commands in this repository's workspace layout.
-- [Modules](modules.html): the 21 Go modules and 11 npm packages (plus the reference
+- [Modules](https://vislake.github.io/speed/docs/modules/): the 21 Go modules and 11 npm packages (plus the reference
   app's web host) a consumer project can pull in, each linking to its own docs.
-- [For AI Agents](ai-agents.html): the AI-agent-oriented orientation section described
+- [For AI Agents](https://vislake.github.io/speed/docs/ai-agents/): the AI-agent-oriented orientation section described
   above.
-- [About](about.html): what speed is, how the pieces fit together, how its
-  documentation is distributed.
-- [Status](status.html): a coarse, verified-against-the-repository snapshot of
+- [About](https://vislake.github.io/speed/docs/about/): what speed is, how the pieces fit together, how its
+  documentation is distributed, and this round's Hugo/hugo-book machinery decision.
+- [Status](https://vislake.github.io/speed/docs/status/): a coarse, verified-against-the-repository snapshot of
   implementation status, pointing at CLAUDE.md for the authoritative detail.
+
+A Chinese (zh-cn) translation of every page above is served under the identical path
+with a `/zh-cn/` prefix, e.g. https://vislake.github.io/speed/zh-cn/docs/quickstart/ —
+listed once here rather than duplicated per language, per the llms.txt convention of one
+crawlable entry point.
 
 ## Module documentation (go/)
 

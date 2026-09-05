@@ -1,0 +1,61 @@
+name: setup-hugo-env
+description: >-
+  Install the pinned Hugo (extended) binary used to build docs/site/.
+
+# Shared Hugo toolchain setup for every CI job that builds docs/site/ --
+# today .github/workflows/docs-site-deploy.yml (the real Pages build)
+# and .github/workflows/docs-check.yml (tools/check_docs_site.py's own
+# `hugo build`). Factored out the same way .github/actions/setup-go-env
+# and .github/actions/setup-node-env already are, so the pinned
+# version+checksum pair lives in exactly one place rather than two
+# copies that could drift against each other.
+#
+# VERSION SOURCE
+# HUGO_VERSION/HUGO_TARBALL_SHA256 below are this repository's single
+# authoritative source for the Hugo version -- root .mise.toml's `hugo`
+# entry and tools/check_toolchain.py's drift gate both mirror this
+# action's HUGO_VERSION, the same "authoritative source elsewhere in the
+# repository" pattern .mise.toml's own header documents for every other
+# pinned tool (go.work for Go, web/.nvmrc for Node, GOLANGCI_VERSION for
+# golangci-lint). actions/setup-go and actions/setup-node can resolve a
+# version from a file in the repo (go.work, web/.nvmrc); no equivalent
+# first-party action or file-based resolution exists for Hugo, so this
+# action pins the version directly, mirroring the golangci-lint install
+# step in setup-go-env/action.yml exactly (a checksum-verified
+# curl+tar install into RUNNER_TOOL_CACHE rather than a marketplace
+# action) instead of introducing a third-party action for a single
+# binary download.
+#
+# WHY "extended": hugo-book's own assets need Sass support, which only
+# the extended build ships. The plain (non-extended) build cannot build
+# this site at all; "extended_withdeploy" adds the `hugo deploy`
+# subcommand neither workflow here uses, so plain "extended" is the
+# minimal correct variant.
+#
+# LINUX-ONLY: both call sites run on ubuntu-latest; this action does not
+# handle other runner OSes (unlike setup-go-env/setup-node-env, which
+# lean on first-party actions that are OS-aware) -- add an OS branch
+# here if a future job needs Hugo on a different runner.
+
+runs:
+  using: composite
+  steps:
+    - name: Install pinned Hugo (extended)
+      shell: bash
+      env:
+        HUGO_VERSION: "0.165.0"
+        # sha256 of hugo_extended_0.165.0_linux-amd64.tar.gz from the
+        # release's own hugo_0.165.0_checksums.txt, pinned so a tampered
+        # artifact cannot reach CI. Bump version and hash together.
+        HUGO_TARBALL_SHA256: "f43494894cdf4a8630a201d5c828051c77f523cc66bb3938b30806835470ac20"
+      run: |
+        set -euo pipefail
+        install_dir="$RUNNER_TOOL_CACHE/hugo/${HUGO_VERSION}"
+        if [ ! -x "$install_dir/hugo" ]; then
+          tmp="$RUNNER_TEMP/hugo.tar.gz"
+          curl -fsSL "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.tar.gz" -o "$tmp"
+          echo "${HUGO_TARBALL_SHA256}  $tmp" | sha256sum -c -
+          mkdir -p "$install_dir"
+          tar -xzf "$tmp" -C "$install_dir" hugo
+        fi
+        echo "$install_dir" >> "$GITHUB_PATH"

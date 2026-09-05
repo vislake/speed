@@ -1,0 +1,28 @@
+# Project-level override for the hugo-book theme's own UI strings
+# (search box, "Edit this page", "Last modified by", and the CJK-aware
+# search tokenizer). This site's Hugo language key is "zh-cn" (per this
+# round's own bilingual-routing decision), but the theme ships its
+# Chinese translations under the key "zh" (docs/site/themes/hugo-book/
+# i18n/zh.yaml; "cn.yaml" is the theme's own deprecated alias for the
+# same key) -- Hugo's i18n lookup is exact-match by language key, so
+# without this file the theme's chrome would silently render in English
+# on every zh-cn page. Content is a verbatim copy of the theme's zh.yaml,
+# kept in step by hand if the theme submodule is ever bumped.
+- id: Search
+  translation: 搜索
+
+- id: Edit this page
+  translation: 编辑本页
+
+- id: Last modified by
+  translation: 最后修改者
+
+- id: bookSearchConfig
+  translation: |
+    {
+      tokenize: function (text) {
+        const cjk = /[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}]/u;
+        return (text.match(/(?:(?=\p{L})[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}])+|(?:(?![\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}])[\p{L}\p{N}])+/gu) || [])
+          .flatMap(run => cjk.test(run) && run.length > 1 ? Array.from(run.slice(1), (_, i) => run.slice(i, i + 2)) : [run]);
+      }
+    }

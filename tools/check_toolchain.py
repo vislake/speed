@@ -19,6 +19,8 @@ fails when a mirror drifts from its source. The sources, one per tool:
   pnpm          web/package.json's packageManager field
   golangci-lint GOLANGCI_VERSION in .github/actions/setup-go-env/
                 action.yml
+  hugo          HUGO_VERSION in .github/actions/setup-hugo-env/
+                action.yml
 
 Bump the authoritative source and the mirror together; this gate exists
 because they are separate files and will drift without it.
@@ -133,12 +135,26 @@ def _read_golangci_version(root: str) -> str:
     return m.group(1)
 
 
+def _read_hugo_version(root: str) -> str:
+    path = os.path.join(root, ".github", "actions", "setup-hugo-env", "action.yml")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except FileNotFoundError:
+        raise SystemExit(f"error: {path} is missing -- the source of the hugo pin")
+    m = re.search(r'^\s*HUGO_VERSION:\s*"([^"]+)"', text, re.MULTILINE)
+    if not m:
+        raise SystemExit(f"error: no HUGO_VERSION found in {path}")
+    return m.group(1)
+
+
 SOURCES = [
     ("task", _read_task_pin, "Taskfile.yml header comment"),
     ("go", _read_go_version, "go.work's go directive"),
     ("node", _read_nvmrc, "web/.nvmrc"),
     ("pnpm", _read_package_manager, "web/package.json's packageManager"),
     ("golangci-lint", _read_golangci_version, "setup-go-env's GOLANGCI_VERSION"),
+    ("hugo", _read_hugo_version, "setup-hugo-env's HUGO_VERSION"),
 ]
 
 
@@ -147,7 +163,8 @@ def main(argv: list[str] | None = None) -> int:
         description=(
             "Fail when a version pinned in the root .mise.toml no longer mirrors "
             "its authoritative source (Taskfile.yml header, go.work, web/.nvmrc, "
-            "web/package.json, setup-go-env's GOLANGCI_VERSION)."
+            "web/package.json, setup-go-env's GOLANGCI_VERSION, setup-hugo-env's "
+            "HUGO_VERSION)."
         )
     )
     parser.add_argument(
