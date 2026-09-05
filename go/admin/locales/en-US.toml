@@ -20,6 +20,9 @@
 "admin.org_module_required" = "This deployment is missing its org module; membership composition is unavailable."
 "admin.compliance_module_required" = "This deployment is missing its compliance module; audit search is unavailable."
 "admin.notification_module_required" = "This deployment is missing its notification module; impersonation cannot notify its target."
+"admin.queue_required" = "This deployment is missing its job queue; audit export cannot run asynchronously."
+"admin.rbac_service_required" = "The rbac service has not been attached yet; role management is unavailable."
+"admin.usage_modules_not_wired" = "This deployment has neither its metering nor its billing module wired; the usage dashboard is unavailable."
 "admin.principal_required" = "This request carries no verified identity."
 "admin.internal" = "An unexpected internal error occurred."
 

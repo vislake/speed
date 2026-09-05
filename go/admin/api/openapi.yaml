@@ -2,33 +2,46 @@ openapi: 3.0.3
 info:
   title: admin
   description: >-
-    The operations-console backend: round 1 of docs/internal/23-admin.md --
-    the tenant ledger (D3, record-only), the impersonation pipeline (D5),
-    cross-tenant user search (D6) and the audit-query HTTP shell (D7's read
-    side). This fragment follows the operationId (admin_<action><Resource>)
-    and schema-name (Admin<Type>) conventions from
+    The operations-console backend. Round 1 of docs/internal/23-admin.md
+    shipped the tenant ledger (D3, record-only), the impersonation pipeline
+    (D5), cross-tenant user search (D6) and the audit-query HTTP shell (D7's
+    read side). Round 2 adds D4's enforcement half (PATCH .../tenants/{id}
+    now takes effect through tenancy.WithTenantStatusResolver, no new
+    route of its own), role management wrapping rbac.Service (D8: GET/POST
+    .../roles, POST .../roles/{id}/bindings), the cross-tenant usage/billing
+    dashboard (D9: GET .../usage-summary, stitched from metering's and
+    billing's own per-tenant methods, no new aggregate table), notification
+    send-record search (D10: GET .../notifications/send-records) and D7's
+    export leg (POST .../audit-events/export, asynchronous through go/jobs,
+    delivered through go/sharing via compliance.ExportService). This
+    fragment follows the operationId (admin_<action><Resource>) and
+    schema-name (Admin<Type>) conventions from
     .claude/skills/backend-coding-standards/SKILL.md §6.1. Regenerating
     admin-server.gen.go (in this directory) from this file with oapi-codegen
     pinned at v2.8.0 uses this directory's own oapi-codegen.yaml -- see that
-    file for the exact command. Neither Taskfile.yml's api:gen task nor
-    .github/workflows/api-contract.yml includes this fragment yet (a known
-    gap, not an oversight -- mirrored after go/pki's own honest disclosure
-    of the identical shape of gap for its api-contract.yml leg, before that
-    was closed for pki's Taskfile side): today the generated file must be
-    regenerated and diffed against openapi.yaml by hand, and a spec change
-    committed without a matching regeneration will not be caught by CI. A
-    future round should add this directory to both.
+    file for the exact command.
+
+    This round wires this fragment into .github/workflows/api-contract.yml's
+    regenerate-then-diff gate (backend-only, mirroring org's and storage's
+    own single-fragment entries in that workflow) -- round 1's honest
+    "neither Taskfile.yml's api:gen task nor api-contract.yml includes this
+    fragment yet" gap is closed on the CI side; Taskfile.yml's api:gen task
+    list still does not name admin explicitly (a separate, smaller gap left
+    for a future round, matching how pki's own Taskfile leg and
+    api-contract.yml leg closed in two different rounds).
 
     Every operation here is a platform-operations action gated on a
     rbac.SystemDomain permission (admin:access, admin:tenants_manage,
-    admin:search_users, admin:impersonate, admin:audit_read) -- it is
-    deliberately NOT downstream of the ordinary tenancy.Middleware tenant
-    resolution the way notes' or org's routes are, because these routes are
-    about tenants as data, not scoped to any one of them. The one exception
-    to "no ordinary tenant resolution" is impersonation's OWN downstream
-    effect on the REST of the application's routes, which is a request-
-    pipeline decorator (admin.ImpersonationMiddleware, pipeline.go) inserted
-    ahead of tenancy.Middleware for those other routes, not for admin's own.
+    admin:search_users, admin:impersonate, admin:audit_read,
+    admin:audit_export, admin:roles_manage, admin:usage_read,
+    admin:notifications_read) -- it is deliberately NOT downstream of the
+    ordinary tenancy.Middleware tenant resolution the way notes' or org's
+    routes are, because these routes are about tenants as data, not scoped
+    to any one of them. The one exception to "no ordinary tenant
+    resolution" is impersonation's OWN downstream effect on the REST of the
+    application's routes, which is a request-pipeline decorator
+    (admin.ImpersonationMiddleware, pipeline.go) inserted ahead of
+    tenancy.Middleware for those other routes, not for admin's own.
 
     Merging this fragment into the application-wide build/openapi/speed.yaml
     stays future work, following storage's own precedent of shipping a
@@ -340,6 +353,184 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AdminListAuditEventsResponse'
+  /api/v1/admin/audit-events/export:
+    post:
+      operationId: admin_exportAuditEvents
+      summary: Kick off an asynchronous audit-event export for one tenant (D7's export leg).
+      description: >-
+        Wraps compliance.ExportService.Export, which gathers every
+        registered participant's data for the tenant, stores it and
+        delivers it as a short-lived, single-view go/sharing link. This is
+        necessarily asynchronous -- the handler enqueues one go/jobs task
+        and returns immediately with its id, never running Export
+        synchronously inside the request (root CLAUDE.md's asynchronous-
+        work discipline).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminExportAuditEventsRequest'
+      responses:
+        '202':
+          description: The export job was enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminExportAuditEventsResponse'
+        '400':
+          description: tenantId was empty.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminError'
+  /api/v1/admin/roles:
+    get:
+      operationId: admin_listDeclaredPermissions
+      summary: List every permission any module has declared (D8's role-editing checklist).
+      description: >-
+        Wraps rbac.Service.DeclaredPermissions -- the frozen catalog
+        snapshot, not any one subject's own granted permissions
+        (ListPermissions answers that, and is not exposed here).
+      responses:
+        '200':
+          description: The declared permission catalog.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminListDeclaredPermissionsResponse'
+    post:
+      operationId: admin_defineRole
+      summary: Define or update a role inside one tenant (D8), wrapping rbac.Service.DefineRole.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminDefineRoleRequest'
+      responses:
+        '201':
+          description: The defined role.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminRole'
+        '400':
+          description: tenantId, key was empty, or permissions named one rbac has not declared.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminError'
+  /api/v1/admin/roles/{id}/bindings:
+    post:
+      operationId: admin_createRoleBinding
+      summary: >-
+        Assign a role to a user, optionally scoped to one org node (D8),
+        wrapping rbac.Service.AssignRole.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The role's Key (rbac.RoleDefinition.Key), not its database id.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCreateRoleBindingRequest'
+      responses:
+        '201':
+          description: The binding was created (idempotent -- AssignRole's own contract).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminRoleBinding'
+        '400':
+          description: tenantId or userId was empty.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminError'
+  /api/v1/admin/usage-summary:
+    get:
+      operationId: admin_getUsageSummary
+      summary: Cross-tenant usage/billing dashboard (D9).
+      description: >-
+        Stitched from go/metering's and go/billing's already-real,
+        per-tenant query methods, looped once per tenant in admin's own
+        ledger under D2's tenancy.WithSystemContext mechanism -- no new
+        database table. meteringSummaries/creditBalance/activeSubscription
+        are absent from a row when the corresponding module was never
+        wired through WithMetering/WithBilling.
+      responses:
+        '200':
+          description: One row per tenant in admin's own ledger.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminUsageSummaryResponse'
+        '500':
+          description: Neither go/metering nor go/billing was wired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminError'
+  /api/v1/admin/notifications/send-records:
+    get:
+      operationId: admin_listSendRecords
+      summary: Cross-tenant notification send-record search (D10).
+      description: >-
+        Wraps notification.SendRecordRepository.ListByFilter. tenantId
+        absent means every tenant in admin's own ledger (D2's per-tenant
+        loop under tenancy.WithSystemContext); present means the
+        single-tenant path.
+      parameters:
+        - name: tenantId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: channel
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: The matching send records.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminListSendRecordsResponse'
 components:
   schemas:
     AdminTenantStatus:
@@ -510,6 +701,172 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AdminAuditEvent'
+    AdminExportAuditEventsRequest:
+      type: object
+      required: [tenantId]
+      properties:
+        tenantId:
+          type: string
+    AdminExportAuditEventsResponse:
+      type: object
+      required: [jobId]
+      properties:
+        jobId:
+          type: string
+    AdminListDeclaredPermissionsResponse:
+      type: object
+      required: [permissions]
+      properties:
+        permissions:
+          type: array
+          items:
+            type: string
+    AdminDefineRoleRequest:
+      type: object
+      required: [tenantId, key, permissions]
+      properties:
+        tenantId:
+          type: string
+        key:
+          type: string
+        descriptionKey:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+    AdminRole:
+      type: object
+      required: [id, tenantId, key, descriptionKey, permissions]
+      properties:
+        id:
+          type: string
+        tenantId:
+          type: string
+        key:
+          type: string
+        descriptionKey:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+    AdminCreateRoleBindingRequest:
+      type: object
+      required: [tenantId, userId]
+      properties:
+        tenantId:
+          type: string
+        userId:
+          type: string
+        nodeId:
+          type: string
+    AdminRoleBinding:
+      type: object
+      required: [tenantId, userId, role]
+      properties:
+        tenantId:
+          type: string
+        userId:
+          type: string
+        role:
+          type: string
+        nodeId:
+          type: string
+    AdminUsageFeatureSummary:
+      type: object
+      required: [feature, periodStart, periodEnd, quantity]
+      properties:
+        feature:
+          type: string
+        periodStart:
+          type: string
+          format: date-time
+        periodEnd:
+          type: string
+          format: date-time
+        quantity:
+          type: number
+    AdminCreditBalance:
+      type: object
+      required: [available, reserved]
+      properties:
+        available:
+          type: integer
+        reserved:
+          type: integer
+    AdminSubscription:
+      type: object
+      required: [id, planId, status, createdAt]
+      properties:
+        id:
+          type: string
+        planId:
+          type: string
+        status:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    AdminUsageSummaryRow:
+      type: object
+      required: [tenantId, displayName]
+      properties:
+        tenantId:
+          type: string
+        displayName:
+          type: string
+        meteringSummaries:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminUsageFeatureSummary'
+        creditBalance:
+          $ref: '#/components/schemas/AdminCreditBalance'
+        activeSubscription:
+          $ref: '#/components/schemas/AdminSubscription'
+    AdminUsageSummaryResponse:
+      type: object
+      required: [rows]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminUsageSummaryRow'
+    AdminSendRecord:
+      type: object
+      required: [id, tenantId, typeKey, channel, recipientClass, status, createdAt]
+      properties:
+        id:
+          type: string
+        tenantId:
+          type: string
+        typeKey:
+          type: string
+        channel:
+          type: string
+        recipientClass:
+          type: string
+        recipientUserId:
+          type: string
+        contactId:
+          type: string
+        status:
+          type: string
+        error:
+          type: string
+        idempotencyKey:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    AdminListSendRecordsResponse:
+      type: object
+      required: [records]
+      properties:
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminSendRecord'
     AdminError:
       type: object
       description: >-

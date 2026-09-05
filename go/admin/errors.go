@@ -101,6 +101,32 @@ var (
 	// impersonation-started security notification has no transport
 	// without one.
 	ErrNotificationModuleRequired = apperr.Internal("admin.notification_module_required")
+
+	// ErrQueueRequired is returned when no jobs.Queue was injected with
+	// WithQueue -- D7's export leg (POST /api/v1/admin/audit-events/export)
+	// has no way to run compliance.ExportService.Export asynchronously
+	// without one.
+	ErrQueueRequired = apperr.Internal("admin.queue_required")
+
+	// ErrRBACServiceRequired is returned by every RoleService (D8) method
+	// when Module.AttachRBAC has not been called yet. Unlike the six
+	// wiring errors above, this is NOT a Register-time (Bootstrap)
+	// failure: rbac.Service does not exist until the host calls
+	// rbacModule.Attach(reg), which must run strictly AFTER Bootstrap
+	// returns -- a full cycle later than admin's own Register runs. See
+	// role.go's own RoleService doc comment and Module.AttachRBAC for the
+	// full reasoning. A request reaching D8's HTTP surface before the
+	// host has called AttachRBAC gets this refusal instead of a
+	// nil-service panic.
+	ErrRBACServiceRequired = apperr.Internal("admin.rbac_service_required")
+
+	// ErrUsageModulesNotWired is returned by UsageService.Summary (D9)
+	// when NEITHER go/metering nor go/billing was ever wired through
+	// WithMetering/WithBilling. A dashboard with nothing at all to stitch
+	// is a wiring gap, not a partial answer -- when only one of the two
+	// is wired, Summary instead answers with that one dimension present
+	// and the other absent from every row, never refusing outright.
+	ErrUsageModulesNotWired = apperr.Internal("admin.usage_modules_not_wired")
 )
 
 // errorCodes lists every code this module can return, in catalog order. It
@@ -122,5 +148,8 @@ var errorCodes = []string{
 	ErrOrgModuleRequired.Code,
 	ErrComplianceModuleRequired.Code,
 	ErrNotificationModuleRequired.Code,
+	ErrQueueRequired.Code,
+	ErrRBACServiceRequired.Code,
+	ErrUsageModulesNotWired.Code,
 	errInternal.Code,
 }

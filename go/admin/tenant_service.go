@@ -7,6 +7,8 @@ import (
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/tenancy"
 
 	"github.com/vislake/speed/go/dbkit/audit"
 )
@@ -146,6 +148,50 @@ func (s *TenantService) recordAudit(ctx context.Context, actor pkgcore.Actor, te
 			"tenant_id", tenantID, "error", err)
 	}
 }
+
+// Status implements tenancy.TenantStatusResolver (D4): the ledger row's
+// suspended status is what gives "suspend a tenant" real teeth, once a
+// host wires tenancy.WithTenantStatusResolver(adminModule.Tenants()) into
+// its own tenancy.Middleware call.
+//
+// A tenant absent from the ledger entirely -- one whose event-driven lazy
+// registration (D3) has not landed yet, or one nobody has bothered to
+// record here at all -- is reported TenantStatusActive, never suspended:
+// the ledger is an operator CONVENIENCE (this file's own TenantService
+// doc comment), never the authoritative source of tenant existence, so
+// its own absence must never itself become a reason to refuse a request
+// -- that would turn "the ledger has not caught up yet" into an outage for
+// a perfectly legitimate, brand-new tenant. Any other repository failure
+// (a genuine database error) is propagated unchanged, so
+// tenancy.Middleware fails the request closed with
+// ErrTenantStatusUnavailable rather than assuming the tenant is active on
+// an unreachable ledger.
+func (s *TenantService) Status(ctx context.Context, tenant pkgcore.TenantID) (tenancy.TenantStatus, error) {
+	t, err := s.repo.Get(ctx, string(tenant))
+	if err != nil {
+		if isTenantNotFound(err) {
+			return tenancy.TenantStatusActive, nil
+		}
+		return "", err
+	}
+	if t.Status == TenantStatusSuspended {
+		return tenancy.TenantStatusSuspended, nil
+	}
+	return tenancy.TenantStatusActive, nil
+}
+
+// isTenantNotFound reports whether err is ErrTenantNotFound, classifying
+// by Code through apperr.As rather than by pointer identity -- the same
+// convention isGrantNotFound (impersonation_service.go) documents in
+// full.
+func isTenantNotFound(err error) bool {
+	appErr, ok := apperr.As(err)
+	return ok && appErr.Code == ErrTenantNotFound.Code
+}
+
+// compile-time check that *TenantService satisfies
+// tenancy.TenantStatusResolver.
+var _ tenancy.TenantStatusResolver = (*TenantService)(nil)
 
 // handleOrgNodeCreated is D3's event-driven lazy population subscriber: it
 // listens for org's real org.node.created event and, when the created node

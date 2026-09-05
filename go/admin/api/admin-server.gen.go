@@ -49,6 +49,13 @@ type AdminAuditEvent struct {
 	TenantID         *string   `json:"tenantId,omitempty"`
 }
 
+// AdminCreateRoleBindingRequest defines model for AdminCreateRoleBindingRequest.
+type AdminCreateRoleBindingRequest struct {
+	NodeID   *string `json:"nodeId,omitempty"`
+	TenantID string  `json:"tenantId"`
+	UserID   string  `json:"userId"`
+}
+
 // AdminCreateTenantRequest defines model for AdminCreateTenantRequest.
 type AdminCreateTenantRequest struct {
 	DisplayName *string `json:"displayName,omitempty"`
@@ -56,11 +63,35 @@ type AdminCreateTenantRequest struct {
 	TenantID    string  `json:"tenantId"`
 }
 
+// AdminCreditBalance defines model for AdminCreditBalance.
+type AdminCreditBalance struct {
+	Available int `json:"available"`
+	Reserved  int `json:"reserved"`
+}
+
+// AdminDefineRoleRequest defines model for AdminDefineRoleRequest.
+type AdminDefineRoleRequest struct {
+	DescriptionKey *string  `json:"descriptionKey,omitempty"`
+	Key            string   `json:"key"`
+	Permissions    []string `json:"permissions"`
+	TenantID       string   `json:"tenantId"`
+}
+
 // AdminError The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md).
 type AdminError struct {
 	// Code Example: admin.tenant_not_found
 	Code   *string                 `json:"code,omitempty"`
 	Params *map[string]interface{} `json:"params,omitempty"`
+}
+
+// AdminExportAuditEventsRequest defines model for AdminExportAuditEventsRequest.
+type AdminExportAuditEventsRequest struct {
+	TenantID string `json:"tenantId"`
+}
+
+// AdminExportAuditEventsResponse defines model for AdminExportAuditEventsResponse.
+type AdminExportAuditEventsResponse struct {
+	JobID string `json:"jobId"`
 }
 
 // AdminImpersonationGrant defines model for AdminImpersonationGrant.
@@ -81,9 +112,19 @@ type AdminListAuditEventsResponse struct {
 	Events []AdminAuditEvent `json:"events"`
 }
 
+// AdminListDeclaredPermissionsResponse defines model for AdminListDeclaredPermissionsResponse.
+type AdminListDeclaredPermissionsResponse struct {
+	Permissions []string `json:"permissions"`
+}
+
 // AdminListImpersonationGrantsResponse defines model for AdminListImpersonationGrantsResponse.
 type AdminListImpersonationGrantsResponse struct {
 	Grants []AdminImpersonationGrant `json:"grants"`
+}
+
+// AdminListSendRecordsResponse defines model for AdminListSendRecordsResponse.
+type AdminListSendRecordsResponse struct {
+	Records []AdminSendRecord `json:"records"`
 }
 
 // AdminListTenantsResponse defines model for AdminListTenantsResponse.
@@ -96,9 +137,41 @@ type AdminListUserMembershipsResponse struct {
 	TenantIds []string `json:"tenantIds"`
 }
 
+// AdminRole defines model for AdminRole.
+type AdminRole struct {
+	DescriptionKey string   `json:"descriptionKey"`
+	ID             string   `json:"id"`
+	Key            string   `json:"key"`
+	Permissions    []string `json:"permissions"`
+	TenantID       string   `json:"tenantId"`
+}
+
+// AdminRoleBinding defines model for AdminRoleBinding.
+type AdminRoleBinding struct {
+	NodeID   *string `json:"nodeId,omitempty"`
+	Role     string  `json:"role"`
+	TenantID string  `json:"tenantId"`
+	UserID   string  `json:"userId"`
+}
+
 // AdminSearchUsersResponse defines model for AdminSearchUsersResponse.
 type AdminSearchUsersResponse struct {
 	Users []AdminUser `json:"users"`
+}
+
+// AdminSendRecord defines model for AdminSendRecord.
+type AdminSendRecord struct {
+	Channel         string    `json:"channel"`
+	ContactID       *string   `json:"contactId,omitempty"`
+	CreatedAt       time.Time `json:"createdAt"`
+	Error           *string   `json:"error,omitempty"`
+	ID              string    `json:"id"`
+	IdempotencyKey  *string   `json:"idempotencyKey,omitempty"`
+	RecipientClass  string    `json:"recipientClass"`
+	RecipientUserID *string   `json:"recipientUserId,omitempty"`
+	Status          string    `json:"status"`
+	TenantID        string    `json:"tenantId"`
+	TypeKey         string    `json:"typeKey"`
 }
 
 // AdminStartImpersonationRequest defines model for AdminStartImpersonationRequest.
@@ -107,6 +180,14 @@ type AdminStartImpersonationRequest struct {
 	Reason         string  `json:"reason"`
 	TargetTenantID string  `json:"targetTenantId"`
 	TargetUserID   string  `json:"targetUserId"`
+}
+
+// AdminSubscription defines model for AdminSubscription.
+type AdminSubscription struct {
+	CreatedAt time.Time `json:"createdAt"`
+	ID        string    `json:"id"`
+	PlanID    string    `json:"planId"`
+	Status    string    `json:"status"`
 }
 
 // AdminTenant defines model for AdminTenant.
@@ -132,6 +213,28 @@ type AdminUpdateTenantRequest struct {
 	SuspendedReason *string            `json:"suspendedReason,omitempty"`
 }
 
+// AdminUsageFeatureSummary defines model for AdminUsageFeatureSummary.
+type AdminUsageFeatureSummary struct {
+	Feature     string    `json:"feature"`
+	PeriodEnd   time.Time `json:"periodEnd"`
+	PeriodStart time.Time `json:"periodStart"`
+	Quantity    float32   `json:"quantity"`
+}
+
+// AdminUsageSummaryResponse defines model for AdminUsageSummaryResponse.
+type AdminUsageSummaryResponse struct {
+	Rows []AdminUsageSummaryRow `json:"rows"`
+}
+
+// AdminUsageSummaryRow defines model for AdminUsageSummaryRow.
+type AdminUsageSummaryRow struct {
+	ActiveSubscription *AdminSubscription          `json:"activeSubscription,omitempty"`
+	CreditBalance      *AdminCreditBalance         `json:"creditBalance,omitempty"`
+	DisplayName        string                      `json:"displayName"`
+	MeteringSummaries  *[]AdminUsageFeatureSummary `json:"meteringSummaries,omitempty"`
+	TenantID           string                      `json:"tenantId"`
+}
+
 // AdminUser defines model for AdminUser.
 type AdminUser struct {
 	DisplayName string  `json:"displayName"`
@@ -153,6 +256,17 @@ type AdminListAuditEventsParams struct {
 	Offset   *int       `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
+// AdminListSendRecordsParams defines parameters for AdminListSendRecords.
+type AdminListSendRecordsParams struct {
+	TenantID *string    `form:"tenantId,omitempty" json:"tenantId,omitempty"`
+	Channel  *string    `form:"channel,omitempty" json:"channel,omitempty"`
+	Status   *string    `form:"status,omitempty" json:"status,omitempty"`
+	From     *time.Time `form:"from,omitempty" json:"from,omitempty"`
+	To       *time.Time `form:"to,omitempty" json:"to,omitempty"`
+	Limit    *int       `form:"limit,omitempty" json:"limit,omitempty"`
+	Offset   *int       `form:"offset,omitempty" json:"offset,omitempty"`
+}
+
 // AdminListTenantsParams defines parameters for AdminListTenants.
 type AdminListTenantsParams struct {
 	Status *AdminTenantStatus `form:"status,omitempty" json:"status,omitempty"`
@@ -168,8 +282,17 @@ type AdminSearchUsersParams struct {
 	Limit             *int    `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// AdminExportAuditEventsJSONRequestBody defines body for AdminExportAuditEvents for application/json ContentType.
+type AdminExportAuditEventsJSONRequestBody = AdminExportAuditEventsRequest
+
 // AdminStartImpersonationJSONRequestBody defines body for AdminStartImpersonation for application/json ContentType.
 type AdminStartImpersonationJSONRequestBody = AdminStartImpersonationRequest
+
+// AdminDefineRoleJSONRequestBody defines body for AdminDefineRole for application/json ContentType.
+type AdminDefineRoleJSONRequestBody = AdminDefineRoleRequest
+
+// AdminCreateRoleBindingJSONRequestBody defines body for AdminCreateRoleBinding for application/json ContentType.
+type AdminCreateRoleBindingJSONRequestBody = AdminCreateRoleBindingRequest
 
 // AdminCreateTenantJSONRequestBody defines body for AdminCreateTenant for application/json ContentType.
 type AdminCreateTenantJSONRequestBody = AdminCreateTenantRequest
@@ -182,6 +305,9 @@ type ServerInterface interface {
 	// AdminListAuditEvents Query the audit trail, single-tenant or cross-tenant (D7).
 	// (GET /api/v1/admin/audit-events)
 	AdminListAuditEvents(w http.ResponseWriter, r *http.Request, params AdminListAuditEventsParams)
+	// AdminExportAuditEvents Kick off an asynchronous audit-event export for one tenant (D7's export leg).
+	// (POST /api/v1/admin/audit-events/export)
+	AdminExportAuditEvents(w http.ResponseWriter, r *http.Request)
 	// AdminListImpersonationGrants List currently-active impersonation grants (D5's self-audit listing).
 	// (GET /api/v1/admin/impersonation)
 	AdminListImpersonationGrants(w http.ResponseWriter, r *http.Request)
@@ -191,6 +317,18 @@ type ServerInterface interface {
 	// AdminEndImpersonation End an impersonation session early (D5).
 	// (DELETE /api/v1/admin/impersonation/{id})
 	AdminEndImpersonation(w http.ResponseWriter, r *http.Request, id string)
+	// AdminListSendRecords Cross-tenant notification send-record search (D10).
+	// (GET /api/v1/admin/notifications/send-records)
+	AdminListSendRecords(w http.ResponseWriter, r *http.Request, params AdminListSendRecordsParams)
+	// AdminListDeclaredPermissions List every permission any module has declared (D8's role-editing checklist).
+	// (GET /api/v1/admin/roles)
+	AdminListDeclaredPermissions(w http.ResponseWriter, r *http.Request)
+	// AdminDefineRole Define or update a role inside one tenant (D8), wrapping rbac.Service.DefineRole.
+	// (POST /api/v1/admin/roles)
+	AdminDefineRole(w http.ResponseWriter, r *http.Request)
+	// AdminCreateRoleBinding Assign a role to a user, optionally scoped to one org node (D8), wrapping rbac.Service.AssignRole.
+	// (POST /api/v1/admin/roles/{id}/bindings)
+	AdminCreateRoleBinding(w http.ResponseWriter, r *http.Request, id string)
 	// AdminListTenants List the operator-facing tenant ledger (D3).
 	// (GET /api/v1/admin/tenants)
 	AdminListTenants(w http.ResponseWriter, r *http.Request, params AdminListTenantsParams)
@@ -203,6 +341,9 @@ type ServerInterface interface {
 	// AdminUpdateTenant Rename, suspend or resume a tenant ledger row (D3 + D4's record-only half).
 	// (PATCH /api/v1/admin/tenants/{id})
 	AdminUpdateTenant(w http.ResponseWriter, r *http.Request, id string)
+	// AdminGetUsageSummary Cross-tenant usage/billing dashboard (D9).
+	// (GET /api/v1/admin/usage-summary)
+	AdminGetUsageSummary(w http.ResponseWriter, r *http.Request)
 	// AdminSearchUsers Cross-tenant user search (D6).
 	// (GET /api/v1/admin/users)
 	AdminSearchUsers(w http.ResponseWriter, r *http.Request, params AdminSearchUsersParams)
@@ -357,6 +498,20 @@ func (siw *ServerInterfaceWrapper) AdminListAuditEvents(w http.ResponseWriter, r
 	handler.ServeHTTP(w, r)
 }
 
+// AdminExportAuditEvents operation middleware
+func (siw *ServerInterfaceWrapper) AdminExportAuditEvents(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AdminExportAuditEvents(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // AdminListImpersonationGrants operation middleware
 func (siw *ServerInterfaceWrapper) AdminListImpersonationGrants(w http.ResponseWriter, r *http.Request) {
 
@@ -402,6 +557,171 @@ func (siw *ServerInterfaceWrapper) AdminEndImpersonation(w http.ResponseWriter, 
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.AdminEndImpersonation(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AdminListSendRecords operation middleware
+func (siw *ServerInterfaceWrapper) AdminListSendRecords(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params AdminListSendRecordsParams
+
+	// ------------- Optional query parameter "tenantId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "tenantId", r.URL.Query(), &params.TenantID, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "tenantId"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "tenantId", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "channel" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "channel", r.URL.Query(), &params.Channel, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "channel"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channel", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "status", r.URL.Query(), &params.Status, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "status"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "status", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "from" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "from", r.URL.Query(), &params.From, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "from"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "from", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "to" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "to", r.URL.Query(), &params.To, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "to"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "to", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "offset" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "offset", r.URL.Query(), &params.Offset, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "offset"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "offset", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AdminListSendRecords(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AdminListDeclaredPermissions operation middleware
+func (siw *ServerInterfaceWrapper) AdminListDeclaredPermissions(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AdminListDeclaredPermissions(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AdminDefineRole operation middleware
+func (siw *ServerInterfaceWrapper) AdminDefineRole(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AdminDefineRole(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AdminCreateRoleBinding operation middleware
+func (siw *ServerInterfaceWrapper) AdminCreateRoleBinding(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AdminCreateRoleBinding(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -527,6 +847,20 @@ func (siw *ServerInterfaceWrapper) AdminUpdateTenant(w http.ResponseWriter, r *h
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.AdminUpdateTenant(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AdminGetUsageSummary operation middleware
+func (siw *ServerInterfaceWrapper) AdminGetUsageSummary(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AdminGetUsageSummary(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -764,6 +1098,12 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/admin/impersonation", wrapper.AdminStartImpersonation)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/admin/impersonation/{id}", wrapper.AdminEndImpersonation)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/audit-events", wrapper.AdminListAuditEvents)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/admin/audit-events/export", wrapper.AdminExportAuditEvents)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/roles", wrapper.AdminListDeclaredPermissions)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/admin/roles", wrapper.AdminDefineRole)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/admin/roles/{id}/bindings", wrapper.AdminCreateRoleBinding)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/usage-summary", wrapper.AdminGetUsageSummary)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/notifications/send-records", wrapper.AdminListSendRecords)
 
 	return m
 }

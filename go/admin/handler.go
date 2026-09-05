@@ -6,8 +6,10 @@ import (
 
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/dbkit/audit"
+	"github.com/vislake/speed/go/notification"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/rbac"
 
 	"github.com/vislake/speed/go/admin/api"
 )
@@ -39,17 +41,30 @@ type Handler struct {
 	impersonation *ImpersonationService
 	search        *SearchService
 	auditSvc      *AuditService
+	exportSvc     *ExportService
+	roles         *RoleService
+	usage         *UsageService
+	sendRecords   *SendRecordSearchService
 	mux           *http.ServeMux
 }
 
-// NewHandler returns a Handler serving the four given services' operations.
+// NewHandler returns a Handler serving the given services' operations.
 //
 // The returned Handler's routing is registered by the generated
 // api.HandlerFromMux helper, mirroring every other module's identical
 // handler-construction pattern (see notes/handler.go's NewHandler for the
 // full rationale).
-func NewHandler(tenants *TenantService, impersonation *ImpersonationService, search *SearchService, auditSvc *AuditService) *Handler {
-	h := &Handler{tenants: tenants, impersonation: impersonation, search: search, auditSvc: auditSvc}
+func NewHandler(tenants *TenantService, impersonation *ImpersonationService, search *SearchService, auditSvc *AuditService, exportSvc *ExportService, roles *RoleService, usage *UsageService, sendRecords *SendRecordSearchService) *Handler {
+	h := &Handler{
+		tenants:       tenants,
+		impersonation: impersonation,
+		search:        search,
+		auditSvc:      auditSvc,
+		exportSvc:     exportSvc,
+		roles:         roles,
+		usage:         usage,
+		sendRecords:   sendRecords,
+	}
 	h.mux = http.NewServeMux()
 	api.HandlerFromMux(h, h.mux)
 	return h
@@ -414,6 +429,220 @@ func toAdminAuditEvent(e audit.AuditEvent) api.AdminAuditEvent {
 	if e.TenantID != "" {
 		tenantID := e.TenantID
 		out.TenantID = &tenantID
+	}
+	return out
+}
+
+// --- D7: audit export -------------------------------------------------------
+
+// AdminExportAuditEvents implements api.ServerInterface.
+func (h *Handler) AdminExportAuditEvents(w http.ResponseWriter, r *http.Request) {
+	var req api.AdminExportAuditEventsRequest
+	if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
+		writeError(w, ErrTenantIDRequired.WithCause(decodeErr))
+		return
+	}
+	jobID, err := h.exportSvc.Enqueue(r.Context(), req.TenantID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, api.AdminExportAuditEventsResponse{JobID: string(jobID)})
+}
+
+// --- D8: role management -----------------------------------------------------
+
+// AdminListDeclaredPermissions implements api.ServerInterface.
+func (h *Handler) AdminListDeclaredPermissions(w http.ResponseWriter, r *http.Request) {
+	perms, err := h.roles.DeclaredPermissions()
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, api.AdminListDeclaredPermissionsResponse{Permissions: perms})
+}
+
+// AdminDefineRole implements api.ServerInterface.
+func (h *Handler) AdminDefineRole(w http.ResponseWriter, r *http.Request) {
+	var req api.AdminDefineRoleRequest
+	if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
+		writeError(w, ErrTenantIDRequired.WithCause(decodeErr))
+		return
+	}
+	def := rbac.RoleDefinition{Key: req.Key, Permissions: req.Permissions}
+	if req.DescriptionKey != nil {
+		def.DescriptionKey = *req.DescriptionKey
+	}
+	role, err := h.roles.DefineRole(r.Context(), req.TenantID, def)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, api.AdminRole{
+		ID:             role.ID,
+		TenantID:       role.TenantID,
+		Key:            role.Key,
+		DescriptionKey: role.DescriptionKey,
+		Permissions:    req.Permissions,
+	})
+}
+
+// AdminCreateRoleBinding implements api.ServerInterface.
+func (h *Handler) AdminCreateRoleBinding(w http.ResponseWriter, r *http.Request, id string) {
+	var req api.AdminCreateRoleBindingRequest
+	if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
+		writeError(w, ErrTenantIDRequired.WithCause(decodeErr))
+		return
+	}
+	nodeID := ""
+	if req.NodeID != nil {
+		nodeID = *req.NodeID
+	}
+	if err := h.roles.AssignRole(r.Context(), req.TenantID, req.UserID, id, nodeID); err != nil {
+		writeError(w, err)
+		return
+	}
+	out := api.AdminRoleBinding{TenantID: req.TenantID, UserID: req.UserID, Role: id}
+	if nodeID != "" {
+		out.NodeID = &nodeID
+	}
+	writeJSON(w, http.StatusCreated, out)
+}
+
+// --- D9: usage/billing dashboard ---------------------------------------------
+
+// AdminGetUsageSummary implements api.ServerInterface.
+func (h *Handler) AdminGetUsageSummary(w http.ResponseWriter, r *http.Request) {
+	callerID, err := callerUserID(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	rows, err := h.usage.Summary(r.Context(), callerID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	resp := api.AdminUsageSummaryResponse{Rows: make([]api.AdminUsageSummaryRow, 0, len(rows))}
+	for _, row := range rows {
+		resp.Rows = append(resp.Rows, toAdminUsageSummaryRow(row))
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func toAdminUsageSummaryRow(row UsageSummaryRow) api.AdminUsageSummaryRow {
+	out := api.AdminUsageSummaryRow{TenantID: row.TenantID, DisplayName: row.DisplayName}
+	if row.MeteringSummaries != nil {
+		summaries := make([]api.AdminUsageFeatureSummary, 0, len(row.MeteringSummaries))
+		for _, s := range row.MeteringSummaries {
+			summaries = append(summaries, api.AdminUsageFeatureSummary{
+				Feature:     s.Feature,
+				PeriodStart: s.PeriodStart,
+				PeriodEnd:   s.PeriodEnd,
+				Quantity:    float32(s.Quantity),
+			})
+		}
+		out.MeteringSummaries = &summaries
+	}
+	if row.CreditBalance != nil {
+		out.CreditBalance = &api.AdminCreditBalance{
+			Available: int(row.CreditBalance.Available),
+			Reserved:  int(row.CreditBalance.Reserved),
+		}
+	}
+	if row.ActiveSubscription != nil {
+		out.ActiveSubscription = &api.AdminSubscription{
+			ID:        row.ActiveSubscription.ID,
+			PlanID:    row.ActiveSubscription.PlanID,
+			Status:    row.ActiveSubscription.Status,
+			CreatedAt: row.ActiveSubscription.CreatedAt,
+		}
+	}
+	return out
+}
+
+// --- D10: notification send-record search ------------------------------------
+
+// defaultSendRecordSearchLimit/maxSendRecordSearchLimit resolve D10's own
+// limit before SendRecordRepository.ListByFilter is ever called: that
+// method never clamps (its own doc comment: the caller resolves the
+// default and cap first), and gorm's Limit(0) means "zero rows", not "no
+// limit" -- an unresolved zero limit here would silently return an empty
+// result for a caller that simply omitted the parameter.
+const (
+	defaultSendRecordSearchLimit = 50
+	maxSendRecordSearchLimit     = 500
+)
+
+// AdminListSendRecords implements api.ServerInterface.
+func (h *Handler) AdminListSendRecords(w http.ResponseWriter, r *http.Request, params api.AdminListSendRecordsParams) {
+	callerID, err := callerUserID(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	filter := notification.SendRecordFilter{Limit: defaultSendRecordSearchLimit}
+	if params.Channel != nil {
+		filter.Channel = *params.Channel
+	}
+	if params.Status != nil {
+		filter.Status = *params.Status
+	}
+	if params.From != nil {
+		filter.From = *params.From
+	}
+	if params.To != nil {
+		filter.To = *params.To
+	}
+	if params.Limit != nil && *params.Limit > 0 {
+		filter.Limit = *params.Limit
+	}
+	if filter.Limit > maxSendRecordSearchLimit {
+		filter.Limit = maxSendRecordSearchLimit
+	}
+	if params.Offset != nil {
+		filter.Offset = *params.Offset
+	}
+
+	var tenantID string
+	if params.TenantID != nil {
+		tenantID = *params.TenantID
+	}
+
+	records, err := h.sendRecords.Query(r.Context(), callerID, tenantID, filter)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	resp := api.AdminListSendRecordsResponse{Records: make([]api.AdminSendRecord, 0, len(records))}
+	for _, rec := range records {
+		resp.Records = append(resp.Records, toAdminSendRecord(rec))
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func toAdminSendRecord(rec notification.SendRecord) api.AdminSendRecord {
+	out := api.AdminSendRecord{
+		ID:             rec.ID,
+		TenantID:       rec.TenantID,
+		TypeKey:        rec.TypeKey,
+		Channel:        rec.Channel,
+		RecipientClass: rec.RecipientClass,
+		Status:         rec.Status,
+		CreatedAt:      rec.CreatedAt,
+	}
+	if rec.RecipientUserID != "" {
+		out.RecipientUserID = &rec.RecipientUserID
+	}
+	if rec.ContactID != "" {
+		out.ContactID = &rec.ContactID
+	}
+	if rec.Error != "" {
+		out.Error = &rec.Error
+	}
+	if rec.IdempotencyKey != "" {
+		out.IdempotencyKey = &rec.IdempotencyKey
 	}
 	return out
 }

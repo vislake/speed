@@ -6,10 +6,14 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/billing"
 	"github.com/vislake/speed/go/compliance"
+	"github.com/vislake/speed/go/jobs"
+	"github.com/vislake/speed/go/metering"
 	"github.com/vislake/speed/go/notification"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/rbac"
 
 	"github.com/vislake/speed/go/admin/locales"
 	"github.com/vislake/speed/go/admin/migrations"
@@ -52,6 +56,25 @@ const (
 
 	// PermissionAuditRead gates D7's audit-query HTTP shell.
 	PermissionAuditRead = "admin:audit_read"
+
+	// PermissionAuditExport gates D7's export leg (POST
+	// /api/v1/admin/audit-events/export) -- kept distinct from
+	// PermissionAuditRead since exporting a tenant's complete audit
+	// trail as a downloadable package is a materially stronger action
+	// than merely reading it through the paginated query surface.
+	PermissionAuditExport = "admin:audit_export"
+
+	// PermissionRolesManage gates D8's whole role-management surface:
+	// listing the declared-permission catalog, defining a role and
+	// binding it to a user.
+	PermissionRolesManage = "admin:roles_manage"
+
+	// PermissionUsageRead gates D9's cross-tenant usage/billing dashboard.
+	PermissionUsageRead = "admin:usage_read"
+
+	// PermissionNotificationsRead gates D10's cross-tenant notification
+	// send-record search.
+	PermissionNotificationsRead = "admin:notifications_read"
 )
 
 // The audit actions admin contributes to the audit vocabulary --
@@ -107,11 +130,17 @@ type Module struct {
 	impersonation *ImpersonationService
 	search        *SearchService
 	auditSvc      *AuditService
+	exportSvc     *ExportService
+	roles         *RoleService
+	usage         *UsageService
 
 	authnModule        *authn.Module
 	orgModule          *org.Module
 	complianceModule   *compliance.Module
 	notificationModule *notification.Module
+	meteringModule     *metering.Module // optional, D9 -- see WithMetering
+	billingModule      *billing.Module  // optional, D9 -- see WithBilling
+	queue              jobs.Queue       // mandatory, D7's export leg -- see WithQueue
 
 	handler *Handler
 }
@@ -157,6 +186,39 @@ func WithNotification(notificationModule *notification.Module) Option {
 	return func(m *Module) { m.notificationModule = notificationModule }
 }
 
+// WithQueue wires the jobs.Queue D7's export leg (POST
+// /api/v1/admin/audit-events/export) enqueues onto -- mandatory, like the
+// four options above: without it, Register returns ErrQueueRequired.
+// compliance.ExportService.Export gathers, stores and delivers a tenant's
+// complete audit export in one call, which does not belong inside an HTTP
+// request's own timeout budget (root CLAUDE.md's asynchronous-work
+// discipline), so this module needs a queue exactly as go/storage's and
+// go/notification's own WithQueue/WithDeliveryQueue options do.
+func WithQueue(queue jobs.Queue) Option {
+	return func(m *Module) { m.queue = queue }
+}
+
+// WithMetering wires the *metering.Module D9's usage dashboard reads
+// go/metering's per-tenant UsageSummary rows through
+// (metering.Module.Summaries().List). OPTIONAL, unlike the five options
+// above: a host that never calls this simply gets no metering dimension
+// in D9's response rows (nil MeteringSummaries on every row) rather than
+// failing Bootstrap -- see UsageService's own doc comment for why
+// go/metering and go/billing are each independently optional rather than
+// both mandatory the way authn/org/compliance/notification are.
+func WithMetering(meteringModule *metering.Module) Option {
+	return func(m *Module) { m.meteringModule = meteringModule }
+}
+
+// WithBilling wires the *billing.Module D9's usage dashboard reads
+// go/billing's per-tenant CreditBalance and active Subscription through
+// (billing.Module.Credits().Balance, billing.Module.Subscriptions().Active).
+// OPTIONAL, mirroring WithMetering's own doc comment exactly, the other
+// side of the same design choice.
+func WithBilling(billingModule *billing.Module) Option {
+	return func(m *Module) { m.billingModule = billingModule }
+}
+
 // NewModule returns a Module whose two platform-data tables live in db.
 // Constructing a Module performs no I/O: opening and migrating db is the
 // host's responsibility, done once at startup before Bootstrap ever calls
@@ -164,12 +226,14 @@ func WithNotification(notificationModule *notification.Module) Option {
 func NewModule(db *gorm.DB, opts ...Option) *Module {
 	tenantRepo := NewTenantRepository(db)
 	grantRepo := NewImpersonationRepository(db)
+	tenants := NewTenantService(tenantRepo)
 	m := &Module{
 		db:            db,
 		tenantRepo:    tenantRepo,
 		grantRepo:     grantRepo,
-		tenants:       NewTenantService(tenantRepo),
+		tenants:       tenants,
 		impersonation: NewImpersonationService(grantRepo),
+		roles:         NewRoleService(),
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -177,7 +241,10 @@ func NewModule(db *gorm.DB, opts ...Option) *Module {
 	return m
 }
 
-// Tenants returns the module's TenantService (D3).
+// Tenants returns the module's TenantService (D3). It also implements
+// tenancy.TenantStatusResolver (D4) -- a host wires
+// tenancy.WithTenantStatusResolver(adminModule.Tenants()) into its own
+// tenancy.Middleware call to give tenant suspension real teeth.
 func (m *Module) Tenants() *TenantService { return m.tenants }
 
 // Impersonation returns the module's ImpersonationService (D5).
@@ -186,6 +253,40 @@ func (m *Module) Impersonation() *ImpersonationService { return m.impersonation 
 // Search returns the module's SearchService (D6). Nil until Register has
 // run.
 func (m *Module) Search() *SearchService { return m.search }
+
+// Roles returns the module's RoleService (D8). Every method on it fails
+// closed with ErrRBACServiceRequired until the host calls AttachRBAC --
+// see that method's own doc comment for when to call it.
+func (m *Module) Roles() *RoleService { return m.roles }
+
+// Usage returns the module's UsageService (D9). Nil until Register has
+// run.
+func (m *Module) Usage() *UsageService { return m.usage }
+
+// Export returns the module's ExportService (D7's export leg). Nil until
+// Register has run.
+func (m *Module) Export() *ExportService { return m.exportSvc }
+
+// AttachRBAC gives the module's RoleService (D8) the *rbac.Service every
+// one of its methods delegates to. The host calls this exactly once,
+// immediately after its own rbacModule.Attach(registry) succeeds -- a
+// call that, by rbac's own documented contract, must run strictly AFTER
+// pkgcore.Kernel.Bootstrap returns (Attach freezes the snapshot of every
+// permission every module declared, so it cannot run any earlier without
+// risking an incomplete catalog).
+//
+// This is why rbac is NOT wired through a WithXxx(*rbac.Module)
+// construction-time Option the way authn, org, compliance and
+// notification are: admin's own Module.Register runs DURING Bootstrap,
+// strictly before the host's own post-Bootstrap rbacModule.Attach call,
+// so a *rbac.Module handed to admin at construction time would have no
+// Service to read yet at the one point (Register) admin could read it
+// from. AttachRBAC is therefore a distinct, later wiring step the host
+// performs itself -- see role.go's RoleService doc comment for the full
+// reasoning. Calling this before Bootstrap, or not at all, leaves every
+// RoleService method failing closed with ErrRBACServiceRequired rather
+// than panicking on a nil service.
+func (m *Module) AttachRBAC(svc *rbac.Service) { m.roles.attach(svc) }
 
 // Name implements pkgcore.Module.
 func (m *Module) Name() string { return moduleName }
@@ -261,6 +362,9 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	if m.notificationModule == nil {
 		return ErrNotificationModuleRequired
 	}
+	if m.queue == nil {
+		return ErrQueueRequired
+	}
 
 	if err := reg.Permissions.Add(
 		PermissionAccess,
@@ -268,6 +372,10 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		PermissionSearchUsers,
 		PermissionImpersonate,
 		PermissionAuditRead,
+		PermissionAuditExport,
+		PermissionRolesManage,
+		PermissionUsageRead,
+		PermissionNotificationsRead,
 	); err != nil {
 		return err
 	}
@@ -303,9 +411,20 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	m.auditSvc = NewAuditService(m.complianceModule.AuditQuery(), m.tenants)
 	m.auditSvc.attach(bus)
 
+	m.exportSvc = NewExportService(m.complianceModule.Export(), m.queue)
+	if err := reg.Jobs.Handle(jobTypeAuditExport, m.exportSvc); err != nil {
+		return err
+	}
+
+	m.usage = NewUsageService(m.meteringModule, m.billingModule, m.tenants)
+	m.usage.attach(bus)
+
+	sendRecords := NewSendRecordSearchService(m.notificationModule.Deliveries(), m.tenants)
+	sendRecords.attach(bus)
+
 	reg.Events.Subscribe(org.EventNodeCreated, m.tenants.handleOrgNodeCreated)
 
-	m.handler = NewHandler(m.tenants, m.impersonation, m.search, m.auditSvc)
+	m.handler = NewHandler(m.tenants, m.impersonation, m.search, m.auditSvc, m.exportSvc, m.roles, m.usage, sendRecords)
 	reg.Routes.Mount(apiPath, m.handler)
 	return nil
 }

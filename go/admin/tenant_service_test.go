@@ -9,6 +9,7 @@ import (
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/tenancy"
 )
 
 // newTestRegistry returns a *pkgcore.Registry over an in-process bus, an
@@ -257,5 +258,101 @@ func TestTenantService_SetStatus_RecordsAuditEvent(t *testing.T) {
 	}
 	if recorded[0].Actor != actor {
 		t.Fatalf("Actor = %+v, want %+v", recorded[0].Actor, actor)
+	}
+}
+
+// TestTenantService_Status_UnknownTenant_IsActiveNeverSuspended is D4's
+// core safety property: a tenant the ledger has never heard of -- whose
+// event-driven lazy registration has not landed yet, or one nobody has
+// recorded here at all -- must never be treated as suspended, or the
+// ledger's own eventual-consistency lag would turn into an outage for a
+// perfectly legitimate, brand-new tenant.
+func TestTenantService_Status_UnknownTenant_IsActiveNeverSuspended(t *testing.T) {
+	db := testutil.NewDB(t)
+	svc := NewTenantService(NewTenantRepository(db))
+
+	status, err := svc.Status(context.Background(), "tenant-never-seen")
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if status != tenancy.TenantStatusActive {
+		t.Fatalf("Status() = %q, want %q", status, tenancy.TenantStatusActive)
+	}
+}
+
+// TestTenantService_Status_ActiveTenant_ReportsActive pins the ordinary
+// case: an explicitly active ledger row reports active.
+func TestTenantService_Status_ActiveTenant_ReportsActive(t *testing.T) {
+	db := testutil.NewDB(t)
+	repo := NewTenantRepository(db)
+	svc := NewTenantService(repo)
+	ctx := context.Background()
+	if err := repo.Create(ctx, &Tenant{TenantID: "tenant-active-1"}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	status, err := svc.Status(ctx, "tenant-active-1")
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if status != tenancy.TenantStatusActive {
+		t.Fatalf("Status() = %q, want %q", status, tenancy.TenantStatusActive)
+	}
+}
+
+// TestTenantService_Status_SuspendedTenant_ReportsSuspended is D4's whole
+// point: a ledger row SetStatus suspended reports suspended through this
+// same seam, exactly the fact tenancy.Middleware needs to actually refuse
+// a request.
+func TestTenantService_Status_SuspendedTenant_ReportsSuspended(t *testing.T) {
+	db := testutil.NewDB(t)
+	repo := NewTenantRepository(db)
+	svc := NewTenantService(repo)
+	ctx := context.Background()
+	if err := repo.Create(ctx, &Tenant{TenantID: "tenant-suspended-1"}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	suspended := TenantStatusSuspended
+	if _, err := svc.SetStatus(ctx, "tenant-suspended-1", TenantPatch{Status: &suspended}, pkgcore.Actor{ID: "op"}); err != nil {
+		t.Fatalf("SetStatus() error = %v", err)
+	}
+
+	status, err := svc.Status(ctx, "tenant-suspended-1")
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if status != tenancy.TenantStatusSuspended {
+		t.Fatalf("Status() = %q, want %q", status, tenancy.TenantStatusSuspended)
+	}
+}
+
+// TestTenantService_Status_ResumedTenant_ReportsActiveAgain proves a
+// resumed tenant's next Status call flips back to active immediately --
+// D4's "takes effect on the next request through the resolver" promise,
+// at the TenantService layer (pipeline_test.go / server-level tests cover
+// the same promise through a real tenancy.Middleware round trip).
+func TestTenantService_Status_ResumedTenant_ReportsActiveAgain(t *testing.T) {
+	db := testutil.NewDB(t)
+	repo := NewTenantRepository(db)
+	svc := NewTenantService(repo)
+	ctx := context.Background()
+	if err := repo.Create(ctx, &Tenant{TenantID: "tenant-resumed-1"}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	suspended := TenantStatusSuspended
+	if _, err := svc.SetStatus(ctx, "tenant-resumed-1", TenantPatch{Status: &suspended}, pkgcore.Actor{ID: "op"}); err != nil {
+		t.Fatalf("suspend SetStatus() error = %v", err)
+	}
+	active := TenantStatusActive
+	if _, err := svc.SetStatus(ctx, "tenant-resumed-1", TenantPatch{Status: &active}, pkgcore.Actor{ID: "op"}); err != nil {
+		t.Fatalf("resume SetStatus() error = %v", err)
+	}
+
+	status, err := svc.Status(ctx, "tenant-resumed-1")
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if status != tenancy.TenantStatusActive {
+		t.Fatalf("Status() after resume = %q, want %q", status, tenancy.TenantStatusActive)
 	}
 }
