@@ -1,6 +1,6 @@
 module github.com/vislake/speed/go/sharing
 
-go 1.25.0
+go 1.26.0
 
 replace github.com/vislake/speed/go/pkgcore => ../pkgcore
 
@@ -23,7 +23,7 @@ require (
 	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/ratelimit v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/tenancy v0.0.0-00010101000000-000000000000
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	gorm.io/gorm v1.31.2
 )
 

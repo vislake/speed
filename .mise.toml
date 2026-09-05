@@ -29,7 +29,7 @@
 # Mirror of the Taskfile.yml header's task pin.
 task = "3.53.1"
 # Mirror of go.work's `go` directive.
-go = "1.25.0"
+go = "1.26.8"
 # Mirror of web/.nvmrc.
 node = "24"
 # Mirror of web/package.json's packageManager (the version after "pnpm@").
