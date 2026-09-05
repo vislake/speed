@@ -181,7 +181,18 @@ def _check_llms_txt(public_dir: Path, root: Path) -> list[str]:
 
 def _check_links(public_dir: Path, pages: list[Path], root: Path, base_path: str) -> list[str]:
     violations = []
-    link_re = re.compile(r"""(?:href|src)\s*=\s*"([^"]+)"|(?:href|src)\s*=\s*'([^']+)'""")
+    # `--minify` (the flag every real build in this repo runs -- see
+    # _run_hugo_build) strips the quotes from any attribute value that
+    # contains no whitespace, quote, or angle-bracket character, which is
+    # true of essentially every internal href/src this site emits (e.g.
+    # `<link href=/speed/favicon.png>`). A quoted-only regex therefore
+    # matches nothing on a real minified build and silently no-ops this
+    # whole check, so the unquoted form MUST be matched too.
+    link_re = re.compile(
+        r"""(?:href|src)\s*=\s*"([^"]*)"""
+        r"""|(?:href|src)\s*=\s*'([^']*)'"""
+        r"""|(?:href|src)\s*=\s*([^\s"'=<>`]+)"""
+    )
     for page in pages:
         try:
             text = page.read_text(encoding="utf-8")
@@ -190,7 +201,12 @@ def _check_links(public_dir: Path, pages: list[Path], root: Path, base_path: str
             violations.append(f"{rel}: page unreadable as UTF-8 text ({exc})")
             continue
         for match in link_re.finditer(text):
-            target = match.group(1) if match.group(1) is not None else match.group(2)
+            if match.group(1) is not None:
+                target = match.group(1)
+            elif match.group(2) is not None:
+                target = match.group(2)
+            else:
+                target = match.group(3)
             violation = _resolve_one(page, target, public_dir, root, base_path)
             if violation:
                 violations.append(violation)
