@@ -1453,7 +1453,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// storageModule's own HTTP surface, and the job-status route polls the
 	// same standaloneQueue every other async task in this app shares. The
 	// call cannot fail: nothing it does returns an error.
-	smileSimService := smilesim.NewService(aiGatewayModule.Gateway())
+	smileSimService := smilesim.NewService(aiGatewayModule.Gateway(), reg.EventBus())
 	wireSmileSim(mux, smileSimService, standaloneQueue)
 
 	// The middleware chain: authn.Middleware(verifier) FIRST, then

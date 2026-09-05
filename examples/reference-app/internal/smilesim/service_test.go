@@ -2,6 +2,7 @@ package smilesim
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 
@@ -152,7 +153,7 @@ func newTestService(t *testing.T, provider aigateway.ImageProvider, queue *recor
 		aigateway.WithImageGeneration(queue, storageModule.ObjectService()),
 	)
 
-	return NewService(gateway)
+	return NewService(gateway, pkgcore.NewMemoryEventBus())
 }
 
 func TestService_Simulate_EnqueuesImageToImageUnderTheLogicalModel(t *testing.T) {
@@ -161,7 +162,7 @@ func TestService_Simulate_EnqueuesImageToImageUnderTheLogicalModel(t *testing.T)
 	svc := newTestService(t, provider, queue)
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
-	jobID, err := svc.Simulate(ctx, "photo-object-1")
+	jobID, err := svc.Simulate(ctx, "photo-object-1", "user-1")
 	if err != nil {
 		t.Fatalf("Simulate: %v", err)
 	}
@@ -180,7 +181,7 @@ func TestService_Simulate_EnqueuesImageToImageUnderTheLogicalModel(t *testing.T)
 func TestService_Simulate_MissingTenant_Refused(t *testing.T) {
 	svc := newTestService(t, &fakeImageProvider{}, &recordingQueue{jobID: "job-unused"})
 
-	if _, err := svc.Simulate(context.Background(), "photo-object-1"); err == nil {
+	if _, err := svc.Simulate(context.Background(), "photo-object-1", "user-1"); err == nil {
 		t.Fatal("Simulate with no tenant context succeeded, want an error")
 	}
 }
@@ -189,7 +190,145 @@ func TestService_Simulate_EmptyPhotoObjectID_Refused(t *testing.T) {
 	svc := newTestService(t, &fakeImageProvider{}, &recordingQueue{jobID: "job-unused"})
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
-	if _, err := svc.Simulate(ctx, ""); err == nil {
+	if _, err := svc.Simulate(ctx, "", "user-1"); err == nil {
 		t.Fatal("Simulate with an empty photo object id succeeded, want an error -- ImageOperationImageToImage requires InputObjectID")
+	}
+}
+
+// subscribeSimulationCompleted subscribes a recorder to
+// EventSimulationCompleted on bus and returns a func reading back every
+// SimulationCompletedPayload received so far, in order.
+func subscribeSimulationCompleted(bus pkgcore.EventBus) func() []SimulationCompletedPayload {
+	var mu sync.Mutex
+	var got []SimulationCompletedPayload
+	bus.Subscribe(EventSimulationCompleted, func(_ context.Context, evt pkgcore.Event) error {
+		payload, ok := evt.Payload.(SimulationCompletedPayload)
+		if !ok {
+			return nil
+		}
+		mu.Lock()
+		got = append(got, payload)
+		mu.Unlock()
+		return nil
+	})
+	return func() []SimulationCompletedPayload {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]SimulationCompletedPayload(nil), got...)
+	}
+}
+
+func TestService_NotifyOnCompletion_PublishesOnceForASucceededJobWithARecipient(t *testing.T) {
+	bus := pkgcore.NewMemoryEventBus()
+	svc := NewService(nil, bus)
+	events := subscribeSimulationCompleted(bus)
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	const jobID = jobs.JobID("job-1")
+	svc.recipients[jobID] = "user-7"
+
+	result, err := json.Marshal(aigateway.ImageJobResult{OutputObjectID: "object-out-1"})
+	if err != nil {
+		t.Fatalf("marshal ImageJobResult: %v", err)
+	}
+	job := &jobs.Job{
+		ID:       jobID,
+		TenantID: "tenant-acme",
+		Status:   jobs.StatusSucceeded,
+		Result:   &jobs.Result{Data: result},
+	}
+
+	if err := svc.NotifyOnCompletion(ctx, job); err != nil {
+		t.Fatalf("NotifyOnCompletion: %v", err)
+	}
+	// A second call for the SAME job (a repeated poll) must not publish
+	// again.
+	if err := svc.NotifyOnCompletion(ctx, job); err != nil {
+		t.Fatalf("NotifyOnCompletion (second call): %v", err)
+	}
+
+	got := events()
+	if len(got) != 1 {
+		t.Fatalf("published %d events, want exactly 1 (repeated polls must not double-publish): %+v", len(got), got)
+	}
+	if got[0].RecipientUserID != "user-7" || got[0].TenantID != "tenant-acme" || got[0].ImageJobID != string(jobID) {
+		t.Errorf("payload = %+v, want recipient=user-7 tenant=tenant-acme job=%s", got[0], jobID)
+	}
+	if !got[0].Succeeded {
+		t.Error("Succeeded = false, want true for a StatusSucceeded job")
+	}
+	if got[0].OutputObjectID != "object-out-1" {
+		t.Errorf("OutputObjectID = %q, want %q", got[0].OutputObjectID, "object-out-1")
+	}
+}
+
+func TestService_NotifyOnCompletion_DeadLetterReportsFailureWithNoOutputObject(t *testing.T) {
+	bus := pkgcore.NewMemoryEventBus()
+	svc := NewService(nil, bus)
+	events := subscribeSimulationCompleted(bus)
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	const jobID = jobs.JobID("job-2")
+	svc.recipients[jobID] = "user-7"
+
+	job := &jobs.Job{ID: jobID, TenantID: "tenant-acme", Status: jobs.StatusDeadLetter}
+	if err := svc.NotifyOnCompletion(ctx, job); err != nil {
+		t.Fatalf("NotifyOnCompletion: %v", err)
+	}
+
+	got := events()
+	if len(got) != 1 {
+		t.Fatalf("published %d events, want 1: %+v", len(got), got)
+	}
+	if got[0].Succeeded {
+		t.Error("Succeeded = true, want false for a StatusDeadLetter job")
+	}
+	if got[0].OutputObjectID != "" {
+		t.Errorf("OutputObjectID = %q, want empty for a failed job", got[0].OutputObjectID)
+	}
+}
+
+func TestService_NotifyOnCompletion_NoRecipientOnFile_NeverPublishes(t *testing.T) {
+	bus := pkgcore.NewMemoryEventBus()
+	svc := NewService(nil, bus)
+	events := subscribeSimulationCompleted(bus)
+
+	job := &jobs.Job{ID: "job-no-recipient", TenantID: "tenant-acme", Status: jobs.StatusSucceeded}
+	if err := svc.NotifyOnCompletion(context.Background(), job); err != nil {
+		t.Fatalf("NotifyOnCompletion: %v", err)
+	}
+	if got := events(); len(got) != 0 {
+		t.Errorf("published %d events for a job with no recipient on file, want 0: %+v", len(got), got)
+	}
+}
+
+func TestService_NotifyOnCompletion_NonTerminalStatus_NeverPublishes(t *testing.T) {
+	bus := pkgcore.NewMemoryEventBus()
+	svc := NewService(nil, bus)
+	events := subscribeSimulationCompleted(bus)
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	const jobID = jobs.JobID("job-3")
+	svc.recipients[jobID] = "user-7"
+
+	for _, status := range []jobs.Status{jobs.StatusPending, jobs.StatusRunning, jobs.StatusRetrying} {
+		job := &jobs.Job{ID: jobID, TenantID: "tenant-acme", Status: status}
+		if err := svc.NotifyOnCompletion(ctx, job); err != nil {
+			t.Fatalf("NotifyOnCompletion(%s): %v", status, err)
+		}
+	}
+	if got := events(); len(got) != 0 {
+		t.Errorf("published %d events for a non-terminal job, want 0: %+v", len(got), got)
+	}
+}
+
+func TestService_NotifyOnCompletion_NilBus_IsANoOp(t *testing.T) {
+	svc := NewService(nil, nil)
+	job := &jobs.Job{ID: "job-x", TenantID: "tenant-acme", Status: jobs.StatusSucceeded}
+	// Never given a recipient, so this would be a no-op regardless, but the
+	// point is that a nil bus must not panic even when it IS reached.
+	svc.recipients[job.ID] = "user-7"
+	if err := svc.NotifyOnCompletion(context.Background(), job); err != nil {
+		t.Fatalf("NotifyOnCompletion with a nil bus error = %v, want nil", err)
 	}
 }

@@ -46,6 +46,7 @@ import (
 
 	"github.com/vislake/speed/examples/reference-app/internal/demo"
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
+	"github.com/vislake/speed/examples/reference-app/internal/smilesim"
 	"github.com/vislake/speed/go/notification"
 	"github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
@@ -74,8 +75,18 @@ import (
 // finds no phone address is skipped with a recorded send record, never
 // failed (see UserAddresses' own doc comment). Every other demo user
 // resolves to no addresses -- an ordinary state, not an error.
+//
+// demoSmileSimRecipientUserID is smilesim_flow_test.go's own fixture: a
+// phone-only entry (the smilesim completion notification's DefaultChannels
+// is sms-only -- see internal/demo/module.go's TypeKeySimulationReady --
+// so a phone is the one address that matters here), named directly as a
+// POST /simulate request's recipient_user_id, independent of whichever
+// account actually authenticated the request.
+const demoSmileSimRecipientUserID = "user-smilesim-recipient-1"
+
 var demoUserAddresses = map[string]notification.UserAddresses{
-	demoNotesCreatorUserID: {Email: "user-creator-1@demo.example"},
+	demoNotesCreatorUserID:      {Email: "user-creator-1@demo.example"},
+	demoSmileSimRecipientUserID: {Phone: "+8613800138099"},
 }
 
 // demoUserAddressResolver is the reference app's implementation of
@@ -292,5 +303,51 @@ func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 			return
 		}
 		w.WriteHeader(http.StatusAccepted)
+	})
+
+	// The smilesim completion subscription: internal/smilesim's Service
+	// publishes smilesim.EventSimulationCompleted (see its own package
+	// comment's "Completion notification" section) once a requested smile
+	// simulation reaches a terminal status for a caller who named a
+	// recipient; this subscription dispatches the demo module's own
+	// demo.TypeKeySimulationReady type (a DIFFERENT string from the event
+	// type -- see that constant's own doc comment for why) to that
+	// recipient -- the identical "business fact published as a
+	// pkgcore.Event,
+	// notification consumes it as a dispatch trigger" shape, with the
+	// smilesim-owned payload decoded directly (both sides of this
+	// subscription are reference-app code, so there is no cross-module
+	// wire-shape ambiguity the note-created subscription's
+	// noteCreatedFieldsFromPayload probe has to handle).
+	//
+	// A failed simulation (Succeeded: false) is deliberately never
+	// dispatched: "your simulation is ready to view" would be actively
+	// wrong for a job that dead-lettered or was cancelled, and this app
+	// has no distinct "your simulation failed" copy to send instead.
+	bus.Subscribe(smilesim.EventSimulationCompleted, func(ctx context.Context, evt pkgcore.Event) error {
+		logger := observability.FromContext(ctx)
+		payload, ok := evt.Payload.(smilesim.SimulationCompletedPayload)
+		if !ok {
+			logger.Warn("demo notification glue dropped a smilesim.simulation_completed event with an unreadable payload",
+				"event_type", evt.Type)
+			return nil
+		}
+		if !payload.Succeeded {
+			return nil
+		}
+		dispatchCtx := pkgcore.WithTenant(ctx, evt.TenantID)
+		if _, err := module.Deliveries().Dispatch(dispatchCtx, notification.Dispatch{
+			TypeKey: demo.TypeKeySimulationReady,
+			Recipient: notification.DispatchRecipient{
+				Class:  notification.RecipientClassUser,
+				UserID: payload.RecipientUserID,
+			},
+			Locale: i18n.LocaleZHCN,
+			Params: map[string]any{},
+		}); err != nil {
+			logger.Warn("demo notification glue could not dispatch the simulation-completed delivery",
+				"event_type", evt.Type, "user_id", payload.RecipientUserID, "error", err)
+		}
+		return nil
 	})
 }

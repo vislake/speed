@@ -60,6 +60,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -362,5 +363,102 @@ func TestSmileSimulation_ImageToImage_EndToEnd(t *testing.T) {
 	}
 	if outputObject.MimeType != "image/png" {
 		t.Fatalf("generated object mime = %q, want image/png", outputObject.MimeType)
+	}
+}
+
+// TestSmileSimulation_CompletionNotifiesTheNamedRecipient proves this
+// round's own addition end to end: a POST /simulate naming a
+// recipient_user_id gets that recipient an SMS once the job succeeds --
+// internal/smilesim's Service publishes EventSimulationCompleted (from
+// NotifyOnCompletion, called by the job-status route this test polls
+// exactly like the round's original test above), demo_notification.go's
+// subscription turns that into a notification.Dispatch of
+// demo.TypeKeySimulationReady, and the delivery job renders and sends it
+// over the sms-only channel that type declares.
+func TestSmileSimulation_CompletionNotifiesTheNamedRecipient(t *testing.T) {
+	imgServer := newFakeOpenAIImageServer(t)
+
+	// Built directly, rather than through buildSmileSimTestServer, so
+	// cfg.SMSOutput can be set to a capturing buffer before the one
+	// buildServer call -- the console SMS sender this app wires reads
+	// cfg.SMSOutput exactly once, at construction time.
+	cfg := testConfig(t)
+	cfg.AIGatewayImageBaseURL = imgServer.URL
+	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-notify-key"
+	sms := &lockedBuffer{}
+	cfg.SMSOutput = sms
+
+	handler, cleanup, err := buildServer(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("buildServer: %v", err)
+	}
+	t.Cleanup(func() {
+		if cleanupErr := cleanup(); cleanupErr != nil {
+			t.Errorf("cleanup: %v", cleanupErr)
+		}
+	})
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "smilesim-notify-owner")
+
+	photo := jpegWithExif(t)
+	completedPhoto := uploadAndComplete(t, srv, token, photo, "")
+	if completedPhoto.State != "completed" {
+		t.Fatalf("photo state = %q, want completed", completedPhoto.State)
+	}
+
+	simulateBody, err := json.Marshal(map[string]string{
+		"photo_object_id":   completedPhoto.ID,
+		"recipient_user_id": demoSmileSimRecipientUserID,
+	})
+	if err != nil {
+		t.Fatalf("marshal simulate request: %v", err)
+	}
+	resp := smileSimRequest(t, srv, http.MethodPost, smileSimulatePath, token, simulateBody)
+	var simulateOut struct {
+		JobID string `json:"job_id"`
+	}
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&simulateOut); decodeErr != nil {
+		resp.Body.Close()
+		t.Fatalf("decode simulate response: %v", decodeErr)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST %s status = %d, want %d", smileSimulatePath, resp.StatusCode, http.StatusAccepted)
+	}
+
+	final := waitForSmileSimSucceeded(t, srv, token, simulateOut.JobID, time.Now().Add(5*time.Second))
+	if status, _ := final["status"].(string); status != "succeeded" {
+		t.Fatalf("final job status = %v, want \"succeeded\"", final["status"])
+	}
+
+	// The delivery job runs asynchronously off the same StandaloneQueue --
+	// waitForSmileSimSucceeded's own polling already forced
+	// NotifyOnCompletion to publish the event by the time this point is
+	// reached, but the notification.deliver job it triggers still needs
+	// its own worker turn.
+	eventually(t, 4*time.Second, "the simulation-ready SMS", func() bool {
+		return len(smsLinesTo(sms, "+8613800138099")) == 1
+	})
+	// The demo module's copy renders in zh-CN (the fixed locale
+	// demo_notification.go's subscription dispatches with -- demo users
+	// carry no profile to negotiate a locale from, the same reasoning the
+	// note-created subscription's own doc comment gives), so this
+	// assertion checks only the line's structure -- never the rendered
+	// text itself, mirroring notification_flow_test.go's own mailsTo-based
+	// assertions, which check no literal message content either.
+	lines := smsLinesTo(sms, "+8613800138099")
+	if strings.TrimSpace(lines[0]) == "SMS to +8613800138099:" {
+		t.Errorf("SMS line = %q, want non-empty rendered copy after the address", lines[0])
+	}
+
+	// A repeated poll of the same job (waitForSmileSimSucceeded already
+	// issued several once it was terminal) must never send a second SMS --
+	// NotifyOnCompletion's own once-only guarantee, proven here through the
+	// real HTTP polling path rather than only at the unit level
+	// (internal/smilesim's own service_test.go).
+	if got := smsLinesTo(sms, "+8613800138099"); len(got) != 1 {
+		t.Errorf("recorded %d SMS lines to the recipient, want exactly 1 (repeated polling must not double-send)", len(got))
 	}
 }

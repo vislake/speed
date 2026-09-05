@@ -20,6 +20,7 @@ import (
 
 	aigateway "github.com/vislake/speed/go/ai-gateway"
 	"github.com/vislake/speed/go/jobs"
+	"github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 
 	"github.com/vislake/speed/examples/reference-app/internal/smilesim"
@@ -57,7 +58,8 @@ var smileSimErrInternal = apperr.Internal("smilesim.internal_error")
 func wireSmileSim(mux *http.ServeMux, svc *smilesim.Service, queue jobs.Queue) {
 	mux.HandleFunc(http.MethodPost+" "+smileSimulatePath, func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			PhotoObjectID string `json:"photo_object_id"`
+			PhotoObjectID   string `json:"photo_object_id"`
+			RecipientUserID string `json:"recipient_user_id"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeSmileSimError(w, apperr.Invalid("smilesim.invalid_request_body").WithCause(err))
@@ -68,7 +70,12 @@ func wireSmileSim(mux *http.ServeMux, svc *smilesim.Service, queue jobs.Queue) {
 			return
 		}
 
-		jobID, err := svc.Simulate(r.Context(), body.PhotoObjectID)
+		// RecipientUserID is optional: a caller that supplies one gets an
+		// EventSimulationCompleted notification once the job finishes
+		// (svc.NotifyOnCompletion, called from the job-status route
+		// below); a caller that omits it just polls for the result, same
+		// as before this field existed.
+		jobID, err := svc.Simulate(r.Context(), body.PhotoObjectID, body.RecipientUserID)
 		if err != nil {
 			writeSmileSimError(w, err)
 			return
@@ -90,6 +97,17 @@ func wireSmileSim(mux *http.ServeMux, svc *smilesim.Service, queue jobs.Queue) {
 		if err != nil {
 			writeSmileSimError(w, err)
 			return
+		}
+
+		// A no-op unless Simulate was given a recipient for this job and
+		// job has just reached a terminal status for the first time --
+		// see NotifyOnCompletion's own doc comment for why this poll
+		// route is where that check happens. A failure here is logged and
+		// swallowed: the notification side channel must never turn an
+		// otherwise-successful status read into an error response.
+		if notifyErr := svc.NotifyOnCompletion(r.Context(), job); notifyErr != nil {
+			observability.FromContext(r.Context()).Warn("smilesim completion notification failed",
+				"job_id", id, "error", notifyErr)
 		}
 
 		resp := map[string]any{"status": string(job.Status)}

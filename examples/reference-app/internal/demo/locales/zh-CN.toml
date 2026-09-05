@@ -1,12 +1,15 @@
 # demo 模块面向用户的中文（zh-CN）文案。
 #
-# 本文件只携带一种 id：demo 模块声明的 notification 类型
-# demo.patient_reminder 的模板文案，遵循 go/notification/render.go 文档化的
-# 模板 id 约定——类型 key、渠道、部件依次排列（<type_key>.<channel>.<part>，
-# 如 demo.patient_reminder.email.subject），另加一条
-# "<type_key>.description" 供类型目录展示；面向收件人的参数以 {{.snake_case}}
-# 占位符拼写。本类型的模板不带参数：demo 病人提醒路由（cmd/server 的
-# demo_notification.go）只触发发送，文案本身是固定的复诊提醒。
+# 本文件携带两种 id：demo 模块声明的 notification 类型
+# demo.patient_reminder 的模板文案，以及 demo.simulation_ready 类型（当
+# internal/smilesim 自己的 smilesim.EventSimulationCompleted 事件以
+# Succeeded: true 触发时派发——事件名与通知类型 key 为何是两个不同的字符串，
+# 见 module.go 的 TypeKeySimulationReady 注释）的模板文案，均遵循
+# go/notification/render.go 文档化的模板 id 约定——类型 key、渠道、部件依次
+# 排列（<type_key>.<channel>.<part>，如 demo.patient_reminder.email.subject），
+# 各加一条 "<type_key>.description" 供类型目录展示；面向收件人的参数以
+# {{.snake_case}} 占位符拼写。两种类型的模板都不带参数：demo 病人提醒路由与
+# smilesim 完成态胶水代码（均在 cmd/server）只触发发送，文案本身是固定文本。
 #
 # 这些文案在 dispatch 时由 notification 模块从合并目录渲染（Kernel.Bootstrap
 # 把 demo 模块的 Locales() 收进目录后冻结），demo 模块自身从不读取它们——
@@ -20,3 +23,6 @@
 "demo.patient_reminder.email.body_text" = "这是 Smile Studio 给您的复诊提醒：您预约的微笑检查即将到来。如需改期，请直接回复本邮件。"
 "demo.patient_reminder.sms.text" = "Smile Studio 复诊提醒：您预约的微笑检查即将到来。如需改期，请回复短信说明。"
 "demo.patient_reminder.description" = "当联系人的预约复诊临近时发送。"
+
+"demo.simulation_ready.sms.text" = "Smile Studio：您的微笑模拟效果已生成，请查看。"
+"demo.simulation_ready.description" = "当请求的微笑模拟生成完成时发送。"
