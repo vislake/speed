@@ -6,19 +6,36 @@
 # legs, working-directory: examples/reference-app/web) sees this directory as
 # a one-project workspace of its own.
 #
-# pnpm 11 reads pnpm settings from the workspace manifest, not from .npmrc
-# (project .npmrc files contribute auth and network keys only). The run gate
-# below is the one setting this standalone context needs: when pnpm runs a
-# package script it first verifies the project's deps are in sync and
-# auto-installs when they are not, and an install started here cannot resolve
-# the workspace:* dependencies -- they resolve only from the web/ root,
-# where the reusable's leg 0 installs the whole workspace from
-# web/pnpm-lock.yaml (frozen). That frozen install is the lockfile gate; this
-# setting disables the redundant per-run install gate instead of moving the
-# scripts' working directory out of the package.
+# pnpm DOES merge settings from a workspace manifest's own top-level keys into
+# its config -- but only camelCase ones (pnpm's own
+# addSettingsFromWorkspaceManifestToConfig applies an isCamelCase(key) gate
+# before merging any key it does not already recognise as a packages/catalog
+# field). verifyDepsBeforeRun is the correct spelling; verify-deps-before-run
+# -- this file's own prior, broken content -- is silently ignored by that
+# gate and falls through to the true default ("install"), which is exactly
+# the bug a real, reproduced CI failure exposed: whenever this setting
+# resolves to "install" from this directory, pnpm's own run-gate first
+# verifies the project's deps are in sync and auto-installs when they are
+# not, and an install started here cannot resolve the workspace:*
+# dependencies -- they resolve only from the web/ root, where the reusable's
+# leg 0 installs the whole workspace from web/pnpm-lock.yaml (frozen) --
+# failing with ERR_PNPM_WORKSPACE_PKG_NOT_FOUND. That frozen install is the
+# lockfile gate; the key below disables the redundant per-run install gate
+# instead of moving the scripts' working directory out of the package.
+#
+# (A short-lived intermediate fix moved this same setting into a plain
+# `.npmrc` instead, on the theory that a workspace manifest cannot carry the
+# key at all. That theory was wrong, and the intermediate fix did not work:
+# a project `.npmrc` in a leaf directory that is not itself a pnpm workspace
+# root is not merged into pnpm's config resolution, so verifyDepsBeforeRun
+# kept resolving to "install" and the exact ERR_PNPM_WORKSPACE_PKG_NOT_FOUND
+# failure this file exists to prevent still reproduced. Restoring the key
+# here, spelled correctly this time, is the fix that is actually verified to
+# work, including from a genuinely clean environment with no masking
+# global/user pnpm config.)
 #
 # Only this one key is declared here on purpose: the file exists solely to
 # carry the setting for standalone runs, and web/ stays the single real
 # workspace root (no packages list, so no project is ever treated as a
 # workspace root by web/-rooted commands).
-verify-deps-before-run: false
+verifyDepsBeforeRun: false
