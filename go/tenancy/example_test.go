@@ -85,6 +85,60 @@ func Example() {
 	// handler saw tenant="acme" ok=true
 }
 
+// exampleTenantStatuses stands in for the store a real
+// tenancy.TenantStatusResolver implementation would consult -- go/admin's
+// own tenant ledger (D3/D4) is this seam's first real implementer,
+// entirely on admin's side of the module boundary.
+type exampleTenantStatuses map[pkgcore.TenantID]tenancy.TenantStatus
+
+// Status implements tenancy.TenantStatusResolver. A tenant absent from
+// the map is treated as active, matching a real implementation that has
+// never recorded a suspension for a tenant it otherwise knows nothing
+// special about.
+func (s exampleTenantStatuses) Status(_ context.Context, tenant pkgcore.TenantID) (tenancy.TenantStatus, error) {
+	if status, ok := s[tenant]; ok {
+		return status, nil
+	}
+	return tenancy.TenantStatusActive, nil
+}
+
+// ExampleWithTenantStatusResolver demonstrates D4: wiring a
+// TenantStatusResolver gives a suspended tenant's status real teeth --
+// every request against it is refused with the coded ErrTenantSuspended
+// error, never merely recorded somewhere no request pipeline consults.
+// Leaving WithTenantStatusResolver off entirely (as every earlier example
+// in this file does) is what keeps this seam's behavior unchanged for a
+// host that never wires one.
+func ExampleWithTenantStatusResolver() {
+	resolver := tenancy.NewDomainResolver(exampleTenantsByHost, "public")
+	statuses := exampleTenantStatuses{"acme": tenancy.TenantStatusSuspended}
+
+	protected := tenancy.Middleware(resolver, tenancy.WithTenantStatusResolver(statuses))(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			tenant, ok := pkgcore.TenantFromContext(r.Context())
+			fmt.Printf("handler saw tenant=%q ok=%t\n", tenant, ok)
+		}),
+	)
+
+	// acme.example.com resolves to the suspended "acme" tenant: the
+	// request never reaches the handler.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	req.Host = "acme.example.com"
+	protected.ServeHTTP(rec, req)
+	fmt.Println("status:", rec.Code, "body:", strings.TrimSpace(rec.Body.String()))
+
+	// An unrecognized Host still falls back to the "public" default
+	// tenant, which nobody suspended, and the request proceeds normally.
+	req = httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	req.Host = "unknown.example.com"
+	protected.ServeHTTP(httptest.NewRecorder(), req)
+
+	// Output:
+	// status: 403 body: {"code":"tenancy.tenant_suspended"}
+	// handler saw tenant="public" ok=true
+}
+
 // exampleTokenResolver stands in for the Resolver authn will eventually
 // supply for authenticated requests (see resolver.go's own doc comment for
 // why tenancy does not implement one itself): it "verifies" a bearer token

@@ -292,6 +292,160 @@ func TestMiddleware_IgnoresClientSuppliedTenantHints(t *testing.T) {
 	}
 }
 
+// stubStatusResolver is a TenantStatusResolver test double whose behavior
+// is fixed at construction: statuses maps a tenant to the TenantStatus
+// Status reports for it (a tenant absent from the map is treated as
+// TenantStatusActive, matching a real resolver that has never heard of
+// suspension for a tenant it does track), and err, when non-nil, makes
+// every call fail instead.
+type stubStatusResolver struct {
+	statuses map[pkgcore.TenantID]TenantStatus
+	err      error
+	calls    []pkgcore.TenantID
+}
+
+func (s *stubStatusResolver) Status(_ context.Context, tenant pkgcore.TenantID) (TenantStatus, error) {
+	s.calls = append(s.calls, tenant)
+	if s.err != nil {
+		return "", s.err
+	}
+	if status, ok := s.statuses[tenant]; ok {
+		return status, nil
+	}
+	return TenantStatusActive, nil
+}
+
+// TestMiddleware_NoTenantStatusResolver_BehaviorUnchanged pins D4's
+// central compatibility contract: a host that never calls
+// WithTenantStatusResolver sees exactly today's Middleware behavior,
+// unchanged -- a resolved tenant's request proceeds regardless of
+// whatever status it might have anywhere else in the system, because
+// nothing here consults one.
+func TestMiddleware_NoTenantStatusResolver_BehaviorUnchanged(t *testing.T) {
+	handler := &recordingHandler{}
+	mw := Middleware(stubResolver{tenant: "acme"})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/billing/plans", nil)
+	rec := httptest.NewRecorder()
+	mw(handler).ServeHTTP(rec, req)
+
+	if !handler.called {
+		t.Fatal("next handler was not called; an unwired TenantStatusResolver must never itself gate a request")
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+// TestMiddleware_TenantStatusResolver_ActiveTenant_Proceeds proves the
+// wired-but-active case is indistinguishable from the unwired case for
+// the caller.
+func TestMiddleware_TenantStatusResolver_ActiveTenant_Proceeds(t *testing.T) {
+	handler := &recordingHandler{}
+	resolver := &stubStatusResolver{statuses: map[pkgcore.TenantID]TenantStatus{"acme": TenantStatusActive}}
+	mw := Middleware(stubResolver{tenant: "acme"}, WithTenantStatusResolver(resolver))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/billing/plans", nil)
+	rec := httptest.NewRecorder()
+	mw(handler).ServeHTTP(rec, req)
+
+	if !handler.called {
+		t.Fatal("next handler was not called for an active tenant")
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if len(resolver.calls) != 1 || resolver.calls[0] != "acme" {
+		t.Errorf("resolver.calls = %v, want exactly one call for tenant %q", resolver.calls, "acme")
+	}
+}
+
+// TestMiddleware_TenantStatusResolver_SuspendedTenant_RefusesWithCodedError
+// is D4's core enforcement proof: a suspended tenant's request never
+// reaches the handler and is refused with the coded ErrTenantSuspended
+// error, never a bare HTTP status with no code.
+func TestMiddleware_TenantStatusResolver_SuspendedTenant_RefusesWithCodedError(t *testing.T) {
+	handler := &recordingHandler{}
+	resolver := &stubStatusResolver{statuses: map[pkgcore.TenantID]TenantStatus{"acme": TenantStatusSuspended}}
+	mw := Middleware(stubResolver{tenant: "acme"}, WithTenantStatusResolver(resolver))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/billing/plans", nil)
+	rec := httptest.NewRecorder()
+	mw(handler).ServeHTTP(rec, req)
+
+	if handler.called {
+		t.Fatal("next handler was called despite the resolved tenant being suspended")
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+	var body tenantErrorBody
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decoding error body: %v", err)
+	}
+	if body.Code != ErrTenantSuspended.Code {
+		t.Errorf("error code = %q, want %q", body.Code, ErrTenantSuspended.Code)
+	}
+}
+
+// TestMiddleware_TenantStatusResolver_StatusCallFails_FailsClosed proves
+// the resolver's own discipline extends to TenantStatusResolver: an
+// unreachable status source refuses the request rather than assuming the
+// tenant is active.
+func TestMiddleware_TenantStatusResolver_StatusCallFails_FailsClosed(t *testing.T) {
+	handler := &recordingHandler{}
+	resolver := &stubStatusResolver{err: errors.New("status store unreachable")}
+	mw := Middleware(stubResolver{tenant: "acme"}, WithTenantStatusResolver(resolver))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/billing/plans", nil)
+	rec := httptest.NewRecorder()
+	mw(handler).ServeHTTP(rec, req)
+
+	if handler.called {
+		t.Fatal("next handler was called despite the status resolver failing")
+	}
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	var body tenantErrorBody
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decoding error body: %v", err)
+	}
+	if body.Code != ErrTenantStatusUnavailable.Code {
+		t.Errorf("error code = %q, want %q", body.Code, ErrTenantStatusUnavailable.Code)
+	}
+}
+
+// TestMiddleware_TenantStatusResolver_AllowlistedNoTenant_NeverConsulted
+// proves the status check is skipped entirely -- not merely defaulted to
+// active -- when a request proceeds with no resolved tenant at all (an
+// allowlisted path whose Resolver failed): there is nothing to look up a
+// status for, and a resolver that would panic or error on an empty
+// pkgcore.TenantID must never be called with one.
+func TestMiddleware_TenantStatusResolver_AllowlistedNoTenant_NeverConsulted(t *testing.T) {
+	handler := &recordingHandler{}
+	resolver := &stubStatusResolver{err: errors.New("must never be called")}
+	mw := Middleware(
+		stubResolver{err: errors.New("resolver deliberately failed")},
+		WithAllowlist(http.MethodGet, "/healthz"),
+		WithTenantStatusResolver(resolver),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	mw(handler).ServeHTTP(rec, req)
+
+	if !handler.called {
+		t.Fatal("next handler was not called for an allowlisted path")
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if len(resolver.calls) != 0 {
+		t.Errorf("resolver.calls = %v, want none: a request with no resolved tenant must never consult TenantStatusResolver", resolver.calls)
+	}
+}
+
 // This file exercises the literal end-to-end shape the tenancy module's
 // three pieces are meant to support together: an http.Handler wrapped in
 // Middleware that, within the same request, also calls WithSystemContext --

@@ -24,6 +24,21 @@ const tenantErrorContentType = "application/json; charset=utf-8"
 // (should a caller want to) cannot race.
 var ErrTenantUnresolved = apperr.Forbidden("tenancy.tenant_unresolved")
 
+// ErrTenantSuspended is the structured error Middleware writes to the
+// response when a WithTenantStatusResolver-wired resolver reports a
+// resolved tenant as TenantStatusSuspended. It is never returned, and
+// never even checked for, on a host that has not wired one -- see
+// WithTenantStatusResolver's own doc comment for the full "off by
+// default" contract this depends on.
+var ErrTenantSuspended = apperr.Forbidden("tenancy.tenant_suspended")
+
+// ErrTenantStatusUnavailable is the structured error Middleware writes to
+// the response when a wired TenantStatusResolver's Status call itself
+// fails. Exactly like a Resolver failure, this fails the request closed
+// rather than assuming the tenant is active -- an unreachable status
+// source must never be treated as "no news is good news".
+var ErrTenantStatusUnavailable = apperr.Internal("tenancy.tenant_status_unavailable")
+
 // errEmptyTenantResolved stands in for the error returned by a Resolver
 // that reports success (a nil error) with a zero-value TenantID. A correct
 // Resolver never does this, but Middleware treats it exactly like a
@@ -47,6 +62,12 @@ type allowlistKey struct {
 // middlewareConfig accumulates the options passed to Middleware.
 type middlewareConfig struct {
 	allowlist map[allowlistKey]struct{}
+
+	// statusResolver is nil unless WithTenantStatusResolver was applied --
+	// Middleware's D4 enforcement check is skipped entirely when it is
+	// nil, which is what keeps an unwired host's behavior byte-for-byte
+	// identical to before this seam existed.
+	statusResolver TenantStatusResolver
 }
 
 // WithAllowlist exempts the given (method, paths) combinations from tenant
@@ -109,6 +130,14 @@ func WithAllowlist(method string, paths ...string) MiddlewareOption {
 // proceeds with a zero-value tenant on a non-allowlisted (method, path)
 // pair: that is the forgotten-tenant-filter bug class that turns into a
 // cross-tenant data leak, not a style choice.
+//
+// When WithTenantStatusResolver was given, a successfully resolved tenant
+// is additionally checked against it: TenantStatusSuspended rejects the
+// request with ErrTenantSuspended, and a Status call that itself errors
+// rejects with ErrTenantStatusUnavailable -- both fail-closed, matching
+// Resolver's own discipline. With no TenantStatusResolver wired (the
+// default), this check never runs at all, so behavior is unchanged from
+// before this seam existed.
 func Middleware(resolver Resolver, opts ...MiddlewareOption) func(http.Handler) http.Handler {
 	cfg := &middlewareConfig{allowlist: make(map[allowlistKey]struct{})}
 	for _, opt := range opts {
@@ -126,10 +155,23 @@ func Middleware(resolver Resolver, opts ...MiddlewareOption) func(http.Handler) 
 					next.ServeHTTP(w, r)
 					return
 				}
-				writeTenantUnresolved(w)
+				writeError(w, ErrTenantUnresolved)
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(pkgcore.WithTenant(r.Context(), tenantID)))
+
+			ctx := pkgcore.WithTenant(r.Context(), tenantID)
+			if cfg.statusResolver != nil {
+				status, statusErr := cfg.statusResolver.Status(ctx, tenantID)
+				if statusErr != nil {
+					writeError(w, ErrTenantStatusUnavailable)
+					return
+				}
+				if status == TenantStatusSuspended {
+					writeError(w, ErrTenantSuspended)
+					return
+				}
+			}
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
@@ -142,17 +184,18 @@ type tenantErrorBody struct {
 	Params map[string]any `json:"params,omitempty"`
 }
 
-// writeTenantUnresolved writes ErrTenantUnresolved to w as a JSON body.
-// The Resolver's own error is deliberately never included in the body: it
-// may carry internal detail from whatever produced it -- once authn
-// supplies the authenticated-request Resolver, that could be
-// token-validation internals -- and internal detail must never reach an
-// API response.
-func writeTenantUnresolved(w http.ResponseWriter) {
+// writeError writes appErr to w as a JSON body -- ErrTenantUnresolved,
+// ErrTenantSuspended or ErrTenantStatusUnavailable, Middleware's three
+// possible refusals. The underlying Resolver/TenantStatusResolver error,
+// if any, is deliberately never included in the body: it may carry
+// internal detail from whatever produced it -- once authn supplies the
+// authenticated-request Resolver, that could be token-validation
+// internals -- and internal detail must never reach an API response.
+func writeError(w http.ResponseWriter, appErr *apperr.Error) {
 	w.Header().Set("Content-Type", tenantErrorContentType)
-	w.WriteHeader(ErrTenantUnresolved.Status)
+	w.WriteHeader(appErr.Status)
 	_ = json.NewEncoder(w).Encode(tenantErrorBody{
-		Code:   ErrTenantUnresolved.Code,
-		Params: ErrTenantUnresolved.Params,
+		Code:   appErr.Code,
+		Params: appErr.Params,
 	})
 }
