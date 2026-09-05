@@ -21,7 +21,7 @@ this file adds what is specific to the npm side.
 1. Scaffold under `web/packages/<name>` following the shape in the root
    `web/README.md` (ESM-only exports map, tsconfig pair, scripts
    `lint`/`typecheck`/`test`/`build`).
-2. Add it to the CI matrix: `.github/workflows/pr-check.yml`'s `npm-packages`
+2. Add it to the CI matrix: `.github/workflows/fast-check.yml`'s `npm-packages`
    job calls the reusable `npm-package-ci.yml` once per package path.
 3. Write README.md + AGENTS.md and run every gate from the package
    directory: `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, all
@@ -77,7 +77,7 @@ The rules' unit tests run from the workspace root, not from a package
 directory (the rules live outside every package, so no per-package
 suite picks them up): locally via
 `pnpm exec vitest run eslint-rules/no-literal-text.test.mjs eslint-rules/no-direct-http.test.mjs`
-from `web/`, and in CI by pr-check's `repo-checks` job, which runs that
+from `web/`, and in CI by fast-check's `repo-checks` job, which runs that
 same command once per PR.
 
 Still deferred, tracked in the CI workflow headers with their owning

@@ -21,7 +21,7 @@
 - Playwright 覆盖：注册/登录/SSO、组织与成员、套餐订阅与两种支付、用量与超额、AI 调用、运营后台
 - 每个里程碑出口条件对应一组 e2e 用例，只增不减
 
-> **实施状态注记（本轮核实）：** 上面两条是设计意图，尚未落地——仓库里没有任何 Playwright 配置或 spec 文件，`.github/workflows/e2e.yml` 是 gated stub（guard step 直接失败，不在任何 PR 上触发），推迟到 roadmap M4 的 e2e 条目。reference-app 目前的验证方式是 Go 侧的组合 HTTP 测试（`*_flow_test.go` 系列：notes、org、authn、storage、notification 等，跑在 `full-ci` 标签的 `pr-full.yml` 上）加前端各包自己的 `usage-example.test.tsx`（真实机制见第 6/8 节的注记），浏览器页面本身（挂载、渲染、真实点击）还没有任何自动化覆盖。
+> **实施状态注记（本轮核实）：** 上面两条是设计意图，尚未落地——仓库里没有任何 Playwright 配置或 spec 文件，`.github/workflows/e2e.yml` 是 gated stub（guard step 直接失败，不在任何 PR 上触发），推迟到 roadmap M4 的 e2e 条目。reference-app 目前的验证方式是 Go 侧的组合 HTTP 测试（`*_flow_test.go` 系列：notes、org、authn、storage、notification 等，跑在 `full-ci` 标签的 `full-check.yml` 上）加前端各包自己的 `usage-example.test.tsx`（真实机制见第 6/8 节的注记），浏览器页面本身（挂载、渲染、真实点击）还没有任何自动化覆盖。
 
 **5. 脚手架生成验证（防止模板腐化）**
 - CI 定时任务：`saasctl new tmpapp` + `create-saas-app tmpapp-web` → `go build` / `pnpm build` → 先 `docker compose -f docker-compose.standalone.yml up`（应在数十秒内就绪）再 `docker compose up` → 两次都跑冒烟脚本打健康检查与登录接口

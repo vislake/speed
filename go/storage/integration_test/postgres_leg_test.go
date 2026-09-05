@@ -4,7 +4,7 @@ package storage_test
 
 // This file is the PostgreSQL leg of the storage module's integration
 // tier (go test -tags=integration ./... from the module directory, the
-// exact invocation pr-full.yml's integration-tiers job runs). The unit
+// exact invocation full-check.yml's integration-tiers job runs). The unit
 // tier proves the module against SQLite; this leg re-proves what the
 // second dialect can break.
 //

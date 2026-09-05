@@ -20,7 +20,7 @@ same-rule expectations are meaningful.
 Usage:
   python3 tools/semgrep_fixture_check.py [SEMGREP_BIN]
 
-SEMGREP_BIN defaults to "semgrep" on PATH. pr-check's repo-checks job
+SEMGREP_BIN defaults to "semgrep" on PATH. fast-check's repo-checks job
 passes the venv-installed binary from its throwaway pip install; local
 runs pass the pinned returntocorp/semgrep docker image through a shim.
 The scan of the real tree itself (go/ examples/ tools/, fixtures

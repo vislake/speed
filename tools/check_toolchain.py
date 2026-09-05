@@ -6,7 +6,7 @@ the root .mise.toml carries the versions. CI cannot read .mise.toml
 directly -- actions/setup-go's go-version-file resolves go.mod, go.work,
 go.sum or .go-version only, and setup-node reads web/.nvmrc -- so every
 .mise.toml version is a MIRROR of an authoritative source elsewhere in
-the repository, and this gate (wired into pr-check's repo-checks job)
+the repository, and this gate (wired into fast-check's repo-checks job)
 fails when a mirror drifts from its source. The sources, one per tool:
 
   task          the Taskfile.yml header comment -- "task 3.53.1 (the

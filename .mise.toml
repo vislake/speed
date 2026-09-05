@@ -6,7 +6,7 @@
 # reads web/.nvmrc), so CI keeps reading the sources and .mise.toml exists
 # for `mise install` (the Taskfile setup task's toolchain leg). Two files
 # that both state a version drift unless something checks them, which is
-# why tools/check_toolchain.py -- wired into pr-check's repo-checks job,
+# why tools/check_toolchain.py -- wired into fast-check's repo-checks job,
 # every pull request -- fails when a mirror no longer equals its source.
 # Bump the authoritative source and this file together. Sources, one per
 # tool:

@@ -109,4 +109,4 @@ Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包�
 
 不稳定测试会侵蚀团队对 CI 的信任，最终导致"红了就重跑"的坏习惯。措施：nightly 重复运行标记不稳定用例，自动开 issue 跟踪；连续不稳定的用例先隔离（标记 skip 并挂跟踪项）再修复，不允许长期挂着一个时红时绿的 CI。
 
-> **实施状态注记（本轮核实）：** 上面两节都是纯设计意图，尚未落地——`.github/workflows/nightly.yml` 整个是 gated stub（触发即在 guard step 失败，不接受任何调度），其自己的文件头如实记录了阻塞原因：性能基准回归这一半，仓库里当前一个 `func Benchmark` 都没有（`grep "func Benchmark"` 遍历 `go/` 与 `examples/` 零命中），benchmark 随各热点归属的模块在 roadmap M1-M3 落地；flaky 检测这一半需要一个有 `issues: write` 权限的 token 来自动开 issue，等实现轮次落地时一并接入并过一次安全审查。全量矩阵这一半本身已经不再是阻塞点——`pr-full` 已经真实存在——但只要没有 benchmark 套件，`nightly` 就整体停在 gated stub。
+> **实施状态注记（本轮核实）：** 上面两节都是纯设计意图，尚未落地——`.github/workflows/nightly.yml` 整个是 gated stub（触发即在 guard step 失败，不接受任何调度），其自己的文件头如实记录了阻塞原因：性能基准回归这一半，仓库里当前一个 `func Benchmark` 都没有（`grep "func Benchmark"` 遍历 `go/` 与 `examples/` 零命中），benchmark 随各热点归属的模块在 roadmap M1-M3 落地；flaky 检测这一半需要一个有 `issues: write` 权限的 token 来自动开 issue，等实现轮次落地时一并接入并过一次安全审查。全量矩阵这一半本身已经不再是阻塞点——`full-check` 已经真实存在——但只要没有 benchmark 套件，`nightly` 就整体停在 gated stub。

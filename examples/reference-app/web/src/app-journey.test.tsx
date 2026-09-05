@@ -142,7 +142,7 @@ describe('the app journey', () => {
   // These journeys drive dozens of real userEvent interactions and
   // network round-trips end to end -- on a warm dev machine the whole
   // file finishes in a few seconds, but a real GitHub Actions run
-  // (2026-09-05, pr-check run 2) measured a cold import alone at ~14s
+  // (2026-09-05, fast-check run 2) measured a cold import alone at ~14s
   // against ~0.8s locally, and the owner-day journey's own test then
   // tripped vitest's 5000ms default per-test timeout.
   //

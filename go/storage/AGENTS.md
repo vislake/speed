@@ -391,7 +391,7 @@ tier. A Docker-backed integration tier (`integration_test/`, built with
 `//go:build integration` so a plain unit run never touches it) re-proves on
 real infrastructure what a SQLite-only suite cannot, run as
 `go test -race -tags=integration ./...` from this directory — the exact
-invocation pr-full.yml's integration-tiers job runs for this module:
+invocation full-check.yml's integration-tiers job runs for this module:
 
 - `postgres_leg_test.go` — the module's postgres/*.sql migration files
   apply from zero against a real PostgreSQL server (testutil.NewPostgres

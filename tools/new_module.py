@@ -198,11 +198,11 @@ def registration_checklist(module_name: str, design_doc: str) -> list[str]:
         f"  1. go.work (repo root): add \"./{GO_DIR_NAME}/{module_name}\" to the "
         "use ( ... ) block -- the workspace is what makes go build / go test "
         "resolve the new module locally.",
-        "  2. CI matrix: register the module in the pr-check/pr-full "
+        "  2. CI matrix: register the module in the fast-check/full-check "
         "workflow matrix (docs/internal/18-cicd.md, reusable-workflow "
         "design section: adding a module is one row in the orchestrating "
         "workflow's matrix list). Both pipelines are live: add the module "
-        "to the matrix in .github/workflows/pr-check.yml and pr-full.yml, "
+        "to the matrix in .github/workflows/fast-check.yml and full-check.yml, "
         "or it is never linted, vetted or tested in CI.",
         "  3. Lockstep release: step 1's go.work use entry is this "
         "module's release registration too -- the release coordinator "

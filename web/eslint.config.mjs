@@ -5,7 +5,7 @@
  * directory and ESLint discovers this file by walking up, so a new package
  * needs no config of its own -- and a rule change lands in one place.
  *
- * Deliberately minimal (see AGENTS.md and pr-check.yml's DELIBERATELY-NOT-
+ * Deliberately minimal (see AGENTS.md and fast-check.yml's DELIBERATELY-NOT-
  * WIRED notes): typescript-eslint's recommended rules plus an explicit
  * no-explicit-any error, and -- since the first React package round -- the
  * no-literal-text rule (web/eslint-rules/no-literal-text.js, tested in

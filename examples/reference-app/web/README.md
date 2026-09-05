@@ -96,7 +96,7 @@ pnpm build       # tsc -p tsconfig.json -- no-emit until the M4 html-runner
                  # round lands a bundler (see the tsconfig comment)
 ```
 
-CI runs the same four legs as this directory's row in pr-check's npm matrix: the app is one row of the matrix through the same reusable `npm-package-ci` workflow as the eleven web packages — a frozen-lockfile workspace install from the web/ root first, then each leg with this directory as the working directory (recorded in `.github/workflows/pr-check.yml`). From the web/ root, the workspace-wide `pnpm -r` forms reach this app the same way they reach any member.
+CI runs the same four legs as this directory's row in fast-check's npm matrix: the app is one row of the matrix through the same reusable `npm-package-ci` workflow as the eleven web packages — a frozen-lockfile workspace install from the web/ root first, then each leg with this directory as the working directory (recorded in `.github/workflows/fast-check.yml`). From the web/ root, the workspace-wide `pnpm -r` forms reach this app the same way they reach any member.
 
 Type and test resolution of the `@speed/*` imports map every specifier — subpaths included — onto the workspace sibling's live source (tsconfig `paths`, mirrored in the vitest config's aliases), because a sibling's `dist/` is never committed and may not exist when this app runs; the mapped set covers the transitive graph (tokens, `@speed/i18n/mui-locale`, `@speed/api-sdk/runtime`), with subpath entries ordered before their prefixes.
 

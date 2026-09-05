@@ -18,7 +18,7 @@ file is the discipline that ships with the module to consuming projects.
 > flow above), and **self-service session/device-list and login-history
 > management** (`history.go`: list sessions, revoke one, revoke every other,
 > list login history). Wiring this module into a real HTTP server (the
-> reference app, `pr-check`/`pr-full` CI matrices, `Taskfile.yml`'s
+> reference app, `fast-check`/`full-check` CI matrices, `Taskfile.yml`'s
 > `INTEGRATION_DIRS`) is the next block's job — this module builds, lints
 > and tests green entirely on its own regardless. Judge what exists by the
 > tree, not by this note.
@@ -543,9 +543,9 @@ go -C go/authn test -tags=integration -race ./integration_test/...   # PostgreSQ
 ```
 
 All three are wired into CI: the unit tier and lint run through the shared
-`go-module-ci` matrix in both `pr-check.yml` (every PR) and `pr-full.yml`
+`go-module-ci` matrix in both `fast-check.yml` (every PR) and `full-check.yml`
 (`full-ci`-labeled PRs), and the PostgreSQL integration tier runs in
-`pr-full.yml`'s `integration-tiers` matrix — `go/authn` is a row in both
+`full-check.yml`'s `integration-tiers` matrix — `go/authn` is a row in both
 matrices, and `Taskfile.yml`'s `INTEGRATION_DIRS` carries the same entry for
 `task test:full`'s local loop.
 

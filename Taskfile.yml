@@ -17,8 +17,8 @@ version: '3'
 # tools/ are intentionally wired into no task: docs/internal/18-cicd.md's
 # discipline table assigns them to CI workflows, and they run directly,
 # exactly as tools/README.md documents. Two of the three are wired today:
-# tools/scan_cjk.py runs in pr-check's repo-checks job
-# (.github/workflows/pr-check.yml) and tools/check_i18n_keys.py runs in
+# tools/scan_cjk.py runs in fast-check's repo-checks job
+# (.github/workflows/fast-check.yml) and tools/check_i18n_keys.py runs in
 # the docs-check pipeline (.github/workflows/docs-check.yml), which fires
 # on doc/i18n-touching PRs; only tools/check_repo_isolation.py is still
 # wired into no workflow, so it keeps running directly until its row lands
@@ -137,7 +137,7 @@ tasks:
       # standalone-topology + MultiReplicaSafe composition the
       # deployment-composition retrofit proves. Kept out of
       # {{.INTEGRATION_DIRS}} because that list enumerates modules under
-      # go/ (see its comment above); pr-full.yml mirrors this leg in the
+      # go/ (see its comment above); full-check.yml mirrors this leg in the
       # reference-app job.
       - cd "{{.APP_DIR}}" && go test -race -tags=integration ./...
       - |
@@ -155,7 +155,7 @@ tasks:
     # golangci-lint is the project standard (docs/internal/20-quality-and-
     # security.md; .golangci.yml at the repo root, v2 schema) and CI enforces
     # it on every pull request (the reusable go-module-ci workflow's
-    # golangci-lint leg; the reference app lints in pr-full). It cannot run
+    # golangci-lint leg; the reference app lints in full-check). It cannot run
     # from the workspace root, though: with go.work in effect, golangci-lint
     # v2 effectively lints nothing there (logs "typechecking error ...
     # directory prefix . does not contain modules listed in go.work", reports
