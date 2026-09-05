@@ -575,6 +575,7 @@
       "version": "v5.3.0"
     },
     {
+      "adr": "docs/adr/0003-accept-mpl2-for-pki-signer-vault.md",
       "ecosystem": "go",
       "evidence": "go module cache license file: github.com/hashicorp/vault/api@v1.23.0/LICENSE (Mozilla Public License, version 2.0; cross-checked against the module's own SPDX-License-Identifier: MPL-2.0 headers, e.g. auth.go, client.go)",
       "license": "MPL-2.0",

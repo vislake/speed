@@ -464,9 +464,12 @@ expansion of this manifest.
 Policy (mirroring `docs/internal/20-quality-and-security.md`): strong
 copyleft (GPL family, AGPL) fails outright; weak copyleft (MPL, LGPL)
 fails unless the entry carries an `adr` field naming an existing `docs/`
-file that records the adjudication (none exists); any unrecognized license
-string fails closed with an adjudication message; the permissive set
-(0BSD, Apache-2.0, BSD-2/3-Clause, CC0-1.0, ISC, MIT, Unlicense) passes.
+file that records the adjudication (`github.com/hashicorp/vault/api`'s
+entry is the one case today, adjudicated by
+`docs/adr/0003-accept-mpl2-for-pki-signer-vault.md`); any unrecognized
+license string fails closed with an adjudication message; the permissive
+set (0BSD, Apache-2.0, BSD-2/3-Clause, CC0-1.0, ISC, MIT, Unlicense)
+passes.
 Beyond the policy check, the scan re-derives the expected dependency set
 from the tree and fails on any drift: a newly required dependency, an
 orphan manifest entry, a version change, a `used_by` list that no longer
@@ -487,10 +490,10 @@ are deterministic: `$GOMODCACHE/<module>@<version>/<file>`).
 
 Execution status, stated honestly: the planted-fixture suite
 (`tools/license_scan_testdata/`, one directory per case with an
-`expected_exit` file) passes 10/10, and the real-tree check passes ("43
-manifest entries match the tree, all licenses within policy"), both
-proven locally. Wired into the security pipeline's license job (selftest,
-then the real check) in `.github/workflows/security.yml`.
+`expected_exit` file) passes 10/10, and the real-tree check passes ("55
+manifest entries match the tree, all licenses within policy" -- 46 go +
+9 npm), both proven locally. Wired into the security pipeline's license
+job (selftest, then the real check) in `.github/workflows/security.yml`.
 
 When a dependency appears, a version changes, or a dependency goes away:
 adjudicate the license (read the license file the release ships, record

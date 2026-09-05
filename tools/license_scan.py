@@ -20,7 +20,9 @@ Policy, mirroring docs/internal/20-quality-and-security.md:
   * strong copyleft (GPL family, AGPL)           -> FAIL
   * weak copyleft (MPL, LGPL)                     -> FAIL unless the entry
         carries an "adr" field naming a file under docs/ that exists and
-        records the adjudication (none exists today)
+        records the adjudication (one entry today, github.com/hashicorp/
+        vault/api, adjudicated by
+        docs/adr/0003-accept-mpl2-for-pki-signer-vault.md)
   * any other unrecognized license string         -> FAIL with an
         adjudication message: identify the license from the dependency's
         own license file and record the SPDX id plus evidence
@@ -84,8 +86,11 @@ STRONG_COPYLEFT = {
 }
 
 # Weak copyleft: pass only with a recorded adjudication (an "adr" field on
-# the manifest entry naming an existing file under docs/). None exists in
-# this repository today; the fixture suite proves both branches.
+# the manifest entry naming an existing file under docs/). One real entry
+# carries this today -- github.com/hashicorp/vault/api, adjudicated by
+# docs/adr/0003-accept-mpl2-for-pki-signer-vault.md; the fixture suite
+# proves both branches (adjudicated and un-adjudicated) independently of
+# that real entry.
 WEAK_COPYLEFT = {
     "LGPL-2.1",
     "LGPL-2.1-only",
