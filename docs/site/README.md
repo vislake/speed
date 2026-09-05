@@ -3,9 +3,12 @@
 This directory holds the documentation site for speed: the modular
 monolith distributed as libraries that business projects pull in via
 `go get` / `npm install`. The site is the versioned, central reference
-for consuming teams; each module additionally ships its own `docs/`
-inside the module, so documentation travels with the code (see
-docs/internal/13-documentation-standards.md for the full split).
+for consuming teams; each module additionally ships its own `AGENTS.md`
+and `README.md` inside the module, so documentation travels with the
+code (see docs/internal/13-documentation-standards.md for the full
+split — a per-module `docs/usage.md` is that doc's longer-term plan,
+created so far by exactly one module, `go/notification`, as a template
+for the rest).
 
 ## Current state: real content, machinery still deferred
 

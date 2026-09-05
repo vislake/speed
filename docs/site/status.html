@@ -43,10 +43,11 @@
     <code>go.work</code> have real, tested implementations — <code>go build</code>,
     <code>go vet</code>, <code>golangci-lint run ./...</code> and <code>go test -race</code>
     all pass. See <a href="modules.html">Modules</a> for the list.</td></tr>
-    <tr><td>Go CI coverage</td><td>20 of those 21 have a CI matrix row in
-    <code>pr-check.yml</code> (every pull request). <code>go/admin</code> is the one
-    named exception: its own unit suite passes, but no workflow runs lint/vet/build/test
-    against it yet — a real, recorded gap, not an oversight.</td></tr>
+    <tr><td>Go CI coverage</td><td>All <strong>21</strong> have a CI matrix row in
+    <code>pr-check.yml</code> (every pull request) — <code>golangci-lint</code>,
+    <code>go vet</code>, race-tested unit tests, a workspace-context build and a
+    <code>GOWORK=off</code> standalone build, per module, <code>go/admin</code>
+    included.</td></tr>
     <tr><td>npm packages</td><td><strong>11</strong> <code>@speed/*</code> packages under
     <code>web/packages/</code>, plus the reference app's own web host as an unversioned
     twelfth workspace member, are implemented, tested, and lint/typecheck/build clean.</td></tr>
@@ -62,7 +63,7 @@
   <table>
     <tr><th>Pipeline</th><th>Trigger</th><th>Covers</th></tr>
     <tr><td><code>pr-check.yml</code></td><td>Every pull request</td><td>Lint, vet and
-    race-tested unit tests for the 20-module Go matrix; lint/typecheck/test/build for
+    race-tested unit tests for the 21-module Go matrix; lint/typecheck/test/build for
     the 11 npm packages plus the reference-app web host; repository-wide checks
     (CJK-outside-<code>docs/internal</code> scan, a workspace-wide build, a
     <code>go.work</code> drift gate, the architecture-discipline semgrep rules).</td></tr>
