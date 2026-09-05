@@ -63,6 +63,7 @@
 "notification.subject_unresolved" = "The request could not be attributed to a user."
 
 "notification.invalid_list_params" = "The {{.field}} parameter ({{.value}}) is outside the range this API serves."
+"notification.send_record_tenant_required" = "Listing send records requires a tenant."
 
 "notification.contact.verify_code.sms" = "Your verification code is {{.code}}. It is valid for {{.minutes}} minutes."
 

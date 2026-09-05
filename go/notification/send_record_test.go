@@ -3,9 +3,11 @@ package notification
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
@@ -228,5 +230,151 @@ func TestSendRecordRepository_Save_InsertsWhenAbsent(t *testing.T) {
 	}
 	if got == nil || got.Status != SendRecordStatusFailed {
 		t.Errorf("ByTenantAndKey after Save-on-absent = %+v, want the failed record", got)
+	}
+}
+
+// TestSendRecordRepository_ListByFilter_NoTenant_Refused pins D10's one
+// error: a filter with no TenantID is refused before any query runs, the
+// same forgotten-tenant-filter refusal ByTenantAndKey's own hand-written
+// WHERE clause exists to make impossible to skip by accident.
+func TestSendRecordRepository_ListByFilter_NoTenant_Refused(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewSendRecordRepository(db)
+
+	_, err := repo.ListByFilter(tenantCtx("tenant-acme"), SendRecordFilter{Limit: 50})
+	appErr, ok := apperr.As(err)
+	if !ok || appErr.Code != ErrSendRecordTenantRequired.Code {
+		t.Fatalf("ListByFilter with no TenantID error = %v, want %s", err, ErrSendRecordTenantRequired.Code)
+	}
+}
+
+// TestSendRecordRepository_ListByFilter_IsScopedPerTenant pins D10's
+// cross-tenant read discipline: a filter naming one tenant never returns
+// another tenant's records, even with every other field left at its zero
+// value.
+func TestSendRecordRepository_ListByFilter_IsScopedPerTenant(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewSendRecordRepository(db)
+
+	insertSendRecordFixture(t, db, testSendRecord(t, "sr-acme-1", "tenant-acme", "key-1"))
+	insertSendRecordFixture(t, db, testSendRecord(t, "sr-bright-1", "tenant-bright", "key-2"))
+
+	got, err := repo.ListByFilter(tenantCtx("tenant-acme"), SendRecordFilter{TenantID: "tenant-acme", Limit: 50})
+	if err != nil {
+		t.Fatalf("ListByFilter: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "sr-acme-1" {
+		t.Fatalf("ListByFilter(tenant-acme) = %+v, want exactly the acme record", got)
+	}
+}
+
+// TestSendRecordRepository_ListByFilter_ChannelAndStatus_Match pins D10's
+// second and third filter dimensions: a channel or status filter narrows
+// the result to exactly the matching rows, and combining both is an AND,
+// not an OR.
+func TestSendRecordRepository_ListByFilter_ChannelAndStatus_Match(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewSendRecordRepository(db)
+
+	emailSucceeded := testSendRecord(t, "sr-1", "tenant-acme", "key-1")
+	emailSucceeded.Channel = ChannelEmail
+	emailSucceeded.Status = SendRecordStatusSucceeded
+	insertSendRecordFixture(t, db, emailSucceeded)
+
+	emailFailed := testSendRecord(t, "sr-2", "tenant-acme", "key-2")
+	emailFailed.Channel = ChannelEmail
+	emailFailed.Status = SendRecordStatusFailed
+	insertSendRecordFixture(t, db, emailFailed)
+
+	smsSucceeded := testSendRecord(t, "sr-3", "tenant-acme", "key-3")
+	smsSucceeded.Channel = ChannelSMS
+	smsSucceeded.Status = SendRecordStatusSucceeded
+	insertSendRecordFixture(t, db, smsSucceeded)
+
+	got, err := repo.ListByFilter(tenantCtx("tenant-acme"), SendRecordFilter{
+		TenantID: "tenant-acme",
+		Channel:  ChannelEmail,
+		Status:   SendRecordStatusFailed,
+		Limit:    50,
+	})
+	if err != nil {
+		t.Fatalf("ListByFilter: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "sr-2" {
+		t.Fatalf("ListByFilter(channel=email, status=failed) = %+v, want exactly sr-2", got)
+	}
+}
+
+// TestSendRecordRepository_ListByFilter_TimeRange_ExcludesOutsideRecords
+// pins D10's fourth filter dimension: From/To bound created_at, excluding
+// a record on either side of the window while keeping one inside it.
+func TestSendRecordRepository_ListByFilter_TimeRange_ExcludesOutsideRecords(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewSendRecordRepository(db)
+
+	old := testSendRecord(t, "sr-old", "tenant-acme", "key-old")
+	insertSendRecordFixture(t, db, old)
+	if err := db.Model(&SendRecord{}).Where("id = ?", "sr-old").
+		Update("created_at", time.Now().Add(-48*time.Hour)).Error; err != nil {
+		t.Fatalf("backdate sr-old: %v", err)
+	}
+
+	inWindow := testSendRecord(t, "sr-in-window", "tenant-acme", "key-in-window")
+	insertSendRecordFixture(t, db, inWindow)
+
+	future := testSendRecord(t, "sr-future", "tenant-acme", "key-future")
+	insertSendRecordFixture(t, db, future)
+	if err := db.Model(&SendRecord{}).Where("id = ?", "sr-future").
+		Update("created_at", time.Now().Add(48*time.Hour)).Error; err != nil {
+		t.Fatalf("postdate sr-future: %v", err)
+	}
+
+	got, err := repo.ListByFilter(tenantCtx("tenant-acme"), SendRecordFilter{
+		TenantID: "tenant-acme",
+		From:     time.Now().Add(-24 * time.Hour),
+		To:       time.Now().Add(24 * time.Hour),
+		Limit:    50,
+	})
+	if err != nil {
+		t.Fatalf("ListByFilter: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "sr-in-window" {
+		t.Fatalf("ListByFilter(time-bounded) = %+v, want exactly sr-in-window", got)
+	}
+}
+
+// TestSendRecordRepository_ListByFilter_NewestFirstWithLimitAndOffset pins
+// D10's paging contract: results are ordered created_at DESC, id DESC
+// (ListForRecipient's identical stable-paging tiebreak), and Limit/Offset
+// page through them exactly as given, with no clamping inside the
+// repository.
+func TestSendRecordRepository_ListByFilter_NewestFirstWithLimitAndOffset(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewSendRecordRepository(db)
+
+	base := time.Now().Add(-time.Hour)
+	for i, id := range []string{"sr-1", "sr-2", "sr-3"} {
+		rec := testSendRecord(t, id, "tenant-acme", "key-"+id)
+		insertSendRecordFixture(t, db, rec)
+		if err := db.Model(&SendRecord{}).Where("id = ?", id).
+			Update("created_at", base.Add(time.Duration(i)*time.Minute)).Error; err != nil {
+			t.Fatalf("stamp %s: %v", id, err)
+		}
+	}
+
+	all, err := repo.ListByFilter(tenantCtx("tenant-acme"), SendRecordFilter{TenantID: "tenant-acme", Limit: 50})
+	if err != nil {
+		t.Fatalf("ListByFilter: %v", err)
+	}
+	if len(all) != 3 || all[0].ID != "sr-3" || all[1].ID != "sr-2" || all[2].ID != "sr-1" {
+		t.Fatalf("ListByFilter order = %+v, want newest first (sr-3, sr-2, sr-1)", all)
+	}
+
+	page, err := repo.ListByFilter(tenantCtx("tenant-acme"), SendRecordFilter{TenantID: "tenant-acme", Limit: 1, Offset: 1})
+	if err != nil {
+		t.Fatalf("ListByFilter(paged): %v", err)
+	}
+	if len(page) != 1 || page[0].ID != "sr-2" {
+		t.Fatalf("ListByFilter(limit=1, offset=1) = %+v, want exactly sr-2", page)
 	}
 }

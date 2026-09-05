@@ -177,6 +177,20 @@ var (
 	ErrMessageNotFound = apperr.NotFound("notification.message_not_found")
 )
 
+// The send-record group: the one error send_record.go's ListByFilter (D10,
+// docs/internal/23-admin.md) can return.
+var (
+	// ErrSendRecordTenantRequired reports a ListByFilter call whose
+	// SendRecordFilter.TenantID was empty. send_records is platform data
+	// carrying no plugin-injected tenant scoping (see SendRecord's own doc
+	// comment), so the tenant filter is hand-written here exactly as
+	// ByTenantAndKey's already is -- an empty tenant would otherwise
+	// silently list every tenant's records at once, the same
+	// forgotten-tenant-filter shape the rest of this codebase refuses
+	// outright rather than risks.
+	ErrSendRecordTenantRequired = apperr.Invalid("notification.send_record_tenant_required")
+)
+
 // The HTTP-transport group: every error the module's HTTP handler (handler.go)
 // can return before a service is reached. The statuses are the caller's whole
 // answer on how to treat the failure. The first two mirror org's own pair

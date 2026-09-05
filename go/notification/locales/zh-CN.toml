@@ -59,6 +59,7 @@
 "notification.subject_unresolved" = "无法将该请求关联到任何用户。"
 
 "notification.invalid_list_params" = "{{.field}} 参数({{.value}})超出该接口允许的范围。"
+"notification.send_record_tenant_required" = "查询发送记录必须指定租户。"
 
 "notification.contact.verify_code.sms" = "您的验证码是 {{.code}},{{.minutes}} 分钟内有效。"
 

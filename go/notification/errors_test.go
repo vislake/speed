@@ -46,6 +46,9 @@ var errorCatalog = []struct {
 	// The inbox group (repository.go and handler.go).
 	{"ErrMessageNotFound", ErrMessageNotFound, "notification.message_not_found", http.StatusNotFound},
 
+	// The send-record group (send_record.go).
+	{"ErrSendRecordTenantRequired", ErrSendRecordTenantRequired, "notification.send_record_tenant_required", http.StatusBadRequest},
+
 	// The Register-time wiring group (module.go).
 	{"ErrSMSSenderRequired", ErrSMSSenderRequired, "notification.sms_sender_required", http.StatusInternalServerError},
 	{"ErrMailFromRequired", ErrMailFromRequired, "notification.mail_from_required", http.StatusInternalServerError},

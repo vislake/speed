@@ -357,6 +357,15 @@ func (s *DeliveryService) attachHost(reg *pkgcore.Registry) {
 	s.host = reg
 }
 
+// SendRecords returns the module's SendRecordRepository -- the same
+// instance every delivery attempt settles into (newDeliveryService's own
+// doc comment: one data path, not a second wrapper over one connection).
+// This is what a caller outside this package (go/admin's D10,
+// docs/internal/23-admin.md) reaches to search send records by tenant,
+// time range, channel and status through SendRecordRepository.ListByFilter,
+// rather than this package growing its own HTTP surface for it.
+func (s *DeliveryService) SendRecords() *SendRecordRepository { return s.sendRecs }
+
 // Dispatch validates d and enqueues one delivery job for it, returning the
 // job's id. Delivery is asynchronous: nothing is sent, rendered or checked
 // here beyond validation -- the queue worker's Handle runs the send-time

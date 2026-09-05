@@ -114,6 +114,87 @@ func ExampleInboxMessage() {
 	// other tenant: dbkit.record_not_found
 }
 
+// ExampleSendRecordRepository_ListByFilter walks D10's operator-facing
+// search (docs/internal/23-admin.md, go/admin's round 2): finding out
+// whether a delivery actually went out, and what happened, filtered by
+// tenant, channel and status.
+//
+// The example needs no delivery pipeline: it writes two send_records rows
+// directly, exactly as an outbound delivery attempt itself would (Create
+// on a fresh record, Save to settle it), which is enough to demonstrate
+// ListByFilter's own contract without standing up a full Dispatch.
+func ExampleSendRecordRepository_ListByFilter() {
+	ctx := context.Background()
+
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:notification_example_send_records?mode=memory&cache=shared",
+	})
+	if err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+
+	registry := dbkit.NewMigrationRegistry()
+	if err = registry.Register(notification.NewModule(db)); err != nil {
+		fmt.Println("register migrations:", err)
+		return
+	}
+	if err = registry.Apply(ctx, db, dbkit.DialectSQLite); err != nil {
+		fmt.Println("apply migrations:", err)
+		return
+	}
+
+	repo := notification.NewSendRecordRepository(db)
+
+	succeeded := &notification.SendRecord{
+		ID:              "send-record-000001",
+		TenantID:        "tenant-acme",
+		TypeKey:         "note.shared",
+		Channel:         notification.ChannelEmail,
+		RecipientClass:  notification.RecipientClassUser,
+		RecipientUserID: "user-7",
+		Status:          notification.SendRecordStatusSucceeded,
+		IdempotencyKey:  "delivery-key-1",
+	}
+	if err = repo.Create(ctx, succeeded); err != nil {
+		fmt.Println("create succeeded record:", err)
+		return
+	}
+
+	failed := &notification.SendRecord{
+		ID:              "send-record-000002",
+		TenantID:        "tenant-acme",
+		TypeKey:         "note.shared",
+		Channel:         notification.ChannelSMS,
+		RecipientClass:  notification.RecipientClassUser,
+		RecipientUserID: "user-7",
+		Status:          notification.SendRecordStatusFailed,
+		Error:           "sms provider refused",
+		IdempotencyKey:  "delivery-key-2",
+	}
+	if err = repo.Create(ctx, failed); err != nil {
+		fmt.Println("create failed record:", err)
+		return
+	}
+
+	records, err := repo.ListByFilter(ctx, notification.SendRecordFilter{
+		TenantID: "tenant-acme",
+		Status:   notification.SendRecordStatusFailed,
+		Limit:    10,
+	})
+	if err != nil {
+		fmt.Println("list:", err)
+		return
+	}
+	for _, rec := range records {
+		fmt.Printf("channel=%s status=%s error=%s\n", rec.Channel, rec.Status, rec.Error)
+	}
+
+	// Output:
+	// channel=sms status=failed error=sms provider refused
+}
+
 // ExampleNotificationPreferences walks the preference matrix the way a host
 // assembles it: the business module declares its notification types on the
 // host registry, the notification module's Register attaches that registrar

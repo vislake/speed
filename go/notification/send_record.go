@@ -208,3 +208,80 @@ func (r *SendRecordRepository) Create(ctx context.Context, rec *SendRecord) erro
 func (r *SendRecordRepository) Save(ctx context.Context, rec *SendRecord) error {
 	return r.db.WithContext(ctx).Save(rec).Error
 }
+
+// SendRecordFilter narrows a ListByFilter read to one tenant's own send
+// records, newest first. TenantID is required (ErrSendRecordTenantRequired
+// otherwise) -- mirroring ByTenantAndKey's own explicit, hand-written
+// tenant filter, since this platform table carries no plugin-injected
+// tenant scoping. Every other field is optional: its zero value matches
+// everything.
+//
+// Limit must be positive and Offset non-negative -- the identical contract
+// repository.go's ListForRecipient documents for its own list surface: the
+// caller resolves the spec's default and cap before calling ListByFilter,
+// and nothing is silently clamped here.
+type SendRecordFilter struct {
+	// TenantID is the tenant to search. Required.
+	TenantID string
+
+	// Channel, when non-empty, matches SendRecord.Channel exactly.
+	Channel string
+
+	// Status, when non-empty, matches SendRecord.Status exactly (one of
+	// the SendRecordStatus* values).
+	Status string
+
+	// From, when non-zero, excludes records created strictly before it.
+	From time.Time
+
+	// To, when non-zero, excludes records created strictly after it.
+	To time.Time
+
+	// Limit bounds the number of rows returned. See the type's own doc
+	// comment: the caller resolves this before calling, ListByFilter never
+	// clamps it.
+	Limit int
+
+	// Offset skips this many matching rows before the page ListByFilter
+	// returns starts.
+	Offset int
+}
+
+// ListByFilter returns the page of filter.TenantID's own send records
+// matching filter, newest first (created_at DESC with id DESC as the
+// tiebreak -- ListForRecipient's identical stable-paging convention, so
+// two records written in the same instant still page deterministically).
+// This is D10's operator-facing search (docs/internal/23-admin.md):
+// "did this delivery actually go out, and what happened".
+//
+// This is a single-tenant read, matching D2's established mechanism for
+// every other cross-tenant admin read in this codebase: a caller needing
+// every tenant's records (go/admin's own HTTP handler) loops this method
+// once per tenant under tenancy.WithSystemContext, rather than
+// notification growing a ListAcrossTenants bypass of its own.
+func (r *SendRecordRepository) ListByFilter(ctx context.Context, filter SendRecordFilter) ([]SendRecord, error) {
+	if filter.TenantID == "" {
+		return nil, ErrSendRecordTenantRequired
+	}
+
+	q := r.db.WithContext(ctx).Where("tenant_id = ?", filter.TenantID)
+	if filter.Channel != "" {
+		q = q.Where("channel = ?", filter.Channel)
+	}
+	if filter.Status != "" {
+		q = q.Where("status = ?", filter.Status)
+	}
+	if !filter.From.IsZero() {
+		q = q.Where("created_at >= ?", filter.From)
+	}
+	if !filter.To.IsZero() {
+		q = q.Where("created_at <= ?", filter.To)
+	}
+
+	var rows []SendRecord
+	err := q.Order("created_at DESC, id DESC").Limit(filter.Limit).Offset(filter.Offset).Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
