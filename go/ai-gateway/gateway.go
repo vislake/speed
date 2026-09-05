@@ -9,6 +9,7 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/ratelimit"
 	"github.com/vislake/speed/go/storage"
 )
 
@@ -53,6 +54,14 @@ type Gateway struct {
 	// ordinary downward dependency, unlike Entitlements/UsageRecorder.
 	imageQueue    jobs.Queue
 	objectService *storage.ObjectService
+
+	// host and limiter back checkRateLimit's per-tenant rate limiting
+	// (ratelimit.go): host is attached by Module.Register (mirroring
+	// go/sharing's identical hostSeams wiring), and limiter is the
+	// test-injection point ratelimit_test.go uses to isolate a Gateway
+	// under test from a real KVStore -- see rateLimiter's own doc comment.
+	host    hostSeams
+	limiter ratelimit.Limiter
 }
 
 // GatewayOption configures a Gateway at construction time.
@@ -195,6 +204,11 @@ func (g *Gateway) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 	}
 	logicalModel := req.Model
 
+	tenant, _ := pkgcore.TenantFromContext(ctx)
+	if err := g.checkRateLimit(ctx, string(tenant)); err != nil {
+		return ChatResponse{}, err
+	}
+
 	if err := g.checkEntitlement(ctx, logicalModel); err != nil {
 		return ChatResponse{}, err
 	}
@@ -240,6 +254,11 @@ func (g *Gateway) ChatStream(ctx context.Context, req ChatRequest) (<-chan ChatC
 		return nil, err
 	}
 	logicalModel := req.Model
+
+	tenant, _ := pkgcore.TenantFromContext(ctx)
+	if err := g.checkRateLimit(ctx, string(tenant)); err != nil {
+		return nil, err
+	}
 
 	if err := g.checkEntitlement(ctx, logicalModel); err != nil {
 		return nil, err

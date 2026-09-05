@@ -108,6 +108,11 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // what else remains deliberately absent.
 func (m *Module) Register(reg *pkgcore.Registry) error {
 	pkgcore.RegisterSystemPurpose(SystemPurposeCredentialWrite)
+	// Attaches the registry as Gateway's hostSeams so checkRateLimit
+	// (ratelimit.go) can build a go/ratelimit.Limiter over the deployment
+	// mode's resolved KVStore -- mirroring go/sharing's identical
+	// s.host = reg wiring in its own Module.Register.
+	m.gateway.host = reg
 	if handler, ok := m.gateway.imageJobHandler(); ok {
 		if err := reg.Jobs.Handle(TaskTypeImageGenerate, handler); err != nil {
 			return err

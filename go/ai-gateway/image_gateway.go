@@ -193,6 +193,11 @@ func (g *Gateway) GenerateImage(ctx context.Context, req ImageRequest) (jobs.Job
 	}
 	logicalModel := req.Model
 
+	tenant, _ := pkgcore.TenantFromContext(ctx)
+	if err := g.checkRateLimit(ctx, string(tenant)); err != nil {
+		return "", err
+	}
+
 	if err := g.checkEntitlement(ctx, logicalModel); err != nil {
 		return "", err
 	}

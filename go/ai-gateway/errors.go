@@ -30,6 +30,14 @@ var (
 	// the provider is called, so a refused caller is never billed.
 	ErrEntitlementDenied = apperr.Forbidden("aigateway.entitlement_denied")
 
+	// ErrRateLimitCheckFailed reports that Gateway's per-tenant rate-limit
+	// check (ratelimit.go's checkRateLimit) could not get an answer from a
+	// wired Limiter -- a KVStore outage, never a genuine over-limit
+	// decision (see ErrRateLimited for that). Fails the call closed rather
+	// than silently allowing it through, per go/ratelimit.Limiter's own
+	// fail-closed contract.
+	ErrRateLimitCheckFailed = apperr.Internal("aigateway.rate_limit_check_failed")
+
 	// ErrCredentialNotFound reports that CredentialService.Resolve found
 	// neither a tenant BYOK row nor a platform-wide row for a provider.
 	ErrCredentialNotFound = apperr.NotFound("aigateway.credential_not_found")
