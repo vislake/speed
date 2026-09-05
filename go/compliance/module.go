@@ -86,6 +86,11 @@ type Module struct {
 	export     *ExportService
 	auditQuery *AuditQuery
 
+	// auditRepo is the same *audit.Repository instance auditQuery reads
+	// through, kept as its own field so onConfigItemChanged (config_audit.go)
+	// can write to it without reaching into auditQuery's unexported field.
+	auditRepo *audit.Repository
+
 	queue jobs.Queue
 }
 
@@ -145,6 +150,7 @@ func NewModule(auditRepo *audit.Repository, opts ...Option) *Module {
 		erasure:    newErasureService(),
 		export:     newExportService(),
 		auditQuery: NewAuditQuery(auditRepo),
+		auditRepo:  auditRepo,
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -251,6 +257,15 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 
 	pkgcore.RegisterSystemPurpose(SystemPurposeRetentionSweep)
 	pkgcore.RegisterSystemPurpose(SystemPurposeRightToErasure)
+
+	// Subscribe to config's own EventConfigItemChanged so every successful
+	// config.Set finally gets the dedicated audit record
+	// docs/internal/11-cross-cutting.md's "变更审计" bullet promised for
+	// this module's own round -- see onConfigItemChanged's doc comment
+	// (config_audit.go). Valid to install regardless of whether config's
+	// Register has run yet, mirroring go/dbkit/audit's own Module.Register
+	// doc comment on the identical point.
+	reg.Events.Subscribe(config.EventConfigItemChanged, m.onConfigItemChanged)
 
 	bus := reg.EventBus()
 	m.retention.retention = reg.Retention
