@@ -11,10 +11,9 @@ import (
 )
 
 // This file closes the known gap docs/internal/11-cross-cutting.md's
-// ratelimit consumer table records for this module: "ai-gateway | 按租户
-// 的请求频率限流，独立于按信用点计的成本限额" (per-tenant request-rate
+// ratelimit consumer table records for this module: per-tenant request-rate
 // limiting, independent of the credit-based cost quota Entitlements
-// already enforces). It applies go/ratelimit to Gateway's three call
+// already enforces. It applies go/ratelimit to Gateway's three call
 // sites -- Chat, ChatStream and GenerateImage -- the same one-dimension
 // shape go/sharing's checkCreateRateLimit applies to its own single
 // per-tenant dimension, with the underlying Limiter built lazily over the

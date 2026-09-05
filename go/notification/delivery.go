@@ -35,8 +35,8 @@ const jobTypeDeliver = "notification.deliver"
 const InstrumentationName = "github.com/vislake/speed/go/notification"
 
 // Metric instrument names registerDeliveryMetrics wires under
-// InstrumentationName -- the "各渠道投递成功率、延迟、退信率"
-// (per-channel delivery success rate, latency, bounce rate) row
+// InstrumentationName -- the per-channel delivery success rate, latency and
+// bounce rate row
 // docs/internal/09-observability.md's must-instrument table requires for the
 // notification domain. Bounce rate is derivable from
 // deliveryCountMetricName's own status attribute: a transport's permanent

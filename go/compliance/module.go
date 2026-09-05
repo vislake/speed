@@ -260,7 +260,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 
 	// Subscribe to config's own EventConfigItemChanged so every successful
 	// config.Set finally gets the dedicated audit record
-	// docs/internal/11-cross-cutting.md's "变更审计" bullet promised for
+	// docs/internal/11-cross-cutting.md's change-audit bullet promised for
 	// this module's own round -- see onConfigItemChanged's doc comment
 	// (config_audit.go). Valid to install regardless of whether config's
 	// Register has run yet, mirroring go/dbkit/audit's own Module.Register

@@ -25,12 +25,11 @@ var configAuditEventIDNamespace = uuid.MustParse("875a41cd-229c-4648-8633-a100d3
 
 // onConfigItemChanged normalizes a config.EventConfigItemChanged event into
 // an audit.AuditEvent under config.AuditActionConfigSet, closing the gap
-// docs/internal/11-cross-cutting.md's own "变更审计" bullet records as
-// deferred: "专门的审计记录与 compliance 消费者随 compliance 模块的 round
-// 落地（届时订阅 config.item.changed 即可，本模块不依赖审计方）"
-// (a dedicated audit record and its compliance consumer land with
-// compliance's own round, subscribing to config.item.changed; that module
-// takes no dependency on the audit side for it). config.AuditActionConfigSet
+// docs/internal/11-cross-cutting.md's own "change audit" bullet records as
+// deferred to this module's own round: a dedicated audit record and its
+// compliance consumer land with compliance's own round, subscribing to
+// config.item.changed; that module takes no dependency on the audit side
+// for it. config.AuditActionConfigSet
 // is already declared on reg.AuditActions by config's own Register (see
 // go/dbkit/audit/emit.go's own doc comment: "closing the loop go/config's
 // own AuditActionConfigSet declaration left open") -- no new audit action

@@ -25,9 +25,9 @@ import (
 const InstrumentationName = "github.com/vislake/speed/go/authn"
 
 // Metric instrument names registerAuthMetrics wires under
-// InstrumentationName -- the "登录成功/失败率、MFA 挑战量、token 刷新失败率"
-// (login success/failure rate, MFA challenge volume, refresh failure rate)
-// row docs/internal/09-observability.md's must-instrument table requires
+// InstrumentationName -- the login success/failure rate, MFA challenge
+// volume, and token refresh failure rate row
+// docs/internal/09-observability.md's must-instrument table requires
 // for the authentication domain. One counter and one histogram cover all
 // three: each is sliced by its "operation" attribute (authOpLogin/
 // authOpRefresh/authOpMFAChallenge) and "outcome" attribute
