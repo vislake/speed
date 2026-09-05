@@ -51,10 +51,12 @@
   orientation for an AI coding tool: responsibility boundary, public API, typical usage,
   and explicit dos-and-don'ts — plus a plain <code>README.md</code>, so documentation
   ships with the code and stays current with the version a consumer actually pulls. (A
-  per-module <code>docs/</code> subdirectory is the longer-term plan recorded in
+  per-module <code>docs/usage.md</code> is the longer-term plan recorded in
   <a href="https://github.com/vislake/speed/blob/main/docs/internal/13-documentation-standards.md">docs/internal/13</a>;
-  as of this writing no Go module or npm package has actually created one yet — module
-  documentation today really is just its <code>AGENTS.md</code> plus its
+  as of this writing exactly one module, <code>go/notification</code>, has created one —
+  <a href="https://github.com/vislake/speed/blob/main/go/notification/docs/usage.md">go/notification/docs/usage.md</a>,
+  written as a template for the rest, its own header says as much — while every other Go
+  module and every npm package still relies on just its <code>AGENTS.md</code> plus its
   <code>README.md</code>.) This site is the <em>central</em> reference across modules —
   see <a href="modules.html">Modules</a> for the full index — planned to be versioned
   per release, with the module-level docs pointing at it for the overview.</p>
