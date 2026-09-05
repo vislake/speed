@@ -1,0 +1,65 @@
+name: docs-site-deploy
+
+# Publishes docs/site/ to GitHub Pages -- the public documentation site
+# for consuming teams and AI coding agents (docs/site/README.md,
+# docs/internal/13-documentation-standards.md). The site is a
+# hand-written static skeleton with no build step (no npm project, no
+# SSG) -- this workflow uploads docs/site/ exactly as committed via the
+# modern "build_type: workflow" Pages flow (actions/configure-pages +
+# actions/upload-pages-artifact + actions/deploy-pages), not the legacy
+# gh-pages-branch approach.
+#
+# TRIGGER: push to main touching docs/site/** or this workflow file
+# itself, plus workflow_dispatch for a manual re-run (e.g. after a Pages
+# environment change with no site content change). Deliberately narrow --
+# this pipeline has nothing to do with the Go/npm module matrices and
+# must not fire on every push to main.
+#
+# PERMISSIONS: least-privilege for the deploy-pages action's contract --
+# pages: write (to deploy) and id-token: write (for the action's OIDC
+# token proving the deploy's provenance). No broader permission is
+# requested.
+#
+# CONCURRENCY: grouped on "pages" with cancel-in-progress: false, per
+# GitHub's own documented recommendation for Pages deploy workflows --
+# two concurrent deploys writing to the same Pages environment can
+# corrupt each other, so a second run queues rather than cancels the
+# first.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/site/**
+      - .github/workflows/docs-site-deploy.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and deploy docs/site to GitHub Pages
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Configure Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d  # v6.0.0
+      - name: Upload docs/site as the Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9  # v5.0.0
+        with:
+          path: docs/site
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346  # v5.0.1
