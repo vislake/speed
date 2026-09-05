@@ -85,6 +85,16 @@ type Service struct {
 	// it are re-read next time; only the poller touches it, so it lives
 	// behind pollMu.
 	watermark time.Time
+
+	// afterRefreshLock, when non-nil, is called synchronously by Refresh
+	// immediately after it acquires pollMu and before it does any work. It
+	// exists solely so a test can force the exact interleaving the
+	// Close/poller deadlock this package's history records needs -- a
+	// poller-triggered Refresh call provably holding pollMu at the moment
+	// Close is invoked -- deterministically rather than by timing alone.
+	// See TestService_Close_DoesNotDeadlockAgainstAnInFlightPollerRefresh.
+	// Nil on every production path.
+	afterRefreshLock func()
 }
 
 // now is time.Now, indirected so tests can pin time if they ever need to;
@@ -526,6 +536,9 @@ func (s *Service) decrypt(stored string) (string, error) {
 func (s *Service) Refresh(ctx context.Context) error {
 	s.pollMu.Lock()
 	defer s.pollMu.Unlock()
+	if s.afterRefreshLock != nil {
+		s.afterRefreshLock()
+	}
 	rows, err := s.st.changedSince(ctx, s.watermark)
 	if err != nil {
 		return ErrStorage.WithCause(err)
@@ -544,16 +557,31 @@ func (s *Service) Refresh(ctx context.Context) error {
 // writes after Close -- Close only silences the background goroutine, so a
 // host that shuts the poller down while request traffic drains does not
 // lose the ability to serve.
+//
+// pollMu is held only long enough to capture and clear the poller-lifecycle
+// fields, never across the wait: the poller goroutine calls Refresh on
+// every tick, and Refresh itself locks pollMu, so a Close that stayed
+// blocked on <-pollDone while still holding pollMu would deadlock against
+// a tick that fired the instant before pollStop closed -- the poller
+// could never finish that in-flight Refresh (it needs pollMu), and Close
+// would never release pollMu until the poller finished. Releasing the
+// lock before waiting lets that in-flight Refresh acquire and release
+// pollMu normally, so the poller's next loop iteration observes the
+// closed pollStop and exits.
 func (s *Service) Close() error {
 	s.pollMu.Lock()
-	defer s.pollMu.Unlock()
-	if s.pollStop == nil {
+	stop := s.pollStop
+	done := s.pollDone
+	if stop == nil {
+		s.pollMu.Unlock()
 		return nil
 	}
-	close(s.pollStop)
-	<-s.pollDone
 	s.pollStop = nil
 	s.pollDone = nil
+	s.pollMu.Unlock()
+
+	close(stop)
+	<-done
 	return nil
 }
 
@@ -568,15 +596,23 @@ func (s *Service) startPoller() {
 	if s.pollInterval <= 0 {
 		return
 	}
-	s.pollStop = make(chan struct{})
-	s.pollDone = make(chan struct{})
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	s.pollStop = stop
+	s.pollDone = done
+	// The goroutine below closes over the local stop/done copies, never
+	// the s.pollStop/s.pollDone fields themselves: Close clears those
+	// fields to nil (under pollMu) before this goroutine is guaranteed to
+	// have exited, and reading them directly here -- on every loop
+	// iteration's select, and in the deferred close -- would race against
+	// that write.
 	go func() {
-		defer close(s.pollDone)
+		defer close(done)
 		ticker := time.NewTicker(s.pollInterval)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-s.pollStop:
+			case <-stop:
 				return
 			case <-ticker.C:
 				ctx, cancel := context.WithTimeout(context.Background(), s.pollInterval)

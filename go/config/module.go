@@ -71,6 +71,16 @@ type Module struct {
 	// mounted during Register resolve it lazily per request, so the
 	// window between Register and Attach reports ErrServiceNotAttached.
 	service *Service
+
+	// afterRefreshLock, forwarded onto the attached Service's own field of
+	// the same name before the poller starts, exists solely so a test can
+	// deterministically synchronize with an in-flight, poller-triggered
+	// Refresh call (see TestService_Close_DoesNotDeadlockAgainstAnInFlightPollerRefresh).
+	// Setting it here, before Attach constructs the Service and starts the
+	// poller goroutine, avoids racing that goroutine's first read of the
+	// field against a test setting it after the fact. Nil on every
+	// production path; there is no exported Option for it.
+	afterRefreshLock func()
 }
 
 // Option configures a Module built by NewModule.
@@ -103,6 +113,15 @@ func WithResolver(resolver tenancy.Resolver) Option {
 // poller entirely; tests use that or a short interval.
 func WithPollInterval(interval time.Duration) Option {
 	return func(m *Module) { m.pollInterval = interval }
+}
+
+// withAfterRefreshLockForTest is unexported: it exists only so
+// TestService_Close_DoesNotDeadlockAgainstAnInFlightPollerRefresh can
+// install the Service's afterRefreshLock hook before Attach starts the
+// poller goroutine, never after -- see the Module field's own doc
+// comment for why the ordering matters.
+func withAfterRefreshLockForTest(hook func()) Option {
+	return func(m *Module) { m.afterRefreshLock = hook }
 }
 
 // NewModule returns a Module whose configs table lives in db. Constructing
@@ -217,13 +236,14 @@ func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
 	}
 
 	svc := &Service{
-		schema:       schema,
-		st:           &store{db: m.db},
-		bus:          reg.Events.Bus(),
-		cipher:       m.cipher,
-		cache:        newValueCache(),
-		watchers:     &watchers{byKey: make(map[string][]watch)},
-		pollInterval: m.pollInterval,
+		schema:           schema,
+		st:               &store{db: m.db},
+		bus:              reg.Events.Bus(),
+		cipher:           m.cipher,
+		cache:            newValueCache(),
+		watchers:         &watchers{byKey: make(map[string][]watch)},
+		pollInterval:     m.pollInterval,
+		afterRefreshLock: m.afterRefreshLock,
 	}
 	reg.Events.Subscribe(EventConfigItemChanged, svc.onItemChanged)
 	svc.startPoller()

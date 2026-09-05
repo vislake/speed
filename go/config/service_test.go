@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -899,6 +900,87 @@ func TestService_Poller_ConvergesAStaleCache(t *testing.T) {
 		v, err := svc.Get(tenantA(), "brand.site_name")
 		return err == nil && v.Data == "Backdoor B"
 	})
+}
+
+// TestService_Close_DoesNotDeadlockAgainstAnInFlightPollerRefresh is a
+// deterministic regression test for a real deadlock a loaded CI runner
+// once hit: Close used to hold pollMu for its entire body, including the
+// block on <-pollDone. The poller's own ticker-triggered Refresh call
+// needs pollMu to finish and let the poller's next select observe the
+// closed pollStop -- so if the poller's select ever picked <-ticker.C
+// over the already-closed <-pollStop while Close was mid-wait, the
+// poller blocked forever trying to re-acquire pollMu for that tick's
+// Refresh call, and Close, still holding pollMu, waited forever for a
+// pollDone that could now never close. Circular wait.
+//
+// The one piece of that race this test cannot pin down directly is which
+// case Go's select picks when both channels are simultaneously ready --
+// that choice is a uniform, unforceable coin flip by language design.
+// Everything else the deadlock needs is forced here, deterministically,
+// via the afterRefreshLock hook rather than hoped for through timing: a
+// poller-triggered Refresh call provably holding pollMu at the exact
+// moment Close is invoked, and (through an extremely short poll interval)
+// a second tick provably pending in the poller's ticker by the time that
+// Refresh call returns. That leaves only the coin flip, so the scenario
+// is repeated enough times that never landing the bad half of it is
+// vanishingly unlikely against the unfixed code, while the fixed Close
+// cannot deadlock on either outcome of that flip -- every iteration
+// passes reliably post-fix. Each iteration carries its own hard
+// wall-clock timeout, so a reappearing deadlock fails fast and names the
+// iteration instead of hanging the whole test binary for minutes the way
+// the real incident did.
+func TestService_Close_DoesNotDeadlockAgainstAnInFlightPollerRefresh(t *testing.T) {
+	const iterations = 25
+	for i := 0; i < iterations; i++ {
+		refreshLocked := make(chan struct{})
+		proceedRefresh := make(chan struct{})
+		var signalOnce sync.Once
+		hook := func() {
+			signalOnce.Do(func() { close(refreshLocked) })
+			<-proceedRefresh
+		}
+
+		// The hook is installed before Attach starts the poller goroutine
+		// (via the unexported withAfterRefreshLockForTest, forwarded onto
+		// the Service before startPoller runs), never assigned onto the
+		// Service after the fact -- the poller's first tick can otherwise
+		// land before or during a post-construction assignment, racing it.
+		svc := attachDefaultServiceForTest(t, WithPollInterval(200*time.Microsecond), withAfterRefreshLockForTest(hook))
+
+		// Wait for the poller's own ticker-triggered Refresh call to
+		// actually acquire pollMu -- the precondition a real deadlock
+		// needs, forced here instead of hoped for.
+		select {
+		case <-refreshLocked:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("iteration %d: the poller never entered Refresh within 5s", i)
+		}
+
+		closeDone := make(chan error, 1)
+		go func() { closeDone <- svc.Close() }()
+
+		// Give Close a moment to reach pollMu.Lock() and block there
+		// behind the still-held Refresh call, and let the short poll
+		// interval queue up a second, pending tick in the meantime.
+		time.Sleep(20 * time.Millisecond)
+
+		// Release the in-flight Refresh. The fixed Close released pollMu
+		// before waiting on pollDone, so this always finishes cleanly.
+		// The buggy Close held pollMu across that wait instead, and if
+		// the poller's next select then picks the now-pending tick over
+		// the already-closed pollStop, the poller blocks forever
+		// re-acquiring pollMu for that tick's Refresh call.
+		close(proceedRefresh)
+
+		select {
+		case err := <-closeDone:
+			if err != nil {
+				t.Fatalf("iteration %d: Close: %v", i, err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("iteration %d: Close deadlocked against an in-flight poller tick -- see Close's doc comment in service.go", i)
+		}
+	}
 }
 
 // eventually polls probe until it reports true or timeout elapses. It is
