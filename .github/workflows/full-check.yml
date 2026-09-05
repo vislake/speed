@@ -101,26 +101,44 @@ name: full-check
 #                       proof cannot rule out
 #   * reference-app job: examples/reference-app's golangci-lint leg, unit
 #     suite under -race, and its Docker-backed integration tier
-#     (-tags=integration -- testcontainers Redis) -- reference-app is its
-#     own module, listed in go.work but outside go/, so neither the module
-#     matrix above nor the go/... import-path build of fast-check covers it
-#     (Taskfile's APP_DIR legs are the local mirror, and Taskfile test:full
-#     runs the app's integration tier the same way this job does). The
-#     app's integration_test/ boots the real server with a real Redis
-#     Streams EventBus in a standalone topology -- the retrofit's proof
-#     that implementation composition is orthogonal to deployment mode.
-#     Its lint lives here, not in fast-check, keeping the fast per-PR
-#     pipeline on its 8-minute budget; the app's go.mod is still validated
-#     on every PR by fast-check's repo-checks workspace build.
+#     (-tags=integration -- testcontainers Redis, MinIO and a Mailpit SMTP
+#     catcher) -- reference-app is its own module, listed in go.work but
+#     outside go/, so neither the module matrix above nor the go/...
+#     import-path build of fast-check covers it (Taskfile's APP_DIR legs
+#     are the local mirror, and Taskfile test:full runs the app's
+#     integration tier the same way this job does). The app's
+#     integration_test/ carries two proofs at this point:
+#     redis_eventbus_composition_test.go boots the real server with a real
+#     Redis Streams EventBus in a STANDALONE topology (the
+#     deployment-composition retrofit's original proof that implementation
+#     composition is orthogonal to deployment mode), and
+#     distributed_mode_test.go (this round) boots the real server TWICE,
+#     both replicas under SPEED_DEPLOYMENT_MODE=distributed against the
+#     same real Redis/MinIO/SMTP-catcher infrastructure, and proves a
+#     notification triggered through replica A's HTTP port is read back
+#     through replica B's -- the positive half of the M0 exit condition
+#     this file's own NOT YET section used to record as entirely missing --
+#     plus a negative-path sub-test proving an incompletely-composed
+#     distributed boot still fails closed through the real binary's own
+#     process exit code, not just server_test.go's in-process form. Its
+#     lint lives here, not in fast-check, keeping the fast per-PR pipeline
+#     on its 8-minute budget; the app's go.mod is still validated on every
+#     PR by fast-check's repo-checks workspace build.
 #
 # NOT YET -- listed honestly, roadmap M0:
 #   * the dual deployment mode x dual dialect full-matrix acceptance across
 #     every module. What runs above is the real part of the matrix that
 #     exists today: the standalone-mode unit suites, the PostgreSQL /
-#     Redis / MinIO-S3 integration tiers, and the reference-app job's
-#     integration tier (a real-Redis composition in a standalone topology,
-#     not a distributed-mode run). No distributed-mode or second-dialect
-#     tier exists to run yet.
+#     Redis / MinIO-S3 integration tiers, and the reference-app job's two
+#     integration-tier proofs (a real-Redis composition in a STANDALONE
+#     topology, and -- new this round -- a genuine two-replica DISTRIBUTED
+#     boot against real Redis/MinIO/SMTP, both still on the app's own
+#     hard-coded SQLite dialect: the deployment-mode axis this condition
+#     names is now real, the second-dialect axis is not, and
+#     distributed_mode_test.go's own header records that combination
+#     explicitly as a recorded, not silently worked around, deviation from
+#     what a genuinely dual-dialect distributed run would need). No
+#     dual-mode-x-dual-dialect combined tier exists to run yet.
 #   * coverage reporting: Taskfile test:full passes -cover, but CI has no
 #     collector for coverage output, so -cover is deliberately not passed
 #     on the legs above (and the go-module-ci legs are shared with fast-check
