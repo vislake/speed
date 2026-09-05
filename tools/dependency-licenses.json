@@ -613,14 +613,14 @@
     },
     {
       "ecosystem": "go",
-      "evidence": "go module cache license file: golang.org/x/crypto@v0.55.0/LICENSE",
+      "evidence": "go module cache license file: golang.org/x/crypto@v0.56.0/LICENSE",
       "license": "BSD-3-Clause",
       "name": "golang.org/x/crypto",
       "used_by": [
         "go/authn",
         "go/sharing"
       ],
-      "version": "v0.55.0"
+      "version": "v0.56.0"
     },
     {
       "ecosystem": "go",
