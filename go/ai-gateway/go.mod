@@ -1,6 +1,6 @@
 module github.com/vislake/speed/go/ai-gateway
 
-go 1.25.0
+go 1.26.0
 
 replace github.com/vislake/speed/go/pkgcore => ../pkgcore
 

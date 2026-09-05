@@ -1,6 +1,6 @@
 module github.com/vislake/speed/go/authn
 
-go 1.25.0
+go 1.26.0
 
 replace github.com/vislake/speed/go/pkgcore => ../pkgcore
 
@@ -26,7 +26,7 @@ require (
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/metric v1.44.0
 	go.opentelemetry.io/otel/sdk/metric v1.44.0
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/oauth2 v0.36.0
 	gorm.io/gorm v1.31.2
 )

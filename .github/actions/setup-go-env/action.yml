@@ -7,8 +7,10 @@ description: >-
 # Shared Go toolchain setup for every CI job that runs Go commands.
 #
 # VERSION SOURCE
-# This action reads go.work's `go` directive (currently `go 1.25.0`) via
-# actions/setup-go's go-version-file input. go.work is the repository's
+# This action reads go.work's `go` directive (currently `go 1.26.8`, raised
+# from 1.25.0 by the govulncheck-wiring round to clear a long tail of
+# stdlib CVEs -- see security.yml's own TOOLCHAIN comment for the detail)
+# via actions/setup-go's go-version-file input. go.work is the repository's
 # single Go toolchain version source for CI -- the one file the action
 # resolves. Each module's go.mod also declares a `go` version, but that is
 # per-module metadata, not a second source CI reads, and it cannot drift
@@ -16,19 +18,17 @@ description: >-
 # listed module's go.mod demands a newer go than go.work declares. CI
 # exercises that guard in fast-check's repo-checks job, whose workspace-wide
 # `go build github.com/vislake/speed/go/...` compiles every go/ module's
-# packages, the fifteen stubs included. The same load-time check covers
-# examples/reference-app too -- go.work lists it, so its go.mod is
-# validated on every fast-check run even though no every-PR job builds its
-# packages (its unit suite is full-check's reference-app job to run -- live
-# since the second CI layer -- so its packages are built and tested there,
-# on full-ci-labeled PRs). (Today the six
-# real modules -- go/dbkit, go/jobs, go/observability, go/pkgcore,
-# go/ratelimit, go/tenancy -- declare `go 1.25.0`, as does
-# examples/reference-app; the fifteen stub modules still say `go 1.23`,
-# and tools/new_module.py keeps writing 1.23 for new stubs -- the bare
-# directive of a dependency-free module, bumped when the implementation
-# round adds its first dependency. That is fine: the guard refuses a
-# go.mod above go.work's line, never one below it.) The root .mise.toml
+# packages. The same load-time check covers examples/reference-app too --
+# go.work lists it, so its go.mod is validated on every fast-check run even
+# though no every-PR job builds its packages (its unit suite is
+# full-check's reference-app job to run -- live since the second CI layer
+# -- so its packages are built and tested there, on full-ci-labeled PRs).
+# (Every one of the twenty-one implemented modules, plus
+# examples/reference-app, declares `go 1.26.0` today -- `go mod tidy`'s own
+# choice, converged during the govulncheck-wiring round's dependency
+# bumps, not a value this action or any script sets by hand. That is fine:
+# the guard refuses a go.mod above go.work's line, never one below it.)
+# The root .mise.toml
 # mirrors this directive for local toolchain installs (the Taskfile setup
 # task runs `mise install` against it). The go-version-file input stays
 # go.work rather than being repointed at .mise.toml: actions/setup-go can

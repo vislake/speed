@@ -50,44 +50,62 @@ name: security
 #     deliveries, so dependency licenses transmit to customer projects),
 #     MPL/LGPL only with a recorded ADR (none exists), unknown ids fail
 #     closed pending adjudication.
-#   * govulncheck for Go dependencies -- NOT WIRED, see DEFERRED.
+#   * govulncheck for Go dependencies -- LIVE (deps-go job), see TOOLCHAIN
+#     below for what it took to get here.
 #   * trivy for container images -- NOT WIRED, see DEFERRED.
 #
-# DEFERRED (each has a real prerequisite missing today; wiring them now
-# would produce a permanently red check -- the half-wired state this repo
+# TOOLCHAIN (govulncheck's own prerequisites, closed by this round -- what
+# was DEFERRED before now records what was actually done):
+#   * stdlib class: go.work's `go` directive was 1.25.0, which predated the
+#     fixes for a long tail of Go-standard-library advisories accumulated
+#     since (net/url, crypto/tls, crypto/x509, encoding/xml,
+#     encoding/asn1 among them -- a fresh govulncheck baseline against the
+#     unpatched 1.25.0 toolchain found each of the twenty-one implemented
+#     modules affected by anywhere from 3 to 32 stdlib findings, GO-2025-
+#     and GO-2026-prefixed alike, strictly more than any single advisory
+#     list this comment could enumerate and stay current). The fix: the
+#     go directive is raised to 1.26.8 (the latest patched release on the
+#     1.26.x line as of this writing, clearing every cited advisory --
+#     each is fixed by go1.25.13/1.26.6/1.27.0-rc.3 or earlier). Re-run
+#     against the new toolchain: zero stdlib findings across all
+#     twenty-one modules. The .mise.toml mirror was bumped alongside (its
+#     own drift gate, tools/check_toolchain.py, proves the two cannot
+#     drift apart).
+#   * module class: a same-day Dependabot bump had already cleared two of
+#     the three dependency-level CVEs this comment used to name before
+#     this round touched anything -- github.com/moby/go-archive is v0.3.0
+#     in dbkit/tenancy (was v0.2.0, GO-2026-6253) and
+#     google.golang.org/grpc is v1.83.1 in observability (was v1.81.1,
+#     GO-2026-6061) -- confirmed clear by the fresh baseline above. The
+#     one that remained: golang.org/x/crypto v0.55.0 (GO-2026-6355/6354,
+#     an SSH deadlock DoS pair), reachable through testcontainers'
+#     Docker-integration test-support packages in eleven modules --
+#     authn, billing, dbkit, integration, metering, notification, org,
+#     pki, sharing, storage, tenancy -- each bumped to v0.56.0 (`go get
+#     golang.org/x/crypto@v0.56.0 && go mod tidy` under GOWORK=off, this
+#     repo's own per-module bump discipline), which raised each bumped
+#     module's own go.mod `go` directive to 1.26.0 (x/crypto v0.56.0's own
+#     minimum) -- still below go.work's 1.26.8, so the workspace load-time
+#     guard (setup-go-env's own header) stays satisfied. The other ten
+#     modules never had x/crypto as a reachable finding (present in their
+#     go.mod as a transitive dependency, but their own test code never
+#     calls the affected ssh package), so they were left untouched. The
+#     bump rippled further than those eleven, though: every module that
+#     locally `replace`s one of them now resolves x/crypto v0.56.0
+#     transitively even where its own go.mod still pinned v0.55.0,
+#     leaving it "go mod tidy"-dirty under GOWORK=off -- seven more
+#     modules (admin, ai-gateway, compliance, config, jobs, rbac, saasctl)
+#     plus the reference app needed the same tidy for that reason alone,
+#     with no CVE of their own to clear. Re-run after every fix: zero
+#     findings, every module, `govulncheck` exit 0.
+#   * deps-go itself: one job below, a matrix over the twenty-one
+#     implemented modules, `go run golang.org/x/vuln/cmd/govulncheck@v1.1.4
+#     ./...` with working-directory go/<module> after setup-go-env (which
+#     now installs 1.26.8). Govulncheck version stays pinned at v1.1.4.
+#
+# DEFERRED (a real prerequisite is still missing; wiring it now would
+# produce a permanently red check -- the half-wired state this repo
 # refuses to ship, see the gated-stub rationale in fast-check.yml):
-#   * deps-go (govulncheck @v1.1.4, one run per module directory against
-#     the CI toolchain go 1.25.0 from go.work): the scan cannot pass on
-#     the current tree, in two independent classes, and neither fix is
-#     this round's to make (no go.mod/go.work edits -- this is the
-#     security-tooling round):
-#       - stdlib class, all six implemented modules: open Go-standard-
-#         library advisories (e.g. GO-2026-6218 net/url, GO-2026-6090
-#         and GO-2026-5856 crypto/tls, GO-2026-6088 encoding/xml,
-#         GO-2026-5972 encoding/asn1, fixed in go1.26.4-1.26.6) are a
-#         property of the toolchain line, and go.work's go directive
-#         (1.25.0) predates their fixes. Locally proven on go1.26.1:
-#         pkgcore 15 stdlib findings, ratelimit 9; dbkit 18, tenancy 17,
-#         observability 12 and jobs 12 mix the same stdlib set with the
-#         module findings below. CI's exact 1.25.0 is strictly more
-#         affected. The fix -- raising the go directive to a patched
-#         release -- belongs to the toolchain-pinning round.
-#       - module class: dbkit and tenancy reach golang.org/x/crypto
-#         v0.55.0 (GO-2026-6355/6354, fixed in v0.56.0) and
-#         github.com/moby/go-archive v0.2.0 (GO-2026-6253, fixed in
-#         v0.3.0) through testcontainers v0.44.0 in their
-#         Docker-integration test-support packages (dbkit/dbtest, the
-#         tenancytest helper tree); observability reaches
-#         google.golang.org/grpc v1.81.1 (GO-2026-6061, fixed in
-#         v1.82.1) through its direct OTLP gRPC exporter requires, and
-#         jobs reaches the same grpc through the exporter edge. The
-#         fixes are dependency bumps owned by the modules themselves.
-#     Wire deps-go when the toolchain-pinning round lands (the stdlib
-#     class clears; the module class clears as the owning rounds bump):
-#     one job, a matrix over the six implemented modules,
-#     `go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...` with
-#     working-directory go/<module> after setup-go-env. Govulncheck
-#     version stays pinned at v1.1.4 (locally cached and proven).
 #   * trivy (container image scanning): the repository builds no images
 #     today -- nothing ships a Dockerfile -- so there is nothing to
 #     scan. Wire when the release round produces an image.
@@ -204,3 +222,49 @@ jobs:
         uses: github/codeql-action/autobuild@6f5948dfacef28e207b48d0905cf90c03365536d  # v3.37.9
       - name: Analyze
         uses: github/codeql-action/analyze@6f5948dfacef28e207b48d0905cf90c03365536d  # v3.37.9
+
+  deps-go:
+    name: govulncheck (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      # Mirrors fast-check.yml's go-modules matrix exactly: one row per
+      # implemented module (a go.mod + real code, never a doc.go-only
+      # stub). Adding a module to that matrix and to this one is the same
+      # act -- keep the two lists identical.
+      matrix:
+        module:
+          - go/pkgcore
+          - go/dbkit
+          - go/tenancy
+          - go/observability
+          - go/config
+          - go/jobs
+          - go/ratelimit
+          - go/rbac
+          - go/org
+          - go/authn
+          - go/saasctl
+          - go/storage
+          - go/notification
+          - go/pki
+          - go/integration
+          - go/metering
+          - go/sharing
+          - go/billing
+          - go/ai-gateway
+          - go/compliance
+          - go/admin
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Set up pinned Go toolchain and caches
+        uses: ./.github/actions/setup-go-env
+      # govulncheck version stays pinned at v1.1.4 regardless of the Go
+      # toolchain version (which setup-go-env resolves from go.work, per
+      # the TOOLCHAIN section above) -- `go run` fetches and caches the
+      # pinned scanner module, never a floating latest.
+      - name: govulncheck
+        working-directory: ${{ matrix.module }}
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
