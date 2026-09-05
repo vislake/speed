@@ -133,112 +133,16 @@ func TestEnqueue_InvalidTask_ReturnsError(t *testing.T) {
 	}
 }
 
-func TestEnqueue_Get_HappyPath(t *testing.T) {
-	q := newTestQueue(t)
-	if err := q.RegisterHandler(NewHandlerFunc("echo", func(_ context.Context, job *Job, _ ProgressFn) (Result, error) {
-		return Result{Data: job.Payload}, nil
-	})); err != nil {
-		t.Fatalf("RegisterHandler() error = %v", err)
-	}
-	startQueue(t, q)
-
-	id, err := q.Enqueue(context.Background(), Task{Type: "echo", TenantID: "tenant-a", Payload: []byte("hello")})
-	if err != nil {
-		t.Fatalf("Enqueue() error = %v", err)
-	}
-
-	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
-	job := waitTerminal(t, q, ctx, id)
-	if job.Status != StatusSucceeded {
-		t.Fatalf("Status = %v, want %v (job: %+v)", job.Status, StatusSucceeded, job)
-	}
-	if job.Result == nil || string(job.Result.Data) != "hello" {
-		t.Errorf("Result = %+v, want Data = %q", job.Result, "hello")
-	}
-	if job.Attempts != 1 {
-		t.Errorf("Attempts = %d, want 1", job.Attempts)
-	}
-	if job.CompletedAt == nil {
-		t.Error("CompletedAt = nil, want set")
-	}
-}
-
-// TestGet_TenantIsolation needs no running dispatcher: Get reads directly,
-// so the enqueued Job is simply left StatusPending forever.
-func TestGet_TenantIsolation(t *testing.T) {
-	q := newTestQueue(t)
-	id, err := q.Enqueue(context.Background(), Task{Type: "noop", TenantID: "tenant-a"})
-	if err != nil {
-		t.Fatalf("Enqueue() error = %v", err)
-	}
-
-	ownerCtx := pkgcore.WithTenant(context.Background(), "tenant-a")
-	_, err = q.Get(ownerCtx, id)
-	if err != nil {
-		t.Errorf("Get() with the owning tenant error = %v, want nil", err)
-	}
-
-	otherCtx := pkgcore.WithTenant(context.Background(), "tenant-b")
-	_, err = q.Get(otherCtx, id)
-	if !isJobNotFound(err) {
-		t.Errorf("Get() with a different tenant error = %v, want ErrJobNotFound", err)
-	}
-
-	_, err = q.Get(context.Background(), id)
-	if !isJobNotFound(err) {
-		t.Errorf("Get() with no tenant and no system context error = %v, want ErrJobNotFound", err)
-	}
-
-	pkgcore.RegisterSystemPurpose(testSystemPurpose)
-	sysCtx, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{Actor: "test", Purpose: testSystemPurpose})
-	if err != nil {
-		t.Fatalf("WithSystemContext() error = %v", err)
-	}
-	_, err = q.Get(sysCtx, id)
-	if err != nil {
-		t.Errorf("Get() with a system context error = %v, want nil", err)
-	}
-
-	_, err = q.Get(ownerCtx, JobID("no-such-id"))
-	if !isJobNotFound(err) {
-		t.Errorf("Get() for a nonexistent id error = %v, want ErrJobNotFound", err)
-	}
-}
-
-// TestCancel_TenantIsolation_And_Idempotency also needs no running
-// dispatcher: WithDelay(time.Hour) keeps the Job safely StatusPending for
-// the duration of the test.
-func TestCancel_TenantIsolation_And_Idempotency(t *testing.T) {
-	q := newTestQueue(t)
-	id, err := q.Enqueue(context.Background(), Task{Type: "noop", TenantID: "tenant-a"}, WithDelay(time.Hour))
-	if err != nil {
-		t.Fatalf("Enqueue() error = %v", err)
-	}
-
-	otherCtx := pkgcore.WithTenant(context.Background(), "tenant-b")
-	err = q.Cancel(otherCtx, id)
-	if !isJobNotFound(err) {
-		t.Errorf("Cancel() from a different tenant error = %v, want ErrJobNotFound", err)
-	}
-
-	ownerCtx := pkgcore.WithTenant(context.Background(), "tenant-a")
-	err = q.Cancel(ownerCtx, id)
-	if err != nil {
-		t.Fatalf("Cancel() error = %v", err)
-	}
-	job, err := q.Get(ownerCtx, id)
-	if err != nil {
-		t.Fatalf("Get() error = %v", err)
-	}
-	if job.Status != StatusCancelled {
-		t.Errorf("Status = %v, want %v", job.Status, StatusCancelled)
-	}
-
-	err = q.Cancel(ownerCtx, id)
-	if err != nil {
-		t.Errorf("second Cancel() error = %v, want nil (idempotent)", err)
-	}
-}
+// TestEnqueue_Get_HappyPath, TestGet_TenantIsolation and
+// TestCancel_TenantIsolation_And_Idempotency used to live here, hand-testing
+// exactly what queue_conformance_test.go's
+// TestStandaloneQueue_ConformsToQueueContract now proves through the
+// shared go/jobs/queuetest.AssertConforms suite (its own
+// "enqueue_get_happy_path", "get_tenant_isolation" and
+// "cancel_tenant_isolation_and_idempotency" subtests) -- see that file for
+// the rationale (docs/internal/16-verification.md §2's claim that Queue
+// deserves the identical shared-conformance-suite treatment the other four
+// seams already have, made real).
 
 func TestPriorityOrdering(t *testing.T) {
 	q := newTestQueue(t, WithWorkerCount(1))
@@ -339,34 +243,18 @@ func (h *flakyHandler) OnFailure(context.Context, *Job, error) {
 	h.onFailureCalls.Add(1)
 }
 
-func TestRetry_SucceedsAfterTransientFailures(t *testing.T) {
-	q := newTestQueue(t)
-	h := &flakyHandler{failuresBefore: 2}
-	if err := q.RegisterHandler(h); err != nil {
-		t.Fatalf("RegisterHandler() error = %v", err)
-	}
-	startQueue(t, q)
-
-	id, err := q.Enqueue(context.Background(), Task{Type: "flaky", TenantID: "tenant-a"}, WithMaxRetries(5))
-	if err != nil {
-		t.Fatalf("Enqueue() error = %v", err)
-	}
-
-	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
-	job := waitTerminal(t, q, ctx, id)
-	if job.Status != StatusSucceeded {
-		t.Fatalf("Status = %v, want %v (job: %+v)", job.Status, StatusSucceeded, job)
-	}
-	if job.Attempts != 3 {
-		t.Errorf("Attempts = %d, want 3 (2 failures + 1 success)", job.Attempts)
-	}
-	if job.Error != "" {
-		t.Errorf("Error = %q, want empty after eventual success", job.Error)
-	}
-	if h.onFailureCalls.Load() != 0 {
-		t.Errorf("onFailureCalls = %d, want 0: FailureHook must not fire for a Job that eventually succeeds", h.onFailureCalls.Load())
-	}
-}
+// TestRetry_SucceedsAfterTransientFailures and
+// TestDeadLetter_ExhaustsRetries_And_InvokesFailureHook used to live here,
+// hand-testing exactly what queue_conformance_test.go's
+// TestStandaloneQueue_ConformsToQueueContract now proves through the
+// shared go/jobs/queuetest.AssertConforms suite (its own
+// "retry_succeeds_after_transient_failures" and
+// "dead_letter_exhausts_retries_and_invokes_failure_hook" subtests) -- see
+// that file's own doc comment for the rationale. flakyHandler and
+// countingFailureHandler stay defined below/above: both are still used by
+// TestStandaloneQueue_JobMetrics_RecordsDurationAttemptsAndDeadLetter,
+// which proves this package's own metrics instrumentation rather than the
+// portable Queue contract queuetest now owns.
 
 // countingFailureHandler always fails, and records every OnFailure call it
 // receives on onFailureCh.
@@ -382,58 +270,6 @@ func (*countingFailureHandler) Handle(context.Context, *Job, ProgressFn) (Result
 
 func (h *countingFailureHandler) OnFailure(_ context.Context, job *Job, _ error) {
 	h.onFailureCh <- job
-}
-
-func TestDeadLetter_ExhaustsRetries_And_InvokesFailureHook(t *testing.T) {
-	q := newTestQueue(t)
-	h := &countingFailureHandler{onFailureCh: make(chan *Job, 1)}
-	if err := q.RegisterHandler(h); err != nil {
-		t.Fatalf("RegisterHandler() error = %v", err)
-	}
-	startQueue(t, q)
-
-	id, err := q.Enqueue(context.Background(), Task{Type: "always-fails", TenantID: "tenant-a"}, WithMaxRetries(1))
-	if err != nil {
-		t.Fatalf("Enqueue() error = %v", err)
-	}
-
-	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
-	job := waitTerminal(t, q, ctx, id)
-	if job.Status != StatusDeadLetter {
-		t.Fatalf("Status = %v, want %v (job: %+v)", job.Status, StatusDeadLetter, job)
-	}
-	if job.Attempts != 2 {
-		t.Errorf("Attempts = %d, want 2 (1 initial + 1 retry, MaxRetries=1)", job.Attempts)
-	}
-	if job.Error != "permanent failure" {
-		t.Errorf("Error = %q, want %q", job.Error, "permanent failure")
-	}
-
-	select {
-	case hookJob := <-h.onFailureCh:
-		if hookJob.ID != id {
-			t.Errorf("OnFailure job.ID = %q, want %q", hookJob.ID, id)
-		}
-		if hookJob.Status != StatusDeadLetter {
-			t.Errorf("OnFailure job.Status = %v, want %v", hookJob.Status, StatusDeadLetter)
-		}
-	case <-time.After(1 * time.Second):
-		t.Fatal("FailureHook.OnFailure was never called")
-	}
-
-	dead, err := q.DeadLetterJobs(ctx)
-	if err != nil {
-		t.Fatalf("DeadLetterJobs() error = %v", err)
-	}
-	found := false
-	for _, j := range dead {
-		if j.ID == id {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("DeadLetterJobs() = %v, want it to include %q", dead, id)
-	}
 }
 
 // blockingHandler signals startedCh with its Job's id, then blocks until
