@@ -79,8 +79,8 @@ require (
 	github.com/redis/go-redis/v9 v9.14.1
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/redis v0.44.0
-	github.com/vislake/speed/go/ai-gateway v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/admin v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/ai-gateway v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/authn v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/compliance v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/config v0.0.0-00010101000000-000000000000
@@ -103,7 +103,7 @@ require github.com/vislake/speed/go/ratelimit v0.0.0-00010101000000-000000000000
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
-	filippo.io/edwards25519 v1.1.0 // indirect
+	filippo.io/edwards25519 v1.1.1 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
@@ -145,12 +145,12 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mdelapenya/tlscert v0.2.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
-	github.com/moby/go-archive v0.2.0 // indirect
+	github.com/moby/go-archive v0.3.0 // indirect
 	github.com/moby/moby/api v1.55.0 // indirect
 	github.com/moby/moby/client v0.5.0 // indirect
 	github.com/moby/patternmatcher v0.6.1 // indirect
 	github.com/moby/sys/sequential v0.7.0 // indirect
-	github.com/moby/sys/user v0.4.0 // indirect
+	github.com/moby/sys/user v0.4.1 // indirect
 	github.com/moby/sys/userns v0.1.0 // indirect
 	github.com/moby/term v0.5.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
