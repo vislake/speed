@@ -16,6 +16,8 @@ replace github.com/vislake/speed/go/config => ../config
 
 replace github.com/vislake/speed/go/sharing => ../sharing
 
+replace github.com/vislake/speed/go/ratelimit => ../ratelimit
+
 require (
 	github.com/google/uuid v1.6.0
 	github.com/vislake/speed/go/config v0.0.0-00010101000000-000000000000
@@ -88,6 +90,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
+	github.com/vislake/speed/go/ratelimit v0.0.0-00010101000000-000000000000 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
