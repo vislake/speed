@@ -57,6 +57,24 @@
 #     its "tenant_id = ?" clauses are ordinary primary-key lookups, not a
 #     bypass of an injected guard the plugin would otherwise supply (there
 #     is no such guard for this table at all).
+#   * go/metering/repository.go -- the metering outbox's
+#     findOutboxByIdempotencyKey looks up OutboxRecord by (tenant_id,
+#     idempotency_key). OutboxRecord is platform data by deliberate design
+#     (model.go's own doc comment, expanded in AGENTS.md's "Outbox table:
+#     platform data, not tenant-scoped" section) -- the billing-grade
+#     outbox pattern needs exactly-once delivery across every tenant's
+#     events from one poller, so no TenantScoped plugin filter is injected
+#     for this table at all, the identical shape go/jobs/store.go's
+#     jobRecord idempotency guard already establishes above.
+#   * go/notification/send_record.go -- send_records is platform data
+#     (root CLAUDE.md's notification census entry: "send_records ... are
+#     platform data, deliberately never dbkit.TenantScoped ... with
+#     tenant_id a real, unenforced column"), and ByTenantAndKey's own doc
+#     comment names this as "the one hand-written tenant filter in the
+#     module" precisely because no plugin filter exists for this table --
+#     the hand-written clause is what makes the lookup honour the same
+#     UNIQUE (tenant_id, idempotency_key) scoping the index enforces, not
+#     a bypass of a guard that would otherwise apply.
 #
 # Residual gap: only the first-argument literal form is matched -- a
 # clause assembled dynamically (fmt.Sprintf into the clause, or a
@@ -72,7 +90,8 @@ rules:
       writing WHERE tenant_id = ? by hand bypasses the guard. Legitimate
       sites are allowlisted in the rule header (go/dbkit internals,
       go/jobs/store.go, go/config/store.go, go/billing/plan.go,
-      go/ai-gateway/store.go, go/admin/tenant_repository.go).
+      go/ai-gateway/store.go, go/admin/tenant_repository.go,
+      go/metering/repository.go, go/notification/send_record.go).
     languages:
       - go
     severity: WARNING
@@ -96,3 +115,5 @@ rules:
         - "**/go/billing/plan.go"
         - "**/go/ai-gateway/store.go"
         - "**/go/admin/tenant_repository.go"
+        - "**/go/metering/repository.go"
+        - "**/go/notification/send_record.go"
