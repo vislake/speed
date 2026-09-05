@@ -6,7 +6,10 @@
       "license": "MIT",
       "name": "github.com/BurntSushi/toml",
       "used_by": [
-        "go/pkgcore"
+        "go/admin",
+        "go/authn",
+        "go/pkgcore",
+        "go/pki"
       ],
       "version": "v1.6.0"
     },
@@ -26,7 +29,19 @@
       "license": "BSD-3-Clause",
       "name": "github.com/google/uuid",
       "used_by": [
-        "go/jobs"
+        "go/authn",
+        "go/billing",
+        "go/compliance",
+        "go/dbkit",
+        "go/integration",
+        "go/jobs",
+        "go/metering",
+        "go/notification",
+        "go/org",
+        "go/pki",
+        "go/rbac",
+        "go/sharing",
+        "go/storage"
       ],
       "version": "v1.6.0"
     },
@@ -96,7 +111,8 @@
       "license": "Apache-2.0",
       "name": "github.com/minio/minio-go/v7",
       "used_by": [
-        "go/pkgcore"
+        "go/pkgcore",
+        "go/storage"
       ],
       "version": "v7.3.0"
     },
@@ -122,23 +138,15 @@
     },
     {
       "ecosystem": "go",
-      "evidence": "go module cache license file: github.com/prometheus/client_model@v0.6.2/LICENSE",
-      "license": "Apache-2.0",
-      "name": "github.com/prometheus/client_model",
-      "used_by": [
-        "go/observability"
-      ],
-      "version": "v0.6.2"
-    },
-    {
-      "ecosystem": "go",
       "evidence": "go module cache license file: github.com/redis/go-redis/v9@v9.14.1/LICENSE",
       "license": "BSD-2-Clause",
       "name": "github.com/redis/go-redis/v9",
       "used_by": [
         "go/config",
         "go/jobs",
-        "go/pkgcore"
+        "go/notification",
+        "go/pkgcore",
+        "go/rbac"
       ],
       "version": "v9.14.1"
     },
@@ -150,8 +158,12 @@
       "used_by": [
         "go/config",
         "go/dbkit",
+        "go/integration",
         "go/jobs",
-        "go/pkgcore"
+        "go/notification",
+        "go/pkgcore",
+        "go/rbac",
+        "go/storage"
       ],
       "version": "v0.44.0"
     },
@@ -161,7 +173,8 @@
       "license": "MIT",
       "name": "github.com/testcontainers/testcontainers-go/modules/minio",
       "used_by": [
-        "go/pkgcore"
+        "go/pkgcore",
+        "go/storage"
       ],
       "version": "v0.44.0"
     },
@@ -172,7 +185,10 @@
       "name": "github.com/testcontainers/testcontainers-go/modules/postgres",
       "used_by": [
         "go/config",
-        "go/dbkit"
+        "go/dbkit",
+        "go/integration",
+        "go/notification",
+        "go/rbac"
       ],
       "version": "v0.44.0"
     },
@@ -184,7 +200,9 @@
       "used_by": [
         "go/config",
         "go/jobs",
-        "go/pkgcore"
+        "go/notification",
+        "go/pkgcore",
+        "go/rbac"
       ],
       "version": "v0.44.0"
     },
@@ -204,7 +222,9 @@
       "license": "Apache-2.0",
       "name": "go.opentelemetry.io/otel",
       "used_by": [
+        "go/authn",
         "go/jobs",
+        "go/notification",
         "go/observability"
       ],
       "version": "v1.44.0"
@@ -265,7 +285,9 @@
       "license": "Apache-2.0",
       "name": "go.opentelemetry.io/otel/metric",
       "used_by": [
+        "go/authn",
         "go/jobs",
+        "go/notification",
         "go/observability"
       ],
       "version": "v1.44.0"
@@ -286,7 +308,9 @@
       "license": "Apache-2.0",
       "name": "go.opentelemetry.io/otel/sdk/metric",
       "used_by": [
+        "go/authn",
         "go/jobs",
+        "go/notification",
         "go/observability"
       ],
       "version": "v1.44.0"
@@ -347,9 +371,23 @@
       "license": "MIT",
       "name": "gorm.io/gorm",
       "used_by": [
+        "go/admin",
+        "go/ai-gateway",
+        "go/authn",
+        "go/billing",
+        "go/compliance",
         "go/config",
         "go/dbkit",
+        "go/integration",
         "go/jobs",
+        "go/metering",
+        "go/notification",
+        "go/org",
+        "go/pki",
+        "go/rbac",
+        "go/saasctl",
+        "go/sharing",
+        "go/storage",
         "go/tenancy"
       ],
       "version": "v1.31.2"
@@ -380,7 +418,12 @@
       "license": "MIT",
       "name": "@mui/material",
       "used_by": [
+        "web/packages/account-ui",
+        "web/packages/auth-ui",
         "web/packages/i18n",
+        "web/packages/layout-kit",
+        "web/packages/product-shell",
+        "web/packages/tenancy-ui",
         "web/packages/ui-kit"
       ],
       "version": "9.4.0"
@@ -391,8 +434,15 @@
       "license": "MIT",
       "name": "react",
       "used_by": [
+        "web/packages/account-ui",
+        "web/packages/api-client",
         "web/packages/api-sdk",
+        "web/packages/auth-core",
+        "web/packages/auth-ui",
         "web/packages/i18n",
+        "web/packages/layout-kit",
+        "web/packages/product-shell",
+        "web/packages/tenancy-ui",
         "web/packages/ui-kit"
       ],
       "version": "19.2.8"
@@ -403,6 +453,11 @@
       "license": "MIT",
       "name": "react-dom",
       "used_by": [
+        "web/packages/account-ui",
+        "web/packages/auth-ui",
+        "web/packages/layout-kit",
+        "web/packages/product-shell",
+        "web/packages/tenancy-ui",
         "web/packages/ui-kit"
       ],
       "version": "19.2.8"
@@ -413,6 +468,11 @@
       "license": "MIT",
       "name": "@emotion/react",
       "used_by": [
+        "web/packages/account-ui",
+        "web/packages/auth-ui",
+        "web/packages/layout-kit",
+        "web/packages/product-shell",
+        "web/packages/tenancy-ui",
         "web/packages/ui-kit"
       ],
       "version": "11.14.0"
@@ -423,6 +483,11 @@
       "license": "MIT",
       "name": "@emotion/styled",
       "used_by": [
+        "web/packages/account-ui",
+        "web/packages/auth-ui",
+        "web/packages/layout-kit",
+        "web/packages/product-shell",
+        "web/packages/tenancy-ui",
         "web/packages/ui-kit"
       ],
       "version": "11.14.1"
@@ -433,6 +498,7 @@
       "license": "MIT",
       "name": "react-hook-form",
       "used_by": [
+        "web/packages/auth-ui",
         "web/packages/ui-kit"
       ],
       "version": "7.87.0"
@@ -443,9 +509,151 @@
       "license": "MIT",
       "name": "@tanstack/react-query",
       "used_by": [
+        "web/packages/account-ui",
         "web/packages/api-sdk"
       ],
       "version": "5.102.8"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/aws/aws-sdk-go-v2@v1.45.1/LICENSE.txt",
+      "license": "Apache-2.0",
+      "name": "github.com/aws/aws-sdk-go-v2",
+      "used_by": [
+        "go/pki"
+      ],
+      "version": "v1.45.1"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/aws/aws-sdk-go-v2/credentials@v1.20.2/LICENSE.txt",
+      "license": "Apache-2.0",
+      "name": "github.com/aws/aws-sdk-go-v2/credentials",
+      "used_by": [
+        "go/pki"
+      ],
+      "version": "v1.20.2"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/aws/aws-sdk-go-v2/service/kms@v1.58.0/LICENSE.txt",
+      "license": "Apache-2.0",
+      "name": "github.com/aws/aws-sdk-go-v2/service/kms",
+      "used_by": [
+        "go/pki"
+      ],
+      "version": "v1.58.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/coreos/go-oidc/v3@v3.16.0/LICENSE",
+      "license": "Apache-2.0",
+      "name": "github.com/coreos/go-oidc/v3",
+      "used_by": [
+        "go/authn"
+      ],
+      "version": "v3.16.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/go-jose/go-jose/v4@v4.1.4/LICENSE",
+      "license": "Apache-2.0",
+      "name": "github.com/go-jose/go-jose/v4",
+      "used_by": [
+        "go/pki"
+      ],
+      "version": "v4.1.4"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/golang-jwt/jwt/v5@v5.3.0/LICENSE",
+      "license": "MIT",
+      "name": "github.com/golang-jwt/jwt/v5",
+      "used_by": [
+        "go/authn"
+      ],
+      "version": "v5.3.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/hashicorp/vault/api@v1.23.0/LICENSE (Mozilla Public License, version 2.0; cross-checked against the module's own SPDX-License-Identifier: MPL-2.0 headers, e.g. auth.go, client.go)",
+      "license": "MPL-2.0",
+      "name": "github.com/hashicorp/vault/api",
+      "used_by": [
+        "go/pki"
+      ],
+      "version": "v1.23.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/oapi-codegen/runtime@v1.7.0/LICENSE",
+      "license": "Apache-2.0",
+      "name": "github.com/oapi-codegen/runtime",
+      "used_by": [
+        "go/admin",
+        "go/authn",
+        "go/notification",
+        "go/org",
+        "go/pki",
+        "go/sharing",
+        "go/storage"
+      ],
+      "version": "v1.7.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/stripe/stripe-go/v82@v82.5.1/LICENSE",
+      "license": "MIT",
+      "name": "github.com/stripe/stripe-go/v82",
+      "used_by": [
+        "go/billing"
+      ],
+      "version": "v82.5.1"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: golang.org/x/crypto@v0.55.0/LICENSE",
+      "license": "BSD-3-Clause",
+      "name": "golang.org/x/crypto",
+      "used_by": [
+        "go/authn",
+        "go/sharing"
+      ],
+      "version": "v0.55.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: golang.org/x/mod@v0.38.0/LICENSE",
+      "license": "BSD-3-Clause",
+      "name": "golang.org/x/mod",
+      "used_by": [
+        "go/saasctl"
+      ],
+      "version": "v0.38.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: golang.org/x/oauth2@v0.36.0/LICENSE",
+      "license": "BSD-3-Clause",
+      "name": "golang.org/x/oauth2",
+      "used_by": [
+        "go/authn"
+      ],
+      "version": "v0.36.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: gorm.io/datatypes@v1.2.7/License",
+      "license": "MIT",
+      "name": "gorm.io/datatypes",
+      "used_by": [
+        "go/billing",
+        "go/dbkit",
+        "go/integration",
+        "go/notification",
+        "go/pki"
+      ],
+      "version": "v1.2.7"
     }
   ],
   "schema": 1,
