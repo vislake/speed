@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"strings"
 
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
@@ -124,4 +125,52 @@ func Example() {
 	// default: Smile Studio
 	// acme: Acme Dental
 	// custom_theme: false
+}
+
+// ExampleService_Describe shows the two pieces that together produce a
+// generated configuration reference: Describe reads back every item and
+// feature flag the frozen schema carries (brandModule's own declarations,
+// here), and RenderMarkdown turns that into the Markdown table a host
+// writes straight to a docs/config-reference.md file -- never hand-written,
+// per docs/internal/13-documentation-standards.md's must-have doc list.
+func ExampleService_Describe() {
+	ctx := context.Background()
+
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:config_describe_example?mode=memory&cache=shared",
+	})
+	if err != nil {
+		panic(err)
+	}
+	configModule := config.NewModule(db, config.WithPollInterval(0))
+	migrations := dbkit.NewMigrationRegistry()
+	if err = migrations.Register(configModule); err != nil {
+		panic(err)
+	}
+	if err = migrations.Apply(ctx, db, dbkit.DialectSQLite); err != nil {
+		panic(err)
+	}
+
+	reg, err := pkgcore.NewKernel().Bootstrap(ctx, &brandModule{}, configModule)
+	if err != nil {
+		panic(err)
+	}
+	svc, err := configModule.Attach(reg)
+	if err != nil {
+		panic(err)
+	}
+	defer svc.Close()
+
+	for _, item := range svc.Describe() {
+		fmt.Printf("%s: type=%s public=%v has_default=%v\n", item.Key, item.Type, item.Public, item.HasDefault)
+	}
+
+	rendered := config.RenderMarkdown(svc.Describe())
+	fmt.Println(strings.Contains(rendered, "| `brand.site_name` |"))
+
+	// Output:
+	// brand.custom_theme: type=bool public=false has_default=true
+	// brand.site_name: type=string public=true has_default=true
+	// true
 }
