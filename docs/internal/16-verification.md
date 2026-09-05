@@ -21,17 +21,21 @@
 - Playwright 覆盖：注册/登录/SSO、组织与成员、套餐订阅与两种支付、用量与超额、AI 调用、运营后台
 - 每个里程碑出口条件对应一组 e2e 用例，只增不减
 
+> **实施状态注记（本轮核实）：** 上面两条是设计意图，尚未落地——仓库里没有任何 Playwright 配置或 spec 文件，`.github/workflows/e2e.yml` 是 gated stub（guard step 直接失败，不在任何 PR 上触发），推迟到 roadmap M4 的 e2e 条目。reference-app 目前的验证方式是 Go 侧的组合 HTTP 测试（`*_flow_test.go` 系列：notes、org、authn、storage、notification 等，跑在 `full-ci` 标签的 `pr-full.yml` 上）加前端各包自己的 `usage-example.test.tsx`（真实机制见第 6/8 节的注记），浏览器页面本身（挂载、渲染、真实点击）还没有任何自动化覆盖。
+
 **5. 脚手架生成验证（防止模板腐化）**
 - CI 定时任务：`saasctl new tmpapp` + `create-saas-app tmpapp-web` → `go build` / `pnpm build` → 先 `docker compose -f docker-compose.standalone.yml up`（应在数十秒内就绪）再 `docker compose up` → 两次都跑冒烟脚本打健康检查与登录接口
 - 这条流水线一旦红，说明模板与模块版本已脱节，必须立即修复
 
-> **实现状态注记（2026-09-03，saasctl 轮）：** 本条流水线的"生成 → 构建 → 冒烟"工具侧已在 saasctl 轮真实落地并跑通——`saasctl new`（含 `--with` 选择）materialize 出项目后，经真实 `go mod tidy`（网络）与 `go build` 编译，boot 起来冒烟真实组成的 HTTP 链（healthz、config/public、register、错密码 401、坏 token 401、匿名 403 等逐项断言），外加 `db migrate` 与 `upgrade` 对真实文件的操作；程序与逐项答案记录在 `go/saasctl/AGENTS.md` Testing 章节，是模板与模块版本"此刻未脱节"的证据。但本节的 CI 化形态仍未落地：`scaffold-verify.yml` 仍是 gated stub（其文件头已由本轮更新，记录"生成侧已存在且有离线证明；双部署模式 boot 门仍未接线"），CI 定时触发与第 25 行的两次 `docker compose`（standalone 与 distributed 各 boot 一次）属 M4 该流水线转正时的范围——届时每轮 PR 不跑它（它按设计是每日 + 发布后），模板腐化的日常防线靠 saasctl 轮之后的仓库内测试（golden 钉死 + materialize 证明）。
+> **实现状态注记（2026-09-03，saasctl 轮）：** 本条流水线的"生成 → 构建 → 冒烟"工具侧已在 saasctl 轮真实落地并跑通——`saasctl new`（含 `--with` 选择）materialize 出项目后，经真实 `go mod tidy`（网络）与 `go build` 编译，boot 起来冒烟真实组成的 HTTP 链（healthz、config/public、register、错密码 401、坏 token 401、匿名 403 等逐项断言），外加 `db migrate` 与 `upgrade` 对真实文件的操作；程序与逐项答案记录在 `go/saasctl/AGENTS.md` Testing 章节，是模板与模块版本"此刻未脱节"的证据。但本节的 CI 化形态仍未落地：`scaffold-verify.yml` 仍是 gated stub（其文件头已由本轮更新，记录"生成侧已存在且有离线证明；双部署模式 boot 门仍未接线"），CI 定时触发与上面"CI 定时任务"一行描述的两次 `docker compose`（standalone 与 distributed 各 boot 一次）属 M4 该流水线转正时的范围——届时每轮 PR 不跑它（它按设计是每日 + 发布后），模板腐化的日常防线靠 saasctl 轮之后的仓库内测试（golden 钉死 + materialize 证明）。
 
 **6. 国际化**
 - CI lint：UI 包 JSX 中不得出现裸文本节点；Go 代码中面向用户的错误不得使用字面量文案
 - 资源完整性检查：`zh-CN` 与 `en-US` 的 key 集合必须完全一致，缺任何一边 CI 报错
-- Storybook 为核心组件提供中英双语 story，人工过一遍长文案截断问题
+- 核心组件提供中英双语的可运行示例，人工过一遍长文案截断问题
 - reference-app 的 e2e 至少有一条完整链路跑英文界面，并断言邮件按收件人 locale（而非操作者语言）渲染
+
+> **实施状态注记（本轮核实）：** 第三条原写"Storybook 为核心组件提供…story"，已按现状改写——仓库里没有 Storybook（无 `.stories.*` 文件、无相关依赖或配置），真实提供双语可运行示例的机制是各包自己的 `src/usage-example.test.tsx`（`account-ui`、`auth-ui`、`tenancy-ui`、`api-client` 已落地，`pnpm -r test` 覆盖），不是独立的可视化组件浏览器；这个缺口在第 8、20 节反复出现，均按同一现状改写。第四条的 reference-app e2e 同样尚未落地，见第 4 节的注记。
 
 **7. 配置管理**
 - 优先级链测试：同一个键分别从 flag/env/文件/默认值提供，断言覆盖顺序正确
@@ -40,11 +44,13 @@
 - `saasctl config print` 输出的来源标注与实际一致——**已解除（2026-09-03，saasctl 轮）**：print 与生成应用的引导同源（`internal/appconfig` 是模板内 `cmd/server/config.go` 的孪生，孪生关系由测试钉死），实测两个变体——设了 `SPEED_*` 的环境时每行标 `from <ENV>`、空环境下每行标默认来源——密钥行一律 `[redacted]`，逐行输出与真实解析一致（程序与答案见 `go/saasctl/AGENTS.md` Testing 章节）。注意该行只覆盖引导配置面；动态配置（`configs` 表）的打印仍待其维护面落地。
 
 **8. 文档**
-- CI 强制编译并运行所有文档中的代码示例（Go `Example` 测试 + Storybook 构建），示例失败等同于构建失败
+- CI 强制编译并运行所有文档中的代码示例（Go `Example` 测试 + 前端各包自己的 `usage-example.test.tsx`），示例失败等同于构建失败
 - 配置清单文档由 schema 自动生成，CI 检查生成结果与仓库内文件一致（防止手改漂移）
 - 每个公开导出的 API 必须在文档中有对应条目，CI 做覆盖率检查
 - 每个模块的 `AGENTS.md` 存在性检查；仓库根 `CLAUDE.md` 的纪律条目与 CI 检查表一一对应
 - 人工验收：用一个未接触过本项目的 AI Agent，仅凭文档完成"接入认证模块并加一个受权限保护的接口"，记录卡点并回补文档
+
+> **实施状态注记（本轮核实）：** 第一条已按现状改写——"Storybook 构建"从未存在，真实机制同第 6 节注记。第二、三、四条这三项 CI 检查目前都没有接线：`go/config/schema.go` 的 schema 类型未导出，没有工具能读出配置项清单，自然也没有生成结果与仓库文件的一致性检查；`docs-check.yml` 自己的 header 明确把"config-reference generation drift"列进"DELIBERATELY NOT WIRED"；API 文档覆盖率检查和 `AGENTS.md` 存在性检查同样不在任何 workflow 里，通读 `.github/workflows/*.yml` 无一处提及。这三项目前都只能算设计意图，回补需要先有导出的 schema 访问器、错误码/API 清单生成脚本和一个存在性检查脚本，是真实的实现缺口而非本轮的文档措辞问题。
 
 **9. 第三方登录与功能开关**
 - 账号关联安全用例（最高优先级）：构造"第三方返回未验证邮箱且与已有用户邮箱相同"的场景，断言**不会**自动合并账号；`state` 缺失或不匹配时回调必须被拒绝；回调地址不在白名单时拒绝
@@ -52,6 +58,8 @@
 - 各渠道用官方沙箱或 mock server 覆盖授权码换取流程；`MockSocialProvider` 作为该 seam 的一套实现，让本地无需真实应用凭证即可跑通
 - 开关组合：CI 跑最小集 / 全开 / 典型交付组合三种构建；非法开关组合（如开启超额计费但禁用 metering）必须启动失败
 - 被禁用功能的接口返回 404，且 `/api/system/features` 状态与实际一致
+
+> **实施状态注记（本轮核实）：** 三种构建组合的矩阵尚未接线——通读 `.github/workflows/*.yml` 没有任何 job 构造"最小集/全开/典型交付组合"这三种开关组合分别构建，仍是设计意图。
 
 **10. 身份与组织**
 - **密码**：argon2id 参数生效（哈希前缀可验证）；弱口令字典拦截；密码策略走动态配置且改动即时生效
@@ -93,11 +101,15 @@
 - ESLint 规则确实拦截手写的 `fetch`/`axios` 后端调用
 - 合并后的 spec 通过 redocly lint，无 operationId / schema 命名冲突
 
+> `oasdiff` 破坏性变更闸门本身仍待交付，需要首个发布基线，计划落在 M4——与 [21 API 契约](21-api-contract.md) 末尾的实现状态注记及 `api-contract.yml` 自己 DELIBERATELY NOT WIRED 一节记录的机制决策一致，不是遗漏。
+
 **15. 数据分域与系统上下文**
 - 身份数据与平台数据跑 `AssertNotTenantScoped`：断言它们**不会**被误加租户过滤
-- 系统上下文：非白名单模块 import `WithSystemContext` 时 CI 拒绝；每次进入系统上下文都产生审计记录
+- 系统上下文：非白名单模块 import `WithSystemContext` 由 code review / CODEOWNERS 把关（`go/pkgcore`、`go/tenancy`）；每次进入系统上下文都产生审计记录
 - 分布式 PG 下用受 RLS 约束的角色执行跨租户查询必须返回空，切到 `BYPASSRLS` 角色才可见
 - 从租户移除成员后，该用户针对该租户的 access token 立即失效
+
+> **实施精确化（本轮核实，与 [04 数据层与多租户](04-data-and-tenancy.md) 的"实现落地更正"一致）：** 第二条原写"CI 拒绝"，已改为真实机制——depguard 只能按整个 import path 粒度放行/拒绝一个文件，做不到只挡 `WithSystemContext` 这一个符号（`pkgcore` 根包同时还装着 `TenantID`/`WithTenant`/`apperr`，把"仅白名单可 import `pkgcore`"接成 depguard 规则会连带拦下 `go/dbkit` 23 处无关合法导入），这条草稿规则因此未合入，完整推演见 `.golangci.yml` 自己的 depguard 注释。白名单目前靠 code review 与 `go/pkgcore`、`go/tenancy` 的 CODEOWNERS 加两个函数的文档注释把关，不是静态检查。
 
 **16. 外部联系人与同意**
 - 未验证地址除验证消息外一律拒绝发送

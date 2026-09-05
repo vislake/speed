@@ -6,6 +6,8 @@
 
 **埋点层与后端存储层解耦是这里的关键**——OTel SDK 照常埋点，导出目标是一个可独立选择的实现：导出到 stdout（结构化日志直接可读）并在进程内暴露 `/metrics` 端点（需要时用浏览器直接看，或临时挂一个 Prometheus），完全不需要 Collector 与任何存储组件；或导出到 OTel Collector。**这个选择与部署成几个副本无关**——单进程的生产部署同样应该把遥测送往真实 Collector（见 [03 部署模式与实现组装](03-deployment-modes.md)）。业务代码与中间件零改动。
 
+**实施精确化（本轮核实，见 `go/observability/AGENTS.md`"Exporter isolation"节）：** `/metrics` 端点不是 `go/observability` 自动暴露的——`init.go` 的根包不再直接依赖 Prometheus SDK，宿主必须自己 `import _ "github.com/vislake/speed/go/observability/exporter/prometheus"` 空白导入这个子包，`MetricsHandler` 才会挂上真的 Prometheus reader；没有这行空白导入，`MetricsHandler` 应答 404 并在正文里点名缺的这行导入。`examples/reference-app` 已经这样接了线，所以它的 `/metrics` 路由照常工作；上一段说的"暴露"要按这个前提读，不按"开箱即有"读。
+
 | 维度 | 选型（OTLP → Collector 一侧） | 理由 |
 |---|---|---|
 | 埋点 | OpenTelemetry Go SDK | 厂商中立，换后端不改业务代码 |
@@ -56,3 +58,5 @@
 | 缓存 / KV | 命中率、延迟 | 命中率骤降会引发数据库过载 |
 
 **告警只对少数指标设置**，其余留作排查用。首批告警：HTTP 5xx 率、任务队列积压超阈值、outbox 积压、支付回调失败率、死信堆积、数据库连接池接近上限。告警过多等于没有告警。
+
+**实施状态注记（本轮核实）：** 上表是设计意图的全景，不是现状——`go/jobs` 是目前唯一真正落地了自己那一行的模块：`standalone_queue.go` 通过 `otel.Meter` 注册了队列积压深度（`jobs.job.queue_depth`，一个按任务类型和状态分组的异步 Gauge 回调）、执行时长分位（`jobs.job.duration` Histogram）、尝试次数（`jobs.job.attempts` Counter）和死信计数（`jobs.job.dead_letter` Counter）四个 instrument，`worker.go` 在实际执行路径上写入后三者。其余六行——计量管道、通知、支付、AI 网关、站内信 SSE、认证——目前 `go/metering`、`go/notification`、`go/billing`、`go/ai-gateway`、`go/authn` 全文 grep `otel.Meter` 均为零命中，是模块已经落地但尚未补埋点，而不是模块本身不存在（`go/observability/AGENTS.md` 曾经的表述需要按这个区分读）。

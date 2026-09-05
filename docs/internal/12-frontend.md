@@ -103,6 +103,8 @@ M0 的"核心组件"指下面第一组。组件全部受控、props 驱动、不
 - **服务端状态 TanStack Query + 客户端状态 Zustand**（不引入 Redux）。
 - Query key 强制按租户命名空间：`['tenant', tenantId, resource]`。切换租户后 key 天然变化，旧数据自动失效；`switchTenant` 成功后显式 `removeQueries(['tenant', oldId])` 清理缓存，避免运营后台频繁切租户导致内存堆积。
 - `currentTenantId` 放 Zustand 而非 Context：高频读低频写，selector 按需订阅避免大范围 re-render；且**可在组件树外读取**（如构造 query key 时）。
+
+  **实施精确化（本轮核实）：** 真实落地的机制不是 Zustand——`web/` 全部 `package.json` 与 pnpm lockfile 里都没有 `zustand` 这个依赖，Zustand 从未被引入。`currentTenantId` 真实走的是 `@speed/auth-core` 的 `useCurrentTenant`：`session.ts` 里一份内存态，`hooks.ts` 用 React 18 原生的 `useSyncExternalStore` 订阅（`src/hooks.ts`），效果和上面两条列的取舍一致——高频读、按需订阅、组件树外可读（`session` 闭包本身就是那个组件树外的读取点）——只是不经过 Zustand 这个第三方库。上面两条按"当初设想的方案"读，不按"现状"读。
 - **注意：前端不把 `tenantId` 作为请求头发送。** 租户上下文由 access token 携带，服务端只信任令牌（见 [04 数据层与多租户](04-data-and-tenancy.md) 的信任边界）。前端这份 `currentTenantId` 只用于三件事：query key 命名空间、UI 展示、调用切换租户接口时的入参。切换租户成功后拿到新令牌，随后所有请求自动带上新租户。
 - Token 存储：refresh token 走 httpOnly+Secure+SameSite Cookie，access token 只存内存，不落 localStorage。
 - **主题三层覆盖**：`defaultTokens`（包内置）→ `projectTokens`（业务项目 `theme/tokens.ts`，构建期）→ `tenantOverrides`（运行时从后端拉取，支持白标 SaaS 按租户换 Logo/主色）。业务项目只写差异部分，深合并回退默认值。品牌资产放业务项目 `public/`，包内不打包任何具体品牌资产。

@@ -16,6 +16,8 @@
 ### 前端测试
 Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包的每个公开组件需有 Storybook story（同时充当文档与视觉回归基线）。
 
+> **实施状态注记（本轮核实）：** Playwright 与 Storybook 两者目前都不存在于仓库——没有任何 Playwright 配置/spec 文件，也没有 `.stories.*` 文件或 Storybook 依赖/配置；`.github/workflows/reusable/npm-package-ci.yml` 自己的 header 明确把"Storybook component previews"列进未接线清单（"ui-kit shipped without a preview harness; the round that introduces one wires it here"）。真实的组件/hook 测试确实是 Vitest + Testing Library；e2e 与视觉回归目前都靠各包自己的 `src/usage-example.test.tsx`（真实机制见 [13 文档规范](13-documentation-standards.md)、[16 验证方式](16-verification.md) 的同一处注记——这一缺口在多份文档里重复出现，均按此注记读）。
+
 ### 文件与目录布局
 
 这是硬性约定，不是风格偏好——目的是让 `go test ./...`（默认只跑单元测试，秒级完成）和 `go test -tags=integration ./...`（显式触发，允许慢）这条分层在物理上可执行，而不是靠开发者自觉：
@@ -45,10 +47,14 @@ Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包�
 - **ESLint + Prettier**，配置作为共享包发布，业务项目可直接继承
 - 公开包必须导出完整类型定义，`tsc --noEmit` 与 `publint` 校验打包产物
 
+  **实施状态注记（本轮核实）：** `publint` 尚未接线——`.github/workflows/reusable/npm-package-ci.yml` 自己的 header 把"publint publish-shape validation and changesets wiring"列为明确未接线项，理由是目前还没有任何 `@speed/*` 包真正发布过，等 web 侧发布机制轮次落地再一并接入。`tsc --noEmit` 是真实落地的（每包 lint/typecheck leg 的一部分）。
+
 ### 覆盖率
 不设一刀切的百分比门槛（容易催生无意义的测试），而是：
 - 地基模块（`pkgcore`、`dbkit`、`tenancy`、`rbac`、`billing`、`jobs`）要求较高覆盖，且**覆盖率不允许下降**（与基线比对）
 - 安全相关路径（租户隔离、权限判定、支付回调、令牌校验）要求分支覆盖完整
+
+> **实施状态注记（本轮核实）：** "覆盖率不允许下降（与基线比对）"是设计意图，尚未落地——通读所有 workflow 文件，没有任何覆盖率采集、基线存储或 diff 比对的机制；地基模块要求较高覆盖、安全路径要求分支覆盖完整目前都只靠 code review 把关，没有自动化数字门槛。
 
 ### 警告治理
 **警告视为一等问题**，与团队既定规范一致：编译警告、lint 警告、废弃 API 警告、React 控制台警告、a11y 警告、竞态检测警告，全部不得静默忽略或抑制。CI 中新增警告即失败；确需保留的必须有显式豁免注释并说明原因与跟踪项。
@@ -71,7 +77,7 @@ Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包�
 ### 许可证合规（对本项目尤其重要）
 脚手架会被用于**对外商业交付**，依赖的许可证会传导给客户项目。CI 中做许可证扫描，**禁止引入 GPL/AGPL 系依赖**；MPL/LGPL 类需单独评估并记录在 ADR 中。这一条在纯内部项目里可以放松，在这里不行。
 
-> **实施状态注记（2026-09，security 轮次）**：已落地——`tools/license_scan.py` 在 security.yml 的 license job 运行（先跑内置 selftest 再扫真实依赖树）；Go 侧 34 条、npm 侧 8 条共 42 条依赖的逐条 adjudication 见 `tools/dependency-licenses.json`，扫描器会把「manifest 与真实依赖树不一致」或「新增依赖缺 adjudication」当作漂移直接报错，策略与本节一致（GPL/AGPL 拒绝、MPL/LGPL 需 ADR、未知许可证 fail-closed）。
+> **实施状态注记（2026-09，security 轮次；依赖计数已按本轮核实更正）**：已落地——`tools/license_scan.py` 在 security.yml 的 license job 运行（先跑内置 selftest 再扫真实依赖树）；Go 侧 34 条、npm 侧 9 条共 43 条依赖的逐条 adjudication 见 `tools/dependency-licenses.json`（`jq '.dependencies | length'` 实测 43，按 `ecosystem` 分组 go=34、npm=9），扫描器会把「manifest 与真实依赖树不一致」或「新增依赖缺 adjudication」当作漂移直接报错，策略与本节一致（GPL/AGPL 拒绝、MPL/LGPL 需 ADR、未知许可证 fail-closed）。
 
 ### 安全测试专项
 以下场景必须有自动化用例，它们在 [16 验证方式](16-verification.md) 中已定义验收标准：
@@ -102,3 +108,5 @@ Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包�
 ## Flaky 测试治理
 
 不稳定测试会侵蚀团队对 CI 的信任，最终导致"红了就重跑"的坏习惯。措施：nightly 重复运行标记不稳定用例，自动开 issue 跟踪；连续不稳定的用例先隔离（标记 skip 并挂跟踪项）再修复，不允许长期挂着一个时红时绿的 CI。
+
+> **实施状态注记（本轮核实）：** 上面两节都是纯设计意图，尚未落地——`.github/workflows/nightly.yml` 整个是 gated stub（触发即在 guard step 失败，不接受任何调度），其自己的文件头如实记录了阻塞原因：性能基准回归这一半，仓库里当前一个 `func Benchmark` 都没有（`grep "func Benchmark"` 遍历 `go/` 与 `examples/` 零命中），benchmark 随各热点归属的模块在 roadmap M1-M3 落地；flaky 检测这一半需要一个有 `issues: write` 权限的 token 来自动开 issue，等实现轮次落地时一并接入并过一次安全审查。全量矩阵这一半本身已经不再是阻塞点——`pr-full` 已经真实存在——但只要没有 benchmark 套件，`nightly` 就整体停在 gated stub。

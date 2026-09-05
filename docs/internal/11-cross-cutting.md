@@ -6,7 +6,9 @@
 
 **这是必须从 M0 就位的横切能力，不能后补。** 多个 UI 包一旦硬编码文案发布出去，回头补 i18n 是全量返工，且业务方已经基于硬编码文案做了定制，改动会破坏他们的项目。
 
-**语言协商链**（优先级从高到低）：URL 参数 / 用户手动切换（存 localStorage）→ 用户 profile 的 `locale` 字段 → `Accept-Language` 请求头 → 默认 `zh-CN`。前后端使用同一套解析结果，避免出现"界面中文、邮件英文"。
+**语言协商链**（优先级从高到低）：URL 参数 / 用户手动切换（存 localStorage）→ 用户 profile 的 `locale` 字段 → 浏览器语言偏好 → 默认 `zh-CN`。前后端使用同一套解析结果，避免出现"界面中文、邮件英文"。
+
+**实施精确化（本轮核实，`@speed/i18n` `createI18n`）：** 第三级读的是客户端 `navigator.languages` 这个浏览器 API，不是 `Accept-Language` HTTP 请求头——两者在同源请求下通常一致，但这是纯前端解析，后端从未读取过这个请求头来做语言协商；上面"前后端使用同一套解析结果"说的是协商优先级顺序一致，不是同一段代码跑在两侧。
 
 **后端**
 - 新增 `pkgcore/i18n` 子包，选 `nicksnyder/go-i18n`（支持复数形式与嵌套消息，生态成熟）。
@@ -108,7 +110,9 @@
 - **启动时校验开关依赖图并 fail-fast**：例如启用了"用量超额计费"却禁用了 `metering`，直接拒绝启动并说明原因，而不是运行到一半才出现诡异行为。
 - **禁用只跳过路由注册与后台任务，不跳过数据库迁移**。表结构始终保持最新，这样开关可以随时来回切换而不需要做数据迁移——这个取舍很关键，反过来做会让"临时关一下"变成一次运维事故。
 - 被禁用功能的接口返回 `404` 而非 `403`（不暴露"存在但被关闭"的信息），但在 `/api/system/features` 里可查询当前启用状态，方便排查。
-- 前端通过 `/api/config/public` 拿到启用列表，`useFeature('billing')` hook 控制菜单与路由的显隐；`layout-kit` 的 `NavItem` 支持 `requiredFeature` 字段，与已有的 `requiredPermission` 并列。
+- 前端通过 `/api/config/public` 拿到启用列表，`useFeature('billing')` hook 控制菜单与路由的显隐；`layout-kit` 的 `NavItem` 设想支持 `requiredFeature` 字段，与 `requiredPermission` 并列，交由宿主在渲染前过滤。
+
+  **实施状态注记（本轮核实）：** 这两个字段都还没有落地。`@speed/layout-kit` 真实的 `AppShellNavItem`（`components/AppShell.tsx`）目前只有 `id`/`label`/`icon`/`href`/`onClick`/`selected` 六个字段——没有 `requiredFeature`，也没有 `requiredPermission`；权限与功能开关的显隐目前完全是宿主自己在构造 `navItems` 数组前过滤好的（`layout-kit` 本身不做任何路径匹配或权限判断，见根 `CLAUDE.md`"Depends on `@speed/i18n` 和 `@speed/ui-kit` only"一段），上面两句按"设想的扩展点"读，不按"现状"读。
 
 **组合爆炸的应对**：N 个开关有 2^N 种组合，不可能全测。策略是——依赖图校验保证非法组合根本无法启动；CI 只测三种典型组合：**最小可用组合**（上表所列）、**全开**、**典型交付组合**（最小可用组合 + billing + 一个支付渠道 + storage + notification）。
 

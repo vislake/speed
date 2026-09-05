@@ -8,9 +8,9 @@
 统一命令入口用 **Taskfile**（`task` 命令，YAML 定义，跨平台，比 Makefile 更适合混合 Go/Node 的仓库）：
 
 ```
-task setup          # 安装工具链、拉依赖、初始化数据库
-task dev            # 单进程部署模式启动后端 + 前端（热重载）
-task test           # 跑受影响模块的测试
+task setup          # 安装工具链、拉依赖（数据库初始化尚未实现，见下）
+task dev            # 单进程部署模式启动后端 + 前端（热重载，尚未实现，见下）
+task test           # 跑全部模块的单元测试（无差异检测，见下）
 task test:full      # 全量矩阵
 task lint           # 全部 lint
 task api:gen        # 合并 spec + 生成后端 interface + 生成前端 sdk
@@ -19,9 +19,15 @@ task new:module     # 脚手架自身的模块生成器（见下）
 task release:plan   # 离线验证某个版本号下全模块的 lockstep 发布计划一致（M0 轮）
 ```
 
+**`task`/`mise` 二进制本身在标准检出环境里可能未安装**（根 `CLAUDE.md` 已有此说明）：`Taskfile.yml` 与其包装的命令都真实存在且能跑，但 `task` 这个 CLI 本身不一定在 `PATH` 上——遇到时直接跑它包装的原始命令（`go test ./...`、`go vet ./...`、`golangci-lint run ./...` 等），不要假设 `task xxx` 就一定可用，先确认 `task` 在 `PATH` 上。`mise` 同理：`task setup` 的工具链腿在 `mise` 缺席时只警告并跳过，不会失败（见下方"工具链版本统一"一节）。
+
 `task release:plan` 是 M0 发布轮新增的真实任务（非 stub）：离线验证"给定版本号下，全部 Go 模块与 npm 包能按同一版本号一致发布"——包装 `tools/release/lockstep-release.py` 的默认校验模式（退出码 0 仅当计划一致；不写任何文件），是 [02 仓库结构与发布](02-repo-and-release.md) / [18 CI/CD](18-cicd.md) 发布设计的 M0 落地一半。用法：`task release:plan VERSION=v1.2.0`。`.github/workflows/release.yml` 手动触发时运行同一校验加协调器自测（见 [18 CI/CD](18-cicd.md) 的 M0 注记）；真实发布——推 tag、changesets bump、npm publish、GitHub Release——排在 v1.0（M4 里程碑）。
 
 `task dev` 必须在 **单进程部署模式**下工作：单进程、SQLite、零外部依赖。这是单进程部署模式给开发体验带来的直接收益——本地开发不需要 `docker compose up` 拉起一堆容器。
+
+**当前状态：尚未实现。** 和 `task seed` 一样，`task dev` 目前是 not-implemented stub（跑起来会打印说明，退出非零）：它承诺的"后端 + 前端、单进程部署模式、热重载"组合式开发循环还没有接线——`web/` pnpm workspace 与 `examples/reference-app/web` 这个消费者壳都已经真实存在，但都还没有接进一个热重载 runner。真正能跑起来的是 reference-app 服务器本身：`cd examples/reference-app && go run ./cmd/server`（默认监听 `:8080`，SQLite 落 `./reference-app.db`，两者都可用环境变量覆盖），直接跑这一行即可。
+
+**`task test` 的真实实现（本轮核实）：** 命令表里"跑受影响模块的测试"是设计意图，不是现状——`Taskfile.yml` 的 `test` task 就是无条件的 `go test {{.ALL_PKGS}}` 加 reference-app 自己的 `go test ./...`，没有任何 diff 检测或"只跑改动模块"的逻辑，每次调用都跑全部真实模块的单元测试（无 `-race`、无覆盖率，那两项留给 `task test:full`）。差异感知的"只测受影响模块"仍是未来工作。
 
 ### 工具链版本统一
 用 **mise**（或 asdf）锁定 Go、Node、pnpm、golangci-lint 等版本，配置文件入库。CI 与本地读同一份配置，杜绝"我本地是好的"。
@@ -114,7 +120,10 @@ PR 模板包含一份 checklist，对应仓库根 [CLAUDE.md](../../CLAUDE.md) �
 - **CI 兜底已接线**：`.github/workflows/api-contract.yml` 在改动 spec 片段 / 生成器配置（含 `web/orval.config.ts` 与 `web/scripts/**`）/ `Taskfile.yml` / 流水线自身的 PR 上触发（路径过滤），后端 oapi-codegen 重新生成后 `git diff --exit-code` 比对生成物，并 `go build` reference-app 保证 handler 跟上 spec——这是 [18 CI/CD](18-cicd.md) 管道表 api-contract 行所规划"生成物一致性 diff"的后端一半；前端一半见下一条。
 - **前端 sdk 一半已落地**：`@speed/api-sdk`（`web/packages/api-sdk`）由钉定的 orval 8.17.0 从同一 notes 片段生成 hooks 与 TS 类型（DO-NOT-EDIT 头带钉定版本），`task api:gen` 的前端 leg 执行 `cd web && pnpm dlx orval@8.17.0 --config orval.config.ts && node scripts/orval-nodenext-fixup.mjs`（orval 永不进入 lockfile）；生成代码不直接触碰网络，经包内唯一手写接缝 `src/runtime.ts`（`bindRequestFn(createClient(...))`）路由到 api-client 运行时；orval 发射的无扩展名 mutator 导入由 `web/scripts/orval-nodenext-fixup.mjs` 确定性改写为显式 `.js`（nodenext/TS2835，机制与延期细节见该包 AGENTS.md）。该包进入 pr-check 的 npm 矩阵与 api-contract.yml 的第二个一致性 diff；与后端相同的"task api:gen + CI 重新生成比对"模式，api:gen 的两个 leg 与 api-contract.yml 的两个再生成步骤一一对应、保持 lockstep。
 
-**当前状态（2026-09-03，authn 轮：第二个片段落地）：多片段合并与 lint 已落地，oasdiff 仍未实现。** `go/authn/api/openapi.yaml` 是继 notes 之后的第二个模块 spec 片段，触发了原先"没有合并对象"的那道缺口：仓库根目录的 `redocly.yaml` 定义了合并规则与命名规范 lint 规则，`task api:merge`（`Taskfile.yml`）与 `.github/workflows/api-contract.yml` 用钉定的 `@redocly/cli@2.51.1` 的 `join` 命令把两个片段合并进 `build/openapi/speed.yaml` 并按 `redocly.yaml` 的规则 lint，`git diff --exit-code` 校验该文件与提交版本一致——这一段随 `task api:gen` 的既有骨架一并扩展，不是另起的机制。仍未实现的只剩 oasdiff 破坏性变更闸门（需首个发布基线，计划 M4，已作为机制决策记录而非假闸门）。详见 [21 API 契约](21-api-contract.md) 末尾的实现状态注记。
+**当前状态（2026-09-03，authn 轮：触发多片段合并机制启用）：多片段合并与 lint 已落地，oasdiff 仍未实现。** `go/authn/api/openapi.yaml` 触发了原先"没有合并对象"的那道缺口，把合并机制第一次真正用起来——但它不是继 notes 之后的第二个模块 spec 片段：`go/org/api/openapi.yaml` 更早落地，只是 org 的片段当时不参与合并（预留给后续的 org-web 轮），所以"没有合并对象"这道缺口直到 authn 片段出现、且它需要被合并时才第一次真正暴露。仓库根目录的 `redocly.yaml` 定义了合并规则与命名规范 lint 规则，`task api:merge`（`Taskfile.yml`）与 `.github/workflows/api-contract.yml` 用钉定的 `@redocly/cli@2.51.1` 的 `join` 命令把两个片段合并进 `build/openapi/speed.yaml` 并按 `redocly.yaml` 的规则 lint，`git diff --exit-code` 校验该文件与提交版本一致——这一段随 `task api:gen` 的既有骨架一并扩展，不是另起的机制。仍未实现的只剩 oasdiff 破坏性变更闸门（需首个发布基线，计划 M4，已作为机制决策记录而非假闸门）。详见 [21 API 契约](21-api-contract.md) 末尾的实现状态注记。
+
+**实施状态注记（本轮核实，`task api:gen` 的真实片段数）：** 本节到此描述的一直是"notes + authn"两片段合并的历史顺序，但截至本轮，`task api:gen` 真实覆盖的模块 spec 片段已有 7 个——notes、org、storage、authn、notification、sharing、pki（`Taskfile.yml` 的 `api:gen` task 逐一执行 oapi-codegen 的目录列表），其中只有 notes、authn、notification 三个片段进了合并文档 `build/openapi/speed.yaml`（供 orval 生成前端 sdk）；org、storage、sharing、pki 四个片段仅有后端 leg（各自的理由记录在 `go/org/AGENTS.md`、`go/storage/AGENTS.md`、`go/sharing/AGENTS.md`、`go/pki/AGENTS.md` 的 Deferred/Known limitations 小节）。`go/admin/api/openapi.yaml` 是仓库里第 8 个真实存在的 openapi 片段，但刻意不在 `task api:gen` 与 `api-contract.yml` 的覆盖范围内，是一个如实披露的已知缺口（`go/admin/AGENTS.md` 与该模块自己的 openapi.yaml 头部注释记录），不要把它也算进上面的 7 个。
+
 **当前状态（2026-09-03，auth-core 轮：第三个片段的前端半边与首个编译消费者落地）：orval 前端 leg 改为消费合并文档，oasdiff 仍未实现。** `go/authn/api/openapi.yaml` 成为第三个模块 spec 片段后，`task api:gen` 的前端 leg 随之改为依赖 `api:merge`：钉定的 orval 从合并后的 `build/openapi/speed.yaml`（notes + authn，org 片段仍不在合并列表）生成 `@speed/api-sdk`——api-sdk 从此覆盖两个片段，上一段"尚未落到合并文档"与 api-sdk 单一 notes 源的声称到此为止。同一轮落地的 `@speed/auth-core`（`web/packages/auth-core`）成为 api-sdk 生成面的**首个 in-workspace compile consumer**：其单元套件经 `bindRequestFn` 接缝绑定 scripted `RequestFn` 驱动生成操作并做类型检查，`src/usage-example.test.tsx` 把 README 用法编译执行——"生成层没有消费者做类型检查"的推迟理由随之消除；**运行时端到端消费**（reference-app shell 以真实客户端驱动真实登录）仍属 consumer-shell（`auth-ui`）round。api:gen 后端 leg 继续逐片段独立生成；api-contract.yml 的再生成与 diff 覆盖合并文档的这条前端 leg。仍未实现的只剩 oasdiff 破坏性变更闸门（需首个发布基线，计划 M4）。详见 [21 API 契约](21-api-contract.md) 末尾两条实现状态注记。
 
 **当前状态（2026-09-03，auth-ui 轮：运行时端到端消费以包级 in-form 形态落地，浏览器 leg 移交 shell）：** 上一段 auth-core 轮注记中"**运行时端到端消费**（reference-app shell 以真实客户端驱动真实登录）仍属 consumer-shell（`auth-ui`）round"的声称由本段取代——落地的 `@speed/auth-ui`（`web/packages/auth-ui`，登录组件家族：`SignInScreen`/`PasswordSignInForm`/`SMSSignInForm`/`RegisterForm`/`SocialSignInSection`/`SocialCallbackHandler`/`SignOutButton`/`SessionEndedScreen`）把该消费在包级以 in-form 形态兑现：`src/usage-example.test.tsx` 用**真实 `@speed/api-client`**（`createClient` + 内存 access-token store + 可注入 fetch；fetch 替身以真正的 `Response` 对象作答）经同一 `bindRequestFn` 接缝绑定，编译并执行 README quick start 的组合——密码登录 → 受保护请求（过期的 access token）以 `authn.token_expired` 被拒 → 静默刷新 → 服务端会话死亡（`authn.session_revoked`）→ 收敛匿名 → 再次登录 → `switchLanguage` 到 en-US，六次请求顺序钉死。剩余的浏览器 + 真服务器 leg 与跨路由门禁随 reference-app shell（生成 hooks、租户 query-key 命名空间、`RouteGuard` 门禁随之落地）与 M4 e2e 管线落地。oasdiff 破坏性变更闸门仍未实现（同上两段）。详见 [21 API 契约](21-api-contract.md) 末尾的实现状态注记。
