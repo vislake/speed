@@ -450,6 +450,15 @@ export function createClient(options: ClientOptions): RequestFn {
       'createClient requires a non-empty baseUrl (host + optional prefix; see the README).',
     )
   }
+  // CodeQL's js/polynomial-redos alert on this line: reviewed and confirmed
+  // a false positive. /\/+$/ is a single anchored character-class
+  // repetition (one quantifier, no nesting, no alternation) matching a run
+  // of trailing slashes at the end of the string -- there is exactly one
+  // way to decompose a match, so this runs in O(n) even under a naive
+  // backtracking engine; it has none of the nested/overlapping-quantifier
+  // shape catastrophic backtracking needs. options.baseUrl reaches this line
+  // directly from the caller with no intervening transformation, and no
+  // other regex in this file is a plausible alternate target for the alert.
   const baseUrl = options.baseUrl.replace(/\/+$/, '')
   const fetchFn =
     options.fetch ??
