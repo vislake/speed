@@ -467,6 +467,24 @@ func (r *statusRecorder) WriteHeader(status int) {
 // ever calling WriteHeader implicitly sends 200, exactly like the
 // underlying http.ResponseWriter would, so that implicit status is
 // recorded here too.
+//
+// CodeQL's go/reflected-xss alert traces a notification verified_contacts
+// address through pkgcore.Mail{To: [...]} into consoleMailer.Send's
+// m.w.Write(remaining) (pkgcore/mailer.go) and merges that with this Write:
+// reviewed and confirmed a false positive. consoleMailer.w is an arbitrary
+// injected io.Writer (os.Stdout in production, never an HTTP response), and
+// r.ResponseWriter here is a genuinely unrelated http.ResponseWriter
+// instance from a real HTTP handler chain -- the two never share a real
+// writer at runtime. CodeQL's interprocedural points-to analysis conflates
+// them purely because both satisfy the identical Write([]byte) (int, error)
+// signature. Separately: no handler in this codebase sets an HTML
+// Content-Type on an HTTP response (grepped for text/html -- the only hits
+// are outbound email bodies), and every http.Error call site (the only
+// place request-derived text reaches a response body) goes through the
+// oapi-codegen-generated boilerplate's call to Go's stdlib http.Error, which
+// unconditionally forces Content-Type: text/plain; charset=utf-8 plus
+// X-Content-Type-Options: nosniff -- so no reflected-XSS-shaped sink exists
+// on this path regardless of the conflation above.
 func (r *statusRecorder) Write(b []byte) (int, error) {
 	if !r.wroteHeader {
 		r.WriteHeader(http.StatusOK)
