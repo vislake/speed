@@ -1498,3 +1498,69 @@ func TestHandler_Stream_RefusesAResponseWriterThatCannotFlush(t *testing.T) {
 	env.h.ServeHTTP(nonFlushingResponseWriter{rec: rec}, req)
 	assertEnvelope(t, rec, http.StatusInternalServerError, "notification.internal_error")
 }
+
+// unwrappingResponseWriter wraps an http.ResponseWriter WITHOUT directly
+// implementing http.Flusher itself, but declaring the standard library's Go
+// 1.20+ "Unwrap() http.ResponseWriter" convention instead -- exactly the
+// shape go/observability's own statusRecorder uses in this app's real
+// composed HTTP chain (see that type's own Unwrap doc comment, which names
+// this very stream route as the reason it exists). Embedding the
+// http.ResponseWriter INTERFACE, rather than the concrete *flushRecorder,
+// is what keeps Flush from being promoted here even though the wrapped
+// value underneath genuinely has one: method promotion through an embedded
+// interface only promotes that interface's own method set, and Flush is
+// not part of http.ResponseWriter.
+type unwrappingResponseWriter struct {
+	http.ResponseWriter
+}
+
+func (w unwrappingResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+var (
+	_ http.ResponseWriter                       = unwrappingResponseWriter{}
+	_ interface{ Unwrap() http.ResponseWriter } = unwrappingResponseWriter{}
+)
+
+// TestHandler_Stream_FindsFlusherThroughAWrappingResponseWriter pins the fix
+// for a real bug: handleStream used to look for http.Flusher with a naive
+// w.(http.Flusher) type assertion, which fails the instant a middleware
+// wraps the response writer in anything that does not ALSO directly
+// implement Flush -- exactly the shape every request reaching this handler
+// through this app's real composed HTTP chain has, since
+// go/observability's Middleware wraps every response writer in its own
+// statusRecorder, which exposes Flush only via Unwrap. Before the fix, a
+// stream request through that chain always failed with a 500
+// notification.internal_error -- discovered by
+// examples/reference-app/integration_test/distributed_mode_test.go's
+// TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructure,
+// the first test anywhere in this repository to drive this route through a
+// real composed HTTP stack rather than calling the Handler directly. This
+// test reproduces the same wrapper shape without needing the whole app: the
+// stream must still open (a 200 status and at least one flush) despite the
+// response writer never satisfying http.Flusher directly.
+func TestHandler_Stream_FindsFlusherThroughAWrappingResponseWriter(t *testing.T) {
+	env := newHandlerEnv(t)
+
+	rec := newFlushRecorder()
+	wrapped := unwrappingResponseWriter{ResponseWriter: rec}
+	ctx, cancel := context.WithCancel(tenantCtx(handlerTenant))
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		env.h.ServeHTTP(wrapped, httptest.NewRequest(http.MethodGet, apiPath+"/stream", nil).WithContext(ctx))
+	}()
+	waitUntil(t, "the stream opened despite the wrapping response writer", func() bool { return rec.flushCount() >= 1 })
+	if got := rec.statusCode(); got != http.StatusOK {
+		t.Fatalf("status = %d, want %d", got, http.StatusOK)
+	}
+	cancel()
+	waitUntil(t, "the handler exited", func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	})
+}

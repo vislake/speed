@@ -665,7 +665,7 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	flusher, ok := w.(http.Flusher)
+	flusher, ok := findFlusher(w)
 	if !ok {
 		h.writeError(w, ErrInternal.WithCause(errors.New("notification: the stream route needs a flushing response writer")))
 		return
@@ -701,6 +701,46 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request) {
 			}
 			flusher.Flush()
 		}
+	}
+}
+
+// findFlusher looks for an http.Flusher underneath w, unwrapping through any
+// number of http.ResponseWriter wrapper layers that expose the standard
+// library's Go 1.20+ "Unwrap() http.ResponseWriter" convention (the same
+// convention http.NewResponseController's own Flush/Hijack/etc. use) --
+// mirroring that unwrapping algorithm directly, rather than calling
+// http.NewResponseController(w).Flush() itself, since that call ALSO
+// implicitly sends headers (status 200) the moment it succeeds, which would
+// make it impossible for handleStream to still answer a clean, un-started
+// ErrInternal response on the failure path below.
+//
+// A naive w.(http.Flusher) type assertion -- what this function replaced --
+// is correct only when w is untouched net/http-provided ResponseWriter; it
+// silently fails the instant ANY middleware wraps w in a struct that embeds
+// http.ResponseWriter without separately implementing Flush itself, exactly
+// the shape go/observability's own Middleware uses for its statusRecorder
+// (see that type's own Unwrap doc comment, which names this very stream
+// route as the reason Unwrap exists) -- a real bug this function fixes:
+// every request through this app's real composed HTTP chain reaches
+// handleStream through that middleware, so the naive assertion always
+// failed with a 500 notification.internal_error the moment a real client
+// connected, never caught by any earlier test because no earlier test in
+// this repository had exercised GET /api/v1/notifications/stream through
+// the fully composed chain (only through hand-built httptest requests that
+// bypass Middleware) until
+// examples/reference-app/integration_test/distributed_mode_test.go's
+// TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructure
+// did, over a real, fully composed reference-app server.
+func findFlusher(w http.ResponseWriter) (http.Flusher, bool) {
+	for {
+		if f, ok := w.(http.Flusher); ok {
+			return f, true
+		}
+		unwrapper, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return nil, false
+		}
+		w = unwrapper.Unwrap()
 	}
 }
 
