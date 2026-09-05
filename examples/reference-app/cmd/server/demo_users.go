@@ -29,6 +29,12 @@ import (
 // shape (SPEED_*_PASSWORD) mirrors the config-key pair configFromEnv
 // reads for the same reason -- an env var is visible, auditable and
 // per-deployment in a way a compiled-in default is not.
+//
+// #nosec G101 -- this is an ENVIRONMENT VARIABLE NAME, not a credential
+// value: gosec's hardcoded-credential heuristic matches on the substring
+// "Password" in the identifier alone, the same false positive go/authn's
+// and go/sharing's own identically-shaped name constants are already
+// excepted from elsewhere in this codebase.
 const demoUsersPasswordEnv = "SPEED_DEMO_USERS_PASSWORD"
 
 // The three demo accounts seedDemoUsers registers when
@@ -168,7 +174,7 @@ func registerDemoUser(ctx context.Context, handler http.Handler, email, password
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	resp := rec.Result()
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusCreated {
 		var envelope struct {
