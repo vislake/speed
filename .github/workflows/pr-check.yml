@@ -169,6 +169,21 @@ name: pr-check
 on:
   pull_request:
   workflow_dispatch:
+  # A commit that lands on main without going through a pull_request (a
+  # locally-merged worktree round pushed straight to origin, an admin
+  # merge, anything else that bypasses PR review) gets none of the checks
+  # above -- pull_request only fires for the PR's own commits, and
+  # workflow_dispatch only runs when someone remembers to trigger it by
+  # hand. Without this, "is main healthy" after such a push is answered by
+  # a human manually running `gh workflow run`, which is exactly the gap
+  # this trigger closes: every push to main now gets this same fast
+  # lint/vet/build/test matrix automatically, no manual step required.
+  # Scoped to main only, and deliberately just this workflow -- pr-full's
+  # expensive Docker-backed integration tiers stay label-gated per its own
+  # cost-control rationale, and security's daily schedule already covers
+  # its own periodic default-branch re-check.
+  push:
+    branches: [main]
 
 concurrency:
   group: pr-check-${{ github.event.pull_request.number || github.ref_name }}
