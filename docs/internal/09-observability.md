@@ -59,4 +59,4 @@
 
 **告警只对少数指标设置**，其余留作排查用。首批告警：HTTP 5xx 率、任务队列积压超阈值、outbox 积压、支付回调失败率、死信堆积、数据库连接池接近上限。告警过多等于没有告警。
 
-**实施状态注记（本轮核实）：** 上表是设计意图的全景，不是现状——`go/jobs` 是目前唯一真正落地了自己那一行的模块：`standalone_queue.go` 通过 `otel.Meter` 注册了队列积压深度（`jobs.job.queue_depth`，一个按任务类型和状态分组的异步 Gauge 回调）、执行时长分位（`jobs.job.duration` Histogram）、尝试次数（`jobs.job.attempts` Counter）和死信计数（`jobs.job.dead_letter` Counter）四个 instrument，`worker.go` 在实际执行路径上写入后三者。其余六行——计量管道、通知、支付、AI 网关、站内信 SSE、认证——目前 `go/metering`、`go/notification`、`go/billing`、`go/ai-gateway`、`go/authn` 全文 grep `otel.Meter` 均为零命中，是模块已经落地但尚未补埋点，而不是模块本身不存在（`go/observability/AGENTS.md` 曾经的表述需要按这个区分读）。
+**实施状态注记（本轮核实）：** 上表是设计意图的全景，不是现状——`go/jobs` 是目前唯一真正落地了自己那一行的模块：`standalone_queue.go` 通过 `otel.Meter` 注册了队列积压深度（`jobs.queue.depth`，一个按任务类型和状态分组的异步 Gauge 回调）、执行时长分位（`jobs.job.duration` Histogram）、尝试次数（`jobs.job.attempts` Counter）和死信计数（`jobs.job.dead_letter` Counter）四个 instrument，`worker.go` 在实际执行路径上写入后三者。其余六行——计量管道、通知、支付、AI 网关、站内信 SSE、认证——目前 `go/metering`、`go/notification`、`go/billing`、`go/ai-gateway`、`go/authn` 全文 grep `otel.Meter` 均为零命中，是模块已经落地但尚未补埋点，而不是模块本身不存在（`go/observability/AGENTS.md` 曾经的表述需要按这个区分读）。
