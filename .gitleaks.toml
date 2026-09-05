@@ -1,7 +1,7 @@
 # gitleaks configuration for the speed monorepo.
 #
 # The default rule set is extended (no rule is disabled or added): this
-# file exists only to carry the one allowlist the tree genuinely needs.
+# file exists only to carry the allowlists the tree genuinely needs.
 # Findings in the go/observability redaction tests are planted fixtures,
 # not leaks: the observability module's redaction layer is tested by
 # logging deliberately secret-shaped stand-in values and asserting they
@@ -12,15 +12,27 @@
 # files are exempted by path -- the allowlists block at the bottom of
 # this file lists them.
 #
-# The exemption is scoped to exactly those three fixture files; the scan
-# keeps firing on every other file in the tree and in the commit history
-# (the security pipeline's secrets job checks out the full history -- see
+# Every exemption below is scoped to exact, named files; the scan keeps
+# firing on every other file in the tree and in the commit history (the
+# security pipeline's secrets job checks out the full history -- see
 # .github/workflows/security.yml). Real credentials must never enter
 # these files either -- code review and the files' own fixture-only
 # comments guard that, and the repository holds no real credentials
 # anywhere (see the SECRETS note in .github/workflows/security.yml). Any
 # further allowlist need must arrive with its own justification in this
-# comment.
+# comment, naming the exact files it covers and why each one's match is
+# not a real credential.
+#
+# Later rounds added their own synthetic, secret-shaped fixtures as new
+# modules landed encrypted-field, blind-index, cipher and payment-gateway
+# tests -- the same pattern as the observability block above, just for
+# different modules -- plus two genuinely user-facing documentation
+# files whose whole purpose is showing a placeholder in a shape gitleaks'
+# default `generic-api-key`/`curl-auth-header` rules key on. Each group
+# below was re-verified against gitleaks 8.30.1 (the pinned version
+# .github/workflows/security.yml downloads and checksum-verifies) run
+# against the real, current tree and full commit history before being
+# added, per that section's own file-by-file reasoning.
 
 title = "speed gitleaks config"
 
@@ -33,4 +45,39 @@ paths = [
   "go/observability/redact_test.go",
   "go/observability/middleware_test.go",
   "go/observability/example_test.go",
+]
+
+[[allowlists]]
+description = "encrypted-field / blind-index / payment-webhook test fixture keys: fixed, hard-coded 32-byte hex strings (and one hard-coded Stripe-shaped webhook secret) that each file's own doc comment names as a fixture -- registering a GORM field-encryption or blind-index serializer under a known key so the test can assert round-trip behaviour without touching a real key store, mirroring go/dbkit's own encryption_test.go precedent. go/ai-gateway/model_test.go's testCipherKey and go/pki/repository_test.go's testLocalKeyCipherKey are both the fixed literal \"0123456789abcdef0123456789abcdef\", explicitly documented as mirroring one another; go/notification/contact_test.go's testCipherKey/testEmailIndexKey/testPhoneIndexKey trio (and its byte-for-byte integration-tier twin in go/notification/integration_test/postgres_leg_test.go, which the twin's own header comment says exists only so that external test binary stands alone) are three deliberately distinct fixture keys proving an index key never doubles as the encryption key; go/billing/gateway/stripe/gateway_test.go's testWebhookSecret is fed only to a fakeBackend that never dials a real network connection, so it is never verified against Stripe's real webhook-signing logic"
+paths = [
+  "go/ai-gateway/model_test.go",
+  "go/billing/gateway/stripe/gateway_test.go",
+  "go/pki/repository_test.go",
+  "go/notification/contact_test.go",
+  "go/notification/integration_test/postgres_leg_test.go",
+]
+
+[[allowlists]]
+description = "saasctl config-loading test fixture keys: go/saasctl/internal/appconfig/appconfig_test.go's configKeyHex/orgIndexKeyHex and go/saasctl/internal/config/print_test.go's copies of the same values are deliberately patterned, non-random hex literals (a strictly ascending run \"000102...1e1f\" and a strictly descending run \"ffe0f1...ddee\") used only to prove that appconfig.Load parses SPEED_CONFIG_KEY/SPEED_ORG_INDEX_KEY from the environment and that saasctl config print never renders their bytes -- print_test.go's own TestPrintNeverRendersTheKeyBytes asserts the opposite property gitleaks is checking for, that these values are exactly what must never reach real output"
+paths = [
+  "go/saasctl/internal/appconfig/appconfig_test.go",
+  "go/saasctl/internal/config/print_test.go",
+]
+
+[[allowlists]]
+description = "examples/reference-app/.env.example: a template file whose entire purpose is showing the shape of a real environment variable without a real value -- every flagged line is the literal placeholder string REPLACE_WITH_64_HEX_CHARS (SPEED_CONFIG_KEY, SPEED_ORG_INDEX_KEY, SPEED_NOTIFICATION_INDEX_KEY), and the file's own header comment already tells a reader to generate a real key with `openssl rand -hex 32` rather than use what is checked in here"
+paths = [
+  "examples/reference-app/.env.example",
+]
+
+[[allowlists]]
+description = "examples/reference-app/README.md: the \"Try it\" curl walkthrough authenticates one example request with the literal placeholder `Authorization: Bearer not-a-real-token`, a string chosen specifically to read as fake rather than as a redacted real token"
+paths = [
+  "examples/reference-app/README.md",
+]
+
+[[allowlists]]
+description = "go/pki/AGENTS.md: the flagged line is documentation prose describing the envelope-mode key-handling mechanism (\"...generates a real ed25519 key pair in-process, PKCS8-marshals the private half, and immediately wraps it with the external service's own encrypt operation...\") -- there is no literal secret value anywhere on the line, and gitleaks' generic-api-key rule is matching the prose's own high-entropy-looking run of words describing PKCS8 marshalling, not a credential"
+paths = [
+  "go/pki/AGENTS.md",
 ]
