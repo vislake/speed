@@ -36,6 +36,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/rbac"
 )
 
@@ -492,6 +493,123 @@ func TestAdminFlow_AdminRoutes_IgnoreActiveImpersonation(t *testing.T) {
 	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/users?email="+demoPlatformStaffEmail, staffToken, nil, http.StatusOK, &searchedAgain, impersonationHeaders)
 	if len(searchedAgain.Users) != 1 {
 		t.Fatalf("search for the platform-staff account while impersonating = %+v, want exactly one", searchedAgain.Users)
+	}
+}
+
+// tenancyErrorBody decodes the {code, params} envelope
+// tenancy.Middleware's own writeError writes on every refusal -- D4's
+// coded-error discipline (root CLAUDE.md: "a coded error, never a raw
+// HTTP status with no code").
+type tenancyErrorBody struct {
+	Code string `json:"code"`
+}
+
+// rawStatusRequest issues method against srv.URL+path, authenticated as
+// token, and returns the raw status code plus the decoded {code, ...}
+// error envelope body (empty Code on a non-error response) -- unlike
+// adminRequest/orgRequest, it never fatals on an unexpected status, since
+// this suite's whole point is asserting a REFUSAL happens, not just a
+// success.
+func rawStatusRequest(t *testing.T, srv *httptest.Server, method, path, token string) (int, tenancyErrorBody) {
+	t.Helper()
+	req, err := http.NewRequest(method, srv.URL+path, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer resp.Body.Close()
+
+	var body tenancyErrorBody
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	return resp.StatusCode, body
+}
+
+// TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd is D4's
+// genuinely observable, live-request-pipeline proof (docs/internal/23-
+// admin.md's D4, go/tenancy/tenant_status.go's WithTenantStatusResolver
+// seam): suspending a tenant through admin's own PATCH
+// /api/v1/admin/tenants/{id} makes every OTHER route serving that tenant
+// -- org's, here -- actually start refusing requests on the very next
+// one, with no restart, no cache to invalidate and no code path of its
+// own beyond tenancy.Middleware consulting the resolver it was wired
+// with; resuming the tenant makes the exact same route succeed again
+// immediately.
+//
+// This is the one round-2 deliverable this suite proves through the real
+// composed HTTP stack end to end, per this round's own brief: D4 is the
+// only round-2 item with a genuinely observable behavior change in a live
+// request pipeline (D8/D9/D10/D7-export are proven at go/admin's own
+// module level, mirroring how go/pki's X.509 layer and go/billing/
+// go/metering carry the identical "real, tested, but not yet a reference-
+// app HTTP consumer" exception elsewhere in this codebase).
+func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
+	srv, cfg, _ := buildAdminTestServer(t)
+	staffToken := platformStaffToken(t, srv)
+
+	const tenant = pkgcore.TenantID("tenant-suspend-flow")
+	ownerToken := registerAndAuthenticate(t, srv, cfg, tenant, "suspend-flow-owner")
+
+	// Creating the tenant's root node is both this test's ordinary,
+	// tenant-scoped request (org mounts no rbac gate of its own in this
+	// app -- root CLAUDE.md's notes-only rbac-gating note -- so it depends
+	// on nothing but tenancy.Middleware resolving the tenant) AND what
+	// lazily registers "tenant-suspend-flow" in admin's own D3 ledger
+	// (org.node.created -> TenantService.handleOrgNodeCreated), so no
+	// separate manual ledger-registration call is needed before D4's
+	// PATCH below.
+	var root orgNode
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", ownerToken, "",
+		map[string]string{"name": "Suspend Flow Co", "kind": "group"}, &root)
+	if root.ID == "" {
+		t.Fatal("org_createNode returned no node id")
+	}
+	nodePath := "/api/v1/org/nodes/" + root.ID
+
+	// Before suspension: the tenant is active (either its own explicit
+	// TenantStatusActive, or a WithTenantStatusResolver-wired but
+	// not-yet-suspended ledger row), so the ordinary request succeeds.
+	if status, _ := rawStatusRequest(t, srv, http.MethodGet, nodePath, ownerToken); status != http.StatusOK {
+		t.Fatalf("GET %s before suspension: status = %d, want %d", nodePath, status, http.StatusOK)
+	}
+
+	// D3 + D4: suspend the tenant through admin's own console.
+	var patched adminTenant
+	adminRequest(t, srv, http.MethodPatch, "/api/v1/admin/tenants/"+string(tenant), staffToken,
+		map[string]string{"status": "suspended", "suspendedReason": "reproducing a billing dispute"},
+		http.StatusOK, &patched, nil)
+	if patched.Status != "suspended" {
+		t.Fatalf("PATCH tenants/%s response Status = %q, want %q", tenant, patched.Status, "suspended")
+	}
+
+	// D4's whole point: the VERY NEXT request against this tenant --
+	// through an entirely different module's route, org's, not admin's
+	// own -- is refused, with the coded error tenancy.Middleware writes,
+	// never a bare status with no code.
+	status, body := rawStatusRequest(t, srv, http.MethodGet, nodePath, ownerToken)
+	if status != http.StatusForbidden {
+		t.Fatalf("GET %s after suspension: status = %d, want %d", nodePath, status, http.StatusForbidden)
+	}
+	if body.Code != "tenancy.tenant_suspended" {
+		t.Fatalf("GET %s after suspension: error code = %q, want %q", nodePath, body.Code, "tenancy.tenant_suspended")
+	}
+
+	// Resume: PATCH status back to active.
+	adminRequest(t, srv, http.MethodPatch, "/api/v1/admin/tenants/"+string(tenant), staffToken,
+		map[string]string{"status": "active"}, http.StatusOK, &patched, nil)
+	if patched.Status != "active" {
+		t.Fatalf("PATCH tenants/%s (resume) response Status = %q, want %q", tenant, patched.Status, "active")
+	}
+
+	// The same request that was refused a moment ago now succeeds again,
+	// with no restart and nothing else changed.
+	if status, _ := rawStatusRequest(t, srv, http.MethodGet, nodePath, ownerToken); status != http.StatusOK {
+		t.Fatalf("GET %s after resume: status = %d, want %d", nodePath, status, http.StatusOK)
 	}
 }
 

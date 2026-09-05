@@ -1131,25 +1131,45 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// sharing one connection to one audit_events table, exactly as
 	// auditModule shares notesModule's own connection above. WithQueue is
 	// the same standaloneQueue every other module's asynchronous work
-	// already shares; this app never calls the retention/erasure/export
-	// services WithQueue backs, but compliance.Module.Register refuses to
-	// proceed without one (ErrQueueRequired) regardless of whether a
-	// caller happens to use that half of the module.
+	// already shares; compliance.Module.Register refuses to proceed
+	// without one (ErrQueueRequired) regardless of whether a caller
+	// happens to use that half of the module. WithSharing wires the
+	// already-constructed sharingModule's own Service() as
+	// compliance.SharingCreator -- go/compliance/AGENTS.md's round-2 notes
+	// this seam as deliberately unwired "until an owning module opts in";
+	// go/admin's D7 export leg (docs/internal/23-admin.md) is that
+	// module, so this is where compliance.ExportService.Export gains its
+	// first genuine delivery path (a real, single-view go/sharing link)
+	// rather than refusing every call with ErrSharingRequired.
 	complianceAuditRepo := audit.NewRepository(db)
-	complianceModule := compliance.NewModule(complianceAuditRepo, compliance.WithQueue(standaloneQueue))
+	complianceModule := compliance.NewModule(complianceAuditRepo,
+		compliance.WithQueue(standaloneQueue),
+		compliance.WithSharing(sharingModule.Service()),
+	)
 
 	// adminModule is the reference app's mandatory first consumer of
-	// go/admin's round 1 (docs/internal/23-admin.md): D3's tenant ledger,
-	// D5's impersonation pipeline, D6's cross-tenant user search and D7's
-	// audit-query shell. WithAuthn takes the *authn.Module itself, not its
+	// go/admin's round 1 AND round 2 (docs/internal/23-admin.md): D3's
+	// tenant ledger, D5's impersonation pipeline, D6's cross-tenant user
+	// search, D7's audit-query shell and export leg, D8's role management
+	// and D9's usage dashboard (D9's go/metering/go/billing wiring is
+	// deliberately not part of this, since neither module has a real
+	// reference-app consumer of its own yet -- go/admin/AGENTS.md's Known
+	// limitations records this the same way go/pki's X.509 layer and
+	// go/billing/go/metering themselves already do for their own unwired
+	// surfaces). WithAuthn takes the *authn.Module itself, not its
 	// Service() -- see go/admin/AGENTS.md's wiring-contract section for
 	// why, and admin.Module.DependsOn()'s own doc comment for the
 	// resulting "authn" dependency Kernel.Bootstrap's sort honors below.
+	// WithQueue is the same standaloneQueue every other module's
+	// asynchronous work already shares -- D7's export leg enqueues onto
+	// it rather than running compliance.ExportService.Export synchronously
+	// inside the request.
 	adminModule := admin.NewModule(db,
 		admin.WithAuthn(authnModule),
 		admin.WithOrg(orgModule),
 		admin.WithCompliance(complianceModule),
 		admin.WithNotification(notificationModule),
+		admin.WithQueue(standaloneQueue),
 	)
 
 	migrationRegistry := dbkit.NewMigrationRegistry()
@@ -1337,6 +1357,15 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		_ = cleanup()
 		return nil, nil, seedErr
 	}
+
+	// admin's D8 role-management surface needs the real *rbac.Service --
+	// which, like config's and rbac's own Attach calls above, exists only
+	// after Bootstrap has returned. This is why go/admin's RoleService is
+	// wired through a distinct, post-Bootstrap Module.AttachRBAC call
+	// rather than a WithXxx(*rbac.Module) construction-time Option the
+	// way authn/org/compliance/notification are -- see AttachRBAC's own
+	// doc comment for the full reasoning.
+	adminModule.AttachRBAC(rbacService)
 
 	// The ai-gateway platform credential: written only when cfg.AIGatewayAPIKey
 	// is set (see its own doc comment on serverConfig for why the default is
@@ -1526,6 +1555,19 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// own).
 	restOfAppChain := admin.ImpersonationMiddleware(adminModule.Impersonation())(
 		tenancy.Middleware(authn.NewPrincipalResolver(), append([]tenancy.MiddlewareOption{
+			// tenancy.WithTenantStatusResolver is D4's enforcement seam
+			// (docs/internal/23-admin.md, go/tenancy/tenant_status.go):
+			// admin's own tenant ledger (*admin.TenantService, D3)
+			// implements tenancy.TenantStatusResolver structurally --
+			// admin is its one real implementer, but the interface itself
+			// does not know admin exists, the identical no-import-in-
+			// either-direction shape org.FeatureGate/rbac.SubtreeResolver
+			// already use. This is what turns "an operator marked a
+			// tenant suspended in admin's console" into every OTHER
+			// route (notes, storage, org, ...) actually refusing that
+			// tenant's requests on the very next one, rather than being
+			// a ledger fact nothing downstream ever consults.
+			tenancy.WithTenantStatusResolver(adminModule.Tenants()),
 			tenancy.WithAllowlist(http.MethodGet, healthzPath),
 			tenancy.WithAllowlist(http.MethodHead, healthzPath),
 			tenancy.WithAllowlist(http.MethodGet, metricsPath),

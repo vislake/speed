@@ -22,6 +22,17 @@ replace github.com/vislake/speed/go/authn => ../../go/authn
 
 replace github.com/vislake/speed/go/pki => ../../go/pki
 
+// go/billing and go/metering reach this app transitively through
+// go/admin's D9 usage-dashboard wiring (docs/internal/23-admin.md) --
+// go/admin imports both directly (it sits at the top of the module
+// dependency graph and is explicitly permitted to), so this app's own
+// go.mod needs its own replace for them too, the identical reasoning the
+// go/jobs and go/storage comment below already gives for the same shape
+// of transitive local-module dependency.
+replace github.com/vislake/speed/go/metering => ../../go/metering
+
+replace github.com/vislake/speed/go/billing => ../../go/billing
+
 // go/jobs and go/storage are imported directly by this app: buildServer
 // wires the storage module's asynchronous object work onto a
 // jobs.StandaloneQueue sharing the app's own database (see server.go).
@@ -172,6 +183,8 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
+	github.com/vislake/speed/go/billing v0.0.0-00010101000000-000000000000 // indirect
+	github.com/vislake/speed/go/metering v0.0.0-00010101000000-000000000000 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
