@@ -10,6 +10,9 @@
 <header>
   <nav>
     <a href="index.html">Home</a>
+    <a href="quickstart.html">Quickstart</a>
+    <a href="modules.html">Modules</a>
+    <a href="ai-agents.html">For AI Agents</a>
     <a href="about.html">About</a>
     <a href="status.html">Status</a>
   </nav>
@@ -22,24 +25,30 @@
 
   <h2>On this site</h2>
   <ul>
+    <li><a href="quickstart.html">Quickstart</a> — generate a starter project with
+    <code>saasctl new</code>, and the four <code>saasctl</code> commands.</li>
+    <li><a href="modules.html">Modules</a> — the concrete list of Go modules and npm
+    packages a consumer project can pull in, each linking to its own docs.</li>
+    <li><a href="ai-agents.html">For AI Agents</a> — what to read first, and the
+    architecture rules that most often matter when an AI coding agent is doing the
+    integrating.</li>
     <li><a href="about.html">About speed</a> — what the project is, how the pieces fit,
     and how its documentation is distributed.</li>
-    <li><a href="status.html">Status</a> — where implementation stands, milestone by
-    milestone.</li>
+    <li><a href="status.html">Status</a> — where implementation genuinely stands today.</li>
   </ul>
 
   <div class="note">
-    <p><strong>This site is a skeleton.</strong> The pages here are static HTML with no
-    build step, so they are previewable and checkable today — but the full machinery is
-    a later milestone: per-version release directories, <code>llms.txt</code> once the
-    site goes public, and the complete documentation set. What is real now versus
-    deferred is spelled out on <a href="about.html">About</a> and in the operating note
-    at the top of this tree (docs/site/README.md, outside the site itself).</p>
+    <p><strong>This site is a hand-written static skeleton, deliberately.</strong> No
+    build step, no framework, no generated output — see
+    <a href="about.html">About</a> for what is real today versus still deferred (per-version
+    release directories and a build-tool decision, both later milestone work). An
+    AI-agent-oriented <a href="llms.txt">llms.txt</a> lives at this site's root.</p>
   </div>
 </main>
 <footer>
-  <p>speed documentation site · skeleton: static HTML, no build step · preview with
-  <code>python3 -m http.server 8000 -d docs/site</code></p>
+  <p>speed documentation site · static HTML, no build step · preview with
+  <code>python3 -m http.server 8000 -d docs/site</code> · machine-readable index at
+  <a href="llms.txt">/llms.txt</a></p>
 </footer>
 </body>
 </html>

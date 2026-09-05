@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>For AI Agents — speed documentation</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header>
+  <nav>
+    <a href="index.html">Home</a>
+    <a href="quickstart.html">Quickstart</a>
+    <a href="modules.html">Modules</a>
+    <a href="ai-agents.html">For AI Agents</a>
+    <a href="about.html">About</a>
+    <a href="status.html">Status</a>
+  </nav>
+</header>
+<main>
+  <h1>For AI Agents</h1>
+
+  <p class="lede">If you are a coding agent helping someone integrate speed, or being
+  pointed at this site as context, this page is for you. speed's own documentation
+  standard treats agents and humans as first-class readers equally (see
+  <a href="https://github.com/vislake/speed/blob/main/docs/internal/13-documentation-standards.md">docs/internal/13</a>,
+  Chinese-language design rationale) — this page and <a href="llms.txt">llms.txt</a> at
+  the site root are this site's own answer to that.</p>
+
+  <h2>Read this first, in this order</h2>
+  <ol>
+    <li><strong><a href="https://github.com/vislake/speed/blob/main/AGENTS.md">Root
+    <code>AGENTS.md</code></a></strong> — orientation for any AI coding tool: top-level
+    shape, the module dependency direction, the rules that will burn you fastest, and
+    where everything else lives. Written to be read start to finish in a couple of
+    minutes.</li>
+    <li><strong>The target module's own <code>AGENTS.md</code></strong>
+    (<code>go/&lt;name&gt;/AGENTS.md</code> or
+    <code>web/packages/&lt;name&gt;/AGENTS.md</code>) — module-specific discipline, file
+    layout, known limitations, testing setup. See the <a href="modules.html">module
+    index</a> for the full list with direct links.</li>
+    <li><strong><a href="https://github.com/vislake/speed/blob/main/CLAUDE.md">Root
+    <code>CLAUDE.md</code></a>'s <em>Repository Status</em> section</strong> — see
+    below, this is the one you must not let go stale in your own head.</li>
+  </ol>
+
+  <h2>The single source of truth for "is this actually implemented"</h2>
+  <div class="note">
+    <p>Root <code>CLAUDE.md</code>'s <strong>Repository Status</strong> section is the
+    single, authoritative, current answer to "what genuinely runs and passes in CI
+    today." It names, per module, exactly what is implemented, what CI workflow proves
+    it (and on what trigger — every PR, a <code>full-ci</code>-labeled PR, a manual
+    dispatch), and what is still a placeholder stub. This static site cannot update
+    itself as fast as that section changes — <strong>do not treat anything on this site
+    as a substitute for reading it</strong>, and do not trust a status claim (including
+    this site's own <a href="status.html">Status</a> page) that you have not
+    cross-checked against it or against the repository itself.</p>
+  </div>
+  <p>The practical rule that section itself states and this page repeats: a module
+  directory existing is not evidence it has real code behind it — some are still a
+  <code>go.mod</code> plus a one-line <code>doc.go</code> plus an <code>AGENTS.md</code>
+  pointing at a design doc. Check for more than a stub before relying on one.</p>
+
+  <h2>Architecture rules that most often matter</h2>
+
+  <h3>Module dependency direction</h3>
+  <p>Dependencies flow strictly bottom-up:</p>
+  <pre><code>pkgcore -&gt; dbkit / observability / ratelimit -&gt; tenancy -&gt; config / jobs -&gt; storage / notification / pki
+        -&gt; authn / rbac / org / metering -&gt; billing / ai-gateway / sharing / integration
+        -&gt; compliance -&gt; admin</code></pre>
+  <p>This is a coarse ordering, not the full edge list —
+  <a href="https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md">docs/internal/01-architecture.md</a>'s
+  own diagram is the authority for exactly which module imports which. The two rules
+  that catch most first-time mistakes: <code>rbac</code> must never import
+  <code>authn</code> (authorization only ever sees <code>Subject{TenantID, UserID}</code>,
+  assembled by the authenticating side), and a module must never import another business
+  module's struct for a database relation — cross-module relations are ID references
+  plus domain events (<code>org</code> subscribes to <code>authn</code>'s
+  <code>user.created</code> event by name and JSON-shaped payload probe; it never
+  imports <code>authn.User</code>).</p>
+
+  <h3>API contract: spec-first, non-negotiable order</h3>
+  <p>Edit <code>api/openapi.yaml</code> → run <code>task api:gen</code> → the resulting
+  compilation failures reveal every handler to fix → implement → update the frontend →
+  commit everything together. The generated Go server interface participates in
+  compilation, so drift between spec and implementation cannot compile. The frontend
+  side mirrors this: hand-written <code>fetch</code>/<code>axios</code> calls are
+  permitted only inside <code>@speed/api-client</code>; every other package calls the
+  generated <code>@speed/api-sdk</code> hooks, never HTTP directly.</p>
+
+  <h3>The four data domains</h3>
+  <p>Every table is classified before it is designed, not after:</p>
+  <table>
+    <tr><th>Domain</th><th>Definition</th><th><code>TenantScoped</code>?</th><th>Example</th></tr>
+    <tr><td>Tenant data</td><td>Belongs to one tenant, never visible across tenants</td>
+    <td>Yes</td><td>org nodes, memberships, subscriptions, media, business data</td></tr>
+    <tr><td>Identity data</td><td>Belongs to a natural person, who may belong to several
+    tenants</td><td>No</td><td><code>users</code>, <code>user_identities</code>,
+    <code>sessions</code>, login logs</td></tr>
+    <tr><td>Platform data</td><td>Globally shared, tenants read only</td><td>No</td>
+    <td>platform-wide Plan definitions, social login provider config, system config</td></tr>
+    <tr><td>Link data</td><td>Bridges identity and tenant</td><td>Yes (by
+    <code>tenant_id</code>)</td><td><code>memberships</code></td></tr>
+  </table>
+  <p>The rule this table exists to enforce: <code>users</code> is deliberately
+  <strong>not</strong> tenant-scoped (a person can belong to several tenants, and social
+  sign-in succeeds before any tenant exists), and platform-wide definitions like a
+  billing Plan must stay visible to every tenant's fallback lookup. Getting this
+  classification wrong is, per this codebase's own experience, the earliest place a
+  multi-tenant implementation gets stuck.</p>
+
+  <h3>Deployment mode vs. implementation composition</h3>
+  <p>Two orthogonal axes, and conflating them is the design error this codebase's own
+  docs record as a mistake it used to make:</p>
+  <ul>
+    <li><strong>Deployment mode</strong> — how many replicas this runs as, and therefore
+    which implementations are <em>permissible</em>.</li>
+    <li><strong>Implementation composition</strong> — which implementation each
+    infrastructure seam (<code>EventBus</code>, <code>KVStore</code>, <code>Mailer</code>,
+    <code>ObjectStore</code>) actually uses.</li>
+  </ul>
+  <p>The deployment mode does not select an implementation — it only constrains one.
+  Each implementation declares capabilities (<code>MultiReplicaSafe</code>,
+  <code>SurvivesRestart</code>, <code>Stateless</code>); each deployment mode declares
+  what it requires; assembly fails at startup, naming the seam and the implementation,
+  when the composition cannot satisfy the declared mode. A single-process deployment
+  talking to real PostgreSQL, real Stripe and real SMTP is the ordinary shape of a
+  small-customer production install, not a misuse — the constraint runs one direction
+  only. Business code must never branch on the mode (<code>if mode == "standalone"</code>
+  is a code-review rejection, not a style nit) — mode differences belong exclusively to
+  kernel wiring.</p>
+
+  <h2>Other rules worth knowing before you write code</h2>
+  <ul>
+    <li>Tenant-owned repositories must embed <code>dbkit.Repository[T]</code> — never
+    hold a raw <code>*gorm.DB</code> and hand-write <code>WHERE tenant_id = ?</code>, and
+    never accept a caller-supplied <code>tenant_id</code> at the API layer (it comes from
+    the access-token claims only).</li>
+    <li>Workers do not inherit tenant context — rebuild it explicitly
+    (<code>pkgcore.WithTenant(ctx, job.TenantID)</code>) or the Repository fails closed.</li>
+    <li>Notifications are event-driven: business modules publish domain events,
+    <code>notification</code> subscribes. The sole exception is synchronous verification
+    codes. External (non-user) recipients require consent verification before anything
+    is sent.</li>
+    <li>Every bug fix ships with a test that reproduces it (failing before the fix,
+    passing after) — this repository treats a missing regression test as an incomplete
+    fix, not an optional nicety.</li>
+  </ul>
+  <p>The full, enforceable list — with which parts are code-review-only versus genuinely
+  CI-enforced today — is root <code>CLAUDE.md</code>'s <em>Architecture Discipline</em>
+  section.</p>
+
+  <h2>Machine-readable entry point</h2>
+  <p><a href="llms.txt">/llms.txt</a> at this site's root lists the same pages plus the
+  repository files above in the <a href="https://llmstxt.org/">llms.txt</a> convention,
+  for a crawler or agent fetching this domain directly.</p>
+</main>
+<footer>
+  <p><a href="index.html">Home</a> · <a href="quickstart.html">Quickstart</a> ·
+  <a href="modules.html">Modules</a> · <a href="about.html">About</a> ·
+  <a href="status.html">Status</a></p>
+</footer>
+</body>
+</html>

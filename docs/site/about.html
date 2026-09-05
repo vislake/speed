@@ -10,6 +10,9 @@
 <header>
   <nav>
     <a href="index.html">Home</a>
+    <a href="quickstart.html">Quickstart</a>
+    <a href="modules.html">Modules</a>
+    <a href="ai-agents.html">For AI Agents</a>
     <a href="about.html">About</a>
     <a href="status.html">Status</a>
   </nav>
@@ -44,24 +47,36 @@
   </table>
 
   <h2>How documentation is distributed</h2>
-  <p>Each module carries its own <code>docs/</code> and <code>AGENTS.md</code> inside the
-  module, so documentation ships with the code and stays current with the version a
-  consumer actually pulls. This site is the <em>central</em> reference — planned to be
-  versioned per release, with the module-level docs pointing at it for the overview.</p>
+  <p>Each module carries its own <code>AGENTS.md</code> inside the module — a quick
+  orientation for an AI coding tool: responsibility boundary, public API, typical usage,
+  and explicit dos-and-don'ts — plus a plain <code>README.md</code>, so documentation
+  ships with the code and stays current with the version a consumer actually pulls. (A
+  per-module <code>docs/</code> subdirectory is the longer-term plan recorded in
+  <a href="https://github.com/vislake/speed/blob/main/docs/internal/13-documentation-standards.md">docs/internal/13</a>;
+  as of this writing no Go module or npm package has actually created one yet — module
+  documentation today really is just its <code>AGENTS.md</code> plus its
+  <code>README.md</code>.) This site is the <em>central</em> reference across modules —
+  see <a href="modules.html">Modules</a> for the full index — planned to be versioned
+  per release, with the module-level docs pointing at it for the overview.</p>
 
   <h2>This site today versus the plan</h2>
-  <p>Real now: hand-written static pages (this one, the landing page, the status page)
-  with a single stylesheet, served by the python3 standard library — deliberately no
-  build step and no framework, so the skeleton is previewable and CI-checkable offline.
-  The operating note for this tree is docs/site/README.md; the conventions it follows
-  are set in docs/internal/13-documentation-standards.md.</p>
-  <p>Deferred to a later milestone (M4): per-version release directories, an
-  <code>llms.txt</code> at the site root once the site goes public, the complete
-  documentation set, and the static-site machinery decision. Nothing on this site
-  anticipates that choice.</p>
+  <p>Real now: hand-written static pages with a single stylesheet, served by the python3
+  standard library — deliberately no build step and no framework, so the skeleton is
+  previewable and CI-checkable offline — a quickstart, a module index, an AI-agent
+  orientation page, and, now that the repository and this site are genuinely public, an
+  <code>llms.txt</code> at the site root. The operating note for this tree is
+  docs/site/README.md; the conventions it follows are set in
+  <a href="https://github.com/vislake/speed/blob/main/docs/internal/13-documentation-standards.md">docs/internal/13-documentation-standards.md</a>.</p>
+  <p>Deferred to a later milestone (M4): per-version release directories (this site
+  versioned like the code it documents), the complete documentation set (config
+  reference generated from schema, an error-code index, ADRs), and the static-site
+  machinery decision (a build step / static site generator) — this hand-written-HTML
+  skeleton deliberately does not anticipate that choice.</p>
 </main>
 <footer>
-  <p><a href="index.html">Home</a> · <a href="status.html">Status</a></p>
+  <p><a href="index.html">Home</a> · <a href="quickstart.html">Quickstart</a> ·
+  <a href="modules.html">Modules</a> · <a href="ai-agents.html">For AI Agents</a> ·
+  <a href="status.html">Status</a></p>
 </footer>
 </body>
 </html>

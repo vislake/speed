@@ -1,0 +1,139 @@
+# speed
+
+> speed is a modular monolith distributed as libraries: independently released Go
+> modules and npm packages that business projects pull in via `go get` / `npm install`
+> and compile into one binary, with multi-tenant isolation, authentication and
+> permissions, organizations, subscription billing and metering, an AI gateway,
+> background jobs, media storage, notifications, observability and an operations
+> console already built in. It is not an application you run and not a repository you
+> fork. Nothing is published to a registry yet — the whole tree is a real, buildable
+> checkout, not a pre-release preview.
+
+## Start here
+
+- [For AI Agents](ai-agents.html): what to read first, the architecture rules that most
+  often matter (module dependency direction, API-contract spec-first order, the four
+  data domains, deployment mode vs. implementation composition), and where the
+  authoritative implementation status lives.
+- [Root AGENTS.md](https://github.com/vislake/speed/blob/main/AGENTS.md): the repository's
+  own first-read orientation for any AI coding tool.
+- [Root CLAUDE.md](https://github.com/vislake/speed/blob/main/CLAUDE.md): the exhaustive
+  architecture reference, the full discipline list, and the single source of truth for
+  which modules genuinely pass CI today (its Repository Status section).
+
+## Site pages
+
+- [Home](index.html): landing page and site map.
+- [Quickstart](quickstart.html): generate a starter project with `saasctl new`, the four
+  `saasctl` commands (`new`, `upgrade`, `db migrate`, `config print`), and how to run Go
+  commands in this repository's workspace layout.
+- [Modules](modules.html): the 21 Go modules and 11 npm packages (plus the reference
+  app's web host) a consumer project can pull in, each linking to its own docs.
+- [For AI Agents](ai-agents.html): the AI-agent-oriented orientation section described
+  above.
+- [About](about.html): what speed is, how the pieces fit together, how its
+  documentation is distributed.
+- [Status](status.html): a coarse, verified-against-the-repository snapshot of
+  implementation status, pointing at CLAUDE.md for the authoritative detail.
+
+## Module documentation (go/)
+
+- [pkgcore](https://github.com/vislake/speed/blob/main/go/pkgcore/AGENTS.md): the
+  dependency floor — Module/Registry/Kernel wiring, seam registries, the merged i18n
+  catalog.
+- [dbkit](https://github.com/vislake/speed/blob/main/go/dbkit/AGENTS.md): dual-dialect
+  `*gorm.DB` wrapper, the mandatory generic Repository[T], migrations, field encryption,
+  blind indexing, soft/hard delete.
+- [tenancy](https://github.com/vislake/speed/blob/main/go/tenancy/AGENTS.md): tenant
+  resolution, the audited system-context escape hatch, isolation test suites.
+- [observability](https://github.com/vislake/speed/blob/main/go/observability/AGENTS.md):
+  OpenTelemetry init, redacted structured logging, HTTP metrics middleware.
+- [config](https://github.com/vislake/speed/blob/main/go/config/AGENTS.md): dynamic,
+  scoped configuration with encrypted sensitive items and pre-auth endpoints.
+- [jobs](https://github.com/vislake/speed/blob/main/go/jobs/AGENTS.md): the background
+  job queue contract, standalone (SQLite) and distributed (Redis) implementations.
+- [ratelimit](https://github.com/vislake/speed/blob/main/go/ratelimit/AGENTS.md): a
+  KVStore-backed rate limiter shared across modules.
+- [pki](https://github.com/vislake/speed/blob/main/go/pki/AGENTS.md): signing-key and
+  X.509 certificate lifecycle management.
+- [authn](https://github.com/vislake/speed/blob/main/go/authn/AGENTS.md):
+  authentication — passwords, sessions, MFA, social/enterprise sign-in.
+- [rbac](https://github.com/vislake/speed/blob/main/go/rbac/AGENTS.md): role-based
+  access control, deny-by-default, no dependency on authn.
+- [org](https://github.com/vislake/speed/blob/main/go/org/AGENTS.md): a tenant's
+  organization tree, memberships and invitations.
+- [storage](https://github.com/vislake/speed/blob/main/go/storage/AGENTS.md): tenant
+  object storage lifecycle over the ObjectStore seam.
+- [notification](https://github.com/vislake/speed/blob/main/go/notification/AGENTS.md):
+  the platform's messaging surface — type registry, inbox, consent-verified delivery.
+- [billing](https://github.com/vislake/speed/blob/main/go/billing/AGENTS.md): plans,
+  entitlements, subscriptions, credits ledger, real payment gateways.
+- [metering](https://github.com/vislake/speed/blob/main/go/metering/AGENTS.md): usage
+  recording with analytics-grade and billing-grade reliability tiers.
+- [sharing](https://github.com/vislake/speed/blob/main/go/sharing/AGENTS.md): public
+  share links with forced expiry, instant revocation and access logging.
+- [integration](https://github.com/vislake/speed/blob/main/go/integration/AGENTS.md): a
+  tenant's outward-facing API surface — API keys and outbound webhooks.
+- [ai-gateway](https://github.com/vislake/speed/blob/main/go/ai-gateway/AGENTS.md): a
+  vendor-agnostic LLM chat and image-generation gateway.
+- [compliance](https://github.com/vislake/speed/blob/main/go/compliance/AGENTS.md):
+  retention sweeps, right-to-erasure, export delivery, audit querying.
+- [admin](https://github.com/vislake/speed/blob/main/go/admin/AGENTS.md): the
+  operations-console backend — tenant ledger, impersonation, cross-tenant search.
+- [saasctl](https://github.com/vislake/speed/blob/main/go/saasctl/AGENTS.md): the
+  consumer-facing CLI (`new`, `upgrade`, `db migrate`, `config print`).
+
+## Package documentation (web/packages/)
+
+- [tokens](https://github.com/vislake/speed/blob/main/web/packages/tokens/AGENTS.md):
+  the design-token tree as dependency-free pure data.
+- [i18n](https://github.com/vislake/speed/blob/main/web/packages/i18n/AGENTS.md): the
+  react-i18next wrapper mirroring pkgcore's message catalog.
+- [ui-kit](https://github.com/vislake/speed/blob/main/web/packages/ui-kit/AGENTS.md):
+  the MUI v9 theme factory and seven controlled components.
+- [api-client](https://github.com/vislake/speed/blob/main/web/packages/api-client/AGENTS.md):
+  the single hand-written HTTP client home — token store, retry, refresh.
+- [api-sdk](https://github.com/vislake/speed/blob/main/web/packages/api-sdk/AGENTS.md):
+  the generated typed surface of the merged OpenAPI document.
+- [layout-kit](https://github.com/vislake/speed/blob/main/web/packages/layout-kit/AGENTS.md):
+  shared app chrome — AppShell and RouteGuard.
+- [auth-core](https://github.com/vislake/speed/blob/main/web/packages/auth-core/AGENTS.md):
+  the headless session state machine over the generated authn surface.
+- [auth-ui](https://github.com/vislake/speed/blob/main/web/packages/auth-ui/AGENTS.md):
+  the sign-in component family.
+- [tenancy-ui](https://github.com/vislake/speed/blob/main/web/packages/tenancy-ui/AGENTS.md):
+  the controlled TenantSwitcher component.
+- [product-shell](https://github.com/vislake/speed/blob/main/web/packages/product-shell/AGENTS.md):
+  the tenant-facing assembly shell.
+- [account-ui](https://github.com/vislake/speed/blob/main/web/packages/account-ui/AGENTS.md):
+  the signed-in account-management component family.
+
+## Reference application (mandatory first consumer of every module)
+
+- [Reference app overview](https://github.com/vislake/speed/blob/main/examples/reference-app/README.md):
+  the AI smile-simulation dental SaaS backend that every module must be exercised
+  against.
+- [Reference app web host](https://github.com/vislake/speed/blob/main/examples/reference-app/web/README.md):
+  the reference app's own frontend, composing every `@speed/*` package together.
+
+## Design documents (background and rationale; Chinese-language)
+
+- [00 Overview](https://github.com/vislake/speed/blob/main/docs/internal/00-overview.md):
+  navigation table for the full design-document set.
+- [01 Architecture](https://github.com/vislake/speed/blob/main/docs/internal/01-architecture.md):
+  the authoritative module dependency graph.
+- [03 Deployment modes](https://github.com/vislake/speed/blob/main/docs/internal/03-deployment-modes.md):
+  deployment mode vs. implementation composition, in full.
+- [04 Data and tenancy](https://github.com/vislake/speed/blob/main/docs/internal/04-data-and-tenancy.md):
+  the four data domains and multi-tenant isolation mechanics.
+- [13 Documentation standards](https://github.com/vislake/speed/blob/main/docs/internal/13-documentation-standards.md):
+  the standard this site and llms.txt itself follow.
+- [15 Roadmap](https://github.com/vislake/speed/blob/main/docs/internal/15-roadmap.md):
+  milestones and what each one covers.
+
+## Optional
+
+- [Coding standards](https://github.com/vislake/speed/tree/main/.claude/skills):
+  backend, frontend and commit-message handbooks with templates and checklists.
+- [Risk register](https://github.com/vislake/speed/blob/main/docs/internal/17-risks.md):
+  known risks and mitigations.
