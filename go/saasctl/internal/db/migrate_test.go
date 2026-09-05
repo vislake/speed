@@ -98,17 +98,18 @@ func ledgerCounts(t *testing.T, gdb *gorm.DB) map[string]int {
 // The counts are drift guards against the modules' own migration sets:
 // authn ships nine sqlite migration files (0001_create_users through
 // 0009_create_user_recovery_codes), config one (0001_create_configs), org
-// three (0001_create_org_nodes, 0002_create_memberships,
-// 0003_create_org_invitations) and rbac one (0001_create_rbac) -- 14 in
-// total, tables configs, users, org_nodes and rbac_roles among them. A
-// module adding or removing a migration file fails the tests that pin
-// these numbers, so the expectation here is updated deliberately when the
-// module's migration set really changes, never silently.
+// four (0001_create_org_nodes, 0002_create_memberships,
+// 0003_create_org_invitations, 0004_add_soft_delete) and rbac two
+// (0001_create_rbac, 0002_add_soft_delete) -- 16 in total, tables configs,
+// users, org_nodes and rbac_roles among them. A module adding or removing
+// a migration file fails the tests that pin these numbers, so the
+// expectation here is updated deliberately when the module's migration
+// set really changes, never silently.
 var fullUniverseLedger = map[string]int{
 	"authn":  9,
 	"config": 1,
-	"org":    3,
-	"rbac":   1,
+	"org":    4,
+	"rbac":   2,
 }
 
 // TestMigrateFreshDatabaseAppliesTheWholeRequiredUniverse: a first run
@@ -126,7 +127,7 @@ func TestMigrateFreshDatabaseAppliesTheWholeRequiredUniverse(t *testing.T) {
 	if stderr != "" {
 		t.Errorf("stderr = %q, want empty", stderr)
 	}
-	want := fmt.Sprintf("Migrated %s: applied 14 migration files (authn 9, config 1, org 3, rbac 1)\n", dbPath)
+	want := fmt.Sprintf("Migrated %s: applied 16 migration files (authn 9, config 1, org 4, rbac 2)\n", dbPath)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
@@ -159,13 +160,13 @@ func TestMigrate_PKIRequired_MigratesPKITablesToo(t *testing.T) {
 	if stderr != "" {
 		t.Errorf("stderr = %q, want empty", stderr)
 	}
-	want := fmt.Sprintf("Migrated %s: applied 19 migration files (authn 9, config 1, org 3, pki 5, rbac 1)\n", dbPath)
+	want := fmt.Sprintf("Migrated %s: applied 23 migration files (authn 9, config 1, org 4, pki 7, rbac 2)\n", dbPath)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
 
 	gdb := openDB(t, dbPath)
-	wantLedger := map[string]int{"authn": 9, "config": 1, "org": 3, "pki": 5, "rbac": 1}
+	wantLedger := map[string]int{"authn": 9, "config": 1, "org": 4, "pki": 7, "rbac": 2}
 	if got := ledgerCounts(t, gdb); !reflect.DeepEqual(got, wantLedger) {
 		t.Errorf("ledger = %v, want %v", got, wantLedger)
 	}
@@ -209,7 +210,7 @@ func TestMigrateDefaultDatabaseAnchorsAtTheGoModArgument(t *testing.T) {
 	}
 
 	// The report names the database next to the go.mod...
-	want := fmt.Sprintf("Migrated %s: applied 14 migration files (authn 9, config 1, org 3, rbac 1)\n",
+	want := fmt.Sprintf("Migrated %s: applied 16 migration files (authn 9, config 1, org 4, rbac 2)\n",
 		filepath.Join(projectDir, "cli-app.db"))
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
@@ -242,7 +243,7 @@ func TestMigrateRerunOverTheSameDatabaseReportsUpToDate(t *testing.T) {
 	if stderr != "" {
 		t.Errorf("stderr = %q, want empty", stderr)
 	}
-	want := fmt.Sprintf("%s is up to date: schema_migrations already records 14 migration files (authn 9, config 1, org 3, rbac 1)\n", dbPath)
+	want := fmt.Sprintf("%s is up to date: schema_migrations already records 16 migration files (authn 9, config 1, org 4, rbac 2)\n", dbPath)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
@@ -272,7 +273,7 @@ func TestMigrateAppliesOnlyWhatAGrowingGoModNewlyRequires(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("full-universe run exit code = %d, want 0; stderr:\n%s", code, stderr)
 	}
-	want = fmt.Sprintf("Migrated %s: applied 13 migration files (authn 9, org 3, rbac 1)\n", dbPath)
+	want = fmt.Sprintf("Migrated %s: applied 15 migration files (authn 9, org 4, rbac 2)\n", dbPath)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}

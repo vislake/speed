@@ -247,7 +247,7 @@ type moduleCount struct {
 }
 
 // formatCounts renders module counts as the parenthetical of a report
-// line -- "authn 9, config 1, org 3, rbac 1" -- in the order collected
+// line -- "authn 9, config 1, org 4, rbac 2" -- in the order collected
 // (the migration universe's alphabetical order).
 func formatCounts(counts []moduleCount) string {
 	pairs := make([]string, len(counts))
