@@ -202,6 +202,25 @@ const (
 	// distributed replica pool is reading -- see buildServer's authn
 	// wiring comment for the three-way branch this drives.
 	smsGatewayURLEnv = "SPEED_SMS_GATEWAY_URL"
+
+	// disableQueueWorkerEnv names the environment variable that, when set to
+	// any non-empty value, makes buildServer skip standaloneQueue.Start
+	// entirely: the queue still accepts Enqueue calls (a plain row insert,
+	// see jobs.StandaloneQueue.Enqueue's own doc comment -- it needs no
+	// dispatcher or worker goroutine), but this replica's own dispatcher and
+	// worker goroutines never launch, so it can never claim or execute a
+	// Job itself, no matter how long it runs. This exists purely for
+	// integration_test/distributed_mode_test.go's positive proof: with one
+	// replica's worker structurally disabled this way, the OTHER replica is
+	// the only process that can ever run a delivery Job, which turns "did
+	// the notification.inbox.created announcement reach a replica that
+	// never executed anything itself" into a genuine, deterministic
+	// cross-process EventBus proof rather than a coincidence a shared
+	// SQLite jobs table could also explain (see that file's own doc
+	// comment for the finding this env var exists to address). Left unset
+	// (the default), buildServer's behavior is exactly what it was before
+	// this variable existed.
+	disableQueueWorkerEnv = "SPEED_DISABLE_QUEUE_WORKER"
 )
 
 // devConfigKey is the master key used when SPEED_CONFIG_KEY is unset. It is
@@ -584,6 +603,13 @@ type serverConfig struct {
 	// means under each deployment mode.
 	SMSGatewayURL string
 
+	// DisableQueueWorker, when true, makes buildServer skip
+	// standaloneQueue.Start -- see disableQueueWorkerEnv's own doc comment
+	// above for why this exists and what it changes. configFromEnv sets it
+	// from SPEED_DISABLE_QUEUE_WORKER; false (the default) is byte-identical
+	// to this field never having existed.
+	DisableQueueWorker bool
+
 	// Mailer overrides the console mailer the standalone Preset resolves
 	// for the "mailer" seam when set. configFromEnv sets it to a real
 	// pkgcore.NewSMTPMailer composition when SMTPHost is configured (see
@@ -842,6 +868,7 @@ func configFromEnv() (serverConfig, error) {
 		SMTPUsername:         os.Getenv(smtpUsernameEnv),
 		SMTPPassword:         os.Getenv(smtpPasswordEnv),
 		SMSGatewayURL:        os.Getenv(smsGatewayURLEnv),
+		DisableQueueWorker:   os.Getenv(disableQueueWorkerEnv) != "",
 		HostTenants:          demoHostTenants,
 		// Empty when unset: the demo-user seed is opt-in (its own doc
 		// comment in demo_users.go says why the default skips it).
@@ -1691,9 +1718,17 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			return nil, nil, fmt.Errorf("reference-app: register job handler %q: %w", jobType, err)
 		}
 	}
-	if err := standaloneQueue.Start(ctx); err != nil {
-		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: start the job queue: %w", err)
+	// cfg.DisableQueueWorker skips Start entirely rather than merely
+	// declining to enqueue: RegisterHandler above still runs (so a stray
+	// Enqueue call from another module's wiring is never refused with
+	// jobs.ErrHandlerNotRegistered), but with no dispatcher and no worker
+	// goroutines launched, this replica can never claim or execute a Job of
+	// any type -- see disableQueueWorkerEnv's own doc comment for why.
+	if !cfg.DisableQueueWorker {
+		if err := standaloneQueue.Start(ctx); err != nil {
+			_ = cleanup()
+			return nil, nil, fmt.Errorf("reference-app: start the job queue: %w", err)
+		}
 	}
 
 	mux := http.NewServeMux()

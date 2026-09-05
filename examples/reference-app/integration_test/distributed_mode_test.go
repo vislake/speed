@@ -17,14 +17,69 @@
 // ./cmd/server" binary, both run with SPEED_DEPLOYMENT_MODE=distributed,
 // both pointed at the SAME real Redis, the SAME real MinIO bucket, the SAME
 // real SMTP catcher, and -- necessarily, see the deviation note below --
-// the SAME SQLite file. The scenario only works if the two replicas are
-// genuinely composed against shared, multi-replica-safe infrastructure: a
-// user registered and a note created through replica A's HTTP port must be
-// observable through replica B's HTTP port, with the notification's inbox
-// row crossing process boundaries over the real Redis EventBus (the
-// "eventbus" seam) and the real Redis KVStore (the "kv" seam, exercised by
-// authn's rate limiter on every login attempt) doing the actual work, not
-// an in-process channel that would silently only work within one process.
+// the SAME SQLite file.
+//
+// # Why the earlier version of this file's positive proof did not prove what
+// # it claimed, and what changed
+//
+// An earlier version of this test created a note on replica A and read the
+// resulting notification back through replica B's REST endpoint, and
+// claimed that crossing proved the "eventbus" and "kv" seams were genuinely
+// shared over Redis. That claim did not hold up: cmd/server/server.go wires
+// jobs.NewStandaloneQueue(db) UNCONDITIONALLY, regardless of deployment
+// mode -- there is no Redis-backed jobs queue anywhere in this app -- and
+// both replicas share one SQLite file (see the deviation note below for
+// why). notification.DeliveryService.Dispatch only ENQUEUES a job; the
+// actual in_app_messages row write happens later, inside WHICHEVER
+// replica's StandaloneQueue worker polls and claims that row from the
+// shared jobs table. So the old chain -- replica A creates a note, note-
+// created fires Dispatch (wherever its subscription happened to land), a
+// job row lands in the shared SQLite jobs table, EITHER replica's worker
+// claims and executes it, writing the inbox row into the SAME shared
+// SQLite database, and replica B's GET reads that row straight off disk --
+// never actually required the EventBus or KVStore to cross a process
+// boundary at all. Two fully isolated, unconnected per-replica Redis
+// instances would not have made that old test fail.
+//
+// This version closes that gap by making replica B's own worker
+// STRUCTURALLY incapable of ever processing a job: replica B boots with
+// SPEED_DISABLE_QUEUE_WORKER=true (server.go's cfg.DisableQueueWorker),
+// which skips standaloneQueue.Start entirely on that replica -- no
+// dispatcher, no worker goroutines, ever, on B, no matter how long it
+// runs. With B's worker disabled, replica A is the ONLY process that can
+// ever claim and execute the delivery job, which means
+// notification.announceInbox's EventInboxCreated publish always
+// originates from A's own process. The module's Hub
+// (reg.Events.Subscribe(EventInboxCreated, m.hub.HandleEvent), go/
+// notification/module.go) is subscribed independently on EVERY replica,
+// including B, regardless of whether that replica's queue worker runs --
+// so this test opens replica B's own GET /api/v1/notifications/stream
+// (the module's SSE inbox announcement, handler.go's handleStream) BEFORE
+// creating the note, and asserts the announcement frame arrives there.
+// Because B can never self-produce that announcement (it never executes
+// the job that would publish it), the ONLY way the frame reaches B's own
+// SSE connection is if the real, Redis-backed EventBus actually delivered
+// EventInboxCreated across the process boundary from A to B -- a shared
+// SQLite file explains none of this, since the stream frame is the bus
+// payload itself (message_id/tenant_id/recipient_user_id/type_key), never
+// a database read.
+//
+// The "kv" seam gets its own, independent proof for the identical reason:
+// the old file's doc comment claimed authn's login rate limiter exercised
+// it "on every login attempt", but the test never actually drove more than
+// one login, on replica A alone, so it could not have detected a KVStore
+// that failed to synchronize. This version drives two wrong-password
+// login attempts deliberately: one against replica A (which records a
+// failure and opens authn's own 30-second progressive-lockout window,
+// go/authn/ratelimit.go's RecordLoginFailure/loginLockoutBase -- state
+// kept in the shared pkgcore.KVStore seam, never in the SQLite file both
+// replicas share), then immediately a second against replica B for the
+// SAME account. Replica B can only answer authn.account_locked if its own
+// authn.loginLocked read the SAME lockout row replica A just wrote a
+// moment earlier through a genuinely shared KVStore; a KVStore that failed
+// to cross replicas would leave replica B with no lockout state at all, so
+// its attempt would still answer the ordinary authn.invalid_credentials a
+// wrong password always gets on a fresh account.
 //
 // # A recorded deviation from a real Postgres container
 //
@@ -47,10 +102,15 @@
 // a second opener, so two processes against one file is not itself broken
 // -- but it is also not how a genuine multi-replica production deployment
 // would be shaped, and this file's own design (below) deliberately funnels
-// every WRITE through replica A and keeps replica B to reads only, so the
-// two processes' writes are never actually concurrent, which is the
-// SQLite-specific accommodation this shared-file topology needs that a
-// real distributed database would not.
+// every WRITE through replica A and keeps replica B to reads (and now, the
+// SSE stream) only, so the two processes' writes are never actually
+// concurrent, which is the SQLite-specific accommodation this shared-file
+// topology needs that a real distributed database would not. This is also
+// exactly why the positive proof above cannot rely on the shared file for
+// its EventBus/KVStore claims -- the same sharing that makes the topology
+// workable at all is what made the earlier version of this test's claim
+// false, and SPEED_DISABLE_QUEUE_WORKER plus the SSE/lockout assertions are
+// what closes that gap without touching the SQLite topology itself.
 //
 // # A recorded fact about the demo identity layer under two replicas
 //
@@ -60,52 +120,70 @@
 // registered and granted membership during replica A's boot-time seed
 // (SPEED_DEMO_USERS_PASSWORD, demo_users.go) is invisible to replica B's
 // OWN, separate demoMemberships instance: an interactive LOGIN attempt
-// against replica B for that same account would be refused (membership
-// unavailable), even though the account genuinely exists in the shared
-// database replica B reads. This file's scenario is designed around that
-// real, documented limitation rather than working around it: it logs in
-// exactly ONCE, against replica A, and reuses that one access token
-// against replica B for every subsequent request. Token verification does
-// not consult demoMemberships at all -- it is a stateless check against
-// the Ed25519 material go/pki's LocalSigner persists in the SAME shared
-// database, so the token replica A mints is genuinely verified by replica
-// B's own independent authn.Middleware, which is itself a real
-// cross-replica proof (a shared signing key via the shared database,
-// never a shared process). A genuinely fresh login against an arbitrary
-// replica is a real gap this file does not attempt to close -- it belongs
-// to demoMemberships becoming a real, shared store, which is business
+// against replica B for that same account, if it depended on a successful
+// membership resolution, would be refused (membership unavailable), even
+// though the account genuinely exists in the shared database replica B
+// reads. This file's scenario is designed around that real, documented
+// limitation rather than working around it:
+//
+//   - The one SUCCESSFUL, token-minting login happens exactly once,
+//     against replica A, and that one access token is reused against
+//     replica B for every subsequent request (the SSE stream included).
+//     Token verification does not consult demoMemberships at all -- it is
+//     a stateless check against the Ed25519 material go/pki's LocalSigner
+//     persists in the SAME shared database, so the token replica A mints
+//     is genuinely verified by replica B's own independent
+//     authn.Middleware, which is itself a real cross-replica proof (a
+//     shared signing key via the shared database, never a shared
+//     process).
+//
+//   - The two WRONG-password attempts the "kv" proof drives never reach
+//     the membership-resolution step at all: authn's own login sequence
+//     (go/authn/service.go's login) checks the rate limiter/lockout FIRST,
+//     then resolves the account and verifies the password, and only
+//     reaches tenant/membership resolution for a request whose password
+//     was actually correct. A wrong password against either replica fails
+//     at the password check (or, for the second attempt, at the lockout
+//     check before the password is ever touched), never at membership --
+//     so demoMemberships' per-process separation is simply never on the
+//     path this proof exercises.
+//
+// A genuinely fresh, successful login against an arbitrary replica is a
+// real gap this file does not attempt to close -- it belongs to
+// demoMemberships becoming a real, shared store, which is business
 // (demo-glue) code this round's brief says not to touch.
 //
 // # Why no Postgres/S3/SMTP touch the CORE assertion, and why they are still real
 //
 // The chosen proof (register once at boot, log in once, create one note,
-// observe its notification on the OTHER replica) exercises "eventbus" (the
-// note-created event, and the notification module's own
-// notification.inbox.created cross-replica announcement) and "kv" (every
-// login and register attempt is rate-limited through go/ratelimit, which is
-// KVStore-backed) directly. It does not synchronously touch "objectstore"
-// or "mailer" during either replica's BOOT (no boot-time seeding step
-// reads or writes an object or sends a mail), so in principle a fake,
-// never-dialed S3 endpoint and SMTP relay would let Kernel.Bootstrap's
-// capability validation pass just as well, since that validation checks
-// only the DECLARED capability bits of an injected implementation, never
-// its reachability (objectstore/s3.NewObjectStore and pkgcore.NewSMTPMailer
-// both dial nothing at construction -- their own doc comments say so).
-// This file uses REAL MinIO and a REAL SMTP catcher anyway, deliberately:
-// declaring a capability this app never actually exercises would be a
-// weaker proof than this round's own brief asks for, and the note-created
-// notification type's DefaultChannels ("in_app", "email", "sms" --
+// observe its announcement on the OTHER replica's SSE stream) exercises
+// "eventbus" and "kv" directly, as described above. It does not
+// synchronously touch "objectstore" or "mailer" during either replica's
+// BOOT (no boot-time seeding step reads or writes an object or sends a
+// mail), so in principle a fake, never-dialed S3 endpoint and SMTP relay
+// would let Kernel.Bootstrap's capability validation pass just as well,
+// since that validation checks only the DECLARED capability bits of an
+// injected implementation, never its reachability
+// (objectstore/s3.NewObjectStore and pkgcore.NewSMTPMailer both dial
+// nothing at construction -- their own doc comments say so). This file
+// uses REAL MinIO and a REAL SMTP catcher anyway, deliberately: declaring
+// a capability this app never actually exercises would be a weaker proof
+// than this round's own brief asks for, and the note-created notification
+// type's DefaultChannels ("in_app", "email", "sms" --
 // examples/reference-app/internal/notes/module.go) means the SAME note
 // creation that drives the "eventbus"/"kv" proof ALSO drives a real
 // delivery attempt over the "mailer" seam (the creator has an email
 // address in demo_notification.go's demoUserAddresses; no phone, so SMS is
 // skipped, an ordinary no-address outcome, never a failure) -- so this file
-// verifies that real send too, as a bonus assertion over MailHog's own HTTP
+// verifies that real send too, as a bonus assertion over Mailpit's own HTTP
 // API, rather than leaving "mailer" a capability declared but never really
-// proven to work.
+// proven to work. That delivery, too, only ever runs on replica A now
+// (SPEED_DISABLE_QUEUE_WORKER on B), which is consistent with everything
+// above rather than an accident of this particular assertion.
 package referenceapp_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -128,6 +206,8 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcminio "github.com/testcontainers/testcontainers-go/modules/minio"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	"github.com/vislake/speed/go/notification"
 )
 
 // minioImage pins the same MinIO release go/storage's and go/pkgcore's own
@@ -172,8 +252,20 @@ const distributedNoteCreatorEmail = "user-creator-1@demo.example"
 // authorized actor (demoOwner, granted the built-in owner role by
 // seedDemoGrants), and demoUserIDHeader so the note (and the notification
 // dispatched back to its creator) is attributed to
-// distributedNoteCreatorUserID.
+// distributedNoteCreatorUserID. The stream request below carries only
+// demoUserIDHeader: notification mounts no permission gate of its own
+// (handler.go's own doc comment), so a caller only needs to be identified,
+// never additionally authorized.
 const demoUserIDHeader = "X-Demo-User-Id"
+
+// distributedNoteCreatedTypeKey is
+// examples/reference-app/internal/notes/module.go's EventNoteCreated
+// copied byte for byte -- the type key notification's inbox-created
+// announcement (InboxCreatedPayload.TypeKey) carries for the note this
+// file creates. Copied rather than imported for the same reason this
+// file's other constants above are: consistency with its neighbors, which
+// copy cmd/server identifiers this file structurally cannot import.
+const distributedNoteCreatedTypeKey = "notes.note.created"
 
 // notifMessages mirrors notification_flow_test.go's own wire shape for
 // GET /api/v1/notifications/messages (this file cannot import package
@@ -417,19 +509,134 @@ func mailhogCapturedMessage(t *testing.T, apiBaseURL, address string) bool {
 	return strings.Contains(string(body), address)
 }
 
+// authnLoginAttempt POSTs one password-login attempt for demoOwnerEmail
+// against baseURL and returns the response's status code and, when the
+// body carries one, its JSON envelope's top-level "code" field (empty on a
+// 200, which carries no such field). Unlike demoAccessToken, this helper
+// does not require the attempt to succeed -- the "kv" cross-replica proof
+// below needs to observe exactly which failure code comes back, not a
+// token.
+func authnLoginAttempt(t *testing.T, httpClient *http.Client, baseURL, password string) (status int, code string) {
+	t.Helper()
+
+	body, err := json.Marshal(map[string]string{
+		"identifier": demoOwnerEmail,
+		"password":   password,
+		"tenant_id":  string(acmeTenantID),
+	})
+	if err != nil {
+		t.Fatalf("marshal the login attempt body: %v", err)
+	}
+	resp, err := httpClient.Post(baseURL+"/api/v1/authn/login/password", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST the login attempt: %v", err)
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read the login attempt response: %v", err)
+	}
+	var decoded struct {
+		Code string `json:"code"`
+	}
+	// Best effort: a 200 body (access_token/refresh_token/...) carries no
+	// "code" field at all, so a decode error there is expected and
+	// harmless -- status alone already tells that case apart.
+	_ = json.Unmarshal(respBody, &decoded)
+	return resp.StatusCode, decoded.Code
+}
+
+// sseListener is one open GET /api/v1/notifications/stream connection,
+// read in a background goroutine so this file can create the note that
+// triggers the announcement afterward and wait for the frame on its own
+// schedule -- the connection must be opened BEFORE the note is created,
+// since the stream carries no replay (go/notification/handler.go's own
+// doc comment on handleStream: "no replay and no resume").
+type sseListener struct {
+	messages chan notification.InboxCreatedPayload
+	cancel   context.CancelFunc
+}
+
+// openInboxStream opens GET baseURL+"/api/v1/notifications/stream",
+// identified as userIDHeader and authenticated by accessToken, and starts
+// reading server-sent-event frames into the returned listener's buffered
+// channel in the background. The listener (and its underlying connection)
+// is torn down by t.Cleanup.
+func openInboxStream(t *testing.T, baseURL, accessToken, userIDHeader string) *sseListener {
+	t.Helper()
+
+	// The request's own context, not apiClient()'s Client.Timeout, is what
+	// bounds this connection: Client.Timeout covers the WHOLE round trip
+	// including reading the body, which would truncate a deliberately
+	// long-lived stream, so this listener uses a dedicated client with no
+	// Client.Timeout at all.
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/api/v1/notifications/stream", nil)
+	if err != nil {
+		cancel()
+		t.Fatalf("build the SSE stream request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set(demoUserIDHeader, userIDHeader)
+
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		cancel()
+		t.Fatalf("GET the SSE stream: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		cancel()
+		t.Fatalf("GET the SSE stream status = %d, want %d; body = %s", resp.StatusCode, http.StatusOK, respBody)
+	}
+
+	l := &sseListener{
+		messages: make(chan notification.InboxCreatedPayload, 8),
+		cancel:   cancel,
+	}
+	go func() {
+		defer resp.Body.Close()
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			data, ok := strings.CutPrefix(scanner.Text(), "data: ")
+			if !ok {
+				// Every other line this endpoint sends ("event: message",
+				// or the blank frame separator) is not a payload line.
+				continue
+			}
+			var payload notification.InboxCreatedPayload
+			if err := json.Unmarshal([]byte(data), &payload); err != nil {
+				// The handler only ever marshals InboxCreatedPayload
+				// (handler.go's own doc comment), so this is unreachable
+				// in a running system; skip rather than fail the reader
+				// goroutine over it.
+				continue
+			}
+			select {
+			case l.messages <- payload:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	t.Cleanup(l.cancel)
+	return l
+}
+
 // TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructure
 // is this round's positive proof: two real reference-app server processes,
 // both booted under SPEED_DEPLOYMENT_MODE=distributed against the SAME
 // real Redis, the SAME real MinIO bucket and the SAME real SMTP catcher --
 // exactly the composition this round's server.go changes make possible,
 // declaring MultiReplicaSafe|SurvivesRestart on every one of the four
-// stateful seams Kernel.Bootstrap validates. A user registered and a note
-// created through replica A's HTTP port produce a notification whose inbox
-// row is read back through replica B's HTTP port, proving the EventBus and
-// KVStore seams genuinely crossed process boundaries through Redis rather
-// than an in-process channel that would silently only work within one
-// process -- and, as a bonus, that the real SMTP relay actually received
-// the same delivery's email leg.
+// stateful seams Kernel.Bootstrap validates. Replica B additionally boots
+// with SPEED_DISABLE_QUEUE_WORKER=true, so it can never itself execute the
+// delivery job the note-created event triggers -- see this file's own
+// package doc comment for why that is what turns the assertions below into
+// a genuine cross-process proof of the "eventbus" and "kv" seams, rather
+// than something the two replicas' shared SQLite file could explain on its
+// own.
 func TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructure(t *testing.T) {
 	ctx := context.Background()
 
@@ -455,7 +662,8 @@ func TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructur
 
 	// One shared SQLite file -- see this file's package doc comment for
 	// why this is the correct topology given the app's own current,
-	// hard-coded SQLite dialect.
+	// hard-coded SQLite dialect, and for why it is deliberately NOT what
+	// this test's cross-replica claims rest on.
 	dbPath := filepath.Join(tmp, "reference-app.db")
 	baseEnv := scrubbedEnviron()
 	sharedEnv := append(append([]string(nil), baseEnv...),
@@ -482,25 +690,58 @@ func TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructur
 	// seedDemoUsers steps, both real writes to the shared SQLite file, must
 	// complete before replica B's own boot-time writes begin -- see this
 	// file's package doc comment on why the two boots are staggered rather
-	// than concurrent).
+	// than concurrent). A keeps its queue worker: it is the only replica
+	// that will ever execute a job in this test.
 	portA := freePort(t)
 	envA := append(append([]string(nil), sharedEnv...), "PORT="+strconv.Itoa(portA))
 	replicaA := bootReplica(t, bin, portA, envA)
 
+	// Replica B's queue worker is structurally disabled -- see this file's
+	// package doc comment for why that is the change that turns this
+	// test's cross-replica assertions into a genuine proof.
 	portB := freePort(t)
-	envB := append(append([]string(nil), sharedEnv...), "PORT="+strconv.Itoa(portB))
+	envB := append(append([]string(nil), sharedEnv...),
+		"PORT="+strconv.Itoa(portB),
+		"SPEED_DISABLE_QUEUE_WORKER=true",
+	)
 	replicaB := bootReplica(t, bin, portB, envB)
 
 	httpClient := apiClient()
 
-	// One real login, against replica A only -- see this file's package
-	// doc comment on why a second, independent login against replica B
-	// would fail today (demoMemberships is in-process, not shared) and why
-	// that does not weaken this test: every subsequent request, including
-	// the ones against replica B below, reuses this ONE token, and its
-	// verification on replica B is itself a real cross-replica proof (the
-	// shared go/pki signing key material, read from the shared database).
+	// One real, SUCCESSFUL login, against replica A only -- see this
+	// file's package doc comment on why a second, independent successful
+	// login against replica B would fail today (demoMemberships is
+	// in-process, not shared) and why that does not weaken this test:
+	// every subsequent request, including the ones against replica B
+	// below, reuses this ONE token, and its verification on replica B is
+	// itself a real cross-replica proof (the shared go/pki signing key
+	// material, read from the shared database).
 	accessToken := demoAccessToken(t, httpClient, replicaA.baseURL, acmeTenantID)
+
+	// The "kv" cross-replica proof: two wrong-password login attempts,
+	// deliberately against different replicas, for the state authn's own
+	// progressive lockout keeps in the shared KVStore (never in the SQLite
+	// file the note/notification chain below could otherwise explain
+	// away) -- see this file's package doc comment for the full argument.
+	wrongPassword := demoUsersPassword + "-wrong-on-purpose"
+	statusA, codeA := authnLoginAttempt(t, httpClient, replicaA.baseURL, wrongPassword)
+	if statusA != http.StatusUnauthorized || codeA != "authn.invalid_credentials" {
+		t.Fatalf("first wrong-password attempt, against replica A: status = %d, code = %q, want %d / %q\n%s",
+			statusA, codeA, http.StatusUnauthorized, "authn.invalid_credentials", replicaA.logs())
+	}
+	statusB, codeB := authnLoginAttempt(t, httpClient, replicaB.baseURL, wrongPassword)
+	if statusB != http.StatusTooManyRequests || codeB != "authn.account_locked" {
+		t.Fatalf("second wrong-password attempt, against replica B, inside the 30s lockout window replica A's attempt just opened: "+
+			"status = %d, code = %q, want %d / %q -- this is exactly what an unshared KVStore would produce instead (an ordinary "+
+			"authn.invalid_credentials, since replica B would see no lockout state of its own)\n%s",
+			statusB, codeB, http.StatusTooManyRequests, "authn.account_locked", replicaB.logs())
+	}
+
+	// The "eventbus" cross-replica proof starts here: open replica B's own
+	// SSE inbox stream BEFORE the note that will trigger an announcement
+	// is created (no replay exists -- see the openInboxStream doc
+	// comment).
+	stream := openInboxStream(t, replicaB.baseURL, accessToken, distributedNoteCreatorUserID)
 
 	// Create one note through replica A's real HTTP stack, attributed to
 	// distributedNoteCreatorUserID -- notes.note.created's DefaultChannels
@@ -561,14 +802,47 @@ func TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructur
 		t.Fatalf("no note with text %q in replica A's own listing: %+v", noteText, listed.Notes)
 	}
 
-	// The cross-replica assertion: the notification the note-created event
-	// triggers must be readable through REPLICA B's own HTTP port -- the
-	// same access token replica A minted, verified independently by
-	// replica B's own authn.Middleware, over the real Redis-backed
-	// EventBus and KVStore this round's server.go wiring composes.
+	// The core assertion: the note-created event's resulting
+	// notification.inbox.created announcement must arrive on REPLICA B's
+	// own SSE stream. Replica B's queue worker is disabled, so it cannot
+	// have produced this announcement itself -- the only path is a real
+	// cross-process delivery over the "eventbus" seam this round's
+	// server.go wiring composes over Redis.
+	var gotFrame bool
+	deadline := time.After(20 * time.Second)
+	for !gotFrame {
+		select {
+		case payload := <-stream.messages:
+			if payload.RecipientUserID == distributedNoteCreatorUserID &&
+				payload.TenantID == acmeTenantID &&
+				payload.TypeKey == distributedNoteCreatedTypeKey {
+				gotFrame = true
+			}
+			// An unrelated frame (there should not be one in this
+			// scenario, but nothing here assumes there cannot be) is
+			// simply not what we are waiting for; keep reading.
+		case <-deadline:
+			t.Fatalf("replica B's own SSE stream never announced the note-created delivery within 20s "+
+				"(replica B cannot have produced this itself -- its queue worker never started)\nreplica A:\n%s\nreplica B:\n%s",
+				replicaA.logs(), replicaB.logs())
+		}
+	}
+	// Close the stream connection now rather than waiting for t.Cleanup:
+	// stopGracefully below asks replica B's own http.Server to shut down
+	// gracefully, which waits for every active connection to finish first,
+	// and this long-lived SSE connection (handleStream blocks on
+	// <-r.Context().Done()) would otherwise still be open, holding that
+	// shutdown past its own deadline for no reason once this assertion is
+	// done with it.
+	stream.cancel()
+
+	// A secondary correctness check, not a cross-replica proof by itself
+	// (see this file's package doc comment): the delivered message is also
+	// readable through replica B's own REST endpoint, over the shared
+	// database.
 	messagesURL := replicaB.baseURL + "/api/v1/notifications/messages"
-	var found bool
-	eventually(t, "the note-created inbox message to reach replica B", func() bool {
+	var foundViaREST bool
+	eventually(t, "the note-created inbox message to be readable through replica B's REST endpoint", func() bool {
 		req, reqErr := http.NewRequest(http.MethodGet, messagesURL, nil)
 		if reqErr != nil {
 			t.Fatalf("build GET request: %v", reqErr)
@@ -589,14 +863,14 @@ func TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructur
 		}
 		for _, item := range out.Items {
 			if item.Params["note_id"] == noteID {
-				found = true
+				foundViaREST = true
 				return true
 			}
 		}
 		return false
 	})
-	if !found {
-		t.Fatalf("the note-created notification never reached replica B's own inbox listing\nreplica A:\n%s\nreplica B:\n%s",
+	if !foundViaREST {
+		t.Fatalf("the note-created notification never became readable through replica B's own REST listing\nreplica A:\n%s\nreplica B:\n%s",
 			replicaA.logs(), replicaB.logs())
 	}
 
