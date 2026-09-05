@@ -101,6 +101,20 @@ const nonceAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234
 // WeChat Pay's own replay protection is the (timestamp, nonce) pair
 // together with its own tolerance window, not the nonce's
 // unpredictability alone.
+//
+// CodeQL's go/insecure-randomness alert on this function: reviewed and
+// confirmed a false positive. generateNonce's only call site in this repo is
+// authorizationHeader above, building the nonce_str for an OUTGOING request;
+// requestSignMessage folds that same nonce into the string signRequest then
+// RSA-SHA256-signs with the merchant's real private key (crypto/rand.Reader
+// for the signature itself), so an attacker who predicted the nonce still
+// cannot forge a valid Authorization header without that private key --
+// nonce predictability grants no forgery capability here. generateNonce is
+// never reused for a session token, a CSRF token, key-derivation input, or
+// compared against an inbound nonce (VerifySignature takes an inbound nonce
+// as a parameter; it never generates one). Do not repurpose this function
+// for anything where unpredictability itself is the safety property without
+// switching it to crypto/rand first.
 func generateNonce() string {
 	b := make([]byte, 32)
 	for i := range b {
