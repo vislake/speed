@@ -64,6 +64,56 @@ func Example() {
 	// Output: [rbac:manage rbac:read]
 }
 
+// ExampleService_DeclaredPermissions shows D8's new read-only accessor:
+// the full permission catalog every module declared, frozen at Attach --
+// what a role-management UI (go/admin's D8, docs/internal/23-admin.md)
+// renders as "every permission that exists" when defining a new role,
+// as opposed to ListPermissions, which answers what one already-granted
+// Subject currently holds.
+func ExampleService_DeclaredPermissions() {
+	ctx := context.Background()
+
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:rbac_example_declared_permissions?mode=memory&cache=shared",
+	})
+	if err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+
+	module := rbac.NewModule(db)
+	migrations := dbkit.NewMigrationRegistry()
+	if regErr := migrations.Register(module); regErr != nil {
+		fmt.Println("register migrations:", regErr)
+		return
+	}
+	if applyErr := migrations.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
+		fmt.Println("apply migrations:", applyErr)
+		return
+	}
+
+	registry, err := pkgcore.NewKernel().Bootstrap(ctx, module)
+	if err != nil {
+		fmt.Println("bootstrap:", err)
+		return
+	}
+
+	svc, err := module.Attach(registry)
+	if err != nil {
+		fmt.Println("attach:", err)
+		return
+	}
+	defer func() { _ = svc.Close() }()
+
+	// No role has been defined and nobody has been granted anything, yet
+	// DeclaredPermissions still reports the whole catalog: it is a
+	// question about what the platform knows how to grant, not about any
+	// one subject's own bindings.
+	fmt.Println(svc.DeclaredPermissions())
+	// Output: [rbac:manage rbac:read]
+}
+
 // ExampleWithSubject shows how the authenticating side hands rbac an
 // identity. This is the module's first no-import seam: rbac never learns
 // what a user record looks like, so it never imports the module that owns

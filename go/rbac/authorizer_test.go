@@ -419,6 +419,49 @@ func TestService_ListPermissions_NoBindings_IsEmptyNotNilError(t *testing.T) {
 	}
 }
 
+// TestService_DeclaredPermissions_IsTheFrozenCatalogNotOneSubjectsGrants
+// distinguishes DeclaredPermissions (D8: what the platform knows how to
+// grant at all) from ListPermissions (what one Subject was actually
+// granted): a Subject with no bindings at all still sees every permission
+// any module declared, including rbac's own PermissionRead/PermissionManage.
+func TestService_DeclaredPermissions_IsTheFrozenCatalogNotOneSubjectsGrants(t *testing.T) {
+	svc := newTestService(t)
+
+	got := svc.DeclaredPermissions()
+
+	want := []string{"billing:manage", "notes:read", "notes:write", PermissionManage, PermissionRead}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("DeclaredPermissions() = %v, want %v", got, want)
+	}
+
+	// No grant was ever made -- ListPermissions for any Subject is empty --
+	// yet DeclaredPermissions is unaffected, since it answers a question
+	// about the catalog, not about any one subject's bindings.
+	perms, err := svc.ListPermissions(context.Background(), Subject{TenantID: "tenant-a", UserID: "nobody"})
+	if err != nil {
+		t.Fatalf("ListPermissions: %v", err)
+	}
+	if len(perms) != 0 {
+		t.Fatalf("ListPermissions = %v, want empty for an ungranted subject", perms)
+	}
+}
+
+// TestService_DeclaredPermissions_DoesNotExposeTheFrozenCatalog proves a
+// caller mutating the returned slice cannot corrupt the catalog every
+// later call reads from -- catalog.permissions() already copies, and this
+// pins that guarantee at the Service's own public boundary too.
+func TestService_DeclaredPermissions_DoesNotExposeTheFrozenCatalog(t *testing.T) {
+	svc := newTestService(t)
+
+	first := svc.DeclaredPermissions()
+	first[0] = "tampered"
+
+	second := svc.DeclaredPermissions()
+	if second[0] == "tampered" {
+		t.Fatalf("mutating the first result corrupted the frozen catalog: %v", second)
+	}
+}
+
 func TestService_ListPermissions_DoesNotExposeTheCachedMap(t *testing.T) {
 	// The cached grant set is shared across goroutines and must stay
 	// immutable; a caller that received a slice aliasing it could not be

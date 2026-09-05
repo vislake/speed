@@ -133,6 +133,29 @@ func (s *Service) ListPermissions(ctx context.Context, sub Subject) ([]string, e
 	return out, nil
 }
 
+// DeclaredPermissions returns every resource:action permission any module
+// declared through pkgcore's PermissionRegistrar during Bootstrap -- the
+// catalog frozen in Attach (catalog.go's own doc comment has the full
+// "why a snapshot" rationale) -- in sorted order.
+//
+// This answers a different question than ListPermissions: ListPermissions
+// says what one Subject has been GRANTED; DeclaredPermissions says what
+// the platform knows how to grant at all, regardless of subject. A role-
+// management UI needs exactly this to render "every permission that
+// exists" as a checklist when assigning a new role -- go/admin's D8
+// (docs/internal/23-admin.md) is this method's first consumer, wrapping
+// it in an HTTP surface rather than growing rbac its own.
+//
+// The returned slice is a copy of the frozen catalog's own snapshot
+// (catalog.permissions() already copies), so a caller cannot mutate it.
+// Unlike ListPermissions, this needs no ctx or Subject and never touches
+// the cache, the bus or a repository: it is a pure read of a value
+// computed once, at Attach, and never touched again for the life of the
+// process.
+func (s *Service) DeclaredPermissions() []string {
+	return s.catalog.permissions()
+}
+
 // DataScope implements Authorizer.
 func (s *Service) DataScope(ctx context.Context, sub Subject, action, resource string) (DataScope, error) {
 	grants, err := s.grantsFor(ctx, sub)
