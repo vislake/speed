@@ -1,7 +1,7 @@
-name: pr-check
+name: fast-check
 
 # Fast per-PR check pipeline -- docs/internal/18-cicd.md's pipeline table,
-# pr-check row: lint + unit tests + build of the modules a PR can affect,
+# fast-check row: lint + unit tests + build of the modules a PR can affect,
 # plus the repository-level discipline checks that exist today. Target
 # duration under 8 minutes; every job carries a timeout and stale runs are
 # cancelled via concurrency (18-cicd cost-control rules 4 and 5).
@@ -131,20 +131,23 @@ name: pr-check
 #     live outside any package, so only a repo-level run exercises
 #     them. The react-hooks plugin awaits a stateful-components round.
 #     The API-contract toolchain runs as its own path-filtered
-#     pipeline, api-contract.yml: on PRs touching one of the four
-#     module fragments (notes, org, storage, authn) or the generator side it
-#     regenerates the touched fragments' backend interfaces via pinned
-#     oapi-codegen and the merged document's frontend SDK via pinned
-#     orval into @speed/api-sdk (the merge itself -- notes + authn
-#     joined by pinned redocly, linted against redocly.yaml -- and both
-#     committed artifacts diffed), and builds the reference app so a
-#     spec that outgrew its handler fails compilation without needing
-#     a full-ci label.
+#     pipeline, api-contract.yml: on PRs touching one of the six
+#     module fragments (notes, org, storage, authn, notification,
+#     sharing) or the generator side it regenerates the touched
+#     fragments' backend interfaces via pinned oapi-codegen -- three of
+#     the six (notes, authn, notification) also feed the merged
+#     document's frontend SDK via pinned orval into @speed/api-sdk (the
+#     merge itself -- notes + authn + notification joined by pinned
+#     redocly, linted against redocly.yaml; org/storage/sharing stay
+#     backend-only), every regenerated artifact diffed against the
+#     committed one, and builds the reference app so a spec that
+#     outgrew its handler fails compilation without needing a full-ci
+#     label.
 #     i18n key-parity wiring exists and runs in docs-check on
 #     doc/i18n-touching PRs -- deliberately not here, so this fast
 #     per-PR check stays under its 8-minute budget.
 #   * reference-app lint and unit suite: the reference app runs its
-#     golangci-lint leg and unit suite in pr-full's reference-app job
+#     golangci-lint leg and unit suite in full-check's reference-app job
 #     (full-ci-labeled PRs), keeping this per-PR check on its budget. Its
 #     compilation is NOT deferred, though: repo-checks builds the app
 #     directly (the workspace-wide go/... build does not reach it -- the
@@ -157,7 +160,7 @@ name: pr-check
 #     shipped and that only a standalone build surfaces -- cannot slip
 #     through green.
 #   * Docker-backed integration tiers (-tags=integration): wired, but in
-#     pr-full -- 18-cicd's layered-triggering rule assigns them to the
+#     full-check -- 18-cicd's layered-triggering rule assigns them to the
 #     pre-merge full matrix (PRs labeled full-ci), not to the fast per-PR
 #     check.
 #   * dorny/paths-filter path filtering: the module set is small enough that
@@ -178,7 +181,7 @@ on:
   # a human manually running `gh workflow run`, which is exactly the gap
   # this trigger closes: every push to main now gets this same fast
   # lint/vet/build/test matrix automatically, no manual step required.
-  # Scoped to main only, and deliberately just this workflow -- pr-full's
+  # Scoped to main only, and deliberately just this workflow -- full-check's
   # expensive Docker-backed integration tiers stay label-gated per its own
   # cost-control rationale, and security's daily schedule already covers
   # its own periodic default-branch re-check.
@@ -186,7 +189,7 @@ on:
     branches: [main]
 
 concurrency:
-  group: pr-check-${{ github.event.pull_request.number || github.ref_name }}
+  group: fast-check-${{ github.event.pull_request.number || github.ref_name }}
   cancel-in-progress: true
 
 permissions:
@@ -297,11 +300,12 @@ jobs:
       # github.com/vislake/speed/examples/reference-app. Without this step
       # the app -- CLAUDE.md's mandatory first consumer of every module, and
       # the only artifact that boots -- is never built on an ordinary PR:
-      # api-contract.yml's path filter does not cover its handler, and
-      # pr-full is label-gated (a skipped job satisfies a required check), so
-      # a PR deleting a handler method would break the ServerInterface
-      # assertion and still merge green. One build against an already-warm
-      # Go cache closes that.
+      # api-contract.yml's path filter does not cover its handler, and an
+      # unlabeled PR skips every full-check job (label-gated; a skipped job
+      # satisfies a required check) -- full-check's own push trigger covers
+      # main after the fact, but not the PR itself -- so a PR deleting a
+      # handler method would break the ServerInterface assertion and still
+      # merge green. One build against an already-warm Go cache closes that.
       - name: Build the reference app (its module lives outside go/...)
         working-directory: examples/reference-app
         run: go build ./...
