@@ -60,6 +60,17 @@ name: api-contract
 #     fragment's failure is unambiguous in the job log. Backend-only,
 #     like storage's: sharing's fragment feeds neither the merge nor
 #     orval below (go/sharing/AGENTS.md's Deferred list).
+#   * Regeneration consistency (admin): the same check runs a sixth time
+#     for admin's fragment (go/admin/api/openapi.yaml ->
+#     go/admin/api/admin-server.gen.go) -- same pinned oapi-codegen
+#     invocation, same git diff --exit-code gate, its own step so each
+#     fragment's failure is unambiguous in the job log. Backend-only,
+#     like storage's and sharing's: admin's fragment feeds neither the
+#     merge nor orval below (go/admin's own openapi.yaml header records
+#     the same deferral storage's and sharing's AGENTS.md do). This
+#     closes the gap the fragment's own header used to record -- neither
+#     Taskfile.yml's api:gen task nor this workflow included it before
+#     go/admin's round 2.
 #   * Spec merge + info stamp + naming-convention lint: the pinned
 #     redocly CLI (2.51.1, the same
 #     `pnpm --package=@redocly/cli@2.51.1 dlx redocly ...` invocation as
@@ -102,19 +113,19 @@ name: api-contract
 #     orval itself is never a workspace dependency (pnpm dlx, no lockfile
 #     entry); a version bump is visible in the regenerated header and
 #     must land in Taskfile, web/orval.config.ts and this file together.
-#   * Compile enforcement (notes, org, storage, notification and
-#     sharing): `go build ./...` of examples/reference-app. This is what
-#     makes "spec changed, handler not updated" fail here for ANY of the
-#     five fragments: examples/reference-app imports go/org, go/storage,
-#     go/notification and go/sharing (root CLAUDE.md's
-#     mandatory-first-consumer rule), so a regenerated api.ServerInterface
-#     that outgrows any Handler's compile-time assertion
-#     (internal/notes/handler.go, go/org/handler.go,
+#   * Compile enforcement (notes, org, storage, notification, sharing
+#     and admin): `go build ./...` of examples/reference-app. This is
+#     what makes "spec changed, handler not updated" fail here for ANY of
+#     the six fragments: examples/reference-app imports go/org,
+#     go/storage, go/notification, go/sharing and go/admin (root
+#     CLAUDE.md's mandatory-first-consumer rule), so a regenerated
+#     api.ServerInterface that outgrows any Handler's compile-time
+#     assertion (internal/notes/handler.go, go/org/handler.go,
 #     go/storage/handler.go, go/notification/handler.go,
-#     go/sharing/handler.go) fails this one build step, transitively,
-#     with no separate step needed for org's, storage's, notification's
-#     or sharing's own module build. Without this leg a spec+artifact
-#     PR whose handler lagged
+#     go/sharing/handler.go, go/admin/handler.go) fails this one build
+#     step, transitively, with no separate step needed for org's,
+#     storage's, notification's, sharing's or admin's own module build.
+#     Without this leg a spec+artifact PR whose handler lagged
 #     would pass both this pipeline and fast-check (which does not build
 #     the reference app). Precise only for a parameter-free operation,
 #     though: an operation carrying a path or query parameter makes the
@@ -197,6 +208,20 @@ name: api-contract
 #                                                  own backend generated
 #                                                  artifact -- same reasoning
 #                                                  as the storage row above
+#   go/admin/api/**                                admin's fragment, its
+#                                                  generator config and its
+#                                                  own backend generated
+#                                                  artifact -- same reasoning
+#                                                  as the storage row above;
+#                                                  this round (go/admin's
+#                                                  round 2) is what closes
+#                                                  the gap the fragment's
+#                                                  own header used to
+#                                                  record ("neither
+#                                                  Taskfile.yml's api:gen
+#                                                  task nor this workflow
+#                                                  includes this fragment
+#                                                  yet")
 #   redocly.yaml                                   the merge/lint naming-
 #                                                  convention rules
 #   build/openapi/**                               the committed merged
@@ -219,6 +244,7 @@ on:
       - go/authn/api/**
       - go/notification/api/**
       - go/sharing/api/**
+      - go/admin/api/**
       - redocly.yaml
       - build/openapi/**
       - Taskfile.yml
@@ -348,6 +374,31 @@ jobs:
             echo "dirty. The checked-in go/sharing/api/"
             echo "sharing-server.gen.go is not what"
             echo "go/sharing/api/openapi.yaml generates -- did you change"
+            echo "the spec without running 'task api:gen' and committing"
+            echo "the result?"
+            echo "Per docs/internal/21-api-contract.md, spec + generated"
+            echo "artifact + implementation ship in the same PR."
+            exit 1
+          }
+      - name: Regenerate admin's API surface (pinned oapi-codegen v2.8.0)
+        # The same command as Taskfile.yml's api:gen task would run for
+        # admin (Taskfile.yml's own task list still does not name admin
+        # explicitly, a separate, smaller gap left for a future round --
+        # see this workflow's own header). Run from the fragment's own
+        # directory, where oapi-codegen.yaml's paths are relative,
+        # mirroring the notes, org, storage, notification and sharing
+        # steps above exactly.
+        run: |
+          cd go/admin/api
+          go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
+            -config oapi-codegen.yaml openapi.yaml
+      - name: Admin's generated artifact must match the committed spec
+        run: |
+          git diff --exit-code || {
+            echo "error: regenerating from the committed spec left the tree"
+            echo "dirty. The checked-in go/admin/api/"
+            echo "admin-server.gen.go is not what"
+            echo "go/admin/api/openapi.yaml generates -- did you change"
             echo "the spec without running 'task api:gen' and committing"
             echo "the result?"
             echo "Per docs/internal/21-api-contract.md, spec + generated"
