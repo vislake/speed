@@ -8,8 +8,8 @@
 
 | 流水线 | 触发 | 职责 | 目标时长 |
 |---|---|---|---|
-| `pr-check` | PR 打开/更新 | 受影响模块的 lint + 类型检查 + 单元测试 + 构建 | < 8 分钟 |
-| `pr-full` | PR 打 `full-ci` 标签 / 合入前 | 全量矩阵：每个 seam 的契约测试 × 该 seam 的每套实现（[16-verification](16-verification.md) §2 的矩阵形态），双方言，外加代表性整机组装冒烟 | < 25 分钟 |
+| `fast-check` | PR 打开/更新 | 受影响模块的 lint + 类型检查 + 单元测试 + 构建 | < 8 分钟 |
+| `full-check` | PR 打 `full-ci` 标签 / 合入前 | 全量矩阵：每个 seam 的契约测试 × 该 seam 的每套实现（[16-verification](16-verification.md) §2 的矩阵形态），双方言，外加代表性整机组装冒烟 | < 25 分钟 |
 | `e2e` | 合入 main / 每日 | reference-app 端到端（Playwright） | < 20 分钟 |
 | `security` | PR + 每日 | 依赖漏洞、密钥扫描、SAST、镜像扫描、许可证检查 | < 10 分钟 |
 | `docs-check` | 涉及文档或公开 API 的 PR | 文档示例编译运行、链接检查、i18n key 一致性、配置清单漂移 | < 5 分钟 |
@@ -20,7 +20,7 @@
 
 > **注记（2026-09-04，issue #1 子包拆分轮次已解决——本轮核实）：** 本条曾记录的问题——`.golangci.yml` 三条 SDK 规则的放行写法是 `!**/go/pkgcore/**` 与 `!**/go/jobs/**`，放行**整个模块连同它的全部子包**，导致 `pkgcore` 根包内联 Redis 与 S3 实现（`redis_kv.go`、`s3_objectstore.go` 与接口同包）在规则下完全合规、"每个消费者无条件继承 go-redis 与 minio-go"从未被任何检查报出——**已经修复**：`go/pkgcore` 的 Redis/S3 实现已迁入 `go/pkgcore/eventbus/redis`、`go/pkgcore/kv/redis`、`go/pkgcore/objectstore/s3` 三个实现子包，`go/jobs` 的 asynq 实现迁入 `go/jobs/queue/asynq`，`.golangci.yml` 的 `redis-only-in-pkgcore-and-jobs`/`minio-only-in-pkgcore`/`asynq-only-in-jobs` 三条规则的放行路径也随之收紧到 `!**/go/pkgcore/kv/redis/**` 这样的实现包本身，不再放行整个模块——谁再把 SDK import 写回根包或另一个实现包，CI 现在会直接失败，这正是拆分工作当初设定的验收条件。现状与推演见 `.golangci.yml` 自己的 depguard 注释；issue #1 的其余站点仍按各自轮次推进。
 
-> **实施状态注记（2026-09，security 轮次）**：上表是设计规格，不是现状。当前真实落地的流水线：`pr-check`（每个 PR）、`pr-full`（打 `full-ci` 标签的 PR）、`docs-check` 与 `api-contract`（按路径过滤触发），以及本轮由 gated stub 转正的 `security`（每个 PR + 每日 05:37 UTC 定时；触发、职责与暂缓项的解除条件见 `.github/workflows/security.yml` 文件头）。`release` 在 release-foundation 轮次转正（此后手动触发）；`e2e`、`nightly`、`scaffold-verify` 仍是 gated stub，由各自轮次接手——scaffold-verify 的文件头已由 saasctl 轮更新：`go/saasctl` v0.1 交付了该流水线的生成侧，`saasctl new` 的真实离线端到端证明（生成→tidy→build→boot→冒烟）逐项记录在 `go/saasctl/AGENTS.md` Testing 章节，但两种部署模式各 boot 一次与每日/发布后触发仍是 M4 门，stub guard 保持原样（见 `.github/workflows/scaffold-verify.yml` 文件头与 [16 验证方式](16-verification.md) §5 的注记）。security 行的设计内容逐项核对：pnpm audit、gitleaks、CodeQL 与许可证扫描已接线；依赖漏洞扫描（Go 侧 govulncheck）与镜像扫描（trivy）暂缓——govulncheck 在当前树有两处独立原因必然失败（标准库公告属于 go.work `go 1.25.0` 工具链线、需 toolchain-pinning 轮抬升 go 指令才能清零；模块类公告经 testcontainers 的测试支撑依赖与 exporter 依赖触达、属各模块自己的升级轮），trivy 在仓库产出镜像前无物可扫——两处的证据与解除条件都在 security.yml 文件头的 DEFERRED 节。
+> **实施状态注记（2026-09，security 轮次）**：上表是设计规格，不是现状。当前真实落地的流水线：`fast-check`（每个 PR，加上每次直接推送到 main——参见「分支保护」一节，main 允许直接推送是团队常态，这条 push 触发器才是大多数运行的真实来源）、`full-check`（打 `full-ci` 标签的 PR，加上每次直接推送到 main——和 `fast-check` 同样的理由，同样的代价：每次 push 都要多付约 25 分钟的 Docker 集成测试）、`docs-check` 与 `api-contract`（按路径过滤触发），以及本轮由 gated stub 转正的 `security`（每个 PR + 每日 05:37 UTC 定时；触发、职责与暂缓项的解除条件见 `.github/workflows/security.yml` 文件头）。`release` 在 release-foundation 轮次转正（此后手动触发）；`e2e`、`nightly`、`scaffold-verify` 仍是 gated stub，由各自轮次接手——scaffold-verify 的文件头已由 saasctl 轮更新：`go/saasctl` v0.1 交付了该流水线的生成侧，`saasctl new` 的真实离线端到端证明（生成→tidy→build→boot→冒烟）逐项记录在 `go/saasctl/AGENTS.md` Testing 章节，但两种部署模式各 boot 一次与每日/发布后触发仍是 M4 门，stub guard 保持原样（见 `.github/workflows/scaffold-verify.yml` 文件头与 [16 验证方式](16-verification.md) §5 的注记）。security 行的设计内容逐项核对：pnpm audit、gitleaks、CodeQL 与许可证扫描已接线；依赖漏洞扫描（Go 侧 govulncheck）与镜像扫描（trivy）暂缓——govulncheck 在当前树有两处独立原因必然失败（标准库公告属于 go.work `go 1.25.0` 工具链线、需 toolchain-pinning 轮抬升 go 指令才能清零；模块类公告经 testcontainers 的测试支撑依赖与 exporter 依赖触达、属各模块自己的升级轮），trivy 在仓库产出镜像前无物可扫——两处的证据与解除条件都在 security.yml 文件头的 DEFERRED 节。
 
 ## 成本控制：不是每个 PR 都跑全量
 
@@ -30,7 +30,7 @@
 2. **分层触发**：PR 阶段跑快速检查（全进程内实现 + SQLite，无需容器）；合入前跑全量矩阵。这利用了进程内实现的一个副产品优势——大部分测试不需要 testcontainers 就能跑。
 3. **缓存**：Go module cache、pnpm store、Docker layer、golangci-lint cache 全部启用，按 lockfile 哈希做 key。
 
-> **实施状态注记（本轮核实）：** 第 1、3 条都还是设计意图，尚未落地。`pr-check.yml` 自己的文件头明确写着 `dorny/paths-filter` 未接入——现存模块数量还不大，每个 PR 目前无差别跑全部真实模块，等模块集合变大再引入路径过滤，且已经预留了"下游依赖推导"的落点（依托可复用的 `go-module-ci` workflow，接入时只改调用方，不改被调用的可复用 workflow 本身）。Docker layer 缓存同样没有对应设施——仓库里唯一涉及镜像构建的 workflow 是 `.github/workflows/reusable-docker-build.yml`，一个尚无人调用、guard step 直接失败的 gated stub，等第一个产出镜像的应用出现才会真正用到 Docker layer 缓存。第 2 条（分层触发）与 Go module cache / pnpm store / golangci-lint cache 三项缓存是真实落地的，与本条注记不冲突。
+> **实施状态注记（本轮核实）：** 第 1、3 条都还是设计意图，尚未落地。`fast-check.yml` 自己的文件头明确写着 `dorny/paths-filter` 未接入——现存模块数量还不大，每个 PR 目前无差别跑全部真实模块，等模块集合变大再引入路径过滤，且已经预留了"下游依赖推导"的落点（依托可复用的 `go-module-ci` workflow，接入时只改调用方，不改被调用的可复用 workflow 本身）。Docker layer 缓存同样没有对应设施——仓库里唯一涉及镜像构建的 workflow 是 `.github/workflows/reusable-docker-build.yml`，一个尚无人调用、guard step 直接失败的 gated stub，等第一个产出镜像的应用出现才会真正用到 Docker layer 缓存。第 2 条（分层触发）与 Go module cache / pnpm store / golangci-lint cache 三项缓存是真实落地的，与本条注记不冲突。
 4. **并发控制**：同一 PR 的新推送自动取消旧运行（`concurrency` + `cancel-in-progress`）。
 5. **超时**：每个 job 设 timeout，防止挂死消耗额度。
 
@@ -39,7 +39,7 @@
 ```
 .github/
   workflows/
-    pr-check.yml                    # 编排：调用下面的可复用 workflow
+    fast-check.yml                    # 编排：调用下面的可复用 workflow
     release.yml
     ...
     reusable-go-module-ci.yml       # 输入：模块路径 → lint/test/build
@@ -72,7 +72,7 @@
 | 前端禁止手写 API 调用 | ESLint 自定义规则：除 `@speed/api-client` 内部外禁止 `fetch`/`axios` 指向后端路径 |
 | spec 与实现必须一致 | 生成的 server interface 参与编译；CI 重新生成并 diff，不一致即失败 |
 | operationId / schema 命名规范 | redocly lint 自定义规则 |
-| 系统上下文只能由白名单模块调用 | 人工评审 + 函数级文档约定；**不是** `depguard`——`WithSystemContext` 与 `TenantID`/`WithTenant`/`apperr` 同属 `pkgcore` 根包同一个 import path，depguard 只能按包路径粒度放行/拒绝，做不到只挡一个符号。已实测验证：把「仅 admin/compliance/jobs/authn/`tenancy` 可 import `pkgcore`」接成 depguard 规则，会连带拦下 `go/dbkit`（真实代码、不在白名单、但合法依赖 `TenantID` 等）23 处无关导入，草稿规则因此未合入。`tenancy` 现已建成，提供审计封装版 `tenancy.WithSystemContext`，业务代码应调用它而非直接调用原语；要让这条纪律真正可静态检查，需要先把 `WithSystemContext` 迁到 `pkgcore` 独立子包（类似 `apperr/`、`config/`），这是一次公开 API 决策，超出本表列出的自动化检查范围。仓库里目前没有任何 CODEOWNERS 文件（`go/pkgcore`、`go/tenancy` 均无）——这是一处已知的真实实现缺口，白名单纯靠人工把关 |
+| 系统上下文只能由白名单模块调用 | 人工评审 + 函数级文档约定；**不是** `depguard`——`WithSystemContext` 与 `TenantID`/`WithTenant`/`apperr` 同属 `pkgcore` 根包同一个 import path，depguard 只能按包路径粒度放行/拒绝，做不到只挡一个符号。已实测验证：把「仅 admin/compliance/jobs/authn/`tenancy` 可 import `pkgcore`」接成 depguard 规则，会连带拦下 `go/dbkit`（真实代码、不在白名单、但合法依赖 `TenantID` 等）23 处无关导入，草稿规则因此未合入。`tenancy` 现已建成，提供审计封装版 `tenancy.WithSystemContext`，业务代码应调用它而非直接调用原语；要让这条纪律真正可静态检查，需要先把 `WithSystemContext` 迁到 `pkgcore` 独立子包（类似 `apperr/`、`config/`），这是一次公开 API 决策，超出本表列出的自动化检查范围。`.github/CODEOWNERS` 已经落地，覆盖 `go/pkgcore`、`go/dbkit`、`go/tenancy`，但它只能要求"这些路径的改动需要指定 owner 过目"，做不到"只有白名单模块能调用 `WithSystemContext`"这种符号级约束——两者是不同粒度的问题，CODEOWNERS 落地并不代表这条纪律已经可以自动检查，白名单仍然纯靠人工把关 |
 | 禁止手写 `WHERE tenant_id = ?` | `semgrep`：租户过滤只能由插件与 Repository 注入，手写即意味着绕过防护 |
 | API 层不得接受外部传入的 `tenant_id` | `semgrep` + spec lint：请求参数/请求体中出现 `tenant_id` 字段即拒绝 |
 | 禁止 `AutoMigrate` | `semgrep`：生产迁移必须是版本化 SQL |
@@ -84,11 +84,11 @@
 
 **这张表是 CI 的核心价值所在**——纪律靠人记会在三个月后失效，靠 CI 才能长期有效。
 
-> **实施状态注记（2026-09，security 轮次）**：表中由 `semgrep` 承担的行已有六条规则落地（本轮新增），见 `tools/semgrep_rules/`——`raw-gorm-bypass.yml`（第 1 行 `db.Table/Model/Raw`，path allowlist 放行 go/dbkit 与 go/jobs 的合法存储层文件）、`deployment-mode-branch.yml`（第 2 行，按值匹配模式比较与 `SPEED_DEPLOYMENT_MODE` 读取，仅放行两个 kernel 装配模式决策点：`go/pkgcore/deployment_mode.go` 的必需能力分发与 reference-app 入口的 env 读取）、`tenant-id-metric-label.yml`（第 6 行，配合 observability 既有的标签断言测试）、`non-constant-log-message.yml`（第 10 行）、`handwritten-tenant-id-filter.yml`（第 16 行，放行 go/dbkit 与 go/jobs 存储层）、`gorm-automigrate-ban.yml`（第 18 行，未来防线，当前零真实调用点）。每条规则的文件头写明：对应的纪律行、命中形状、path allowlist 与放行理由、残余缺口；配套 planted-violation fixture（`testdata/<规则>/{positive,negative}.go`）证明规则真的会响。六条规则随每个 PR 在 pr-check 的 repo-checks job 运行（临时 venv 安装 semgrep，扫 `go/`、`examples/`、`tools/` 三棵子树，fixture 子树在 CLI 层排除；CI 首绿前版本故意不 pin），运行方式与执行状态见 `tools/README.md`。两点如实披露：其一，semgrep 对 `examples/reference-app/internal/notes/repository.go:19`（内嵌实例化泛型 `*dbkit.Repository[Note]`）始终抛 PartialParsing 异常、该行不参与分析——它是结构体嵌入声明，与六条规则的命中形状均无关，暂无盲区，但后续新增规则必须知道这个文件扫不全；其二，各规则文件头列出的残余缺口（动态拼装、别名间接引用等文本匹配不到的形态）仍由 code review 兜底。depguard 侧，第 5 行「业务代码不得 import 具体基础设施 SDK」本轮落地三条规则（redis / minio / asynq）——**这三条规则随后又被 issue #1 子包拆分轮次进一步收紧**：放行粒度从本轮落地时的整模块（`!**/go/pkgcore/**`、`!**/go/jobs/**`）改为各自实现归属的子包（`!**/go/pkgcore/kv/redis/**` 等），详见本文档开头的注记——rules 与 files-list allowlist 的取舍记录在 `.golangci.yml` 的 depguard 注释里；第 15 行「系统上下文白名单」维持评审制——该行已写明 depguard 做不到符号粒度、草稿规则为何未合入，与落地现状一致。此前轮次已落地的行：第 7 行（ESLint `no-literal-text` 规则在 npm-package-ci 每包 lint 腿运行）、第 8 行（中英 key 一致性在 docs-check）、第 9 行（CJK 扫描在 repo-checks）、第 13 行（spec 一致性在 api-contract）、第 23 行（`GOWORK=off` 独立构建在 go-module-ci 第 5 腿，过渡期 `standalone_build_test.go` 保留本地执行）。其余行——跨模块 import struct 与 `rbac` 依赖 `authn`（go-arch-lint / 依赖白名单）、日志字段名规范、前端手写 API 调用、API 层接受 `tenant_id` 参数、跨模块外键迁移 lint、`@speed/api-sdk` 禁改、Repository 隔离测试覆盖脚本——的自动化仍是未来轮次，不在此虚报；PII 直入日志行的运行时一半（脱敏中间件与它的单元测试）已在 go/observability 落地，缺的是 semgrep 静态检查那一半。
+> **实施状态注记（2026-09，security 轮次）**：表中由 `semgrep` 承担的行已有六条规则落地（本轮新增），见 `tools/semgrep_rules/`——`raw-gorm-bypass.yml`（第 1 行 `db.Table/Model/Raw`，path allowlist 放行 go/dbkit 与 go/jobs 的合法存储层文件）、`deployment-mode-branch.yml`（第 2 行，按值匹配模式比较与 `SPEED_DEPLOYMENT_MODE` 读取，仅放行两个 kernel 装配模式决策点：`go/pkgcore/deployment_mode.go` 的必需能力分发与 reference-app 入口的 env 读取）、`tenant-id-metric-label.yml`（第 6 行，配合 observability 既有的标签断言测试）、`non-constant-log-message.yml`（第 10 行）、`handwritten-tenant-id-filter.yml`（第 16 行，放行 go/dbkit 与 go/jobs 存储层）、`gorm-automigrate-ban.yml`（第 18 行，未来防线，当前零真实调用点）。每条规则的文件头写明：对应的纪律行、命中形状、path allowlist 与放行理由、残余缺口；配套 planted-violation fixture（`testdata/<规则>/{positive,negative}.go`）证明规则真的会响。六条规则随每个 PR 在 fast-check 的 repo-checks job 运行（临时 venv 安装 semgrep，扫 `go/`、`examples/`、`tools/` 三棵子树，fixture 子树在 CLI 层排除；CI 首绿前版本故意不 pin），运行方式与执行状态见 `tools/README.md`。两点如实披露：其一，semgrep 对 `examples/reference-app/internal/notes/repository.go:19`（内嵌实例化泛型 `*dbkit.Repository[Note]`）始终抛 PartialParsing 异常、该行不参与分析——它是结构体嵌入声明，与六条规则的命中形状均无关，暂无盲区，但后续新增规则必须知道这个文件扫不全；其二，各规则文件头列出的残余缺口（动态拼装、别名间接引用等文本匹配不到的形态）仍由 code review 兜底。depguard 侧，第 5 行「业务代码不得 import 具体基础设施 SDK」本轮落地三条规则（redis / minio / asynq）——**这三条规则随后又被 issue #1 子包拆分轮次进一步收紧**：放行粒度从本轮落地时的整模块（`!**/go/pkgcore/**`、`!**/go/jobs/**`）改为各自实现归属的子包（`!**/go/pkgcore/kv/redis/**` 等），详见本文档开头的注记——rules 与 files-list allowlist 的取舍记录在 `.golangci.yml` 的 depguard 注释里；第 15 行「系统上下文白名单」维持评审制——该行已写明 depguard 做不到符号粒度、草稿规则为何未合入，与落地现状一致。此前轮次已落地的行：第 7 行（ESLint `no-literal-text` 规则在 npm-package-ci 每包 lint 腿运行）、第 8 行（中英 key 一致性在 docs-check）、第 9 行（CJK 扫描在 repo-checks）、第 13 行（spec 一致性在 api-contract）、第 23 行（`GOWORK=off` 独立构建在 go-module-ci 第 5 腿，过渡期 `standalone_build_test.go` 保留本地执行）。其余行——跨模块 import struct 与 `rbac` 依赖 `authn`（go-arch-lint / 依赖白名单）、日志字段名规范、前端手写 API 调用、API 层接受 `tenant_id` 参数、跨模块外键迁移 lint、`@speed/api-sdk` 禁改、Repository 隔离测试覆盖脚本——的自动化仍是未来轮次，不在此虚报；PII 直入日志行的运行时一半（脱敏中间件与它的单元测试）已在 go/observability 落地，缺的是 semgrep 静态检查那一半。
 
 > **实施状态注记（2026-09-03，authn 轮次；片段顺序已按本轮核实更正）**：上一条注记里点名"仍是未来轮次"的 operationId / schema 命名规范一行，本轮已落地——`go/authn/api/openapi.yaml` 触发了合并的存在意义（它不是继 notes 之后的第二个模块 spec 片段，`go/org/api/openapi.yaml` 更早落地，只是 org 的片段当时不参与合并，详见 [19 开发工作流](19-dev-workflow.md) 的同一处更正）：仓库根目录的 `redocly.yaml` 定义了 `rule/speed-operation-id-format`、`rule/speed-schema-name-format` 两条 error 级命名规范规则，`Taskfile.yml` 的 `task api:merge` 与 `.github/workflows/api-contract.yml` 用钉定的 `@redocly/cli@2.51.1` 把两个片段 `join` 进 `build/openapi/speed.yaml` 后按这两条规则 `lint`，`git diff --exit-code` 校验该文件与提交版本一致。详见 [19 开发工作流](19-dev-workflow.md) 与 [21 API 契约](21-api-contract.md) 各自的实现状态注记。
 
-> **实施状态注记（2026-09，deployment-composition 轮次更新）**：第 2 行规则随改造转为残余风险探测器——部署模式从选择器变成约束（`NewKernel` 不再收模式、四个 seam 从各自的实现注册表解析带能力声明的实现），`registry.go`、observability `init.go`、reference-app `main.go` 的模式分支被移除，allowlist 相应删到上一段句读的两个决策点；按 `Capability` 分支（如 `caps.Has(MultiReplicaSafe)`）是改造引入的新词汇，尚无纪律行，规则头与 `tools/README.md` 的残余缺口列明确记录为不覆盖。pr-full 的真实矩阵随之对齐 [16-verification](16-verification.md) §2 的形态：pkgcore 的 Docker 腿把三套有真实后端的 seam 契约测试（`kvstoretest`/`eventbustest` 对真实 Redis、`objectstoretest` 对 MinIO/S3）各跑一遍——mailer 的 SMTP 实现无容器后端，同一套 `mailertest.AssertConforms` 在单元层对进程内 fake SMTP server 跑；reference-app job 新增其 Docker-backed 组装腿（真实 Redis `EventBus` 注入、standalone 拓扑启动整机——正是 §2 的"代表性整机组装冒烟"），Taskfile `test:full` 同步镜像。
+> **实施状态注记（2026-09，deployment-composition 轮次更新）**：第 2 行规则随改造转为残余风险探测器——部署模式从选择器变成约束（`NewKernel` 不再收模式、四个 seam 从各自的实现注册表解析带能力声明的实现），`registry.go`、observability `init.go`、reference-app `main.go` 的模式分支被移除，allowlist 相应删到上一段句读的两个决策点；按 `Capability` 分支（如 `caps.Has(MultiReplicaSafe)`）是改造引入的新词汇，尚无纪律行，规则头与 `tools/README.md` 的残余缺口列明确记录为不覆盖。full-check 的真实矩阵随之对齐 [16-verification](16-verification.md) §2 的形态：pkgcore 的 Docker 腿把三套有真实后端的 seam 契约测试（`kvstoretest`/`eventbustest` 对真实 Redis、`objectstoretest` 对 MinIO/S3）各跑一遍——mailer 的 SMTP 实现无容器后端，同一套 `mailertest.AssertConforms` 在单元层对进程内 fake SMTP server 跑；reference-app job 新增其 Docker-backed 组装腿（真实 Redis `EventBus` 注入、standalone 拓扑启动整机——正是 §2 的"代表性整机组装冒烟"），Taskfile `test:full` 同步镜像。
 
 ## 发布流水线（lockstep）
 
@@ -107,7 +107,7 @@
 - **`.github/workflows/release.yml` 的现状 = 只验证、不发布**：手动触发、输入版本号（`workflow_dispatch` 的 `version` 输入承载版本号，第 1 步的"版本号未被占用"预检由协调器查重实现）。步骤为：校验版本号格式（正则 `^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`，v 必需；`workflow_dispatch` 输入不支持 pattern 校验，故用 grep 步骤）→ 跑发布协调器默认模式 → 跑协调器自测。工作流权限仅 `contents: read`，**不接任何发布凭据——它不可能真实发布，这是本轮的刻意设计**。
 - **协调器 `tools/release/lockstep-release.py`**（默认模式 = 离线验证；`--self-test` = 自带 unittest 套件）：推导可发布集合（go.work `use` 条目 + `web/packages/*`），检查版本格式、查重（`git tag -l`——因此 checkout 必须 `fetch-depth: 0`，浅克隆看不到 tag 会静默废掉查重预检）、go.work↔`go/` 树双向完备、npm 版本统一、`web/.changeset/config.json` fixed 组恰好覆盖现存包，全绿后打印完整单版本发布计划（每模块 tag、每包 bump 后版本）。本地入口 `task release:plan VERSION=v1.2.0`。
 - **第 3 步（Go 发布）的两半**：打 tag 以硬闸本地模式存在于协调器（`--apply` 必须配 `--allow-local-tag-creation`，只创建本地、永不推送的 tag，仅用于在 scratch checkout 演练）；首次发布的 replace 清理以纯函数 + `tools/release/testdata/` 夹具交付，**严禁对真实 go.mod 运行**——树的过渡态保留到 v1.0（[02 仓库结构与发布](02-repo-and-release.md) 的 M0 注记）。
-- **第 2、4、5、6、7 步的接线逐一等待**：第 2 步等 pr-full 的全量编排成熟（当前 pr-full 跑十一模块 Docker 集成矩阵——`dbkit`、`tenancy`、`jobs`、`pkgcore`、`config`、`rbac`、`org`、`authn`、`storage`、`notification`、`integration`——本轮核实自 `pr-full.yml` 自己的 `integration-tiers` job `matrix.module` 列表，而非任何文档转述 + reference-app 单测与 Redis 组装集成测试）；第 4 步等 M4（changesets 未安装进 web/、仓库无 npm 凭据）；第 5 步等制品轮（goreleaser 配置、镜像构建、spec 合并工具均未落地）；第 6 步等 `scaffold-verify.yml` 脱离 gated stub（现状见根 CLAUDE.md）；第 7 步等 M4。预发布通道与回滚策略（见下）不变，随真实发布轮实现。
+- **第 2、4、5、6、7 步的接线逐一等待**：第 2 步等 full-check 的全量编排成熟（当前 full-check 跑十一模块 Docker 集成矩阵——`dbkit`、`tenancy`、`jobs`、`pkgcore`、`config`、`rbac`、`org`、`authn`、`storage`、`notification`、`integration`——本轮核实自 `full-check.yml` 自己的 `integration-tiers` job `matrix.module` 列表，而非任何文档转述 + reference-app 单测与 Redis 组装集成测试）；第 4 步等 M4（changesets 未安装进 web/、仓库无 npm 凭据）；第 5 步等制品轮（goreleaser 配置、镜像构建、spec 合并工具均未落地）；第 6 步等 `scaffold-verify.yml` 脱离 gated stub（现状见根 CLAUDE.md）；第 7 步等 M4。预发布通道与回滚策略（见下）不变，随真实发布轮实现。
 - **验收口径**：该 M0 条目的退出条件是"一次命令能把全部模块以同一版本号发布出去"可**离线证明**——release.yml 每次手动触发（版本格式合法、各项预检全绿即通过）就是这份证明；首次端到端真实运行在 v1.0（M4）。协调器的绝对禁令与"树变化时该动什么"见 `tools/release/AGENTS.md`。
 
 ### 预发布通道
@@ -118,7 +118,7 @@
 
 ## 分支保护
 
-- `main` 分支禁止直接推送，必须经 PR
-- 必需检查项：`pr-check`、`security`、`docs-check` 全绿
-- 至少一位 reviewer 批准；涉及 `pkgcore`/`dbkit`/`tenancy` 等地基模块时需要指定 owner 批准——设计意图，尚未落地：仓库里没有任何 CODEOWNERS 文件，这条 owner 审批目前无工具强制，纯靠人工把关
-- **合并方式：仅允许 fast-forward**（与团队 Git 规范一致，见 [19 开发工作流](19-dev-workflow.md)）
+- `main` 分支允许直接推送——这是团队实际的工作方式：本地完成、rebase 到 main 顶部、fast-forward 推送即可，不强制经过 PR。本轮核实：710 次提交中只有 1 次真正走了 PR（`#3`，Dependabot 自动发起的依赖升级，人工点击合并），其余全部是直接推送——这不是历史遗留的例外，是常态。
+- `fast-check` 在每次 PR 和每次直接推送到 main 时都跑（`.github/workflows/fast-check.yml` 的 `push: branches: [main]` 触发器），是 main 健康与否的事后可见信号；`security`/`docs-check` 各自按路径过滤或每日定时触发。三者都不是 GitHub 分支保护意义上"合并前必须全绿"的强制闸门——main 上出现红灯之后要靠人工在 Actions 页面发现、随后补一个修复提交去收敛，而不是被拦在推送之前。GitHub 上确实没有为 main 配置任何原生分支保护规则（`gh api repos/.../branches/main/protection` 返回 404），这与本条描述的实际工作方式是一致的，不是缺口。
+- reviewer 批准与 CODEOWNERS：常规工作没有强制 review 步骤；`.github/CODEOWNERS` 文件存在（覆盖 `pkgcore`/`dbkit`/`tenancy` 等地基层模块），但 GitHub 侧"Require review from Code Owners"未启用，目前不生效。仅有的一次 PR 合并（Dependabot）经过了人工点击合并这一步，可以视为对自动化变更的最低限度把关。
+- **合并方式：仅允许 fast-forward**（与团队 Git 规范一致，见 [19 开发工作流](19-dev-workflow.md)）——这一条是真实执行的：`git log --merges` 为空，历史保持线性。
