@@ -40,7 +40,7 @@ Both are tenant data: a share belongs to the tenant whose resource it exposes, a
 
 ## The five mandatory rules
 
-Every rule `docs/internal/07-platform-services.md`'s own "必须遵守的规则" (mandatory rules) list states is enforced, each with a passing test:
+Every rule `docs/internal/07-platform-services.md`'s own mandatory-rules list for sharing states is enforced, each with a passing test:
 
 1. **Tokens are cryptographically random, at least 128 bits, never derived from a predictable value.** `token.go`'s `newShareToken` draws 32 bytes (256 bits) from `crypto/rand` and nothing else. `TestNewShareToken_MeetsTheEntropyFloor`, `TestNewShareToken_IsUnpredictable`, `TestNewShareToken_LeakingOneTokenDoesNotRevealAnother` (`token_test.go`).
 2. **A share created with no explicit expiry gets the tenant's configured default, and a request for a never-expiring link is refused outright.** `Service.Create`'s `resolveExpiry` (nil `ExpiresAt`) and its `CreateParams.Forever` check (`ErrExpiryRequired`). `TestService_Create_NoExpiryFallsBackToDefault`, `TestService_Create_NoExpiryUsesTenantConfiguredDefault`, `TestService_Create_ForeverRefused` (`service_test.go`).
