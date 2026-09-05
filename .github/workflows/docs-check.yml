@@ -49,6 +49,10 @@ name: docs-check
 #     docs/-wide check.
 #   * config-reference generation drift: the reference is generated from
 #     the pkgcore/config schema; generation is not in CI.
+#   * error-code index generation drift: tools/gen_error_code_index.py
+#     generates docs/error-codes.md from every apperr.* declaration plus
+#     each module's own locales/en-US.toml; its own --check mode exists
+#     (tools/README.md's own section on it) but is not run here yet.
 #   * the docs site machinery: docs/site/ itself is now real -- a static
 #     skeleton with structure checked here (COVERAGE above) -- but the
 #     per-version release directories, llms.txt at the site root once the

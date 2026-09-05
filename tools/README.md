@@ -277,6 +277,48 @@ docs-site: violation    index.html: required entry file is missing
 docs-site: violation    status.html: link 'aboutx.html' resolves to nothing
 ```
 
+## gen_error_code_index.py — error-code index generator
+
+Closes docs/internal/13-documentation-standards.md's must-have doc list
+item (an error-code index) -- go/pkgcore/apperr/apperr.go only has the
+encoding mechanism (the six status-mapped builders), never a catalog of
+the codes built with it, and no such catalog existed anywhere in the
+repository before this script.
+
+It walks every `*.go` file under `--roots` (default: `go` and `examples`,
+excluding `_test.go` and generated `*.gen.go`/`*_gen.go` files), regex-
+matching two declaration shapes -- `ErrFoo = apperr.Invalid("module.code")`
+and the struct-literal `ErrFoo = &apperr.Error{Code: "module.code",
+Status: http.StatusTooManyRequests}` (the shape go/sharing's,
+go/integration's, go/org's and go/ai-gateway's own `ErrRateLimited` use,
+since none of apperr's five builder functions map to HTTP 429) -- and
+collects, for each: the Go identifier, the code string, the resulting HTTP
+status, the file:line, the contiguous doc comment immediately above the
+declaration (the "triggering condition" column), and the code's own
+`en-US.toml` catalog entry when one exists (go/pkgcore/i18n's own
+message-catalog convention: the TOML key *is* the apperr code) -- a code
+with none is reported as such rather than silently omitted, since it means
+the code is never rendered to an end user (typically a boot-time wiring
+refusal).
+
+The result is one Markdown file, one table per module (grouped by the
+code's own dot-prefix, e.g. `notification` from
+`notification.type_not_found`), sorted by module then code.
+
+Usage:
+
+```
+python3 tools/gen_error_code_index.py                          # writes docs/error-codes.md
+python3 tools/gen_error_code_index.py --check                  # exit 1 if docs/error-codes.md is stale
+python3 tools/gen_error_code_index.py --roots go examples --out docs/error-codes.md
+```
+
+Cross-checked, at generation time, against the 34-code reachable-error
+enumeration `examples/reference-app/web/src/codes-alignment.test.ts`
+hand-maintains for its four frontend surfaces: every one of that
+enumeration's backend (non-`client.*`) codes appears in the generated
+index.
+
 ## new_module.py — Go module stub generator
 
 Scaffolds the canonical stub of a future module, exactly the three files
@@ -525,8 +567,10 @@ whose pull_request path filter fires on PRs touching documentation or
 i18n resources; and the license scanner (`python3 tools/license_scan.py`,
 selftest first, then the real check) runs in the security pipeline's
 license job (`.github/workflows/security.yml`).
-`tools/check_repo_isolation.py` is wired into no workflow yet; its row
-lands with a future CI round. Locally, run them from the
+`tools/check_repo_isolation.py` and `tools/gen_error_code_index.py --check`
+are both wired into no workflow yet; their rows land with a future CI
+round (docs-check.yml's own DELIBERATELY NOT WIRED list is the honest
+place that gap is recorded today). Locally, run them from the
 repository root — the default `--root` is the current directory, so plain
 `python3 tools/scan_cjk.py` also works there. All output paths are relative
 to `--root`. `license_scan.py` is the exception: it takes no `--root` at
