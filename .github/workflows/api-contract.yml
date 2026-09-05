@@ -355,7 +355,7 @@ jobs:
             exit 1
           }
       - name: Set up pinned Node.js, pnpm and the pnpm store cache
-        # Mirrors the npm CI jobs (reusable/npm-package-ci.yml): the same
+        # Mirrors the npm CI jobs (reusable-npm-package-ci.yml): the same
         # composite action, the same single version sources (web/.nvmrc,
         # web/package.json's packageManager field) and the same pnpm store
         # cache keyed on the lockfile hash. One call serves both Node-based

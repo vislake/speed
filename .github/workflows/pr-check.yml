@@ -207,7 +207,7 @@ jobs:
           - go/ai-gateway
           - go/compliance
           - go/admin
-    uses: ./.github/workflows/reusable/go-module-ci.yml
+    uses: ./.github/workflows/reusable-go-module-ci.yml
     with:
       module: ${{ matrix.module }}
 
@@ -234,7 +234,7 @@ jobs:
           # examples/reference-app/web, running the same lint/typecheck/
           # test/build matrix through the same reusable.
           - examples/reference-app/web
-    uses: ./.github/workflows/reusable/npm-package-ci.yml
+    uses: ./.github/workflows/reusable-npm-package-ci.yml
     with:
       package: ${{ matrix.package }}
 

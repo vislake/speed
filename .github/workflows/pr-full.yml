@@ -165,7 +165,7 @@ jobs:
           - go/ai-gateway
           - go/compliance
           - go/admin
-    uses: ./.github/workflows/reusable/go-module-ci.yml
+    uses: ./.github/workflows/reusable-go-module-ci.yml
     with:
       module: ${{ matrix.module }}
 
