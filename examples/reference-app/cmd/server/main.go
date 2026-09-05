@@ -39,6 +39,26 @@ func main() {
 	baseCtx := obs.WithLogger(context.Background(), slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
 	if err := run(baseCtx); err != nil {
+		// CodeQL's go/clear-text-logging alert on this line: reviewed and
+		// confirmed a false positive. The traced flow is
+		// authn/module.go's socialCredentialItems() -> a local anonymous
+		// struct field named "secretKey" (already //nolint:gosec'd at its
+		// declaration) holding a CONFIG-ITEM KEY NAME constant like
+		// "authn.social.google.client_secret", not a credential value ->
+		// pkgcore.ConfigItem{Key: ...} -> pkgcore.validateConfigItem, whose
+		// own doc comment guarantees it names only the Key, never a
+		// Sensitive item's value, in any error it returns -> up through
+		// Module.Register/Kernel.Bootstrap/buildServer/run to here. CodeQL's
+		// heuristic matched the identifier "secretKey" as if it held a
+		// secret; it holds a schema key name. Separately, obs.FromContext's
+		// logger passes every attribute through go/observability's
+		// redaction layer (redact.go), which does real value-content
+		// scanning (bearer tokens, JWTs, URL userinfo/DSN passwords) and is
+		// pinned by TestRedact_ErrorValues and
+		// TestRedact_SecretShapesInValues -- a second, independent guard
+		// even if some future err ever did carry a value. Do not "fix" this
+		// by renaming secretKey or by suppressing this specific alert
+		// without re-tracing the flow if module.go's struct shape changes.
 		obs.FromContext(baseCtx).Error("reference-app server exited with error", "error", err)
 		os.Exit(1)
 	}
