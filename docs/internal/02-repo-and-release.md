@@ -52,7 +52,7 @@ speed/
 
 - **根 `deploy/` 目录从未实现**（布局树的 `deploy/` 一节）：仓库里没有任何
   `docker-compose*.yml` 或 `Dockerfile`，`grafana/` 编排目录也不存在——涉及镜像
-  构建的唯一 workflow（`.github/workflows/reusable/docker-build.yml`）是尚无人
+  构建的唯一 workflow（`.github/workflows/reusable-docker-build.yml`）是尚无人
   调用、guard step 直接失败的 gated stub（见 [18 CI/CD](18-cicd.md)）。这与
   `templates/` 一行同理：`task dev` 按根 `CLAUDE.md` 与
   [19 开发工作流](19-dev-workflow.md) 的约定跑单进程 standalone 模式、SQLite、

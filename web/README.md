@@ -19,7 +19,7 @@ root:
   ever needs a Go module. Two roots, one repo, zero overlap.
 
 CI treats the boundary the same way: Go checks run from module directories,
-npm checks run from `web/` (see `.github/workflows/reusable/npm-package-ci.yml`).
+npm checks run from `web/` (see `.github/workflows/reusable-npm-package-ci.yml`).
 
 ## Node and pnpm versions: single sources, identical locally and in CI
 

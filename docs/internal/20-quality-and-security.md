@@ -16,7 +16,7 @@
 ### 前端测试
 Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包的每个公开组件需有 Storybook story（同时充当文档与视觉回归基线）。
 
-> **实施状态注记（本轮核实）：** Playwright 与 Storybook 两者目前都不存在于仓库——没有任何 Playwright 配置/spec 文件，也没有 `.stories.*` 文件或 Storybook 依赖/配置；`.github/workflows/reusable/npm-package-ci.yml` 自己的 header 明确把"Storybook component previews"列进未接线清单（"ui-kit shipped without a preview harness; the round that introduces one wires it here"）。真实的组件/hook 测试确实是 Vitest + Testing Library；e2e 与视觉回归目前都靠各包自己的 `src/usage-example.test.tsx`（真实机制见 [13 文档规范](13-documentation-standards.md)、[16 验证方式](16-verification.md) 的同一处注记——这一缺口在多份文档里重复出现，均按此注记读）。
+> **实施状态注记（本轮核实）：** Playwright 与 Storybook 两者目前都不存在于仓库——没有任何 Playwright 配置/spec 文件，也没有 `.stories.*` 文件或 Storybook 依赖/配置；`.github/workflows/reusable-npm-package-ci.yml` 自己的 header 明确把"Storybook component previews"列进未接线清单（"ui-kit shipped without a preview harness; the round that introduces one wires it here"）。真实的组件/hook 测试确实是 Vitest + Testing Library；e2e 与视觉回归目前都靠各包自己的 `src/usage-example.test.tsx`（真实机制见 [13 文档规范](13-documentation-standards.md)、[16 验证方式](16-verification.md) 的同一处注记——这一缺口在多份文档里重复出现，均按此注记读）。
 
 ### 文件与目录布局
 
@@ -47,7 +47,7 @@ Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包�
 - **ESLint + Prettier**，配置作为共享包发布，业务项目可直接继承
 - 公开包必须导出完整类型定义，`tsc --noEmit` 与 `publint` 校验打包产物
 
-  **实施状态注记（本轮核实）：** `publint` 尚未接线——`.github/workflows/reusable/npm-package-ci.yml` 自己的 header 把"publint publish-shape validation and changesets wiring"列为明确未接线项，理由是目前还没有任何 `@speed/*` 包真正发布过，等 web 侧发布机制轮次落地再一并接入。`tsc --noEmit` 是真实落地的（每包 lint/typecheck leg 的一部分）。
+  **实施状态注记（本轮核实）：** `publint` 尚未接线——`.github/workflows/reusable-npm-package-ci.yml` 自己的 header 把"publint publish-shape validation and changesets wiring"列为明确未接线项，理由是目前还没有任何 `@speed/*` 包真正发布过，等 web 侧发布机制轮次落地再一并接入。`tsc --noEmit` 是真实落地的（每包 lint/typecheck leg 的一部分）。
 
 ### 覆盖率
 不设一刀切的百分比门槛（容易催生无意义的测试），而是：

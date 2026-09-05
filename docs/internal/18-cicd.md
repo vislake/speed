@@ -30,7 +30,7 @@
 2. **分层触发**：PR 阶段跑快速检查（全进程内实现 + SQLite，无需容器）；合入前跑全量矩阵。这利用了进程内实现的一个副产品优势——大部分测试不需要 testcontainers 就能跑。
 3. **缓存**：Go module cache、pnpm store、Docker layer、golangci-lint cache 全部启用，按 lockfile 哈希做 key。
 
-> **实施状态注记（本轮核实）：** 第 1、3 条都还是设计意图，尚未落地。`pr-check.yml` 自己的文件头明确写着 `dorny/paths-filter` 未接入——现存模块数量还不大，每个 PR 目前无差别跑全部真实模块，等模块集合变大再引入路径过滤，且已经预留了"下游依赖推导"的落点（依托可复用的 `go-module-ci` workflow，接入时只改调用方，不改被调用的可复用 workflow 本身）。Docker layer 缓存同样没有对应设施——仓库里唯一涉及镜像构建的 workflow 是 `.github/workflows/reusable/docker-build.yml`，一个尚无人调用、guard step 直接失败的 gated stub，等第一个产出镜像的应用出现才会真正用到 Docker layer 缓存。第 2 条（分层触发）与 Go module cache / pnpm store / golangci-lint cache 三项缓存是真实落地的，与本条注记不冲突。
+> **实施状态注记（本轮核实）：** 第 1、3 条都还是设计意图，尚未落地。`pr-check.yml` 自己的文件头明确写着 `dorny/paths-filter` 未接入——现存模块数量还不大，每个 PR 目前无差别跑全部真实模块，等模块集合变大再引入路径过滤，且已经预留了"下游依赖推导"的落点（依托可复用的 `go-module-ci` workflow，接入时只改调用方，不改被调用的可复用 workflow 本身）。Docker layer 缓存同样没有对应设施——仓库里唯一涉及镜像构建的 workflow 是 `.github/workflows/reusable-docker-build.yml`，一个尚无人调用、guard step 直接失败的 gated stub，等第一个产出镜像的应用出现才会真正用到 Docker layer 缓存。第 2 条（分层触发）与 Go module cache / pnpm store / golangci-lint cache 三项缓存是真实落地的，与本条注记不冲突。
 4. **并发控制**：同一 PR 的新推送自动取消旧运行（`concurrency` + `cancel-in-progress`）。
 5. **超时**：每个 job 设 timeout，防止挂死消耗额度。
 
@@ -39,13 +39,12 @@
 ```
 .github/
   workflows/
-    pr-check.yml            # 编排：调用下面的可复用 workflow
+    pr-check.yml                    # 编排：调用下面的可复用 workflow
     release.yml
     ...
-  workflows/reusable/
-    go-module-ci.yml        # 输入：模块路径 → lint/test/build
-    npm-package-ci.yml      # 输入：包路径 → lint/typecheck/test/build
-    docker-build.yml        # 多架构镜像构建
+    reusable-go-module-ci.yml       # 输入：模块路径 → lint/test/build
+    reusable-npm-package-ci.yml     # 输入：包路径 → lint/typecheck/test/build
+    reusable-docker-build.yml       # 多架构镜像构建
   actions/
     setup-go-env/           # 统一 Go 版本 + 缓存
     setup-node-env/         # 统一 Node/pnpm 版本 + 缓存
