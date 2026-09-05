@@ -347,13 +347,13 @@
     },
     {
       "ecosystem": "go",
-      "evidence": "go module cache license file: google.golang.org/grpc@v1.81.1/LICENSE",
+      "evidence": "go module cache license file: google.golang.org/grpc@v1.83.1/LICENSE",
       "license": "Apache-2.0",
       "name": "google.golang.org/grpc",
       "used_by": [
         "go/observability"
       ],
-      "version": "v1.81.1"
+      "version": "v1.83.1"
     },
     {
       "ecosystem": "go",
