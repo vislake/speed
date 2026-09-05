@@ -114,13 +114,22 @@ name: full-check
 #     composition is orthogonal to deployment mode), and
 #     distributed_mode_test.go (this round) boots the real server TWICE,
 #     both replicas under SPEED_DEPLOYMENT_MODE=distributed against the
-#     same real Redis/MinIO/SMTP-catcher infrastructure, and proves a
-#     notification triggered through replica A's HTTP port is read back
-#     through replica B's -- the positive half of the M0 exit condition
-#     this file's own NOT YET section used to record as entirely missing --
-#     plus a negative-path sub-test proving an incompletely-composed
-#     distributed boot still fails closed through the real binary's own
-#     process exit code, not just server_test.go's in-process form. Its
+#     same real Redis/MinIO/SMTP-catcher infrastructure. Replica B boots
+#     with SPEED_DISABLE_QUEUE_WORKER=true so it can never self-produce a
+#     delivery; the test opens replica B's own SSE inbox stream
+#     (GET /api/v1/notifications/stream) before replica A creates the note,
+#     and asserts the EventInboxCreated announcement still reaches B --
+#     provable only if the real Redis-backed EventBus crossed the process
+#     boundary, since the two replicas share one SQLite file and a shared
+#     jobs table alone could not explain it. A second sub-assertion drives
+#     one wrong-password login against each replica for the same account
+#     and checks replica B sees the account-locked state replica A's
+#     attempt wrote, proving the KVStore seam crossed the same boundary --
+#     the positive half of the M0 exit condition this file's own NOT YET
+#     section used to record as entirely missing -- plus a negative-path
+#     sub-test proving an incompletely-composed distributed boot still
+#     fails closed through the real binary's own process exit code, not
+#     just server_test.go's in-process form. Its
 #     lint lives here, not in fast-check, keeping the fast per-PR pipeline
 #     on its 8-minute budget; the app's go.mod is still validated on every
 #     PR by fast-check's repo-checks workspace build.
