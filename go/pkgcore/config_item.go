@@ -24,6 +24,15 @@ var configItemTypes = map[string]struct{}{
 // nobody can save. Errors wrap ErrInvalidConfigItem and name the key (when
 // the item has one) and the contradiction, never the value of a Sensitive
 // item.
+//
+// This guarantee is load-bearing for a CodeQL go/clear-text-logging alert
+// traced through this function (go/authn's socialCredentialItems ->
+// ConfigItem{Key: channel.secretKey, Sensitive: true} -> here -> up through
+// Register/Bootstrap to a log call in the reference app's main.go, reviewed
+// and confirmed a false positive): every error this function returns names
+// only item.Key, a schema identifier, never item.Default or any other
+// value-bearing field. Do not add a value to any error message here without
+// re-auditing that alert.
 func validateConfigItem(item ConfigItem) error {
 	if item.Key == "" {
 		return fmt.Errorf("%w: an item without a key cannot be registered", ErrInvalidConfigItem)

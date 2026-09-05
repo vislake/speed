@@ -61,6 +61,19 @@ type Mailer interface {
 // validateMail enforces the rules ErrInvalidMail describes. It is shared by
 // every implementation so that a message accepted by one backend is accepted
 // by all of them, and the checks run before a message touches the wire.
+//
+// This is the header-injection barrier for buildMessage's raw From/To/Subject
+// interpolation in smtp_mailer.go: every Mailer.Send calls validateMail first
+// and returns before reaching buildMessage, so a \r or \n in any of those
+// three fields never survives to be written as a header line. CodeQL's
+// go/email-injection alert on smtp_mailer.go does not recognize this
+// validate-then-return-early pattern as a sanitizing barrier across the two
+// separate call sites (Send validates, then later in the same function calls
+// buildMessage) -- reviewed and confirmed a false positive; do not remove
+// this check without re-auditing that alert. See mailer_test.go's
+// TestConsoleMailer_RejectsInvalidMail, smtp_mailer_test.go's
+// TestSMTPMailer_Send_RejectsInvalidMailWithoutTouchingTheWire, and
+// mailertest/assert_conforms.go for the tests pinning this guarantee.
 func validateMail(mail Mail) error {
 	if mail.From == "" {
 		return fmt.Errorf("%w: From is empty", ErrInvalidMail)
@@ -98,6 +111,13 @@ func validateMail(mail Mail) error {
 // consoleMailer is the standalone deployment mode's Mailer: it prints every
 // message to an io.Writer, standard output by default. A mutex guards the
 // writer so that concurrent Send calls cannot interleave their output.
+//
+// w is an arbitrary io.Writer (os.Stdout in production), never an
+// http.ResponseWriter -- see go/observability/middleware.go's statusRecorder
+// (its own Write method) for the CodeQL go/reflected-xss false positive
+// this field's Write call is one side of: CodeQL's points-to analysis
+// conflates the two because both satisfy the identical Write([]byte) (int,
+// error) signature, but they are never the same writer instance at runtime.
 type consoleMailer struct {
 	mu sync.Mutex
 	w  io.Writer

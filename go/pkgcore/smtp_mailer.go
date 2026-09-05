@@ -308,6 +308,13 @@ func (m *smtpMailer) authenticate(client *smtp.Client) error {
 // prefer them. The boundary in the Content-Type header and the one the parts
 // use come from the same multipart.Writer, because the header must be written
 // before the body but the writer's boundary is only settled once.
+//
+// buildMessage trusts mail.From/To/Subject to already be free of \r\n: its
+// only caller, Send, calls validateMail first and returns on any failure
+// before reaching this function, so the raw interpolation below cannot be
+// used for SMTP header injection. (CodeQL's go/email-injection flags this
+// function; see validateMail's doc comment in mailer.go for the full
+// reasoning -- reviewed and confirmed a false positive.)
 func buildMessage(mail Mail) []byte {
 	contentType, body := renderBody(mail)
 
