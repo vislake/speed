@@ -14,11 +14,14 @@ replace github.com/vislake/speed/go/jobs => ../jobs
 
 replace github.com/vislake/speed/go/storage => ../storage
 
+replace github.com/vislake/speed/go/ratelimit => ../ratelimit
+
 require (
 	github.com/vislake/speed/go/dbkit v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/jobs v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/ratelimit v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/storage v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/tenancy v0.0.0-00010101000000-000000000000
 	gorm.io/gorm v1.31.2
