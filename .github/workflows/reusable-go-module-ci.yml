@@ -1,7 +1,7 @@
 name: go-module-ci
 
-# Reusable per-module Go CI, called by the pipeline orchestrators (pr-check
-# and pr-full today; nightly when it lands). docs/internal/18-cicd.md's
+# Reusable per-module Go CI, called by the pipeline orchestrators (fast-check
+# and full-check today; nightly when it lands). docs/internal/18-cicd.md's
 # reusable-workflow design section is the governing spec: callers enumerate
 # one matrix row per module, so adding a module means adding one row to a
 # caller's matrix -- never copying this file's legs into a workflow.
@@ -36,7 +36,7 @@ name: go-module-ci
 #                                integration_test/ runs both tiers)
 #                                intentionally do NOT run here: 18-cicd's
 #                                layered-triggering rule puts them in the
-#                                pre-merge full matrix (pr-full), not in
+#                                pre-merge full matrix (full-check), not in
 #                                the fast per-PR check.
 #   4. go build ./...            module build in workspace context.
 #   5. GOWORK=off go build ./... standalone build proving the module's
@@ -75,8 +75,8 @@ jobs:
         uses: ./.github/actions/setup-go-env
         with:
           # The golangci-lint leg below needs the binary; the install is
-          # opt-in so the non-linting setup-go-env callers (pr-check's
-          # repo-checks job, pr-full's integration-tiers rows) do not pay
+          # opt-in so the non-linting setup-go-env callers (fast-check's
+          # repo-checks job, full-check's integration-tiers rows) do not pay
           # for a download and cache round-trip they never use.
           install-golangci: true
       - name: golangci-lint

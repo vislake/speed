@@ -24,7 +24,7 @@ name: release
 #      here already (this job), the rest waits for the release round's
 #      process decisions (docs/internal/02-repo-and-release.md).
 #   2. full test matrix, any failure aborts -- waits for nothing
-#      technical: pr-full already runs the Docker-backed integration
+#      technical: full-check already runs the Docker-backed integration
 #      matrix on full-ci-labelled PRs today; the release round mounts the
 #      same reusable workflows here.
 #   3. Go release -- one tag per module directory, go/<module>/<version>

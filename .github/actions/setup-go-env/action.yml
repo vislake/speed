@@ -14,12 +14,12 @@ description: >-
 # per-module metadata, not a second source CI reads, and it cannot drift
 # above go.work: the go command refuses to load a workspace in which any
 # listed module's go.mod demands a newer go than go.work declares. CI
-# exercises that guard in pr-check's repo-checks job, whose workspace-wide
+# exercises that guard in fast-check's repo-checks job, whose workspace-wide
 # `go build github.com/vislake/speed/go/...` compiles every go/ module's
 # packages, the fifteen stubs included. The same load-time check covers
 # examples/reference-app too -- go.work lists it, so its go.mod is
-# validated on every pr-check run even though no every-PR job builds its
-# packages (its unit suite is pr-full's reference-app job to run -- live
+# validated on every fast-check run even though no every-PR job builds its
+# packages (its unit suite is full-check's reference-app job to run -- live
 # since the second CI layer -- so its packages are built and tested there,
 # on full-ci-labeled PRs). (Today the six
 # real modules -- go/dbkit, go/jobs, go/observability, go/pkgcore,
@@ -34,7 +34,7 @@ description: >-
 # go.work rather than being repointed at .mise.toml: actions/setup-go can
 # only read go.mod, go.work, go.sum or .go-version, so a mise config is
 # not a file it can resolve. CI and local installs therefore read two
-# files by design, and tools/check_toolchain.py -- wired into pr-check's
+# files by design, and tools/check_toolchain.py -- wired into fast-check's
 # repo-checks job -- is the drift gate proving the .mise.toml mirror
 # equals this directive.
 #
@@ -42,8 +42,8 @@ description: >-
 # golangci-lint installs only for jobs that lint: callers set the
 # install-golangci input below (default false) -- today the reusable
 # go-module-ci workflow's golangci-lint leg and the reference-app job of
-# pr-full -- so there is exactly one install site, and it is opt-in. The
-# other callers (pr-check's repo-checks job, pr-full's integration-tiers
+# full-check -- so there is exactly one install site, and it is opt-in. The
+# other callers (fast-check's repo-checks job, full-check's integration-tiers
 # rows) run Go but never lint; an unconditional install would cost them a
 # ~15 MB download plus checksum verify on every job (the RUNNER_TOOL_CACHE
 # install dir below is per-job, so the existence guard never short-circuits

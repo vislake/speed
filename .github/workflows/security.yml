@@ -55,7 +55,7 @@ name: security
 #
 # DEFERRED (each has a real prerequisite missing today; wiring them now
 # would produce a permanently red check -- the half-wired state this repo
-# refuses to ship, see the gated-stub rationale in pr-check.yml):
+# refuses to ship, see the gated-stub rationale in fast-check.yml):
 #   * deps-go (govulncheck @v1.1.4, one run per module directory against
 #     the CI toolchain go 1.25.0 from go.work): the scan cannot pass on
 #     the current tree, in two independent classes, and neither fix is

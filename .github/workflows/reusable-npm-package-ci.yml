@@ -1,7 +1,7 @@
 name: npm-package-ci
 
 # Reusable per-package npm CI, called by the pipeline orchestrators
-# (pr-check today; pr-full, nightly and release when they grow npm legs).
+# (fast-check today; full-check, nightly and release when they grow npm legs).
 # docs/internal/18-cicd.md's reusable-workflow design section is the
 # governing spec: callers enumerate one matrix row per package, so adding a
 # package means adding one row to a caller's matrix -- never copying this
@@ -42,7 +42,7 @@ name: npm-package-ci
 #                    whitelist -- api-client src is where hand-written
 #                    HTTP is designed to live, and the rule is the guard
 #                    that keeps it there. The rules' unit tests live
-#                    outside every package; pr-check runs them once per
+#                    outside every package; fast-check runs them once per
 #                    PR in its repo-checks job, not in these per-package
 #                    legs.
 #   2. pnpm typecheck

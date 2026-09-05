@@ -11,8 +11,8 @@ name: nightly
 # (a scheduled stub would only produce daily noise).
 #
 # CONTENT PLANNED:
-#   * the full matrix -- inherits everything pr-full runs, so nightly could
-#     not be meaningfully implemented before pr-full existed; pr-full is
+#   * the full matrix -- inherits everything full-check runs, so nightly could
+#     not be meaningfully implemented before full-check existed; full-check is
 #     live now, so this half is unblocked;
 #   * benchmark regression: docs/internal/20-quality-and-security.md names
 #     the planned hotspots (tenant-filtered repository queries,
@@ -25,7 +25,7 @@ name: nightly
 #     the auto-issue mechanism needs a token with issues: write, reviewed
 #     when the round lands.
 #
-# GATE: the first benchmark suites (roadmap M1 onward). pr-full, the other
+# GATE: the first benchmark suites (roadmap M1 onward). full-check, the other
 # half of this pipeline's content, went live with the M0 CI round, so the
 # full-matrix half no longer blocks anything; no benchmark suite exists in
 # the tree yet (grep "func Benchmark" over go/ and examples/ returns
@@ -48,5 +48,5 @@ jobs:
           echo "error: the nightly pipeline is not implemented. This failing"
           echo "run is its stub guard, so the pipeline can never pass"
           echo "silently. Wire the full matrix + benchmark + flaky-detection"
-          echo "legs once pr-full is live and the first benchmarks exist."
+          echo "legs once full-check is live and the first benchmarks exist."
           exit 1

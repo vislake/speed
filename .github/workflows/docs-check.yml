@@ -5,7 +5,7 @@ name: docs-check
 # compile and run, link checks, zh-CN/en-US i18n key-set parity, and config-
 # reference drift detection. Target under 5 minutes. This pipeline is also a
 # branch-protection required check at 18-cicd's branch-protection section
-# (alongside pr-check and security); runs skipped by the path filter report
+# (alongside fast-check and security); runs skipped by the path filter report
 # neutral and never block a merge.
 #
 # DESIGN-TABLE TRIGGER: PRs touching documentation or a public API, via
@@ -13,7 +13,7 @@ name: docs-check
 # actions (dorny/paths-filter stays future work for the module set, per
 # 18-cicd's cost-control section; with a single-job pipeline the event's own
 # path filter is the whole gate). The path set below is deliberately not
-# "everything": code-only PRs are already covered by pr-check's module
+# "everything": code-only PRs are already covered by fast-check's module
 # matrix and must not fire this pipeline, while locale and i18n-contract
 # changes must never slip through it.
 #
@@ -60,7 +60,7 @@ name: docs-check
 #     (docs/site/README.md, docs/internal/13-documentation-standards.md).
 #   * a dedicated harness for prose-embedded documentation examples. Go
 #     example tests already compile and run inside the go-module-ci unit
-#     suites (pr-check/pr-full); what does not exist is a harness for
+#     suites (fast-check/full-check); what does not exist is a harness for
 #     examples embedded in docs prose and AGENTS.md files.
 #
 # PATH SET -- documentation or i18n/public-API changes only:

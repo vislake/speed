@@ -20,11 +20,11 @@ name: api-contract
 # fragment(s), the generator config, the api:gen task definition, and this
 # workflow itself. A PR touching only handler code has nothing to
 # regenerate; whether it still implements the interface is a compile
-# question, answered by pr-full's reference-app job on full-ci-labeled PRs
-# (the reference-app unit suite is not part of pr-check -- see pr-check's
+# question, answered by full-check's reference-app job on full-ci-labeled PRs
+# (the reference-app unit suite is not part of fast-check -- see fast-check's
 # DELIBERATELY NOT WIRED list) and, for authn, by this workflow's own
 # go/authn build leg below (go/authn is a real module built on every
-# pr-check run regardless of what changed, so its own compile enforcement
+# fast-check run regardless of what changed, so its own compile enforcement
 # does not need to wait for full-ci the way the reference app's does).
 #
 # COVERAGE -- what genuinely runs today (in step order)
@@ -115,7 +115,7 @@ name: api-contract
 #     with no separate step needed for org's, storage's, notification's
 #     or sharing's own module build. Without this leg a spec+artifact
 #     PR whose handler lagged
-#     would pass both this pipeline and pr-check (which does not build
+#     would pass both this pipeline and fast-check (which does not build
 #     the reference app). Precise only for a parameter-free operation,
 #     though: an operation carrying a path or query parameter makes the
 #     generated file import github.com/oapi-codegen/runtime, which the

@@ -5,7 +5,7 @@ description: >-
 
 # Shared Node.js toolchain setup for every CI job that runs pnpm commands.
 # The consumers are the reusable workflows that check npm packages
-# (workflows/reusable-npm-package-ci.yml today, pr-full/release/nightly
+# (workflows/reusable-npm-package-ci.yml today, full-check/release/nightly
 # when they grow npm legs).
 #
 # VERSION SOURCES -- single sites, identical locally and in CI
