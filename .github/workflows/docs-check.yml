@@ -3,10 +3,14 @@ name: docs-check
 # Documentation and public-API discipline pipeline -- docs/internal/
 # 18-cicd.md's pipeline table, docs-check row: documentation code examples
 # compile and run, link checks, zh-CN/en-US i18n key-set parity, and config-
-# reference drift detection. Target under 5 minutes. This pipeline is also a
-# branch-protection required check at 18-cicd's branch-protection section
-# (alongside fast-check and security); runs skipped by the path filter report
-# neutral and never block a merge.
+# reference drift detection. Target under 8 minutes (raised from 5 when the
+# markdown-example check below added a second toolchain install -- Go,
+# alongside Hugo -- plus two tiny throwaway-module `go build`+`go vet`
+# calls; both are cheap in practice but the budget line should not lie
+# about what the job now does). This pipeline is also a branch-protection
+# required check at 18-cicd's branch-protection section (alongside
+# fast-check and security); runs skipped by the path filter report neutral
+# and never block a merge.
 #
 # DESIGN-TABLE TRIGGER: PRs touching documentation or a public API, via
 # GitHub-native path filtering on the pull_request event -- zero third-party
@@ -46,6 +50,32 @@ name: docs-check
 #     ephemeral port and fetches the site root). Needs the pinned Hugo
 #     binary (setup-hugo-env step below) and the theme submodule checked
 #     out, unlike the dependency-free i18n checker above.
+#   * markdown Go example compile/parse check: python3 tools/
+#     check_markdown_examples.py from the repository root, closing the
+#     "dedicated harness for prose-embedded documentation examples" item
+#     this file used to carry in the list below (root CLAUDE.md's
+#     Documentation section names the same gap: "Examples embedded in
+#     markdown prose (AGENTS.md, READMEs, ADRs) have no compile harness").
+#     Every fenced ```go block in every AGENTS.md, go/*/README.md,
+#     web/packages/*/README.md, the root README.md and docs/adr/*.md is
+#     checked (docs/internal/** is deliberately excluded -- see the
+#     script's own module docstring for why): a block that opens with its
+#     own `package` clause is a claim of real working code and is really
+#     `go build`+`go vet`'d, in a throwaway module `replace`-directived
+#     onto whichever go/<module> packages its own imports name (the
+#     replace directive alone -- not GOPROXY -- guarantees this repo's own
+#     modules resolve to the tree under review rather than a stale
+#     published version, so the default GOPROXY is left alone and only
+#     GOWORK=off is set, keeping real third-party transitive dependencies
+#     fetchable on a cold module cache); a bare
+#     fragment (the overwhelming majority of the corpus -- a partial
+#     snippet is a deliberate, legitimate documentation style, not a bug)
+#     is instead syntax-checked with `gofmt -e` under several throwaway
+#     wrappings (top-level declaration list, function body, interface
+#     body, struct body, const/var block), failing only if EVERY wrapping
+#     rejects it. Needs the pinned Go toolchain (setup-go-env step below,
+#     no golangci-lint install) but no network beyond what actions/
+#     checkout and setup-go already needed, and no Docker.
 #
 # DELIBERATELY NOT WIRED HERE -- roadmap M0 docs-engineering items whose
 # tooling does not exist yet (wiring them now would be fake checks):
@@ -62,10 +92,6 @@ name: docs-check
 #   * per-version release directories for docs/site/ (the site versioned
 #     like the code it documents) -- still a later (M4) milestone item
 #     (docs/site/README.md, docs/internal/13-documentation-standards.md).
-#   * a dedicated harness for prose-embedded documentation examples. Go
-#     example tests already compile and run inside the go-module-ci unit
-#     suites (fast-check/full-check); what does not exist is a harness for
-#     examples embedded in docs prose and AGENTS.md files.
 #
 # PATH SET -- documentation or i18n/public-API changes only:
 #   docs/**                     the design docs this pipeline guards, and
@@ -74,12 +100,44 @@ name: docs-check
 #                                the theme submodule's pointer commit)
 #   .claude/**                  skill handbooks (standards documentation)
 #   **/AGENTS.md                per-module discipline docs (consumer-facing)
-#   **/locales/**               i18n resources -- the check's direct subject
-#   go/pkgcore/i18n/**          the catalog contract the checker mirrors
-#   tools/check_i18n_keys.py    the checker itself (self-test on change)
-#   tools/check_docs_site.py    the site checker (self-test on change)
+#   go/*/README.md               package READMEs the markdown-example
+#   web/packages/*/README.md     checker also scans (root README.md is
+#                                already covered by the CLAUDE.md/README.md
+#                                line below)
+#   **/locales/**                i18n resources -- the check's direct subject
+#   go/pkgcore/**                the catalog contract the checker mirrors,
+#                                and (see next entry) a dependency of both
+#                                complete markdown examples in the corpus
+#   go/dbkit/**, go/ratelimit/** the two modules a markdown ```go block
+#                                currently claims to be real, buildable code
+#                                against (go/dbkit/AGENTS.md, go/ratelimit/
+#                                AGENTS.md) -- a source-only change to
+#                                either module with no markdown edit could
+#                                otherwise silently make that example stale
+#                                with nothing to catch it (fast-check's own
+#                                module matrix never builds markdown
+#                                fences). Both examples also import
+#                                go/pkgcore directly (pkgcore.TenantID in
+#                                dbkit's, pkgcore.KVStore/NewMemoryKVStore
+#                                in ratelimit's -- confirmed via
+#                                _module_dirs_for_block), which is why
+#                                go/pkgcore/** is listed above rather than
+#                                the narrower go/pkgcore/i18n/** alone. This
+#                                list is exactly the set
+#                                check_markdown_examples.py's own --survey
+#                                mode reports as owning a "complete" block
+#                                today; re-run --survey and extend this
+#                                list by hand whenever a new complete block
+#                                starts depending on a module not named here
+#   tools/check_i18n_keys.py     the checker itself (self-test on change)
+#   tools/check_docs_site.py     the site checker (self-test on change)
+#   tools/check_markdown_examples.py       the markdown-example checker
+#   tools/test_check_markdown_examples.py  and its own unit test suite
+#                                (self-test on change)
 #   .github/actions/setup-hugo-env/**  the pinned Hugo install this job
 #                                needs (self-test on change)
+#   .github/actions/setup-go-env/**    the pinned Go install the markdown-
+#                                example check needs (self-test on change)
 #   CLAUDE.md, README.md        root docs stating the rules and CI claims
 #   Taskfile.yml                dev-workflow docs of the checker commands
 
@@ -89,11 +147,18 @@ on:
       - docs/**
       - .claude/**
       - "**/AGENTS.md"
+      - go/*/README.md
+      - web/packages/*/README.md
       - "**/locales/**"
-      - go/pkgcore/i18n/**
+      - go/pkgcore/**
+      - go/dbkit/**
+      - go/ratelimit/**
       - tools/check_i18n_keys.py
       - tools/check_docs_site.py
+      - tools/check_markdown_examples.py
+      - tools/test_check_markdown_examples.py
       - .github/actions/setup-hugo-env/**
+      - .github/actions/setup-go-env/**
       - CLAUDE.md
       - README.md
       - Taskfile.yml
@@ -110,7 +175,7 @@ jobs:
   docs-checks:
     name: docs discipline checks
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -124,3 +189,7 @@ jobs:
         uses: ./.github/actions/setup-hugo-env
       - name: Docs-site build (check_docs_site)
         run: python3 tools/check_docs_site.py
+      - name: Install pinned Go
+        uses: ./.github/actions/setup-go-env
+      - name: Markdown Go example compile/parse check
+        run: python3 tools/check_markdown_examples.py

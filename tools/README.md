@@ -1,7 +1,7 @@
 # tools/ — repo scripts
 
 Plain, dependency-free Python scripts (standard library only, Python >= 3.11
-for `tomllib`) that back the repository's cross-cutting disciplines and its release machinery: three discipline checkers, the dependency-license scanner with its committed manifest, one scaffold generator, the semgrep architecture-discipline ruleset under `tools/semgrep_rules/` with its planted-violation fixtures, and the lockstep release coordinator (a release tool, not a discipline checker — it follows the same convention, which is why it lives here). The checkers are the local-run counterparts of the CI discipline checks scheduled in `docs/internal/18-cicd.md` (the table rows for banning CJK outside `docs/internal/`, for requiring identical zh-CN/en-US message-key sets, and for making every tenant-scoped Repository run the tenancytest isolation suite, all marked there as self-written scripts); CI workflows mount two of the three under `tools/` — `scan_cjk.py` in fast-check's repo-checks job and `check_i18n_keys.py` in the docs-check pipeline — while `check_repo_isolation.py` is wired into no workflow yet and runs locally only (see "Running in CI and locally" below). Two further scripts are repo self-checks rather than 18-cicd discipline rows: `tools/check_toolchain.py` gates the tool versions the root `.mise.toml` pins — mirrors of the authoritative sources CI actually reads (Taskfile.yml header, `go.work`, `web/.nvmrc`, `web/package.json`, setup-go-env's `GOLANGCI_VERSION`) — proving the mirrors cannot drift, and fast-check's repo-checks job runs it; `tools/check_docs_site.py` validates the docs-site skeleton (required entry files, internal links, offline preview) and the docs-check pipeline runs it. The generator is the backend of the `task new:module` promised by `docs/internal/19-dev-workflow.md`. The release coordinator (`release/lockstep-release.py`) is the M0 deliverable for the roadmap's lockstep-release item (`docs/internal/02-repo-and-release.md`, `docs/internal/18-cicd.md`), an offline verification of the full one-version release plan, wrapped by the root Taskfile's `release:plan` task and mounted by `.github/workflows/release.yml`; its unittest suite and go.mod fixtures live beside it under `tools/release/`. Nothing here needs anything beyond `python3` except the semgrep ruleset, which needs a semgrep binary to run (see the ruleset section for the pinned local version and the CI shape), and the checkers print hit paths relative to their `--root`.
+for `tomllib`) that back the repository's cross-cutting disciplines and its release machinery: three discipline checkers, a fourth Go-toolchain-requiring markdown-example checker, the dependency-license scanner with its committed manifest, one scaffold generator, the semgrep architecture-discipline ruleset under `tools/semgrep_rules/` with its planted-violation fixtures, and the lockstep release coordinator (a release tool, not a discipline checker — it follows the same convention, which is why it lives here). The checkers are the local-run counterparts of the CI discipline checks scheduled in `docs/internal/18-cicd.md` (the table rows for banning CJK outside `docs/internal/`, for requiring identical zh-CN/en-US message-key sets, and for making every tenant-scoped Repository run the tenancytest isolation suite, all marked there as self-written scripts); CI workflows mount two of the three under `tools/` — `scan_cjk.py` in fast-check's repo-checks job and `check_i18n_keys.py` in the docs-check pipeline — while `check_repo_isolation.py` is wired into no workflow yet and runs locally only (see "Running in CI and locally" below). Two further scripts are repo self-checks rather than 18-cicd discipline rows: `tools/check_toolchain.py` gates the tool versions the root `.mise.toml` pins — mirrors of the authoritative sources CI actually reads (Taskfile.yml header, `go.work`, `web/.nvmrc`, `web/package.json`, setup-go-env's `GOLANGCI_VERSION`) — proving the mirrors cannot drift, and fast-check's repo-checks job runs it; `tools/check_docs_site.py` validates the docs-site skeleton (required entry files, internal links, offline preview) and the docs-check pipeline runs it. `tools/check_markdown_examples.py` closes root CLAUDE.md's own recorded gap ("Examples embedded in markdown prose... have no compile harness"): every fenced ```go block in AGENTS.md/README/ADR prose is either really `go build`+`go vet`'d (a block with its own `package` clause) or `gofmt -e` syntax-checked under several throwaway wrappings (a bare fragment, the corpus majority) — the one script here that genuinely needs a Go toolchain, not just `python3` (see its own section below for why, and for the design tradeoff that keeps a partial snippet legitimate rather than forcing every example into a padded full program). The generator is the backend of the `task new:module` promised by `docs/internal/19-dev-workflow.md`. The release coordinator (`release/lockstep-release.py`) is the M0 deliverable for the roadmap's lockstep-release item (`docs/internal/02-repo-and-release.md`, `docs/internal/18-cicd.md`), an offline verification of the full one-version release plan, wrapped by the root Taskfile's `release:plan` task and mounted by `.github/workflows/release.yml`; its unittest suite and go.mod fixtures live beside it under `tools/release/`. Nothing here needs anything beyond `python3` except the semgrep ruleset (needs a semgrep binary) and `check_markdown_examples.py` (needs `go`/`gofmt` on PATH) — see their own sections for the pinned local versions and the CI shape — and the checkers print hit paths relative to their `--root`.
 
 | Script | Kind | Enforces / does | Exit codes |
 |---|---|---|---|
@@ -10,6 +10,7 @@ for `tomllib`) that back the repository's cross-cutting disciplines and its rele
 | `check_repo_isolation.py` | Checker | Multi-tenant isolation discipline: every Repository type (a struct embedding `dbkit.Repository[T]`) is covered by `tenancytest.AssertIsolated` in its package's tests | 0 all covered / 1 uncovered repository / 2 error |
 | `check_toolchain.py` | Checker | Root `.mise.toml` tool versions mirror their authoritative sources (Taskfile.yml header, `go.work`, `web/.nvmrc`, `web/package.json`, setup-go-env's `GOLANGCI_VERSION`) | 0 all mirrors match / 1 drift / 2 error |
 | `check_docs_site.py` | Checker | `docs/site/` skeleton structure: required entry files present, internal links resolve inside the tree, offline preview serves (python3 stdlib HTTP server) | 0 clean / 1 violation / 2 error |
+| `check_markdown_examples.py` | Checker | Root `CLAUDE.md` Documentation section: every fenced ```go block in AGENTS.md/README/ADR prose really compiles (a complete block) or at least parses under some throwaway wrapping (a fragment) | 0 clean / 1 a block fails its check / 2 error |
 | `license_scan.py` | Checker | Dependency-license compliance: every direct third-party dependency of the implemented Go modules and web packages is adjudicated and within policy in `dependency-licenses.json`, re-derived from the live tree on every run | 0 clean / 1 violation / 2 usage error |
 | `new_module.py` | Generator | Scaffolds the canonical stub of a new Go module under `go/<name>` and prints its registration checklist; never modifies shared repository files | 0 scaffolded / 2 refusal or validation error |
 | `release/lockstep-release.py` | Release verifier | Verifies the lockstep one-version release plan offline — derives the publishable set at runtime (go.work `use` entries under `go/` + `web/packages/*`) and checks version form, no duplicate tag, go.work-to-tree completeness both ways, uniform npm versions, changesets fixed-group coverage (`web/.changeset/config.json`); `--self-test` runs its unittest suite; `--apply` is a hard-gated local-tag mode (real publishing is M4's job) | 0 consistent plan / 1 inconsistent plan or self-test failure / 2 usage / 3 `--apply` refused |
@@ -276,6 +277,77 @@ handled:
 docs-site: violation    index.html: required entry file is missing
 docs-site: violation    status.html: link 'aboutx.html' resolves to nothing
 ```
+
+## check_markdown_examples.py — markdown Go-example compiler/parser
+
+Closes the gap root CLAUDE.md's Documentation section names plainly:
+"Godoc Example functions are compiled and run by CI inside each module's
+unit suite... Examples embedded in markdown prose (AGENTS.md, READMEs,
+ADRs) have no compile harness." A real survey of this repository's own
+corpus (every `AGENTS.md`, every `go/*/README.md` and
+`web/packages/*/README.md`, the root `README.md`, `docs/adr/*.md` --
+`docs/internal/**` is deliberately out of scope, see the script's own
+module docstring) found 20 fenced ```go blocks across 8 files, 18 of
+them deliberately partial illustrative fragments and only 2 complete,
+self-contained files (their own `package` clause). That split is not
+incidental — most of a good AGENTS.md's code blocks are "here is the
+shape of this call", not "here is a whole program" — so the script draws
+its check exactly on that line rather than forcing every fragment into a
+padded, noisy full program just to satisfy a linter:
+
+* A **complete** block (starts with its own `package` clause) is a claim
+  of real, working code. It is really compiled: written into a throwaway
+  Go module whose own imports are scanned for
+  `github.com/vislake/speed/go/<module>` (or `.../examples/reference-app`)
+  paths, `replace`-directived onto that module's real directory under
+  `--root`, then `go build ./...` and `go vet ./...` are run against it
+  with `GOWORK=off` (so it never inherits the repo's own go.work) and the
+  default `GOPROXY` — the `replace` directive alone guarantees this
+  repo's own modules resolve to the working tree under review rather than
+  a stale published version regardless of `GOPROXY`, so `GOPROXY=off`
+  would buy nothing for that goal while blocking real third-party
+  transitive dependencies from resolving on a cold module cache. A real
+  compile failure here is a genuine documentation bug.
+* A **fragment** block (no `package` clause) cannot be honestly compiled
+  without inventing context its author never wrote, so it is instead
+  syntax-checked with `gofmt -e` (a zero-additional-code front end onto
+  `go/parser` — gofmt's own implementation is exactly `parser.ParseFile`
+  plus `go/printer`) under several throwaway wrappings in turn: as a
+  top-level declaration list (legal even for a bare function *signature*
+  with no body — Go's grammar permits that), as a function body, as an
+  interface body, as a struct body, as a const block, as a var block.
+  The first wrapping that parses wins; a fragment that parses under NONE
+  of them is a hard violation, not a warning — a syntactically broken
+  snippet (a stray `...` elision placeholder standing where Go requires a
+  real token, an unbalanced brace) is exactly the bug a reader
+  cutting-and-pasting the snippet would hit immediately, and this
+  repository's own first run of the script found two real instances of
+  precisely that shape (go/dbkit/AGENTS.md, go/admin/AGENTS.md — both
+  fixed in the same commit that introduced this script, never papered
+  over by loosening the check).
+
+A fragment that is genuinely, unavoidably unwrappable can be marked with
+an HTML comment on the line immediately before its fence —
+`<!-- markdown-example: no-parse-check -->` — a hard, git-diff-visible,
+per-block opt-out a reviewer sees in the same pull request that adds it,
+mirroring this repository's other adjudication escapes (`license_scan.py`'s
+`adr` field, semgrep's planted-fixture allowlist). Nothing in the corpus
+uses it today.
+
+Usage:
+
+```
+python3 tools/check_markdown_examples.py --root /path/to/repo
+python3 tools/check_markdown_examples.py        # --root defaults to the current directory
+python3 tools/check_markdown_examples.py --survey     # corpus census only, no compiling/parsing
+python3 tools/check_markdown_examples.py --keep-temp  # leave throwaway build dirs on disk
+```
+
+Needs `go` and `gofmt` on PATH (the one script under `tools/` with that
+requirement) but no network beyond whatever `go mod tidy` needs to
+resolve a complete block's ordinary third-party imports from the local
+module cache, and no Docker. Runs in the docs-check pipeline
+(`.github/workflows/docs-check.yml`) after a pinned Go install.
 
 ## gen_error_code_index.py — error-code index generator
 
@@ -565,9 +637,12 @@ fail the build on a nonzero exit: `python3 tools/scan_cjk.py` and
 (catalogued above) run in fast-check's repo-checks job (every pull
 request, `.github/workflows/fast-check.yml`);
 `python3 tools/check_i18n_keys.py` plus `python3 tools/check_docs_site.py`
-run in the docs-check pipeline (`.github/workflows/docs-check.yml`),
-whose pull_request path filter fires on PRs touching documentation or
-i18n resources; and the license scanner (`python3 tools/license_scan.py`,
+plus `python3 tools/check_markdown_examples.py` (after a pinned Go
+install, `./.github/actions/setup-go-env`) run in the docs-check pipeline
+(`.github/workflows/docs-check.yml`), whose pull_request path filter fires
+on PRs touching documentation, i18n resources, or the two modules
+(`go/dbkit`, `go/ratelimit`) a markdown example currently claims to
+build against; and the license scanner (`python3 tools/license_scan.py`,
 selftest first, then the real check) runs in the security pipeline's
 license job (`.github/workflows/security.yml`).
 `tools/check_repo_isolation.py` and `tools/gen_error_code_index.py --check`
@@ -579,10 +654,15 @@ repository root — the default `--root` is the current directory, so plain
 to `--root`. `license_scan.py` is the exception: it takes no `--root` at
 all (passing one is a usage error, exit 2) and always resolves the
 repository root from its own location under `tools/`, so it can be invoked
-by absolute path from any working directory. All scripts are plain executables with no third-party
-dependencies and no module metadata of their own; they live here precisely
-so a CI image never needs a Go toolchain or a package install to enforce
-these disciplines. The generator is a developer-time tool: run it when a
+by absolute path from any working directory. All scripts here are plain
+executables with no third-party Python dependencies and no module metadata
+of their own; nearly all of them need nothing beyond `python3`, so a CI
+image never needs a Go toolchain or a package install just to enforce
+these disciplines. `check_markdown_examples.py` is the one exception --
+compiling a markdown code example is, unavoidably, a Go-toolchain
+operation, so its docs-check step is the one place in this pipeline that
+installs one (`.github/actions/setup-go-env`, no golangci-lint). The
+generator is a developer-time tool: run it when a
 roadmap item assigns a module a milestone, commit the three scaffolded
 files with the design doc, and perform the printed registrations in the
 same change.

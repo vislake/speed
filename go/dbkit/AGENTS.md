@@ -184,7 +184,9 @@ account := Account{Email: form.Email, EmailIndex: indexValue}
 
 cond, err := emailIndex.Equal(form.Email) // normalize identically at query time
 var got Account
-if err := db.Where(cond).First(&got).Error; err != nil { ... }
+if err := db.Where(cond).First(&got).Error; err != nil {
+	// handle err
+}
 ```
 
 ### RLS session state — `tenant_session.go`

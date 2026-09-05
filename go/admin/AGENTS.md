@@ -58,7 +58,7 @@ The fixed middleware chain (`docs/internal/01-architecture.md`) is `authn.Middle
 ```go
 authn.Middleware(verifier)(
     admin.ImpersonationMiddleware(adminModule.Impersonation())(
-        tenancy.Middleware(authn.NewPrincipalResolver(), ...)(mux),
+        tenancy.Middleware(authn.NewPrincipalResolver())(mux), // trailing ...Option args, if any, are unaffected
     ),
 )
 ```
