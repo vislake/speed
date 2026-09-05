@@ -147,7 +147,7 @@ tasks:
         done
 
   lint:
-    desc: Vet every module (workspace and reference app), then run golangci-lint per module.
+    desc: Vet every module (workspace and reference app), run golangci-lint per module, then lint the web workspace.
     # go vet over the import-path pattern covers every module under go/ in one
     # workspace-wide pass; the reference app is a separate module outside go/
     # and gets its own dir-scoped vet.
@@ -186,6 +186,31 @@ tasks:
           echo "         (golangci-lint included; tools/check_toolchain.py keeps the mirrors"
           echo "         honest in CI -- docs/internal/19-dev-workflow.md)."
           echo "         Run it manually from any module directory:  golangci-lint run ./..."
+        fi
+      - |
+        # web/ is a separate pnpm workspace (not part of go.work), and the
+        # eleven @speed/* packages plus the reference app's web host
+        # (examples/reference-app/web, wired in as an external member of
+        # web/pnpm-workspace.yaml) all carry their own lint script (root
+        # CLAUDE.md's Repository Status: "pnpm -r lint ... genuinely run
+        # and pass today"; CI enforces it per-package in the reusable
+        # npm-package-ci workflow). Guarded exactly like the golangci-lint
+        # loop above: warn and skip rather than hard-fail when pnpm is not
+        # on PATH, so a bare `task lint` still gets as far as it can on a
+        # machine that never ran `task setup`.
+        if command -v pnpm >/dev/null 2>&1; then
+          echo "== pnpm -r lint (web)"
+          (cd web && pnpm -r lint) || exit 1
+        else
+          echo "warning: pnpm is not on PATH, so the frontend lint leg above was"
+          echo "         skipped -- CI runs it on every pull request (the reusable"
+          echo "         npm-package-ci workflow's lint leg, once per web package and"
+          echo "         for the reference app's web host), so a local run that skips"
+          echo "         it can be green while the PR fails. With mise on PATH, 'task"
+          echo "         setup' installs the pinned Node/pnpm versions (web/.nvmrc,"
+          echo "         web/package.json's packageManager field are the single version"
+          echo "         sources) from the root .mise.toml. Run it manually from web/:"
+          echo "         pnpm -r lint"
         fi
 
   dev:
