@@ -142,16 +142,47 @@ describe('the app journey', () => {
   // These journeys drive dozens of real userEvent interactions and
   // network round-trips end to end -- on a warm dev machine the whole
   // file finishes in a few seconds, but a real GitHub Actions run
-  // (2026-09-05, pr-check run 2) measured a cold import alone at
-  // ~14s against ~0.8s locally, and the owner-day journey's own test
-  // then tripped vitest's 5000ms default per-test timeout while the
-  // read-only-member journey's `findByRole('alert')` separately
-  // tripped Testing Library's own, independent 1000ms default
-  // findBy/waitFor timeout. Both are raised here, file-scoped (vitest
-  // isolates each test file's module registry by default, so neither
-  // call reaches any other suite), with generous headroom over the
-  // worst CI timing observed rather than lowering what either
-  // assertion actually waits for.
+  // (2026-09-05, pr-check run 2) measured a cold import alone at ~14s
+  // against ~0.8s locally, and the owner-day journey's own test then
+  // tripped vitest's 5000ms default per-test timeout.
+  //
+  // That first timeout does not stay contained to its own test. Vitest
+  // has no way to cancel a running async test body -- it only races the
+  // test's promise against a timer and reports whichever settles first
+  // -- so the owner-day test's own userEvent/mutateAsync continuation
+  // keeps executing, unobserved, after vitest has already moved on to
+  // the next test. Reproduced directly (a throwaway forced-timeout
+  // build of this file): the abandoned continuation's console output
+  // lands under the *next* test's name in the reporter, and its
+  // continued DOM queries and network calls measurably starve the next
+  // test's own event-loop turns badly enough to blow its own timeout
+  // too -- because jsdom's `document` is one shared instance per test
+  // *file*, not per test, and Testing Library's render queries are
+  // bound to `document.body` by default rather than to the render's own
+  // container, an abandoned test's stale query handle keeps resolving
+  // against whatever the next test currently has on screen. That is
+  // the honest account of the read-only-member journey's own failure in
+  // the same CI run: its DOM at the moment `findByRole('alert')` gave
+  // up already carried a *real*, served note row (the reader's own
+  // typed text under the server's real creation timestamp) with no
+  // Alert in sight -- not a slow assertion, but exactly the signature
+  // this cross-test interference produces. `notes-view.tsx` and the
+  // demo server's write gate were re-audited over this: both are plain,
+  // deterministic, synchronous code with no path for a reader's create
+  // to succeed, and every scripted rbac refusal here is a real 403 the
+  // real notes handler's rbac gate produces (server_test.go:335) --
+  // there is no application-level bug for this failure to be hiding.
+  //
+  // The fix stays the one applied here (raising both budgets, file-
+  // scoped so neither call reaches another suite) because it removes
+  // the one precondition this whole cascade depends on: a test in this
+  // file actually exceeding its timeout. At ~14x the measured CI
+  // slowdown, 30s leaves the owner-day journey (a couple of seconds
+  // locally) generous headroom, so no test here should come close to
+  // needing it -- if one ever does, that is worth treating as its own
+  // incident rather than raising the budget again, since a second test
+  // in this file paying for the first one's overrun is exactly the
+  // failure mode above.
   beforeAll(() => {
     vi.setConfig({ testTimeout: 30_000 })
     configure({ asyncUtilTimeout: 5_000 })
