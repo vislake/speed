@@ -73,6 +73,17 @@ func newAPIKeyToken() (raw, prefix, hash string, err error) {
 // org.hashInvitationToken gives: the input is 32 bytes of full-entropy
 // randomness, not a human-chosen secret, so there is no dictionary an
 // attacker could use to make a slow hash worth paying for.
+//
+// CodeQL's go/weak-sensitive-data-hashing alert on this function: reviewed
+// and confirmed a false positive, on the identical precedent as
+// org.hashInvitationToken. hashAPIKeyToken's only call site in non-test code
+// is newAPIKeyToken above, immediately after rand.Read fills the raw 32-byte
+// key -- it is never called with a caller- or attacker-supplied string.
+// go/integration ships no Authenticate/Verify method yet (round 1's scope is
+// issuance/list/rotate/revoke only), so there is no lookup path today that
+// could ever feed this function attacker-influenced, low-entropy input. If a
+// future round adds key verification, re-check this reasoning still holds
+// before assuming it does.
 func hashAPIKeyToken(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
