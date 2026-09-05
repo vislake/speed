@@ -1,0 +1,41 @@
+# CODEOWNERS -- foundation-tier module review gate.
+#
+# Closes the gap docs/internal/18-cicd.md's own branch-protection section
+# records twice: a change touching pkgcore/dbkit/tenancy and other
+# foundation-tier modules is documented as needing a designated owner's
+# approval via CODEOWNERS, and its architecture-discipline table names
+# CODEOWNERS (over go/pkgcore and go/tenancy specifically) alongside manual
+# review and function-level doc convention as the enforcement mechanism for
+# the "system context is callable only by whitelisted modules" rule -- no
+# such file existed anywhere in this repository before this one, so
+# GitHub's own "Require review from Code Owners" branch protection setting
+# had nothing to bind to regardless of whether it was ever turned on.
+#
+# Foundation tier, per root CLAUDE.md's own dependency-floor framing
+# ("pkgcore -> dbkit / observability / ratelimit -> tenancy -> config /
+# jobs -> ..."): go/pkgcore is the dependency floor every other module
+# sits on, go/dbkit is the very next layer (the dual-dialect *gorm.DB
+# wrapper, the mandatory Repository[T], and the WithSystemContext
+# escape-hatch primitive dbkit/audit itself must call by its bare string
+# rather than an import -- see that package's own module.go doc comment),
+# and go/tenancy sits directly above both (the tenant-resolution
+# Middleware, the audited WithSystemContext wrapper business code is meant
+# to call instead of pkgcore's raw primitive, and the tenancytest isolation
+# suites every other module's repositories are required to run). A defect
+# in any of the three propagates to every module built on top of it.
+#
+# PLACEHOLDER TEAM HANDLE: @vislake/foundation-reviewers below does not
+# correspond to a real GitHub team in this organization -- there is no real
+# team to bind to yet. Replace it with a real team (or a list of real
+# individual reviewers) before relying on GitHub's "Require review from
+# Code Owners" branch protection setting to actually enforce anything;
+# until then, this file documents the INTENDED review gate but GitHub
+# cannot request a review from a team that does not exist.
+#
+# Last match wins (this is GitHub's own CODEOWNERS matching rule, not a
+# convention this file invents), so more specific paths are listed after
+# broader ones where both could apply.
+
+go/pkgcore/  @vislake/foundation-reviewers
+go/dbkit/    @vislake/foundation-reviewers
+go/tenancy/  @vislake/foundation-reviewers
