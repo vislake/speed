@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
@@ -166,9 +167,11 @@ func NewCreditTransactionRepository(db *gorm.DB) *CreditTransactionRepository {
 // regardless of what it held on entry). A duplicate ID is a genuine
 // primary-key conflict -- Insert never updates an existing row, since
 // Repository has no notion of "the same entry happening again" to
-// reconcile (CreditService.PreDeduct's own idempotent-retry handling
-// checks for the duplicate BEFORE calling Insert, inside the same
-// transaction -- see that method's doc comment).
+// reconcile. It is the strict insert (CreditService.PreDeduct's own
+// idempotent retry goes through the separate insertIdempotent core, which
+// reports a duplicate as a no-op answer rather than an error -- see that
+// method's doc comment); every other caller's rows carry fresh
+// uuid.NewString() ids that must never silently collide.
 func (r *CreditTransactionRepository) Insert(ctx context.Context, tx *CreditTransaction) error {
 	return dbkit.WithTenantSession(ctx, r.db, func(session *gorm.DB) error {
 		return r.insert(ctx, session, tx)
@@ -178,6 +181,10 @@ func (r *CreditTransactionRepository) Insert(ctx context.Context, tx *CreditTran
 // insert is Insert's transaction-scoped core, used directly by
 // CreditService's own multi-step transactions (which already hold a
 // dbkit.WithTenantSession session and must not open a second, nested one).
+// It is the strict core: a duplicate (id, tenant_id) is a genuine
+// primary-key conflict, returned as an error, never reconciled -- the
+// right answer for Grant and Expire, whose rows carry fresh
+// uuid.NewString() ids with no idempotent-retry contract of their own.
 func (r *CreditTransactionRepository) insert(ctx context.Context, session *gorm.DB, tx *CreditTransaction) error {
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
@@ -188,6 +195,41 @@ func (r *CreditTransactionRepository) insert(ctx context.Context, session *gorm.
 		return fmt.Errorf("billing: insert credit transaction: %w", err)
 	}
 	return nil
+}
+
+// insertIdempotent is insert's idempotent-retry twin, used by
+// CreditService.PreDeduct's reserve half -- the one insert whose duplicate
+// is a normal, expected outcome rather than an error (a retried PreDeduct
+// with the same caller-supplied IdempotencyKey meets its own earlier
+// attempt's row). It reports a duplicate (id, tenant_id) as inserted==false
+// with NO error, because the insert runs as ON CONFLICT DO NOTHING -- never
+// as a unique-constraint error. That matters because session is PreDeduct's
+// own still-open dbkit.WithTenantSession transaction: on PostgreSQL a
+// unique-violation error would leave that transaction aborted, and neither
+// this method's own read-back of the existing row nor anything else in the
+// transaction could run another statement on it (SQLSTATE 25P02, and a
+// COMMIT would be turned into a ROLLBACK). SQLite tolerates a failed
+// statement inside an open transaction, which is exactly why this shape's
+// original error-catch-then-read-back worked on the unit tier and broke on
+// PostgreSQL -- the identical poisoned-transaction defect go/metering's
+// outbox.go documents and fixed the same way (see that file's own
+// insertOutboxRecord doc comment).
+func (r *CreditTransactionRepository) insertIdempotent(ctx context.Context, session *gorm.DB, tx *CreditTransaction) (inserted bool, err error) {
+	tenant, err := pkgcore.MustTenantFromContext(ctx)
+	if err != nil {
+		return false, err
+	}
+	tx.TenantID = string(tenant)
+	res := session.
+		Clauses(clause.OnConflict{DoNothing: true}).
+		Create(tx)
+	if res.Error != nil {
+		return false, fmt.Errorf("billing: insert credit transaction: %w", res.Error)
+	}
+	// RowsAffected distinguishes the fresh insert (1) from the no-op the
+	// ON CONFLICT DO NOTHING became for a duplicate (0) -- on both
+	// dialects, without ever having raised a statement error.
+	return res.RowsAffected == 1, nil
 }
 
 // Get returns the CreditTransaction with the given id, for the tenant in

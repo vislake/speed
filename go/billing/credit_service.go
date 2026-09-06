@@ -189,8 +189,25 @@ func (s *CreditService) PreDeduct(ctx context.Context, in PreDeductInput) (*Cred
 			Amount: in.Amount,
 			Reason: in.Reason,
 		}
-		insertErr := s.transactions.insert(ctx, session, row)
-		if insertErr == nil {
+		// The insert runs as ON CONFLICT DO NOTHING and reports a duplicate
+		// (id, tenant_id) as inserted==false with NO error (see
+		// insertIdempotent's own doc comment for why that matters): the
+		// transaction stays healthy, and the read-back below -- the
+		// idempotent retry's answer -- runs on it either way. On PostgreSQL
+		// the shape this replaced -- catching the insert's unique-violation
+		// error and reading the existing row back on the SAME transaction
+		// -- could not work: the violation aborts the whole transaction
+		// (SQLSTATE 25P02), the read-back failed, and a retried PreDeduct
+		// whose first attempt had already committed returned an error
+		// instead of its own earlier reservation, breaking the money path
+		// on the one dialect SQLite's tolerance of a failed statement never
+		// exposed (P1-1, proven against real PostgreSQL by
+		// go/billing/integration_test/postgres_credit_transactions_test.go).
+		inserted, insertErr := s.transactions.insertIdempotent(ctx, session, row)
+		if insertErr != nil {
+			return insertErr
+		}
+		if inserted {
 			if err := s.ensureBalance(session, tenant); err != nil {
 				return err
 			}
@@ -206,19 +223,24 @@ func (s *CreditService) PreDeduct(ctx context.Context, in PreDeductInput) (*Cred
 			resultBalance = s.readBalanceForAudit(ctx, session, string(tenant))
 			return nil
 		}
-		if !isUniqueViolationErr(insertErr) {
-			return insertErr
-		}
-		// Idempotent retry: a row for this IdempotencyKey already exists.
+		// Idempotent retry: a row for this IdempotencyKey already exists --
+		// the transaction is still healthy (nothing aborted), so read the
+		// existing row back on it and return that instead of erroring or
+		// reserving a second time.
 		existing, err := s.findTransaction(session, in.IdempotencyKey)
 		if err != nil {
 			return err
 		}
 		if existing == nil {
-			// Unreachable in practice (the unique-key violation just
-			// proved a row exists), but never silently swallow it into a
-			// nil result.
-			return insertErr
+			// The conflicting row vanished between the no-op insert and
+			// this read-back -- only a concurrent deleter could do that,
+			// and nothing in this module deletes credit-transaction rows
+			// (the ledger is append-only; this repository offers no Delete
+			// at all). Unreachable in practice, but never silently swallow
+			// it into a nil result: the honest answer is a coded error a
+			// caller can retry on, exactly like go/metering's own
+			// errOutboxConflictRowVanished corner.
+			return errCreditReservationVanished
 		}
 		result = existing
 		return nil
@@ -589,14 +611,20 @@ func applyBalanceDelta(session *gorm.DB, tenantID string, availableDelta, reserv
 	return res.RowsAffected == 1, nil
 }
 
-// isUniqueViolationErr reports whether err is a unique-constraint
-// violation. dbkit.Open sets gorm.Config.TranslateError: true, so both
-// dialects' drivers already translate their own raw error into gorm's
-// portable gorm.ErrDuplicatedKey sentinel before this function ever sees
-// it -- the identical helper go/metering's outbox.go documents in full.
-func isUniqueViolationErr(err error) bool {
-	return errors.Is(err, gorm.ErrDuplicatedKey)
-}
+// errCreditReservationVanished reports the unreachable-in-practice corner
+// where a duplicate (id, tenant_id) PreDeduct insert skipped via ON
+// CONFLICT DO NOTHING but the read-back that follows finds no row: some
+// other writer deleted it between the two statements. Nothing in this
+// module deletes credit-transaction rows (the ledger is append-only, and
+// CreditTransactionRepository offers no Delete at all), so the branch
+// exists for completeness only; a caller retrying PreDeduct gets the
+// correct outcome either way, since a vanished row makes the retry a
+// plain first insert again. It is deliberately a plain package-internal
+// sentinel rather than an *apperr.Error: it is not reachable through any
+// user-facing surface, so it earns no error-index or locale entry -- the
+// identical choice go/metering's errOutboxConflictRowVanished makes for
+// the same corner in its own idempotent-insert path.
+var errCreditReservationVanished = errors.New("billing: conflicting credit-transaction row vanished between insert and read-back; retry PreDeduct")
 
 // readBalanceForAudit reads tenant's CreditBalance row through session --
 // the SAME *gorm.DB passed to the mutating transaction's own
