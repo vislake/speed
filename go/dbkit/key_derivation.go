@@ -46,13 +46,14 @@ const derivedKeySize = 32
 // version suffix, never edit the string in place.
 //
 // The output is always exactly derivedKeySize (32) bytes, produced by
-// HKDF-Expand alone (RFC 5869's Extract step is skipped, matching the
-// standard "expand from one high-entropy secret, no independent salt"
-// shape: rootKey itself supplies all the entropy this construction needs,
-// so a nil salt -- HKDF's spec-defined default of an all-zero string the
-// hash's own block size long -- loses nothing here). This is exactly what
-// makes DeriveKey suitable as a drop-in root key for NewCipher's activeKey/
-// retiredKeys and NewBlindIndexer's key: both require precisely 32 bytes.
+// stdlib crypto/hkdf.Key's full RFC 5869 Extract-then-Expand pipeline
+// (Extract over a nil salt, then Expand): rootKey itself supplies all the
+// entropy this construction needs, so a nil salt -- HKDF's spec-defined
+// default of an all-zero string as long as the hash's own output size
+// (HashLen; 32 bytes for SHA-256) -- loses nothing here. This is exactly
+// what makes DeriveKey suitable as a drop-in root key for NewCipher's
+// activeKey/retiredKeys and NewBlindIndexer's key: both require precisely
+// 32 bytes.
 //
 // # Why this does not violate the "never reuse key material" rule
 //
