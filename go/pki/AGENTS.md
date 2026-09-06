@@ -120,6 +120,44 @@ This is a deliberate "keep the column, skip the transition" choice, not a half-b
 - **`Service.PromoteNow` is a round-3 addition that is NOT itself revocation.** It exists as a companion to `RevokeSigningKey` (an emergency revocation leaves a purpose with no active key until something is promoted) but performs no revocation of its own, and nothing in this module ever calls it automatically -- a host must call it explicitly. See `lifecycle.go`'s own doc comment for why it lives next to `PromoteDuePending` rather than in `revocation.go`, and for why it honors, rather than bypasses, the propagation window.
 - **`Service.EnqueueExpiryScan`'s idempotency choice is deliberate, not an oversight.** Unlike `storage.EnqueueExpirySweep`'s per-tenant `IdempotencyKey`, this round's `EnqueueExpiryScan` sets none: each expiry-scan tick is its own independent occurrence (not a repeated trigger for the SAME occurrence the way a tenant's sweep can be), and `ScanExpiry`'s guarded, status-checked updates make two overlapping runs safe. See `job.go`'s own doc comment for the full argument.
 - **`platformScanTenantID` is a deliberate accommodation, not a design pki would have chosen.** `jobs.Task.Validate` requires a non-empty `TenantID` unconditionally, but `pki_signing_keys` is platform data with no tenant to put there -- every other module's periodic task (`storage.taskTypeExpirySweep`) has a real one because its scanned data is tenant data. A fixed sentinel value exists purely to satisfy `jobs`' own validation; `expiryScanHandler.Handle` never reads it, since `SigningKeyRepository` is a plain `*gorm.DB` with no tenant-filtering plugin engaged. See `job.go`'s own doc comment.
+- **2026-09-06: the first real host scheduling the expiry scan is
+  `examples/reference-app`.** The app's host-side periodic-task scheduler
+  (`examples/reference-app/cmd/server/periodic_scheduler.go`) enqueues one
+  `Service.EnqueueExpiryScan` per tick -- an idempotency-key-less, genuinely
+  periodic occurrence, exactly the shape this module's own bullet above
+  records -- on the cadence `cfg.PeriodicTaskInterval` (one minute by
+  default, `defaultPeriodicTaskSchedulerInterval`), started and stopped with
+  the queue worker in `cmd/server/server.go`'s `buildServer` (the same
+  `cfg.DisableQueueWorker` gate). The reference app is what makes the scan
+  genuinely periodic in a real host: without these enqueues, the boot key
+  authn's `KeySource` consumption signs with would age out of its rotation
+  policy with nobody ever staging its replacement. The end-to-end proof is
+  `TestBuildServer_PeriodicScheduler_PKIExpiryScan_RotatesBootKey`
+  (`examples/reference-app/cmd/server/periodic_pki_scan_flow_test.go`):
+  through real ticks, a real `StandaloneQueue` drain and the real
+  `expiryScanHandler`, the purpose's boot key (created lazily by authn's
+  first token issue through `KeySource`) is staged over by a pending
+  successor and promoted away to `retiring`, observed through a second
+  connection to the app's SQLite file, with the rotated purpose still
+  signing and verifying real tokens over the wire afterward.
+- **2026-09-06: the same host deliberately does NOT wire pki's
+  CRL-regeneration task.** `CAService.EnqueueCRLRegenerate` /
+  `crlRegenerateHandler` are never scheduled by `examples/reference-app`:
+  the app is a dental SaaS with no X.509 consumer at all (the "X.509 layer:
+  still no real consumer" exception above -- no CA issuance, no certificate
+  verification), so regenerating a CRL nobody reads would be work for its
+  own sake. The handler IS nevertheless registered and drained onto this
+  host's shared queue -- `pki.Module.Register` claims both the expiry-scan
+  and the CRL-regenerate handlers whenever the module is wired with a queue,
+  and this host wires `pki.WithQueue` -- it simply never receives a task,
+  because nothing in the host ever enqueues one. A host with a real
+  certificate consumer (one that declared a `CRLDistributionPoint` on the
+  certificates it issues) would schedule `EnqueueCRLRegenerate` on the same
+  cadence, next to the expiry-scan enqueue in `runPeriodicTasks`.
+  go/compliance's `RetentionService` scheduling is likewise not wired by
+  this host: only the two mechanisms the app actually consumes are
+  scheduled, and the wiring decision itself lives in
+  `periodic_scheduler.go`'s own doc comment.
 - **No `KeySource` mismatch detection on rotation.** `Service.EnsurePurpose` still does not verify that an already-active key's `Algorithm` matches the requested one on a repeated call -- round 1's known limitation, carried forward unchanged (see "`Service`: the key-lifecycle layer's public shape" above).
 - **`pki_local_keys.not_after` is still unpopulated, and `pki_authorities`/`pki_certificates` still get no EXPIRY-driven lifecycle transitions.** The expiry scan (`lifecycle.go`) drives only `pki_signing_keys` -- `pki_authorities`/`pki_certificates` use a two-value `active`/`revoked` status vocabulary with no `pending`/`retiring` states to transition through. Round 3 gives them a REVOCATION-shaped lifecycle instead (`CAService.RevokeCertificate`/`VerifyCertificate`, the `pki.certificate.revoked` event), which is a different axis from expiry: nothing in this module watches `pki_authorities`/`pki_certificates.not_after` and automatically revokes or renews an authority or certificate as it approaches expiry -- that remains unbuilt, and a host must track its own certificates' expiry and call `IssueCertificate` again itself. `pki_local_keys.NotAfter` stays unpopulated for the structural reason `model.go`'s `LocalKey.NotAfter` doc comment explains: populating it would require `Service` to acquire signer-implementation-specific knowledge of `LocalSigner`, which the `Signer` seam's abstraction is built to prevent.
 
