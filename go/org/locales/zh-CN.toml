@@ -31,6 +31,8 @@
 
 "org.internal_error" = "组织服务未能完成本次请求。"
 
+"org.concurrent_update" = "该组织架构正在被同时修改,请稍后重试。"
+
 "org.restore_parent_not_live" = "该节点的上级节点尚未恢复,请先恢复上级节点后再试。"
 
 "org.node_has_members" = "该节点下还有成员,请先把他们调整到其他节点再删除。"
@@ -48,6 +50,8 @@
 "org.invitation_already_accepted" = "该邀请已被接受。"
 
 "org.invitation_revoked" = "该邀请已被撤回。"
+
+"org.invitation_already_pending" = "刚刚有人向该地址发送了另一份邀请,请稍后重试。"
 
 "org.invitation_rate_limited" = "邀请发送过于频繁,请在 {{.retry_after_seconds}} 秒后重试。"
 

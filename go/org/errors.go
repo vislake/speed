@@ -116,6 +116,19 @@ var (
 	// wraps the underlying error as its cause so the trace carries it; the
 	// cause never reaches an API response body.
 	ErrInternal = apperr.Internal("org.internal_error")
+
+	// ErrConcurrentUpdate reports that an atomic, multi-statement tree
+	// operation (CreateChild, Move, Restore) could not be serialized against
+	// a concurrent writer of the same rows within its bounded retry budget
+	// (see tree.go's withRetry) -- PostgreSQL detected a genuine deadlock
+	// between overlapping lock orders, or SQLite's writers stayed contended
+	// for longer than the retry budget's backoff covers. The operation
+	// changed nothing: this is the database correctly refusing to let two
+	// overlapping writers proceed at once, not data corruption, and the
+	// caller's next attempt starts from a clean read of whatever the winner
+	// committed. It is deliberately rare -- see withRetry's own doc comment
+	// for the budget this only fires past.
+	ErrConcurrentUpdate = apperr.Conflict("org.concurrent_update")
 )
 
 // The membership and invitation half of the error index. Same convention as
@@ -203,6 +216,15 @@ var (
 	// encrypted at rest and looked up by HMAC blind index; without the index
 	// key org could store an invitation it could never find again.
 	ErrEmailIndexerRequired = apperr.Internal("org.email_indexer_required")
+
+	// ErrInvitationAlreadyPending reports a lost race against another
+	// concurrent Invite for the same address in the same tenant: both
+	// revoked whatever was pending and both tried to insert a fresh row, and
+	// the database's partial unique index on (tenant_id, email_index) WHERE
+	// status = 'pending' let exactly one of the two inserts land. See
+	// InviteService.Invite's own doc comment for why this can only be
+	// reported by the insert itself, never predicted by a pre-check.
+	ErrInvitationAlreadyPending = apperr.Conflict("org.invitation_already_pending")
 
 	// ErrInvitationMailRequired is returned by Module.Register when the
 	// invitation email is enabled -- which it is by default -- but the host

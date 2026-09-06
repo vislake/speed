@@ -36,6 +36,7 @@ var errorCatalog = []struct {
 	{"ErrNodeHasMembers", ErrNodeHasMembers, "org.node_has_members", http.StatusConflict},
 	{"ErrRestoreParentNotLive", ErrRestoreParentNotLive, "org.restore_parent_not_live", http.StatusConflict},
 	{"ErrInternal", ErrInternal, "org.internal_error", http.StatusInternalServerError},
+	{"ErrConcurrentUpdate", ErrConcurrentUpdate, "org.concurrent_update", http.StatusConflict},
 
 	{"ErrMembershipNotFound", ErrMembershipNotFound, "org.membership_not_found", http.StatusNotFound},
 	{"ErrMembershipExists", ErrMembershipExists, "org.membership_exists", http.StatusConflict},
@@ -44,6 +45,7 @@ var errorCatalog = []struct {
 	{"ErrInvitationExpired", ErrInvitationExpired, "org.invitation_expired", http.StatusConflict},
 	{"ErrInvitationAlreadyAccepted", ErrInvitationAlreadyAccepted, "org.invitation_already_accepted", http.StatusConflict},
 	{"ErrInvitationRevoked", ErrInvitationRevoked, "org.invitation_revoked", http.StatusConflict},
+	{"ErrInvitationAlreadyPending", ErrInvitationAlreadyPending, "org.invitation_already_pending", http.StatusConflict},
 	{"ErrInvitationRateLimited", ErrInvitationRateLimited, "org.invitation_rate_limited", http.StatusTooManyRequests},
 	{"ErrInvalidEmail", ErrInvalidEmail, "org.invalid_email", http.StatusBadRequest},
 	{"ErrInvitationsDisabled", ErrInvitationsDisabled, "org.invitations_disabled", http.StatusForbidden},

@@ -32,6 +32,8 @@
 
 "org.internal_error" = "The organization service could not complete the request."
 
+"org.concurrent_update" = "Another change to this organization tree is happening at the same time. Please try again."
+
 "org.restore_parent_not_live" = "This node's parent has not been restored yet. Restore the parent first, then try again."
 
 "org.node_has_members" = "That node still has members. Move them elsewhere before deleting it."
@@ -49,6 +51,8 @@
 "org.invitation_already_accepted" = "That invitation has already been accepted."
 
 "org.invitation_revoked" = "That invitation was withdrawn."
+
+"org.invitation_already_pending" = "An invitation to that address was just sent by someone else. Try again in a moment."
 
 "org.invitation_rate_limited" = "Too many invitations have been sent. Try again in {{.retry_after_seconds}} seconds."
 
