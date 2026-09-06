@@ -130,6 +130,18 @@ func TestRedact_TokenStemDoesNotOverRedactUnrelatedWords(t *testing.T) {
 //     joined "token" segment), must still redact (the fix must not have
 //     narrowed the word-boundary check so far that it stops matching
 //     "token" as a whole segment).
+//
+// The vocabulary spans both separator styles the boundary rule must treat
+// identically. The underscore-joined forms below ("access_token") mark
+// their boundaries with a non-letter; the camelCase forms ("accessToken",
+// "tokenValue") mark the same boundaries with a lowercase-to-uppercase
+// case transition instead -- the regression class this round closes, after
+// the original fix's letter-only boundary check stopped treating "Token"
+// following a lowercase letter as a whole word and let exactly these key
+// names leak their values again. Both styles appear in both directions:
+// prompt_tokens and its camelCase plural "promptTokens" are equally
+// legitimate usage counts that must survive, and a bare "token" segment
+// joined either way is equally secret-bearing.
 func TestRedact_TokenStemWordBoundary_AdversarialVocabulary(t *testing.T) {
 	benign := []string{
 		// Already covered by the original regression test; repeated here
@@ -144,6 +156,11 @@ func TestRedact_TokenStemWordBoundary_AdversarialVocabulary(t *testing.T) {
 		// "token" as an interior fragment of an unrelated compound word,
 		// letters on both sides.
 		"autotokenizer",
+		// camelCase plurals: a lowercase-to-uppercase transition marks the
+		// boundary before "Token", but the lowercase "s" continuing the
+		// stem is still the plural -- the same usage-count field as
+		// prompt_tokens, spelled camelCase, and equally legitimate.
+		"promptTokens", "completionTokens", "sessionTokens",
 	}
 	for _, key := range benign {
 		t.Run("benign/"+key, func(t *testing.T) {
@@ -173,6 +190,16 @@ func TestRedact_TokenStemWordBoundary_AdversarialVocabulary(t *testing.T) {
 		// pinned.
 		"oauth_token", "bearer_token", "reset_token", "verification_token",
 		"TOKEN", "x_auth_token",
+		// Separator-free camelCase compounds, both boundary directions:
+		// "Token" following a lowercase letter (the accessToken family --
+		// the security regression this round fixes: the word-boundary
+		// check's letter-only left boundary rejected these, so the key
+		// rule stopped redacting them entirely and only the weaker
+		// value-shape net remained) and "token" followed by an uppercase
+		// letter starting the next word (tokenValue). Each was redacted
+		// before the word-boundary narrowing and must redact again.
+		"accessToken", "sessionToken", "refreshToken", "apiToken",
+		"userToken", "idToken", "tokenValue",
 	}
 	for _, key := range secretShaped {
 		t.Run("secret/"+key, func(t *testing.T) {

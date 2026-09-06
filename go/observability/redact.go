@@ -161,11 +161,18 @@ const RedactedValue = "[REDACTED]"
 // substring rule swallowed with no warning -- ai-gateway's own gateway.go
 // carries a "rename to _units to dodge this redactor" comment as the paper
 // trail. stemMatches therefore checks "token" with a word-boundary rule
-// (foldContainsWordASCII) instead: "access_token" and
-// "session_token_duration" still match through the '_' boundary, "token"
-// alone matches at the segment's own start/end, but "tokens"/
-// "prompt_tokens"/"completion_tokens" do not, since the letter "s"
-// immediately following "token" fails the boundary check. A field that
+// (foldContainsWordASCII) instead: a match counts only when a word
+// boundary flanks it on both sides -- the segment's own start/end, a
+// non-letter byte (an underscore or digit separator), or a
+// lowercase-to-uppercase case transition, the marker camelCase leaves
+// between words. "access_token" and "session_token_duration" still match
+// through the '_' boundary, "token" alone matches at the segment's own
+// start/end, and "accessToken"/"tokenValue" match through their case
+// transitions (see wordBoundaryASCII); but "tokens"/"prompt_tokens"/
+// "completion_tokens" and their camelCase twins "promptTokens"/
+// "completionTokens" do not, since the "s" continuing the stem is a
+// lowercase letter and a lowercase continuation is the same word, not a
+// boundary. A field that
 // genuinely stores multiple real tokens under a plural key name (e.g. a
 // hypothetical "session_tokens") is not caught by the key rule any more --
 // the accepted cost of closing the over-redaction gap -- but the
@@ -689,14 +696,47 @@ func isASCIILetter(b byte) bool {
 	return ('a' <= b && b <= 'z') || ('A' <= b && b <= 'Z')
 }
 
+// isLowerCaseASCII and isUpperCaseASCII report whether b is an ASCII
+// lowercase / uppercase letter.
+func isLowerCaseASCII(b byte) bool { return 'a' <= b && b <= 'z' }
+func isUpperCaseASCII(b byte) bool { return 'A' <= b && b <= 'Z' }
+
+// wordBoundaryASCII reports whether a word boundary separates the two
+// adjacent bytes s[left] and s[right] (right == left+1). A boundary is
+// present when one side lies outside the string (the segment's own start
+// or end), when either byte is not an ASCII letter (an underscore or digit
+// separator), or when the pair is a lowercase-to-uppercase case transition
+// -- the marker camelCase leaves between words, so "accessToken" splits
+// between the 's' and the 'T' exactly where "access_token" splits at the
+// '_', and "tokenValue" splits between the 'n' and the 'V'. Every other
+// letter adjacency is one word continuing -- "tokens"'s 'n'-'s' and
+// "tokenizer"'s 'n'-'i' are the same word, not a boundary -- which is what
+// keeps the plural and the "-izer" suffix out of the "token" stem's net.
+// An all-caps acronym glued directly to a word ("APIToken", "JWTToken")
+// carries no case transition at the join and is not recognized as a
+// boundary: spelling such a compound with a separator or with mixed case
+// at the join is the convention this matcher keys on.
+func wordBoundaryASCII(s string, left, right int) bool {
+	if left < 0 || right >= len(s) {
+		return true
+	}
+	if !isASCIILetter(s[left]) || !isASCIILetter(s[right]) {
+		return true
+	}
+	return isLowerCaseASCII(s[left]) && isUpperCaseASCII(s[right])
+}
+
 // foldContainsWordASCII reports whether s contains sub as a whole word:
 // every occurrence of sub (ASCII case-insensitive) is checked, and a match
-// only counts when neither side is an ASCII letter -- the start/end of s
-// counts as a non-letter boundary. This is the "token" stem's own matcher
-// (see sensitiveStems and stemMatches): "access_token" and
-// "session_token_duration" still match through the '_' boundary, but
-// "tokens"/"prompt_tokens" do not, because the "s" immediately following
-// "token" is itself a letter.
+// only counts when a word boundary flanks it on both sides (see
+// wordBoundaryASCII for what counts as a boundary). This is the "token"
+// stem's own matcher (see sensitiveStems and stemMatches): "access_token"
+// and "accessToken" both match, the first through the '_' and the second
+// through the 's'->'T' case transition; "tokenValue" matches through the
+// 'n'->'V' transition on the other side. The plurals "tokens"/
+// "prompt_tokens", camelCase or not ("promptTokens"), do not, because the
+// "s" continuing the stem is a lowercase letter and a lowercase
+// continuation is the same word, not a boundary.
 func foldContainsWordASCII(s, sub string) bool {
 	if len(sub) > len(s) {
 		return false
@@ -705,11 +745,10 @@ func foldContainsWordASCII(s, sub string) bool {
 		if !foldEqualASCII(s[i:i+len(sub)], sub) {
 			continue
 		}
-		if i > 0 && isASCIILetter(s[i-1]) {
+		if !wordBoundaryASCII(s, i-1, i) {
 			continue
 		}
-		end := i + len(sub)
-		if end < len(s) && isASCIILetter(s[end]) {
+		if !wordBoundaryASCII(s, i+len(sub)-1, i+len(sub)) {
 			continue
 		}
 		return true
