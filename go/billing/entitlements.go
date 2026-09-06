@@ -88,7 +88,18 @@ func (s *EntitlementsService) Check(ctx context.Context, featureKey string, requ
 		return Decision{Allowed: false, Remaining: DecisionRemainingUnbounded, Reason: DecisionReasonFeatureDisabled}, nil
 	}
 
-	switch grantKind(grant) {
+	kind, ok := grantKind(grant)
+	if !ok {
+		// A Grant whose Value no Feature kind interprets -- a string that is
+		// not the GrantValueUnlimited sentinel, e.g. a quota limit encoded
+		// as "1000" by a config/import error -- is refused fail-closed with
+		// the same feature_disabled answer checkQuota's own malformed-value
+		// branch gives, never granted unlimited: a malformed grant must
+		// deny, exactly like a feature that is not granted at all.
+		return Decision{Allowed: false, Remaining: DecisionRemainingUnbounded, Reason: DecisionReasonFeatureDisabled}, nil
+	}
+
+	switch kind {
 	case FeatureKindBoolean:
 		return s.checkBoolean(grant)
 	case FeatureKindUnlimited:
@@ -101,15 +112,26 @@ func (s *EntitlementsService) Check(ctx context.Context, featureKey string, requ
 // grantKind infers the Feature.Kind a Grant was issued for, from the Go
 // type of its own Value -- Grant carries no Kind field of its own
 // (docs/internal/06-billing-and-metering.md's sketch does not give it
-// one), so the value's shape is the only signal Check has.
-func grantKind(g Grant) FeatureKind {
+// one), so the value's shape is the only signal Check has. The three
+// legitimate shapes are model.go's own documented vocabulary: a bool for
+// FeatureKindBoolean, the GrantValueUnlimited sentinel string for
+// FeatureKindUnlimited, any numeric for FeatureKindQuota (an int64 value
+// round-tripped through Plan.GrantsJSON decodes as float64 -- see
+// grantQuotaLimit's own doc comment). Any OTHER shape -- most importantly
+// a string that is not the sentinel, since a quota limit encoded as
+// "1000" is precisely the kind of config/import error Check must fail
+// closed on -- is malformed, reported through ok=false, never guessed at.
+func grantKind(g Grant) (kind FeatureKind, ok bool) {
 	switch g.Value.(type) {
 	case bool:
-		return FeatureKindBoolean
+		return FeatureKindBoolean, true
 	case string:
-		return FeatureKindUnlimited
+		if g.Value == GrantValueUnlimited {
+			return FeatureKindUnlimited, true
+		}
+		return "", false
 	default:
-		return FeatureKindQuota
+		return FeatureKindQuota, true
 	}
 }
 

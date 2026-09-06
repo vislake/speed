@@ -5,22 +5,29 @@ import "testing"
 // TestGrantKind_InfersFromValueType pins grantKind's own contract
 // (entitlements.go): a Grant carries no explicit Kind field of its own, so
 // the Go type of its Value is the only signal Check has for which of the
-// three Feature kinds it was issued under.
+// three Feature kinds it was issued under. A Value shape no Feature kind
+// interprets -- a string that is not the GrantValueUnlimited sentinel --
+// is reported through ok=false so Check fails closed rather than guessing
+// (TestEntitlementsService_Check_NonSentinelStringGrantValue_FailsClosed
+// is the service-level regression).
 func TestGrantKind_InfersFromValueType(t *testing.T) {
 	tests := []struct {
 		name  string
 		value any
 		want  FeatureKind
+		ok    bool
 	}{
-		{name: "bool -> Boolean", value: true, want: FeatureKindBoolean},
-		{name: "GrantValueUnlimited string -> Unlimited", value: GrantValueUnlimited, want: FeatureKindUnlimited},
-		{name: "int64 -> Quota", value: int64(10), want: FeatureKindQuota},
-		{name: "float64 (JSON round-trip shape) -> Quota", value: float64(10), want: FeatureKindQuota},
+		{name: "bool -> Boolean", value: true, want: FeatureKindBoolean, ok: true},
+		{name: "GrantValueUnlimited string -> Unlimited", value: GrantValueUnlimited, want: FeatureKindUnlimited, ok: true},
+		{name: "int64 -> Quota", value: int64(10), want: FeatureKindQuota, ok: true},
+		{name: "float64 (JSON round-trip shape) -> Quota", value: float64(10), want: FeatureKindQuota, ok: true},
+		{name: "non-sentinel string is malformed, never Unlimited", value: "1000", want: "", ok: false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := grantKind(Grant{Value: tc.value}); got != tc.want {
-				t.Errorf("grantKind(%v) = %q, want %q", tc.value, got, tc.want)
+			got, ok := grantKind(Grant{Value: tc.value})
+			if got != tc.want || ok != tc.ok {
+				t.Errorf("grantKind(%v) = %q, %v, want %q, %v", tc.value, got, ok, tc.want, tc.ok)
 			}
 		})
 	}

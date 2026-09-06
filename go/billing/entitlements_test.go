@@ -101,6 +101,31 @@ func TestEntitlementsService_Check_Unlimited(t *testing.T) {
 	}
 }
 
+// TestEntitlementsService_Check_NonSentinelStringGrantValue_FailsClosed is
+// P1-5's regression: a string-typed Grant.Value that is NOT the
+// GrantValueUnlimited sentinel -- a quota limit encoded as "1000" by a
+// config/import error, a typo'd "unlimted" -- must never be read as
+// FeatureKindUnlimited. On pre-fix code grantKind classified every string
+// as Unlimited, so such a grant let every request through with
+// Remaining=unbounded -- exactly the fail-open a malformed grant must not
+// produce. Check now fails closed with the same feature_disabled answer
+// checkQuota's own "Value is not a usable integer" branch already gives
+// for a malformed Quota grant: the feature is treated as disabled, never
+// as unlimited.
+func TestEntitlementsService_Check_NonSentinelStringGrantValue_FailsClosed(t *testing.T) {
+	svc, ctx := newEntitlementsFixture(t, []Grant{
+		{FeatureKey: "ai_tokens", Value: "1000"},
+	}, 0)
+
+	decision, err := svc.Check(ctx, "ai_tokens", 1)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if decision.Allowed || decision.Remaining != DecisionRemainingUnbounded || decision.Reason != DecisionReasonFeatureDisabled {
+		t.Errorf("decision = %+v, want Allowed=false Remaining=%d Reason=feature_disabled (a string grant value must fail closed, never grant unlimited)", decision, DecisionRemainingUnbounded)
+	}
+}
+
 func TestEntitlementsService_Check_FeatureNotGranted(t *testing.T) {
 	svc, ctx := newEntitlementsFixture(t, []Grant{{FeatureKey: "seats", Value: int64(5)}}, 0)
 
