@@ -1652,6 +1652,40 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// package comment says so at length).
 	demoModule := demo.NewModule()
 
+	// billingModule is the reference app's mandatory first consumer of
+	// go/billing (root CLAUDE.md's Reference App section: "a module API
+	// that it does not actually use is not considered done") -- both of the
+	// module's judgment halves, at that: the credits ledger
+	// (docs/internal/15-roadmap.md's M2 exit condition's
+	// credit-pack/reserve/refund/usage-display leg) through Credits(), and
+	// the subscription-derived entitlement path through Entitlements(),
+	// which aiGatewayModule's own construction right below wires onto
+	// go/ai-gateway's optional Entitlements seam. It shares this app's own
+	// db connection, the same pattern every other module here uses.
+	//
+	// It is deliberately constructed BEFORE aiGatewayModule: Go evaluates
+	// statements in order, and the WithEntitlements option below needs
+	// billingModule's already-built EntitlementsService in scope. That is
+	// safe even though both modules' Register calls (and the gateway's own
+	// first Check) come later: billing.NewModule constructs its services
+	// at construction time -- no I/O, nothing deferred to Bootstrap (see
+	// go/billing/module.go's own NewModule doc comment) -- and
+	// EntitlementsService.Check reads the subscription/plan rows fresh on
+	// every call, so judging cannot start before the demo seed below has
+	// run, no matter how early the service is built.
+	//
+	// The one deliberately absent wiring is a UsageReader (nil): quota-kind
+	// grants need go/billing's real-time usage counter through that reader,
+	// and this app has no metering composition behind it -- which is why
+	// demo_entitlements.go's seed grants are Boolean, never Quota (see that
+	// file's own doc comment). No WithQueue either: this round wires no
+	// payment-channel gateway, so PollingService's active-polling fallback
+	// has nothing to poll -- see go/billing/AGENTS.md's own scope table for
+	// why an actual payment-gateway integration (a real Stripe/Alipay/
+	// WeChat sandbox charge) stays explicitly deferred, untouched by this
+	// round.
+	billingModule := billing.NewModule(db, nil)
+
 	// aiGatewayModule is the reference app's mandatory first consumer of
 	// go/ai-gateway (root CLAUDE.md's "Reference App" section): the
 	// internal/consult service (wired below, after Bootstrap) calls its
@@ -1677,30 +1711,40 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// below, alongside every other module's job handlers) reads the
 	// patient photo and writes the generated simulation back through the
 	// very same storage this app's other consumers use.
+	//
+	// WithEntitlements is this round's addition: it wires
+	// billingModule.Entitlements() -- the real billing.EntitlementsService
+	// constructed above -- onto go/ai-gateway's optional, structurally-
+	// typed Entitlements seam, so BOTH halves of this one Gateway instance
+	// (Chat for consult, GenerateImage for smilesim; they share the very
+	// same *aigateway.Gateway) gate every request on the calling tenant's
+	// subscription before any provider is reached, exactly go/ai-gateway's
+	// own checkEntitlement design: key "model:"+logicalModel, requested 1,
+	// denial answered with ErrEntitlementDenied before the provider sees
+	// the call. The adapter is an aigateway.EntitlementsFunc closure rather
+	// than a direct assignment because the two modules' Decision types are
+	// distinct named types (billing.Decision vs aigateway.Decision) -- the
+	// exact no-adapter-to-write claim go/ai-gateway/seams.go's own doc
+	// comment makes is a deliberate simplification that does not compile;
+	// the closure shape below is that file's own documented example,
+	// verbatim. An unwired seam (nil) would let every request through; a
+	// wired one judged against an empty database would deny everything --
+	// seedDemoEntitlements (boot, below) is what keeps the seeded demo
+	// tenants on the allowed side from the very first request.
 	aiGatewayModule := aigateway.NewModule(db,
 		aigateway.WithModelRoute(consult.LogicalModel, aigateway.ProviderOpenAICompatible, "gpt-4o-mini"),
 		aigateway.WithModelRoute(smilesim.LogicalModel, aigateway.ProviderOpenAICompatibleImage, "dall-e-3"),
 		aigateway.WithImageGeneration(standaloneQueue, storageModule.ObjectService()),
+		aigateway.WithEntitlements(aigateway.EntitlementsFunc(
+			func(ctx context.Context, featureKey string, requested int64) (aigateway.Decision, error) {
+				decision, err := billingModule.Entitlements().Check(ctx, featureKey, requested)
+				if err != nil {
+					return aigateway.Decision{}, err
+				}
+				return aigateway.Decision{Allowed: decision.Allowed, Reason: string(decision.Reason)}, nil
+			},
+		)),
 	)
-
-	// billingModule is the reference app's mandatory first consumer of
-	// go/billing's CreditService (docs/internal/15-roadmap.md's M2 exit
-	// condition's credit-pack/reserve/refund/usage-display leg; root
-	// CLAUDE.md's Reference App section: "a module API that it does not
-	// actually use is not considered done"). It shares this app's own db
-	// connection, the same pattern every other module here uses, and is
-	// wired with no UsageReader (nil): the internal/smilesim consumer below
-	// only ever calls Credits() (PreDeduct/Confirm/Refund/Grant/Balance),
-	// never Entitlements() -- go/billing's own EntitlementsService is a
-	// fully separate judgment path this round has no caller for (see
-	// go/billing/AGENTS.md's "Credits are a separate path from
-	// Entitlements.Check"). No WithQueue either: this round wires no
-	// payment-channel gateway, so PollingService's active-polling fallback
-	// has nothing to poll -- see go/billing/AGENTS.md's own scope table for
-	// why an actual payment-gateway integration (a real Stripe/Alipay/
-	// WeChat sandbox charge) stays explicitly deferred, untouched by this
-	// round.
-	billingModule := billing.NewModule(db, nil)
 
 	// complianceModule is the reference app's first consumer of
 	// go/compliance: admin's D7 audit-query HTTP shell reads through
