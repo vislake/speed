@@ -24,10 +24,14 @@
  * message field can ever reach the row.
  *
  * The section takes no props: whose history this is comes from the
- * caller's bound client and its access token. Empty and failure states
- * hide the section header entirely and render one ui-kit EmptyState
- * (empty / error variant with a retry button), so the heading order
- * never skips a level.
+ * caller's bound client and its access token. An unresolved load -- the
+ * first load in flight, or parked by react-query's default networkMode
+ * 'online' while the device is offline -- keeps the loading branch,
+ * header included. Only a settled query leaves it: a genuine empty
+ * answer (or a genuine failure) hides the section header entirely and
+ * renders one ui-kit EmptyState (empty / error variant with a retry
+ * button), so the heading order never skips a level and the no-history
+ * text is never asserted for an answer that has not arrived.
  */
 
 import { useMemo } from 'react'
@@ -125,7 +129,7 @@ function HistoryListSkeleton({ label }: { readonly label: string }) {
 
 export function LoginHistorySection() {
   const { t, i18n } = useAccountUiTranslation()
-  const { data, isLoading, isError, refetch } = useAuthnListLoginHistory({
+  const { data, isPending, isError, refetch } = useAuthnListLoginHistory({
     limit: PAGE_SIZE,
   })
 
@@ -139,10 +143,18 @@ export function LoginHistorySection() {
   )
 
   const attempts = data?.attempts
-  const pending = isLoading && attempts === undefined
-  const failed = !isLoading && attempts === undefined && isError
-  const hasRows =
-    !isLoading && !failed && attempts !== undefined && attempts.length > 0
+  // The answer is unresolved whenever there is no data yet: the first
+  // load in flight, or parked by react-query's default networkMode
+  // 'online' while the device is offline -- such a fetch sits at
+  // fetchStatus 'paused', where isFetching (and isLoading, its
+  // isPending-and-isFetching conjunction) is false and isError stays
+  // false too, so a pending test derived from isLoading would miss
+  // every branch and read an unresolved load as an empty answer.
+  // isPending alone tracks "no answer yet" across the in-flight and the
+  // parked states; a failed load is the isError branch below.
+  const pending = isPending && attempts === undefined
+  const failed = !isPending && attempts === undefined && isError
+  const hasRows = attempts !== undefined && attempts.length > 0
 
   return (
     <Box>
@@ -161,6 +173,13 @@ export function LoginHistorySection() {
           variant="error"
           title={t('history.error.title')}
           description={t('history.error.description')}
+          // No in-flight state can ever coexist with this button: the
+          // moment a refetch of a settled error is armed, react-query
+          // moves the data-less query back to the pending state, so the
+          // section re-enters the loading branch above -- that loading
+          // announcement is the retry's progress feedback, and the
+          // button, which exists only in this settled branch, can never
+          // be clicked twice into overlapping refetches.
           action={
             <Button onClick={() => void refetch()}>{t('history.retry')}</Button>
           }
@@ -170,7 +189,15 @@ export function LoginHistorySection() {
           // level rather than skipping to h6.
           headingLevel="h2"
         />
-      ) : attempts === undefined || attempts.length === 0 ? (
+      ) : attempts === undefined ? (
+        // The only state left is one the query machine cannot produce
+        // (no data, no pending, no error -- no placeholderData is in
+        // play, so a settled query always carries data): render the
+        // loading branch rather than an empty answer, so a future
+        // contract drift can never read an unresolved load as "no
+        // sign-in history".
+        <HistoryListSkeleton label={t('history.loading')} />
+      ) : attempts.length === 0 ? (
         <EmptyState
           variant="empty"
           title={t('history.empty.title')}

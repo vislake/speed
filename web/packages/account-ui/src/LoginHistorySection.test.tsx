@@ -15,8 +15,9 @@
  * scenario ends with an axe pass.
  */
 
-import { describe, expect, it } from 'vitest'
-import { screen } from '@testing-library/react'
+import { describe, expect, it, afterEach } from 'vitest'
+import { screen, waitFor } from '@testing-library/react'
+import { onlineManager } from '@tanstack/react-query'
 import userEvent from '@testing-library/user-event'
 import type { AuthnLoginAttempt } from '@speed/api-sdk'
 import zhCN from './locales/zh-CN.json' with { type: 'json' }
@@ -59,6 +60,13 @@ function plainTime(iso: string): string {
 }
 
 describe('LoginHistorySection', () => {
+  afterEach(() => {
+    // The offline scenario toggles the global online manager; every
+    // other test signs in and fetches over the real transport, so the
+    // device must be back online when the next test starts.
+    onlineManager.setOnline(true)
+  })
+
   it('render method, outcome and time per attempt, mapping known values and falling back for unknown ones', async () => {
     const attempts = [
       attempt({
@@ -228,6 +236,131 @@ describe('LoginHistorySection', () => {
     await user.click(screen.getByRole('button', { name: zhCN.history.retry }))
     expect(await screen.findByText(zhCN.history.method.sms)).toBeTruthy()
     expect(screen.queryByText(zhCN.history.error.title)).toBeNull()
+    expect(historyCalls).toBe(2)
+
+    await expectNoAxeViolations()
+  })
+
+  it('never read an unresolved load as no history: a fetch parked offline stays on the loading branch until the network returns', async () => {
+    const list = [attempt()]
+    let wentOnline = false
+    let historyCalls = 0
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === LOGIN_PATH) {
+        return jsonResponse(200, makePair())
+      }
+      if (call.method === 'GET' && call.path === HISTORY_PATH) {
+        historyCalls += 1
+        if (!wentOnline) {
+          throw new Error(
+            'a history request reached the transport while the fetch was parked offline',
+          )
+        }
+        return jsonResponse(200, { attempts: list })
+      }
+      throw new Error(`unexpected ${call.method} ${call.path}`)
+    })
+    await signInWithPassword(rig)
+    // react-query's default networkMode 'online' parks a fetch that
+    // starts while the device is offline at fetchStatus 'paused':
+    // isFetching -- and isLoading, its isPending-and-isFetching
+    // conjunction -- are false, isError stays false and data stays
+    // undefined, so a pending test derived from isLoading misses every
+    // branch. The section must stay on the loading branch (isPending)
+    // instead of asserting an empty history for an answer that never
+    // arrived.
+    onlineManager.setOnline(false)
+    const { queryClient } = renderWithProviders(<LoginHistorySection />)
+
+    await waitFor(() => {
+      const [query] = queryClient.getQueryCache().findAll()
+      expect(query?.state.fetchStatus).toBe('paused')
+    })
+    expect(historyCalls).toBe(0)
+
+    // Still the loading branch: the header and one loading announcement,
+    // never the no-history or error text.
+    expect(
+      screen.getByRole('heading', { name: zhCN.history.title }),
+    ).toBeTruthy()
+    expect(
+      screen.getByRole('status', { name: zhCN.history.loading }),
+    ).toBeTruthy()
+    expect(screen.queryByText(zhCN.history.empty.title)).toBeNull()
+    expect(screen.queryByText(zhCN.history.error.title)).toBeNull()
+
+    // The parked fetch resumes by itself once the network is back.
+    wentOnline = true
+    onlineManager.setOnline(true)
+    expect(await screen.findByText(zhCN.history.method.password)).toBeTruthy()
+    expect(
+      screen.queryByRole('status', { name: zhCN.history.loading }),
+    ).toBeNull()
+    expect(historyCalls).toBe(1)
+
+    await expectNoAxeViolations()
+  })
+
+  it('feedback while a retry is armed: a retry clicked offline parks on the loading branch, resumes with exactly one request, and no button exists to stack a second click', async () => {
+    const user = userEvent.setup()
+    let historyCalls = 0
+    let wentOnline = true
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === LOGIN_PATH) {
+        return jsonResponse(200, makePair())
+      }
+      if (call.method === 'GET' && call.path === HISTORY_PATH) {
+        historyCalls += 1
+        if (historyCalls === 1) {
+          return errorResponse(500, 'client.http.500')
+        }
+        if (!wentOnline) {
+          throw new Error(
+            'a history request reached the transport while the device was offline',
+          )
+        }
+        return jsonResponse(200, { attempts: [attempt()] })
+      }
+      throw new Error(`unexpected ${call.method} ${call.path}`)
+    })
+    await signInWithPassword(rig)
+    const { queryClient } = renderWithProviders(<LoginHistorySection />)
+
+    expect(await screen.findByText(zhCN.history.error.title)).toBeTruthy()
+
+    // The retry of a settled error is armed the moment it is clicked:
+    // react-query puts the refetch back into the pending state (and
+    // parks it at fetchStatus 'paused' while the device is offline), so
+    // the retry affordance's feedback IS the loading branch -- a live
+    // progress announcement, never a still-clickable button, so repeat
+    // clicks cannot overlap refetches.
+    onlineManager.setOnline(false)
+    wentOnline = false
+    await user.click(screen.getByRole('button', { name: zhCN.history.retry }))
+
+    await waitFor(() => {
+      const [query] = queryClient.getQueryCache().findAll()
+      expect(query?.state.fetchStatus).toBe('paused')
+    })
+    expect(historyCalls).toBe(1)
+    expect(
+      screen.getByRole('status', { name: zhCN.history.loading }),
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole('button', { name: zhCN.history.retry }),
+    ).toBeNull()
+    expect(screen.queryByText(zhCN.history.error.title)).toBeNull()
+    expect(screen.queryByText(zhCN.history.empty.title)).toBeNull()
+
+    // The parked refetch resumes by itself once the network is back,
+    // with exactly one request -- the park/resume cycle never stacks a
+    // duplicate.
+    wentOnline = true
+    onlineManager.setOnline(true)
+    expect(await screen.findByText(zhCN.history.method.password)).toBeTruthy()
+    expect(
+      screen.queryByRole('status', { name: zhCN.history.loading }),
+    ).toBeNull()
     expect(historyCalls).toBe(2)
 
     await expectNoAxeViolations()

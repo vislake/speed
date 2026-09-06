@@ -28,8 +28,9 @@
  * axe pass.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, afterEach } from 'vitest'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { onlineManager } from '@tanstack/react-query'
 import userEvent from '@testing-library/user-event'
 import type { AuthnIdentity } from '@speed/api-sdk'
 import { uiKitResources } from '@speed/ui-kit'
@@ -94,6 +95,13 @@ function firstUnlink(): HTMLElement {
 }
 
 describe('SocialBindingsSection', () => {
+  afterEach(() => {
+    // The offline scenario toggles the global online manager; every
+    // other test signs in and fetches over the real transport, so the
+    // device must be back online when the next test starts.
+    onlineManager.setOnline(true)
+  })
+
   it('render every identity with its provider label, email and one unlink action per id-carrying row', async () => {
     const list = [
       identity({
@@ -648,6 +656,132 @@ describe('SocialBindingsSection', () => {
     await waitFor(() =>
       expect(screen.queryByRole('status', { name: zhCN.bindings.loading })).toBeNull(),
     )
+
+    await expectNoAxeViolations()
+  })
+
+  it('never vanish while the list is unresolved: a fetch parked offline stays on the loading branch until the network returns', async () => {
+    const list = [identity({ id: 'github-1', provider: 'github' })]
+    let wentOnline = false
+    let listCalls = 0
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === LOGIN_PATH) {
+        return jsonResponse(200, makePair())
+      }
+      if (call.method === 'GET' && call.path === IDENTITIES_PATH) {
+        listCalls += 1
+        if (!wentOnline) {
+          throw new Error(
+            'an identities request reached the transport while the fetch was parked offline',
+          )
+        }
+        return jsonResponse(200, { identities: list })
+      }
+      return errorResponse(500, 'internal')
+    })
+    await signInWithPassword(rig)
+    // react-query's default networkMode 'online' parks a fetch that
+    // starts while the device is offline at fetchStatus 'paused':
+    // isFetching -- and isLoading, its isPending-and-isFetching
+    // conjunction -- are false, isError stays false and data stays
+    // undefined, so a pending test derived from isLoading misses every
+    // branch and the block falls through to the silent null. The
+    // section must stay on the loading branch (isPending) -- header
+    // and one loading announcement, never nothing.
+    onlineManager.setOnline(false)
+    const { queryClient } = renderWithProviders(
+      <SocialBindingsSection session={rig.session} providers={[config('github')]} />,
+    )
+
+    await waitFor(() => {
+      const [query] = queryClient.getQueryCache().findAll()
+      expect(query?.state.fetchStatus).toBe('paused')
+    })
+    expect(listCalls).toBe(0)
+
+    expect(
+      screen.getByRole('heading', { level: 2, name: zhCN.bindings.title }),
+    ).toBeTruthy()
+    expect(
+      screen.getByRole('status', { name: zhCN.bindings.loading }),
+    ).toBeTruthy()
+    expect(screen.queryByText(zhCN.bindings.empty.title)).toBeNull()
+    expect(screen.queryByText(zhCN.bindings.error.title)).toBeNull()
+
+    // The parked fetch resumes by itself once the network is back.
+    wentOnline = true
+    onlineManager.setOnline(true)
+    expect(await screen.findByText('GitHub')).toBeTruthy()
+    expect(
+      screen.queryByRole('status', { name: zhCN.bindings.loading }),
+    ).toBeNull()
+    expect(listCalls).toBe(1)
+
+    await expectNoAxeViolations()
+  })
+
+  it('feedback while a retry is armed: a retry clicked offline parks on the loading branch, resumes with exactly one request, and no button exists to stack a second click', async () => {
+    const list = [identity({ id: 'github-1', provider: 'github' })]
+    let listCalls = 0
+    let wentOnline = true
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === LOGIN_PATH) {
+        return jsonResponse(200, makePair())
+      }
+      if (call.method === 'GET' && call.path === IDENTITIES_PATH) {
+        listCalls += 1
+        if (listCalls === 1) {
+          return errorResponse(500, 'internal')
+        }
+        if (!wentOnline) {
+          throw new Error(
+            'an identities request reached the transport while the device was offline',
+          )
+        }
+        return jsonResponse(200, { identities: list })
+      }
+      return errorResponse(500, 'internal')
+    })
+    await signInWithPassword(rig)
+    const { queryClient } = renderWithProviders(
+      <SocialBindingsSection session={rig.session} providers={[config('github')]} />,
+    )
+    expect(await screen.findByText(zhCN.bindings.error.title)).toBeTruthy()
+
+    // The retry of a settled error is armed the moment it is clicked:
+    // react-query puts the refetch back into the pending state (and
+    // parks it at fetchStatus 'paused' while the device is offline), so
+    // the retry affordance's feedback IS the loading branch -- a live
+    // progress announcement, never a still-clickable button, so repeat
+    // clicks cannot overlap refetches.
+    onlineManager.setOnline(false)
+    wentOnline = false
+    await userEvent.click(screen.getByRole('button', { name: zhCN.bindings.retry }))
+
+    await waitFor(() => {
+      const [query] = queryClient.getQueryCache().findAll()
+      expect(query?.state.fetchStatus).toBe('paused')
+    })
+    expect(listCalls).toBe(1)
+    expect(
+      screen.getByRole('status', { name: zhCN.bindings.loading }),
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole('button', { name: zhCN.bindings.retry }),
+    ).toBeNull()
+    expect(screen.queryByText(zhCN.bindings.error.title)).toBeNull()
+    expect(screen.queryByText(zhCN.bindings.empty.title)).toBeNull()
+
+    // The parked refetch resumes by itself once the network is back,
+    // with exactly one request -- the park/resume cycle never stacks a
+    // duplicate.
+    wentOnline = true
+    onlineManager.setOnline(true)
+    expect(await screen.findByText('GitHub')).toBeTruthy()
+    expect(
+      screen.queryByRole('status', { name: zhCN.bindings.loading }),
+    ).toBeNull()
+    expect(listCalls).toBe(2)
 
     await expectNoAxeViolations()
   })

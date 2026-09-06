@@ -39,6 +39,10 @@
  * channel added to the spec lands in both packages' copies in the same
  * round.
  *
+ * An unresolved load -- the first load in flight, or parked by
+ * react-query's default networkMode 'online' while the device is
+ * offline -- keeps the section header and the loading skeleton; the
+ * block must never silently vanish while the answer has not arrived.
  * Empty and failure states render one ui-kit EmptyState (empty / error
  * variant with a retry button) with the section header hidden, so the
  * heading order never skips a level. The one exception is a first-run
@@ -159,7 +163,7 @@ export function SocialBindingsSection({
 }: SocialBindingsSectionProps) {
   const { t } = useAccountUiTranslation()
   const queryClient = useQueryClient()
-  const { data, isLoading, isError, refetch } = useAuthnListIdentities()
+  const { data, isPending, isError, refetch } = useAuthnListIdentities()
   const unbindMutation = useAuthnUnbindIdentity()
 
   const [unbindTarget, setUnbindTarget] = useState<string | null>(null)
@@ -168,10 +172,19 @@ export function SocialBindingsSection({
   const [authorizeError, setAuthorizeError] = useState<string | null>(null)
 
   const identities = data?.identities
-  const pending = isLoading && identities === undefined
-  const failed = !isLoading && identities === undefined && isError
+  // The answer is unresolved whenever there is no data yet: the first
+  // load in flight, or parked by react-query's default networkMode
+  // 'online' while the device is offline -- such a fetch sits at
+  // fetchStatus 'paused', where isFetching (and isLoading, its
+  // isPending-and-isFetching conjunction) is false and isError stays
+  // false too, so a pending test derived from isLoading would miss
+  // every branch and the block would silently vanish. isPending alone
+  // tracks "no answer yet" across the in-flight and the parked states;
+  // a failed load is the isError branch below.
+  const pending = isPending && identities === undefined
+  const failed = !isPending && identities === undefined && isError
   const rows =
-    !isLoading && !failed && identities !== undefined ? identities : undefined
+    !pending && !failed && identities !== undefined ? identities : undefined
 
   const boundProviders =
     rows === undefined
@@ -259,11 +272,26 @@ export function SocialBindingsSection({
           variant="error"
           title={t('bindings.error.title')}
           description={t('bindings.error.description')}
+          // No in-flight state can ever coexist with this button: the
+          // moment a refetch of a settled error is armed, react-query
+          // moves the data-less query back to the pending state, so the
+          // section re-enters the loading branch above -- that loading
+          // announcement is the retry's progress feedback, and the
+          // button, which exists only in this settled branch, can never
+          // be clicked twice into overlapping refetches.
           action={
             <Button onClick={() => void refetch()}>{t('bindings.retry')}</Button>
           }
           headingLevel="h2"
         />
+      ) : rows === undefined ? (
+        // The only state left is one the query machine cannot produce
+        // (no data, no pending, no error -- no placeholderData is in
+        // play, so a settled query always carries data): render the
+        // loading branch rather than nothing, so a future contract
+        // drift can never make the social-bindings block silently
+        // vanish.
+        <BindingListSkeleton label={t('bindings.loading')} />
       ) : showEmptyState ? (
         <EmptyState
           variant="empty"
@@ -271,7 +299,7 @@ export function SocialBindingsSection({
           description={t('bindings.empty.description')}
           headingLevel="h2"
         />
-      ) : rows === undefined ? null : (
+      ) : (
         <Box>
           {notice?.kind === 'unbind-failed' && <InlineError code={notice.code} />}
           {/* The identity rows are one real list, as the sessions rows

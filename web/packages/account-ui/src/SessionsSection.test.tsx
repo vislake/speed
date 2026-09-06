@@ -20,8 +20,9 @@
  * with a retry that refetches. Every scenario ends with an axe pass.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, afterEach } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
+import { onlineManager } from '@tanstack/react-query'
 import userEvent from '@testing-library/user-event'
 import type { AuthnSession } from '@speed/api-sdk'
 import { uiKitResources } from '@speed/ui-kit'
@@ -87,6 +88,13 @@ function revokeAriaOf(device: string): string {
 }
 
 describe('SessionsSection', () => {
+  afterEach(() => {
+    // The offline scenario toggles the global online manager; every
+    // other test signs in and fetches over the real transport, so the
+    // device must be back online when the next test starts.
+    onlineManager.setOnline(true)
+  })
+
   it('render every session with raw values, the current marker, and one revoke action per non-current active row', async () => {
     const sessions = [
       session({
@@ -255,6 +263,131 @@ describe('SessionsSection', () => {
     await user.click(screen.getByRole('button', { name: zhCN.sessions.retry }))
     expect(await screen.findByText('Chrome/126.0.0.0 on Windows')).toBeTruthy()
     expect(screen.queryByText(zhCN.sessions.error.title)).toBeNull()
+    expect(listCalls).toBe(2)
+
+    await expectNoAxeViolations()
+  })
+
+  it('never read an unresolved load as no sessions: a fetch parked offline stays on the loading branch until the network returns', async () => {
+    const list = [session()]
+    let wentOnline = false
+    let listCalls = 0
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === LOGIN_PATH) {
+        return jsonResponse(200, makePair())
+      }
+      if (call.method === 'GET' && call.path === SESSIONS_PATH) {
+        listCalls += 1
+        if (!wentOnline) {
+          throw new Error(
+            'a list request reached the transport while the fetch was parked offline',
+          )
+        }
+        return jsonResponse(200, { sessions: list })
+      }
+      throw new Error(`unexpected ${call.method} ${call.path}`)
+    })
+    await signInWithPassword(rig)
+    // react-query's default networkMode 'online' parks a fetch that
+    // starts while the device is offline at fetchStatus 'paused':
+    // isFetching -- and isLoading, its isPending-and-isFetching
+    // conjunction -- are false, isError stays false and data stays
+    // undefined, so a pending test derived from isLoading misses every
+    // branch. The section must stay on the loading branch (isPending)
+    // instead of asserting an empty list for an answer that never
+    // arrived.
+    onlineManager.setOnline(false)
+    const { queryClient } = renderWithProviders(<SessionsSection />)
+
+    await waitFor(() => {
+      const [query] = queryClient.getQueryCache().findAll()
+      expect(query?.state.fetchStatus).toBe('paused')
+    })
+    expect(listCalls).toBe(0)
+
+    // Still the loading branch: the header and one loading announcement,
+    // never the no-sessions or error text.
+    expect(
+      screen.getByRole('heading', { name: zhCN.sessions.title }),
+    ).toBeTruthy()
+    expect(
+      screen.getByRole('status', { name: zhCN.sessions.loading }),
+    ).toBeTruthy()
+    expect(screen.queryByText(zhCN.sessions.empty.title)).toBeNull()
+    expect(screen.queryByText(zhCN.sessions.error.title)).toBeNull()
+
+    // The parked fetch resumes by itself once the network is back.
+    wentOnline = true
+    onlineManager.setOnline(true)
+    expect(await screen.findByText('Chrome/126.0.0.0 on Windows')).toBeTruthy()
+    expect(
+      screen.queryByRole('status', { name: zhCN.sessions.loading }),
+    ).toBeNull()
+    expect(listCalls).toBe(1)
+
+    await expectNoAxeViolations()
+  })
+
+  it('feedback while a retry is armed: a retry clicked offline parks on the loading branch, resumes with exactly one request, and no button exists to stack a second click', async () => {
+    const user = userEvent.setup()
+    let listCalls = 0
+    let wentOnline = true
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === LOGIN_PATH) {
+        return jsonResponse(200, makePair())
+      }
+      if (call.method === 'GET' && call.path === SESSIONS_PATH) {
+        listCalls += 1
+        if (listCalls === 1) {
+          return errorResponse(500, 'client.http.500')
+        }
+        if (!wentOnline) {
+          throw new Error(
+            'a list request reached the transport while the device was offline',
+          )
+        }
+        return jsonResponse(200, { sessions: [session()] })
+      }
+      throw new Error(`unexpected ${call.method} ${call.path}`)
+    })
+    await signInWithPassword(rig)
+    const { queryClient } = renderWithProviders(<SessionsSection />)
+
+    expect(await screen.findByText(zhCN.sessions.error.title)).toBeTruthy()
+
+    // The retry of a settled error is armed the moment it is clicked:
+    // react-query puts the refetch back into the pending state (and
+    // parks it at fetchStatus 'paused' while the device is offline), so
+    // the retry affordance's feedback IS the loading branch -- a live
+    // progress announcement, never a still-clickable button, so repeat
+    // clicks cannot overlap refetches.
+    onlineManager.setOnline(false)
+    wentOnline = false
+    await user.click(screen.getByRole('button', { name: zhCN.sessions.retry }))
+
+    await waitFor(() => {
+      const [query] = queryClient.getQueryCache().findAll()
+      expect(query?.state.fetchStatus).toBe('paused')
+    })
+    expect(listCalls).toBe(1)
+    expect(
+      screen.getByRole('status', { name: zhCN.sessions.loading }),
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole('button', { name: zhCN.sessions.retry }),
+    ).toBeNull()
+    expect(screen.queryByText(zhCN.sessions.error.title)).toBeNull()
+    expect(screen.queryByText(zhCN.sessions.empty.title)).toBeNull()
+
+    // The parked refetch resumes by itself once the network is back,
+    // with exactly one request -- the park/resume cycle never stacks a
+    // duplicate.
+    wentOnline = true
+    onlineManager.setOnline(true)
+    expect(await screen.findByText('Chrome/126.0.0.0 on Windows')).toBeTruthy()
+    expect(
+      screen.queryByRole('status', { name: zhCN.sessions.loading }),
+    ).toBeNull()
     expect(listCalls).toBe(2)
 
     await expectNoAxeViolations()

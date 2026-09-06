@@ -26,9 +26,14 @@
  * The section takes no props: whose sessions these are, and the right to
  * revoke them, come from the caller's bound client and its access token;
  * the section only renders the list and drives the generated mutations.
- * Empty and failure states hide the section header entirely and render
- * one ui-kit EmptyState (empty / error variant with a retry button), so
- * the heading order never skips a level.
+ * An unresolved load -- the first load in flight, or parked by
+ * react-query's default networkMode 'online' while the device is offline
+ * -- keeps the loading branch, header included. Only a settled query
+ * leaves it: a genuine empty answer (or a genuine failure) hides the
+ * section header entirely and renders one ui-kit EmptyState (empty /
+ * error variant with a retry button), so the heading order never skips a
+ * level and the no-sessions text is never asserted for an answer that
+ * has not arrived.
  */
 
 import { useMemo, useState } from 'react'
@@ -131,7 +136,7 @@ function SessionListSkeleton({ label }: { readonly label: string }) {
 export function SessionsSection() {
   const { t, i18n } = useAccountUiTranslation()
   const queryClient = useQueryClient()
-  const { data, isLoading, isError, refetch } = useAuthnListSessions()
+  const { data, isPending, isError, refetch } = useAuthnListSessions()
   const revokeSessionMutation = useAuthnRevokeSession()
   const revokeOthersMutation = useAuthnRevokeOtherSessions()
 
@@ -149,10 +154,18 @@ export function SessionsSection() {
   )
 
   const sessions = data?.sessions
-  const pending = isLoading && sessions === undefined
-  const failed = !isLoading && sessions === undefined && isError
-  const hasSessions =
-    !isLoading && !failed && sessions !== undefined && sessions.length > 0
+  // The answer is unresolved whenever there is no data yet: the first
+  // load in flight, or parked by react-query's default networkMode
+  // 'online' while the device is offline -- such a fetch sits at
+  // fetchStatus 'paused', where isFetching (and isLoading, its
+  // isPending-and-isFetching conjunction) is false and isError stays
+  // false too, so a pending test derived from isLoading would miss
+  // every branch and read an unresolved load as an empty answer.
+  // isPending alone tracks "no answer yet" across the in-flight and the
+  // parked states; a failed load is the isError branch below.
+  const pending = isPending && sessions === undefined
+  const failed = !isPending && sessions === undefined && isError
+  const hasSessions = sessions !== undefined && sessions.length > 0
   const busy =
     revokeSessionMutation.isPending || revokeOthersMutation.isPending
 
@@ -238,6 +251,13 @@ export function SessionsSection() {
           variant="error"
           title={t('sessions.error.title')}
           description={t('sessions.error.description')}
+          // No in-flight state can ever coexist with this button: the
+          // moment a refetch of a settled error is armed, react-query
+          // moves the data-less query back to the pending state, so the
+          // section re-enters the loading branch above -- that loading
+          // announcement is the retry's progress feedback, and the
+          // button, which exists only in this settled branch, can never
+          // be clicked twice into overlapping refetches.
           action={
             <Button onClick={() => void refetch()}>{t('sessions.retry')}</Button>
           }
@@ -247,7 +267,15 @@ export function SessionsSection() {
           // heading order skips straight from h1 to h6.
           headingLevel="h2"
         />
-      ) : sessions === undefined || sessions.length === 0 ? (
+      ) : sessions === undefined ? (
+        // The only state left is one the query machine cannot produce
+        // (no data, no pending, no error -- no placeholderData is in
+        // play, so a settled query always carries data): render the
+        // loading branch rather than an empty answer, so a future
+        // contract drift can never read an unresolved load as "no
+        // sessions".
+        <SessionListSkeleton label={t('sessions.loading')} />
+      ) : sessions.length === 0 ? (
         <EmptyState
           variant="empty"
           title={t('sessions.empty.title')}
