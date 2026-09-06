@@ -102,7 +102,11 @@ plumbing and deliberately not exported.
   additive prop stays additive: it defaults to `1`, exactly today's
   unconditional single-column flow, so every existing consumer that
   omits it is byte-for-byte unaffected; only passing `columns={2}`
-  opts into the new CSS Grid flow.
+  opts into the new CSS Grid flow. `DataTableColumn`'s `priority?: 'high'
+  | 'medium' | 'low'` follows the identical template: undefined by
+  default, exactly today's always-visible column, so an existing
+  consumer that sets no column's priority is byte-for-byte unaffected;
+  only a column that opts in gets the breakpoint-keyed hide/show.
 
 ## Testing
 
@@ -145,6 +149,20 @@ declaration was wired into the render; neither proves a layout looks
 correct at a real viewport width, which this package's jsdom suite
 cannot render at all (see the package README's Deferrals: Storybook /
 browser-side visual verification is the same standing gap).
+
+**DataTable column priority (this round)** reuses the same
+`emittedStyleText()` technique for its own breakpoint-keyed `display`
+value (see the README's Column priority subsection): one test per tier
+asserts the tier's exact `@media (min-width:...)` breakpoint and the
+`table-cell` restore value both appear in the generated CSS, plus a
+separate test proving a prioritized column stays a genuine DOM column
+rather than being conditionally rendered away (which the loading/empty
+rows' `colSpan` depends on). No other `sx` in this component is
+breakpoint-keyed, so those generated-CSS strings can only originate
+from this feature — the same non-collision reasoning `FormLayout`'s
+own test relies on. As with every `emittedStyleText()` assertion in
+this package, this proves the right declarations were wired in, not
+that a real viewport actually hides or shows the column.
 
 ## Deferrals (recorded, do not re-open silently)
 

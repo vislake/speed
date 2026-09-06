@@ -20,6 +20,7 @@ import zhCN from '../locales/zh-CN.json' with { type: 'json' }
 import enUS from '../locales/en-US.json' with { type: 'json' }
 import { renderWithProviders } from '../../test-utils/render.js'
 import { expectNoAxeViolations } from '../../test-utils/axe.js'
+import { emittedStyleText } from '../../test-utils/emitted-css.js'
 import { DataTable } from './DataTable.js'
 import type { DataTableColumn, DataTableProps } from './DataTable.js'
 
@@ -563,6 +564,97 @@ describe('DataTable', () => {
     const utils = renderTable({ size: 'small' })
     const cell = utils.container.querySelector('tbody td')
     expect(cell?.className).toContain('MuiTableCell-sizeSmall')
+  })
+
+  describe('column priority (responsive reflow)', () => {
+    // Same class of proof as FormLayout's `columns={2}` breakpoint-keyed
+    // grid test (see that file): a breakpoint-keyed `sx` value compiles
+    // to a base rule plus an `@media` rule, and jsdom evaluates neither
+    // real layout nor `@media` conditions -- there is no real viewport
+    // for either side to be "active" at, so `getComputedStyle`/
+    // `toHaveStyle` cannot resolve which one applies. Reading the
+    // generated CSS text instead proves the right declarations (hidden
+    // below the tier's breakpoint, restored at and above it) were wired
+    // into the render; it does not prove a real viewport actually hides
+    // or shows the column, which this package's jsdom suite cannot
+    // render at all. No other sx in this component is breakpoint-keyed,
+    // so the `@media (min-width:...)` and `table-cell` strings these
+    // tests look for can only come from this feature.
+
+    it('renders a column with no priority with no visibility override -- unaffected by the feature', () => {
+      // BASE_COLUMNS sets no column's priority; this restates the
+      // existing "applies column alignment and width to cells" contract
+      // as this round's own required backward-compatibility proof: a
+      // host that sets no column's priority sees byte-identical
+      // rendering, on every viewport.
+      const utils = renderTable()
+      const creditCells = utils.container.querySelectorAll(
+        'tbody td.MuiTableCell-alignRight',
+      )
+      expect(creditCells[0]).toHaveStyle({ width: '120px' })
+      expect(utils.getByText('Ada')).toBeInTheDocument()
+    })
+
+    it('hides a high-priority column below sm and restores it from sm up', () => {
+      const columns: DataTableColumn<Member>[] = [
+        ...BASE_COLUMNS,
+        { id: 'plan', header: 'Plan', priority: 'high', cell: () => 'Pro' },
+      ]
+      renderTable({ columns })
+      const css = emittedStyleText()
+      expect(css).toMatch(/display:none/)
+      expect(css).toMatch(/@media \(min-width:600px\)/)
+      expect(css).toMatch(/display:table-cell/)
+    })
+
+    it('hides a medium-priority column below md', () => {
+      const columns: DataTableColumn<Member>[] = [
+        ...BASE_COLUMNS,
+        { id: 'plan', header: 'Plan', priority: 'medium', cell: () => 'Pro' },
+      ]
+      renderTable({ columns })
+      const css = emittedStyleText()
+      expect(css).toMatch(/@media \(min-width:900px\)/)
+      expect(css).toMatch(/display:table-cell/)
+    })
+
+    it('hides a low-priority column below lg', () => {
+      const columns: DataTableColumn<Member>[] = [
+        ...BASE_COLUMNS,
+        { id: 'plan', header: 'Plan', priority: 'low', cell: () => 'Pro' },
+      ]
+      renderTable({ columns })
+      const css = emittedStyleText()
+      expect(css).toMatch(/@media \(min-width:1200px\)/)
+      expect(css).toMatch(/display:table-cell/)
+    })
+
+    it('keeps a prioritized column as a real DOM column (CSS-hidden, never conditionally removed)', () => {
+      // Hiding is pure CSS, so the cell stays a genuine column in jsdom
+      // (which does not evaluate the @media rule either way) -- the
+      // point under test is that the column was never conditionally
+      // rendered away, which the loading/empty rows' colSpan depends on,
+      // and that an always-visible column alongside it is untouched.
+      const columns: DataTableColumn<Member>[] = [
+        ...BASE_COLUMNS,
+        { id: 'plan', header: 'Plan', priority: 'low', cell: () => 'Pro' },
+      ]
+      const utils = renderTable({ columns })
+      expect(
+        utils.getByRole('columnheader', { name: 'Plan' }),
+      ).toBeInTheDocument()
+      expect(utils.getAllByText('Pro')).toHaveLength(MEMBERS.length)
+      expect(utils.getByText('Ada')).toBeInTheDocument()
+    })
+
+    it('passes axe with a mix of prioritized and always-visible columns', async () => {
+      const columns: DataTableColumn<Member>[] = [
+        ...BASE_COLUMNS,
+        { id: 'plan', header: 'Plan', priority: 'low', cell: () => 'Pro' },
+      ]
+      renderTable({ columns })
+      await expectNoAxeViolations()
+    })
   })
 
   it('passes axe over a fully loaded table', async () => {

@@ -32,6 +32,29 @@
  * "horizontal-scroll container" test for the regression proof (a future
  * refactor that drops `TableContainer` would fail it).
  *
+ * Column priority (opt-in, additive) is the reflow alternative to that
+ * scroll fallback: a column's `priority` ('high' | 'medium' | 'low')
+ * hides it below that tier's breakpoint on the same shared scale
+ * (@speed/tokens' breakpoints.values: xs:0/sm:600/md:900/lg:1200/xl:1536)
+ * every other responsive surface in this repo reads from -- 'low' clears
+ * at `lg`, 'medium' at `md`, 'high' at `sm`, so a narrowing viewport
+ * sheds the least important columns first and keeps shedding until only
+ * the always-visible ones (no `priority` set) remain, even at `xs`. A
+ * column with no `priority` renders with no visibility override at all,
+ * so a host that sets no column's priority is byte-for-byte unaffected --
+ * the TableContainer scroll fallback above still applies to it exactly as
+ * before. The hiding is pure CSS (a breakpoint-keyed `display` value on
+ * the cell), never a JS layout decision: unlike AppShell's drawer-variant
+ * switch (@speed/layout-kit), a hidden table cell has no interactive
+ * state to preserve across the switch, so there is nothing a `sx`
+ * breakpoint value can't do that a `useMediaQuery` re-render would do
+ * better, and CSS keeps every rendered breakpoint available to print/
+ * devtools inspection rather than only the one JS measured at mount.
+ * See DataTable.test.tsx's priority tests for what this proves and does
+ * not (jsdom evaluates neither real layout nor `@media`, so the proof is
+ * that the right declarations were wired in, not that a real viewport
+ * renders correctly).
+ *
  * Selection is enabled by passing `onSelectionChange`; `selectedRowKeys`
  * then holds the keys (from `rowKey`, index-keyed by default -- pass an
  * id-based `rowKey` once a table can reorder) and the header checkbox
@@ -61,6 +84,14 @@ import type { SxProps, Theme } from '@mui/material/styles'
 import { EmptyState } from './EmptyState.js'
 import { useUiKitTranslation } from '../internal/translation.js'
 
+/**
+ * Opt-in column visibility priority (see the header note for the full
+ * cascade). Higher priority survives to narrower viewports: 'low' is the
+ * first to be hidden as the viewport shrinks, 'high' the last, and a
+ * column with no priority is never hidden.
+ */
+export type DataTableColumnPriority = 'high' | 'medium' | 'low'
+
 /** One column definition: header plus a per-row cell renderer. */
 export interface DataTableColumn<T> {
   /** Stable column identity; also the sort-state columnId. */
@@ -73,6 +104,14 @@ export interface DataTableColumn<T> {
   readonly align?: 'left' | 'center' | 'right'
   /** Table-cell width hint. */
   readonly width?: number | string
+  /**
+   * Opt-in responsive visibility: hides this column below the tier's
+   * breakpoint as the viewport narrows (see DataTableColumnPriority and
+   * the component header note for the exact cascade). Omitting it keeps
+   * the column always visible -- today's exact behavior, unaffected by
+   * this prop existing.
+   */
+  readonly priority?: DataTableColumnPriority
   /** Renders one row's cell; rowIndex is the index within `rows`. */
   readonly cell: (row: T, rowIndex: number) => ReactNode
 }
@@ -152,6 +191,36 @@ export interface DataTableProps<T> {
 
 function flip(direction: DataTableSortDirection): DataTableSortDirection {
   return direction === 'asc' ? 'desc' : 'asc'
+}
+
+/**
+ * The breakpoint each priority tier stays visible from, on the shared
+ * scale (@speed/tokens' breakpoints.values: sm:600/md:900/lg:1200). 'low'
+ * clears the highest bar (visible only from `lg` up) so it is the first
+ * dropped as the viewport narrows; 'high' clears the lowest bar (visible
+ * from `sm` up) so it is the last dropped, hidden only below `sm`.
+ */
+const PRIORITY_VISIBLE_FROM: Record<DataTableColumnPriority, 'sm' | 'md' | 'lg'> = {
+  high: 'sm',
+  medium: 'md',
+  low: 'lg',
+}
+
+/**
+ * Renders a column's opt-in priority into a breakpoint-keyed `display`
+ * sx value: `none` below the tier's breakpoint, `table-cell` (a
+ * TableCell's own default display, restored explicitly since MUI's
+ * breakpoint object only ever adds rules, never restores a browser
+ * default) from it up. Returns undefined for a column with no priority,
+ * so spreading its result into a cell's sx is a no-op -- the exact prior
+ * sx shape, unaffected by this feature.
+ */
+function columnVisibilitySx(
+  priority: DataTableColumnPriority | undefined,
+): { display: Partial<Record<'xs' | 'sm' | 'md' | 'lg', string>> } | undefined {
+  if (priority === undefined) return undefined
+  const visibleFrom = PRIORITY_VISIBLE_FROM[priority]
+  return { display: { xs: 'none', [visibleFrom]: 'table-cell' } }
 }
 
 /**
@@ -288,7 +357,7 @@ export function DataTable<T>({
                   <TableCell
                     key={column.id}
                     align={column.align}
-                    sx={{ width: column.width }}
+                    sx={{ width: column.width, ...columnVisibilitySx(column.priority) }}
                     aria-sort={
                       activeDirection === 'asc'
                         ? 'ascending'
@@ -374,7 +443,7 @@ export function DataTable<T>({
                     <TableCell
                       key={column.id}
                       align={column.align}
-                      sx={{ width: column.width }}
+                      sx={{ width: column.width, ...columnVisibilitySx(column.priority) }}
                     >
                       {column.cell(row, index)}
                     </TableCell>

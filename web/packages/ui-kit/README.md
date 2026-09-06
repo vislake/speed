@@ -24,7 +24,7 @@ string lives in the bilingual `ui-kit` namespace registered through
 | `components/FileUploader.tsx` | `FileUploader`, `FileUploaderProps`, `FileUploaderRow`, `FileUploaderRowStatus` |
 | `components/FormField.tsx` | `FormField`, `FormFieldProps`, `FormFieldRenderState`, `REQUIRED_ERROR_KEY` |
 | `components/FormLayout.tsx` | `FormLayout`, `FormLayoutProps`, `FormLayoutColumns` |
-| `components/DataTable.tsx` | `DataTable`, `DataTableColumn`, `DataTableSort`, `DataTableSortDirection`, `DataTableFilter`, `DataTablePagination`, `DataTableProps` |
+| `components/DataTable.tsx` | `DataTable`, `DataTableColumn`, `DataTableColumnPriority`, `DataTableSort`, `DataTableSortDirection`, `DataTableFilter`, `DataTablePagination`, `DataTableProps` |
 | `resources.ts` | `UI_KIT_NAMESPACE`, `uiKitResources` |
 
 Everything else (`src/internal/`) is shared component plumbing and is
@@ -506,9 +506,70 @@ width, and needs no prop. `DataTable.test.tsx`'s
 deliberately over-wide column set and asserting the wrapper is a real
 `TableContainer` with `overflow-x: auto`, so a future refactor that
 drops `TableContainer` would fail a test instead of silently
-regressing. Column-hiding or a priority-reflow layout for narrow
-viewports is a possible future enhancement, deliberately not built in
-this round.
+regressing.
+
+**Column priority is the opt-in reflow alternative to that scroll
+fallback.** A column's `priority?: 'high' | 'medium' | 'low'` hides it
+below that tier's breakpoint on the same shared scale every other
+responsive surface in this repo reads from (`@speed/tokens`'
+`breakpoints.values`: xs:0/sm:600/md:900/lg:1200/xl:1536):
+
+| Priority | Visible from | Hidden below |
+|---|---|---|
+| `low` | `lg` (1200px) | `lg` -- the first column dropped as the viewport narrows |
+| `medium` | `md` (900px) | `md` |
+| `high` | `sm` (600px) | `sm` -- the last column dropped, only below the narrowest phone widths |
+| unset (default) | always | never -- today's exact behavior |
+
+A narrowing viewport therefore sheds the least important columns
+first and keeps shedding until only the always-visible columns (no
+`priority` set) remain, even at `xs`. Omitting `priority` on every
+column renders with no visibility override at all -- a host that sets
+no column's priority sees byte-identical rendering, on every viewport,
+to before this feature existed; the `TableContainer` scroll fallback
+above still applies to it exactly as before.
+
+The hiding is pure CSS -- a breakpoint-keyed `display` value (`none`
+below the tier's breakpoint, `table-cell` -- a table cell's own default
+display, restored explicitly -- at and above it) on the header and
+body cell, never a JS layout decision. Unlike `AppShell`'s drawer-
+variant switch (`@speed/layout-kit`, a `useMediaQuery` boolean), a
+hidden table cell has no interactive state to preserve across the
+switch, so a `sx` breakpoint value does everything a JS re-render
+would, at no extra cost. `DataTable.test.tsx`'s "column priority"
+tests pin the three tiers' generated CSS (the same
+generated-CSS-text technique `FormLayout`'s `columns={2}` test uses,
+documented under Testing below) and that a prioritized column stays a
+real DOM column rather than being conditionally rendered away --
+jsdom evaluates neither real layout nor `@media`, so this proves the
+right declarations were wired in, not that a real viewport hides or
+shows the column correctly.
+
+```tsx
+const columns: DataTableColumn<Member>[] = [
+  { id: 'name', header: 'Name', sortable: true, cell: (row) => row.name },
+  // Visible everywhere -- same as every column before this feature.
+  {
+    id: 'email',
+    header: 'Email',
+    cell: (row) => row.email,
+  },
+  // Dropped first as the viewport narrows (hidden below `lg`).
+  {
+    id: 'joinedAt',
+    header: 'Joined',
+    priority: 'low',
+    cell: (row) => row.joinedAt,
+  },
+  // Dropped last, only below the narrowest phone widths (`sm`).
+  {
+    id: 'plan',
+    header: 'Plan',
+    priority: 'high',
+    cell: (row) => row.plan,
+  },
+]
+```
 
 ### FileUploader
 
@@ -644,11 +705,11 @@ same rationale documented here.
 ## Deferrals and recorded decisions
 
 - **DataTable column-hiding / priority-reflow for narrow viewports**:
-  out of scope for this round's responsive-design pass. The
-  horizontal-scroll container (see the DataTable section) is the
-  stated, tested contract for a narrow viewport today; a layout that
-  hides or reflows lower-priority columns instead of scrolling is a
-  possible future enhancement, deliberately not built.
+  landed this round (see the DataTable section's Column priority
+  subsection) -- an opt-in `priority` field on `DataTableColumn` hides
+  lower-priority columns first as the viewport narrows through the
+  shared breakpoint scale, alongside the unaffected horizontal-scroll
+  fallback for columns that don't opt in.
 - **Validation from generated types**: zod-style validation derived from
   the API-generated types is the form milestone's follow-up (roadmap),
   deliberately not implemented here. The validation-error contract is
