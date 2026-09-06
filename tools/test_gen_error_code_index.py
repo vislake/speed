@@ -107,6 +107,42 @@ class ScanGoFileTests(unittest.TestCase):
         self.assertTrue(m._is_excluded(pathlib.Path("foo_gen.go")))
         self.assertFalse(m._is_excluded(pathlib.Path("errors.go")))
 
+    def test_function_body_assignment_is_not_a_declaration(self):
+        # A plain reassignment inside a function body -- the exact text
+        # shape of a normal "handle the failure" line -- must not produce
+        # a phantom index row for a code nobody declared at package
+        # level. Fails before the tightening (the pre-anchored pattern
+        # matched the indented line and invented an entry).
+        entries = self._scan(
+            'package foo\n\n'
+            'func handle() error {\n'
+            '\tif broken {\n'
+            '\t\terr = apperr.Invalid("foo.phantom")\n'
+            '\t\treturn err\n'
+            '\t}\n'
+            '\treturn nil\n'
+            '}\n'
+        )
+        self.assertEqual(entries, [])
+
+    def test_multiple_var_blocks_all_contribute(self):
+        # Two var (...)-blocks in one file (the gofmt shape when a module
+        # groups its sentinels twice, e.g. before and after a long doc
+        # comment) each contribute their entries; the closer of the first
+        # block must not suppress the second.
+        entries = self._scan(
+            'package foo\n\n'
+            'var (\n'
+            '\tErrA = apperr.NotFound("foo.a")\n'
+            ')\n'
+            '\n'
+            'var (\n'
+            '\tErrB = apperr.Invalid("foo.b")\n'
+            ')\n'
+        )
+        self.assertEqual([e.code for e in entries], ["foo.a", "foo.b"])
+        self.assertEqual([e.status for e in entries], [404, 400])
+
 
 class CollectMessagesTests(unittest.TestCase):
     def test_flat_string_message_is_looked_up_by_code(self):
@@ -171,6 +207,32 @@ class RenderMarkdownTests(unittest.TestCase):
         rendered = m.render_markdown(entries)
         self.assertIn("a \\| b", rendered)
         self.assertIn("c \\| d", rendered)
+
+    def test_footer_reports_the_real_dedupe_counts(self):
+        # The footer must state the real numbers -- how many unique codes
+        # the table documents and how many duplicate declarations the
+        # one-row-per-code collapse removed -- not the raw declaration
+        # count with a "before de-duplicating" hedge. Fails before the
+        # fix (no counts were computed or printed).
+        entries = [
+            m.ErrorEntry(ident="ErrA", code="foo.a", status=400, source="a.go:1", doc="doc a"),
+            m.ErrorEntry(ident="ErrA2", code="foo.a", status=400, source="a2.go:1", doc="doc a again"),
+            m.ErrorEntry(ident="ErrB", code="bar.b", status=404, source="b.go:1", doc="doc b"),
+        ]
+        rendered = m.render_markdown(entries)
+        self.assertIn("3 declaration(s) collapsed to 2 code(s)", rendered)
+        self.assertIn("(1 duplicate declaration(s) removed)", rendered)
+        self.assertNotIn("before de-duplicating", rendered)
+
+    def test_code_counts_helper(self):
+        entries = [
+            m.ErrorEntry(ident="ErrA", code="foo.a", status=400, source="a.go:1"),
+            m.ErrorEntry(ident="ErrA2", code="foo.a", status=400, source="a2.go:1"),
+            m.ErrorEntry(ident="ErrB", code="foo.b", status=400, source="b.go:1"),
+            m.ErrorEntry(ident="ErrC", code="bar.c", status=404, source="c.go:1"),
+        ]
+        self.assertEqual(m.code_counts(entries), (4, 3, 1))
+        self.assertEqual(m.code_counts([]), (0, 0, 0))
 
 
 if __name__ == "__main__":

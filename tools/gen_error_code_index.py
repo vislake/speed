@@ -66,8 +66,18 @@ from dataclasses import dataclass
 # are both already captured on the opening line. IDENT may be unexported
 # (a package-private sentinel like notes' own errInternal) as well as
 # exported.
+#
+# Both patterns are anchored at column zero -- no leading whitespace --
+# because a top-level declaration is the only valid Go shape a line can
+# have at column zero, while INDENTED assignments live in function bodies
+# and var (...)-block entries alike. _scan_go_file decides between those
+# two: an indented match counts only when the line sits inside a var
+# block (it then probes the line with the leading whitespace stripped, so
+# the column-zero patterns still apply), so a plain reassignment inside a
+# function -- "err = apperr.Invalid("module.code")" -- can never produce a
+# phantom index row for a code nobody declared.
 _BUILDER_RE = re.compile(
-    r'^\s*(?:var\s+)?(?P<ident>[A-Za-z_]\w*)\s*=\s*apperr\.'
+    r'^(?:var\s+)?(?P<ident>[A-Za-z_]\w*)\s*=\s*apperr\.'
     r'(?P<builder>NotFound|Invalid|Conflict|Unauthorized|Forbidden|Internal)'
     r'\(\s*"(?P<code>[^"]+)"\s*\)'
 )
@@ -79,7 +89,7 @@ _BUILDER_RE = re.compile(
 # five builders provide, and every real call site in this repository uses
 # this shape for exactly that reason).
 _STRUCT_RE = re.compile(
-    r'^\s*(?:var\s+)?(?P<ident>[A-Za-z_]\w*)\s*=\s*&apperr\.Error\{'
+    r'^(?:var\s+)?(?P<ident>[A-Za-z_]\w*)\s*=\s*&apperr\.Error\{'
     r'\s*Code:\s*"(?P<code>[^"]+)"'
 )
 
@@ -136,34 +146,62 @@ def _leading_comment(lines: list[str], decl_index: int) -> str:
     return " ".join(collected)
 
 
+def _match_entry_line(probe: str) -> tuple[re.Match, str] | None:
+    """Return (match, kind) for one (possibly probed) line's shape.
+
+    kind is "builder" or "struct", the pattern that matched -- the two
+    patterns differ in how the HTTP status is derived, so the caller
+    must know which one fired.
+    """
+    m = _BUILDER_RE.match(probe)
+    if m:
+        return m, "builder"
+    m = _STRUCT_RE.match(probe)
+    if m:
+        return m, "struct"
+    return None
+
+
 def _scan_go_file(path: pathlib.Path, rel: str) -> list[ErrorEntry]:
     text = path.read_text(encoding="utf-8", errors="replace")
     lines = text.splitlines()
     entries: list[ErrorEntry] = []
+    in_var_block = False
     for i, line in enumerate(lines):
-        m = _BUILDER_RE.match(line)
-        if m:
-            entries.append(
-                ErrorEntry(
-                    ident=m.group("ident"),
-                    code=m.group("code"),
-                    status=_BUILDER_STATUS[m.group("builder")],
-                    source=f"{rel}:{i + 1}",
-                    doc=_leading_comment(lines, i),
-                )
-            )
+        stripped = line.strip()
+        if not stripped:
             continue
-        m = _STRUCT_RE.match(line)
-        if m:
-            entries.append(
-                ErrorEntry(
-                    ident=m.group("ident"),
-                    code=m.group("code"),
-                    status=429,
-                    source=f"{rel}:{i + 1}",
-                    doc=_leading_comment(lines, i),
-                )
+        if in_var_block:
+            if stripped == ")":
+                in_var_block = False
+                continue
+            # A var (...)-block entry is indented; its declaration shape
+            # is the column-zero patterns applied to the stripped line.
+            matched = _match_entry_line(line.lstrip())
+        else:
+            if stripped.startswith("var ") and stripped.endswith("("):
+                in_var_block = True
+                continue
+            # Outside a var block only a column-zero line can be a
+            # top-level declaration (gofmt'd code; function-body
+            # statements are indented), which is exactly what the
+            # column-zero-anchored patterns require -- an indented plain
+            # assignment ("err = apperr.Invalid(...)" in a function) can
+            # never match here, so it cannot produce a phantom row.
+            matched = _match_entry_line(line)
+        if matched is None:
+            continue
+        m, kind = matched
+        status = 429 if kind == "struct" else _BUILDER_STATUS[m.group("builder")]
+        entries.append(
+            ErrorEntry(
+                ident=m.group("ident"),
+                code=m.group("code"),
+                status=status,
+                source=f"{rel}:{i + 1}",
+                doc=_leading_comment(lines, i),
             )
+        )
     return entries
 
 
@@ -216,6 +254,22 @@ def collect_messages(roots: list[pathlib.Path]) -> dict[str, str]:
     return messages
 
 
+def code_counts(entries: list[ErrorEntry]) -> tuple[int, int, int]:
+    """Return (declarations, unique codes, duplicates removed).
+
+    The table renders one row per code and collapses a code declared more
+    than once (a rare, deliberate re-export, or two vars sharing one
+    code) into its first declaration's row -- so the real numbers are the
+    unique-code count and the number of duplicate declarations the
+    rendering removed, not the raw declaration count. A code's module is
+    its own dot-prefix, so a code can never span two modules and the
+    per-module collapse equals the global one.
+    """
+    n_decls = len(entries)
+    n_codes = len({e.code for e in entries})
+    return n_decls, n_codes, n_decls - n_codes
+
+
 def render_markdown(entries: list[ErrorEntry]) -> str:
     lines = [
         "# Error code index",
@@ -260,7 +314,12 @@ def render_markdown(entries: list[ErrorEntry]) -> str:
             lines.append(f"| `{e.code}` | {e.status} | {message} | {doc} | `{e.source}` |")
         lines.append("")
 
-    lines.append(f"{len(entries)} declaration(s), {sum(len(v) for v in by_module.values())} across {len(by_module)} module(s) (before de-duplicating a code declared more than once).")
+    n_decls, n_codes, n_dups = code_counts(entries)
+    lines.append(
+        f"{n_decls} declaration(s) collapsed to {n_codes} code(s) across "
+        f"{len(by_module)} module(s) "
+        f"({n_dups} duplicate declaration(s) removed)."
+    )
     lines.append("")
     return "\n".join(lines)
 
@@ -283,17 +342,26 @@ def main() -> int:
     rendered = render_markdown(entries)
     out_path = repo_root / args.out
 
+    n_decls, n_codes, n_dups = code_counts(entries)
+
     if args.check:
         current = out_path.read_text(encoding="utf-8") if out_path.exists() else ""
         if current != rendered:
             print(f"{args.out} is out of date; run: python3 tools/gen_error_code_index.py", file=sys.stderr)
             return 1
-        print(f"{args.out} is up to date ({len(entries)} declarations).")
+        print(
+            f"{args.out} is up to date ({n_decls} declarations, {n_codes} "
+            f"codes, {n_dups} duplicate(s) removed)."
+        )
         return 0
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(rendered, encoding="utf-8")
-    print(f"wrote {args.out} ({len(entries)} declarations across {len(set(e.module for e in entries))} modules)")
+    print(
+        f"wrote {args.out} ({n_decls} declarations, {n_codes} codes, "
+        f"{n_dups} duplicate(s) removed, across "
+        f"{len(set(e.module for e in entries))} modules)"
+    )
     return 0
 
 
