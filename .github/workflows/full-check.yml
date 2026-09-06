@@ -31,11 +31,12 @@ name: full-check
 #     under -race, a workspace-context build and a GOWORK=off standalone
 #     build) -- the full matrix runs the unit tier too. Per 18-cicd's
 #     reusable-workflow design rule, this file adds one matrix row per
-#     module and copies no legs. go/sharing, go/billing, go/compliance and
-#     go/admin ship no Docker-backed integration_test/ tier this round, so
+#     module and copies no legs. go/sharing, go/billing, go/compliance,
+#     go/admin and go/pki ship no Docker-backed integration_test/ tier, so
 #     they are deliberately absent from the integration-tiers matrix below,
-#     the same absence go/pki's and go/metering's own rounds recorded for
-#     themselves.
+#     the same absence go/metering's own round recorded for itself until
+#     this round landed its PostgreSQL tier (see go/metering/AGENTS.md's
+#     Testing section and Known limitations).
 #   * integration-tiers job: the Docker-backed integration tiers
 #     (-tags=integration), one matrix row per module that ships a tier, run
 #     from inside the module: go test -race -tags=integration ./... -- the
@@ -99,6 +100,20 @@ name: full-check
 #                       mechanism against a real server, a PostgreSQL-
 #                       specific mistake the unit tier's SQLite-only
 #                       proof cannot rule out
+#       go/metering   PostgreSQL -- its integration_test/ (added in the
+#                     metering-PostgreSQL round) applies the module's
+#                     migrations from zero on the real server, re-runs the
+#                     two tenant-scoped repositories' AssertIsolated
+#                     suites, and carries the round's three regressions --
+#                     PostgreSQL-only failures an SQLite-only suite cannot
+#                     see, each proven to fail pre-fix and pass post-fix on
+#                     real PostgreSQL: Enqueue's idempotent retry inside a
+#                     caller transaction (postgres_outbox_test.go), the
+#                     redelivered-event no-op and the redelivered outbox
+#                     row retiring instead of failing forever
+#                     (postgres_ingest_receipts_test.go), and validate's
+#                     byte bounds refusing an over-long field before any
+#                     write (postgres_validation_test.go)
 #   * reference-app job: examples/reference-app's golangci-lint leg, unit
 #     suite under -race, and its Docker-backed integration tier
 #     (-tags=integration -- testcontainers Redis, RustFS and a Mailpit SMTP
@@ -240,6 +255,7 @@ jobs:
           - go/storage
           - go/notification
           - go/integration
+          - go/metering
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
