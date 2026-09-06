@@ -6,13 +6,17 @@
  * display names are app-namespace copy -- and the current tenant comes
  * from the auth-core hook (the principal's own claim, never local
  * memory). A completed switch lands the menu in the new tenant and
- * evicts the leaving tenant's query rows -- the tenant-namespaced-key
- * discipline, proven at the app layer by seeding the query client the
- * tree renders with: the leaving tenant's notes-list data must be gone
- * while an unrelated key and the other tenant's rows survive, and the
- * switch request on the wire carries the requested tenant id in its
- * body. The current row is rendered but disabled: a tenant you are in
- * is not a destination.
+ * evicts the rows the departing access token fetched -- the tenant-
+ * namespaced-key discipline, proven at the app layer by seeding the
+ * query client the tree renders with: the leaving tenant's notes-list
+ * data must be gone, and so must the identity-domain rows the account
+ * surface reads (their bare spec-path keys carry no tenant segment --
+ * reference-app-web.md P1-apisdk-1), while an unrelated key and the
+ * other tenant's rows survive. The switch also re-asks the host-
+ * resolved Public config (one revalidation fetch on the wire --
+ * reference-app-web.md P2-refapp-14), and the switch request itself
+ * carries the requested tenant id in its body. The current row is
+ * rendered but disabled: a tenant you are in is not a destination.
  */
 
 import { waitFor } from '@testing-library/react'
@@ -72,7 +76,7 @@ describe('UserMenu', () => {
     ).not.toHaveAttribute('aria-disabled')
   })
 
-  it('lands in the switched tenant and evicts the leaving tenant query rows only', async () => {
+  it('lands in the switched tenant, evicts the leaving tenant rows AND the identity-domain rows, and revalidates the Public config', async () => {
     const rig = await makeSignedInRig()
     const view = await renderedUserMenu(rig)
     const user = userEvent.setup()
@@ -85,6 +89,15 @@ describe('UserMenu', () => {
     view.queryClient.setQueryData(acmeNotesKey, ['note-1'])
     view.queryClient.setQueryData(globexOtherKey, ['globex-row'])
     view.queryClient.setQueryData(unrelatedKey, ['pref-1'])
+    // The account surface's identity-domain keys -- bare spec paths,
+    // no tenant segment (the login-history key carrying its {limit}
+    // params as a further element, the shape the real hook's key has).
+    const sessionsKey = ['/api/v1/authn/sessions']
+    const loginHistoryKey = ['/api/v1/authn/login-history', { limit: 20 }]
+    const identitiesKey = ['/api/v1/authn/identities']
+    view.queryClient.setQueryData(sessionsKey, ['session-row'])
+    view.queryClient.setQueryData(loginHistoryKey, ['attempt-row'])
+    view.queryClient.setQueryData(identitiesKey, ['identity-row'])
 
     await user.click(view.getByRole('button', { name: zhCN.tenants.acme }))
     await user.click(
@@ -93,10 +106,14 @@ describe('UserMenu', () => {
 
     // The switch commits: the trigger relabels to the new tenant.
     await view.findByRole('button', { name: zhCN.tenants.globex })
-    // The leaving tenant's rows are gone; nothing else was touched.
+    // The leaving tenant's rows and the identity-domain rows are gone;
+    // nothing else was touched.
     await waitFor(() => {
       expect(view.queryClient.getQueryState(acmeNotesKey)).toBeUndefined()
     })
+    expect(view.queryClient.getQueryState(sessionsKey)).toBeUndefined()
+    expect(view.queryClient.getQueryState(loginHistoryKey)).toBeUndefined()
+    expect(view.queryClient.getQueryState(identitiesKey)).toBeUndefined()
     expect(view.queryClient.getQueryState(globexOtherKey)).toBeDefined()
     expect(view.queryClient.getQueryState(unrelatedKey)).toBeDefined()
 
@@ -112,5 +129,13 @@ describe('UserMenu', () => {
       unknown
     >
     expect(switchBody.tenant_id).toBe(TENANT_GLOBEX)
+
+    // The completed switch re-asked the host-resolved Public config:
+    // the menu's own subscription started the shared cache's first
+    // fetch, and the switch's revalidation issued a second one.
+    const configCalls = rig.calls.filter(
+      (call) => call.path === '/api/config/public',
+    )
+    expect(configCalls).toHaveLength(2)
   })
 })

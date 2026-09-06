@@ -13,27 +13,38 @@
  * server -- arrives with the Playwright e2e suite on the
  * test/reference-app-e2e-suite branch, not yet on main.
  *
- * evictTenantQueriesOnSessionEnd -- the session-end cache eviction in
+ * evictQueriesOnSessionEnd -- the session-end cache eviction in
  * isolation, over a real AuthSession (createAuthSession, driven
  * through the real-client rig's own scripted responder) and a real
  * QueryClient, without mounting any DOM tree: the wiring is pure
  * session-and-cache plumbing, so nothing here needs React or the
- * app's own views. The cross-account leak this pins is
+ * app's own views. The cross-account leaks this pins are
  * reference-app-web.md P1-1's root cause -- nothing evicted a
  * tenant's cached queries on sign-out/session-death, only a tenant
- * switch did -- and the notes-view suite's own gate test covers the
- * ternary-ordering half of the same finding; the full end-to-end
- * regression (a signed-out account's cached notes never reaching a
- * different, read-denied account signing into the same tenant) lives
- * in app-journey.test.tsx.
+ * switch did -- and P1-apisdk-1's: the eviction the P1-1 round added
+ * cleared only the departing tenant's ['tenant', tenantId] prefix, so
+ * the identity-domain rows the account surface reads through bare
+ * spec-path keys (sessions, login history, bound identities) survived
+ * a session end for a different account signing in afterward to
+ * inherit. The eviction is therefore total: whatever domain a future
+ * surface reads in, no row outlives the session that fetched it. The
+ * notes-view suite's own gate test covers the ternary-ordering half
+ * of the P1-1 finding; the full end-to-end regressions (a signed-out
+ * account's cached notes and account rows never reaching a different
+ * account signing in after it) live in app-journey.test.tsx.
  */
 
 import { QueryClient } from '@tanstack/react-query'
 import { act, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import {
+  getAuthnListIdentitiesQueryKey,
+  getAuthnListLoginHistoryQueryKey,
+  getAuthnListSessionsQueryKey,
+} from '@speed/api-sdk'
 import zhCN from './locales/zh-CN.json' with { type: 'json' }
 import { bootstrapReferenceApp } from './main.js'
-import { evictTenantQueriesOnSessionEnd } from './main.js'
+import { evictQueriesOnSessionEnd } from './main.js'
 import { jsonResponse, makeRealClientRig } from './test-utils/real-client.js'
 import type { RealResponder } from './test-utils/real-client.js'
 
@@ -68,6 +79,40 @@ function seedNotesCache(queryClient: QueryClient): void {
     ['tenant', TENANT_ID, '/api/v1/notes', {}],
     { notes: [{ id: 'note-1', text: 'cached from the departing session' }] },
   )
+}
+
+/** The identity-domain cache entries of the account surface, under the
+ * exact bare generated keys its reads use (the login-history key
+ * carries its {limit} query params as a further element, the shape the
+ * real hook's key has). Nothing here is tenant-namespaced -- the shape
+ * that made the earlier tenant-prefix-only eviction miss them. */
+function seedIdentityCache(queryClient: QueryClient): void {
+  queryClient.setQueryData(
+    [...getAuthnListSessionsQueryKey()],
+    { sessions: [{ id: 'session-1' }] },
+  )
+  queryClient.setQueryData(
+    [...getAuthnListLoginHistoryQueryKey(), { limit: 20 }],
+    { attempts: [{ method: 'password' }] },
+  )
+  queryClient.setQueryData(
+    [...getAuthnListIdentitiesQueryKey()],
+    { identities: [{ id: 'social-github' }] },
+  )
+}
+
+/** A query row that belongs to no domain the surface evictions ever
+ * named -- the "remove everything" proof that no future domain needs a
+ * new eviction call site either. */
+function seedUnrelatedCache(queryClient: QueryClient): void {
+  queryClient.setQueryData(['preferences'], { theme: 'dark' })
+}
+
+/** Seeds every domain an authenticated session's reads can populate. */
+function seedAllDomains(queryClient: QueryClient): void {
+  seedNotesCache(queryClient)
+  seedIdentityCache(queryClient)
+  seedUnrelatedCache(queryClient)
 }
 
 describe('bootstrapReferenceApp', () => {
@@ -222,29 +267,63 @@ describe('bootstrapReferenceApp', () => {
   })
 })
 
-describe('evictTenantQueriesOnSessionEnd', () => {
-  it('evicts the tenant a sign-out leaves behind', async () => {
+describe('evictQueriesOnSessionEnd', () => {
+  it('empties every domain a sign-out leaves behind: the tenant rows, the identity-domain rows and any unrelated key', async () => {
+    // reference-app-web.md P1-1 and P1-apisdk-1 together: the first
+    // session-end eviction cleared only the departing tenant's
+    // ['tenant', tenantId] prefix, so the identity-domain rows (bare
+    // spec-path keys -- nothing in @speed/api-sdk is tenant-
+    // namespaced) stayed cached for a different account signing in
+    // afterward to inherit. The eviction is total: every domain is
+    // asserted gone, including a key no eviction call site knows
+    // about, so a future surface's domain cannot leak either.
     const rig = makeRealClientRig(respond)
     const queryClient = new QueryClient()
-    evictTenantQueriesOnSessionEnd(rig.session, queryClient)
+    evictQueriesOnSessionEnd(rig.session, queryClient)
 
     await rig.session.loginWithPassword({
       identifier: 'owner@example.test',
       password: 'correct-horse-battery-staple',
     })
-    seedNotesCache(queryClient)
+    seedAllDomains(queryClient)
     expect(
       queryClient.getQueryData(['tenant', TENANT_ID, '/api/v1/notes', {}]),
     ).toBeDefined()
+    expect(queryClient.getQueryData([...getAuthnListSessionsQueryKey()]))
+      .toBeDefined()
+    expect(
+      queryClient.getQueryData([
+        ...getAuthnListLoginHistoryQueryKey(),
+        { limit: 20 },
+      ]),
+    ).toBeDefined()
+    expect(queryClient.getQueryData([...getAuthnListIdentitiesQueryKey()]))
+      .toBeDefined()
+    expect(queryClient.getQueryData(['preferences'])).toBeDefined()
 
     await rig.session.logout()
 
+    // Every query the departing session's reads cached is gone --
+    // the notes rows, the account surface's three identity-domain
+    // lists, and the key no eviction knows by name.
+    expect(queryClient.getQueryCache().findAll()).toHaveLength(0)
     expect(
       queryClient.getQueryData(['tenant', TENANT_ID, '/api/v1/notes', {}]),
     ).toBeUndefined()
+    expect(queryClient.getQueryData([...getAuthnListSessionsQueryKey()]))
+      .toBeUndefined()
+    expect(
+      queryClient.getQueryData([
+        ...getAuthnListLoginHistoryQueryKey(),
+        { limit: 20 },
+      ]),
+    ).toBeUndefined()
+    expect(queryClient.getQueryData([...getAuthnListIdentitiesQueryKey()]))
+      .toBeUndefined()
+    expect(queryClient.getQueryData(['preferences'])).toBeUndefined()
   })
 
-  it('evicts the tenant a session death (a refused silent refresh) leaves behind', async () => {
+  it('empties the same domains a session death (a refused silent refresh) leaves behind', async () => {
     // refresh() never rejects for a refused token -- it resolves false
     // and signs the session out locally (session.ts's own contract),
     // the same authenticated -> anonymous transition a manual sign-out
@@ -259,31 +338,43 @@ describe('evictTenantQueriesOnSessionEnd', () => {
       return respond(call)
     })
     const queryClient = new QueryClient()
-    evictTenantQueriesOnSessionEnd(rig.session, queryClient)
+    evictQueriesOnSessionEnd(rig.session, queryClient)
 
     await rig.session.loginWithPassword({
       identifier: 'owner@example.test',
       password: 'correct-horse-battery-staple',
     })
-    seedNotesCache(queryClient)
+    seedAllDomains(queryClient)
 
     expect(await rig.session.refresh()).toBe(false)
 
+    expect(queryClient.getQueryCache().findAll()).toHaveLength(0)
     expect(
       queryClient.getQueryData(['tenant', TENANT_ID, '/api/v1/notes', {}]),
     ).toBeUndefined()
+    expect(queryClient.getQueryData([...getAuthnListSessionsQueryKey()]))
+      .toBeUndefined()
+    expect(
+      queryClient.getQueryData([
+        ...getAuthnListLoginHistoryQueryKey(),
+        { limit: 20 },
+      ]),
+    ).toBeUndefined()
+    expect(queryClient.getQueryData([...getAuthnListIdentitiesQueryKey()]))
+      .toBeUndefined()
   })
 
   it('does nothing while the session was never authenticated', async () => {
     const rig = makeRealClientRig(respond)
     const queryClient = new QueryClient()
-    evictTenantQueriesOnSessionEnd(rig.session, queryClient)
-    seedNotesCache(queryClient)
+    evictQueriesOnSessionEnd(rig.session, queryClient)
+    seedAllDomains(queryClient)
 
     // A snapshot notification with no prior authenticated state (none
     // fires here since nothing logs in) must not evict anything --
     // asserted by the cache surviving to this point unexamined by any
     // transition at all.
+    expect(queryClient.getQueryCache().findAll()).toHaveLength(5)
     expect(
       queryClient.getQueryData(['tenant', TENANT_ID, '/api/v1/notes', {}]),
     ).toBeDefined()
@@ -310,18 +401,29 @@ describe('evictTenantQueriesOnSessionEnd', () => {
       return respond(call)
     })
     const queryClient = new QueryClient()
-    evictTenantQueriesOnSessionEnd(rig.session, queryClient)
+    evictQueriesOnSessionEnd(rig.session, queryClient)
 
     await rig.session.loginWithPassword({
       identifier: 'owner@example.test',
       password: 'correct-horse-battery-staple',
     })
-    seedNotesCache(queryClient)
+    seedAllDomains(queryClient)
 
     await rig.session.switchTenant('tenant-globex')
 
+    expect(queryClient.getQueryCache().findAll()).toHaveLength(5)
     expect(
       queryClient.getQueryData(['tenant', TENANT_ID, '/api/v1/notes', {}]),
     ).toBeDefined()
+    expect(queryClient.getQueryData([...getAuthnListSessionsQueryKey()]))
+      .toBeDefined()
+    expect(
+      queryClient.getQueryData([
+        ...getAuthnListLoginHistoryQueryKey(),
+        { limit: 20 },
+      ]),
+    ).toBeDefined()
+    expect(queryClient.getQueryData([...getAuthnListIdentitiesQueryKey()]))
+      .toBeDefined()
   })
 })

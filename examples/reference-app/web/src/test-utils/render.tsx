@@ -64,6 +64,12 @@ export interface RenderWithProvidersOptions {
    * on the same instance throws by design).
    */
   readonly i18n?: I18nInstance
+  /**
+   * Render under a caller-supplied query client instead of the fresh
+   * retries-nothing one -- the suites that pin the app's own bootstrap
+   * policy (createAppQueryClient) drive the tree under that client.
+   */
+  readonly queryClient?: QueryClient
 }
 
 export interface RenderWithProvidersResult extends RenderResult {
@@ -110,9 +116,9 @@ export function renderWithProviders(
   ui: ReactElement,
   options: RenderWithProvidersOptions = {},
 ): RenderWithProvidersResult {
-  const { language = 'zh-CN', i18n } = options
+  const { language = 'zh-CN', i18n, queryClient: suppliedClient } = options
   const instance = i18n ?? createAppI18n(language)
-  const queryClient = createTestQueryClient()
+  const queryClient = suppliedClient ?? createTestQueryClient()
   const result = render(
     <I18nextProvider i18n={instance}>
       <AppThemeProvider i18n={instance}>

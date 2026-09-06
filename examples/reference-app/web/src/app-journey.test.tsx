@@ -39,8 +39,10 @@
  * text -- and the replacement codes shown once), sign-out into the
  * session-ended screen, and the re-login that lands back on the
  * account fragment. A bilingual leg closes the day, and the whole
- * trace pins with configGets === 1: one Public-config fetch served
- * the entire session.
+ * trace pins with configGets === 3: the initial Public-config fetch
+ * plus one revalidation per tenant switch (a switch re-asks the host-
+ * resolved config the frame's brand and the home cards render from --
+ * reference-app-web.md P2-refapp-14).
  *
  * The second and third journeys script the member days of the demo's
  * other account shapes: the reader day (the rig's reader option --
@@ -93,7 +95,7 @@ import {
 } from './test-utils/demo-server.js'
 import type { RealCall, RealClientRig } from './test-utils/real-client.js'
 import { errorResponse, makeRealClientRig } from './test-utils/real-client.js'
-import { evictTenantQueriesOnSessionEnd } from './main.js'
+import { evictQueriesOnSessionEnd } from './main.js'
 
 /** The identifier the register turn creates -- an account the demo
  * seed granted no membership, whose own sign-in the day then answers
@@ -458,10 +460,12 @@ describe('the app journey', () => {
     await view.findByRole('button', { name: zhCN.signIn.registerAction })
 
     // The re-login lands back on the account fragment (access-5),
-    // whose surface is served fresh again.
+    // whose surface is served fresh again. The config count stands at
+    // three: the first paint's fetch plus one revalidation per tenant
+    // switch (the two switches earlier in the day).
     await signInWithPasswordUi(view, user)
     await view.findByRole('heading', { name: zhCN.account.heading })
-    expect(configGets(rig)).toBe(1)
+    expect(configGets(rig)).toBe(3)
 
     // The bilingual leg: the frame speaks the switched language, and
     // the notes list of the day still answers under the new token.
@@ -478,15 +482,25 @@ describe('the app journey', () => {
     ).toBeInTheDocument()
     expect(await view.findByText(NOTE_TEXT)).toBeInTheDocument()
 
-    // The whole session, pinned: one config fetch served the day, and
-    // every request landed in order with the bearer of the token that
-    // was current when it left -- the session's own token timeline
-    // (access-1 after the first sign-in, access-2/3 across the two
-    // switches, access-4 after the step-up, access-5 after the
-    // re-login), credentials never riding the register or the
-    // sign-ins, and every body exactly as the surface sent it.
-    await waitFor(() => expect(rig.calls).toHaveLength(29))
-    expect(configGets(rig)).toBe(1)
+    // The whole session, pinned: every request landed in order with
+    // the bearer of the token that was current when it left -- the
+    // session's own token timeline (access-1 after the first sign-in,
+    // access-2/3 across the two switches, access-4 after the step-up,
+    // access-5 after the re-login), credentials never riding the
+    // register or the sign-ins, and every body exactly as the surface
+    // sent it. The Public-config fetch appears three times: the
+    // first-paint fetch (anonymous, hence bearer-less) plus one
+    // revalidation after each completed tenant switch -- the switch
+    // handler re-asks the host-resolved config
+    // (reference-app-web.md P2-refapp-14). A revalidation rides the
+    // access token current at the time (the client attaches the
+    // store's token to every request; the pre-auth endpoint ignores
+    // it). Each revalidation lands right behind the new tenant's first
+    // notes read after its switch: the notes view's re-keyed query
+    // refetches as the tenant change commits, the switch handler's
+    // config refresh follows in the same turn.
+    await waitFor(() => expect(rig.calls).toHaveLength(31))
+    expect(configGets(rig)).toBe(3)
     const trace = rig.calls.map((call) => `${call.method} ${call.path}${call.query}`)
     expect(trace).toEqual([
       'GET /api/config/public',
@@ -498,8 +512,10 @@ describe('the app journey', () => {
       'GET /api/v1/notes',
       'POST /api/v1/authn/tenant/switch',
       'GET /api/v1/notes',
+      'GET /api/config/public',
       'POST /api/v1/authn/tenant/switch',
       'GET /api/v1/notes',
+      'GET /api/config/public',
       'GET /api/v1/authn/sessions',
       'GET /api/v1/authn/login-history?limit=20',
       'GET /api/v1/authn/identities',
@@ -529,17 +545,20 @@ describe('the app journey', () => {
     for (let index = 4; index <= 7; index += 1) {
       expect(authOf(index)).toBe('Bearer access-1')
     }
-    for (let index = 8; index <= 9; index += 1) {
-      expect(authOf(index)).toBe('Bearer access-2')
-    }
-    for (let index = 10; index <= 20; index += 1) {
+    expect(authOf(8)).toBe('Bearer access-2')
+    expect(authOf(9)).toBe('Bearer access-2') // the switch's revalidation
+    expect(authOf(10)).toBe('Bearer access-2')
+    expect(authOf(11)).toBe('Bearer access-3')
+    expect(authOf(12)).toBe('Bearer access-3') // the second switch's
+    // revalidation
+    for (let index = 13; index <= 22; index += 1) {
       expect(authOf(index)).toBe('Bearer access-3')
     }
-    for (let index = 21; index <= 23; index += 1) {
+    for (let index = 23; index <= 25; index += 1) {
       expect(authOf(index)).toBe('Bearer access-4')
     }
-    expect(authOf(24)).toBeNull() // the re-login: public again
-    for (let index = 25; index <= 28; index += 1) {
+    expect(authOf(26)).toBeNull() // the re-login: public again
+    for (let index = 27; index <= 30; index += 1) {
       expect(authOf(index)).toBe('Bearer access-5')
     }
 
@@ -558,12 +577,12 @@ describe('the app journey', () => {
     })
     expect(bodyOf(callOf(rig, 5))).toEqual({ text: NOTE_TEXT })
     expect(bodyOf(callOf(rig, 7))).toEqual({ tenant_id: 'tenant-globex' })
-    expect(bodyOf(callOf(rig, 9))).toEqual({ tenant_id: 'tenant-acme' })
-    expect(bodyOf(callOf(rig, 17))).toEqual({ code: DEMO_MFA_CONFIRM_CODE })
-    expect(bodyOf(callOf(rig, 19))).toEqual({ code: '000000' })
-    expect(bodyOf(callOf(rig, 20))).toEqual({ code: DEMO_MFA_CONFIRM_CODE })
+    expect(bodyOf(callOf(rig, 10))).toEqual({ tenant_id: 'tenant-acme' })
+    expect(bodyOf(callOf(rig, 19))).toEqual({ code: DEMO_MFA_CONFIRM_CODE })
+    expect(bodyOf(callOf(rig, 21))).toEqual({ code: '000000' })
     expect(bodyOf(callOf(rig, 22))).toEqual({ code: DEMO_MFA_CONFIRM_CODE })
-    expect(bodyOf(callOf(rig, 24))).toEqual({
+    expect(bodyOf(callOf(rig, 24))).toEqual({ code: DEMO_MFA_CONFIRM_CODE })
+    expect(bodyOf(callOf(rig, 26))).toEqual({
       identifier: DEMO_OWNER_IDENTIFIER,
       password: APP_PASSWORD,
     })
@@ -664,7 +683,7 @@ describe('the app journey', () => {
     //
     // The second account's read is held open on a gate this test
     // releases by hand -- proving the cache-eviction half of the fix,
-    // not only the gate-reorder half: without evictTenantQueriesOn
+    // not only the gate-reorder half: without evictQueriesOn
     // SessionEnd, the query's cache still holds the first account's
     // row the instant the second account's view remounts, and that
     // row would render for the whole time this gate stays held (data
@@ -692,7 +711,7 @@ describe('the app journey', () => {
     // the bootstrap's own session-end cache eviction is wired here
     // explicitly, exactly as the real bootstrap wires it, over the same
     // rig session and the same QueryClient this render uses.
-    evictTenantQueriesOnSessionEnd(rig.session, view.queryClient)
+    evictQueriesOnSessionEnd(rig.session, view.queryClient)
     const user = userEvent.setup()
 
     // The first account signs in and reads the tenant's notes -- the
@@ -704,8 +723,8 @@ describe('the app journey', () => {
 
     // It signs out: the session-ended screen, then back to sign-in --
     // the same authenticated -> anonymous transition a session death
-    // produces (main.tsx's evictTenantQueriesOnSessionEnd fires on
-    // either).
+    // produces (main.tsx's evictQueriesOnSessionEnd fires on either,
+    // emptying the whole cache).
     await user.click(
       view.getByRole('button', { name: authUiZhCN.signOut.label }),
     )
@@ -741,5 +760,84 @@ describe('the app journey', () => {
       await view.findByText(uiKitZhCN.emptyState.noPermission.title),
     ).toBeInTheDocument()
     expect(view.queryByText(CACHED_NOTE_TEXT)).not.toBeInTheDocument()
+  })
+
+  it('never shows a second account the identity-domain rows an earlier account cached in the same tenant (reference-app-web.md P1-apisdk-1)', async () => {
+    // The first account visits the account surface -- the reads that
+    // populate the identity-domain queries: the sessions list, the
+    // login history and the bound identities, all under bare spec-path
+    // keys that no ['tenant', tenantId] eviction can reach (nothing in
+    // @speed/api-sdk is tenant-namespaced). It signs out; the session-
+    // end eviction must empty those keys too, so the second account's
+    // account surface answers only what its own token can fetch. The
+    // second account's reads are refused, per its own bearer, which
+    // makes the leak deterministic in the final state: an un-evicted
+    // cache would keep rendering the first account's rows on top of
+    // the refusals (react-query keeps `data` through a failed
+    // refetch), while the eviction lets the refusals surface as each
+    // section's own error state -- the same shape the notes cross-
+    // account regression above pins for the tenant domain.
+    const server = demoServer()
+    const rig = makeRealClientRig((call) => {
+      if (
+        call.authorization === 'Bearer access-2' &&
+        (call.path === '/api/v1/authn/sessions' ||
+          call.path === '/api/v1/authn/login-history' ||
+          call.path === '/api/v1/authn/identities')
+      ) {
+        return errorResponse(403, 'authn.session_not_found')
+      }
+      return server(call)
+    })
+    const view = rendered(rig)
+    // The bootstrap's own session-end eviction, wired over this
+    // render's session and QueryClient exactly as the real bootstrap
+    // wires it (rendered() composes the tree by hand; see the notes
+    // cross-account regression above).
+    evictQueriesOnSessionEnd(rig.session, view.queryClient)
+    const user = userEvent.setup()
+
+    // The first account signs in and reads the account surface: the
+    // session rows of the day render from the demo's served state.
+    await signInWithPasswordUi(view, user)
+    navigateTo('#/account')
+    await view.findByRole('heading', { name: zhCN.account.heading })
+    expect(await view.findByText('Demo laptop')).toBeInTheDocument()
+    expect(view.getByText('iPad Safari')).toBeInTheDocument()
+
+    // It signs out: the session-ended screen, then back to sign-in --
+    // the session-end transition whose eviction must clear the
+    // identity-domain rows this account's reads just cached.
+    await user.click(
+      view.getByRole('button', { name: authUiZhCN.signOut.label }),
+    )
+    await view.findByText(authUiZhCN.sessionEnded.title)
+    await user.click(
+      view.getByRole('button', { name: authUiZhCN.sessionEnded.signInAction }),
+    )
+
+    // A second account signs into the SAME tenant. The hash is still
+    // '#/account' from before (sign-out never changes it), so the
+    // frame renders the account surface again the moment this sign-in
+    // commits -- and every one of its reads is refused, per its own
+    // bearer, by the gate above.
+    await signInWithPasswordUi(view, user, 'second-account@example.test')
+
+    // The refusals surface as each section's own error state -- the
+    // sessions list, the login history and the bound identities --
+    // never as the first account's cached rows and never as the
+    // cached empty binding list the earlier session left behind.
+    expect(
+      await view.findByText(accountUiZhCN.sessions.error.title),
+    ).toBeInTheDocument()
+    expect(
+      view.getByText(accountUiZhCN.history.error.title),
+    ).toBeInTheDocument()
+    expect(
+      view.getByText(accountUiZhCN.bindings.error.title),
+    ).toBeInTheDocument()
+    for (const device of ['Demo laptop', 'Windows desktop', 'iPad Safari']) {
+      expect(view.queryByText(device)).not.toBeInTheDocument()
+    }
   })
 }, 30_000)

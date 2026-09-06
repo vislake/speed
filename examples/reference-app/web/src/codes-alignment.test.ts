@@ -51,6 +51,7 @@
  * not cover, or a whitelist entry with no citation, both fail here.
  */
 
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { ERROR_TEXT_CODES as AUTH_UI_ERROR_TEXT_CODES } from '../../../../web/packages/auth-ui/src/internal/error-text.js'
 import { ERROR_TEXT_CODES as ACCOUNT_UI_ERROR_TEXT_CODES } from '../../../../web/packages/account-ui/src/internal/error-text.js'
@@ -71,7 +72,12 @@ import { NOTE_ERROR_TEXT_KEYS } from './views/notes-view.js'
  * the authn block shifted 25 of 30 line citations and stayed silent
  * until an audit re-measured them) became visible at all: a citation
  * carrying only a line number cannot be checked without re-opening the
- * Go file, one carrying the identifier can.
+ * Go file, one carrying the identifier can. Since that audit, the
+ * suite's own "every citation sits at its declared line" check below
+ * has re-measured mechanically: a Go edit that moves a sentinel now
+ * fails this suite with the code, the citation and the file named
+ * (the P3-rnweb-3 re-pin of the 22 authn citations an intervening
+ * round's sentinel insertions had shifted).
  */
 const GO_PINNED: Readonly<Record<string, string>> = {
   // go/authn/errors.go -- the authn module's error sentinels.
@@ -83,31 +89,31 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   'authn.phone_already_registered': 'go/authn/errors.go:66 (ErrPhoneAlreadyRegistered)',
   'authn.password_too_short': 'go/authn/errors.go:69 (ErrPasswordTooShort)',
   'authn.password_too_long': 'go/authn/errors.go:72 (ErrPasswordTooLong)',
-  'authn.password_too_weak': 'go/authn/errors.go:76 (ErrPasswordTooWeak)',
+  'authn.password_too_weak': 'go/authn/errors.go:86 (ErrPasswordTooWeak)',
   'authn.display_name_too_long': 'go/authn/errors.go:82 (ErrDisplayNameTooLong)',
-  'authn.token_expired': 'go/authn/errors.go:95 (ErrTokenExpired)',
-  'authn.session_revoked': 'go/authn/errors.go:99 (ErrSessionRevoked)',
-  'authn.refresh_token_invalid': 'go/authn/errors.go:103 (ErrRefreshTokenInvalid)',
-  'authn.refresh_token_reused': 'go/authn/errors.go:109 (ErrRefreshTokenReused)',
-  'authn.tenant_membership_required': 'go/authn/errors.go:115 (ErrTenantMembershipRequired)',
+  'authn.token_expired': 'go/authn/errors.go:105 (ErrTokenExpired)',
+  'authn.session_revoked': 'go/authn/errors.go:109 (ErrSessionRevoked)',
+  'authn.refresh_token_invalid': 'go/authn/errors.go:113 (ErrRefreshTokenInvalid)',
+  'authn.refresh_token_reused': 'go/authn/errors.go:119 (ErrRefreshTokenReused)',
+  'authn.tenant_membership_required': 'go/authn/errors.go:125 (ErrTenantMembershipRequired)',
   'authn.tenant_membership_unavailable': 'go/authn/errors.go:131 (ErrTenantMembershipUnavailable)',
-  'authn.oauth_state_invalid': 'go/authn/errors.go:135 (ErrOAuthStateInvalid)',
-  'authn.redirect_uri_not_allowed': 'go/authn/errors.go:139 (ErrRedirectURINotAllowed)',
-  'authn.provider_unknown': 'go/authn/errors.go:144 (ErrProviderUnknown)',
-  'authn.social_exchange_failed': 'go/authn/errors.go:151 (ErrSocialExchangeFailed)',
-  'authn.identity_requires_binding': 'go/authn/errors.go:184 (ErrIdentityRequiresBinding)',
-  'authn.identity_already_bound': 'go/authn/errors.go:188 (ErrIdentityAlreadyBound)',
-  'authn.identity_not_found': 'go/authn/errors.go:194 (ErrIdentityNotFound)',
-  'authn.last_login_method': 'go/authn/errors.go:200 (ErrLastLoginMethod)',
-  'authn.rate_limited': 'go/authn/errors.go:232 (ErrRateLimited)',
-  'authn.account_locked': 'go/authn/errors.go:240 (ErrAccountLocked)',
-  'authn.verification_code_invalid': 'go/authn/errors.go:258 (ErrVerificationCodeInvalid)',
+  'authn.oauth_state_invalid': 'go/authn/errors.go:145 (ErrOAuthStateInvalid)',
+  'authn.redirect_uri_not_allowed': 'go/authn/errors.go:149 (ErrRedirectURINotAllowed)',
+  'authn.provider_unknown': 'go/authn/errors.go:154 (ErrProviderUnknown)',
+  'authn.social_exchange_failed': 'go/authn/errors.go:161 (ErrSocialExchangeFailed)',
+  'authn.identity_requires_binding': 'go/authn/errors.go:194 (ErrIdentityRequiresBinding)',
+  'authn.identity_already_bound': 'go/authn/errors.go:198 (ErrIdentityAlreadyBound)',
+  'authn.identity_not_found': 'go/authn/errors.go:204 (ErrIdentityNotFound)',
+  'authn.last_login_method': 'go/authn/errors.go:210 (ErrLastLoginMethod)',
+  'authn.rate_limited': 'go/authn/errors.go:242 (ErrRateLimited)',
+  'authn.account_locked': 'go/authn/errors.go:250 (ErrAccountLocked)',
+  'authn.verification_code_invalid': 'go/authn/errors.go:268 (ErrVerificationCodeInvalid)',
   'authn.channel_disabled': 'go/authn/errors.go:260 (ErrChannelDisabled)',
-  'authn.mfa_not_enrolled': 'go/authn/errors.go:268 (ErrMFANotEnrolled)',
-  'authn.mfa_already_enrolled': 'go/authn/errors.go:272 (ErrMFAAlreadyEnrolled)',
-  'authn.mfa_invalid_code': 'go/authn/errors.go:278 (ErrMFAInvalidCode)',
-  'authn.step_up_required': 'go/authn/errors.go:282 (ErrStepUpRequired)',
-  'authn.session_not_found': 'go/authn/errors.go:291 (ErrSessionNotFound)',
+  'authn.mfa_not_enrolled': 'go/authn/errors.go:285 (ErrMFANotEnrolled)',
+  'authn.mfa_already_enrolled': 'go/authn/errors.go:289 (ErrMFAAlreadyEnrolled)',
+  'authn.mfa_invalid_code': 'go/authn/errors.go:295 (ErrMFAInvalidCode)',
+  'authn.step_up_required': 'go/authn/errors.go:299 (ErrStepUpRequired)',
+  'authn.session_not_found': 'go/authn/errors.go:308 (ErrSessionNotFound)',
   // go/rbac/errors.go -- the permission-denied sentinel the notes route's
   // rbac gate answers with.
   'rbac.permission_denied': 'go/rbac/errors.go:56 (ErrPermissionDenied)',
@@ -161,7 +167,59 @@ const SURFACE_WHITELISTS: Readonly<Record<string, readonly string[]>> = {
   'notes create surface': Object.keys(NOTE_ERROR_TEXT_KEYS),
 }
 
+/** A citation's path, line and sentinel identifier. */
+interface SentinelCitation {
+  readonly path: string
+  readonly line: number
+  readonly identifier: string
+}
+
+/** Parses a citation of the shape 'path:line (Identifier)'. */
+function parseCitation(code: string, citation: string): SentinelCitation {
+  const match = /^([^:]+):(\d+) \(([^)]+)\)$/.exec(citation)
+  const path = match?.[1]
+  const lineText = match?.[2]
+  const identifier = match?.[3]
+  if (path === undefined || lineText === undefined || identifier === undefined) {
+    throw new Error(`malformed citation for ${code}: ${citation}`)
+  }
+  return { path, line: Number(lineText), identifier }
+}
+
+/** The repository root as a filesystem path, derived from this test
+ * file's own URL (the app's src sits four levels under the root:
+ * examples/reference-app/web/src). The path is assembled as plain
+ * string arithmetic rather than `new URL(..., import.meta.url)`,
+ * because vite's transform rewrites that pattern as an asset
+ * reference; the filesystem resolves the '..' segments at open time. */
+function repoRootPath(): string {
+  const url = import.meta.url
+  const withoutScheme = url.startsWith('file://') ? url.slice(7) : url
+  const srcDir = withoutScheme.slice(0, withoutScheme.lastIndexOf('/'))
+  return `${srcDir}/../../../../`
+}
+
 describe('reachable-error whitelists vs the server code set', () => {
+  it('keeps every GO_PINNED citation at the line that declares its sentinel', () => {
+    // The machine half of the identifier-citation discipline (see the
+    // GO_PINNED doc comment): each cited line must actually declare
+    // the cited sentinel, so a Go edit that moves a sentinel -- the
+    // drift reference-app-web.md P2-1 recorded -- fails this suite
+    // instead of waiting for the next manual audit. The files are
+    // read relative to this test file (the app lives at
+    // examples/reference-app/web, four levels under the repository
+    // root, and the citations are repository-root-relative paths).
+    for (const [code, citation] of Object.entries(GO_PINNED)) {
+      const { path, line, identifier } = parseCitation(code, citation)
+      const source = readFileSync(`${repoRootPath()}${path}`, 'utf8')
+      const cited = source.split('\n')[line - 1]
+      expect(
+        cited,
+        `${code} is cited at ${path}:${line} (${identifier}), but that line does not declare the sentinel`,
+      ).toMatch(new RegExp(`^\\s*(?:var\\s+)?${identifier}\\s*=`))
+    }
+  })
+
   it('keeps the hand-maintained enumeration at its audited size', () => {
     // 33 authn sentinels (the 30 of the previous audit plus the three
     // answers this round's auth-ui whitelist extension covers:

@@ -27,12 +27,18 @@
  *     operations, attached to the auth-core hooks. A reload starts
  *     anonymous: the session is memory-only by contract. A session-end
  *     transition (a sign-out or a session death -- a silently refused
- *     refresh) also evicts the departing tenant's namespaced query
- *     cache (evictTenantQueriesOnSessionEnd, below), mirroring
- *     user-menu.tsx's own tenant-switch eviction so a different
- *     account signing into the same tenant afterward never inherits
- *     rows an earlier session's reads cached (reference-app-web.md
- *     P1-1).
+ *     refresh) also empties the whole query cache
+ *     (evictQueriesOnSessionEnd, below): every row the departing
+ *     principal's reads cached -- tenant-namespaced data and the
+ *     identity-domain rows the account surface reads alike -- is gone
+ *     the moment the session is, so a different account signing in
+ *     afterward, into any tenant, starts from an empty cache and can
+ *     never inherit an earlier session's rows (reference-app-web.md
+ *     P1-1 and P1-apisdk-1).
+ *
+ *  2a. The query client itself -- created by createAppQueryClient,
+ *     below, whose no-retry policy is this host's deliberate answer to
+ *     where transient retries belong (reference-app-web.md P2-rnweb-2).
  *
  *  3. The client -- the app's one HTTP surface: @speed/api-client's
  *     createClient over the environment's own fetch (no fetch option:
@@ -95,7 +101,6 @@ import {
   REFERENCE_APP_NAMESPACE,
   referenceAppResources,
 } from './resources.js'
-import { TENANT_QUERY_PREFIX } from './views/user-menu.js'
 
 /** What a page's bootstrap produced: the mounted root, the i18n
  * instance and the query client, for hosts and harnesses that act on
@@ -110,58 +115,94 @@ export interface ReferenceAppBootstrap {
 }
 
 /**
- * Wires the tenant-namespaced query cache to empty the departing
- * tenant's rows the moment the session ends. A manual sign-out and a
- * session death (a silently refused refresh) both settle the same
- * authenticated -> anonymous AuthSnapshot transition (auth-core's
- * session.ts clears the same way for either), so this fires on both.
+ * Wires the query cache to empty the moment the session ends. A manual
+ * sign-out and a session death (a silently refused refresh) both settle
+ * the same authenticated -> anonymous AuthSnapshot transition (auth-
+ * core's session.ts clears the same way for either), so this fires on
+ * both.
  *
- * This mirrors user-menu.tsx's own tenant-switch eviction exactly --
- * the same ['tenant', tenantId] prefix, the same queryClient.
- * removeQueries call -- rather than a new cache-management mechanism:
- * a tenant switch evicts the tenant being left mid-session, this
- * evicts the tenant the session was in when it ended. Before this,
- * nothing in the app ever cleared a query cached under a tenant's key
- * on sign-out, so a later sign-in to the same tenant -- by the same
- * account after a session death, or a different account the operator
- * switches to on a shared machine -- inherited rows an earlier
- * session's reads left behind (reference-app-web.md P1-1): the read
- * itself answers a genuine refusal for the new principal, but a gate
- * derived from the query alone cannot un-render rows a shared
- * QueryClient never forgot. Evicting on session end closes that at
- * its root instead of leaving it to the gate to paper over.
+ * The eviction is total -- removeQueries() with no filter -- because
+ * every query this page holds was fetched under the departing
+ * principal's access token, and no query is safe to carry across an
+ * authenticated -> anonymous boundary. That includes two domains the
+ * earlier, tenant-only eviction (reference-app-web.md P1-1) missed:
  *
- * A full user-scoped query-key segment (['tenant', tenantId, userId,
- * ...]) was the other shape considered and rejected: every tenant-
- * scoped read in this app already re-fetches under the new principal's
- * access token on every mount (staleTime 0, the generated hooks'
- * default), so the leak's live window is exactly "an unmounted
- * component's stale cache entry between one session ending and the
- * next one's first read of the same key" -- precisely what an
- * eviction on the session-end transition closes, without adding a
- * dimension every tenant-scoped query key in the app would need to
- * carry from here on.
+ *  - the tenant-namespaced rows (['tenant', tenantId, ...] -- the notes
+ *    list), which the old eviction cleared for the session's one
+ *    tenant, and
+ *  - the identity-domain rows the account surface reads through bare
+ *    spec-path keys ('/api/v1/authn/sessions', '/api/v1/authn/
+ *    login-history' and '/api/v1/authn/identities' -- nothing in
+ *    @speed/api-sdk is tenant-namespaced), which the old eviction never
+ *    touched: the keys carry no tenant segment for a ['tenant',
+ *    tenantId] removal to reach, so a session-end left them cached for
+ *    a different account signing in afterward to inherit -- the
+ *    account page would answer the earlier account's sessions, login
+ *    history and bound identities out of the shared QueryClient's
+ *    memory (reference-app-web.md P1-apisdk-1).
+ *
+ * Evicting everything on the authenticated -> anonymous edge closes
+ * both at the root: whatever domain a future surface reads in, its
+ * rows cannot outlive the session that fetched them, and a later
+ * account always starts from an empty cache. (user-menu.tsx's own
+ * tenant-switch eviction -- still mid-session, where this eviction
+ * deliberately does not fire -- clears the same tenant prefix plus the
+ * identity-domain keys, since a switch rotates the access token those
+ * rows were answered under.)
  *
  * Returns the session's own unsubscribe function for a caller that
  * wants to tear this down (unit tests do); bootstrapReferenceApp does
  * not hold onto it, since the composed page never tears itself down
  * before an unload a fresh reload starts over from anyway.
  */
-export function evictTenantQueriesOnSessionEnd(
+export function evictQueriesOnSessionEnd(
   session: AuthSession,
   queryClient: QueryClient,
 ): () => void {
   let previous = session.getSnapshot()
   return session.subscribe((snapshot) => {
     if (previous.state === 'authenticated' && snapshot.state === 'anonymous') {
-      const tenantId = previous.principal?.tenant_id
-      if (typeof tenantId === 'string' && tenantId !== '') {
-        queryClient.removeQueries({
-          queryKey: [TENANT_QUERY_PREFIX, tenantId],
-        })
-      }
+      queryClient.removeQueries()
     }
     previous = snapshot
+  })
+}
+
+/**
+ * The page's QueryClient. It retries nothing -- neither queries nor
+ * mutations -- by deliberate policy, because transient retries belong
+ * to the transport, not to this layer:
+ *
+ *  - @speed/api-client's frozen retry policy already retries exactly
+ *    the transient classes a repetition could redeem -- 429 (honouring
+ *    Retry-After) plus 502/503/504, network failures and timeouts, on
+ *    idempotent methods only, up to three attempts under full-jitter
+ *    backoff -- inside a single request. By the time a queryFn call
+ *    rejects, that budget is already spent; a react-query retry would
+ *    only re-run it whole (up to a twelve-attempt worst case across
+ *    the two layers) and add exponential backoff on top.
+ *  - Every answer that carries a code -- an envelope answer such as a
+ *    403 rbac.permission_denied, or a client.* transport code -- is a
+ *    definitive answer a repetition cannot redeem. Retrying a refused
+ *    authorization read three times with the default backoff burns a
+ *    doomed ~7-second window before the refusal surfaces, and re-arms
+ *    it on every refetch (reference-app-web.md P2-rnweb-2).
+ *  - A mutation must never re-fire after a lost response: a create
+ *    whose answer timed out server-side may already have committed,
+ *    and a retry would duplicate it.
+ *
+ * Recovery is not lost: every query is staleTime 0, so a remount or a
+ * window refocus re-reads under the current token; the transport's own
+ * transient retries cover momentary outages; and a refused read now
+ * surfaces to the gate on the first response, where the surface's
+ * fail-closed states answer it.
+ */
+export function createAppQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
   })
 }
 
@@ -195,8 +236,8 @@ export function bootstrapReferenceApp(
   })
   bindRequestFn(client)
 
-  const queryClient = new QueryClient()
-  evictTenantQueriesOnSessionEnd(session, queryClient)
+  const queryClient = createAppQueryClient()
+  evictQueriesOnSessionEnd(session, queryClient)
   const root = createRoot(container)
   root.render(
     <StrictMode>

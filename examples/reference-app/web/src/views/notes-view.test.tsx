@@ -34,12 +34,15 @@
 
 import { act, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import type { RequestFn } from '@speed/api-client'
 import type { NotesNote } from '@speed/api-sdk'
+import { bindRequestFn } from '@speed/api-sdk/runtime'
 import { describe, expect, it } from 'vitest'
 import layoutKitZhCN from '../../../../../web/packages/layout-kit/src/locales/zh-CN.json' with { type: 'json' }
 import uiKitZhCN from '../../../../../web/packages/ui-kit/src/locales/zh-CN.json' with { type: 'json' }
 import zhCN from '../locales/zh-CN.json' with { type: 'json' }
 import enUS from '../locales/en-US.json' with { type: 'json' }
+import { createAppQueryClient } from '../main.js'
 import { demoServer } from '../test-utils/demo-server.js'
 import type { RealClientRig } from '../test-utils/real-client.js'
 import {
@@ -50,6 +53,18 @@ import {
 import type { RenderWithProvidersOptions } from '../test-utils/render.js'
 import { renderWithAppServices } from '../test-utils/render.js'
 import { NotesView } from './notes-view.js'
+
+/** A transport whose every call rejects with a raw, code-less error --
+ * the shape a bug-shaped transport throw (or an error thrown before
+ * the api-client could normalize it) arrives in: no envelope code, no
+ * client.* code, nothing apiErrorCodeOf can read. The bound-seam
+ * replacement is how these tests drive the generated hook's queryFn
+ * through a genuine codeless rejection (reference-app-web.md
+ * P2-rnweb-1). */
+const UNNORMALIZED_TRANSPORT_FAILURE: RequestFn = () =>
+  Promise.reject(
+    new Error('[notes-view.test] an un-normalized transport failure'),
+  )
 
 /** The fixed demo epoch the demo server's note answers carry. */
 const DEMO_CREATED_AT = '2026-09-04T00:00:00Z'
@@ -322,6 +337,94 @@ describe('NotesView', () => {
     expect(
       view.queryByRole('button', { name: zhCN.notes.create.submit }),
     ).not.toBeInTheDocument()
+  })
+
+  it('a codeless refusal after a served read renders the read-error state, never the stale rows (reference-app-web.md P2-rnweb-1)', async () => {
+    // The read serves the row once and opens the gate; then the same
+    // query is refetched into a refusal that carries NO code -- a raw
+    // transport error the api-client never normalized. The failed
+    // refetch leaves the earlier `data` in the cache (tanstack v5
+    // keeps it), so classifying the failure by its code alone -- this
+    // view's earlier shape -- read "no code, data defined" and kept
+    // the stale row under an 'allowed' gate. The error state itself
+    // must be the classification: it renders the read-error suit.
+    const rig = makeRealClientRig(demoServer({ initialNotes: [NOTE_ONE] }))
+    await signInWithPassword(rig)
+    const view = renderNotes(rig)
+
+    expect(await view.findByText(NOTE_ONE_TEXT)).toBeInTheDocument()
+
+    // Replace the bound transport with the codeless-failing one, then
+    // force the same query to refetch (never a fresh mount, so what
+    // the query already cached is exactly what a real mid-session
+    // failure would still hold).
+    bindRequestFn(UNNORMALIZED_TRANSPORT_FAILURE)
+    try {
+      await act(async () => {
+        await view.queryClient.refetchQueries()
+      })
+
+      expect(
+        await view.findByText(uiKitZhCN.emptyState.error.title),
+      ).toBeInTheDocument()
+      expect(view.queryByText(NOTE_ONE_TEXT)).not.toBeInTheDocument()
+      expect(
+        view.queryByText(uiKitZhCN.emptyState.noPermission.title),
+      ).not.toBeInTheDocument()
+    } finally {
+      // The seam is last-bind-wins and shared across this file's
+      // suites: restore the rig's own client whatever happened.
+      bindRequestFn(rig.api)
+    }
+  })
+
+  it('a codeless refusal with no data ever served renders the read-error state, never a permanent pending (reference-app-web.md P2-rnweb-1)', async () => {
+    // The failure arrives before any read ever served data -- the
+    // shape a host whose transport is broken from the start produces.
+    // A gate that only knew coded failures had nothing to classify and
+    // parked at 'pending' forever (no answer, no error branch); the
+    // error state itself is the failure, whatever it carries.
+    const rig = makeRealClientRig(demoServer())
+    await signInWithPassword(rig)
+    bindRequestFn(UNNORMALIZED_TRANSPORT_FAILURE)
+    try {
+      const view = renderNotes(rig)
+
+      expect(
+        await view.findByText(uiKitZhCN.emptyState.error.title),
+      ).toBeInTheDocument()
+      expect(
+        view.queryByRole('progressbar', {
+          name: layoutKitZhCN.routeGuard.pending,
+        }),
+      ).not.toBeInTheDocument()
+      expect(
+        view.queryByText(uiKitZhCN.emptyState.noPermission.title),
+      ).not.toBeInTheDocument()
+    } finally {
+      bindRequestFn(rig.api)
+    }
+  })
+
+  it('surfaces a refused read on the first response under the app bootstrap\'s own query-client policy (reference-app-web.md P2-rnweb-2)', async () => {
+    // The production QueryClient (createAppQueryClient) retries
+    // nothing: transient retries belong to the api-client transport
+    // (its frozen policy already retries 429/502/503/504, network and
+    // timeouts on idempotent methods before an answer surfaces), and a
+    // definitive refusal like the rbac gate's 403 must never burn a
+    // doomed ~7-second react-query retry window (three retries at 1s,
+    // 2s and 4s of backoff) before the gate sees it. The gate answer
+    // must land on the FIRST response.
+    const rig = makeRealClientRig(demoServer({ denyNotesRead: true }))
+    await signInWithPassword(rig)
+    const view = renderNotes(rig, { queryClient: createAppQueryClient() })
+
+    expect(
+      await view.findByText(uiKitZhCN.emptyState.noPermission.title),
+    ).toBeInTheDocument()
+    // Exactly one read left the page: the refusal surfaced on the
+    // first response, no retries behind it.
+    expect(notesGets(rig)).toBe(1)
   })
 
   it('sends whitespace-only text and renders the server\'s text-required refusal', async () => {

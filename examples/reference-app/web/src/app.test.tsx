@@ -55,7 +55,11 @@ import {
   signInWithPasswordUi,
 } from './test-utils/app-harness.js'
 import { demoServer } from './test-utils/demo-server.js'
-import { makeRealClientRig } from './test-utils/real-client.js'
+import {
+  jsonResponse,
+  makeRealClientRig,
+} from './test-utils/real-client.js'
+import { FEATURE_SMILE_PREVIEW } from './views/home-view.js'
 
 describe('parseHashFragment', () => {
   it('parses the three routes, with or without a leading slash', () => {
@@ -285,5 +289,73 @@ describe('AppView', () => {
     expect(
       view.getByRole('button', { name: enUS.tenants.acme }),
     ).toBeInTheDocument()
+  })
+
+  it('a tenant switch revalidates the host-resolved Public config: the brand and the home feature cards answer the new tenant (reference-app-web.md P2-refapp-14)', async () => {
+    // The shared demo server answers one static Public config; this
+    // journey's responder answers per tenant instead, tracking the
+    // tenant each completed switch names -- the shape a host serves
+    // whose domain resolver maps more than one tenant. The host
+    // switches tenants same-origin (no host header changes), so only a
+    // revalidation on the switch can make the config-driven chrome --
+    // the AppBar brand, the home heading and the feature cards --
+    // converge on the new tenant's answers.
+    const ACME_BRAND = 'Acme Smile Lab'
+    const GLOBEX_BRAND = 'Globex Smile Lab'
+    const inner = demoServer()
+    let currentTenant = 'tenant-acme'
+    const rig = makeRealClientRig(async (call) => {
+      if (
+        call.method === 'POST' &&
+        call.path === '/api/v1/authn/tenant/switch'
+      ) {
+        const body = JSON.parse(call.body) as { tenant_id?: string }
+        if (typeof body.tenant_id === 'string') {
+          currentTenant = body.tenant_id
+        }
+      }
+      if (call.path === '/api/config/public') {
+        const globex = currentTenant === 'tenant-globex'
+        return jsonResponse(200, {
+          config: {
+            'brand.site_name': globex ? GLOBEX_BRAND : ACME_BRAND,
+          },
+          features: globex ? [] : [FEATURE_SMILE_PREVIEW],
+        })
+      }
+      return inner(call)
+    })
+    const view = rendered(rig)
+    const user = userEvent.setup()
+
+    // tenant-acme serves its own brand and the smile-preview card over
+    // the first-paint config fetch (the brand renders in two slots:
+    // the AppBar and the home heading).
+    await signInWithPasswordUi(view, user)
+    expect(await view.findAllByText(ACME_BRAND)).toHaveLength(2)
+    expect(
+      view.getByText(zhCN.features.smilePreview.title),
+    ).toBeInTheDocument()
+    expect(configGets(rig)).toBe(1)
+
+    // A switch commits: the notes list re-keys per tenant (its own
+    // mechanism), and the Public-config cache is re-asked -- the brand
+    // (AppBar and home heading: two rendered slots) and the feature
+    // cards converge on tenant-globex's answers instead of holding
+    // tenant-acme's.
+    await user.click(view.getByRole('button', { name: zhCN.tenants.acme }))
+    await user.click(
+      await view.findByRole('menuitem', { name: zhCN.tenants.globex }),
+    )
+    expect(await view.findAllByText(GLOBEX_BRAND)).toHaveLength(2)
+    expect(view.getByText(zhCN.home.intro)).toBeInTheDocument()
+    expect(
+      view.queryByText(zhCN.features.smilePreview.title),
+    ).not.toBeInTheDocument()
+    expect(
+      view.queryByText(zhCN.features.premiumUpsell.title),
+    ).not.toBeInTheDocument()
+    // One revalidation fetch served the switched tenant's answers.
+    expect(configGets(rig)).toBe(2)
   })
 })

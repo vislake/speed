@@ -9,37 +9,42 @@
  * caller without notes:read with 403 rbac.permission_denied, so the
  * query is the real permission fetch -- the router-level RouteGuard
  * behind real fetches that the auth-ui census defers to this shell.
- * The three statuses map onto the query's own states, checked in an
- * order that fails closed: a read error is classified first -- only
- * the rbac read gate's own refusal is an authorization fact and maps
- * to 'denied'; a read that failed for any other reason (a transport
- * answer, a 5xx) is a load failure and renders the ui-kit error empty
- * state in its own suit, never the no-permission one
- * (reference-app-web.md P2-2). Whichever suit, a failed read means no
- * surface, whether or not an earlier read on the very same query
- * already left rows in the cache. tanstack query v5 never clears a
- * query's `data` on a failed refetch (the last successful answer keeps
- * rendering while the retry runs), so checking `data` ahead of
- * `isError` -- this view's original shape -- left a permission revoked
- * mid-session, or a different account signing into a tenant an earlier
- * read already cached, showing the earlier read's stale rows instead
- * of failing closed (reference-app-web.md P1-1). A served list is
- * 'allowed' next, and no answer at all yet is 'pending'.
- * The create form lives inside the allowed branch, and a refused
- * create (a caller without notes:write answers the same 403) stays on
- * the page with its code text -- the write gate is probed by the
- * mutation, never pre-empted client-side.
+ * The classification is error-state first, because the error state is
+ * where every failure of this read lands, whatever it carried: only
+ * the rbac read gate's own refusal (its code, rbac.permission_denied)
+ * is an authorization fact and maps to 'denied'; every other failed
+ * read -- a coded transport answer or server 5xx, or a refusal that
+ * carries no code at all (a raw AbortError, an error thrown before
+ * the api-client could normalize it) -- is a load failure and renders
+ * the ui-kit error empty state in its own suit, never the
+ * no-permission one (reference-app-web.md P2-2, P2-rnweb-1).
+ * Whichever suit, a failed read means no surface, whether or not an
+ * earlier read on the very same query already left rows in the cache:
+ * tanstack query v5 never clears a query's `data` on a failed refetch
+ * (the last successful answer stays in the cache while the retry
+ * runs), so classifying by the error's code alone -- this view's
+ * earlier shape -- let a codeless refusal fall through to the stale
+ * rows (the code check found none, `data` was still defined, the gate
+ * read 'allowed') or, with no data ever served, park at 'pending'
+ * forever instead of rendering a failure. Checking `isError` ahead of
+ * anything else closes both: a served list is 'allowed' only when no
+ * error stands, and no answer at all yet is 'pending'
+ * (reference-app-web.md P1-1 covers the coded-refusal half of the same
+ * ordering). The create form lives inside the allowed branch, and a
+ * refused create (a caller without notes:write answers the same 403)
+ * stays on the page with its code text -- the write gate is probed by
+ * the mutation, never pre-empted client-side.
  *
  * The list query key is tenant-namespaced per the frontend standard
  * (['tenant', tenantId, ...] over the generated bare key) so a tenant
  * switch can never read the previous tenant's cached notes -- user-
  * menu.tsx evicts the departing tenant's ['tenant', tenantId] queries
- * on every switch, and main.tsx's evictTenantQueriesOnSessionEnd evicts
- * the same prefix again the moment the session ends (a sign-out or a
- * session death), so a different account signing into the same tenant
- * afterward starts from an empty cache rather than inheriting rows an
- * earlier session's reads left behind. The create invalidates exactly
- * the namespaced key.
+ * (and the identity-domain rows) on every switch, and main.tsx's
+ * evictQueriesOnSessionEnd empties the whole cache the moment the
+ * session ends (a sign-out or a session death), so a different account
+ * signing in afterward -- into any tenant -- starts from an empty
+ * cache rather than inheriting rows an earlier session's reads left
+ * behind. The create invalidates exactly the namespaced key.
  *
  * Created-at times render through Intl in the surface language (never
  * hand-formatted); an unparseable value renders as an empty cell
@@ -171,30 +176,31 @@ export function NotesView(): ReactElement {
   const createForm = useForm<NoteDraft>({ defaultValues: { text: '' } })
   const [submitErrorCode, setSubmitErrorCode] = useState<string | null>(null)
 
-  // The read error, classified: only the rbac read gate's own 403 is an
-  // authorization fact. Every other failure a list read can answer
-  // with -- a transport answer (client.network / client.timeout /
-  // client.http.<status>), a 5xx the server answered under its own
-  // code -- is a load failure and renders the read-error state below,
-  // never the no-permission suit (reference-app-web.md P2-2: a down
-  // server is not a permission problem, and a user told they are
-  // forbidden while the server is failing reads like a
-  // misconfiguration to the operator who must fix it).
-  const listErrorCode = notesQuery.isError
+  // The read error, classified by the query's own error state first:
+  // an error state means the read failed, whatever the failure carried.
+  // Only the rbac read gate's own refusal -- its code -- is an
+  // authorization fact; every other failed read, coded or not, is a
+  // load failure and renders the read-error state below, never the
+  // no-permission suit (reference-app-web.md P2-2: a down server is
+  // not a permission problem, and a user told they are forbidden while
+  // the server is failing reads like a misconfiguration to the
+  // operator who must fix it; P2-rnweb-1: a codeless refusal is a
+  // failure too, never stale rows and never a permanent pending).
+  const listReadFailed = notesQuery.isError
+  const listErrorCode = listReadFailed
     ? apiErrorCodeOf(notesQuery.error)
     : null
   const gateDenied = listErrorCode === NOTES_READ_DENIED_CODE
 
-  // The gate: a read error fails it closed first and unconditionally --
-  // even when the query still holds an earlier read's data, since
-  // tanstack query v5 never clears `data` on a failed refetch (see the
-  // file header). Checking `data` before `isError` (this view's
-  // original shape) was the fail-open bug reference-app-web.md P1-1
-  // named: a permission revoked between two reads, or a different
-  // account signing into a tenant an earlier account's read already
-  // cached, refetches into a 403 whose stale `data` kept the gate
-  // 'allowed' -- so a served list is checked only once no error
-  // stands, and no answer at all yet is pending.
+  // The gate: an error state fails it closed before anything else is
+  // consulted -- even when the query still holds an earlier read's
+  // data, since tanstack query v5 never clears `data` on a failed
+  // refetch (see the file header). Classifying on the error alone was
+  // the fail-open bug reference-app-web.md P1-1 and P2-rnweb-1 named:
+  // a refusal whose error carries no code slipped past the code check
+  // into the stale `data` (gate 'allowed') or, with no data ever
+  // served, parked at 'pending' -- so a served list is checked only
+  // once no error stands, and no answer at all yet is pending.
   const gateStatus: RouteGuardStatus = gateDenied
     ? 'denied'
     : notesQuery.data !== undefined
@@ -270,12 +276,14 @@ export function NotesView(): ReactElement {
       >
         {t('notes.intro')}
       </Typography>
-      {listErrorCode !== null && !gateDenied ? (
-        // The read failed for a reason other than authorization: the
-        // error empty state in its own suit, not the no-permission one.
-        // Both placeholders sit at the same heading level (h2, below
-        // this view's h1) so the page's heading order does not change
-        // with the state.
+      {listReadFailed && !gateDenied ? (
+        // The read failed for a reason other than authorization -- the
+        // error empty state in its own suit, not the no-permission
+        // one. Coded or codeless, a failed read renders here: an error
+        // state is a failure, never stale rows and never a permanent
+        // pending. Both placeholders sit at the same heading level
+        // (h2, below this view's h1) so the page's heading order does
+        // not change with the state.
         <EmptyState variant="error" headingLevel="h2" />
       ) : (
         <RouteGuard
