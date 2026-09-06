@@ -4,18 +4,26 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/vislake/speed/go/dbkit"
 )
 
-// TestWithRecursiveTriggers pins the DSN-merging logic on its own, for every
+// TestWithDefaultPragmas pins the DSN-merging logic on its own, for every
 // DSN shape this package's callers are known to pass to dbkit.Open: a bare
 // file path with no query string at all, a "file:" URI that already carries
 // one query parameter, and a bare ":memory:" DSN — see
 // go/dbkit/audit/repository_test.go, go/dbkit/audit/example_test.go and
 // go/dbkit/open_test.go for the exact strings this mirrors.
-func TestWithRecursiveTriggers(t *testing.T) {
+//
+// The pragma fragment is order-sensitive at the driver end: glebarez/go-
+// sqlite applies "_pragma" params in DSN order, last application winning, so
+// the last expectation below pins that this package's own busy_timeout is
+// appended AFTER a caller-supplied one and therefore deliberately overrides
+// it — one fixed default per AGENTS.md's "SQLite busy timeout" section.
+func TestWithDefaultPragmas(t *testing.T) {
+	wantPragmas := "_pragma=recursive_triggers(1)&_pragma=busy_timeout(" + strconv.Itoa(defaultBusyTimeoutMS) + ")"
 	tests := []struct {
 		name string
 		dsn  string
@@ -24,29 +32,34 @@ func TestWithRecursiveTriggers(t *testing.T) {
 		{
 			name: "bare_file_path_no_query",
 			dsn:  "/tmp/some-dir/app.db",
-			want: "/tmp/some-dir/app.db?_pragma=recursive_triggers(1)",
+			want: "/tmp/some-dir/app.db?" + wantPragmas,
 		},
 		{
 			name: "bare_memory_no_query",
 			dsn:  ":memory:",
-			want: ":memory:?_pragma=recursive_triggers(1)",
+			want: ":memory:?" + wantPragmas,
 		},
 		{
 			name: "file_uri_with_existing_query",
 			dsn:  "file::memory:?cache=shared",
-			want: "file::memory:?cache=shared&_pragma=recursive_triggers(1)",
+			want: "file::memory:?cache=shared&" + wantPragmas,
 		},
 		{
 			name: "file_uri_with_mode_and_cache",
 			dsn:  "file:audit_test_1?mode=memory&cache=shared",
-			want: "file:audit_test_1?mode=memory&cache=shared&_pragma=recursive_triggers(1)",
+			want: "file:audit_test_1?mode=memory&cache=shared&" + wantPragmas,
+		},
+		{
+			name: "caller_supplied_busy_timeout_is_overridden",
+			dsn:  "file:app.db?_pragma=busy_timeout(100)",
+			want: "file:app.db?_pragma=busy_timeout(100)&" + wantPragmas,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := withRecursiveTriggers(tt.dsn); got != tt.want {
-				t.Errorf("withRecursiveTriggers(%q) = %q, want %q", tt.dsn, got, tt.want)
+			if got := withDefaultPragmas(tt.dsn); got != tt.want {
+				t.Errorf("withDefaultPragmas(%q) = %q, want %q", tt.dsn, got, tt.want)
 			}
 		})
 	}
