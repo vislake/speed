@@ -303,6 +303,31 @@ func auditPublishFailed(ctx context.Context, evt pkgcore.Event, cause error) {
 	)
 }
 
+// auditTenantMismatch reports, as a structured warning, that a captured
+// write's model argument declared a tenant (modelTenantID, read off its
+// GetTenantID()) different from evt.TenantID -- the write's ctx tenant,
+// already stamped onto evt by the time this is called, and the value
+// stampTenantID's own doc comment explains is the trustworthy one of the
+// two. This can never fail or roll back the write -- by the time capture
+// runs the write has already succeeded -- so, mirroring
+// auditPublishFailed's alert-not-fail idiom and for the identical reason
+// (dbkit cannot depend on go/observability; see that function's doc
+// comment), it is reported through log/slog directly rather than returned
+// to any caller. Seeing this warning fire is not expected on the sanctioned
+// dbkit.Repository[T] path (see stampTenantID's own doc comment for why),
+// so it points at code holding a bare *gorm.DB directly with a decoupled or
+// stale Model argument -- worth a human's attention.
+func auditTenantMismatch(ctx context.Context, evt WriteCapturedEvent, modelTenantID string) {
+	slog.Default().WarnContext(ctx, "dbkit: captured write's model argument tenant differs from context tenant",
+		"table", evt.Table,
+		"resource_type", evt.ResourceType,
+		"resource_id", evt.ResourceID,
+		"operation", evt.Operation,
+		"tenant_id", evt.TenantID,
+		"model_tenant_id", modelTenantID,
+	)
+}
+
 // Name returns the plugin's identifier, satisfying gorm.Plugin.
 func (p *auditCapturePlugin) Name() string { return auditCapturePluginName }
 
@@ -451,9 +476,7 @@ func (p *auditCapturePlugin) capture(db *gorm.DB, operation string) {
 		copyOf := onBehalfOf
 		evt.OnBehalfOf = &copyOf
 	}
-	if tenant, ok := pkgcore.TenantFromContext(db.Statement.Context); ok {
-		evt.TenantID = string(tenant)
-	}
+	stampTenantID(db.Statement, &evt)
 
 	pkgEvt := pkgcore.Event{
 		Type:     EventWriteCaptured,
@@ -484,6 +507,130 @@ func (p *auditCapturePlugin) capture(db *gorm.DB, operation string) {
 	// publishPending's own check of it, so publishPending — never this
 	// call site — is the single place that decides whether to publish.
 	db.InstanceSet(pendingAuditEventInstanceKey, pkgEvt)
+}
+
+// stampTenantID sets evt.TenantID for a captured write.
+//
+// The short version: for a model implementing TenantScoped, evt.TenantID is
+// the write's ctx tenant -- never the model argument's own GetTenantID()
+// value -- with a disagreement between the two logged as a warning
+// (auditTenantMismatch) rather than acted on. For a model that does not
+// implement TenantScoped at all, evt.TenantID is left empty, full stop, no
+// ctx fallback.
+//
+// The longer version, and why ctx -- not the model's own field -- is the
+// trustworthy signal here, contrary to the naive "the row is the fact being
+// audited, prefer its own declared value" framing this fix started from:
+// this plugin (auditCapturePlugin) is only ever installed by Open, on the
+// exact same *gorm.DB that Open also unconditionally installs
+// tenantScopePlugin on (tenant_scope.go) -- there is no code path in this
+// codebase that attaches one without the other. tenantScopePlugin fails
+// every create/update/delete of a TenantScoped model closed
+// (ErrMissingTenantContext) when ctx carries no tenant, forces the tenant_id
+// column to ctx's tenant on every Create (tenantScopeBeforeCreate's
+// SetColumn, overwriting whatever the caller populated), and appends
+// "WHERE tenant_id = <ctx's tenant>" to every Update/Delete
+// (tenantScopeBeforeUpdate/Delete) -- rejecting outright
+// (ErrTenantIDImmutable) any Update payload that tries to write a different
+// tenant_id in its own SET clause. So whenever capture() is reached with a
+// TenantScoped model and db.Error == nil and db.RowsAffected > 0 (its own
+// existing guards, above), tenantScopePlugin has already, unconditionally,
+// guaranteed that ctx's tenant is the real, enforced tenant of whichever row
+// was actually created, matched or affected -- proven empirically while
+// designing this fix by constructing every Repository[T] write shape
+// (Create, full-record Update, Delete, softDelete) and confirming ctx's
+// tenant is what the WHERE clause or the forced column bound in every case.
+//
+// The model argument's own GetTenantID(), by contrast, is not reliably that
+// same value at all: dbkit.Repository[T]'s own sanctioned Delete and
+// softDelete build a bare "var zero T" (or an m populated only for the two
+// columns the mark-delete UPDATE selects) and never touch the argument
+// struct's TenantID field, so GetTenantID() there is simply empty --
+// confirmed by TestAuditCapturePlugin_HardDelete_ClassifiesAsDelete, which
+// pins TenantID = ctx's tenant even though the model argument's own field
+// carries nothing. More importantly, it can be actively wrong: a caller
+// holding a bare *gorm.DB directly (outside Repository[T] -- the
+// raw-SQL/WithTenantSession-direct escape hatch backend-coding-standards
+// SKILL.md §3.2 documents, generalized to any bare-GORM call) can write
+// db.Model(&Widget{ID: "w1", TenantID: "tenant-b"}).Updates(map[string]any{"name": "x"})
+// under a ctx carrying "tenant-a": the map payload never itself sets
+// tenant_id, so tenantScopeBeforeUpdate's immutability guard -- which
+// inspects only the payload (stmt.Dest), never the decoupled .Model()
+// argument -- never fires, and the WHERE clause it appends still correctly
+// scopes the write to ctx's real "tenant-a" row. GetTenantID() read off
+// stmt.Model here returns "tenant-b" -- a value with nothing to do with the
+// row actually matched, since .Model() here is merely a query selector
+// decoupled from Updates()'s own payload, not "the row" in any meaningful
+// sense. TestAuditCapturePlugin_ModelArgumentTenantDiffersFromContext_TrustsContextAndWarns
+// proves this reachable and pins ctx ("tenant-a") -- not the stale Model
+// argument ("tenant-b") -- as what gets captured.
+//
+// A disagreement between ctx's tenant and a non-empty GetTenantID() is
+// therefore treated as option (ii) from this fix's own design brief: a
+// signal of a deeper bug (a decoupled or stale Model argument) worth
+// surfacing loudly, via auditTenantMismatch, rather than a reason to prefer
+// the model's value over ctx's -- investigation here found no real,
+// reachable case in this codebase where the model's own field is a *more*
+// truthful answer than ctx, and at least one reachable case (above) where
+// it is actively less truthful.
+//
+// ctx carrying no tenant at all should not be reachable for a captured
+// TenantScoped write, per the guarantee above -- but as defense in depth,
+// rather than silently leaving evt.TenantID empty for a row that may well
+// have declared a real one, this falls back to a non-empty GetTenantID()
+// in that case.
+//
+// For a model that does not implement TenantScoped at all -- a platform- or
+// identity-domain Auditable model (root CLAUDE.md's four-data-domain
+// table) -- evt.TenantID is left empty, with no ctx fallback of any kind:
+// tenantScopePlugin gives no guarantee whatsoever for a model it never
+// scopes, so a platform write can run under any tenant's ctx for reasons
+// entirely unrelated to the row itself (a job or admin operation that
+// rebuilt tenant ctx for an unrelated purpose), and stamping that tenant
+// onto the event would misattribute it in the audit trail -- exactly
+// dbkit-tenancy P2-2. The acting identity is still fully captured, just
+// under Actor/OnBehalfOf rather than TenantID, which is sufficient: a
+// platform write's "who did this, from where" is Actor/OnBehalfOf's job,
+// and TenantID empty is the truthful answer to "which tenant does this row
+// belong to" for a row that belongs to none.
+func stampTenantID(stmt *gorm.Statement, evt *WriteCapturedEvent) {
+	ts, ok := tenantScopedOf(stmt)
+	if !ok {
+		return
+	}
+
+	rowTenant := ts.GetTenantID()
+
+	ctxTenant, ctxHasTenant := pkgcore.TenantFromContext(stmt.Context)
+	if !ctxHasTenant {
+		// Defense in depth only: should not be reachable for a captured
+		// TenantScoped write (see doc comment), since tenantScopePlugin
+		// fails such a write closed before it ever reaches capture().
+		if rowTenant != "" {
+			evt.TenantID = string(rowTenant)
+		}
+		return
+	}
+
+	evt.TenantID = string(ctxTenant)
+	if rowTenant != "" && rowTenant != ctxTenant {
+		auditTenantMismatch(stmt.Context, *evt, string(rowTenant))
+	}
+}
+
+// tenantScopedOf reports whether stmt's model implements TenantScoped,
+// mirroring auditableOf's exact Model-before-Dest precedence (see that
+// function's doc comment for why Model must be checked first: GORM's Count
+// finisher briefly seeds Model from Dest, then overwrites Dest with the
+// *int64 result pointer before callbacks run).
+func tenantScopedOf(stmt *gorm.Statement) (TenantScoped, bool) {
+	if ts, ok := stmt.Model.(TenantScoped); ok {
+		return ts, true
+	}
+	if ts, ok := stmt.Dest.(TenantScoped); ok {
+		return ts, true
+	}
+	return nil, false
 }
 
 // auditableOf reports whether stmt's model implements Auditable, checking

@@ -475,7 +475,14 @@ func captureSlogDefault(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
 	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
+	// Level: slog.LevelWarn (rather than the LevelError this helper used
+	// before dbkit-tenancy P2-2's fix added a Warn-level alert of its own,
+	// auditTenantMismatch) still captures every existing Error-level alert
+	// this file's other tests assert on -- LevelWarn is strictly lower, so
+	// the filter "handle anything >= this level" still passes Error
+	// records through unchanged -- while now also capturing the new
+	// Warn-level one.
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	return &buf
 }
@@ -1422,5 +1429,200 @@ func TestAuditCapturePlugin_OmitOnlyMapUpdate_CapturesOnlyTheColumnsItWrites(t *
 	}
 	if rowLabel != "mapped" {
 		t.Errorf("row label = %q, want %q", rowLabel, "mapped")
+	}
+}
+
+// auditCapturePlatformRecord is a platform-domain Auditable fixture that
+// deliberately does NOT implement dbkit.TenantScoped -- the shape
+// root CLAUDE.md's four-data-domain table gives identity and platform
+// tables (users, sessions, platform-level plan definitions), mirroring
+// go/dbkit/audit's own AuditEvent, which the module's own doc comment
+// records as "deliberately does not implement TenantScoped". It is local to
+// this file (the nonAuditableFlag/auditCaptureSecretWidget/
+// auditCaptureOmitWidget precedent above), used only by
+// TestAuditCapturePlugin_NonTenantScopedModel_DoesNotInheritContextTenant.
+type auditCapturePlatformRecord struct {
+	ID   string `gorm:"primaryKey;size:26"`
+	Name string `gorm:"size:255;not null"`
+}
+
+// AuditResourceType satisfies dbkit.Auditable. auditCapturePlatformRecord
+// carries no GetTenantID method at all, so it does not satisfy
+// dbkit.TenantScoped -- confirmed by its absence from the compile-time
+// assertions below, the reverse-and-equally-important property
+// nonAuditableFlag already proves for the opposite combination.
+func (auditCapturePlatformRecord) AuditResourceType() string { return "platform_record" }
+
+var _ dbkit.Auditable = auditCapturePlatformRecord{}
+
+// createAuditCapturePlatformRecordsTable creates the table backing
+// auditCapturePlatformRecord: deliberately no tenant_id column at all,
+// matching a real platform/identity table's shape.
+func createAuditCapturePlatformRecordsTable(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	err := db.Exec(`CREATE TABLE audit_capture_platform_records (
+		id   VARCHAR(26)  NOT NULL PRIMARY KEY,
+		name VARCHAR(255) NOT NULL
+	)`).Error
+	if err != nil {
+		t.Fatalf("create audit_capture_platform_records table: %v", err)
+	}
+}
+
+// TestAuditCapturePlugin_NonTenantScopedModel_DoesNotInheritContextTenant is
+// the regression for dbkit-tenancy P2-2's second failure shape: a model
+// implementing Auditable but NOT dbkit.TenantScoped -- a platform or
+// identity-domain model per root CLAUDE.md's four-data-domain table --
+// written under some tenant ctx (a job or admin operation that rebuilt
+// tenant ctx for a reason entirely unrelated to this platform-level write)
+// must not have that ctx's tenant show up on its captured event at all: the
+// row itself has no real tenant, so the truthful WriteCapturedEvent.TenantID
+// is empty, never whatever the ctx happened to carry.
+//
+// Before this fix, capture built evt.TenantID directly from
+// pkgcore.TenantFromContext(db.Statement.Context) unconditionally, with no
+// check on whether the written model was even TenantScoped at all -- so
+// this exact write would have wrongly captured TenantID = "tenant-a".
+func TestAuditCapturePlugin_NonTenantScopedModel_DoesNotInheritContextTenant(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	createAuditCapturePlatformRecordsTable(t, db)
+
+	// The write's ctx carries a real tenant -- exactly the shape the audit
+	// text describes: a platform-domain write that happens to run under
+	// some tenant's ctx for reasons unrelated to the row itself (this test
+	// does not need to construct why; it only needs ctx to carry one).
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	rec := &auditCapturePlatformRecord{ID: "rec1", Name: "seed"}
+	if err := db.WithContext(ctx).Create(rec).Error; err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	events := bus.captured()
+	if len(events) != 1 {
+		t.Fatalf("captured %d events, want exactly 1", len(events))
+	}
+	got := events[0]
+	if got.Operation != "create" {
+		t.Errorf("Operation = %q, want %q", got.Operation, "create")
+	}
+	if got.TenantID != "" {
+		t.Errorf(`TenantID = %q, want "" -- a platform-domain Auditable model must never inherit `+
+			"the ctx tenant it merely happened to be written under (dbkit-tenancy P2-2)", got.TenantID)
+	}
+}
+
+// auditCaptureTenantModelWidget is a TenantScoped, Auditable fixture whose
+// tenant_id column is NOT part of the primary key -- ID alone is --
+// embedding dbkit.TenantModel exactly the way that type's own doc comment
+// describes as its intended use ("the narrower case where a plain, non-key
+// tenant_id column is genuinely enough"), unlike testutil.Widget's
+// composite (tenant_id, id) primary key, which every real tenant-scoped
+// table in this codebase is required to use instead (backend coding
+// standard §5). That distinction is load-bearing for
+// TestAuditCapturePlugin_ModelArgumentTenantDiffersFromContext_TrustsContextAndWarns
+// below: see that test's own doc comment for why a composite-primary-key
+// model cannot reach the scenario it targets at all. Local to this file,
+// like every other fixture above.
+type auditCaptureTenantModelWidget struct {
+	ID string `gorm:"primaryKey;size:26"`
+	dbkit.TenantModel
+	Name string `gorm:"size:255;not null"`
+}
+
+func (auditCaptureTenantModelWidget) AuditResourceType() string { return "tenant_model_widget" }
+
+var (
+	_ dbkit.TenantScoped = auditCaptureTenantModelWidget{}
+	_ dbkit.Auditable    = auditCaptureTenantModelWidget{}
+)
+
+// createAuditCaptureTenantModelWidgetsTable creates the table backing
+// auditCaptureTenantModelWidget: id alone is the primary key, tenant_id an
+// ordinary NOT NULL column -- the inverse of createWidgetsTable's composite
+// key, deliberately.
+func createAuditCaptureTenantModelWidgetsTable(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	err := db.Exec(`CREATE TABLE audit_capture_tenant_model_widgets (
+		id        VARCHAR(26)  NOT NULL PRIMARY KEY,
+		tenant_id VARCHAR(26)  NOT NULL,
+		name      VARCHAR(255) NOT NULL
+	)`).Error
+	if err != nil {
+		t.Fatalf("create audit_capture_tenant_model_widgets table: %v", err)
+	}
+}
+
+// TestAuditCapturePlugin_ModelArgumentTenantDiffersFromContext_TrustsContextAndWarns
+// is the regression for dbkit-tenancy P2-2's first failure shape, resolved
+// the opposite way its own audit text initially assumed: a TenantScoped
+// model's captured event trusts the write's ctx tenant, not the model
+// argument's own GetTenantID() value, because investigation (see
+// stampTenantID's own doc comment in audit_capture.go) found ctx to be the
+// value tenantScopePlugin -- always co-installed with the audit-capture
+// plugin by Open, on the exact same connection -- actually enforces via the
+// statement's WHERE clause, while a decoupled .Model(...) argument can
+// disagree with it and still have the write succeed.
+//
+// Why this needs auditCaptureTenantModelWidget rather than testutil.Widget:
+// GORM's own ConvertToAssignments (gorm.io/gorm/callbacks/update.go) folds
+// every non-zero primary-key field of a Model argument into the statement's
+// WHERE clause whenever Model != Dest (a map payload, as this test uses,
+// always is this) -- confirmed empirically while writing this test.
+// Against testutil.Widget, whose primary key is the composite
+// (tenant_id, id) every real tenant-scoped table is required to use, a
+// stale Model argument's own tenant_id therefore becomes a second,
+// self-defeating WHERE condition alongside tenantScopeBeforeUpdate's
+// ctx-derived one -- the two together match nothing at all, so no
+// mismatched event is ever captured through that shape: a composite-key
+// model's own field genuinely cannot disagree with ctx on a write that
+// still succeeds. auditCaptureTenantModelWidget's tenant_id is deliberately
+// NOT part of its primary key (only ID is), so GORM folds just "id = ..."
+// from the Model argument, leaving tenantScopeBeforeUpdate's ctx-derived
+// tenant_id condition as the sole tenant filter -- the row actually matched
+// and written is therefore ctx's real tenant, even though the Model
+// argument's own GetTenantID() claims a different one.
+func TestAuditCapturePlugin_ModelArgumentTenantDiffersFromContext_TrustsContextAndWarns(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	createAuditCaptureTenantModelWidgetsTable(t, db)
+	ctxA := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	w := &auditCaptureTenantModelWidget{ID: "tmw1", Name: "gadget"}
+	if err := db.WithContext(ctxA).Create(w).Error; err != nil {
+		t.Fatalf("seed Create() error = %v", err)
+	}
+
+	logBuf := captureSlogDefault(t)
+
+	staleModel := &auditCaptureTenantModelWidget{ID: "tmw1", TenantModel: dbkit.TenantModel{TenantID: "tenant-b"}}
+	res := db.WithContext(ctxA).Model(staleModel).Updates(map[string]any{"name": "renamed"})
+	if res.Error != nil {
+		t.Fatalf("Updates() error = %v", res.Error)
+	}
+	if res.RowsAffected != 1 {
+		t.Fatalf("RowsAffected = %d, want 1 -- the WHERE clause must still have matched the real "+
+			"tenant-a row despite the decoupled Model argument claiming tenant-b", res.RowsAffected)
+	}
+
+	events := bus.captured()
+	if len(events) != 2 {
+		t.Fatalf("captured %d events, want 2 (create then update)", len(events))
+	}
+	got := events[1]
+	if got.Operation != "update" {
+		t.Errorf("Operation = %q, want %q", got.Operation, "update")
+	}
+	if got.TenantID != "tenant-a" {
+		t.Errorf(`TenantID = %q, want "tenant-a" -- ctx is the value tenantScopeBeforeUpdate actually `+
+			"bound into the WHERE clause that matched this row, so it must win over the decoupled "+
+			"Model argument's own stale tenant-b field", got.TenantID)
+	}
+	if !strings.Contains(logBuf.String(), "dbkit: captured write's model argument tenant differs from context tenant") {
+		t.Errorf("expected a logged mismatch warning naming the disagreement, log = %q", logBuf.String())
+	}
+	if !strings.Contains(logBuf.String(), "model_tenant_id=tenant-b") {
+		t.Errorf("expected the mismatch warning to name the disagreeing model_tenant_id=tenant-b, log = %q", logBuf.String())
 	}
 }
