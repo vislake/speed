@@ -138,6 +138,38 @@ ON CONFLICT (key) DO UPDATE SET
     END
 RETURNING value`
 
+	// incrByFloatWithTTLSQL implements KVStore.IncrByFloatWithTTL: the exact
+	// upsert incrByFloatSQL performs, with one difference -- everywhere
+	// incrByFloatSQL resets expires_at to NULL (a genuinely missing row, or
+	// an existing row whose own expiry has already passed), this statement
+	// instead sets it to $3, the caller-computed absolute expiry (NULL when
+	// the caller passed a ttl of zero or less, matching Set's own
+	// zero-or-less-means-no-expiry convention). A live, non-expired row's
+	// branch is untouched byte for byte: its own expires_at is carried over
+	// exactly as incrByFloatSQL already does, so $3 is never consulted for
+	// it -- ttl is ignored for a live key, never extending it, the identical
+	// non-extension rule IncrByFloat's own doc comment states.
+	//
+	// This is one statement, not incrByFloatSQL followed by a second write:
+	// the same row-level serialization argument in incrByFloatSQL's own doc
+	// comment applies unchanged, so no concurrent caller creating this key
+	// can ever have its increment overwritten by another caller's own
+	// expiry-attaching write -- there is no second write to race against.
+	incrByFloatWithTTLSQL = `INSERT INTO pkgcore_kv_entries AS kv (key, value, expires_at)
+VALUES ($1, ($2::numeric)::text::bytea, $3::timestamptz)
+ON CONFLICT (key) DO UPDATE SET
+    value = CASE
+        WHEN kv.expires_at IS NOT NULL AND kv.expires_at <= now()
+            THEN ($2::numeric)::text::bytea
+        ELSE (convert_from(kv.value, 'UTF8')::numeric + $2::numeric)::text::bytea
+    END,
+    expires_at = CASE
+        WHEN kv.expires_at IS NOT NULL AND kv.expires_at <= now()
+            THEN $3::timestamptz
+        ELSE kv.expires_at
+    END
+RETURNING value`
+
 	// compareAndSwapSQL implements KVStore.CompareAndSwap as one database-
 	// arbitrated statement combining an UPDATE CTE (the "key exists" path,
 	// live-match or expired-treated-as-absent) with an INSERT CTE guarded by
@@ -242,8 +274,10 @@ type Store struct {
 // The store preserves pkgcore.NewMemoryKVStore's and kv/redis.NewKVStore's
 // semantics exactly: Set replaces both the value and any expiry, IncrByFloat
 // keeps a live key's expiry and starts a missing or expired key at zero with
-// no expiry, and CompareAndSwap compares the whole value and never changes
-// the key's expiry. One boundary detail is this backend's own: unlike
+// no expiry, IncrByFloatWithTTL does the same but atomically attaches an
+// expiry on the call that creates the key, and CompareAndSwap compares the
+// whole value and never changes the key's expiry. One boundary detail is this
+// backend's own: unlike
 // Redis, PostgreSQL has no native active expiry, so an expired row is
 // invisible to every read (the WHERE guard every statement in this file
 // carries) but is not physically removed until something touches it again
@@ -340,6 +374,37 @@ func (s *Store) IncrByFloat(ctx context.Context, key string, delta float64) (flo
 		// reaches a value this store itself just wrote -- so it is reported
 		// as a plain error rather than misclassified.
 		return 0, fmt.Errorf("pkgcore/kv/postgres: incr: parse stored result %q: %w", result, err)
+	}
+	return parsed, nil
+}
+
+// IncrByFloatWithTTL implements pkgcore.KVStore.IncrByFloatWithTTL. See
+// incrByFloatWithTTLSQL's own doc comment for the single-statement design and
+// its atomicity argument.
+func (s *Store) IncrByFloatWithTTL(ctx context.Context, key string, delta float64, ttl time.Duration) (float64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	deltaText := formatFloat(delta)
+
+	var expiresAt *time.Time
+	if ttl > kvNoExpiry {
+		at := time.Now().Add(ttl)
+		expiresAt = &at
+	}
+
+	var result []byte
+	err := s.pool.QueryRow(ctx, incrByFloatWithTTLSQL, key, deltaText, expiresAt).Scan(&result)
+	if err != nil {
+		if isNotNumericErr(err) {
+			return 0, pkgcore.ErrNotNumeric
+		}
+		return 0, fmt.Errorf("pkgcore/kv/postgres: incr with ttl: %w", err)
+	}
+	parsed, err := parseFloat(result)
+	if err != nil {
+		return 0, fmt.Errorf("pkgcore/kv/postgres: incr with ttl: parse stored result %q: %w", result, err)
 	}
 	return parsed, nil
 }
