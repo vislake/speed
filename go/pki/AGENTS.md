@@ -118,6 +118,7 @@ This is a deliberate "keep the column, skip the transition" choice, not a half-b
 - **`api-contract.yml` does not yet gate this fragment.** See "HTTP surface (round 3)" above -- `task api:gen` regenerates `pki-server.gen.go` correctly, but the CI workflow's own regenerate-then-diff enforcement was not extended to it this round.
 - **`ErrSignerUnavailable`'s first real trigger is CRL signing, not a KMS-backed signer's own network failure.** Round 1/2's AGENTS.md parenthetically associated this code with "a KMS-backed signer" (round 4's `vault`/`kmsaws`), but neither provider package declares or returns it -- their `Sign`/`Public`/`Destroy` failures are unwrapped `fmt.Errorf` (verified by grep against `go/pki/signer/{vault,kmsaws}/signer.go` before this line was written). `crl.go`'s `GenerateCRL` wraps ANY non-`*apperr.Error` failure from `x509.CreateRevocationList` this way, including the library's own template-validation errors, not only a genuine signer-transport fault -- an imprecision accepted because this module's own callers never produce an invalid template, so the ambiguity is theoretical today. See errors.go's own doc comment for the full accounting.
 - **`Service.PromoteNow` is a round-3 addition that is NOT itself revocation.** It exists as a companion to `RevokeSigningKey` (an emergency revocation leaves a purpose with no active key until something is promoted) but performs no revocation of its own, and nothing in this module ever calls it automatically -- a host must call it explicitly. See `lifecycle.go`'s own doc comment for why it lives next to `PromoteDuePending` rather than in `revocation.go`, and for why it honors, rather than bypasses, the propagation window.
+- **`Service.ReclaimRetired` (the retirement-and-reclaim round) is host-invoked and never automatic, and its report must be read through each signer's own `Destroy` semantics.** It is deliberately NOT wired into `ScanExpiry` or the expiry-scan job -- for the `vault`/`kmsaws` direct-sign modes `Destroy` is real provider-side deletion, and the scan's "never pushes to any external system" boundary (lifecycle.go) holds for deletion too. A host "enables reclamation" by calling the method on its own schedule; its schedule IS its retention declaration. The report's `Destroyed` list means "`Destroy` answered nil" -- which for `LocalSigner` is a physically deleted `pki_local_keys` row, for direct-sign modes a scheduled/performed provider deletion, and for envelope modes a validation no-op that reclaims nothing (the ciphertext in the row IS the material; dropping the row is a host history decision per the module's own recorded boundary). `ErrKeyNotFound` counts as already-reclaimed (`Destroyed`, quiet convergence); `revoked` keys are deliberately never reclaimed (the emergency path must not silently bundle deletion); a host wanting a revoked key's material gone calls its signer's `Destroy` directly. Full argument in `reclaim.go`'s doc comment and the round entry below.
 - **`Service.EnqueueExpiryScan`'s idempotency choice is deliberate, not an oversight.** Unlike `storage.EnqueueExpirySweep`'s per-tenant `IdempotencyKey`, this round's `EnqueueExpiryScan` sets none: each expiry-scan tick is its own independent occurrence (not a repeated trigger for the SAME occurrence the way a tenant's sweep can be), and `ScanExpiry`'s guarded, status-checked updates make two overlapping runs safe. See `job.go`'s own doc comment for the full argument.
 - **`platformScanTenantID` is a deliberate accommodation, not a design pki would have chosen.** `jobs.Task.Validate` requires a non-empty `TenantID` unconditionally, but `pki_signing_keys` is platform data with no tenant to put there -- every other module's periodic task (`storage.taskTypeExpirySweep`) has a real one because its scanned data is tenant data. A fixed sentinel value exists purely to satisfy `jobs`' own validation; `expiryScanHandler.Handle` never reads it, since `SigningKeyRepository` is a plain `*gorm.DB` with no tenant-filtering plugin engaged. See `job.go`'s own doc comment.
 - **2026-09-06: the first real host scheduling the expiry scan is
@@ -168,6 +169,7 @@ This is a deliberate "keep the column, skip the transition" choice, not a half-b
 - `local_signer_test.go` covers `GenerateKey`'s algorithm rejection, the sign/verify round trip against `crypto/ed25519.Verify`, the unknown-`keyRef` failure, and `Destroy`.
 - `service_test.go` covers `EnsurePurpose`'s validation and idempotence, `ActiveSigner`'s no-key failure, and `VerificationKeys`'s revoked-key exclusion.
 - `lifecycle_test.go` covers every transition `ScanExpiry` drives with a controllable clock (`Service.now`): `PromoteDuePending`'s propagation-window boundary (both sides) and its atomic demotion of the purpose's previous active key (including the `PromoteToActive` statement-ordering bug this round's own tests caught -- see below), `RetireDueRetiring`'s overlap-period boundary and its defensive skip of a row with no `RetiringAt`, `StageDueRotations`'s renewal-lead-time threshold and its skip of a purpose already carrying a pending key, and one full `ScanExpiry` pass exercising all three transitions together plus its `RotationConfig`-zero-value fallback to the `Service`'s own configured defaults.
+- `reclaim_test.go` (the retirement-and-reclaim round) covers `Service.ReclaimRetired`: real-material destruction through `LocalSigner` (the `pki_local_keys` row is physically gone and the report names the kid), the retired-only scope (a row in each of the other four statuses survives a reclaim that destroys a retired sibling), the signer-name guard (a foreign-owned retired row whose keyRef points at real local material is reported `NotOwned` and its material survives -- the round's fail-before proof, see the round entry), `ErrKeyNotFound`-as-already-reclaimed convergence across repeated runs, and per-key failure isolation through a stub signer (one failing key lands in `Failed` without aborting the walk, and a later call re-attempts it until the provider answers).
 - `cache_test.go` covers `keySetCache` directly: hit/miss/invalidate, per-purpose invalidation isolation, TTL expiry, the `ttl<=0` disabled mode (including that `put` becomes a no-op and `close` on a janitor-less cache is safe), the janitor's `sweep`, and `close`'s idempotence.
 - `events_test.go` covers `signingKeyLifecycleEventFromWire`'s two real wire shapes (the concrete struct the standalone mode's bus passes through, and the `map[string]any` the distributed mode's JSON-decoded bus hands subscribers), the optional `PreviousKID` field, and rejection of a payload with no usable `Purpose` or an unrecognized shape entirely; plus `eventDecls`' declared set against the exported event-name constants.
 - `job_test.go` covers `Service.EnqueueExpiryScan` (the shaped `jobs.Task`, the "no queue wired" failure, a propagated queue error) and `expiryScanHandler` (`Type`, a `Handle` call that actually drives `ScanExpiry`, and the non-empty-payload task-shape rejection).
@@ -418,26 +420,154 @@ deliberately defers:
   declares `VARCHAR(255)` -- and (c) `model_test.go` pins the three
   `size:4096` model tags. A future pki PostgreSQL integration tier should
   re-prove the widening there.
-- **P2-2 (confirmed, assessed, deferred -- no clean wiring point).**
-  `Signer.Destroy` has zero production callers across the repository: the
-  key-lifecycle layer's expiry scan stops at `retired` and never destroys
-  the underlying key material (`LocalSigner`'s encrypted
-  `pki_local_keys` rows in particular accumulate forever), and
-  `docs/internal/22-pki.md` names no post-retirement reclamation sweep.
-  Wiring `Destroy` into the `retiring -> retired` transition would be a
-  lifecycle-policy decision, not a wiring detail: for the `vault`/`kmsaws`
-  direct-sign providers it triggers REAL provider-side deletion (KMS's
-  seven-day minimum pending window among them), and the module's lifecycle
-  vocabulary has no post-retired state an auto-destroy could consult
-  before acting across every `Signer` implementation, future ones
-  included. Follow-up (not scoped anywhere yet): a retirement-sweep round
-  that defines the post-retired reclamation policy -- which signer
-  implementations may auto-destroy on retirement, and what retention a
-  host can declare -- then wires `Destroy` and `LocalKeyRepository.Delete`
-  to it. Nothing in this module leaks private key material meanwhile: the
-  rows stay encrypted at rest, and `Destroy` remains available to a host
-  that wants explicit reclamation today.
+- **P2-2 (confirmed, assessed, then RESOLVED by the retirement-and-reclaim
+  round below, 2026-09-07).** `Signer.Destroy` had zero production callers
+  across the repository: the key-lifecycle layer's expiry scan stops at
+  `retired` and never destroys the underlying key material
+  (`LocalSigner`'s encrypted `pki_local_keys` rows in particular
+  accumulate forever), and `docs/internal/22-pki.md` names no
+  post-retirement reclamation sweep. Wiring `Destroy` into the
+  `retiring -> retired` transition would be a lifecycle-policy decision,
+  not a wiring detail: for the `vault`/`kmsaws` direct-sign providers it
+  triggers REAL provider-side deletion (KMS's seven-day minimum pending
+  window among them), and the module's lifecycle vocabulary has no
+  post-retired state an auto-destroy could consult before acting across
+  every `Signer` implementation, future ones included. The round below
+  resolves the finding in the host-invoked shape rather than the
+  auto-destroy shape: `Service.ReclaimRetired` gives every retired key its
+  first production-reachable `Destroy` call path, and the policy question
+  (which signer implementations may destroy on retirement, and what
+  retention a host declares) is answered by the host's own invocation --
+  its schedule IS the retention declaration. What remains deliberately
+  unbuilt -- the automatic-destruction mechanisms a consumer with
+  non-`ErrKeyNotFound`-convergent providers would need -- is recorded in
+  the round entry below. Nothing in this module leaks private key material
+  meanwhile: the rows stay encrypted at rest.
 
 Tests for both fixes fail on the unmodified code and pass after (recorded
 above with the reproduced output), green under plain `go test` and under
 `-race`.
+
+## Retirement-and-reclaim round (round entry, 2026-09-07)
+
+Resolves the P2-2 finding above in the host-invoked shape, and records the
+policy decision the finding's deferral asked for.
+
+**The decision (option (a), host-facing reclaim -- never automatic).**
+`Service.ReclaimRetired(ctx)` walks every `SigningKeyStatusRetired` row
+whose `SignerName` equals this Service's own and calls the signer's
+`Destroy` on its `KeyRef`, returning a `ReclaimReport` (`Destroyed` /
+`NotOwned` / `Failed`, nil-when-empty like `ScanReport`). It is deliberately
+NOT wired into `ScanExpiry` or the expiry-scan job, for the three reasons
+`reclaim.go`'s own doc comment develops and `docs/internal/22-pki.md`'s new
+"reclaiming retired keys' material" section records in the doc's own
+language:
+
+1. **Destroy under direct-sign modes is real provider-side deletion** --
+   the module's "advances the state machine, never pushes to any external
+   system" boundary (lifecycle.go's `ScanExpiry` doc) applies to deletion
+   as much as to activation, so destruction must be an explicit host act,
+   the same "module manages the state machine, host owns every push"
+   division the rotation section draws.
+2. **Auto-destroy and retention are per-deployment policy.** A host
+   "enables reclamation" by calling the method on its own schedule (after
+   each expiry-scan drain for a `LocalSigner` deployment; rarely and
+   deliberately for a direct-sign one), and its schedule IS the retention
+   declaration -- the module adds no configuration schema, the same reason
+   `DefaultCacheTTL` is a named constant.
+3. **The consultable boundary already exists.** The deferral worried that
+   "the module's lifecycle vocabulary has no post-retired state an
+   auto-destroy could consult". Host invocation dissolves the worry: the
+   host consults the state machine itself (`retired` means the overlap
+   elapsed and nothing under the key is still offered for verification),
+   decides, and calls. No new state needed for deliberate reclamation.
+
+Design directions (b) (a tombstone/pending-destruction state with a
+grace period) and (c) (stop at a policy spec) were weighed and rejected /
+subsumed: (b)'s machinery -- a new status value or `destroyed` marker, a
+guarded transition, possibly an event -- would be surface area with no
+in-repo consumer, and the module cannot in principle certify per-mode
+destruction at the `Signer` interface level (an envelope-mode `Destroy`
+returns nil after validating and reclaims nothing; the ciphertext row IS
+the material), so a module-owned "destroyed" marker would record the
+signer's answer, not the truth. (c) is subsumed because a mechanism, not
+just a spec, could land soundly once reclamation is host-invoked; the
+parts that genuinely need a design decision beyond this round are recorded
+under "Deliberately not built" below.
+
+**What landed.**
+
+- `go/pki/reclaim.go`: `ReclaimReport` + `Service.ReclaimRetired`, with the
+  full policy argument in the method's doc comment.
+- The signer-name guard: only rows whose `SignerName` is this Service's
+  own are ever handed to `Destroy`; foreign rows land in `NotOwned`. This
+  guard is load-bearing, not cosmetic: `ErrKeyNotFound`-as-already-reclaimed
+  would silently swallow a cross-owner miss (a second Service instance
+  sharing `pki_signing_keys`), so a guard-less implementation both deletes
+  material it does not own and reports foreign rows as converged. The
+  fail-before proof is reproduced below.
+- Convergence and isolation: `ErrKeyNotFound` from `Destroy` counts as
+  already reclaimed (`Destroyed`, distinct log line), so repeated calls
+  converge quietly for implementations that answer that way; any other
+  error is logged with the kid and lands in `Failed` without aborting the
+  walk, and the next call re-attempts the failed key (still `retired`,
+  material still in place).
+- `reclaim_test.go`: five tests pinning the walk (real-material destroy,
+  retired-only scope across all five statuses, the signer-name guard,
+  `ErrKeyNotFound` convergence across repeated runs, per-key failure
+  isolation with re-attempt-after-recovery through a stub signer).
+
+**Fail-before proof (the guard).** With the `SignerName` check removed
+from `ReclaimRetired` and every retired row processed unconditionally,
+`TestService_ReclaimRetired_DoesNotTouchKeysOwnedByAnotherSigner` failed
+with the planted foreign-owned row's material actually destroyed:
+
+```
+--- FAIL: TestService_ReclaimRetired_DoesNotTouchKeysOwnedByAnotherSigner (0.01s)
+    reclaim_test.go:151: NotOwned = [], want [kid-vault-owned]
+    reclaim_test.go:154: Destroyed = [kid-vault-owned], want nil (nothing this Service owns was retired)
+    reclaim_test.go:161: foreign-owned retired key's material was destroyed by reclaim, want it to survive
+```
+
+The test plants a retired row wearing `SignerName: "vault"` whose `KeyRef`
+points at a real local key, so the guard-less implementation destroys
+material this Service does not own. Restored, the guard moves the row to
+`NotOwned`, the material survives, and the full suite is green under
+plain `go test` and `-race`. Per the repository's bug-fix test policy,
+note the shape of this round's proof honestly: P2-2 is a missing-capability
+defect (no production path reached `Destroy`), so most of the new suite
+pins NEW behaviour rather than regressing old code -- the one genuinely
+regressable new invariant, the cross-owner guard, is the one with a real
+red-before/green-after proof above.
+
+**Deliberately not built** (each with its trigger condition, so a future
+round knows when it is warranted):
+
+- **`revoked` keys are not reclaimed.** Revocation is the emergency path;
+  incident response may need the material of the very key just stopped,
+  and an emergency action should never silently bundle deletion. A host
+  that wants a revoked key's material gone calls its signer's `Destroy`
+  directly.
+- **No automatic destruction and no new state.** If a real consumer --
+  most plausibly a `vault`/`kmsaws` direct-sign deployment that wants
+  destruction on the scan's own cadence, or one that needs repeat runs
+  silent for providers answering an already-destroyed key with a raw
+  error -- needs the automatic shape, the future round implements the
+  mechanism the P2-2 deferral originally imagined: a per-implementation
+  destroy capability declaration and/or a module-owned `destroyed` marker
+  with a guarded transition. That round's test must pin the marker's
+  semantics per mode (the module cannot certify an envelope-mode `Destroy`
+  actually reclaimed anything -- see above), the cache/event non-effects
+  this round proved, and the cross-replica story if an event is added.
+- **No reference-app wiring.** `examples/reference-app`'s host-side
+  periodic scheduler (which genuinely drives the expiry scan since
+  2026-09-06) is the natural first caller of `ReclaimRetired` for its
+  local-signer deployment, but the wiring is a host-side change outside
+  this round's scope, which is confined to `go/pki` and the pki docs.
+- **No `api-contract.yml`/HTTP/audit surface.** Reclamation is a
+  background lifecycle act like the expiry scan itself; it gets no HTTP
+  operation, no audit action (there is no human operator "who did it" to
+  record -- the same reasoning `pki.key.rotate` is deliberately never
+  declared), and no event (it changes no row; retired keys are already
+  outside every replica's verifiable set and active pointer, so no
+  replica cache needs to converge).
