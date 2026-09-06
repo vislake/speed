@@ -18,7 +18,11 @@ import "sort"
 // than decoded back into a typed Go value: the decoding rule depends on
 // Type, which a generic renderer has no business special-casing, and the
 // canonical string is exactly what a human-readable reference needs to
-// display anyway.
+// display anyway. The one deliberate divergence from the schema entry is
+// Default: Describe applies redactIf to a Sensitive item's Default at
+// assembly time (see that field's own comment), so the exported view
+// carries the redactedMarker -- never the plaintext -- exactly as the
+// event bus does.
 type ConfigItemDescriptor struct {
 	// Key is the configuration key, shared between items and flags.
 	Key string
@@ -50,7 +54,12 @@ type ConfigItemDescriptor struct {
 	HasDefault bool
 
 	// Default is the Default in canonical form, meaningful only when
-	// HasDefault is true. For a feature flag this is always present.
+	// HasDefault is true. For a feature flag this is always present. For a
+	// Sensitive item the field carries the redactedMarker instead of the
+	// declared plaintext (see redactIf): this descriptor is the exported
+	// view boundary -- the admin console and the configuration-reference
+	// generator both consume it -- and a secret's default has no more
+	// business crossing it than crossing the event bus.
 	Default string
 
 	// IsFeatureFlag marks entries folded in from the FeatureFlag
@@ -78,6 +87,15 @@ type ConfigItemDescriptor struct {
 // the only place a *Service is ever constructed, and it always populates
 // schema before returning one (module.go's Attach) -- there is no
 // partially-constructed *Service for this method to guard against.
+//
+// A Sensitive item's Default is redacted at this boundary, not at each
+// consumer's: the descriptor is a document a caller renders and shares
+// (RenderMarkdown's generated reference, an admin console's item listing),
+// so the plaintext default goes through redactIf exactly as a Set's event
+// values do on the bus -- see events.go for the marker semantics.
+// RenderMarkdown's own renderDefault still applies redactIf a second time
+// for hand-built descriptor slices; the marker is idempotent, so the
+// double application is harmless.
 func (s *Service) Describe() []ConfigItemDescriptor {
 	out := make([]ConfigItemDescriptor, 0, len(s.schema.items))
 	for _, item := range s.schema.items {
@@ -91,7 +109,7 @@ func (s *Service) Describe() []ConfigItemDescriptor {
 			Min:           canonicalPtrCopy(item.minCanonical),
 			Max:           canonicalPtrCopy(item.maxCanonical),
 			HasDefault:    item.hasDefault,
-			Default:       item.defaultCanonical,
+			Default:       redactIf(item.sensitive, item.defaultCanonical),
 			IsFeatureFlag: item.isFlag,
 			FlagDependsOn: append([]string(nil), item.flagDeps...),
 		})

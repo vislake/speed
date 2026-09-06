@@ -70,7 +70,11 @@ func RenderMarkdown(items []ConfigItemDescriptor) string {
 // idiom Service uses to keep a Sensitive value off the event bus (see
 // events.go) -- a generated configuration reference is a document meant to
 // be committed and shared just like that bus, so a secret's plaintext
-// Default has no more business landing here than on it.
+// Default has no more business landing here than on it. Describe already
+// redacts entries it produces (see its doc comment), so a Describe-fed
+// slice arrives pre-redacted and this pass is idempotent over the marker;
+// the pass exists for hand-built descriptor slices, whose plaintext
+// defaults must not survive a caller's detour around Describe.
 func renderDefault(it ConfigItemDescriptor) string {
 	if !it.HasDefault {
 		return "_(none)_"
