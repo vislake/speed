@@ -41,6 +41,12 @@ type KeySource struct {
 	// EnsureErr, when non-nil, is what EnsurePurpose returns -- for a test
 	// that needs Signer.Issue's first-call bootstrap to fail.
 	EnsureErr error
+
+	// VerificationErr, when non-nil, is what VerificationKeys returns -- for
+	// a test that needs the verification-key lookup itself to fail, the
+	// "keys are unavailable" case Verify must classify as a cannot-answer
+	// rather than a rejected token.
+	VerificationErr error
 }
 
 type keySourceEntry struct {
@@ -98,6 +104,9 @@ func (k *KeySource) VerificationKeys(context.Context, string) ([]struct {
 ) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	if k.VerificationErr != nil {
+		return nil, k.VerificationErr
+	}
 	out := make([]struct {
 		KID       string
 		Algorithm string

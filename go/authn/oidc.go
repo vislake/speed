@@ -242,18 +242,24 @@ type SSOService struct {
 	httpClient *http.Client
 	guard      *safehttp.Guard
 
-	// mu guards the memoized discovery results, keyed by issuer URL, and
-	// nothing else. Discovery itself is a round trip to a third party whose
-	// answer changes almost never; repeating it per sign-in would put that
-	// third party on the latency path of every login. But memoizing it must
-	// never mean holding mu across the round trip: the only bound on that
-	// fetch is the HTTP client's own timeout, so a lock held across it
-	// would queue every other tenant's discovery -- and with it every other
-	// tenant's SSO sign-in -- behind one issuer that stopped answering.
-	// discover() therefore fetches OUTSIDE the lock and re-checks the map
-	// afterwards (double-checked memoization); see its own doc comment.
+	// mu guards the memoized discovery results, keyed by issuer URL, the
+	// forgotten generation counter below, and nothing else. Discovery
+	// itself is a round trip to a third party whose answer changes almost
+	// never; repeating it per sign-in would put that third party on the
+	// latency path of every login. But memoizing it must never mean holding
+	// mu across the round trip: the only bound on that fetch is the HTTP
+	// client's own timeout, so a lock held across it would queue every
+	// other tenant's discovery -- and with it every other tenant's SSO
+	// sign-in -- behind one issuer that stopped answering. discover()
+	// therefore fetches OUTSIDE the lock and re-checks the map afterwards
+	// (double-checked memoization); see its own doc comment.
 	mu         sync.Mutex
 	discovered map[string]*oidc.Provider
+	// forgotten counts every forget() that has ever run. discover captures
+	// it when it decides to fetch and compares it before storing, so a
+	// forget that lands while a fetch is in flight wins over that fetch's
+	// store -- see discover's own doc comment.
+	forgotten uint64
 }
 
 // newSSOService assembles the relying party from a Service's own wiring.
@@ -300,6 +306,16 @@ func (s *SSOService) SaveConfig(ctx context.Context, in SSOConfigInput) (*Tenant
 	existing, err := s.configs.Current(ctx)
 	switch {
 	case err == nil:
+		// The issuer changes below, so the URL whose discovery document the
+		// memo may hold is the one the row had BEFORE this write. Capture it
+		// first: forget must evict the OLD issuer -- an A-to-B change that
+		// forgot B instead would leave A's document memoized forever, and
+		// switching back to A later would silently reuse a document that
+		// predates the change. (The forget runs only after the update
+		// commits, so a failed write leaves the memo intact; when the
+		// issuer did not change, the forget drops a still-valid entry that
+		// the next discovery simply refetches.)
+		previousIssuer := existing.Issuer
 		existing.Issuer = strings.TrimSpace(in.Issuer)
 		existing.ClientID = strings.TrimSpace(in.ClientID)
 		existing.ClientSecret = in.ClientSecret
@@ -308,7 +324,7 @@ func (s *SSOService) SaveConfig(ctx context.Context, in SSOConfigInput) (*Tenant
 		if updateErr := s.configs.Update(ctx, existing); updateErr != nil {
 			return nil, updateErr
 		}
-		s.forget(existing.Issuer)
+		s.forget(previousIssuer)
 		return existing, nil
 	case errors.Is(err, ErrNotFound):
 		created := &TenantSSOConfig{
@@ -516,6 +532,15 @@ func (s *SSOService) signIn(ctx context.Context, config *TenantSSOConfig, extern
 		if findErr != nil {
 			return nil, findErr
 		}
+		// Merge what this sign-in's provider just claimed onto the stored
+		// identity before TouchLogin below persists it (the same refresh
+		// the social channels' own sign-in applies): display data only --
+		// the identity row's email never resolves an account -- and a field
+		// the provider no longer reports arrives empty and clears the
+		// stored value instead of leaving it stale.
+		identity.Email = strings.TrimSpace(external.Email)
+		identity.DisplayName = external.Name
+		identity.AvatarURL = external.Avatar
 		result.User, result.Identity = user, identity
 	case errors.Is(err, ErrNotFound):
 		user, created, linkErr := s.resolveAccount(ctx, config, external)
@@ -701,9 +726,23 @@ func (s *SSOService) enabledConfig(ctx context.Context) (*TenantSSOConfig, error
 // lock makes the map converge on one stored result either way: whichever
 // discover stores first wins, and the other keeps its own equally valid
 // document for its caller without overwriting the stored one.
+//
+// A forget() that runs while a fetch is in flight must WIN over that
+// fetch's store, or an eviction would be silently undone -- the memoized
+// document resurrected -- by a discovery the eviction was meant to make
+// stale. The forgotten generation counter makes that precise: the fetch
+// captures the counter when it sees its miss and stores only when no
+// forget has run since. The counter is deliberately coarse (any forget,
+// not just one for this issuer, suppresses the store): the cost of the
+// imprecision is one extra fetch of an unrelated issuer, and the cost of
+// tracking per-issuer forgets would be unbounded bookkeeping for no
+// benefit. The in-flight caller still receives the document it fetched --
+// it asked for it and the fetch succeeded -- it is simply not memoized,
+// so the next caller fetches afresh.
 func (s *SSOService) discover(ctx context.Context, issuer string) (*oidc.Provider, error) {
 	s.mu.Lock()
 	provider, ok := s.discovered[issuer]
+	generation := s.forgotten
 	s.mu.Unlock()
 	if ok {
 		return provider, nil
@@ -716,25 +755,30 @@ func (s *SSOService) discover(ctx context.Context, issuer string) (*oidc.Provide
 
 	// Re-check rather than storing unconditionally: a concurrent discover
 	// may have stored its own result for this issuer while this one was
-	// fetching, and a concurrent SaveConfig may have called forget() on
-	// the same issuer -- which must win over a store this fetch only
-	// learned about afterwards. Both outcomes leave the memo with a valid
-	// document for the caller that just fetched one.
+	// fetching, and a concurrent forget() may have run -- the re-check must
+	// not resurrect a document the forget evicted (see this method's doc
+	// comment).
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing, ok := s.discovered[issuer]; ok {
 		return existing, nil
+	}
+	if s.forgotten != generation {
+		return provider, nil
 	}
 	s.discovered[issuer] = provider
 	return provider, nil
 }
 
 // forget drops a memoized discovery document, so a configuration change takes
-// effect without a restart.
+// effect without a restart, and bumps the forgotten generation counter so any
+// discovery fetch already in flight for the evicted issuer does not store its
+// now-stale document back (see discover's doc comment).
 func (s *SSOService) forget(issuer string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.discovered, issuer)
+	s.forgotten++
 }
 
 // SSOChannelName returns the provider name an enterprise identity is stored

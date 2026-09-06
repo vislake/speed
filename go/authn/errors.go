@@ -136,6 +136,18 @@ var (
 	// revocation check.
 	ErrRevocationCheckFailed = apperr.Internal("authn.revocation_check_failed")
 
+	// ErrTokenVerificationFailed is returned when an access token could not
+	// be verified because the verification keys themselves could not be
+	// loaded -- the signature question is unanswerable, and the token is
+	// never judged on an unanswerable question. It is the same
+	// cannot-answer classification ErrRevocationCheckFailed carries, for
+	// the same reason: an infrastructure failure must not masquerade as
+	// ErrTokenInvalid, because on the client side a 401 is the refresh
+	// signal and its eventual failure signs the session out over what was
+	// really a pki/store hiccup. An Internal error keeps the session where
+	// it is until the keys answer again.
+	ErrTokenVerificationFailed = apperr.Internal("authn.token_verification_failed")
+
 	// ErrOAuthStateInvalid is returned when an authorization callback's
 	// "state" is unknown, expired, already used, bound to a different
 	// channel, or bound to a different browser. All five collapse into one
@@ -341,6 +353,7 @@ var errorCodes = []string{
 	ErrTenantMembershipRequired.Code,
 	ErrTenantMembershipUnavailable.Code,
 	ErrRevocationCheckFailed.Code,
+	ErrTokenVerificationFailed.Code,
 	ErrOAuthStateInvalid.Code,
 	ErrRedirectURINotAllowed.Code,
 	ErrProviderUnknown.Code,

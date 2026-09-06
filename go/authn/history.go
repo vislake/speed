@@ -83,36 +83,19 @@ func (s *Service) RevokeSession(ctx context.Context, userID, sessionID string) e
 //
 // currentSessionID must itself belong to userID -- it comes from the calling
 // Principal, never from a request parameter, so a caller can never ask to
-// keep somebody else's session alive while revoking their own. Only sessions
-// that are still SessionStatusActive count toward the returned total: a
-// session already revoked contributes nothing to revoke a second time, which
-// is what keeps a repeated call idempotent in its reported count as well as
-// its effect.
+// keep somebody else's session alive while revoking their own.
+//
+// The batch semantics live in SessionManager.RevokeOthers: every eligible
+// session is attempted even when one of them fails, and the returned count
+// -- the rows this call actually flipped, never abandoned mid-batch -- is
+// accurate alongside the error, so a caller that hears "something failed"
+// still hears exactly how far the revocation got (see that method's doc
+// comment).
 func (s *Service) RevokeOtherSessions(ctx context.Context, userID, currentSessionID string) (int, error) {
 	if userID == "" || currentSessionID == "" {
 		return 0, ErrAuthenticationRequired
 	}
-
-	sessions, err := s.sessionRepo.ListByUser(ctx, userID)
-	if err != nil {
-		return 0, err
-	}
-
-	revoked := 0
-	for i := range sessions {
-		session := &sessions[i]
-		if session.ID == currentSessionID {
-			continue
-		}
-		if session.Status != SessionStatusActive {
-			continue
-		}
-		if err := s.sessions.Revoke(ctx, session.ID, RevokeReasonRevokeOthers); err != nil {
-			return revoked, err
-		}
-		revoked++
-	}
-	return revoked, nil
+	return s.sessions.RevokeOthers(ctx, userID, currentSessionID, RevokeReasonRevokeOthers)
 }
 
 // ListLoginHistory returns userID's most recent login attempts, successful

@@ -1,6 +1,9 @@
 package authn
 
 import (
+	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -167,6 +170,71 @@ func TestService_RevokeOtherSessions_KeepsCurrentRevokesRest(t *testing.T) {
 	}
 	if second != 0 {
 		t.Errorf("second RevokeOtherSessions() revoked = %d, want 0", second)
+	}
+}
+
+// failingRevocationSetKV is a KVStore whose Set refuses exactly the
+// immediate-revocation-list keys (revokedSessionKeyPrefix) and passes every
+// other operation through to the wrapped store -- so registration, login
+// and the rate limiter keep working on it while the per-session
+// revocation-list write the manager performs fails, which is the precise
+// mid-way failure this file's P3-24 test needs.
+type failingRevocationSetKV struct {
+	pkgcore.KVStore
+}
+
+// Set implements pkgcore.KVStore.
+func (k failingRevocationSetKV) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
+	if strings.HasPrefix(key, revokedSessionKeyPrefix) {
+		return errors.New("testutil: revocation-list write refused")
+	}
+	return k.KVStore.Set(ctx, key, value, ttl)
+}
+
+// TestService_RevokeOtherSessions_MidwayFailureStillReportsTheAccurateCount
+// is the P3-24 regression: a revoke-others batch whose revocation-list
+// writes fail must still report how many sessions were ACTUALLY revoked,
+// and must not abandon the sessions it had not reached yet. The fixture
+// runs in immediate mode against a key-value store that refuses every
+// revocation-list write, so each session's row flip and refresh-token
+// invalidation succeed and the list entry fails -- before the fix, the very
+// first failure aborted the loop and the service answered (0, err) although
+// the row had already been revoked, losing the count and leaving the rest
+// of the batch unreached.
+func TestService_RevokeOtherSessions_MidwayFailureStillReportsTheAccurateCount(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixtureWithKV(t,
+		failingRevocationSetKV{KVStore: pkgcore.NewMemoryKVStore()},
+		WithRevocationMode(RevocationModeImmediate))
+	user := f.registerUser(t, "revoke-others-failing@example.com", testTenantA)
+	current := loginAt(t, f, "revoke-others-failing@example.com", "laptop", testTenantA)
+	for _, device := range []string{"phone", "tablet", "desktop"} {
+		loginAt(t, f, "revoke-others-failing@example.com", device, testTenantA)
+	}
+
+	revoked, err := f.svc.RevokeOtherSessions(t.Context(), user.ID, current.Principal.SessionID)
+	if err == nil {
+		t.Fatal("RevokeOtherSessions() error = nil although the revocation list refused every write")
+	}
+	if revoked != 3 {
+		t.Errorf("RevokeOtherSessions() revoked = %d alongside the error, want 3 (the count of rows actually revoked must survive a mid-way failure, P3-24)", revoked)
+	}
+
+	// Every eligible row is revoked even though the batch hit errors: the
+	// failures never abandon the sessions they had not reached yet.
+	sessions, err := f.svc.sessionRepo.ListByUser(t.Context(), user.ID)
+	if err != nil {
+		t.Fatalf("ListByUser() error = %v", err)
+	}
+	revokedRows := 0
+	for i := range sessions {
+		if sessions[i].Status == SessionStatusRevoked {
+			revokedRows++
+		}
+	}
+	if revokedRows != 3 {
+		t.Errorf("%d sessions revoked in the database, want 3: the mid-way failure aborted the batch before it finished", revokedRows)
 	}
 }
 

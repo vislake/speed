@@ -181,12 +181,19 @@ type TokenPair struct {
 	AccessToken string
 	// AccessExpiresAt is when AccessToken stops verifying.
 	AccessExpiresAt time.Time
-	// RefreshToken is the opaque long-lived credential. A tenant switch
-	// deliberately returns the SAME refresh token it was given: switching
-	// tenants is not a new login and must not start a new token family.
+	// RefreshToken is the opaque long-lived credential a response that
+	// mints a NEW token family carries: a sign-in, a refresh, a social or
+	// SSO callback. A tenant switch and a step-up verification
+	// deliberately issue NO new refresh token -- neither is a new login,
+	// and the caller keeps the token it already holds -- so on those
+	// responses RefreshToken is empty, and toTokenPairResponse omits the
+	// refresh_token field from the wire payload entirely rather than
+	// echoing a token the response never minted.
 	RefreshToken string
 	// RefreshExpiresAt is when RefreshToken stops being accepted. It is
-	// zero on a tenant switch, which issues no new refresh token.
+	// zero -- and likewise absent from the wire payload -- exactly when
+	// RefreshToken is empty: a tenant switch or a step-up verification,
+	// which issue no new refresh token.
 	RefreshExpiresAt time.Time
 	// Principal is the identity the access token asserts, with Email
 	// filled in from the user record.
@@ -474,7 +481,7 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (*User, error)
 	user.PasswordHash = hash
 
 	if err := s.users.Create(ctx, user); err != nil {
-		return nil, err
+		return nil, s.mapRegisterCreateConflict(ctx, user, err)
 	}
 
 	s.publish(ctx, pkgcore.Event{
@@ -486,6 +493,39 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (*User, error)
 		},
 	})
 	return user, nil
+}
+
+// mapRegisterCreateConflict translates a registration whose insert lost the
+// race against a CONCURRENT registration of the same identifier. The
+// pre-checks above answer the sequential duplicate; when two registrations
+// both pass them, the database's unique index (idx_users_email_index,
+// idx_users_phone_index) admits exactly one insert and refuses the other
+// with gorm.ErrDuplicatedKey. That refusal must reach the caller as the
+// same coded conflict the pre-checks answer -- a bare internal error would
+// tell a client the server is broken when the truth is that the identifier
+// is taken, and the documented duplicate-registration answer is a conflict
+// (see Register's own doc comment).
+//
+// Which of the two unique indexes refused is answered by probing the
+// account's identifiers: the racing writer's commit is necessarily visible
+// by the time this insert failed, so the identifier that now resolves is
+// the one that was taken. Email is probed first when the account carries
+// both, matching the pre-checks' own order.
+func (s *Service) mapRegisterCreateConflict(ctx context.Context, user *User, err error) error {
+	if !errors.Is(err, gorm.ErrDuplicatedKey) {
+		return err
+	}
+	if user.Email != "" {
+		if _, findErr := s.users.FindByEmail(ctx, user.Email); findErr == nil {
+			return ErrEmailAlreadyRegistered
+		}
+	}
+	if user.Phone != "" {
+		if _, findErr := s.users.FindByPhone(ctx, user.Phone); findErr == nil {
+			return ErrPhoneAlreadyRegistered
+		}
+	}
+	return err
 }
 
 // Login verifies a password and, on success, starts a session and issues the

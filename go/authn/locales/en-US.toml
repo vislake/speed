@@ -32,6 +32,7 @@
 "authn.tenant_membership_required" = "You are not a member of that workspace."
 "authn.tenant_membership_unavailable" = "Workspace membership could not be checked. Try again shortly."
 "authn.revocation_check_failed" = "The request could not be verified. Try again shortly."
+"authn.token_verification_failed" = "Your sign-in could not be verified right now. Try again shortly."
 "authn.internal_error" = "An internal error occurred. Please try again later."
 "authn.oauth_state_invalid" = "This sign-in request is no longer valid. Start again."
 "authn.redirect_uri_not_allowed" = "That redirect address is not on the allowed list."

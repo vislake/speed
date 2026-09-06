@@ -366,6 +366,81 @@ func (m *SessionManager) handleReplay(ctx context.Context, record *RefreshToken)
 	return ErrRefreshTokenReused
 }
 
+// RevokeOthers signs out every one of userID's sessions EXCEPT
+// keepSessionID, and returns how many session rows this call actually
+// revoked.
+//
+// The count is a count of rows this call flipped from active to revoked.
+// Each flip is the same compare-and-swap Revoke performs -- status in the
+// WHERE clause, the database as arbiter -- so a session a concurrent caller
+// already revoked is neither revoked again nor counted here, which is what
+// keeps a repeated call idempotent in its reported count as well as its
+// effect.
+//
+// A failure never abandons the batch. Every eligible session is attempted
+// whatever happens to the ones before it, and each failure -- a flip the
+// database refused, a refresh-token invalidation or revocation-list write
+// that errored after its session's row had already flipped -- is collected
+// and returned alongside the count, errors.Join'ed, so the caller hears
+// both how far the batch got and that something on it failed. A row whose
+// flip succeeded is counted even when one of its follow-ups failed: the
+// flip is the revocation, the follow-ups (tokens, the immediate-revocation
+// entry, the event) are per-row work on top of it, and a follow-up failure
+// must not make the account's true state unreportable.
+//
+// The revoke event is published only for rows THIS call flipped, so a batch
+// racing a concurrent revoke of one of its targets does not announce a
+// second security notice for that session.
+func (m *SessionManager) RevokeOthers(ctx context.Context, userID, keepSessionID, reason string) (int, error) {
+	now := m.now()
+	sessions, err := m.sessions.ListByUser(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
+
+	revoked := 0
+	var failures []error
+	for i := range sessions {
+		session := &sessions[i]
+		if session.ID == keepSessionID {
+			continue
+		}
+		if session.Status != SessionStatusActive {
+			continue
+		}
+
+		changed, err := m.sessions.Revoke(ctx, session.ID, reason, now)
+		if err != nil {
+			// The flip itself was refused; the row stands active and a
+			// later retry can still reach it. Record and keep going.
+			failures = append(failures, fmt.Errorf("authn: revoke session %s: %w", session.ID, err))
+			continue
+		}
+		if !changed {
+			// A concurrent revoke won between the list read and this flip.
+			// Not this call's revocation: not counted, no event announced.
+			continue
+		}
+		revoked++
+		if _, err := m.tokens.RevokeBySession(ctx, session.ID, now); err != nil {
+			failures = append(failures, fmt.Errorf("authn: revoke session %s refresh tokens: %w", session.ID, err))
+		}
+		if err := m.markRevoked(ctx, session.ID); err != nil {
+			failures = append(failures, fmt.Errorf("authn: record session %s in the revocation list: %w", session.ID, err))
+		}
+		m.publish(ctx, pkgcore.Event{
+			Type:     EventSessionRevoked,
+			TenantID: pkgcore.TenantID(session.CurrentTenantID),
+			Payload: SessionRevokedPayload{
+				UserID:    session.UserID,
+				SessionID: session.ID,
+				Reason:    reason,
+			},
+		})
+	}
+	return revoked, errors.Join(failures...)
+}
+
 // Revoke signs a session out: the row is marked revoked, every refresh token
 // bound to it is invalidated, and -- in immediate mode -- the session id is
 // added to the revocation list Middleware consults.

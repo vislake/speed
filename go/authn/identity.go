@@ -128,10 +128,29 @@ func (r *UserIdentityRepository) ListByUser(ctx context.Context, userID string) 
 }
 
 // TouchLogin records that identity was just used to sign in, refreshing the
-// display fields the provider reported.
+// display fields the provider reported. The refreshed values are whatever
+// the passed identity carries -- the caller is expected to have merged the
+// claims the sign-in just received into it (see signInWithExternalIdentity
+// and SSOService.signIn).
+//
+// The write is a column-level update of exactly that reported set, and the
+// column-level form is the point: GORM's plain Updates(struct) silently
+// skips every zero-valued field, so an address or display field the
+// provider STOPPED reporting (an email withdrawn from the profile, a
+// cleared avatar) would stay stale forever. Selecting the reported columns
+// explicitly makes their zero values take effect and clears the stored
+// value, so the identity converges on what the provider most recently
+// reported. The columns are display data only -- this update is never a
+// lookup key and never touches the user row.
 func (r *UserIdentityRepository) TouchLogin(ctx context.Context, identity *UserIdentity, at time.Time) error {
 	identity.LastLoginAt = &at
+	// The update stays on the struct path (with the reported columns
+	// explicitly Selected, which is what admits their zero values): that
+	// is the path that routes the email column through its at-rest
+	// serializer, where a map-keyed Updates would write plaintext.
 	return r.db.WithContext(ctx).
+		Model(&UserIdentity{}).
+		Select("display_name", "avatar_url", "email", "last_login_at", "updated_at").
 		Where("id = ?", identity.ID).
 		Updates(&UserIdentity{
 			DisplayName: identity.DisplayName,
@@ -401,6 +420,15 @@ func (s *Service) signInWithExternalIdentity(ctx context.Context, external *Exte
 		if findErr != nil {
 			return nil, findErr
 		}
+		// Merge what THIS sign-in's provider just reported onto the stored
+		// identity before TouchLogin below persists it -- the refresh
+		// "refreshed on every sign-in" promises (UserIdentity's doc
+		// comment). A field the provider no longer reports arrives as empty
+		// and TouchLogin's column-level write clears the stored value
+		// rather than leaving it stale.
+		identity.Email = strings.TrimSpace(external.Email)
+		identity.DisplayName = external.Name
+		identity.AvatarURL = external.Avatar
 		result.User, result.Identity = user, identity
 	case errors.Is(err, ErrNotFound):
 		user, created, linkErr := s.resolveSocialAccount(ctx, external)

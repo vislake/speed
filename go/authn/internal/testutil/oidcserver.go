@@ -63,6 +63,17 @@ type OIDCServer struct {
 	// timeout.
 	discoveryEntered  chan struct{}
 	discoveryReleased chan struct{}
+	// discoveryRequests counts every discovery request handled, so a test
+	// can tell a memoized discovery answer from a real fetch.
+	discoveryRequests int
+}
+
+// DiscoveryRequests returns how many discovery requests the server has
+// handled so far.
+func (s *OIDCServer) DiscoveryRequests() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.discoveryRequests
 }
 
 // GateDiscovery makes discovery requests signal entered (once per request)
@@ -212,6 +223,7 @@ func (s *OIDCServer) SignIDToken(t *testing.T, in IDTokenClaims) string {
 func (s *OIDCServer) handleDiscovery(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()
 	entered, released := s.discoveryEntered, s.discoveryReleased
+	s.discoveryRequests++
 	s.mu.Unlock()
 	if entered != nil {
 		entered <- struct{}{}

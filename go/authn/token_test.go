@@ -406,8 +406,108 @@ func (c *countingKeySource) EnsurePurpose(ctx context.Context, purpose, algorith
 
 var _ KeySource = (*countingKeySource)(nil)
 
+// TestSigner_EnsurePurposeFailureIsRetriedAfterTheRetryWindow is the P1-16
+// regression: Signer.Issue is a lazy, first-request bootstrap, so a
+// KeySource that fails the very first EnsurePurpose -- a key-lifecycle
+// store that is still starting up -- must not disable token issuance for
+// the process's whole lifetime. The failure stays loud while it is recent,
+// and the first Issue after the retry window tries the ensure again: a
+// hiccup self-heals, a genuinely missing key keeps failing.
+func TestSigner_EnsurePurposeFailureIsRetriedAfterTheRetryWindow(t *testing.T) {
+	t.Parallel()
+
+	keys := testutil.NewKeySource(t, "kid-active")
+	clock := testutil.NewClock(time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC))
+	ctx := context.Background()
+
+	var calls int
+	counting := &countingKeySource{KeySource: keys, calls: &calls}
+	signer, _ := NewSigner(counting, WithTokenClock(clock.Now))
+
+	// The process's first request: the key source fails to provision.
+	keys.EnsureErr = fmt.Errorf("boom")
+	if _, _, err := signer.Issue(ctx, testPrincipal()); err == nil {
+		t.Fatal("Issue() with a failing EnsurePurpose succeeded, want an error")
+	}
+	if calls != 1 {
+		t.Fatalf("EnsurePurpose was called %d times, want 1", calls)
+	}
+
+	// The source recovers. Inside the retry window the remembered failure
+	// still answers, loudly, and nothing has retried yet.
+	keys.EnsureErr = nil
+	if _, _, err := signer.Issue(ctx, testPrincipal()); err == nil {
+		t.Fatal("Issue() succeeded inside the retry window; the failed ensure must keep answering until it is retried")
+	}
+	if calls != 1 {
+		t.Fatalf("EnsurePurpose was retried inside the retry window (%d calls), want the retry to wait it out", calls)
+	}
+
+	// Once the window has passed, the next Issue retries the ensure and
+	// recovers: one transient hiccup no longer disables issuance for the
+	// rest of the process's life.
+	clock.Advance(2 * ensureRetryInterval)
+	if _, _, err := signer.Issue(ctx, testPrincipal()); err != nil {
+		t.Fatalf("Issue() after the retry window error = %v, want the retried ensure to succeed", err)
+	}
+	if calls != 2 {
+		t.Fatalf("EnsurePurpose was called %d times after recovery, want exactly 2 (one failed bootstrap, one retry)", calls)
+	}
+
+	// The recovery is remembered: later Issues pay nothing again.
+	if _, _, err := signer.Issue(ctx, testPrincipal()); err != nil {
+		t.Fatalf("Issue() after recovery error = %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("EnsurePurpose was called %d times across four Issue calls, want exactly 2", calls)
+	}
+}
+
+// TestVerify_VerificationKeysFailureIsACannotAnswerNotARejectedToken is the
+// P2-17 regression: when the verification keys themselves cannot be loaded,
+// Verify must answer the cannot-answer internal error -- the same
+// classification ErrRevocationCheckFailed carries -- never authn.token_invalid.
+// A 401 is the client's refresh signal, and a pki/store hiccup masquerading
+// as one would sign sessions out over an infrastructure failure (the
+// refresh it triggers eventually fails and the session ends); a 500 keeps
+// the session where it is until the keys answer again.
+func TestVerify_VerificationKeysFailureIsACannotAnswerNotARejectedToken(t *testing.T) {
+	t.Parallel()
+
+	keys := testutil.NewKeySource(t, "kid-active")
+	ctx := context.Background()
+	signer, _ := NewSigner(keys)
+	verifier, _ := NewVerifier(keys)
+
+	token, _, issueErr := signer.Issue(ctx, testPrincipal())
+	if issueErr != nil {
+		t.Fatalf("Issue() error = %v", issueErr)
+	}
+	if _, err := verifier.Verify(ctx, token); err != nil {
+		t.Fatalf("Verify() error = %v while the keys answer", err)
+	}
+
+	// The key source goes down. A genuinely valid token can no longer be
+	// verified because the keys cannot be loaded at all -- the signature
+	// question is unanswerable, and the answer must not be a verdict on
+	// the token.
+	keys.VerificationErr = fmt.Errorf("key store unavailable")
+	_, verifyErr := verifier.Verify(ctx, token)
+	assertErrorCode(t, verifyErr, ErrTokenVerificationFailed.Code)
+	if hasCode(verifyErr, ErrTokenInvalid.Code) {
+		t.Fatal("Verify() answered token_invalid for an unloadable key store; the cannot-answer must not masquerade as a rejected token")
+	}
+
+	// The token itself is untouched by the outage: the same token verifies
+	// again once the keys answer.
+	keys.VerificationErr = nil
+	if _, err := verifier.Verify(ctx, token); err != nil {
+		t.Fatalf("Verify() error = %v after the keys recovered", err)
+	}
+}
+
 // TestSigner_EnsurePurposeRunsExactlyOnce proves EnsurePurpose is not paid
-// on every Issue call -- Signer.ensureOnce's own doc comment explains why.
+// on every Issue call -- Signer.ensureMu's own doc comment explains why.
 func TestSigner_EnsurePurposeRunsExactlyOnce(t *testing.T) {
 	t.Parallel()
 

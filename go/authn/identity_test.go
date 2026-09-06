@@ -667,3 +667,77 @@ func TestService_UnbindIdentity_ConcurrentUnbindsNeverZeroTheAccount(t *testing.
 		})
 	}
 }
+
+// TestUserIdentityRepository_TouchLogin_ClearsAFieldTheProviderStoppedReporting
+// is the P3-21 regression: TouchLogin refreshes the display fields a
+// sign-in's provider just reported, and a field the provider STOPPED
+// reporting must clear the stored value rather than persist stale data.
+// GORM's Updates(struct) silently skips zero-valued fields, so the refresh
+// has to be a column-level update of the reported set -- only that shape
+// lets an empty reported value take effect.
+func TestUserIdentityRepository_TouchLogin_ClearsAFieldTheProviderStoppedReporting(t *testing.T) {
+	t.Parallel()
+
+	db := testutil.NewDB(t)
+	repo, repoErr := NewUserIdentityRepository(db)
+	if repoErr != nil {
+		t.Fatalf("NewUserIdentityRepository() error = %v", repoErr)
+	}
+
+	created := &UserIdentity{
+		UserID:      "user-1",
+		Provider:    ProviderGoogle,
+		ExternalID:  "google-1",
+		Email:       "old@example.com",
+		DisplayName: "Old Name",
+		AvatarURL:   "https://old.example.com/avatar.png",
+	}
+	if createErr := repo.Create(t.Context(), created); createErr != nil {
+		t.Fatalf("Create() error = %v", createErr)
+	}
+
+	// The next sign-in's claims: the provider no longer reports an email
+	// (the address was withdrawn from the profile) nor an avatar, and does
+	// report a changed display name. This is the snapshot TouchLogin's
+	// callers merge before persisting (signInWithExternalIdentity and
+	// SSOService.signIn).
+	now := time.Now()
+	refreshed := &UserIdentity{
+		ID:          created.ID,
+		Email:       "",
+		DisplayName: "New Name",
+		AvatarURL:   "",
+	}
+	if touchErr := repo.TouchLogin(t.Context(), refreshed, now); touchErr != nil {
+		t.Fatalf("TouchLogin() error = %v", touchErr)
+	}
+
+	stored, err := repo.FindByID(t.Context(), created.ID)
+	if err != nil {
+		t.Fatalf("FindByID() error = %v", err)
+	}
+	if stored.Email != "" {
+		t.Errorf("stored email = %q, want empty: a provider that stopped reporting the email left the stale address behind (P3-21)", stored.Email)
+	}
+	if stored.AvatarURL != "" {
+		t.Errorf("stored avatar URL = %q, want empty: a provider that stopped reporting the avatar left the stale URL behind", stored.AvatarURL)
+	}
+	if stored.DisplayName != "New Name" {
+		t.Errorf("stored display name = %q, want the freshly reported %q", stored.DisplayName, "New Name")
+	}
+	if stored.LastLoginAt == nil || !stored.LastLoginAt.Equal(now) {
+		t.Errorf("stored last_login_at = %v, want %v", stored.LastLoginAt, now)
+	}
+
+	// The clear must still travel through the at-rest encryption: the raw
+	// column holds ciphertext of the empty address, never a literal empty
+	// value -- a map-keyed update that bypassed the serializer would be a
+	// plaintext write to an encrypted column.
+	var raw []byte
+	if err := db.Raw("SELECT email FROM user_identities WHERE id = ?", created.ID).Row().Scan(&raw); err != nil {
+		t.Fatalf("read the raw email column: %v", err)
+	}
+	if len(raw) == 0 {
+		t.Error("the raw email column is empty: the column-level clear bypassed the at-rest encryption")
+	}
+}

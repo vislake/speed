@@ -3,8 +3,10 @@ package authn
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -1254,5 +1256,63 @@ func TestService_UpgradePasswordHash_DoesNotRegressACommittedColumn(t *testing.T
 	}
 	if ok, err := VerifyPassword(fresh.PasswordHash, password); err != nil || !ok {
 		t.Errorf("stored hash does not verify the password (ok=%v err=%v)", ok, err)
+	}
+}
+
+// TestService_Register_ConcurrentDuplicateAnswersTheCodedConflict is the
+// P3-20 regression: when two registrations of one email race, the database's
+// unique index (idx_users_email_index) admits exactly one insert and refuses
+// the other, and the loser must hear the same coded conflict a sequential
+// duplicate hears (Register's pre-checks answer that one) -- never a bare
+// internal error, which would tell the client the server broke when the
+// truth is that the address is taken.
+//
+// Deliberately not t.Parallel and run over fresh fixtures per round: the
+// losers' inserts only lose when their pre-checks overlap (both read "no
+// such account" before either inserts), a wall-clock race -- the loop only
+// costs the broken code its luck.
+func TestService_Register_ConcurrentDuplicateAnswersTheCodedConflict(t *testing.T) {
+	const (
+		rounds = 8
+		racers = 3
+	)
+	for round := 1; round <= rounds; round++ {
+		t.Run(fmt.Sprintf("round %d", round), func(t *testing.T) {
+			f := newServiceFixture(t)
+			email := fmt.Sprintf("register-race-%d@example.com", round)
+
+			start := make(chan struct{})
+			results := make([]error, racers)
+			var wg sync.WaitGroup
+			wg.Add(racers)
+			for i := range racers {
+				go func(i int) {
+					defer wg.Done()
+					<-start
+					_, err := f.svc.Register(t.Context(), RegisterInput{
+						Email: email, Password: testPassword, DisplayName: "Racer",
+					})
+					results[i] = err
+				}(i)
+			}
+			close(start)
+			wg.Wait()
+
+			successes := 0
+			for i, err := range results {
+				switch {
+				case err == nil:
+					successes++
+				case hasCode(err, ErrEmailAlreadyRegistered.Code):
+					// The expected answer for every loser: the sequential
+					// duplicate's coded conflict.
+				default:
+					t.Fatalf("racer %d answered %v, want the coded %q conflict: a lost insert race must never surface as a bare internal error (P3-20)", i, err, ErrEmailAlreadyRegistered.Code)
+				}
+			}
+			if successes != 1 {
+				t.Fatalf("%d of %d racing registrations succeeded, want exactly 1", successes, racers)
+			}
+		})
 	}
 }

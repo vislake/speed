@@ -764,6 +764,116 @@ func TestSSOService_Discover_DoesNotHoldTheMutexAcrossTheNetworkCall(t *testing.
 	}
 }
 
+// TestSSOService_Discover_ForgetDuringAnInFlightFetchIsNotUndone is the
+// P2-18 regression: a forget() that runs while a discovery fetch is on the
+// wire must win over that fetch's store-back. The double-checked re-check
+// alone cannot see the difference between "never memoized" and "just
+// forgotten" -- both leave the map empty -- so the store-back resurrects
+// the document the forget evicted, and the eviction silently never takes
+// effect. (The old comment claimed the forget won; the code proved
+// otherwise.)
+func TestSSOService_Discover_ForgetDuringAnInFlightFetchIsNotUndone(t *testing.T) {
+	t.Parallel()
+
+	server := testutil.NewOIDCServer(t, "enterprise-client")
+	f := newSSOFixture(t, server)
+	svc := f.svc.SSO()
+	ctx := pkgcore.WithTenant(t.Context(), testTenantA)
+	issuer := server.URL()
+
+	// entered is buffered so a discovery request issued AFTER the gate is
+	// released (the post-forget refetch below) can signal and proceed
+	// without needing a reader; the first fetch's signal is consumed by
+	// the select below.
+	entered := make(chan struct{}, 2)
+	released := make(chan struct{})
+	server.GateDiscovery(entered, released)
+	// The parked request must ALWAYS be released, whatever the assertions
+	// below say, or it keeps the server from shutting down at the end of
+	// the test; the Once makes the release idempotent across the early
+	// return paths.
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(released) }) }
+	defer release()
+
+	// A first-time discovery of the issuer starts and parks on the wire.
+	first := make(chan error, 1)
+	go func() {
+		_, err := svc.discover(ctx, issuer)
+		first <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the discovery request never reached the server")
+	}
+
+	// A configuration change evicts the issuer while the fetch is in
+	// flight.
+	svc.forget(issuer)
+
+	// The in-flight fetch may now finish.
+	release()
+	if err := <-first; err != nil {
+		t.Fatalf("discover() (in flight during the forget) error = %v", err)
+	}
+
+	// The next discovery of the same issuer must fetch again: had the
+	// in-flight fetch stored its document after the forget ran, this call
+	// would be a memo hit and the server would never hear from it.
+	if _, err := svc.discover(ctx, issuer); err != nil {
+		t.Fatalf("discover() after the forget error = %v", err)
+	}
+	if got := server.DiscoveryRequests(); got != 2 {
+		t.Errorf("discovery requests across the forget = %d, want 2: the in-flight fetch stored the document the forget evicted (P2-18)", got)
+	}
+}
+
+// TestSSOService_SaveConfig_IssuerChangeEvictsTheOldIssuerFromTheMemo is the
+// P2-19 regression: SaveConfig's forget must target the issuer the row held
+// BEFORE the update. An A-to-B issuer change whose forget evicts the NEW
+// issuer (a no-op, never memoized) leaves A's discovery document memoized
+// forever -- silently reused if the tenant ever points back at A, stale
+// however long the provider was away.
+func TestSSOService_SaveConfig_IssuerChangeEvictsTheOldIssuerFromTheMemo(t *testing.T) {
+	t.Parallel()
+
+	serverA := testutil.NewOIDCServer(t, "issuer-a-client")
+	f := newSSOFixture(t, serverA)
+	svc := f.svc.SSO()
+	ctx := pkgcore.WithTenant(t.Context(), testTenantA)
+	issuerA := serverA.URL()
+
+	writeSSOConfig(t, f, testTenantA, serverA, "issuer-a-client", "example.com")
+
+	// Discovery memoizes issuer A.
+	if _, err := svc.discover(ctx, issuerA); err != nil {
+		t.Fatalf("discover(issuer A) error = %v", err)
+	}
+	if got := serverA.DiscoveryRequests(); got != 1 {
+		t.Fatalf("discovery requests = %d, want 1", got)
+	}
+
+	// The tenant switches providers, A -> B. B is a public literal address
+	// the SSRF guard admits without DNS; this test never fetches it.
+	if _, err := svc.SaveConfig(ctx, SSOConfigInput{
+		Issuer: "https://93.184.216.34/oidc", ClientID: "issuer-b-client", Enabled: true,
+	}); err != nil {
+		t.Fatalf("SaveConfig(A -> B) error = %v", err)
+	}
+
+	// A discovery of the OLD issuer must now be a real fetch, not a memo
+	// hit: before the fix, A's document survived the save (the forget
+	// evicted the never-memoized B), and this call would have been
+	// answered from the memo with no request reaching the server.
+	if _, err := svc.discover(ctx, issuerA); err != nil {
+		t.Fatalf("discover(issuer A) after the issuer change error = %v", err)
+	}
+	if got := serverA.DiscoveryRequests(); got != 2 {
+		t.Errorf("discovery requests for the old issuer after the change = %d, want 2: the old issuer's document was not evicted (P2-19)", got)
+	}
+}
+
 // compile-time reminder that TenantSSOConfig stays tenant-scoped data; a
 // change here would be caught by TestSSOConfigRepository_AssertIsolated too,
 // but the type assertion makes the requirement readable without running it.

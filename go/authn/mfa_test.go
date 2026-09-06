@@ -1,6 +1,7 @@
 package authn
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -781,6 +782,235 @@ func TestConfirmTOTP_ConcurrentConfirmsOfOnePendingFactor_HaveOneWinner(t *testi
 			}
 			if len(rows) != recoveryCodeCount {
 				t.Errorf("stored %d recovery codes, want %d (a losing confirm regenerated the batch)", len(rows), recoveryCodeCount)
+			}
+		})
+	}
+}
+
+// failRecoveryCodeCreatesWhile makes every user_recovery_codes insert on db
+// fail with an injected error while fail is true, by way of a GORM create
+// callback -- the deterministic stand-in for a batch write that dies
+// halfway through a regeneration. The hook is scoped by table name, so the
+// MFA-factor writes around it pass untouched, and is removed on cleanup.
+func failRecoveryCodeCreatesWhile(t *testing.T, db *gorm.DB, fail *bool) {
+	t.Helper()
+	const hookName = "authn_test_fail_recovery_code_create"
+	if err := db.Callback().Create().Before("gorm:create").Register(hookName, func(tx *gorm.DB) {
+		if *fail && tx.Statement.Schema != nil && tx.Statement.Schema.Table == "user_recovery_codes" {
+			tx.AddError(errors.New("injected: recovery-code batch write refused"))
+		}
+	}); err != nil {
+		t.Fatalf("register the recovery-code create failure hook: %v", err)
+	}
+	t.Cleanup(func() {
+		*fail = false
+		_ = db.Callback().Create().Remove(hookName)
+	})
+}
+
+// TestConfirmTOTP_RegenerationFailure_KeepsThePreviousBatch is the P3-23
+// regression on the confirm side: ConfirmTOTP activates the pending factor
+// (atomically retiring the one it replaces) and then regenerates the
+// recovery-code batch. A regeneration that failed between deleting the old
+// batch and inserting the new one would leave the account on a fresh ACTIVE
+// factor with ZERO backup codes -- nothing left to get back in with when
+// the authenticator device is lost. The replacement is one transaction, so
+// a refused insert rolls the deletion back and the previous batch survives.
+func TestConfirmTOTP_RegenerationFailure_KeepsThePreviousBatch(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	user := f.registerUser(t, "mfa-confirm-fail@example.com", testTenantA)
+	_, _ = enrollAndConfirmTOTP(t, f, user.ID)
+
+	// A second enrollment starts a replacement (allowed: the principal
+	// carries a completed step-up) and leaves a pending row to confirm.
+	elevated := Principal{UserID: user.ID, AMR: []string{MethodPassword, MethodMFATOTP}}
+	result, err := f.svc.EnrollTOTP(t.Context(), elevated)
+	if err != nil {
+		t.Fatalf("EnrollTOTP() error = %v", err)
+	}
+	code, err := totp.Code(result.Secret, time.Now())
+	if err != nil {
+		t.Fatalf("totp.Code() error = %v", err)
+	}
+
+	// From here on, the recovery-code batch insert is refused.
+	failing := true
+	failRecoveryCodeCreatesWhile(t, f.db, &failing)
+
+	if _, err := f.svc.ConfirmTOTP(t.Context(), user.ID, code); err == nil {
+		t.Fatal("ConfirmTOTP() succeeded although the recovery-code write was refused")
+	}
+
+	var rows []UserRecoveryCode
+	if err := f.db.Where("user_id = ?", user.ID).Find(&rows).Error; err != nil {
+		t.Fatalf("query user_recovery_codes: %v", err)
+	}
+	if len(rows) != recoveryCodeCount {
+		t.Errorf("stored %d recovery codes after a refused regeneration, want the previous batch of %d intact (P3-23): the account was left with zero backup codes on its active factor", len(rows), recoveryCodeCount)
+	}
+}
+
+// TestRegenerateRecoveryCodes_WriteFailure_KeepsThePreviousBatch is the
+// P3-23 regression on the plain regenerate path: RegenerateRecoveryCodes
+// must never land the account on its active factor with zero backup codes
+// either, so its replacement of the batch is the same single transaction.
+func TestRegenerateRecoveryCodes_WriteFailure_KeepsThePreviousBatch(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	user := f.registerUser(t, "mfa-regenerate-fail@example.com", testTenantA)
+	_, _ = enrollAndConfirmTOTP(t, f, user.ID)
+
+	failing := true
+	failRecoveryCodeCreatesWhile(t, f.db, &failing)
+
+	if _, err := f.svc.RegenerateRecoveryCodes(t.Context(), user.ID); err == nil {
+		t.Fatal("RegenerateRecoveryCodes() succeeded although the recovery-code write was refused")
+	}
+
+	var rows []UserRecoveryCode
+	if err := f.db.Where("user_id = ?", user.ID).Find(&rows).Error; err != nil {
+		t.Fatalf("query user_recovery_codes: %v", err)
+	}
+	if len(rows) != recoveryCodeCount {
+		t.Errorf("stored %d recovery codes after a refused regeneration, want the previous batch of %d intact (P3-23)", len(rows), recoveryCodeCount)
+	}
+}
+
+// TestMFAFactorRepository_SecondPendingRowForOneUserIsRefused is the
+// deterministic half of the P3-22 regression: the database itself must
+// refuse a second PENDING row for one (user, type), under the partial
+// unique index migration 0011 (idx_user_mfa_factors_user_type_pending). The
+// service-level race test below reproduces how two such rows used to come
+// into being; this test pins the schema that now makes that state
+// unrepresentable -- before the fix nothing refused the second insert, and
+// ConfirmTOTP's pending lookup could take whichever row happened to come
+// first.
+func TestMFAFactorRepository_SecondPendingRowForOneUserIsRefused(t *testing.T) {
+	t.Parallel()
+
+	db := testutil.NewDB(t)
+	repo, err := NewMFAFactorRepository(db)
+	if err != nil {
+		t.Fatalf("NewMFAFactorRepository() error = %v", err)
+	}
+	first := &UserMFAFactor{UserID: "user-1", Type: MFATypeTOTP, Secret: "first-secret", CreatedAt: time.Now()}
+	if err := repo.Create(t.Context(), first); err != nil {
+		t.Fatalf("create the first pending row: %v", err)
+	}
+
+	// A second, racing enrollment's row for the same user and type: the
+	// database must refuse it.
+	second := &UserMFAFactor{UserID: "user-1", Type: MFATypeTOTP, Secret: "second-secret", CreatedAt: time.Now()}
+	createErr := repo.Create(t.Context(), second)
+	if createErr == nil {
+		var rows []UserMFAFactor
+		if err := db.Where("user_id = ? AND type = ? AND status = ?",
+			"user-1", MFATypeTOTP, MFAFactorStatusPending).Find(&rows).Error; err != nil {
+			t.Fatalf("query pending rows: %v", err)
+		}
+		t.Fatalf("a second PENDING row for one (user, type) was inserted (%d rows now), want the database to refuse it (P3-22): ConfirmTOTP could take the wrong enrollment", len(rows))
+	}
+	if !errors.Is(createErr, gorm.ErrDuplicatedKey) {
+		t.Fatalf("the refused second insert error = %v, want gorm.ErrDuplicatedKey", createErr)
+	}
+
+	// The first row is unharmed, and a pending row may still coexist with an
+	// ACTIVE one (the 0010 design) -- only a second pending row is refused.
+	active := &UserMFAFactor{
+		UserID:      "user-1",
+		Type:        MFATypeTOTP,
+		Secret:      "active-secret",
+		Status:      MFAFactorStatusActive,
+		ConfirmedAt: &first.CreatedAt,
+		CreatedAt:   time.Now(),
+	}
+	if err := repo.Create(t.Context(), active); err != nil {
+		t.Fatalf("an ACTIVE row alongside the pending one was refused: %v", err)
+	}
+}
+
+// TestEnrollTOTP_ConcurrentEnrollsLeaveExactlyOnePendingRow is the P3-22
+// regression: racing enroll requests for one user must leave exactly one
+// PENDING row -- the one whose secret the user was most recently shown --
+// and never two rows for a confirm to take the wrong one. Before the fix
+// each enroll deleted and created in two separate statements, so racing
+// requests could interleave (del, del, insert, insert) and leave two
+// pending rows; ConfirmTOTP then confirms whichever the database returns
+// first, which need not be the enrollment the user scanned. The fix makes
+// each enrollment one transaction serialized on the user's own row, so
+// every round below is deterministic -- the loop only costs the broken code
+// its luck.
+func TestEnrollTOTP_ConcurrentEnrollsLeaveExactlyOnePendingRow(t *testing.T) {
+	const (
+		rounds = 12
+		racers = 4
+	)
+	for round := 1; round <= rounds; round++ {
+		t.Run(fmt.Sprintf("round %d", round), func(t *testing.T) {
+			f := newServiceFixture(t)
+			user := f.registerUser(t, "mfa-enroll-race@example.com", testTenantA)
+
+			var (
+				wg       sync.WaitGroup
+				mu       sync.Mutex
+				secrets  []string
+				unwanted []error
+			)
+			wg.Add(racers)
+			for range racers {
+				go func() {
+					defer wg.Done()
+					result, err := f.svc.EnrollTOTP(t.Context(), Principal{UserID: user.ID})
+					mu.Lock()
+					defer mu.Unlock()
+					if err != nil {
+						unwanted = append(unwanted, err)
+						return
+					}
+					secrets = append(secrets, result.Secret)
+				}()
+			}
+			wg.Wait()
+
+			if len(unwanted) != 0 {
+				t.Fatalf("enrolls answered unexpected errors: %v", unwanted)
+			}
+			if len(secrets) != racers {
+				t.Fatalf("only %d of %d concurrent enrolls succeeded", len(secrets), racers)
+			}
+
+			var pending []UserMFAFactor
+			if err := f.db.Where("user_id = ? AND type = ? AND status = ?",
+				user.ID, MFATypeTOTP, MFAFactorStatusPending).Find(&pending).Error; err != nil {
+				t.Fatalf("query pending factors: %v", err)
+			}
+			if len(pending) != 1 {
+				t.Fatalf("%d PENDING rows after %d concurrent enrolls, want exactly 1 (P3-22): a confirm could take the wrong enrollment", len(pending), racers)
+			}
+
+			// The surviving row must be one of the enrollments the callers
+			// were shown, and confirming with its secret's code must
+			// succeed -- the account lands on the factor whose secret the
+			// user actually saw, whatever the interleaving.
+			found := false
+			for _, secret := range secrets {
+				if secret == pending[0].Secret {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatal("the surviving pending row's secret matches none of the enroll responses")
+			}
+			code, err := totp.Code(pending[0].Secret, time.Now())
+			if err != nil {
+				t.Fatalf("totp.Code() error = %v", err)
+			}
+			if _, err := f.svc.ConfirmTOTP(t.Context(), user.ID, code); err != nil {
+				t.Fatalf("ConfirmTOTP(surviving enrollment's secret) error = %v", err)
 			}
 		})
 	}

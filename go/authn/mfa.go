@@ -68,12 +68,16 @@ type UserMFAFactor struct {
 	// ROWS ONLY -- see idx_user_mfa_factors_user_type (migration 0010,
 	// narrowed from the full-table unique index migration 0008 originally
 	// shipped) -- which is what lets a fresh PENDING replacement factor
-	// coexist with the still-ACTIVE factor it will eventually replace.
-	// GORM's uniqueIndex struct tag cannot express a WHERE-qualified
-	// index, so, like go/pki's identically-shaped SigningKey.Purpose and
-	// go/rbac's RoleBinding, the constraint lives in the migration SQL
-	// only, not here. See Service.EnrollTOTP and
-	// MFAFactorRepository.Confirm.
+	// coexist with the still-ACTIVE factor it will eventually replace, and
+	// unique among PENDING rows too, under the twin partial index
+	// idx_user_mfa_factors_user_type_pending (migration 0011), which is
+	// what keeps two racing enrollments from leaving two pending rows for
+	// a confirm to take the wrong one (see
+	// MFAFactorRepository.ReplacePending). GORM's uniqueIndex struct tag
+	// cannot express a WHERE-qualified index, so, like go/pki's
+	// identically-shaped SigningKey.Purpose and go/rbac's RoleBinding,
+	// the constraint lives in the migration SQL only, not here. See
+	// Service.EnrollTOTP and MFAFactorRepository.Confirm.
 	UserID string `gorm:"column:user_id;size:36;not null"`
 
 	// Type is one of the MFAType* constants.
@@ -159,21 +163,69 @@ func (r *MFAFactorRepository) FindPendingByUserAndType(ctx context.Context, user
 	return &f, nil
 }
 
-// DeletePendingByUserAndType removes userID's PENDING factor of the given
-// type, if any, WITHOUT touching an existing ACTIVE one. It is not an error
-// for none to exist: EnrollTOTP calls this unconditionally before creating a
-// fresh pending row, so repeatedly starting enrollment without ever
-// confirming replaces the abandoned pending attempt rather than
-// accumulating one row per attempt.
+// ReplacePending removes userID's PENDING factor of the given type, if any,
+// and inserts f in its place, atomically (one transaction per attempt).
+// EnrollTOTP runs every enrollment through this method.
 //
-// This deliberately no longer touches an ACTIVE factor -- see EnrollTOTP's
-// own doc comment for why an active factor now survives an enroll call all
-// the way to a genuinely successful Confirm, never merely a started one.
-func (r *MFAFactorRepository) DeletePendingByUserAndType(ctx context.Context, userID, factorType string) error {
-	return r.db.WithContext(ctx).
-		Where("user_id = ? AND type = ? AND status = ?", userID, factorType, MFAFactorStatusPending).
-		Delete(&UserMFAFactor{}).Error
+// Why a retrying transaction rather than the two plain statements
+// EnrollTOTP used to issue: two rapid enroll requests could interleave
+// their deletes and creates (del, del, insert, insert) and leave TWO
+// pending rows for one (user, type) -- nothing at the database refused a
+// second pending row, the unique index being scoped to ACTIVE rows only
+// (migration 0010) -- and ConfirmTOTP's FindPendingByUserAndType would then
+// take whichever row the database happened to return first, which need not
+// be the enrollment the user actually scanned. Migration 0011 closes that
+// hole at the schema: idx_user_mfa_factors_user_type_pending, a partial
+// unique index over the pending rows, makes the database the arbiter. The
+// losing insert is refused with gorm.ErrDuplicatedKey, and by the time the
+// violation surfaces the winner's row has committed, so this method's
+// bounded retry simply runs its delete-then-create again -- the delete now
+// removes the winner's row, and the retry's insert is the sole survivor.
+// Every racing enrollment therefore succeeds and the LAST one to commit
+// owns the pending row, exactly the enrollment the user was most recently
+// shown; a confirm always matches what the user scanned.
+//
+// It is not an error for no pending row to exist -- replacing an abandoned
+// attempt or turning MFA on for the first time are the same call -- and it
+// deliberately never touches an ACTIVE factor: see EnrollTOTP's own doc
+// comment for why an active factor survives an enroll call all the way to a
+// genuinely successful Confirm, never merely a started one.
+func (r *MFAFactorRepository) ReplacePending(ctx context.Context, userID, factorType string, f *UserMFAFactor) error {
+	if f.ID == "" {
+		f.ID = newID()
+	}
+	if f.Status == "" {
+		f.Status = MFAFactorStatusPending
+	}
+	var lastErr error
+	for attempt := 0; attempt < replacePendingAttempts; attempt++ {
+		lastErr = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Where("user_id = ? AND type = ? AND status = ?", userID, factorType, MFAFactorStatusPending).
+				Delete(&UserMFAFactor{}).Error; err != nil {
+				return err
+			}
+			return tx.Create(f).Error
+		})
+		if lastErr == nil {
+			return nil
+		}
+		if !errors.Is(lastErr, gorm.ErrDuplicatedKey) {
+			return lastErr
+		}
+		// Lost the pending-row race: a concurrent enrollment committed its
+		// row between this attempt's delete and insert (see the method's
+		// doc comment). The transaction rolled back, nothing was deleted,
+		// and the next attempt's delete removes the winner's committed row.
+	}
+	return fmt.Errorf("authn: replace pending %s factor for user %s: %w", factorType, userID, lastErr)
 }
+
+// replacePendingAttempts bounds ReplacePending's retry loop. One retry
+// always suffices in theory -- the refusing row is committed by the time
+// the violation surfaces, so the retry's delete removes it and its insert
+// wins -- the bound exists to turn an unforeseen livelock into a loud error
+// rather than an infinite loop.
+const replacePendingAttempts = 3
 
 // Confirm atomically promotes the pending factor id to active, recording
 // step as its LastUsedStep so the confirmation code itself cannot be
@@ -289,22 +341,32 @@ func NewRecoveryCodeRepository(db *gorm.DB) (*RecoveryCodeRepository, error) {
 	return &RecoveryCodeRepository{db: db}, nil
 }
 
-// CreateBatch inserts every row in codes, filling in IDs where empty.
-func (r *RecoveryCodeRepository) CreateBatch(ctx context.Context, codes []*UserRecoveryCode) error {
+// ReplaceAll atomically replaces userID's entire recovery-code batch with
+// codes: every existing row -- used or not -- is deleted and the new batch
+// inserted in ONE transaction. Regenerating replaces the whole set, so an
+// old, unused code from a batch a user has since regenerated must stop
+// working, or "regenerate" would just mean "add ten more".
+//
+// The single transaction is the point, not an incidental: ConfirmTOTP swaps
+// the factor and then regenerates the batch, and a regeneration that ran
+// its delete and its insert as two separate statements could fail between
+// them (a refused insert, the process dying) and leave the account on an
+// ACTIVE factor with ZERO backup codes -- no way back in when the
+// authenticator is lost. Atomic replacement has no such middle state: the
+// old batch survives intact when the transaction rolls back, and only a
+// complete new batch ever becomes visible.
+func (r *RecoveryCodeRepository) ReplaceAll(ctx context.Context, userID string, codes []*UserRecoveryCode) error {
 	for _, c := range codes {
 		if c.ID == "" {
 			c.ID = newID()
 		}
 	}
-	return r.db.WithContext(ctx).Create(&codes).Error
-}
-
-// DeleteAllByUser removes every recovery code belonging to userID,
-// regardless of whether it was used. Regenerating replaces the whole set:
-// an old, unused code from a batch a user has since regenerated must stop
-// working, or "regenerate" would just mean "add ten more".
-func (r *RecoveryCodeRepository) DeleteAllByUser(ctx context.Context, userID string) error {
-	return r.db.WithContext(ctx).Where("user_id = ?", userID).Delete(&UserRecoveryCode{}).Error
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("user_id = ?", userID).Delete(&UserRecoveryCode{}).Error; err != nil {
+			return err
+		}
+		return tx.Create(&codes).Error
+	})
 }
 
 // FindUnusedByUserAndHash returns userID's unused recovery code matching
@@ -397,13 +459,12 @@ func (s *Service) EnrollTOTP(ctx context.Context, principal Principal) (*EnrollT
 		return nil, findErr
 	}
 
-	// Only a PENDING row from an earlier, abandoned attempt is cleared
-	// here -- an ACTIVE factor (if any) is deliberately left in place. See
-	// this method's own doc comment.
-	if delErr := s.mfaFactors.DeletePendingByUserAndType(ctx, userID, MFATypeTOTP); delErr != nil {
-		return nil, delErr
-	}
-
+	// Only a PENDING row from an earlier, abandoned attempt is replaced
+	// here -- an ACTIVE factor (if any) is deliberately left in place --
+	// and the replacement is one atomic, per-user-serialized operation
+	// (MFAFactorRepository.ReplacePending's doc comment: two rapid enrolls
+	// must never leave two pending rows for a confirm to take the wrong
+	// one). See this method's own doc comment.
 	secret, err := totp.GenerateSecret()
 	if err != nil {
 		return nil, ErrInternal.WithCause(err)
@@ -415,7 +476,7 @@ func (s *Service) EnrollTOTP(ctx context.Context, principal Principal) (*EnrollT
 		Secret:    secret,
 		CreatedAt: s.now(),
 	}
-	if err := s.mfaFactors.Create(ctx, factor); err != nil {
+	if err := s.mfaFactors.ReplacePending(ctx, userID, MFATypeTOTP, factor); err != nil {
 		return nil, err
 	}
 
@@ -531,18 +592,14 @@ func (s *Service) RegenerateRecoveryCodes(ctx context.Context, userID string) ([
 
 // regenerateRecoveryCodesLocked replaces userID's recovery-code batch and
 // returns the new one in plaintext. "Locked" in the name refers to the
-// invariant it maintains (delete-then-create leaves no window where old AND
-// new codes both work), not to a database lock: SQLite and PostgreSQL have
-// no common row-locking primitive this module reaches for (see
-// RefreshTokenRepository.Consume's own doc comment on why compare-and-swap,
-// not SELECT ... FOR UPDATE, is this codebase's answer to that gap), and
-// this operation does not need one -- it is a single user regenerating
-// their own codes, not two parties racing over one row.
+// invariant it maintains -- the replacement is atomic, so there is never a
+// state where old AND new codes both work, nor one where the account has an
+// active factor and NO backup codes (RecoveryCodeRepository.ReplaceAll's
+// doc comment) -- not to a database lock held across the call: the atomic
+// replacement transaction is that guarantee, and this operation needs no
+// row lock on top of it, since it is a single user regenerating their own
+// codes, not two parties racing over one row.
 func (s *Service) regenerateRecoveryCodesLocked(ctx context.Context, userID string) ([]string, error) {
-	if err := s.recoveryCodes.DeleteAllByUser(ctx, userID); err != nil {
-		return nil, err
-	}
-
 	plain := make([]string, recoveryCodeCount)
 	rows := make([]*UserRecoveryCode, recoveryCodeCount)
 	now := s.now()
@@ -554,7 +611,7 @@ func (s *Service) regenerateRecoveryCodesLocked(ctx context.Context, userID stri
 		plain[i] = code
 		rows[i] = &UserRecoveryCode{UserID: userID, CodeHash: hashRecoveryCode(code), CreatedAt: now}
 	}
-	if err := s.recoveryCodes.CreateBatch(ctx, rows); err != nil {
+	if err := s.recoveryCodes.ReplaceAll(ctx, userID, rows); err != nil {
 		return nil, err
 	}
 	return plain, nil

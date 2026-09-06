@@ -200,20 +200,38 @@ type Signer struct {
 	purpose   string
 	cfg       tokenConfig
 
-	// ensureOnce/ensureErr make the first Issue call responsible for
-	// EnsurePurpose (KeySource's own doc comment explains why it cannot
-	// happen in Module.Register). Every later Issue call skips straight to
-	// ActiveSigner: EnsurePurpose only ever does real work on a purpose's
-	// very first bootstrap (KeySource.EnsurePurpose's own contract is
-	// idempotent no-op once an active key exists), so paying its cost on
-	// every token issuance would be pure waste. A failure is cached and
-	// returned on every subsequent call too, rather than retried silently --
-	// a signing key that failed to provision is a startup-shaped problem an
-	// operator needs to see, not one that should keep failing quietly
-	// forever behind a swallowed error.
-	ensureOnce sync.Once
-	ensureErr  error
+	// ensureMu, ensured, ensureErr and retryEnsureAfter make the first Issue
+	// call responsible for EnsurePurpose (KeySource's own doc comment
+	// explains why it cannot happen in Module.Register). Every later Issue
+	// call skips straight to ActiveSigner: EnsurePurpose only ever does real
+	// work on a purpose's very first bootstrap (KeySource.EnsurePurpose's
+	// own contract is idempotent no-op once an active key exists), so paying
+	// its cost on every token issuance would be pure waste.
+	//
+	// A FAILED ensure is deliberately not cached for this process's whole
+	// lifetime. Issue is a lazy, first-request path: a key-lifecycle store
+	// that answers a moment too early -- a replica still starting up, a
+	// transient network blip -- would otherwise let the very first request
+	// of the process disable token issuance forever, until a restart. The
+	// failure is remembered only until retryEnsureAfter, ensureRetryInterval
+	// later: every Issue inside that window keeps returning it (a
+	// provisioning failure stays loud at every call, exactly what an
+	// operator investigating an outage sees), and the first Issue after the
+	// window retries the ensure once. A key that is genuinely missing keeps
+	// every Issue failing with the same error; one that merely hiccuped
+	// self-heals.
+	ensureMu         sync.Mutex
+	ensured          bool
+	ensureErr        error
+	retryEnsureAfter time.Time
 }
+
+// ensureRetryInterval is how long a failed EnsurePurpose keeps failing
+// Issue calls before one of them tries it again. It bounds how long one
+// transient provisioning hiccup can disable issuance (Signer.ensure's field
+// comment), while staying short enough that a genuinely missing key keeps
+// surfacing its failure to callers rather than once per interval.
+const ensureRetryInterval = time.Minute
 
 // NewSigner returns a Signer that mints tokens for AccessTokenKeyPurpose
 // through keySource.
@@ -229,19 +247,41 @@ func NewSigner(keySource KeySource, opts ...TokenOption) (*Signer, error) {
 // access tokens read it here rather than assuming the default.
 func (s *Signer) TTL() time.Duration { return s.cfg.ttl }
 
-// ensure runs EnsurePurpose exactly once for this Signer's lifetime, using
-// ctx's cancellation/deadline/trace for that one call -- see the ensureOnce
+// ensure runs EnsurePurpose for this Signer -- the first call for its whole
+// lifetime, and again after a failure once ensureRetryInterval has passed --
+// using ctx's cancellation/deadline/trace for that call. See the ensureMu
 // field's own doc comment for why this happens here rather than at
-// construction. maxCredentialLifetime is this Signer's own configured TTL:
+// construction, and why a failure is retried rather than cached forever.
+// maxCredentialLifetime is this Signer's own configured TTL:
 // docs/internal/22-pki.md's section on why the retiring overlap period's
 // length is declared by the consumer is explicit that the retiring overlap
 // period must cover an access token's full lifetime, and TTL is exactly
 // that number.
 func (s *Signer) ensure(ctx context.Context) error {
-	s.ensureOnce.Do(func() {
-		s.ensureErr = s.keySource.EnsurePurpose(ctx, s.purpose, accessTokenKeyAlgorithm, s.cfg.ttl)
-	})
-	return s.ensureErr
+	// Every Issue serializes on this decision, retries included: concurrent
+	// callers share one in-flight EnsurePurpose instead of each firing its
+	// own, the same serialization sync.Once used to give the first
+	// bootstrap.
+	s.ensureMu.Lock()
+	defer s.ensureMu.Unlock()
+	if s.ensured {
+		return nil
+	}
+	if s.ensureErr != nil && s.cfg.now().Before(s.retryEnsureAfter) {
+		// Inside the retry window: the last attempt failed and it is not
+		// time to try again yet. The failure is still returned, loudly, to
+		// this caller (see the field comment).
+		return s.ensureErr
+	}
+	err := s.keySource.EnsurePurpose(ctx, s.purpose, accessTokenKeyAlgorithm, s.cfg.ttl)
+	if err != nil {
+		s.ensureErr = err
+		s.retryEnsureAfter = s.cfg.now().Add(ensureRetryInterval)
+		return err
+	}
+	s.ensured = true
+	s.ensureErr = nil
+	return nil
 }
 
 // Issue mints a signed access token for p and returns it with its expiry.
@@ -356,6 +396,14 @@ func NewVerifier(keySource KeySource, opts ...TokenOption) (*Verifier, error) {
 	}, nil
 }
 
+// errVerificationKeysUnavailable marks a keyFunc failure whose cause is that
+// the verification keys could not be loaded at all -- as opposed to a token
+// the loaded keys do not cover. Verify distinguishes the two (see Verify's
+// doc comment): a cannot-answer must never be reported as a rejected token.
+// It wraps the underlying KeySource error in the same %w chain, so both
+// errors.Is classifications stay reachable.
+var errVerificationKeysUnavailable = errors.New("authn: verification keys are unavailable")
+
 // Verify parses and validates raw and returns the Principal it asserts.
 //
 // The returned Principal's Email is always empty: no email claim is minted
@@ -364,13 +412,27 @@ func NewVerifier(keySource KeySource, opts ...TokenOption) (*Verifier, error) {
 // what a Verifier holds.
 //
 // Failures come back as this module's structured errors:
-// ErrTokenExpired for a well-formed token past its expiry, ErrTokenInvalid
-// for everything else, each wrapping the underlying cause so it is available
-// to a log without ever reaching a response body.
+// ErrTokenExpired for a well-formed token past its expiry,
+// ErrTokenVerificationFailed when the verification keys themselves could not
+// be loaded (an unanswerable signature question, never a verdict on the
+// token -- see ErrRevocationCheckFailed's doc comment for the same
+// cannot-answer classification on the revocation side), and ErrTokenInvalid
+// for everything else. Each wraps the underlying cause so it is available to
+// a log without ever reaching a response body.
 func (v *Verifier) Verify(ctx context.Context, raw string) (Principal, error) {
 	claims := &accessClaims{}
 	token, err := v.parser.ParseWithClaims(raw, claims, v.keyFunc(ctx))
 	if err != nil {
+		if errors.Is(err, errVerificationKeysUnavailable) {
+			// The token is not on trial here: the keys that could have
+			// judged its signature were never loaded. Answering
+			// token_invalid would masquerade an infrastructure outage as a
+			// rejected credential -- and on the client side a 401 is the
+			// signal to refresh, whose eventual failure signs the session
+			// out over what was really a pki/store hiccup. A 500 keeps the
+			// session where it is until the keys answer again.
+			return Principal{}, ErrTokenVerificationFailed.WithCause(err)
+		}
 		if errors.Is(err, jwt.ErrTokenExpired) {
 			return Principal{}, ErrTokenExpired.WithCause(err)
 		}
@@ -420,7 +482,8 @@ func (v *Verifier) keyFunc(ctx context.Context) jwt.Keyfunc {
 
 		keys, err := v.keySource.VerificationKeys(ctx, v.purpose)
 		if err != nil {
-			return nil, fmt.Errorf("authn: load verification keys for purpose %q: %w", v.purpose, err)
+			return nil, fmt.Errorf("authn: load verification keys for purpose %q: %w: %w",
+				v.purpose, errVerificationKeysUnavailable, err)
 		}
 		for _, key := range keys {
 			if key.KID != kid {

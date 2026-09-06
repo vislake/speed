@@ -30,6 +30,7 @@
 "authn.tenant_membership_required" = "你不是该工作区的成员。"
 "authn.tenant_membership_unavailable" = "暂时无法校验工作区成员身份，请稍后重试。"
 "authn.revocation_check_failed" = "暂时无法校验本次请求，请稍后重试。"
+"authn.token_verification_failed" = "暂时无法验证您的登录状态，请稍后重试。"
 "authn.internal_error" = "服务器内部发生错误，请稍后重试。"
 "authn.oauth_state_invalid" = "登录请求已失效，请重新发起。"
 "authn.redirect_uri_not_allowed" = "回调地址不在允许列表中。"
