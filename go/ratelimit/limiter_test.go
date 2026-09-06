@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -523,6 +524,203 @@ func TestAllow_ContextCanceled_ReturnsContextError(t *testing.T) {
 	}
 	if dec != (Decision{}) {
 		t.Fatalf("Decision = %+v, want the zero value on error", dec)
+	}
+}
+
+// setInjectsConcurrentIncrementKVStore wraps a real KVStore and, on every
+// Set call against injectKey, first performs a real IncrByFloat(+1) against
+// that same key -- through the embedded, unwrapped store, not through
+// itself -- before delegating to the embedded store's own Set. injected
+// records whether this ever actually fired, so a test can compute how many
+// real increments landed against the key regardless of which code path
+// Allow takes to get there.
+//
+// This models a concurrent caller's increment landing in the exact
+// Get-to-Set gap the pre-fix attachWindowTTL left open: attachWindowTTL Gets
+// the key's current value and then Sets it back with a ttl attached, and
+// anything that increments the key in between those two calls is exactly
+// what this wrapper's Set override reproduces deterministically, with no
+// goroutines or scheduler luck involved (see
+// TestAllow_ConcurrentIncrementInTTLAttachGap_NeverLost below for the actual
+// regression proof, and slidingWindowLimiter's former "The TTL-attachment
+// race" doc comment, since replaced by pkgcore.KVStore.IncrByFloatWithTTL's
+// own contract, for the race itself).
+type setInjectsConcurrentIncrementKVStore struct {
+	pkgcore.KVStore
+	injectKey string
+	injected  bool
+}
+
+func (s *setInjectsConcurrentIncrementKVStore) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
+	if key == s.injectKey {
+		s.injected = true
+		if _, err := s.KVStore.IncrByFloat(ctx, key, 1); err != nil {
+			return err
+		}
+	}
+	return s.KVStore.Set(ctx, key, value, ttl)
+}
+
+// TestAllow_ConcurrentIncrementInTTLAttachGap_NeverLost is the deterministic
+// regression proof for the finding this round closes (a peer-session audit's
+// P1-3: "TTL-attachment race is a real over-admit gap, recurring on every
+// window boundary, with no hard bound"). It reproduces the exact sequence
+// the pre-fix attachWindowTTL's own doc comment described as its residual,
+// non-crash failure mode -- a concurrent increment landing in the narrow gap
+// between attachWindowTTL's own Get and its own Set -- with no goroutines,
+// timing, or scheduler luck involved: setInjectsConcurrentIncrementKVStore's
+// Set override performs the "concurrent" increment itself, synchronously,
+// at the exact instant the pre-fix code's Set call would have raced against
+// one.
+//
+// On pre-fix code, a single Allow call against a fresh key runs exactly this
+// sequence: IncrByFloat creates the key at "1"; since that is the first hit
+// in the window, attachWindowTTL runs, Gets "1" back, then calls Set with a
+// ttl -- and this wrapper's Set override fires first, bumping the real
+// store's value to "2" via a genuine IncrByFloat call, before attachWindowTTL's
+// own Set proceeds to write back the stale "1" it read a moment earlier
+// (now carrying a ttl, but the wrong number). Two real increments happened
+// against the key (the Allow hit itself, and the injected one), but the
+// final stored value reflects only one of them -- exactly the silent
+// undercount the finding describes, and exactly why this assertion fails on
+// unfixed code.
+//
+// On post-fix code, Allow's fixed path collapses "increment" and "attach the
+// ttl, but only on creation" into one atomic pkgcore.KVStore.IncrByFloatWithTTL
+// call, with no caller-side Set anywhere on that path -- so this wrapper's
+// Set override is never reached at all (fake.injected stays false), the
+// wrapper's own injected increment never happens, and the store correctly
+// reflects the single real increment the Allow call actually made. The
+// assertion below computes its expected count from whether the injection
+// actually fired (rather than hardcoding it), so it is a meaningful
+// regression proof in both directions: it fails if a real increment ever
+// goes missing while the injection point is reachable, and it passes,
+// non-vacuously, precisely because the fix makes that injection point
+// structurally unreachable from Allow.
+func TestAllow_ConcurrentIncrementInTTLAttachGap_NeverLost(t *testing.T) {
+	const per = time.Minute // a single window is all this test needs
+	limit := Limit{Rate: 1_000_000, Per: per}
+	ctx := context.Background()
+	key := "ttl-attach-gap"
+
+	// Land solidly at the start of a real window so the window index computed
+	// here for the storage key matches the one Allow computes for the same
+	// hit an instant later (same pattern as TestAllow_WindowExpiry_OldWindowKeyExpires).
+	windowStart := waitForFreshWindowStart(per)
+	windowIndex := windowStart.UnixNano() / int64(per)
+	storeKey := windowKey(key, windowIndex)
+
+	real := pkgcore.NewMemoryKVStore()
+	fake := &setInjectsConcurrentIncrementKVStore{KVStore: real, injectKey: storeKey}
+	lim := New(fake)
+
+	if _, err := lim.Allow(ctx, key, limit); err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+
+	encoded, found, err := real.Get(ctx, storeKey)
+	if err != nil || !found {
+		t.Fatalf("Get(%q) after the hit: found=%t err=%v, want found=true", storeKey, found, err)
+	}
+	got, err := strconv.ParseFloat(string(encoded), floatEncodingBitSize)
+	if err != nil {
+		t.Fatalf("stored value %q does not parse as a float: %v", encoded, err)
+	}
+
+	// Exactly one real increment (Allow's own hit) always lands; a second
+	// lands only if Allow's code path still reaches a caller-side Set call at
+	// all after IncrByFloat -- which the fix must make impossible.
+	want := float64(1)
+	if fake.injected {
+		want = 2
+	}
+	if got != want {
+		t.Fatalf("stored count = %v (the injected concurrent increment fired: %t), want %v -- "+
+			"a real increment against %q was silently lost in the TTL-attachment gap, the exact "+
+			"over-admit finding this test exists to catch", got, fake.injected, want, storeKey)
+	}
+}
+
+// TestAllow_ConcurrentFirstHits_SameFreshKey_NoIncrementLostAndTTLAttached
+// races hundreds of goroutines against one never-before-used key --
+// deliberately with NO warm-up call, unlike
+// TestAllow_ConcurrentCallers_SameKey_NeverExceedsLimit above, which warms
+// the key up first specifically so its own burst never has to create the
+// key concurrently (see that test's own doc comment). This test exercises
+// exactly the case that one dodges: many callers racing to be "the first
+// hit in this window" against the same brand-new key, the scenario the
+// pre-fix Get-then-Set TTL attachment could not make fully race-free (see
+// slidingWindowLimiter's former "The TTL-attachment race" doc comment).
+//
+// On the fixed code, pkgcore.KVStore.IncrByFloatWithTTL's atomicity
+// guarantees both halves of the contract survive the race: the final stored
+// count equals exactly the number of goroutines (no increment lost, unlike
+// the pre-fix sequence this primitive replaces), and the key ends up with a
+// ttl attached despite the concurrent creation -- checked here the same way
+// TestAllow_WindowExpiry_OldWindowKeyExpires checks it, by waiting past the
+// attached ttl and confirming the key is then gone.
+//
+// Per is a full second, generous enough that all 300 goroutines -- trivial,
+// in-memory, mutex-protected operations with no I/O -- reliably complete
+// inside the one window this test needs, without the flakiness a much
+// shorter Per would risk (some goroutines landing in the next window
+// instead, which would undercount this test's own target key for a reason
+// having nothing to do with the property under test).
+func TestAllow_ConcurrentFirstHits_SameFreshKey_NoIncrementLostAndTTLAttached(t *testing.T) {
+	const per = time.Second
+	const goroutines = 300
+	limit := Limit{Rate: 1_000_000, Per: per} // high rate: this test is about counting, not admission
+	ctx := context.Background()
+	key := "concurrent-fresh-key"
+
+	// Land solidly at the start of a real window so the window index computed
+	// here for the storage key matches the one Allow computes for the same
+	// hit an instant later (same pattern as TestAllow_WindowExpiry_OldWindowKeyExpires).
+	windowStart := waitForFreshWindowStart(per)
+	windowIndex := windowStart.UnixNano() / int64(per)
+	storeKey := windowKey(key, windowIndex)
+
+	store := pkgcore.NewMemoryKVStore()
+	lim := New(store)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, goroutines)
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			if _, err := lim.Allow(ctx, key, limit); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("Allow: %v", err)
+	}
+
+	encoded, found, err := store.Get(ctx, storeKey)
+	if err != nil || !found {
+		t.Fatalf("Get(%q) after the burst: found=%t err=%v, want found=true", storeKey, found, err)
+	}
+	got, err := strconv.ParseFloat(string(encoded), floatEncodingBitSize)
+	if err != nil {
+		t.Fatalf("stored value %q does not parse as a float: %v", encoded, err)
+	}
+	if want := float64(goroutines); got != want {
+		t.Fatalf("stored count = %v, want %v: an increment was lost among %d goroutines racing to create the same fresh window key",
+			got, want, goroutines)
+	}
+
+	// windowTTLFactor * per is the ttl the fix attaches unconditionally;
+	// sleep comfortably past it so the key is guaranteed to have expired --
+	// if, and only if, a ttl actually got attached during the concurrent
+	// race to create it.
+	time.Sleep(time.Duration(windowTTLFactor)*per + 100*time.Millisecond)
+	if _, found, err := store.Get(ctx, storeKey); err != nil || found {
+		t.Fatalf("Get(%q) once the ttl should have elapsed: found=%t err=%v, want found=false -- "+
+			"the key never got a ttl attached despite the concurrent race to create it", storeKey, found, err)
 	}
 }
 
