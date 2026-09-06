@@ -29,10 +29,11 @@ const (
 
 // The audit actions this module contributes: the credit ledger's five
 // state-changing operations, per docs/internal's own "financial
-// operations belong in the audit trail" security rule. Declaring the
-// enumeration is this round's own scope; CreditService does not itself
-// call audit.Emit yet -- see AGENTS.md's Known limitations for why, and
-// what a later round wiring it needs.
+// operations belong in the audit trail" security rule. CreditService
+// calls audit.Emit with these exact action names after each of its five
+// methods' own database transaction commits (credit_service.go's
+// emitCreditAudit) -- see AGENTS.md's "Round: credit-ledger audit wiring"
+// entry for the full write-up.
 const (
 	AuditActionCreditGrant         = "billing.credit.grant"
 	AuditActionCreditDeductReserve = "billing.credit.deduct_reserve"
@@ -234,6 +235,13 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	bus := reg.EventBus()
 	m.planService.events = bus
 	m.subService.events = bus
+	// m.credits' own audit.Emit calls (credit_service.go's
+	// emitCreditAudit) need both the same EventBus and the
+	// AuditActionRegistrar the Add call above just populated -- reg.
+	// AuditActions itself, not a copy, since Emit validates against its
+	// live Actions() on every call.
+	m.credits.events = bus
+	m.credits.auditActions = reg.AuditActions
 
 	if m.queue != nil {
 		if err := reg.Jobs.Handle(taskTypePoll, pollHandler{svc: m.polling}); err != nil {

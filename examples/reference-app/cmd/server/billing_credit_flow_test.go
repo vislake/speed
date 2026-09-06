@@ -44,6 +44,7 @@ import (
 
 	"github.com/vislake/speed/go/billing"
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
 
 	"github.com/vislake/speed/examples/reference-app/internal/smilesim"
@@ -115,6 +116,262 @@ func newAlwaysFailingImageServer(t *testing.T) *newAlwaysFailingImageServerResul
 	}))
 	t.Cleanup(f.Close)
 	return f
+}
+
+// auditEventsForTenant opens a SECOND dbkit connection to cfg.SQLitePath
+// and reads tenantID's audit trail back through a real
+// audit.Repository.ListByTenant call -- the identical "buildServer hands
+// out neither its *gorm.DB nor a module's own service, so a second
+// connection is the only reach a test has into storage" pattern
+// openBillingCredits above and server_test.go's own
+// TestBuildServer_NoteCreate_PersistsAuditEvent both already use, applied
+// here to prove go/billing's own audit.Emit wiring (this round's own
+// scope) rather than notes'. No migration call is needed on this second
+// connection: buildServer's own migrationRegistry.Apply already applied
+// go/dbkit/audit's migrations (auditModule shares this app's one database
+// connection -- see server.go's own auditModule construction comment)
+// before this test's server ever started serving.
+func auditEventsForTenant(t *testing.T, cfg serverConfig, tenantID pkgcore.TenantID) []audit.AuditEvent {
+	t.Helper()
+
+	db, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: cfg.SQLitePath})
+	if err != nil {
+		t.Fatalf("open second connection to %q: %v", cfg.SQLitePath, err)
+	}
+	t.Cleanup(func() {
+		sqlDB, dbErr := db.DB()
+		if dbErr != nil {
+			t.Errorf("second connection handle: %v", dbErr)
+			return
+		}
+		if closeErr := sqlDB.Close(); closeErr != nil {
+			t.Errorf("close second connection: %v", closeErr)
+		}
+	})
+
+	events, err := audit.NewRepository(db).ListByTenant(context.Background(), string(tenantID))
+	if err != nil {
+		t.Fatalf("ListByTenant(%q): %v", tenantID, err)
+	}
+	return events
+}
+
+// findAuditEvent returns the first event in events whose Action and
+// Resource().ID match action and resourceID, and true -- or the zero
+// value and false when none does. Several credit-ledger audit rows can
+// share one tenant (this file's own tests seed a demo Grant at boot, on
+// top of whatever reserve/confirm/refund the test itself drives), so
+// asserting on "at least one event with this exact action and
+// transaction id" is what actually proves this round's wiring, not a
+// brittle exact-count or exact-order assumption over the whole table.
+func findAuditEvent(events []audit.AuditEvent, action, resourceID string) (audit.AuditEvent, bool) {
+	for _, evt := range events {
+		if evt.Action == action && evt.Resource().ID == resourceID {
+			return evt, true
+		}
+	}
+	return audit.AuditEvent{}, false
+}
+
+// TestSmileSimulation_SuccessfulReserveConfirm_PersistsAuditEvents is this
+// round's own mandated proof (the task brief's point 3): a real smilesim
+// credit reserve/confirm cycle, driven through the REAL composed HTTP
+// stack exactly like TestSmileSimulation_SufficientCredits_DebitsBalance
+// above, produces real, readable go/dbkit/audit rows -- read back through
+// a SECOND connection to the same SQLite file, never a mock or an
+// in-memory event assertion (go/billing's own credit_service_test.go
+// already covers that narrower unit-level claim). This is deliberately
+// the same "explicit audit.Emit call, not dbkit's AuditBus write-capture
+// plugin" wiring choice notes' own TestBuildServer_NoteCreate_
+// PersistsAuditEvent proves for notes -- see server.go's auditModule
+// construction comment and root CLAUDE.md's known same-file SQLITE_BUSY
+// limitation for why: billingModule and auditModule share one database
+// connection, and audit.Emit's own write only ever runs after
+// CreditService's own mutating transaction has already committed
+// (credit_service.go's emitCreditAudit), so no nested-transaction
+// deadlock is possible here either.
+func TestSmileSimulation_SuccessfulReserveConfirm_PersistsAuditEvents(t *testing.T) {
+	imgServer := newFakeOpenAIImageServer(t)
+	srv, cfg := buildSmileSimTestServer(t, imgServer)
+
+	const tenantID pkgcore.TenantID = "tenant-acme"
+	token := registerAndAuthenticate(t, srv, cfg, tenantID, "credit-audit-owner")
+
+	photo := jpegWithExif(t)
+	completedPhoto := uploadAndComplete(t, srv, token, photo, "")
+	if completedPhoto.State != "completed" {
+		t.Fatalf("photo state = %q, want completed", completedPhoto.State)
+	}
+
+	simulateBody, err := json.Marshal(map[string]string{"photo_object_id": completedPhoto.ID})
+	if err != nil {
+		t.Fatalf("marshal simulate request: %v", err)
+	}
+	resp := smileSimRequest(t, srv, http.MethodPost, smileSimulatePath, token, simulateBody)
+	var simulateOut struct {
+		JobID string `json:"job_id"`
+	}
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&simulateOut); decodeErr != nil {
+		resp.Body.Close()
+		t.Fatalf("decode simulate response: %v", decodeErr)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST %s status = %d, want %d", smileSimulatePath, resp.StatusCode, http.StatusAccepted)
+	}
+
+	final := waitForSmileSimSucceeded(t, srv, token, simulateOut.JobID, time.Now().Add(5*time.Second))
+	if status, _ := final["status"].(string); status != "succeeded" {
+		t.Fatalf("final job status = %v, want \"succeeded\": %+v", final["status"], final)
+	}
+
+	// internal/smilesim's own idempotency key is "smilesim:" + a fresh
+	// uuid per generation request (service.go's own Simulate doc comment)
+	// -- reused for every settlement call on this same generation, so the
+	// PreDeduct and Confirm audit rows below share exactly one
+	// credit_transaction id, which is also this test's own txID.
+	events := auditEventsForTenant(t, cfg, tenantID)
+
+	// The demo seed at boot (cmd/server/demo_credits.go's seedDemoCredits)
+	// is itself a real CreditService.Grant call, so a Grant-actioned row
+	// for tenant-acme is expected to exist too -- this test only asserts
+	// on the reserve/confirm pair a genuine transaction id ties together,
+	// never on the table's total row count.
+	reserveEvt, ok := findFirstCreditAuditEvent(events, billing.AuditActionCreditDeductReserve)
+	if !ok {
+		t.Fatalf("no %s audit event found for tenant %q; events = %+v", billing.AuditActionCreditDeductReserve, tenantID, events)
+	}
+	txID := reserveEvt.Resource().ID
+	if txID == "" {
+		t.Fatal("reserve audit event's Resource().ID is empty, want the credit_transaction id")
+	}
+	assertCreditAuditEvent(t, reserveEvt, tenantID, "credit_transaction", txID)
+
+	confirmEvt, ok := findAuditEvent(events, billing.AuditActionCreditDeductConfirm, txID)
+	if !ok {
+		t.Fatalf("no %s audit event for credit_transaction %q; events = %+v", billing.AuditActionCreditDeductConfirm, txID, events)
+	}
+	assertCreditAuditEvent(t, confirmEvt, tenantID, "credit_transaction", txID)
+}
+
+// TestSmileSimulation_FailedGeneration_PersistsRefundAuditEvent is the
+// refund half of this round's own mandated proof: a generation that fails
+// at the vendor (the same fake-500 image endpoint
+// TestSmileSimulation_FailedGeneration_RefundsReservation above drives)
+// leaves a real, readable audit.deduct_reserve row followed by a real
+// audit.refund row for the SAME credit_transaction id, once the job
+// reaches jobs.StatusDeadLetter and internal/smilesim's own
+// NotifyOnCompletion settles the reservation with a real
+// CreditService.Refund call.
+func TestSmileSimulation_FailedGeneration_PersistsRefundAuditEvent(t *testing.T) {
+	imgServer := newAlwaysFailingImageServer(t)
+
+	cfg := testConfig(t)
+	cfg.AIGatewayImageBaseURL = imgServer.URL
+	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-refund-audit-key"
+	handler, cleanup, err := buildServer(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("buildServer: %v", err)
+	}
+	t.Cleanup(func() {
+		if cleanupErr := cleanup(); cleanupErr != nil {
+			t.Errorf("cleanup: %v", cleanupErr)
+		}
+	})
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	const tenantID pkgcore.TenantID = "tenant-acme"
+	token := registerAndAuthenticate(t, srv, cfg, tenantID, "credit-refund-audit-owner")
+
+	photo := jpegWithExif(t)
+	completedPhoto := uploadAndComplete(t, srv, token, photo, "")
+	if completedPhoto.State != "completed" {
+		t.Fatalf("photo state = %q, want completed", completedPhoto.State)
+	}
+
+	simulateBody, err := json.Marshal(map[string]string{"photo_object_id": completedPhoto.ID})
+	if err != nil {
+		t.Fatalf("marshal simulate request: %v", err)
+	}
+	resp := smileSimRequest(t, srv, http.MethodPost, smileSimulatePath, token, simulateBody)
+	var simulateOut struct {
+		JobID string `json:"job_id"`
+	}
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&simulateOut); decodeErr != nil {
+		resp.Body.Close()
+		t.Fatalf("decode simulate response: %v", decodeErr)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST %s status = %d, want %d", smileSimulatePath, resp.StatusCode, http.StatusAccepted)
+	}
+
+	final := waitForSmileSimSucceeded(t, srv, token, simulateOut.JobID, time.Now().Add(20*time.Second))
+	if status, _ := final["status"].(string); status != "dead_letter" {
+		t.Fatalf("final job status = %v, want \"dead_letter\": %+v", final["status"], final)
+	}
+
+	events := auditEventsForTenant(t, cfg, tenantID)
+	reserveEvt, ok := findFirstCreditAuditEvent(events, billing.AuditActionCreditDeductReserve)
+	if !ok {
+		t.Fatalf("no %s audit event found for tenant %q; events = %+v", billing.AuditActionCreditDeductReserve, tenantID, events)
+	}
+	txID := reserveEvt.Resource().ID
+	if txID == "" {
+		t.Fatal("reserve audit event's Resource().ID is empty, want the credit_transaction id")
+	}
+
+	refundEvt, ok := findAuditEvent(events, billing.AuditActionCreditRefund, txID)
+	if !ok {
+		t.Fatalf("no %s audit event for credit_transaction %q; events = %+v", billing.AuditActionCreditRefund, txID, events)
+	}
+	assertCreditAuditEvent(t, refundEvt, tenantID, "credit_transaction", txID)
+
+	// A dead-lettered generation must never also confirm the same
+	// reservation -- Confirm and Refund are mutually exclusive terminal
+	// states (go/billing's own ErrCreditTransactionAlreadyResolved rule).
+	if _, ok := findAuditEvent(events, billing.AuditActionCreditDeductConfirm, txID); ok {
+		t.Errorf("a %s audit event exists for credit_transaction %q, want none -- a dead-lettered generation must only ever be refunded", billing.AuditActionCreditDeductConfirm, txID)
+	}
+}
+
+// findFirstCreditAuditEvent returns the first event in events whose
+// Action is action, and true -- or the zero value and false when none
+// does. Used only for AuditActionCreditDeductReserve above, where the
+// test does not yet know the credit_transaction id it is looking for
+// (that id is exactly what this call discovers) -- every subsequent
+// lookup in the same test uses the more specific findAuditEvent instead,
+// once txID is known.
+func findFirstCreditAuditEvent(events []audit.AuditEvent, action string) (audit.AuditEvent, bool) {
+	for _, evt := range events {
+		if evt.Action == action {
+			return evt, true
+		}
+	}
+	return audit.AuditEvent{}, false
+}
+
+// assertCreditAuditEvent checks the fields every one of this round's
+// credit-ledger audit rows must carry regardless of which of the five
+// actions produced it: the acting tenant, the Resource shape
+// emitCreditAudit always uses, and a successful Result (every call site
+// only calls audit.Emit after its own mutating transaction has already
+// committed -- see credit_service.go's emitCreditAudit doc comment).
+func assertCreditAuditEvent(t *testing.T, evt audit.AuditEvent, tenantID pkgcore.TenantID, wantResourceType, wantResourceID string) {
+	t.Helper()
+	if evt.TenantID != string(tenantID) {
+		t.Errorf("AuditEvent.TenantID = %q, want %q", evt.TenantID, tenantID)
+	}
+	if evt.Resource().Type != wantResourceType {
+		t.Errorf("AuditEvent.Resource().Type = %q, want %q", evt.Resource().Type, wantResourceType)
+	}
+	if evt.Resource().ID != wantResourceID {
+		t.Errorf("AuditEvent.Resource().ID = %q, want %q", evt.Resource().ID, wantResourceID)
+	}
+	if !evt.Result().Success {
+		t.Errorf("AuditEvent.Result().Success = false, want true (action %q)", evt.Action)
+	}
 }
 
 // TestSmileSimulation_SufficientCredits_DebitsBalance is scenario (a): a

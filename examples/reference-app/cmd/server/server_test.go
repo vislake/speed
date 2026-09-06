@@ -1594,11 +1594,22 @@ func TestBuildServer_NoteCreate_PersistsAuditEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListByTenant(%q): %v", tenantID, err)
 	}
-	if len(events) != 1 {
-		t.Fatalf("audit events for tenant %q = %+v, want exactly 1", tenantID, events)
+	// tenant-acme's own audit trail is no longer notes' alone: since the
+	// go/billing credit-audit round, seedDemoCredits' own boot-time Grant
+	// (demo_credits.go) is itself a real CreditService.Grant call, which
+	// now records its own "billing.credit.grant" AuditEvent for this same
+	// tenant (credit_service.go's emitCreditAudit) -- see
+	// billing_credit_flow_test.go's own audit tests for that surface's
+	// dedicated proof. This test's own claim is narrower and unaffected:
+	// exactly one "notes.note.create" event exists for the note this test
+	// itself created, found among whatever else this tenant's audit trail
+	// holds, rather than assuming the trail holds nothing else at all.
+	noteEvents := auditEventsWithAction(events, "notes.note.create")
+	if len(noteEvents) != 1 {
+		t.Fatalf("notes.note.create audit events for tenant %q = %+v (all events = %+v), want exactly 1", tenantID, noteEvents, events)
 	}
 
-	got := events[0]
+	got := noteEvents[0]
 	if got.Action != "notes.note.create" {
 		t.Fatalf("AuditEvent.Action = %q, want %q", got.Action, "notes.note.create")
 	}
@@ -1619,15 +1630,33 @@ func TestBuildServer_NoteCreate_PersistsAuditEvent(t *testing.T) {
 	}
 
 	// A negative control symmetric with this test's own positive
-	// assertions: an unrelated tenant's read must see none of acme's audit
-	// trail -- audit_events carries a real tenant_id column precisely so
-	// this remains true even though the table is platform data, not
-	// dbkit.TenantScoped (see go/dbkit/audit's model.go doc comment).
+	// assertions: an unrelated tenant's read must see none of acme's
+	// notes.note.create audit trail -- audit_events carries a real
+	// tenant_id column precisely so this remains true even though the
+	// table is platform data, not dbkit.TenantScoped (see go/dbkit/audit's
+	// model.go doc comment). This is deliberately no longer "zero events
+	// of any kind": tenant-globex is demo-seeded credits too
+	// (demoHostTenants lists it alongside tenant-acme), so it carries its
+	// own boot-time "billing.credit.grant" AuditEvent -- exactly the same
+	// real, expected row this test's own tenant-acme assertion above now
+	// tolerates -- the point being that NONE of it is acme's note.
 	globexEvents, err := audit.NewRepository(auditDB).ListByTenant(context.Background(), "tenant-globex")
 	if err != nil {
 		t.Fatalf("ListByTenant(%q): %v", "tenant-globex", err)
 	}
-	if len(globexEvents) != 0 {
-		t.Fatalf("audit events for tenant %q = %+v, want none", "tenant-globex", globexEvents)
+	if globexNoteEvents := auditEventsWithAction(globexEvents, "notes.note.create"); len(globexNoteEvents) != 0 {
+		t.Fatalf("notes.note.create audit events for tenant %q = %+v, want none", "tenant-globex", globexNoteEvents)
 	}
+}
+
+// auditEventsWithAction returns the subset of events whose Action is
+// action, preserving order.
+func auditEventsWithAction(events []audit.AuditEvent, action string) []audit.AuditEvent {
+	var out []audit.AuditEvent
+	for _, evt := range events {
+		if evt.Action == action {
+			out = append(out, evt)
+		}
+	}
+	return out
 }

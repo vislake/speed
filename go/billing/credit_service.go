@@ -11,6 +11,8 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/dbkit/audit"
+	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -49,6 +51,21 @@ type CreditService struct {
 	balances     *CreditBalanceRepository
 	transactions *CreditTransactionRepository
 	now          func() time.Time
+
+	// events and auditActions are wired post-construction by module.go's
+	// Register, exactly the way PlanService.events and
+	// SubscriptionService.events already are (plan.go, subscription.go) --
+	// NewCreditService's own signature stays untouched so every existing
+	// call site (every unit test in this package, plus module.go's own
+	// construction, which happens before Register ever runs) keeps
+	// compiling unchanged. events is nil until Register runs, which is
+	// also every unit test's own condition in this file: emitCreditAudit's
+	// nil check below means a bare *CreditService built directly through
+	// NewCreditService for a test never attempts to call audit.Emit at
+	// all, mirroring examples/reference-app/internal/notes.Handler's
+	// identical bus == nil short-circuit for the same reason.
+	events       pkgcore.EventBus
+	auditActions pkgcore.AuditActionRegistrar
 }
 
 // NewCreditService returns a CreditService over db. db is expected to come
@@ -138,6 +155,16 @@ func (s *CreditService) PreDeduct(ctx context.Context, in PreDeductInput) (*Cred
 	}
 
 	var result *CreditTransaction
+	// reserved is set true only inside the fresh-insert branch below --
+	// never on the idempotent-retry branch that finds an already-existing
+	// row. This is what lets the audit.Emit call after the transaction
+	// commits fire exactly once per genuine reservation, never a second
+	// time for a retried call that reserved nothing new: docs/internal/10's
+	// own rule (repeated in this round's brief) that an audit record must
+	// never be written for something that did not actually happen this
+	// call applies just as much to a harmless no-op retry as to an
+	// outright failure.
+	var reserved bool
 	txErr := dbkit.WithTenantSession(ctx, s.db, func(session *gorm.DB) error {
 		row := &CreditTransaction{
 			ID:     in.IdempotencyKey,
@@ -159,6 +186,7 @@ func (s *CreditService) PreDeduct(ctx context.Context, in PreDeductInput) (*Cred
 				return ErrInsufficientCredits.WithParam("amount", in.Amount)
 			}
 			result = row
+			reserved = true
 			return nil
 		}
 		if !isUniqueViolationErr(insertErr) {
@@ -181,6 +209,9 @@ func (s *CreditService) PreDeduct(ctx context.Context, in PreDeductInput) (*Cred
 	if txErr != nil {
 		return nil, txErr
 	}
+	if reserved {
+		s.emitCreditAudit(ctx, AuditActionCreditDeductReserve, tenant, result.ID, in.Amount, in.Reason)
+	}
 	return result, nil
 }
 
@@ -196,7 +227,7 @@ func (s *CreditService) PreDeduct(ctx context.Context, in PreDeductInput) (*Cred
 // resolved the other way, and reversing that silently would double-spend
 // or double-release credits.
 func (s *CreditService) Confirm(ctx context.Context, idempotencyKey string) (*CreditTransaction, error) {
-	return s.resolve(ctx, idempotencyKey, CreditTransactionStatusConfirmed, func(session *gorm.DB, tenantID string, amount int64, at time.Time) (bool, error) {
+	return s.resolve(ctx, idempotencyKey, CreditTransactionStatusConfirmed, AuditActionCreditDeductConfirm, func(session *gorm.DB, tenantID string, amount int64, at time.Time) (bool, error) {
 		return applyBalanceDelta(session, tenantID, 0, -amount, at)
 	})
 }
@@ -207,7 +238,7 @@ func (s *CreditService) Confirm(ctx context.Context, idempotencyKey string) (*Cr
 // already-resolved contracts mirror Confirm's exactly (see that method's
 // doc comment) with the two terminal statuses swapped.
 func (s *CreditService) Refund(ctx context.Context, idempotencyKey string) (*CreditTransaction, error) {
-	return s.resolve(ctx, idempotencyKey, CreditTransactionStatusRefunded, func(session *gorm.DB, tenantID string, amount int64, at time.Time) (bool, error) {
+	return s.resolve(ctx, idempotencyKey, CreditTransactionStatusRefunded, AuditActionCreditRefund, func(session *gorm.DB, tenantID string, amount int64, at time.Time) (bool, error) {
 		return applyBalanceDelta(session, tenantID, amount, -amount, at)
 	})
 }
@@ -215,11 +246,18 @@ func (s *CreditService) Refund(ctx context.Context, idempotencyKey string) (*Cre
 // resolve is Confirm's and Refund's shared core: compare-and-swap the
 // pending transaction's Status to `to`, then apply the caller's balance
 // delta. See Confirm's doc comment for the full idempotent-retry and
-// already-resolved contract this implements for both callers.
+// already-resolved contract this implements for both callers. auditAction
+// is the caller-specific action name (AuditActionCreditDeductConfirm or
+// AuditActionCreditRefund) recorded through audit.Emit -- but only when
+// this call is the one that genuinely performed the CAS transition (see
+// the resolved flag below); a retried call that lands on the "already in
+// state `to`" idempotent branch changed nothing this time and must not
+// produce a second audit record for the same underlying operation.
 func (s *CreditService) resolve(
 	ctx context.Context,
 	idempotencyKey string,
 	to CreditTransactionStatus,
+	auditAction string,
 	applyDelta func(session *gorm.DB, tenantID string, amount int64, at time.Time) (bool, error),
 ) (*CreditTransaction, error) {
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
@@ -228,6 +266,7 @@ func (s *CreditService) resolve(
 	}
 
 	var result *CreditTransaction
+	var resolved bool
 	txErr := dbkit.WithTenantSession(ctx, s.db, func(session *gorm.DB) error {
 		// The tenant filter is never hand-written here (backend-coding-
 		// standards §3.2): CreditTransaction implements dbkit.TenantScoped,
@@ -264,6 +303,7 @@ func (s *CreditService) resolve(
 				return ErrCreditBalanceInconsistent.WithParam("idempotency_key", idempotencyKey)
 			}
 			result = row
+			resolved = true
 			return nil
 		}
 
@@ -287,6 +327,9 @@ func (s *CreditService) resolve(
 	})
 	if txErr != nil {
 		return nil, txErr
+	}
+	if resolved {
+		s.emitCreditAudit(ctx, auditAction, tenant, result.ID, result.Amount, result.Reason)
 	}
 	return result, nil
 }
@@ -338,6 +381,7 @@ func (s *CreditService) Grant(ctx context.Context, in GrantInput) (*CreditTransa
 	if txErr != nil {
 		return nil, txErr
 	}
+	s.emitCreditAudit(ctx, AuditActionCreditGrant, tenant, row.ID, in.Amount, in.Reason)
 	return row, nil
 }
 
@@ -400,6 +444,7 @@ func (s *CreditService) Expire(ctx context.Context, in ExpireInput) (*CreditTran
 	if txErr != nil {
 		return nil, txErr
 	}
+	s.emitCreditAudit(ctx, AuditActionCreditExpire, tenant, row.ID, in.Amount, in.Reason)
 	return row, nil
 }
 
@@ -519,6 +564,88 @@ func applyBalanceDelta(session *gorm.DB, tenantID string, availableDelta, reserv
 // it -- the identical helper go/metering's outbox.go documents in full.
 func isUniqueViolationErr(err error) bool {
 	return errors.Is(err, gorm.ErrDuplicatedKey)
+}
+
+// emitCreditAudit records action against the credit ledger transaction
+// txID for tenant, following the exact declarative-Emit pattern
+// examples/reference-app/internal/notes/handler.go's recordNoteCreatedAudit
+// established as this codebase's real, working answer to "a business
+// module explicitly calls audit.Emit after a state-changing operation
+// succeeds": every call site above invokes this only AFTER its own
+// dbkit.WithTenantSession transaction has already committed, never from
+// inside the closure, so audit.Emit's own write opens a fresh,
+// uncontended database session rather than nesting inside one still open
+// -- the identical same-file SQLITE_BUSY hazard root CLAUDE.md's and
+// go/dbkit/AGENTS.md's "Audit trail collection" section document for
+// AuditBus's automatic write-capture plugin, sidestepped here exactly the
+// way notes' own handler sidesteps it: by construction, never by
+// avoiding the shared connection.
+//
+// The Resource this ledger's five audited actions all record is the
+// CreditTransaction row itself (Type "credit_transaction", ID txID) --
+// the actual append-only fact each of PreDeduct/Confirm/Refund/Grant/
+// Expire adds to the ledger -- rather than the mutable CreditBalance row
+// underneath it, mirroring notes' own choice to audit the created Note,
+// not some other aggregate it happens to touch. Result is always
+// {Success: true}: every call site below runs only once its own mutating
+// transaction has already committed, so an audited action that reaches
+// this method by definition succeeded -- the "must never write an audit
+// record for something that did not happen" half of this round's own
+// brief is enforced by each call site's own reserved/resolved guard
+// (PreDeduct, resolve) or its single-phase always-succeeds shape (Grant,
+// Expire), never by branching inside this shared helper.
+//
+// Changes.After carries the delta this specific action applied (amount,
+// and reason when the caller supplied one) plus, best effort, the
+// tenant's resulting balance -- read fresh via s.balances.FindByID after
+// the mutating transaction has committed, exactly like Balance's own read
+// path. A failure to read that resulting balance is logged and the two
+// balance fields are simply omitted from the payload; it must never turn
+// an already-succeeded credit mutation into a reported failure, matching
+// this method's own "log, never return" contract for a downstream
+// audit.Emit failure below.
+//
+// s.events is nil for a bare CreditService built directly through
+// NewCreditService (every unit test in this package) and non-nil only
+// once module.go's Register has wired it from the host's
+// pkgcore.Registry -- exactly mirroring notes' own Handler.bus == nil
+// short-circuit, so emitCreditAudit is a no-op for every pre-existing
+// call site and test that constructs a CreditService without going
+// through a full Kernel.Bootstrap.
+func (s *CreditService) emitCreditAudit(ctx context.Context, action string, tenant pkgcore.TenantID, txID string, amount int64, reason string) {
+	if s.events == nil {
+		return
+	}
+
+	payload := map[string]any{"amount": amount}
+	if reason != "" {
+		payload["reason"] = reason
+	}
+	if bal, err := s.balances.FindByID(ctx, string(tenant)); err != nil {
+		obs.FromContext(ctx).Error("billing.credit audit: resulting balance read failed",
+			"tenant_id", string(tenant), "credit_transaction_id", txID, "error", err)
+	} else {
+		payload["resulting_available"] = bal.Available
+		payload["resulting_reserved"] = bal.Reserved
+	}
+
+	err := audit.Emit(ctx, s.events, s.auditActions, audit.Input{
+		Action:   action,
+		Resource: audit.Resource{Type: "credit_transaction", ID: txID},
+		Result:   audit.Result{Success: true},
+		Changes:  &audit.Diff{After: payload},
+	})
+	if err != nil {
+		// See this method's own doc comment above for why the operation
+		// that produced txID is never turned into a failure by this: the
+		// underlying credit mutation already committed by the time this
+		// runs. An Error-level structured log line is this milestone's
+		// whole "must alert" mechanism, per docs/internal/10-compliance-
+		// and-audit.md's rule -- the same choice notes' own
+		// recordNoteCreatedAudit makes for the identical situation.
+		obs.FromContext(ctx).Error("billing.credit audit event emit failed",
+			"action", action, "credit_transaction_id", txID, "tenant_id", string(tenant), "error", err)
+	}
 }
 
 // dbkitTenantModel returns a dbkit.TenantModel carrying tenant, so
