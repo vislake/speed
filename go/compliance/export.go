@@ -186,7 +186,11 @@ type ExportResult struct {
 // only ever reads the caller's own ctx tenant, through each participant's
 // Export callback (typically backed by that participant's own tenant-
 // scoped dbkit.Repository[T] read), so it never bypasses tenant isolation
-// and grants nothing extra.
+// and grants nothing extra. That ctx tenant is the single data boundary an
+// export may ever cross: Export refuses a ctx carrying no tenant
+// (pkgcore.ErrNoTenant) and refuses a tenant argument that differs from
+// the ctx tenant (ErrExportTenantMismatch), before gathering, storing or
+// delivering anything -- see Export's own doc comment.
 //
 // The zero value is not ready to use; construct one with newExportService
 // and wire it through Module.Register.
@@ -256,18 +260,42 @@ func exportObjectKey(tenant pkgcore.TenantID, id string) string {
 // about a participant failure even when the returned error names the
 // delivery problem instead.
 //
-// ctx must carry a tenant (pkgcore.WithTenant); Export never accepts a
-// caller-supplied tenant parameter, per this repository's own API rule.
+// ctx must carry a tenant (pkgcore.WithTenant), and the tenant argument
+// must echo that same tenant back: Export reads every participant's rows
+// through the ctx tenant -- the parameter exists only so the job-handler-
+// style caller that rebuilt ctx from a stored tenant id can pass that same
+// id through, per this repository's own API rule that the tenant comes
+// from the context, never from a caller-supplied parameter. A ctx carrying
+// no tenant is refused with pkgcore.ErrNoTenant, and a tenant argument
+// naming any other tenant is refused with ErrExportTenantMismatch, both
+// before anything is gathered, stored or delivered -- a bare or
+// mis-scoped ctx must never become a license to pick any tenant.
 // The request and its outcome -- including the minted share id when
 // delivery succeeded -- are recorded as one AuditActionExportRequest audit
 // event; a failure to publish it is reported by wrapping
 // ErrAuditRecordFailed, exactly like Sweep and Erase, and does not erase
 // the manifest already stored or the share already minted.
 func (s *ExportService) Export(ctx context.Context, tenant pkgcore.TenantID) (*ExportResult, error) {
+	// The ctx tenant is the one data boundary an export may ever cross:
+	// every participant's Export callback below reads through it, so the
+	// tenant argument may only echo it back. A bare ctx must never become
+	// a license to pick any tenant -- refuse it fail-closed, mirroring
+	// AuditQuery.Query's identical no-tenant handling (a raw
+	// pkgcore.MustTenantFromContext error, unwrapped, is this module's
+	// established no-tenant idiom), and refuse a mismatch outright before
+	// anything is gathered, stored or delivered.
+	ctxTenant, err := pkgcore.MustTenantFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if ctxTenant != tenant {
+		return nil, ErrExportTenantMismatch.
+			WithParam("ctx_tenant", string(ctxTenant)).
+			WithParam("tenant", string(tenant))
+	}
 	if s.sharing == nil {
 		return nil, ErrSharingRequired
 	}
-	ctx = pkgcore.WithTenant(ctx, tenant)
 
 	manifest := ExportManifest{
 		Tenant:       tenant,
@@ -278,12 +306,12 @@ func (s *ExportService) Export(ctx context.Context, tenant pkgcore.TenantID) (*E
 		if p.Export == nil {
 			continue
 		}
-		data, err := p.Export(ctx, tenant)
-		if err != nil {
+		data, exportErr := p.Export(ctx, tenant)
+		if exportErr != nil {
 			if manifest.Errors == nil {
 				manifest.Errors = make(map[string]string)
 			}
-			manifest.Errors[p.Name] = err.Error()
+			manifest.Errors[p.Name] = exportErr.Error()
 			continue
 		}
 		manifest.Participants[p.Name] = data
@@ -311,8 +339,8 @@ func (s *ExportService) Export(ctx context.Context, tenant pkgcore.TenantID) (*E
 	}
 	result.Delivery = delivery
 
-	if err := s.emitExportAudit(ctx, tenant, key, manifest, delivery, nil); err != nil {
-		return result, ErrAuditRecordFailed.WithCause(err)
+	if auditErr := s.emitExportAudit(ctx, tenant, key, manifest, delivery, nil); auditErr != nil {
+		return result, ErrAuditRecordFailed.WithCause(auditErr)
 	}
 	if manifest.HasErrors() {
 		return result, ErrExportPartialFailure.WithParam("participants", exportFailureReason(manifest))

@@ -85,7 +85,7 @@ func TestExportService_Export_GathersAndStoresParticipantData(t *testing.T) {
 	tenant := pkgcore.TenantID("tenant-a")
 	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
 
-	result, err := svc.Export(context.Background(), tenant)
+	result, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
 	if err != nil {
 		t.Fatalf("Export: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestExportService_Export_SkipsParticipantsWithNoExportCallback(t *testing.T
 		t.Fatalf("register no-export participant: %v", err)
 	}
 
-	result, err := svc.Export(context.Background(), "tenant-a")
+	result, err := svc.Export(pkgcore.WithTenant(context.Background(), "tenant-a"), "tenant-a")
 	if err != nil {
 		t.Fatalf("Export: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestExportService_Export_ParticipantErrorIsPartialFailure(t *testing.T) {
 		t.Fatalf("register failing participant: %v", err)
 	}
 
-	result, err := svc.Export(context.Background(), tenant)
+	result, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
 	if !hasCode(err, ErrExportPartialFailure.Code) {
 		t.Fatalf("Export error = %v, want %s", err, ErrExportPartialFailure.Code)
 	}
@@ -181,7 +181,7 @@ func TestExportService_Export_DeliversThroughSharing(t *testing.T) {
 	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
 
 	before := time.Now()
-	result, err := svc.Export(context.Background(), tenant)
+	result, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
 	if err != nil {
 		t.Fatalf("Export: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestExportService_Export_UsesTenantConfiguredExpiry(t *testing.T) {
 	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
 
 	before := time.Now()
-	result, err := svc.Export(context.Background(), tenant)
+	result, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
 	if err != nil {
 		t.Fatalf("Export: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestExportService_Export_ConfigReaderReportingUnconfigured_FallsBackToDefau
 	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
 
 	before := time.Now()
-	if _, err := svc.Export(context.Background(), tenant); err != nil {
+	if _, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant); err != nil {
 		t.Fatalf("Export: %v", err)
 	}
 	after := time.Now()
@@ -303,7 +303,7 @@ func TestExportService_Export_ConfigReaderError_ReportsDeliveryFailed(t *testing
 	tenant := pkgcore.TenantID("tenant-a")
 	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
 
-	_, err := svc.Export(context.Background(), tenant)
+	_, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
 	if !hasCode(err, ErrExportDeliveryFailed.Code) {
 		t.Fatalf("Export error = %v, want %s", err, ErrExportDeliveryFailed.Code)
 	}
@@ -355,7 +355,7 @@ func TestExportService_Export_NoSharingWired_Refuses(t *testing.T) {
 	svc, _, _, _ := newExportHarness(t)
 	svc.sharing = nil
 
-	_, err := svc.Export(context.Background(), "tenant-a")
+	_, err := svc.Export(pkgcore.WithTenant(context.Background(), "tenant-a"), "tenant-a")
 	if !hasCode(err, ErrSharingRequired.Code) {
 		t.Fatalf("Export error = %v, want %s", err, ErrSharingRequired.Code)
 	}
@@ -371,7 +371,7 @@ func TestExportService_Export_DeliveryFailureIsReported(t *testing.T) {
 	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
 	fakeSharing.failWith = errors.New("sharing unavailable")
 
-	result, err := svc.Export(context.Background(), tenant)
+	result, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
 	if !hasCode(err, ErrExportDeliveryFailed.Code) {
 		t.Fatalf("Export error = %v, want %s", err, ErrExportDeliveryFailed.Code)
 	}
@@ -463,7 +463,7 @@ func TestExportService_Export_DeliversThroughRealSharingService(t *testing.T) {
 	realSharing := newRealSharingService(t)
 	svc.sharing = realSharing
 
-	result, err := svc.Export(context.Background(), tenant)
+	result, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
 	if err != nil {
 		t.Fatalf("Export: %v", err)
 	}
