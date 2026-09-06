@@ -122,4 +122,14 @@ var (
 	// failing to write a provider's generated image bytes back into
 	// go/storage as a new object.
 	ErrImageOutputWriteFailed = apperr.Internal("aigateway.image_output_write_failed")
+
+	// ErrInternal reports an HTTP-layer failure Handler cannot classify --
+	// an error returned by something below it that is not an *apperr.Error
+	// (writeError's fallback), or the system-context reason
+	// aiGateway_setPlatformCredential builds for the caller (see
+	// SystemPurposeCredentialWrite) being rejected, which is unreachable in
+	// practice since Module.Register always registers that purpose before
+	// any request can reach the handler -- handled anyway rather than
+	// assumed away, mirroring storage's and org's identical fallback.
+	ErrInternal = apperr.Internal("aigateway.internal_error")
 )
