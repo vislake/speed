@@ -8,12 +8,16 @@
  * unmounts the previous form, so its half-typed state and whole-attempt
  * error are gone with it -- a deliberate reset: channel errors must not
  * leak across surfaces. A successful sign-in on any channel fires
- * onSignedIn once. The screen renders no heading and nothing here
- * navigates: the page above (branding, the heading, the register link)
- * is host content.
+ * onSignedIn once. The tab strip is wired to the mounted channel panel
+ * the ARIA tabs way: each Tab carries an id and the aria-controls of its
+ * own panel, and the mounted channel renders as the role=tabpanel with
+ * that id and the tab as its aria-labelledby -- only the active panel
+ * exists in the DOM, since switching unmounts the previous form. The
+ * screen renders no heading and nothing here navigates: the page above
+ * (branding, the heading, the register link) is host content.
  */
 
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import Box from '@mui/material/Box'
 import Tab from '@mui/material/Tab'
 import Tabs from '@mui/material/Tabs'
@@ -59,6 +63,15 @@ export function SignInScreen({
 }: SignInScreenProps) {
   const { t } = useAuthUiTranslation()
   const [channel, setChannel] = useState<SignInChannel>(defaultChannel)
+  // The id base of the tab/tabpanel pair per channel: each channel's
+  // tab names its panel through aria-controls, and the panel -- the
+  // mounted form, unmounted on switch so a channel's half-typed state
+  // and whole-attempt error reset with it -- answers through
+  // aria-labelledby.
+  const channelId = useId()
+  const tabIdOf = (value: SignInChannel): string => `${channelId}-${value}-tab`
+  const panelIdOf = (value: SignInChannel): string =>
+    `${channelId}-${value}-panel`
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%' }}>
@@ -67,13 +80,35 @@ export function SignInScreen({
         onChange={(_event, value: SignInChannel) => setChannel(value)}
         variant="fullWidth"
       >
-        <Tab label={t('passwordSignIn.title')} value="password" />
-        <Tab label={t('smsSignIn.title')} value="sms" />
+        <Tab
+          label={t('passwordSignIn.title')}
+          value="password"
+          id={tabIdOf('password')}
+          aria-controls={panelIdOf('password')}
+        />
+        <Tab
+          label={t('smsSignIn.title')}
+          value="sms"
+          id={tabIdOf('sms')}
+          aria-controls={panelIdOf('sms')}
+        />
       </Tabs>
       {channel === 'password' ? (
-        <PasswordSignInForm session={session} onSignedIn={onSignedIn} />
+        <Box
+          role="tabpanel"
+          id={panelIdOf('password')}
+          aria-labelledby={tabIdOf('password')}
+        >
+          <PasswordSignInForm session={session} onSignedIn={onSignedIn} />
+        </Box>
       ) : (
-        <SMSSignInForm session={session} onSignedIn={onSignedIn} />
+        <Box
+          role="tabpanel"
+          id={panelIdOf('sms')}
+          aria-labelledby={tabIdOf('sms')}
+        >
+          <SMSSignInForm session={session} onSignedIn={onSignedIn} />
+        </Box>
       )}
       {social !== undefined ? (
         <SocialSignInSection

@@ -80,4 +80,31 @@ describe('SessionEndedScreen', () => {
     renderWithProviders(<SessionEndedScreen onSignIn={() => {}} />)
     await expectNoAxeViolations()
   })
+
+  it('render the title as a real whole-page h1 heading by default', () => {
+    // The screen replaces the whole authenticated page (product-shell's
+    // ended branch mounts it with no AppShell frame and no ancestor
+    // heading), so its title must not stay an h6 -- the page's main
+    // heading level is h1 unless a host embeds the screen under a
+    // heading of its own and says so.
+    renderWithProviders(<SessionEndedScreen onSignIn={() => {}} />)
+    expect(
+      screen.getByRole('heading', {
+        level: 1,
+        name: zhCN.sessionEnded.title,
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it('render the title at a host-passed heading level', () => {
+    renderWithProviders(
+      <SessionEndedScreen onSignIn={() => {}} headingLevel="h3" />,
+    )
+    expect(
+      screen.getByRole('heading', {
+        level: 3,
+        name: zhCN.sessionEnded.title,
+      }),
+    ).toBeInTheDocument()
+  })
 })

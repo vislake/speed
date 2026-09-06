@@ -189,4 +189,37 @@ describe('SignInScreen', () => {
     )
     await expectNoAxeViolations()
   })
+
+  it('wire each channel tab to its own panel by id and aria-controls', async () => {
+    const harness = makeHarness({ [LOGIN_PASSWORD]: () => makePair() })
+    renderWithProviders(<SignInScreen session={harness.session} />)
+    const passwordTab = screen.getByRole('tab', {
+      name: zhCN.passwordSignIn.title,
+    })
+    const smsTab = screen.getByRole('tab', { name: zhCN.smsSignIn.title })
+    // Each tab names the panel it controls, and the ids are distinct.
+    expect(passwordTab).toHaveAttribute('aria-controls')
+    expect(smsTab).toHaveAttribute('aria-controls')
+    expect(passwordTab.getAttribute('aria-controls')).not.toBe(
+      smsTab.getAttribute('aria-controls'),
+    )
+    // The mounted channel renders as a tabpanel whose id the selected
+    // tab's aria-controls names, labelled by that tab.
+    const passwordPanel = screen.getByRole('tabpanel')
+    expect(passwordPanel).toHaveAttribute('id', passwordTab.getAttribute('aria-controls'))
+    expect(passwordPanel).toHaveAttribute(
+      'aria-labelledby',
+      passwordTab.id,
+    )
+    // Switching channels moves the tabpanel: the SMS panel now carries
+    // the SMS tab's id.
+    const user = userEvent.setup()
+    await user.click(smsTab)
+    const smsPanel = screen.getByRole('tabpanel')
+    expect(smsPanel).toHaveAttribute('id', smsTab.getAttribute('aria-controls'))
+    expect(smsPanel).toHaveAttribute('aria-labelledby', smsTab.id)
+    expect(
+      screen.queryByLabelText(zhCN.passwordSignIn.identifierLabel),
+    ).not.toBeInTheDocument()
+  })
 })

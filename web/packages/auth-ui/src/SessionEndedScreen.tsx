@@ -15,22 +15,40 @@
  * EmptyState -- the noPermission variant's lock icon, because the
  * content is gated again until the user signs in; nothing of ui-kit's
  * built-in texts can leak through (every text slot is overridden).
+ *
+ * The screen replaces the whole authenticated page (product-shell's
+ * ended branch mounts it with no AppShell frame and no ancestor
+ * heading), so EmptyState's title is the page's own heading: it
+ * renders as an h1 by default and takes a headingLevel prop for a host
+ * embedding the screen under a heading of its own.
  */
 
 import Button from '@mui/material/Button'
 import { EmptyState } from '@speed/ui-kit'
+import type { EmptyStateProps } from '@speed/ui-kit'
 import { useAuthUiTranslation } from './internal/translation.js'
 
 export interface SessionEndedScreenProps {
   /** Fired when the viewer asks to sign in again; the host navigates. */
   readonly onSignIn: () => void
+  /**
+   * The real heading element the title renders as (forwarded to
+   * ui-kit's EmptyState). The screen is a whole-page placeholder, so
+   * it defaults to 'h1'; a host embedding it under a heading of its
+   * own passes the level that continues the page's order.
+   */
+  readonly headingLevel?: EmptyStateProps['headingLevel']
 }
 
-export function SessionEndedScreen({ onSignIn }: SessionEndedScreenProps) {
+export function SessionEndedScreen({
+  onSignIn,
+  headingLevel = 'h1',
+}: SessionEndedScreenProps) {
   const { t } = useAuthUiTranslation()
   return (
     <EmptyState
       variant="noPermission"
+      headingLevel={headingLevel}
       title={t('sessionEnded.title')}
       description={t('sessionEnded.description')}
       action={
