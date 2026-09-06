@@ -93,10 +93,18 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out the repository
+        # The same commit-SHA pin every sibling workflow uses (fast-check,
+        # api-contract, docs-check, security and reusable-docker-build all
+        # checkout actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1,
+        # tagged v7.0.1) -- release.yml was the one file still floating a
+        # version tag (@v4), so any new checkout major or patch release
+        # could silently change what this pipeline runs on, and the
+        # floating file would drift from the pinned ones. A tag-move
+        # cannot change a SHA.
         # fetch-depth: 0 (full history incl. tags): the duplicate-version
         # preflight lists tags with `git tag -l`, and actions/checkout's
         # default shallow fetch would see none -- silently neutering it.
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
       - name: Validate the version input format
