@@ -66,6 +66,24 @@ var (
 	// and been observed as such).
 	ErrImpersonationGrantEnded = apperr.Conflict("admin.impersonation_grant_ended")
 
+	// ErrImpersonationTargetNotFound is returned by Start when the target
+	// user id does not resolve to any real authn account at all -- surfaced
+	// while resolving the target's own locale for the mandatory security
+	// notification (P1-1's fix), since a ghost user id can never receive
+	// one. No grant is ever written when this is returned.
+	ErrImpersonationTargetNotFound = apperr.NotFound("admin.impersonation_target_not_found")
+
+	// ErrImpersonationNotificationUnavailable is returned by Start when the
+	// mandatory, non-unsubscribable impersonation-started security
+	// notification could not be guaranteed -- the target's locale could
+	// not be resolved for a reason other than "no such user", the
+	// cross-tenant system-context grant could not be entered, or the
+	// notification itself could not even be enqueued. Start refuses the
+	// whole call rather than writing a grant behind a notification nobody
+	// will ever receive (P1-1's fix: previously this failure was logged
+	// and swallowed behind a 201).
+	ErrImpersonationNotificationUnavailable = apperr.Internal("admin.impersonation_notification_unavailable")
+
 	// ErrPrincipalRequired is returned by every admin HTTP operation when
 	// the request carries no verified authn.Principal -- every route this
 	// module mounts sits downstream of authn.Middleware in a correctly
@@ -143,6 +161,8 @@ var errorCodes = []string{
 	ErrImpersonationSelfNotAllowed.Code,
 	ErrImpersonationTargetForbidden.Code,
 	ErrImpersonationGrantEnded.Code,
+	ErrImpersonationTargetNotFound.Code,
+	ErrImpersonationNotificationUnavailable.Code,
 	ErrPrincipalRequired.Code,
 	ErrAuthnServiceRequired.Code,
 	ErrOrgModuleRequired.Code,

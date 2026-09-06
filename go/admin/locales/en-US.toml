@@ -16,6 +16,8 @@
 "admin.impersonation_self_not_allowed" = "You cannot start an impersonation session against your own account."
 "admin.impersonation_target_forbidden" = "You cannot start an impersonation session scoped to the platform-operations domain."
 "admin.impersonation_grant_ended" = "This impersonation grant has already ended."
+"admin.impersonation_target_not_found" = "No account was found for this target user id."
+"admin.impersonation_notification_unavailable" = "The mandatory security notification to the target user could not be sent, so the impersonation session was not started."
 "admin.authn_service_required" = "This deployment is missing its authn service; cross-tenant user search is unavailable."
 "admin.org_module_required" = "This deployment is missing its org module; membership composition is unavailable."
 "admin.compliance_module_required" = "This deployment is missing its compliance module; audit search is unavailable."

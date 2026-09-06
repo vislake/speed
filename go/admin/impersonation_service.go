@@ -2,8 +2,10 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"time"
 
+	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/notification"
@@ -48,6 +50,18 @@ type ImpersonationService struct {
 	auditActions pkgcore.AuditActionRegistrar
 	notifier     Notifier
 
+	// authnSvc resolves the impersonation target's own locale for the
+	// mandatory security notification (see resolveNotificationLocale) --
+	// the same *authn.Service SearchService (search.go) already holds
+	// directly, admin being the one module this codebase's own
+	// module-boundary rule permits to import a downstream module's
+	// concrete package rather than a structurally-typed seam (AGENTS.md's
+	// "admin sits at the top of the module dependency graph" section).
+	// Nil only before Module.Register calls attach (see attach's own doc
+	// comment) -- WithAuthn is a mandatory option, so this is never nil in
+	// a correctly wired production Bootstrap.
+	authnSvc *authn.Service
+
 	// now is the clock, overridden by tests; time.Now in production.
 	now func() time.Time
 }
@@ -58,11 +72,13 @@ func NewImpersonationService(repo *ImpersonationRepository) *ImpersonationServic
 }
 
 // attach gives the service its host seams, read from the *pkgcore.Registry
-// during Module.Register.
-func (s *ImpersonationService) attach(bus pkgcore.EventBus, actions pkgcore.AuditActionRegistrar, notifier Notifier) {
+// (and, for authnSvc, from Module.authnModule.Service()) during
+// Module.Register.
+func (s *ImpersonationService) attach(bus pkgcore.EventBus, actions pkgcore.AuditActionRegistrar, notifier Notifier, authnSvc *authn.Service) {
 	s.bus = bus
 	s.auditActions = actions
 	s.notifier = notifier
+	s.authnSvc = authnSvc
 }
 
 // StartInput is Start's input.
@@ -77,29 +93,49 @@ type StartInput struct {
 	TargetTenantID pkgcore.TenantID
 	// Reason is the operator's required justification.
 	Reason string
-	// Locale is the locale the mandatory security notification renders in
-	// -- the ADMINISTRATOR's own negotiated locale is irrelevant here; per
-	// root CLAUDE.md's i18n rule, backend-generated content renders in the
-	// RECIPIENT's locale, so this should be the target user's own locale
-	// when the caller knows it, and is passed through to
-	// notification.Dispatch unchanged (an empty value refuses the
-	// dispatch there for a user recipient, exactly as any other caller of
-	// Dispatch would be refused -- Start does not invent a default on the
-	// target's behalf).
+	// Locale OPTIONALLY overrides the locale the mandatory security
+	// notification renders in -- the ADMINISTRATOR's own negotiated locale
+	// is irrelevant here; per root CLAUDE.md's i18n rule, backend-generated
+	// content renders in the RECIPIENT's locale. When empty (the ordinary
+	// case: most callers, including admin's own generated HTTP client,
+	// have no reason to know the target's locale), Start resolves the
+	// target's own authn.User.Locale itself (falling back to
+	// authn.DefaultLocale when the user has never chosen one) rather than
+	// letting the notification's Locale requirement -- REQUIRED for a
+	// RecipientClassUser Dispatch -- silently defeat the "mandatory"
+	// notification, which is exactly the bug a caller-optional field with
+	// no resolution behind it used to cause (P1-1: see notifyStarted's own
+	// doc comment). A non-empty value here is trusted verbatim -- an
+	// operator who genuinely knows better than the stored profile value is
+	// not refused -- and Start's dispatch-or-refuse contract applies
+	// identically either way.
 	Locale string
 }
 
 // Start opens a new impersonation grant, exactly as docs/internal/23-admin.md
 // section 4 describes: it is refused (ErrImpersonationReasonRequired,
 // ErrImpersonationTargetRequired, ErrImpersonationSelfNotAllowed,
-// ErrImpersonationTargetForbidden) before anything is written, records
+// ErrImpersonationTargetForbidden) before anything is written, dispatches
+// the mandatory, non-unsubscribable security notification to the target
+// user BEFORE the grant row is ever created, and records
 // admin.impersonation.started as an explicit dual-identity audit event
-// once the grant row commits, and dispatches the mandatory,
-// non-unsubscribable security notification to the target user. Both the
-// audit record and the notification are best-effort side effects of an
-// already-successful write (see recordAudit's and notifyStarted's own
-// doc comments) -- a failure in either is logged and never turns a
-// successfully started grant into an error response.
+// once the grant row commits.
+//
+// The notification is dispatched first, and its failure refuses the whole
+// call (no grant row is written), because a "mandatory" notification that
+// is only attempted after the grant already exists and succeeded cannot
+// ever be un-sent if the attempt fails -- P1-1's own finding: the caller
+// received 201 while the notification silently never went out. What
+// "dispatched" means here is deliberately narrow -- notifyStarted resolves
+// a real recipient locale and gets the delivery successfully ENQUEUED
+// (notification.DeliveryService.Dispatch validates and enqueues, nothing
+// more); actual transport delivery, its retries and its eventual
+// dead-lettering are notification's own asynchronous business, exactly as
+// for any other Dispatch caller, and are not and cannot be observed here.
+// The audit record remains a best-effort side effect of the
+// already-successful grant write (see recordAudit's own doc comment) --
+// unlike the notification, a lost audit event does not mean the target was
+// never told, so it keeps its original log-and-swallow contract.
 func (s *ImpersonationService) Start(ctx context.Context, in StartInput) (*ImpersonationGrant, error) {
 	if in.Reason == "" {
 		return nil, ErrImpersonationReasonRequired
@@ -123,6 +159,10 @@ func (s *ImpersonationService) Start(ctx context.Context, in StartInput) (*Imper
 		return nil, ErrImpersonationTargetForbidden
 	}
 
+	if err := s.notifyStarted(ctx, in); err != nil {
+		return nil, err
+	}
+
 	now := s.now()
 	grant := &ImpersonationGrant{
 		AdminUserID:    in.AdminUserID,
@@ -140,7 +180,6 @@ func (s *ImpersonationService) Start(ctx context.Context, in StartInput) (*Imper
 		"target_tenant_id": grant.TargetTenantID,
 		"expires_at":       grant.ExpiresAt,
 	})
-	s.notifyStarted(ctx, in, grant)
 	return grant, nil
 }
 
@@ -255,10 +294,14 @@ func (s *ImpersonationService) recordAudit(ctx context.Context, action, adminUse
 	}
 }
 
-// notifyStarted sends the target user the mandatory, non-unsubscribable
-// security notification (NotificationTypeImpersonationStarted,
-// notifications.go) announcing that a platform administrator has started
-// an impersonation session against their account.
+// notifyStarted resolves the target user's own locale and gets the
+// mandatory, non-unsubscribable security notification
+// (NotificationTypeImpersonationStarted, notifications.go) ENQUEUED,
+// announcing that a platform administrator has started an impersonation
+// session against their account. It runs BEFORE any grant row exists (see
+// Start's own doc comment for why) -- there is deliberately no grant id to
+// log or to hand to the dispatch: notifications.go's Params carry only
+// admin_user_id and reason, so nothing here depends on one.
 //
 // It runs under an explicit tenancy.WithSystemContext grant, exactly like
 // every other cross-tenant operation admin performs (D2): the target
@@ -266,15 +309,30 @@ func (s *ImpersonationService) recordAudit(ctx context.Context, action, adminUse
 // own request (their own session lives in rbac.SystemDomain), so writing
 // the notification's delivery job into the TARGET tenant's own queue and
 // tables is itself a cross-tenant write this module must not perform
-// silently. A failure at either step -- entering the system context, or
-// the dispatch itself -- is logged and swallowed: the grant already
-// exists and is already usable by the time this runs, so a notification
-// failure must not undo it or fail the Start call it rides along with.
-func (s *ImpersonationService) notifyStarted(ctx context.Context, in StartInput, grant *ImpersonationGrant) {
+// silently.
+//
+// A nil notifier is tolerated by returning nil (no error, nothing
+// attempted): this is the pre-Module.Register state -- attach has not run
+// yet, exactly as recordAudit's own nil-bus tolerance -- and is
+// unreachable in production, since WithNotification is a mandatory Register
+// option. Every OTHER failure here -- the target's locale could not be
+// resolved, the system-context grant could not be entered, or the
+// dispatch itself was refused -- is P1-1's own fix: it is returned as a
+// real error rather than logged and swallowed, so Start refuses the whole
+// call instead of returning success over a notification nobody will ever
+// receive.
+func (s *ImpersonationService) notifyStarted(ctx context.Context, in StartInput) error {
 	if s.notifier == nil {
-		return
+		return nil
 	}
 	log := obs.FromContext(ctx)
+
+	locale, err := s.resolveNotificationLocale(ctx, in)
+	if err != nil {
+		log.Warn("admin could not resolve the impersonation target's locale for the mandatory security notification",
+			"target_user_id", in.TargetUserID, "error", err)
+		return err
+	}
 
 	sysCtx, err := tenancy.WithSystemContext(
 		pkgcore.WithTenant(ctx, in.TargetTenantID),
@@ -286,24 +344,59 @@ func (s *ImpersonationService) notifyStarted(ctx context.Context, in StartInput,
 	)
 	if err != nil {
 		log.Warn("admin could not enter a system context to notify an impersonation target",
-			"grant_id", grant.ID, "target_tenant_id", in.TargetTenantID, "error", err)
-		return
+			"target_tenant_id", in.TargetTenantID, "error", err)
+		return ErrImpersonationNotificationUnavailable.WithCause(err)
 	}
 
-	_, err = s.notifier.Dispatch(sysCtx, notification.Dispatch{
+	if _, err := s.notifier.Dispatch(sysCtx, notification.Dispatch{
 		TypeKey: NotificationTypeImpersonationStarted,
 		Recipient: notification.DispatchRecipient{
 			Class:  notification.RecipientClassUser,
 			UserID: in.TargetUserID,
 		},
-		Locale: in.Locale,
+		Locale: locale,
 		Params: map[string]any{
 			"admin_user_id": in.AdminUserID,
 			"reason":        in.Reason,
 		},
-	})
-	if err != nil {
+	}); err != nil {
 		log.Warn("admin could not dispatch the mandatory impersonation-started notification",
-			"grant_id", grant.ID, "target_user_id", in.TargetUserID, "error", err)
+			"target_user_id", in.TargetUserID, "error", err)
+		return ErrImpersonationNotificationUnavailable.WithCause(err)
 	}
+	return nil
+}
+
+// resolveNotificationLocale answers the locale notifyStarted dispatches
+// in: in.Locale verbatim when the caller supplied one, otherwise the
+// target's own authn.User.Locale (falling back to authn.DefaultLocale when
+// the user has never chosen one -- the identical fallback authn's own
+// verification-code delivery already applies, for the identical "empty
+// means not chosen yet" reason User.Locale's own doc comment gives).
+//
+// A target that cannot be found at all (ErrNotFound) is refused with
+// ErrImpersonationTargetNotFound rather than ErrImpersonationNotificationUnavailable
+// -- a ghost user id is a bad request, not an infrastructure failure -- and
+// any other resolution failure (a storage error, or authnSvc never having
+// been wired) is ErrImpersonationNotificationUnavailable, the same code a
+// downstream dispatch or system-context failure reports, since in every
+// case the mandatory notification cannot be guaranteed.
+func (s *ImpersonationService) resolveNotificationLocale(ctx context.Context, in StartInput) (string, error) {
+	if in.Locale != "" {
+		return in.Locale, nil
+	}
+	if s.authnSvc == nil {
+		return "", ErrImpersonationNotificationUnavailable
+	}
+	user, err := s.authnSvc.Users().FindByID(ctx, in.TargetUserID)
+	if err != nil {
+		if errors.Is(err, authn.ErrNotFound) {
+			return "", ErrImpersonationTargetNotFound.WithCause(err)
+		}
+		return "", ErrImpersonationNotificationUnavailable.WithCause(err)
+	}
+	if user.Locale == "" {
+		return authn.DefaultLocale, nil
+	}
+	return user.Locale, nil
 }

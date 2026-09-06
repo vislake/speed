@@ -46,10 +46,23 @@ func newTestImpersonationService(t *testing.T, notifier Notifier) (*Impersonatio
 	if err := reg.AuditActions.Add(AuditActionImpersonationStarted, AuditActionImpersonationEnded); err != nil {
 		t.Fatalf("register audit actions: %v", err)
 	}
-	svc.attach(reg.EventBus(), reg.AuditActions, notifier)
+	// authnSvc is deliberately nil here: every test in this file that
+	// exercises the real notification path (a non-nil notifier) supplies
+	// an explicit StartInput.Locale (startTestGrant does), which
+	// resolveNotificationLocale honours before ever touching authnSvc --
+	// see that method's own doc comment. Resolving a real target locale
+	// through a genuine *authn.Service is pinned separately, against real
+	// authn and notification modules together, by the
+	// TestImpersonationService_Start_* tests in
+	// impersonation_service_locale_test.go.
+	svc.attach(reg.EventBus(), reg.AuditActions, notifier, nil)
 	return svc, reg
 }
 
+// startTestGrant starts a grant with an explicit Locale -- "a request WITH
+// a locale keeps working exactly as today" (P1-1's second, unchanged
+// leg) -- so every test in this file that does not care about locale
+// resolution itself never needs a real *authn.Service wired.
 func startTestGrant(t *testing.T, svc *ImpersonationService) *ImpersonationGrant {
 	t.Helper()
 	grant, err := svc.Start(context.Background(), StartInput{
@@ -57,6 +70,7 @@ func startTestGrant(t *testing.T, svc *ImpersonationService) *ImpersonationGrant
 		TargetUserID:   "user-1",
 		TargetTenantID: "tenant-1",
 		Reason:         "support ticket #42",
+		Locale:         "zh-CN",
 	})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -214,16 +228,30 @@ func TestImpersonationService_Start_DispatchesMandatoryNotification(t *testing.T
 	}
 }
 
-func TestImpersonationService_Start_NotifierFailure_DoesNotFailStart(t *testing.T) {
+// TestImpersonationService_Start_NotifierFailure_RefusesStart pins P1-1's
+// corrected contract: a synchronous dispatch failure (the notification
+// could not even be enqueued) now refuses the whole Start call, and no
+// grant is ever written -- the exact opposite of this module's pre-fix
+// behaviour (a 201 with the failure only Warn-logged and swallowed behind
+// it, P1-1's own finding).
+func TestImpersonationService_Start_NotifierFailure_RefusesStart(t *testing.T) {
 	notifier := &fakeNotifier{failWith: context.DeadlineExceeded}
 	svc, _ := newTestImpersonationService(t, notifier)
 
-	// Start must still succeed even though the notifier fails -- see
-	// notifyStarted's own doc comment for why a notification failure must
-	// never undo an already-created grant.
-	grant := startTestGrant(t, svc)
-	if grant.ID == "" {
-		t.Fatal("Start() returned a grant with no id")
+	_, err := svc.Start(context.Background(), StartInput{
+		AdminUserID: "admin-1", TargetUserID: "user-1", TargetTenantID: "tenant-1",
+		Reason: "support ticket #42", Locale: "zh-CN",
+	})
+	if !isCode(err, ErrImpersonationNotificationUnavailable.Code) {
+		t.Fatalf("Start() error = %v, want %s", err, ErrImpersonationNotificationUnavailable.Code)
+	}
+
+	active, listErr := svc.ListActive(context.Background())
+	if listErr != nil {
+		t.Fatalf("ListActive() error = %v", listErr)
+	}
+	if len(active) != 0 {
+		t.Fatalf("ListActive() = %+v, want no grant ever written when the mandatory notification could not be dispatched", active)
 	}
 }
 

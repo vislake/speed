@@ -403,7 +403,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 
 	bus := reg.EventBus()
 	m.tenants.attachAudit(bus, reg.AuditActions)
-	m.impersonation.attach(bus, reg.AuditActions, m.notificationModule.Deliveries())
+	m.impersonation.attach(bus, reg.AuditActions, m.notificationModule.Deliveries(), authnSvc)
 
 	m.search = NewSearchService(authnSvc, m.orgModule.Members(), m.tenants)
 	m.search.attach(bus)

@@ -289,11 +289,14 @@ func TestAdminFlow_Impersonation_EndToEnd(t *testing.T) {
 			"targetUserId":   targetID,
 			"targetTenantId": "tenant-acme",
 			"reason":         "reproduce a customer-reported bug",
-			// Locale is required for a user-recipient Dispatch
-			// (notification.Dispatch's own doc comment) -- Start passes
-			// it straight through with no default of its own, so the
-			// mandatory notification below would otherwise silently fail
-			// to send.
+			// locale is optional (StartInput.Locale's own doc comment):
+			// Start resolves the target's own authn.User.Locale itself
+			// when this is omitted (falling back to authn.DefaultLocale
+			// when the user has never chosen one), so the mandatory
+			// notification below is guaranteed to be attempted either
+			// way -- P1-1's fix. Passed explicitly here only to exercise
+			// that leg of the contract too ("a request WITH a locale
+			// keeps working exactly as today").
 			"locale": "zh-CN",
 		}, http.StatusCreated, &grant, nil)
 	if grant.ID == "" || grant.TargetUserID != targetID || grant.TargetTenantID != "tenant-acme" {

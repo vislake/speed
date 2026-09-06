@@ -15,6 +15,8 @@
 "admin.impersonation_self_not_allowed" = "不能对自己的账号发起模拟登录。"
 "admin.impersonation_target_forbidden" = "不能发起作用域为平台运维域的模拟登录。"
 "admin.impersonation_grant_ended" = "该模拟登录授权已结束。"
+"admin.impersonation_target_not_found" = "未找到该目标用户 ID 对应的账号。"
+"admin.impersonation_notification_unavailable" = "无法向目标用户发送强制性安全通知，模拟登录会话未能发起。"
 "admin.authn_service_required" = "本次部署缺少 authn 服务，跨租户用户检索不可用。"
 "admin.org_module_required" = "本次部署缺少 org 模块，成员身份组合查询不可用。"
 "admin.compliance_module_required" = "本次部署缺少 compliance 模块，审计检索不可用。"

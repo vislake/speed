@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"testing"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -99,8 +100,16 @@ func (billingMigrationModule) Register(*pkgcore.Registry) error { return nil }
 // module here does not force every existing two-call-site destructuring
 // assignment to grow another blank identifier.
 type testAdminEnv struct {
-	Registry     *pkgcore.Registry
-	Admin        *Module
+	Registry *pkgcore.Registry
+	Admin    *Module
+
+	// Authn is the real, Register()-ed *authn.Module wired into adminModule
+	// through WithAuthn -- exposed so a test can register a real user
+	// (authnModule.Service().Register) and drive Start's real locale
+	// resolution (impersonation_service_locale_test.go) rather than
+	// standing up a second, parallel authn.Module of its own.
+	Authn *authn.Module
+
 	Org          *org.Module
 	Notification *notification.Module
 	Queue        *jobs.StandaloneQueue
@@ -187,7 +196,26 @@ func buildTestAdminModule(t *testing.T) testAdminEnv {
 	if startErr := queue.Start(t.Context()); startErr != nil {
 		t.Fatalf("queue.Start() error = %v", startErr)
 	}
-	t.Cleanup(func() { _ = queue.Close(t.Context()) })
+	t.Cleanup(func() {
+		// A plain t.Context() is already canceled by the time a Cleanup
+		// func runs (its own doc comment: "canceled just before
+		// Cleanup-registered functions are called") -- passed to Close,
+		// whose own select races <-done against <-ctx.Done(), an
+		// already-canceled ctx makes Close return immediately without
+		// ever actually waiting for q.wg.Wait(), so a job whose Handle is
+		// still mid-flight (a real notification.deliver or
+		// admin.audit_export job a test enqueued but did not itself wait
+		// out to a terminal status) can still be writing to db when this
+		// same Cleanup's dbkit connection closes right after -- observed
+		// as a spurious "persisting success failed: sql: database is
+		// closed" ERROR log with no effect on any test's own assertions,
+		// but noise the Testing warnings policy (root CLAUDE.md) still
+		// requires fixing rather than ignoring. A real, freshly-derived
+		// timeout context gives Close something to actually wait on.
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = queue.Close(closeCtx)
+	})
 
 	sharingModule := sharing.NewModule(db)
 	complianceModule := compliance.NewModule(auditRepo, compliance.WithQueue(queue), compliance.WithSharing(sharingModule.Service()))
@@ -238,6 +266,7 @@ func buildTestAdminModule(t *testing.T) testAdminEnv {
 	return testAdminEnv{
 		Registry:     reg,
 		Admin:        adminModule,
+		Authn:        authnModule,
 		Org:          orgModule,
 		Notification: notificationModule,
 		Queue:        queue,
