@@ -13,12 +13,21 @@
  * drawer width, the nav content filling its paper rather than
  * re-declaring the width itself, the wrapping AppBar row) -- see the
  * "responsive protections" describe block for what each assertion does
- * and does not prove.
+ * and does not prove. The a11y- and state-hardening regressions live
+ * alongside: the skip link activating without touching the host hash
+ * (a hash-routed host would lose the route to fragment navigation),
+ * the uncontrolled temporary drawer closing itself on nav-item
+ * activation with the scrim cleared and focus released (controlled
+ * contract untouched), the uncontrolled open state resetting when the
+ * drawer leaves the temporary variant for the permanent one, and the
+ * header-spacer placeholders deriving from the measured header height
+ * ("measured header spacer" describe block states what jsdom can and
+ * cannot prove about the wrap case).
  */
 
 import { act, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { switchLanguage } from '@speed/i18n'
 import enUS from '../locales/en-US.json' with { type: 'json' }
 import zhCN from '../locales/zh-CN.json' with { type: 'json' }
@@ -26,7 +35,15 @@ import { expectNoAxeViolations } from '../../test-utils/axe.js'
 import { emittedStyleText } from '../../test-utils/emitted-css.js'
 import { mockMatchMedia } from '../../test-utils/matchMedia.js'
 import { renderWithProviders } from '../../test-utils/render.js'
+import { stubResizeObserver } from '../../test-utils/resize-observer.js'
 import { AppShell, type AppShellNavItem } from './AppShell.js'
+
+// Some harnesses below put an app route into location.hash the way a
+// hash-routed host would; nothing else in this file reads the hash, but
+// restore it after every test so no test inherits another's route.
+afterEach(() => {
+  window.location.hash = ''
+})
 
 const NAV_ITEMS: readonly AppShellNavItem[] = [
   { id: 'home', label: 'Home', href: '/home', selected: true },
@@ -133,6 +150,125 @@ describe('AppShell', () => {
         'false',
       )
     })
+
+    it('closes the uncontrolled temporary drawer itself when a nav item is activated, scrim cleared and focus released', async () => {
+      // Regression: activating a nav item in the mobile drawer used to
+      // leave the drawer open -- the temporary variant owns its open
+      // state in uncontrolled mode, so it owns the close-on-navigation
+      // transition too (the scrim clearing and the focus returning to
+      // the document are part of that close, not separate mechanisms).
+      mockMatchMedia(false)
+      const user = userEvent.setup()
+      const { getByRole } = renderWithProviders(
+        <AppShell
+          navItems={[
+            { id: 'home', label: 'Home', href: '#/home' },
+            { id: 'notes', label: 'Notes', href: '#/notes' },
+          ]}
+        >
+          content
+        </AppShell>,
+      )
+      await user.click(getByRole('button', { name: zhCN.appShell.openNav }))
+      const homeLink = getByRole('link', { name: 'Home' })
+      await user.click(homeLink)
+
+      // The drawer closes by itself (the toggle is back to openNav and
+      // aria-expanded false -- the suite's established close marker) ...
+      await waitFor(() => {
+        expect(getByRole('button', { name: zhCN.appShell.openNav })).toHaveAttribute(
+          'aria-expanded',
+          'false',
+        )
+      })
+      // ... and the scrim is cleared: MUI keeps the closed modal's
+      // backdrop mounted (keepMounted) but invisible, so "cleared" is a
+      // visibility assertion, not an absence one.
+      const backdrop = document.querySelector('.MuiBackdrop-root')
+      expect(backdrop).not.toBeNull()
+      expect(backdrop).not.toBeVisible()
+      // ... the host navigation still ran (jsdom performs the anchor's
+      // fragment navigation; AppShell never blocks a nav item) ...
+      expect(window.location.hash).toBe('#/home')
+      // ... and focus is back in the document instead of stranded
+      // inside the closed drawer's aria-hidden region.
+      const paper = document.querySelector('.MuiDrawer-paper')
+      expect(paper).not.toBeNull()
+      expect(paper?.contains(document.activeElement)).toBe(false)
+    })
+
+    it('keeps the controlled contract on nav activation: reports nothing and stays open until the host closes', async () => {
+      // The close-on-navigation transition is AppShell's own only while
+      // AppShell owns the open state. A controlled host keeps the
+      // existing contract untouched: no callback fires from a nav-item
+      // click and the drawer stays open until the host's own next
+      // render closes it.
+      mockMatchMedia(false)
+      const onMobileOpenChange = vi.fn()
+      const user = userEvent.setup()
+      const { getByRole } = renderWithProviders(
+        <AppShell
+          navItems={[{ id: 'home', label: 'Home', href: '#/home' }]}
+          mobileOpen
+          onMobileOpenChange={onMobileOpenChange}
+        >
+          content
+        </AppShell>,
+      )
+      await user.click(getByRole('link', { name: 'Home' }))
+
+      expect(onMobileOpenChange).not.toHaveBeenCalled()
+      expect(
+        getByRole('button', { name: zhCN.appShell.closeNav, hidden: true }),
+      ).toHaveAttribute('aria-expanded', 'true')
+    })
+
+    it('does not bring a portrait-open drawer back open after a widen-and-narrow round trip', async () => {
+      // Regression: the uncontrolled open state used to survive a
+      // breakpoint crossing -- a drawer opened in portrait stayed true
+      // while the layout grew into the permanent (always-open) variant
+      // and re-popped open when the viewport narrowed back. The open
+      // state belongs to the temporary variant alone; leaving temporary
+      // resets it.
+      const media = mockMatchMedia(false)
+      const user = userEvent.setup()
+      const { getByRole, queryByRole } = renderWithProviders(
+        <AppShell navItems={NAV_ITEMS}>content</AppShell>,
+      )
+
+      // Portrait: open the temporary drawer.
+      await user.click(getByRole('button', { name: zhCN.appShell.openNav }))
+      expect(
+        getByRole('button', { name: zhCN.appShell.closeNav, hidden: true }),
+      ).toHaveAttribute('aria-expanded', 'true')
+
+      // Widen past md: the toggle leaves and the permanent drawer takes
+      // over. (queryByRole, not getByRole: an absence assertion must not
+      // throw while the element is still disappearing -- waitFor would
+      // retry the thrown query until timeout.)
+      act(() => {
+        media.changeMatches(true)
+      })
+      await waitFor(() => {
+        expect(
+          queryByRole('button', { name: zhCN.appShell.openNav, hidden: true }),
+        ).not.toBeInTheDocument()
+      })
+      expect(getByRole('navigation', { name: zhCN.appShell.navLabel })).toBeInTheDocument()
+
+      // Narrow back below md: the temporary drawer must come back
+      // closed -- pre-fix it re-pops open, because the portrait-open
+      // state rode through the permanent spell untouched.
+      act(() => {
+        media.changeMatches(false)
+      })
+      await waitFor(() => {
+        expect(getByRole('button', { name: zhCN.appShell.openNav })).toHaveAttribute(
+          'aria-expanded',
+          'false',
+        )
+      })
+    })
   })
 
   describe('slots', () => {
@@ -183,15 +319,49 @@ describe('AppShell', () => {
       )
       const skipLink = getByRole('link', { name: zhCN.appShell.skipToContent })
       const main = getByRole('main')
-      // The skip link must target the main landmark by id ...
+      // The skip link keeps an anchor identity (and, with it, an href) ...
       expect(skipLink.getAttribute('href')).toBe(`#${main.id}`)
-      // ... and that target must be programmatically focusable
-      // (tabIndex={-1}), or a browser's fragment-navigation focusing
-      // algorithm only scrolls to it without ever moving the assistive
-      // -tech focus cursor. jsdom enforces the same focusability rule
-      // as browsers, so calling .focus() directly on the target is a
-      // faithful check of the mechanism the fix relies on.
+      // ... and the target must be programmatically focusable
+      // (tabIndex={-1}) for the skip mechanism's own programmatic focus
+      // to land, or a browser's fragment-navigation focusing algorithm
+      // only scrolls to it without ever moving the assistive-tech focus
+      // cursor. jsdom enforces the same focusability rule as browsers,
+      // so calling .focus() directly on the target is a faithful check
+      // of the mechanism the fix relies on.
       main.focus()
+      expect(document.activeElement).toBe(main)
+    })
+
+    it('activates the skip link without touching the host hash and moves focus into main', async () => {
+      // Regression: the skip link used to be a plain `href="#target"`
+      // anchor, and activating it ran real fragment navigation -- which
+      // REWRITES location.hash. For a host that routes through the
+      // fragment (the reference app's own router parses location.hash
+      // into its surfaces), that replaces the app route with the
+      // generated target id and the route is lost. The harness below
+      // mimics such a host: the hash carries an app route, and the skip
+      // link must leave it alone while still moving focus -- driven the
+      // way a real keyboard user would (Tab to it, Enter to activate).
+      mockMatchMedia(true)
+      window.location.hash = '/notes'
+      const user = userEvent.setup()
+      const { getByRole } = renderWithProviders(
+        <AppShell navItems={NAV_ITEMS}>content</AppShell>,
+      )
+      const main = getByRole('main')
+      const skipLink = getByRole('link', { name: zhCN.appShell.skipToContent })
+
+      await user.tab()
+      expect(skipLink).toHaveFocus()
+      await user.keyboard('{Enter}')
+
+      // The app route survives the activation ...
+      expect(window.location.hash).toBe('#/notes')
+      // ... and focus moved into the main landmark. jsdom performs the
+      // fragment navigation itself (it rewrites the hash and never
+      // moves focus), so both halves of this pair fail on the old
+      // mechanism: the hash is replaced by the target id and focus
+      // stays on the link.
       expect(document.activeElement).toBe(main)
     })
 
@@ -318,6 +488,69 @@ describe('AppShell', () => {
       )
       const actionsGroup = getByRole('button', { name: 'Search' }).parentElement
       expect(actionsGroup).toHaveStyle({ flexWrap: 'wrap' })
+    })
+  })
+
+  describe('measured header spacer', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    it('derives every spacer from the measured header height, so a wrapped header cannot cover content below it', async () => {
+      // The AppBar row wraps under real overflow pressure (the flexWrap
+      // protection), which makes its height taller than the theme
+      // toolbar default the placeholders used to assume -- a taller
+      // fixed header then covered the top of main and the drawer's
+      // first item. jsdom evaluates no real layout, so this test cannot
+      // observe an actual wrap or measure actual coverage; what it can
+      // and does prove is the mechanism that keeps the two in lockstep:
+      // the header's rendered height is measured (ResizeObserver on the
+      // banner) and every spacer placeholder (one in the drawer paper,
+      // one in main) derives its min-height from that measurement, and
+      // the drawer's nav follows its spacer in document order. In a
+      // real browser that height equality is what keeps the fixed
+      // AppBar from covering main and the drawer when the toolbar
+      // wraps onto a second row.
+      mockMatchMedia(true)
+      const resizeObserver = stubResizeObserver()
+      const { getByRole } = renderWithProviders(
+        <AppShell
+          navItems={NAV_ITEMS}
+          header={<span>Brand</span>}
+          headerActions={<button type="button">Search</button>}
+          userMenu={<span>Jane Doe</span>}
+        >
+          content
+        </AppShell>,
+      )
+      // The observer watches the header/banner itself ...
+      expect(resizeObserver.observedElement()).toBe(getByRole('banner'))
+
+      // ... and reports a wrapped, two-row header height.
+      resizeObserver.emitHeight(112)
+
+      // The main landmark's spacer carries the measured height ...
+      const main = getByRole('main')
+      const mainSpacer = main.querySelector('.MuiToolbar-root')
+      expect(mainSpacer).not.toBeNull()
+      expect(mainSpacer).toHaveStyle({ minHeight: '112px' })
+
+      // ... and so does the drawer paper's spacer ...
+      const paper = document.querySelector('.MuiDrawer-paper')
+      expect(paper).not.toBeNull()
+      const drawerSpacer = paper?.querySelector('.MuiToolbar-root') ?? null
+      expect(drawerSpacer).not.toBeNull()
+      expect(drawerSpacer).toHaveStyle({ minHeight: '112px' })
+
+      // ... so the first drawer item sits below the spacer in the
+      // paper, exactly where the fixed header's overlay ends when the
+      // spacer matches the header's height.
+      const nav = paper?.querySelector('nav') ?? null
+      expect(nav).not.toBeNull()
+      expect(
+        (drawerSpacer as Node).compareDocumentPosition(nav as Node) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy()
     })
   })
 

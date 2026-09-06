@@ -41,11 +41,15 @@ rule. The public surface is `src/index.ts`; everything under
   (including each item's `selected` state) is entirely host-computed;
   different hosts use different routers, and this package must work
   with all of them identically.
-- **Narrow-viewport protection is CSS-only, never a new host-facing
+- **Narrow-viewport protection is never a new host-facing
   behavior.** The mobile drawer's paper width cap (a CSS `min()`) and
   the AppBar Toolbar/`headerActions` `flexWrap: 'wrap'`
   (responsive-design-hardening round) are purely additive styling with
-  no prop added or changed. Do not "fix" a future narrow-viewport
+  no prop added or changed; the later measured-header-spacer round
+  added the one non-CSS piece -- a ResizeObserver on the banner whose
+  measurement feeds the offset placeholders that keep content clear of
+  the fixed (and now wrap-capable) AppBar -- still internal-only, no
+  prop and no host-visible behavior. Do not "fix" a future narrow-viewport
   complaint by inventing an auto-collapsing overflow menu or similar
   new behavior here — AppShell renders only what the host gives it,
   and a genuine need for host-computed overflow behavior belongs to
@@ -79,7 +83,14 @@ rule. The public surface is `src/index.ts`; everything under
   drawer open state is the one allowed interaction-local exception
   (uncontrolled by default, promotable to controlled), the same
   carve-out `ui-kit`'s `ConfirmDialog` relies on for its double-confirm
-  arm.
+  arm. Two transitions hang off that carve-out and only off it: the
+  uncontrolled temporary drawer closes itself when a nav item is
+  activated (the host's own `onClick` still runs first, and controlled
+  hosts keep the pre-existing contract -- the shell reports nothing and
+  closing stays the host's next render), and the skip link focuses the
+  `main` landmark programmatically rather than navigating to a fragment
+  (fragment navigation rewrites `location.hash`, losing a hash-routed
+  host's route; this is focus movement, never a routing decision).
 - **No direct `@speed/tokens` dependency.** `AppShell` reads
   `breakpoints.values` / `zIndex.values` through the ambient MUI theme
   a host's `AppThemeProvider` already builds (`useTheme()`), exactly as
@@ -125,7 +136,10 @@ unit under the real host tree — `I18nextProvider` around `ui-kit`'s own
 call so the double-registration guard never fires across tests;
 `expectNoAxeViolations` runs axe, always `await`ed; `mockMatchMedia`
 stubs jsdom's missing `window.matchMedia` for `AppShell`'s
-desktop/mobile split). Bilingual assertions import the shipped bundles
+desktop/mobile split -- its returned handle's `changeMatches` flips a
+mounted shell across the breakpoint, and `resize-observer.ts`'s
+`stubResizeObserver` stubs the header-height measurement that the
+spacer tests drive). Bilingual assertions import the shipped bundles
 (`../locales/zh-CN.json`, `en-US.json`, and — where a test asserts
 `RouteGuard`'s denied fallback — `ui-kit`'s own shipped bundles) —
 never inline a language literal. `src/usage-example.test.tsx` compiles

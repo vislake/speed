@@ -90,7 +90,10 @@ landmark), a nav `Drawer` (a labelled `nav` landmark: permanent at the
 `md` breakpoint and up, temporary and overlaid below it -- driven off
 `useMediaQuery(theme.breakpoints.up('md'))`, no new breakpoint
 introduced), and a `main` content landmark. A visually-hidden
-skip-to-content link is the first focusable element in the shell.
+skip-to-content link is the first focusable element in the shell;
+activating it focuses the `main` landmark directly (never a fragment
+navigation, which would rewrite `location.hash` and lose a
+hash-routed host's current route).
 
 AppShell carries no navigation logic of its own: `navItems` is a
 `readonly AppShellNavItem[]` the host computes in full, including
@@ -104,7 +107,7 @@ different hosts use different routers.
 | `headerActions` | `ReactNode` | end-of-AppBar content (search, notifications) |
 | `userMenu` | `ReactNode` | far end-of-AppBar content (account menu trigger) |
 | `children` | `ReactNode` (required) | the content region, rendered inside the `main` landmark |
-| `mobileOpen` / `onMobileOpenChange` | `boolean` / `(open: boolean) => void` | optional controlled pair for the mobile drawer; omit both to let AppShell manage the toggle itself (the one interaction-local exception, matching `ui-kit`'s `ConfirmDialog` double-confirm arm) |
+| `mobileOpen` / `onMobileOpenChange` | `boolean` / `(open: boolean) => void` | optional controlled pair for the mobile drawer; omit both to let AppShell manage the toggle itself (the one interaction-local exception, matching `ui-kit`'s `ConfirmDialog` double-confirm arm -- the same carve-out covers the uncontrolled temporary drawer closing itself when a nav item is activated; a controlled host keeps the existing contract, closing through its own next render) |
 | `sidebarWidth` | `number` | drawer width in px, both variants; defaults to 280 |
 | `sx` | `SxProps<Theme>` | escape hatch, merged onto the root layout box |
 
@@ -123,9 +126,19 @@ onto a second line under real overflow pressure instead of being
 squeezed or clipped -- AppShell still renders only what the host
 gives it (this is not an auto-collapsing overflow menu; inventing one
 would be new host-facing behavior this package's design deliberately
-avoids elsewhere). Both are purely additive CSS: no prop was added or
-changed, and every existing consumer is visually unaffected outside
-the narrow-viewport cases these protections exist for.
+avoids elsewhere). No prop was added or changed, and every existing
+consumer is visually unaffected outside the narrow-viewport cases
+these protections exist for. Because a wrapped header row is taller
+than the theme's single-row toolbar height, the header's rendered
+height is measured (a ResizeObserver on the banner, where the browser
+provides one) and the three offset placeholders that keep content
+clear of the fixed AppBar -- inside the drawer paper and inside
+`main`, for whichever drawer variant is mounted -- derive their height
+from that measurement, so a wrapped header never covers the top of
+the content below it. jsdom has no ResizeObserver and no layout, so
+the placeholders keep the theme toolbar height there and the
+measurement path is proven through a stubbed observer; the real
+browser round trip is what the mechanism exists for.
 
 ## RouteGuard
 
@@ -231,13 +244,16 @@ package -- see the AGENTS.md non-negotiable rules.
 ## Development
 
 From `web/packages/layout-kit`: `pnpm lint`, `pnpm typecheck`, `pnpm
-test` (31 tests across 3 files), `pnpm build`. The test suite runs in
+test` (38 tests across 3 files), `pnpm build`. The test suite runs in
 jsdom (`vitest.config.ts`); shared helpers live in `test-utils/`
 (`renderWithProviders` mounts the unit under the real host tree --
 `I18nextProvider` plus `ui-kit`'s own `AppThemeProvider`, both
 namespaces registered -- `expectNoAxeViolations` runs axe;
 `mockMatchMedia` stubs jsdom's missing `window.matchMedia` for
-`AppShell`'s desktop/mobile split -- and `emitted-css.ts`'s
+`AppShell`'s desktop/mobile split, its returned handle's
+`changeMatches` flipping a mounted shell across the breakpoint --
+`resize-observer.ts`'s `stubResizeObserver` stubs the header-height
+measurement -- and `emitted-css.ts`'s
 `emittedStyleText()` reads the CSS text emotion has injected into the
 document, used by the mobile-drawer-width-cap test: jsdom evaluates no
 real layout, so that assertion is a property/snapshot proof the CSS

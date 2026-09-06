@@ -12,6 +12,18 @@
  * stand-in for what a real host renders even though this package takes
  * no *direct* dependency on @speed/tokens itself.
  *
+ * The provider tree is passed as the RTL `wrapper` option, not wrapped
+ * around `ui` by hand: RTL re-wraps a `rerender(ui)` call in the very
+ * same wrapper it rendered with, so a rerendered unit stays inside the
+ * providers and React reconciles it in place. A hand-wrapped tree
+ * instead gets REPLACED by the bare rerendered `ui` (the wrapper was
+ * applied outside RTL's knowledge), which unmounts the providers and
+ * remounts the unit -- a fresh instance whose refs and state reset on
+ * the first rerender. RouteGuard's transition tests depend on rerenders
+ * that preserve the instance (its effect ref is what dedupes the
+ * denied-transition firing), so the scaffold has to keep the tree shape
+ * stable across rerenders.
+ *
  * The i18n instance is created per call with a deterministic
  * configuration (no storage, no URL, no navigator) and both namespaces
  * registered -- a fresh instance per call keeps registerNamespace's
@@ -20,7 +32,7 @@
 
 import { render } from '@testing-library/react'
 import type { RenderResult } from '@testing-library/react'
-import type { ReactElement } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import {
   createI18n,
   I18nextProvider,
@@ -67,10 +79,15 @@ export function renderWithProviders(
 ): RenderWithProvidersResult {
   const { language = 'zh-CN', i18n } = options
   const instance = i18n ?? createLayoutKitI18n(language)
-  const result = render(
-    <I18nextProvider i18n={instance}>
-      <AppThemeProvider i18n={instance}>{ui}</AppThemeProvider>
-    </I18nextProvider>,
-  )
+
+  function Wrapper({ children }: { readonly children: ReactNode }): ReactElement {
+    return (
+      <I18nextProvider i18n={instance}>
+        <AppThemeProvider i18n={instance}>{children}</AppThemeProvider>
+      </I18nextProvider>
+    )
+  }
+
+  const result = render(ui, { wrapper: Wrapper })
   return { ...result, i18n: instance }
 }

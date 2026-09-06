@@ -34,10 +34,32 @@
  * `sidebarWidth` itself, so a very narrow viewport (~320px and below)
  * never gets a near-full-screen or overflowing drawer; the desktop
  * (permanent) Drawer's width, and its nav content, are untouched.
+ *
+ * Two interaction-local states live inside AppShell, both only when
+ * the host keeps the drawer uncontrolled. First, the skip link focuses
+ * the `main` landmark programmatically instead of navigating to a
+ * fragment: fragment navigation rewrites `location.hash`, which in a
+ * hash-routed host (the reference app routes exactly that way) replaces
+ * the app route with the generated target id and loses the route.
+ * Second, activating a nav item in the temporary drawer closes it --
+ * the drawer owns its open state in uncontrolled mode, so it owns the
+ * close-on-navigation transition (MUI's own close machinery clears the
+ * scrim and restores focus). A controlled host keeps the existing
+ * contract untouched: nav activation reports nothing and closing stays
+ * the host's own next render.
+ *
+ * Because the header row can wrap, its rendered height is measured
+ * (ResizeObserver on the banner, where the browser supports it) and
+ * the three spacer placeholders -- the one inside the drawer paper and
+ * the one inside `main` for each drawer variant -- derive their height
+ * from that measurement rather than assuming the theme's single-row
+ * toolbar height, so a wrapped header can never cover the top of the
+ * content it overlays. Where no ResizeObserver exists (jsdom), the
+ * spacers keep the plain theme-height Toolbar.
  */
 
-import { useId, useState } from 'react'
-import type { MouseEventHandler, ReactNode } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
+import type { MouseEvent, MouseEventHandler, ReactNode } from 'react'
 import type { SxProps, Theme } from '@mui/material/styles'
 import { useTheme } from '@mui/material/styles'
 import AppBar from '@mui/material/AppBar'
@@ -103,7 +125,23 @@ export interface AppShellProps {
 
 const DEFAULT_SIDEBAR_WIDTH = 280
 
-function NavList({ navItems }: { readonly navItems: readonly AppShellNavItem[] }) {
+function NavList({
+  navItems,
+  onNavigate,
+}: {
+  readonly navItems: readonly AppShellNavItem[]
+  /**
+   * Fired after the item's own onClick, when it has one, on every item
+   * activation. The drawer variants decide what this means: the
+   * temporary drawer closes itself on it (uncontrolled), the permanent
+   * drawer passes none.
+   */
+  readonly onNavigate?: () => void
+}) {
+  const activate = (event: MouseEvent<HTMLElement>, item: AppShellNavItem): void => {
+    item.onClick?.(event)
+    onNavigate?.()
+  }
   return (
     <List>
       {navItems.map((item) => {
@@ -119,7 +157,7 @@ function NavList({ navItems }: { readonly navItems: readonly AppShellNavItem[] }
               <ListItemButton
                 component="a"
                 href={item.href}
-                onClick={item.onClick}
+                onClick={(event) => activate(event, item)}
                 selected={item.selected ?? false}
                 aria-current={item.selected === true ? 'page' : undefined}
               >
@@ -127,7 +165,7 @@ function NavList({ navItems }: { readonly navItems: readonly AppShellNavItem[] }
               </ListItemButton>
             ) : (
               <ListItemButton
-                onClick={item.onClick}
+                onClick={(event) => activate(event, item)}
                 selected={item.selected ?? false}
                 aria-current={item.selected === true ? 'page' : undefined}
               >
@@ -176,17 +214,74 @@ export function AppShell({
     onMobileOpenChange?.(next)
   }
 
-  // Fills whichever Drawer paper it is mounted into rather than
-  // re-declaring sidebarWidth itself -- the permanent (desktop) paper is
-  // exactly sidebarWidth, but the temporary (mobile) paper is capped to
+  // The uncontrolled drawer's open state belongs to the temporary
+  // variant: a portrait-open drawer that grows into the permanent
+  // (always-open) variant at md+ must not come back open when the
+  // viewport narrows again. Reset it the moment the variant leaves
+  // temporary. Controlled hosts own the state themselves; nothing is
+  // reset on their behalf.
+  useEffect(() => {
+    if (isDesktop && !isControlled) {
+      setUncontrolledOpen(false)
+    }
+  }, [isDesktop, isControlled])
+
+  // The header row wraps under real overflow pressure, so its rendered
+  // height is measured and every spacer placeholder derives its height
+  // from the measurement (see the "spacer" note at the placeholders).
+  // Without a ResizeObserver (jsdom) the measurement never arrives and
+  // the spacers keep the theme toolbar height, exactly as before.
+  const [headerHeight, setHeaderHeight] = useState<number | null>(null)
+  const appBarRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const appBar = appBarRef.current
+    if (appBar === null || typeof ResizeObserver === 'undefined') {
+      return undefined
+    }
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[entries.length - 1]
+      if (entry !== undefined) {
+        setHeaderHeight(Math.round(entry.contentRect.height))
+      }
+    })
+    observer.observe(appBar)
+    return () => observer.disconnect()
+  }, [])
+
+  // The skip link's activation target. Kept in a ref rather than
+  // resolved by id so the handler never touches the document: the
+  // element the link labels is the element it focuses.
+  const mainContentRef = useRef<HTMLDivElement | null>(null)
+
+  const focusMainContent = (): void => {
+    mainContentRef.current?.focus()
+  }
+
+  // The nav content mounts into either Drawer paper. It fills whichever
+  // paper it lands in (`width: 100%`) rather than re-declaring
+  // sidebarWidth itself -- the permanent (desktop) paper is exactly
+  // sidebarWidth, but the temporary (mobile) paper is capped to
   // `min(sidebarWidth, 85vw)` below, and a second, independent
-  // sidebarWidth here would silently outgrow that cap and bleed past the
-  // paper's right edge (Drawer's paper is `position: fixed` with no
-  // overflow-x, so the overflow is not clipped, just visible).
-  const navContent = (
+  // sidebarWidth here would silently outgrow that cap and bleed past
+  // the paper's right edge (Drawer's paper is `position: fixed` with no
+  // overflow-x, so the overflow is not clipped, just visible). The
+  // permanent variant passes no onNavigate (nothing to close); the
+  // temporary variant passes the close transition -- see the module doc
+  // comment for who owns it in which mode.
+  const navContent = (onNavigate?: () => void) => (
     <Box component="nav" aria-label={t('appShell.navLabel')} sx={{ width: '100%', boxSizing: 'border-box' }}>
-      <NavList navItems={navItems} />
+      <NavList navItems={navItems} onNavigate={onNavigate} />
     </Box>
+  )
+
+  // The three offset placeholders that keep content clear of the fixed
+  // AppBar: one inside the drawer paper and one inside `main`, for
+  // whichever drawer variant is mounted. When the header height has
+  // been measured, each spacer carries that exact height; before any
+  // measurement exists it is a plain theme-height Toolbar (the
+  // single-row case, which is also the whole jsdom case).
+  const spacer = (
+    <Toolbar sx={headerHeight !== null ? { minHeight: headerHeight } : undefined} />
   )
 
   return (
@@ -196,13 +291,26 @@ export function AppShell({
         ...(Array.isArray(sx) ? sx : sx ? [sx] : []),
       ]}
     >
-      <AppBar position="fixed" sx={{ zIndex: theme.zIndex.drawer + 1 }}>
+      <AppBar position="fixed" ref={appBarRef} sx={{ zIndex: theme.zIndex.drawer + 1 }}>
         {/* Visually hidden until focused; the first focusable element in
             the shell, so it must live before the nav toggle in DOM order.
             It stays inside the header/banner landmark so it never counts
-            as page content outside a landmark. */}
+            as page content outside a landmark. Activating it focuses the
+            main landmark directly instead of navigating to the fragment:
+            fragment navigation rewrites location.hash, and in a
+            hash-routed host the fragment IS the route (the reference app
+            routes exactly that way) -- a skip link that navigates would
+            replace the app route with the generated target id. The
+            keyboard path is unchanged: Tab reaches the link, Enter
+            activates it, and the focus visibly moves into main (browsers
+            scroll a focused element into view, matching what fragment
+            navigation would have scrolled to). */}
         <Link
           href={`#${mainContentId}`}
+          onClick={(event) => {
+            event.preventDefault()
+            focusMainContent()
+          }}
           sx={{
             position: 'absolute',
             width: 1,
@@ -276,8 +384,8 @@ export function AppShell({
             open
             sx={{ '& .MuiDrawer-paper': { boxSizing: 'border-box', width: sidebarWidth } }}
           >
-            <Toolbar />
-            {navContent}
+            {spacer}
+            {navContent()}
           </Drawer>
         ) : (
           <Drawer
@@ -296,19 +404,28 @@ export function AppShell({
               },
             }}
           >
-            <Toolbar />
-            {navContent}
+            {spacer}
+            {navContent(() => {
+              // The temporary drawer owns the close-on-navigation
+              // transition when it owns the open state. In controlled
+              // mode this fires nothing and closes nothing: the host
+              // observes the navigation itself and closes through its
+              // own next render, the unchanged contract.
+              if (!isControlled) {
+                setUncontrolledOpen(false)
+              }
+            })}
           </Drawer>
         )}
       </Box>
       <Box
         component="main"
         id={mainContentId}
+        ref={mainContentRef}
         // A bare `main` has no tabindex, so it is not natively focusable
-        // and the fragment-navigation focusing algorithm the skip link
-        // above relies on can only scroll to it, never move focus into
-        // it. tabIndex={-1} makes it a valid, non-tab-order focus target
-        // without adding a Tab stop.
+        // and neither native fragment navigation nor the skip link's
+        // programmatic focus could land on it. tabIndex={-1} makes it a
+        // valid, non-tab-order focus target without adding a Tab stop.
         tabIndex={-1}
         sx={{
           flexGrow: 1,
@@ -316,7 +433,7 @@ export function AppShell({
           width: { md: `calc(100% - ${sidebarWidth}px)` },
         }}
       >
-        <Toolbar />
+        {spacer}
         {children}
       </Box>
     </Box>
