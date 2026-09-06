@@ -10,10 +10,10 @@ import (
 )
 
 // txRetryBudget bounds how many times one of this module's guarded,
-// database-arbitrated single-statement writes -- ShareRepository's
-// tryRecordView, tryIncrementView and markRevoked -- retries after a
-// transient, contention-only database failure: SQLite's SQLITE_BUSY, or
-// PostgreSQL's detected deadlock or serialization failure.
+// database-arbitrated writes -- ShareRepository's tryRecordView,
+// tryIncrementView and markRevoked -- retries after a transient,
+// contention-only database failure: SQLite's SQLITE_BUSY, or PostgreSQL's
+// detected deadlock or serialization failure.
 // dbkit.IsRetryableConflict's own doc comment has each one; none is data
 // corruption -- all are the database correctly refusing to let two
 // overlapping writers proceed at once -- and the correct response is the
@@ -24,16 +24,17 @@ import (
 // go/org/concurrency.go is the established precedent for this exact
 // mechanism (its own txRetryBudget/txRetryBackoff/withRetry around the
 // tree operations' multi-statement transactions); this module's guarded
-// writes are single statements, so the retry lives around each write's one
-// WithTenantSession rather than around a longer transaction, and -- unlike
-// org's tree operations -- none of them needs to re-read anything on a
+// writes follow the identical shape, with the retry living around each
+// attempt's one WithTenantSession. An attempt needs no re-reading on a
 // retry: each statement's WHERE clause re-evaluates the row's state at
 // execution time on every attempt, which is precisely what keeps a retried
 // tryRecordView from double-counting (a view-count increment committed by
 // someone else between attempts makes the retried attempt affect zero rows
-// and report won == false, exactly as a first attempt would have).
+// and report won == false -- and its granted log row is then not inserted,
+// so no duplicate trail survives either -- exactly as a first attempt would
+// have).
 //
-// # Why runGuardedWrite also orders this module's own writes in-process
+// # Why runGuardedWrite orders this module's own writes in-process on SQLite
 //
 // The retry above is what a guarded write does when it genuinely loses a
 // race against ANOTHER connection. On the SQLite unit tier there is a
@@ -48,28 +49,40 @@ import (
 // views-survive-revoke regression failed 5 of 8 runs with the retry alone,
 // every lost attempt having burned the full 5s timeout; shorter per-attempt
 // waits fared strictly worse, because the winning re-check only ever
-// arrives after seconds of continuous waiting). runGuardedWrite therefore
-// ALSO serializes this repository's own guarded writes behind one
-// in-process mutex (ShareRepository.writeMu) for the duration of each
-// attempt's transaction: every writer this module itself spawns -- view
-// recordings, revocations, the expiry sweep -- then takes the file's write
-// lock in turn with no contention at all, because no second connection of
-// this module is mid-write while one holds the mutex. That is exactly the
+// arrives after seconds of continuous waiting). On SQLite alone,
+// runGuardedWrite therefore ALSO serializes this repository's own guarded
+// writes behind one in-process mutex (ShareRepository.writeMu, gated by
+// the repository's serializeWrites flag) for the duration of each attempt's
+// transaction: every writer this module itself spawns -- view recordings,
+// revocations, the expiry sweep -- then takes the file's write lock in
+// turn with no contention at all, because no second connection of this
+// module is mid-write while one holds the mutex. That is exactly the
 // serialization SQLite's single-writer semantics imposes anyway, made
 // orderly instead of contended: a revoke racing a view storm queues behind
 // the current increment and lands on its next turn (Go's mutex starvation
 // mode hands a long waiter the lock within milliseconds), deterministically,
-// in every scheduling regime. The database remains the arbiter across
-// connections the mutex cannot see -- other processes on the same file, or
-// PostgreSQL replicas -- which is what the retry is for; the two
-// mechanisms are complements, not substitutes, and the mutex's cost (this
-// repository's guarded writes serialize per process) is the same
-// serialization SQLite would impose anyway, while on PostgreSQL it merely
-// moves a single-row update's ordering ahead of the database's own row
-// lock.
+// in every scheduling regime.
+//
+// On PostgreSQL the mutex is NOT taken (serializeWrites is false): SQLite's
+// single-writer premise -- the one thing the mutex exists to make orderly --
+// does not exist there. PostgreSQL arbitrates concurrent writers with its
+// own row locks, and the bounded conflict retry above is the honest
+// mechanism for the rare deadlock/serialization failure that genuine row-
+// lock contention can still produce. A process-wide, cross-tenant mutex
+// around whole transactions would add nothing PostgreSQL needs and would
+// actively cost isolation: one slow guarded write -- a blocked UPDATE, a
+// slow network round trip -- would serialize every unrelated tenant's
+// guarded write behind it, and the expiry sweep would take the lock once
+// per row across a huge tenant's backlog, interrupting unrelated tenants'
+// writes between every row. The mutex is a SQLite-file-lock accommodation,
+// not a module-wide policy, and it stays confined to the dialect whose
+// file lock it exists for. (The database remains the arbiter across
+// connections the mutex cannot see even on SQLite -- other processes on
+// the same file -- which is what the retry is for; the two mechanisms are
+// complements, not substitutes.)
 //
 // 5 is generous for the contention the retry actually needs to absorb once
-// the mutex has removed this module's own writers from the file-lock
+// the mutex has removed this module's own writers from the SQLite file-lock
 // lottery -- a genuine transient blip from a writer outside the mutex, or
 // a PostgreSQL deadlock/serialization failure -- not a number tuned
 // against a measured production workload. Exhausting the budget is
@@ -95,19 +108,23 @@ const txRetryBudget = 5
 const txRetryBackoff = 5 * time.Millisecond
 
 // runGuardedWrite executes one guarded, database-arbitrated
-// single-statement write -- fn is expected to run exactly one UPDATE whose
-// WHERE clause re-evaluates the row's state -- inside a fresh
-// dbkit.WithTenantSession transaction per attempt, ordered behind this
-// repository's own writers by writeMu and retried through withTxRetry
-// exactly as org's atomic operations retry their whole transactions (see
-// txRetryBudget's own doc comment for why both halves exist). fn reports
-// its outcome through captured variables (the attempt's RowsAffected-
-// derived won flag, for example), exactly as org's withRetry closures
-// communicate their transactions' results out.
+// single-statement write -- fn is expected to run its guarded statement(s),
+// each with WHERE clauses that re-evaluate the row's state -- inside a
+// fresh dbkit.WithTenantSession transaction per attempt, retried through
+// withTxRetry exactly as org's atomic operations retry their whole
+// transactions (see txRetryBudget's own doc comment for why the retry
+// exists). On SQLite only, each attempt is additionally ordered behind this
+// repository's own writers by writeMu (serializeWrites); on PostgreSQL the
+// mutex is not taken -- see the doc comment above for why the two dialects
+// get different shapes. fn reports its outcome through captured variables
+// (the attempt's RowsAffected-derived won flag, for example), exactly as
+// org's withRetry closures communicate their transactions' results out.
 func (r *ShareRepository) runGuardedWrite(ctx context.Context, fn func(tx *gorm.DB) error) error {
 	return withTxRetry(func() error {
-		r.writeMu.Lock()
-		defer r.writeMu.Unlock()
+		if r.serializeWrites {
+			r.writeMu.Lock()
+			defer r.writeMu.Unlock()
+		}
 		return dbkit.WithTenantSession(ctx, r.db, fn)
 	})
 }

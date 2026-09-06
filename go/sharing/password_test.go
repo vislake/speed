@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -163,6 +164,68 @@ func TestVerifySharePassword_RefusesParamsArgon2CannotRunWith(t *testing.T) {
 		phc := phcForTest(password, 4096, 2, 1, field)
 		if _, err := verifySharePassword(phc, password); !errors.Is(err, ErrInvalidSharePasswordHash) {
 			t.Errorf("%s: verifySharePassword error = %v, want ErrInvalidSharePasswordHash", name, err)
+		}
+	}
+}
+
+// TestVerifySharePassword_RefusesAbsurdCostParams pins the upper half of
+// the reading-side parameter guard (finding P3-sharing-6) through the
+// verification entry point: a stored PHC string whose cost parameters
+// parse but are absurdly large is refused as ErrInvalidSharePasswordHash
+// BEFORE any argon2.IDKey call, mirroring the maxPHCFieldBytes discipline
+// the salt and digest already carry. The parameters travel in the stored
+// value by design, so a corrupt or hostile row could carry anything up to
+// the parse's own uint32 ceiling -- m=4294967295 would make argon2.IDKey
+// attempt a ~4 TiB allocation on the request goroutine. Each case here
+// uses a memory cost just past the cap (the smallest over-cap value is
+// 1 GiB, so the pre-fix code's allocation attempt stays survivable under
+// an address-space limit -- the m=4294967295 marquee case is pinned at
+// the decode level in TestDecodeSharePasswordPHC_RefusesAbsurdCostParams
+// instead, because pre-fix it is the ~4 TiB attempt itself). The digest
+// bytes are those of a real argon2 derivation under the sane m=4096
+// parameters, so the only thing wrong with these values is the cost field.
+func TestVerifySharePassword_RefusesAbsurdCostParams(t *testing.T) {
+	const password = "password"
+	enc := base64.RawStdEncoding
+	salt := enc.EncodeToString([]byte("0123456789abcdef"))
+	digest := enc.EncodeToString(argon2.IDKey([]byte(password), []byte("0123456789abcdef"), 2, 4096, 1, 32))
+
+	for name, field := range map[string]string{
+		"memory one past the cap": fmt.Sprintf("m=%d,t=2,p=1", maxSharePasswordMemoryKiB+1),
+		"memory far past the cap": "m=1073741824,t=2,p=1", // 1 TiB
+	} {
+		phc := fmt.Sprintf("$argon2id$v=%d$%s$%s$%s", argon2.Version, field, salt, digest)
+		if _, err := verifySharePassword(phc, password); !errors.Is(err, ErrInvalidSharePasswordHash) {
+			t.Errorf("%s: verifySharePassword error = %v, want ErrInvalidSharePasswordHash -- an absurd cost must be refused before any allocation", name, err)
+		}
+	}
+}
+
+// TestDecodeSharePasswordPHC_RefusesAbsurdCostParams pins the refusal at
+// the decode layer itself, where it actually happens -- and where every
+// hostile case can be exercised without the pre-fix code ever reaching
+// argon2.IDKey (decode never allocates), so the fail-before run is the
+// clean assertion failure "the parser accepted m=4294967295", not a ~4 TiB
+// allocation attempt. That attempt is real on the pre-fix code: m at the
+// uint32 ceiling makes argon2.IDKey allocate roughly 4 TiB, and t at the
+// ceiling would loop effectively forever -- both are exactly what these
+// refusals exist to keep from ever starting.
+func TestDecodeSharePasswordPHC_RefusesAbsurdCostParams(t *testing.T) {
+	enc := base64.RawStdEncoding
+	salt := enc.EncodeToString([]byte("0123456789abcdef"))
+	digest := enc.EncodeToString(argon2.IDKey([]byte("password"), []byte("0123456789abcdef"), 2, 4096, 1, 32))
+
+	for name, field := range map[string]string{
+		"memory at the uint32 ceiling":        fmt.Sprintf("m=%d,t=2,p=1", uint32(math.MaxUint32)),
+		"iterations at the uint32 ceiling":    fmt.Sprintf("m=19456,t=%d,p=1", uint32(math.MaxUint32)),
+		"memory far past the cap":             "m=1073741824,t=2,p=1", // 1 TiB
+		"iterations one past the cap":         fmt.Sprintf("m=19456,t=%d,p=1", maxSharePasswordIterations+1),
+		"iterations far past the cap":         "m=19456,t=1000000,p=1",
+		"parallelism past its own type bound": "m=19456,t=2,p=256",
+	} {
+		phc := fmt.Sprintf("$argon2id$v=%d$%s$%s$%s", argon2.Version, field, salt, digest)
+		if _, _, _, err := decodeSharePasswordPHC(phc); !errors.Is(err, ErrInvalidSharePasswordHash) {
+			t.Errorf("%s: decodeSharePasswordPHC error = %v, want ErrInvalidSharePasswordHash -- an absurd cost must be refused at decode, before any allocation", name, err)
 		}
 	}
 }

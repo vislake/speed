@@ -32,12 +32,14 @@ var (
 	// ErrExpiryOutOfRange reports that Service.Create's caller supplied an
 	// ExpiresAt outside the bounds rule 2 allows an explicit expiry to
 	// occupy: not strictly in the future (a share born already expired is
-	// refused rather than created dead), or further out than the module's
-	// maximum requested lifetime -- the same 30-day ceiling rule 2 names
-	// for the default (defaultShareExpiry's own doc comment). The second
-	// half is the "never-expiring in disguise" arm of rule 2: an
-	// expiresAt of 9999-12-31 must not be accepted just because it is
-	// technically not Forever.
+	// refused rather than created dead), or further out than the tenant's
+	// operative explicit-expiry ceiling -- MaxExplicitShareLifetime (the
+	// module's 30-day ceiling on explicit requests), raised to the tenant's
+	// configured default when that default is longer (see
+	// MaxExplicitShareLifetime's own doc comment). The second half is the
+	// "never-expiring in disguise" arm of rule 2: an expiresAt of
+	// 9999-12-31 must not be accepted just because it is technically not
+	// Forever.
 	ErrExpiryOutOfRange = apperr.Invalid("sharing.expiry_out_of_range")
 
 	// ErrInvalidMaxViews reports that Service.Create was called with a

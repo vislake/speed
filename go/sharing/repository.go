@@ -24,18 +24,43 @@ type ShareRepository struct {
 
 	db *gorm.DB
 
-	// writeMu orders this repository's own guarded writes (runGuardedWrite,
-	// concurrency.go) behind one in-process mutex, so the view-recording,
-	// revocation and sweep writers this module itself spawns never contend
-	// with each other for the SQLite file lock -- see concurrency.go's own
-	// doc comment for why that ordering exists alongside the bounded
-	// conflict retry, and why the zero value is ready to use.
+	// serializeWrites reports whether this repository's guarded writes
+	// (runGuardedWrite, concurrency.go) order themselves behind writeMu:
+	// true only when db speaks SQLite, the one dialect whose single-writer
+	// file lock this ordering exists to keep contention-free (concurrency.go's
+	// own doc comment has the full reasoning). On PostgreSQL the field is
+	// false and guarded writes run without the in-process mutex -- the
+	// database's own row locks plus the bounded conflict retry are the
+	// honest mechanism there, and a process-wide cross-tenant mutex would
+	// only serialize unrelated tenants' writes for no benefit. Set once at
+	// construction from the dialector name (db.Name()), never read per call.
+	serializeWrites bool
+
+	// writeMu is the mutex serializeWrites gates: it orders this
+	// repository's own guarded writes behind one in-process lock on
+	// SQLite, so the view-recording, revocation and sweep writers this
+	// module itself spawns never contend with each other for the file
+	// lock -- see concurrency.go's own doc comment for why that ordering
+	// exists alongside the bounded conflict retry, and why the zero value
+	// is ready to use.
 	writeMu sync.Mutex
 }
 
 // NewShareRepository returns a ShareRepository backed by db.
 func NewShareRepository(db *gorm.DB) *ShareRepository {
-	return &ShareRepository{Repository: dbkit.NewRepository[Share](db), db: db}
+	// db may be nil on a Service constructed only for identity checks
+	// (NewModule(nil) -- module_test.go's TestModule_Identity); the
+	// dialect probe is guarded so construction still succeeds, and any
+	// actual I/O on such a Service panics exactly as it always did.
+	// (db.Name() is gorm's own Dialector.Name promoted through the
+	// embedded dialector -- "sqlite" for the SQLite driver, "postgres"
+	// for PostgreSQL.)
+	serialize := db != nil && db.Name() == "sqlite"
+	return &ShareRepository{
+		Repository:      dbkit.NewRepository[Share](db),
+		db:              db,
+		serializeWrites: serialize,
+	}
 }
 
 // byTokenHash returns the caller tenant's share whose stored hash is hash,
@@ -69,6 +94,18 @@ func (r *ShareRepository) byTokenHash(ctx context.Context, hash string) (*Share,
 // of now, and (if MaxViews is set) still under it -- and reports whether
 // this call is the one that recorded the view.
 //
+// When the attempt IS the one that records the view, the caller's
+// grantedEntry -- the access's granted log row, never nil on the
+// Service.recordView path -- is inserted in the SAME transaction, so the
+// count and its trail commit or roll back together: a granted access whose
+// log row cannot be written rolls the count back with it instead of
+// leaving the share exhausted by an access that failed (Service.Access's
+// own doc comment). grantedEntry is written only by the winning attempt:
+// a retried attempt whose WHERE clause no longer matches -- because a
+// concurrent writer committed a view between attempts -- affects zero
+// rows, reports won == false and inserts nothing, so no duplicate log row
+// can survive a lost race.
+//
 // This is a compare-and-swap guard expressed entirely through a WHERE
 // clause and a struct passed to Updates, deliberately NOT a raw SQL
 // increment (view_count = view_count + 1) reached through .Model(...): the
@@ -84,9 +121,11 @@ func (r *ShareRepository) byTokenHash(ctx context.Context, hash string) (*Share,
 // concurrency as "not accessible" -- see its own doc comment.
 //
 // The statement itself runs through runGuardedWrite (concurrency.go):
-// this repository's guarded writes are ordered behind one in-process
-// mutex -- so a view-recording storm and a revoke racing it never contend
-// with each other for the SQLite file lock at all -- and each attempt's
+// on SQLite this repository's guarded writes are ordered behind one
+// in-process mutex -- so a view-recording storm and a revoke racing it
+// never contend with each other for the SQLite file lock at all -- while
+// on PostgreSQL no in-process mutex is taken (the database's own row locks
+// arbitrate; see serializeWrites's own doc comment); and each attempt's
 // transaction retries up to txRetryBudget times on a transient,
 // contention-only database failure (SQLITE_BUSY from a writer outside this
 // module, or PostgreSQL's deadlock/serialization failure) rather than
@@ -96,7 +135,7 @@ func (r *ShareRepository) byTokenHash(ctx context.Context, hash string) (*Share,
 // committed a view between the attempts -- affects zero rows and reports
 // won == false, never a double-count, so the retry changes nothing about
 // how Service.recordView interprets this method's answer.
-func (r *ShareRepository) tryRecordView(ctx context.Context, share *Share, now time.Time) (won bool, err error) {
+func (r *ShareRepository) tryRecordView(ctx context.Context, share *Share, now time.Time, grantedEntry *AccessLogEntry) (won bool, err error) {
 	err = r.runGuardedWrite(ctx, func(tx *gorm.DB) error {
 		res := tx.
 			Where("id = ?", share.ID).
@@ -105,8 +144,14 @@ func (r *ShareRepository) tryRecordView(ctx context.Context, share *Share, now t
 			Where("expires_at > ?", now).
 			Where("max_views IS NULL OR view_count < max_views").
 			Updates(&Share{ViewCount: share.ViewCount + 1})
+		if res.Error != nil {
+			return res.Error
+		}
 		won = res.RowsAffected == 1
-		return res.Error
+		if won && grantedEntry != nil {
+			return tx.Create(grantedEntry).Error
+		}
+		return nil
 	})
 	if err != nil {
 		return false, ErrInternal.WithCause(err)
@@ -119,6 +164,13 @@ func (r *ShareRepository) tryRecordView(ctx context.Context, share *Share, now t
 // one that landed. Service.recordView uses this for an UNLIMITED share
 // (MaxViews nil) -- see recordView's own doc comment for why the
 // compare-and-swap guard of tryRecordView is the wrong tool there.
+//
+// When the increment IS the one that lands, the caller's grantedEntry --
+// the access's granted log row, never nil on the Service.recordView path
+// -- is inserted in the SAME transaction, exactly as tryRecordView commits
+// it alongside its own winning UPDATE: the count and its trail commit or
+// roll back together (tryRecordView's own doc comment has the reasoning,
+// which is identical here).
 //
 // # Why this is a raw Exec, not a struct-based Updates call
 //
@@ -150,15 +202,16 @@ func (r *ShareRepository) tryRecordView(ctx context.Context, share *Share, now t
 // refuse a no-longer-live row.
 //
 // The statement itself runs through runGuardedWrite (concurrency.go),
-// the same ordered-and-retried path tryRecordView and markRevoked use: a
+// the same ordered-and-retried path tryRecordView and markRevoked use: on
+// SQLite this repository's own writers are ordered behind writeMu, and a
 // transient, contention-only database failure (SQLITE_BUSY from a writer
-// outside this module -- this repository's own writers are already ordered
-// behind writeMu -- or PostgreSQL's deadlock/serialization failure)
-// retries the whole guarded increment from a fresh transaction up to
-// txRetryBudget times rather than surfacing as a store error. Each
-// retried attempt is the same atomic server-side increment, so a retry can
-// never double-count.
-func (r *ShareRepository) tryIncrementView(ctx context.Context, share *Share, now time.Time) (won bool, err error) {
+// outside this module, or PostgreSQL's deadlock/serialization failure --
+// the only conflicts left once PostgreSQL skips the in-process mutex
+// entirely, per serializeWrites's own doc comment) retries the whole
+// guarded increment from a fresh transaction up to txRetryBudget times
+// rather than surfacing as a store error. Each retried attempt is the same
+// atomic server-side increment, so a retry can never double-count.
+func (r *ShareRepository) tryIncrementView(ctx context.Context, share *Share, now time.Time, grantedEntry *AccessLogEntry) (won bool, err error) {
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
 		return false, err
@@ -169,8 +222,14 @@ func (r *ShareRepository) tryIncrementView(ctx context.Context, share *Share, no
 				`SET view_count = view_count + 1, updated_at = ? `+
 				`WHERE id = ? AND tenant_id = ? AND revoked_at IS NULL AND expires_at > ?`,
 			now, share.ID, string(tenant), now)
+		if res.Error != nil {
+			return res.Error
+		}
 		won = res.RowsAffected == 1
-		return res.Error
+		if won && grantedEntry != nil {
+			return tx.Create(grantedEntry).Error
+		}
+		return nil
 	})
 	if err != nil {
 		return false, ErrInternal.WithCause(err)
@@ -338,10 +397,13 @@ func (r *ShareRepository) listExpiredOrExhausted(ctx context.Context, now time.T
 }
 
 // AccessLogRepository is the tenant-scoped data-access type for
-// AccessLogEntry. It embeds dbkit.Repository[AccessLogEntry] for Create --
-// the only write this module ever performs against the table, per the
-// type's own append-only doc comment -- and adds the one read shape
-// Service.ListAccessLog needs.
+// AccessLogEntry. It embeds dbkit.Repository[AccessLogEntry] and adds the
+// retried append (createWithRetry) plus the one read shape Service.ListAccessLog
+// needs. Denied access rows are appended through createWithRetry here; a
+// GRANTED access's row is appended inside ShareRepository's own guarded
+// view-recording transaction (tryRecordView/tryIncrementView's grantedEntry
+// insert) so the count and its trail commit together -- both writes go to
+// the same append-only table the type's own doc comment describes.
 type AccessLogRepository struct {
 	*dbkit.Repository[AccessLogEntry]
 
@@ -351,6 +413,24 @@ type AccessLogRepository struct {
 // NewAccessLogRepository returns an AccessLogRepository backed by db.
 func NewAccessLogRepository(db *gorm.DB) *AccessLogRepository {
 	return &AccessLogRepository{Repository: dbkit.NewRepository[AccessLogEntry](db), db: db}
+}
+
+// createWithRetry appends one access log row, retrying the insert through
+// the same withTxRetry envelope this module's guarded writes run under
+// when the database reports a transient, contention-only failure
+// (SQLITE_BUSY, a PostgreSQL deadlock/serialization conflict). A denied
+// row carries no share state -- nothing to order against this module's
+// other writers and nothing a failed insert leaves inconsistent -- so this
+// is deliberately the retry alone, without ShareRepository's writeMu
+// ordering: the retry absorbs momentary congestion, and a failure that
+// outlasts it surfaces to Service.writeAccessLog as the ErrInternal rule 4
+// demands (Service.Access's own doc comment).
+func (r *AccessLogRepository) createWithRetry(ctx context.Context, entry *AccessLogEntry) error {
+	return withTxRetry(func() error {
+		return dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+			return tx.Create(entry).Error
+		})
+	})
 }
 
 // listByShare returns every access log row of the caller tenant recorded

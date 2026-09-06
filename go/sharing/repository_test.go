@@ -87,7 +87,7 @@ func TestShareRepository_TryRecordView_GuardsOnCurrentState(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	won, err := repo.tryRecordView(ctx, share, now)
+	won, err := repo.tryRecordView(ctx, share, now, nil)
 	if err != nil {
 		t.Fatalf("tryRecordView (first): %v", err)
 	}
@@ -107,7 +107,7 @@ func TestShareRepository_TryRecordView_GuardsOnCurrentState(t *testing.T) {
 		t.Fatalf("fresh.ViewCount = %d, want 1", fresh.ViewCount)
 	}
 
-	won, err = repo.tryRecordView(ctx, fresh, now)
+	won, err = repo.tryRecordView(ctx, fresh, now, nil)
 	if err != nil {
 		t.Fatalf("tryRecordView (second, exhausted): %v", err)
 	}
@@ -132,11 +132,11 @@ func TestShareRepository_TryRecordView_StaleViewCountLosesTheRace(t *testing.T) 
 	if err != nil {
 		t.Fatalf("byTokenHash: %v", err)
 	}
-	if racerWon, racerErr := repo.tryRecordView(ctx, other, now); racerErr != nil || !racerWon {
+	if racerWon, racerErr := repo.tryRecordView(ctx, other, now, nil); racerErr != nil || !racerWon {
 		t.Fatalf("tryRecordView (racer): won=%v err=%v", racerWon, racerErr)
 	}
 
-	won, err := repo.tryRecordView(ctx, share, now)
+	won, err := repo.tryRecordView(ctx, share, now, nil)
 	if err != nil {
 		t.Fatalf("tryRecordView (stale copy): %v", err)
 	}
@@ -421,7 +421,7 @@ func TestShareRepository_TryIncrementView_IncrementsAndGuardsLiveness(t *testing
 		t.Fatalf("Create: %v", err)
 	}
 
-	won, err := repo.tryIncrementView(ctx, share, now)
+	won, err := repo.tryIncrementView(ctx, share, now, nil)
 	if err != nil {
 		t.Fatalf("tryIncrementView (first): %v", err)
 	}
@@ -437,7 +437,7 @@ func TestShareRepository_TryIncrementView_IncrementsAndGuardsLiveness(t *testing
 		t.Fatalf("fresh.ViewCount = %d, want 1", fresh.ViewCount)
 	}
 
-	won, err = repo.tryIncrementView(ctx, fresh, now)
+	won, err = repo.tryIncrementView(ctx, fresh, now, nil)
 	if err != nil {
 		t.Fatalf("tryIncrementView (second): %v", err)
 	}
@@ -457,7 +457,7 @@ func TestShareRepository_TryIncrementView_IncrementsAndGuardsLiveness(t *testing
 	// A revoked row refuses the increment: the WHERE clause's liveness
 	// guard is what makes the atomic increment refuse, not a read-then-
 	// decide race.
-	won, err = repo.tryIncrementView(ctx, share, now)
+	won, err = repo.tryIncrementView(ctx, share, now, nil)
 	if err != nil {
 		t.Fatalf("tryIncrementView (revoked): %v", err)
 	}
@@ -483,7 +483,7 @@ func TestShareRepository_TryIncrementView_ScopedToOneTenant(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	won, err := repo.tryIncrementView(ctxB, share, now)
+	won, err := repo.tryIncrementView(ctxB, share, now, nil)
 	if err != nil {
 		t.Fatalf("tryIncrementView(other tenant): %v", err)
 	}
@@ -515,7 +515,7 @@ func TestShareRepository_MarkRevoked_WinsOnceThenIdempotent(t *testing.T) {
 	if err := repo.Create(ctx, share); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if won, err := repo.tryIncrementView(ctx, share, now); err != nil || !won {
+	if won, err := repo.tryIncrementView(ctx, share, now, nil); err != nil || !won {
 		t.Fatalf("tryIncrementView: won=%v err=%v", won, err)
 	}
 

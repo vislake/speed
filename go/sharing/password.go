@@ -55,6 +55,32 @@ const (
 	// int-to-uint32 narrowing below provably in range rather than merely
 	// unlikely to overflow.
 	maxPHCFieldBytes = 1024
+
+	// maxSharePasswordMemoryKiB and maxSharePasswordIterations bound the
+	// COST PARAMETERS a stored PHC string may carry -- the symmetric half
+	// of maxPHCFieldBytes's discipline over the salt and digest. This
+	// package's reader honors whatever parameters a stored hash records
+	// (decodeSharePasswordPHC's own doc comment), and a value is
+	// parameters-travel-in-the-hash by design so a future cost bump or
+	// another tool's configuration keeps verifying -- but the parameter
+	// fields are parsed from stored text that a corrupt or hostile row
+	// could fill with anything up to the parse's own ceiling (m and t are
+	// uint32, so m=4294967295 would make argon2.IDKey attempt a ~4 TiB
+	// allocation -- argon2.IDKey allocates roughly memory KiB on the
+	// calling goroutine -- and t=4294967295 would loop for days). The
+	// bounds below reject such values as corrupt BEFORE argon2.IDKey is
+	// ever reached, with the same "orders of magnitude above any real
+	// value" headroom maxPHCFieldBytes applies to the salt and digest:
+	// this package writes m=19456 KiB and t=2, and no plausible deployment
+	// or future cost bump approaches a 1 GiB memory cost or 65536
+	// iterations, while both caps sit far below the uint32 ceilings that
+	// would let a hostile stored row turn one verification into a memory
+	// or CPU bomb. parallelism needs no cap of its own: it parses into a
+	// uint8, so any value above 255 already fails the parse (fmt's %d
+	// refuses an out-of-range value for the target type), and x/crypto's
+	// argon2 itself accepts no more than 255 lanes.
+	maxSharePasswordMemoryKiB  = 1 << 20 // 1 GiB
+	maxSharePasswordIterations = 1 << 16
 )
 
 // hashSharePassword derives an argon2id digest of password and returns it
@@ -229,9 +255,17 @@ func decodeSharePasswordPHC(encoded string) (params sharePasswordParams, salt, d
 	// verify (or burn) at a cost no legitimate hash of this package's ever
 	// used -- a stored row claiming it is corruption, not a configuration.
 	// This mirrors the reading-side refusal authn.decodePHC applies via
-	// PasswordParams.validate.
+	// PasswordParams.validate. The upper bounds refuse the symmetric
+	// hazard: an absurdly large m/t would make the argon2.IDKey call below
+	// (verifySharePassword) attempt a multi-terabyte allocation or an
+	// effectively endless loop on the request goroutine -- see
+	// maxSharePasswordMemoryKiB's own doc comment for the numbers and why
+	// the caps sit orders of magnitude above any legitimate value.
 	if params.memory == 0 || params.iterations == 0 || params.parallel == 0 {
 		return sharePasswordParams{}, nil, nil, fmt.Errorf("%w: cost parameters argon2 cannot run with", ErrInvalidSharePasswordHash)
+	}
+	if params.memory > maxSharePasswordMemoryKiB || params.iterations > maxSharePasswordIterations {
+		return sharePasswordParams{}, nil, nil, fmt.Errorf("%w: cost parameters beyond this package's bounds", ErrInvalidSharePasswordHash)
 	}
 
 	enc := base64.RawStdEncoding

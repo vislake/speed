@@ -16,26 +16,51 @@ import (
 	"github.com/vislake/speed/go/ratelimit"
 )
 
-// defaultShareExpiry is the ceiling rule 2
+// defaultShareExpiry is the expiry rule 2
 // (docs/internal/07-platform-services.md's "default expiry" rule) names
-// outright: 30 days, used whenever a caller leaves CreateParams.ExpiresAt nil and no
-// TenantConfigReader is wired, or the wired one reports the tenant has
-// configured none. It is also this module's ConfigDefaultExpiry config
-// item's own declared default (module.go), so a host that never touches
-// the config item and never wires a TenantConfigReader still gets the
-// documented 30-day behavior.
+// outright for the UNSPECIFIED default: 30 days, used whenever a caller
+// leaves CreateParams.ExpiresAt nil and no TenantConfigReader is wired, or
+// the wired one reports the tenant has configured none. It is also this
+// module's ConfigDefaultExpiry config item's own declared default
+// (module.go), so a host that never touches the config item and never wires
+// a TenantConfigReader still gets the documented 30-day behavior.
 //
-// The same constant doubles as this module's MAXIMUM requested lifetime:
-// resolveExpiry refuses an explicit ExpiresAt more than 30 days out with
-// ErrExpiryOutOfRange, so "expiresAt 9999-12-31" cannot smuggle a
-// never-expiring link past CreateParams.Forever's refusal (rule 2's
-// "never-expiring links are the most common source of data leaks" concern
-// applies to an effectively-forever link exactly as it does to a literal
-// one). A tenant's configured default (TenantConfigReader / the
-// ConfigDefaultExpiry item) is deliberately NOT re-capped against this
-// ceiling: that value is the host's own policy through a documented seam,
-// not a caller's end-run around the ceiling.
+// This constant is deliberately NOT the explicit-expiry ceiling -- that is
+// MaxExplicitShareLifetime's role, a separate policy value with a separate
+// name (see its own doc comment for why the two roles must not share one
+// constant). For a tenant that has configured no default of its own the two
+// happen to coincide at 30 days -- which is honest rather than conflated:
+// such a tenant's admitted envelope IS the module default, so a caller may
+// not demand more explicitly than the module would grant without a request.
 const defaultShareExpiry = 30 * 24 * time.Hour
+
+// MaxExplicitShareLifetime is the module's ceiling on a caller-supplied
+// EXPLICIT ExpiresAt -- the "never-expiring in disguise" arm of rule 2
+// (docs/internal/07-platform-services.md's "default expiry" rule): an
+// explicit expiresAt of 9999-12-31 must not smuggle a never-expiring link
+// past CreateParams.Forever's refusal, so resolveExpiry refuses an explicit
+// ExpiresAt further out than this with ErrExpiryOutOfRange.
+//
+// For a tenant that has configured a default longer than this (through the
+// TenantConfigReader seam / the ConfigDefaultExpiry item) the operative
+// ceiling is RAISED to that configured default: the module already admits
+// shares of the tenant's own default length on the nil-ExpiresAt path
+// (pinned by TestService_Create_TenantConfiguredDefaultBeyondCeiling_StillHonored),
+// so refusing an explicit request within the tenant's own admitted envelope
+// would be the same-policy contradiction of accepting 90 days by omission
+// while refusing 45 by explicitness. The ceiling is never applied to the
+// tenant-configured default itself -- that value is the host's own policy
+// through a documented seam, not a caller's end-run around the ceiling --
+// and never lowered by it: MaxExplicitShareLifetime remains the floor of
+// the operative ceiling, so the module's own bounded-lifetime guarantee
+// survives a tenant whose configured default is shorter than it.
+//
+// Exported so a consumer that mints shares with an explicit ExpiresAt of
+// its own -- go/compliance's export delivery is the one real one -- can
+// clamp its windows against the same value resolveExpiry enforces
+// (go/compliance/export.go's exportDeliveryExpiry clamps to this ceiling),
+// instead of mirroring a private constant that could drift.
+const MaxExplicitShareLifetime = 30 * 24 * time.Hour
 
 // maxRecordViewAttempts bounds Service.Access's retry loop around a lost
 // compare-and-swap race in ShareRepository.tryRecordView (see recordView's
@@ -206,8 +231,10 @@ func (s *Service) AccessLogs() *AccessLogRepository { return s.accessLogs }
 // CreateParams.Forever's own doc comment) before an expiry is ever
 // resolved; a nil ExpiresAt resolves through TenantConfigReader, falling
 // back to defaultShareExpiry, while an explicit ExpiresAt outside rule
-// 2's bounds -- not strictly in the future, or more than 30 days out -- is
-// refused with ErrExpiryOutOfRange (resolveExpiry's own doc comment);
+// 2's bounds -- not strictly in the future, or beyond the tenant's
+// operative explicit-expiry ceiling (MaxExplicitShareLifetime, raised to a
+// longer tenant-configured default) -- is refused with ErrExpiryOutOfRange
+// (resolveExpiry's own doc comment);
 // MaxViews, if given, must be positive
 // (ErrInvalidMaxViews); an optional Password is hashed, never stored
 // plaintext (password.go); the token is drawn fresh from crypto/rand
@@ -308,14 +335,21 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*CreateResult, er
 // expired is refused with ErrExpiryOutOfRange rather than created dead --
 // and "exactly now" is a share whose first Access at the same instant
 // could already refuse it, so the future requirement is strict), and no
-// further out than defaultShareExpiry from now -- the same 30-day ceiling
-// rule 2 names for the default, applied to explicit requests so that an
-// expiresAt of 9999-12-31 cannot bypass CreateParams.Forever's refusal and
-// create the effectively-never-expiring link rule 2 exists to forbid.
+// further out than the tenant's OPERATIVE explicit-expiry ceiling from now
+// (explicitExpiryCeiling's own doc comment: MaxExplicitShareLifetime,
+// raised to the tenant's configured default when that default is longer)
+// -- so an expiresAt of 9999-12-31 cannot bypass CreateParams.Forever's
+// refusal and create the effectively-never-expiring link rule 2 exists to
+// forbid, while a tenant whose own policy admits 90-day shares never
+// refuses a 45-day explicit request within that envelope.
 func (s *Service) resolveExpiry(ctx context.Context, tenant pkgcore.TenantID, requested *time.Time) (time.Time, error) {
 	if requested != nil {
 		now := s.now()
-		if !requested.After(now) || requested.After(now.Add(defaultShareExpiry)) {
+		ceiling, err := s.explicitExpiryCeiling(ctx, tenant)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if !requested.After(now) || requested.After(now.Add(ceiling)) {
 			return time.Time{}, ErrExpiryOutOfRange
 		}
 		return *requested, nil
@@ -330,6 +364,34 @@ func (s *Service) resolveExpiry(ctx context.Context, tenant pkgcore.TenantID, re
 		}
 	}
 	return s.now().Add(defaultShareExpiry), nil
+}
+
+// explicitExpiryCeiling returns how far from now a caller-supplied explicit
+// ExpiresAt may lie for tenant: MaxExplicitShareLifetime, raised to the
+// tenant's configured default when that default is longer. The tenant's
+// configured default is read through the same cfg seam the nil-ExpiresAt
+// path reads -- a read failure is ErrInternal, an unconfigured tenant
+// (or no reader wired) falls back to MaxExplicitShareLifetime -- and is
+// NEVER re-capped against the ceiling: the ceiling governs only
+// caller-supplied explicit values, while the tenant-configured default is
+// the host's own policy and is honored unchanged (see
+// MaxExplicitShareLifetime's own doc comment for the reasoning). Because
+// the ceiling is a floor that a tenant's own default can only raise,
+// every tenant's operative ceiling is at least MaxExplicitShareLifetime --
+// the property go/compliance's export-delivery clamp relies on when it
+// caps a delivery window at this exported constant.
+func (s *Service) explicitExpiryCeiling(ctx context.Context, tenant pkgcore.TenantID) (time.Duration, error) {
+	ceiling := MaxExplicitShareLifetime
+	if s.cfg != nil {
+		d, ok, err := s.cfg.ShareDefaultExpiry(ctx, tenant)
+		if err != nil {
+			return 0, ErrInternal.WithCause(err)
+		}
+		if ok && d > ceiling {
+			ceiling = d
+		}
+	}
+	return ceiling, nil
 }
 
 // emitSensitiveAudit records Create's sensitive-resource confirmation as an
@@ -381,7 +443,16 @@ func (s *Service) emitSensitiveAudit(ctx context.Context, share *Share) error {
 // comment). An unrecognized token is the one path with no log row: there
 // is no ShareID to attribute an entry to (see below).
 //
-// A failure to WRITE that log row is never swallowed into a Warn. Rule 4
+// For a GRANTED access the log row is written in the SAME guarded database
+// transaction as the view-count recording itself (recordView's own doc
+// comment): the count can never commit in a way a failed log row cannot
+// roll back, so a share whose granted access failed to log is never left
+// silently exhausted -- a MaxViews=1 share a visitor's log-failed attempt
+// 500s against still has its one view available for a retry. Denied rows
+// (every other path) carry no share state, so they are written after the
+// decision as a plain guarded write.
+//
+// A failure to WRITE a log row is never swallowed into a Warn. Rule 4
 // (docs/internal/07-platform-services.md's "access needs no login, but
 // must leave a trail" rule) makes the trail the point of the whole
 // exercise, so an Access whose log row did not commit -- granted or
@@ -417,9 +488,10 @@ func (s *Service) emitSensitiveAudit(ctx context.Context, share *Share) error {
 //
 // A granted access is recorded -- through recordView's compare-and-swap
 // retry loop for a limited share, or its single atomic increment for an
-// unlimited one (recordView's own doc comment) -- before this method
-// returns success, so the row Access hands back always reflects the view
-// that was actually counted.
+// unlimited one, its granted log row committed in the same transaction
+// (recordView's own doc comment) -- before this method returns success, so
+// the row Access hands back always reflects the view that was actually
+// counted and logged.
 func (s *Service) Access(ctx context.Context, token string, p AccessParams) (*Share, error) {
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
@@ -469,15 +541,28 @@ func (s *Service) Access(ctx context.Context, token string, p AccessParams) (*Sh
 		recordErr error
 	)
 	if passwordOK {
-		result, granted, recordErr = s.recordView(ctx, share, now)
+		// The granted log row travels with the view recording, committed in
+		// the SAME guarded transaction when the guard wins (recordView's
+		// own doc comment) -- so a granted access whose log row cannot be
+		// written rolls the count back with it instead of leaving the share
+		// exhausted by an access that failed. The entry is only ever
+		// inserted by the attempt that actually records the view; every
+		// other outcome below writes its own denied row instead.
+		pending := s.accessLogEntry(tenant, share.ID, AccessOutcomeGranted, p)
+		result, granted, recordErr = s.recordView(ctx, share, now, pending)
 	}
 
 	// Exactly one log row and one event per call, on every path below --
 	// a recordView store failure included: its attempt is recorded as
 	// denied (the only outcome vocabulary the log has for an access whose
 	// decision could not be determined) and announced on the bus, and the
-	// failure itself is what Access returns afterwards.
-	logErr := s.logAccess(ctx, tenant, share.ID, granted, p)
+	// failure itself is what Access returns afterwards. A granted outcome
+	// needs no further write here: its row already committed inside
+	// recordView's transaction.
+	var logErr error
+	if !granted {
+		logErr = s.writeAccessLog(ctx, s.accessLogEntry(tenant, share.ID, AccessOutcomeDenied, p))
+	}
 	if pubErr := s.publish(ctx, pkgcore.Event{
 		Type:     EventShareAccessed,
 		TenantID: tenant,
@@ -567,9 +652,23 @@ func (s *Service) AccessPublic(ctx context.Context, token string, p AccessParams
 }
 
 // recordView drives the share's view-recording guard to a definitive
-// outcome: granted (the view was counted, and the returned Share reflects
-// it) or refused (the share was not live at the moment this call observed
-// it).
+// outcome: granted (the view was counted -- and grantedEntry, the access's
+// granted log row, was committed alongside it in the SAME guarded
+// transaction -- and the returned Share reflects the view) or refused (the
+// share was not live at the moment this call observed it, in which case
+// grantedEntry is never written and the caller records a denied row of its
+// own).
+//
+// The count and the granted log row sharing one transaction is what makes
+// Access's log-write failure semantics honest: if the log row cannot be
+// written, the whole transaction rolls back, so the count did not commit in
+// a way the failed log cannot undo -- a log-failed attempt can never
+// permanently exhaust a MaxViews=1 share (the log-write failure surfaces as
+// the attempt's store error and Access returns ErrInternal, and the share
+// still has its view for a genuine retry). The caller's grantedEntry is
+// ONLY inserted by the specific attempt whose guarded UPDATE actually won,
+// so a CAS loss that hands the view to a concurrent viewer never writes a
+// duplicate log row.
 //
 // The two shapes of share take two different paths:
 //
@@ -600,12 +699,12 @@ func (s *Service) AccessPublic(ctx context.Context, token string, p AccessParams
 //     WHERE clause evaluates liveness at write time: every viewer that
 //     observed a live row wins exactly once, and a lost update can only
 //     mean a concurrent revocation or expiry, which is a genuine refusal.
-func (s *Service) recordView(ctx context.Context, share *Share, now time.Time) (*Share, bool, error) {
+func (s *Service) recordView(ctx context.Context, share *Share, now time.Time, grantedEntry *AccessLogEntry) (*Share, bool, error) {
 	if share.MaxViews == nil {
 		if !share.isLive(now) {
 			return share, false, nil
 		}
-		won, err := s.shares.tryIncrementView(ctx, share, now)
+		won, err := s.shares.tryIncrementView(ctx, share, now, grantedEntry)
 		if err != nil {
 			return nil, false, err
 		}
@@ -628,7 +727,7 @@ func (s *Service) recordView(ctx context.Context, share *Share, now time.Time) (
 		if !current.isLive(now) {
 			return current, false, nil
 		}
-		won, err := s.shares.tryRecordView(ctx, current, now)
+		won, err := s.shares.tryRecordView(ctx, current, now, grantedEntry)
 		if err != nil {
 			return nil, false, err
 		}
@@ -650,23 +749,16 @@ func (s *Service) recordView(ctx context.Context, share *Share, now time.Time) (
 	return current, false, nil
 }
 
-// logAccess records one AccessLogEntry for shareID with outcome granted or
-// denied and returns an internal error when the row could not be written --
-// never swallowed: Access treats a log-write failure as a failed call (see
-// Access's own doc comment for the rule-4 reasoning), since an access that
-// leaves no trail is exactly the failure mode rule 4 exists to forbid.
-//
-// The caller-supplied metadata fields (AccessParams.IP/UserAgent/Referrer)
-// are cut to their column bounds HERE, at the write boundary, before the
-// row is built -- see model.go's column-bound constants and
-// truncateAccessLogValue for why the cut happens in Go rather than being
-// left to the database.
-func (s *Service) logAccess(ctx context.Context, tenant pkgcore.TenantID, shareID string, granted bool, p AccessParams) error {
-	outcome := AccessOutcomeDenied
-	if granted {
-		outcome = AccessOutcomeGranted
-	}
-	entry := &AccessLogEntry{
+// accessLogEntry builds one AccessLogEntry for shareID with the given
+// outcome, ready to be persisted -- the row Service.Access commits
+// alongside a granted view (recordView), or writes on its own for every
+// denied outcome. The caller-supplied metadata fields
+// (AccessParams.IP/UserAgent/Referrer) are cut to their column bounds
+// HERE, before the row is built -- see model.go's column-bound constants
+// and truncateAccessLogValue for why the cut happens in Go rather than
+// being left to the database.
+func (s *Service) accessLogEntry(tenant pkgcore.TenantID, shareID, outcome string, p AccessParams) *AccessLogEntry {
+	return &AccessLogEntry{
 		ID:          s.newAccessLogID(),
 		TenantModel: dbkit.TenantModel{TenantID: string(tenant)},
 		ShareID:     shareID,
@@ -676,8 +768,26 @@ func (s *Service) logAccess(ctx context.Context, tenant pkgcore.TenantID, shareI
 		Referrer:    truncateAccessLogValue(p.Referrer, accessLogReferrerLen),
 		Outcome:     outcome,
 	}
-	if err := s.accessLogs.Create(ctx, entry); err != nil {
-		observability.FromContext(ctx).Error("sharing access log write failed", "share_id", shareID, "error", err)
+}
+
+// writeAccessLog persists one already-built access log row and returns an
+// internal error when the row could not be written -- never swallowed:
+// Access treats a log-write failure as a failed call (see Access's own doc
+// comment for the rule-4 reasoning), since an access that leaves no trail
+// is exactly the failure mode rule 4 exists to forbid.
+//
+// The write runs through AccessLogRepository.createWithRetry -- the same
+// withTxRetry envelope this module's guarded writes run under -- so a
+// transient, contention-only database failure (SQLITE_BUSY, a PostgreSQL
+// serialization conflict) retries the insert up to txRetryBudget times
+// rather than failing a denied access over a momentary conflict. A denied
+// row carries no share state, so it deliberately does NOT join
+// ShareRepository's own writeMu ordering: only the granted row -- which
+// travels inside the view-recording transaction (recordView's doc comment)
+// -- needs to be ordered against the module's other writers.
+func (s *Service) writeAccessLog(ctx context.Context, entry *AccessLogEntry) error {
+	if err := s.accessLogs.createWithRetry(ctx, entry); err != nil {
+		observability.FromContext(ctx).Error("sharing access log write failed", "share_id", entry.ShareID, "error", err)
 		return ErrInternal.WithCause(err)
 	}
 	return nil

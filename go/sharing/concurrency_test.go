@@ -1,11 +1,64 @@
 package sharing
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
+
+	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/pkgcore"
 )
+
+// TestShareRepository_GuardedWritesStaySerializedOnSQLite pins the SQLite
+// half of the writeMu scope decision (finding P2-sharing-5): the
+// in-process mutex exists for SQLite's single-writer file lock and MUST
+// stay engaged there -- serializeWrites is true over the SQLite test
+// database, and a guarded write issued while another guarded write holds
+// the mutex queues behind it (deterministically: the goroutine cannot
+// finish until the holder releases) rather than contending for the file
+// lock. The PostgreSQL half -- no mutex, unrelated tenants never block on
+// each other -- is proven against a real server by the module's
+// integration tier (integration_test/postgres_mutex_scope_test.go).
+func TestShareRepository_GuardedWritesStaySerializedOnSQLite(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	if !repo.serializeWrites {
+		t.Fatalf("serializeWrites = false over the SQLite test DB, want true -- the mutex must stay engaged on the single-writer dialect")
+	}
+
+	ctx := pkgcore.WithTenant(context.Background(), testTenant)
+	repo.writeMu.Lock()
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(started)
+		done <- repo.runGuardedWrite(ctx, func(tx *gorm.DB) error {
+			return tx.Exec("SELECT 1").Error
+		})
+	}()
+	// Wait for the goroutine to be past its launch, then give it ample time
+	// to reach (and fail to acquire) the mutex: completion is impossible
+	// while the test holds writeMu, so a completed write in this window is
+	// a definite ordering failure, never a scheduling artifact.
+	<-started
+	select {
+	case err := <-done:
+		t.Fatalf("guarded write completed (%v) while writeMu was held -- SQLite guarded writes must serialize behind the mutex", err)
+	case <-time.After(500 * time.Millisecond):
+		// Blocked behind the holder, as the SQLite ordering requires.
+	}
+	repo.writeMu.Unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("guarded write after release: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("guarded write did not complete after writeMu was released")
+	}
+}
 
 // This file's tests pin withTxRetry's classification contract
 // deterministically: which errors retry (dbkit.IsRetryableConflict's

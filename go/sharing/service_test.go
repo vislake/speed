@@ -836,7 +836,13 @@ func TestService_Access_ConcurrentUnlimitedViews_AllSucceedAndAllCount(t *testin
 		go func() {
 			defer wg2.Done()
 			for c := 0; c < callsPerWorker; c++ {
-				_, granted, viewErr := svc.recordView(testCtx(), share, svc.now())
+				// Each winning recordView also commits a real granted log
+				// row in the same transaction (the count-and-trail
+				// atomicity recordView's own doc comment describes), so the
+				// tournament doubles as the proof that the in-transaction
+				// log insert never fails or duplicates under concurrency.
+				entry := svc.accessLogEntry(testTenant, share.ID, AccessOutcomeGranted, AccessParams{})
+				_, granted, viewErr := svc.recordView(testCtx(), share, svc.now(), entry)
 				switch {
 				case viewErr != nil:
 					atomic.AddInt32(&viewErrs, 1)
@@ -866,6 +872,13 @@ func TestService_Access_ConcurrentUnlimitedViews_AllSucceedAndAllCount(t *testin
 	}
 	if final.ViewCount != int(wantWon) {
 		t.Errorf("ViewCount = %d after %d granted views -- each granted view must be counted exactly once under concurrency", final.ViewCount, wantWon)
+	}
+	logged, err := svc.ListAccessLog(testCtx(), second.Share.ID)
+	if err != nil {
+		t.Fatalf("ListAccessLog (second leg): %v", err)
+	}
+	if len(logged) != int(wantWon) {
+		t.Errorf("access log rows = %d after %d granted views -- every granted view's log row must commit exactly once, in the view's own transaction", len(logged), wantWon)
 	}
 }
 
@@ -908,7 +921,13 @@ func TestService_Access_ConcurrentViewsSurviveRevoke(t *testing.T) {
 						return
 					default:
 					}
-					_, won, viewErr := svc.recordView(testCtx(), share, now)
+					// A real granted log entry rides along with each winning
+					// recordView (committed in the same transaction), so
+					// this race also proves the count-and-trail insert
+					// survives a concurrent revocation without errors or
+					// duplicates.
+					entry := svc.accessLogEntry(testTenant, share.ID, AccessOutcomeGranted, AccessParams{})
+					_, won, viewErr := svc.recordView(testCtx(), share, now, entry)
 					if viewErr != nil {
 						atomic.AddInt32(&workerErrors, 1)
 						return
@@ -947,6 +966,13 @@ func TestService_Access_ConcurrentViewsSurviveRevoke(t *testing.T) {
 		}
 		if got.ViewCount != int(atomic.LoadInt32(&granted)) {
 			t.Fatalf("iteration %d: ViewCount = %d but %d views were granted -- the revoke rolled back a concurrently recorded view", iter, got.ViewCount, atomic.LoadInt32(&granted))
+		}
+		rows, err := svc.ListAccessLog(testCtx(), created.Share.ID)
+		if err != nil {
+			t.Fatalf("ListAccessLog: %v", err)
+		}
+		if len(rows) != int(atomic.LoadInt32(&granted)) {
+			t.Fatalf("iteration %d: %d access log rows for %d granted views -- each granted view's log row must commit exactly once in the view's own transaction, even racing a revoke", iter, len(rows), atomic.LoadInt32(&granted))
 		}
 	}
 }
@@ -1103,12 +1129,13 @@ func TestService_Create_ExpiryInThePast_Refused(t *testing.T) {
 }
 
 // TestService_Create_ExpiryBeyondMaximum_Refused pins the never-expiring-
-// in-disguise arm of rule 2: an explicit ExpiresAt beyond the module's
-// maximum requested lifetime -- the same 30-day ceiling rule 2 names for
-// the default (defaultShareExpiry) -- is refused with
-// sharing.expiry_out_of_range, so expiresAt 9999-12-31 can never create
-// the effectively-never-expiring link CreateParams.Forever's refusal
-// exists to forbid. The exact ceiling (now + 30 days) is still honored.
+// in-disguise arm of rule 2 for a tenant with no configured default: an
+// explicit ExpiresAt beyond the module's explicit-expiry ceiling --
+// MaxExplicitShareLifetime, the same 30 days the unconfigured default
+// names -- is refused with sharing.expiry_out_of_range, so expiresAt
+// 9999-12-31 can never create the effectively-never-expiring link
+// CreateParams.Forever's refusal exists to forbid. The exact ceiling
+// (now + 30 days) is still honored.
 func TestService_Create_ExpiryBeyondMaximum_Refused(t *testing.T) {
 	svc, _ := newTestService(t, nil)
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -1118,11 +1145,11 @@ func TestService_Create_ExpiryBeyondMaximum_Refused(t *testing.T) {
 	_, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r", ExpiresAt: &forever})
 	assertCode(t, err, ErrExpiryOutOfRange.Code)
 
-	beyond := now.Add(defaultShareExpiry + time.Hour)
+	beyond := now.Add(MaxExplicitShareLifetime + time.Hour)
 	_, err = svc.Create(testCtx(), CreateParams{ResourceRef: "r", ExpiresAt: &beyond})
 	assertCode(t, err, ErrExpiryOutOfRange.Code)
 
-	atCeiling := now.Add(defaultShareExpiry)
+	atCeiling := now.Add(MaxExplicitShareLifetime)
 	result, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r", ExpiresAt: &atCeiling})
 	if err != nil {
 		t.Fatalf("Create(at the 30-day ceiling): %v", err)
@@ -1133,11 +1160,13 @@ func TestService_Create_ExpiryBeyondMaximum_Refused(t *testing.T) {
 }
 
 // TestService_Create_TenantConfiguredDefaultBeyondCeiling_StillHonored pins
-// the deliberate boundary of the requested-expiry ceiling: a tenant's
+// the deliberate boundary of the explicit-expiry ceiling: a tenant's
 // CONFIGURED default (through the TenantConfigReader seam) is the host's
 // own policy, not a caller's end-run, so a configured default longer than
-// the 30-day ceiling of explicit requests is honored unchanged --
-// defaultShareExpiry's doc comment states this boundary.
+// the module's own 30-day MaxExplicitShareLifetime is honored unchanged --
+// MaxExplicitShareLifetime's own doc comment states this boundary. The
+// ceiling governs caller-supplied explicit values; it is never applied to
+// the tenant-configured default itself.
 func TestService_Create_TenantConfiguredDefaultBeyondCeiling_StillHonored(t *testing.T) {
 	cfg := fakeTenantConfigReader{d: 60 * 24 * time.Hour, ok: true}
 	svc, _ := newTestService(t, cfg)
@@ -1152,6 +1181,60 @@ func TestService_Create_TenantConfiguredDefaultBeyondCeiling_StillHonored(t *tes
 	if !result.Share.ExpiresAt.Equal(want) {
 		t.Errorf("ExpiresAt = %v, want the tenant-configured %v -- the configured default is host policy, not a caller request", result.Share.ExpiresAt, want)
 	}
+}
+
+// TestService_Create_TenantDefaultAndExplicitExpiry_ShareOnePolicy pins
+// the same-policy consistency of the two expiry paths when a tenant's
+// configured default exceeds the module's own ceiling: the operative
+// explicit-expiry ceiling for that tenant is RAISED to its configured
+// default (explicitExpiryCeiling), so the module never refuses a
+// caller-supplied explicit expiry that lies within the very envelope its
+// own default path already grants -- the contradiction of accepting 90
+// days by omission while refusing 45 by explicitness. Before the
+// two-role split of defaultShareExpiry/MaxExplicitShareLifetime this
+// scenario refused the explicit 45-day request (the 30-day ceiling was
+// applied to it) while happily granting the 90-day default -- "the more
+// specific you are, the more you are refused". The never-expiring-in-
+// disguise arm survives the raise: an explicit request BEYOND the
+// tenant's own configured default is still refused, 9999-12-31 included.
+func TestService_Create_TenantDefaultAndExplicitExpiry_ShareOnePolicy(t *testing.T) {
+	cfg := fakeTenantConfigReader{d: 90 * 24 * time.Hour, ok: true}
+	svc, _ := newTestService(t, cfg)
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc.now = fixedClock(now)
+
+	// An omitted expiry still resolves to the tenant's 90-day default.
+	omitted, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r"})
+	if err != nil {
+		t.Fatalf("Create (omitted expiry): %v", err)
+	}
+	if want := now.Add(90 * 24 * time.Hour); !omitted.Share.ExpiresAt.Equal(want) {
+		t.Errorf("ExpiresAt = %v, want the tenant-configured %v", omitted.Share.ExpiresAt, want)
+	}
+
+	// An explicit 45-day request -- inside the 90-day envelope the tenant's
+	// own default admits -- is accepted and honored exactly, never refused
+	// against the module's own 30-day ceiling.
+	explicit := now.Add(45 * 24 * time.Hour)
+	requested, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r", ExpiresAt: &explicit})
+	if err != nil {
+		t.Fatalf("Create (explicit 45 days, within the tenant's own 90-day envelope): %v", err)
+	}
+	if !requested.Share.ExpiresAt.Equal(explicit) {
+		t.Errorf("ExpiresAt = %v, want the explicit request %v honored exactly", requested.Share.ExpiresAt, explicit)
+	}
+
+	// Beyond the tenant's own configured default the refusal returns:
+	// nothing in this module admits a share longer than the tenant's own
+	// policy, so an effectively-forever request can never slip through a
+	// raised ceiling.
+	beyond := now.Add(91 * 24 * time.Hour)
+	_, err = svc.Create(testCtx(), CreateParams{ResourceRef: "r", ExpiresAt: &beyond})
+	assertCode(t, err, ErrExpiryOutOfRange.Code)
+
+	forever := time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
+	_, err = svc.Create(testCtx(), CreateParams{ResourceRef: "r", ExpiresAt: &forever})
+	assertCode(t, err, ErrExpiryOutOfRange.Code)
 }
 
 // TestService_Access_TruncatesOverlongLogMetadata pins the write-boundary
@@ -1257,6 +1340,73 @@ func TestService_Access_LogWriteFailure_FailsTheAccessInsteadOfLeavingNoTrail(t 
 
 	_, err = svc.Access(testCtx(), created.Token, AccessParams{})
 	assertCode(t, err, ErrInternal.Code)
+}
+
+// TestService_Access_LogWriteFailure_NeverPermanentlyConsumesTheShare
+// pins finding P2-sharing-4's regression: a granted access whose log row
+// cannot be written must not permanently exhaust the share it failed to
+// log. The access-log INSERT alone is forced to fail (a trigger raising on
+// the log table -- the view-count UPDATE itself stays healthy), so under
+// the old code the view count had already committed by the time the log
+// write failed: Access returned sharing.internal_error AND a MaxViews=1
+// share was left permanently consumed -- the visitor got a 500, never saw
+// the resource, and no retry could ever succeed. The count and its
+// granted log row now commit in ONE guarded transaction (recordView's own
+// doc comment), so the failed attempt rolls the count back with it: the
+// first Access still fails with sharing.internal_error (rule 4 -- an
+// access that leaves no trail must not be answered), but the share keeps
+// its one view, and once the log write is healthy again a retry succeeds
+// and records exactly one granted row.
+func TestService_Access_LogWriteFailure_NeverPermanentlyConsumesTheShare(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	limit := 1
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-1", MaxViews: &limit})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	trigger := "CREATE TRIGGER sharing_test_fail_log_insert BEFORE INSERT ON " + tableAccessLog +
+		" BEGIN SELECT RAISE(FAIL, 'injected access-log write failure'); END"
+	if triggerErr := svc.shares.db.Exec(trigger).Error; triggerErr != nil {
+		t.Fatalf("CREATE TRIGGER: %v", triggerErr)
+	}
+
+	// The log-failed attempt must surface as an internal error -- an
+	// access that leaves no trail is never answered as if it had been
+	// processed (rule 4's enforcement half).
+	_, err = svc.Access(testCtx(), created.Token, AccessParams{})
+	assertCode(t, err, ErrInternal.Code)
+
+	// And it must not have consumed the share: nothing committed, so the
+	// row still shows zero views.
+	afterFailed, err := svc.Get(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if afterFailed.ViewCount != 0 {
+		t.Fatalf("ViewCount = %d after the log-failed attempt, want 0 -- the failed attempt must not have committed its view count", afterFailed.ViewCount)
+	}
+
+	// Repair the log write and retry: the share still has its one view,
+	// so the retry is granted and its row lands exactly once.
+	if dropErr := svc.shares.db.Exec("DROP TRIGGER sharing_test_fail_log_insert").Error; dropErr != nil {
+		t.Fatalf("DROP TRIGGER: %v", dropErr)
+	}
+	retried, err := svc.Access(testCtx(), created.Token, AccessParams{})
+	if err != nil {
+		t.Fatalf("Access (retry after repair): %v", err)
+	}
+	if retried.ViewCount != 1 {
+		t.Errorf("ViewCount = %d after the repaired retry, want 1", retried.ViewCount)
+	}
+
+	entries, err := svc.ListAccessLog(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("ListAccessLog: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Outcome != AccessOutcomeGranted {
+		t.Errorf("ListAccessLog = %+v, want exactly one granted entry -- only the successful retry leaves its trail", entries)
+	}
 }
 
 // TestService_Access_UnknownTokenStoreFailure_AnswersInternalNotNotFound
