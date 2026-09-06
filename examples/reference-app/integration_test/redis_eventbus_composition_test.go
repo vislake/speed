@@ -476,10 +476,21 @@ func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *
 		t.Fatalf("child never answered GET %s within 30s\n%s", healthzURL, childLogs())
 	}
 
-	// Drain-then-clear: any audit event the child's boot may have appended
-	// to the stream (this app emits none -- audit.Emit runs only inside the
-	// note-creation handler -- but the 600ms one-read-block wait keeps the
-	// exactly-one assertion below immune to a straggler either way).
+	// Sign in before the drain-then-clear below: authn is itself audited
+	// now, so this real demo login (POST /api/v1/authn/login/password
+	// against the child's own stack) emits an audit event that crosses the
+	// bus exactly like the note one -- as did the boot-time demo seeding,
+	// which registers its accounts through the real authn register route.
+	// Doing the login here puts its event inside the drain below.
+	baseURL := "http://127.0.0.1:" + strconv.Itoa(port)
+	accessToken := demoAccessToken(t, httpClient, baseURL, acmeTenantID)
+
+	// Drain-then-clear: 600ms is far longer than the observer's 500ms
+	// XREADGROUP block, so every audit event published before the note
+	// creation -- the boot-time demo seeding and the demo login just above
+	// -- has reached the observer by now. The clear then wipes them all,
+	// so the exactly-one assertion below can only be satisfied by the
+	// note-create event this test itself drives.
 	time.Sleep(600 * time.Millisecond)
 	recorder.clear()
 
@@ -492,9 +503,7 @@ func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *
 	if err != nil {
 		t.Fatalf("marshal request body: %v", err)
 	}
-	baseURL := "http://127.0.0.1:" + strconv.Itoa(port)
 	notesURL := baseURL + "/api/v1/notes"
-	accessToken := demoAccessToken(t, httpClient, baseURL, acmeTenantID)
 	req, err := http.NewRequest(http.MethodPost, notesURL, bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("build POST request: %v", err)
