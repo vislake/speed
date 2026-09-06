@@ -55,6 +55,18 @@ const (
 // audit trail, never re-derived from event (which is already a decoded,
 // in-memory representation of the same bytes).
 func normalizeEvent(event stripego.Event, rawBody []byte) (billing.NormalizedEvent, error) {
+	// stripe-go's Event.Data is a POINTER: a delivery whose JSON carries no
+	// "data" object (or an explicitly null one) unmarshals with Data == nil,
+	// and every recognized event type's object lives at event.Data.Raw -- an
+	// unconditional dereference of a nil Data panics the process instead of
+	// refusing the delivery (P3-11). A recognized event type with no data
+	// object is undecodable by definition, so it is refused up front as
+	// ErrWebhookPayloadUnrecognized like any other payload this package
+	// cannot parse into a known event -- never a crash, never a synthesized
+	// event.
+	if event.Data == nil || len(event.Data.Raw) == 0 {
+		return billing.NormalizedEvent{}, billing.ErrWebhookPayloadUnrecognized.WithParam("reason", "event carries no data object")
+	}
 	switch string(event.Type) {
 	case eventTypeCheckoutSessionCompleted, eventTypeCheckoutSessionExpired, eventTypeCheckoutSessionAsyncFailed:
 		return normalizeCheckoutSession(event, rawBody)

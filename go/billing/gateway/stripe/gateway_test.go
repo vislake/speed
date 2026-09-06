@@ -515,6 +515,41 @@ func TestGateway_VerifyWebhook_MissingMetadata(t *testing.T) {
 	}
 }
 
+// TestGateway_VerifyWebhook_EventWithoutData_RefusedNotCrashed is P3-11's
+// regression test: stripe-go's Event.Data is a POINTER (nil when a
+// delivery's JSON carries no "data" object), and normalizeEvent's
+// dispatch functions dereferenced it unconditionally -- a signed,
+// recognized event type whose payload lacked data crashed the process with
+// a nil-pointer panic instead of refusing the delivery. The fix guards
+// normalizeEvent up front: an event with no data object (or an empty one)
+// is ErrWebhookPayloadUnrecognized like any other undecodable payload. On
+// pre-fix code this delivery panics (nil dereference), so the test fails
+// before the fix and passes after.
+func TestGateway_VerifyWebhook_EventWithoutData_RefusedNotCrashed(t *testing.T) {
+	payload, err := json.Marshal(map[string]any{
+		"id":      "evt_no_data_1",
+		"type":    "checkout.session.completed",
+		"created": time.Now().Unix(),
+		// deliberately NO "data" object
+	})
+	if err != nil {
+		t.Fatalf("marshal fixture: %v", err)
+	}
+	signed := webhook.GenerateTestSignedPayload(&webhook.UnsignedPayload{
+		Payload:   payload,
+		Secret:    testWebhookSecret,
+		Timestamp: time.Now(),
+	})
+
+	gw := newGatewayWithBackend(&fakeBackend{}, testConfig())
+	_, err = gw.VerifyWebhook(context.Background(), map[string][]string{
+		"Stripe-Signature": {signed.Header},
+	}, signed.Payload)
+	if !hasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
+		t.Errorf("err = %v, want billing.ErrWebhookPayloadUnrecognized (a Data-less event must be refused cleanly, never crash)", err)
+	}
+}
+
 func TestNewGateway_RequiresConfig(t *testing.T) {
 	if _, err := NewGateway(Config{}); err == nil {
 		t.Error("NewGateway(Config{}) = nil error, want an error")
