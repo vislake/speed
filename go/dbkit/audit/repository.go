@@ -28,9 +28,14 @@ import (
 // TestRepository_HasNoUpdateOrDeleteMethod proves by reflecting over
 // Repository's method set, since Go has no way to express "this type
 // lacks a method" any other way that fails loudly on a future regression.
-// The database-role/trigger backstop against a determined operator with
-// raw database access, and the optional hash chain, are both explicitly
-// M4 (docs/internal/15-roadmap.md) -- not built here.
+// A second, database-level backstop against a caller that bypasses
+// Repository entirely -- a raw connection, a bug, a careless future
+// migration -- now also exists: migrations/{postgres,sqlite}/0002_append_
+// only_enforcement.sql installs a trigger pair on audit_events that
+// refuses any UPDATE or DELETE regardless of which role issues it (see
+// AGENTS.md's "Append-only enforcement" section for the mechanism and why
+// a trigger, not a REVOKE-based restricted role). The optional hash chain
+// remains M4 (docs/internal/15-roadmap.md) -- not built here.
 type Repository struct {
 	db *gorm.DB
 }

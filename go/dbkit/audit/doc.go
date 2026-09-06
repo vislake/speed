@@ -20,11 +20,17 @@
 //     own Emit -- plus tenancy's already-shipped
 //     EventSystemContextEntered, normalizing each into an AuditEvent and
 //     calling Repository.Insert.
+//   - Shipped in a later round, alongside this one's own scope: a
+//     database-level append-only backstop (migrations/{postgres,sqlite}/
+//     0002_append_only_enforcement.sql -- a BEFORE UPDATE/DELETE trigger
+//     pair on audit_events, proven against a raw *sql.DB bypassing
+//     Repository entirely in append_only_test.go and, for PostgreSQL,
+//     integration_test/postgres_append_only_test.go).
 //   - Deferred to M4 (go/compliance, per docs/internal/10-compliance-and-
-//     audit.md's own delivery-phase correction): immutability enforcement
-//     at the database-role level, the optional hash chain,
+//     audit.md's own delivery-phase correction): the optional hash chain,
 //     retention/archival, and the actor/resource/action/time-range/result
-//     query and report API. This package's ListByTenant is only the
+//     query API beyond compliance's own AuditQuery and its formatted
+//     (CSV/JSON) report export. This package's ListByTenant is only the
 //     minimal read path its own tests (and this round's reference-app
 //     proof test) need -- not that query surface.
 //
