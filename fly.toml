@@ -1,145 +1,38 @@
-# fly.toml -- Fly.io deployment config for examples/reference-app, speed's
-# mandatory first consumer (root CLAUDE.md's "Reference App" section).
+# fly.toml app configuration file generated for speed-reference-app on 2026-09-06T03:03:27Z
 #
-# THIS FILE LIVES AT THE REPOSITORY ROOT, NOT examples/reference-app/,
-# because the build context must be the repository root: the app's own
-# go.mod carries a `replace` directive for every sibling go/* module by
-# RELATIVE PATH, and it builds under go.work workspace mode, so the build
-# needs go.work, go.work.sum, every go/* module AND examples/reference-app
-# all visible in one context -- examples/reference-app/Dockerfile's own
-# header comment explains this in full, and docker-compose.yml resolves
-# its own build.context the identical way (`../..` from that file's
-# location). fly.toml's own directory (the repo root, wherever `fly
-# deploy`/`fly launch` is run from) is therefore already the right build
-# context with no `--build-context`/context override needed here.
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
-# DEPLOYMENT MODE: standalone, on purpose. This app's own default
-# (SPEED_DEPLOYMENT_MODE unset falls back to "standalone" --
-# cmd/server/server.go's configFromEnv) resolves every infrastructure seam
-# to its zero-external-dependency in-process implementation: an in-process
-# EventBus, an in-memory KVStore, the console Mailer, a local-directory
-# ObjectStore. No SPEED_REDIS_ADDR / SPEED_S3_* / SPEED_SMTP_* /
-# SPEED_SMS_GATEWAY_URL is set anywhere in this file -- wiring any of
-# those means standing up (and paying for) a real Redis/S3/SMTP service
-# alongside this app, which a free-tier demo deployment does not need.
-# See docs/internal/03-deployment-modes.md: deployment mode and
-# implementation composition are orthogonal, and standalone mode places
-# no requirement on any seam's capabilities, so this all-in-process
-# composition is a legitimate, fully-supported shape, not a stripped-down
-# one.
-#
-# SECRETS: this file deliberately sets no value for SPEED_CONFIG_KEY,
-# SPEED_ORG_INDEX_KEY or SPEED_NOTIFICATION_INDEX_KEY (config's cipher key
-# and the two blind-index HMAC keys -- server.go's configKeyEnv /
-# orgIndexKeyEnv / notificationIndexKeyEnv). Leaving them unset here means
-# the app falls back to its committed, NON-secret development defaults
-# (devConfigKey and its two siblings) unless real values are pushed via
-# `fly secrets set` (never `fly.toml`'s [env], which is plaintext,
-# committed and visible to anyone who can read this repository) -- see
-# this repository's DEPLOY.md for the exact command sequence and why
-# SPEED_DEMO_USERS_PASSWORD belongs in secrets too for a real deployment,
-# even though the app's own code treats it as a non-secret local-demo
-# convenience.
-#
-# Schema reference verified against Fly's own current docs
-# (https://fly.io/docs/reference/configuration/) and `flyctl` v0.4.99's
-# own `platform vm-sizes`/`launch --help` output at authoring time -- see
-# DEPLOY.md for the free-tier facts this sizing was checked against.
 
-app = "speed-reference-app"
-
-# Placeholder region -- Fly app names AND the region a machine actually
-# lands in are both decided at `fly launch`/`fly apps create` time
-# (app names are globally unique across all of Fly, so "speed-reference-app"
-# will very likely need to change). "iad" (Ashburn, Virginia) is one of
-# Fly's largest, always-available regions; DEPLOY.md tells the deployer to
-# confirm or override both the app name and this region before deploying.
-primary_region = "iad"
+app = 'speed-reference-app'
+primary_region = 'sin'
 
 [build]
-  # Dockerfile's own header comment: build context MUST be the repository
-  # root (this file's own directory), never examples/reference-app/ itself.
-  dockerfile = "examples/reference-app/Dockerfile"
+  dockerfile = 'examples/reference-app/Dockerfile'
 
 [env]
-  # Mirrors docker-compose.yml's own standalone-profile environment block
-  # (examples/reference-app/docker-compose.yml) for the identical reason:
-  # standalone mode, zero external services, SQLite on a path that lives
-  # under the mounted volume below so it survives a machine restart or
-  # redeploy. PORT restates the Dockerfile's own ENV PORT=8080 default
-  # purely for readability -- it changes nothing on its own.
-  PORT = "8080"
-  SPEED_DEPLOYMENT_MODE = "standalone"
-  SPEED_DB_PATH = "/data/reference-app.db"
+  PORT = '8080'
+  SPEED_DB_PATH = '/data/reference-app.db'
+  SPEED_DEPLOYMENT_MODE = 'standalone'
 
-# A small persistent volume for the SQLite file -- the identical reason
-# docker-compose.yml's own named `reference-app-db` volume exists: `Create`
-# and `Complete` reason about the same on-disk row regardless of which
-# machine restart or redeploy follows. 1GB is enormous headroom for a demo
-# SQLite database (this app's own local dev .db files run a few hundred KB
-# to a few MB); DEPLOY.md documents the real $/GB/month cost this volume
-# carries on Fly today (there is no free ongoing volume allowance -- see
-# that file). The Dockerfile's builder stage already creates /data owned
-# by uid/gid 65532 (the "nonroot" user the final image's own USER
-# directive runs as) inside the IMAGE for Docker Compose's named-volume
-# semantics; Fly's own volume-mount behavior is confirmed separately (a
-# fresh Fly Volume's mount destination is auto-chowned to the image's
-# declared user/group, per Fly staff -- see DEPLOY.md's citation), so no
-# extra wiring is needed here for the nonroot, shell-less distroless image
-# to write into it.
 [[mounts]]
-  source      = "reference_app_data"
-  destination = "/data"
-  initial_size = "1gb"
+  source = 'reference_app_data'
+  destination = '/data'
+  initial_size = '1gb'
 
 [http_service]
   internal_port = 8080
-  force_https   = true
-
-  # Scale-to-zero: the one machine below stops itself after its last
-  # connection closes ("stop", cheaper than "suspend" for a single-shared-
-  # cpu machine with no long-lived in-memory state worth preserving across
-  # a stop) and Fly starts it again on the next inbound request
-  # (auto_start_machines). min_machines_running = 0 makes that "scale all
-  # the way down when idle" intent explicit rather than relying on a
-  # platform default. This is the mechanism that keeps a demo deployment's
-  # actual compute cost close to zero when nobody is using it -- billing
-  # is per-second while a machine runs (see DEPLOY.md), and an idle demo
-  # spends most of its time stopped.
-  auto_stop_machines   = "stop"
-  auto_start_machines  = true
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
   min_machines_running = 0
 
   [[http_service.checks]]
-    # healthzPath (cmd/server/server.go) -- exempted from tenant
-    # resolution, answers 200 "ok" with no auth and no tenant required,
-    # confirmed against the live source at authoring time. This is the
-    # SAME endpoint the Dockerfile's own HEALTHCHECK probes (by re-invoking
-    # the binary's "healthcheck" arg over loopback, since the distroless
-    # image has no curl/wget) -- Fly's check instead probes it directly
-    # over HTTP, which the image's EXPOSE 8080 already makes reachable.
-    grace_period = "10s"
-    interval     = "15s"
-    method       = "GET"
-    path         = "/healthz"
-    timeout      = "3s"
-    protocol     = "http"
+    interval = '15s'
+    timeout = '3s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/healthz'
+    protocol = 'http'
 
 [[vm]]
-  # Smallest available Machine size: 1 shared vCPU, 256MB memory (confirmed
-  # via `flyctl platform vm-sizes`: shared-cpu-1x = 1 CPU core / 256MB,
-  # exactly what "size" alone implies with no memory/cpus override needed).
-  # Real measurement, not a guess: a local `docker run` of this exact image
-  # under a 256MB cgroup limit (this Dockerfile's own multi-stage,
-  # distroless/static build) idled at ~14.5MiB and stayed at ~16MiB after
-  # light HTTP traffic (docker stats, DEPLOY.md has the transcript) -- more
-  # than 15x headroom below the 256MB ceiling.
-  size = "shared-cpu-1x"
-
-# Exactly ONE machine, no redundancy: this is a demo deployment, not a
-# production HA setup. fly.toml's [[vm]] section above only defines the
-# machine's SHAPE (size), not how many exist -- DEPLOY.md's command
-# sequence includes `fly scale count 1` after the first deploy to make
-# that single-machine intent explicit and durable across future deploys,
-# since some flyctl versions default `fly launch` to more than one machine
-# for HA when a region supports it.
+  size = 'shared-cpu-1x'
