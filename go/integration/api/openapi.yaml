@@ -2,9 +2,13 @@ openapi: 3.0.3
 info:
   title: integration
   description: >-
-    A tenant's outward-facing API-key surface: issuance, listing, rotation
-    and revocation of the API keys a tenant issues to its own scripts and
-    third-party systems (see the module's own doc.go and AGENTS.md). This
+    A tenant's outward-facing API surface: the API keys a tenant issues to
+    its own scripts and third-party systems (round 1: issuance, listing,
+    rotation and revocation, under /apikeys), and the outbound webhook
+    subscriptions that deliver this platform's public events to a tenant's
+    own receivers (round 2's subscription management, mounted in round 7:
+    create, list, update, delete, restore, and the recent-deliveries log,
+    under /webhooks). This
     fragment follows the operationId (integration_<action><Resource>) and
     schema-name (Integration<Type>) conventions from
     .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
@@ -18,20 +22,27 @@ info:
     (docs/internal/04-data-and-tenancy.md; root CLAUDE.md's multi-tenant
     isolation rule).
 
-    This fragment covers round 1's API-key surface only
-    (Service.Create/List/Rotate/Revoke) -- round 2's outbound-webhook
-    subscription CRUD (CreateWebhookSubscription and friends) is
-    deliberately out of scope for this fragment; see AGENTS.md's
-    "Deliberately not in scope" table for where that stands.
+    Round 7 grew the fragment's webhook half -- round 2's Service-level
+    subscription CRUD (CreateWebhookSubscription and friends, until now
+    deliberately unmounted; see AGENTS.md's round-7 record) plus round 3's
+    RestoreWebhookSubscription and the recent-deliveries log -- and it now
+    covers both surfaces. Both halves live under ONE mount path
+    (/api/v1/integration): /apikeys for round 1's four operations and
+    /webhooks for round 2/3's six. A router-level permission gate that must
+    tell them apart (a GET under /apikeys needs integration:apikey:read, a
+    GET under /webhooks integration:webhook:read) therefore dispatches on
+    the request's sub-path, never on method alone -- see the reference
+    app's guardIntegrationRoute.
 
     Merging this fragment into the application-wide build/openapi/speed.yaml
     is deliberately deferred, the identical carve-out org's, storage's and
     sharing's own fragments already draw: this surface has no in-workspace
     web (@speed/api-sdk / orval) consumer yet, only the reference app's Go
-    HTTP client in apikey_flow_test.go, so joining the merged document and
-    generating a frontend SDK for it would be generating code nothing
-    calls. See Taskfile.yml's api:gen/api:merge task comments for the exact
-    "which fragments join the merge" rationale this fragment follows.
+    HTTP clients in apikey_flow_test.go and webhook_crud_flow_test.go, so
+    joining the merged document and generating a frontend SDK for it would
+    be generating code nothing calls. See Taskfile.yml's api:gen/api:merge
+    task comments for the exact "which fragments join the merge" rationale
+    this fragment follows.
   version: 0.0.0
 paths:
   /api/v1/integration/apikeys:
@@ -175,10 +186,211 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/IntegrationError'
+  /api/v1/integration/webhooks:
+    post:
+      operationId: integration_createWebhookSubscription
+      summary: Subscribe the caller's tenant to a set of public event types.
+      description: >-
+        The creator is the caller's own authenticated identity, resolved
+        server-side through the same SubjectResolver seam
+        integration_createAPIKey uses (AGENTS.md's round-7 record) -- never
+        a request field. url is validated exactly as
+        Service.CreateWebhookSubscription validates it, before anything is
+        persisted: missing is 400, and a URL whose host is malformed,
+        unresolvable, or blocked as private/loopback is refused outright
+        (go/integration's two-time SSRF rules -- see AGENTS.md). Every
+        eventTypes entry must be some registered EventMapping's public type
+        (400 naming the first unknown one); the empty set is refused. The
+        response's secret field is the raw HMAC signing secret a receiver
+        verifies signatures with -- shown here exactly once, the identical
+        contract integration_createAPIKey's own key field follows; nothing
+        else this fragment exposes ever reproduces it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntegrationCreateWebhookSubscriptionRequest'
+      responses:
+        '201':
+          description: The subscription was created. secret is shown here exactly once.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationCreatedWebhookSubscription'
+        '400':
+          description: >-
+            The request body was malformed, url was missing or failed URL
+            validation, or eventTypes was empty or named an unknown public
+            event type.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationError'
+        '401':
+          description: The caller's identity could not be resolved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationError'
+    get:
+      operationId: integration_listWebhookSubscriptions
+      summary: List the caller's tenant's webhook subscriptions.
+      description: >-
+        Secret-free: every row omits the signing secret, per
+        Service.ListWebhookSubscriptions' own contract. Order is not
+        guaranteed; a caller that needs one sorts the result itself.
+      responses:
+        '200':
+          description: The caller's tenant's webhook subscriptions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationListWebhookSubscriptionsResponse'
+  /api/v1/integration/webhooks/{subscriptionId}:
+    patch:
+      operationId: integration_updateWebhookSubscription
+      summary: Partially update one of the caller's tenant's subscriptions.
+      description: >-
+        Every request field is optional; one that is absent leaves the
+        corresponding stored value unchanged -- Service.UpdateWebhookSubscription's
+        identical nil-means-no-change convention (a partial update, hence
+        PATCH rather than PUT). A present but EMPTY eventTypes is refused
+        with 400, exactly as create refuses it: there is no supported way to
+        leave a subscription with zero event types short of deleting it.
+        url, when present, is validated identically to create. Setting
+        active=false is the supported way to pause delivery without
+        deleting; setting it back to true is how a restored (always-paused)
+        subscription resumes delivery.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntegrationUpdateWebhookSubscriptionRequest'
+      parameters:
+        - $ref: '#/components/parameters/SubscriptionID'
+      responses:
+        '200':
+          description: The updated subscription, secret-free.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationWebhookSubscriptionSummary'
+        '400':
+          description: >-
+            The request body was malformed, or url/eventTypes failed the
+            identical validation create applies.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationError'
+        '404':
+          description: subscriptionId does not name a subscription of the caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationError'
+    delete:
+      operationId: integration_deleteWebhookSubscription
+      summary: Delete one of the caller's tenant's subscriptions.
+      description: >-
+        Mark-deletes the subscription (WebhookSubscription's
+        dbkit.SoftDeletable adoption): its row stays in place -- hidden from
+        every read this fragment performs -- and its past delivery rows are
+        left as history. A delivery already enqueued settles exactly as it
+        always did (Service.DeleteWebhookSubscription's own doc comment).
+        Undo with POST /webhooks/{subscriptionId}/restore.
+      parameters:
+        - $ref: '#/components/parameters/SubscriptionID'
+      responses:
+        '204':
+          description: The subscription was deleted.
+        '404':
+          description: subscriptionId does not name a subscription of the caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationError'
+  /api/v1/integration/webhooks/{subscriptionId}/restore:
+    post:
+      operationId: integration_restoreWebhookSubscription
+      summary: Undo a subscription's deletion.
+      description: >-
+        Undoes the mark-delete integration_deleteWebhookSubscription made.
+        The restored subscription is always PAUSED (active=false), whatever
+        active held when it was deleted -- resuming automatic outbound
+        delivery to a URL nobody has looked at since is never implicit, so
+        delivery restarts only after an explicit
+        integration_updateWebhookSubscription setting active=true
+        (Service.RestoreWebhookSubscription's own doc comment). 404 answers
+        both an unknown subscriptionId and one that exists but is not
+        currently deleted -- the same collapsed not-found signal the
+        Service-level Restore reports, so a caller cannot tell the cases
+        apart.
+      parameters:
+        - $ref: '#/components/parameters/SubscriptionID'
+      responses:
+        '204':
+          description: The subscription was restored, paused.
+        '404':
+          description: >-
+            subscriptionId names no subscription of the caller's tenant, or
+            one that is not currently deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationError'
+  /api/v1/integration/webhooks/{subscriptionId}/deliveries:
+    get:
+      operationId: integration_listWebhookDeliveries
+      summary: List one subscription's most recent delivery attempts.
+      description: >-
+        Newest first, at most limit rows; an absent or non-positive limit
+        falls back to the module's own default
+        (defaultRecentDeliveriesLimit, 50 -- see
+        Service.ListRecentWebhookDeliveries). subscriptionId is NOT verified
+        to exist: an id that names nothing, or a subscription of another
+        tenant, returns an empty list exactly as a genuine subscription with
+        zero deliveries would -- there is no observable difference, and
+        telling the cases apart would let a caller enumerate another
+        tenant's subscription ids (the same no-enumeration answer the 404s
+        above give). Rows carry no payload: the raw event body is an
+        implementation detail of the send pipeline, never exposed to
+        subscription-management callers.
+      parameters:
+        - $ref: '#/components/parameters/SubscriptionID'
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+          description: >-
+            Maximum rows to return. Absent or non-positive falls back to the
+            module's default of 50.
+      responses:
+        '200':
+          description: The subscription's recent delivery attempts, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationListWebhookDeliveriesResponse'
+        '400':
+          description: limit was not a non-negative integer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationError'
 components:
   parameters:
     KeyID:
       name: keyId
+      in: path
+      required: true
+      schema:
+        type: string
+    SubscriptionID:
+      name: subscriptionId
       in: path
       required: true
       schema:
@@ -279,6 +491,185 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/IntegrationAPIKeySummary'
+    IntegrationWebhookSubscriptionSummary:
+      type: object
+      description: >-
+        One webhook subscription as every read of this fragment exposes it:
+        every field of the stored subscription except the signing secret
+        (Service.WebhookSubscriptionSummary). active=false means delivery is
+        paused -- the subscription exists, but no domain event fans out to
+        it until an update sets active=true.
+      properties:
+        id:
+          type: string
+          description: >-
+            Application-generated UUID. Pass this to update, delete,
+            restore or the deliveries log.
+        url:
+          type: string
+          description: The receiving endpoint deliveries are POSTed to.
+        eventTypes:
+          type: array
+          items:
+            type: string
+          description: >-
+            The public event types this subscription wants delivered; every
+            entry is some registered EventMapping's public type.
+        active:
+          type: boolean
+          description: The subscription's delivery gate; false means paused.
+        createdBy:
+          type: string
+          description: The authn user id of whoever configured this subscription.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    IntegrationCreatedWebhookSubscription:
+      type: object
+      description: >-
+        Service.CreateWebhookSubscription's result: the one and only place
+        the raw signing secret is ever available, mirroring round 1's
+        IntegrationCreatedAPIKey "shown once" contract. secret is never
+        logged and never returned again by any other operation.
+      properties:
+        id:
+          type: string
+          description: Application-generated UUID. Pass this to update, delete or restore.
+        url:
+          type: string
+        eventTypes:
+          type: array
+          items:
+            type: string
+        secret:
+          type: string
+          description: >-
+            The raw HMAC signing secret the caller must record now. A
+            receiver verifies this subscription's signatures with it;
+            nothing this fragment returns after this call ever reproduces
+            it.
+        active:
+          type: boolean
+        createdBy:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    IntegrationListWebhookSubscriptionsResponse:
+      type: object
+      properties:
+        webhookSubscriptions:
+          type: array
+          items:
+            $ref: '#/components/schemas/IntegrationWebhookSubscriptionSummary'
+    IntegrationCreateWebhookSubscriptionRequest:
+      type: object
+      description: >-
+        A new subscription's configuration. Both fields are mandatory; the
+        empty eventTypes set is refused (a subscription that would never
+        match anything is never created).
+      required:
+        - url
+        - eventTypes
+      properties:
+        url:
+          type: string
+          description: >-
+            The receiving endpoint. Validated before anything is persisted:
+            must be a reachable http/https URL whose host is neither
+            private, loopback nor otherwise blocked (go/integration's SSRF
+            rules).
+        eventTypes:
+          type: array
+          items:
+            type: string
+          description: >-
+            The non-empty set of public event types to deliver. Every entry
+            must be some registered EventMapping's public type.
+    IntegrationUpdateWebhookSubscriptionRequest:
+      type: object
+      description: >-
+        A partial update: a field that is absent leaves the corresponding
+        stored value unchanged (nil means no change, exactly as
+        Service.UpdateWebhookSubscription's input treats it). A present but
+        empty eventTypes is refused, identically to create.
+      properties:
+        url:
+          type: string
+          description: >-
+            Replaces the stored URL after the identical validation create
+            applies.
+        eventTypes:
+          type: array
+          items:
+            type: string
+          description: >-
+            Replaces the stored selection after the identical non-empty /
+            known-type validation create applies.
+        active:
+          type: boolean
+          description: >-
+            Flips the subscription's delivery gate. false pauses delivery;
+            true resumes it -- the step a restored subscription needs to
+            deliver again.
+    IntegrationWebhookDeliverySummary:
+      type: object
+      description: >-
+        One delivery attempt row of integration_listWebhookDeliveries --
+        every field of the stored delivery except the raw payload bytes
+        (Service.WebhookDeliverySummary).
+      properties:
+        id:
+          type: string
+          description: Application-generated delivery id.
+        subscriptionId:
+          type: string
+          description: The subscription this attempt delivers for.
+        eventType:
+          type: string
+        eventVersion:
+          type: string
+        status:
+          type: string
+          description: >-
+            One of the delivery pipeline's status vocabulary: "pending",
+            "failed", "delivered" or "dead_letter" (the terminal state after
+            the bounded retry horizon; see
+            Service.handleDeliveryJob's own doc comment).
+        attempts:
+          type: integer
+          description: How many times this delivery has been attempted.
+        lastStatusCode:
+          type: integer
+          nullable: true
+          description: >-
+            The receiver's HTTP status on the last attempt. Null when no
+            attempt has produced one yet.
+        lastError:
+          type: string
+          description: The last attempt's failure reason, empty when none.
+        lastAttemptAt:
+          type: string
+          format: date-time
+          nullable: true
+        deliveredAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When a delivered attempt succeeded. Null until then.
+        createdAt:
+          type: string
+          format: date-time
+    IntegrationListWebhookDeliveriesResponse:
+      type: object
+      properties:
+        deliveries:
+          type: array
+          items:
+            $ref: '#/components/schemas/IntegrationWebhookDeliverySummary'
     IntegrationError:
       type: object
       description: >-

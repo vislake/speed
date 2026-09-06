@@ -6,6 +6,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -41,6 +42,15 @@ type IntegrationCreateAPIKeyRequest struct {
 	Scopes *[]string `json:"scopes,omitempty"`
 }
 
+// IntegrationCreateWebhookSubscriptionRequest A new subscription's configuration. Both fields are mandatory; the empty eventTypes set is refused (a subscription that would never match anything is never created).
+type IntegrationCreateWebhookSubscriptionRequest struct {
+	// EventTypes The non-empty set of public event types to deliver. Every entry must be some registered EventMapping's public type.
+	EventTypes []string `json:"eventTypes"`
+
+	// URL The receiving endpoint. Validated before anything is persisted: must be a reachable http/https URL whose host is neither private, loopback nor otherwise blocked (go/integration's SSRF rules).
+	URL string `json:"url"`
+}
+
 // IntegrationCreatedAPIKey Service.Create's (and Service.Rotate's) result: the one and only place the raw key value is ever available. key is never logged and never returned again by any other operation.
 type IntegrationCreatedAPIKey struct {
 	// CreatedBy The authn user id of whoever issued this key.
@@ -58,6 +68,21 @@ type IntegrationCreatedAPIKey struct {
 	Scopes *[]string `json:"scopes,omitempty"`
 }
 
+// IntegrationCreatedWebhookSubscription Service.CreateWebhookSubscription's result: the one and only place the raw signing secret is ever available, mirroring round 1's IntegrationCreatedAPIKey "shown once" contract. secret is never logged and never returned again by any other operation.
+type IntegrationCreatedWebhookSubscription struct {
+	Active     *bool      `json:"active,omitempty"`
+	CreatedAt  *time.Time `json:"createdAt,omitempty"`
+	CreatedBy  *string    `json:"createdBy,omitempty"`
+	EventTypes *[]string  `json:"eventTypes,omitempty"`
+
+	// ID Application-generated UUID. Pass this to update, delete or restore.
+	ID *string `json:"id,omitempty"`
+
+	// Secret The raw HMAC signing secret the caller must record now. A receiver verifies this subscription's signatures with it; nothing this fragment returns after this call ever reproduces it.
+	Secret *string `json:"secret,omitempty"`
+	URL    *string `json:"url,omitempty"`
+}
+
 // IntegrationError The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md) -- a client resolves code through its own i18n catalog, populated from this module's Locales() resources for the codes documented in AGENTS.md's error index.
 type IntegrationError struct {
 	// Code Example: integration.key_not_found
@@ -70,11 +95,96 @@ type IntegrationListAPIKeysResponse struct {
 	APIKeys *[]IntegrationAPIKeySummary `json:"apiKeys,omitempty"`
 }
 
+// IntegrationListWebhookDeliveriesResponse defines model for IntegrationListWebhookDeliveriesResponse.
+type IntegrationListWebhookDeliveriesResponse struct {
+	Deliveries *[]IntegrationWebhookDeliverySummary `json:"deliveries,omitempty"`
+}
+
+// IntegrationListWebhookSubscriptionsResponse defines model for IntegrationListWebhookSubscriptionsResponse.
+type IntegrationListWebhookSubscriptionsResponse struct {
+	WebhookSubscriptions *[]IntegrationWebhookSubscriptionSummary `json:"webhookSubscriptions,omitempty"`
+}
+
+// IntegrationUpdateWebhookSubscriptionRequest A partial update: a field that is absent leaves the corresponding stored value unchanged (nil means no change, exactly as Service.UpdateWebhookSubscription's input treats it). A present but empty eventTypes is refused, identically to create.
+type IntegrationUpdateWebhookSubscriptionRequest struct {
+	// Active Flips the subscription's delivery gate. false pauses delivery; true resumes it -- the step a restored subscription needs to deliver again.
+	Active *bool `json:"active,omitempty"`
+
+	// EventTypes Replaces the stored selection after the identical non-empty / known-type validation create applies.
+	EventTypes *[]string `json:"eventTypes,omitempty"`
+
+	// URL Replaces the stored URL after the identical validation create applies.
+	URL *string `json:"url,omitempty"`
+}
+
+// IntegrationWebhookDeliverySummary One delivery attempt row of integration_listWebhookDeliveries -- every field of the stored delivery except the raw payload bytes (Service.WebhookDeliverySummary).
+type IntegrationWebhookDeliverySummary struct {
+	// Attempts How many times this delivery has been attempted.
+	Attempts  *int       `json:"attempts,omitempty"`
+	CreatedAt *time.Time `json:"createdAt,omitempty"`
+
+	// DeliveredAt When a delivered attempt succeeded. Null until then.
+	DeliveredAt  *time.Time `json:"deliveredAt,omitempty"`
+	EventType    *string    `json:"eventType,omitempty"`
+	EventVersion *string    `json:"eventVersion,omitempty"`
+
+	// ID Application-generated delivery id.
+	ID            *string    `json:"id,omitempty"`
+	LastAttemptAt *time.Time `json:"lastAttemptAt,omitempty"`
+
+	// LastError The last attempt's failure reason, empty when none.
+	LastError *string `json:"lastError,omitempty"`
+
+	// LastStatusCode The receiver's HTTP status on the last attempt. Null when no attempt has produced one yet.
+	LastStatusCode *int `json:"lastStatusCode,omitempty"`
+
+	// Status One of the delivery pipeline's status vocabulary: "pending", "failed", "delivered" or "dead_letter" (the terminal state after the bounded retry horizon; see Service.handleDeliveryJob's own doc comment).
+	Status *string `json:"status,omitempty"`
+
+	// SubscriptionID The subscription this attempt delivers for.
+	SubscriptionID *string `json:"subscriptionId,omitempty"`
+}
+
+// IntegrationWebhookSubscriptionSummary One webhook subscription as every read of this fragment exposes it: every field of the stored subscription except the signing secret (Service.WebhookSubscriptionSummary). active=false means delivery is paused -- the subscription exists, but no domain event fans out to it until an update sets active=true.
+type IntegrationWebhookSubscriptionSummary struct {
+	// Active The subscription's delivery gate; false means paused.
+	Active    *bool      `json:"active,omitempty"`
+	CreatedAt *time.Time `json:"createdAt,omitempty"`
+
+	// CreatedBy The authn user id of whoever configured this subscription.
+	CreatedBy *string `json:"createdBy,omitempty"`
+
+	// EventTypes The public event types this subscription wants delivered; every entry is some registered EventMapping's public type.
+	EventTypes *[]string `json:"eventTypes,omitempty"`
+
+	// ID Application-generated UUID. Pass this to update, delete, restore or the deliveries log.
+	ID        *string    `json:"id,omitempty"`
+	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
+
+	// URL The receiving endpoint deliveries are POSTed to.
+	URL *string `json:"url,omitempty"`
+}
+
 // KeyID defines model for KeyID.
 type KeyID = string
 
+// SubscriptionID defines model for SubscriptionID.
+type SubscriptionID = string
+
+// IntegrationListWebhookDeliveriesParams defines parameters for IntegrationListWebhookDeliveries.
+type IntegrationListWebhookDeliveriesParams struct {
+	// Limit Maximum rows to return. Absent or non-positive falls back to the module's default of 50.
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // IntegrationCreateAPIKeyJSONRequestBody defines body for IntegrationCreateAPIKey for application/json ContentType.
 type IntegrationCreateAPIKeyJSONRequestBody = IntegrationCreateAPIKeyRequest
+
+// IntegrationCreateWebhookSubscriptionJSONRequestBody defines body for IntegrationCreateWebhookSubscription for application/json ContentType.
+type IntegrationCreateWebhookSubscriptionJSONRequestBody = IntegrationCreateWebhookSubscriptionRequest
+
+// IntegrationUpdateWebhookSubscriptionJSONRequestBody defines body for IntegrationUpdateWebhookSubscription for application/json ContentType.
+type IntegrationUpdateWebhookSubscriptionJSONRequestBody = IntegrationUpdateWebhookSubscriptionRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -90,6 +200,24 @@ type ServerInterface interface {
 	// IntegrationRotateAPIKey Issue a replacement key and revoke the named key.
 	// (POST /api/v1/integration/apikeys/{keyId}/rotate)
 	IntegrationRotateAPIKey(w http.ResponseWriter, r *http.Request, keyID KeyID)
+	// IntegrationListWebhookSubscriptions List the caller's tenant's webhook subscriptions.
+	// (GET /api/v1/integration/webhooks)
+	IntegrationListWebhookSubscriptions(w http.ResponseWriter, r *http.Request)
+	// IntegrationCreateWebhookSubscription Subscribe the caller's tenant to a set of public event types.
+	// (POST /api/v1/integration/webhooks)
+	IntegrationCreateWebhookSubscription(w http.ResponseWriter, r *http.Request)
+	// IntegrationDeleteWebhookSubscription Delete one of the caller's tenant's subscriptions.
+	// (DELETE /api/v1/integration/webhooks/{subscriptionId})
+	IntegrationDeleteWebhookSubscription(w http.ResponseWriter, r *http.Request, subscriptionID SubscriptionID)
+	// IntegrationUpdateWebhookSubscription Partially update one of the caller's tenant's subscriptions.
+	// (PATCH /api/v1/integration/webhooks/{subscriptionId})
+	IntegrationUpdateWebhookSubscription(w http.ResponseWriter, r *http.Request, subscriptionID SubscriptionID)
+	// IntegrationListWebhookDeliveries List one subscription's most recent delivery attempts.
+	// (GET /api/v1/integration/webhooks/{subscriptionId}/deliveries)
+	IntegrationListWebhookDeliveries(w http.ResponseWriter, r *http.Request, subscriptionID SubscriptionID, params IntegrationListWebhookDeliveriesParams)
+	// IntegrationRestoreWebhookSubscription Undo a subscription's deletion.
+	// (POST /api/v1/integration/webhooks/{subscriptionId}/restore)
+	IntegrationRestoreWebhookSubscription(w http.ResponseWriter, r *http.Request, subscriptionID SubscriptionID)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -172,6 +300,154 @@ func (siw *ServerInterfaceWrapper) IntegrationRotateAPIKey(w http.ResponseWriter
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.IntegrationRotateAPIKey(w, r, keyID)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// IntegrationListWebhookSubscriptions operation middleware
+func (siw *ServerInterfaceWrapper) IntegrationListWebhookSubscriptions(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.IntegrationListWebhookSubscriptions(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// IntegrationCreateWebhookSubscription operation middleware
+func (siw *ServerInterfaceWrapper) IntegrationCreateWebhookSubscription(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.IntegrationCreateWebhookSubscription(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// IntegrationDeleteWebhookSubscription operation middleware
+func (siw *ServerInterfaceWrapper) IntegrationDeleteWebhookSubscription(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "subscriptionId" -------------
+	var subscriptionID SubscriptionID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "subscriptionId", r.PathValue("subscriptionId"), &subscriptionID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "subscriptionId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.IntegrationDeleteWebhookSubscription(w, r, subscriptionID)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// IntegrationUpdateWebhookSubscription operation middleware
+func (siw *ServerInterfaceWrapper) IntegrationUpdateWebhookSubscription(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "subscriptionId" -------------
+	var subscriptionID SubscriptionID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "subscriptionId", r.PathValue("subscriptionId"), &subscriptionID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "subscriptionId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.IntegrationUpdateWebhookSubscription(w, r, subscriptionID)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// IntegrationListWebhookDeliveries operation middleware
+func (siw *ServerInterfaceWrapper) IntegrationListWebhookDeliveries(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "subscriptionId" -------------
+	var subscriptionID SubscriptionID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "subscriptionId", r.PathValue("subscriptionId"), &subscriptionID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "subscriptionId", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params IntegrationListWebhookDeliveriesParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.IntegrationListWebhookDeliveries(w, r, subscriptionID, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// IntegrationRestoreWebhookSubscription operation middleware
+func (siw *ServerInterfaceWrapper) IntegrationRestoreWebhookSubscription(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "subscriptionId" -------------
+	var subscriptionID SubscriptionID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "subscriptionId", r.PathValue("subscriptionId"), &subscriptionID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "subscriptionId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.IntegrationRestoreWebhookSubscription(w, r, subscriptionID)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -305,6 +581,12 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/integration/apikeys", wrapper.IntegrationCreateAPIKey)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/integration/apikeys/{keyId}", wrapper.IntegrationRevokeAPIKey)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/integration/apikeys/{keyId}/rotate", wrapper.IntegrationRotateAPIKey)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/integration/webhooks", wrapper.IntegrationListWebhookSubscriptions)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/integration/webhooks", wrapper.IntegrationCreateWebhookSubscription)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/integration/webhooks/{subscriptionId}", wrapper.IntegrationDeleteWebhookSubscription)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/integration/webhooks/{subscriptionId}", wrapper.IntegrationUpdateWebhookSubscription)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/integration/webhooks/{subscriptionId}/restore", wrapper.IntegrationRestoreWebhookSubscription)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/integration/webhooks/{subscriptionId}/deliveries", wrapper.IntegrationListWebhookDeliveries)
 
 	return m
 }

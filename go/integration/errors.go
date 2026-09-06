@@ -146,22 +146,32 @@ var (
 	// See eventmapping.go's buildEventMappingIndex.
 	ErrDuplicateEventMapping = apperr.Invalid("integration.duplicate_event_mapping")
 
-	// The round-4 HTTP-transport error index: Handler's own translation
-	// layer over round 1's API-key surface (handler.go). Every code below
-	// is a transport-layer condition Service itself never raises -- it has
-	// no *http.Request to malform and no SubjectResolver of its own -- so
-	// these are declared here rather than in service.go, following org's and
-	// storage's identical split between a Service's own error index and its
-	// Handler's transport-layer additions.
+	// The round-5 HTTP-transport error index: Handler's own translation
+	// layer over round 1's API-key surface (handler.go), since extended to
+	// cover round 7's webhook-subscription CRUD and recent-deliveries
+	// operations -- same layer, same two codes, no new transport condition
+	// a later round has had to add. Every code below is a transport-layer
+	// condition Service itself never raises -- it has no *http.Request to
+	// malform and no SubjectResolver of its own -- so these are declared
+	// here rather than in service.go, following org's and storage's
+	// identical split between a Service's own error index and its Handler's
+	// transport-layer additions.
 
 	// ErrInvalidRequestBody reports a request body Handler could not decode
-	// as integration_createAPIKey's spec-generated JSON type. It carries no
-	// parameters: the schema itself is the message, and no single field can
-	// be blamed for a body that never parsed. This is org's and storage's
-	// identical same-named, same-shaped error.
+	// as the spec-generated JSON type of one of its request-body operations:
+	// round 5's integration_createAPIKey and round 7's
+	// integration_createWebhookSubscription and
+	// integration_updateWebhookSubscription, the latter two through
+	// decodeRequiredJSON, which treats a genuinely empty body as the same
+	// invalid-request condition. It carries no parameters: the schema itself
+	// is the message, and no single field can be blamed for a body that
+	// never parsed. This is org's and storage's identical same-named,
+	// same-shaped error.
 	ErrInvalidRequestBody = apperr.Invalid("integration.invalid_request_body")
 
-	// ErrSubjectUnresolved reports integration_createAPIKey with no
+	// ErrSubjectUnresolved reports integration_createAPIKey (round 5) or
+	// integration_createWebhookSubscription (round 7) -- the two
+	// request-body operations whose payload carries a CreatedBy -- with no
 	// SubjectResolver wired, or one that could not identify the caller. See
 	// SubjectResolver's own doc comment (seams.go): this module fails closed
 	// here rather than inventing a default creator, the identical rule

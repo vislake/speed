@@ -117,13 +117,16 @@ func (f MembershipCheckerFunc) IsActiveMember(ctx context.Context, tenantID, use
 }
 
 // SubjectResolver reports the user id of the request's authenticated
-// caller, for the one round-1 operation that needs one: Handler's
-// integration_createAPIKey (handler.go), which passes it on as
-// CreateInput.CreatedBy. Every other operation this fragment mounts --
-// list, rotate, revoke -- needs no caller identity at all: List reads only
-// the tenant, and Rotate/Revoke resolve CreatedBy from the EXISTING key row
-// (Service.Rotate carries the predecessor's own CreatedBy forward), never
-// from whoever is calling the HTTP endpoint.
+// caller, for the two request-body operations that need one: Handler's
+// integration_createAPIKey (round 5) and integration_createWebhookSubscription
+// (round 7, handler.go), which pass it on as their input's CreatedBy. Every
+// other operation this fragment mounts needs no caller identity at all:
+// List reads only the tenant; Rotate/Revoke resolve CreatedBy from the
+// EXISTING key row (Service.Rotate carries the predecessor's own CreatedBy
+// forward), never from whoever is calling the HTTP endpoint; and webhook
+// Update preserves the existing row's CreatedBy the same way, Delete and
+// Restore need no creator at all, and the deliveries listing is tenant-
+// scoped like the rest.
 //
 // This is the identical structurally-typed, no-import seam org.SubjectResolver
 // and notification.SubjectResolver already declare -- same signature, same
@@ -136,10 +139,11 @@ func (f MembershipCheckerFunc) IsActiveMember(ctx context.Context, tenantID, use
 // actually is.
 //
 // A nil resolver, or one that reports ok=false, makes integration_createAPIKey
-// fail closed with ErrSubjectUnresolved rather than inventing a default
-// creator -- CreatedBy is both the audit trail's responsible party and the
-// identity Service.Create validates Scopes against, so there is no
-// meaningful "anonymous" key to issue over HTTP.
+// and integration_createWebhookSubscription fail closed with
+// ErrSubjectUnresolved rather than inventing a default creator -- CreatedBy
+// is both the audit trail's responsible party and the identity the Service
+// layer validates against, so there is no meaningful "anonymous" key or
+// subscription to issue over HTTP.
 type SubjectResolver interface {
 	// Subject reports r's authenticated caller's user id. ok is false when
 	// no caller could be identified, in which case userID is meaningless and

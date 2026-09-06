@@ -18,21 +18,26 @@ import (
 // same name.
 const jsonContentType = "application/json; charset=utf-8"
 
-// Handler serves round 1's API-key HTTP surface by implementing the
-// spec-generated api.ServerInterface (see api/integration-server.gen.go,
+// Handler serves this module's spec-generated HTTP surface by implementing
+// the spec-generated api.ServerInterface (see api/integration-server.gen.go,
 // regenerated from this module's api/openapi.yaml by task api:gen -- the
 // compile-time assertion at the bottom of this file is what makes "spec
 // changed, handler not" a compile failure instead of a runtime surprise).
+// The fragment grew in two rounds: round 5 added round 1's API-key surface
+// (Create/List/Rotate/Revoke), and round 7 added round 2's webhook-
+// subscription surface -- subscription CRUD (Create/List/Update/Delete),
+// Restore, and the recent-deliveries log -- retiring the "webhook CRUD
+// remains unmounted" row of AGENTS.md's "Deliberately not in scope" table.
 //
 // It must run downstream of tenancy.Middleware on a non-allowlisted path:
 // every method reads the tenant tenancy.Middleware already resolved into the
 // request context, and never from a request parameter, header or body, per
-// root CLAUDE0's multi-tenant isolation rule -- Service's own methods
-// (Create, List) re-derive the tenant themselves through
-// pkgcore.MustTenantFromContext, so Handler adds no tenant resolution of its
-// own beyond the observability annotation mustTenant below performs.
+// root CLAUDE.md's multi-tenant isolation rule -- Service's own methods
+// re-derive the tenant themselves through pkgcore.MustTenantFromContext, so
+// Handler adds no tenant resolution of its own beyond the observability
+// annotation mustTenant below performs.
 //
-// # Round-1-only, and built differently from every other module's Handler
+// # Built differently from every other module's Handler
 //
 // Unlike org's, storage's and notification's Handler -- each built once, at
 // NewModule/Register time, directly from concrete services those modules
@@ -44,24 +49,21 @@ const jsonContentType = "application/json; charset=utf-8"
 // webhookDeliveryHandler already use for the identical reason -- Handler is
 // simply a third place that reads m.service once Attach has produced one,
 // rather than a new pattern.
-//
-// This fragment covers round 1's API-key surface only (Create/List/Rotate/
-// Revoke) -- round 2's webhook-subscription CRUD remains unmounted, per
-// AGENTS.md's "Deliberately not in scope" table; this Handler does not
-// implement anything for that surface and never will unless a later round's
-// own fragment grows this module's api.ServerInterface further.
 type Handler struct {
 	module  *Module
 	subject SubjectResolver
 	mux     *http.ServeMux
 }
 
-// NewHandler returns a Handler serving round 1's API-key surface through
-// module, resolving the caller who creates a key through subject. subject
-// may be nil, in which case integration_createAPIKey fails closed with
+// NewHandler returns a Handler serving this module's spec-generated surface
+// (see Handler's own doc comment for what that covers) through module,
+// resolving the caller who creates a key or a subscription through subject.
+// subject may be nil, in which case integration_createAPIKey and
+// integration_createWebhookSubscription fail closed with
 // ErrSubjectUnresolved rather than guessing a creator -- see SubjectResolver's
-// own doc comment. list, rotate and revoke need no caller identity at all
-// (see Handler's own doc comment) and are unaffected by a nil subject.
+// own doc comment. list, rotate, revoke, update, delete, restore and the
+// deliveries log need no caller identity at all (see Handler's own doc
+// comment) and are unaffected by a nil subject.
 //
 // The returned Handler's routing is registered by the generated
 // api.HandlerFromMux helper: it derives this module's method+path patterns
@@ -131,13 +133,36 @@ func (h *Handler) resolveSubject(w http.ResponseWriter, r *http.Request) (string
 
 // decodeOptionalJSON decodes r's body into dst, tolerating a genuinely
 // empty body (io.EOF) as "use dst's zero value" rather than an error --
-// every field of IntegrationCreateAPIKeyRequest, this handler's one request
-// body, is optional, so a caller issuing a key with no body at all is
-// making a legal request, not a malformed one. Any other decode failure
-// (malformed JSON, a value of the wrong shape) writes ErrInvalidRequestBody
-// and reports false.
+// every field of IntegrationCreateAPIKeyRequest is optional, so a caller
+// issuing a key with no body at all is making a legal request, not a
+// malformed one (this handler's ONE optional body: round 7's webhook
+// request bodies declare their fields required, so they decode through
+// decodeRequiredJSON below instead). Any other decode failure (malformed
+// JSON, a value of the wrong shape) writes ErrInvalidRequestBody and
+// reports false.
 func decodeOptionalJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if err := json.NewDecoder(r.Body).Decode(dst); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, ErrInvalidRequestBody.WithCause(err))
+		return false
+	}
+	return true
+}
+
+// decodeRequiredJSON decodes r's body into dst, treating a genuinely empty
+// body (io.EOF) as a malformed request rather than a legal one: round 7's
+// webhook request bodies -- IntegrationCreateWebhookSubscriptionRequest and
+// IntegrationUpdateWebhookSubscriptionRequest -- mark every field required
+// (api/openapi.yaml declares both requestBody schemas required: true), so a
+// caller sending none is making a malformed request, refused with the plain
+// ErrInvalidRequestBody the identical strict refusal org's, storage's and
+// notification's own handlers apply to their required bodies. Any other
+// decode failure writes ErrInvalidRequestBody.WithCause and reports false.
+func decodeRequiredJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		if errors.Is(err, io.EOF) {
+			writeError(w, ErrInvalidRequestBody)
+			return false
+		}
 		writeError(w, ErrInvalidRequestBody.WithCause(err))
 		return false
 	}
@@ -259,6 +284,190 @@ func (h *Handler) IntegrationRevokeAPIKey(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// IntegrationListWebhookSubscriptions implements api.ServerInterface: GET
+// /api/v1/integration/webhooks. Never exposes a subscription's signing
+// secret -- WebhookSubscriptionSummary carries none, per Service's own
+// contract. Needs no caller identity of its own: List reads only the tenant,
+// and CreatedBy comes from the stored row.
+func (h *Handler) IntegrationListWebhookSubscriptions(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if _, ok := mustTenant(w, r); !ok {
+		return
+	}
+	svc, ok := h.service(w)
+	if !ok {
+		return
+	}
+
+	summaries, err := svc.ListWebhookSubscriptions(ctx)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	items := make([]api.IntegrationWebhookSubscriptionSummary, 0, len(summaries))
+	for i := range summaries {
+		items = append(items, toWebhookSubscriptionSummaryResponse(&summaries[i]))
+	}
+	writeJSON(w, http.StatusOK, api.IntegrationListWebhookSubscriptionsResponse{WebhookSubscriptions: &items})
+}
+
+// IntegrationCreateWebhookSubscription implements api.ServerInterface: POST
+// /api/v1/integration/webhooks. The creator is the caller's own
+// authenticated identity, resolved through SubjectResolver -- never a
+// request field -- the identical rule integration_createAPIKey applies: the
+// new subscription's CreatedBy is the audit trail's responsible party. The
+// response is the one and only place the raw signing secret is ever
+// available, mirroring IntegrationCreatedAPIKey's own "shown once"
+// contract.
+func (h *Handler) IntegrationCreateWebhookSubscription(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if _, ok := mustTenant(w, r); !ok {
+		return
+	}
+	svc, ok := h.service(w)
+	if !ok {
+		return
+	}
+	createdBy, ok := h.resolveSubject(w, r)
+	if !ok {
+		return
+	}
+
+	var req api.IntegrationCreateWebhookSubscriptionRequest
+	if !decodeRequiredJSON(w, r, &req) {
+		return
+	}
+
+	created, err := svc.CreateWebhookSubscription(ctx, CreateWebhookSubscriptionInput{
+		URL:        req.URL,
+		EventTypes: req.EventTypes,
+		CreatedBy:  createdBy,
+	})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	obs.FromContext(ctx).Info("integration webhook subscription created", "id", created.ID, "created_by", created.CreatedBy)
+	writeJSON(w, http.StatusCreated, toCreatedWebhookSubscriptionResponse(created))
+}
+
+// IntegrationUpdateWebhookSubscription implements api.ServerInterface: PATCH
+// /api/v1/integration/webhooks/{subscriptionId}. A field absent from the
+// request leaves the corresponding stored value unchanged -- the request
+// schema's pointer fields map one-to-one onto Service's own "nil means no
+// change" UpdateWebhookSubscriptionInput. subscriptionId never needs a
+// caller identity of its own: the row's CreatedBy is never rewritten by an
+// update (Service.UpdateWebhookSubscription does not touch it), so no
+// SubjectResolver is consulted here.
+func (h *Handler) IntegrationUpdateWebhookSubscription(w http.ResponseWriter, r *http.Request, subscriptionID api.SubscriptionID) {
+	ctx := r.Context()
+	if _, ok := mustTenant(w, r); !ok {
+		return
+	}
+	svc, ok := h.service(w)
+	if !ok {
+		return
+	}
+
+	var req api.IntegrationUpdateWebhookSubscriptionRequest
+	if !decodeRequiredJSON(w, r, &req) {
+		return
+	}
+	in := UpdateWebhookSubscriptionInput{
+		ID:     subscriptionID,
+		URL:    req.URL,
+		Active: req.Active,
+	}
+	if req.EventTypes != nil {
+		in.EventTypes = *req.EventTypes
+	}
+
+	updated, err := svc.UpdateWebhookSubscription(ctx, in)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	obs.FromContext(ctx).Info("integration webhook subscription updated", "id", updated.ID)
+	writeJSON(w, http.StatusOK, toWebhookSubscriptionSummaryResponse(updated))
+}
+
+// IntegrationDeleteWebhookSubscription implements api.ServerInterface:
+// DELETE /api/v1/integration/webhooks/{subscriptionId}. The deletion is a
+// mark-delete, undoable through integration_restoreWebhookSubscription.
+func (h *Handler) IntegrationDeleteWebhookSubscription(w http.ResponseWriter, r *http.Request, subscriptionID api.SubscriptionID) {
+	ctx := r.Context()
+	if _, ok := mustTenant(w, r); !ok {
+		return
+	}
+	svc, ok := h.service(w)
+	if !ok {
+		return
+	}
+
+	if err := svc.DeleteWebhookSubscription(ctx, subscriptionID); err != nil {
+		writeError(w, err)
+		return
+	}
+	obs.FromContext(ctx).Info("integration webhook subscription deleted", "id", subscriptionID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// IntegrationRestoreWebhookSubscription implements api.ServerInterface: POST
+// /api/v1/integration/webhooks/{subscriptionId}/restore. The restored
+// subscription always comes back paused (Active = false) -- Service's own
+// deliberate rule -- so resuming delivery is the caller's explicit next
+// PATCH setting active=true, never an implicit side effect of this call.
+func (h *Handler) IntegrationRestoreWebhookSubscription(w http.ResponseWriter, r *http.Request, subscriptionID api.SubscriptionID) {
+	ctx := r.Context()
+	if _, ok := mustTenant(w, r); !ok {
+		return
+	}
+	svc, ok := h.service(w)
+	if !ok {
+		return
+	}
+
+	if err := svc.RestoreWebhookSubscription(ctx, subscriptionID); err != nil {
+		writeError(w, err)
+		return
+	}
+	obs.FromContext(ctx).Info("integration webhook subscription restored", "id", subscriptionID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// IntegrationListWebhookDeliveries implements api.ServerInterface: GET
+// /api/v1/integration/webhooks/{subscriptionId}/deliveries. params.Limit is
+// passed straight through -- nil (or any non-positive value) becomes
+// Service's default of 50 -- and a malformed query value never reaches this
+// handler at all: the generated wrapper's own parameter binding refuses it
+// with the plain-text 400 of HandlerFromMux's default ErrorHandlerFunc
+// (integration-server.gen.go) before this method runs.
+func (h *Handler) IntegrationListWebhookDeliveries(w http.ResponseWriter, r *http.Request, subscriptionID api.SubscriptionID, params api.IntegrationListWebhookDeliveriesParams) {
+	ctx := r.Context()
+	if _, ok := mustTenant(w, r); !ok {
+		return
+	}
+	svc, ok := h.service(w)
+	if !ok {
+		return
+	}
+
+	var limit int
+	if params.Limit != nil {
+		limit = *params.Limit
+	}
+	deliveries, err := svc.ListRecentWebhookDeliveries(ctx, subscriptionID, limit)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	items := make([]api.IntegrationWebhookDeliverySummary, 0, len(deliveries))
+	for i := range deliveries {
+		items = append(items, toWebhookDeliverySummaryResponse(&deliveries[i]))
+	}
+	writeJSON(w, http.StatusOK, api.IntegrationListWebhookDeliveriesResponse{Deliveries: &items})
+}
+
 // toCreatedAPIKeyResponse maps a *CreatedAPIKey onto the spec-generated
 // response schema.
 func toCreatedAPIKeyResponse(k *CreatedAPIKey) api.IntegrationCreatedAPIKey {
@@ -288,6 +497,56 @@ func toAPIKeySummaryResponse(s *APIKeySummary) api.IntegrationAPIKeySummary {
 		Revoked:     &s.Revoked,
 		Expired:     &s.Expired,
 		CreatorLeft: &s.CreatorLeft,
+	}
+}
+
+// toWebhookSubscriptionSummaryResponse maps one WebhookSubscriptionSummary
+// onto the spec-generated response schema. Deliberately has no field reading
+// Secret -- WebhookSubscriptionSummary carries none, per Service's own
+// contract.
+func toWebhookSubscriptionSummaryResponse(s *WebhookSubscriptionSummary) api.IntegrationWebhookSubscriptionSummary {
+	return api.IntegrationWebhookSubscriptionSummary{
+		ID:         &s.ID,
+		URL:        &s.URL,
+		EventTypes: &s.EventTypes,
+		Active:     &s.Active,
+		CreatedBy:  &s.CreatedBy,
+		CreatedAt:  &s.CreatedAt,
+		UpdatedAt:  &s.UpdatedAt,
+	}
+}
+
+// toCreatedWebhookSubscriptionResponse maps a *CreatedWebhookSubscription
+// onto the spec-generated response schema -- the one response carrying the
+// raw signing secret, and therefore the only mapper below with a Secret
+// field at all.
+func toCreatedWebhookSubscriptionResponse(s *CreatedWebhookSubscription) api.IntegrationCreatedWebhookSubscription {
+	return api.IntegrationCreatedWebhookSubscription{
+		ID:         &s.ID,
+		URL:        &s.URL,
+		EventTypes: &s.EventTypes,
+		Secret:     &s.Secret,
+		Active:     &s.Active,
+		CreatedBy:  &s.CreatedBy,
+		CreatedAt:  &s.CreatedAt,
+	}
+}
+
+// toWebhookDeliverySummaryResponse maps one WebhookDeliverySummary onto the
+// spec-generated response schema.
+func toWebhookDeliverySummaryResponse(d *WebhookDeliverySummary) api.IntegrationWebhookDeliverySummary {
+	return api.IntegrationWebhookDeliverySummary{
+		ID:             &d.ID,
+		SubscriptionID: &d.SubscriptionID,
+		EventType:      &d.EventType,
+		EventVersion:   &d.EventVersion,
+		Status:         &d.Status,
+		Attempts:       &d.Attempts,
+		LastStatusCode: d.LastStatusCode,
+		LastError:      &d.LastError,
+		LastAttemptAt:  d.LastAttemptAt,
+		DeliveredAt:    d.DeliveredAt,
+		CreatedAt:      &d.CreatedAt,
 	}
 }
 
