@@ -7,10 +7,20 @@ name: docs-check
 # markdown-example check below added a second toolchain install -- Go,
 # alongside Hugo -- plus two tiny throwaway-module `go build`+`go vet`
 # calls; both are cheap in practice but the budget line should not lie
-# about what the job now does). This pipeline is also a branch-protection
-# required check at 18-cicd's branch-protection section (alongside
-# fast-check and security); runs skipped by the path filter report neutral
-# and never block a merge.
+# about what the job now does). This pipeline is NOT a GitHub
+# branch-protection required check: this repository has no native branch
+# protection on main at all (18-cicd's branch-protection section records
+# the evidence -- `gh api repos/.../branches/main/protection` returns
+# 404 -- and names fast-check, security and docs-check alike as
+# post-hoc signals, never merge gates). Path filtering makes the same
+# point from the other side: a PR that touches no listed path never
+# starts this workflow, so no check run appears for it at all -- nothing
+# "reports neutral" (that status only arises from a job GitHub runs and
+# skips via an `if:`, which this file never does), and a run that does
+# start reports success or failure like any other check. Either way
+# nothing here blocks a merge: main is direct-push by team convention,
+# and the after-the-fact signal for a direct push is fast-check's own
+# push trigger.
 #
 # DESIGN-TABLE TRIGGER: PRs touching documentation or a public API, via
 # GitHub-native path filtering on the pull_request event -- zero third-party
@@ -138,6 +148,9 @@ name: docs-check
 #                                needs (self-test on change)
 #   .github/actions/setup-go-env/**    the pinned Go install the markdown-
 #                                example check needs (self-test on change)
+#   .github/workflows/docs-check.yml   this workflow itself (a change to
+#                                what runs on doc/i18n PRs should run it
+#                                -- the api-contract precedent)
 #   CLAUDE.md, README.md        root docs stating the rules and CI claims
 #   Taskfile.yml                dev-workflow docs of the checker commands
 
@@ -159,6 +172,7 @@ on:
       - tools/test_check_markdown_examples.py
       - .github/actions/setup-hugo-env/**
       - .github/actions/setup-go-env/**
+      - .github/workflows/docs-check.yml
       - CLAUDE.md
       - README.md
       - Taskfile.yml
