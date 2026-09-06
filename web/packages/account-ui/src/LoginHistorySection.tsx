@@ -164,12 +164,18 @@ export function LoginHistorySection() {
           action={
             <Button onClick={() => void refetch()}>{t('history.retry')}</Button>
           }
+          // The section header above (h2) is hidden whenever this
+          // renders (see the `pending || hasRows` guard), so this
+          // EmptyState's title takes over the section's own heading
+          // level rather than skipping to h6.
+          headingLevel="h2"
         />
       ) : attempts === undefined || attempts.length === 0 ? (
         <EmptyState
           variant="empty"
           title={t('history.empty.title')}
           description={t('history.empty.description')}
+          headingLevel="h2"
         />
       ) : (
         <Box>

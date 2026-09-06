@@ -229,8 +229,9 @@ the session-lifecycle family, `authn.rate_limited`, `client.*`).
 The section takes no props: whose sessions these are, and the right to
 revoke them, come from the caller's bound client and its access token.
 Empty and failure states hide the section header entirely and render
-one ui-kit `EmptyState` (empty / error variant with a retry button), so
-the heading order never skips a level.
+one ui-kit `EmptyState` (empty / error variant with a retry button,
+`headingLevel="h2"` so its title continues at the hidden header's own
+level instead of skipping to `EmptyState`'s `h6` default).
 
 ## LoginHistorySection
 
@@ -256,7 +257,9 @@ message field can ever reach the row.
 
 The section takes no props. Empty and failure states hide the section
 header entirely and render one ui-kit `EmptyState` (empty / error
-variant with a retry button), so the heading order never skips a level.
+variant with a retry button, `headingLevel="h2"` so its title continues
+at the hidden header's own level instead of skipping to `EmptyState`'s
+`h6` default).
 
 ## SocialBindingsSection
 
@@ -319,11 +322,12 @@ export interface SocialProviderConfig {
 | `onAuthorizeUrl` | `(url: string) => void` | receives each channel's authorization URL once built; the host navigates. Omit to run the section without a follow-up |
 
 Empty and failure states render one ui-kit `EmptyState` (empty / error
-variant with a retry button) with the section header hidden, so the
-heading order never skips a level. The one exception is a first-run
-account with an unbound configured provider: there the empty list is
-exactly the add area's cue, so the header stays and the add area is the
-whole of the content.
+variant with a retry button) with the section header hidden and
+`headingLevel="h2"` so its title continues at the hidden header's own
+level instead of skipping to `EmptyState`'s `h6` default. The one
+exception is a first-run account with an unbound configured provider:
+there the empty list is exactly the add area's cue, so the header stays
+and the add area is the whole of the content.
 
 ## BindingCallbackHandler
 
@@ -492,8 +496,14 @@ twice), the revoke-others success notice is a `role="status"` alert,
 every failure renders in one `role="alert"`, the row-end revoke and
 unbind actions are labelled buttons (the revoke is icon-only, so its
 `aria-label` is the whole of its name), and the empty and error states
-of the list surfaces hide the section header so the `EmptyState`'s own
-title stands in for it and the heading order never skips a level.
+of the list surfaces hide the section header and pass `EmptyState`
+`headingLevel="h2"` so its title stands in at the hidden header's own
+level rather than skipping to `EmptyState`'s `h6` default -- component
+tests scan an isolated tree with no preceding `h1`/`h2` of their own, so
+this specific property is pinned by a dedicated test that supplies one
+(`EmptyState.test.tsx` in `@speed/ui-kit`), not by the axe runs above,
+which cannot see a skip that a real page's ancestor headings alone would
+create.
 Dialogs are MUI `Dialog`s (focus managed, Escape and backdrop cancel);
 the danger confirmations use `ui-kit`'s `ConfirmDialog`, whose armed
 state the suite drives through the ui-kit-namespace confirm-again

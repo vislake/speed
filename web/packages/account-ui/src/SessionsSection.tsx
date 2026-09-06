@@ -241,12 +241,18 @@ export function SessionsSection() {
           action={
             <Button onClick={() => void refetch()}>{t('sessions.retry')}</Button>
           }
+          // showHeader is false here (see its definition above): this
+          // EmptyState's title stands in for the hidden h2 section
+          // header, so it must render at that same level or the page's
+          // heading order skips straight from h1 to h6.
+          headingLevel="h2"
         />
       ) : sessions === undefined || sessions.length === 0 ? (
         <EmptyState
           variant="empty"
           title={t('sessions.empty.title')}
           description={t('sessions.empty.description')}
+          headingLevel="h2"
         />
       ) : (
         <Box>

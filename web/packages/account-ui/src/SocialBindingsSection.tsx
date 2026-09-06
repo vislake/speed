@@ -186,7 +186,9 @@ export function SocialBindingsSection({
   )
   const hasAddArea = rows !== undefined && available.length > 0
   // Empty list with nothing to offer: the EmptyState's own title stands
-  // in for the section header, so the heading order never skips a level.
+  // in for the section header (headingLevel="h2" below keeps it at the
+  // hidden header's own level, rather than skipping to EmptyState's h6
+  // default), so the heading order never skips a level.
   const showEmptyState = rows !== undefined && rows.length === 0 && !hasAddArea
   const showHeader =
     pending || (rows !== undefined && (rows.length > 0 || hasAddArea))
@@ -260,12 +262,14 @@ export function SocialBindingsSection({
           action={
             <Button onClick={() => void refetch()}>{t('bindings.retry')}</Button>
           }
+          headingLevel="h2"
         />
       ) : showEmptyState ? (
         <EmptyState
           variant="empty"
           title={t('bindings.empty.title')}
           description={t('bindings.empty.description')}
+          headingLevel="h2"
         />
       ) : rows === undefined ? null : (
         <Box>

@@ -130,7 +130,12 @@ verification); two take no props at all.
 8. **Sections stay sections; nothing navigates, nothing signs anyone
    in or out.** The four surfaces are account-page content under host
    headings — empty and failure states hide the section header and
-   render a ui-kit `EmptyState` so heading order never skips a level.
+   render a ui-kit `EmptyState` with `headingLevel="h2"` (the hidden
+   header's own level), so heading order never skips a level: this
+   depends on the caller supplying `headingLevel` correctly, since
+   `EmptyState` itself carries no page-structure knowledge and defaults
+   to `h6` for callers that do not (see `@speed/ui-kit`'s own
+   `EmptyState` doc comment).
    The bindings add area reports authorize URLs upward through
    `onAuthorizeUrl`; `BindingCallbackHandler` dispatches the exchange's
    answer shape (binding-shaped → refetch + `onBound`; login-shaped →
