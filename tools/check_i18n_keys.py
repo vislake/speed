@@ -160,17 +160,35 @@ def extract_message_ids(table: dict[str, Any]) -> tuple[set[str], dict[str, list
     return ids, id_paths
 
 
-def load_toml_ids(path: str) -> tuple[set[str], str | None]:
-    """Parse path with tomllib. Returns (ids, error_message)."""
+def load_toml_ids(path: str) -> tuple[set[str], list[str]]:
+    """Parse path with tomllib. Returns (ids, problems).
+
+    The problems list carries parse failures and the module docstring's
+    defensive-rule violations: a leaf id defined under two different
+    paths (e.g. one 'x' key under both an '[a]' and a '[b]' section)
+    makes zh-CN/en-US pairing ambiguous, so the file is reported as an
+    error rather than compared -- this check threads the full dotted
+    paths extract_message_ids collects to prove or clear that ambiguity.
+    """
     try:
         with open(path, "rb") as fh:
             data = tomllib.load(fh)
     except OSError as exc:
-        return set(), f"cannot read: {exc}"
+        return set(), [f"cannot read: {exc}"]
     except tomllib.TOMLDecodeError as exc:
-        return set(), f"invalid TOML: {exc}"
-    ids, _ = extract_message_ids(data)
-    return ids, None
+        return set(), [f"invalid TOML: {exc}"]
+    ids, id_paths = extract_message_ids(data)
+    problems = []
+    for leaf in sorted(
+        leaf for leaf, paths in id_paths.items() if len(set(paths)) > 1
+    ):
+        paths = sorted(set(id_paths[leaf]))
+        problems.append(
+            f"leaf id '{leaf}' is defined under {len(paths)} different "
+            f"paths ({', '.join(repr(p) for p in paths)}); pairing across "
+            "languages would be ambiguous, so this file is not compared"
+        )
+    return ids, problems
 
 
 def collect_json_leaves(
@@ -318,11 +336,11 @@ def check_locale_dir(dir_path: str, rel_dir: str) -> tuple[list[str], list[str]]
 def load_ids_for(pair: tuple[str, str]) -> Callable[[str], tuple[set[str], list[str]]]:
     """The right loader for a pair: tomllib for TOML, json for JSON."""
     if pair == TOML_PAIR:
-        def load_toml(path: str) -> tuple[set[str], list[str]]:
-            ids, err = load_toml_ids(path)
-            return ids, ([err] if err is not None else [])
-
-        return load_toml
+        # load_toml_ids now returns the problems list directly: the
+        # duplicate-leaf-id defensive rule (a leaf defined under two
+        # different paths is an error, never compared) is part of its
+        # per-file contract, like a parse failure.
+        return load_toml_ids
     return load_json_ids
 
 
