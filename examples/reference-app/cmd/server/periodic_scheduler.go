@@ -23,9 +23,20 @@ import (
 //   - storage's per-tenant expiry sweep, one task per tenant the host
 //     serves (LifecycleService.EnqueueExpirySweep under a pkgcore tenant
 //     context -- the sweep itself runs tenant-scoped, so the tenant must
-//     travel on the task; the enqueue carries a deterministic per-tenant
-//     idempotency key, so an overlapping tick's duplicate enqueue merges
-//     into the in-flight job instead of stacking a second one).
+//     travel on the task). The enqueue carries a deterministic per-tenant
+//     idempotency key whose design intent is to collapse concurrent
+//     replica enqueues into one in-flight sweep; under the asynq queue's
+//     bounded idempotency that intent holds. On this app's
+//     StandaloneQueue the same key is permanent (go/jobs: a resolved key
+//     is held forever, succeeded rows are never deleted), so the first
+//     tick's sweep is the only one that ever executes and every later
+//     tick's duplicate enqueue merges into that completed job: a
+//     standalone host sweeps each tenant exactly once, at its first tick,
+//     before any object exists. This is a known limitation this round
+//     records rather than fixes -- fixing it requires changing go/jobs'
+//     or go/storage's semantics, module code outside this round's scope.
+//     The pin and the dated record live in periodic_scheduler_flow_test.go
+//     and go/storage/AGENTS.md.
 //   - pki's signing-key expiry scan, one platform-level task per tick
 //     (Service.EnqueueExpiryScan: pki's keys are platform data, so the
 //     scan carries no tenant at all). This is what actually drives the
