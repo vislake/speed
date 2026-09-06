@@ -50,11 +50,11 @@ name: full-check
 #                    both legs (postgres_leg_test.go,
 #                    redis_leg_test.go)
 #       go/jobs      Redis
-#       go/pkgcore   Redis and MinIO/S3 -- its integration_test/ runs both
+#       go/pkgcore   Redis and RustFS/S3 -- its integration_test/ runs both
 #                    tiers (redis_container_test.go/redis_kv_test.go/
 #                    redis_eventbus_test.go against Redis,
-#                    minio_container_test.go/s3_objectstore_test.go against
-#                    MinIO/S3)
+#                    rustfs_container_test.go/objectstore_test.go against
+#                    RustFS/S3)
 #       go/rbac      PostgreSQL and Redis -- its integration_test/ runs
 #                    both legs (postgres_leg_test.go for the second
 #                    dialect's migrations and AssertIsolated,
@@ -72,12 +72,12 @@ name: full-check
 #                    tier: authn touches KVStore only through ratelimit and
 #                    the revocation list, both already covered by their own
 #                    owning module's tier -- go/authn/AGENTS.md)
-#       go/storage   PostgreSQL and MinIO/S3 -- its integration_test/ runs
+#       go/storage   PostgreSQL and RustFS/S3 -- its integration_test/ runs
 #                    both legs (postgres_leg_test.go for the module's
 #                    migrations applied from zero on the second dialect and
 #                    the tenant-scoped repositories' AssertIsolated suite,
-#                    minio_leg_test.go for object-store round-trips against
-#                    MinIO through pkgcore.NewS3ObjectStore)
+#                    rustfs_leg_test.go for object-store round-trips against
+#                    RustFS through pkgcore.NewS3ObjectStore)
 #       go/notification PostgreSQL and Redis -- its integration_test/
 #                       runs both legs (postgres_leg_test.go for the
 #                       schema and isolation semantics of the five
@@ -101,7 +101,7 @@ name: full-check
 #                       proof cannot rule out
 #   * reference-app job: examples/reference-app's golangci-lint leg, unit
 #     suite under -race, and its Docker-backed integration tier
-#     (-tags=integration -- testcontainers Redis, MinIO and a Mailpit SMTP
+#     (-tags=integration -- testcontainers Redis, RustFS and a Mailpit SMTP
 #     catcher) -- reference-app is its own module, listed in go.work but
 #     outside go/, so neither the module matrix above nor the go/...
 #     import-path build of fast-check covers it (Taskfile's APP_DIR legs
@@ -114,7 +114,7 @@ name: full-check
 #     composition is orthogonal to deployment mode), and
 #     distributed_mode_test.go (this round) boots the real server TWICE,
 #     both replicas under SPEED_DEPLOYMENT_MODE=distributed against the
-#     same real Redis/MinIO/SMTP-catcher infrastructure. Replica B boots
+#     same real Redis/RustFS/SMTP-catcher infrastructure. Replica B boots
 #     with SPEED_DISABLE_QUEUE_WORKER=true so it can never self-produce a
 #     delivery; the test opens replica B's own SSE inbox stream
 #     (GET /api/v1/notifications/stream) before replica A creates the note,
@@ -138,10 +138,10 @@ name: full-check
 #   * the dual deployment mode x dual dialect full-matrix acceptance across
 #     every module. What runs above is the real part of the matrix that
 #     exists today: the standalone-mode unit suites, the PostgreSQL /
-#     Redis / MinIO-S3 integration tiers, and the reference-app job's two
+#     Redis / RustFS-S3 integration tiers, and the reference-app job's two
 #     integration-tier proofs (a real-Redis composition in a STANDALONE
 #     topology, and -- new this round -- a genuine two-replica DISTRIBUTED
-#     boot against real Redis/MinIO/SMTP, both still on the app's own
+#     boot against real Redis/RustFS/SMTP, both still on the app's own
 #     hard-coded SQLite dialect: the deployment-mode axis this condition
 #     names is now real, the second-dialect axis is not, and
 #     distributed_mode_test.go's own header records that combination

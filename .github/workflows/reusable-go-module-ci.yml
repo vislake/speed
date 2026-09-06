@@ -32,7 +32,7 @@ name: go-module-ci
 #                                Docker-backed integration tiers
 #                                (-tags=integration: PostgreSQL for dbkit
 #                                and tenancy, Redis for jobs, and Redis
-#                                plus MinIO/S3 for pkgcore -- its
+#                                plus RustFS/S3 for pkgcore -- its
 #                                integration_test/ runs both tiers)
 #                                intentionally do NOT run here: 18-cicd's
 #                                layered-triggering rule puts them in the
