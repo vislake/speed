@@ -147,6 +147,79 @@ func TestVerifyPassword_TamperedDigestDoesNotVerify(t *testing.T) {
 	}
 }
 
+// TestVerifyPassword_UnrunnableStoredParametersAreRejectedNotPanicked is
+// the reading-side twin of TestHashPassword_RejectsUnrunnableParameters:
+// the writer refuses t=0 / p=0 / m=0 at hash time, but a stored row can
+// still carry them -- a corrupted column, or a value written by something
+// that never ran HashPassword. decodePHC's callers hand the recorded
+// parameters straight to argon2.IDKey, which PANICS on t=0 ("number of
+// rounds too small") and p=0 ("parallelism degree too low") rather than
+// returning an error: one corrupt row would crash a login request
+// goroutine. A stored hash that decodes to parameters argon2 cannot run
+// with must decode to ErrInvalidPasswordHash instead.
+func TestVerifyPassword_UnrunnableStoredParametersAreRejectedNotPanicked(t *testing.T) {
+	t.Parallel()
+
+	valid, err := HashPassword("password for the unrunnable-parameter cases", testParams())
+	if err != nil {
+		t.Fatalf("HashPassword() error = %v", err)
+	}
+	fields := strings.Split(valid, "$")
+
+	cases := []struct {
+		name   string
+		params string
+	}{
+		{name: "zero memory", params: "m=0,t=1,p=1"},
+		{name: "zero iterations", params: "m=19456,t=0,p=1"},
+		{name: "zero parallelism", params: "m=19456,t=2,p=0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded := "$" + fields[1] + "$" + fields[2] + "$" + tc.params + "$" + fields[4] + "$" + fields[5]
+			ok, err := VerifyPassword(encoded, "password for the unrunnable-parameter cases")
+			if ok {
+				t.Error("VerifyPassword() = true for a stored hash whose parameters argon2 cannot run with")
+			}
+			if !errors.Is(err, ErrInvalidPasswordHash) {
+				t.Errorf("VerifyPassword() error = %v, want ErrInvalidPasswordHash (a panic would fail the test binary)", err)
+			}
+		})
+	}
+}
+
+// TestVerifyPassword_EmptySaltStaysOKFalse pins the one short-salt shape
+// that is NOT a panic: argon2 accepts an empty salt and simply derives a
+// digest no honest hash can match, so before this round's fix an empty salt
+// answered (false, nil) -- "wrong password". The decode path now applies
+// the writer's own floor (PasswordParams.validate, which HashPassword
+// enforces at write time: no legitimate hash has a salt under 8 bytes), so
+// the same stored value answers (false, ErrInvalidPasswordHash). The "ok"
+// half of the answer is what must not move -- a false result with no panic
+// -- while the error half correctly tells the operator the stored value is
+// corrupt rather than pretending the password was merely wrong.
+func TestVerifyPassword_EmptySaltStaysOKFalse(t *testing.T) {
+	t.Parallel()
+
+	valid, err := HashPassword("password", testParams())
+	if err != nil {
+		t.Fatalf("HashPassword() error = %v", err)
+	}
+	fields := strings.Split(valid, "$")
+	emptySalt := "$" + fields[1] + "$" + fields[2] + "$" + fields[3] + "$$" + fields[5]
+
+	ok, err := VerifyPassword(emptySalt, "password")
+	if ok {
+		t.Error("VerifyPassword() = true for a stored hash with an empty salt")
+	}
+	if err == nil {
+		t.Fatal("VerifyPassword() error = nil for an empty salt, want ErrInvalidPasswordHash: an empty salt is below the writer's own 8-byte floor, so the value is a corrupt stored hash, not a wrong password")
+	}
+	if !errors.Is(err, ErrInvalidPasswordHash) {
+		t.Errorf("VerifyPassword() error = %v, want ErrInvalidPasswordHash", err)
+	}
+}
+
 // TestNeedsRehash covers the migration path that lets a deployment raise its
 // argon2id cost without invalidating a single stored password.
 func TestNeedsRehash(t *testing.T) {

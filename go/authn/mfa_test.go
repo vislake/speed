@@ -1,8 +1,10 @@
 package authn
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -647,4 +649,139 @@ func loginPrincipal(t *testing.T, f *serviceFixture, user *User, tenant pkgcore.
 		t.Fatalf("Login() error = %v", err)
 	}
 	return pair.Principal
+}
+
+// TestMFAFactorRepository_Confirm_SecondConfirmOfAnActivatedFactorLoses is
+// the deterministic half of the P2-7 regression: the loser of a confirm
+// race is a Confirm whose elevation UPDATE matches no row -- the factor is
+// no longer pending, because a concurrent confirm already activated it. The
+// repository must report that loss, so the service layer can refuse BEFORE
+// it regenerates the recovery-code batch the winner just displayed. Before
+// the fix, Confirm dropped RowsAffected and a second confirm of the same
+// pending id returned nil -- indistinguishable from winning.
+func TestMFAFactorRepository_Confirm_SecondConfirmOfAnActivatedFactorLoses(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	user := f.registerUser(t, "mfa-confirm-loser@example.com", testTenantA)
+
+	result, err := f.svc.EnrollTOTP(t.Context(), Principal{UserID: user.ID})
+	if err != nil {
+		t.Fatalf("EnrollTOTP() error = %v", err)
+	}
+	pending, err := f.svc.mfaFactors.FindPendingByUserAndType(t.Context(), user.ID, MFATypeTOTP)
+	if err != nil {
+		t.Fatalf("FindPendingByUserAndType() error = %v", err)
+	}
+	code, err := totp.Code(result.Secret, time.Now())
+	if err != nil {
+		t.Fatalf("totp.Code() error = %v", err)
+	}
+	ok, step := totp.Validate(result.Secret, code, totpSkewSteps)
+	if !ok {
+		t.Fatal("the freshly computed code does not validate")
+	}
+
+	// The winner: this Confirm is the one whose elevation UPDATE matches
+	// the pending row.
+	won, err := f.svc.mfaFactors.Confirm(t.Context(), user.ID, MFATypeTOTP, pending.ID, f.svc.now(), step)
+	if err != nil || !won {
+		t.Fatalf("first Confirm() = (%v, %v), want (true, nil)", won, err)
+	}
+
+	// The loser: the identical Confirm again -- exactly what a concurrent
+	// ConfirmTOTP whose read of the pending row predates the winner's
+	// commit executes. Its UPDATE matches no row, and it must report the
+	// loss rather than a silent nil.
+	won, err = f.svc.mfaFactors.Confirm(t.Context(), user.ID, MFATypeTOTP, pending.ID, f.svc.now(), step)
+	if err != nil {
+		t.Fatalf("second Confirm() error = %v, want a clean (false, nil)", err)
+	}
+	if won {
+		t.Fatal("second Confirm() = true: a confirm whose elevation matched no row reported victory; the caller would regenerate the winner's recovery-code batch and announce a second enrollment")
+	}
+}
+
+// TestConfirmTOTP_ConcurrentConfirmsOfOnePendingFactor_HaveOneWinner is the
+// service-level P2-7 regression: several simultaneous ConfirmTOTP calls
+// with the same valid code race over one pending factor. Exactly one may
+// win the elevation, regenerate the recovery-code batch and announce the
+// enrollment. Every loser must be refused with the already-active answer
+// BEFORE it touches the recovery-code batch -- before the fix, a loser
+// whose pending-factor read landed before the winner's commit ran Confirm
+// to a silent no-op and then regenerated the batch the winner had just
+// displayed, replacing the codes the winner's screen was showing, and
+// announced a second enrollment over one code.
+//
+// Deliberately not t.Parallel() and run over several fresh fixtures: the
+// losers' reads only beat the winner's commit under genuine concurrency,
+// and a single round of a wall-clock race can come out the safe way even
+// on the broken code. Under the fix every round is deterministic -- the
+// database arbitrates exactly one winner -- so the loop only costs the
+// broken code its luck.
+func TestConfirmTOTP_ConcurrentConfirmsOfOnePendingFactor_HaveOneWinner(t *testing.T) {
+	const (
+		rounds = 5
+		racers = 8
+	)
+	for round := 1; round <= rounds; round++ {
+		t.Run(fmt.Sprintf("round %d", round), func(t *testing.T) {
+			f := newServiceFixture(t)
+			user := f.registerUser(t, "mfa-race@example.com", testTenantA)
+			result, err := f.svc.EnrollTOTP(t.Context(), Principal{UserID: user.ID})
+			if err != nil {
+				t.Fatalf("EnrollTOTP() error = %v", err)
+			}
+			code, err := totp.Code(result.Secret, time.Now())
+			if err != nil {
+				t.Fatalf("totp.Code() error = %v", err)
+			}
+
+			var (
+				wg       sync.WaitGroup
+				mu       sync.Mutex
+				success  int
+				refused  int
+				unwanted []error
+			)
+			wg.Add(racers)
+			for range racers {
+				go func() {
+					defer wg.Done()
+					_, err := f.svc.ConfirmTOTP(t.Context(), user.ID, code)
+					mu.Lock()
+					defer mu.Unlock()
+					switch {
+					case err == nil:
+						success++
+					case hasCode(err, ErrMFAAlreadyEnrolled.Code), hasCode(err, ErrMFANotEnrolled.Code):
+						refused++
+					default:
+						unwanted = append(unwanted, err)
+					}
+				}()
+			}
+			wg.Wait()
+
+			if len(unwanted) != 0 {
+				t.Fatalf("losers answered unexpected errors: %v", unwanted)
+			}
+			if success != 1 {
+				t.Fatalf("%d concurrent confirms succeeded, want exactly 1 (a losing confirm must be refused, not regenerate the winner's recovery-code batch)", success)
+			}
+			if refused != racers-1 {
+				t.Fatalf("%d losers were refused, want %d", refused, racers-1)
+			}
+			if n := f.events.Count(EventMFAEnrolled); n != 1 {
+				t.Errorf("%d %s events published, want exactly 1: a losing confirm announced an enrollment", n, EventMFAEnrolled)
+			}
+			var rows []UserRecoveryCode
+			if err := f.db.Where("user_id = ?", user.ID).Find(&rows).Error; err != nil {
+				t.Fatalf("query user_recovery_codes: %v", err)
+			}
+			if len(rows) != recoveryCodeCount {
+				t.Errorf("stored %d recovery codes, want %d (a losing confirm regenerated the batch)", len(rows), recoveryCodeCount)
+			}
+		})
+	}
 }

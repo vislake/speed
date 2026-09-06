@@ -1002,7 +1002,26 @@ func (s *Service) record(ctx context.Context, attempt *LoginAttempt) {
 
 // publish emits evt, logging a delivery failure instead of returning it. The
 // fact the event describes has already been committed.
+//
+// An event whose TenantID the emitting site did not set picks up the tenant
+// of the context it is published in, when one is present. The handlers of
+// protected operations layer the acting principal's own TenantID onto the
+// ctx they hand the service (pkgcore.WithTenant, the same layering
+// recordAudit uses for audit rows -- P1-4), so the security-relevant facts
+// those operations announce -- identity unbound, MFA enrolled, recovery
+// codes regenerated -- carry the same tenant their audit rows do. Every
+// pre-authentication path layers nothing, so its events (registration, a
+// failed sign-in, a binding made at an unauthenticated callback) stay
+// tenant-less: the tenant_id an unauthenticated request merely asserts is
+// not an attestation. A site that knows its event's tenant sets TenantID
+// explicitly (the session events do, from the session row); it is never
+// overwritten here.
 func (s *Service) publish(ctx context.Context, evt pkgcore.Event) {
+	if evt.TenantID == "" {
+		if tenantID, ok := pkgcore.TenantFromContext(ctx); ok {
+			evt.TenantID = tenantID
+		}
+	}
 	if err := s.bus.Publish(ctx, evt); err != nil {
 		obs.FromContext(ctx).Warn("domain event publish failed", "event_type", evt.Type, "error", err)
 	}

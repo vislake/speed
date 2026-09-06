@@ -179,7 +179,14 @@ func (r *MFAFactorRepository) DeletePendingByUserAndType(ctx context.Context, us
 // step as its LastUsedStep so the confirmation code itself cannot be
 // replayed at the next step-up verification, AND -- in the same
 // transaction -- removes userID's other (still-active) factor of the same
-// type, if any.
+// type, if any. It reports whether THIS call won the elevation: an UPDATE
+// that matched no row is not an error, and one means the factor is no
+// longer pending -- a concurrent ConfirmTOTP activated it between this
+// caller's read and this write. The loser's whole transaction is rolled
+// back (the demotion-shaped delete included), and the caller must hear
+// "false" rather than proceed as if it had won: proceeding would
+// regenerate the recovery-code batch the winner just displayed and
+// announce a second enrollment over one code.
 //
 // The demotion-shaped delete runs FIRST, deliberately, mirroring
 // go/pki/repository.go's PromoteToActive: idx_user_mfa_factors_user_type
@@ -199,17 +206,39 @@ func (r *MFAFactorRepository) DeletePendingByUserAndType(ctx context.Context, us
 // user that had happened. Keeping the old factor active until THIS call
 // succeeds means an abandoned enrollment leaves the account exactly as it
 // was.
-func (r *MFAFactorRepository) Confirm(ctx context.Context, userID, factorType, id string, at time.Time, step int64) error {
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+func (r *MFAFactorRepository) Confirm(ctx context.Context, userID, factorType, id string, at time.Time, step int64) (bool, error) {
+	won := false
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("user_id = ? AND type = ? AND status = ? AND id != ?",
 			userID, factorType, MFAFactorStatusActive, id).
 			Delete(&UserMFAFactor{}).Error; err != nil {
 			return err
 		}
-		return tx.Where("id = ? AND status = ?", id, MFAFactorStatusPending).
-			Updates(&UserMFAFactor{Status: MFAFactorStatusActive, ConfirmedAt: &at, LastUsedStep: step}).Error
+		res := tx.Where("id = ? AND status = ?", id, MFAFactorStatusPending).
+			Updates(&UserMFAFactor{Status: MFAFactorStatusActive, ConfirmedAt: &at, LastUsedStep: step})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected != 1 {
+			// Lost the elevation to a concurrent confirm: roll the whole
+			// transaction back and report the loss (see the doc comment).
+			return errMFAConfirmLost
+		}
+		won = true
+		return nil
 	})
+	if err != nil {
+		if errors.Is(err, errMFAConfirmLost) {
+			return false, nil
+		}
+		return false, err
+	}
+	return won, nil
 }
+
+// errMFAConfirmLost is the internal rollback marker Confirm uses to report
+// that the elevation UPDATE matched no row. It never escapes Confirm.
+var errMFAConfirmLost = errors.New("authn: mfa factor is no longer pending")
 
 // UpdateLastUsedStep atomically advances f's replay guard from prevStep to
 // newStep and reports whether it won the race, mirroring
@@ -417,22 +446,31 @@ func (s *Service) ConfirmTOTP(ctx context.Context, userID, code string) ([]strin
 		if !errors.Is(err, ErrNotFound) {
 			return nil, err
 		}
-		// No pending factor. Tell "never enrolled" apart from "already
-		// active, nothing pending" the same way EnrollTOTP does, so
-		// confirming a second time still answers ErrMFAAlreadyEnrolled
-		// rather than the misleading ErrMFANotEnrolled.
-		if _, activeErr := s.mfaFactors.FindActiveByUserAndType(ctx, userID, MFATypeTOTP); activeErr == nil {
-			return nil, ErrMFAAlreadyEnrolled
-		}
-		return nil, ErrMFANotEnrolled
+		// No pending factor: mfaFactorStateError tells "never enrolled"
+		// apart from "already active, nothing pending" the same way
+		// EnrollTOTP does, so confirming a second time still answers
+		// ErrMFAAlreadyEnrolled rather than the misleading ErrMFANotEnrolled.
+		return nil, s.mfaFactorStateError(ctx, userID)
 	}
 
 	ok, step := totp.Validate(factor.Secret, code, totpSkewSteps)
 	if !ok {
 		return nil, ErrMFAInvalidCode
 	}
-	if confirmErr := s.mfaFactors.Confirm(ctx, userID, MFATypeTOTP, factor.ID, s.now(), step); confirmErr != nil {
+	won, confirmErr := s.mfaFactors.Confirm(ctx, userID, MFATypeTOTP, factor.ID, s.now(), step)
+	if confirmErr != nil {
 		return nil, confirmErr
+	}
+	if !won {
+		// A concurrent ConfirmTOTP validated the same pending factor with
+		// the same code and activated it between the read above and this
+		// write (or an EnrollTOTP replaced the pending row). This call
+		// lost the elevation: it must not regenerate the recovery-code
+		// batch the winner just displayed -- the loser would replace the
+		// codes the winner's screen is showing -- nor announce a second
+		// enrollment, nor answer success. Classify exactly like a confirm
+		// that found no pending factor.
+		return nil, s.mfaFactorStateError(ctx, userID)
 	}
 
 	codes, err := s.regenerateRecoveryCodesLocked(ctx, userID)
@@ -445,6 +483,23 @@ func (s *Service) ConfirmTOTP(ctx context.Context, userID, code string) ([]strin
 		Payload: MFAEnrolledPayload{UserID: userID, Type: MFATypeTOTP},
 	})
 	return codes, nil
+}
+
+// mfaFactorStateError answers a ConfirmTOTP that found no pending factor to
+// elevate, distinguishing the two shapes that look alike from the caller's
+// side: an ACTIVE factor already exists (the second confirm of a completed
+// enrollment, or the loser of a concurrent confirm race -- ErrMFAAlreadyEnrolled)
+// versus none ever enrolled (ErrMFANotEnrolled).
+func (s *Service) mfaFactorStateError(ctx context.Context, userID string) error {
+	_, err := s.mfaFactors.FindActiveByUserAndType(ctx, userID, MFATypeTOTP)
+	switch {
+	case err == nil:
+		return ErrMFAAlreadyEnrolled
+	case errors.Is(err, ErrNotFound):
+		return ErrMFANotEnrolled
+	default:
+		return err
+	}
 }
 
 // RegenerateRecoveryCodes discards userID's existing recovery codes and

@@ -223,6 +223,21 @@ func decodePHC(encoded string) (p PasswordParams, salt, digest []byte, err error
 	// line above, which gosec's analyzer does not follow across the
 	// comparison; the conversion cannot overflow.
 	p.SaltLength, p.KeyLength = uint32(len(salt)), uint32(len(digest))
+
+	// The writing side refuses every shape argon2 cannot run with
+	// (PasswordParams.validate, enforced at the top of HashPassword). The
+	// reading side must refuse the same shapes before its callers act on
+	// them: VerifyPassword and NeedsRehash hand the parsed parameters
+	// straight to argon2.IDKey, which PANICS on t=0 ("number of rounds too
+	// small") and p=0 ("parallelism degree too low") rather than returning
+	// an error -- a panic in a request goroutine turns one corrupt stored
+	// row into a crashed request handler. A stored value whose recorded
+	// parameters argon2 cannot run with (including a salt or digest below
+	// this package's own write floor, which no legitimate hash can have)
+	// decodes to ErrInvalidPasswordHash instead.
+	if err := p.validate(); err != nil {
+		return PasswordParams{}, nil, nil, fmt.Errorf("%w: %w", ErrInvalidPasswordHash, err)
+	}
 	return p, salt, digest, nil
 }
 

@@ -409,6 +409,37 @@ func TestHandler_RequestSMSCode_KnownAndUnknownPhone_BothReturn202(t *testing.T)
 	}
 }
 
+// TestHandler_RequestSMSCode_GatewayDown_RegisteredPhoneStillAnswers202 is
+// the P2-8 regression at the layer the oracle actually lives: the HTTP
+// status. Before the fix, a registered phone whose SMS gateway failed
+// answered 500 while an unregistered phone answered 202 under the very same
+// outage -- a response-status split that tells an attacker a number is
+// registered exactly when the platform can least afford to admit it. The
+// gateway failure is logged server-side and both requests answer 202 with
+// an empty body.
+func TestHandler_RequestSMSCode_GatewayDown_RegisteredPhoneStillAnswers202(t *testing.T) {
+	t.Parallel()
+
+	h, f := newTestHandler(t, WithSMSSender(failingSMSSender{}))
+	f.registerUser(t, "smsoracle@example.com", testTenantA)
+	if err := f.svc.Users().Save(t.Context(), mustSetPhone(t, f, "smsoracle@example.com", "+15550000009")); err != nil {
+		t.Fatalf("save the registered phone: %v", err)
+	}
+
+	known := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/login/sms/request", api.AuthnRequestSMSCodeRequest{Phone: "+15550000009"}, nil)
+	if known.Code != http.StatusAccepted {
+		t.Fatalf("registered-phone-under-gateway-outage status = %d, want %d; body = %s", known.Code, http.StatusAccepted, known.Body.String())
+	}
+	if known.Body.Len() != 0 {
+		t.Errorf("registered-phone response body = %q, want empty (an error envelope would disclose the failure)", known.Body.String())
+	}
+
+	unknown := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/login/sms/request", api.AuthnRequestSMSCodeRequest{Phone: "+15559999999"}, nil)
+	if unknown.Code != http.StatusAccepted {
+		t.Fatalf("unknown-phone status = %d, want %d (must equal the registered phone's answer)", unknown.Code, http.StatusAccepted)
+	}
+}
+
 // mustSetPhone attaches phone to the account registered under email and
 // returns the updated row, for the one test above that needs a phone
 // number on an otherwise email-registered fixture user.
@@ -736,6 +767,20 @@ func TestHandler_SocialCallback_BindToSignedInAccount_RecordsIdentityBindAuditEv
 	// authorize step's state is what authenticates it), so the caller's
 	// tenant is not attested at recording time and the row carries none.
 	auditTenantIsEmpty(t, evt)
+
+	// The EventIdentityBound the same flow announces is pinned empty for
+	// the same reason (P2-9's per-site decision): the binding is an
+	// account-level fact recorded at a pre-auth callback where no tenant is
+	// attested -- the mirror of the audit row above. Only an operation that
+	// can attest a tenant (the session events, from the session row; the
+	// protected user events, from the layered principal) stamps one.
+	boundEvent, ok := f.events.First(EventIdentityBound)
+	if !ok {
+		t.Fatalf("no %s event was published", EventIdentityBound)
+	}
+	if boundEvent.TenantID != "" {
+		t.Errorf("%s TenantID = %q, want empty: a binding made at an unauthenticated callback must not be stamped into a tenant by the request's own assertion", EventIdentityBound, boundEvent.TenantID)
+	}
 }
 
 // TestHandler_UnbindIdentity_OwnedBySelfWithPasswordRemaining_RecordsIdentityUnbindAuditEvent
@@ -794,6 +839,19 @@ func TestHandler_UnbindIdentity_OwnedBySelfWithPasswordRemaining_RecordsIdentity
 		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, user.ID)
 	}
 	auditTenantIs(t, evt, testTenantA)
+
+	// The business event the same protected operation announces must carry
+	// the same tenant as its audit row (P2-9): the handler layers the
+	// acting principal's tenant onto the ctx it hands the service, and
+	// Service.publish reads it back. Before the fix EventIdentityUnbound
+	// published with TenantID empty.
+	unboundEvent, ok := f.events.First(EventIdentityUnbound)
+	if !ok {
+		t.Fatalf("no %s event was published", EventIdentityUnbound)
+	}
+	if unboundEvent.TenantID != testTenantA {
+		t.Errorf("%s TenantID = %q, want %q (the acting principal's tenant)", EventIdentityUnbound, unboundEvent.TenantID, testTenantA)
+	}
 }
 
 // TestHandler_ConfirmTOTP_ValidCode_RecordsMFAEnrollAuditEvent covers
@@ -836,6 +894,17 @@ func TestHandler_ConfirmTOTP_ValidCode_RecordsMFAEnrollAuditEvent(t *testing.T) 
 		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, user.ID)
 	}
 	auditTenantIs(t, evt, testTenantA)
+
+	// The business event the same protected operation announces must carry
+	// the same tenant as its audit row (P2-9); before the fix
+	// EventMFAEnrolled published with TenantID empty.
+	enrolled, ok := f.events.First(EventMFAEnrolled)
+	if !ok {
+		t.Fatalf("no %s event was published", EventMFAEnrolled)
+	}
+	if enrolled.TenantID != testTenantA {
+		t.Errorf("%s TenantID = %q, want %q (the acting principal's tenant)", EventMFAEnrolled, enrolled.TenantID, testTenantA)
+	}
 }
 
 // TestHandler_RegenerateRecoveryCodes_SteppedUp_RecordsMFARecoveryCodesRegenerateAuditEvent
@@ -902,6 +971,17 @@ func TestHandler_RegenerateRecoveryCodes_SteppedUp_RecordsMFARecoveryCodesRegene
 		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, user.ID)
 	}
 	auditTenantIs(t, evt, testTenantA)
+
+	// The business event the same protected operation announces must carry
+	// the same tenant as its audit row (P2-9); before the fix
+	// EventMFARecoveryCodesRegenerated published with TenantID empty.
+	regenerated, ok := f.events.First(EventMFARecoveryCodesRegenerated)
+	if !ok {
+		t.Fatalf("no %s event was published", EventMFARecoveryCodesRegenerated)
+	}
+	if regenerated.TenantID != testTenantA {
+		t.Errorf("%s TenantID = %q, want %q (the acting principal's tenant)", EventMFARecoveryCodesRegenerated, regenerated.TenantID, testTenantA)
+	}
 }
 
 // TestHandler_RevokeSession_OwnSession_RecordsSessionRevokeAuditEvent covers

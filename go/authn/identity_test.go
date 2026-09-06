@@ -1,6 +1,8 @@
 package authn
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -481,4 +483,187 @@ func TestUserIdentityModel_IsNotTenantScoped(t *testing.T) {
 		},
 		countOf[UserIdentity],
 	)
+}
+
+// twoIdentityNoPasswordAccount provisions an account whose only login
+// methods are two bound identities -- no password, no verified phone -- the
+// exact shape the last-method guard protects: removing either identity is
+// legal, removing both is not. The first identity arrives with the account
+// (a trusted social sign-in whose session start fails closed on missing
+// membership, exactly like TestService_UnbindIdentity_RefusesTheLastLoginMethod's
+// own setup); the second is bound to the signed-in account through the
+// authorize-then-callback flow.
+func twoIdentityNoPasswordAccount(t *testing.T) (*serviceFixture, *User, []UserIdentity) {
+	t.Helper()
+	first := &stubProvider{name: ProviderGoogle, identity: &ExternalIdentity{
+		ExternalID: "two-identity-first", Email: "two-identity@example.com", EmailVerified: true,
+	}}
+	second := &stubProvider{name: ProviderGitHub, identity: &ExternalIdentity{
+		ExternalID: "two-identity-second", Email: "two-identity-gh@example.com",
+	}}
+	allowlist, allowErr := NewRedirectAllowlist(testRedirectURI)
+	if allowErr != nil {
+		t.Fatalf("NewRedirectAllowlist() error = %v", allowErr)
+	}
+	f := newServiceFixture(t,
+		WithSocialProviders(first, second),
+		WithRedirectAllowlist(allowlist),
+		WithTrustedProviders(ProviderGoogle),
+	)
+
+	if _, err := socialSignIn(t, f, first, testTenantA); err == nil {
+		t.Fatal("socialSignIn() unexpectedly succeeded; a fresh account has no membership yet")
+	}
+	user, findErr := f.svc.Users().FindByEmail(t.Context(), "two-identity@example.com")
+	if findErr != nil {
+		t.Fatalf("account was not provisioned: %v", findErr)
+	}
+
+	authorizeURL, err := f.svc.SocialAuthorizeURL(t.Context(), SocialAuthorizeInput{
+		Provider: second.Name(), RedirectURI: testRedirectURI, LinkUserID: user.ID,
+	})
+	if err != nil {
+		t.Fatalf("SocialAuthorizeURL() error = %v", err)
+	}
+	state := parseQuery(t, authorizeURL).Get("state")
+	if _, bindErr := f.svc.SocialCallback(t.Context(), SocialCallbackInput{
+		Provider: second.Name(), Code: "code", State: state,
+	}); bindErr != nil {
+		t.Fatalf("SocialCallback() (second bind) error = %v", bindErr)
+	}
+
+	identities, err := f.svc.ListIdentities(t.Context(), user.ID)
+	if err != nil || len(identities) != 2 {
+		t.Fatalf("ListIdentities() = %v, %v, want exactly two bound identities", identities, err)
+	}
+	return f, user, identities
+}
+
+// TestUserIdentityRepository_DeleteUnlessLastLoginMethod_GuardIsAuthoritative
+// is the deterministic half of the P2-10 regression: the guarded delete
+// re-derives the remaining method count inside its own transaction, so even
+// a caller whose service-level pre-check ran against a stale count cannot
+// remove an account's last login method. The second deletion here is
+// exactly what a concurrent unbind executes after the other identity is
+// gone: the stale pre-check has already passed (the count read two
+// methods), and the delete itself must refuse.
+func TestUserIdentityRepository_DeleteUnlessLastLoginMethod_GuardIsAuthoritative(t *testing.T) {
+	t.Parallel()
+
+	f, user, identities := twoIdentityNoPasswordAccount(t)
+
+	removed, err := f.svc.identities.DeleteUnlessLastLoginMethod(t.Context(), user.ID, identities[0].ID, f.svc.now())
+	if err != nil || !removed {
+		t.Fatalf("first DeleteUnlessLastLoginMethod() = (%v, %v), want (true, nil): one of two identities may go", removed, err)
+	}
+
+	removed, err = f.svc.identities.DeleteUnlessLastLoginMethod(t.Context(), user.ID, identities[1].ID, f.svc.now())
+	if err == nil || !hasCode(err, ErrLastLoginMethod.Code) {
+		t.Fatalf("second DeleteUnlessLastLoginMethod() = (%v, %v), want ErrLastLoginMethod: deleting the account's last method must be refused", removed, err)
+	}
+	remaining, err := f.svc.ListIdentities(t.Context(), user.ID)
+	if err != nil || len(remaining) != 1 {
+		t.Fatalf("ListIdentities() = %v, %v, want exactly one identity left (the refusal must not delete)", remaining, err)
+	}
+}
+
+// TestUserIdentityRepository_DeleteUnlessLastLoginMethod_PasswordStillCounts
+// proves the guarded delete's method count includes the account's other
+// login methods, not just the other identities: an account that also has a
+// password may shed its last identity.
+func TestUserIdentityRepository_DeleteUnlessLastLoginMethod_PasswordStillCounts(t *testing.T) {
+	t.Parallel()
+
+	provider := &stubProvider{name: ProviderGitHub, identity: &ExternalIdentity{
+		ExternalID: "guarded-password", Email: "guarded-password@example.com",
+	}}
+	f := newFederationFixture(t, provider)
+	user := f.registerUser(t, "guarded-password@example.com", testTenantA)
+
+	authorizeURL, err := f.svc.SocialAuthorizeURL(t.Context(), SocialAuthorizeInput{
+		Provider: provider.Name(), RedirectURI: testRedirectURI, LinkUserID: user.ID,
+	})
+	if err != nil {
+		t.Fatalf("SocialAuthorizeURL() error = %v", err)
+	}
+	state := parseQuery(t, authorizeURL).Get("state")
+	bound, err := f.svc.SocialCallback(t.Context(), SocialCallbackInput{
+		Provider: provider.Name(), Code: "code", State: state,
+	})
+	if err != nil {
+		t.Fatalf("SocialCallback() (bind) error = %v", err)
+	}
+
+	removed, err := f.svc.identities.DeleteUnlessLastLoginMethod(t.Context(), user.ID, bound.Identity.ID, f.svc.now())
+	if err != nil || !removed {
+		t.Fatalf("DeleteUnlessLastLoginMethod() = (%v, %v), want (true, nil): the password is still a login method", removed, err)
+	}
+}
+
+// TestService_UnbindIdentity_ConcurrentUnbindsNeverZeroTheAccount is the
+// service-level P2-10 regression: two simultaneous unbinds of an account
+// whose ONLY login methods are the two identities they remove. Before the
+// fix, both read the full method count, both passed the pre-check, and both
+// deleted -- an account left with zero ways in and no self-service
+// recovery, which is exactly the state UnbindIdentity's guard exists to
+// prevent. After the fix the guarded delete serializes the two on the
+// account's own row, so exactly one unbind can win and the loser is refused
+// with ErrLastLoginMethod.
+//
+// Deliberately not t.Parallel() and run over several fresh fixtures: the
+// harmful interleaving needs both racers' pre-checks to land before either
+// delete commits, and a single round of a wall-clock race can come out the
+// safe way even on the broken code. Under the fix every round is
+// deterministic -- the database arbitrates exactly one winner -- so the
+// loop only costs the broken code its luck.
+func TestService_UnbindIdentity_ConcurrentUnbindsNeverZeroTheAccount(t *testing.T) {
+	const rounds = 8
+	for round := 1; round <= rounds; round++ {
+		t.Run(fmt.Sprintf("round %d", round), func(t *testing.T) {
+			f, user, identities := twoIdentityNoPasswordAccount(t)
+
+			var (
+				wg       sync.WaitGroup
+				mu       sync.Mutex
+				success  int
+				refused  int
+				unwanted []error
+			)
+			wg.Add(2)
+			for _, identity := range identities {
+				go func(identityID string) {
+					defer wg.Done()
+					err := f.svc.UnbindIdentity(t.Context(), user.ID, identityID)
+					mu.Lock()
+					defer mu.Unlock()
+					switch {
+					case err == nil:
+						success++
+					case hasCode(err, ErrLastLoginMethod.Code):
+						refused++
+					default:
+						unwanted = append(unwanted, err)
+					}
+				}(identity.ID)
+			}
+			wg.Wait()
+
+			if len(unwanted) != 0 {
+				t.Fatalf("unbinds answered unexpected errors: %v", unwanted)
+			}
+			if success != 1 {
+				t.Fatalf("%d concurrent unbinds succeeded, want exactly 1: an account whose last two methods race away must lose at most one of them", success)
+			}
+			if refused != 1 {
+				t.Fatalf("%d losers were refused, want 1", refused)
+			}
+			remaining, err := f.svc.ListIdentities(t.Context(), user.ID)
+			if err != nil {
+				t.Fatalf("ListIdentities() error = %v", err)
+			}
+			if len(remaining) != 1 {
+				t.Errorf("%d identities remain, want 1: the account landed at %d login methods", len(remaining), len(remaining))
+			}
+		})
+	}
 }

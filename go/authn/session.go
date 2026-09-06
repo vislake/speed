@@ -334,12 +334,29 @@ func (m *SessionManager) handleReplay(ctx context.Context, record *RefreshToken)
 	if _, err := m.tokens.RevokeFamily(ctx, record.FamilyID, now); err != nil {
 		return err
 	}
-	if err := m.Revoke(ctx, record.SessionID, RevokeReasonReplay); err != nil {
+
+	// The replayed session is loaded once and shared with the revoke path
+	// below, so its own tenant can ride on the replay event without a
+	// second lookup. A session row that is already gone -- Revoke tolerates
+	// that, and the replay event must still fire -- leaves the event's
+	// tenant empty rather than failing the detection.
+	session, err := m.sessions.FindByID(ctx, record.SessionID)
+	switch {
+	case err == nil:
+		if revokeErr := m.revokeSession(ctx, session, RevokeReasonReplay); revokeErr != nil {
+			return revokeErr
+		}
+	case !errors.Is(err, ErrNotFound):
 		return err
 	}
 
+	tenantID := pkgcore.TenantID("")
+	if session != nil {
+		tenantID = pkgcore.TenantID(session.CurrentTenantID)
+	}
 	m.publish(ctx, pkgcore.Event{
-		Type: EventSessionReplayDetected,
+		Type:     EventSessionReplayDetected,
+		TenantID: tenantID,
 		Payload: SessionReplayDetectedPayload{
 			UserID:    record.UserID,
 			SessionID: record.SessionID,
@@ -357,8 +374,6 @@ func (m *SessionManager) handleReplay(ctx context.Context, record *RefreshToken)
 // only for the call that actually changed the row, so a double sign-out does
 // not produce two security notices.
 func (m *SessionManager) Revoke(ctx context.Context, sessionID, reason string) error {
-	now := m.now()
-
 	session, err := m.sessions.FindByID(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -366,6 +381,14 @@ func (m *SessionManager) Revoke(ctx context.Context, sessionID, reason string) e
 		}
 		return err
 	}
+	return m.revokeSession(ctx, session, reason)
+}
+
+// revokeSession is Revoke's body once the session row is in hand, split out
+// so handleReplay can reuse it without loading the session twice.
+func (m *SessionManager) revokeSession(ctx context.Context, session *Session, reason string) error {
+	now := m.now()
+	sessionID := session.ID
 
 	changed, err := m.sessions.Revoke(ctx, sessionID, reason, now)
 	if err != nil {
@@ -381,8 +404,16 @@ func (m *SessionManager) Revoke(ctx context.Context, sessionID, reason string) e
 		return nil
 	}
 
+	// The event belongs to the tenant the revoked session itself acted in
+	// -- its CurrentTenantID -- not to whichever caller asked for the
+	// revoke. A session can be ended by its own logout, by replay
+	// detection inside a refresh, or later by a host job, and the fact
+	// "this session stopped being usable" is a fact about that session in
+	// that tenant; the session row is the one authoritative source for it
+	// on every one of those paths.
 	m.publish(ctx, pkgcore.Event{
-		Type: EventSessionRevoked,
+		Type:     EventSessionRevoked,
+		TenantID: pkgcore.TenantID(session.CurrentTenantID),
 		Payload: SessionRevokedPayload{
 			UserID:    session.UserID,
 			SessionID: sessionID,

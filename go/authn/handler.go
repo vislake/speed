@@ -45,7 +45,13 @@ const preAuthCookieBytes = 32
 // from ctx via pkgcore.TenantFromContext. Every operation that needs an
 // authenticated caller reads the Principal go/authn/middleware.go's
 // Middleware already put in the request context -- see requirePrincipal --
-// rather than checking tenancy at all.
+// rather than checking tenancy at all. The ONE deliberate exception to
+// "never from ctx": a caller may layer its decided tenant onto the ctx it
+// hands to a downstream emit -- recordAudit for audit rows, principalCtx for
+// the domain events a protected operation publishes -- and the emit reads
+// it back. Business decisions never come from a ctx tenant; only the
+// enrichment of an already-committed fact does (see Service.publish's own
+// doc comment).
 type Handler struct {
 	svc          *Service
 	bus          pkgcore.EventBus
@@ -183,6 +189,22 @@ func (h *Handler) recordAudit(ctx context.Context, tenantID pkgcore.TenantID, ac
 		obs.FromContext(ctx).Error("authn audit event emit failed",
 			"action", action, "resource_type", resource.Type, "resource_id", resource.ID, "error", err)
 	}
+}
+
+// principalCtx returns r's context carrying the tenant the acting principal
+// is in, layered unconditionally -- an empty principal TenantID stores a
+// value the readers never report, so a principal without a tenant attests
+// none. Service.publish reads the layered tenant back so the domain events a
+// protected operation announces (identity unbound, MFA enrolled, recovery
+// codes regenerated) carry the same tenant as the operation's own audit row,
+// which the service layer cannot know: its methods receive the acting
+// userID, and the user's tenants are not the tenant the request acted in.
+// The three call sites are exactly the protected operations whose Service
+// methods publish one of those events; every pre-authentication path layers
+// nothing, so its events stay tenant-less (see Service.publish's own doc
+// comment).
+func principalCtx(ctx context.Context, principal Principal) context.Context {
+	return pkgcore.WithTenant(ctx, principal.TenantID)
 }
 
 // auditFailureReason extracts a short failure reason for an audit
@@ -571,7 +593,10 @@ func (h *Handler) AuthnUnbindIdentity(w http.ResponseWriter, r *http.Request, id
 	if !ok {
 		return
 	}
-	ctx := r.Context()
+	// principalCtx layers the acting tenant so the domain event this
+	// protected operation announces carries the same tenant as its audit
+	// row; see principalCtx's own doc comment.
+	ctx := principalCtx(r.Context(), principal)
 	if err := h.svc.UnbindIdentity(ctx, principal.UserID, identityID); err != nil {
 		writeAppError(w, err)
 		return
@@ -614,7 +639,8 @@ func (h *Handler) AuthnConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err)
 		return
 	}
-	ctx := r.Context()
+	// principalCtx: see AuthnUnbindIdentity's own call site comment.
+	ctx := principalCtx(r.Context(), principal)
 	codes, err := h.svc.ConfirmTOTP(ctx, principal.UserID, req.Code)
 	if err != nil {
 		writeAppError(w, err)
@@ -639,7 +665,8 @@ func (h *Handler) AuthnRegenerateRecoveryCodes(w http.ResponseWriter, r *http.Re
 		if !ok {
 			return
 		}
-		ctx := r.Context()
+		// principalCtx: see AuthnUnbindIdentity's own call site comment.
+		ctx := principalCtx(r.Context(), principal)
 		codes, err := h.svc.RegenerateRecoveryCodes(ctx, principal.UserID)
 		if err != nil {
 			writeAppError(w, err)

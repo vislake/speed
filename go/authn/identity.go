@@ -141,18 +141,76 @@ func (r *UserIdentityRepository) TouchLogin(ctx context.Context, identity *UserI
 		}).Error
 }
 
-// Delete removes an identity that belongs to userID and reports whether it
-// did. Scoping the delete to the owner in the WHERE clause, rather than
-// checking ownership beforehand, is what makes "remove somebody else's
-// binding" impossible even under a concurrent transfer.
-func (r *UserIdentityRepository) Delete(ctx context.Context, userID, id string) (bool, error) {
-	res := r.db.WithContext(ctx).
-		Where("id = ? AND user_id = ?", id, userID).
-		Delete(&UserIdentity{})
-	if res.Error != nil {
-		return false, res.Error
+// DeleteUnlessLastLoginMethod removes an identity that belongs to userID,
+// but only when at least one other login method would remain afterwards, and
+// reports whether it removed anything. It is the atomic form of the count
+// guard Service.UnbindIdentity applies before calling it.
+//
+// The atomicity is the point of this method's existence, not an incidental:
+// the service-level guard reads the user row and the identity list, then
+// deletes -- and a caller that lost the race to a CONCURRENT unbind of a
+// DIFFERENT identity can pass that stale read and delete the account's last
+// remaining method. Two unbinds never delete the same row, so a plain delete
+// gives them nothing to race on. This method closes the race with the one
+// write target every unbind of the same user shares: after deleting, the
+// transaction takes a write lock on the user's own row (an UPDATE to
+// updated_at, the dialect-neutral equivalent of SELECT ... FOR UPDATE the
+// module does not reach for -- see RefreshTokenRepository.Consume's doc
+// comment) and only then re-derives the remaining method count. The first
+// unbind to take the user-row lock commits; every later one's re-count runs
+// against that commit and refuses when nothing would remain. The scoping of
+// the delete to the owner in the WHERE clause, rather than checking
+// ownership beforehand, is what makes "remove somebody else's binding"
+// impossible even under a concurrent transfer.
+//
+// Results: (true, nil) when the row was removed and at least one login
+// method remains; (false, nil) when no row matched (absent, or not owned);
+// (false, ErrLastLoginMethod) when the removal was refused because it would
+// leave the account with no way in -- the transaction is rolled back, so
+// nothing was removed.
+func (r *UserIdentityRepository) DeleteUnlessLastLoginMethod(ctx context.Context, userID, identityID string, at time.Time) (bool, error) {
+	removed := false
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		res := tx.Where("id = ? AND user_id = ?", identityID, userID).
+			Delete(&UserIdentity{})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected != 1 {
+			// Nothing to remove: absent, or somebody else's. Commit the
+			// no-op transaction (nothing was written yet).
+			return nil
+		}
+		removed = true
+
+		// Serialize concurrent unbinds of this user on the one row all of
+		// them touch. See the doc comment for why the re-count below is
+		// only sound once this write has been won.
+		if err := tx.Model(&User{}).Where("id = ?", userID).
+			Update("updated_at", at).Error; err != nil {
+			return err
+		}
+
+		var remaining int64
+		if err := tx.Model(&UserIdentity{}).Where("user_id = ?", userID).
+			Count(&remaining).Error; err != nil {
+			return err
+		}
+		var user User
+		if err := tx.Where("id = ?", userID).First(&user).Error; err != nil {
+			return err
+		}
+		if LoginMethodCount(&user, int(remaining)) < 1 {
+			// This deletion would leave the account with no way in at all.
+			// Rolling the transaction back undoes the delete above.
+			return ErrLastLoginMethod
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
 	}
-	return res.RowsAffected == 1, nil
+	return removed, nil
 }
 
 // SocialAuthorizeInput describes the authorization request to build.
@@ -538,6 +596,14 @@ func (s *Service) ListIdentities(ctx context.Context, userID string) ([]UserIden
 // there is no self-service recovery from the state it prevents: an account
 // with no password, no verified phone number and no remaining identity cannot
 // be signed in to, and cannot prove ownership to have one restored.
+//
+// The count guard above is deliberately applied twice. The read-then-delete
+// check here answers the ordinary sequential case cheaply, but it is stale
+// the moment two unbinds of one account race: each can read the full count
+// before either deletes. The authoritative guard is the delete itself --
+// DeleteUnlessLastLoginMethod re-derives the remaining method count inside
+// its own transaction, so the account can never land at zero login methods
+// however the requests interleave.
 func (s *Service) UnbindIdentity(ctx context.Context, userID, identityID string) error {
 	if userID == "" {
 		return ErrAuthenticationRequired
@@ -567,11 +633,15 @@ func (s *Service) UnbindIdentity(ctx context.Context, userID, identityID string)
 		return ErrLastLoginMethod
 	}
 
-	removed, err := s.identities.Delete(ctx, userID, identityID)
+	removed, err := s.identities.DeleteUnlessLastLoginMethod(ctx, userID, identityID, s.now())
 	if err != nil {
 		return err
 	}
 	if !removed {
+		// The row was gone by the time the guarded delete ran -- an
+		// already-completed unbind of the same identity. Same answer as
+		// never having existed, so the endpoint never confirms that a
+		// binding was (or is) real.
 		return ErrIdentityNotFound
 	}
 

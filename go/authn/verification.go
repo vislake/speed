@@ -326,7 +326,21 @@ func (s *Service) deliverSMSCode(ctx context.Context, in RequestSMSCodeInput, in
 	}
 	if err := s.sms.Send(ctx, SMS{To: in.Phone, Text: text}); err != nil {
 		obs.FromContext(ctx).Error("sms verification code delivery failed", "error", err)
-		return ErrSMSDeliveryFailed.WithCause(err)
+		// A delivery failure must not answer differently from a request
+		// whose number has no account behind it. The registered branch's
+		// real work (a persisted row plus one gateway call) is exactly what
+		// an attacker probes to learn whether a number is registered, and
+		// the SMS gateway is the one piece of that work whose outage is
+		// invisible to the unknown-number branch -- surfacing it as an
+		// error turns every gateway outage into a registration oracle on
+		// the response status, undoing the promise RequestSMSCode's own
+		// doc comment makes. The real error stays in this log line (and the
+		// caller's own observability); the request answers identically to a
+		// successful send, and a code that never arrived simply fails its
+		// later verification with the same generic
+		// ErrVerificationCodeInvalid every other dead code answers. The
+		// persisted VerificationCode row is harmless: it expires under its
+		// own TTL and nothing about it can be read back.
 	}
 	return nil
 }

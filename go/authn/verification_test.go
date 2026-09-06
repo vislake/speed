@@ -518,22 +518,34 @@ func TestVerificationCodeModel_IsNotTenantScoped(t *testing.T) {
 	)
 }
 
-// TestSMSDeliveryFailure_ReturnsError proves a transport failure surfaces
-// as ErrSMSDeliveryFailed rather than a silent success.
-func TestSMSDeliveryFailure_ReturnsError(t *testing.T) {
+// TestRequestSMSCode_GatewayFailure_AnswersLikeAnUnknownNumber is the P2-8
+// regression: a delivery failure on a REGISTERED number must not answer
+// differently from a request for an unregistered number. Before the fix the
+// registered branch returned ErrSMSDeliveryFailed when the SMS gateway
+// failed while the unknown-number branch returned nil -- a status split
+// (500 vs 202) that turned every gateway outage into a registration oracle,
+// undoing the response-body defence
+// TestRequestSMSCode_UnknownPhone_SendsNothingButSucceeds proves. The real
+// error stays in the log line the transport branch writes; the request
+// answers identically to a successful send, and a code that never arrived
+// simply fails its later verification with the same generic
+// ErrVerificationCodeInvalid answer every other dead code gets.
+func TestRequestSMSCode_GatewayFailure_AnswersLikeAnUnknownNumber(t *testing.T) {
 	t.Parallel()
 
 	f := newServiceFixture(t, WithSMSSender(failingSMSSender{}))
 	registerPhoneUser(t, f, testPhone, testTenantA)
 
-	err := f.svc.RequestSMSCode(t.Context(), RequestSMSCodeInput{Phone: testPhone, IP: "203.0.113.8"})
-	if !hasCode(err, ErrSMSDeliveryFailed.Code) {
-		t.Fatalf("RequestSMSCode() error = %v, want ErrSMSDeliveryFailed", err)
+	if err := f.svc.RequestSMSCode(t.Context(), RequestSMSCodeInput{Phone: testPhone, IP: "203.0.113.8"}); err != nil {
+		t.Fatalf("RequestSMSCode(registered phone, gateway down) error = %v, want nil: a gateway outage must answer exactly like the unknown-number branch, or it discloses that the number is registered", err)
+	}
+	if err := f.svc.RequestSMSCode(t.Context(), RequestSMSCodeInput{Phone: "+8613800000000", IP: "203.0.113.9"}); err != nil {
+		t.Fatalf("RequestSMSCode(unknown phone) error = %v", err)
 	}
 }
 
 // failingSMSSender is an SMSSender whose every Send fails, for proving a
-// delivery failure surfaces rather than being silently swallowed.
+// delivery failure is logged and answered past, never surfaced.
 type failingSMSSender struct{}
 
 func (failingSMSSender) Send(context.Context, SMS) error {

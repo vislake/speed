@@ -359,6 +359,58 @@ func TestSessionManager_Revoke_IsIdempotentAndAnnouncesOnce(t *testing.T) {
 	}
 }
 
+// TestSessionManager_EventsCarryTheSessionsOwnTenant is the P2-9 regression
+// for the two session events: EventSessionRevoked and
+// EventSessionReplayDetected announce a fact about a session -- it stopped
+// being usable, or its token was replayed -- and that fact belongs to the
+// tenant the session itself acted in (its CurrentTenantID), whatever caller
+// ended it. Before the fix both events published with TenantID empty, so a
+// tenant-scoped subscriber (a notification pipeline, say) could neither
+// route the security notice to the session's own tenant nor filter it.
+func TestSessionManager_EventsCarryTheSessionsOwnTenant(t *testing.T) {
+	t.Parallel()
+
+	f := newSessionFixture(t, RevocationModeNatural)
+	session, first := f.start(t)
+	if session.CurrentTenantID != string(testTenantA) {
+		t.Fatalf("CurrentTenantID = %q, want %q: the fixture must start the session inside a known tenant for this assertion to mean anything", session.CurrentTenantID, testTenantA)
+	}
+
+	// Replay: consume the first token by rotating, then present it again.
+	f.clock.Advance(time.Minute)
+	if _, _, err := f.manager.Rotate(t.Context(), first.Secret); err != nil {
+		t.Fatalf("Rotate() error = %v", err)
+	}
+	if _, _, err := f.manager.Rotate(t.Context(), first.Secret); err == nil {
+		t.Fatal("Rotate(replayed token) unexpectedly succeeded")
+	}
+	replay, ok := f.events.First(EventSessionReplayDetected)
+	if !ok {
+		t.Fatalf("no %s event was published", EventSessionReplayDetected)
+	}
+	if replay.TenantID != testTenantA {
+		t.Errorf("%s TenantID = %q, want %q (the replayed session's own tenant)", EventSessionReplayDetected, replay.TenantID, testTenantA)
+	}
+
+	// Revoke: the replay already revoked the session, so start a second one
+	// to drive the plain revoke path.
+	second, issued := f.start(t)
+	f.clock.Advance(time.Minute)
+	if err := f.manager.Revoke(t.Context(), second.ID, RevokeReasonLogout); err != nil {
+		t.Fatalf("Revoke() error = %v", err)
+	}
+	if _, err := f.tokens.FindByHash(t.Context(), hashRefreshSecret(issued.Secret)); err != nil {
+		t.Fatalf("the revoked session's token did not die with it: %v", err)
+	}
+	revoked, ok := f.events.First(EventSessionRevoked)
+	if !ok {
+		t.Fatalf("no %s event was published", EventSessionRevoked)
+	}
+	if revoked.TenantID != testTenantA {
+		t.Errorf("%s TenantID = %q, want %q (the revoked session's own tenant)", EventSessionRevoked, revoked.TenantID, testTenantA)
+	}
+}
+
 // TestSessionManager_RevocationModes covers the documented trade between the
 // two modes: natural expiry does no per-request work and lets an outstanding
 // access token live out its lifetime; immediate mode records the session so

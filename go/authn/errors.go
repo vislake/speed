@@ -257,8 +257,15 @@ var (
 	// ErrInvalidCredentials is for password sign-in.
 	ErrVerificationCodeInvalid = apperr.Unauthorized("authn.verification_code_invalid")
 
-	// ErrSMSDeliveryFailed is returned when a verification code could not
-	// be handed to the SMSSender transport.
+	// ErrSMSDeliveryFailed names a verification code that could not be
+	// handed to the SMSSender transport. It is deliberately never RETURNED
+	// by RequestSMSCode: a delivery failure must answer indistinguishably
+	// from a request for an unregistered number, or every SMS-gateway
+	// outage would become a registration oracle on the response status
+	// (RequestSMSCode's own doc comment). The failure is logged where it
+	// happens and the request answers success; the sentinel is retained in
+	// the catalog for hosts whose own SMS layer wants to render the same
+	// vocabulary, not as a reachable answer from this module.
 	ErrSMSDeliveryFailed = apperr.Internal("authn.sms_delivery_failed")
 
 	// ErrMFANotEnrolled is returned when an operation needs an ACTIVE TOTP
