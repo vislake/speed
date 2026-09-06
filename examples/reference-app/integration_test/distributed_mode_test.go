@@ -14,7 +14,7 @@
 // duplicating them.
 //
 // TWO real server processes, not one: both built from the SAME "go build
-// ./cmd/server" binary, both run with SPEED_DEPLOYMENT_MODE=distributed,
+// ./cmd/server" binary, both run with APP_DEPLOYMENT_MODE=distributed,
 // both pointed at the SAME real Redis, the SAME real RustFS bucket, the SAME
 // real SMTP catcher, and -- necessarily, see the deviation note below --
 // the SAME SQLite file.
@@ -43,7 +43,7 @@
 //
 // This version closes that gap by making replica B's own worker
 // STRUCTURALLY incapable of ever processing a job: replica B boots with
-// SPEED_DISABLE_QUEUE_WORKER=true (server.go's cfg.DisableQueueWorker),
+// APP_DISABLE_QUEUE_WORKER=true (server.go's cfg.DisableQueueWorker),
 // which skips standaloneQueue.Start entirely on that replica -- no
 // dispatcher, no worker goroutines, ever, on B, no matter how long it
 // runs. With B's worker disabled, replica A is the ONLY process that can
@@ -93,7 +93,7 @@
 // second-dialect-axis redesign this round's own brief says is out of
 // scope ("do not attempt the second-dialect axis in this round... this
 // round's job is not to redesign that"), so this file does not add it.
-// Both replicas therefore share one SQLite file at SPEED_DB_PATH instead --
+// Both replicas therefore share one SQLite file at APP_DB_PATH instead --
 // the two axes this round closes (deployment mode x infrastructure seam
 // composition) are orthogonal to which SQL dialect the app's OWN database
 // uses, and proving them needs no dialect change at all. SQLite tolerates
@@ -109,7 +109,7 @@
 // exactly why the positive proof above cannot rely on the shared file for
 // its EventBus/KVStore claims -- the same sharing that makes the topology
 // workable at all is what made the earlier version of this test's claim
-// false, and SPEED_DISABLE_QUEUE_WORKER plus the SSE/lockout assertions are
+// false, and APP_DISABLE_QUEUE_WORKER plus the SSE/lockout assertions are
 // what closes that gap without touching the SQLite topology itself.
 //
 // # A recorded fact about the demo identity layer under two replicas
@@ -118,7 +118,7 @@
 // WithMembershipReader reads to decide "does this user belong to this
 // tenant") is an IN-PROCESS map, never persisted -- so a demo account
 // registered and granted membership during replica A's boot-time seed
-// (SPEED_DEMO_USERS_PASSWORD, demo_users.go) is invisible to replica B's
+// (APP_DEMO_USERS_PASSWORD, demo_users.go) is invisible to replica B's
 // OWN, separate demoMemberships instance: an interactive LOGIN attempt
 // against replica B for that same account, if it depended on a successful
 // membership resolution, would be refused (membership unavailable), even
@@ -178,7 +178,7 @@
 // verifies that real send too, as a bonus assertion over Mailpit's own HTTP
 // API, rather than leaving "mailer" a capability declared but never really
 // proven to work. That delivery, too, only ever runs on replica A now
-// (SPEED_DISABLE_QUEUE_WORKER on B), which is consistent with everything
+// (APP_DISABLE_QUEUE_WORKER on B), which is consistent with everything
 // above rather than an accident of this particular assertion.
 package referenceapp_test
 
@@ -284,7 +284,7 @@ type notifMessages struct {
 
 // startRustfsStore starts a disposable RustFS container and creates a fresh
 // bucket on it, returning the endpoint (host:port, no scheme -- what
-// objectstore/s3.Config.Endpoint and this file's SPEED_S3_ENDPOINT both
+// objectstore/s3.Config.Endpoint and this file's APP_S3_ENDPOINT both
 // want), the bucket name and the credentials. Copied from
 // go/storage/integration_test/rustfs_leg_test.go's startRustfsStore, adapted
 // to hand back raw configuration this file passes to two SUBPROCESSES as
@@ -400,7 +400,7 @@ func freePort(t *testing.T) int {
 	return port
 }
 
-// scrubbedEnviron returns the ambient environment with every SPEED_* and
+// scrubbedEnviron returns the ambient environment with every APP_* and
 // PORT variable removed, mirroring redis_eventbus_composition_test.go's own
 // inline scrub -- pulled out as a helper since this file builds more than
 // one child's environment from it.
@@ -411,7 +411,7 @@ func scrubbedEnviron() []string {
 		if eq < 0 {
 			continue
 		}
-		if strings.HasPrefix(kv[:eq], "SPEED_") || kv[:eq] == "PORT" {
+		if strings.HasPrefix(kv[:eq], "APP_") || kv[:eq] == "PORT" {
 			continue
 		}
 		out = append(out, kv)
@@ -649,12 +649,12 @@ func openInboxStream(t *testing.T, baseURL, accessToken, userIDHeader string) *s
 
 // TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructure
 // is this round's positive proof: two real reference-app server processes,
-// both booted under SPEED_DEPLOYMENT_MODE=distributed against the SAME
+// both booted under APP_DEPLOYMENT_MODE=distributed against the SAME
 // real Redis, the SAME real RustFS bucket and the SAME real SMTP catcher --
 // exactly the composition this round's server.go changes make possible,
 // declaring MultiReplicaSafe|SurvivesRestart on every one of the four
 // stateful seams Kernel.Bootstrap validates. Replica B additionally boots
-// with SPEED_DISABLE_QUEUE_WORKER=true, so it can never itself execute the
+// with APP_DISABLE_QUEUE_WORKER=true, so it can never itself execute the
 // delivery job the note-created event triggers -- see this file's own
 // package doc comment for why that is what turns the assertions below into
 // a genuine cross-process proof of the "eventbus" and "kv" seams, rather
@@ -690,23 +690,23 @@ func TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructur
 	dbPath := filepath.Join(tmp, "reference-app.db")
 	baseEnv := scrubbedEnviron()
 	sharedEnv := append(append([]string(nil), baseEnv...),
-		"SPEED_DEPLOYMENT_MODE=distributed",
-		"SPEED_CONFIG_KEY=",
-		"SPEED_DB_PATH="+dbPath,
-		"SPEED_REDIS_ADDR="+redisAddr,
-		"SPEED_S3_ENDPOINT="+s3Endpoint,
-		"SPEED_S3_BUCKET="+s3Bucket,
-		"SPEED_S3_ACCESS_KEY="+s3AccessKey,
-		"SPEED_S3_SECRET_KEY="+s3SecretKey,
-		"SPEED_SMTP_HOST="+smtpHost,
-		"SPEED_SMTP_PORT="+smtpPort,
+		"APP_DEPLOYMENT_MODE=distributed",
+		"APP_CONFIG_KEY=",
+		"APP_DB_PATH="+dbPath,
+		"APP_REDIS_ADDR="+redisAddr,
+		"APP_S3_ENDPOINT="+s3Endpoint,
+		"APP_S3_BUCKET="+s3Bucket,
+		"APP_S3_ACCESS_KEY="+s3AccessKey,
+		"APP_S3_SECRET_KEY="+s3SecretKey,
+		"APP_SMTP_HOST="+smtpHost,
+		"APP_SMTP_PORT="+smtpPort,
 		// Never dialed: this test never drives the phone-login flow, and
 		// authn's own wiring-time validation only checks that a sender is
 		// PRESENT under the distributed deployment mode, not that it is
 		// reachable (authn.NewHTTPSMSSender's own construction dials
 		// nothing either).
-		"SPEED_SMS_GATEWAY_URL=http://127.0.0.1:1/sms",
-		"SPEED_DEMO_USERS_PASSWORD="+demoUsersPassword,
+		"APP_SMS_GATEWAY_URL=http://127.0.0.1:1/sms",
+		"APP_DEMO_USERS_PASSWORD="+demoUsersPassword,
 	)
 
 	// Replica A boots first and fully (its own boot-time seedDemoGrants and
@@ -725,7 +725,7 @@ func TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructur
 	portB := freePort(t)
 	envB := append(append([]string(nil), sharedEnv...),
 		"PORT="+strconv.Itoa(portB),
-		"SPEED_DISABLE_QUEUE_WORKER=true",
+		"APP_DISABLE_QUEUE_WORKER=true",
 	)
 	replicaB := bootReplica(t, bin, portB, envB)
 
@@ -955,7 +955,7 @@ func TestServer_DistributedMode_IncompleteComposition_FailsClosedAtBoot(t *testi
 			// what fails now, naming the first seam it resolves in its
 			// fixed order: "eventbus".
 			name:     "SMS sender present, every kernel seam left on its in-process default",
-			extraEnv: []string{"SPEED_SMS_GATEWAY_URL=http://127.0.0.1:1/sms"},
+			extraEnv: []string{"APP_SMS_GATEWAY_URL=http://127.0.0.1:1/sms"},
 			wantSubstr: []string{
 				// pkgcore.ErrCapabilityUnsatisfied's own Error() text --
 				// checked as this literal string, not the Go identifier,
@@ -977,9 +977,9 @@ func TestServer_DistributedMode_IncompleteComposition_FailsClosedAtBoot(t *testi
 		t.Run(tc.name, func(t *testing.T) {
 			dbPath := filepath.Join(tmp, fmt.Sprintf("reference-app-negative-%d.db", i))
 			env := append(append([]string(nil), scrubbedEnviron()...),
-				"SPEED_DEPLOYMENT_MODE=distributed",
-				"SPEED_CONFIG_KEY=",
-				"SPEED_DB_PATH="+dbPath,
+				"APP_DEPLOYMENT_MODE=distributed",
+				"APP_CONFIG_KEY=",
+				"APP_DB_PATH="+dbPath,
 				"PORT="+strconv.Itoa(freePort(t)),
 			)
 			env = append(env, tc.extraEnv...)

@@ -19,6 +19,33 @@ Today this app demonstrates real, end-to-end usage of `pkgcore`, `dbkit`, `tenan
 
 This app deliberately does **not** wire `dbkit.Options.AuditBus` (the automatic GORM write-capture mechanism `notes.Note` is otherwise eligible for, via its `AuditResourceType() string { return "note" }` method) onto its own shared database connection: doing so deadlocks every note creation into `SQLITE_BUSY`, because the write-capture plugin's publish happens synchronously, inside the same still-open write transaction `dbkit.Repository[Note].Create` holds, and the persister on the other end would try to write into the very same SQLite file. See `go/dbkit/AGENTS.md`'s "Audit trail collection" section (Known limitation) and `cmd/server/server.go`'s own doc comment on its `dbkit.Open` call for the full write-up — a real, empirically-confirmed hazard this app's own wiring surfaced, not a hypothetical one.
 
+## Breaking change: environment variable prefix renamed `SPEED_` → `APP_`
+
+Every environment variable this app's own bootstrap code (`cmd/server/server.go`, `demo_users.go`) declares and reads used to carry a `SPEED_` prefix. That prefix was never a framework requirement — it was this consumer app's own naming convention, chosen independently of `go/pkgcore/config.Loader`'s own (separate, currently-dormant, zero-call-site) `EnvPrefix` constant, which is also `"SPEED_"` by coincidence of choice, not by any shared mechanism. To make that ownership visible rather than merely documented, this app's own variables were renamed to an `APP_` prefix. This is a pure rename with no behavior change: an existing `.env` file, `fly secrets`, or CI environment still using the old `SPEED_*` names will simply have no effect — those variables are no longer read, and every affected seam silently falls back to its documented default (or, for `APP_DEPLOYMENT_MODE=distributed` compositions, Bootstrap's own capability validation fails and names the missing seam). Update any deployment configuration you maintain using the mapping below; `PORT` is unaffected — it was never namespaced.
+
+| Old name | New name |
+|---|---|
+| `SPEED_DEPLOYMENT_MODE` | `APP_DEPLOYMENT_MODE` |
+| `SPEED_DB_PATH` | `APP_DB_PATH` |
+| `SPEED_CONFIG_KEY` | `APP_CONFIG_KEY` |
+| `SPEED_ORG_INDEX_KEY` | `APP_ORG_INDEX_KEY` |
+| `SPEED_NOTIFICATION_INDEX_KEY` | `APP_NOTIFICATION_INDEX_KEY` |
+| `SPEED_REDIS_ADDR` | `APP_REDIS_ADDR` |
+| `SPEED_S3_ENDPOINT` | `APP_S3_ENDPOINT` |
+| `SPEED_S3_BUCKET` | `APP_S3_BUCKET` |
+| `SPEED_S3_ACCESS_KEY` | `APP_S3_ACCESS_KEY` |
+| `SPEED_S3_SECRET_KEY` | `APP_S3_SECRET_KEY` |
+| `SPEED_S3_REGION` | `APP_S3_REGION` |
+| `SPEED_S3_USE_SSL` | `APP_S3_USE_SSL` |
+| `SPEED_SMTP_HOST` | `APP_SMTP_HOST` |
+| `SPEED_SMTP_PORT` | `APP_SMTP_PORT` |
+| `SPEED_SMTP_USERNAME` | `APP_SMTP_USERNAME` |
+| `SPEED_SMTP_PASSWORD` | `APP_SMTP_PASSWORD` |
+| `SPEED_SMS_GATEWAY_URL` | `APP_SMS_GATEWAY_URL` |
+| `SPEED_DISABLE_QUEUE_WORKER` | `APP_DISABLE_QUEUE_WORKER` |
+| `SPEED_DEMO_USERS_PASSWORD` | `APP_DEMO_USERS_PASSWORD` |
+| `PORT` | `PORT` (unchanged) |
+
 ## Running it
 
 ```
@@ -26,22 +53,22 @@ cd examples/reference-app
 go run ./cmd/server
 ```
 
-This starts a server on `:8080` (override with `PORT`), backed by a SQLite file `reference-app.db` in the current directory (override with `SPEED_DB_PATH`), running in the standalone deployment mode (`SPEED_DEPLOYMENT_MODE=standalone`, the default) with every infrastructure seam resolved from the standalone preset to its in-process implementation — zero external dependencies. Nothing needs to be running to try it.
+This starts a server on `:8080` (override with `PORT`), backed by a SQLite file `reference-app.db` in the current directory (override with `APP_DB_PATH`), running in the standalone deployment mode (`APP_DEPLOYMENT_MODE=standalone`, the default) with every infrastructure seam resolved from the standalone preset to its in-process implementation — zero external dependencies. Nothing needs to be running to try it.
 
-`SPEED_DEPLOYMENT_MODE=distributed` is a different story, though less of one than it used to be: the deployment mode only *constrains* which implementations are permissible (see below), and this app's env-driven wiring (`SPEED_REDIS_ADDR`/`SPEED_S3_*`/`SPEED_SMTP_*`/`SPEED_SMS_GATEWAY_URL`, all documented in `.env.example`) can compose a real, `MultiReplicaSafe` implementation for every registered seam except the database itself — `cmd/server/server.go` still hard-codes the SQLite dialect, a deliberate deviation that dialect covers on its own — so a distributed boot with all four sets of variables configured genuinely passes Bootstrap's capability validation and runs (proven both by `examples/reference-app/integration_test/distributed_mode_test.go`, which runs two such replicas against real Redis/RustFS/mailpit, and by `examples/reference-app/docker-compose.distributed.yml`'s own one-container demo, below). Configuring only *some* of them still fails exactly as before: capability validation, not a hard-coded `if mode == "standalone"` check, decides which seam trips first, and `cmd/server/server_test.go` pins several such partial-composition failure shapes.
+`APP_DEPLOYMENT_MODE=distributed` is a different story, though less of one than it used to be: the deployment mode only *constrains* which implementations are permissible (see below), and this app's env-driven wiring (`APP_REDIS_ADDR`/`APP_S3_*`/`APP_SMTP_*`/`APP_SMS_GATEWAY_URL`, all documented in `.env.example`) can compose a real, `MultiReplicaSafe` implementation for every registered seam except the database itself — `cmd/server/server.go` still hard-codes the SQLite dialect, a deliberate deviation that dialect covers on its own — so a distributed boot with all four sets of variables configured genuinely passes Bootstrap's capability validation and runs (proven both by `examples/reference-app/integration_test/distributed_mode_test.go`, which runs two such replicas against real Redis/RustFS/mailpit, and by `examples/reference-app/docker-compose.distributed.yml`'s own one-container demo, below). Configuring only *some* of them still fails exactly as before: capability validation, not a hard-coded `if mode == "standalone"` check, decides which seam trips first, and `cmd/server/server_test.go` pins several such partial-composition failure shapes.
 
 ### Real Redis inside a standalone topology
 
-Deployment mode and implementation composition are two orthogonal axes (`docs/internal/03-deployment-modes.md`): the mode constrains which implementations are *permissible* — it never selects one. This app demonstrates the point with no code changes: set `SPEED_REDIS_ADDR` and the same standalone topology keeps its SQLite file, in-process KVStore, console mailer and local object store, but the EventBus seam becomes a real Redis Streams bus:
+Deployment mode and implementation composition are two orthogonal axes (`docs/internal/03-deployment-modes.md`): the mode constrains which implementations are *permissible* — it never selects one. This app demonstrates the point with no code changes: set `APP_REDIS_ADDR` and the same standalone topology keeps its SQLite file, in-process KVStore, console mailer and local object store, but the EventBus seam becomes a real Redis Streams bus:
 
 ```
 docker run --rm -p 6379:6379 redis:7-alpine
-SPEED_REDIS_ADDR=127.0.0.1:6379 go run ./cmd/server
+APP_REDIS_ADDR=127.0.0.1:6379 go run ./cmd/server
 ```
 
 `buildServer` constructs the go-redis client itself — the app is the assembly host `eventbus/redis`'s `NewEventBus` names as the client's owner, so cleanup closes the bus and the client in turn — and injects the bus via `WithEventBus(redisBus, MultiReplicaSafe|SurvivesRestart)`, the capabilities the Redis implementation genuinely carries (see `go/pkgcore/eventbus/redis/eventbus.go`). Standalone mode requires no capabilities, so the mixed composition passes Bootstrap's validation and runs; every event the app publishes — the notes audit-trail `audit.event.recorded` included — is appended to a real Redis stream before it reaches the in-process subscribers, so any other consumer group (a second replica, an observer process) reads the same events. The example's integration tier proves that crossing end to end: `TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses` in `integration_test/` boots this very binary against a real testcontainers Redis, creates a note over real HTTP, and sees the audit event arrive in a consumer group owned by the test process, then reads the SQLite row back through `go/dbkit/audit`'s own `Repository`.
 
-Injecting some seams still isn't injecting all of them: `SPEED_REDIS_ADDR` alone composes both the "eventbus" and the "kv" seam (one shared `*redis.Client` backs both, see `buildServer`'s own kernel-options doc comment), so `SPEED_DEPLOYMENT_MODE=distributed SPEED_REDIS_ADDR=127.0.0.1:6379` with nothing else set now clears those two seams and fails Bootstrap's validation on the next one instead — "mailer", still on its in-process console default — the failure shape `TestBuildServer_DistributedDeploymentMode_RedisConfigured_StillFailsOnMailer` pins. Compose every seam's variables together (`SPEED_REDIS_ADDR` + `SPEED_S3_*` + `SPEED_SMTP_*` + `SPEED_SMS_GATEWAY_URL`) and the distributed boot succeeds outright — see "Running it in Docker" below for a one-command demo of exactly that.
+Injecting some seams still isn't injecting all of them: `APP_REDIS_ADDR` alone composes both the "eventbus" and the "kv" seam (one shared `*redis.Client` backs both, see `buildServer`'s own kernel-options doc comment), so `APP_DEPLOYMENT_MODE=distributed APP_REDIS_ADDR=127.0.0.1:6379` with nothing else set now clears those two seams and fails Bootstrap's validation on the next one instead — "mailer", still on its in-process console default — the failure shape `TestBuildServer_DistributedDeploymentMode_RedisConfigured_StillFailsOnMailer` pins. Compose every seam's variables together (`APP_REDIS_ADDR` + `APP_S3_*` + `APP_SMTP_*` + `APP_SMS_GATEWAY_URL`) and the distributed boot succeeds outright — see "Running it in Docker" below for a one-command demo of exactly that.
 
 ### Running it in Docker
 
@@ -61,7 +88,7 @@ curl localhost:8080/healthz   # ok
 
 Data survives a container restart (`docker compose restart app`), since the SQLite file lives on the named volume rather than the container's writable layer.
 
-`docker-compose.distributed.yml` is an override — not a second demo — that layers Redis, RustFS and a mailpit SMTP catcher onto the same `app` service and flips `SPEED_DEPLOYMENT_MODE` to `distributed`, genuinely passing Bootstrap's capability validation now that every registered seam composes a real, `MultiReplicaSafe` implementation (see the previous two sections):
+`docker-compose.distributed.yml` is an override — not a second demo — that layers Redis, RustFS and a mailpit SMTP catcher onto the same `app` service and flips `APP_DEPLOYMENT_MODE` to `distributed`, genuinely passing Bootstrap's capability validation now that every registered seam composes a real, `MultiReplicaSafe` implementation (see the previous two sections):
 
 ```
 docker compose -f docker-compose.yml -f docker-compose.distributed.yml up --build
@@ -88,7 +115,7 @@ Every one of this app's own routes (the notes API included) resolves its tenant 
 
 ### Demo accounts and the demo identity layer
 
-Reaching a tenant from a browser means signing in as a real account that holds membership there. This app wires authn's host-injected `MembershipReader` to `demoMemberships`, an in-process roster (see its own doc comment in `server.go`): registering an arbitrary account through the open register route grants it **no** membership anywhere, so its sign-in is refused with `authn.tenant_membership_required` until something grants it one. Three demo accounts come pre-granted when the server boots with `SPEED_DEMO_USERS_PASSWORD` set — registered through the real register route at boot, then granted membership and roles under each tenant's own context, so the browser flow never needs a special header:
+Reaching a tenant from a browser means signing in as a real account that holds membership there. This app wires authn's host-injected `MembershipReader` to `demoMemberships`, an in-process roster (see its own doc comment in `server.go`): registering an arbitrary account through the open register route grants it **no** membership anywhere, so its sign-in is refused with `authn.tenant_membership_required` until something grants it one. Three demo accounts come pre-granted when the server boots with `APP_DEMO_USERS_PASSWORD` set — registered through the real register route at boot, then granted membership and roles under each tenant's own context, so the browser flow never needs a special header:
 
 | Account | Roles | Tenants |
 |---|---|---|
@@ -96,7 +123,7 @@ Reaching a tenant from a browser means signing in as a real account that holds m
 | `demo-reader@example.com` | custom `note-reader` role (`notes:read` and nothing else) | every configured tenant |
 | `demo-acme-only@example.com` | custom `note-reader` role | `tenant-acme` only — its grant lives in exactly one tenant, which is the point: a grant is a fact about a (tenant, user) pair, never about a user |
 
-All three share the `SPEED_DEMO_USERS_PASSWORD` value as their password. Seeding runs against the real composed register route, so it only happens once per database file: a boot against a database that already carries the accounts logs a warning and leaves them alone (their memberships live in the in-process roster, which does not survive a restart, and inventing grants would misrepresent state) — point `SPEED_DB_PATH` at a fresh file to re-seed.
+All three share the `APP_DEMO_USERS_PASSWORD` value as their password. Seeding runs against the real composed register route, so it only happens once per database file: a boot against a database that already carries the accounts logs a warning and leaves them alone (their memberships live in the in-process roster, which does not survive a restart, and inventing grants would misrepresent state) — point `APP_DB_PATH` at a fresh file to re-seed.
 
 Alongside those real accounts, the rbac demonstration keeps a fixed actor set (`demo-owner`, `demo-reader`, `demo-acme-only`) addressable through the `X-Demo-User` request header. This is **not authentication** — an unauthenticated header is a claim, not an identity — and it is not a pattern to copy: it predates authn, it still takes precedence over a verified token's Principal by deliberate choice (the pre-auth flows were built around it), and its removal is deferred to the org-web round. Note what the header cannot do: the tenant half of the authorization subject always comes from the request context `tenancy.Middleware` resolved server-side, never from anything the caller controls. A request without the header and without a verified Principal fails closed (403).
 
@@ -104,7 +131,7 @@ Alongside those real accounts, the rbac demonstration keeps a fixed actor set (`
 
 ```
 # Boot against a fresh database with the demo accounts enabled.
-SPEED_DB_PATH=/tmp/ref.db SPEED_DEMO_USERS_PASSWORD='a demo passphrase' \
+APP_DB_PATH=/tmp/ref.db APP_DEMO_USERS_PASSWORD='a demo passphrase' \
   go run ./cmd/server
 
 curl -s localhost:8080/healthz

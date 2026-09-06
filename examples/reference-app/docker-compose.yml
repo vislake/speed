@@ -30,8 +30,8 @@
 # file win, environment maps merge key-by-key) is the idiomatic shape for
 # "same service, different composition" rather than "different services".
 #
-# Real deployments must never lift SPEED_CONFIG_KEY/SPEED_ORG_INDEX_KEY/
-# SPEED_NOTIFICATION_INDEX_KEY from here or from .env.example -- see the
+# Real deployments must never lift APP_CONFIG_KEY/APP_ORG_INDEX_KEY/
+# APP_NOTIFICATION_INDEX_KEY from here or from .env.example -- see the
 # comment block on those three keys below.
 
 services:
@@ -57,22 +57,22 @@ services:
       # this compose file's containerized shape actually needs to differ
       # from a bare `go run ./cmd/server` are set explicitly below.
       PORT: "8080"
-      SPEED_DEPLOYMENT_MODE: standalone
+      APP_DEPLOYMENT_MODE: standalone
       # A container filesystem is not the current working directory
       # `go run` would use -- /data is the volume mounted above, so the
       # SQLite file genuinely persists across `docker compose restart`
       # and `docker compose down` (without `-v`) rather than living in the
       # container's throwaway writable layer.
-      SPEED_DB_PATH: /data/reference-app.db
+      APP_DB_PATH: /data/reference-app.db
       # Gates the boot-time demo-user seed (demo_users.go) exactly as
       # .env.example documents; this is a local-demo passphrase, not a
       # security secret -- README.md's own "Try it" section already
       # publishes an equivalent example passphrase in its curl walkthrough.
       # Set to empty (or delete this line) to skip seeding and use the
       # X-Demo-User header path instead.
-      SPEED_DEMO_USERS_PASSWORD: local-demo-password
+      APP_DEMO_USERS_PASSWORD: local-demo-password
       #
-      # SPEED_CONFIG_KEY / SPEED_ORG_INDEX_KEY / SPEED_NOTIFICATION_INDEX_KEY
+      # APP_CONFIG_KEY / APP_ORG_INDEX_KEY / APP_NOTIFICATION_INDEX_KEY
       # are DELIBERATELY UNSET here: cmd/server/server.go's own configFromEnv
       # falls back to devConfigKey/devOrgIndexKey/devNotificationIndexKey --
       # fixed, non-secret, already-committed-and-documented byte sequences
@@ -84,9 +84,9 @@ services:
       #   7619d61c0a55448ac7c2f9dc631fd66dada34fee697d580a6ff191208de8f776
       # Generate your own the same way for anything beyond a disposable
       # local demo, and set it here instead of leaving these three unset:
-      #   SPEED_CONFIG_KEY: <64 hex chars>
-      #   SPEED_ORG_INDEX_KEY: <64 hex chars, DIFFERENT from the above>
-      #   SPEED_NOTIFICATION_INDEX_KEY: <64 hex chars, DIFFERENT from both>
+      #   APP_CONFIG_KEY: <64 hex chars>
+      #   APP_ORG_INDEX_KEY: <64 hex chars, DIFFERENT from the above>
+      #   APP_NOTIFICATION_INDEX_KEY: <64 hex chars, DIFFERENT from both>
       # Never commit real values for any of the three to this file.
     healthcheck:
       # Inherited from the image's own HEALTHCHECK (Dockerfile) -- restated

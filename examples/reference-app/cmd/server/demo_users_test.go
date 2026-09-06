@@ -15,7 +15,7 @@ import (
 )
 
 // demo_users_test.go is the consumer proof of seedDemoUsers: when an
-// operator sets SPEED_DEMO_USERS_PASSWORD, the boot registers the three demo
+// operator sets APP_DEMO_USERS_PASSWORD, the boot registers the three demo
 // accounts through authn's real register route, grants each its membership
 // and rbac role under the user id authn assigned, and those grants are then
 // reachable from a browser-shaped request -- a bearer token and no

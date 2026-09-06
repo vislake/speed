@@ -4,6 +4,33 @@ This is a real, validated Fly.io deployment config for `examples/reference-app` 
 
 This document only *describes* the commands a human operator runs. Nothing in this repository runs `fly launch`/`fly deploy`/`fly secrets set` against a real account automatically — those are live, outward-facing actions with real billing consequences, deliberately left to a human (or an agent acting with the account owner directly in the loop) to run themselves.
 
+## Breaking change: environment variable prefix renamed `SPEED_` → `APP_`
+
+Every environment variable name this app's own bootstrap code declares and reads was renamed from a `SPEED_` prefix to an `APP_` prefix — a pure rename, this consumer app's own naming convention rather than any framework-level requirement, with no behavior change otherwise. An existing `fly secrets` set or a previously-deployed `fly.toml` `[env]` block still using the old `SPEED_*` names will simply have no effect on the next deploy: those variables are no longer read, and every affected setting falls back to its documented default (or, if you run distributed mode, `Kernel.Bootstrap`'s capability validation fails and names the missing seam). Re-set your secrets and `[env]` values under the new names before redeploying:
+
+| Old name | New name |
+|---|---|
+| `SPEED_DEPLOYMENT_MODE` | `APP_DEPLOYMENT_MODE` |
+| `SPEED_DB_PATH` | `APP_DB_PATH` |
+| `SPEED_CONFIG_KEY` | `APP_CONFIG_KEY` |
+| `SPEED_ORG_INDEX_KEY` | `APP_ORG_INDEX_KEY` |
+| `SPEED_NOTIFICATION_INDEX_KEY` | `APP_NOTIFICATION_INDEX_KEY` |
+| `SPEED_REDIS_ADDR` | `APP_REDIS_ADDR` |
+| `SPEED_S3_ENDPOINT` | `APP_S3_ENDPOINT` |
+| `SPEED_S3_BUCKET` | `APP_S3_BUCKET` |
+| `SPEED_S3_ACCESS_KEY` | `APP_S3_ACCESS_KEY` |
+| `SPEED_S3_SECRET_KEY` | `APP_S3_SECRET_KEY` |
+| `SPEED_S3_REGION` | `APP_S3_REGION` |
+| `SPEED_S3_USE_SSL` | `APP_S3_USE_SSL` |
+| `SPEED_SMTP_HOST` | `APP_SMTP_HOST` |
+| `SPEED_SMTP_PORT` | `APP_SMTP_PORT` |
+| `SPEED_SMTP_USERNAME` | `APP_SMTP_USERNAME` |
+| `SPEED_SMTP_PASSWORD` | `APP_SMTP_PASSWORD` |
+| `SPEED_SMS_GATEWAY_URL` | `APP_SMS_GATEWAY_URL` |
+| `SPEED_DISABLE_QUEUE_WORKER` | `APP_DISABLE_QUEUE_WORKER` |
+| `SPEED_DEMO_USERS_PASSWORD` | `APP_DEMO_USERS_PASSWORD` |
+| `PORT` | `PORT` (unchanged) |
+
 ## Prerequisites
 
 - `flyctl` installed and authenticated (`fly auth login` or `fly auth signup`). Verified present in this environment as `flyctl v0.4.99`.
@@ -27,9 +54,9 @@ fly launch --name <your-unique-app-name> --region <your-region> --no-deploy \
 #    values -- never reuse the example below, never commit real values
 #    anywhere in this repository.
 fly secrets set \
-  SPEED_CONFIG_KEY="$(openssl rand -hex 32)" \
-  SPEED_ORG_INDEX_KEY="$(openssl rand -hex 32)" \
-  SPEED_NOTIFICATION_INDEX_KEY="$(openssl rand -hex 32)"
+  APP_CONFIG_KEY="$(openssl rand -hex 32)" \
+  APP_ORG_INDEX_KEY="$(openssl rand -hex 32)" \
+  APP_NOTIFICATION_INDEX_KEY="$(openssl rand -hex 32)"
 
 # 3. First deploy. Creates the volume declared in fly.toml's [[mounts]] on
 #    first deploy if it does not already exist (recent flyctl versions do
@@ -59,13 +86,13 @@ Every one of these is named, never valued, by this repository — generate real 
 
 | Secret | Why it is sensitive |
 |---|---|
-| `SPEED_CONFIG_KEY` | The master key `config.WithCipher` seals every Sensitive dynamic-configuration value with. The key that encrypts the `configs` table cannot live in that table, so it must come from the environment — and a real deployment must never fall back to the committed, documented-as-non-secret `devConfigKey` development default. |
-| `SPEED_ORG_INDEX_KEY` | The HMAC key org's blind indexer normalizes and indexes invitation email addresses with. A dbkit rule (an AES key must never double as an HMAC key) is why this is a separate secret from `SPEED_CONFIG_KEY`, never the same value. |
-| `SPEED_NOTIFICATION_INDEX_KEY` | The HMAC key the notification module's blind indexers index encrypted contact email/phone addresses with. Same separate-secret rule as above, and separate again from `SPEED_ORG_INDEX_KEY`. |
+| `APP_CONFIG_KEY` | The master key `config.WithCipher` seals every Sensitive dynamic-configuration value with. The key that encrypts the `configs` table cannot live in that table, so it must come from the environment — and a real deployment must never fall back to the committed, documented-as-non-secret `devConfigKey` development default. |
+| `APP_ORG_INDEX_KEY` | The HMAC key org's blind indexer normalizes and indexes invitation email addresses with. A dbkit rule (an AES key must never double as an HMAC key) is why this is a separate secret from `APP_CONFIG_KEY`, never the same value. |
+| `APP_NOTIFICATION_INDEX_KEY` | The HMAC key the notification module's blind indexers index encrypted contact email/phone addresses with. Same separate-secret rule as above, and separate again from `APP_ORG_INDEX_KEY`. |
 
-Optional, but recommended to set as a secret rather than leave in `[env]` **for a real deployment reachable over the public internet** — `SPEED_DEMO_USERS_PASSWORD` (gates the boot-time demo-user seed, `demo_users.go`). The app's own code and `.env.example` treat this as a non-secret local-demo passphrase, which is true on a laptop nobody else can reach; on a public Fly.io URL, though, whoever knows this value can sign in as `demo-owner@example.com`, a real account holding every permission any module declared. This deployment's `fly.toml` leaves it **unset entirely**, which skips the demo-account seed — the safer default for a fresh public deployment. Set it only if you deliberately want the demo accounts reachable, and set it via `fly secrets set SPEED_DEMO_USERS_PASSWORD=...`, never `[env]`.
+Optional, but recommended to set as a secret rather than leave in `[env]` **for a real deployment reachable over the public internet** — `APP_DEMO_USERS_PASSWORD` (gates the boot-time demo-user seed, `demo_users.go`). The app's own code and `.env.example` treat this as a non-secret local-demo passphrase, which is true on a laptop nobody else can reach; on a public Fly.io URL, though, whoever knows this value can sign in as `demo-owner@example.com`, a real account holding every permission any module declared. This deployment's `fly.toml` leaves it **unset entirely**, which skips the demo-account seed — the safer default for a fresh public deployment. Set it only if you deliberately want the demo accounts reachable, and set it via `fly secrets set APP_DEMO_USERS_PASSWORD=...`, never `[env]`.
 
-Nothing else needs a secret for this deployment: standalone mode with no `SPEED_REDIS_ADDR`/`SPEED_S3_*`/`SPEED_SMTP_*`/`SPEED_SMS_GATEWAY_URL` set leaves every other seam on its zero-external-dependency in-process implementation (console mailer, local-directory object store, in-process event bus and KV store) — real cost and complexity this first deployment deliberately does not take on.
+Nothing else needs a secret for this deployment: standalone mode with no `APP_REDIS_ADDR`/`APP_S3_*`/`APP_SMTP_*`/`APP_SMS_GATEWAY_URL` set leaves every other seam on its zero-external-dependency in-process implementation (console mailer, local-directory object store, in-process event bus and KV store) — real cost and complexity this first deployment deliberately does not take on.
 
 ## The free-tier facts, as verified today
 
@@ -103,6 +130,6 @@ Both run with no authenticated app context required (only a harmless "Metrics to
 
 ## What this deployment deliberately does not do
 
-- **No Redis, S3-compatible storage, SMTP relay, or SMS gateway.** `SPEED_DEPLOYMENT_MODE` stays `standalone` and every other seam stays on its in-process default — see `fly.toml`'s own comment on why, and this README's "Running it in Docker" section for what wiring those in (a *different*, more expensive composition) would look like, were a later deployment to need it.
+- **No Redis, S3-compatible storage, SMTP relay, or SMS gateway.** `APP_DEPLOYMENT_MODE` stays `standalone` and every other seam stays on its in-process default — see `fly.toml`'s own comment on why, and this README's "Running it in Docker" section for what wiring those in (a *different*, more expensive composition) would look like, were a later deployment to need it.
 - **No `fly launch`/`fly deploy`/`fly volumes create`/`fly secrets set` run against a real account by this change.** The command sequence above is documentation for a human (or an agent working directly with the account owner) to run; nothing in this repository executes it.
 - **No real secret value anywhere in this repository.** Every key named above is a name only; generate real values with `openssl rand -hex 32` at deploy time.

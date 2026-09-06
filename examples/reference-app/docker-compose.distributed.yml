@@ -12,7 +12,7 @@
 #
 #   - Redis (redis:7-alpine)   backs BOTH the "eventbus" seam (Redis
 #     Streams) AND the "kv" seam (one client, two seams -- server.go's own
-#     SPEED_REDIS_ADDR doc comment explains why one address suffices).
+#     APP_REDIS_ADDR doc comment explains why one address suffices).
 #   - RustFS (rustfs/rustfs, https://github.com/rustfs/rustfs, the same
 #     release pin examples/reference-app/integration_test/distributed_mode_test.go
 #     already uses) backs the "objectstore" seam (S3-compatible). RustFS
@@ -26,7 +26,7 @@
 #     mailpit for every Docker-backed SMTP-catcher need) backs the
 #     "mailer" seam over real SMTP.
 #
-# SPEED_DEPLOYMENT_MODE flips to "distributed" below -- genuinely provable
+# APP_DEPLOYMENT_MODE flips to "distributed" below -- genuinely provable
 # now that all four registered seams (eventbus/kv/objectstore/mailer)
 # compose MultiReplicaSafe implementations, exactly the property
 # examples/reference-app/integration_test/distributed_mode_test.go proves
@@ -87,7 +87,7 @@ services:
       timeout: 3s
       retries: 10
 
-  # One-shot: creates the bucket this app's SPEED_S3_BUCKET names, then
+  # One-shot: creates the bucket this app's APP_S3_BUCKET names, then
   # exits. minio-go (the client objectstore/s3.NewObjectStore builds on)
   # never creates its own bucket -- see go/pkgcore/objectstore/s3's own
   # Config doc comment -- so something must, exactly once, before `app`
@@ -121,7 +121,7 @@ services:
   mailpit:
     image: axllent/mailpit:v1.31
     ports:
-      - "1025:1025" # SMTP -- SPEED_SMTP_HOST/SPEED_SMTP_PORT point here
+      - "1025:1025" # SMTP -- APP_SMTP_HOST/APP_SMTP_PORT point here
       - "8025:8025" # Web UI -- open this to read captured mail
     healthcheck:
       # mailpit's own built-in healthcheck subcommand (verified directly
@@ -140,15 +140,15 @@ services:
       mailpit:
         condition: service_healthy
     environment:
-      SPEED_DEPLOYMENT_MODE: distributed
-      SPEED_REDIS_ADDR: redis:6379
-      SPEED_S3_ENDPOINT: rustfs:9000
-      SPEED_S3_BUCKET: reference-app
-      SPEED_S3_ACCESS_KEY: rustfsadmin
-      SPEED_S3_SECRET_KEY: rustfsadmin
-      SPEED_S3_USE_SSL: "false"
-      SPEED_SMTP_HOST: mailpit
-      SPEED_SMTP_PORT: "1025"
+      APP_DEPLOYMENT_MODE: distributed
+      APP_REDIS_ADDR: redis:6379
+      APP_S3_ENDPOINT: rustfs:9000
+      APP_S3_BUCKET: reference-app
+      APP_S3_ACCESS_KEY: rustfsadmin
+      APP_S3_SECRET_KEY: rustfsadmin
+      APP_S3_USE_SSL: "false"
+      APP_SMTP_HOST: mailpit
+      APP_SMTP_PORT: "1025"
       # Deliberately unreachable -- the distributed deployment mode
       # requires authn's "SMS sender" seam to be WIRED (a non-empty URL),
       # never that it is reachable, and this demo never drives the
@@ -157,7 +157,7 @@ services:
       # convention examples/reference-app/integration_test/distributed_mode_test.go
       # already uses for the same reason, spelled out in that file's own
       # comment on this exact value.
-      SPEED_SMS_GATEWAY_URL: http://127.0.0.1:1/sms
+      APP_SMS_GATEWAY_URL: http://127.0.0.1:1/sms
 
 volumes:
   reference-app-rustfs:

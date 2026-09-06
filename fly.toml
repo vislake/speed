@@ -11,8 +11,8 @@ primary_region = 'sin'
 
 [env]
   PORT = '8080'
-  SPEED_DB_PATH = '/data/reference-app.db'
-  SPEED_DEPLOYMENT_MODE = 'standalone'
+  APP_DB_PATH = '/data/reference-app.db'
+  APP_DEPLOYMENT_MODE = 'standalone'
 
 [[mounts]]
   source = 'reference_app_data'

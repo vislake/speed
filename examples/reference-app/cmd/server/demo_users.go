@@ -26,7 +26,7 @@ import (
 // The passphrase is not secret in the same sense as the config keys are,
 // but it is also not a hardcoded default: it exists to gate a DEMO
 // affordance behind an operator's deliberate choice, and the constant
-// shape (SPEED_*_PASSWORD) mirrors the config-key pair configFromEnv
+// shape (APP_*_PASSWORD) mirrors the config-key pair configFromEnv
 // reads for the same reason -- an env var is visible, auditable and
 // per-deployment in a way a compiled-in default is not.
 //
@@ -35,10 +35,10 @@ import (
 // "Password" in the identifier alone, the same false positive go/authn's
 // and go/sharing's own identically-shaped name constants are already
 // excepted from elsewhere in this codebase.
-const demoUsersPasswordEnv = "SPEED_DEMO_USERS_PASSWORD"
+const demoUsersPasswordEnv = "APP_DEMO_USERS_PASSWORD"
 
 // The three demo accounts seedDemoUsers registers when
-// SPEED_DEMO_USERS_PASSWORD is set. Each is the real-account twin of the
+// APP_DEMO_USERS_PASSWORD is set. Each is the real-account twin of the
 // demo_subject.go actor id its grant model mirrors: demo-owner /
 // demo-reader / demo-acme-only are header user ids with no database row
 // behind them, while these accounts exist as real authn users whose
@@ -101,7 +101,7 @@ var demoSeedAccounts = []demoSeedAccount{
 //
 // buildServer calls it AFTER seedDemoGrants, which is what guarantees the
 // roles this function AssignRole-s are already defined in every tenant. It
-// runs only when the operator set SPEED_DEMO_USERS_PASSWORD; an empty
+// runs only when the operator set APP_DEMO_USERS_PASSWORD; an empty
 // password leaves the demo-header world exactly as it was.
 //
 // Registration goes through the HTTP surface on purpose: seedDemoUsers is
@@ -120,7 +120,7 @@ var demoSeedAccounts = []demoSeedAccount{
 // same database therefore cannot reach into the past and grant what the
 // first boot granted: it logs a warning and leaves that account alone,
 // fail-closed, and the operator who wants the demo accounts back starts
-// from a fresh database (SPEED_DB_PATH). That honest skip is preferred
+// from a fresh database (APP_DB_PATH). That honest skip is preferred
 // over pretending a skip is a seed.
 func seedDemoUsers(ctx context.Context, handler http.Handler, memberships *demoMemberships, svc *rbac.Service, tenants map[string]pkgcore.TenantID, password string) error {
 	logger := obs.FromContext(ctx)

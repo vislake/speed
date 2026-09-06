@@ -46,7 +46,7 @@ const testPassword = "a perfectly fine passphrase"
 //
 // NotificationIndexKey is set because every boot wires the notification
 // module's two contact indexers from the struct field directly -- the
-// SPEED_NOTIFICATION_INDEX_KEY environment default only exists on the
+// APP_NOTIFICATION_INDEX_KEY environment default only exists on the
 // configFromEnv path, which this helper never takes -- and an empty key
 // fails the boot before the first request.
 func testConfig(t *testing.T) serverConfig {
@@ -842,7 +842,7 @@ func TestBuildServer_DistributedDeploymentMode_FailsCapabilityValidation(t *test
 
 // TestBuildServer_DistributedDeploymentMode_RedisConfigured_StillFailsOnMailer
 // is the second half of the distributed-mode pin, rewritten for this
-// round's env-driven wiring: SPEED_REDIS_ADDR now composes BOTH the
+// round's env-driven wiring: APP_REDIS_ADDR now composes BOTH the
 // "eventbus" and the "kv" seam onto one shared *redis.Client (buildServer's
 // kernel-options doc comment explains why one Redis instance backs both),
 // so a distributed deployment with only cfg.RedisAddr set no longer fails
@@ -850,7 +850,7 @@ func TestBuildServer_DistributedDeploymentMode_FailsCapabilityValidation(t *test
 // "eventbus" and "kv" and now fails capability validation on the NEXT seam
 // Kernel.Bootstrap resolves: "mailer", whose Preset default
 // ("mailer.console") also lacks MultiReplicaSafe, and this test configures
-// no SPEED_SMTP_* composition to swap it for. This is exactly the "one
+// no APP_SMTP_* composition to swap it for. This is exactly the "one
 // seam wired isn't enough" property root CLAUDE.md's distributed-mode
 // section documents, now demonstrated one seam later than before this
 // round. Validation precedes module registration, so no Subscribe is ever
@@ -883,7 +883,7 @@ func TestBuildServer_DistributedDeploymentMode_RedisConfigured_StillFailsOnMaile
 
 // TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed proves
 // the negative half of this round's authn "SMS sender" wiring: a
-// distributed composition that forgets SPEED_SMS_GATEWAY_URL must fail
+// distributed composition that forgets APP_SMS_GATEWAY_URL must fail
 // closed with authn.ErrMissingDistributedSMSSender, rather than silently
 // keeping the console transport nobody in a distributed replica pool is
 // reading -- the exact property docs/internal/03-deployment-modes.md's
@@ -901,10 +901,10 @@ func TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed(t *testi
 
 	_, _, err := buildServer(context.Background(), cfg)
 	if err == nil {
-		t.Fatal("buildServer with DeploymentModeDistributed and no SPEED_SMS_GATEWAY_URL: want error, got nil")
+		t.Fatal("buildServer with DeploymentModeDistributed and no APP_SMS_GATEWAY_URL: want error, got nil")
 	}
 	if !errors.Is(err, authn.ErrMissingDistributedSMSSender) {
-		t.Fatalf("buildServer with DeploymentModeDistributed and no SPEED_SMS_GATEWAY_URL: error = %v, want errors.Is(err, authn.ErrMissingDistributedSMSSender)", err)
+		t.Fatalf("buildServer with DeploymentModeDistributed and no APP_SMS_GATEWAY_URL: error = %v, want errors.Is(err, authn.ErrMissingDistributedSMSSender)", err)
 	}
 }
 
@@ -1050,11 +1050,11 @@ func TestBuildServer_Unauthenticated_FailsClosed(t *testing.T) {
 // wrong reason) outside a clean shell. t.Setenv also restores the previous
 // value automatically once the test finishes.
 func TestConfigFromEnv_Defaults(t *testing.T) {
-	t.Setenv("SPEED_DEPLOYMENT_MODE", "")
+	t.Setenv("APP_DEPLOYMENT_MODE", "")
 	t.Setenv("PORT", "")
-	t.Setenv("SPEED_DB_PATH", "")
-	t.Setenv("SPEED_REDIS_ADDR", "")
-	t.Setenv("SPEED_DEMO_USERS_PASSWORD", "")
+	t.Setenv("APP_DB_PATH", "")
+	t.Setenv("APP_REDIS_ADDR", "")
+	t.Setenv("APP_DEMO_USERS_PASSWORD", "")
 
 	cfg, err := configFromEnv()
 	if err != nil {
@@ -1083,12 +1083,12 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 // TestConfigFromEnv_ReadsOverrides verifies each environment variable
 // configFromEnv reads is actually honored.
 func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
-	t.Setenv("SPEED_DEPLOYMENT_MODE", string(pkgcore.DeploymentModeDistributed))
+	t.Setenv("APP_DEPLOYMENT_MODE", string(pkgcore.DeploymentModeDistributed))
 	t.Setenv("PORT", "9999")
-	t.Setenv("SPEED_DB_PATH", "/tmp/reference-app-configfromenv-test.db")
-	t.Setenv("SPEED_CONFIG_KEY", "0f0e0d0c0b0a090807060504030201001f1e1d1c1b1a19181716151413121110")
-	t.Setenv("SPEED_REDIS_ADDR", "127.0.0.1:6380")
-	t.Setenv("SPEED_DEMO_USERS_PASSWORD", "env demo seed passphrase")
+	t.Setenv("APP_DB_PATH", "/tmp/reference-app-configfromenv-test.db")
+	t.Setenv("APP_CONFIG_KEY", "0f0e0d0c0b0a090807060504030201001f1e1d1c1b1a19181716151413121110")
+	t.Setenv("APP_REDIS_ADDR", "127.0.0.1:6380")
+	t.Setenv("APP_DEMO_USERS_PASSWORD", "env demo seed passphrase")
 
 	cfg, err := configFromEnv()
 	if err != nil {
@@ -1107,7 +1107,7 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 		t.Fatalf("RedisAddr = %q, want %q", cfg.RedisAddr, "127.0.0.1:6380")
 	}
 	if cfg.DemoUsersPassword != "env demo seed passphrase" {
-		t.Fatalf("DemoUsersPassword = %q, want the SPEED_DEMO_USERS_PASSWORD value", cfg.DemoUsersPassword)
+		t.Fatalf("DemoUsersPassword = %q, want the APP_DEMO_USERS_PASSWORD value", cfg.DemoUsersPassword)
 	}
 	wantKey := []byte{
 		0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09, 0x08,
@@ -1116,29 +1116,29 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 		0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11, 0x10,
 	}
 	if !bytes.Equal(cfg.ConfigKey, wantKey) {
-		t.Fatalf("ConfigKey = %x, want the decoded SPEED_CONFIG_KEY %x", cfg.ConfigKey, wantKey)
+		t.Fatalf("ConfigKey = %x, want the decoded APP_CONFIG_KEY %x", cfg.ConfigKey, wantKey)
 	}
 }
 
 // TestConfigFromEnv_ConfigKeyRejectsMalformedValues proves configFromEnv
-// fails configuration loading on a malformed SPEED_CONFIG_KEY -- too short
+// fails configuration loading on a malformed APP_CONFIG_KEY -- too short
 // to be a 32-byte key, or not hex at all -- with a precise error, rather
 // than letting a subtly wrong key reach dbkit.NewCipher (whose error would
 // name only the key size) or, worse, silently sealing values with a key
 // the operator did not intend.
 func TestConfigFromEnv_ConfigKeyRejectsMalformedValues(t *testing.T) {
-	t.Setenv("SPEED_DEPLOYMENT_MODE", "")
+	t.Setenv("APP_DEPLOYMENT_MODE", "")
 	t.Setenv("PORT", "")
-	t.Setenv("SPEED_DB_PATH", "")
+	t.Setenv("APP_DB_PATH", "")
 
 	for name, encoded := range map[string]string{
 		"too short": "00ff",                                                             // 1 byte, not 32
 		"not hex":   "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", // 64 chars, not hex
 	} {
 		t.Run(name, func(t *testing.T) {
-			t.Setenv("SPEED_CONFIG_KEY", encoded)
+			t.Setenv("APP_CONFIG_KEY", encoded)
 			if _, err := configFromEnv(); err == nil {
-				t.Fatalf("configFromEnv with SPEED_CONFIG_KEY=%q: want error, got nil", encoded)
+				t.Fatalf("configFromEnv with APP_CONFIG_KEY=%q: want error, got nil", encoded)
 			}
 		})
 	}
@@ -1146,17 +1146,17 @@ func TestConfigFromEnv_ConfigKeyRejectsMalformedValues(t *testing.T) {
 
 // TestConfigFromEnv_InvalidDeploymentMode_ReturnsError proves the
 // pkgcore.ParseDeploymentMode error path actually propagates out of
-// configFromEnv: an invalid SPEED_DEPLOYMENT_MODE value must fail
+// configFromEnv: an invalid APP_DEPLOYMENT_MODE value must fail
 // configuration loading -- and therefore run() in main.go -- rather than
 // silently fall back to the standalone default or panic.
 func TestConfigFromEnv_InvalidDeploymentMode_ReturnsError(t *testing.T) {
-	t.Setenv("SPEED_DEPLOYMENT_MODE", "not-a-real-deployment-mode")
+	t.Setenv("APP_DEPLOYMENT_MODE", "not-a-real-deployment-mode")
 	t.Setenv("PORT", "")
-	t.Setenv("SPEED_DB_PATH", "")
+	t.Setenv("APP_DB_PATH", "")
 
 	_, err := configFromEnv()
 	if err == nil {
-		t.Fatal("configFromEnv with SPEED_DEPLOYMENT_MODE=not-a-real-deployment-mode: want error, got nil")
+		t.Fatal("configFromEnv with APP_DEPLOYMENT_MODE=not-a-real-deployment-mode: want error, got nil")
 	}
 	if !errors.Is(err, pkgcore.ErrInvalidDeploymentMode) {
 		t.Fatalf("configFromEnv error = %v, want it to wrap %v", err, pkgcore.ErrInvalidDeploymentMode)

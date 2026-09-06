@@ -12,7 +12,7 @@
 package referenceapp_test
 
 // TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses
-// is this round's proof that the SPEED_REDIS_ADDR composition really works
+// is this round's proof that the APP_REDIS_ADDR composition really works
 // end to end: a standalone-deployment-mode reference app whose events
 // cross a real Redis server.
 //
@@ -28,7 +28,7 @@ package referenceapp_test
 //
 // Authentication is as real as a subprocess can make it, and genuinely
 // real end to end since go/pki's integration: the child is booted with
-// SPEED_DEMO_USERS_PASSWORD set, so cmd/server's own boot-time seed
+// APP_DEMO_USERS_PASSWORD set, so cmd/server's own boot-time seed
 // (demo_users.go) registers demoOwnerEmail as a real account with real
 // tenant-acme membership before this test ever sends a request, and the
 // note request's access token comes from a genuine
@@ -285,7 +285,7 @@ const (
 	// tenant, tenant-acme included, once demoUsersPassword seeds it.
 	demoOwnerEmail = "demo-owner@example.com"
 	// demoUsersPassword is this test's own value for
-	// SPEED_DEMO_USERS_PASSWORD -- any password authn's policy accepts, it
+	// APP_DEMO_USERS_PASSWORD -- any password authn's policy accepts, it
 	// gates seeding, not a real secret.
 	demoUsersPassword = "a perfectly fine demo passphrase"
 )
@@ -298,7 +298,7 @@ func apiClient() *http.Client {
 }
 
 // demoAccessToken signs in as the child's own boot-time-seeded demoOwnerEmail
-// account (SPEED_DEMO_USERS_PASSWORD, set in this test's child env below)
+// account (APP_DEMO_USERS_PASSWORD, set in this test's child env below)
 // for tenant, through the child's REAL composed HTTP stack --
 // POST /api/v1/authn/login/password against httpClient and baseURL -- and
 // returns the access token the child itself minted and signed.
@@ -352,7 +352,7 @@ func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *
 	// One disposable real Redis server; three bus instances share it --
 	// the observer and warmer here, and the app's own bus in the child
 	// process, which connects to the same host:port through
-	// SPEED_REDIS_ADDR.
+	// APP_REDIS_ADDR.
 	client := startRedisClient(t, ctx)
 	redisAddr := client.Options().Addr // "host:port", reachable from this process
 
@@ -393,10 +393,10 @@ func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *
 	}
 
 	// The child's environment: the ambient environment, scrubbed of every
-	// SPEED_* variable and PORT (whose ambient values must not leak into
+	// APP_* variable and PORT (whose ambient values must not leak into
 	// the subprocess), then the explicit configuration for this run.
-	// SPEED_CONFIG_KEY="" selects the documented dev default key, and
-	// SPEED_DB_PATH points at a fresh file in this test's own temp
+	// APP_CONFIG_KEY="" selects the documented dev default key, and
+	// APP_DB_PATH points at a fresh file in this test's own temp
 	// directory, so the test can open a second connection to the same
 	// SQLite file afterwards.
 	var baseEnv []string
@@ -405,19 +405,19 @@ func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *
 		if eq < 0 {
 			continue
 		}
-		if strings.HasPrefix(kv[:eq], "SPEED_") || kv[:eq] == "PORT" {
+		if strings.HasPrefix(kv[:eq], "APP_") || kv[:eq] == "PORT" {
 			continue
 		}
 		baseEnv = append(baseEnv, kv)
 	}
 	dbPath := filepath.Join(tmp, "reference-app.db")
 	env := append(baseEnv,
-		"SPEED_DEPLOYMENT_MODE=standalone",
+		"APP_DEPLOYMENT_MODE=standalone",
 		"PORT="+strconv.Itoa(port),
-		"SPEED_DB_PATH="+dbPath,
-		"SPEED_CONFIG_KEY=",
-		"SPEED_REDIS_ADDR="+redisAddr,
-		"SPEED_DEMO_USERS_PASSWORD="+demoUsersPassword,
+		"APP_DB_PATH="+dbPath,
+		"APP_CONFIG_KEY=",
+		"APP_REDIS_ADDR="+redisAddr,
+		"APP_DEMO_USERS_PASSWORD="+demoUsersPassword,
 	)
 
 	cmd := exec.Command(bin)

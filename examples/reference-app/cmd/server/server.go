@@ -69,7 +69,7 @@ const (
 	// defaultPort is used when the PORT environment variable is unset.
 	defaultPort = "8080"
 
-	// defaultSQLitePath is used when SPEED_DB_PATH is unset. It is a
+	// defaultSQLitePath is used when APP_DB_PATH is unset. It is a
 	// relative path so `go run ./cmd/server` works with zero setup, per
 	// root CLAUDE.md's "task dev must work in standalone deployment
 	// mode" rule applied to this example's own entry point.
@@ -103,11 +103,11 @@ const (
 	// key that encrypts the table cannot live in the table -- so it comes
 	// from the environment like every other bootstrap value, with the
 	// documented development default below.
-	configKeyEnv = "SPEED_CONFIG_KEY"
+	configKeyEnv = "APP_CONFIG_KEY"
 
 	// configKeyHexLength is the encoded length of the required 32-byte key
 	// (2 hex characters per byte), checked so a short or malformed
-	// SPEED_CONFIG_KEY fails configuration loading with a precise message
+	// APP_CONFIG_KEY fails configuration loading with a precise message
 	// rather than surfacing later as an opaque NewCipher error.
 	configKeyHexLength = 64
 
@@ -121,7 +121,7 @@ const (
 	// go/org/invitation.go's EmailSerializerName doc comment. Introducing
 	// this one additional key, distinct from the cipher key, is what keeps
 	// that rule real rather than aspirational in this app's own wiring.
-	orgIndexKeyEnv = "SPEED_ORG_INDEX_KEY"
+	orgIndexKeyEnv = "APP_ORG_INDEX_KEY"
 
 	// notificationIndexKeyEnv names the environment variable holding the
 	// hex-encoded 32-byte HMAC key the blind indexers over the notification
@@ -137,7 +137,7 @@ const (
 	// comment says so) -- the two normalizers keep the two index columns'
 	// inputs in disjoint canonical forms, so a shared key leaks nothing
 	// between them.
-	notificationIndexKeyEnv = "SPEED_NOTIFICATION_INDEX_KEY"
+	notificationIndexKeyEnv = "APP_NOTIFICATION_INDEX_KEY"
 
 	// redisAddrEnv names the environment variable holding the Redis server
 	// address ("host:port") the injected EventBus AND KVStore connect to --
@@ -152,7 +152,7 @@ const (
 	// the deployment-mode / implementation-composition orthogonality
 	// docs/internal/03-deployment-modes.md draws, or into a distributed
 	// deployment mode, where MultiReplicaSafe is required of both seams.
-	redisAddrEnv = "SPEED_REDIS_ADDR"
+	redisAddrEnv = "APP_REDIS_ADDR"
 
 	// s3EndpointEnv, s3BucketEnv, s3AccessKeyEnv and s3SecretKeyEnv name the
 	// environment variables that together compose a real S3-compatible
@@ -165,17 +165,17 @@ const (
 	// Aliyun OSS (MinIO ignores it, per objectstore/s3.Config's own doc
 	// comment), and s3UseSSLEnv, parsed as a Go bool, defaults to false --
 	// plain HTTP, the common case for a local RustFS -- when unset.
-	s3EndpointEnv  = "SPEED_S3_ENDPOINT"
-	s3BucketEnv    = "SPEED_S3_BUCKET"
-	s3AccessKeyEnv = "SPEED_S3_ACCESS_KEY"
+	s3EndpointEnv  = "APP_S3_ENDPOINT"
+	s3BucketEnv    = "APP_S3_BUCKET"
+	s3AccessKeyEnv = "APP_S3_ACCESS_KEY"
 	// #nosec G101 -- this is an ENVIRONMENT VARIABLE NAME, not a credential
 	// value: gosec's hardcoded-credential heuristic matches on the substring
 	// "Secret" in the identifier alone, the same false positive
 	// demoUsersPasswordEnv's own #nosec comment (demo_users.go) already
 	// excepts elsewhere in this codebase.
-	s3SecretKeyEnv = "SPEED_S3_SECRET_KEY"
-	s3RegionEnv    = "SPEED_S3_REGION"
-	s3UseSSLEnv    = "SPEED_S3_USE_SSL"
+	s3SecretKeyEnv = "APP_S3_SECRET_KEY"
+	s3RegionEnv    = "APP_S3_REGION"
+	s3UseSSLEnv    = "APP_S3_USE_SSL"
 
 	// smtpHostEnv and smtpPortEnv name the environment variables that
 	// together compose a real SMTP Mailer (pkgcore.NewSMTPMailer) for the
@@ -185,13 +185,13 @@ const (
 	// activates only when a username is set (pkgcore.SMTPConfig.Username's
 	// own doc comment). Unset -- the default -- leaves the "mailer" seam on
 	// the Preset's console default, exactly like every other seam here.
-	smtpHostEnv     = "SPEED_SMTP_HOST"
-	smtpPortEnv     = "SPEED_SMTP_PORT"
-	smtpUsernameEnv = "SPEED_SMTP_USERNAME"
+	smtpHostEnv     = "APP_SMTP_HOST"
+	smtpPortEnv     = "APP_SMTP_PORT"
+	smtpUsernameEnv = "APP_SMTP_USERNAME"
 	// #nosec G101 -- this is an ENVIRONMENT VARIABLE NAME, not a credential
 	// value, the identical false positive s3SecretKeyEnv's own #nosec
 	// comment above excepts.
-	smtpPasswordEnv = "SPEED_SMTP_PASSWORD"
+	smtpPasswordEnv = "APP_SMTP_PASSWORD"
 
 	// smsGatewayURLEnv names the environment variable holding the endpoint
 	// authn's real SMS transport (authn.NewHTTPSMSSender) posts delivery
@@ -203,7 +203,7 @@ const (
 	// rather than this app silently keeping a console sender nobody in a
 	// distributed replica pool is reading -- see buildServer's authn
 	// wiring comment for the three-way branch this drives.
-	smsGatewayURLEnv = "SPEED_SMS_GATEWAY_URL"
+	smsGatewayURLEnv = "APP_SMS_GATEWAY_URL"
 
 	// disableQueueWorkerEnv names the environment variable that, when set to
 	// any non-empty value, makes buildServer skip standaloneQueue.Start
@@ -222,10 +222,10 @@ const (
 	// comment for the finding this env var exists to address). Left unset
 	// (the default), buildServer's behavior is exactly what it was before
 	// this variable existed.
-	disableQueueWorkerEnv = "SPEED_DISABLE_QUEUE_WORKER"
+	disableQueueWorkerEnv = "APP_DISABLE_QUEUE_WORKER"
 )
 
-// devConfigKey is the master key used when SPEED_CONFIG_KEY is unset. It is
+// devConfigKey is the master key used when APP_CONFIG_KEY is unset. It is
 // the ascending 0x00..0x1f byte sequence -- a recognizable constant, never
 // a secret -- because zero-setup standalone development (`go run
 // ./cmd/server`, `task dev`, this app's tests) must work with no
@@ -235,7 +235,7 @@ const (
 //
 // This default is a documented trade-off, not a pattern to copy: it is a
 // key committed to the repository, which real hosts must never do. A real
-// deployment must set SPEED_CONFIG_KEY from a secret store (or refuse to
+// deployment must set APP_CONFIG_KEY from a secret store (or refuse to
 // start); the constant exists so the *demo* keeps working out of the box,
 // and its name and doc comment are the guard rails that keep it honest.
 var devConfigKey = []byte{
@@ -245,7 +245,7 @@ var devConfigKey = []byte{
 	0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
 }
 
-// devOrgIndexKey is the HMAC key used when SPEED_ORG_INDEX_KEY is unset --
+// devOrgIndexKey is the HMAC key used when APP_ORG_INDEX_KEY is unset --
 // the descending 0xff..0xe0 byte sequence, chosen precisely so it is
 // visibly a DIFFERENT 32 bytes from devConfigKey's ascending 0x00..0x1f
 // (see orgIndexKeyEnv's own doc comment for why the two must never be the
@@ -304,7 +304,7 @@ var (
 )
 
 // devNotificationIndexKey is the HMAC key used when
-// SPEED_NOTIFICATION_INDEX_KEY is unset -- the ascending 0x80..0x9f byte
+// APP_NOTIFICATION_INDEX_KEY is unset -- the ascending 0x80..0x9f byte
 // sequence, the next free 32-byte region of this file's recognizable
 // constants and chosen so it is visibly a DIFFERENT 32 bytes from every key
 // above it (see notificationIndexKeyEnv's own doc comment for why the
@@ -357,7 +357,7 @@ var demoHostTenants = map[string]pkgcore.TenantID{
 //   - Every boot seeds the fixed demo header actors' rbac grants
 //     (seedDemoGrants) but NO memberships: those actors have no database
 //     row, so nothing can sign in as them.
-//   - A boot with SPEED_DEMO_USERS_PASSWORD set additionally registers the
+//   - A boot with APP_DEMO_USERS_PASSWORD set additionally registers the
 //     three demo accounts of demo_users.go through the real register route
 //     and records their memberships here -- which is what makes those real
 //     sign-ins succeed (authn's resolveTenant refuses an account with no
@@ -608,7 +608,7 @@ type serverConfig struct {
 	// DisableQueueWorker, when true, makes buildServer skip
 	// standaloneQueue.Start -- see disableQueueWorkerEnv's own doc comment
 	// above for why this exists and what it changes. configFromEnv sets it
-	// from SPEED_DISABLE_QUEUE_WORKER; false (the default) is byte-identical
+	// from APP_DISABLE_QUEUE_WORKER; false (the default) is byte-identical
 	// to this field never having existed.
 	DisableQueueWorker bool
 
@@ -649,7 +649,7 @@ type serverConfig struct {
 	// membership and role its actor model declares -- so a browser visitor
 	// can sign in as demo-owner@example.com and friends with a real
 	// account, real membership and real rbac grants, and no demo header.
-	// configFromEnv fills it from SPEED_DEMO_USERS_PASSWORD; the empty
+	// configFromEnv fills it from APP_DEMO_USERS_PASSWORD; the empty
 	// default (the zero-external-dependency `go run ./cmd/server`
 	// experience) skips the seed entirely.
 	DemoUsersPassword string
@@ -729,7 +729,7 @@ type serverConfig struct {
 // standalone deployment mode on SQLite so `go run ./cmd/server` genuinely
 // starts a working server with zero external dependencies.
 func configFromEnv() (serverConfig, error) {
-	deploymentModeStr := os.Getenv("SPEED_DEPLOYMENT_MODE")
+	deploymentModeStr := os.Getenv("APP_DEPLOYMENT_MODE")
 	if deploymentModeStr == "" {
 		deploymentModeStr = string(pkgcore.DeploymentModeStandalone)
 	}
@@ -743,7 +743,7 @@ func configFromEnv() (serverConfig, error) {
 		port = defaultPort
 	}
 
-	dbPath := os.Getenv("SPEED_DB_PATH")
+	dbPath := os.Getenv("APP_DB_PATH")
 	if dbPath == "" {
 		dbPath = defaultSQLitePath
 	}
@@ -754,7 +754,7 @@ func configFromEnv() (serverConfig, error) {
 	// default intact.
 	redisAddr := os.Getenv(redisAddrEnv)
 
-	// The config master key: SPEED_CONFIG_KEY when set (a hex-encoded
+	// The config master key: APP_CONFIG_KEY when set (a hex-encoded
 	// 32-byte key -- see configKeyEnv's doc comment), the documented
 	// development default otherwise (see devConfigKey's). A malformed
 	// value must fail startup with a precise message rather than surface
@@ -775,7 +775,7 @@ func configFromEnv() (serverConfig, error) {
 		configKey = decoded
 	}
 
-	// The org invitation blind-index key: SPEED_ORG_INDEX_KEY when set,
+	// The org invitation blind-index key: APP_ORG_INDEX_KEY when set,
 	// devOrgIndexKey otherwise -- same parsing and same failure shape as
 	// configKey above, and see orgIndexKeyEnv's own doc comment for why
 	// this must be a key distinct from configKey rather than the same one
@@ -795,7 +795,7 @@ func configFromEnv() (serverConfig, error) {
 	}
 
 	// The notification contact-address blind-index key:
-	// SPEED_NOTIFICATION_INDEX_KEY when set, devNotificationIndexKey
+	// APP_NOTIFICATION_INDEX_KEY when set, devNotificationIndexKey
 	// otherwise -- same parsing and same failure shape as configKey above,
 	// and see notificationIndexKeyEnv's own doc comment for why this must
 	// be a key distinct from configKey rather than the same one reused.
@@ -853,7 +853,7 @@ func configFromEnv() (serverConfig, error) {
 
 	// smtpHost/smtpPortRaw mirror s3Endpoint/... above: both unset leaves
 	// the "mailer" seam on the Preset's console default, and a partial
-	// SPEED_SMTP_* set is refused rather than silently ignored.
+	// APP_SMTP_* set is refused rather than silently ignored.
 	smtpHost := os.Getenv(smtpHostEnv)
 	smtpPortRaw := os.Getenv(smtpPortEnv)
 	var smtpPort int
@@ -1633,13 +1633,13 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// composition is validated against; it never selects an implementation
 	// (docs/internal/03-deployment-modes.md's orthogonality rule). Every
 	// stateful seam below follows the exact same conditional-injection
-	// shape SPEED_REDIS_ADDR originally established for the "eventbus" seam
+	// shape APP_REDIS_ADDR originally established for the "eventbus" seam
 	// alone: an unset env var leaves that seam on the Preset's in-process
 	// default (so a plain `go run ./cmd/server` is byte-for-byte unaffected
 	// by this round), and a configured one injects a real implementation
 	// with the capability bits that implementation genuinely carries.
 	//
-	// When SPEED_REDIS_ADDR is set, WithEventBus injects a REAL
+	// When APP_REDIS_ADDR is set, WithEventBus injects a REAL
 	// Redis-backed EventBus -- eventbus/redis's NewEventBus over a go-redis
 	// client this host constructs and owns -- declaring
 	// MultiReplicaSafe|SurvivesRestart, the capabilities the Redis Streams
@@ -1656,7 +1656,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// very next seam Kernel.Bootstrap resolves and validates, "kv", would
 	// still fail on the Preset's in-process default.
 	//
-	// When the SPEED_S3_* variables are set (configFromEnv's own doc
+	// When the APP_S3_* variables are set (configFromEnv's own doc
 	// comment on s3EndpointEnv has the completeness rule), WithObjectStore
 	// injects a REAL S3-compatible ObjectStore (objectstore/s3.
 	// NewObjectStore, reaching MinIO, Aliyun OSS or AWS S3 through the
@@ -1665,7 +1665,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	//
 	// The Mailer override -- cfg.Mailer, non-nil either because
 	// configFromEnv composed a real pkgcore.NewSMTPMailer from the
-	// SPEED_SMTP_* variables, or because a test (server_test.go's org/
+	// APP_SMTP_* variables, or because a test (server_test.go's org/
 	// notification flow tests) injected an in-process capture double --
 	// rides along as a fourth conditional option. Its capability
 	// declaration is cfg.MailerCapabilities when set (MultiReplicaSafe|
@@ -2061,7 +2061,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// The demo-user seed runs last, once the composed handler exists: it
 	// registers the demo accounts through the same register route a browser
 	// would use, which needs the whole chain above it. It is opt-in
-	// (SPEED_DEMO_USERS_PASSWORD, see configFromEnv); an empty password
+	// (APP_DEMO_USERS_PASSWORD, see configFromEnv); an empty password
 	// leaves everything above exactly as it was.
 	if cfg.DemoUsersPassword != "" {
 		if seedErr := seedDemoUsers(ctx, handler, memberships, rbacService, cfg.HostTenants, cfg.DemoUsersPassword); seedErr != nil {

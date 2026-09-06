@@ -32,7 +32,7 @@
 # package manager, nothing but the binary, a nonroot user and a CA
 # certificate bundle (needed for outbound TLS -- a real SMTP relay,
 # S3-compatible endpoint or HTTP SMS gateway, all real possibilities once
-# SPEED_SMTP_*/SPEED_S3_*/SPEED_SMS_GATEWAY_URL are set -- see
+# APP_SMTP_*/APP_S3_*/APP_SMS_GATEWAY_URL are set -- see
 # cmd/server/server.go).
 #
 # The go builder image's tag is pinned to go.work's own `go` directive
@@ -85,7 +85,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     go build -trimpath -ldflags="-s -w" -o /out/reference-app-server ./cmd/server
 
 # /data is where docker-compose.yml mounts the named volume that holds this
-# app's SQLite file (SPEED_DB_PATH=/data/reference-app.db) -- created and
+# app's SQLite file (APP_DB_PATH=/data/reference-app.db) -- created and
 # owned by uid/gid 65532 ("nonroot", the final stage's own user, confirmed
 # against this exact base image's /etc/passwd) HERE, in the builder stage,
 # because the distroless final stage below has no shell, mkdir or chown of
