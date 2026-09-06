@@ -192,13 +192,40 @@ type EventBus struct {
 	closed   bool
 	handlers map[string][]pkgcore.EventHandler
 
-	// deliverMu serializes every delivery-and-cursor-advance sequence
-	// against every other one on this instance -- Publish's own
-	// synchronous local delivery and the listener goroutine's periodic
-	// catch-up scan alike -- so no two of them can race the same event
-	// Type's cursor row. See ensureCursor's and advanceCursorAtLeast's own
-	// doc comments for what this buys.
+	// deliverMu serializes, for this bus instance alone, each short
+	// delivery-critical section against every other one: Publish's
+	// per-Type in-flight bookkeeping (below) and the catch-up poller's
+	// per-batch check of that bookkeeping plus its cursor read and outbox
+	// fetch. The lock is deliberately NEVER held while a handler runs:
+	// Publish's own synchronous local delivery and deliverPendingForType's
+	// catch-up loop both invoke every handler outside it, which is what
+	// makes a handler's re-entrant Publish (or Subscribe) on this same bus
+	// safe instead of a self-deadlock.
+	//
+	// What the lock actually buys is the no-double-delivery argument
+	// between the two delivery paths for one (replicaID, event Type)
+	// cursor row. Publish raises the Type's in-flight count BEFORE its
+	// outbox insert can make a row visible (the insert is that visibility
+	// point) and drops it only AFTER its local handlers ran and
+	// advanceCursorAtLeast persisted the watermark past every row they
+	// covered. The poller's check, cursor read and fetch share one
+	// critical section, so a fetch that sees the count at zero can only
+	// observe rows whose local delivery -- if any -- already advanced the
+	// persisted cursor past them, and a fetch that races a Publish either
+	// sees the raised count (and skips the batch, letting the Publish's
+	// own local delivery handle the rows) or runs entirely before that
+	// Publish's insert commits. Rows a skipped batch would have covered
+	// are not lost: delivery remains at-least-once, and the next catch-up
+	// cycle delivers what the concurrent Publish did not.
 	deliverMu sync.Mutex
+
+	// inFlight counts, per event Type, the Publish calls on this instance
+	// whose local delivery has not fully completed yet -- the count is
+	// raised before the outbox insert and dropped after the local
+	// handlers ran and the cursor advance persisted, so while it is
+	// non-zero the Type's committed rows are being handled synchronously
+	// and the catch-up poller must not fetch them. Guarded by deliverMu.
+	inFlight map[string]int
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -241,6 +268,7 @@ func NewEventBus(pool *pgxpool.Pool, replicaID string) *EventBus {
 		pool:       pool,
 		replicaID:  replicaID,
 		handlers:   make(map[string][]pkgcore.EventHandler),
+		inFlight:   make(map[string]int),
 		ctx:        ctx,
 		cancel:     cancel,
 		listenDone: make(chan struct{}),
@@ -310,6 +338,10 @@ func (b *EventBus) Subscribe(eventType string, h pkgcore.EventHandler) {
 // the process boundary through the outbox's payload column; a payload that
 // does not (channels, funcs) fails the publish before anything is written
 // or delivered.
+//
+// Local handlers run without deliverMu held (see deliverMu's own doc
+// comment), so a handler may itself call Publish -- or Subscribe -- on this
+// bus re-entrantly; the nested publish is delivered exactly like any other.
 func (b *EventBus) Publish(ctx context.Context, evt pkgcore.Event) error {
 	if b.isClosed() {
 		return ErrEventBusClosed
@@ -323,14 +355,36 @@ func (b *EventBus) Publish(ctx context.Context, evt pkgcore.Event) error {
 		return fmt.Errorf("pkgcore/eventbus/postgres: payload of event %q is not JSON-serializable: %w", evt.Type, err)
 	}
 
+	// Raise this Type's in-flight count BEFORE the insert below can make
+	// the row visible to the catch-up poller, and drop it only after the
+	// local handlers ran and the cursor advance persisted -- see
+	// deliverMu's own doc comment for why this ordering is the
+	// no-double-delivery argument. defer guarantees the count is dropped
+	// on every path out of this function, including a handler panic, so a
+	// wedged publish can never stall the poller.
+	b.deliverMu.Lock()
+	b.inFlight[evt.Type]++
+	b.deliverMu.Unlock()
+	defer func() {
+		b.deliverMu.Lock()
+		b.inFlight[evt.Type]--
+		if b.inFlight[evt.Type] == 0 {
+			delete(b.inFlight, evt.Type)
+		}
+		b.deliverMu.Unlock()
+	}()
+
 	id, err := insertOutboxAndNotify(ctx, b.pool, evt.Type, string(evt.TenantID), payload)
 	if err != nil {
 		return fmt.Errorf("pkgcore/eventbus/postgres: publish event %q: %w", evt.Type, err)
 	}
 
-	b.deliverMu.Lock()
-	defer b.deliverMu.Unlock()
-
+	// Local handlers run WITHOUT deliverMu held (the in-flight count above
+	// is what keeps the catch-up poller from racing them), synchronously
+	// and in registration order on this goroutine, exactly as on the
+	// in-memory bus. A handler's own re-entrant Publish on this bus takes
+	// deliverMu only for its brief in-flight bookkeeping, never blocking
+	// on this call's lock, because this call no longer holds it.
 	handlers := b.handlersFor(evt.Type)
 	failures := make([]error, 0, len(handlers))
 	for i, h := range handlers {
@@ -355,9 +409,10 @@ func (b *EventBus) Publish(ctx context.Context, evt pkgcore.Event) error {
 
 // handlersFor returns a private snapshot of the handlers subscribed to
 // eventType, copied under the lock exactly like eventbus/redis's own
-// handlersFor, so a handler is free to call Subscribe or Publish
-// re-entrantly and a concurrent Subscribe cannot mutate the slice being
-// iterated.
+// handlersFor. The snapshot is what lets a handler call Subscribe
+// re-entrantly without mutating the slice being iterated; calling Publish
+// re-entrantly is equally safe because no handler ever runs under deliverMu
+// (see deliverMu's own doc comment).
 func (b *EventBus) handlersFor(eventType string) []pkgcore.EventHandler {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -473,44 +528,90 @@ func (b *EventBus) readLoop(conn *pgx.Conn) {
 }
 
 // deliverPending runs deliverPendingForType for every event Type this
-// instance is currently subscribed to, serialized against Publish's own
-// local delivery by deliverMu.
+// instance is currently subscribed to. No lock spans the whole scan: each
+// Type's scan takes the brief deliverMu critical section it needs for
+// itself (see deliverPendingForType and deliverMu's own doc comment) and
+// runs every handler it delivers to outside deliverMu, so a handler may
+// Publish (or Subscribe) on this same bus re-entrantly even while a
+// catch-up delivery is in progress.
 func (b *EventBus) deliverPending(ctx context.Context) {
 	types := b.subscribedTypes()
 	if len(types) == 0 {
 		return
 	}
 
-	b.deliverMu.Lock()
-	defer b.deliverMu.Unlock()
 	for _, eventType := range types {
 		b.deliverPendingForType(ctx, eventType)
 	}
 }
 
-// deliverPendingForType reads this replica's persisted cursor for
-// eventType, initializing it at the live end on the very first call
-// (ensureCursor), and delivers every outbox row newer than it in batches
-// of catchUpBatchSize, advancing the cursor after each row. A failure at
+// deliverPendingForType delivers every outbox row of eventType newer than
+// this replica's persisted cursor for it, in batches of catchUpBatchSize,
+// initializing the cursor at the live end on the very first call
+// (ensureCursor) and re-reading it from the database before every later
+// batch. Each batch is fetched inside one brief deliverMu critical
+// section: the section first skips the Type entirely when a Publish on
+// this same instance is delivering it locally right now -- see deliverMu's
+// own doc comment for why that check, the cursor read and the fetch must
+// share the section to rule out double delivery -- then reads the cursor
+// (re-read, never trusted from a previous batch's memory, because a
+// concurrent local Publish may have advanced it between batches) and
+// fetches the batch. Every handler runs outside deliverMu
+// (deliverOutboxRow), and the cursor advances after each row, also outside
+// deliverMu: advanceCursorAtLeast's GREATEST upsert makes concurrent
+// advances from a simultaneous local Publish commute safely. A failure at
 // any point here is swallowed rather than propagated -- there is no
 // caller left to report it to, the same "handlers on other replicas ...
 // errors are not observable by any publisher" contract eventbus/redis
 // documents for its own remote delivery path -- and simply retried on the
 // next call.
 func (b *EventBus) deliverPendingForType(ctx context.Context, eventType string) {
-	cursor, err := ensureCursor(ctx, b.pool, b.replicaID, eventType)
-	if err != nil {
-		return
-	}
-
+	cursorKnown := false
 	for {
+		// One critical section per batch: the in-flight check, the cursor
+		// read and the fetch must be atomic against Publish's own
+		// bookkeeping for the no-double-delivery argument to hold (see
+		// deliverMu's own doc comment), so deliverMu stays held across
+		// them but is released before any handler runs.
+		b.deliverMu.Lock()
+		if b.inFlight[eventType] > 0 {
+			// A local Publish on this instance is delivering eventType
+			// synchronously right now and will advance the cursor past
+			// every row it covers. Anything this scan would have fetched
+			// is either already being handled there or not yet committed,
+			// so skip the whole batch: the next catch-up cycle (a NOTIFY
+			// or the next listenBlock timeout) delivers what that Publish
+			// did not, and delivery stays at-least-once.
+			b.deliverMu.Unlock()
+			return
+		}
+		var (
+			cursor int64
+			err    error
+		)
+		if cursorKnown {
+			// Re-read, never reuse the previous batch's value: a
+			// concurrent local Publish may have advanced the cursor since,
+			// and fetching from a stale position would redeliver the rows
+			// it already handled.
+			cursor, err = readCursor(ctx, b.pool, b.replicaID, eventType)
+		} else {
+			cursor, err = ensureCursor(ctx, b.pool, b.replicaID, eventType)
+			if err == nil {
+				cursorKnown = true
+			}
+		}
+		if err != nil {
+			b.deliverMu.Unlock()
+			return
+		}
 		rows, err := fetchOutboxSince(ctx, b.pool, eventType, cursor)
+		b.deliverMu.Unlock()
 		if err != nil || len(rows) == 0 {
 			return
 		}
 		for _, row := range rows {
 			b.deliverOutboxRow(ctx, row)
-			cursor = row.id
 			if err := advanceCursorAtLeast(ctx, b.pool, b.replicaID, eventType, row.id); err != nil {
 				return // retried from the (unadvanced) persisted cursor next call
 			}

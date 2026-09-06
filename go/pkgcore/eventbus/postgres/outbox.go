@@ -122,15 +122,25 @@ func fetchOutboxSince(ctx context.Context, pool *pgxpool.Pool, eventType string,
 // first-time Subscribe starts at the live end exactly like a fresh Redis
 // consumer group does (eventbus/redis's own "$" semantics), rather than
 // replaying every event of that type ever published. Every call after
-// that first one is a plain read of the row this call (or advanceCursorAtLeast) already
-// created.
+// that first one is a plain read (readCursor) of the row this call (or
+// advanceCursorAtLeast) already created.
 //
-// The upsert races harmlessly against a concurrent call for the same
-// (replicaID, eventType) -- Publish's own local-delivery path and the
-// catch-up poller's loop both call this on the very same bus, serialized
-// by EventBus.deliverMu, so in practice there is never a real concurrent
-// writer for one bus instance's own rows; ON CONFLICT DO NOTHING is
-// defensive belt-and-braces rather than a load-bearing property.
+// deliverPendingForType calls this inside its per-batch deliverMu
+// critical section on the first batch only (and re-reads via readCursor
+// on every later batch), so this function's own writes are serialized
+// against Publish's in-flight bookkeeping -- but NOT against
+// advanceCursorAtLeast, which runs outside deliverMu entirely (see
+// deliverMu's own doc comment on EventBus for why). A concurrent
+// advance of the same (replicaID, eventType) row is therefore a real
+// possibility, and the upsert is safe against it: if the advance's
+// INSERT won the race, ON CONFLICT DO NOTHING skips this one and the
+// SELECT below reads the row the advance created; if this INSERT wins
+// (or the row already existed), the SELECT reads the existing row and
+// advanceCursorAtLeast's own GREATEST upsert later never moves the
+// watermark backward. The one race left is a SELECT that runs before a
+// concurrent advance commits, which simply reads the older watermark --
+// inside at-least-once delivery, where redelivering a row the local
+// path just handled is always permitted.
 func ensureCursor(ctx context.Context, pool *pgxpool.Pool, replicaID, eventType string) (int64, error) {
 	now := time.Now().UTC()
 	// eventType is passed twice ($2 and $4), once for the inserted column
@@ -153,6 +163,19 @@ func ensureCursor(ctx context.Context, pool *pgxpool.Pool, replicaID, eventType 
 		return 0, fmt.Errorf("initialize cursor for %q: %w", eventType, err)
 	}
 
+	return readCursor(ctx, pool, replicaID, eventType)
+}
+
+// readCursor returns replicaID's persisted watermark for eventType, which
+// the caller is responsible for knowing exists: ensureCursor creates the
+// row on first use, and both ensureCursor and advanceCursorAtLeast
+// maintain it afterwards. deliverPendingForType re-reads it via this
+// helper before every batch after the first rather than trusting a cursor
+// value remembered from an earlier batch -- a concurrent local Publish
+// may have advanced the persisted row since (see deliverPendingForType's
+// own doc comment), and fetching from a stale position would redeliver
+// the rows that Publish already handled.
+func readCursor(ctx context.Context, pool *pgxpool.Pool, replicaID, eventType string) (int64, error) {
 	var cursor int64
 	if err := pool.QueryRow(ctx,
 		`SELECT last_delivered_id FROM pkgcore_eventbus_cursor WHERE replica_id = $1 AND event_type = $2`,
@@ -168,9 +191,19 @@ func ensureCursor(ctx context.Context, pool *pgxpool.Pool, replicaID, eventType 
 // local-delivery path can reach a type before the listener goroutine's
 // deliverPendingForType has ever called ensureCursor for it), and never
 // moving it backward -- GREATEST makes this call commute with any other
-// advance of the same row regardless of arrival order, though in practice
-// EventBus.deliverMu already serializes every caller of this function
-// against every other one for the same bus instance.
+// advance of the same row regardless of arrival order. That commutativity
+// is load-bearing, not defensive: since the re-entrancy fix no handler ever
+// runs under deliverMu, both of this function's callers invoke it outside
+// the lock (Publish's local-delivery path advances right after its own
+// handlers, on the publisher's goroutine; deliverPendingForType advances
+// after each row its listener-goroutine scan delivers), so concurrent
+// advances of one row genuinely interleave -- a local Publish finishing a
+// delivery while the catch-up scan is mid-batch on the same type, say --
+// and the GREATEST upsert is what keeps the persisted watermark at the
+// highest row either side delivered, exactly as the at-least-once contract
+// needs. The concurrent-creation race against ensureCursor (which runs
+// inside deliverMu's critical section) is likewise safe, for the reasons
+// ensureCursor's own doc comment gives.
 //
 // # Why this call is retried, and what that does and does not guarantee
 //
