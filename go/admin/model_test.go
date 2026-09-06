@@ -8,6 +8,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/admin/internal/testutil"
+	"github.com/vislake/speed/go/tenancy"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
@@ -24,7 +25,7 @@ func TestTenant_IsNotTenantScoped(t *testing.T) {
 		seq++
 		return db.Create(&Tenant{
 			TenantID:  newTestID(t, "tenant", seq),
-			Status:    TenantStatusActive,
+			Status:    tenancy.TenantStatusActive,
 			CreatedAt: time.Now().UTC(),
 		}).Error
 	}

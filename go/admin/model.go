@@ -1,20 +1,9 @@
 package admin
 
-import "time"
+import (
+	"time"
 
-// TenantStatus is the closed vocabulary of Tenant.Status.
-type TenantStatus string
-
-const (
-	// TenantStatusActive is a tenant's default, ordinary state.
-	TenantStatusActive TenantStatus = "active"
-
-	// TenantStatusSuspended marks a tenant as suspended in the ledger.
-	// Round 1 deliberately stops at recording this: nothing in the
-	// request pipeline refuses a request because of it yet (D4, the
-	// enforcement seam, is round 2's work per
-	// docs/internal/23-admin.md section 8).
-	TenantStatusSuspended TenantStatus = "suspended"
+	"github.com/vislake/speed/go/tenancy"
 )
 
 // Tenant is one row of admin_tenants, the operator-facing TENANT LEDGER
@@ -41,18 +30,37 @@ type Tenant struct {
 	// operator supplied on a manually created row.
 	DisplayName string `gorm:"column:display_name;size:255;not null"`
 
-	// Status is one of the TenantStatus* constants.
-	Status TenantStatus `gorm:"column:status;size:32;not null"`
+	// Status is the tenant's ledger status -- which state the platform
+	// operator believes this tenant is in. It is typed with go/tenancy's
+	// own TenantStatus, the vocabulary tenancy.Middleware's optional
+	// TenantStatusResolver gate reports, deliberately ONE type rather than
+	// an admin-local duplicate plus a hand-written translation (P3-4's
+	// consolidation): the pre-consolidation shape translated "anything not
+	// suspended" to TenantStatusActive, and a future third state added to
+	// only one side of that translation would silently fail the status gate
+	// OPEN -- the exact fail-open class go/tenancy's seam semantics close.
+	// With the shared type there is no translation to forget: a stored
+	// value is reported to the seam as-is, and the gate refuses anything
+	// other than tenancy.TenantStatusActive by default, so a future ledger
+	// state a tenant must not be served under (an "archived" tenant, say)
+	// needs no code change here at all -- declaring it as a
+	// tenancy.TenantStatus value is enough, and the gate refuses it. A
+	// state requests SHOULD flow for requires the deliberate widening of
+	// tenancy.Middleware's own check, which is where that decision
+	// belongs. Consumers of the deleted admin.TenantStatus type must
+	// switch to tenancy.TenantStatus.
+	Status tenancy.TenantStatus `gorm:"column:status;size:32;not null"`
 
 	// SuspendedReason is the operator-supplied reason recorded the last
-	// time Status became TenantStatusSuspended. It is left in place (not
-	// cleared) when the tenant is later resumed, as a historical note --
-	// SuspendedAt being nil is what says "not currently suspended", not
-	// this field being empty.
+	// time Status became tenancy.TenantStatusSuspended. It is left in
+	// place (not cleared) when the tenant is later resumed, as a
+	// historical note -- SuspendedAt being nil is what says "not currently
+	// suspended", not this field being empty.
 	SuspendedReason string `gorm:"column:suspended_reason;size:2000;not null"`
 
-	// SuspendedAt is when Status last became TenantStatusSuspended, or nil
-	// when the tenant is not currently suspended.
+	// SuspendedAt is when Status last became
+	// tenancy.TenantStatusSuspended, or nil when the tenant is not
+	// currently suspended.
 	SuspendedAt *time.Time `gorm:"column:suspended_at"`
 
 	// CreatedAt is when this ledger row was created -- NOT necessarily

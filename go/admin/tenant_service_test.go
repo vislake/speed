@@ -53,7 +53,7 @@ func TestTenantService_HandleOrgNodeCreated_RootNode_LazilyRegisters(t *testing.
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
-	if got.Status != TenantStatusActive {
+	if got.Status != tenancy.TenantStatusActive {
 		t.Fatalf("Get().Status = %q, want active", got.Status)
 	}
 }
@@ -244,7 +244,7 @@ func TestTenantService_SetStatus_RecordsAuditEvent(t *testing.T) {
 		return nil
 	})
 
-	suspended := TenantStatusSuspended
+	suspended := tenancy.TenantStatusSuspended
 	actor := pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: "operator-1"}
 	if _, err := svc.SetStatus(ctx, "tenant-audit-1", TenantPatch{Status: &suspended}, actor); err != nil {
 		t.Fatalf("SetStatus() error = %v", err)
@@ -312,7 +312,7 @@ func TestTenantService_Status_SuspendedTenant_ReportsSuspended(t *testing.T) {
 	if err := repo.Create(ctx, &Tenant{TenantID: "tenant-suspended-1"}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	suspended := TenantStatusSuspended
+	suspended := tenancy.TenantStatusSuspended
 	if _, err := svc.SetStatus(ctx, "tenant-suspended-1", TenantPatch{Status: &suspended}, pkgcore.Actor{ID: "op"}); err != nil {
 		t.Fatalf("SetStatus() error = %v", err)
 	}
@@ -339,11 +339,11 @@ func TestTenantService_Status_ResumedTenant_ReportsActiveAgain(t *testing.T) {
 	if err := repo.Create(ctx, &Tenant{TenantID: "tenant-resumed-1"}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	suspended := TenantStatusSuspended
+	suspended := tenancy.TenantStatusSuspended
 	if _, err := svc.SetStatus(ctx, "tenant-resumed-1", TenantPatch{Status: &suspended}, pkgcore.Actor{ID: "op"}); err != nil {
 		t.Fatalf("suspend SetStatus() error = %v", err)
 	}
-	active := TenantStatusActive
+	active := tenancy.TenantStatusActive
 	if _, err := svc.SetStatus(ctx, "tenant-resumed-1", TenantPatch{Status: &active}, pkgcore.Actor{ID: "op"}); err != nil {
 		t.Fatalf("resume SetStatus() error = %v", err)
 	}
@@ -354,5 +354,38 @@ func TestTenantService_Status_ResumedTenant_ReportsActiveAgain(t *testing.T) {
 	}
 	if status != tenancy.TenantStatusActive {
 		t.Fatalf("Status() after resume = %q, want %q", status, tenancy.TenantStatusActive)
+	}
+}
+
+// TestTenantService_Status_UnknownLedgerStatus_ReportedAsIsNotActive is
+// the P3-4 consolidation's regression test: the ledger's Status column is
+// typed with tenancy.TenantStatus itself, so TenantService.Status reports
+// a stored value as-is -- it must NEVER translate an unrecognized status
+// to TenantStatusActive the way the pre-consolidation admin-local
+// vocabulary did ("anything not suspended means active"). tenancy's own
+// gate (middleware_test.go's
+// TestMiddleware_TenantStatusResolver_NonActiveStatus_FailsClosed) refuses
+// every status other than TenantStatusActive, so an unrecognized stored
+// value reported faithfully is refused; one translated to active would
+// silently keep serving requests for a tenant a future third state was
+// meant to block -- the exact fail-open this test pins closed. It fails
+// against the pre-consolidation code, which answered TenantStatusActive
+// for this very row.
+func TestTenantService_Status_UnknownLedgerStatus_ReportedAsIsNotActive(t *testing.T) {
+	db := testutil.NewDB(t)
+	repo := NewTenantRepository(db)
+	svc := NewTenantService(repo)
+	ctx := context.Background()
+	unknown := tenancy.TenantStatus("archived")
+	if err := repo.Create(ctx, &Tenant{TenantID: "tenant-future-state", Status: unknown}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	status, err := svc.Status(ctx, "tenant-future-state")
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if status != unknown {
+		t.Fatalf("Status() = %q, want %q -- reported as-is, never translated to active", status, unknown)
 	}
 }

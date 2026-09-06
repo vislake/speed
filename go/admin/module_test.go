@@ -25,6 +25,7 @@ import (
 	rbacmigrations "github.com/vislake/speed/go/rbac/migrations"
 	"github.com/vislake/speed/go/sharing"
 	sharingmigrations "github.com/vislake/speed/go/sharing/migrations"
+	"github.com/vislake/speed/go/tenancy"
 )
 
 // fakeUserAddressResolver reports no addresses for anyone -- enough for
@@ -347,7 +348,7 @@ func TestModule_Register_OrgNodeCreatedSubscriptionFires(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() after CreateRoot() error = %v, want the lazily-registered ledger row", err)
 	}
-	if got.Status != TenantStatusActive {
+	if got.Status != tenancy.TenantStatusActive {
 		t.Fatalf("Get().Status = %q, want active", got.Status)
 	}
 }

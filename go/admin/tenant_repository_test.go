@@ -7,6 +7,7 @@ import (
 
 	"github.com/vislake/speed/go/admin/internal/testutil"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/tenancy"
 )
 
 func TestTenantRepository_Create_DuplicateTenantID_ReportsAlreadyExists(t *testing.T) {
@@ -108,14 +109,14 @@ func TestTenantRepository_List_FiltersByStatus(t *testing.T) {
 	repo := NewTenantRepository(db)
 	ctx := context.Background()
 
-	if err := repo.Create(ctx, &Tenant{TenantID: "tenant-active", Status: TenantStatusActive}); err != nil {
+	if err := repo.Create(ctx, &Tenant{TenantID: "tenant-active", Status: tenancy.TenantStatusActive}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if err := repo.Create(ctx, &Tenant{TenantID: "tenant-suspended", Status: TenantStatusSuspended}); err != nil {
+	if err := repo.Create(ctx, &Tenant{TenantID: "tenant-suspended", Status: tenancy.TenantStatusSuspended}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	rows, err := repo.List(ctx, TenantFilter{Status: TenantStatusSuspended})
+	rows, err := repo.List(ctx, TenantFilter{Status: tenancy.TenantStatusSuspended})
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -133,11 +134,11 @@ func TestTenantRepository_Update_SuspendThenResume_TracksSuspendedAt(t *testing.
 	repo := NewTenantRepository(db)
 	ctx := context.Background()
 
-	if err := repo.Create(ctx, &Tenant{TenantID: "tenant-d", Status: TenantStatusActive}); err != nil {
+	if err := repo.Create(ctx, &Tenant{TenantID: "tenant-d", Status: tenancy.TenantStatusActive}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	suspended := TenantStatusSuspended
+	suspended := tenancy.TenantStatusSuspended
 	reason := "billing overdue"
 	got, err := repo.Update(ctx, "tenant-d", TenantPatch{Status: &suspended, SuspendedReason: &reason})
 	if err != nil {
@@ -150,7 +151,7 @@ func TestTenantRepository_Update_SuspendThenResume_TracksSuspendedAt(t *testing.
 		t.Fatalf("Update(suspend) SuspendedReason = %q, want %q", got.SuspendedReason, reason)
 	}
 
-	active := TenantStatusActive
+	active := tenancy.TenantStatusActive
 	got, err = repo.Update(ctx, "tenant-d", TenantPatch{Status: &active})
 	if err != nil {
 		t.Fatalf("Update(resume) error = %v", err)
@@ -188,7 +189,7 @@ func TestTenantRepository_Update_ConcurrentConflictingPatches_SecondRefused(t *t
 	repo := NewTenantRepository(db)
 	ctx := context.Background()
 
-	if err := repo.Create(ctx, &Tenant{TenantID: "tenant-race", Status: TenantStatusActive, DisplayName: "Race Co"}); err != nil {
+	if err := repo.Create(ctx, &Tenant{TenantID: "tenant-race", Status: tenancy.TenantStatusActive, DisplayName: "Race Co"}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	observed, err := repo.Get(ctx, "tenant-race")
@@ -196,7 +197,7 @@ func TestTenantRepository_Update_ConcurrentConflictingPatches_SecondRefused(t *t
 		t.Fatalf("Get() error = %v", err)
 	}
 
-	suspended := TenantStatusSuspended
+	suspended := tenancy.TenantStatusSuspended
 	renamed := "Renamed Co"
 
 	var wg sync.WaitGroup

@@ -10,6 +10,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/rbac"
+	"github.com/vislake/speed/go/tenancy"
 
 	"github.com/vislake/speed/go/admin/api"
 )
@@ -92,7 +93,7 @@ func callerUserID(r *http.Request) (string, error) {
 func (h *Handler) AdminListTenants(w http.ResponseWriter, r *http.Request, params api.AdminListTenantsParams) {
 	filter := TenantFilter{}
 	if params.Status != nil {
-		filter.Status = TenantStatus(*params.Status)
+		filter.Status = tenancy.TenantStatus(*params.Status)
 	}
 	if params.Cursor != nil {
 		filter.Cursor = *params.Cursor
@@ -163,7 +164,7 @@ func (h *Handler) AdminUpdateTenant(w http.ResponseWriter, r *http.Request, id s
 	}
 	patch := TenantPatch{DisplayName: req.DisplayName, Notes: req.Notes, SuspendedReason: req.SuspendedReason}
 	if req.Status != nil {
-		status := TenantStatus(*req.Status)
+		status := tenancy.TenantStatus(*req.Status)
 		patch.Status = &status
 	}
 	actor := pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: callerID}

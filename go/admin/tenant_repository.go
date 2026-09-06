@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+
+	"github.com/vislake/speed/go/tenancy"
 )
 
 // TenantRepository reads and writes admin_tenants.
@@ -39,7 +41,7 @@ func (r *TenantRepository) Create(ctx context.Context, t *Tenant) error {
 		return ErrTenantIDRequired
 	}
 	if t.Status == "" {
-		t.Status = TenantStatusActive
+		t.Status = tenancy.TenantStatusActive
 	}
 	if t.CreatedAt.IsZero() {
 		t.CreatedAt = time.Now().UTC()
@@ -69,7 +71,7 @@ func (r *TenantRepository) EnsureExists(ctx context.Context, tenantID string) (c
 	}
 	err = r.db.WithContext(ctx).Create(&Tenant{
 		TenantID:  tenantID,
-		Status:    TenantStatusActive,
+		Status:    tenancy.TenantStatusActive,
 		CreatedAt: time.Now().UTC(),
 	}).Error
 	if err == nil {
@@ -98,7 +100,7 @@ func (r *TenantRepository) Get(ctx context.Context, tenantID string) (*Tenant, e
 // TenantFilter{} lists every ledger row.
 type TenantFilter struct {
 	// Status, when non-empty, matches exactly.
-	Status TenantStatus
+	Status tenancy.TenantStatus
 	// Limit bounds the number of rows returned. Zero uses
 	// defaultTenantListLimit; anything above maxTenantListLimit is
 	// clamped to it.
@@ -144,7 +146,7 @@ func (r *TenantRepository) List(ctx context.Context, filter TenantFilter) ([]Ten
 // both together) with the same method.
 type TenantPatch struct {
 	DisplayName     *string
-	Status          *TenantStatus
+	Status          *tenancy.TenantStatus
 	SuspendedReason *string
 	Notes           *string
 }
@@ -154,12 +156,12 @@ type TenantPatch struct {
 //
 // SuspendedAt is derived from the Status transition, never taken as a
 // caller-supplied value (TenantPatch has no field for it): a patch whose
-// Status becomes TenantStatusSuspended while the row was not already
-// suspended stamps SuspendedAt to now; a patch whose Status becomes
-// anything else clears SuspendedAt to nil, matching its own doc comment
-// ("nil means not currently suspended"); a patch that does not change
-// Status at all, or restates the row's current Status, leaves SuspendedAt
-// untouched.
+// Status becomes tenancy.TenantStatusSuspended while the row was not
+// already suspended stamps SuspendedAt to now; a patch whose Status
+// becomes anything else clears SuspendedAt to nil, matching its own doc
+// comment ("nil means not currently suspended"); a patch that does not
+// change Status at all, or restates the row's current Status, leaves
+// SuspendedAt untouched.
 //
 // The read (this call's own Get) and the write are NOT one atomic
 // operation -- see applyGuardedPatch's own doc comment for the
@@ -204,7 +206,7 @@ func (r *TenantRepository) Update(ctx context.Context, tenantID string, patch Te
 // timing to reproduce two real overlapping Update calls.
 func (r *TenantRepository) applyGuardedPatch(ctx context.Context, tenantID string, observed Tenant, patch TenantPatch) (*Tenant, error) {
 	t := observed
-	wasSuspended := t.Status == TenantStatusSuspended
+	wasSuspended := t.Status == tenancy.TenantStatusSuspended
 
 	if patch.DisplayName != nil {
 		t.DisplayName = *patch.DisplayName
@@ -217,7 +219,7 @@ func (r *TenantRepository) applyGuardedPatch(ctx context.Context, tenantID strin
 	}
 	if patch.Status != nil {
 		t.Status = *patch.Status
-		nowSuspended := t.Status == TenantStatusSuspended
+		nowSuspended := t.Status == tenancy.TenantStatusSuspended
 		switch {
 		case nowSuspended && !wasSuspended:
 			now := time.Now().UTC()

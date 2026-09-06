@@ -150,9 +150,9 @@ func (s *TenantService) recordAudit(ctx context.Context, actor pkgcore.Actor, te
 }
 
 // Status implements tenancy.TenantStatusResolver (D4): the ledger row's
-// suspended status is what gives "suspend a tenant" real teeth, once a
-// host wires tenancy.WithTenantStatusResolver(adminModule.Tenants()) into
-// its own tenancy.Middleware call.
+// stored status is what gives "suspend a tenant" real teeth, once a host
+// wires tenancy.WithTenantStatusResolver(adminModule.Tenants()) into its
+// own tenancy.Middleware call.
 //
 // A tenant absent from the ledger entirely -- one whose event-driven lazy
 // registration (D3) has not landed yet, or one nobody has bothered to
@@ -166,6 +166,16 @@ func (s *TenantService) recordAudit(ctx context.Context, actor pkgcore.Actor, te
 // tenancy.Middleware fails the request closed with
 // ErrTenantStatusUnavailable rather than assuming the tenant is active on
 // an unreachable ledger.
+//
+// A present row's stored status is returned as-is, with no translation:
+// the ledger's Status column is typed with tenancy.TenantStatus itself
+// (P3-4's consolidation removed the admin-local duplicate vocabulary that
+// used to translate "anything not suspended" to TenantStatusActive here).
+// The seam's own gate refuses any status other than tenancy.TenantStatusActive
+// by default, so a future third ledger state a tenant must not be served
+// under is refused automatically, and the pre-consolidation silent
+// fail-open -- a new state nobody remembered to translate reading as
+// "assume active" -- cannot recur.
 func (s *TenantService) Status(ctx context.Context, tenant pkgcore.TenantID) (tenancy.TenantStatus, error) {
 	t, err := s.repo.Get(ctx, string(tenant))
 	if err != nil {
@@ -174,10 +184,7 @@ func (s *TenantService) Status(ctx context.Context, tenant pkgcore.TenantID) (te
 		}
 		return "", err
 	}
-	if t.Status == TenantStatusSuspended {
-		return tenancy.TenantStatusSuspended, nil
-	}
-	return tenancy.TenantStatusActive, nil
+	return t.Status, nil
 }
 
 // isTenantNotFound reports whether err is ErrTenantNotFound, classifying
