@@ -705,6 +705,52 @@ func TestService_RestoreRole_AnotherTenantsBinding_IsNotFound(t *testing.T) {
 	}
 }
 
+// TestService_RestoreRole_ConcurrentAssignBeforeItsWrite_IsBindingNotFound
+// pins the classification of the OTHER race RestoreRole's branch comment
+// promises: findMostRecentlyRevoked and bindings.Restore are not atomic
+// either, so a fresh AssignRole landing at the identical tuple after the
+// lookup returned but before this call's own un-delete write runs leaves the
+// write colliding with the partial unique index
+// uq_rbac_role_bindings_tenant_user_role_node -- two rows with deleted_at IS
+// NULL at one tuple -- which gorm reports as gorm.ErrDuplicatedKey. Before
+// this fix only dbkit.ErrRecordNotFound was checked against, so this race
+// surfaced as ErrStorage: a caller retrying under contention got a generic
+// storage error where the documented semantic answer (the concurrent assign
+// already achieved the caller's end state) promised ErrBindingNotFound, the
+// identical classification RevokeRole gives its own lost race. Reproduced
+// deterministically via the beforeBindingRestore test hook, firing after
+// THIS call's own findMostRecentlyRevoked already succeeded but before its
+// Restore runs: inside it, the concurrent AssignRole creates the fresh live
+// row at the very tuple this restore is about to un-delete.
+func TestService_RestoreRole_ConcurrentAssignBeforeItsWrite_IsBindingNotFound(t *testing.T) {
+	svc := newTestService(t)
+	ctx := tenantCtx("tenant-a")
+	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
+	grant(t, svc, sub, "reader", Scope{}, "notes:read")
+
+	if err := svc.RevokeRole(ctx, sub, "reader", Scope{}); err != nil {
+		t.Fatalf("RevokeRole: %v", err)
+	}
+
+	svc.beforeBindingRestore = func() {
+		svc.beforeBindingRestore = nil // run exactly once
+		if assignErr := svc.AssignRole(ctx, sub, "reader", Scope{}); assignErr != nil {
+			t.Fatalf("simulated concurrent AssignRole: %v", assignErr)
+		}
+	}
+
+	restoreErr := svc.RestoreRole(ctx, sub, "reader", Scope{})
+	if !hasCode(restoreErr, ErrBindingNotFound.Code) {
+		t.Fatalf("RestoreRole racing a concurrent assign error = %v, want %s (not a generic storage error)", restoreErr, ErrBindingNotFound.Code)
+	}
+
+	// The winner's live row is untouched -- the lost write changed nothing
+	// about the grant that actually exists at the tuple.
+	if ok, err := svc.Can(context.Background(), sub, "read", "notes"); err != nil || !ok {
+		t.Fatalf("Can after the lost race = %v, %v; want the concurrent assign's grant to hold", ok, err)
+	}
+}
+
 // mustRoleID resolves roleKey's id inside ctx's tenant, failing the test on
 // error. It exists so the RestoreRole tests above can address
 // svc.bindings.Find directly, which the module's own AssignRole/RevokeRole

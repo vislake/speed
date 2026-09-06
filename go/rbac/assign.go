@@ -300,13 +300,32 @@ func (s *Service) RestoreRole(ctx context.Context, sub Subject, role string, sco
 		return err
 	}
 
+	if s.beforeBindingRestore != nil {
+		s.beforeBindingRestore()
+	}
+
 	if err := s.bindings.Restore(writeCtx, binding.ID); err != nil {
-		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+		if hasCode(err, dbkit.ErrRecordNotFound.Code) || errors.Is(err, gorm.ErrDuplicatedKey) {
 			// Lost a race: something else -- a concurrent RestoreRole for
 			// the identical tuple, or a fresh AssignRole that landed
 			// between the lookup above and this write -- changed the row's
-			// state first. Classified the same way RevokeRole classifies
-			// its own identical race, in assign.go's RevokeRole comment.
+			// state first. The two shapes of that race surface as two
+			// different errors. A concurrent RestoreRole that restored this
+			// same row first leaves this call's conditional un-delete
+			// matching zero rows, which dbkit.Repository[T].Restore reports
+			// as ErrRecordNotFound. A fresh AssignRole that created a NEW
+			// live row at this tuple first makes this call's own un-delete
+			// collide with the partial unique index
+			// uq_rbac_role_bindings_tenant_user_role_node (two rows with
+			// deleted_at IS NULL at one tuple), which gorm translates to
+			// ErrDuplicatedKey -- the identical conflict AssignRole's own
+			// concurrent-assign race surfaces as (see that method's comment
+			// above). Both races mean the caller's desired end state -- a
+			// live grant at this tuple -- was achieved by the winner, so
+			// both are classified the same way RevokeRole classifies its
+			// own identical race: ErrBindingNotFound, never the ErrStorage
+			// a caller could not distinguish from an actual database
+			// failure.
 			return ErrBindingNotFound.
 				WithParam("role_id", def.ID).
 				WithParam("node_id", scope.NodeID)

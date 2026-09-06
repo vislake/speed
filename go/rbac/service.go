@@ -86,6 +86,14 @@ type Service struct {
 	// RevokeRole: it runs synchronously right after RevokeRole's Find
 	// succeeds and right before its Delete, for the identical reason.
 	beforeBindingDelete func()
+
+	// beforeBindingRestore is beforeBindingDelete's counterpart for
+	// RestoreRole: it runs synchronously right after RestoreRole's
+	// findMostRecentlyRevoked succeeds and right before its Restore, so a
+	// test can deterministically inject a concurrent write to the same tuple
+	// into that exact window instead of relying on goroutine scheduling to
+	// reproduce the race. Nil, and therefore a no-op, in production.
+	beforeBindingRestore func()
 }
 
 // Close releases the Service's background resources: it stops the decision
