@@ -36,10 +36,10 @@ package main
 // cancellation takes effect immediately with no cache to invalidate:
 // EntitlementsService.Check reads the tenant's subscription row fresh on
 // every call (go/billing/subscription.go's own doc comment), and the
-// seed deliberately never resubscribes a canceled demo subscription
-// (demo_entitlements.go) -- so a mid-test cancel is the honest stand-in
-// for "this tenant's subscription lapsed between requests", exactly the
-// state change a real payment-channel failure would drive.
+// boot-time seed runs exactly once per process (server.go), so a
+// mid-test cancel is never undone while this process lives -- the honest
+// stand-in for "this tenant's subscription lapsed between requests",
+// exactly the state change a real payment-channel failure would drive.
 //
 // Why tenant-acme and never a fresh tenant: seedDemoEntitlements runs
 // unconditionally at boot for every tenant in cfg.HostTenants, so every
@@ -104,9 +104,10 @@ func openBillingModule(t *testing.T, cfg serverConfig) *billing.Module {
 // cancelActiveDemoSubscription cancels tenantID's Active demo
 // subscription through a real SubscriptionService.Cancel call on a second
 // connection -- the mid-test stand-in for the tenant's subscription
-// lapsing. SubscriptionStatusCanceled is terminal and
-// seedDemoEntitlements never resubscribes it, so the refusal the tests
-// below assert stays in force for the rest of the test.
+// lapsing. SubscriptionStatusCanceled is terminal (subscription.go's own
+// status doc), and the boot-time seed never runs again within this
+// process, so the refusal the tests below assert stays in force for the
+// rest of the test.
 func cancelActiveDemoSubscription(t *testing.T, cfg serverConfig, tenantID pkgcore.TenantID) {
 	t.Helper()
 

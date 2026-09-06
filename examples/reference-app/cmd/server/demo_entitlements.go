@@ -79,17 +79,26 @@ var demoEntitlementGrants = []billing.Grant{
 // same tenant are subscribed once, mirroring seedDemoCredits' own dedup
 // (demo_credits.go).
 //
-// Unlike seedDemoCredits, this seed is idempotent in full: Plan resolution
-// is key-based (a re-boot finds the existing demo Plan and reuses it as-is,
-// never clobbering a later edit to its grants), and
-// SubscriptionService.Active makes a second boot against the SAME database
-// a no-op for a tenant that already holds an Active subscription. The only
-// state that is not re-seeded is one a re-boot should not touch anyway: a
-// demo subscription that was deliberately canceled (entitlements_flow_test.go's
-// refusal leg does exactly that mid-test) stays canceled, so a running demo
-// cannot silently resubscribe a tenant an operator just took offline --
-// re-seeding it is a fresh-database or explicit-administrator act, never a
-// boot side effect.
+// The seed's idempotence is bounded to one boot's lifetime, stated
+// honestly rather than as an absolute: Plan resolution is key-based (a
+// re-boot finds the existing demo Plan and reuses it as-is, never
+// clobbering a later edit to its grants), and within one process the
+// SubscriptionService.Active check above makes the per-tenant loop a
+// no-op for a tenant that already holds an Active subscription. A
+// subscription canceled during that lifetime (entitlements_flow_test.go's
+// refusal leg does exactly that, through a real Cancel call) is terminal
+// and is never re-seeded while the process lives. Across a re-boot,
+// though, a canceled row is invisible to this seed:
+// SubscriptionService.Active reads only status == "active" rows
+// (go/billing/subscription.go), so a later boot against the SAME
+// database finds no Active subscription and re-creates and re-activates
+// one -- accepted self-healing, the same bounded idempotence
+// seedDemoCredits shows toward a tenant that spent a seeded balance down
+// to exactly zero (demo_credits.go). "Canceled stays canceled" is
+// therefore true per boot, never per database file; what the seed
+// guarantees for a running demo is that it cannot silently resubscribe a
+// tenant an operator just took offline mid-session -- and the refusal
+// story entitlements_flow_test.go drives is exactly that in-process one.
 //
 // This must run before the first demo chat/image request can arrive -- the
 // gateway's entitlement gate refuses every call for a tenant with no Active
