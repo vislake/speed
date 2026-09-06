@@ -1019,68 +1019,104 @@ func (s *DeliveryService) alreadyDelivered(ctx context.Context, tenantID, key st
 //
 // # Never-downgrade-succeeded
 //
-// A probe that finds the key's existing record already succeeded refuses to
-// overwrite it with a different terminal status -- skipped or failed -- and
-// returns nil without writing: the succeeded row is the historical fact
-// that this key already delivered, and a later settle under the same key (a
-// refusal replay landing after the recipient unsubscribed or bounced, a
-// retry failing inside the acknowledged double-send window, any future
-// rejection path) must never erase it. The write is dropped, not rewritten
-// -- updated_at stays unmoved -- and the caller sees the same nil
+// A row that already says succeeded refuses to be overwritten with a
+// different terminal status -- skipped or failed -- and the settle that
+// would write it returns nil without writing: the succeeded row is the
+// historical fact that this key already delivered, and a later settle under
+// the same key (a refusal replay landing after the recipient unsubscribed
+// or bounced, a retry failing inside the acknowledged double-send window,
+// any future rejection path) must never erase it. The write is dropped, not
+// rewritten -- updated_at stays unmoved -- and the caller sees the same nil
 // convergence its own settle would have returned; the job's next retry then
-// converges on the alreadyDelivered probe. The guard sits at the adopt
-// point, where settle's probe already ran: every delivery path builds its
-// record through sendRecordFor with an empty ID (the adopt branch is where
-// an existing row is ever picked up), so no future rejection path reaches
-// the Save below without first passing this check.
+// converges on the alreadyDelivered probe.
+//
+// The refusal is decided by the write itself, never by a probe: every write
+// to an existing row runs through the repository's SaveGuarded, a
+// compare-and-set whose single UPDATE statement carries the guard in its
+// WHERE -- the row's status is checked and the row written in the one
+// statement the database serializes, so a succeeded row committed by a
+// concurrent settle between this settle's probe and its write still refuses
+// this write. SQLite has no SELECT FOR UPDATE, which is why the guard
+// cannot be a probe-then-write pair; a two-statement guard has exactly the
+// losing interleaving of the acknowledged double-send window (the guard
+// checked, the winner's succeeded settle committed, the loser's write
+// erasing it), and the statement-level compare-and-set is the answer
+// (contact.go's verified-contact flips use the identical shape). The
+// probe-time check above the write is only a fast path that skips a write
+// the guard would refuse all the same; it is not the authority.
+//
+// Two attempts that race for a key no record exists under yet both write
+// their own fresh id, and the loser converges on the UNIQUE (tenant_id,
+// idempotency_key) index: its insert fails, settle re-probes, adopts the
+// winner's row and writes it guarded -- the upgrade a succeeded attempt
+// makes over a failed row the guard allows, and the drop when the winner
+// already says succeeded. settle is entered with an empty ID by every
+// delivery path (records are built through sendRecordFor, so the adopt
+// branch is where an existing row's id is ever picked up); only the
+// guarded writes below can meet an already-succeeded row.
 func (s *DeliveryService) settle(ctx context.Context, tenantID string, rec *SendRecord) error {
 	if len(rec.Error) > sendRecordErrorBudget {
 		rec.Error = rec.Error[:sendRecordErrorBudget]
 	}
 
-	if rec.ID == "" {
+	adopted := rec.ID != ""
+	if !adopted {
 		existing, err := s.sendRecs.ByTenantAndKey(ctx, tenantID, rec.IdempotencyKey)
 		if err != nil {
 			return err
 		}
 		if existing != nil {
 			if existing.Status == SendRecordStatusSucceeded && rec.Status != SendRecordStatusSucceeded {
-				// Never-downgrade-succeeded: the key already delivered;
-				// keep the existing row (see the doc above).
+				// Never-downgrade-succeeded fast path: the key already
+				// delivered; SaveGuarded below would refuse this settle all
+				// the same, so skip the write (see the doc above).
 				return nil
 			}
 			rec.ID = existing.ID
+			adopted = true
 		} else {
+			// First write for the key: invent the record's id for life.
 			rec.ID = uuid.NewString()
 		}
 	}
 
-	persist := func() error {
-		if err := s.sendRecs.Save(ctx, rec); err != nil {
-			return err
+	if !adopted {
+		// A fresh record inserts with plain Save -- it cannot erase a
+		// succeeded row that does not exist yet. When the insert races
+		// another writer that committed the same (tenant, key) first, it
+		// fails on the UNIQUE index and falls through to adopt the winner's
+		// row below.
+		err := s.sendRecs.Save(ctx, rec)
+		if err == nil {
+			s.recordDeliveryMetrics(ctx, rec)
+			return nil
 		}
-		s.recordDeliveryMetrics(ctx, rec)
-		return nil
-	}
-
-	if err := persist(); err != nil {
-		// The Save raced another writer that committed the same
-		// (tenant, key): adopt the winner's id and save once more -- unless
-		// the winner already records a succeeded send, which this attempt
-		// must not downgrade (never-downgrade-succeeded). A second failure
-		// is returned for the job to retry.
 		existing, probeErr := s.sendRecs.ByTenantAndKey(ctx, tenantID, rec.IdempotencyKey)
 		if probeErr != nil {
 			return errors.Join(err, probeErr)
 		}
 		if existing == nil {
+			// The insert failed for its own reason, not a key race -- no
+			// winner row exists to adopt. The outcome must stay visible:
+			// return the failure for the job to retry.
 			return err
 		}
-		if existing.Status == SendRecordStatusSucceeded && rec.Status != SendRecordStatusSucceeded {
-			return nil
-		}
 		rec.ID = existing.ID
-		return persist()
+	}
+
+	// An adopted row is written by one guarded statement: SaveGuarded
+	// checks the never-downgrade-succeeded guard in the same UPDATE that
+	// writes, so the refusal reflects the row's state at write time -- a
+	// succeeded row a concurrent settle committed after this settle's probe
+	// still refuses this write. A refused write drops this attempt's
+	// outcome (nil, no metrics): the succeeded row is the durable fact that
+	// the key delivered.
+	landed, err := s.sendRecs.SaveGuarded(ctx, rec)
+	if err != nil {
+		return err
+	}
+	if landed {
+		s.recordDeliveryMetrics(ctx, rec)
 	}
 	return nil
 }
@@ -1092,7 +1128,7 @@ func (s *DeliveryService) settle(ctx context.Context, tenantID string, rec *Send
 // go/jobs/standalone_queue.go's registerJobMetrics doc comment gives (all
 // three label values are bounded, declared vocabularies: a type key from the
 // host's type registry, one of the three channel constants, one of the
-// three SendRecordStatus* values). Called from settle after each Save it
+// three SendRecordStatus* values). Called from settle after each write it
 // persists lands -- the single write funnel every delivery path (success,
 // failure and skip alike) runs through -- never for a write the
 // never-downgrade-succeeded guard dropped, so the recorded outcome always

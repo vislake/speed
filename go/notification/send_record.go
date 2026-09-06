@@ -38,8 +38,12 @@ const (
 // status reflects the last attempt -- with one exception: settle's
 // never-downgrade-succeeded guard (delivery.go's settle doc) refuses to
 // overwrite a row that already says succeeded with any later skipped or
-// failed outcome under the same key, so a succeeded row is the durable fact
-// that its key delivered, whatever later attempts settled. Replay
+// failed outcome under the same key. The refusal is decided by the write
+// itself: an existing row is written through SaveGuarded's compare-and-set,
+// one statement that checks the guard and writes together, never by a probe
+// that could have run before a concurrent succeed's settle committed. A
+// succeeded row is therefore the durable fact that its key delivered,
+// whatever later attempts settled. Replay
 // convergence is best-effort at-most-once -- the delivery job checks this
 // record's succeeded state before any attempt, and the UNIQUE
 // (tenant_id, idempotency_key) index keeps the record set under one key
@@ -209,9 +213,54 @@ func (r *SendRecordRepository) Create(ctx context.Context, rec *SendRecord) erro
 // column of the row whose id matches, and inserts when none does. The
 // delivery job's settle uses it so a retry's attempt overwrites the
 // previous attempt's row in place -- the record keeps one id per (tenant,
-// idempotency key) for the life of the delivery.
+// idempotency key) for the life of the delivery. Save is unconditional:
+// settle's never-downgrade-succeeded writes go through SaveGuarded instead
+// (see there), so Save here is the raw upsert -- an unconditional update
+// that would overwrite a succeeded row, which is exactly why the guarded
+// path exists.
 func (r *SendRecordRepository) Save(ctx context.Context, rec *SendRecord) error {
 	return r.db.WithContext(ctx).Save(rec).Error
+}
+
+// SaveGuarded writes rec onto the row whose id rec carries -- the same
+// in-place, every-column retry overwrite Save performs -- under settle's
+// never-downgrade-succeeded guard (delivery.go's settle doc): the UPDATE
+// that writes also carries the guard in its WHERE, refusing a row that
+// already says succeeded when this write's status says anything else. The
+// guard and the write are one statement the database serializes, so a
+// succeeded row survives even a settle whose earlier probe ran before the
+// succeeded write committed -- the acknowledged double-send window's loser
+// writes exactly that way (SQLite has no SELECT FOR UPDATE, which is why
+// the refusal cannot be a probe-then-write pair; the compare-and-set shape
+// mirrors contact.go's verified-contact flips). It reports what happened:
+//
+//   - (true, nil): the write landed. The guard passed, or the row already
+//     said succeeded and this write says succeeded too -- the guard allows
+//     a re-settle of the same winner -- in which case the row is rewritten
+//     in place exactly as Save would.
+//   - (false, nil): the guard refused the write (0 rows affected): the row
+//     under rec.ID says succeeded and rec.Status is skipped or failed. The
+//     caller drops its write -- nothing is rewritten, updated_at stays
+//     unmoved -- and treats the outcome as already recorded.
+//   - (false, err): the database call itself failed; nothing was written.
+//
+// Unlike Save, SaveGuarded never inserts: a rec.ID no row carries is a
+// refusal, not a create. settle reaches it only with an id its own probe
+// read off an existing row (or one a caller pre-set), and send_records has
+// no delete path, so the two are the same already-delivered answer there.
+// A guarded write can race another guarded write on the same row; SQLite
+// serializes writers and each statement re-evaluates the guard on the
+// row's committed state, so the last write to land is whichever the guard
+// allowed -- never one that erases a succeeded row.
+func (r *SendRecordRepository) SaveGuarded(ctx context.Context, rec *SendRecord) (landed bool, err error) {
+	res := r.db.WithContext(ctx).
+		Where("id = ? AND NOT (status = ? AND ? <> ?)", rec.ID, SendRecordStatusSucceeded, rec.Status, SendRecordStatusSucceeded).
+		Select("*").
+		Updates(rec)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
 }
 
 // SendRecordFilter narrows a ListByFilter read to one tenant's own send

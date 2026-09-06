@@ -1197,6 +1197,73 @@ func TestDelivery_ErrorSettleAfterASettledKeyDoesNotDowngradeTheSucceededRecord(
 	}
 }
 
+// TestDelivery_StaleAdoptedSettleDoesNotDowngradeTheSucceededRecord pins the
+// never-downgrade-succeeded invariant across the interleaving the two
+// sequential-replay tests above cannot produce (delivery.go's settle doc):
+// the acknowledged double-send window, where a later failed attempt at an
+// already-succeeded key settles after its adopt probe ran while the row
+// still said failed -- before the winner's succeeded settle committed. A
+// guard checked only at adopt time lets that settle through, and the plain
+// in-place Save it lands on the adopted id then erases the succeeded row
+// the winner committed in between: the real delivery vanishes from the log,
+// and the failed job's own retry probes a failed row and sends a third
+// time. The guard must therefore be decided by the write itself -- one
+// compare-and-set statement that checks and writes together -- not by a
+// probe that ran earlier.
+//
+// The test reconstructs that window deterministically: the failed attempt's
+// record carries the succeeded row's id pre-set -- exactly the state a
+// settle whose adopt probe ran before the winner's commit reaches when it
+// finally writes -- and failAndRetry settles it after the succeeded row is
+// on disk. A probe-time guard never runs here (the id is already adopted),
+// so only a guarded write can refuse the downgrade.
+func TestDelivery_StaleAdoptedSettleDoesNotDowngradeTheSucceededRecord(t *testing.T) {
+	env := newDeliveryEnv(t)
+	env.resolver.byUser[deliveryUser] = deliveryAddresses
+	ctx := tenantCtx(deliveryTenant)
+
+	d := deliveryDispatch()
+	if err := env.dispatchAndAttempt(t, d); err != nil {
+		t.Fatalf("first delivery attempt: %v", err)
+	}
+	before := env.sendRecordByChannel(t, ctx, d, ChannelEmail)
+	if before == nil || before.Status != SendRecordStatusSucceeded {
+		t.Fatalf("record after the first delivery = %+v, want succeeded", before)
+	}
+
+	// The double-send window's loser: a later attempt at the same key whose
+	// settle adopted the succeeded row's id while it still said failed, and
+	// settles its own failure only now, after the winner's succeeded settle
+	// committed. failAndRetry is the transient-failure leg's own settle
+	// call; the pre-set ID is the stale adoption.
+	rec := env.svc.sendRecordFor(deliveryTenant, d, ChannelEmail)
+	key, err := deriveDeliveryKey(deliveryTenant, d, ChannelEmail)
+	if err != nil {
+		t.Fatalf("deriveDeliveryKey: %v", err)
+	}
+	rec.IdempotencyKey = key
+	rec.ID = before.ID
+	cause := errors.New("smtp 550 relay denied")
+
+	got := env.svc.failAndRetry(ctx, deliveryTenant, rec, cause)
+	if !errors.Is(got, cause) {
+		t.Fatalf("failAndRetry returned %v, want the cause itself -- the guard must not change the retry answer", got)
+	}
+
+	after := env.sendRecordByChannel(t, ctx, d, ChannelEmail)
+	if after == nil {
+		t.Fatal("the failed settle removed the record, want the succeeded row kept")
+	}
+	if after.Status != SendRecordStatusSucceeded {
+		t.Errorf("a stale-adopted failed settle after the winner committed downgraded the record to %s (%q): the guard must be decided by the write itself, never by a probe that ran before the winner's commit", after.Status, after.Error)
+	}
+	if after.ID != before.ID || after.Error != before.Error ||
+		after.DurationMs != before.DurationMs || !after.CreatedAt.Equal(before.CreatedAt) ||
+		!after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("the refused settle rewrote the succeeded row: before = %+v, after = %+v", before, after)
+	}
+}
+
 // TestDelivery_MissingTemplateCopyStopsTheAttempt pins the render failure
 // as a terminal, recorded stop: a delivery whose type has no copy for the
 // resolved channel (here clinic.reminder_only, whose fixture bundle carries
