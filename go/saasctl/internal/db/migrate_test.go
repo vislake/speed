@@ -173,13 +173,13 @@ func TestMigrate_PKIRequired_MigratesPKITablesToo(t *testing.T) {
 	if stderr != "" {
 		t.Errorf("stderr = %q, want empty", stderr)
 	}
-	want := fmt.Sprintf("Migrated %s: applied 26 migration files (authn 10, config 1, org 5, pki 8, rbac 2)\n", dbPath)
+	want := fmt.Sprintf("Migrated %s: applied 27 migration files (authn 10, config 1, org 5, pki 9, rbac 2)\n", dbPath)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
 
 	gdb := openDB(t, dbPath)
-	wantLedger := map[string]int{"authn": 10, "config": 1, "org": 5, "pki": 8, "rbac": 2}
+	wantLedger := map[string]int{"authn": 10, "config": 1, "org": 5, "pki": 9, "rbac": 2}
 	if got := ledgerCounts(t, gdb); !reflect.DeepEqual(got, wantLedger) {
 		t.Errorf("ledger = %v, want %v", got, wantLedger)
 	}
