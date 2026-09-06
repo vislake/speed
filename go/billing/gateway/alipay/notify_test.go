@@ -149,6 +149,151 @@ func TestGateway_VerifyWebhook_MissingPassback(t *testing.T) {
 	}
 }
 
+// passbackFixture returns a marshalled passbackPayload every notify test
+// below can embed.
+func passbackFixture(t *testing.T) string {
+	t.Helper()
+	passback, err := json.Marshal(passbackPayload{TenantID: "tenant-a", SubscriptionID: "sub-1", InvoiceID: "inv-1"})
+	if err != nil {
+		t.Fatalf("marshal passback: %v", err)
+	}
+	return string(passback)
+}
+
+// TestGateway_VerifyWebhook_PartialRefundNotify_IsRefusedNotMistakenForThePayment
+// is P1-4's regression for the partial-refund leg. Alipay keeps a
+// partially-refunded trade at TRADE_SUCCESS and re-sends the TRADE_SUCCESS
+// async notification for the refund (its order status only moves on a FULL
+// refund), carrying the refund's own parameters -- refund_fee and
+// gmt_refund -- alongside the trade's. On pre-fix code normalizeNotify
+// mapped that delivery to the identical
+// NormalizedEventChargeSucceeded/EventID "ORD1:TRADE_SUCCESS" the original
+// payment produced, so the payment_events insert-first-dedup ledger
+// swallowed the refund signal as a duplicate of the payment -- the platform
+// would never learn a refund happened. This round's posture mirrors
+// go/billing/gateway/wechat's own REFUND.* handling exactly: the delivery
+// is refused loudly as ErrWebhookPayloadUnrecognized rather than guessed
+// at, because the trade-notify vocabulary carries no per-refund-occurrence
+// identifier to build a dedup-safe NormalizedEventRefunded EventID from
+// (see go/billing/gateway/AGENTS.md's "refund notifications are not
+// decoded" note).
+func TestGateway_VerifyWebhook_PartialRefundNotify_IsRefusedNotMistakenForThePayment(t *testing.T) {
+	_, alipayPubPEM, alipayPriv := generateTestKeyPair(t)
+	cfg := testGatewayConfig(t, alipayPubPEM)
+	gw, err := newGatewayWithClient(&fakeDoer{}, cfg)
+	if err != nil {
+		t.Fatalf("newGatewayWithClient: %v", err)
+	}
+
+	body := signedNotifyBody(t, alipayPriv, map[string]string{
+		"notify_id":       "notify_refund_1",
+		"out_trade_no":    "ORD1",
+		"trade_no":        "2026090422001",
+		"trade_status":    "TRADE_SUCCESS",
+		"total_amount":    "29.00",
+		"refund_fee":      "10.00",
+		"gmt_refund":      "2026-09-05 10:00:00",
+		"passback_params": passbackFixture(t),
+	})
+
+	_, err = gw.VerifyWebhook(context.Background(), nil, body)
+	if !hasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
+		t.Errorf("err = %v, want billing.ErrWebhookPayloadUnrecognized (a partial-refund notification must never normalize into an event byte-identical to the payment, which the dedup ledger would swallow)", err)
+	}
+}
+
+// TestGateway_VerifyWebhook_FullRefundTradeClosed_MapsToRefunded is P1-4's
+// regression for the full-refund leg: Alipay's own status definitions say
+// TRADE_CLOSED covers two distinct fates -- an unpaid trade closed by
+// timeout, and a PAID trade closed by a full refund (only a full refund
+// moves the order off TRADE_SUCCESS). The two are told apart by the
+// notification's own parameters: the full-refund delivery carries
+// refund_fee (the refunded amount) and gmt_refund (the refund time); the
+// timeout delivery carries neither. A TRADE_CLOSED notification bearing
+// those refund markers therefore reports a refund of the earlier succeeded
+// charge and must map to NormalizedEventRefunded/ChannelStatusRefunded --
+// never to the ChannelStatusFailed a timed-out unpaid order gets. On
+// pre-fix code every TRADE_CLOSED mapped to charge_failed, so a fully
+// refunded charge was recorded as a failed payment and the refund signal
+// was lost.
+func TestGateway_VerifyWebhook_FullRefundTradeClosed_MapsToRefunded(t *testing.T) {
+	_, alipayPubPEM, alipayPriv := generateTestKeyPair(t)
+	cfg := testGatewayConfig(t, alipayPubPEM)
+	gw, err := newGatewayWithClient(&fakeDoer{}, cfg)
+	if err != nil {
+		t.Fatalf("newGatewayWithClient: %v", err)
+	}
+
+	body := signedNotifyBody(t, alipayPriv, map[string]string{
+		"notify_id":       "notify_full_refund_1",
+		"out_trade_no":    "ORD1",
+		"trade_no":        "2026090422001",
+		"trade_status":    "TRADE_CLOSED",
+		"total_amount":    "29.00",
+		"refund_fee":      "29.00",
+		"gmt_payment":     "2026-09-04 10:00:00",
+		"gmt_refund":      "2026-09-05 10:30:00",
+		"passback_params": passbackFixture(t),
+	})
+
+	event, err := gw.VerifyWebhook(context.Background(), nil, body)
+	if err != nil {
+		t.Fatalf("VerifyWebhook: %v", err)
+	}
+	if event.Type != billing.NormalizedEventRefunded {
+		t.Errorf("Type = %q, want refunded (a TRADE_CLOSED notification carrying refund_fee/gmt_refund is a full refund of a paid trade)", event.Type)
+	}
+	if event.Status != billing.ChannelStatusRefunded {
+		t.Errorf("Status = %q, want refunded", event.Status)
+	}
+	if event.EventID != "ORD1:TRADE_CLOSED" {
+		t.Errorf("EventID = %q, want ORD1:TRADE_CLOSED (stable across redeliveries, distinct from the payment's ORD1:TRADE_SUCCESS)", event.EventID)
+	}
+	if event.Amount.Cents != 2900 || event.Amount.Currency != "CNY" {
+		t.Errorf("Amount = %+v, want the trade's CNY 29.00", event.Amount)
+	}
+}
+
+// TestGateway_VerifyWebhook_TradeClosedUnpaidTimeout_StillChargeFailed pins
+// the other half of the TRADE_CLOSED distinction: a trade closed by
+// timeout without ever being paid carries no refund markers (no refund_fee,
+// no gmt_refund) and keeps mapping to NormalizedEventChargeFailed/
+// ChannelStatusFailed, exactly as it always has -- the two TRADE_CLOSED
+// fates must produce two different events, never be conflated in either
+// direction.
+func TestGateway_VerifyWebhook_TradeClosedUnpaidTimeout_StillChargeFailed(t *testing.T) {
+	_, alipayPubPEM, alipayPriv := generateTestKeyPair(t)
+	cfg := testGatewayConfig(t, alipayPubPEM)
+	gw, err := newGatewayWithClient(&fakeDoer{}, cfg)
+	if err != nil {
+		t.Fatalf("newGatewayWithClient: %v", err)
+	}
+
+	body := signedNotifyBody(t, alipayPriv, map[string]string{
+		"notify_id":       "notify_timeout_1",
+		"out_trade_no":    "ORD1",
+		"trade_no":        "2026090422001",
+		"trade_status":    "TRADE_CLOSED",
+		"total_amount":    "29.00",
+		"gmt_close":       "2026-09-04 11:00:00",
+		"passback_params": passbackFixture(t),
+	})
+
+	event, err := gw.VerifyWebhook(context.Background(), nil, body)
+	if err != nil {
+		t.Fatalf("VerifyWebhook: %v", err)
+	}
+	if event.Type != billing.NormalizedEventChargeFailed {
+		t.Errorf("Type = %q, want charge_failed (a TRADE_CLOSED without refund markers is an unpaid trade closed by timeout)", event.Type)
+	}
+	if event.Status != billing.ChannelStatusFailed {
+		t.Errorf("Status = %q, want failed", event.Status)
+	}
+	if event.EventID != "ORD1:TRADE_CLOSED" {
+		t.Errorf("EventID = %q, want ORD1:TRADE_CLOSED", event.EventID)
+	}
+}
+
 func TestGateway_VerifyWebhook_UnrecognizedTradeStatus(t *testing.T) {
 	_, alipayPubPEM, alipayPriv := generateTestKeyPair(t)
 	cfg := testGatewayConfig(t, alipayPubPEM)

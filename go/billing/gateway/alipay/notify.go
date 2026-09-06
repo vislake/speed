@@ -30,6 +30,35 @@ func (g *Gateway) VerifyWebhook(_ context.Context, _ map[string][]string, body [
 	return normalizeNotify(params, body)
 }
 
+// notifyCarriesRefund reports whether a verified Alipay notify parameter
+// set describes a REFUND of an already-paid trade, told apart from the
+// trade's own payment by the notification's own parameters: an async
+// notification carrying refund information includes refund_fee (the
+// refunded amount, a decimal yuan string) and gmt_refund (the refund
+// time). Alipay's status definitions
+// (https://opendocs.alipay.com/open/194/103296, the same source
+// tradeStatusToChannelStatus's doc comment cites) record that a paid
+// trade only leaves TRADE_SUCCESS on a FULL refund -- which lands as a
+// TRADE_CLOSED notification carrying those refund fields, where an unpaid
+// trade closed by timeout lands as a TRADE_CLOSED notification carrying
+// none -- and that a PARTIAL refund keeps the trade at TRADE_SUCCESS and
+// re-sends the TRADE_SUCCESS notification, refund fields included, for
+// every refund. refund_fee == "0.00" and an absent gmt_refund therefore
+// mean no refund happened; a refund_fee that does not parse as a positive
+// amount is treated as no refund rather than guessed at (the refunds this
+// predicate cares about are always positive sums).
+func notifyCarriesRefund(params map[string]string) bool {
+	if params["gmt_refund"] != "" {
+		return true
+	}
+	fee := params["refund_fee"]
+	if fee == "" {
+		return false
+	}
+	cents, err := parseAmount(fee)
+	return err == nil && cents > 0
+}
+
 // normalizeNotify maps a verified Alipay notify parameter set onto a
 // billing.NormalizedEvent.
 func normalizeNotify(params map[string]string, rawBody []byte) (billing.NormalizedEvent, error) {
@@ -53,15 +82,55 @@ func normalizeNotify(params map[string]string, rawBody []byte) (billing.Normaliz
 		return billing.NormalizedEvent{}, billing.ErrWebhookPayloadUnrecognized.WithParam("reason", "passback_params missing tenant/subscription/invoice identifiers")
 	}
 
+	refund := notifyCarriesRefund(params)
+
 	var eventType billing.NormalizedEventType
 	var status billing.ChannelStatus
 	switch tradeStatus {
 	case "TRADE_SUCCESS", "TRADE_FINISHED":
+		if refund {
+			// A PARTIAL refund: the trade stays at TRADE_SUCCESS, and Alipay
+			// re-sends the TRADE_SUCCESS notification for the refund,
+			// refund_fee/gmt_refund included (see notifyCarriesRefund's own
+			// doc comment). Mapping it to the same
+			// NormalizedEventChargeSucceeded/EventID the original payment
+			// produced -- what this function did before this round -- would
+			// hand the payment_events insert-first-dedup ledger a byte-
+			// identical duplicate of the payment, silently swallowing the
+			// refund signal. This package's own posture therefore mirrors
+			// go/billing/gateway/wechat's REFUND.* handling exactly: refused
+			// loudly as ErrWebhookPayloadUnrecognized, never guessed at --
+			// the trade-notify vocabulary carries no per-refund-occurrence
+			// identifier to build a dedup-safe NormalizedEventRefunded
+			// EventID from (go/billing/gateway/AGENTS.md's "refund
+			// notifications are not decoded" Known limitation, which now
+			// covers this leg too).
+			return billing.NormalizedEvent{}, billing.ErrWebhookPayloadUnrecognized.
+				WithParam("reason", "TRADE_SUCCESS notification carries refund fields (refund_fee/gmt_refund): a partial-refund notification, which this round does not decode").
+				WithParam("trade_status", tradeStatus)
+		}
 		eventType = billing.NormalizedEventChargeSucceeded
 		status = billing.ChannelStatusSucceeded
 	case "TRADE_CLOSED":
-		eventType = billing.NormalizedEventChargeFailed
-		status = billing.ChannelStatusFailed
+		if refund {
+			// A FULL refund of an already-paid trade: per Alipay's own
+			// status definitions, TRADE_CLOSED covers both an unpaid trade
+			// closed by timeout and a paid trade closed by a full refund --
+			// the refund fields on this delivery are what tell the two
+			// apart (see notifyCarriesRefund's own doc comment). This is a
+			// genuine refund of the earlier succeeded charge:
+			// NormalizedEventRefunded/ChannelStatusRefunded, never the
+			// ChannelStatusFailed an unpaid timeout gets. The EventID stays
+			// the stable (out_trade_no, TRADE_CLOSED) pair -- distinct from
+			// the payment's own (out_trade_no, TRADE_SUCCESS), so the dedup
+			// ledger records both, and stable across Alipay's redeliveries
+			// of this same status transition.
+			eventType = billing.NormalizedEventRefunded
+			status = billing.ChannelStatusRefunded
+		} else {
+			eventType = billing.NormalizedEventChargeFailed
+			status = billing.ChannelStatusFailed
+		}
 	default:
 		// WAIT_BUYER_PAY and any other value this package does not expect
 		// to ever be notified about (Alipay's own docs say only these four
@@ -82,7 +151,15 @@ func normalizeNotify(params map[string]string, rawBody []byte) (billing.Normaliz
 	}
 
 	occurredAt := time.Now().UTC()
-	if gmtStr := params["gmt_payment"]; gmtStr != "" {
+	// The event's own timestamp: gmt_refund for a refund notification (the
+	// refund happened at gmt_refund, not at the original gmt_payment), the
+	// payment time otherwise. Best-effort exactly as before -- an
+	// unparseable value falls back to now().
+	gmtKey := "gmt_payment"
+	if eventType == billing.NormalizedEventRefunded {
+		gmtKey = "gmt_refund"
+	}
+	if gmtStr := params[gmtKey]; gmtStr != "" {
 		if t, err := time.ParseInLocation(alipayTimeFormat, gmtStr, alipayLocation()); err == nil {
 			occurredAt = t.UTC()
 		}
@@ -98,7 +175,11 @@ func normalizeNotify(params map[string]string, rawBody []byte) (billing.Normaliz
 		// status transition verbatim until acknowledged, so this
 		// synthesized id collapses every redelivery of one event into the
 		// one dedup row docs/internal/06-billing-and-metering.md's rule
-		// requires.
+		// requires. A full-refund TRADE_CLOSED and an unpaid-timeout
+		// TRADE_CLOSED are DIFFERENT events about the same trade and
+		// therefore share this id space only with redeliveries of
+		// themselves (see the TRADE_CLOSED branch above for why the two
+		// fates still normalize differently).
 		EventID:          fmt.Sprintf("%s:%s", outTradeNo, tradeStatus),
 		Channel:          "alipay",
 		ChannelReference: billing.ChannelReference(outTradeNo),
