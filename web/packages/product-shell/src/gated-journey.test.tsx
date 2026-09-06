@@ -303,7 +303,7 @@ function GatedTenantApp({
 }
 
 /** Fresh instance with the tenancy-ui namespace added on top of the
- * shell trio, the four namespaces a host composing the switcher
+ * shell quartet, the five namespaces a host composing the switcher
  * registers. */
 function createGatedI18n() {
   const i18n = createProductShellI18n()

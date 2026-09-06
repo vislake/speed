@@ -14,13 +14,21 @@ the one tier whose package code is allowed to consume `auth-core` hooks —
 there: the shell reads the snapshot and renders a branch; it never calls a
 session operation, never fetches, never navigates.
 
-The public surface is exactly two names: `ProductShell` and
-`ProductShellProps`, both from `src/index.ts`. There is no namespace, no
-`resources.ts`, no locale directory: the shell renders zero text of its
-own. Every built-in string on screen in the authenticated branch comes from
-the layout-kit namespace (AppShell's frame), every one in the default ended
-view from the auth-ui namespace (`SessionEndedScreen`) — both registered by
-the host, who registers them for the underlying packages anyway.
+The public surface is four names: `ProductShell` and `ProductShellProps`
+plus the `PRODUCT_SHELL_NAMESPACE` / `productShellResources` pair every
+sibling ships for its namespace. The shell renders one string of its own —
+the polite `announcements.sessionEnded` announcement of the session-ended
+flip, read from the product-shell namespace through `@speed/i18n` — and no
+other copy: every built-in string on screen in the authenticated branch
+comes from the layout-kit namespace (AppShell's frame), every one in the
+default ended view from the auth-ui namespace (`SessionEndedScreen`), all
+registered by the host, who registers them for the underlying packages
+anyway. The announcement renders only when the product-shell namespace is
+registered; an unregistered host — the composed consumer whose
+registration lands in its own round — keeps the focus half of the a11y
+contract and never sees raw key text (a missing namespace is a host
+configuration state, not a missing key, so the missing-key discipline must
+not fire for it).
 
 ## The machine (the one thing this package decides)
 
@@ -31,7 +39,12 @@ the host, who registers them for the underlying packages anyway.
    (`reachedApp` local state) → the host's `sessionEnded` node, or the
    default `SessionEndedScreen` (from `@speed/auth-ui`) when no slot is
    given. Only the *default* screen gets the internal wiring that returns
-   the viewer to the sign-in view on its action.
+   the viewer to the sign-in view on its action — and only when a sign-in
+   view exists to return to: with no `signIn` slot the reset would land
+   on the deliberately-blank fresh-visitor branch, a whitescreen dead end
+   (reviewer P1-1), so the action keeps the viewer on the ended screen
+   and the host's own composition (its blank-branch pairing, or its own
+   `sessionEnded` node) owns the way back into the app.
 3. anonymous and the app was never reached → the host's `signIn` node,
    or nothing when no slot is given (the shell deliberately ships no
    default sign-in surface: the channel mix is a host product decision).
@@ -41,6 +54,23 @@ app must never fall back to a fresh-visitor sign-in. `reachedApp` is
 component-local state — it resets on unmount and is not a persistence
 layer; the *session's* authenticated state lives in `@speed/auth-core` and
 is the only authority the machine reads.
+
+The machine is a whole-page switch, so it owns the two a11y duties a page
+swap carries (reviewer P2-3), in the sibling family's shape: every branch
+flip moves focus into the branch's own container — the branches render
+inside one focusable, non-tab-stop wrapper each, never into a slot the
+host may not be able to reach — and every flip into the session-ended
+view announces itself through the sr-only `role="status"` region the
+ended branch carries (the shell cannot tell a server-side death from an
+explicit sign-out — the same snapshot flip — and both land the viewer on
+a screen the shell itself placed there; the flips the user's own action
+aimed at, whose destinations announce themselves, move focus only). The
+region's text is set by the flip effect only after the branch committed
+with an empty region, so the announcement lands as an insertion into a
+live region already in the tree (the FileUploader pattern, not a region
+that mounts pre-filled). Focus never moves on the first render — a page
+load's focus belongs to the host — and never on a re-render that leaves
+the branch unchanged.
 
 ## Non-negotiable rules
 
@@ -60,17 +90,21 @@ is the only authority the machine reads.
   the hooks fail closed to the anonymous snapshot, so an unattached shell
   can only ever render the sign-in branch (or nothing): that fail-closed
   behaviour is contract and is pinned by the suite.
-- **Dependencies stop at `auth-core`, `auth-ui`, `layout-kit`.**
-  Everything the shell renders arrives through those three: `AppShell`
+- **Dependencies stop at `auth-core`, `auth-ui`, `layout-kit` and
+  `i18n`.**
+  Everything the shell renders arrives through those four: `AppShell`
   and its frame strings through layout-kit, the ended screen through
-  auth-ui, the snapshot through auth-core. Never add `ui-kit`, `i18n`,
-  `api-client` or `api-sdk` as a dependency of this package — layout-kit
-  and auth-ui already carry them, and an extra edge here is how a shell
-  quietly starts depending on machinery it must stay agnostic to (the
-  platform-facing sibling shell will reuse this same package later).
-  Test-only needs go in `devDependencies` — the suites' `@speed/tenancy-ui`
-  is exactly that: a composition partner of journey code, never of the
-  package's own imports.
+  auth-ui, the snapshot through auth-core, and the one sentence the
+  shell speaks itself — the session-ended announcement — through `i18n`,
+  the single exception to the dependency floor, earned by the a11y
+  finding that gave the shell its own text: no other package edge is
+  permitted here, and `ui-kit`, `api-client` and `api-sdk` stay out —
+  an extra edge beyond i18n is how a shell quietly starts depending on
+  machinery it must stay agnostic to (the platform-facing sibling shell
+  will reuse this same package later). Test-only needs go in
+  `devDependencies` — the suites' `@speed/tenancy-ui` is exactly that: a
+  composition partner of journey code, never of the package's own
+  imports.
 - **All chrome props pass through to `AppShell` untouched.** The shell
   must not reinterpret, reorder or path-match `navItems` — their
   `selected` state is host-computed, per layout-kit's contract, and a
@@ -79,13 +113,17 @@ is the only authority the machine reads.
   are picked off the props and forwarded verbatim; adding a prop means
   adding it to the pass-through `Pick<AppShellProps, ...>`, never to a
   parallel interpretation.
-- **Zero text, zero resources, zero registration.** The shell renders no
-  strings: built-ins belong to layout-kit's and auth-ui's namespaces,
-  everything else is host content (`navItems` labels, `header`,
-  `children`) and therefore the host's i18n responsibility. The
-  `speed/no-literal-text` rule (workspace config) enforces this over
+- **One sentence of the shell's own, nothing else.** The only strings
+  this package renders are the `announcements.sessionEnded` key pair in
+  its own bilingual bundle (`src/locales/`, identical leaf key sets);
+  every other built-in belongs to layout-kit's and auth-ui's
+  namespaces, everything else is host content (`navItems` labels,
+  `header`, `children`) and therefore the host's i18n responsibility.
+  The `speed/no-literal-text` rule (workspace config) enforces this over
   `src/`; a bare text node or an inline attribute string in package code
-  is a review error. Do not add a `locales/` directory to this package.
+  is a review error. Do not grow the `locales/` directory past the
+  announcement keys: a second sentence of shell-owned copy is a product
+  decision that belongs in a host slot, not in the machine.
 - **No network and no session calls in package code.** The shell adds no
   HTTP surface of its own; the requests the composed views make are
   session operations travelling through the host's bound api-client. If
@@ -97,33 +135,51 @@ is the only authority the machine reads.
   only intentionally. A public change ships, in one commit: the code,
   its tests, this AGENTS.md, the README, and the compiled usage example
   when the documented composition changes.
-- **Framework peers stay peers.** `react`, `react-dom`, `@mui/material`
-  and `@emotion/*` are peer (required) dependencies; `auth-core`,
-  `auth-ui` and `layout-kit` are regular dependencies.
+- **Framework peers stay peers.** `react`, `react-dom`, `@mui/material`,
+  `@emotion/*` and `react-hook-form` are peer (required) dependencies —
+  react-hook-form because the paired auth-ui sign-in family renders with
+  it, re-declared here the way every package whose surface pulls a
+  sibling's peer in re-declares it (reviewer P2-2: this package was the
+  one missing link in the chain); `auth-core`, `auth-ui`, `i18n` and
+  `layout-kit` are regular dependencies. The manifest contract is pinned
+  by `src/package.json.test.ts`.
 
 ## Testing
 
 Unit tests are vitest + jsdom, one file per source file under `src/`,
 shared helpers only in `test-utils/`. `renderWithProviders` mounts the
 unit under the real host tree — `I18nextProvider` around `ui-kit`'s
-`AppThemeProvider`, fresh i18n instance per call with exactly the three
-namespaces a real host registers (`ui-kit`, `layout-kit`, `auth-ui`);
-the journey suites build their instance from the same helper and
-register tenancy-ui's namespace on it (the fourth, exactly as a host
-composing the switcher must) — and `test-utils/setup.ts` installs the
-desktop `matchMedia` stub the frame's responsive drawer needs. Bilingual
-assertions import the shipped sibling bundles relatively
-(`../../auth-ui/src/locales/zh-CN.json`, the layout-kit and tenancy-ui
-equivalents) — never an inline translation. Three suites:
+`AppThemeProvider`, fresh i18n instance per call with exactly the four
+namespaces a real host registers (`ui-kit`, `layout-kit`, `auth-ui` and
+`product-shell`'s own); the journey suites build their instance from the
+same helper and register tenancy-ui's namespace on it (the fifth,
+exactly as a host composing the switcher must) — and
+`test-utils/setup.ts` installs the desktop `matchMedia` stub the frame's
+responsive drawer needs. Bilingual assertions import the shipped sibling
+bundles relatively (`../../auth-ui/src/locales/zh-CN.json`, the
+layout-kit and tenancy-ui equivalents, and this package's own
+`../locales/zh-CN.json`) — never an inline translation. Four suites:
 
 - `src/components/ProductShell.test.tsx` — the view machine. It drives
   real sessions over the real-client rig (a genuine `@speed/api-client`
   over a scripted fetch answering genuine `Response` objects, bound
   through the api-sdk runtime seam exactly as a host binds one) and
   asserts the three branches, both slot overrides, the fail-closed
-  unattached shape, and axe (the `region` rule left enabled: the
-  authenticated branch is a full page, layout-kit's page-chrome
-  precedent; `color-contrast` disabled, jsdom computes no layout).
+  unattached shape, the dead-end regressions (a host without a `signIn`
+  view keeps the ended screen when its action is activated — never a
+  whitescreen — and the frame still returns on the next sign-in), the
+  flip a11y contract (every branch flip moves focus into the new
+  branch's container; the session-ended flip additionally announces
+  through the `role="status"` region; a host that has not registered the
+  product-shell namespace gets focus and no raw key text), and axe (the
+  `region` rule left enabled for the authenticated frame — layout-kit's
+  page-chrome precedent — and disabled for the ended-branch scan, whose
+  screen auth-ui's own suite scans; `color-contrast` disabled, jsdom
+  computes no layout).
+- `src/package.json.test.ts` — the manifest's peer contract: the
+  react-hook-form declaration (range and workspace-pinned devDependency)
+  this package's surface requires, so the reviewer's P2-2 cannot
+  silently regress.
 - `src/usage-example.test.tsx` — compiles and executes the README's
   Quick start composition (the four-namespace bootstrap, one attached
   session, the documented slots — the `userMenu` composing tenancy-ui's
@@ -183,7 +239,15 @@ bind one explicitly before rendering.
   composed consumer; the required consumer proof stays at the package
   level (`src/usage-example.test.tsx`), the same honesty standard
   `ui-kit` and `layout-kit` used before any shell consumer existed.
-  The browser page leg is M4's html-runner/e2e work.
+  The shell's own namespace is deliberately absent from the consumer's
+  registration set this round: an unregistered shell renders no
+  announcement and no raw keys (the flip still transfers focus), so the
+  consumer keeps running untouched; registering
+  `PRODUCT_SHELL_NAMESPACE` on its instance (one import, one
+  `registerNamespace` line, mirroring its five existing registrations)
+  is a one-line follow-up for the consumer's own round, recorded here so
+  it is not silently forgotten. The browser page leg is M4's
+  html-runner/e2e work.
 - **Storybook.** No preview-harness round exists yet; components are
   covered by jsdom tests + axe, and color-contrast verification awaits a
   browser-side visual round, same as the packages below.

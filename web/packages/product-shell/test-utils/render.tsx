@@ -5,13 +5,14 @@
  * I18nextProvider (the app-level provider component translations need)
  * around AppThemeProvider (theme + MUI locale linkage + CssBaseline).
  * The i18n instance is created per call with a deterministic
- * configuration (no storage, no URL, no navigator) and the three
- * namespaces the rendered shell can read are registered: the ui-kit
- * namespace (the theme provider and EmptyState texts), the layout-kit
- * namespace (the AppShell frame's built-in strings) and the auth-ui
- * namespace (the default session-ended screen's) -- the namespace trio
- * every product-shell host must register at bootstrap, exactly as the
- * README quick start documents. A fresh instance per call keeps
+ * configuration (no storage, no URL, no navigator) and the namespaces
+ * the rendered shell can read are registered: the ui-kit namespace (the
+ * theme provider and EmptyState texts), the layout-kit namespace (the
+ * AppShell frame's built-in strings), the auth-ui namespace (the
+ * default session-ended screen's) and the product-shell namespace (the
+ * machine's own session-ended transition announcement) -- the four
+ * namespaces every product-shell host registers at bootstrap, exactly
+ * as the README quick start documents. A fresh instance per call keeps
  * registerNamespace's double-registration guard from firing across
  * tests.
  *
@@ -35,6 +36,10 @@ import {
   layoutKitResources,
 } from '@speed/layout-kit'
 import { AUTH_UI_NAMESPACE, authUiResources } from '@speed/auth-ui'
+import {
+  PRODUCT_SHELL_NAMESPACE,
+  productShellResources,
+} from '../src/resources.js'
 
 export interface RenderWithProvidersOptions {
   /** Start language of the fresh instance; defaults to zh-CN. */
@@ -54,7 +59,7 @@ export interface RenderWithProvidersResult extends RenderResult {
 
 export const TEST_LANGUAGES = ['zh-CN', 'en-US'] as const
 
-/** Fresh bilingual instance with the three namespaces registered. */
+/** Fresh bilingual instance with the four namespaces registered. */
 export function createProductShellI18n(language: string = 'zh-CN'): I18nInstance {
   const instance = createI18n({
     supportedLanguages: TEST_LANGUAGES,
@@ -66,6 +71,7 @@ export function createProductShellI18n(language: string = 'zh-CN'): I18nInstance
   registerNamespace(instance, UI_KIT_NAMESPACE, uiKitResources)
   registerNamespace(instance, LAYOUT_KIT_NAMESPACE, layoutKitResources)
   registerNamespace(instance, AUTH_UI_NAMESPACE, authUiResources)
+  registerNamespace(instance, PRODUCT_SHELL_NAMESPACE, productShellResources)
   return instance
 }
 

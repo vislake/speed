@@ -9,10 +9,11 @@
  * way a host attaches one, and assert what renders and what the machine
  * remembers -- never internal state of the component under test. Every
  * built-in string asserted here comes from the shipped sibling bundles
- * (auth-ui's for the default ended screen, layout-kit's for the frame),
- * imported relatively -- never inline translations. Slot and content
- * strings are English fixtures on purpose: they stand in for a host's
- * own content and are data in a test file, not rendered product text.
+ * (auth-ui's for the default ended screen, layout-kit's for the frame,
+ * product-shell's own for the flip announcement), imported relatively --
+ * never inline translations. Slot and content strings are English
+ * fixtures on purpose: they stand in for a host's own content and are
+ * data in a test file, not rendered product text.
  *
  * The three branches are mutually exclusive by construction (the same
  * order auth-ui's SessionGate pattern established): the ended view is
@@ -24,9 +25,23 @@ import { act, fireEvent } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { attachSession } from '@speed/auth-core'
 import type { AuthSession } from '@speed/auth-core'
+import { createI18n, registerNamespace } from '@speed/i18n'
+import {
+  AUTH_UI_NAMESPACE,
+  authUiResources,
+} from '@speed/auth-ui'
+import {
+  LAYOUT_KIT_NAMESPACE,
+  layoutKitResources,
+} from '@speed/layout-kit'
+import { UI_KIT_NAMESPACE, uiKitResources } from '@speed/ui-kit'
 import authUiZhCN from '../../../auth-ui/src/locales/zh-CN.json' with { type: 'json' }
 import layoutKitZhCN from '../../../layout-kit/src/locales/zh-CN.json' with { type: 'json' }
-import { renderWithProviders } from '../../test-utils/render.js'
+import productShellZhCN from '../locales/zh-CN.json' with { type: 'json' }
+import {
+  renderWithProviders,
+  TEST_LANGUAGES,
+} from '../../test-utils/render.js'
 import { expectNoAxeViolations } from '../../test-utils/axe.js'
 import {
   jsonResponse,
@@ -248,5 +263,149 @@ describe('ProductShell view machine', () => {
     // (all content inside a landmark) because the authenticated branch
     // is a full app page, unlike the widget-shaped pre-auth branches.
     await expectNoAxeViolations()
+  })
+
+  it('keeps a host without a sign-in view on the ended screen when its action is activated', async () => {
+    // The no-signIn composition is legal (the README and the suite above
+    // pin its blank fresh-visitor branch): such a host pairs its own
+    // sign-in surface with that blank. The default ended screen's action
+    // promises to "return the viewer to the sign-in view" -- a view that
+    // does not exist in this composition -- so the machine must not
+    // reset into a branch that would render nothing (a whitescreen dead
+    // end); the action keeps the viewer on the ended screen, which stays
+    // reachable and still hands the frame back the moment a session
+    // authenticates again.
+    const rig = makeJourneyRig()
+    attachSession(rig.session)
+    const utils = renderWithProviders(
+      <ProductShell navItems={NAV_ITEMS} header="My App">
+        <p>app content</p>
+      </ProductShell>,
+    )
+    await signInTo(rig.session)
+    expect(utils.getByText('app content')).toBeInTheDocument()
+    await signOutOf(rig.session)
+    expect(utils.getByText(authUiZhCN.sessionEnded.title)).toBeInTheDocument()
+    fireEvent.click(
+      utils.getByRole('button', { name: authUiZhCN.sessionEnded.signInAction }),
+    )
+    // Not a whitescreen: the viewer stays on a rendered screen -- the
+    // ended screen, whose title and action remain in the document.
+    expect(utils.getByText(authUiZhCN.sessionEnded.title)).toBeInTheDocument()
+    expect(utils.getByText(authUiZhCN.sessionEnded.description)).toBeInTheDocument()
+    expect(utils.queryByRole('banner')).not.toBeInTheDocument()
+    expect(utils.container).not.toBeEmptyDOMElement()
+    // Nor a dead end: the next authentication still brings the frame
+    // back, exactly as it would for a fresh visitor.
+    await signInTo(rig.session)
+    expect(utils.getByText('app content')).toBeInTheDocument()
+  })
+
+  it('moves focus into the ended branch and announces the transition into it', async () => {
+    const rig = makeJourneyRig()
+    attachSession(rig.session)
+    const utils = renderWithProviders(
+      <ProductShell navItems={NAV_ITEMS} header="My App" signIn={<p>sign-in view</p>}>
+        <p>app content</p>
+      </ProductShell>,
+    )
+    await signInTo(rig.session)
+    expect(utils.getByText('app content')).toBeInTheDocument()
+    // The session ends mid-use (an explicit sign-out here; a server-side
+    // death is the same snapshot flip, driven by the gated-journey
+    // suite): the machine transfers focus into the ended branch's own
+    // container -- focus never falls back to the body -- and a
+    // role="status" element announces the transition from the
+    // product-shell namespace (the family convention, registered by this
+    // suite's harness).
+    await signOutOf(rig.session)
+    expect(utils.getByText(authUiZhCN.sessionEnded.title)).toBeInTheDocument()
+    const active = document.activeElement
+    expect(active).not.toBeNull()
+    expect(active).not.toBe(document.body)
+    expect(utils.container.contains(active)).toBe(true)
+    expect(active?.textContent).toContain(authUiZhCN.sessionEnded.title)
+    expect(active?.textContent).toContain(productShellZhCN.announcements.sessionEnded)
+    const status = utils.getByRole('status')
+    expect(status).toHaveTextContent(productShellZhCN.announcements.sessionEnded)
+    // The shell-owned parts of the ended branch (the focusable container
+    // and the sr-only live region) carry no axe violations of their own;
+    // the branch is a whole-page placeholder by design, so the `region`
+    // rule (content inside a landmark) is disabled exactly as it is for
+    // auth-ui's own scan of the screen.
+    await expectNoAxeViolations({ disabledRules: ['region'] })
+  })
+
+  it('still transfers focus into the ended branch when its namespace is not registered, and renders no announcement text', async () => {
+    // The machine's announcement renders from the product-shell
+    // namespace; a host that has not (yet) registered it -- the composed
+    // consumer whose registration lands in its own round -- must get
+    // neither raw key text nor missing-key warnings: the flip still
+    // moves focus, the ended screen renders, and no status element
+    // exists. The pre-registration harness below registers exactly the
+    // three sibling namespaces every shell host registers anyway.
+    const trio = createI18n({
+      supportedLanguages: TEST_LANGUAGES,
+      defaultLanguage: 'zh-CN',
+      storage: null,
+      urlParameterName: null,
+      navigatorLanguages: [],
+    })
+    registerNamespace(trio, UI_KIT_NAMESPACE, uiKitResources)
+    registerNamespace(trio, LAYOUT_KIT_NAMESPACE, layoutKitResources)
+    registerNamespace(trio, AUTH_UI_NAMESPACE, authUiResources)
+    const rig = makeJourneyRig()
+    attachSession(rig.session)
+    const utils = renderWithProviders(
+      <ProductShell navItems={NAV_ITEMS} header="My App" signIn={<p>sign-in view</p>}>
+        <p>app content</p>
+      </ProductShell>,
+      { i18n: trio },
+    )
+    await signInTo(rig.session)
+    await signOutOf(rig.session)
+    expect(utils.getByText(authUiZhCN.sessionEnded.title)).toBeInTheDocument()
+    const active = document.activeElement
+    expect(active).not.toBeNull()
+    expect(active).not.toBe(document.body)
+    expect(utils.container.contains(active)).toBe(true)
+    expect(active?.textContent).toContain(authUiZhCN.sessionEnded.title)
+    expect(utils.queryByRole('status')).not.toBeInTheDocument()
+    expect(utils.queryByText(productShellZhCN.announcements.sessionEnded)).not.toBeInTheDocument()
+  })
+
+  it('moves focus into the branch every flip lands on, along the whole journey', async () => {
+    const rig = makeJourneyRig()
+    attachSession(rig.session)
+    const utils = renderWithProviders(
+      <ProductShell navItems={NAV_ITEMS} header="My App" signIn={<p>sign-in view</p>}>
+        <p>app content</p>
+      </ProductShell>,
+    )
+    // Mounting into the sign-in branch never moves focus (a fresh page
+    // load keeps the host's own focus); the first flip -- the login --
+    // moves focus into the authenticated frame's container.
+    expect(utils.getByText('sign-in view')).toBeInTheDocument()
+    await signInTo(rig.session)
+    expect(utils.getByText('app content')).toBeInTheDocument()
+    const inFrame = document.activeElement
+    expect(inFrame).not.toBe(document.body)
+    expect(inFrame?.textContent).toContain('app content')
+    // The ended action's reset is a flip too: focus lands inside the
+    // sign-in branch.
+    await signOutOf(rig.session)
+    expect(utils.getByText(authUiZhCN.sessionEnded.title)).toBeInTheDocument()
+    fireEvent.click(
+      utils.getByRole('button', { name: authUiZhCN.sessionEnded.signInAction }),
+    )
+    expect(utils.getByText('sign-in view')).toBeInTheDocument()
+    const inSignIn = document.activeElement
+    expect(inSignIn).not.toBe(document.body)
+    expect(inSignIn?.textContent).toContain('sign-in view')
+    // A re-login lands focus back inside the frame.
+    await signInTo(rig.session)
+    expect(utils.getByText('app content')).toBeInTheDocument()
+    expect(document.activeElement?.textContent).toContain('app content')
+    expect(utils.queryByRole('status')).not.toBeInTheDocument()
   })
 })

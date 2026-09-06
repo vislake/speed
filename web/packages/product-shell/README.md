@@ -6,8 +6,10 @@ app chrome (`@speed/layout-kit`'s `AppShell`), the sign-in family
 (`@speed/auth-ui`) and the headless session hooks (`@speed/auth-core`) into
 one ready-to-copy front door for a tenant-facing business application.
 
-The package ships exactly one export — `ProductShell` — which renders one of
-three branches from the authenticated snapshot:
+The package exports `ProductShell` (and its props type) plus the
+`PRODUCT_SHELL_NAMESPACE` / `productShellResources` pair every sibling
+ships for its own namespace. The shell renders one of three branches from
+the authenticated snapshot:
 
 | Snapshot | Branch |
 | --- | --- |
@@ -21,9 +23,19 @@ must not fall back to a fresh-visitor sign-in. The shell remembers that the
 app was reached, per session, in component state; the session itself stays
 in `@speed/auth-core`, unattached to any view.
 
-ProductShell renders no text of its own and ships no locale files: every
-string on the authenticated frame and the default session-ended screen comes
-from the layout-kit and auth-ui namespaces, which the host registers anyway.
+Because the shell is a whole-page switch it also owns the page-swap
+accessibility duties, in the sibling family's shape: every branch flip
+moves focus into the branch's own container (the branches render inside a
+focusable, non-tab-stop wrapper), and every flip into the session-ended
+view — the destination the shell cannot tell apart by cause, a server-side
+session death and an explicit sign-out being the same snapshot flip —
+announces itself through a `role="status"` region. That announcement is
+the shell's one string of its own, read from the `product-shell` namespace
+(below); every other string on the frame and the default ended screen
+comes from the layout-kit and auth-ui namespaces, which the host registers
+anyway. The announcement renders only when the `product-shell` namespace
+is registered; an unregistered host keeps the focus transfer and gets no
+raw key text.
 
 ## Quick start
 
@@ -35,7 +47,7 @@ import { AUTH_UI_NAMESPACE, authUiResources, SignInScreen, SignOutButton } from 
 import { TENANCY_UI_NAMESPACE, tenancyUiResources, TenantSwitcher } from '@speed/tenancy-ui'
 import { attachSession, useCurrentTenant } from '@speed/auth-core'
 import type { AuthSession } from '@speed/auth-core'
-import { ProductShell } from '@speed/product-shell'
+import { PRODUCT_SHELL_NAMESPACE, productShellResources, ProductShell } from '@speed/product-shell'
 
 // Bootstrap, once, before render:
 const i18n = createI18n({
@@ -46,6 +58,7 @@ const i18n = createI18n({
 registerNamespace(i18n, UI_KIT_NAMESPACE, uiKitResources)
 registerNamespace(i18n, LAYOUT_KIT_NAMESPACE, layoutKitResources)
 registerNamespace(i18n, AUTH_UI_NAMESPACE, authUiResources)
+registerNamespace(i18n, PRODUCT_SHELL_NAMESPACE, productShellResources)
 registerNamespace(i18n, TENANCY_UI_NAMESPACE, tenancyUiResources)
 attachSession(session) // your @speed/auth-core session, already wired to api-client
 
@@ -151,15 +164,17 @@ control belongs. The composition shown above is the packaged evidence of it:
   frame; see Development.
 
 Composing the switcher requires registering tenancy-ui's namespace on the
-host's one i18n instance (the fourth registration above), like every other
+host's one i18n instance (the fifth registration above), like every other
 package whose strings render in the frame.
 
 ## Host checklist
 
 - Register the namespaces once each on your one i18n instance — the shell
-  trio `ui-kit`, `layout-kit` and `auth-ui`, plus tenancy-ui's own whenever
-  the `userMenu` composes the tenant switcher (see above) — double
-  registration throws.
+  quartet `ui-kit`, `layout-kit`, `auth-ui` and `product-shell` (the last
+  carries the machine's own session-ended announcement; absent it, the
+  shell still transfers focus and renders no raw key text), plus
+  tenancy-ui's own whenever the `userMenu` composes the tenant switcher
+  (see above) — double registration throws.
 - Attach your session once with `attachSession` before render. Before any
   attach, and after logout, the hooks ProductShell reads fail closed to the
   anonymous snapshot, so the shell can only show the sign-in branch.
@@ -167,7 +182,13 @@ package whose strings render in the frame.
   branch renders nothing (a blank page); the shell deliberately does not
   ship a default sign-in surface — pairing it with the `@speed/auth-ui`
   family is the host's call, because the channel mix (password, SMS,
-  social, registration) is a product decision.
+  social, registration) is a product decision. The default ended screen's
+  action returns the viewer to the `signIn` view, so a host without a
+  `signIn` slot whose session ends mid-use stays on the ended screen when
+  the action is activated — the machine never resets into a branch that
+  would render nothing. Such a host's way back into the app is its own:
+  supply `signIn`, or supply a `sessionEnded` node that owns its own way
+  out.
 - Any `AppShell` chrome prop (`navItems`, `header`, `headerActions`,
   `userMenu`, ...) is passed straight through; see `@speed/layout-kit`'s
   `AppShell` for the full surface. `navItems` must arrive host-computed,
@@ -176,13 +197,20 @@ package whose strings render in the frame.
   `@speed/auth-ui` `SessionEndedScreen` renders, whose action returns the
   viewer to the sign-in view. A custom node renders as-is and owns its own
   way back (signing in again flips the snapshot and the frame returns).
+- Don't fight the focus contract: every branch flip moves focus into the
+  branch's own container (a focusable, non-tab-stop wrapper around the
+  rendered view), and the session-ended flip announces itself through the
+  sr-only `role="status"` region. A host that manages focus itself can
+  still pass content in — the container is the boundary the machine owns.
 
 ## Text and i18n
 
-ProductShell renders zero text of its own — no namespace, no locale files,
-no error whitelist. The frame's built-in strings come from the layout-kit
-namespace; the default session-ended screen's from the auth-ui namespace;
-both are bilingual and host-registered. What you pass as host content
+The shell's own strings are exactly one sentence: the bilingual
+`announcements.sessionEnded` polite announcement of the session-ended flip,
+in the `product-shell` namespace. The frame's built-in strings come from
+the layout-kit namespace; the default session-ended screen's from the
+auth-ui namespace; both are bilingual and host-registered. There is no
+error whitelist and no other copy: what you pass as host content
 (`navItems` labels, `header`, `children`) is your i18n responsibility, as in
 any package.
 
@@ -193,17 +221,21 @@ any package.
 | `@speed/layout-kit` | The authenticated frame: `AppShell` chrome and landmarks |
 | `@speed/auth-ui` | The default session-ended screen (`SessionEndedScreen`) |
 | `@speed/auth-core` | The hooks that read the attached session's snapshot |
+| `@speed/i18n` | The translation hook that reads the shell's own namespace |
 
 `@speed/tenancy-ui` is deliberately absent: the switcher composition in the
 quick start is host work in the `userMenu` slot, so tenancy-ui is a dev-only
 companion of the suites (a `devDependency`, aliased to its sources by the
 test config), never something this package imports, bundles or depends on.
 
-Peers: `react`, `react-dom`, `@mui/material`, `@emotion/*` — the ambient
-MUI/React tree, never duplicated. `layout-kit` and `auth-ui` already pull
-their own concrete dependencies; product-shell adds nothing beyond them.
-No routing, state or query library is required — your `children` bring their
-own.
+Peers: `react`, `react-dom`, `@mui/material`, `@emotion/*` plus
+`react-hook-form` — the ambient MUI/React tree, never duplicated, and the
+form library the paired auth-ui sign-in family renders with (re-declared
+here, as every package whose surface pulls it in re-declares it, so a host
+sees the requirement at every level of the chain). `layout-kit` and
+`auth-ui` already pull their own concrete dependencies; product-shell adds
+nothing beyond them. No routing, state or query library is required — your
+`children` bring their own.
 
 ## What this shell does not do (yet)
 

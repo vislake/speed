@@ -52,6 +52,10 @@ import { attachSession, useCurrentTenant } from '@speed/auth-core'
 import type { AuthSession } from '@speed/auth-core'
 import authUiZhCN from '../../auth-ui/src/locales/zh-CN.json' with { type: 'json' }
 import layoutKitZhCN from '../../layout-kit/src/locales/zh-CN.json' with { type: 'json' }
+import {
+  PRODUCT_SHELL_NAMESPACE,
+  productShellResources,
+} from './resources.js'
 import { renderWithProviders } from '../test-utils/render.js'
 import {
   jsonResponse,
@@ -114,11 +118,13 @@ const rig = makeRealClientRig((call) => {
 })
 
 // The quick start's bootstrap: the namespaces the composed views render
-// under -- the host's shell trio plus tenancy-ui's own, whose switcher
-// sits in the userMenu -- registered exactly once on the one instance
-// (double registration throws), and the session attached before any
-// render. Module scope matches the README; the single journey below is
-// the only consumer of this instance, so nothing double-registers.
+// under -- the host's shell quartet (ui-kit, layout-kit, auth-ui and
+// product-shell's own, whose session-ended announcement the machine
+// reads) plus tenancy-ui's, whose switcher sits in the userMenu --
+// registered exactly once on the one instance (double registration
+// throws), and the session attached before any render. Module scope
+// matches the README; the single journey below is the only consumer of
+// this instance, so nothing double-registers.
 const i18n = createI18n({
   supportedLanguages: ['zh-CN', 'en-US'],
   defaultLanguage: 'zh-CN',
@@ -129,6 +135,7 @@ const i18n = createI18n({
 registerNamespace(i18n, UI_KIT_NAMESPACE, uiKitResources)
 registerNamespace(i18n, LAYOUT_KIT_NAMESPACE, layoutKitResources)
 registerNamespace(i18n, AUTH_UI_NAMESPACE, authUiResources)
+registerNamespace(i18n, PRODUCT_SHELL_NAMESPACE, productShellResources)
 registerNamespace(i18n, TENANCY_UI_NAMESPACE, tenancyUiResources)
 attachSession(rig.session)
 

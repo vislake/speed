@@ -7,11 +7,11 @@
     // typecheckable by NodeNext consumers as-is.
     //
     // The workspace dependencies (@speed/auth-core, @speed/auth-ui,
-    // @speed/layout-kit) are resolved here exactly like a consumer
-    // resolves them: through each package's exports map to its emitted
-    // dist/ declarations (no paths mapping). tsconfig.json (the noEmit
-    // typecheck, tests included) maps the workspace specifiers onto the
-    // siblings' source instead; the build script rebuilds the three
+    // @speed/i18n, @speed/layout-kit) are resolved here exactly like a
+    // consumer resolves them: through each package's exports map to its
+    // emitted dist/ declarations (no paths mapping). tsconfig.json (the
+    // noEmit typecheck, tests included) maps the workspace specifiers
+    // onto the siblings' source instead; the build script rebuilds the
     // dependencies first so the dist declarations this program
     // type-checks against are never stale.
     "module": "nodenext",
