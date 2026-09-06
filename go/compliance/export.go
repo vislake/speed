@@ -63,7 +63,7 @@ const ConfigExportDeliveryExpiry = "compliance.export_delivery_expiry"
 // has configured none.
 //
 // This is deliberately far shorter than sharing's own 30-day
-// defaultShareExpiry: an export bundles a subject's complete personal
+// MaxExplicitShareLifetime: an export bundles a subject's complete personal
 // data into one downloadable package, so the window in which a leaked or
 // intercepted link stays usable must be measured in hours, not weeks --
 // docs/internal/10-compliance-and-audit.md's data-export bullet describes
@@ -398,6 +398,25 @@ func (s *ExportService) deliverExport(ctx context.Context, tenant pkgcore.Tenant
 // time -- and the reader is a host-supplied seam whose answer this module
 // cannot trust to be sensible, so the nonsense must resolve to the honest
 // default, never to an instantly dead link minted silently.
+//
+// A wired reader answering a duration LONGER than go/sharing's own
+// explicit-expiry ceiling (sharing.MaxExplicitShareLifetime) is clamped
+// to that ceiling rather than honored -- the mirror-image guard to the
+// `<= 0` clamp above, and the same "the host's answer cannot be minted as
+// given" family: deliverExport hands the resolved duration to
+// sharing.Service.Create as an EXPLICIT ExpiresAt, and sharing refuses an
+// explicit expiry beyond its ceiling with sharing.expiry_out_of_range. A
+// window beyond the ceiling is not nonsense the way a non-positive one is
+// (the default Export path always mints within it), but no host
+// configuration may be able to break every export this way -- so the
+// answer is clamped DOWN to the sharing ceiling, the closest mintable
+// duration to what the operator configured, rather than silently dropped
+// to defaultExportDeliveryExpiry. The clamp uses the ceiling sharing
+// itself enforces for a tenant with no longer configured default of its
+// own (MaxExplicitShareLifetime's own doc comment: a tenant's own sharing
+// default can only raise the operative bound, never lower it below this
+// floor), so a window clamped here is accepted by sharing for every
+// tenant.
 func (s *ExportService) exportDeliveryExpiry(ctx context.Context, tenant pkgcore.TenantID) (time.Duration, error) {
 	if s.cfg == nil {
 		return defaultExportDeliveryExpiry, nil
@@ -411,6 +430,9 @@ func (s *ExportService) exportDeliveryExpiry(ctx context.Context, tenant pkgcore
 	}
 	if d <= 0 {
 		return defaultExportDeliveryExpiry, nil
+	}
+	if d > sharing.MaxExplicitShareLifetime {
+		return sharing.MaxExplicitShareLifetime, nil
 	}
 	return d, nil
 }

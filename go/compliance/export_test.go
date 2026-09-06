@@ -350,6 +350,81 @@ func TestExportService_Export_ConfigReaderReportingNonPositive_FallsBackToDefaul
 	}
 }
 
+// TestExportService_Export_ConfigReaderBeyondSharingCeiling_Clamped proves
+// the upper clamp of exportDeliveryExpiry (finding P1-sharing-3's
+// compliance leg): a wired ExportDeliveryExpiryReader answering a duration
+// LONGER than go/sharing's explicit-expiry ceiling
+// (sharing.MaxExplicitShareLifetime) must not be handed to sharing.Create
+// as an explicit ExpiresAt -- sharing refuses an explicit expiry beyond
+// its ceiling, so honoring the answer as given would let one host
+// configuration break every export. The window is clamped DOWN to the
+// sharing ceiling (the closest mintable duration to what the operator
+// configured -- the mirror image of the `<= 0` fallback's "nonsense
+// resolves to the honest default"), never minted at the configured length
+// and never silently dropped to defaultExportDeliveryExpiry.
+func TestExportService_Export_ConfigReaderBeyondSharingCeiling_Clamped(t *testing.T) {
+	svc, repo, _, fakeSharing := newExportHarness(t)
+	svc.cfg = fakeExportDeliveryExpiryReader{d: sharing.MaxExplicitShareLifetime + 30*24*time.Hour, ok: true}
+	tenant := pkgcore.TenantID("tenant-a")
+	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
+
+	before := time.Now()
+	if _, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	after := time.Now()
+
+	call := fakeSharing.calls[0]
+	if call.ExpiresAt == nil {
+		t.Fatal("Create ExpiresAt must not be nil")
+	}
+	wantEarliest := before.Add(sharing.MaxExplicitShareLifetime)
+	wantLatest := after.Add(sharing.MaxExplicitShareLifetime)
+	if call.ExpiresAt.Before(wantEarliest) || call.ExpiresAt.After(wantLatest) {
+		t.Errorf("Create ExpiresAt = %v, want between %v and %v -- a reader answer beyond the sharing ceiling must be clamped to the ceiling, never minted at its own length", *call.ExpiresAt, wantEarliest, wantLatest)
+	}
+}
+
+// TestExportService_Export_DeliveryWindowBeyondSharingCeiling_RealSharingStillSucceeds
+// is the end-to-end counterpart of the clamp test above, wired to a REAL
+// *sharing.Service (newRealSharingService) instead of the scripted fake:
+// a delivery window beyond sharing's explicit-expiry ceiling must not
+// break every export. Before the clamp, exportDeliveryExpiry returned the
+// configured 60 days unchanged, deliverExport minted an explicit ExpiresAt
+// 60 days out, and the real sharing.Service refused it with
+// sharing.expiry_out_of_range -- so every export for a tenant configured
+// with a long delivery window failed with ErrExportDeliveryFailed. With
+// the clamp the minted window is the sharing ceiling, which sharing
+// accepts for every tenant, and the export completes end to end.
+func TestExportService_Export_DeliveryWindowBeyondSharingCeiling_RealSharingStillSucceeds(t *testing.T) {
+	svc, repo, _, _ := newExportHarness(t)
+	svc.cfg = fakeExportDeliveryExpiryReader{d: 60 * 24 * time.Hour, ok: true}
+	realSharing := newRealSharingService(t)
+	svc.sharing = realSharing
+	tenant := pkgcore.TenantID("tenant-a")
+	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
+
+	result, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
+	if err != nil {
+		t.Fatalf("Export: %v -- a delivery window beyond the sharing ceiling must be clamped, not break the export", err)
+	}
+	if result.Delivery.ShareID == "" || result.Delivery.Token == "" {
+		t.Fatalf("Export result.Delivery = %+v, want a real minted share id and token", result.Delivery)
+	}
+	if result.Delivery.ExpiresAt.After(time.Now().Add(sharing.MaxExplicitShareLifetime)) {
+		t.Errorf("minted delivery ExpiresAt = %v, want within the sharing ceiling of now -- the clamp must have bounded the window", result.Delivery.ExpiresAt)
+	}
+
+	// The minted share is genuinely live through the real service.
+	share, err := realSharing.Access(pkgcore.WithTenant(context.Background(), tenant), result.Delivery.Token, sharing.AccessParams{})
+	if err != nil {
+		t.Fatalf("real sharing.Service.Access(minted token): %v", err)
+	}
+	if share.ID != result.Delivery.ShareID {
+		t.Errorf("Access share ID = %q, want %q", share.ID, result.Delivery.ShareID)
+	}
+}
+
 // TestExportService_Export_NoTenantContext_Refused proves Export refuses a
 // ctx that carries no tenant. The ctx tenant is the single data boundary an
 // export may ever read through -- every participant's Export callback reads
