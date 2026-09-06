@@ -45,12 +45,30 @@ func NewWebhookSubscriptionRepository(db *gorm.DB) *WebhookSubscriptionRepositor
 	}
 }
 
-// updateFields applies a partial column update -- exactly the columns in
-// fields and nothing else -- to the LIVE subscription named by id, in the
-// tenant of ctx, and reports whether any row matched. It is the write
-// Service.UpdateWebhookSubscription performs after its read-modify
-// validation (webhook_service.go), and two of its properties are load-
-// bearing there:
+// webhookSubscriptionChanges is the change set updateFields applies: each
+// non-nil field names one column to write, mirroring the "nil means no
+// change" convention UpdateWebhookSubscriptionInput (webhook_service.go)
+// already establishes for the Service's own input -- the Service validates
+// and assembles a changes value, the repository writes exactly its non-nil
+// columns and nothing else. EventTypes is a []string rather than a *[]string
+// because the nil slice is the natural "no change" value, the identical
+// convention the Service input's EventTypes field follows; the empty slice
+// is refused upstream (ErrEventTypesRequired), never written here.
+type webhookSubscriptionChanges struct {
+	// URL, when non-nil, replaces the stored URL.
+	URL *string
+	// EventTypes, when non-nil, replaces the stored selection.
+	EventTypes []string
+	// Active, when non-nil, replaces the stored delivery gate.
+	Active *bool
+}
+
+// updateFields applies a partial column update -- exactly the columns the
+// non-nil fields of changes name, and nothing else -- to the LIVE
+// subscription identified by id, in the tenant of ctx, and reports whether
+// any row matched. It is the write Service.UpdateWebhookSubscription
+// performs after its read-modify validation (webhook_service.go), and two
+// of its properties are load-bearing there:
 //
 //  1. It never carries deleted_at/deleted_by (or any other column outside
 //     the caller's own change set) in its SET clause. A full-row
@@ -69,16 +87,57 @@ func NewWebhookSubscriptionRepository(db *gorm.DB) *WebhookSubscriptionRepositor
 //     ErrWebhookSubscriptionNotFound -- the deletion wins, exactly as if it
 //     had landed before the read.
 //
+// # How the statement is built, and why
+//
+// The write is expressed as tx.Where(...).Where("deleted_at IS NULL").
+// Select(columns).Updates(&m) -- gorm resolves the target table from the
+// struct passed to Updates, so nothing here reaches for db.Model / db.Table
+// / db.Raw (the three bypass entry points
+// tools/semgrep_rules/raw-gorm-bypass.yml flags), the identical
+// construction dbkit's own softDelete/Restore, go/ai-gateway's
+// markGenerated/markCompleted and go/org's deleteLeaf all use for a guarded
+// column-scoped write. Select is load-bearing, not decorative: gorm's
+// struct-based Updates silently omits any zero-valued field from the SET
+// clause, and Active is a bool whose replacement value may legitimately be
+// false (that is how a caller pauses a subscription) -- naming the changed
+// columns in Select forces exactly those columns into the SET clause
+// regardless of value. The one always-present extra column is UpdatedAt:
+// gorm's auto-update-time machinery writes it, exactly as it did under the
+// previous statement shape (the map-payload Updates also refreshed it on
+// every write), and its presence is what makes RowsAffected a reliable
+// "did a live row match" answer on SQLite -- a matched row always changes,
+// so it is always counted.
+//
 // The tenant filter comes from dbkit's tenant-scope plugin (the statement
 // runs inside WithTenantSession against the TenantScoped
-// WebhookSubscription model), so this can never touch another tenant's row.
-func (r *WebhookSubscriptionRepository) updateFields(ctx context.Context, id string, fields map[string]any) (bool, error) {
+// WebhookSubscription model, which gorm resolves from the Updates payload
+// when no Model is set), so this can never touch another tenant's row.
+func (r *WebhookSubscriptionRepository) updateFields(ctx context.Context, id string, changes webhookSubscriptionChanges) (bool, error) {
+	m := WebhookSubscription{}
+	columns := make([]string, 0, 4)
+	if changes.URL != nil {
+		m.URL = *changes.URL
+		columns = append(columns, "URL")
+	}
+	if changes.EventTypes != nil {
+		m.EventTypes = eventTypesJSON(changes.EventTypes)
+		columns = append(columns, "EventTypes")
+	}
+	if changes.Active != nil {
+		m.Active = *changes.Active
+		columns = append(columns, "Active")
+	}
+	// Always part of the SET clause: gorm's auto-update-time machinery fills
+	// UpdatedAt with the current time (see the doc comment above).
+	columns = append(columns, "UpdatedAt")
+
 	var matched bool
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
-		res := tx.Model(&WebhookSubscription{}).
+		res := tx.
 			Where("id = ?", id).
 			Where("deleted_at IS NULL").
-			Updates(fields)
+			Select(columns).
+			Updates(&m)
 		matched = res.RowsAffected > 0
 		return res.Error
 	})

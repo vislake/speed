@@ -198,7 +198,7 @@ func (s *Service) UpdateWebhookSubscription(ctx context.Context, in UpdateWebhoo
 		return nil, translateWebhookRepoErr(err)
 	}
 
-	fields := make(map[string]any, 3)
+	var changes webhookSubscriptionChanges
 	if in.URL != nil {
 		if *in.URL == "" {
 			return nil, ErrWebhookURLRequired
@@ -207,7 +207,7 @@ func (s *Service) UpdateWebhookSubscription(ctx context.Context, in UpdateWebhoo
 			return nil, urlErr
 		}
 		row.URL = *in.URL
-		fields["url"] = *in.URL
+		changes.URL = in.URL
 	}
 	if in.EventTypes != nil {
 		if len(in.EventTypes) == 0 {
@@ -217,15 +217,15 @@ func (s *Service) UpdateWebhookSubscription(ctx context.Context, in UpdateWebhoo
 			return nil, typesErr
 		}
 		row.EventTypes = eventTypesJSON(in.EventTypes)
-		fields["event_types"] = row.EventTypes
+		changes.EventTypes = in.EventTypes
 	}
 	if in.Active != nil {
 		row.Active = *in.Active
-		fields["active"] = *in.Active
+		changes.Active = in.Active
 	}
 
-	if len(fields) > 0 {
-		matched, updateErr := s.webhookRepo.updateFields(ctx, in.ID, fields)
+	if changes.URL != nil || changes.EventTypes != nil || changes.Active != nil {
+		matched, updateErr := s.webhookRepo.updateFields(ctx, in.ID, changes)
 		if updateErr != nil {
 			return nil, ErrInternal.WithCause(updateErr)
 		}

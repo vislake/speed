@@ -127,8 +127,12 @@ func TestWebhookSubscriptionRepository_updateFields_PartialAndLiveOnly(t *testin
 		t.Fatalf("create: %v", err)
 	}
 
-	// Update exactly one column; the others must survive untouched.
-	matched, err := repo.updateFields(ctx, "sub-1", map[string]any{"active": false})
+	// Update exactly one column (Active to its zero value -- the case a
+	// bare struct-based Updates would silently omit, which is why the
+	// repository writes through an explicit Select list); the others must
+	// survive untouched.
+	paused := false
+	matched, err := repo.updateFields(ctx, "sub-1", webhookSubscriptionChanges{Active: &paused})
 	if err != nil {
 		t.Fatalf("updateFields: %v", err)
 	}
@@ -150,7 +154,8 @@ func TestWebhookSubscriptionRepository_updateFields_PartialAndLiveOnly(t *testin
 	if delErr := repo.Delete(ctx, "sub-1"); delErr != nil {
 		t.Fatalf("delete: %v", delErr)
 	}
-	matched, err = repo.updateFields(ctx, "sub-1", map[string]any{"active": true})
+	active := true
+	matched, err = repo.updateFields(ctx, "sub-1", webhookSubscriptionChanges{Active: &active})
 	if err != nil {
 		t.Fatalf("updateFields after delete: %v", err)
 	}
@@ -170,7 +175,7 @@ func TestWebhookSubscriptionRepository_updateFields_PartialAndLiveOnly(t *testin
 	if createErr := repo.Create(other, otherRow); createErr != nil {
 		t.Fatalf("create other-tenant: %v", createErr)
 	}
-	matched, err = repo.updateFields(ctx, "sub-other", map[string]any{"active": false})
+	matched, err = repo.updateFields(ctx, "sub-other", webhookSubscriptionChanges{Active: &paused})
 	if err != nil {
 		t.Fatalf("updateFields cross-tenant: %v", err)
 	}
