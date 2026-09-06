@@ -28,10 +28,31 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { createTheme, ThemeProvider } from '@mui/material/styles'
 import CssBaseline from '@mui/material/CssBaseline'
+import { enUS } from '@mui/material/locale'
+import type { Localization } from '@mui/material/locale'
 import { muiLocaleFor } from '@speed/i18n/mui-locale'
 import type { I18nInstance } from '@speed/i18n'
 import type { TokensOverride } from '@speed/tokens'
 import { createAppTheme } from './createAppTheme.js'
+
+/**
+ * The MUI localization for the active language, or the en-US MUI locale
+ * when the language has no entry in the MUI locale table. muiLocaleFor
+ * deliberately throws on unknown tags for direct callers who want a loud
+ * failure at theme-assembly time; a render path must never throw, because
+ * createI18n's supported set is host-chosen and can include languages
+ * beyond the two MUI mappings this package ships. MUI's own built-in
+ * texts (table pagination labels, tooltips, ...) then fall back to
+ * English -- a documented default -- while the app's translations keep
+ * rendering in the active language.
+ */
+function muiLocaleForOrDefault(language: string): Localization {
+  try {
+    return muiLocaleFor(language)
+  } catch {
+    return enUS
+  }
+}
 
 export interface AppThemeProviderProps {
   /** The app's i18n instance (createI18n result). MUI built-in texts follow its language. */
@@ -66,11 +87,13 @@ export function AppThemeProvider({
       i18n.off('languageChanged', onLanguageChanged)
     }
   }, [i18n])
-  // muiLocaleFor throws on a language it has no locale for, so an unknown
-  // language (impossible via createI18n's supported set) fails loudly here
-  // rather than pairing a Chinese UI with English MUI built-ins.
+  // MUI's built-in texts follow the active language. A language outside
+  // the MUI locale table must never throw mid-render: createI18n supports
+  // host-chosen canonical sets that can exceed the MUI mappings, so such a
+  // language falls back to the en-US MUI locale (see muiLocaleForOrDefault)
+  // instead of white-screening the tree.
   const theme = useMemo(
-    () => createTheme(base.theme, muiLocaleFor(language)),
+    () => createTheme(base.theme, muiLocaleForOrDefault(language)),
     [base, language],
   )
 

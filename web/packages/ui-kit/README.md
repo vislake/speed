@@ -293,11 +293,15 @@ surface:
 The returned theme is locale-free on purpose: MUI's built-in texts
 (table pagination, tooltips) are language-bearing, so the locale merge
 happens at render time. `AppThemeProvider` does it for you -- it merges
-`muiLocaleFor(i18n.language)` over the base theme, subscribes to
+the MUI locale of `i18n.language` over the base theme, subscribes to
 `languageChanged` so MUI texts follow every switch, and renders the
-theme-aware `CssBaseline` once. Its props are the i18n instance, the
-optional two token layers, and children. Hosts composing their own
-theme tree do the same merge explicitly:
+theme-aware `CssBaseline` once. A language outside the MUI locale table
+never throws mid-render: the i18n supported set is host-chosen and may
+include languages the two MUI mappings do not cover, and MUI's built-in
+texts then fall back to the en-US MUI locale while the app's own
+translations keep rendering in the active language. Its props are the
+i18n instance, the optional two token layers, and children. Hosts
+composing their own theme tree do the same merge explicitly:
 
 ```ts
 import { createTheme } from '@mui/material/styles'

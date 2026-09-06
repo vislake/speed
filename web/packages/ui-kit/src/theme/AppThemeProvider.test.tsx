@@ -11,7 +11,7 @@ import { useTheme } from '@mui/material/styles'
 import type { Theme } from '@mui/material/styles'
 import { enUS, zhCN } from '@mui/material/locale'
 import { describe, expect, it } from 'vitest'
-import { I18nextProvider, switchLanguage } from '@speed/i18n'
+import { createI18n, I18nextProvider, switchLanguage } from '@speed/i18n'
 import { defaultTokens } from '@speed/tokens'
 import type { TokensOverride } from '@speed/tokens'
 import { AppThemeProvider } from './AppThemeProvider.js'
@@ -110,5 +110,59 @@ describe('AppThemeProvider', () => {
   it('renders children inside the theme context', () => {
     const { getByText } = renderWithProviders(<div>child content</div>)
     expect(getByText('child content')).toBeInTheDocument()
+  })
+
+  it('renders with a language outside the MUI locale table, using the en-US MUI locale fallback', () => {
+    // createI18n's supported set is host-chosen and may include languages
+    // the MUI locale table does not map; rendering must never throw for
+    // one of them.
+    const i18n = createI18n({
+      supportedLanguages: ['zh-CN', 'en-US', 'fr-FR'],
+      defaultLanguage: 'fr-FR',
+      storage: null,
+      urlParameterName: null,
+      navigatorLanguages: [],
+    })
+    let seen: Theme | undefined
+    expect(() =>
+      render(
+        <I18nextProvider i18n={i18n}>
+          <AppThemeProvider i18n={i18n}>
+            <ThemeProbe onTheme={(t) => (seen = t)} />
+          </AppThemeProvider>
+        </I18nextProvider>,
+      ),
+    ).not.toThrow()
+    expect(i18n.language).toBe('fr-FR')
+    expect(paginationLabel(seen)).toBe(
+      enUS.components?.MuiTablePagination?.defaultProps?.labelRowsPerPage,
+    )
+  })
+
+  it('re-merges with the fallback MUI locale when switching into a language outside the table', async () => {
+    const i18n = createI18n({
+      supportedLanguages: ['zh-CN', 'en-US', 'fr-FR'],
+      defaultLanguage: 'zh-CN',
+      storage: null,
+      urlParameterName: null,
+      navigatorLanguages: [],
+    })
+    let seen: Theme | undefined
+    render(
+      <I18nextProvider i18n={i18n}>
+        <AppThemeProvider i18n={i18n}>
+          <ThemeProbe onTheme={(t) => (seen = t)} />
+        </AppThemeProvider>
+      </I18nextProvider>,
+    )
+    const zhLabel = zhCN.components?.MuiTablePagination?.defaultProps?.labelRowsPerPage
+    expect(paginationLabel(seen)).toBe(zhLabel)
+    await act(async () => {
+      await switchLanguage(i18n, 'fr-FR')
+    })
+    expect(i18n.language).toBe('fr-FR')
+    const enLabel = enUS.components?.MuiTablePagination?.defaultProps?.labelRowsPerPage
+    expect(paginationLabel(seen)).toBe(enLabel)
+    expect(paginationLabel(seen)).not.toBe(zhLabel)
   })
 })
