@@ -3,10 +3,22 @@ package wechat
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"time"
 
 	"github.com/vislake/speed/go/billing"
 )
+
+// notifyTimestampTolerance is how far a delivery's Wechatpay-Timestamp may
+// sit from the current time, in either direction, and still be accepted --
+// the same 300-second window stripe-go's own webhook handling applies to
+// Stripe deliveries (webhook.DefaultTolerance, enforced by this module's
+// stripe leg through ConstructEventWithOptions), mirrored here per WeChat
+// Pay's own notification guidance, which likewise tells receivers to bound
+// the delivery's age so a captured notification cannot be replayed at
+// arbitrary leisure. The symmetric window also absorbs ordinary clock skew
+// between this host and WeChat Pay's signing servers.
+const notifyTimestampTolerance = 300 * time.Second
 
 // notifyEnvelope is WeChat Pay's own webhook delivery envelope --
 // https://pay.weixin.qq.com/doc/v3/merchant/4012791862's documented shape.
@@ -69,6 +81,28 @@ func (g *Gateway) VerifyWebhook(_ context.Context, headers map[string][]string, 
 	}
 	if err := VerifySignature(timestamp, nonce, body, sig, g.keys.platform); err != nil {
 		return billing.NormalizedEvent{}, billing.ErrWebhookSignatureInvalid.WithCause(err)
+	}
+
+	// Freshness: the delivery's own timestamp must sit within
+	// notifyTimestampTolerance of now, in either direction. A signature
+	// proves WHO sent the body, never WHEN; without this bound a captured
+	// notification (whose signature stays valid forever) could be replayed
+	// at arbitrary leisure. A stale delivery is refused with the same
+	// authentication-class error a stale Stripe delivery gets in this
+	// module's stripe leg (whose SDK-level tolerance check surfaces through
+	// ErrWebhookSignatureInvalid too) -- the signature itself verified, but
+	// the delivery is not accepted as live. An unparseable timestamp is
+	// refused the same way: there is nothing to bound.
+	ts, tsErr := strconv.ParseInt(timestamp, 10, 64)
+	if tsErr != nil {
+		return billing.NormalizedEvent{}, billing.ErrWebhookSignatureInvalid.WithParam("reason", "Wechatpay-Timestamp is not a valid Unix timestamp").WithCause(tsErr)
+	}
+	deliveredAt := time.Unix(ts, 0)
+	skew := time.Since(deliveredAt)
+	if skew > notifyTimestampTolerance || skew < -notifyTimestampTolerance {
+		return billing.NormalizedEvent{}, billing.ErrWebhookSignatureInvalid.
+			WithParam("reason", "Wechatpay-Timestamp is outside the accepted freshness window").
+			WithParam("skew_seconds", strconv.FormatInt(int64(skew/time.Second), 10))
 	}
 
 	var envelope notifyEnvelope

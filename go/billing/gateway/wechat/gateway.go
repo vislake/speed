@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/vislake/speed/go/billing"
@@ -185,7 +186,20 @@ func requireCNY(currency string) error {
 // order, so no CreateCharge-side enforcement is needed to make this
 // honest.
 func (g *Gateway) QueryStatus(ctx context.Context, ref billing.ChannelReference) (billing.ChannelStatus, billing.Money, error) {
-	path := fmt.Sprintf("/v3/pay/transactions/out-trade-no/%s?mchid=%s", string(ref), g.cfg.MchID)
+	// The reference (an out_trade_no this package itself derived from a
+	// caller's idempotency key -- see outTradeNoFor) is percent-escaped as
+	// one URL path segment, and that SAME escaped form is what both the
+	// Authorization header's canonical URL and the actual request carry.
+	// WeChat Pay's APIv3 signing scheme requires the signed canonical URL
+	// and the requested URL to be byte-identical, so the reference must be
+	// escaped exactly once, up front, before either is built: an earlier
+	// revision interpolated the raw reference into both, so a reference
+	// holding URL metacharacters split the two apart -- a raw "#" is a
+	// fragment delimiter, which Go's HTTP client stripped (along with the
+	// mchid query that followed it) from the request actually sent while
+	// the signature still covered the un-stripped string, guaranteeing a
+	// signature mismatch at WeChat Pay for any such key.
+	path := fmt.Sprintf("/v3/pay/transactions/out-trade-no/%s?mchid=%s", url.PathEscape(string(ref)), g.cfg.MchID)
 
 	var resp struct {
 		TradeState string `json:"trade_state"`

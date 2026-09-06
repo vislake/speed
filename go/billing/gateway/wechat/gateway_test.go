@@ -334,6 +334,111 @@ func TestGateway_CreateCharge_AcceptsLowercaseCNY(t *testing.T) {
 	}
 }
 
+// TestGateway_OutTradeNoWithSpecialCharacters_RoundTrips is P2-8's
+// regression test: an out_trade_no derived from a caller's idempotency key
+// may carry URL metacharacters (here "|" and "#"), and QueryStatus used to
+// interpolate the reference RAW into both the Authorization header's
+// canonical URL and the request URL. A raw "#" is a fragment delimiter:
+// Go's HTTP client truncated the request path at it (the signed canonical
+// URL and the request actually sent disagreed, and the mchid query
+// parameter was swallowed into the fragment), so WeChat Pay could never
+// have verified the signature -- the very "the signed URL and the
+// requested URL must be identical" requirement of WeChat Pay's APIv3
+// scheme. The fix percent-escapes the reference once, with url.PathEscape,
+// before BOTH signing and requesting, so the two always agree and the
+// reference round-trips: CreateCharge's handle stays usable for a later
+// QueryStatus. On pre-fix code the request URI this test asserts is simply
+// not what QueryStatus sends (the fragment eats the query, and the raw "|"
+// stays unescaped), so this fails before the fix.
+func TestGateway_OutTradeNoWithSpecialCharacters_RoundTrips(t *testing.T) {
+	const idemKey = "ORD|1#x"
+	_, platformPubPEM, platformPriv := generateTestKeyPair(t)
+	cfg := testGatewayConfig(t, platformPubPEM)
+
+	created := false
+	wantQueryURI := "/v3/pay/transactions/out-trade-no/ORD%7C1%23x?mchid=" + cfg.MchID
+	doer := &fakeDoer{
+		platform: platformPriv,
+		respond: func(req *http.Request, body []byte) (int, []byte) {
+			// The request's WIRE identity is its escaped form (RequestURI,
+			// what the HTTP request line carries and what WeChat Pay's
+			// server compares the signature's canonical URL against) --
+			// never req.URL.Path, which Go keeps percent-DECODED.
+			switch {
+			case req.Method == http.MethodPost && req.URL.RequestURI() == nativePayPath:
+				created = true
+				var payload map[string]any
+				if err := json.Unmarshal(body, &payload); err != nil {
+					t.Fatalf("decode body: %v", err)
+				}
+				// The order body carries the reference raw -- out_trade_no is
+				// a JSON field there, not a URL segment, so no escaping
+				// applies to it.
+				if payload["out_trade_no"] != idemKey {
+					t.Errorf("out_trade_no = %v, want %q", payload["out_trade_no"], idemKey)
+				}
+				respBody, _ := json.Marshal(map[string]string{"code_url": "weixin://wxpay/bizpayurl?pr=fake"})
+				return 200, respBody
+			case req.Method == http.MethodGet && req.URL.RequestURI() == wantQueryURI:
+				// The Authorization header must sign the SAME escaped
+				// canonical URL the request actually carries -- re-verified
+				// here against the escaped form from first principles, so a
+				// signature over a differently-escaped string can never
+				// slip through.
+				authz := req.Header.Get("Authorization")
+				fields := parseAuthorizationHeader(t, authz)
+				merchantPub := mustPublicFromPrivatePEM(t, cfg.MchPrivateKeyPEM)
+				message := requestSignMessage(http.MethodGet, wantQueryURI, fields["timestamp"], fields["nonce_str"], "")
+				if err := verifyRawSignature(message, fields["signature"], merchantPub); err != nil {
+					t.Errorf("QueryStatus signature does not verify over the escaped canonical URL: %v", err)
+				}
+				respBody, _ := json.Marshal(map[string]any{
+					"trade_state": "SUCCESS",
+					"amount":      map[string]any{"total": 2900, "currency": "CNY"},
+				})
+				return 200, respBody
+			default:
+				t.Fatalf("unexpected call: %s %s", req.Method, req.URL.RequestURI())
+				return 0, nil
+			}
+		},
+	}
+
+	gw, err := newGatewayWithClient(doer, cfg)
+	if err != nil {
+		t.Fatalf("newGatewayWithClient: %v", err)
+	}
+
+	handle, err := gw.CreateCharge(context.Background(), billing.ChargeRequest{
+		TenantID:       "tenant-a",
+		SubscriptionID: "sub-1",
+		InvoiceID:      "inv-1",
+		Amount:         billing.Money{Cents: 2900, Currency: "CNY"},
+		Description:    "Pro plan",
+		IdempotencyKey: idemKey,
+	})
+	if err != nil {
+		t.Fatalf("CreateCharge: %v", err)
+	}
+	if !created {
+		t.Fatal("CreateCharge never reached the doer")
+	}
+	if handle.ChannelReference != billing.ChannelReference(idemKey) {
+		t.Errorf("ChannelReference = %q, want %q", handle.ChannelReference, idemKey)
+	}
+
+	status, amount, err := gw.QueryStatus(context.Background(), handle.ChannelReference)
+	if err != nil {
+		t.Fatalf("QueryStatus: %v", err)
+	}
+	if status != billing.ChannelStatusSucceeded {
+		t.Errorf("status = %q, want succeeded", status)
+	}
+	if amount.Cents != 2900 || amount.Currency != "CNY" {
+		t.Errorf("amount = %+v", amount)
+	}
+}
+
 func TestNewGateway_RequiresConfig(t *testing.T) {
 	if _, err := NewGateway(Config{}); err == nil {
 		t.Error("NewGateway(Config{}) = nil error, want an error")

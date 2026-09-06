@@ -15,7 +15,15 @@ import (
 // resource AEAD_AES_256_GCM-encrypted with apiV3Key and the whole body
 // RSA-SHA256-signed with platformPriv -- this package's own
 // locally-constructed fixture (doc.go's own testing-strategy section).
+// signedNotifyBodyAt is the same fixture with an explicit
+// Wechatpay-Timestamp, so a test can build a genuinely fresh delivery and
+// a deliberately stale one.
 func signedNotifyBody(t *testing.T, platformPriv *rsa.PrivateKey, apiV3Key []byte, eventType string, txn transactionResource) (headers map[string][]string, body []byte) {
+	t.Helper()
+	return signedNotifyBodyAt(t, platformPriv, apiV3Key, eventType, txn, strconv.FormatInt(time.Now().Unix(), 10))
+}
+
+func signedNotifyBodyAt(t *testing.T, platformPriv *rsa.PrivateKey, apiV3Key []byte, eventType string, txn transactionResource, timestamp string) (headers map[string][]string, body []byte) {
 	t.Helper()
 	plaintext, err := json.Marshal(txn)
 	if err != nil {
@@ -40,7 +48,6 @@ func signedNotifyBody(t *testing.T, platformPriv *rsa.PrivateKey, apiV3Key []byt
 		t.Fatalf("marshal envelope: %v", err)
 	}
 
-	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 	sigNonce := "notify-nonce"
 	sig, err := signRequest(notifySignMessage(timestamp, sigNonce, string(body)), platformPriv)
 	if err != nil {
@@ -174,6 +181,62 @@ func TestGateway_VerifyWebhook_UnrecognizedEventType(t *testing.T) {
 	_, err = gw.VerifyWebhook(context.Background(), headers, body)
 	if !hasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookPayloadUnrecognized", err)
+	}
+}
+
+// TestGateway_VerifyWebhook_StaleTimestamp_Refused is P3-13's regression
+// test: VerifyWebhook used to check nothing about the delivery's
+// Wechatpay-Timestamp -- a captured, replayed notification with a fully
+// valid signature was accepted no matter how old it was. WeChat Pay's own
+// notification scheme (like the signature-verification scheme this
+// module's stripe leg already enforces through stripe-go's own timestamp
+// tolerance) expects the receiver to bound the delivery's age: a
+// notification older than the freshness window is a replay and is refused
+// even though its signature verifies. The fix checks the header's Unix
+// timestamp against the same 300-second tolerance stripe-go's webhook
+// handling applies (its DefaultTolerance), refusing a delivery outside it
+// with ErrWebhookSignatureInvalid exactly like any other
+// authentication-class failure. On pre-fix code this stale-but-genuinely
+// signed delivery is accepted and normalized, so the test fails before the
+// fix and passes after.
+func TestGateway_VerifyWebhook_StaleTimestamp_Refused(t *testing.T) {
+	_, platformPubPEM, platformPriv := generateTestKeyPair(t)
+	cfg := testGatewayConfig(t, platformPubPEM)
+	gw, err := newGatewayWithClient(&fakeDoer{}, cfg)
+	if err != nil {
+		t.Fatalf("newGatewayWithClient: %v", err)
+	}
+
+	txn := testTransaction(t, "tenant-a", "sub-1", "inv-1", "ORD1", "SUCCESS", 2900)
+	stale := strconv.FormatInt(time.Now().Add(-10*time.Minute).Unix(), 10)
+	headers, body := signedNotifyBodyAt(t, platformPriv, cfg.APIv3Key, eventTypeTransactionSuccess, txn, stale)
+
+	_, err = gw.VerifyWebhook(context.Background(), headers, body)
+	if !hasCode(err, billing.ErrWebhookSignatureInvalid.Code) {
+		t.Errorf("err = %v, want billing.ErrWebhookSignatureInvalid (a stale notification is a replay and must be refused)", err)
+	}
+}
+
+// TestGateway_VerifyWebhook_CurrentTimestamp_StillAccepted pins the other
+// side of P3-13: a genuinely fresh delivery keeps verifying exactly as
+// before, so the freshness check cannot become overzealous.
+func TestGateway_VerifyWebhook_CurrentTimestamp_StillAccepted(t *testing.T) {
+	_, platformPubPEM, platformPriv := generateTestKeyPair(t)
+	cfg := testGatewayConfig(t, platformPubPEM)
+	gw, err := newGatewayWithClient(&fakeDoer{}, cfg)
+	if err != nil {
+		t.Fatalf("newGatewayWithClient: %v", err)
+	}
+
+	txn := testTransaction(t, "tenant-a", "sub-1", "inv-1", "ORD1", "SUCCESS", 2900)
+	headers, body := signedNotifyBody(t, platformPriv, cfg.APIv3Key, eventTypeTransactionSuccess, txn)
+
+	event, err := gw.VerifyWebhook(context.Background(), headers, body)
+	if err != nil {
+		t.Fatalf("VerifyWebhook: %v", err)
+	}
+	if event.EventID != "ORD1:SUCCESS" {
+		t.Errorf("EventID = %q, want ORD1:SUCCESS", event.EventID)
 	}
 }
 
