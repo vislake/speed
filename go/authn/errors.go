@@ -279,6 +279,15 @@ var (
 	// that a session id belongs to somebody else by getting a different
 	// error for "not found" than for "not yours".
 	ErrSessionNotFound = apperr.NotFound("authn.session_not_found")
+
+	// ErrInvalidRequestBody is returned by decodeJSON (handler.go) for a
+	// request body that does not decode into the operation's expected
+	// shape. Every one of this module's twenty HTTP operations that reads
+	// a body can answer with it, which is exactly what made its previous
+	// absence from this catalog (and from both locale files) a real gap: a
+	// client had no text to render for the single most common decode
+	// failure any endpoint can produce, only the raw code.
+	ErrInvalidRequestBody = apperr.Invalid("authn.invalid_request_body")
 )
 
 // errorCodes lists every code this module can return, in catalog order. It
@@ -327,4 +336,5 @@ var errorCodes = []string{
 	ErrMFAInvalidCode.Code,
 	ErrStepUpRequired.Code,
 	ErrSessionNotFound.Code,
+	ErrInvalidRequestBody.Code,
 }

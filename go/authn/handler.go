@@ -81,11 +81,14 @@ func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (Prin
 	return principal, true
 }
 
-// decodeJSON decodes r's body into v, translating a decode failure into the
-// structured invalid-request-body error every operation below reports it as.
+// decodeJSON decodes r's body into v, translating a decode failure into
+// ErrInvalidRequestBody (errors.go) -- the structured invalid-request-body
+// error every operation below reports it as, now catalogued and
+// bilingually rendered like every other error this module returns (see
+// ErrInvalidRequestBody's own doc comment).
 func decodeJSON(r *http.Request, v any) error {
 	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
-		return apperr.Invalid("authn.invalid_request_body").WithCause(err)
+		return ErrInvalidRequestBody.WithCause(err)
 	}
 	return nil
 }

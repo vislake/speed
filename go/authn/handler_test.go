@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"testing"
 	"time"
 
@@ -113,6 +114,40 @@ func TestHandler_Register_WeakPassword_Returns400(t *testing.T) {
 	errBody := decodeAuthnError(t, rec)
 	if errBody.Code == nil || *errBody.Code != ErrPasswordTooShort.Code {
 		t.Errorf("error code = %v, want %s", errBody.Code, ErrPasswordTooShort.Code)
+	}
+}
+
+// TestHandler_Register_MalformedBody_ReturnsCatalogedInvalidRequestBodyCode
+// is the regression for P2-6: decodeJSON's answer for a malformed request
+// body -- returned by every one of this module's operations that reads
+// one, register included -- used to have no entry in errorCodes (and so no
+// locale text in either language): a real answer no client could
+// localize, only render as a raw key. It is now ErrInvalidRequestBody
+// (errors.go), cataloged and bilingually rendered like every other coded
+// error this module returns.
+func TestHandler_Register_MalformedBody_ReturnsCatalogedInvalidRequestBodyCode(t *testing.T) {
+	t.Parallel()
+	h, _ := newTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/register", bytes.NewReader([]byte("{not valid json")))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	errBody := decodeAuthnError(t, rec)
+	if errBody.Code == nil || *errBody.Code != ErrInvalidRequestBody.Code {
+		t.Fatalf("error code = %v, want %s", errBody.Code, ErrInvalidRequestBody.Code)
+	}
+
+	if !slices.Contains(errorCodes, *errBody.Code) {
+		t.Errorf("returned code %q is not in errorCodes; a client has no locale-backed text to render for it", *errBody.Code)
+	}
+	for _, language := range []string{"zh-CN", "en-US"} {
+		if _, ok := loadLocale(t, language)[*errBody.Code]; !ok {
+			t.Errorf("%s locale carries no message for %q", language, *errBody.Code)
+		}
 	}
 }
 
