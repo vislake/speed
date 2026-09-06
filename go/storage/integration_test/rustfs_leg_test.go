@@ -2,7 +2,7 @@
 
 package storage_test
 
-// This file is the MinIO/S3 leg of the storage module's integration tier:
+// This file is the RustFS/S3 leg of the storage module's integration tier:
 // the module's full object lifecycle driven against a real S3-compatible
 // object store, through the objectstore/s3 subpackage's NewObjectStore, the
 // implementation the distributed deployment mode composes. It exists
@@ -18,14 +18,17 @@ package storage_test
 // raw minio-go client, never through the module's own read paths, so
 // nothing the module believes about its writes goes unchecked: a PutObject
 // that only pretended to write would pass an OpenContent round-trip but
-// fail the raw client's byte-for-byte check here.
+// fail the raw client's byte-for-byte check here. minio-go itself stays
+// the client library (it speaks plain S3 API, not anything MinIO-specific);
+// only the server this leg spins up changed, from MinIO to RustFS
+// (https://github.com/rustfs/rustfs).
 //
 // The composition under test is the ordinary one for a deployment that
 // keeps its metadata in-process and its bytes in real object storage: a
 // standalone-mode kernel (the module's own register/bootstrap path, its
 // unit tier's exact recipe) whose ObjectStore the host overrides with the
 // S3-backed implementation via WithObjectStore -- the same injectable
-// seam a distributed-mode host wires, exercised against real MinIO.
+// seam a distributed-mode host wires, exercised against real RustFS.
 //
 // Lifecycle coverage in one pass: nothing exists under the object's key
 // before the upload, the streamed bytes appear under it exactly as sent
@@ -42,13 +45,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/testcontainers/testcontainers-go"
-	tcminio "github.com/testcontainers/testcontainers-go/modules/minio"
+	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
@@ -59,10 +64,13 @@ import (
 	"github.com/vislake/speed/go/storage/migrations"
 )
 
-// minioImage pins the MinIO image this leg runs against to the same
+// rustfsImage pins the RustFS image this leg runs against to the same
 // release tag pkgcore's own ObjectStore tier uses, so both tiers exercise
-// the same server behavior.
-const minioImage = "minio/minio:RELEASE.2024-01-16T16-07-38Z"
+// the same server behavior. RustFS (https://github.com/rustfs/rustfs) has
+// no dedicated testcontainers-go module the way MinIO did (tcminio), so
+// the container is started through testcontainers' own generic
+// ContainerRequest instead -- see startRustfsStore below.
+const rustfsImage = "rustfs/rustfs:1.0.0-rc.5"
 
 // noopQueue is the do-nothing jobs.Queue this leg's module gets, mirroring
 // the unit tier's stubQueue: the module requires that a queue EXISTS for
@@ -80,7 +88,7 @@ func (noopQueue) Cancel(context.Context, jobs.JobID) error           { return ni
 // compile-time check that noopQueue satisfies jobs.Queue.
 var _ jobs.Queue = noopQueue{}
 
-// startMinioStore starts a disposable MinIO container, creates a fresh
+// startRustfsStore starts a disposable RustFS container, creates a fresh
 // bucket on it, and returns an S3-backed ObjectStore pointed at that
 // bucket, the raw client (for the independent assertions this file's
 // header promises) and the bucket name. The container is terminated via
@@ -88,55 +96,74 @@ var _ jobs.Queue = noopQueue{}
 // rather than by the store: provisioning a bucket is a hosting operation,
 // and s3.NewObjectStore deliberately never provisions its own. The shape
 // mirrors go/pkgcore/objectstore/s3/integration_test's own
-// startMinioObjectStore helper; the raw client is the addition this leg
+// startRustfsObjectStore helper; the raw client is the addition this leg
 // needs.
-func startMinioStore(t *testing.T, ctx context.Context) (pkgcore.ObjectStore, *minio.Client, string) {
+func startRustfsStore(t *testing.T, ctx context.Context) (pkgcore.ObjectStore, *minio.Client, string) {
 	t.Helper()
 
-	container, err := tcminio.Run(ctx, minioImage,
-		tcminio.WithUsername("minioadmin"),
-		tcminio.WithPassword("minioadmin"),
-	)
+	req := testcontainers.ContainerRequest{
+		Image:        rustfsImage,
+		ExposedPorts: []string{"9000/tcp"},
+		Env: map[string]string{
+			"RUSTFS_ACCESS_KEY":     "rustfsadmin",
+			"RUSTFS_SECRET_KEY":     "rustfsadmin",
+			"RUSTFS_ADDRESS":        ":9000",
+			"RUSTFS_CONSOLE_ENABLE": "false",
+		},
+		Cmd:        []string{"/data"},
+		WaitingFor: wait.ForHTTP("/health").WithPort("9000/tcp").WithStartupTimeout(60 * time.Second),
+	}
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
 	if err != nil {
-		t.Fatalf("start minio testcontainer: %v", err)
+		t.Fatalf("start rustfs testcontainer: %v", err)
 	}
 	t.Cleanup(func() {
 		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
-			t.Errorf("terminate minio testcontainer: %v", terminateErr)
+			t.Errorf("terminate rustfs testcontainer: %v", terminateErr)
 		}
 	})
 
-	endpoint, err := container.ConnectionString(ctx)
+	host, err := container.Host(ctx)
 	if err != nil {
-		t.Fatalf("minio testcontainer connection string: %v", err)
+		t.Fatalf("rustfs testcontainer host: %v", err)
 	}
+	mappedPort, err := container.MappedPort(ctx, "9000/tcp")
+	if err != nil {
+		t.Fatalf("rustfs testcontainer mapped port: %v", err)
+	}
+	endpoint := fmt.Sprintf("%s:%s", host, mappedPort.Port())
 
 	const bucket = "objects"
+	const accessKey = "rustfsadmin"
+	const secretKey = "rustfsadmin"
 	client, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(container.Username, container.Password, ""),
+		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
 		Secure: false,
 	})
 	if err != nil {
-		t.Fatalf("build a minio client for %q: %v", endpoint, err)
+		t.Fatalf("build a minio-go client for %q: %v", endpoint, err)
 	}
 	if err := client.MakeBucket(ctx, bucket, minio.MakeBucketOptions{}); err != nil {
-		t.Fatalf("create bucket %q on the minio testcontainer: %v", bucket, err)
+		t.Fatalf("create bucket %q on the rustfs testcontainer: %v", bucket, err)
 	}
 
 	return s3.NewObjectStore(s3.Config{
 		Endpoint:  endpoint,
 		Bucket:    bucket,
-		AccessKey: container.Username,
-		SecretKey: container.Password,
+		AccessKey: accessKey,
+		SecretKey: secretKey,
 	}), client, bucket
 }
 
 // TestObjectLifecycle_RoundTripsThroughS3 drives one object through the
-// module's full lifecycle against real MinIO, asserting at each step on
+// module's full lifecycle against real RustFS, asserting at each step on
 // what the raw client can see of the store.
 func TestObjectLifecycle_RoundTripsThroughS3(t *testing.T) {
 	ctx := context.Background()
-	store, client, bucket := startMinioStore(t, ctx)
+	store, client, bucket := startRustfsStore(t, ctx)
 
 	db := testutil.NewSQLite(t, "storage", migrations.FS)
 	module := storage.NewModule(db, storage.WithQueue(noopQueue{}))
@@ -145,7 +172,7 @@ func TestObjectLifecycle_RoundTripsThroughS3(t *testing.T) {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 
-	tenant := pkgcore.TenantID("minio-leg-tenant")
+	tenant := pkgcore.TenantID("rustfs-leg-tenant")
 	tctx := pkgcore.WithTenant(ctx, tenant)
 
 	jpeg := testutil.JPEG(t, 64, 64)

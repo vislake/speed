@@ -14,7 +14,7 @@ its revalidation pipeline, `DeriveService`'s thumbnail derivation, and
 `LifecycleService`'s crash-convergent delete protocol and expiry sweep; the
 HTTP surface (`api/openapi.yaml`, the generated `api.ServerInterface`,
 `Handler`, mounted by `Register` at `/api/v1/storage`); the Docker-backed
-`integration_test/` tier (a PostgreSQL leg and a MinIO/S3 leg, see
+`integration_test/` tier (a PostgreSQL leg and a RustFS/S3 leg, see
 "Testing"); and the reference app wired as the module's mandatory first
 consumer end to end (`examples/reference-app/cmd/server/server.go`,
 `cmd/server/storage_flow_test.go`). See "Deferred and not shipped" for what
@@ -400,15 +400,17 @@ invocation full-check.yml's integration-tiers job runs for this module:
   tenant-scoped repositories (objects, object_derivatives) on the second
   dialect, with fixtures filling every NOT NULL column exactly as the unit
   tier's do;
-- `minio_leg_test.go` — one object's full lifecycle driven against a real
-  MinIO server through `s3.NewObjectStore` (`go/pkgcore/objectstore/s3`),
-  the implementation the distributed deployment mode composes: every
-  assertion on the store's physical contents is made through a raw
-  minio-go client, never through the module's own read paths, so nothing
-  the module believes about its writes goes unchecked. The composition is
-  a standalone-mode kernel whose ObjectStore the host overrides via
+- `rustfs_leg_test.go` — one object's full lifecycle driven against a real
+  RustFS (https://github.com/rustfs/rustfs) server through
+  `s3.NewObjectStore` (`go/pkgcore/objectstore/s3`), the implementation the
+  distributed deployment mode composes: every assertion on the store's
+  physical contents is made through a raw minio-go client (the client
+  library stays minio-go regardless of which S3-compatible server backs
+  it), never through the module's own read paths, so nothing the module
+  believes about its writes goes unchecked. The composition is a
+  standalone-mode kernel whose ObjectStore the host overrides via
   `WithObjectStore` — the injectable seam a distributed-mode host wires,
-  exercised against real MinIO.
+  exercised against real RustFS.
 
 ## Known limitations
 
