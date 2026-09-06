@@ -462,3 +462,23 @@ tasks:
       # Quoted for the same reason as new:module: a malformed VERSION reaches
       # the script whole and fails there with its own message (exit 2).
       - python3 tools/release/lockstep-release.py '{{.VERSION}}'
+
+  docker:build:
+    desc: Build the reference app's Docker image locally (examples/reference-app/Dockerfile) and load it into the local Docker daemon.
+    # The reference-app-docker-image round's local-build convenience --
+    # mirrors the single-platform (native-arch), --load leg
+    # .github/workflows/reusable-docker-build.yml runs in CI, minus the
+    # multi-arch (linux/amd64,linux/arm64) discard-on-success leg CI also
+    # runs, which proves cross-platform buildability but produces nothing
+    # a local Docker daemon could load or run anyway (see that workflow's
+    # own header for why a genuinely multi-platform result cannot be
+    # --load-ed at all). The build context MUST be the repository root,
+    # not examples/reference-app/ -- see the Dockerfile's own header for
+    # why (its go.mod's replace directives reach every sibling go/*
+    # module by relative path, and it builds under go.work workspace
+    # mode). Requires Docker; docker-compose.yml (in the same directory)
+    # builds the identical image as part of `docker compose up --build`
+    # for the local demo, so this task exists for the "just build it,
+    # nothing else" case.
+    cmds:
+      - docker build -f examples/reference-app/Dockerfile -t speed-reference-app:local .
