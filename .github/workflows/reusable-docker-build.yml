@@ -47,10 +47,11 @@ name: docker-build
 #     (ghcr.io/<owner>/<image_name>), authenticated with the workflow's
 #     own built-in `GITHUB_TOKEN` -- see NOT YET below for why this is
 #     not a new credential.
-#   * Docker layer caching via actions/cache, keyed on the Dockerfile's
-#     own hash plus the runner OS plus the architecture (each
-#     architecture's layers are cached separately -- they are not
-#     interchangeable).
+#   * Docker layer caching via actions/cache, keyed on every input that
+#     changes a layer -- the Dockerfile plus the files it COPYs into the
+#     image (go.work, go.work.sum, go/**, examples/reference-app/**) --
+#     plus the runner OS plus the architecture (each architecture's
+#     layers are cached separately -- they are not interchangeable).
 #
 # NOT YET (this round's own stated boundary, not an oversight):
 #   * The registry namespace used here (this repository's own
@@ -82,7 +83,11 @@ name: docker-build
 #                  a run id, or a fixed string for a smoke build). The two
 #                  architecture-suffixed images land at
 #                  `<image_tag>-amd64` / `<image_tag>-arm64`; the combined
-#                  manifest lands at the plain `<image_tag>`.
+#                  manifest lands at the plain `<image_tag>`. Free text by
+#                  schema, so both jobs validate it against the OCI tag
+#                  grammar in their first step and interpolate it only
+#                  through the exported IMAGE_TAG environment variable
+#                  (see the validate step below).
 #   context     -- build context path, relative to the repository root.
 #   dockerfile  -- Dockerfile path, relative to the repository root.
 #   healthcheck_path -- HTTP path each architecture's own smoke leg curls
@@ -154,6 +159,34 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
+      - name: Validate the image_tag input format
+        # workflow_call inputs accept no `pattern` key (workflow_dispatch
+        # and workflow_call inputs share that schema limitation), so this
+        # reusable validates its free-text image_tag in a first step
+        # before anything interpolates it -- the same shape release.yml's
+        # version-input validation uses. The pattern IS the OCI/Docker tag
+        # grammar ([A-Za-z0-9_][A-Za-z0-9._-]{0,127}): image_tag lands in
+        # registry references and inside run: scripts below, and any
+        # character outside that grammar -- spaces, quotes, $, ;, &, a
+        # newline -- would be both an invalid tag and a script-injection
+        # vector, which is why interpolation below goes through the
+        # IMAGE_TAG environment variable this step exports rather than
+        # through ${{ }} expression substitution. Callers pass commit
+        # SHAs, run ids or fixed smoke strings, all of which match; the
+        # tag grammar also caps the length at 128 characters.
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          if ! [[ "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]]; then
+            echo "error: image_tag '$IMAGE_TAG' is not a valid image tag:"
+            echo "       expected ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}\$ -- a 1-128"
+            echo "       character name over letters, digits, '_', '.' and"
+            echo "       '-', with no leading '.' or '-'."
+            exit 1
+          fi
+          echo "image_tag '$IMAGE_TAG' has valid tag form"
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> "$GITHUB_ENV"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
 
@@ -176,14 +209,29 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Docker layer cache -- keyed on the Dockerfile's own content hash,
-      # the runner OS AND the architecture: amd64 and arm64 layers are
-      # never interchangeable, so they never share a cache slot.
+      # Docker layer cache -- keyed on every input that can change a
+      # layer, the runner OS AND the architecture: amd64 and arm64 layers
+      # are never interchangeable, so they never share a cache slot.
+      # The layer inputs are exactly what this Dockerfile COPYs into the
+      # image: go.work, go.work.sum, the whole go/ tree (workspace mode
+      # needs a real go.mod at every one of go.work's `use` entries to
+      # resolve at all -- the Dockerfile's own header says the same) and
+      # examples/reference-app/. The build context is the repository
+      # root (the one caller, docker-image-ci.yml, passes "."), which
+      # contains far more -- web/, docs/, .github/, tools/ -- but the
+      # Dockerfile never copies those into any layer, so hashing them
+      # would only churn the key without a layer change. If the
+      # Dockerfile ever COPYs more, extend this pattern list. Not
+      # covered by any source hash: the base images are tag-pinned
+      # (golang:1.26.8-bookworm, distroless static-debian12) rather than
+      # digest-pinned, so upstream base-image drift can move a layer
+      # under an unchanged key -- the honest residual, recorded at the
+      # cache-swap step below.
       - name: Cache Docker layers
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: /tmp/.buildx-cache
-          key: docker-buildx-${{ matrix.arch }}-${{ runner.os }}-${{ hashFiles(inputs.dockerfile) }}
+          key: docker-buildx-${{ matrix.arch }}-${{ runner.os }}-${{ hashFiles(inputs.dockerfile, 'go.work', 'go.work.sum', 'go/**', 'examples/reference-app/**') }}
           restore-keys: |
             docker-buildx-${{ matrix.arch }}-${{ runner.os }}-
 
@@ -197,25 +245,47 @@ jobs:
           file: ${{ inputs.dockerfile }}
           platforms: ${{ matrix.platform }}
           load: true
-          tags: ${{ env.REGISTRY_IMAGE }}:${{ inputs.image_tag }}-${{ matrix.arch }}
+          tags: ${{ env.REGISTRY_IMAGE }}:${{ env.IMAGE_TAG }}-${{ matrix.arch }}
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
 
-      # actions/cache has no update-in-place -- swap the new cache into the
-      # restored path so the NEXT run's restore-keys sees this run's layers
-      # rather than a stale one from whenever the key was first populated.
+      # actions/cache has no update-in-place -- swap the freshly written
+      # cache into the restored path, where the cache action's own post
+      # step picks it up for the store (that post step runs only on a
+      # successful job -- a smoke failure skips the save, which is the
+      # desired direction: nothing useful to store from a failed run).
+      # WHEN that post-step save fires (actions/cache v6 semantics, read
+      # from the action's own source):
+      # it saves under the primary key UNLESS the restore hit that key
+      # exactly -- an exact hit prints "Cache hit occurred on the primary
+      # key ..., not saving cache" and means the store already holds this
+      # key's content, so there is nothing to update. With the key above
+      # covering every input that changes a layer, the save therefore
+      # fires exactly when the tree changed since the last save (key
+      # miss, then a restore-keys hit or a cold first run both save) and
+      # is correctly skipped when nothing changed. Under the old
+      # Dockerfile-only key this claim could not hold: a source-only
+      # change kept the key, the restore hit it exactly, the save never
+      # fired, and the store stayed frozen at the layers from whenever
+      # the key was first populated -- precisely the stale state this
+      # step's comment claimed to prevent. The one residual no key can
+      # cover: the tag-pinned base images drift upstream under an
+      # unchanged key, so an exact-hit run can rebuild against a moved
+      # base and this swap then discards those refreshed layers (the
+      # store keeps the older ones; the next run re-pulls what moved --
+      # correct, just without the cache converging).
       - name: Move new Docker layer cache into place
         run: |
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
       - name: Report image size
-        run: docker image inspect ${{ env.REGISTRY_IMAGE }}:${{ inputs.image_tag }}-${{ matrix.arch }} --format '{{ .Size }} bytes'
+        run: docker image inspect "${REGISTRY_IMAGE}:${IMAGE_TAG}-${{ matrix.arch }}" --format '{{ .Size }} bytes'
 
       - name: Boot the loaded image and smoke-test its health route
         run: |
           set -euo pipefail
-          container_id=$(docker run -d -p "${{ inputs.healthcheck_port }}:${{ inputs.healthcheck_port }}" "${{ env.REGISTRY_IMAGE }}:${{ inputs.image_tag }}-${{ matrix.arch }}")
+          container_id=$(docker run -d -p "${{ inputs.healthcheck_port }}:${{ inputs.healthcheck_port }}" "${REGISTRY_IMAGE}:${IMAGE_TAG}-${{ matrix.arch }}")
           trap 'docker logs "$container_id" || true; docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
 
           echo "waiting for the container's own HEALTHCHECK (if any) and health route to answer..."
@@ -236,7 +306,7 @@ jobs:
             exit 1
           fi
 
-          echo "health route response ($REGISTRY_IMAGE:${{ inputs.image_tag }}-${{ matrix.arch }}, native ${{ matrix.platform }}, no emulation):"
+          echo "health route response (${REGISTRY_IMAGE}:${IMAGE_TAG}-${{ matrix.arch }}, native ${{ matrix.platform }}, no emulation):"
           cat /tmp/healthcheck-response
           echo
           echo "container HEALTHCHECK status: $status"
@@ -252,7 +322,7 @@ jobs:
           file: ${{ inputs.dockerfile }}
           platforms: ${{ matrix.platform }}
           push: true
-          tags: ${{ env.REGISTRY_IMAGE }}:${{ inputs.image_tag }}-${{ matrix.arch }}
+          tags: ${{ env.REGISTRY_IMAGE }}:${{ env.IMAGE_TAG }}-${{ matrix.arch }}
           cache-from: type=local,src=/tmp/.buildx-cache
 
   # Combines the two already-pushed, already-smoke-tested single-arch
@@ -273,6 +343,24 @@ jobs:
       contents: read
       packages: write
     steps:
+      # The same image_tag validation the build job runs (its own first
+      # step, since the two jobs run on separate runners): a tag that
+      # would fail one job must fail both before either pushes anything
+      # under a malformed reference.
+      - name: Validate the image_tag input format
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          if ! [[ "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]]; then
+            echo "error: image_tag '$IMAGE_TAG' is not a valid image tag:"
+            echo "       expected ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}\$ -- a 1-128"
+            echo "       character name over letters, digits, '_', '.' and"
+            echo "       '-', with no leading '.' or '-'."
+            exit 1
+          fi
+          echo "image_tag '$IMAGE_TAG' has valid tag form"
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> "$GITHUB_ENV"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
 
@@ -292,11 +380,11 @@ jobs:
       - name: Create the combined multi-arch manifest
         run: |
           docker buildx imagetools create \
-            -t "${REGISTRY_IMAGE}:${{ inputs.image_tag }}" \
-            "${REGISTRY_IMAGE}:${{ inputs.image_tag }}-amd64" \
-            "${REGISTRY_IMAGE}:${{ inputs.image_tag }}-arm64"
+            -t "${REGISTRY_IMAGE}:${IMAGE_TAG}" \
+            "${REGISTRY_IMAGE}:${IMAGE_TAG}-amd64" \
+            "${REGISTRY_IMAGE}:${IMAGE_TAG}-arm64"
 
       # The proof: print the combined tag's own manifest list and confirm
       # both native platforms are really in it.
       - name: Inspect the combined manifest
-        run: docker buildx imagetools inspect "${REGISTRY_IMAGE}:${{ inputs.image_tag }}"
+        run: docker buildx imagetools inspect "${REGISTRY_IMAGE}:${IMAGE_TAG}"
