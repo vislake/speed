@@ -35,13 +35,18 @@ const (
 // after a deliberate non-send -- no address on file, an external contact
 // whose consent lapsed (unsubscribed or bounced) -- whose reason will not
 // change by retrying. The record is upserted on every attempt, so its final
-// status reflects the last attempt; replay convergence is best-effort
-// at-most-once -- the delivery job checks this record's succeeded state
-// before any attempt, and the UNIQUE (tenant_id, idempotency_key) index
-// keeps the record set under one key singular while attempts race -- but a
-// crash between the transport's accept and this record's settle, or two
-// attempts probing before either settles, can still double-send
-// (delivery.go's deliverUserChannel doc spells the windows out).
+// status reflects the last attempt -- with one exception: settle's
+// never-downgrade-succeeded guard (delivery.go's settle doc) refuses to
+// overwrite a row that already says succeeded with any later skipped or
+// failed outcome under the same key, so a succeeded row is the durable fact
+// that its key delivered, whatever later attempts settled. Replay
+// convergence is best-effort at-most-once -- the delivery job checks this
+// record's succeeded state before any attempt, and the UNIQUE
+// (tenant_id, idempotency_key) index keeps the record set under one key
+// singular while attempts race -- but a crash between the transport's
+// accept and this record's settle, or two attempts probing before either
+// settles, can still double-send (delivery.go's deliverUserChannel doc
+// spells the windows out).
 const (
 	SendRecordStatusSucceeded = "succeeded"
 	SendRecordStatusFailed    = "failed"

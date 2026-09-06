@@ -253,6 +253,11 @@ var _ deliveryHost = (*pkgcore.Registry)(nil)
 //     accept and the record's settle, or two attempts probing before
 //     either settles, can still double-send (deliverUserChannel's doc
 //     below spells the windows out);
+//   - replay convergence never rewrites history: settle's
+//     never-downgrade-succeeded guard (its own doc below) refuses to
+//     overwrite a record that already says succeeded with any later
+//     skipped or failed outcome under the same key, whatever path --
+//     refusal, preference, error -- settled it;
 //   - an inbox delivery additionally publishes EventInboxCreated after the
 //     row is committed, announcing it to every replica's Hub.
 //
@@ -785,7 +790,10 @@ func (s *DeliveryService) deliverToContact(ctx context.Context, tenantID string,
 // the refusal error's own "channel" parameter (EnsureDeliverable attaches
 // the contact's channel to these two refusals; the other refusals carry no
 // channel and are not recorded, because a send record without a channel
-// could never be probed by a retry).
+// could never be probed by a retry). A refusal that lands on a key whose
+// record already says succeeded is dropped by settle's
+// never-downgrade-succeeded guard: the earlier delivery's outcome is the
+// durable fact, whatever the recipient's consent says now.
 func (s *DeliveryService) settleContactRefusal(ctx context.Context, tenantID string, d Dispatch, perr *apperr.Error) error {
 	channel, _ := perr.Params["channel"].(string)
 	if channel == "" {
@@ -999,17 +1007,33 @@ func (s *DeliveryService) alreadyDelivered(ctx context.Context, tenantID, key st
 }
 
 // settle persists one attempt's outcome as its send record -- the single
-// write every delivery path funnels through. It adopts the id of the record
-// already under the attempt's key (a retry overwrites its earlier attempts'
-// row in place, so one delivery keeps one record for life), invents one for
-// the first write, truncates the recorded message to the column's budget,
-// and returns nil when the record landed. A record that fails to land is
-// returned as an error: the attempt's outcome must be visible even when the
-// record write itself failed, which is what makes a lost succeeded record a
-// retried delivery rather than a silent gap in the log.
+// write every delivery path funnels through. It probes the record already
+// under the attempt's key, adopts its id (a retry overwrites its earlier
+// attempts' row in place, so one delivery keeps one record for life) or
+// invents one for the first write, truncates the recorded message to the
+// column's budget, and returns nil when the record landed. A record that
+// fails to land is returned as an error: the attempt's outcome must be
+// visible even when the record write itself failed, which is what makes a
+// lost succeeded record a retried delivery rather than a silent gap in the
+// log.
+//
+// # Never-downgrade-succeeded
+//
+// A probe that finds the key's existing record already succeeded refuses to
+// overwrite it with a different terminal status -- skipped or failed -- and
+// returns nil without writing: the succeeded row is the historical fact
+// that this key already delivered, and a later settle under the same key (a
+// refusal replay landing after the recipient unsubscribed or bounced, a
+// retry failing inside the acknowledged double-send window, any future
+// rejection path) must never erase it. The write is dropped, not rewritten
+// -- updated_at stays unmoved -- and the caller sees the same nil
+// convergence its own settle would have returned; the job's next retry then
+// converges on the alreadyDelivered probe. The guard sits at the adopt
+// point, where settle's probe already ran: every delivery path builds its
+// record through sendRecordFor with an empty ID (the adopt branch is where
+// an existing row is ever picked up), so no future rejection path reaches
+// the Save below without first passing this check.
 func (s *DeliveryService) settle(ctx context.Context, tenantID string, rec *SendRecord) error {
-	s.recordDeliveryMetrics(ctx, rec)
-
 	if len(rec.Error) > sendRecordErrorBudget {
 		rec.Error = rec.Error[:sendRecordErrorBudget]
 	}
@@ -1020,16 +1044,31 @@ func (s *DeliveryService) settle(ctx context.Context, tenantID string, rec *Send
 			return err
 		}
 		if existing != nil {
+			if existing.Status == SendRecordStatusSucceeded && rec.Status != SendRecordStatusSucceeded {
+				// Never-downgrade-succeeded: the key already delivered;
+				// keep the existing row (see the doc above).
+				return nil
+			}
 			rec.ID = existing.ID
 		} else {
 			rec.ID = uuid.NewString()
 		}
 	}
 
-	if err := s.sendRecs.Save(ctx, rec); err != nil {
+	persist := func() error {
+		if err := s.sendRecs.Save(ctx, rec); err != nil {
+			return err
+		}
+		s.recordDeliveryMetrics(ctx, rec)
+		return nil
+	}
+
+	if err := persist(); err != nil {
 		// The Save raced another writer that committed the same
-		// (tenant, key): adopt the winner's id and save once more. A
-		// second failure is returned for the job to retry.
+		// (tenant, key): adopt the winner's id and save once more -- unless
+		// the winner already records a succeeded send, which this attempt
+		// must not downgrade (never-downgrade-succeeded). A second failure
+		// is returned for the job to retry.
 		existing, probeErr := s.sendRecs.ByTenantAndKey(ctx, tenantID, rec.IdempotencyKey)
 		if probeErr != nil {
 			return errors.Join(err, probeErr)
@@ -1037,8 +1076,11 @@ func (s *DeliveryService) settle(ctx context.Context, tenantID string, rec *Send
 		if existing == nil {
 			return err
 		}
+		if existing.Status == SendRecordStatusSucceeded && rec.Status != SendRecordStatusSucceeded {
+			return nil
+		}
 		rec.ID = existing.ID
-		return s.sendRecs.Save(ctx, rec)
+		return persist()
 	}
 	return nil
 }
@@ -1050,10 +1092,12 @@ func (s *DeliveryService) settle(ctx context.Context, tenantID string, rec *Send
 // go/jobs/standalone_queue.go's registerJobMetrics doc comment gives (all
 // three label values are bounded, declared vocabularies: a type key from the
 // host's type registry, one of the three channel constants, one of the
-// three SendRecordStatus* values). Called from settle -- the single write
-// funnel every delivery path (success, failure and skip alike) runs through
-// -- so the recorded outcome always matches the record actually persisted,
-// even across settle's own id-race retry. rec.DurationMs is 0 for a channel
+// three SendRecordStatus* values). Called from settle after each Save it
+// persists lands -- the single write funnel every delivery path (success,
+// failure and skip alike) runs through -- never for a write the
+// never-downgrade-succeeded guard dropped, so the recorded outcome always
+// matches the record actually persisted, even across settle's own id-race
+// retry (only the winning row's settle counts once). rec.DurationMs is 0 for a channel
 // with no transport call (deliverInbox never sets it), which the histogram
 // simply records as a zero-duration observation rather than skipping.
 //
