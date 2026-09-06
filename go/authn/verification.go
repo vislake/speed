@@ -287,23 +287,33 @@ func (s *Service) RequestSMSCode(ctx context.Context, in RequestSMSCodeInput) er
 // this marks User.PhoneVerified true if it was not already, which is what
 // lets a phone-only account satisfy LoginMethodCount without ever visiting
 // a separate "verify my phone" flow.
+//
+// The per-target wrong-guess rate-limit budget (guard.CheckSMSVerifyWrongGuess)
+// is deliberately consulted AFTER verifyPhoneLoginCode, not before: see that
+// method's own doc comment for why checking it up front -- this method's own
+// previous shape -- lets an attacker who knows the target but not the code
+// hold the real holder's own correct attempt hostage for an entire window.
+// The IP dimension (guard.CheckSMSVerifyIP) is unaffected and still checked
+// up front, since it does not create that property.
 func (s *Service) LoginWithSMSCode(ctx context.Context, in SMSLoginInput) (*TokenPair, error) {
 	index, err := s.users.PhoneIndexOf(in.Phone)
 	if err != nil {
 		return nil, err
 	}
 
-	if guardErr := s.guard.CheckSMSVerify(ctx, index, in.IP); guardErr != nil {
+	if guardErr := s.guard.CheckSMSVerifyIP(ctx, in.IP); guardErr != nil {
 		return nil, guardErr
 	}
 
 	if verifyErr := s.verifyPhoneLoginCode(ctx, index, in.Code); verifyErr != nil {
-		user, lookupErr := s.users.FindByPhone(ctx, in.Phone)
-		userID := ""
-		if lookupErr == nil {
-			userID = user.ID
+		s.recordSMSFailureByPhone(ctx, in.Phone, index, in.IP)
+
+		// Only a WRONG guess -- verifyErr is non-nil here -- ever consumes
+		// this budget; a correct guess (the branch below) never reaches
+		// this call at all, so it can never be refused by it.
+		if guardErr := s.guard.CheckSMSVerifyWrongGuess(ctx, index); guardErr != nil {
+			return nil, guardErr
 		}
-		s.recordSMSFailure(ctx, userID, index, in.IP, FailureReasonBadCode)
 		return nil, verifyErr
 	}
 
@@ -414,6 +424,20 @@ func (s *Service) markPhoneLoginAttempt(ctx context.Context, targetIndex string,
 	}
 	obs.FromContext(ctx).Warn("verification code attempt retries exhausted",
 		"retries", maxMarkAttemptRetries)
+}
+
+// recordSMSFailureByPhone resolves phone's owning user (if any) and records
+// a bad-code failure against index -- the lookup+call pair LoginWithSMSCode
+// used to inline directly, factored out once its wrong-guess branch grew a
+// second caller of the same pattern (this round's rate-limit fix; see
+// LoginWithSMSCode's own doc comment).
+func (s *Service) recordSMSFailureByPhone(ctx context.Context, phone, index, ip string) {
+	user, lookupErr := s.users.FindByPhone(ctx, phone)
+	userID := ""
+	if lookupErr == nil {
+		userID = user.ID
+	}
+	s.recordSMSFailure(ctx, userID, index, ip, FailureReasonBadCode)
 }
 
 // recordSMSFailure writes a failed phone-login attempt to the login history

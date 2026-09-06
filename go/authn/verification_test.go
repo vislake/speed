@@ -268,6 +268,104 @@ func TestLoginWithSMSCode_LocksAfterMaxAttempts(t *testing.T) {
 	}
 }
 
+// TestLoginWithSMSCode_AttackerWrongGuesses_DoNotBlockVictimsCorrectCode is
+// the regression for P2-3: an attacker who knows the victim's phone number
+// but not the code used to be able to hold the shared per-target rate-limit
+// budget hostage, permanently denying the real holder's own correct
+// attempt for the rest of the window. See ratelimit.go's
+// CheckSMSVerifyWrongGuess and LoginWithSMSCode's own doc comment for the
+// fix.
+//
+// smsCodeMaxAttempts is deliberately raised well above the rate limiter's
+// own Rate so the attacker's wrong guesses exhaust the RATE LIMITER without
+// also locking the code itself (verifyPhoneLoginCode's independent
+// MaxAttempts counter) -- this test isolates the rate limiter's behavior
+// from that separate protection, which
+// TestLoginWithSMSCode_SustainedWrongGuessing_StillLocksViaMaxAttempts
+// below covers on its own.
+func TestLoginWithSMSCode_AttackerWrongGuesses_DoNotBlockVictimsCorrectCode(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	f := newSMSServiceFixture(t, &buf, WithSMSCodeMaxAttempts(limitSMSVerifyByTarget.Rate+5))
+	registerPhoneUser(t, f, testPhone, testTenantA)
+
+	if err := f.svc.RequestSMSCode(t.Context(), RequestSMSCodeInput{Phone: testPhone, IP: "203.0.113.200"}); err != nil {
+		t.Fatalf("RequestSMSCode() error = %v", err)
+	}
+	real := extractSentCode(t, &buf)
+	wrong := "000000"
+	if wrong == real {
+		wrong = "111111"
+	}
+
+	// The attacker, from their OWN IP, knows the victim's phone number but
+	// not the code: enough wrong guesses to exhaust the per-target verify
+	// budget entirely.
+	for i := 0; i < limitSMSVerifyByTarget.Rate; i++ {
+		if _, err := f.svc.LoginWithSMSCode(t.Context(), SMSLoginInput{
+			Phone: testPhone, Code: wrong, IP: "198.51.100.66",
+		}); !errors.Is(err, ErrVerificationCodeInvalid) {
+			t.Fatalf("attacker attempt %d: LoginWithSMSCode(wrong code) error = %v, want ErrVerificationCodeInvalid", i, err)
+		}
+	}
+
+	// The real account holder, from a DIFFERENT IP, now tries their own
+	// correct code. The per-target budget the attacker just exhausted must
+	// not be what decides this call: a correct code always gets through.
+	pair, err := f.svc.LoginWithSMSCode(t.Context(), SMSLoginInput{
+		Phone: testPhone, Code: real, TenantID: testTenantA, IP: "203.0.113.200",
+	})
+	if err != nil {
+		t.Fatalf("LoginWithSMSCode(real holder's correct code, after attacker exhausted the target budget) error = %v, want nil", err)
+	}
+	if pair.AccessToken == "" {
+		t.Errorf("LoginWithSMSCode() returned an incomplete token pair: %+v", pair)
+	}
+}
+
+// TestLoginWithSMSCode_SustainedWrongGuessing_StillLocksViaMaxAttempts is
+// the guard regression for P2-3: proving the fix above did not weaken
+// brute-force resistance against the code itself. A sustained attacker
+// guessing wrong from ONE source still gets the code locked by
+// smsCodeMaxAttempts (verifyPhoneLoginCode's own, independent counter),
+// which the rate-limiter change never touched.
+func TestLoginWithSMSCode_SustainedWrongGuessing_StillLocksViaMaxAttempts(t *testing.T) {
+	t.Parallel()
+
+	const maxAttempts = 3
+	var buf bytes.Buffer
+	f := newSMSServiceFixture(t, &buf, WithSMSCodeMaxAttempts(maxAttempts))
+	registerPhoneUser(t, f, testPhone, testTenantA)
+
+	if err := f.svc.RequestSMSCode(t.Context(), RequestSMSCodeInput{Phone: testPhone, IP: "203.0.113.201"}); err != nil {
+		t.Fatalf("RequestSMSCode() error = %v", err)
+	}
+	real := extractSentCode(t, &buf)
+	wrong := "000000"
+	if wrong == real {
+		wrong = "111111"
+	}
+
+	// A sustained attacker from ONE source guesses wrong maxAttempts times.
+	for i := range maxAttempts {
+		if _, err := f.svc.LoginWithSMSCode(t.Context(), SMSLoginInput{
+			Phone: testPhone, Code: wrong, IP: "198.51.100.77",
+		}); !errors.Is(err, ErrVerificationCodeInvalid) {
+			t.Fatalf("attempt %d: LoginWithSMSCode(wrong code) error = %v, want ErrVerificationCodeInvalid", i, err)
+		}
+	}
+
+	// The code is now locked: even the REAL code, from the same source,
+	// must be refused -- this is the brute-force defense the rate-limiter
+	// fix above must not have weakened.
+	if _, err := f.svc.LoginWithSMSCode(t.Context(), SMSLoginInput{
+		Phone: testPhone, Code: real, IP: "198.51.100.77",
+	}); !errors.Is(err, ErrVerificationCodeInvalid) {
+		t.Fatalf("LoginWithSMSCode(real code, after MaxAttempts reached) error = %v, want ErrVerificationCodeInvalid", err)
+	}
+}
+
 // TestMarkPhoneLoginAttempt_RetriesOnLostRace proves a wrong guess that
 // loses MarkAttempt's compare-and-swap race to a CONCURRENT wrong guess
 // against the SAME code still gets its own attempt recorded, rather than

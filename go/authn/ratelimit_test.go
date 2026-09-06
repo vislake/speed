@@ -197,9 +197,13 @@ func TestRateGuard_CheckSMSSend_EachDimensionLimitsIndependently(t *testing.T) {
 	}
 }
 
-// TestRateGuard_CheckSMSVerify_EachDimensionLimitsIndependently mirrors the
-// above for the code-verify endpoint.
-func TestRateGuard_CheckSMSVerify_EachDimensionLimitsIndependently(t *testing.T) {
+// TestRateGuard_CheckSMSVerifyWrongGuess_TargetDimensionSaturates mirrors
+// TestRateGuard_CheckSMSSend_EachDimensionLimitsIndependently for the
+// code-verify endpoint's per-target wrong-guess dimension -- the two guard
+// methods (CheckSMSVerifyWrongGuess, CheckSMSVerifyIP below) replaced the
+// single CheckSMSVerify this test used to exercise; see ratelimit.go's own
+// doc comments for why they were split.
+func TestRateGuard_CheckSMSVerifyWrongGuess_TargetDimensionSaturates(t *testing.T) {
 	t.Parallel()
 
 	guard := newRateGuard(pkgcore.NewMemoryKVStore())
@@ -207,10 +211,36 @@ func TestRateGuard_CheckSMSVerify_EachDimensionLimitsIndependently(t *testing.T)
 
 	var lastErr error
 	for i := 0; i < limitSMSVerifyByTarget.Rate+1; i++ {
-		lastErr = guard.CheckSMSVerify(ctx, "target-verify-test", ipForIndex(i))
+		lastErr = guard.CheckSMSVerifyWrongGuess(ctx, "target-verify-test")
 	}
 	if !hasCode(lastErr, ErrRateLimited.Code) {
-		t.Fatalf("CheckSMSVerify() after saturating the target dimension error = %v, want ErrRateLimited", lastErr)
+		t.Fatalf("CheckSMSVerifyWrongGuess() after saturating the target dimension error = %v, want ErrRateLimited", lastErr)
+	}
+
+	if err := guard.CheckSMSVerifyWrongGuess(ctx, "target-verify-unaffected"); err != nil {
+		t.Errorf("CheckSMSVerifyWrongGuess() for an unrelated target error = %v, want nil", err)
+	}
+}
+
+// TestRateGuard_CheckSMSVerifyIP_LimitsIndependently proves the IP
+// dimension is a separate counter from the per-target wrong-guess one:
+// many different targets sharing one IP saturate it on their own.
+func TestRateGuard_CheckSMSVerifyIP_LimitsIndependently(t *testing.T) {
+	t.Parallel()
+
+	guard := newRateGuard(pkgcore.NewMemoryKVStore())
+	ctx := t.Context()
+
+	var lastErr error
+	for i := 0; i < limitSMSVerifyByIP.Rate+1; i++ {
+		lastErr = guard.CheckSMSVerifyIP(ctx, "203.0.113.222")
+	}
+	if !hasCode(lastErr, ErrRateLimited.Code) {
+		t.Fatalf("CheckSMSVerifyIP() after saturating the IP dimension error = %v, want ErrRateLimited", lastErr)
+	}
+
+	if err := guard.CheckSMSVerifyIP(ctx, "203.0.113.223"); err != nil {
+		t.Errorf("CheckSMSVerifyIP() for a different IP error = %v, want nil", err)
 	}
 }
 

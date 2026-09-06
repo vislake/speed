@@ -167,13 +167,48 @@ func (g *rateGuard) CheckSMSSend(ctx context.Context, target, ip string) error {
 	return g.allow(ctx, "authn:sms:send:ip:"+ip, limitSMSSendByIP)
 }
 
-// CheckSMSVerify refuses a phone-login code VERIFICATION for target and ip
-// when either dimension is over limit.
-func (g *rateGuard) CheckSMSVerify(ctx context.Context, target, ip string) error {
-	if err := g.allow(ctx, "authn:sms:verify:target:"+target, limitSMSVerifyByTarget); err != nil {
-		return err
-	}
+// CheckSMSVerifyIP refuses a phone-login code verification attempt from ip
+// when the IP dimension is over limit. Unlike CheckSMSVerifyWrongGuess
+// below, this is checked unconditionally, before the presented code is
+// even compared: it protects against sheer request volume from one
+// source, a property that does not depend on WHICH target the request
+// names, so consulting it up front creates no hostage-the-victim's-own-
+// budget property the way the old, unconditional per-target check did
+// (see CheckSMSVerifyWrongGuess's own doc comment).
+func (g *rateGuard) CheckSMSVerifyIP(ctx context.Context, ip string) error {
 	return g.allow(ctx, "authn:sms:verify:ip:"+ip, limitSMSVerifyByIP)
+}
+
+// CheckSMSVerifyWrongGuess records one wrong phone-login code guess against
+// target and refuses further guessing once the per-target dimension is
+// over limit.
+//
+// This is deliberately consulted -- and its budget deliberately consumed --
+// ONLY after a guess has already been determined wrong (see verification.
+// go's LoginWithSMSCode, the one caller), never unconditionally before the
+// code is even compared, which is what this dimension's shape used to do
+// and what CheckSMSVerifyIP's own IP dimension still does today. A shared
+// per-target budget consumed on every attempt regardless of outcome can be
+// exhausted by an attacker who does not hold the real code and therefore
+// never succeeds -- 5 wrong guesses from anywhere within the window
+// permanently deny the real holder's own correct attempt for the rest of
+// it, because that attempt is refused by THIS check before it ever reaches
+// the comparison that would have told the two apart. Gating the budget on
+// "the guess just presented was wrong" instead means a correct code is
+// NEVER refused for budget reasons, no matter how many wrong guesses (from
+// however many sources) already exhausted it.
+//
+// This does not weaken brute-force resistance against the code itself:
+// that protection is DefaultSMSCodeMaxAttempts (verification.go), a
+// per-code counter enforced by verifyPhoneLoginCode independently of this
+// rate limiter, which locks a code after a fixed number of wrong guesses
+// regardless of source or of this dimension's own state. This dimension's
+// remaining role is throttling how often one target's wrong guesses can
+// recur across MULTIPLE issued codes within a window -- CheckSMSSend's own
+// per-target send limit already bounds how many fresh codes (each with its
+// own MaxAttempts budget) a window can produce.
+func (g *rateGuard) CheckSMSVerifyWrongGuess(ctx context.Context, target string) error {
+	return g.allow(ctx, "authn:sms:verify:target:"+target, limitSMSVerifyByTarget)
 }
 
 // CheckStepUp refuses a step-up verification for account (the user id) and
