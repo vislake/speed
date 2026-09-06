@@ -82,6 +82,17 @@ M0 的"核心组件"指下面第一组。组件全部受控、props 驱动、不
 
 **表单方案**：react-hook-form + zod 校验。zod schema 优先从 OpenAPI 生成的类型推导，避免前后端校验规则各写一套。
 
+> **已落地（responsive-design-hardening round）：本仓库第一轮显式的响应式设计核实与加固，横跨 ui-kit / layout-kit / reference-app 三处。** 本轮之前，`docs/internal/` 里没有任何既存的响应式/断点/视口设计要求——AppShell 的桌面/移动抽屉切换（`useMediaQuery(theme.breakpoints.up('md'))`）是唯一一处刻意设计的响应式机制，其余的响应式表现（PageHeader 的操作区换行）都是实现细节带来的偶然结果，从未被文档或测试钉住。本轮因此是**建立**验收基准，而非对着已写好的规格查漏。逐组件记的"响应式"现在具体指什么：
+>
+> - **layout-kit `AppShell`**：移动端（temporary）抽屉的 paper 宽度加了 CSS `min(sidebarWidth, 85vw)` 上限——极窄视口（约 320px 及以下）不再可能出现贴近满屏或溢出的抽屉；桌面端（permanent）抽屉宽度原样保留纯 `sidebarWidth`，未受影响。AppBar 的 Toolbar 行与 `headerActions` 分组都加了响应式 `flexWrap: 'wrap'`，host 塞进多个头部操作时换行而不是被挤压或裁切——两处都是纯 CSS 新增，未新增或修改任何 prop，也没有引入 AppShell 设计里刻意回避的"自动折叠溢出菜单"之类新的 host 面行为。
+> - **ui-kit `FileUploader`**：每行的操作按钮组（上传中的取消按钮；已完成/失败行的重试/移除按钮）加了响应式 `flexWrap: 'wrap'`，长文件名加多个按钮不会溢出窄队列卡片——纯 CSS 新增，行为不变。
+> - **ui-kit `PageHeader`**：行为不变（标题/操作区行原有的 flexWrap 换行本就有效）；本轮补了一条回归测试钉住这条此前无测试保护的偶然行为。
+> - **ui-kit `FormLayout`**：新增可选的 `columns?: 1 | 2` prop，默认值 `1` 与今天的无条件单列纵向流完全一致——省略该 prop 的每个既有消费者零行为变化。传 `columns={2}` 切到响应式 CSS Grid：`sm`（600px）以下单列、`sm` 及以上两列等宽轨道，操作区在 grid 模式下跨满全部列轨道。断点选在 `sm` 而非 `md` 是刻意的：两字段一行（如姓名/邮箱并排）一旦跨过手机/平板竖屏的分界线，字段宽度就已经足够可读；确实需要整行宽度的字段，无论视口如何都可以继续传 `columns={1}`。
+> - **ui-kit `DataTable`**：功能不变（`TableContainer` 自带的 `overflow-x: auto` 溢出处理本就生效）；本轮把这一直靠"用了 TableContainer 就顺带获得"的偶然结果，写成组件自身文档注释里明确声明、并有回归测试钉住的契约——列数或列宽如何都会在容器内横向滚动，而不是撑破页面。按优先级隐藏/重排列的响应式布局显式列为**延后**事项（README 的 Deferrals 记录），不是被默默丢弃。
+> - **reference-app 三个页面视图**（home-view.tsx、notes-view.tsx、account-view.tsx）：`p: 3` 改成 `p: { xs: 2, sm: 3 }`，纯样式取值调整，移动视口的边距从固定 24px 收紧到 16px；sign-in-view.tsx 复核后确认本就用 `width: 1` + `maxWidth` 的正确写法，未改动（它自身外层容器的 `p: 3` 与三处视图是同一遗留问题，但既然它不在本轮命名范围内且非本轮引入，故意留待下一轮一并处理，而非本轮顺手改掉未在范围内声明的文件）。
+>
+> 测试方法论上的诚实记录：本仓库没有 Playwright/真实视口渲染基建，引入一套也明确排除在本轮范围外（真实 e2e/视口测试是已记录、已规划的 M4 事项，`.github/workflows/e2e.yml` 自身就是一个待启用的 gated stub）。本轮沿用 `AppShell.test.tsx` 早先建立的 `window.matchMedia` 布尔替身模式处理既有的 JS 分支断点逻辑；新加的纯 CSS sx 断点值(FormLayout 的 grid 列、AppShell 移动抽屉宽度上限)——因为 jsdom 既不做真实布局也不求值 `@media` 条件，断点两侧谁"生效"在 jsdom 里根本没有对应的真实视口可言——改为读取 emotion 注入进文档的实际 CSS 文本（`emittedStyleText()`,新增的 `test-utils/emitted-css.ts`，ui-kit 与 layout-kit 两包各有一份）做属性/快照式断言，证明"预期的声明确实被写进了渲染结果"，而不是证明"某个断点侧的布局在真实设备上看起来正确"——这条局限性在测试文件自身的注释与两包的 README/AGENTS.md 里都逐处写明，不留默认更强覆盖率的印象。
+
 ## 跨领域 hooks 的归属
 
 避免"这个 hook 该放哪个包"反复扯皮，明确归属规则：**hook 跟随它所属的领域包，而不是集中放在 api-client。**
