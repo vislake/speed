@@ -12,35 +12,45 @@ import (
 )
 
 // org_invitation_signin_test.go is the end-to-end regression for the
-// invited-user half of the sign-in membership defect this round fixes: org
-// invitation acceptance creates a real, persistent org Membership row, and
-// sign-in must keep honoring that row -- in the process that accepted it
-// and in every later process booted against the same database. Before this
-// round, authn's membership answers came from an in-process roster that a
-// real accepted invitation was only mirrored into by an event subscription
-// owned by the accepting process (the sync-glue the org-backed
-// sign_in_memberships.go store replaced), so an invited user whose row
-// predated the current process -- the row survived every restart, the
-// roster did not -- could never sign in to the invited tenant: 403
-// authn.tenant_membership_required forever, exactly the failure a real
-// invited user hits on a deployed instance that stopped and came back
-// between their acceptance and their first sign-in.
+// invited-user half of the sign-in membership defect the membership round
+// fixed, kept honest by the tenantless-accept round that closed the STOP
+// item the earlier shape left behind: org invitation acceptance creates a
+// real, persistent org Membership row, and sign-in must keep honoring that
+// row -- in the process that accepted it and in every later process booted
+// against the same database. Before the membership round, authn's
+// membership answers came from an in-process roster that a real accepted
+// invitation was only mirrored into by an event subscription owned by the
+// accepting process (the sync-glue the org-backed sign_in_memberships.go
+// store replaced), so an invited user whose row predated the current
+// process -- the row survived every restart, the roster did not -- could
+// never sign in to the invited tenant: 403 authn.tenant_membership_required
+// forever, exactly the failure a real invited user hits on a deployed
+// instance that stopped and came back between their acceptance and their
+// first sign-in.
 //
 // The shape mirrors the same-boot regression the removed sync glue carried
 // (the deleted demo_org_membership_sync_test.go): the invitee is
 // registered through authn's real register route and NEVER granted a
 // membership by hand -- its only path to a membership is really accepting
-// the invitation below. The accept request carries the inviter's bearer
-// token (the tenant-scoped token org's accept handler requires -- go/org's
-// own doc comment: the invitation is resolved strictly inside the tenant
-// the context carries) and names the REAL registered invitee as the acting
-// subject through the demo identity header, which is the only way this
-// app's own accept flow can name a memberless invitee at all (the accept
-// flow's own memberless-caller limitation is recorded in this round's
-// report, not papered over here). Boot one then proves the accept grants
-// sign-in in process; the server shuts down completely, and boot two
-// against the same database proves the sign-in survives the restart that
-// used to kill it.
+// the invitation below. And the acceptance itself is performed the way a
+// real memberless invitee must perform it: the accept request carries NO
+// bearer token at all (the invitee holds no token -- with no membership
+// anywhere, sign-in is impossible until the acceptance below creates one)
+// and names the REAL registered invitee as the acting subject through the
+// demo identity header. That used to be impossible: org's accept handler
+// resolved the invitation strictly inside the tenant the caller's bearer
+// token named, so a memberless invitee could never accept, and this test
+// had to borrow the inviter's target-tenant token for the accept call (the
+// accept flow's memberless-caller limitation, recorded as a STOP item by
+// the membership round). Since the tenantless-accept round,
+// org_acceptInvitation resolves the invitation's own tenant from the token,
+// server-side, and this app's tenancy allowlist lets the accept path
+// through unresolved -- the accept below is the round's journey regression:
+// it failed with 403 tenancy.tenant_unresolved before the round, and
+// grants the invitee a real sign-in-able membership after it. Boot one
+// proves the accept grants sign-in in process; the server shuts down
+// completely, and boot two against the same database proves the sign-in
+// survives the restart that used to kill it.
 
 // registerOnlyRealAccount registers email through authn's real register
 // route and returns the user id authn assigned, WITHOUT ever granting the
@@ -153,11 +163,19 @@ func TestInvitationAccept_SignInSurvivesTheAcceptingProcess(t *testing.T) {
 
 	// Accept through org's real HTTP accept route, naming the REAL
 	// registered invitee's id as the acting subject -- never a
-	// cfg.Memberships.Grant on its behalf. The membership this call
-	// creates is org's own real row, and whether that row reaches authn's
-	// sign-in path is exactly what this test measures.
+	// cfg.Memberships.Grant on its behalf -- and carrying NO bearer token,
+	// because this invitee genuinely has none: with no membership anywhere,
+	// authn's own sign-in refused the account above (the control leg), so
+	// the only credential the invitee holds is the invitation token itself,
+	// and org's tenantless accept resolves the inviting tenant from it.
+	// This call used to borrow the inviter's target-tenant bearer instead
+	// (the STOP item the tenantless-accept round closes); on that pre-round
+	// code it fails with 403 tenancy.tenant_unresolved before org's handler
+	// is even reached. The membership this call creates is org's own real
+	// row, and whether that row reaches authn's sign-in path is exactly
+	// what this test measures.
 	var membership orgMembership
-	orgRequest(t, srv1, http.MethodPost, "/api/v1/org/invitations/accept", inviterToken, inviteeUserID,
+	orgRequest(t, srv1, http.MethodPost, "/api/v1/org/invitations/accept", "", inviteeUserID,
 		map[string]string{"token": token}, &membership)
 	if membership.UserID != inviteeUserID || membership.NodeID != root.ID || membership.Status != "active" {
 		t.Fatalf("membership after accept = %+v, want userId %q, nodeId %q, status \"active\"",

@@ -241,20 +241,24 @@ func TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd(t *
 	// The whole flow runs in one tenant, tenant-acme -- the tenant the demo
 	// host "acme.demo.localhost" used to select before authn landed. The
 	// bearer token registerAndAuthenticate returns is what selects that
-	// tenant now: org's routes sit behind the authn+tenancy middleware
-	// chain like every other route this app protects, and Host no longer
-	// resolves a tenant for them (see server.go's middleware-chain doc
-	// comment). The invitee authenticates as a DIFFERENT account than the
-	// inviter, exactly as a real acceptance would be: the person accepting
-	// is never the same HTTP caller who sent the invite. The two accounts'
-	// emails are authn-internal placeholders -- only the invitation's own
-	// email (inviteeEmail below) is what org's token binds to.
+	// tenant for the INVITER: org's routes sit behind the authn+tenancy
+	// middleware chain like every other route this app protects, and Host no
+	// longer resolves a tenant for them (see server.go's middleware-chain
+	// doc comment). The INVITEE deliberately authenticates as nobody: since
+	// the tenantless-accept round, org_acceptInvitation resolves the
+	// invitation's own tenant from the token, server-side, and the app's
+	// tenancy allowlist lets the accept path through unresolved -- exactly
+	// the situation a real invitee is in, holding no membership in and no
+	// bearer token for the inviting tenant yet. The accept request below
+	// therefore carries NO Authorization header at all; only the subject
+	// header names who is accepting (the invitee's user id, never the
+	// inviter's), and only the invitation's own email (inviteeEmail below)
+	// is what org's token binds to.
 	const inviterUserID = "user-owner-1"
 	const inviteeUserID = "user-new-hire-1"
 	const inviteeEmail = "new-hire@example.com"
 
 	inviterToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "org-owner")
-	inviteeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "org-invitee")
 
 	// Step 1: create the tenant's root -- the DSO's top-level group. No
 	// subject header: org_createNode never resolves a caller identity (only
@@ -302,12 +306,16 @@ func TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd(t *
 	}
 	token := tokenFromMail(t, mail)
 
-	// Step 4: the invitee accepts, authenticated as themselves -- a
-	// different subject than the inviter, exactly as a real acceptance
-	// would be: the person accepting is never the same HTTP caller who sent
-	// the invite.
+	// Step 4: the invitee accepts -- a different subject than the inviter
+	// (the person accepting is never the same HTTP caller who sent the
+	// invite) AND, since the tenantless-accept round, a caller holding no
+	// bearer token at all: the token in the body resolves the tenant
+	// server-side, which is the only way a real invitee, who has no
+	// membership in the inviting tenant yet, could ever reach an acceptance.
+	// The subject header names the invitee's user id; the request's
+	// Authorization header is deliberately absent.
 	var membership orgMembership
-	orgRequest(t, srv, http.MethodPost, "/api/v1/org/invitations/accept", inviteeToken, inviteeUserID,
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/invitations/accept", "", inviteeUserID,
 		map[string]string{"token": token}, &membership)
 	if membership.UserID != inviteeUserID || membership.NodeID != storeA.ID || membership.Status != "active" {
 		t.Fatalf("membership after accept = %+v, want userId %q, nodeId %q, status \"active\"",

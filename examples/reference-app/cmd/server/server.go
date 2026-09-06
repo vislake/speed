@@ -2605,6 +2605,25 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			// AuthMiddleware ever got the chance to resolve one from the
 			// presented key.
 			tenancy.WithAllowlist(http.MethodGet, integrationWhoamiPath),
+			// orgAcceptPath (org_acceptInvitation) is the one org route this
+			// app lets through tenant resolution, for the identical reason
+			// sharing.PathAccess gets its entry: the caller an invitation
+			// exists for -- a freshly invited person -- holds no membership
+			// in, and typically no bearer token for, the inviting tenant, so
+			// their request carries no tenant claim for tenancy.Middleware
+			// to resolve. org's accept handler resolves the tenant itself,
+			// server-side, from the invitation token (InviteService.Accept,
+			// through go/org's narrow org_invitation_token_index -- the
+			// sharing-model mechanism sharing's own public path uses), once
+			// this allowlist entry lets the request reach it at all; without
+			// the entry, tenancy.Middleware would refuse every accept with
+			// tenancy.tenant_unresolved before org's handler ever saw the
+			// token. POST only: the fragment defines no other method on this
+			// path. Unlike sharing.PathAccess this is NOT an anonymous
+			// surface: org's own per-operation SubjectResolver check still
+			// refuses an unidentifiable acceptor with org.subject_unresolved,
+			// and authn.Middleware still 401s a genuinely invalid bearer.
+			tenancy.WithAllowlist(http.MethodPost, orgAcceptPath),
 		}, authnPreAuthAllowlist()...)...)(mux),
 	)
 

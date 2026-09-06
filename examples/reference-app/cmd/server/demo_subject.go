@@ -726,6 +726,15 @@ const (
 	orgAcceptSuffix       = "/accept"
 )
 
+// orgAcceptPath is the full path of org_acceptInvitation (POST
+// /api/v1/org/invitations/accept) -- the one org operation this app's
+// tenancy.Middleware allowlist names (server.go's buildServer) and the one
+// org operation guardOrgRoute's permission gate lets through ungated.
+// Composed here, in the same file that owns the path's three components,
+// so server.go's allowlist entry and guardOrgRoute's bypass can never drift
+// from orgPermissionFor's own sub-path switches.
+const orgAcceptPath = orgRoutePath + orgInvitationsSubPath + orgAcceptSuffix
+
 // orgPermissionFor selects the org:* permission a request against
 // orgRoutePath must hold, from its path and method alone -- never a header,
 // a query parameter or a body field, the same rule demoPermissionFor's own
