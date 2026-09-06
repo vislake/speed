@@ -87,5 +87,14 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test-utils/setup.ts'],
+    // The e2e/ directory holds the Playwright suite (playwright.config.ts),
+    // whose specs import @playwright/test and drive a real browser against
+    // a real server. Vitest's default include pattern would otherwise
+    // collect them as unit tests -- the two tiers stay physically apart by
+    // convention (.claude/skills/frontend-coding-standards/SKILL.md §12),
+    // and this exclusion is what keeps `pnpm test` honest about which tier
+    // it ran. Vitest's own defaults (node_modules, dist) are restated here
+    // because naming `exclude` replaces them rather than extending them.
+    exclude: ['e2e/**', '**/node_modules/**', '**/dist/**'],
   },
 })

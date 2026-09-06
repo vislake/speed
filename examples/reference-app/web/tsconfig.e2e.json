@@ -1,0 +1,25 @@
+{
+  // Type configuration for the Playwright suite under e2e/.
+  //
+  // It is a separate config rather than an entry in tsconfig.json's
+  // include for one reason: tsconfig.json is what `vite build` type-gates
+  // the shipped app with, and the browser bundle must never carry the
+  // e2e tier's types or imports in its graph. Splitting keeps the app's
+  // build honest while still type-checking the suite -- package.json's
+  // typecheck script runs both configs, so a bad locator type or a stale
+  // import fails before anyone starts a browser.
+  //
+  // Everything else -- strictness, module resolution, the @speed/* path
+  // map -- is inherited unchanged from the app's own config, so the specs
+  // resolve the workspace siblings exactly the way the app's src does.
+  //
+  // "types" names node explicitly: the base config sets a DOM lib for the
+  // browser bundle and pulls in no ambient type packages, while this tier
+  // runs half in Node (the config's server orchestration, the temp-file
+  // database path, process.env) and half in the browser (the specs).
+  // @speed/api-client sets the same precedent for a package that needs
+  // both.
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "types": ["node"] },
+  "include": ["e2e", "playwright.config.ts"]
+}

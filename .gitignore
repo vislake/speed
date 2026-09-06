@@ -54,3 +54,13 @@ dist/
 /docs/site/public/
 /docs/site/resources/
 /docs/site/.hugo_build.lock
+
+# Playwright output for the reference-app end-to-end suite
+# (examples/reference-app/web/e2e, playwright.config.ts): per-run traces,
+# screenshots and failure snapshots plus the HTML report. Diagnostic
+# artifacts of one run on one machine, never committed -- CI uploads them
+# from its own run instead.
+/examples/reference-app/web/test-results/
+/examples/reference-app/web/playwright-report/
+/examples/reference-app/web/blob-report/
+/examples/reference-app/web/.playwright/
