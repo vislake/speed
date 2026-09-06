@@ -472,11 +472,37 @@ var demoHostTenants = map[string]pkgcore.TenantID{
 	"globex.demo.localhost": "tenant-globex",
 }
 
-// demoMemberships is this app's small, in-process stand-in for the org
-// module's real membership store -- authn's MembershipReader seam
-// (go/authn/service.go), seeded by hand rather than backed by a real
-// organizations table. Root CLAUDE.md's "org / rbac rounds" deferral is why
-// there is no real one to wire yet.
+// demoMemberships is this app's small, in-process stand-in for a real
+// authn.MembershipReader (go/authn/service.go) -- seeded by hand rather
+// than backed by a real store. org and rbac are NOT the reason this exists:
+// both are real, tested, landed modules, and this app wires both for real
+// (org.NewModule at this file's own orgModule composition; rbac.NewModule
+// alongside it) -- root CLAUDE.md's "org / rbac rounds" deferral this
+// comment used to cite was stale by the time it was written, since both
+// rounds had already shipped.
+//
+// The real reason is a structural one: authn's MembershipReader seam asks
+// two questions -- "is this (user, tenant) pair an active membership" and
+// "which tenants is this user a member of, at all" -- and authn never
+// imports org (root CLAUDE.md's own module-boundary rule: authn and org sit
+// at the same dependency tier, peers, neither importing the other), so
+// whatever answers those questions must be host glue supplied by the
+// assembling application, exactly like demoNotesSubjectResolver and
+// orgSubtreeResolver below are. A real org-backed answer is possible in
+// principle -- org.MemberService.Get(ctx, userID) answers the first
+// question for a caller who already knows which tenant to ask, since
+// Membership is tenant-scoped -- but the second question, "every tenant
+// this user belongs to", has no single-query answer in org's own schema:
+// each tenant's memberships live in that tenant's own scoped table, so
+// answering it for an arbitrary user would mean iterating every tenant org
+// has ever seen (or a system-context aggregate query org does not expose),
+// which is real, unscoped engineering this app's own small, fixed set of
+// demo tenants and accounts does not need. demoMemberships remains the
+// pragmatic choice for that reason, not because org or rbac are unfinished
+// -- an org-backed MembershipReader adapter is a real option for a
+// consumer project with its own bounded tenant set, left to that
+// consumer's own wiring rather than built here as a second stand-in this
+// example does not need.
 //
 // It starts empty, and who fills it depends on the boot:
 //
