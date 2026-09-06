@@ -305,8 +305,8 @@ func TestSQLiteBusyTimeout_ReadThenWriteUpgradeDoesNotWait(t *testing.T) {
 	if err != nil {
 		t.Fatalf("A begin: %v", err)
 	}
-	if _, err := txA.Exec("INSERT INTO t (v) VALUES ('held')"); err != nil {
-		t.Fatalf("A insert (acquire RESERVED): %v", err)
+	if _, insertErr := txA.Exec("INSERT INTO t (v) VALUES ('held')"); insertErr != nil {
+		t.Fatalf("A insert (acquire RESERVED): %v", insertErr)
 	}
 
 	txB, err := b.Begin()
