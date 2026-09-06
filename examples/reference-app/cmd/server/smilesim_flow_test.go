@@ -4,8 +4,11 @@ package main
 // pipeline end to end through the composed HTTP stack -- the
 // authn+tenancy middleware chain, a real temp-file SQLite database
 // (carrying storage's, ai-gateway's and every other module's real
-// migrations), a real jobs.StandaloneQueue, and the hand-written
-// smile-simulation routes (cmd/server/smilesim.go) -- against a fake
+// migrations), a real jobs.StandaloneQueue, and the smile-simulation
+// surface (cmd/server/smilesim.go, the app-side implementation of the
+// generated interface its internal/smilesim/api fragment declares, whose
+// mount patterns the generated HandlerFromMux derives from the fragment
+// itself) -- against a fake
 // OpenAI-compatible images endpoint (fakeOpenAIImageServer below),
 // standing in for the real vendor: no live API key is available or
 // needed, since the OpenAI-compatible images-edits multipart/form-data

@@ -29,8 +29,8 @@ type caseCreateBody struct {
 }
 
 // testCase is the response shape a case's create/list/detail answers
-// share (caseResponse in cases.go), decoded enough for this file's
-// assertions.
+// share (the spec fragment's CasesCase, encoded by toCasesCase in
+// cases.go), decoded enough for this file's assertions.
 type testCase struct {
 	ID            string `json:"id"`
 	PatientName   string `json:"patient_name"`
