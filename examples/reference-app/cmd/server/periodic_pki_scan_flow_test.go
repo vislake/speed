@@ -2,21 +2,25 @@ package main
 
 // periodic_pki_scan_flow_test.go proves that the reference app's host-side
 // periodic-task scheduler (periodic_scheduler.go) really drives go/pki's
-// signing-key expiry scan through the composed stack: real ticks at a
-// sub-second cfg.PeriodicTaskInterval enqueue Service.EnqueueExpiryScan
-// tasks, the app's real standalone queue drains them into pki's
-// expiryScanHandler, and each run of ScanExpiry advances the signing-key
-// state machine over the real pki_signing_keys rows.
+// signing-key expiry scan through the composed stack: real ticks at the
+// flow tests' cfg.PeriodicTaskInterval (periodicFlowTickInterval, one
+// second) enqueue Service.EnqueueExpiryScan tasks, the app's real
+// standalone queue drains them into pki's expiryScanHandler, and each run
+// of ScanExpiry advances the signing-key state machine over the real
+// pki_signing_keys rows.
 //
 // The mechanism is genuinely periodic on this app's queue, unlike
 // storage's expiry sweep. The sweep's deterministic per-tenant idempotency
-// key collides with StandaloneQueue's permanent idempotency, so only its
-// first tick's sweep ever runs (periodic_scheduler_flow_test.go's header
-// records that collision and pins it). EnqueueExpiryScan carries NO
-// idempotency key -- each tick is its own independent occurrence, and the
-// scan's guarded, status-checked state transitions make overlapping scans
-// safe -- so this test can observe a real rotation complete: the purpose's
-// boot key staged over by a successor and demoted to retiring.
+// key collides with StandaloneQueue's permanent idempotency, so each
+// tenant gets exactly one sweep per database file -- the first-ever one
+// (periodic_scheduler_flow_test.go's header records that residual
+// limitation, and its two-boot test proves that one sweep really removes
+// an expired object's row and bytes when an expired object exists).
+// EnqueueExpiryScan carries NO idempotency key -- each tick is its own
+// independent occurrence, and the scan's guarded, status-checked state
+// transitions make overlapping scans safe -- so this test can observe a
+// real rotation complete: the purpose's boot key staged over by a
+// successor and demoted to retiring.
 //
 // What the test drives, and what it only watches:
 //
@@ -44,8 +48,8 @@ package main
 //     150s default, so a scan tick past that window promotes the staged
 //     key. The rotation math itself is real: the scan reads the real key
 //     rows' NotAfter/RetiringOverlap columns and the real clock; only the
-//     policy constants are compressed, exactly like the fast cadence of
-//     periodicFlowTickInterval itself.
+//     policy constants are compressed, exactly like the compressed cadence
+//     of periodicFlowTickInterval itself.
 //   - Observation is the same second-connection reach the audit flow test
 //     uses (TestBuildServer_NoteCreate_PersistsAuditEvent): buildServer
 //     hands out neither its *gorm.DB nor module services, so a second
@@ -82,8 +86,12 @@ import (
 // pkiFlowPropagationWindow is the cfg.PKIPropagationWindow the rotation
 // test injects: 400ms in place of go/pki's DefaultPropagationWindow (150s,
 // five 30s cache TTLs), so a staged successor key becomes promotable
-// within test time while staying comfortably longer than one tick -- a
-// promotion can never be observed before the scan that staged the key.
+// within test time. The window is what stops one scan from both staging
+// and promoting: a promotion requires now >= staged_at + window, which no
+// single scan can satisfy for the key it just staged. With the one-second
+// flow-tick cadence the window also sits well under a tick interval, so
+// the tick after the staging one is always far enough past the staging
+// scan -- promotion lands on the next tick, never on the staging one.
 const pkiFlowPropagationWindow = 400 * time.Millisecond
 
 // pkiFlowRenewalLeadTime is the cfg.PKIRenewalLeadTime the rotation test
@@ -96,12 +104,12 @@ const pkiFlowPropagationWindow = 400 * time.Millisecond
 const pkiFlowRenewalLeadTime = 400 * 24 * time.Hour
 
 // signingKeyRotationDeadline bounds the poll below. The happy path is fast
-// (a stage on the first tick after the sign-in, a promotion on the first
-// tick past pkiFlowPropagationWindow -- under a second of real ticks), so
-// the deadline is generous purely against loaded CI machines; a rotation
-// that has not landed within it means the scheduled scans are not
-// advancing the state machine, which is exactly the failure this test
-// exists to catch.
+// (a stage on the first tick after the sign-in, a promotion on the next
+// tick, which the one-second cadence puts well past the propagation
+// window -- about two seconds of real ticks), so the deadline is generous
+// purely against loaded CI machines; a rotation that has not landed within
+// it means the scheduled scans are not advancing the state machine, which
+// is exactly the failure this test exists to catch.
 const signingKeyRotationDeadline = 20 * time.Second
 
 // TestBuildServer_PeriodicScheduler_PKIExpiryScan_RotatesBootKey drives the
