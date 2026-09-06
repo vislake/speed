@@ -145,8 +145,12 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   // examples/reference-app/internal/notes/handler.go -- the notes module
   // handler's own sentinels.
   'notes.text_required': 'examples/reference-app/internal/notes/handler.go:31 (ErrTextRequired)',
-  'notes.text_too_long': 'examples/reference-app/internal/notes/handler.go:66 (ErrTextTooLong)',
-  'notes.internal_error': 'examples/reference-app/internal/notes/handler.go:70 (errInternal)',
+  // The two declarations below sit after the maxRequestBodyBytes constant
+  // block the request-body-cap round added above ErrTextTooLong; the cited
+  // lines are the current declaration sites, kept in step with the Go
+  // source (the deep-check below fails any drift).
+  'notes.text_too_long': 'examples/reference-app/internal/notes/handler.go:80 (ErrTextTooLong)',
+  'notes.internal_error': 'examples/reference-app/internal/notes/handler.go:84 (errInternal)',
 }
 
 /**
