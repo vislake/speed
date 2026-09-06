@@ -411,8 +411,16 @@ func TestSSOService_Callback_JITProvisioningStillRequiresMembership(t *testing.T
 	if userErr != nil {
 		t.Fatalf("the account was not provisioned: %v", userErr)
 	}
-	if !created.EmailVerified {
-		t.Error("EmailVerified = false, want true: the tenant's own identity provider asserted it")
+	// The mint is email-less by design (resolveAccount's mint branch): a
+	// tenant-grade verified claim must not seat the platform-unique email
+	// index, or the tenant's administrator could capture the address's true
+	// owner's later trusted-provider sign-ins. The claimed address lives on
+	// the identity row as display data instead.
+	if created.Email != "" || created.EmailVerified {
+		t.Errorf("Email = %q, EmailVerified = %v; want an email-less mint", created.Email, created.EmailVerified)
+	}
+	if identity.Email != "brand-new@example.com" {
+		t.Errorf("Identity.Email = %q, want the claimed address kept on the identity row", identity.Email)
 	}
 }
 
@@ -504,8 +512,12 @@ func TestSSOService_Callback_JITProvisionedMemberSignsInOnTheNextAttempt(t *test
 	if userErr != nil {
 		t.Fatalf("the account was not provisioned: %v", userErr)
 	}
-	if !created.EmailVerified {
-		t.Error("EmailVerified = false, want true: the identity provider asserted it")
+	// Email-less mint, exactly as TestSSOService_Callback_JITProvisioningStillRequiresMembership
+	// now pins: the tenant-grade verified claim must not seat the
+	// platform-unique email index. The sign-in below needs no email -- it
+	// resolves over the bound identity.
+	if created.Email != "" || created.EmailVerified {
+		t.Errorf("Email = %q, EmailVerified = %v; want an email-less mint", created.Email, created.EmailVerified)
 	}
 
 	// The host's membership machinery, reacting to EventUserCreated, grants
@@ -549,6 +561,124 @@ func writeSSOConfig(t *testing.T, f *serviceFixture, tenantID pkgcore.TenantID, 
 		t.Fatalf("write the tenant sso config: %v", err)
 	}
 	return config
+}
+
+// TestSSOService_Callback_JITMintDoesNotCaptureTheAddressOwnersLaterTrustedSignIn
+// is the P1-6 regression, reproducing the takeover chain end to end against
+// this module's own scaffolding:
+//
+// Leg 1 -- the tenant administrator of tenant A, who configures the issuer
+// and the allowed domains and may run the identity provider themselves (the
+// premise the membership condition on resolveAccount's linking branch exists
+// to bound), lists example.com and completes an enterprise callback asserting
+// victim@example.com as verified. The address has no account yet, so the
+// just-in-time branch mints one and binds the administrator's subject to it;
+// the host's membership machinery (reacting to EventUserCreated, the
+// documented reaction that makes enterprise JIT sign-in work) then grants
+// the minted account membership of tenant A, and the administrator signs in.
+//
+// Leg 2 -- the address's TRUE owner later signs in through a channel the
+// platform trusts (the Google-shaped verified channel, the same stand-in the
+// module's own social round-trip suites use) at the same address. The
+// verified-and-trusted auto-link rule resolves the owner's identity against
+// the platform-unique email index; the minted account must not be there.
+// Pre-fix the mint seated the tenant-grade claim as a platform-verified
+// address, so the owner's genuine Google identity was auto-linked INTO the
+// tenant administrator's account -- the account takeover. The fix keeps the
+// seat free: the mint is email-less (the claimed address lives on the
+// identity row as display data only), the owner's sign-in provisions their
+// own account at the address, and the tenant-minted account never gains the
+// owner's identity.
+func TestSSOService_Callback_JITMintDoesNotCaptureTheAddressOwnersLaterTrustedSignIn(t *testing.T) {
+	t.Parallel()
+
+	server := testutil.NewOIDCServer(t, "enterprise-client")
+	google := &stubProvider{name: ProviderGoogle, identity: &ExternalIdentity{
+		ExternalID: "victim-google-subject", Email: "victim@example.com", EmailVerified: true, Name: "Victim Person",
+	}}
+	allowlist, err := NewRedirectAllowlist(ssoRedirectURI, testRedirectURI)
+	if err != nil {
+		t.Fatalf("NewRedirectAllowlist() error = %v", err)
+	}
+	f := newServiceFixture(t,
+		WithFederationHTTPClient(server.Client()),
+		WithRedirectAllowlist(allowlist),
+		WithSocialProviders(google),
+		WithTrustedProviders(ProviderGoogle),
+	)
+	writeSSOConfig(t, f, testTenantA, server, "enterprise-client", "example.com")
+
+	// Leg 1, attempt 1: the tenant administrator's verified claim mints an
+	// account for the subject, but authn grants no membership on its own.
+	state, nonce := ssoAuthorize(t, f, testTenantA)
+	server.QueueIDToken(server.SignIDToken(t, testutil.IDTokenClaims{
+		Subject: "attacker-sso-subject", Email: "victim@example.com", EmailVerified: true, Nonce: nonce,
+	}))
+	_, err = f.svc.SSO().Callback(t.Context(), SSOCallbackInput{
+		TenantID: testTenantA, Code: "code", State: state,
+	})
+	assertErrorCode(t, err, ErrTenantMembershipRequired.Code)
+
+	ssoIdentity, findErr := f.svc.Identities().FindByExternal(t.Context(), SSOChannelName(testTenantA), "attacker-sso-subject")
+	if findErr != nil {
+		t.Fatalf("the enterprise identity was not provisioned: %v", findErr)
+	}
+	minted, userErr := f.svc.Users().FindByID(t.Context(), ssoIdentity.UserID)
+	if userErr != nil {
+		t.Fatalf("the account was not provisioned: %v", userErr)
+	}
+	// The claimed address stays on the identity row as display data; the
+	// users row must NOT seat it (the platform-unique email index).
+	if ssoIdentity.Email != "victim@example.com" {
+		t.Errorf("Identity.Email = %q, want the claimed address on the identity row", ssoIdentity.Email)
+	}
+	if minted.Email != "" || minted.EmailVerified {
+		t.Errorf("minted account Email = %q, EmailVerified = %v; want an email-less mint so the address's true owner keeps the seat free", minted.Email, minted.EmailVerified)
+	}
+
+	// The host's membership machinery, reacting to EventUserCreated, grants
+	// the minted account membership of the tenant, and the administrator's
+	// next attempt completes the sign-in: the account is genuinely theirs.
+	f.members.Add(minted.ID, testTenantA)
+	state, nonce = ssoAuthorize(t, f, testTenantA)
+	server.QueueIDToken(server.SignIDToken(t, testutil.IDTokenClaims{
+		Subject: "attacker-sso-subject", Email: "victim@example.com", EmailVerified: true, Nonce: nonce,
+	}))
+	controlled, err := f.svc.SSO().Callback(t.Context(), SSOCallbackInput{
+		TenantID: testTenantA, Code: "code", State: state,
+	})
+	if err != nil {
+		t.Fatalf("the tenant administrator's own sign-in failed: %v", err)
+	}
+	if controlled.User.ID != minted.ID || controlled.Tokens == nil {
+		t.Fatalf("the administrator's sign-in did not land in the minted account (user %q, tokens nil = %v)", controlled.User.ID, controlled.Tokens == nil)
+	}
+
+	// Leg 2: the address's true owner signs in through the trusted Google
+	// channel. The one thing that must be true afterwards: the owner's
+	// identity and account are their own, never the tenant-minted account's.
+	_, _ = socialSignIn(t, f, google, testTenantA)
+
+	googleIdentity, findErr := f.svc.Identities().FindByExternal(t.Context(), ProviderGoogle, "victim-google-subject")
+	if findErr != nil {
+		t.Fatalf("the owner's google identity was not provisioned: %v", findErr)
+	}
+	if googleIdentity.UserID == minted.ID {
+		t.Fatalf("account takeover: the address's true owner's trusted google identity was auto-linked INTO the tenant-minted account %q", minted.ID)
+	}
+	victimsAccount, findErr := f.svc.Users().FindByEmail(t.Context(), "victim@example.com")
+	if findErr != nil {
+		t.Fatalf("the address's true owner has no account at their own address: %v", findErr)
+	}
+	if victimsAccount.ID == minted.ID {
+		t.Fatalf("account takeover: the address's true owner's sign-in resolved to the tenant-minted account %q", minted.ID)
+	}
+	if !victimsAccount.EmailVerified || victimsAccount.Email != "victim@example.com" {
+		t.Errorf("the owner's own account Email = %q, EmailVerified = %v; want the address seated verified by the TRUSTED channel", victimsAccount.Email, victimsAccount.EmailVerified)
+	}
+	if googleIdentity.UserID != victimsAccount.ID {
+		t.Errorf("the owner's google identity is bound to %q, want their own account %q", googleIdentity.UserID, victimsAccount.ID)
+	}
 }
 
 // compile-time reminder that TenantSSOConfig stays tenant-scoped data; a

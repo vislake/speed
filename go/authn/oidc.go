@@ -409,14 +409,19 @@ type ssoClaims struct {
 // that was already inside their own tenant, which they already administer.
 //
 // A verified address claim on an allowed domain, for a subject that has no
-// account yet, is provisioned just-in-time: the account is created carrying
-// the claimed address as verified, EventUserCreated is published, and the
-// subject is bound to the account. The membership condition cannot apply to
-// that mint -- the account does not exist yet, so there is nothing to be a
-// member of -- but no session and no membership is granted by it either:
-// authn never grants tenant membership on its own, the host's membership
-// machinery grants it in reaction to EventUserCreated, and the subject's
-// next sign-in attempt completes the session.
+// account yet, is provisioned just-in-time: an account is created, its
+// subject bound to it, and EventUserCreated published -- but the account is
+// deliberately created with NO email, and the claimed address is kept only
+// on the identity row as display data (see resolveAccount's mint branch for
+// the reasoning: the assertion behind it is tenant-grade, and seating it in
+// the platform-unique verified-email index would let the tenant's
+// administrator capture the address's true owner's later trusted-provider
+// sign-ins). The membership condition cannot apply to that mint -- the
+// account does not exist yet, so there is nothing to be a member of -- but
+// no session and no membership is granted by it either: authn never grants
+// tenant membership on its own, the host's membership machinery grants it in
+// reaction to EventUserCreated, and the subject's next sign-in attempt
+// completes the session.
 func (s *SSOService) Callback(ctx context.Context, in SSOCallbackInput) (*SocialLoginResult, error) {
 	if in.TenantID == "" {
 		return nil, ErrSSONotConfigured
@@ -555,8 +560,14 @@ func (s *SSOService) signIn(ctx context.Context, config *TenantSSOConfig, extern
 //     verified bar above already cleared, the same ErrIdentityRequiresBinding
 //     covers a would-be link to a non-member.
 //   - Only a verified, domain-allowed address with no account is minted
-//     just-in-time: the account is created carrying the address as verified,
-//     EventUserCreated is published, and the caller binds the subject to it.
+//     just-in-time -- and the mint deliberately creates the account with NO
+//     email, keeping the claimed address on the identity row as display data
+//     only. EventUserCreated is published and the caller binds the subject
+//     to the account; the account's own flows need no email (the subject
+//     signs in over the bound identity), and seating a tenant-grade verified
+//     claim in the platform-unique email index is exactly the manufactured
+//     "platform-verified" seat the social channels' auto-link rule must
+//     never see (see the mint branch's own comment).
 //
 // The membership condition cannot apply to the mint -- the account does not
 // exist yet, so there is nothing to be a member of -- but the mint grants
@@ -595,19 +606,36 @@ func (s *SSOService) resolveAccount(ctx context.Context, config *TenantSSOConfig
 		return existing, false, nil
 	case errors.Is(err, ErrNotFound):
 		// Just-in-time provisioning, reached only with the verified
-		// assertion from above. The identity provider that asserted the
-		// address is one this tenant's own administrator configured AND
-		// the address is in a domain they registered -- together the
-		// strongest assertion about an address this module ever gets --
-		// so the account is created carrying the address as verified. The
-		// memberOf gate the linking branch applies is structurally
-		// impossible here: the account does not exist yet, and nothing
-		// about minting it grants membership or a session.
+		// assertion from above. The account is deliberately created with
+		// NO email: the address stays on the identity row, where it is
+		// display data, and is never seated in the platform-unique
+		// verified-email index.
+		//
+		// The verified assertion above is a TENANT-grade one -- an
+		// identity provider this tenant's own administrator configured,
+		// for a domain they registered, an administrator who may run the
+		// identity provider themselves (the same premise the memberOf
+		// gate on the linking branch above exists to bound). The
+		// platform-unique email index is what the SOCIAL channels'
+		// verified-and-trusted auto-link rule resolves against: an
+		// account seated there with a verified address reads to that rule
+		// as platform-grade evidence that its holder controls the
+		// address. Seating a tenant-grade claim would let a tenant
+		// administrator mint a "verified" account at any address whose
+		// domain they listed -- say a public domain -- and the true
+		// owner's later, genuinely verified sign-in through a trusted
+		// social channel would then be absorbed INTO that account. The
+		// mint must therefore leave the address free for its true owner,
+		// exactly as the unverified-claim refusal above leaves it free:
+		// the account exists for the tenant's own SSO flows (the subject
+		// signs in over the bound identity), but nothing about it can
+		// capture the owner's later sign-ins. The memberOf gate the
+		// linking branch applies is structurally impossible here: the
+		// account does not exist yet, and nothing about minting it grants
+		// membership or a session.
 		user := &User{
-			DisplayName:   external.Name,
-			Status:        UserStatusActive,
-			Email:         email,
-			EmailVerified: true,
+			DisplayName: external.Name,
+			Status:      UserStatusActive,
 		}
 		if createErr := s.svc.users.Create(ctx, user); createErr != nil {
 			return nil, false, createErr
@@ -615,7 +643,7 @@ func (s *SSOService) resolveAccount(ctx context.Context, config *TenantSSOConfig
 		s.svc.publish(ctx, pkgcore.Event{
 			Type:     EventUserCreated,
 			TenantID: pkgcore.TenantID(config.TenantID),
-			Payload:  UserCreatedPayload{UserID: user.ID, HasEmail: true},
+			Payload:  UserCreatedPayload{UserID: user.ID, HasEmail: false},
 		})
 		return user, true, nil
 	default:

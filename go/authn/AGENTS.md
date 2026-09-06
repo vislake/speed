@@ -362,6 +362,29 @@ session; membership of the tenant is the host's decision, made in reaction to
 the published `EventUserCreated`, and the subject's next attempt completes
 the sign-in.
 
+A VERIFIED claim's just-in-time mint is deliberately **email-less**: the
+account is created with no address, the claimed address living only on the
+identity row as display data. The verified claim behind a mint is
+tenant-grade — an identity provider this tenant's own administrator
+configured, for a domain they registered, and that administrator may run the
+identity provider themselves (the same premise the membership condition
+above bounds). The platform-unique verified-email index is what the social
+channels' verified-and-trusted auto-link rule resolves against, and seating
+a tenant-grade claim there would let such an administrator mint a "verified"
+account at any address whose domain they listed and have the address's true
+owner's later, genuinely verified sign-in through a trusted social channel
+absorbed INTO that account — a takeover reaching far beyond the tenant the
+administrator already administers. Keeping the seat free for its true owner
+is what makes the membership condition's bound — "the worst they can reach
+is an account already inside their own tenant" — actually hold. The
+email-less mint is the same account shape the module already provisions for
+a trusted social identity that carries no address, and its cost is confined
+to the tenant's own flows: the account's address is not on the users row, so
+host-side consumers of `users.email` (notifications, profile display) see
+none until a future flow lets the holder add one, and the account cannot be
+merged by email with another account of the same person — merges by email
+equality alone are refused everywhere else in this module on purpose.
+
 A channel that reports **no email at all** (WeChat) can never satisfy either
 rule's first condition, so it never auto-links. It is not an error path: with
 no address to match against, the safe and correct behaviour is to provision a
