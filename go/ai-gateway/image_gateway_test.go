@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
+	"io"
 	"testing"
 
 	"github.com/vislake/speed/go/dbkit"
@@ -106,6 +108,18 @@ func (noopStorageQueue) Cancel(context.Context, jobs.JobID) error           { re
 
 func newTestStorageObjectService(t *testing.T) *storage.ObjectService {
 	t.Helper()
+	return newTestStorageObjectServiceWithStore(t, pkgcore.NewLocalObjectStore(t.TempDir()))
+}
+
+// newTestStorageObjectServiceWithStore is newTestStorageObjectService's own
+// generalization: store backs the storage.ObjectService the job handler's
+// readImageObject/writeImageObject actually exercises, instead of the
+// kernel's own default local store -- letting a test inject an
+// pkgcore.ObjectStore double (failNPutObjectStore below) for the
+// after-vendor-success failure path RetryAfterVendorSuccess tests need,
+// which a real, unconditionally-succeeding local store cannot express.
+func newTestStorageObjectServiceWithStore(t *testing.T, store pkgcore.ObjectStore) *storage.ObjectService {
+	t.Helper()
 
 	dsn := "file:aigateway_image_test_" + t.Name() + "?mode=memory&cache=shared"
 	db, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: dsn})
@@ -120,11 +134,51 @@ func newTestStorageObjectService(t *testing.T) *storage.ObjectService {
 	if err := migrations.Apply(context.Background(), db, dbkit.DialectSQLite); err != nil {
 		t.Fatalf("apply storage migrations: %v", err)
 	}
-	if _, err := pkgcore.NewKernel().Bootstrap(context.Background(), storageModule); err != nil {
+	// capabilities 0: the identical value pkgcore's own "objectstore.local"
+	// builtin registers (builtin_implementations.go) -- irrelevant here
+	// regardless, since these tests never set WithDeploymentMode and a
+	// single-process deployment excludes no implementation (root CLAUDE.md's
+	// Deployment mode section).
+	if _, err := pkgcore.NewKernel(pkgcore.WithObjectStore(store, 0)).Bootstrap(context.Background(), storageModule); err != nil {
 		t.Fatalf("bootstrap storage module: %v", err)
 	}
 	return storageModule.ObjectService()
 }
+
+// failNPutObjectStore wraps a real pkgcore.ObjectStore, failing exactly the
+// first n calls to PutObject (storage.ObjectService.Upload's own seam call)
+// and delegating every other call, and every other method, unchanged. It
+// exists to let a test deterministically reproduce "the vendor call
+// succeeded, then the storage write failed" -- the audited bug this round
+// fixes -- without a wall-clock sleep or real SQLITE_BUSY contention: any
+// go/storage write failure after a successful vendor call is the same bug
+// from imageGenerateHandler.Handle's point of view, and PutObject is the
+// natural, minimal seam to inject one at (root CLAUDE.md's bug-fix test
+// policy).
+type failNPutObjectStore struct {
+	inner pkgcore.ObjectStore
+	n     int
+
+	calls int
+}
+
+func (s *failNPutObjectStore) PutObject(ctx context.Context, key string, r io.Reader) error {
+	s.calls++
+	if s.calls <= s.n {
+		return fmt.Errorf("aigateway test: injected storage write failure (call %d of %d)", s.calls, s.n)
+	}
+	return s.inner.PutObject(ctx, key, r)
+}
+
+func (s *failNPutObjectStore) GetObject(ctx context.Context, key string) (io.ReadCloser, error) {
+	return s.inner.GetObject(ctx, key)
+}
+
+func (s *failNPutObjectStore) DeleteObject(ctx context.Context, key string) error {
+	return s.inner.DeleteObject(ctx, key)
+}
+
+var _ pkgcore.ObjectStore = (*failNPutObjectStore)(nil)
 
 // imageGatewayTestFixture builds a Gateway wired to a fake ImageProvider
 // (routed under "image:default"), a real CredentialService over a fresh
@@ -133,6 +187,16 @@ func newTestStorageObjectService(t *testing.T) *storage.ObjectService {
 // below starts from, mirroring gatewayTestFixture's identical role for
 // chat.
 func imageGatewayTestFixture(t *testing.T, provider *fakeImageProvider, opts ...GatewayOption) (*Gateway, *recordingImageQueue, *storage.ObjectService) {
+	t.Helper()
+	return imageGatewayTestFixtureWithObjects(t, provider, newTestStorageObjectService(t), opts...)
+}
+
+// imageGatewayTestFixtureWithObjects is imageGatewayTestFixture's own
+// generalization: objects backs the Gateway's WithImageGeneration wiring
+// directly, letting a test pass one built over
+// newTestStorageObjectServiceWithStore's injectable store instead of
+// imageGatewayTestFixture's own always-real one.
+func imageGatewayTestFixtureWithObjects(t *testing.T, provider *fakeImageProvider, objects *storage.ObjectService, opts ...GatewayOption) (*Gateway, *recordingImageQueue, *storage.ObjectService) {
 	t.Helper()
 	credentials := NewCredentialService(newTestDB(t))
 	sysCtx, err := pkgcore.WithSystemContext(context.Background(), systemTestCtx(t))
@@ -144,7 +208,6 @@ func imageGatewayTestFixture(t *testing.T, provider *fakeImageProvider, opts ...
 	}
 
 	queue := &recordingImageQueue{jobID: "job-fixture-1"}
-	objects := newTestStorageObjectService(t)
 
 	allOpts := append([]GatewayOption{
 		WithModelRoute("image:default", fakeImageProviderName, "vendor-model-x"),
@@ -499,5 +562,181 @@ func TestImageGenerateHandler_ProviderError_Refused(t *testing.T) {
 	})
 	if got, ok := apperrCode(err); !ok || got != ErrProviderRequestFailed.Code {
 		t.Fatalf("Handle err = %v, want ErrProviderRequestFailed", err)
+	}
+}
+
+// --- Job idempotency: a retry must never re-bill the vendor or double-
+// record usage (this round's fix for the audited P1-1 bug) ---------------
+
+// TestImageGenerateHandler_RetryAfterVendorSuccess_DoesNotRecallVendorOrDoubleRecordUsage
+// is THE regression test for the audited bug: it reproduces "the vendor
+// call succeeds, then the storage write fails" (via failNPutObjectStore,
+// the same shape of failure go/ai-gateway/AGENTS.md's SQLITE_BUSY entry
+// records as a real, observed scenario), drives the queue's own retry by
+// calling Handle a second time for the SAME *jobs.Job (job.ID never
+// changes between attempts -- jobs.Job.ID's own doc comment), and asserts
+// the vendor was invoked exactly once and usage was recorded exactly once
+// across both attempts.
+//
+// This test FAILS on pre-fix code: with no job-idempotency marker at all,
+// the second Handle call unconditionally re-resolves the route and calls
+// ImageProvider.TextToImage again, so provider.textToImageCalls is 2 after
+// both attempts (this test wants 1).
+func TestImageGenerateHandler_RetryAfterVendorSuccess_DoesNotRecallVendorOrDoubleRecordUsage(t *testing.T) {
+	provider := &fakeImageProvider{result: ImageResult{
+		Image: ImageBytes{Content: tinyPNG, MIME: "image/png"},
+		Usage: ImageUsage{ImageCount: 1, Steps: 20, ResolutionTier: "512x512"},
+	}}
+	var recordedEvents []UsageEvent
+	recorder := UsageRecorderFunc(func(_ context.Context, event UsageEvent) error {
+		recordedEvents = append(recordedEvents, event)
+		return nil
+	})
+	failingStore := &failNPutObjectStore{inner: pkgcore.NewLocalObjectStore(t.TempDir()), n: 1}
+	objects := newTestStorageObjectServiceWithStore(t, failingStore)
+	g, _, _ := imageGatewayTestFixtureWithObjects(t, provider, objects, WithUsageRecorder(recorder))
+
+	handler, ok := g.imageJobHandler()
+	if !ok {
+		t.Fatal("imageJobHandler() reported image generation not wired")
+	}
+	raw, err := json.Marshal(imageGenerateTaskPayload{
+		Model: "image:default", Operation: string(ImageOperationTextToImage), Prompt: "a bright smile",
+	})
+	if err != nil {
+		t.Fatalf("marshal task payload: %v", err)
+	}
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	job := &jobs.Job{ID: "job-retry-1", Type: TaskTypeImageGenerate, TenantID: "tenant-acme", Payload: raw}
+
+	// First attempt: the vendor call succeeds, but the storage write fails
+	// (the injected PutObject failure) -- exactly the audited scenario: a
+	// failure AFTER a successful vendor call.
+	if _, firstErr := handler.Handle(ctx, job, func(int, string) {}); firstErr == nil {
+		t.Fatal("first attempt succeeded, want the injected storage failure to surface")
+	}
+	if provider.textToImageCalls != 1 {
+		t.Fatalf("provider called %d times after the first attempt, want 1", provider.textToImageCalls)
+	}
+	if len(recordedEvents) != 0 {
+		t.Fatalf("usage recorded after a failed attempt (before the object was ever written) = %+v, want none", recordedEvents)
+	}
+
+	// The queue retries the SAME job -- job.ID is never regenerated across
+	// a retry (jobs.Job.ID's own doc comment); Attempts incrementing is
+	// this test mirroring go/jobs' own bookkeeping, not something Handle
+	// itself reads.
+	job.Attempts++
+	result, err := handler.Handle(ctx, job, func(int, string) {})
+	if err != nil {
+		t.Fatalf("retry attempt: %v", err)
+	}
+
+	// THE invariant this round ships.
+	if provider.textToImageCalls != 1 {
+		t.Fatalf("provider called %d times across both attempts, want exactly 1 -- a retry after a successful vendor call must never call the vendor again", provider.textToImageCalls)
+	}
+	var imageCountEvents, imageStepsEvents int
+	var imageCountKey, imageStepsKey string
+	for _, e := range recordedEvents {
+		switch e.Feature {
+		case usageFeatureImageCount:
+			imageCountEvents++
+			imageCountKey = e.IdempotencyKey
+		case usageFeatureImageSteps:
+			imageStepsEvents++
+			imageStepsKey = e.IdempotencyKey
+		}
+	}
+	if imageCountEvents != 1 || imageStepsEvents != 1 {
+		t.Fatalf("recorded usage events = %+v (image_count=%d, image_steps=%d), want exactly one of each -- a retry must never double-record usage", recordedEvents, imageCountEvents, imageStepsEvents)
+	}
+	if imageCountKey == "" || imageStepsKey == "" {
+		t.Fatal("recorded usage events carry an empty IdempotencyKey")
+	}
+	if imageCountKey == imageStepsKey {
+		t.Fatalf("image_count and image_steps events share one IdempotencyKey %q, want distinct keys per dimension", imageCountKey)
+	}
+
+	var jobResult ImageJobResult
+	if err := json.Unmarshal(result.Data, &jobResult); err != nil {
+		t.Fatalf("decode ImageJobResult: %v", err)
+	}
+	if jobResult.OutputObjectID == "" {
+		t.Fatal("ImageJobResult carries no OutputObjectID after the successful retry")
+	}
+	if jobResult.Usage != (ImageUsage{ImageCount: 1, Steps: 20, ResolutionTier: "512x512"}) {
+		t.Fatalf("ImageJobResult.Usage after the successful retry = %+v", jobResult.Usage)
+	}
+}
+
+// TestImageGenerateHandler_HandleCalledAgainAfterSuccess_SkipsVendorAndUsage
+// covers the OTHER half of the marker state machine the retry test above
+// does not reach: a Handle call for a job that has already fully
+// succeeded (status "completed"). This is a stronger property than "a
+// retry after a mid-flight failure" -- it proves the short-circuit at the
+// very top of Handle answers from the row alone, with no vendor call, no
+// storage write and no usage record, for a job nothing has any reason to
+// retry at all.
+func TestImageGenerateHandler_HandleCalledAgainAfterSuccess_SkipsVendorAndUsage(t *testing.T) {
+	provider := &fakeImageProvider{result: ImageResult{
+		Image: ImageBytes{Content: tinyPNG, MIME: "image/png"},
+		Usage: ImageUsage{ImageCount: 1, Steps: 5},
+	}}
+	var recordedEvents []UsageEvent
+	recorder := UsageRecorderFunc(func(_ context.Context, event UsageEvent) error {
+		recordedEvents = append(recordedEvents, event)
+		return nil
+	})
+	g, _, _ := imageGatewayTestFixture(t, provider, WithUsageRecorder(recorder))
+
+	payload := imageGenerateTaskPayload{Model: "image:default", Operation: string(ImageOperationTextToImage), Prompt: "a bright smile"}
+
+	first, err := runImageGenerateJob(t, g, "tenant-acme", payload)
+	if err != nil {
+		t.Fatalf("first Handle: %v", err)
+	}
+	second, err := runImageGenerateJob(t, g, "tenant-acme", payload)
+	if err != nil {
+		t.Fatalf("second Handle (redelivery of an already-succeeded job): %v", err)
+	}
+
+	if provider.textToImageCalls != 1 {
+		t.Fatalf("provider called %d times across two Handle calls for the same already-succeeded job, want 1", provider.textToImageCalls)
+	}
+	var imageCountEvents int
+	for _, e := range recordedEvents {
+		if e.Feature == usageFeatureImageCount {
+			imageCountEvents++
+		}
+	}
+	if imageCountEvents != 1 {
+		t.Fatalf("image_count usage recorded %d times across two Handle calls, want 1", imageCountEvents)
+	}
+	if !bytes.Equal(first.Data, second.Data) {
+		t.Fatalf("Handle's second (redelivered) result = %s, want the same as the first %s", second.Data, first.Data)
+	}
+}
+
+// TestImageUsageIdempotencyKey_StablePerJobAndFeature is the direct,
+// job-machinery-free proof of the key-derivation change: the same job id
+// and feature always converge on the same key (the property a
+// UsageRecorder-side dedup needs), while either input changing changes the
+// key.
+func TestImageUsageIdempotencyKey_StablePerJobAndFeature(t *testing.T) {
+	k1 := imageUsageIdempotencyKey("job-1", usageFeatureImageCount)
+	k2 := imageUsageIdempotencyKey("job-1", usageFeatureImageCount)
+	if k1 != k2 {
+		t.Fatalf("imageUsageIdempotencyKey(%q, %q) = %q then %q, want the same value both times", "job-1", usageFeatureImageCount, k1, k2)
+	}
+	if k1 == "" {
+		t.Fatal("imageUsageIdempotencyKey returned an empty key")
+	}
+
+	if got := imageUsageIdempotencyKey("job-1", usageFeatureImageSteps); got == k1 {
+		t.Fatalf("imageUsageIdempotencyKey(%q, %q) = %q, want it to differ from the %q dimension's key", "job-1", usageFeatureImageSteps, got, usageFeatureImageCount)
+	}
+	if got := imageUsageIdempotencyKey("job-2", usageFeatureImageCount); got == k1 {
+		t.Fatalf("imageUsageIdempotencyKey(%q, ...) = %q, want it to differ from job-1's key", "job-2", got)
 	}
 }
