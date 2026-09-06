@@ -25,7 +25,14 @@
  *     touches storage; nothing here writes localStorage) feeding the
  *     auth-core session state machine over the generated authn
  *     operations, attached to the auth-core hooks. A reload starts
- *     anonymous: the session is memory-only by contract.
+ *     anonymous: the session is memory-only by contract. A session-end
+ *     transition (a sign-out or a session death -- a silently refused
+ *     refresh) also evicts the departing tenant's namespaced query
+ *     cache (evictTenantQueriesOnSessionEnd, below), mirroring
+ *     user-menu.tsx's own tenant-switch eviction so a different
+ *     account signing into the same tenant afterward never inherits
+ *     rows an earlier session's reads cached (reference-app-web.md
+ *     P1-1).
  *
  *  3. The client -- the app's one HTTP surface: @speed/api-client's
  *     createClient over the environment's own fetch (no fetch option:
@@ -62,6 +69,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { createClient, createMemoryAccessTokenStore } from '@speed/api-client'
 import { bindRequestFn } from '@speed/api-sdk/runtime'
 import { attachSession, createAuthSession } from '@speed/auth-core'
+import type { AuthSession } from '@speed/auth-core'
 import {
   createI18n,
   I18nextProvider,
@@ -83,6 +91,7 @@ import {
   REFERENCE_APP_NAMESPACE,
   referenceAppResources,
 } from './resources.js'
+import { TENANT_QUERY_PREFIX } from './views/user-menu.js'
 
 /** What a page's bootstrap produced: the mounted root, the i18n
  * instance and the query client, for hosts and harnesses that act on
@@ -94,6 +103,62 @@ export interface ReferenceAppBootstrap {
   readonly i18n: I18nInstance
   /** The query client the tree renders with. */
   readonly queryClient: QueryClient
+}
+
+/**
+ * Wires the tenant-namespaced query cache to empty the departing
+ * tenant's rows the moment the session ends. A manual sign-out and a
+ * session death (a silently refused refresh) both settle the same
+ * authenticated -> anonymous AuthSnapshot transition (auth-core's
+ * session.ts clears the same way for either), so this fires on both.
+ *
+ * This mirrors user-menu.tsx's own tenant-switch eviction exactly --
+ * the same ['tenant', tenantId] prefix, the same queryClient.
+ * removeQueries call -- rather than a new cache-management mechanism:
+ * a tenant switch evicts the tenant being left mid-session, this
+ * evicts the tenant the session was in when it ended. Without it nothing
+ * in this app ever cleared a query cached under a tenant's key on
+ * sign-out, so a later sign-in to the same tenant -- by the same
+ * account after a session death, or a different account the operator
+ * switches to on a shared machine -- inherited rows an earlier
+ * session's reads left behind (reference-app-web.md P1-1): the read
+ * itself answers a genuine refusal for the new principal, but a gate
+ * derived from the query alone cannot un-render rows a shared
+ * QueryClient never forgot. Evicting on session end closes that at
+ * its root instead of leaving it to the gate to paper over.
+ *
+ * A full user-scoped query-key segment (['tenant', tenantId, userId,
+ * ...]) was the other shape considered and rejected: every tenant-
+ * scoped read in this app already re-fetches under the new principal's
+ * access token on every mount (staleTime 0, the generated hooks'
+ * default), so the leak's live window is exactly "an unmounted
+ * component's stale cache entry between one session ending and the
+ * next one's first read of the same key" -- precisely what an
+ * eviction on the session-end transition closes, without adding a
+ * dimension every tenant-scoped query key in the app would need to
+ * carry from here on.
+ *
+ * Returns the session's own unsubscribe function for a caller that
+ * wants to tear this down (unit tests do); bootstrapReferenceApp does
+ * not hold onto it, since the composed page never tears itself down
+ * before an unload a fresh reload starts over from anyway.
+ */
+export function evictTenantQueriesOnSessionEnd(
+  session: AuthSession,
+  queryClient: QueryClient,
+): () => void {
+  let previous = session.getSnapshot()
+  return session.subscribe((snapshot) => {
+    if (previous.state === 'authenticated' && snapshot.state === 'anonymous') {
+      const tenantId = previous.principal?.tenant_id
+      if (typeof tenantId === 'string' && tenantId !== '') {
+        queryClient.removeQueries({
+          queryKey: [TENANT_QUERY_PREFIX, tenantId],
+        })
+      }
+    }
+    previous = snapshot
+  })
 }
 
 /**
@@ -127,6 +192,7 @@ export function bootstrapReferenceApp(
   bindRequestFn(client)
 
   const queryClient = new QueryClient()
+  evictTenantQueriesOnSessionEnd(session, queryClient)
   const root = createRoot(container)
   root.render(
     <StrictMode>

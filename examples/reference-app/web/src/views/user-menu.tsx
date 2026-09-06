@@ -53,7 +53,9 @@ export const DEMO_TENANTS: readonly DemoTenant[] = [
 
 /** The tenant-scoped query-key prefix the app's data queries namespace
  * under (['tenant', tenantId, ...]); the eviction below removes whole
- * prefixes. */
+ * prefixes. main.tsx's evictTenantQueriesOnSessionEnd imports this same
+ * constant so the session-end eviction it wires targets the identical
+ * prefix this tenant-switch eviction does. */
 export const TENANT_QUERY_PREFIX = 'tenant'
 
 /** The user menu the AppShell mounts at the AppBar's end. */
