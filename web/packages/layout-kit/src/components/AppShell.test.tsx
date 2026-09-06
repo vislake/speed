@@ -7,8 +7,12 @@
  * default and promotable to controlled via mobileOpen/onMobileOpenChange),
  * that header/headerActions/userMenu/children render only host content,
  * the header/nav/main landmarks in both languages via the shipped
- * bundles, and a zero-violation axe scan with `region` left enabled
- * (AppShell is page-level chrome, unlike ui-kit's per-widget components).
+ * bundles, a zero-violation axe scan with `region` left enabled
+ * (AppShell is page-level chrome, unlike ui-kit's per-widget components),
+ * and this round's narrow-viewport CSS protections (the capped mobile
+ * drawer width, the wrapping AppBar row) -- see the "responsive
+ * protections" describe block for what each assertion does and does not
+ * prove.
  */
 
 import { act, waitFor } from '@testing-library/react'
@@ -18,6 +22,7 @@ import { switchLanguage } from '@speed/i18n'
 import enUS from '../locales/en-US.json' with { type: 'json' }
 import zhCN from '../locales/zh-CN.json' with { type: 'json' }
 import { expectNoAxeViolations } from '../../test-utils/axe.js'
+import { emittedStyleText } from '../../test-utils/emitted-css.js'
 import { mockMatchMedia } from '../../test-utils/matchMedia.js'
 import { renderWithProviders } from '../../test-utils/render.js'
 import { AppShell, type AppShellNavItem } from './AppShell.js'
@@ -209,6 +214,76 @@ describe('AppShell', () => {
         enUS.appShell.navLabel,
       )
       expect(getByRole('button', { name: enUS.appShell.openNav })).toBeInTheDocument()
+    })
+  })
+
+  describe('responsive protections', () => {
+    // jsdom evaluates neither real layout nor `@media` conditions, so
+    // these are property/snapshot assertions on the generated CSS text
+    // or on a plain (non-breakpoint-gated) computed style value -- they
+    // prove the intended declaration was wired into the render, not
+    // that it looks correct at a real narrow viewport.
+    it('caps the mobile (temporary) drawer paper width to a CSS min() of sidebarWidth and a viewport fraction', () => {
+      mockMatchMedia(false)
+      renderWithProviders(
+        <AppShell navItems={NAV_ITEMS} sidebarWidth={280}>
+          content
+        </AppShell>,
+      )
+      expect(emittedStyleText()).toMatch(/width:\s*min\(280px,\s*85vw\)/)
+    })
+
+    it('leaves the desktop (permanent) drawer paper width as the plain sidebarWidth, uncapped', () => {
+      mockMatchMedia(true)
+      renderWithProviders(
+        <AppShell navItems={NAV_ITEMS} sidebarWidth={280}>
+          content
+        </AppShell>,
+      )
+      // A precise rule-text match (not a "no 85vw anywhere" assertion,
+      // since emotion's injected <style> accumulates every rule any
+      // test in this file has rendered so far and never removes one on
+      // unmount) -- this is the permanent Drawer's own docked-paper
+      // rule, plain box-sizing/width with no CSS min() wrapping it.
+      expect(emittedStyleText()).toMatch(
+        /\.MuiDrawer-paper\{box-sizing:border-box;width:280px;\}/,
+      )
+    })
+
+    it('wraps the AppBar Toolbar row instead of squeezing header/actions/userMenu', () => {
+      mockMatchMedia(true)
+      const { container } = renderWithProviders(
+        <AppShell
+          navItems={NAV_ITEMS}
+          header={<span>Brand</span>}
+          headerActions={<button type="button">Search</button>}
+          userMenu={<span>Jane Doe</span>}
+        >
+          content
+        </AppShell>,
+      )
+      const toolbar = container.querySelector('.MuiToolbar-root')
+      expect(toolbar).not.toBeNull()
+      expect(toolbar).toHaveStyle({ flexWrap: 'wrap' })
+    })
+
+    it('wraps the headerActions group itself when the host supplies several actions', () => {
+      mockMatchMedia(true)
+      const { getByRole } = renderWithProviders(
+        <AppShell
+          navItems={NAV_ITEMS}
+          headerActions={
+            <>
+              <button type="button">Search</button>
+              <button type="button">Notifications</button>
+            </>
+          }
+        >
+          content
+        </AppShell>,
+      )
+      const actionsGroup = getByRole('button', { name: 'Search' }).parentElement
+      expect(actionsGroup).toHaveStyle({ flexWrap: 'wrap' })
     })
   })
 

@@ -20,6 +20,18 @@
  * Slots (`header`, `headerActions`, `userMenu`, `children`) render
  * exactly the host content passed in and nothing implicit -- an absent
  * slot renders nothing, never a placeholder.
+ *
+ * Narrow-viewport protection (additive, CSS-only, no prop changes):
+ * the Toolbar row and the `headerActions` group both carry a responsive
+ * `flexWrap: 'wrap'` so a host that supplies several header actions
+ * wraps onto a second line under real overflow pressure instead of
+ * being squeezed or clipped -- AppShell still renders only what the
+ * host gives it (no auto-collapsing overflow menu is invented here,
+ * consistent with this package's host-injected-everything design). The
+ * mobile (temporary) Drawer's paper width is capped to
+ * `min(sidebarWidth, 85vw)` so a very narrow viewport (~320px and
+ * below) never gets a near-full-screen or overflowing drawer; the
+ * desktop (permanent) Drawer's width is untouched.
  */
 
 import { useId, useState } from 'react'
@@ -211,7 +223,7 @@ export function AppShell({
         >
           {t('appShell.skipToContent')}
         </Link>
-        <Toolbar>
+        <Toolbar sx={{ flexWrap: 'wrap', rowGap: 1 }}>
           {!isDesktop && (
             <IconButton
               color="inherit"
@@ -232,6 +244,7 @@ export function AppShell({
               sx={{
                 display: 'flex',
                 alignItems: 'center',
+                flexWrap: 'wrap',
                 gap: 1,
                 marginRight: userMenu !== undefined ? 2 : 0,
               }}
@@ -263,7 +276,16 @@ export function AppShell({
             open={mobileOpen}
             onClose={() => setMobileOpen(false)}
             ModalProps={{ keepMounted: true }}
-            sx={{ '& .MuiDrawer-paper': { boxSizing: 'border-box', width: sidebarWidth } }}
+            sx={{
+              '& .MuiDrawer-paper': {
+                boxSizing: 'border-box',
+                // Capped to the viewport so a very narrow screen (~320px
+                // and below) never gets a near-full-screen or
+                // overflowing drawer; the permanent (desktop) Drawer
+                // above is untouched and keeps the plain sidebarWidth.
+                width: `min(${sidebarWidth}px, 85vw)`,
+              },
+            }}
           >
             <Toolbar />
             {navContent}

@@ -111,6 +111,22 @@ different hosts use different routers.
 Slots render exactly the content passed in -- an omitted slot renders
 nothing, never a placeholder.
 
+**Narrow-viewport protections (responsive-design-hardening round,
+CSS-only, no prop changes)**: the mobile (temporary) Drawer's paper
+width is capped to a CSS `min(sidebarWidth, 85vw)` -- a very narrow
+viewport (~320px and below) never gets a near-full-screen or
+overflowing drawer -- while the desktop (permanent) Drawer's paper
+width is untouched, still the plain `sidebarWidth`. The AppBar's
+Toolbar row and the `headerActions` group both carry a responsive
+`flexWrap: 'wrap'`, so a host supplying several header actions wraps
+onto a second line under real overflow pressure instead of being
+squeezed or clipped -- AppShell still renders only what the host
+gives it (this is not an auto-collapsing overflow menu; inventing one
+would be new host-facing behavior this package's design deliberately
+avoids elsewhere). Both are purely additive CSS: no prop was added or
+changed, and every existing consumer is visually unaffected outside
+the narrow-viewport cases these protections exist for.
+
 ## RouteGuard
 
 Gates `children` on a host-computed `status`, never a callback
@@ -215,13 +231,18 @@ package -- see the AGENTS.md non-negotiable rules.
 ## Development
 
 From `web/packages/layout-kit`: `pnpm lint`, `pnpm typecheck`, `pnpm
-test`, `pnpm build`. The test suite runs in jsdom
-(`vitest.config.ts`); shared helpers live in `test-utils/`
+test` (31 tests across 3 files), `pnpm build`. The test suite runs in
+jsdom (`vitest.config.ts`); shared helpers live in `test-utils/`
 (`renderWithProviders` mounts the unit under the real host tree --
 `I18nextProvider` plus `ui-kit`'s own `AppThemeProvider`, both
-namespaces registered -- and `expectNoAxeViolations` runs axe;
+namespaces registered -- `expectNoAxeViolations` runs axe;
 `mockMatchMedia` stubs jsdom's missing `window.matchMedia` for
-`AppShell`'s desktop/mobile split). Bilingual fixtures are the shipped
+`AppShell`'s desktop/mobile split -- and `emitted-css.ts`'s
+`emittedStyleText()` reads the CSS text emotion has injected into the
+document, used by the mobile-drawer-width-cap test: jsdom evaluates no
+real layout, so that assertion is a property/snapshot proof the CSS
+`min()` cap was wired into the render, not a proof it looks correct at
+a real narrow viewport). Bilingual fixtures are the shipped
 locale files under `src/locales/`, imported by sources and tests;
 `src/usage-example.test.tsx` compiles and executes the Quick start
 composition above, so the documented usage cannot drift from the API.

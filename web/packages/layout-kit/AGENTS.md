@@ -41,6 +41,15 @@ rule. The public surface is `src/index.ts`; everything under
   (including each item's `selected` state) is entirely host-computed;
   different hosts use different routers, and this package must work
   with all of them identically.
+- **Narrow-viewport protection is CSS-only, never a new host-facing
+  behavior.** The mobile drawer's paper width cap (a CSS `min()`) and
+  the AppBar Toolbar/`headerActions` `flexWrap: 'wrap'`
+  (responsive-design-hardening round) are purely additive styling with
+  no prop added or changed. Do not "fix" a future narrow-viewport
+  complaint by inventing an auto-collapsing overflow menu or similar
+  new behavior here — AppShell renders only what the host gives it,
+  and a genuine need for host-computed overflow behavior belongs to
+  the host composing this package, not to AppShell itself.
 - **This package makes zero HTTP calls.** There is no scope in which
   it legitimately needs to — if a change wants to fetch anything, that
   is a sign scope has drifted; stop and re-read the package README's
@@ -123,6 +132,21 @@ never inline a language literal. `src/usage-example.test.tsx` compiles
 and executes the README's Quick start composition, so the documented
 usage cannot drift from the API; when that composition changes, this
 file changes with it.
+
+**Responsive sx assertions (responsive-design-hardening round)**: a
+plain, non-breakpoint-gated sx value (`flexWrap: 'wrap'` on the
+Toolbar and `headerActions` group) computes fine through jsdom's
+`getComputedStyle`, so those stay ordinary `toHaveStyle` assertions.
+The mobile drawer's `width: min(sidebarWidth, 85vw)` is not
+breakpoint-gated either, but a CSS math function jsdom's simplified
+style engine may not evaluate reliably, so that one instead asserts
+against `test-utils/emitted-css.ts`'s `emittedStyleText()` — the actual
+generated CSS text, read across every `<style>` tag in the document.
+Both forms are property/snapshot proofs that the intended declaration
+was wired into the render; neither proves the layout looks correct at
+a real narrow viewport, which this package's jsdom suite cannot render
+at all (same standing gap as the Storybook / browser-side visual
+verification deferral below).
 
 ## Deferrals (recorded, do not re-open silently)
 
