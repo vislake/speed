@@ -62,7 +62,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vislake/speed/go/ai-gateway"
+	aigateway "github.com/vislake/speed/go/ai-gateway"
 	"github.com/vislake/speed/go/billing"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"

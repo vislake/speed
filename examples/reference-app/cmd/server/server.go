@@ -1858,9 +1858,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		aigateway.WithImageGeneration(standaloneQueue, storageModule.ObjectService()),
 		aigateway.WithEntitlements(aigateway.EntitlementsFunc(
 			func(ctx context.Context, featureKey string, requested int64) (aigateway.Decision, error) {
-				decision, err := billingModule.Entitlements().Check(ctx, featureKey, requested)
-				if err != nil {
-					return aigateway.Decision{}, err
+				decision, checkErr := billingModule.Entitlements().Check(ctx, featureKey, requested)
+				if checkErr != nil {
+					return aigateway.Decision{}, checkErr
 				}
 				return aigateway.Decision{Allowed: decision.Allowed, Reason: string(decision.Reason)}, nil
 			},
@@ -2175,9 +2175,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// spec-generated surface the module mounts reads the Service at call
 	// time through Handler's own Register-time forwarding wrapper instead),
 	// so the value is discarded here.
-	if _, err := integrationModule.Attach(reg); err != nil {
+	if _, attachErr := integrationModule.Attach(reg); attachErr != nil {
 		_ = cleanup()
-		return nil, nil, nil, fmt.Errorf("reference-app: attach the integration module: %w", err)
+		return nil, nil, nil, fmt.Errorf("reference-app: attach the integration module: %w", attachErr)
 	}
 	configService, err = configModule.Attach(reg)
 	if err != nil {
