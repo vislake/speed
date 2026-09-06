@@ -46,18 +46,31 @@ import tomllib
 TASK_HEADER_LIMIT = 40  # the header comment's task pin lives in these lines
 
 
+def _infra(message: str) -> None:
+    """Report an infrastructure failure and exit 2.
+
+    The exit-code contract (module docstring): 2 = infrastructure error
+    (a source file missing or unparsable, a tool absent from .mise.toml),
+    and only 1 = drift. SystemExit alone cannot carry the distinction --
+    sys.exit("message") exits 1 -- so the message is printed to stderr
+    first and the bare code raised.
+    """
+    print(message, file=sys.stderr)
+    raise SystemExit(2)
+
+
 def _read_mise_tools(root: str) -> dict[str, str]:
     path = os.path.join(root, ".mise.toml")
     try:
         with open(path, "rb") as fh:
             data = tomllib.load(fh)
     except FileNotFoundError:
-        raise SystemExit(f"error: {path} is missing -- the mise config this gate guards")
+        _infra(f"error: {path} is missing -- the mise config this gate guards")
     except tomllib.TOMLDecodeError as exc:
-        raise SystemExit(f"error: {path} is not parsable TOML: {exc}")
+        _infra(f"error: {path} is not parsable TOML: {exc}")
     tools = data.get("tools")
     if not isinstance(tools, dict):
-        raise SystemExit(f"error: {path} has no [tools] table")
+        _infra(f"error: {path} has no [tools] table")
     return {str(k): str(v) for k, v in tools.items()}
 
 
@@ -65,16 +78,27 @@ def _read_task_pin(root: str) -> str:
     path = os.path.join(root, "Taskfile.yml")
     try:
         with open(path, encoding="utf-8") as fh:
-            lines = [next(fh) for _ in range(TASK_HEADER_LIMIT)]
+            # Read up to TASK_HEADER_LIMIT lines one at a time, keeping
+            # what was actually read: a file shorter than the limit (a
+            # freshly scaffolded one, say) must still report a pin that
+            # lives in its readable lines. The old form -- a list
+            # comprehension of next(fh) calls that raised StopIteration
+            # mid-read and discarded the lines already collected -- turned
+            # a short Taskfile whose pin sat on line 1 into "pin not
+            # found".
+            lines: list[str] = []
+            for _ in range(TASK_HEADER_LIMIT):
+                line = fh.readline()
+                if not line:
+                    break
+                lines.append(line)
     except FileNotFoundError:
-        raise SystemExit(f"error: {path} is missing -- the source of the task pin")
-    except StopIteration:
-        lines = []
+        _infra(f"error: {path} is missing -- the source of the task pin")
     m = re.search(r"\btask\s+(\d+\.\d+(?:\.\d+)?)", "".join(lines))
     if not m:
-        raise SystemExit(
-            f"error: no 'task <version>' pin found in the first {TASK_HEADER_LIMIT} "
-            f"lines of {path}"
+        _infra(
+            f"error: no 'task <version>' pin found in the first "
+            f"{TASK_HEADER_LIMIT} lines of {path}"
         )
     return m.group(1)
 
@@ -85,10 +109,10 @@ def _read_go_version(root: str) -> str:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
     except FileNotFoundError:
-        raise SystemExit(f"error: {path} is missing -- the source of the go pin")
+        _infra(f"error: {path} is missing -- the source of the go pin")
     m = re.search(r"^go\s+(\d+\.\d+(?:\.\d+)?)", text, re.MULTILINE)
     if not m:
-        raise SystemExit(f"error: no 'go' directive found in {path}")
+        _infra(f"error: no 'go' directive found in {path}")
     return m.group(1)
 
 
@@ -98,9 +122,9 @@ def _read_nvmrc(root: str) -> str:
         with open(path, encoding="utf-8") as fh:
             version = fh.read().strip()
     except FileNotFoundError:
-        raise SystemExit(f"error: {path} is missing -- the source of the node pin")
+        _infra(f"error: {path} is missing -- the source of the node pin")
     if not version:
-        raise SystemExit(f"error: {path} is empty -- the source of the node pin")
+        _infra(f"error: {path} is empty -- the source of the node pin")
     return version
 
 
@@ -110,15 +134,15 @@ def _read_package_manager(root: str) -> str:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
     except FileNotFoundError:
-        raise SystemExit(f"error: {path} is missing -- the source of the pnpm pin")
+        _infra(f"error: {path} is missing -- the source of the pnpm pin")
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"error: {path} is not parsable JSON: {exc}")
+        _infra(f"error: {path} is not parsable JSON: {exc}")
     field = data.get("packageManager")
     if not isinstance(field, str):
-        raise SystemExit(f"error: {path} has no packageManager string field")
+        _infra(f"error: {path} has no packageManager string field")
     m = re.match(r"^pnpm@(\d+\.\d+(?:\.\d+)?)", field)
     if not m:
-        raise SystemExit(f"error: {path}'s packageManager is not 'pnpm@<version>': {field}")
+        _infra(f"error: {path}'s packageManager is not 'pnpm@<version>': {field}")
     return m.group(1)
 
 
@@ -128,10 +152,10 @@ def _read_golangci_version(root: str) -> str:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
     except FileNotFoundError:
-        raise SystemExit(f"error: {path} is missing -- the source of the golangci-lint pin")
+        _infra(f"error: {path} is missing -- the source of the golangci-lint pin")
     m = re.search(r'^\s*GOLANGCI_VERSION:\s*"([^"]+)"', text, re.MULTILINE)
     if not m:
-        raise SystemExit(f"error: no GOLANGCI_VERSION found in {path}")
+        _infra(f"error: no GOLANGCI_VERSION found in {path}")
     return m.group(1)
 
 
@@ -141,10 +165,10 @@ def _read_hugo_version(root: str) -> str:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
     except FileNotFoundError:
-        raise SystemExit(f"error: {path} is missing -- the source of the hugo pin")
+        _infra(f"error: {path} is missing -- the source of the hugo pin")
     m = re.search(r'^\s*HUGO_VERSION:\s*"([^"]+)"', text, re.MULTILINE)
     if not m:
-        raise SystemExit(f"error: no HUGO_VERSION found in {path}")
+        _infra(f"error: no HUGO_VERSION found in {path}")
     return m.group(1)
 
 
@@ -181,10 +205,11 @@ def main(argv: list[str] | None = None) -> int:
 
     mise = _read_mise_tools(root)
     drifted = 0
+    missing = 0
     for tool, reader, source_name in SOURCES:
         if tool not in mise:
             print(f"toolchain: MISSING     {tool} is absent from .mise.toml")
-            drifted += 1
+            missing += 1
             continue
         mirror = mise[tool]
         source = reader(root)
@@ -200,6 +225,18 @@ def main(argv: list[str] | None = None) -> int:
             )
             drifted += 1
 
+    if missing:
+        # An expected tool absent from .mise.toml is an infrastructure
+        # failure per the module docstring's exit-code contract: the gate
+        # exists to prove the mirrors cannot drift, and a mirror that does
+        # not exist cannot be compared.
+        print(
+            f"error: {missing} expected tool(s) absent from .mise.toml -- "
+            "every tool this gate's SOURCES list pins must appear in the "
+            "[tools] table (see the .mise.toml header)",
+            file=sys.stderr,
+        )
+        return 2
     if drifted:
         print(
             f"error: {drifted} tool version(s) drifted -- bump the authoritative "
