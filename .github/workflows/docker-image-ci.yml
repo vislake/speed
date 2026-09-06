@@ -7,10 +7,23 @@ name: docker-image-ci
 # boundary for this round: e2e, release and nightly -- the reusable
 # workflow's own eventual real callers -- are not live yet (each stays a
 # gated stub in its own right), so this file is the one live caller until
-# one of those three rounds lands and wires it in for real. No push
-# anywhere: reusable-docker-build.yml's own header explains why (no
-# registry, no credentials, by deliberate and permanent policy until this
-# repository's own M4 release round).
+# one of those three rounds lands and wires it in for real.
+#
+# As of chore/docker-build-native-arm, the reusable workflow this file
+# calls no longer builds linux/arm64 by QEMU emulation on a single
+# x86_64 runner: it runs two native builder jobs in parallel (amd64 on
+# ubuntu-latest, arm64 on GitHub's real, GA, hosted ubuntu-24.04-arm
+# runner) and combines their independently-pushed images into one real
+# multi-arch manifest via `docker buildx imagetools create`. No
+# `platforms` input exists any more -- both architectures are always
+# built, natively, every dispatch. The push target is this repository's
+# own GHCR namespace under the workflow's built-in GITHUB_TOKEN (see
+# reusable-docker-build.yml's own header for why that is not a new
+# credential), not a no-op discard as the prior QEMU-based leg's
+# never-loaded multi-arch build used to be -- so a dispatch of this
+# workflow now leaves behind three real, architecture- and run-scoped CI
+# proof tags (`<tag>-amd64`, `<tag>-arm64`, the plain `<tag>` manifest
+# list) in this repository's GHCR packages, not a release artifact.
 #
 # Flat under .github/workflows/, never a subdirectory -- this repository
 # hit a real GitHub Actions constraint earlier over exactly that mistake
@@ -33,11 +46,13 @@ jobs:
   build-reference-app:
     name: build examples/reference-app
     uses: ./.github/workflows/reusable-docker-build.yml
+    permissions:
+      contents: read
+      packages: write
     with:
       image_name: speed-reference-app
       image_tag: ${{ inputs.image_tag != '' && inputs.image_tag || format('ci-{0}', github.run_id) }}
       context: .
       dockerfile: examples/reference-app/Dockerfile
-      platforms: linux/amd64,linux/arm64
       healthcheck_path: /healthz
       healthcheck_port: "8080"

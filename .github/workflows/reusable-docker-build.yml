@@ -4,60 +4,67 @@ name: docker-build
 # of the reference-app-docker-image round (docs/internal/18-cicd.md's own
 # implementation-status note has the detail): examples/reference-app now
 # ships a real multi-stage Dockerfile, and this workflow builds it for
-# every platform a caller names, proving the build itself -- not yet the
-# full release shape.
+# linux/amd64 and linux/arm64.
 #
-# WHAT THIS ROUND SHIPS:
-#   * buildx setup (QEMU for cross-platform emulation, then buildx itself)
-#     and a multi-arch `docker buildx build` over every platform `platforms`
-#     names, with no destination: no push (no registry exists to push to --
-#     see NOT YET below) and no --load for a genuinely multi-platform build,
-#     because the default docker-container buildx driver cannot load a
-#     multi-platform result into the local daemon at all (only a
-#     single-platform image can be loaded) -- so this leg's proof is
-#     "every named platform's layers actually build", discarded on success,
-#     which is exactly `docker buildx build` without --push/--load's own
-#     documented default behavior, not a workaround this file invented.
-#   * a SECOND build, single-platform (linux/amd64, the GitHub-hosted
-#     runner's own native architecture -- no QEMU emulation needed to
-#     actually EXECUTE it, unlike the multi-arch leg above), with --load
-#     into the runner's local Docker daemon, so the image can be run for
-#     real: this leg boots a container from it, curls the health route the
-#     caller names, and confirms the image's own HEALTHCHECK (if the
-#     Dockerfile declares one) converges to "healthy" -- the same two
-#     proofs examples/reference-app's own Dockerfile round performed by
-#     hand, now repeatable in CI.
-#   * Docker layer caching via actions/cache, keyed on the Dockerfile's own
-#     hash plus the runner OS -- the "no facility exists yet" gap
-#     18-cicd's cost-control section used to record for this exact
-#     workflow is closed by this round, for this workflow specifically.
-#
-# INPUTS
-#   image_name  -- image name to tag (no registry prefix -- there is
-#                  nowhere real to push to yet, see NOT YET below).
-#   image_tag   -- tag for the built image (caller's choice -- a commit SHA,
-#                  a run id, or a fixed string for a smoke build).
-#   context     -- build context path, relative to the repository root.
-#   dockerfile  -- Dockerfile path, relative to the repository root.
-#   platforms   -- comma-separated platform list for the multi-arch
-#                  (never-loaded) leg. Defaults to linux/amd64,linux/arm64
-#                  -- the pair root CLAUDE.md's release-artifact rule and
-#                  this repository's own release.yml design note both name.
-#   healthcheck_path -- HTTP path the single-platform smoke leg curls after
-#                  booting the loaded image (default /healthz, matching
-#                  examples/reference-app's own route).
-#   healthcheck_port -- container port the smoke leg publishes and curls
-#                  (default 8080, examples/reference-app's own default
-#                  PORT).
+# WHAT THIS ROUND SHIPS (chore/docker-build-native-arm -- replaces the
+# reference-app-docker-image round's single-runner QEMU-emulated approach):
+#   * TWO NATIVE BUILDER JOBS running IN PARALLEL, one per architecture,
+#     each on a GitHub-hosted runner whose own CPU genuinely matches the
+#     platform it builds -- ubuntu-latest (amd64) and ubuntu-24.04-arm
+#     (arm64, GitHub's real, publicly-available, GA hosted Arm runner,
+#     Cobalt-100-based, 4 vCPU -- see
+#     https://github.blog/changelog/2025-08-07-arm64-hosted-runners-for-public-repositories-are-now-generally-available/).
+#     Neither job's `docker buildx build` ever names a `--platform`
+#     outside its own runner's native architecture, so QEMU is gone
+#     entirely: no `docker/setup-qemu-action` step exists anywhere in this
+#     file any more, and none is needed -- every layer that gets built is
+#     built by a CPU that actually executes that instruction set, not one
+#     emulating it.
+#   * Each builder job's image is genuinely smoke-tested natively -- a
+#     property the old QEMU approach could only give the amd64 leg,
+#     since an emulated arm64 container was never actually booted, only
+#     proven to build. Now both architectures boot for real: each job
+#     builds twice against the same local Docker layer cache (a
+#     `--load` build that stays local for the boot-and-curl smoke test,
+#     then a `--push` build -- itself a near-total cache hit off the load
+#     build's own layers, so the second build costs seconds, not a full
+#     rebuild) and pushes its own single-architecture image to this
+#     repository's own GHCR namespace, tagged with an architecture suffix
+#     (`<tag>-amd64` / `<tag>-arm64`).
+#   * A third job, `manifest`, depends on both builder jobs and runs
+#     `docker buildx imagetools create` to combine the two
+#     already-pushed, already-verified single-architecture images into
+#     one real multi-arch manifest list under the plain tag (no
+#     architecture suffix) -- the standard, documented mechanism buildx
+#     itself expects for handing two separate jobs' (necessarily separate
+#     Docker daemons') images to a combining step: `imagetools create`
+#     reads existing manifests from a registry, it does not reach across
+#     two disconnected local daemons, which is exactly why each builder
+#     job pushes rather than only loading. `imagetools inspect` then
+#     prints the combined manifest's platform list as this job's own
+#     proof that both native architectures genuinely landed in one tag.
+#   * The registry is this repository's own GHCR namespace
+#     (ghcr.io/<owner>/<image_name>), authenticated with the workflow's
+#     own built-in `GITHUB_TOKEN` -- see NOT YET below for why this is
+#     not a new credential.
+#   * Docker layer caching via actions/cache, keyed on the Dockerfile's
+#     own hash plus the runner OS plus the architecture (each
+#     architecture's layers are cached separately -- they are not
+#     interchangeable).
 #
 # NOT YET (this round's own stated boundary, not an oversight):
-#   * No registry push of any kind -- this repository holds no registry
-#     credentials and must never acquire any (root CLAUDE.md's Security
-#     rules; security.yml's own header states the identical constraint for
-#     trivy). Real publishing, multi-arch manifest lists actually pushed
-#     and tagged, and goreleaser-produced binaries riding alongside them
-#     are all M4 release-pipeline work (docs/internal/18-cicd.md's
-#     lockstep-release section, step 5).
+#   * The registry namespace used here (this repository's own
+#     `ghcr.io/<owner>/...` package) is a real, standard, zero-additional-
+#     setup GitHub Actions capability -- a repository's built-in
+#     `GITHUB_TOKEN` pushing to its OWN GHCR namespace under
+#     `permissions: packages: write` is not "inventing a credential" (root
+#     CLAUDE.md's Security rules; confirmed live for this repository:
+#     `default_workflow_permissions` is `write`). It is NOT the release
+#     pipeline's eventual public-facing registry publication -- these
+#     images carry architecture-suffixed and run-scoped tags for CI proof
+#     purposes only, nothing here is a versioned release artifact, and
+#     real, versioned release publishing under the lockstep lifecycle
+#     stays M4 work (release.yml's own header).
 #   * No caller wires this into e2e/release/nightly yet -- those three
 #     stay gated stubs in their own right (see each file's own header).
 #     The only live caller today is docker-image-ci.yml, workflow_dispatch-
@@ -66,16 +73,34 @@ name: docker-build
 #     nothing to scan from a live per-PR pipeline -- this workflow builds
 #     an image on manual dispatch only, not on every PR, so it does not by
 #     itself give trivy a standing target.
+#
+# INPUTS
+#   image_name  -- image name to tag (no registry prefix -- this workflow
+#                  derives the full reference itself, as
+#                  ghcr.io/<repository_owner>/<image_name>).
+#   image_tag   -- tag for the built image (caller's choice -- a commit SHA,
+#                  a run id, or a fixed string for a smoke build). The two
+#                  architecture-suffixed images land at
+#                  `<image_tag>-amd64` / `<image_tag>-arm64`; the combined
+#                  manifest lands at the plain `<image_tag>`.
+#   context     -- build context path, relative to the repository root.
+#   dockerfile  -- Dockerfile path, relative to the repository root.
+#   healthcheck_path -- HTTP path each architecture's own smoke leg curls
+#                  after booting its natively-loaded image (default
+#                  /healthz, matching examples/reference-app's own route).
+#   healthcheck_port -- container port each smoke leg publishes and curls
+#                  (default 8080, examples/reference-app's own default
+#                  PORT).
 
 on:
   workflow_call:
     inputs:
       image_name:
-        description: Image name to tag (no registry prefix).
+        description: Image name to tag (no registry prefix -- the full reference is derived as ghcr.io/<repository_owner>/<image_name>).
         required: true
         type: string
       image_tag:
-        description: Tag for the built image.
+        description: Tag for the built image. Architecture-suffixed images land at <image_tag>-amd64/-arm64; the combined manifest lands at the plain <image_tag>.
         required: true
         type: string
       context:
@@ -86,18 +111,13 @@ on:
         description: Dockerfile path, relative to the repository root.
         required: true
         type: string
-      platforms:
-        description: Comma-separated platform list for the multi-arch (never-loaded) build leg.
-        required: false
-        type: string
-        default: linux/amd64,linux/arm64
       healthcheck_path:
-        description: HTTP path the single-platform smoke leg curls after booting the loaded image.
+        description: HTTP path each architecture's own smoke leg curls after booting its natively-loaded image.
         required: false
         type: string
         default: /healthz
       healthcheck_port:
-        description: Container port the smoke leg publishes and curls.
+        description: Container port each smoke leg publishes and curls.
         required: false
         type: string
         default: "8080"
@@ -106,49 +126,78 @@ permissions:
   contents: read
 
 jobs:
-  docker-build:
-    name: docker build (${{ inputs.image_name }}:${{ inputs.image_tag }})
-    runs-on: ubuntu-latest
+  # Two native builder jobs running in parallel, one per architecture --
+  # never a cross-build, never QEMU. Each pushes its own single-arch image
+  # to this repository's GHCR namespace so the manifest job below has a
+  # real registry to read both digests from.
+  build:
+    name: build (${{ matrix.arch }} on ${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # linux/amd64 on GitHub's standard x86_64 hosted runner.
+          - arch: amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+          # linux/arm64 on GitHub's standard, GA, publicly-available
+          # native Arm64 hosted runner -- no emulation, a real arm64 CPU.
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      # QEMU is what lets buildx assemble non-native-architecture layers
-      # (linux/arm64 on this x86_64 runner) -- required for the multi-arch
-      # leg below, unused by the amd64-only smoke leg.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a  # v4.3.0
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
 
-      # Docker layer cache -- keyed on the Dockerfile's own content hash
-      # plus the runner OS, exactly the cache-key shape 18-cicd's own
-      # caching rule names ("by lockfile hash" generalized to "by the input
-      # that defines the build" for a Dockerfile). A cache miss (the
-      # Dockerfile changed, or this is the first run) costs one full build;
-      # every unchanged rebuild after that reuses it.
+      # Lowercased explicitly: GHCR (like every OCI registry) requires a
+      # lowercase repository path, while github.repository_owner and
+      # inputs.image_name are not guaranteed to be.
+      - name: Compute the registry image reference
+        run: |
+          owner_lower=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          image_lower=$(echo '${{ inputs.image_name }}' | tr '[:upper:]' '[:lower:]')
+          echo "REGISTRY_IMAGE=ghcr.io/${owner_lower}/${image_lower}" >> "$GITHUB_ENV"
+
+      # This repository's own built-in GITHUB_TOKEN, scoped to this
+      # repository's own GHCR namespace by the job's packages: write
+      # permission above -- no credential is created or stored anywhere.
+      - name: Log in to this repository's GHCR namespace
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Docker layer cache -- keyed on the Dockerfile's own content hash,
+      # the runner OS AND the architecture: amd64 and arm64 layers are
+      # never interchangeable, so they never share a cache slot.
       - name: Cache Docker layers
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: /tmp/.buildx-cache
-          key: docker-buildx-${{ runner.os }}-${{ hashFiles(inputs.dockerfile) }}
+          key: docker-buildx-${{ matrix.arch }}-${{ runner.os }}-${{ hashFiles(inputs.dockerfile) }}
           restore-keys: |
-            docker-buildx-${{ runner.os }}-
+            docker-buildx-${{ matrix.arch }}-${{ runner.os }}-
 
-      # Multi-arch leg: builds every named platform's layers with no
-      # destination (no --push, no --load) -- see this file's own header
-      # for why that is docker buildx build's own documented behavior for
-      # a genuinely multi-platform result, not a workaround. A platform
-      # that fails to build fails this step, which is the whole proof.
-      - name: Build (multi-arch, discarded on success)
+      # Native, single-platform, loaded into this runner's own local
+      # Docker daemon -- real for both architectures now, since neither
+      # runner emulates the other's instruction set.
+      - name: Build (${{ matrix.platform }}, loaded into the local daemon)
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: ${{ inputs.context }}
           file: ${{ inputs.dockerfile }}
-          platforms: ${{ inputs.platforms }}
-          push: false
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: ${{ env.REGISTRY_IMAGE }}:${{ inputs.image_tag }}-${{ matrix.arch }}
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
 
@@ -160,26 +209,13 @@ jobs:
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
-      # Single-platform (native, linux/amd64) leg: --load puts the result
-      # into the runner's own Docker daemon so the smoke steps below can
-      # actually run it, which a multi-platform result never allows.
-      - name: Build (linux/amd64, loaded into the local daemon)
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
-        with:
-          context: ${{ inputs.context }}
-          file: ${{ inputs.dockerfile }}
-          platforms: linux/amd64
-          load: true
-          tags: ${{ inputs.image_name }}:${{ inputs.image_tag }}
-          cache-from: type=local,src=/tmp/.buildx-cache
-
       - name: Report image size
-        run: docker image inspect ${{ inputs.image_name }}:${{ inputs.image_tag }} --format '{{ .Size }} bytes'
+        run: docker image inspect ${{ env.REGISTRY_IMAGE }}:${{ inputs.image_tag }}-${{ matrix.arch }} --format '{{ .Size }} bytes'
 
       - name: Boot the loaded image and smoke-test its health route
         run: |
           set -euo pipefail
-          container_id=$(docker run -d -p "${{ inputs.healthcheck_port }}:${{ inputs.healthcheck_port }}" "${{ inputs.image_name }}:${{ inputs.image_tag }}")
+          container_id=$(docker run -d -p "${{ inputs.healthcheck_port }}:${{ inputs.healthcheck_port }}" "${{ env.REGISTRY_IMAGE }}:${{ inputs.image_tag }}-${{ matrix.arch }}")
           trap 'docker logs "$container_id" || true; docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
 
           echo "waiting for the container's own HEALTHCHECK (if any) and health route to answer..."
@@ -200,7 +236,67 @@ jobs:
             exit 1
           fi
 
-          echo "health route response:"
+          echo "health route response ($REGISTRY_IMAGE:${{ inputs.image_tag }}-${{ matrix.arch }}, native ${{ matrix.platform }}, no emulation):"
           cat /tmp/healthcheck-response
           echo
           echo "container HEALTHCHECK status: $status"
+
+      # Pushes this architecture's own image to this repository's GHCR
+      # namespace under its architecture-suffixed tag. Reuses the load
+      # build's own cache above -- with no Dockerfile change since the
+      # first build, this is a cache hit, not a second real build.
+      - name: Push (${{ matrix.platform }})
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ${{ env.REGISTRY_IMAGE }}:${{ inputs.image_tag }}-${{ matrix.arch }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+
+  # Combines the two already-pushed, already-smoke-tested single-arch
+  # images into one real multi-arch manifest list under the plain tag.
+  # `docker buildx imagetools create` is buildx's own documented mechanism
+  # for exactly this: it reads existing manifests back from a registry, so
+  # a registry (this repository's own GHCR namespace, populated by the two
+  # build jobs above) is the real, correct hand-off point between two
+  # separate jobs' necessarily separate local Docker daemons -- there is
+  # no way to hand a locally-loaded image from one job's daemon to
+  # another's directly.
+  manifest:
+    name: combine into one multi-arch manifest
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
+
+      - name: Compute the registry image reference
+        run: |
+          owner_lower=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          image_lower=$(echo '${{ inputs.image_name }}' | tr '[:upper:]' '[:lower:]')
+          echo "REGISTRY_IMAGE=ghcr.io/${owner_lower}/${image_lower}" >> "$GITHUB_ENV"
+
+      - name: Log in to this repository's GHCR namespace
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create the combined multi-arch manifest
+        run: |
+          docker buildx imagetools create \
+            -t "${REGISTRY_IMAGE}:${{ inputs.image_tag }}" \
+            "${REGISTRY_IMAGE}:${{ inputs.image_tag }}-amd64" \
+            "${REGISTRY_IMAGE}:${{ inputs.image_tag }}-arm64"
+
+      # The proof: print the combined tag's own manifest list and confirm
+      # both native platforms are really in it.
+      - name: Inspect the combined manifest
+        run: docker buildx imagetools inspect "${REGISTRY_IMAGE}:${{ inputs.image_tag }}"
