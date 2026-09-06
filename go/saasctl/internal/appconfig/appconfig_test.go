@@ -173,6 +173,211 @@ func TestLoadSetButEmptyCountsAsUnset(t *testing.T) {
 	}
 }
 
+// TestLoadReadsInfrastructureVariables: with a complete environment across
+// every infrastructure group -- Redis, the full S3 group and its optional
+// refinements, the SMTP pair and its optional refinements, and the SMS
+// gateway URL -- Load resolves every field and records it as from-env,
+// mirroring TestLoadReadsSetVariables above for the twelve variables the
+// twin did not cover before this fix.
+func TestLoadReadsInfrastructureVariables(t *testing.T) {
+	cfg, err := Load("cli-app", envFromMap(map[string]string{
+		RedisAddrEnv:     "redis.internal:6379",
+		S3EndpointEnv:    "s3.internal:9000",
+		S3BucketEnv:      "smiles",
+		S3AccessKeyEnv:   "AKIAEXAMPLE",
+		S3SecretKeyEnv:   "s3cr3t",
+		S3RegionEnv:      "us-east-1",
+		S3UseSSLEnv:      "true",
+		SMTPHostEnv:      "smtp.internal",
+		SMTPPortEnv:      "587",
+		SMTPUsernameEnv:  "mailer",
+		SMTPPasswordEnv:  "hunter2",
+		SMSGatewayURLEnv: "http://sms.internal/send",
+	}))
+	if err != nil {
+		t.Fatalf("Load with a complete infrastructure environment failed: %v", err)
+	}
+	if cfg.RedisAddr != "redis.internal:6379" || !cfg.RedisAddrFromEnv {
+		t.Errorf("RedisAddr = %q (fromEnv %v), want the set value recorded as from-env", cfg.RedisAddr, cfg.RedisAddrFromEnv)
+	}
+	if cfg.S3Endpoint != "s3.internal:9000" || cfg.S3Bucket != "smiles" ||
+		cfg.S3AccessKey != "AKIAEXAMPLE" || cfg.S3SecretKey != "s3cr3t" || cfg.S3Region != "us-east-1" || !cfg.S3UseSSL {
+		t.Errorf("S3 fields did not resolve to the set values: %+v", cfg)
+	}
+	if !cfg.S3EndpointFromEnv || !cfg.S3BucketFromEnv || !cfg.S3AccessKeyFromEnv ||
+		!cfg.S3SecretKeyFromEnv || !cfg.S3RegionFromEnv || !cfg.S3UseSSLFromEnv {
+		t.Error("a complete S3 group must record every field as from-env")
+	}
+	if cfg.SMTPHost != "smtp.internal" || cfg.SMTPPort != 587 || cfg.SMTPUsername != "mailer" || cfg.SMTPPassword != "hunter2" {
+		t.Errorf("SMTP fields did not resolve to the set values: %+v", cfg)
+	}
+	if !cfg.SMTPHostFromEnv || !cfg.SMTPPortFromEnv || !cfg.SMTPUsernameFromEnv || !cfg.SMTPPasswordFromEnv {
+		t.Error("a complete SMTP pair must record every field as from-env")
+	}
+	if cfg.SMSGatewayURL != "http://sms.internal/send" || !cfg.SMSGatewayURLFromEnv {
+		t.Errorf("SMSGatewayURL = %q (fromEnv %v), want the set value recorded as from-env", cfg.SMSGatewayURL, cfg.SMSGatewayURLFromEnv)
+	}
+}
+
+// TestLoadInfrastructureVariablesDefaultToUnwired: with an empty
+// environment, every infrastructure field resolves to its zero value --
+// empty strings, S3UseSSL false, SMTPPort 0 -- leaving every seam on its
+// Preset default, and no field is recorded as from-env: the same "empty
+// counts as unset" contract the original five variables already carry.
+// Before this fix, appconfig did not read these variables at all, so this
+// case held trivially for the wrong reason; TestLoadReadsInfrastructureVariables
+// above is what actually proves they are now wired.
+func TestLoadInfrastructureVariablesDefaultToUnwired(t *testing.T) {
+	cfg, err := Load("cli-app", envFromMap(nil))
+	if err != nil {
+		t.Fatalf("Load with an empty environment failed: %v", err)
+	}
+	if cfg.RedisAddr != "" || cfg.S3Endpoint != "" || cfg.S3Bucket != "" || cfg.S3AccessKey != "" ||
+		cfg.S3SecretKey != "" || cfg.S3Region != "" || cfg.S3UseSSL || cfg.SMTPHost != "" ||
+		cfg.SMTPPort != 0 || cfg.SMTPUsername != "" || cfg.SMTPPassword != "" || cfg.SMSGatewayURL != "" {
+		t.Errorf("an empty environment must leave every infrastructure field at its zero value, got %+v", cfg)
+	}
+	if cfg.RedisAddrFromEnv || cfg.S3EndpointFromEnv || cfg.S3BucketFromEnv || cfg.S3AccessKeyFromEnv ||
+		cfg.S3SecretKeyFromEnv || cfg.S3RegionFromEnv || cfg.S3UseSSLFromEnv || cfg.SMTPHostFromEnv ||
+		cfg.SMTPPortFromEnv || cfg.SMTPUsernameFromEnv || cfg.SMTPPasswordFromEnv || cfg.SMSGatewayURLFromEnv {
+		t.Error("an empty environment must record every infrastructure field as not-from-env")
+	}
+}
+
+// TestLoadRefusesIncompleteS3Group: an S3 group missing two of its four
+// required members fails with the template's own completeness error
+// naming exactly which variables are missing -- the unit-level pin behind
+// config.TestPrintRefusesIncompleteS3Group's command-level proof. Before
+// this fix Load ignored these variables entirely, so this environment
+// resolved successfully and silently -- exactly the misdiagnosis the
+// audit finding names.
+func TestLoadRefusesIncompleteS3Group(t *testing.T) {
+	_, err := Load("cli-app", envFromMap(map[string]string{
+		S3EndpointEnv: "s3.internal:9000",
+		S3BucketEnv:   "smiles",
+		// S3AccessKeyEnv and S3SecretKeyEnv deliberately left unset.
+	}))
+	if err == nil {
+		t.Fatal("Load accepted an incomplete S3 group")
+	}
+	want := "cli-app: an S3 ObjectStore composition needs APP_S3_ACCESS_KEY, APP_S3_SECRET_KEY set too " +
+		"(got some but not all of APP_S3_ENDPOINT/APP_S3_BUCKET/APP_S3_ACCESS_KEY/APP_S3_SECRET_KEY)"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err, want)
+	}
+}
+
+// TestLoadRefusesIncompleteSMTPPair: an SMTP pair missing its host fails
+// with the template's own completeness error, the pair's mirror of
+// TestLoadRefusesIncompleteS3Group above.
+func TestLoadRefusesIncompleteSMTPPair(t *testing.T) {
+	_, err := Load("cli-app", envFromMap(map[string]string{
+		SMTPPortEnv: "587",
+		// SMTPHostEnv deliberately left unset.
+	}))
+	if err == nil {
+		t.Fatal("Load accepted an incomplete SMTP pair")
+	}
+	want := "cli-app: an SMTP Mailer composition needs both APP_SMTP_HOST and APP_SMTP_PORT set"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err, want)
+	}
+}
+
+// TestLoadS3UseSSLMustBeAValidBool: a non-bool APP_S3_USE_SSL fails with
+// the template's own parse error.
+func TestLoadS3UseSSLMustBeAValidBool(t *testing.T) {
+	_, err := Load("cli-app", envFromMap(map[string]string{S3UseSSLEnv: "maybe"}))
+	if err == nil {
+		t.Fatal("Load accepted a non-bool APP_S3_USE_SSL")
+	}
+	if !strings.HasPrefix(err.Error(), `cli-app: APP_S3_USE_SSL must be a valid bool, got "maybe": `) {
+		t.Errorf("error = %q, want the template's APP_S3_USE_SSL bool-parse prefix", err)
+	}
+}
+
+// TestLoadSMTPPortMustBeAValidNumber: a non-numeric APP_SMTP_PORT fails
+// with the template's own parse error, once its pair partner (the host)
+// is also set so the completeness check does not short-circuit first.
+func TestLoadSMTPPortMustBeAValidNumber(t *testing.T) {
+	_, err := Load("cli-app", envFromMap(map[string]string{
+		SMTPHostEnv: "smtp.internal",
+		SMTPPortEnv: "not-a-port",
+	}))
+	if err == nil {
+		t.Fatal("Load accepted a non-numeric APP_SMTP_PORT")
+	}
+	if !strings.HasPrefix(err.Error(), `cli-app: APP_SMTP_PORT must be a valid port number, got "not-a-port": `) {
+		t.Errorf("error = %q, want the template's APP_SMTP_PORT parse-error prefix", err)
+	}
+}
+
+// envVarDeclPattern matches one "<identifier>Env = \"<VALUE>\"" constant
+// declaration, the exact shape every one of the seventeen bootstrap
+// variable names takes in both the template's config.go and this
+// package's own const block -- an identifier ending in the literal "Env"
+// assigned a quoted environment-variable-name string literal, on its own
+// line inside a const block. Comment lines (including the #nosec
+// exceptions both sides carry on the two credential-shaped names) do not
+// match, since they do not fit the "identifier = "VALUE"" shape at all.
+var envVarDeclPattern = regexp.MustCompile(`(?m)^\s*[A-Za-z0-9]+Env\s*=\s*"([A-Za-z0-9_]+)"`)
+
+// extractEnvVarNames returns the set of environment-variable-name string
+// values assigned to an "...Env"-suffixed identifier in src.
+func extractEnvVarNames(src string) map[string]bool {
+	names := map[string]bool{}
+	for _, m := range envVarDeclPattern.FindAllStringSubmatch(src, -1) {
+		names[m[1]] = true
+	}
+	return names
+}
+
+// TestAppConfigEnvSetMatchesTheTemplateExactly is the drift-proof set
+// equality the P2-2 fix requires: it extracts every "...Env = "VALUE""
+// declaration from the embedded template's own config.go source text --
+// never a hand-maintained list this test could silently fall behind, so a
+// future template edit is caught even before anyone updates this file --
+// and asserts the twin's own exported Env constants cover exactly that
+// set, in both directions. The twin's own side is built from the actual
+// exported Go constants (not from copied string literals), so renaming or
+// removing one of them fails this file to even compile, a second,
+// stronger drift signal than the runtime check below.
+//
+// Before this fix, the template declared seventeen such variables while
+// the twin supported five: this test fails on that state (RED), listing
+// the twelve variables the template parses that the twin ignores.
+func TestAppConfigEnvSetMatchesTheTemplateExactly(t *testing.T) {
+	content, err := template.Project.ReadFile("project/cmd/server/config.go")
+	if err != nil {
+		t.Fatalf("read the embedded template config.go: %v", err)
+	}
+	templateVars := extractEnvVarNames(string(content))
+	if len(templateVars) == 0 {
+		t.Fatal("extracted zero environment variable names from the template; the extraction pattern itself has drifted")
+	}
+
+	twinVars := map[string]bool{
+		DeploymentModeEnv: true, PortEnv: true, DBPathEnv: true,
+		ConfigKeyEnv: true, OrgIndexKeyEnv: true,
+		RedisAddrEnv:  true,
+		S3EndpointEnv: true, S3BucketEnv: true, S3AccessKeyEnv: true, S3SecretKeyEnv: true,
+		S3RegionEnv: true, S3UseSSLEnv: true,
+		SMTPHostEnv: true, SMTPPortEnv: true, SMTPUsernameEnv: true, SMTPPasswordEnv: true,
+		SMSGatewayURLEnv: true,
+	}
+
+	for name := range templateVars {
+		if !twinVars[name] {
+			t.Errorf("template config.go parses %s but the appconfig twin does not support it; the twin has drifted behind the template", name)
+		}
+	}
+	for name := range twinVars {
+		if !templateVars[name] {
+			t.Errorf("appconfig supports %s but the template config.go does not parse it; the twin claims a variable the app does not have", name)
+		}
+	}
+}
+
 // TestAppConfigIsTheGeneratedProjectsTwin re-reads the embedded template
 // project's cmd/server/config.go and fails when the two sides drift: every
 // variable name, the parse order, the defaults, the two error format
@@ -187,18 +392,35 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 	}
 	src := string(content)
 
-	// The five variable names and the two scalar defaults, declared in the
-	// template as <local name> = "<value>" inside its const block.
+	// The seventeen variable names and the one scalar default, declared in
+	// the template as <local name> = "<value>" inside its const block.
 	for local, want := range map[string]string{
 		"deploymentModeEnv": DeploymentModeEnv,
 		"portEnv":           PortEnv,
 		"dbPathEnv":         DBPathEnv,
 		"configKeyEnv":      ConfigKeyEnv,
 		"orgIndexKeyEnv":    OrgIndexKeyEnv,
+		"redisAddrEnv":      RedisAddrEnv,
+		"s3EndpointEnv":     S3EndpointEnv,
+		"s3BucketEnv":       S3BucketEnv,
+		"s3AccessKeyEnv":    S3AccessKeyEnv,
+		"s3SecretKeyEnv":    S3SecretKeyEnv,
+		"s3RegionEnv":       S3RegionEnv,
+		"s3UseSSLEnv":       S3UseSSLEnv,
+		"smtpHostEnv":       SMTPHostEnv,
+		"smtpPortEnv":       SMTPPortEnv,
+		"smtpUsernameEnv":   SMTPUsernameEnv,
+		"smtpPasswordEnv":   SMTPPasswordEnv,
+		"smsGatewayURLEnv":  SMSGatewayURLEnv,
 		"defaultPort":       defaultPort,
 	} {
-		decl := fmt.Sprintf(`%s = "%s"`, local, want)
-		if !strings.Contains(src, decl) {
+		// gofmt aligns "=" across a const block's declarations, so the
+		// number of spaces before it varies with the block's longest name
+		// (s3EndpointEnv  = ..., s3BucketEnv    = ...); match any run of
+		// whitespace there rather than the single space a literal
+		// substring check would require.
+		decl := regexp.MustCompile(fmt.Sprintf(`%s\s*=\s*"%s"`, regexp.QuoteMeta(local), regexp.QuoteMeta(want)))
+		if !decl.MatchString(src) {
 			t.Errorf("template does not declare %s (want %q); the twin has drifted", local, want)
 		}
 	}
@@ -229,6 +451,34 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 		t.Error("template no longer defaults the mode through pkgcore.DeploymentModeStandalone")
 	}
 
+	// The infrastructure-group completeness errors: Load must produce
+	// byte-identical messages to the template's for an incomplete S3 group
+	// and an incomplete SMTP pair, and the template's own format strings
+	// must still be there to drift against.
+	if _, err := Load("__APP_NAME__", envFromMap(map[string]string{S3EndpointEnv: "e"})); err == nil {
+		t.Fatal("Load accepted a lone APP_S3_ENDPOINT during the parity check")
+	} else if want := `__APP_NAME__: an S3 ObjectStore composition needs APP_S3_BUCKET, APP_S3_ACCESS_KEY, APP_S3_SECRET_KEY set too ` +
+		`(got some but not all of APP_S3_ENDPOINT/APP_S3_BUCKET/APP_S3_ACCESS_KEY/APP_S3_SECRET_KEY)`; err.Error() != want {
+		t.Errorf("Load error = %q, want the template's %q", err, want)
+	}
+	if !strings.Contains(src, `"__APP_NAME__: an S3 ObjectStore composition needs %s set too (got some but not all of %s/%s/%s/%s)"`) {
+		t.Error("template's S3-completeness error format string drifted from the twin's")
+	}
+	if _, err := Load("__APP_NAME__", envFromMap(map[string]string{SMTPHostEnv: "h"})); err == nil {
+		t.Fatal("Load accepted a lone APP_SMTP_HOST during the parity check")
+	} else if want := `__APP_NAME__: an SMTP Mailer composition needs both APP_SMTP_HOST and APP_SMTP_PORT set`; err.Error() != want {
+		t.Errorf("Load error = %q, want the template's %q", err, want)
+	}
+	if !strings.Contains(src, `"__APP_NAME__: an SMTP Mailer composition needs both %s and %s set"`) {
+		t.Error("template's SMTP-completeness error format string drifted from the twin's")
+	}
+	if !strings.Contains(src, `"__APP_NAME__: %s must be a valid bool, got %q: %w"`) {
+		t.Error("template's S3-use-SSL bool-parse error format string drifted from the twin's")
+	}
+	if !strings.Contains(src, `"__APP_NAME__: %s must be a valid port number, got %q: %w"`) {
+		t.Error("template's SMTP-port parse error format string drifted from the twin's")
+	}
+
 	// The development key bytes, asserted as their byte-for-byte hex
 	// literals after whitespace normalization, so a template edit that
 	// reorders, adds or drops a byte fails here.
@@ -252,7 +502,12 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 	// text position either.
 	body := src[strings.Index(src, "func configFromEnv"):]
 	body = regexp.MustCompile(`(?m)//.*$`).ReplaceAllString(body, "")
-	parseOrder := []string{"deploymentModeEnv", "portEnv", "dbPathEnv", "configKeyEnv", "orgIndexKeyEnv"}
+	parseOrder := []string{
+		"deploymentModeEnv", "portEnv", "dbPathEnv", "configKeyEnv", "orgIndexKeyEnv",
+		"redisAddrEnv", "s3EndpointEnv", "s3BucketEnv", "s3AccessKeyEnv", "s3SecretKeyEnv",
+		"s3UseSSLEnv", "smtpHostEnv", "smtpPortEnv", "s3RegionEnv", "smtpUsernameEnv",
+		"smtpPasswordEnv", "smsGatewayURLEnv",
+	}
 	last := -1
 	for _, marker := range parseOrder {
 		pos := strings.Index(body, marker)

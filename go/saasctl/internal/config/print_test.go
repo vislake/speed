@@ -12,16 +12,28 @@ import (
 )
 
 // bootstrapEnvKeys lists the environment surface a generated project's
-// bootstrap reads -- the five variables appconfig resolves, exported for
-// the tests and examples that must clear or restore them all. The list
-// mirrors the one internal/db's migrate tests carry, each package's copy
-// sitting next to the code that uses it.
+// bootstrap reads -- the full seventeen variables appconfig resolves,
+// exported for the tests and examples that must clear or restore them all.
+// The list mirrors the one internal/db's migrate tests carry, each
+// package's copy sitting next to the code that uses it.
 var bootstrapEnvKeys = []string{
 	appconfig.DeploymentModeEnv,
 	appconfig.PortEnv,
 	appconfig.DBPathEnv,
 	appconfig.ConfigKeyEnv,
 	appconfig.OrgIndexKeyEnv,
+	appconfig.RedisAddrEnv,
+	appconfig.S3EndpointEnv,
+	appconfig.S3BucketEnv,
+	appconfig.S3AccessKeyEnv,
+	appconfig.S3SecretKeyEnv,
+	appconfig.S3RegionEnv,
+	appconfig.S3UseSSLEnv,
+	appconfig.SMTPHostEnv,
+	appconfig.SMTPPortEnv,
+	appconfig.SMTPUsernameEnv,
+	appconfig.SMTPPasswordEnv,
+	appconfig.SMSGatewayURLEnv,
 }
 
 // clearBootstrapEnv empties every bootstrap variable through t.Setenv, so
@@ -60,9 +72,17 @@ func fixture(t *testing.T, name string) string {
 // TestPrintResolvesAndRendersTheDocumentedDefaults: with an empty
 // environment, print renders what the generated app boots on with no
 // environment at all -- the standalone deployment mode, port 8080, the
-// <app name>.db path and the two development key bytes -- one line per
-// value, each sourced line naming the default it fell back to. The key
-// rows show only the [redacted] marker in the value column.
+// <app name>.db path, the two development key bytes, and every
+// infrastructure seam left on its Preset default -- one line per value,
+// each sourced line naming the default (or the seam) it fell back to. The
+// key rows and the S3 secret key / SMTP password rows show only the
+// [redacted] marker in the value column.
+//
+// Before the appconfig twin covered the full bootstrap surface, this
+// rendered only the first five lines: the twelve infrastructure rows
+// below are the regression proof that config print now resolves the SAME
+// environment the generated app's own configFromEnv resolves, not a
+// truncated subset of it.
 func TestPrintResolvesAndRendersTheDocumentedDefaults(t *testing.T) {
 	code, stdout, stderr := drivePrint(t, []string{fixture(t, "print.mod")}, nil)
 	if code != 0 {
@@ -75,16 +95,33 @@ func TestPrintResolvesAndRendersTheDocumentedDefaults(t *testing.T) {
 		"port             8080         unset or empty (default 8080)\n" +
 		"sqlite path      cli-app.db   unset or empty (default cli-app.db)\n" +
 		"config key       [redacted]   unset or empty (development default)\n" +
-		"org index key    [redacted]   unset or empty (development default)\n"
+		"org index key    [redacted]   unset or empty (development default)\n" +
+		"redis addr                    unset or empty (eventbus/kv stay on the in-process default)\n" +
+		"s3 endpoint                   unset or empty (objectstore stays on the local-directory default)\n" +
+		"s3 bucket                     unset or empty (objectstore stays on the local-directory default)\n" +
+		"s3 access key                 unset or empty (objectstore stays on the local-directory default)\n" +
+		"s3 secret key    [redacted]   unset or empty (objectstore stays on the local-directory default)\n" +
+		"s3 region                     unset or empty (optional S3 refinement; used only when the group above is set)\n" +
+		"s3 use ssl       false        unset or empty (default false)\n" +
+		"smtp host                     unset or empty (mailer stays on the console default)\n" +
+		"smtp port                     unset or empty (mailer stays on the console default)\n" +
+		"smtp username                 unset or empty (optional SMTP refinement; used only when the group above is set)\n" +
+		"smtp password    [redacted]   unset or empty (optional SMTP refinement; used only when the group above is set)\n" +
+		"sms gateway url               unset or empty (SMS sender seam left unwired: console default under standalone, refused under distributed)\n"
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
 }
 
 // TestPrintReportsEveryValueThatCameFromTheEnvironment: with every
-// bootstrap variable set, each of the five lines shows the resolved value
-// and names the variable that carried it -- the generated app's own
-// resolution, reported with its provenance.
+// bootstrap variable set -- including a complete S3 group, a complete SMTP
+// pair and their optional refinements -- every line shows the resolved
+// value and names the variable that carried it: the generated app's own
+// resolution, reported with its provenance. This is the mirror of the
+// defaults case above: before the twin covered the full surface, setting
+// these twelve infrastructure variables changed nothing about print's
+// output (they were silently ignored), which this test's line count and
+// per-row "from APP_*" provenance would have caught.
 func TestPrintReportsEveryValueThatCameFromTheEnvironment(t *testing.T) {
 	code, stdout, stderr := drivePrint(t, []string{fixture(t, "print.mod")}, map[string]string{
 		appconfig.DeploymentModeEnv: "distributed",
@@ -92,6 +129,18 @@ func TestPrintReportsEveryValueThatCameFromTheEnvironment(t *testing.T) {
 		appconfig.DBPathEnv:         "db.sqlite",
 		appconfig.ConfigKeyEnv:      "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
 		appconfig.OrgIndexKeyEnv:    "ffe0f1d2c3b4a5968778695a4b3c2d1e0f00112233445566778899aabbccddee",
+		appconfig.RedisAddrEnv:      "redis.internal:6379",
+		appconfig.S3EndpointEnv:     "s3.internal:9000",
+		appconfig.S3BucketEnv:       "smiles",
+		appconfig.S3AccessKeyEnv:    "AKIAEXAMPLE",
+		appconfig.S3SecretKeyEnv:    "s3cr3t",
+		appconfig.S3RegionEnv:       "us-east-1",
+		appconfig.S3UseSSLEnv:       "true",
+		appconfig.SMTPHostEnv:       "smtp.internal",
+		appconfig.SMTPPortEnv:       "587",
+		appconfig.SMTPUsernameEnv:   "mailer",
+		appconfig.SMTPPasswordEnv:   "hunter2",
+		appconfig.SMSGatewayURLEnv:  "http://sms.internal/send",
 	})
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, stderr)
@@ -103,22 +152,94 @@ func TestPrintReportsEveryValueThatCameFromTheEnvironment(t *testing.T) {
 		"port             9090         from PORT\n" +
 		"sqlite path      db.sqlite    from APP_DB_PATH\n" +
 		"config key       [redacted]   from APP_CONFIG_KEY\n" +
-		"org index key    [redacted]   from APP_ORG_INDEX_KEY\n"
+		"org index key    [redacted]   from APP_ORG_INDEX_KEY\n" +
+		"redis addr       redis.internal:6379 from APP_REDIS_ADDR\n" +
+		"s3 endpoint      s3.internal:9000 from APP_S3_ENDPOINT\n" +
+		"s3 bucket        smiles       from APP_S3_BUCKET\n" +
+		"s3 access key    AKIAEXAMPLE  from APP_S3_ACCESS_KEY\n" +
+		"s3 secret key    [redacted]   from APP_S3_SECRET_KEY\n" +
+		"s3 region        us-east-1    from APP_S3_REGION\n" +
+		"s3 use ssl       true         from APP_S3_USE_SSL\n" +
+		"smtp host        smtp.internal from APP_SMTP_HOST\n" +
+		"smtp port        587          from APP_SMTP_PORT\n" +
+		"smtp username    mailer       from APP_SMTP_USERNAME\n" +
+		"smtp password    [redacted]   from APP_SMTP_PASSWORD\n" +
+		"sms gateway url  http://sms.internal/send from APP_SMS_GATEWAY_URL\n"
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
+	}
+}
+
+// TestPrintRefusesIncompleteS3Group: an S3 group missing one of its four
+// required members fails print exactly as it fails the generated app's own
+// bootstrap -- the coded completeness error naming which variables are
+// missing -- rather than printing five (or seventeen) lines and exiting 0
+// on an environment the generated app would refuse to boot on. Before the
+// appconfig twin validated the S3 group, print silently ignored these
+// variables and always exited 0; this is the exact misdiagnosis the audit
+// finding names.
+func TestPrintRefusesIncompleteS3Group(t *testing.T) {
+	code, stdout, stderr := drivePrint(t, []string{fixture(t, "print.mod")}, map[string]string{
+		appconfig.S3EndpointEnv:  "s3.internal:9000",
+		appconfig.S3BucketEnv:    "smiles",
+		appconfig.S3AccessKeyEnv: "AKIAEXAMPLE",
+		// APP_S3_SECRET_KEY deliberately left unset: an incomplete group.
+	})
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty (a refused environment must print nothing)", stdout)
+	}
+	want := "saasctl config print: cli-app: an S3 ObjectStore composition needs APP_S3_SECRET_KEY set too " +
+		"(got some but not all of APP_S3_ENDPOINT/APP_S3_BUCKET/APP_S3_ACCESS_KEY/APP_S3_SECRET_KEY)\n"
+	if stderr != want {
+		t.Errorf("stderr = %q, want %q", stderr, want)
+	}
+}
+
+// TestPrintRefusesIncompleteSMTPPair: an SMTP pair missing its port fails
+// print with the generated app's own SMTP completeness error, the pair's
+// mirror of TestPrintRefusesIncompleteS3Group above.
+func TestPrintRefusesIncompleteSMTPPair(t *testing.T) {
+	code, stdout, stderr := drivePrint(t, []string{fixture(t, "print.mod")}, map[string]string{
+		appconfig.SMTPHostEnv: "smtp.internal",
+		// APP_SMTP_PORT deliberately left unset: an incomplete pair.
+	})
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty (a refused environment must print nothing)", stdout)
+	}
+	want := "saasctl config print: cli-app: an SMTP Mailer composition needs both APP_SMTP_HOST and APP_SMTP_PORT set\n"
+	if stderr != want {
+		t.Errorf("stderr = %q, want %q", stderr, want)
 	}
 }
 
 // TestPrintNeverRendersTheKeyBytes: however the key variables are set,
 // their hex never appears anywhere in the output -- the [redacted] marker
 // is the whole story the value column tells, and the provenance column
-// names only the variable, never its contents.
+// names only the variable, never its contents. The S3 secret key and SMTP
+// password join the same check: they are secret-shaped rows too, and must
+// never start printing plaintext just because they arrived through the
+// twin's newly-covered infrastructure surface.
 func TestPrintNeverRendersTheKeyBytes(t *testing.T) {
 	configKeyHex := "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 	orgIndexKeyHex := "ffe0f1d2c3b4a5968778695a4b3c2d1e0f00112233445566778899aabbccddee"
+	s3Secret := "correct-horse-battery-staple-s3"
+	smtpPassword := "correct-horse-battery-staple-smtp"
 	code, stdout, stderr := drivePrint(t, []string{fixture(t, "print.mod")}, map[string]string{
-		appconfig.ConfigKeyEnv:   configKeyHex,
-		appconfig.OrgIndexKeyEnv: orgIndexKeyHex,
+		appconfig.ConfigKeyEnv:    configKeyHex,
+		appconfig.OrgIndexKeyEnv:  orgIndexKeyHex,
+		appconfig.S3EndpointEnv:   "s3.internal:9000",
+		appconfig.S3BucketEnv:     "smiles",
+		appconfig.S3AccessKeyEnv:  "AKIAEXAMPLE",
+		appconfig.S3SecretKeyEnv:  s3Secret,
+		appconfig.SMTPHostEnv:     "smtp.internal",
+		appconfig.SMTPPortEnv:     "587",
+		appconfig.SMTPPasswordEnv: smtpPassword,
 	})
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, stderr)
@@ -126,9 +247,9 @@ func TestPrintNeverRendersTheKeyBytes(t *testing.T) {
 	if stderr != "" {
 		t.Errorf("stderr = %q, want empty", stderr)
 	}
-	for _, hex := range []string{configKeyHex, orgIndexKeyHex} {
-		if strings.Contains(stdout, hex) {
-			t.Errorf("stdout leaks a key variable's hex; it must render only [redacted] markers")
+	for _, secret := range []string{configKeyHex, orgIndexKeyHex, s3Secret, smtpPassword} {
+		if strings.Contains(stdout, secret) {
+			t.Errorf("stdout leaks a secret variable's value; it must render only [redacted] markers")
 		}
 	}
 }

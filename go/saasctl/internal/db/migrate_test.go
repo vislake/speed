@@ -18,14 +18,26 @@ import (
 )
 
 // bootstrapEnvKeys lists the environment surface a generated project's
-// bootstrap reads -- the five variables appconfig resolves, exported for
-// the tests and examples that must clear or restore them all.
+// bootstrap reads -- the full seventeen variables appconfig resolves,
+// exported for the tests and examples that must clear or restore them all.
 var bootstrapEnvKeys = []string{
 	appconfig.DeploymentModeEnv,
 	appconfig.PortEnv,
 	appconfig.DBPathEnv,
 	appconfig.ConfigKeyEnv,
 	appconfig.OrgIndexKeyEnv,
+	appconfig.RedisAddrEnv,
+	appconfig.S3EndpointEnv,
+	appconfig.S3BucketEnv,
+	appconfig.S3AccessKeyEnv,
+	appconfig.S3SecretKeyEnv,
+	appconfig.S3RegionEnv,
+	appconfig.S3UseSSLEnv,
+	appconfig.SMTPHostEnv,
+	appconfig.SMTPPortEnv,
+	appconfig.SMTPUsernameEnv,
+	appconfig.SMTPPasswordEnv,
+	appconfig.SMSGatewayURLEnv,
 }
 
 // clearBootstrapEnv empties every bootstrap variable through t.Setenv, so
