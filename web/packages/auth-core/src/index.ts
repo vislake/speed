@@ -11,7 +11,12 @@
  * contract is ApiError-based: user operations reject raw (tell apart
  * with isApiError) and change nothing on failure; refresh() is the
  * silent path -- false for a refused token (the session signs out),
- * a raw rethrow for a transport/server failure.
+ * a raw rethrow for a transport/server failure. A token-issuing user
+ * operation (login, switch, step-up) whose own request answered
+ * successfully but lost a race against a concurrent sibling operation
+ * rejects instead with OperationSupersededError (tell apart with
+ * isOperationSuperseded) rather than silently resolving with the
+ * winner's snapshot -- see session.ts's generation-guard doc comment.
  *
  * The hooks (hooks.ts) read one host-attached session: attachSession
  * binds it once at bootstrap (last bind wins), useAuthState exposes
@@ -28,7 +33,11 @@
  * Known limitations).
  */
 
-export { createAuthSession } from './session.js'
+export {
+  createAuthSession,
+  isOperationSuperseded,
+  OperationSupersededError,
+} from './session.js'
 export {
   attachSession,
   useAuthState,

@@ -42,7 +42,7 @@ import {
   SWITCH_TENANT,
 } from '../test-utils/session-harness'
 import type { Harness } from '../test-utils/session-harness'
-import { createAuthSession } from './session'
+import { createAuthSession, isOperationSuperseded } from './session'
 import type { AuthSnapshot } from './session'
 
 async function expectProtocolViolation(
@@ -384,6 +384,141 @@ describe('switch tenant', () => {
     expect(harness.store.get()).toBe('access-1')
     expect(harness.session.getSnapshot().principal?.tenant_id).toBe('tenant-1')
     await expect(harness.session.refresh()).resolves.toBe(true)
+  })
+})
+
+describe('operation supersession', () => {
+  // Regression for web-auth-api.md P2-1: settleIssued used to answer a
+  // superseded token-issuing operation by silently returning the
+  // CURRENT (winner's) snapshot -- resolving, not rejecting, with no
+  // notify. A caller had no way to tell "my own request committed" from
+  // "I lost the race and someone else's operation is now the truth",
+  // which is exactly what TenantSwitcher's onSwitched contract needs:
+  // "fired exactly once after a switch commits" was false for a
+  // superseded caller, since it fired for the loser too.
+
+  it('rejects OperationSupersededError for the switchTenant call that loses the generation race, never resolving with the winner\'s tenant', async () => {
+    let releaseTenant2!: (pair: unknown) => void
+    let releaseTenant3!: (pair: unknown) => void
+    const tenant2Gate = new Promise((resolve) => {
+      releaseTenant2 = resolve
+    })
+    const tenant3Gate = new Promise((resolve) => {
+      releaseTenant3 = resolve
+    })
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+      [SWITCH_TENANT]: (call) => {
+        const body = call.options?.body as { tenant_id?: string }
+        return body?.tenant_id === 'tenant-2' ? tenant2Gate : tenant3Gate
+      },
+    })
+    await harness.session.loginWithPassword({
+      identifier: 'ada@example.com',
+      password: 'pw',
+    })
+    const seen = snapshotLog(harness.session)
+    // Two concurrent switchTenant calls, exactly the shape two
+    // TenantSwitcher instances racing a click each produce: both
+    // capture the same pre-switch generation synchronously, before
+    // either request's response arrives.
+    const toTenant2 = harness.session.switchTenant('tenant-2')
+    const toTenant3 = harness.session.switchTenant('tenant-3')
+
+    // tenant-2's response arrives first and commits: it owns the
+    // generation now.
+    releaseTenant2(
+      makePair({
+        access_token: 'access-tenant-2',
+        principal: principal('user-1', 'tenant-2'),
+      }),
+    )
+    await expect(toTenant2).resolves.toMatchObject({
+      state: 'authenticated',
+      principal: { tenant_id: 'tenant-2' },
+    })
+    expect(harness.store.get()).toBe('access-tenant-2')
+
+    // tenant-3's response arrives after tenant-2 already committed: its
+    // own request answered successfully server-side (this is not an
+    // ApiError), but it lost the generation race. It must reject
+    // distinguishably rather than resolve with tenant-2's snapshot.
+    releaseTenant3(
+      makePair({
+        access_token: 'access-tenant-3',
+        principal: principal('user-1', 'tenant-3'),
+      }),
+    )
+    const error = await captureRejection(toTenant3)
+    expect(isOperationSuperseded(error)).toBe(true)
+    expect(isApiError(error)).toBe(false)
+    if (isOperationSuperseded(error)) {
+      // The rejection carries the session's actual (winning) state,
+      // for a caller that wants to compare it against its own request.
+      expect(error.snapshot.principal?.tenant_id).toBe('tenant-2')
+    }
+    // The loser's tokens were never applied: the session still runs
+    // on tenant-2's access token and principal, exactly as before
+    // tenant-3's response arrived.
+    expect(harness.store.get()).toBe('access-tenant-2')
+    expect(harness.session.getSnapshot().principal?.tenant_id).toBe('tenant-2')
+    // Only the winning commit notified subscribers -- the superseded
+    // rejection is silent on the notify() side too, since nothing
+    // observable changed for it.
+    expect(seen.map((snapshot) => snapshot.principal?.tenant_id)).toEqual([
+      'tenant-2',
+    ])
+  })
+
+  it('rejects OperationSupersededError for a loginWithPassword call that loses a concurrent login race', async () => {
+    let releaseFirst!: (pair: unknown) => void
+    let releaseSecond!: (pair: unknown) => void
+    const firstGate = new Promise((resolve) => {
+      releaseFirst = resolve
+    })
+    const secondGate = new Promise((resolve) => {
+      releaseSecond = resolve
+    })
+    let loginCall = 0
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => {
+        loginCall += 1
+        return loginCall === 1 ? firstGate : secondGate
+      },
+    })
+    // A double-submitted login form: two calls fired back to back,
+    // both anonymous, before either response arrives.
+    const first = harness.session.loginWithPassword({
+      identifier: 'ada@example.com',
+      password: 'pw',
+    })
+    const second = harness.session.loginWithPassword({
+      identifier: 'ada@example.com',
+      password: 'pw',
+    })
+
+    releaseFirst(makePair({ access_token: 'access-first' }))
+    await expect(first).resolves.toMatchObject({ state: 'authenticated' })
+    expect(harness.store.get()).toBe('access-first')
+
+    // The second submission's response answers successfully too, but
+    // only after the first already committed. Silently resolving here
+    // would tell the caller its own (possibly different) credentials
+    // are the ones now signed in, which is not true: the first
+    // request's identity is what the session actually holds.
+    releaseSecond(
+      makePair({
+        access_token: 'access-second',
+        refresh_token: 'refresh-second',
+      }),
+    )
+    const error = await captureRejection(second)
+    expect(isOperationSuperseded(error)).toBe(true)
+    expect(isApiError(error)).toBe(false)
+    // The loser's tokens never applied: the session still runs on the
+    // first login's access token, and a refresh still presents the
+    // first login's refresh token (not the second's).
+    expect(harness.store.get()).toBe('access-first')
   })
 })
 

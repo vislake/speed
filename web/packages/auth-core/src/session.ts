@@ -43,21 +43,36 @@
  * tokens, a successful logout bumps after clearing. (Bumping on entry
  * would let a failed operation strand an in-flight refresh: the
  * refresh's writes would be dropped as stale even though nothing
- * changed.) refresh() never bumps: it captures the generation it
- * started under, and its writes -- the store, the snapshot -- apply
- * only while that generation still holds. That makes a completed
- * logout win over a refresh that resolves after it (a refresh cannot
- * resurrect an ended session) and a committed user operation win over
- * a refresh that resolves after it: the losing pair's access token
- * and principal are never applied over the winner's. The one
- * exception is the held refresh token itself: when the operation that
- * won the race kept it -- a tenant switch or a step-up mints no new
- * refresh token -- the refresh's success has still consumed it
- * server-side, so the session adopts only the rotated token from the
- * losing pair; without that, the session's next refresh would present
- * a consumed token, read as a replay and die. (A losing pair that
- * violates the contract is dropped, never cleared: the winner's
- * session stands.) refresh() is also single-flight per held token:
+ * changed.) A token-issuing user operation (login, switch, step-up,
+ * completeSocialLogin) whose own request answers successfully but
+ * whose generation has moved on -- a concurrent sibling operation
+ * committed first -- rejects with OperationSupersededError rather
+ * than silently resolving with whatever the winner left behind: the
+ * caller's request never lied (its own answer was genuine), but that
+ * answer no longer describes the session, and a caller that cannot
+ * tell "I committed" from "I lost the race" cannot safely react to a
+ * 2xx -- fire a one-shot side effect (a tenant-switch host callback,
+ * a post-login redirect) for a tenant or identity the session is not
+ * actually running under, or misread a login as its own credentials
+ * taking effect when a different concurrent login actually won. The
+ * losing operation's freshly minted tokens are never applied either
+ * way -- that part of the guard is unchanged; only how the caller
+ * learns about it changed. refresh() never bumps: it captures the
+ * generation it started under, and its writes -- the store, the
+ * snapshot -- apply only while that generation still holds. That
+ * makes a completed logout win over a refresh that resolves after it
+ * (a refresh cannot resurrect an ended session) and a committed user
+ * operation win over a refresh that resolves after it: the losing
+ * pair's access token and principal are never applied over the
+ * winner's. The one exception is the held refresh token itself: when
+ * the operation that won the race kept it -- a tenant switch or a
+ * step-up mints no new refresh token -- the refresh's success has
+ * still consumed it server-side, so the session adopts only the
+ * rotated token from the losing pair; without that, the session's
+ * next refresh would present a consumed token, read as a replay and
+ * die. (A losing pair that violates the contract is dropped, never
+ * cleared: the winner's session stands.) refresh() is also
+ * single-flight per held token:
  * concurrent callers -- the api-client silent-401 hook and an
  * application timer -- share one in-flight request, because the authn
  * server treats parallel refreshes presenting the same token as theft
@@ -151,11 +166,19 @@ export interface AuthSession {
   getSnapshot(): AuthSnapshot
   /** Subscribe to state changes; returns the unsubscribe function. */
   subscribe(listener: AuthSessionListener): () => void
-  /** Signs in with an email-or-phone identifier and a password. */
+  /** Signs in with an email-or-phone identifier and a password.
+   * Rejects with OperationSupersededError, never resolving, when a
+   * concurrent user operation (typically a second, later login)
+   * committed to the session before this request's own answer
+   * arrived -- this request's tokens are never applied over the
+   * winner's, and the caller must not treat its own 2xx as proof its
+   * credentials are the ones now signed in (see the class's doc
+   * comment). */
   loginWithPassword(
     request: AuthnLoginWithPasswordRequest,
   ): Promise<AuthSnapshot>
-  /** Signs in with a phone number and the SMS code sent to it. */
+  /** Signs in with a phone number and the SMS code sent to it. Same
+   * OperationSupersededError contract as loginWithPassword. */
   loginWithSMSCode(request: AuthnLoginWithSMSCodeRequest): Promise<AuthSnapshot>
   /** Requests a one-time SMS sign-in code for a phone number -- the
    * 202 that precedes a loginWithSMSCode. The endpoint always answers
@@ -196,7 +219,9 @@ export interface AuthSession {
    * with a client.protocol ApiError before any state change: this
    * surface is a sign-in surface, its caller is anonymous by
    * construction, and there is nothing to bind to. Binding semantics
-   * belong to a later round. */
+   * belong to a later round. Same OperationSupersededError contract
+   * as loginWithPassword when a concurrent operation committed
+   * first. */
   completeSocialLogin(
     provider: string,
     request: AuthnSocialCallbackRequest,
@@ -206,10 +231,18 @@ export interface AuthSession {
   logout(): Promise<void>
   /** Switches the session to another tenant the principal belongs to;
    * the server mints a new access token and the held refresh token
-   * keeps rotating into it. */
+   * keeps rotating into it. Rejects with OperationSupersededError,
+   * never resolving, when a concurrent user operation -- typically
+   * another switchTenant call, from a second TenantSwitcher instance
+   * or a repeated call through this one -- committed first: this
+   * call's own switch went through server-side, but a different
+   * operation now owns the session, so the caller must not treat its
+   * own 2xx as proof the session switched to ITS tenant (see the
+   * class's doc comment). */
   switchTenant(tenantId: string): Promise<AuthSnapshot>
   /** Re-proves a second factor for the current session; the elevation
-   * lives in the access token just minted. */
+   * lives in the access token just minted. Same
+   * OperationSupersededError contract as switchTenant. */
   verifyStepUp(code: string): Promise<AuthSnapshot>
   /** Host-attached permission list for one domain: replaces the list
    * the snapshot carries with a defensive copy (mutating the caller's
@@ -235,6 +268,44 @@ export interface AuthSession {
    * the held tokens in place. Concurrent calls presenting the same
    * held token share a single in-flight request. */
   refresh(): Promise<boolean>
+}
+
+/**
+ * Rejects a token-issuing user operation (loginWithPassword,
+ * loginWithSMSCode, completeSocialLogin, switchTenant, verifyStepUp)
+ * whose own request answered successfully but was superseded by a
+ * concurrent sibling operation that committed first -- two
+ * TenantSwitcher instances racing switchTenant to different tenants,
+ * a double-submitted login, a switch racing a step-up. The request
+ * itself did not fail (isApiError(error) is false for this), and the
+ * session is not broken -- some operation's tokens are applied and
+ * the session is authenticated under them -- but they are not
+ * necessarily THIS caller's tokens, so this caller must not treat its
+ * own 2xx as a commit signal: no one-shot side effect (a switch's
+ * onSwitched, a login's post-sign-in redirect) may fire for a tenant
+ * or identity the session is not actually running under. `snapshot`
+ * carries the session's current (winning) state at the moment of
+ * rejection, for a caller that wants to compare it against its own
+ * request rather than only detecting the supersession.
+ */
+export class OperationSupersededError extends Error {
+  readonly snapshot: AuthSnapshot
+
+  constructor(snapshot: AuthSnapshot) {
+    super(
+      'a concurrent operation committed to the session before this one settled',
+    )
+    this.name = 'OperationSupersededError'
+    this.snapshot = snapshot
+  }
+}
+
+/** Type guard for OperationSupersededError, mirroring isApiError's
+ * shape so callers tell the two rejection kinds apart the same way. */
+export function isOperationSuperseded(
+  value: unknown,
+): value is OperationSupersededError {
+  return value instanceof OperationSupersededError
 }
 
 /** A validated token-issuing response. */
@@ -411,7 +482,14 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
    * the generation so an in-flight refresh that resolves later is
    * dropped instead of overwriting the fresher tokens. freshLogin is
    * true only for the login operations, whose commits clear both
-   * host-attached permission domains (see nextPermissionSets). */
+   * host-attached permission domains (see nextPermissionSets).
+   *
+   * When another user operation committed while this one was in
+   * flight, this result is superseded: its freshly minted tokens are
+   * never applied (that part is unchanged), but the caller is told so
+   * via an OperationSupersededError rejection rather than a silent
+   * resolve carrying someone else's snapshot -- see the class's own
+   * doc comment and the file header's generation-guard paragraph. */
   function settleIssued(
     opGeneration: number,
     body: AuthnTokenPair,
@@ -420,10 +498,7 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
   ): AuthSnapshot {
     const issued = parseIssued(body, expectRefreshToken)
     if (generation !== opGeneration) {
-      // Another user operation committed while this one was in
-      // flight: it owns the session now, and this stale result is
-      // dropped -- its freshly minted tokens are never applied.
-      return snapshot
+      throw new OperationSupersededError(snapshot)
     }
     commitIssued(issued, freshLogin)
     generation += 1
