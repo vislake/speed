@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"gorm.io/gorm"
@@ -1316,5 +1317,290 @@ func TestTreeService_Restore_DeadParent_RefusesRestore(t *testing.T) {
 	}
 	if _, err := tree.Restore(ctx, store.ID); err != nil {
 		t.Fatalf("Restore(store) after Restore(north): %v, want success", err)
+	}
+}
+
+// assertNoOrphans is the tree invariant every one of this file's concurrent
+// stress tests re-checks after each round: every currently-live node's
+// stored ParentID either is the empty-root sentinel or names another
+// currently-live node, and every live node's Path is exactly its parent's
+// Path with its own id appended -- the two invariants path.go's own doc
+// comment calls "corrupt, not a supported state" when violated, and which
+// D1 (a child landing under a soft-deleted parent) and D2 (a moved subtree
+// whose Path and ParentID chain disagree) each name as their own violation.
+//
+// It reads every row once, through the ordinary soft-delete auto-scope
+// (never Unscoped), so only currently-live rows are ever checked -- exactly
+// the shape a real consumer's own consistency job would run.
+func assertNoOrphans(t *testing.T, db *gorm.DB, ctx context.Context, label string) {
+	t.Helper()
+	var nodes []OrgNode
+	if err := dbkit.WithTenantSession(ctx, db, func(tx *gorm.DB) error {
+		return tx.Order("depth, id").Find(&nodes).Error
+	}); err != nil {
+		t.Fatalf("%s: list nodes: %v", label, err)
+	}
+	byID := make(map[string]OrgNode, len(nodes))
+	for _, n := range nodes {
+		byID[n.ID] = n
+	}
+	for _, n := range nodes {
+		if n.ParentID == "" {
+			continue // root
+		}
+		parent, ok := byID[n.ParentID]
+		if !ok {
+			t.Fatalf("%s: node %s (path %s) has ParentID %s, which does not exist among live nodes -- orphan",
+				label, n.ID, n.Path, n.ParentID)
+		}
+		want := buildPath(parent.Path, n.ID)
+		if n.Path != want {
+			t.Fatalf("%s: node %s has Path %s, want %s (parent %s's Path %s + its own id) -- Path/ParentID chain disagree",
+				label, n.ID, n.Path, want, parent.ID, parent.Path)
+		}
+	}
+}
+
+// TestTreeService_ConcurrentCreateChildAndDelete_NeverOrphansAChild is the
+// D1 (org-rbac P1-3) regression proof.
+//
+// # Why this is a stress test, not a deterministic interleaving
+//
+// The window this closes sits between two DIFFERENT transactions' single
+// statements (deleteLeaf's own UPDATE and CreateChild's now-atomic parent
+// lock), not between two statements of the SAME call this test could pause
+// midway through with a hook -- there is no seam in either method's real,
+// shipped code a test could deterministically suspend without adding a
+// test-only instrumentation point to production code, which this round
+// deliberately does not do. This test instead runs many rounds of the two
+// operations racing for real, over a real file-backed SQLite database, and
+// asserts the invariant (assertNoOrphans) after every single round: on the
+// pre-fix code the two outcomes below could BOTH occur in the same round
+// (CreateChild succeeding while Delete also succeeds), landing a live child
+// under a soft-deleted parent; after the fix, lockLiveNode's shared row lock
+// makes that combination impossible -- at most one of the two operations
+// can ever win a given round.
+func TestTreeService_ConcurrentCreateChildAndDelete_NeverOrphansAChild(t *testing.T) {
+	const rounds = 200
+	for round := 0; round < rounds; round++ {
+		db := newTestDB(t)
+		tree := newTestTreeOn(t, db)
+		ctx := tenantCtx("tenant-a")
+		root := mustCreateRoot(t, tree, ctx, "root")
+		parent := mustCreateChild(t, tree, ctx, root.ID, "parent")
+
+		var wg sync.WaitGroup
+		var createErr, deleteErr error
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, createErr = tree.CreateChild(ctx, parent.ID, "child", "store")
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			deleteErr = tree.Delete(ctx, parent.ID, false)
+		}()
+		close(start)
+		wg.Wait()
+
+		if createErr == nil && deleteErr == nil {
+			t.Fatalf("round %d: CreateChild AND Delete(parent) both succeeded -- "+
+				"the child now lives under a soft-deleted parent (the D1 orphan)", round)
+		}
+		assertNoOrphans(t, db, ctx, fmt.Sprintf("round %d", round))
+	}
+}
+
+// TestTreeService_ConcurrentMoveAndMove_TreeInvariantHolds is the D2
+// (org-rbac P1-4) regression proof: two overlapping Moves -- swapping two
+// subtrees' positions under each other's own current parent -- racing for
+// real over many rounds, each followed by assertNoOrphans. Move's rewrite
+// now runs as one transaction with lockLiveNode locking the moved node and
+// the target parent before either is trusted, so two overlapping Moves
+// serialize on whichever row they lock first rather than mixing per-row
+// last-writer-wins; a real PostgreSQL deadlock between two such calls
+// locking in opposite orders is handled by withRetry (concurrency.go) and
+// separately proven in integration_test/postgres_concurrent_move_test.go.
+func TestTreeService_ConcurrentMoveAndMove_TreeInvariantHolds(t *testing.T) {
+	const rounds = 100
+	for round := 0; round < rounds; round++ {
+		db := newTestDB(t)
+		tree := newTestTreeOn(t, db)
+		ctx := tenantCtx("tenant-a")
+		root := mustCreateRoot(t, tree, ctx, "root")
+		a := mustCreateChild(t, tree, ctx, root.ID, "a")
+		b := mustCreateChild(t, tree, ctx, root.ID, "b")
+		mustCreateChild(t, tree, ctx, a.ID, "a-child")
+		mustCreateChild(t, tree, ctx, b.ID, "b-child")
+
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _ = tree.Move(ctx, a.ID, b.ID) // may lose to a real deadlock/refusal; that is fine
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _ = tree.Move(ctx, b.ID, a.ID)
+		}()
+		close(start)
+		wg.Wait()
+
+		assertNoOrphans(t, db, ctx, fmt.Sprintf("round %d", round))
+	}
+}
+
+// TestTreeService_ConcurrentMoveAndCreateChild_TreeInvariantHolds is D2's
+// second required pairing: a concurrent CreateChild targeting the exact
+// node another goroutine is Move-ing. Both now lock that node's row through
+// the same lockLiveNode primitive (tree.go's CreateChild locks the PARENT
+// it is creating under; Move locks the NODE it is moving -- the same row
+// when the two calls target each other), so whichever runs second re-reads
+// the row's current Path after the lock clears rather than building on a
+// stale one.
+func TestTreeService_ConcurrentMoveAndCreateChild_TreeInvariantHolds(t *testing.T) {
+	const rounds = 150
+	for round := 0; round < rounds; round++ {
+		db := newTestDB(t)
+		tree := newTestTreeOn(t, db)
+		ctx := tenantCtx("tenant-a")
+		root := mustCreateRoot(t, tree, ctx, "root")
+		a := mustCreateChild(t, tree, ctx, root.ID, "a")
+		b := mustCreateChild(t, tree, ctx, root.ID, "b")
+
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _ = tree.Move(ctx, a.ID, b.ID)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _ = tree.CreateChild(ctx, a.ID, "late-child", "store")
+		}()
+		close(start)
+		wg.Wait()
+
+		assertNoOrphans(t, db, ctx, fmt.Sprintf("round %d", round))
+	}
+}
+
+// TestTreeService_ConcurrentMoveAndDelete_TreeInvariantHolds is D2's third
+// required pairing: Move racing a cascade Delete of the node it is moving.
+// Move's lockLiveNode on the moved node and deleteSubtree's own single
+// UPDATE now contend for the identical row, so exactly one of the two wins
+// each round; assertNoOrphans catches either a stranded (never soft-
+// deleted) escapee or a partially-rewritten moved subtree.
+func TestTreeService_ConcurrentMoveAndDelete_TreeInvariantHolds(t *testing.T) {
+	const rounds = 150
+	for round := 0; round < rounds; round++ {
+		db := newTestDB(t)
+		tree := newTestTreeOn(t, db)
+		ctx := tenantCtx("tenant-a")
+		root := mustCreateRoot(t, tree, ctx, "root")
+		a := mustCreateChild(t, tree, ctx, root.ID, "a")
+		b := mustCreateChild(t, tree, ctx, root.ID, "b")
+		mustCreateChild(t, tree, ctx, a.ID, "a-child")
+
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _ = tree.Move(ctx, a.ID, b.ID)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = tree.Delete(ctx, a.ID, true)
+		}()
+		close(start)
+		wg.Wait()
+
+		assertNoOrphans(t, db, ctx, fmt.Sprintf("round %d", round))
+	}
+}
+
+// TestTreeService_ConcurrentRestoreAndCascadeDelete_NeverLandsOnADeadParent
+// is the D5 (org-rbac P3) regression proof: Restore of a node racing a
+// cascade Delete of that same node's live ancestor, over many rounds, each
+// followed by assertNoOrphans -- which catches exactly the corrupt state
+// this finding names, a restored node left LIVE under a parent that ends up
+// soft-deleted.
+//
+// # Two legitimate outcomes, and the one that would not be
+//
+// Restore's parent-lock (lockLiveNode on existing.ParentID, held until
+// Restore's own write commits) and deleteSubtree's own single UPDATE
+// contend for the identical parent row, so the two calls always serialize
+// on it -- there is no ordering in which Restore's write and Delete's
+// bulk-touch of that row are both in flight unlocked at once. That
+// serialization still allows either of two outcomes, both correct:
+//
+//   - Delete's cascade reaches (and soft-deletes) the parent BEFORE
+//     Restore's lock attempt: Restore's own lockLiveNode then finds the
+//     parent already dead and refuses (ErrRestoreParentNotLive) -- the
+//     child stays exactly as dead as it was.
+//   - Restore's lock succeeds first and its whole transaction (lock +
+//     write) commits before Delete's blocked write resumes: Delete's
+//     cascade then re-evaluates its own "path LIKE prefix%" scan against
+//     the NOW-current state once unblocked (SQLite does not operate on a
+//     stale snapshot after waiting out another writer's lock) and finds
+//     the just-restored child live again -- so the cascade sweeps it up
+//     too, soft-deleting parent AND child together. Restore reports
+//     success (it did, genuinely, un-delete the row, if only for the
+//     instant before the racing cascade caught up with it) and the cascade
+//     also reports success; the final state has BOTH rows dead, which is
+//     consistent, not corrupt.
+//
+// The corrupt state D5 exists to rule out -- the child ending up LIVE
+// while its parent ends up dead -- is not reachable under either ordering,
+// which is exactly what assertNoOrphans checks for on every round: it is
+// the sole assertion here, deliberately, rather than a check on which of
+// the two calls "won".
+func TestTreeService_ConcurrentRestoreAndCascadeDelete_NeverLandsOnADeadParent(t *testing.T) {
+	const rounds = 150
+	for round := 0; round < rounds; round++ {
+		db := newTestDB(t)
+		tree := newTestTreeOn(t, db)
+		ctx := tenantCtx("tenant-a")
+		root := mustCreateRoot(t, tree, ctx, "root")
+		parent := mustCreateChild(t, tree, ctx, root.ID, "parent")
+		child := mustCreateChild(t, tree, ctx, parent.ID, "child")
+
+		// Soft-delete the child alone first (a leaf delete), so the round's
+		// race is specifically "restore the child" vs "cascade-delete its
+		// still-live parent" -- the exact shape the finding describes.
+		if err := tree.Delete(ctx, child.ID, false); err != nil {
+			t.Fatalf("round %d: seed delete(child): %v", round, err)
+		}
+
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _ = tree.Restore(ctx, child.ID)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = tree.Delete(ctx, parent.ID, true)
+		}()
+		close(start)
+		wg.Wait()
+
+		assertNoOrphans(t, db, ctx, fmt.Sprintf("round %d", round))
 	}
 }
