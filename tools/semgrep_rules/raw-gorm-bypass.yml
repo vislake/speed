@@ -21,6 +21,17 @@
 #     docs/internal/17-risks.md row 46 and the store.go file-header
 #     comment); the plain *gorm.DB dbkit.Open returns is the documented
 #     pattern for that data domain.
+#   * go/authn/internal/testutil/testutil.go -- a test-fixture helper,
+#     the same category the wholesale "**/*_test.go" exclude already
+#     covers, but it cannot be named "*_test.go" itself: authn's own
+#     external test files (package authn_test) import this package, and
+#     a "_test.go"-suffixed file is only ever compiled into its own
+#     package's test binary, never importable by another package's tests.
+#     Its one flagged call (ExpireSession) reaches the raw "sessions"
+#     table on purpose, to force a decayed-session state no production
+#     path ever writes, precisely so a real test can prove the read-time
+#     check catches it -- the same reason test files are excluded
+#     wholesale rather than enumerated (see header below).
 #
 # Residual gaps: only the three named entry points are matched -- a
 # workaround through another method on *gorm.DB (e.g. Exec with hand-
@@ -51,3 +62,4 @@ rules:
         # Allowlist (see header).
         - "**/go/dbkit/**"
         - "**/go/jobs/store.go"
+        - "**/go/authn/internal/testutil/testutil.go"
