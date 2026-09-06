@@ -1,6 +1,7 @@
 package authn
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/vislake/speed/go/authn/internal/testutil"
@@ -412,6 +413,122 @@ func TestSSOService_Callback_JITProvisioningStillRequiresMembership(t *testing.T
 	}
 	if !created.EmailVerified {
 		t.Error("EmailVerified = false, want true: the tenant's own identity provider asserted it")
+	}
+}
+
+// TestSSOService_Callback_RefusesToProvisionFromAnUnverifiedEmail is the
+// defect this round closes: the just-in-time branch used to mint an ACTIVE
+// account carrying the IdP-claimed address -- seating the platform-unique
+// email index -- even when the identity provider did not assert the address
+// was verified. The mint is now refused with the same error the
+// existing-account branch gives for the same fact, and nothing is
+// provisioned: no identity, no account, no EventUserCreated, so the
+// address's true owner keeps the seat free to register it themselves.
+func TestSSOService_Callback_RefusesToProvisionFromAnUnverifiedEmail(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// claim is the email_verified value the token carries; nil omits the
+		// claim entirely, which is how many enterprise identity providers
+		// ship by default.
+		claim any
+	}{
+		{name: "the token claims email_verified = false", claim: false},
+		{name: "the token omits email_verified", claim: nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := testutil.NewOIDCServer(t, "enterprise-client")
+			f := newSSOFixture(t, server)
+			writeSSOConfig(t, f, testTenantA, server, "enterprise-client", "example.com")
+
+			state, nonce := ssoAuthorize(t, f, testTenantA)
+			server.QueueIDToken(server.SignIDToken(t, testutil.IDTokenClaims{
+				Subject: "enterprise-subject-unverified", Email: "fresh-seat@example.com",
+				EmailVerified: tc.claim, Nonce: nonce,
+			}))
+
+			_, err := f.svc.SSO().Callback(t.Context(), SSOCallbackInput{
+				TenantID: testTenantA, Code: "code", State: state,
+			})
+			assertErrorCode(t, err, ErrIdentityRequiresBinding.Code)
+
+			if _, findErr := f.svc.Identities().FindByExternal(t.Context(), SSOChannelName(testTenantA), "enterprise-subject-unverified"); !errors.Is(findErr, ErrNotFound) {
+				t.Errorf("an identity was provisioned for the unverified subject (FindByExternal error = %v); want no provisioning at all", findErr)
+			}
+			if _, findErr := f.svc.Users().FindByEmail(t.Context(), "fresh-seat@example.com"); !errors.Is(findErr, ErrNotFound) {
+				t.Errorf("an account was provisioned seating the unverified address (FindByEmail error = %v); want no account at all", findErr)
+			}
+			if n := f.events.Count(EventUserCreated); n != 0 {
+				t.Errorf("recorded %d %s events, want 0: an unverified claim must not mint", n, EventUserCreated)
+			}
+		})
+	}
+}
+
+// TestSSOService_Callback_JITProvisionedMemberSignsInOnTheNextAttempt is the
+// mirror of the refusal above, the scenario that must keep working: a
+// VERIFIED address claim on an allowed domain still mints the account and
+// publishes EventUserCreated, and once the host's membership machinery has
+// made the minted account an active member -- reacting to that event, the
+// way the reference app's org module does -- a later attempt over the now
+// bound identity completes the sign-in.
+func TestSSOService_Callback_JITProvisionedMemberSignsInOnTheNextAttempt(t *testing.T) {
+	t.Parallel()
+
+	server := testutil.NewOIDCServer(t, "enterprise-client")
+	f := newSSOFixture(t, server)
+	writeSSOConfig(t, f, testTenantA, server, "enterprise-client", "example.com")
+
+	// First attempt: the verified claim mints the account, but authn grants
+	// no membership on its own, so the session is refused.
+	state, nonce := ssoAuthorize(t, f, testTenantA)
+	server.QueueIDToken(server.SignIDToken(t, testutil.IDTokenClaims{
+		Subject: "enterprise-subject-fresh-verified", Email: "fresh-verified@example.com",
+		EmailVerified: true, Nonce: nonce,
+	}))
+	_, err := f.svc.SSO().Callback(t.Context(), SSOCallbackInput{
+		TenantID: testTenantA, Code: "code", State: state,
+	})
+	assertErrorCode(t, err, ErrTenantMembershipRequired.Code)
+
+	identity, findErr := f.svc.Identities().FindByExternal(t.Context(), SSOChannelName(testTenantA), "enterprise-subject-fresh-verified")
+	if findErr != nil {
+		t.Fatalf("the identity was not provisioned: %v", findErr)
+	}
+	created, userErr := f.svc.Users().FindByID(t.Context(), identity.UserID)
+	if userErr != nil {
+		t.Fatalf("the account was not provisioned: %v", userErr)
+	}
+	if !created.EmailVerified {
+		t.Error("EmailVerified = false, want true: the identity provider asserted it")
+	}
+
+	// The host's membership machinery, reacting to EventUserCreated, grants
+	// the minted account membership of the tenant.
+	f.members.Add(identity.UserID, testTenantA)
+
+	// Second attempt: the bound subject signs in without any re-resolution.
+	state, nonce = ssoAuthorize(t, f, testTenantA)
+	server.QueueIDToken(server.SignIDToken(t, testutil.IDTokenClaims{
+		Subject: "enterprise-subject-fresh-verified", Email: "fresh-verified@example.com",
+		EmailVerified: true, Nonce: nonce,
+	}))
+	result, err := f.svc.SSO().Callback(t.Context(), SSOCallbackInput{
+		TenantID: testTenantA, Code: "code", State: state,
+	})
+	if err != nil {
+		t.Fatalf("Callback() error = %v, want the sign-in to complete once the minted account is a member", err)
+	}
+	if result.User.ID != created.ID {
+		t.Errorf("User.ID = %q, want the minted account %q", result.User.ID, created.ID)
+	}
+	if result.Tokens == nil {
+		t.Fatal("Tokens = nil, want a session")
 	}
 }
 
