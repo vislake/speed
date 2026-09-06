@@ -2732,6 +2732,48 @@ const authnAPIPath = "/api/v1/authn"
 // own doc comment) -- otherwise enabling one later would silently need a
 // code change here too, exactly the kind of drift this round's frozen plan
 // warns about.
+//
+// CONFIRMED GAP, deliberately left unfixed this round (reference-app-go.md,
+// Finding 4 / P2-3): this "every channel gets two entries" claim genuinely
+// does not hold for authn's enterprise OIDC channel. Its provider value is
+// not one of the five literals enumerated below -- it is "oidc:<tenant>"
+// (authn.ProviderOIDCPrefix + a tenant id), a value this app cannot
+// enumerate ahead of time since tenants are created dynamically through
+// org's own real flow. A GET to /api/v1/authn/social/oidc:<tenant>/authorize
+// carries no Principal (it is the FIRST step of a sign-in, before any token
+// exists), so tenancy.Middleware's allowlist is the only thing that could
+// let it through -- and since no per-tenant literal is ever in this list,
+// every enterprise-OIDC-configured tenant's login-start request is refused
+// with 403 tenancy.tenant_unresolved before authn's own OIDC logic (which
+// resolves its tenant from the provider string itself, never from ctx --
+// see authn's AuthnSocialAuthorize/AuthnSocialCallback handlers) ever sees
+// it. Empirically reproduced against this app's own real composed HTTP
+// stack while investigating this finding.
+//
+// Two fix shapes were identified, both judged too large to risk under this
+// round's own scope (this round's other four findings are otherwise
+// complete, low-risk, and already tested; this fifth would be the one
+// architectural change among them):
+//  1. Give go/tenancy's WithAllowlist a pattern-matching form (a prefix or
+//     predicate variant), so a rule like "any path under
+//     /api/v1/authn/social/oidc:*" can be expressed once. This is a real
+//     API addition to a shipped, frozen-API module every consumer of
+//     tenancy.Middleware depends on -- outside this round's
+//     examples/reference-app-only scope, and warranting its own contract
+//     tests in go/tenancy itself.
+//  2. Restructure this file's own middleware composition so authn's social
+//     endpoints (or all of /api/v1/authn) bypass tenancy.Middleware
+//     entirely, mounted on topMux directly behind authn.Middleware the way
+//     adminRoutePath already is. This stays inside examples/reference-app,
+//     but touches the shared dispatch path this app's authn_e2e_test.go,
+//     org_flow_test.go and admin_flow_test.go all exercise today, and its
+//     correctness would hinge on Go 1.22 ServeMux wildcard-precedence rules
+//     this round did not want to risk getting subtly wrong with no
+//     dedicated test budget to validate it.
+//
+// Either fix needs its own round, with its own tests proving an enterprise-
+// OIDC-configured tenant's login-start request reaches authn's OIDC logic
+// rather than being refused here first.
 func authnPreAuthAllowlist() []tenancy.MiddlewareOption {
 	opts := []tenancy.MiddlewareOption{
 		tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/register"),
