@@ -34,6 +34,34 @@
 -- INSERT is completely unaffected -- Repository.Insert/InsertIdempotent
 -- keep working exactly as before, since neither trigger's event matches
 -- an INSERT.
+--
+-- TRUNCATE is a separate statement type PostgreSQL's row-level triggers
+-- never fire for, regardless of how the two triggers above are declared --
+-- only a dedicated FOR EACH STATEMENT trigger bound to the TRUNCATE event
+-- fires for it, so a table protected by nothing but the row-level
+-- UPDATE/DELETE pair above is still fully vulnerable to a single
+-- `TRUNCATE audit_events;` wiping every row with no error and no row-level
+-- trigger ever invoked. The statement-level trigger below closes exactly
+-- that gap, reusing the same reject-always function.
+--
+-- Residual risk this migration does NOT close, and cannot close with a
+-- trigger alone: the same role that creates a trigger can also disable it
+-- (`ALTER TABLE audit_events DISABLE TRIGGER ALL`, reversible) or drop it
+-- outright (`DROP TRIGGER trg_audit_events_reject_delete ON audit_events`,
+-- permanent) -- both requiring only the ownership/DDL privilege this
+-- migration itself already needed to CREATE the triggers, never a higher
+-- one. Closing that specific gap needs a second, more restricted database
+-- role with UPDATE/DELETE/TRUNCATE granted on audit_events but ALTER/DROP
+-- TRIGGER (and ownership) withheld, connecting as that restricted role for
+-- ordinary application traffic -- exactly the role-provisioning step this
+-- migration's own rationale above already declines to take on, for the
+-- identical reason go/dbkit/AGENTS.md's "Out of scope" section states for
+-- PostgreSQL RLS's own role: this package assumes deployments provision
+-- their database roles, it does not provision them itself. A production
+-- deployment that wants this residual risk closed provisions that
+-- restricted role and connects dbkit.Open through it; go/dbkit/audit/
+-- AGENTS.md's "Known limitations" section records this as a named,
+-- deliberate gap rather than an oversight.
 CREATE FUNCTION audit_events_reject_mutation() RETURNS trigger AS $$
 BEGIN
     RAISE EXCEPTION 'audit_events is append-only: % is not permitted', TG_OP;
@@ -47,3 +75,7 @@ CREATE TRIGGER trg_audit_events_reject_update
 CREATE TRIGGER trg_audit_events_reject_delete
     BEFORE DELETE ON audit_events
     FOR EACH ROW EXECUTE FUNCTION audit_events_reject_mutation();
+
+CREATE TRIGGER trg_audit_events_reject_truncate
+    BEFORE TRUNCATE ON audit_events
+    FOR EACH STATEMENT EXECUTE FUNCTION audit_events_reject_mutation();

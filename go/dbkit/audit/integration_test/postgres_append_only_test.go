@@ -139,6 +139,39 @@ func TestAppendOnlyTrigger_Postgres_RejectsRawUpdateAndDelete(t *testing.T) {
 	})
 }
 
+// TestAppendOnlyTrigger_Postgres_RejectsTruncate proves the migration's
+// statement-level TRUNCATE trigger, added alongside the pre-existing
+// row-level UPDATE/DELETE pair: PostgreSQL never fires a row-level trigger
+// for TRUNCATE, so without a dedicated FOR EACH STATEMENT trigger bound to
+// the TRUNCATE event, a single `TRUNCATE audit_events;` would wipe every
+// row with no error and no trigger ever invoked, even with the row-level
+// UPDATE/DELETE triggers fully installed.
+func TestAppendOnlyTrigger_Postgres_RejectsTruncate(t *testing.T) {
+	ctx := context.Background()
+	db := newMigratedPostgresAuditDB(t)
+	repo := audit.NewRepository(db)
+
+	evt := sampleEvent()
+	if err := repo.Insert(ctx, evt); err != nil {
+		t.Fatalf("Insert() error = %v, want nil -- INSERT must be completely unaffected by the append-only trigger", err)
+	}
+
+	sqlDB := rawSQLDB(t, db)
+
+	_, err := sqlDB.ExecContext(ctx, `TRUNCATE audit_events`)
+	if err == nil {
+		t.Fatal("raw TRUNCATE against audit_events succeeded, want the append-only statement-level trigger to reject it")
+	}
+
+	got, getErr := repo.Get(ctx, evt.ID)
+	if getErr != nil {
+		t.Fatalf("Get() after the rejected TRUNCATE error = %v", getErr)
+	}
+	if got == nil {
+		t.Fatal("row is gone after the rejected TRUNCATE, want it still physically present")
+	}
+}
+
 // TestAppendOnlyTrigger_Postgres_InsertStillWorks proves the trigger
 // migration leaves ordinary Insert traffic against a real PostgreSQL
 // server completely unaffected, driving several inserts through the same
