@@ -309,6 +309,45 @@ func TestExportService_Export_ConfigReaderError_ReportsDeliveryFailed(t *testing
 	}
 }
 
+// TestExportService_Export_NoTenantContext_Refused proves Export refuses a
+// ctx that carries no tenant. The ctx tenant is the single data boundary an
+// export may ever read through -- every participant's Export callback reads
+// repo.List(ctx) -- so a bare or background ctx must never become a license
+// to pick any tenant via the tenant argument. The ungated behavior this
+// test pins against is Export's old unconditional
+// pkgcore.WithTenant(ctx, tenant) re-scope, under which this call exported
+// tenant-a's rows from a background context and returned nil.
+func TestExportService_Export_NoTenantContext_Refused(t *testing.T) {
+	svc, _, _, fakeSharing := newExportHarness(t)
+
+	_, err := svc.Export(context.Background(), "tenant-a")
+	if !errors.Is(err, pkgcore.ErrNoTenant) {
+		t.Fatalf("Export error = %v, want pkgcore.ErrNoTenant", err)
+	}
+	if len(fakeSharing.calls) != 0 {
+		t.Errorf("sharing.Create calls = %d, want 0: a refused export must deliver nothing", len(fakeSharing.calls))
+	}
+}
+
+// TestExportService_Export_TenantMismatch_Refused proves Export refuses when
+// the tenant ctx carries differs from the tenant argument. Export is
+// documented to read the SAME tenant the caller's own ctx is scoped to, so
+// the argument may only echo the ctx tenant back, never name a wider one --
+// under the old unconditional re-scope this call exported tenant-a's rows
+// while the ctx said tenant-b.
+func TestExportService_Export_TenantMismatch_Refused(t *testing.T) {
+	svc, _, _, fakeSharing := newExportHarness(t)
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-b")
+	_, err := svc.Export(ctx, "tenant-a")
+	if !hasCode(err, ErrExportTenantMismatch.Code) {
+		t.Fatalf("Export error = %v, want %s", err, ErrExportTenantMismatch.Code)
+	}
+	if len(fakeSharing.calls) != 0 {
+		t.Errorf("sharing.Create calls = %d, want 0: a refused export must deliver nothing", len(fakeSharing.calls))
+	}
+}
+
 // TestExportService_Export_NoSharingWired_Refuses proves Export refuses
 // outright with ErrSharingRequired when the module was built with no
 // WithSharing option -- before gathering or storing anything.

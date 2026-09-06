@@ -27,3 +27,5 @@
 "compliance.unsupported_report_format" = "The requested audit report format is not supported; use csv or json."
 
 "compliance.export_delivery_failed" = "The export was gathered and stored, but could not be delivered as a share link."
+
+"compliance.export_tenant_mismatch" = "The export was refused: the tenant the context is scoped to does not match the tenant argument."

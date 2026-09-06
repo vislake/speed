@@ -26,3 +26,5 @@
 "compliance.unsupported_report_format" = "请求的审计报表格式不受支持,请使用 csv 或 json。"
 
 "compliance.export_delivery_failed" = "导出已收集并存储完成,但未能生成分享链接下发。"
+
+"compliance.export_tenant_mismatch" = "导出请求的上下文租户与所选租户不一致,拒绝执行。"

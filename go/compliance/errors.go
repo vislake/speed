@@ -106,6 +106,16 @@ var (
 	// ErrExportPartialFailure, which describes a participant gathering
 	// failure, not a delivery failure.
 	ErrExportDeliveryFailed = apperr.Internal("compliance.export_delivery_failed")
+
+	// ErrExportTenantMismatch is returned by ExportService.Export when the
+	// tenant carried by ctx differs from the tenant argument. Export reads
+	// every participant's rows through the ctx tenant -- that is the only
+	// data boundary an export may ever cross (see Export's doc comment) --
+	// so an argument naming any other tenant is a caller bug, refused
+	// before anything is gathered, stored or delivered. A ctx carrying no
+	// tenant at all is refused earlier, with pkgcore.ErrNoTenant, by
+	// pkgcore.MustTenantFromContext.
+	ErrExportTenantMismatch = apperr.Invalid("compliance.export_tenant_mismatch")
 )
 
 // hasCode reports whether err is (or wraps, via apperr.As's Unwrap chain
