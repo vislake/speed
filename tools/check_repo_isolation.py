@@ -21,9 +21,13 @@ script scans every Go module under --root and, for every top-level struct
 type that anonymously embeds the dbkit Repository generic (a field of the
 form `dbkit.Repository[T]` or `*dbkit.Repository[T]`, with no field name,
 i.e. `type Repository struct { *dbkit.Repository[Note] }`), checks that the
-type's own package tests call tenancytest.AssertIsolated. A repository with
-no such call in its package is reported with its declaration location; exit
-code is 1 when anything is uncovered, 0 when everything is covered.
+type's own package tests call tenancytest.AssertIsolated -- or, for a
+repository whose record cannot satisfy the tenancytest suite's ID
+convention, run the equivalent suite named Test<TypeName>_AssertIsolated
+(the attribution heuristics below spell both rules out). A repository
+with no such coverage in its package is reported with its declaration
+location; exit code is 1 when anything is uncovered, 0 when everything is
+covered.
 
 Coverage attribution heuristics (documented here because the script is a
 textual scanner, not a Go type checker):
@@ -39,12 +43,38 @@ textual scanner, not a Go type checker):
     is written "func(tenant pkgcore.TenantID) *Note { ... }" -- but a call
     that names neither is reported as not covering the type, with the calls
     found listed so the author can see why.
+  * A type whose own package tests run a test function named
+    Test<TypeName>_AssertIsolated is covered by that suite. This is the
+    equivalent-suite rule: tenancytest.AssertIsolated reflects T's
+    exported "ID" field and queries the "id" column (see tenancytest's own
+    doc comment), so a Repository embedding whose record deliberately
+    deviates from dbkit's ID convention -- a Create-only embedding over a
+    differently-keyed primary key, e.g. the reference app's SimulationStore
+    over smilesim's job_id-keyed simulationRecord -- cannot run the
+    mandatory suite at all and must instead ship a store-level isolation
+    suite under that canonical name (the name carries the same evidential
+    weight as the call-text matching above: this checker is a textual
+    tripwire, and the suite it recognizes is a real test that CI compiles
+    and runs).
   * Coverage tests are the package's _test.go files in the package
     directory plus the _test.go files under its physically separated
     integration_test/ directory (root CLAUDE.md testing rule: integration
     tests live in their own directory so a plain `go test` never touches
     them). Build tags are ignored: the check is textual, so tagged-in and
     tagged-out files are both counted.
+
+What is NOT a candidate, beyond _test.go files (see "What is deliberately
+NOT required" below):
+
+  * Types declared under a package's internal/testutil tree. Root
+    CLAUDE.md's Testing rule makes internal/testutil the repo-mandated
+    home of shared test helpers, and the test doubles that live there
+    (go/compliance/internal/testutil's FakeRepository, say) embed
+    dbkit.Repository[T] precisely so OTHER packages' tests exercise the
+    real generic base. The fake itself is a fixture, not a shipped
+    repository implementation, and no tenancytest.AssertIsolated call
+    belongs beside it -- requiring one would false-positive on the very
+    shape root CLAUDE.md's Testing rule mandates.
 
 What is deliberately NOT required, and why:
 
@@ -651,6 +681,43 @@ def package_key_of_test_file(test_rel: str) -> str:
     return "/".join(parts[:-1]) or "."
 
 
+def equivalent_suite_name(type_name: str) -> str:
+    """The canonical name of a repository type's equivalent isolation suite.
+
+    Tenancytest.AssertIsolated reflects T's exported "ID" field and
+    queries the "id" column, so a Repository-embedding type whose record
+    deliberately deviates from that convention (a Create-only embedding
+    over a differently-keyed primary key) cannot run the mandatory suite;
+    root CLAUDE.md's discipline is then discharged by an in-package
+    store-level isolation suite named exactly Test<TypeName>_AssertIsolated
+    (see the module docstring's coverage heuristics).
+    """
+    return f"Test{type_name}_AssertIsolated"
+
+
+def find_test_funcs(tokens: list[Token], file_text: str) -> set[str]:
+    """Return the names of the file's top-level Test* functions.
+
+    The equivalent-suite coverage rule needs the names of the package's
+    test functions, not only its tenancytest calls. A test function is a
+    col-0 'func' whose declared name starts with "Test" (gofmt'd top
+    level, the same column-zero convention parse_imports relies on).
+    """
+    names: set[str] = set()
+    n = len(tokens)
+    i = 0
+    while i < n:
+        tok = tokens[i]
+        if (tok.kind == "ident" and tok.text == "func"
+                and _column_is_zero(file_text, tok)
+                and i + 1 < n
+                and tokens[i + 1].kind == "ident"
+                and tokens[i + 1].text.startswith("Test")):
+            names.add(tokens[i + 1].text)
+        i += 1
+    return names
+
+
 def module_roots(root: str) -> list[str]:
     """Repo-relative paths of the Go module roots under root.
 
@@ -667,14 +734,31 @@ def module_roots(root: str) -> list[str]:
     return sorted(found)
 
 
-def scan_module(root: str, module_rel: str) -> tuple[list[Candidate],
-                                                     list[CallSite],
-                                                     list[str]]:
-    """Scan one module. Returns (candidates, calls, notes)."""
+def scan_module(
+    root: str,
+    module_rel: str,
+) -> tuple[list[Candidate], list[CallSite], list[str],
+           dict[str, set[str]]]:
+    """Scan one module.
+
+    Returns (candidates, calls, notes, test_funcs_by_pkg): the test
+    functions' names grouped by the package key their files test, the
+    input the equivalent-suite coverage rule (see pair_candidates_with_
+    calls) matches canonical Test<TypeName>_AssertIsolated names against.
+    """
     module_root = os.path.join(root, module_rel)
     parsed: list[tuple[str, list[Token], str, dict[str, str], bool]] = []
     notes: list[str] = []
     for dirpath, dirnames, filenames in os.walk(module_root):
+        if (os.path.basename(dirpath) == "testutil"
+                and os.path.basename(os.path.dirname(dirpath)) == "internal"):
+            # internal/testutil: the repo-mandated home of shared test
+            # helpers (root CLAUDE.md's Testing rule). The test doubles
+            # there embed dbkit.Repository[T] so OTHER packages' tests can
+            # exercise the real base; the fakes themselves are fixtures,
+            # never shipped repositories, and no tenancytest call belongs
+            # beside them -- skip the whole tree (its subdirectories too).
+            continue
         dirnames[:] = sorted(d for d in dirnames if d not in PRUNED_DIR_NAMES)
         for filename in sorted(filenames):
             if not filename.endswith(".go"):
@@ -695,6 +779,7 @@ def scan_module(root: str, module_rel: str) -> tuple[list[Candidate],
             parsed.append((rel, tokens, file_text, quals, dot_tt))
     candidates: list[Candidate] = []
     calls: list[CallSite] = []
+    test_funcs_by_pkg: dict[str, set[str]] = {}
     for rel, tokens, file_text, quals, dot_tt in parsed:
         if rel.endswith(TEST_FILE_SUFFIX):
             # Embedding shapes inside _test.go files are notes, not
@@ -708,20 +793,31 @@ def scan_module(root: str, module_rel: str) -> tuple[list[Candidate],
                     "(not checked)"
                 )
             calls.extend(find_calls(tokens, quals, rel, dot_tt))
+            pkg_key = package_key_of_test_file(rel)
+            names = find_test_funcs(tokens, file_text)
+            if names:
+                test_funcs_by_pkg.setdefault(pkg_key, set()).update(names)
         else:
             candidates.extend(find_candidates(rel, tokens, file_text, quals))
-    return candidates, calls, notes
+    return candidates, calls, notes, test_funcs_by_pkg
 
 
 def pair_candidates_with_calls(
-    candidates: list[Candidate], calls: list[CallSite]
-) -> list[tuple[Candidate, CallSite | None]]:
-    """Pair each candidate with the call that covers it (None = uncovered).
+    candidates: list[Candidate],
+    calls: list[CallSite],
+    test_funcs_by_pkg: dict[str, set[str]] | None = None,
+) -> list[tuple[Candidate, CallSite | None, str | None]]:
+    """Pair each candidate with what covers it (None = uncovered).
+
+    Returns (candidate, covering call, covering-suite marker): exactly one
+    of the two coverage carriers is set for a covered candidate.
 
     See the module docstring for the attribution rules: single-candidate
     packages are covered by any AssertIsolated call; multi-candidate
     packages need a call mentioning the type or one of its embedded model
-    identifiers.
+    identifiers; and a package whose tests run the equivalent suite named
+    exactly Test<TypeName>_AssertIsolated covers a type the tenancytest
+    suite structurally cannot express (see equivalent_suite_name).
     """
     by_pkg: dict[str, list[Candidate]] = {}
     for cand in candidates:
@@ -731,11 +827,13 @@ def pair_candidates_with_calls(
         if call.name == ASSERT_ISOLATED:
             calls_by_pkg.setdefault(package_key_of_test_file(call.file_path),
                                     []).append(call)
-    paired: list[tuple[Candidate, CallSite | None]] = []
+    suites_by_pkg = test_funcs_by_pkg or {}
+    paired: list[tuple[Candidate, CallSite | None, str | None]] = []
     for pkg, pkg_candidates in by_pkg.items():
         pkg_calls = calls_by_pkg.get(pkg, [])
         for cand in pkg_candidates:
             cover: CallSite | None = None
+            suite: str | None = None
             if len(pkg_candidates) == 1 and pkg_calls:
                 cover = pkg_calls[0]
             else:
@@ -744,7 +842,11 @@ def pair_candidates_with_calls(
                     if want & call.idents:
                         cover = call
                         break
-            paired.append((cand, cover))
+            if cover is None:
+                suite_name = equivalent_suite_name(cand.type_name)
+                if suite_name in suites_by_pkg.get(pkg, set()):
+                    suite = suite_name
+            paired.append((cand, cover, suite))
     return paired
 
 
@@ -757,31 +859,49 @@ def run(root: str) -> int:
     all_candidates: list[Candidate] = []
     all_calls: list[CallSite] = []
     notes: list[str] = []
+    test_funcs_by_pkg: dict[str, set[str]] = {}
     for module_rel in roots:
-        cands, calls, mod_notes = scan_module(root, module_rel)
+        cands, calls, mod_notes, mod_funcs = scan_module(root, module_rel)
         all_candidates.extend(cands)
         all_calls.extend(calls)
         notes.extend(mod_notes)
+        for pkg_key, names in mod_funcs.items():
+            test_funcs_by_pkg.setdefault(pkg_key, set()).update(names)
     notes.sort()
-    paired = pair_candidates_with_calls(all_candidates, all_calls)
-    uncovered = [cand for cand, cover in paired if cover is None]
+    paired = pair_candidates_with_calls(
+        all_candidates, all_calls, test_funcs_by_pkg
+    )
+    uncovered = [cand for cand, cover, suite in paired if cover is None
+                 and suite is None]
     n_assert_not = sum(1 for c in all_calls
                        if c.name == ASSERT_NOT_TENANT_SCOPED)
     n_assert_iso = sum(1 for c in all_calls if c.name == ASSERT_ISOLATED)
+    n_suites = sum(1 for _cand, _cover, suite in paired if suite is not None)
 
-    for cand, cover in sorted(paired, key=lambda p: p[0].file_path):
+    for cand, cover, suite in sorted(paired, key=lambda p: p[0].file_path):
         if cover is not None:
             print(f"{cand.file_path}:{cand.decl_line}: repository type "
                   f"{cand.type_name} (embeds {cand.embed_text}) -- covered "
                   f"by tenancytest.{ASSERT_ISOLATED} at {cover.file_path}:"
                   f"{cover.line}")
+        elif suite is not None:
+            print(f"{cand.file_path}:{cand.decl_line}: repository type "
+                  f"{cand.type_name} (embeds {cand.embed_text}) -- covered "
+                  f"by the equivalent isolation suite {suite} in its "
+                  "package's tests (a Repository embedding whose record "
+                  "cannot satisfy tenancytest's ID convention runs the "
+                  "store-level equivalent under that canonical name; see "
+                  "the checker's module docstring)")
         else:
             print(f"{cand.file_path}:{cand.decl_line}: repository type "
                   f"{cand.type_name} (embeds {cand.embed_text}) is NOT "
                   "covered: no tenancytest.AssertIsolated call in its "
                   "package's tests (root CLAUDE.md multi-tenant isolation "
                   "rule: every tenant-data repository must run the "
-                  "tenancytest suite; see tenancytest's doc comment)")
+                  "tenancytest suite; see tenancytest's doc comment) -- "
+                  f"if the record cannot satisfy tenancytest's ID "
+                  f"convention, run the equivalent suite named "
+                  f"{equivalent_suite_name(cand.type_name)} instead")
             pkg_calls = [c for c in all_calls
                          if c.name == ASSERT_ISOLATED
                          and package_key_of_test_file(c.file_path)
@@ -809,15 +929,16 @@ def run(root: str) -> int:
         print(f"FAILED: {len(uncovered)} of {n_candidates} tenant-scoped "
               "Repository type(s) (types embedding dbkit.Repository[T]) "
               f"across {len(roots)} Go module(s) lack a "
-              f"tenancytest.{ASSERT_ISOLATED} call in their package's tests; "
+              f"tenancytest.{ASSERT_ISOLATED} call (or the equivalent "
+              "Test<Type>_AssertIsolated suite) in their package's tests; "
               "every tenant-scoped repository must run the tenancytest "
               "isolation suite (root CLAUDE.md, tenancytest, "
               "docs/internal/04-data-and-tenancy.md)")
         return 1
     print(f"OK: all {n_candidates} tenant-scoped Repository type(s) across "
-          f"{len(roots)} Go module(s) are covered by "
-          f"tenancytest.{ASSERT_ISOLATED} ({n_assert_iso} assertion "
-          "call(s) found)")
+          f"{len(roots)} Go module(s) are covered ({n_assert_iso} "
+          f"tenancytest.{ASSERT_ISOLATED} call(s), {n_suites} equivalent "
+          "Test<Type>_AssertIsolated suite(s) found)")
     return 0
 
 
@@ -828,10 +949,14 @@ def main(argv: list[str] | None = None) -> int:
             "embedding dbkit.Repository[T] -- is covered by the mandatory "
             "tenancytest.AssertIsolated assertion in its package's tests, "
             "per the docs/internal/18-cicd.md discipline row for repository "
-            "isolation tests. Repository types declared in _test.go files "
-            "(test doubles, Example code) are not candidates; "
-            "identity/platform data cannot be enumerated statically and is "
-            "reported as notes only."
+            "isolation tests. Coverage also holds for a package running "
+            "the equivalent store-level suite named "
+            "Test<TypeName>_AssertIsolated, for a repository whose record "
+            "cannot satisfy tenancytest's ID convention. Types under "
+            "internal/testutil (the repo-mandated home of shared test "
+            "helpers) and types declared in _test.go files (test doubles, "
+            "Example code) are not candidates; identity/platform data "
+            "cannot be enumerated statically and is reported as notes only."
         )
     )
     parser.add_argument(
