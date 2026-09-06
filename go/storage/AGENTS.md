@@ -438,8 +438,9 @@ invocation full-check.yml's integration-tiers job runs for this module:
   no sweeps retains everything. The per-tenant idempotency key keeps the
   sweeps that do run from racing each other.
 - **2026-09-06: the first real scheduling host is `examples/reference-app`,
-  and its flow test pins a genuine one-shot limitation.** The app's host-side
-  periodic-task scheduler (`examples/reference-app/cmd/server/periodic_scheduler.go`)
+  whose flow test proves the sweep deletes through real host wiring, and
+  records the residual per-database-file-once limitation.** The app's
+  host-side periodic-task scheduler (`examples/reference-app/cmd/server/periodic_scheduler.go`)
   enqueues one sweep per unique host tenant every tick — the cadence
   `cfg.PeriodicTaskInterval` (one minute by default,
   `defaultPeriodicTaskSchedulerInterval`), the tenants the values of the
@@ -448,22 +449,32 @@ invocation full-check.yml's integration-tiers job runs for this module:
   tenant-scoped — started and stopped with the queue worker in
   `cmd/server/server.go`'s `buildServer` (the same `cfg.DisableQueueWorker`
   gate). What the reference app proves about the mechanism is bounded and
-  honest: `TestBuildServer_PeriodicScheduler_ExpirySweep_StandaloneOneShot`
-  (`examples/reference-app/cmd/server/periodic_scheduler_flow_test.go`) pins
-  that on this host's `StandaloneQueue` exactly ONE sweep per tenant ever
-  executes — the first tick's, before any object exists — because the queue's
-  PERMANENT idempotency (go/jobs: a resolved idempotency key is held forever,
-  succeeded rows are never deleted) collides with the sweep's deterministic
-  per-tenant key, so every later tick's duplicate enqueue merges into that
-  completed first job instead of scheduling another run. A standalone host
-  therefore cannot expire anything through this mechanism; the pin keeps the
-  limitation observable (the expired object stays served and listed well past
-  its deadline) precisely so the round that fixes the semantics — changing
-  go/jobs' idempotency retention or go/storage's sweep keying, both module
-  code outside that round's scope — sees this test fail and flips it back
-  into the removal e2e it replaced. On the distributed asynq queue, whose
-  retention windows release a resolved key, the intended bounded-idempotency
-  behaviour is where the design holds.
+  honest: on this host's `StandaloneQueue` exactly ONE sweep per tenant per
+  database file ever executes, because the queue's PERMANENT idempotency
+  (go/jobs: a resolved idempotency key is held forever, succeeded rows are
+  never deleted) collides with the sweep's deterministic per-tenant key, so
+  every tick after the first-ever enqueue merges into that completed first
+  job instead of scheduling another run. That single sweep is a real
+  deletion, proven end to end by
+  `TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject`
+  (`examples/reference-app/cmd/server/periodic_scheduler_flow_test.go`): a
+  two-boot test over one database file and one object-store directory —
+  boot 1 hosts a completed object whose retention deadline passes, plus a
+  no-deadline survivor, with the worker-and-scheduler pair disabled
+  (expiry alone removes nothing: both objects still serve and list past
+  the deadline), and boot 2 starts the normal gate so the sweep its first
+  tick enqueues removes the expired object's row and bytes — observed
+  through the host's HTTP surface, a second-connection repository read
+  and the filesystem, with the survivor untouched. What remains genuinely
+  limited is the second sweep onwards: an object whose retention deadline
+  passes AFTER that one sweep has run is never reaped on a standalone
+  host, its row and bytes persisting until the database file is replaced,
+  because the queue never schedules the sweep again. The round that
+  changes go/jobs' idempotency retention or go/storage's sweep keying —
+  module semantics, deliberately untouched by the round that built this
+  proof — must revisit this entry. On the distributed asynq queue, whose
+  retention windows release a resolved key, the intended
+  bounded-idempotency behaviour is where the design holds.
 - **Upload and Complete serialize per object only inside one process.** The
   service's `objectLocks` (object.go) keep a completed row's finalized
   metadata honest within a single process: a second Upload of the same object
