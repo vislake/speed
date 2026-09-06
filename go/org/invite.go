@@ -429,7 +429,31 @@ func (s *InviteService) revertAcceptClaim(ctx context.Context, invitation *Invit
 // Revoke withdraws a pending invitation, making its token useless. Revoking
 // an already-accepted invitation reports ErrInvitationAlreadyAccepted rather
 // than silently un-joining somebody: removing a member is
-// MemberService.Remove's job, and it publishes a different event.
+// MemberService.Remove's job, and it publishes a different event. Revoking
+// an already-revoked invitation is a no-op success, so a redelivered revoke
+// is safe.
+//
+// # The write is a compare-and-swap, never an unconditional overwrite
+//
+// The read above classifies the invitation's state at one instant; the
+// write below must not trust that instant to still hold. Accept owns the
+// identical transition in the other direction and gates it on the row still
+// being pending (acceptIfPending), and Revoke gates its own the same way
+// (revokeIfPending): between this method's read and its write, a concurrent
+// Accept may have won the pending -> accepted claim and created the
+// membership -- an unconditional Status = Revoked write landing after that
+// would leave the invitation terminal-revoked while the membership stays
+// live, the invitation row and the roster disagreeing about whether the
+// invitee joined. If the compare-and-swap loses (won == false), the state
+// was changed by a concurrent caller in between, so this method re-reads
+// and classifies like Accept's own lost-race reporter does: an accepted
+// invitation answers ErrInvitationAlreadyAccepted, a revoked one (another
+// revoke won) is the idempotent success, and a row still pending means the
+// winner was an Accept whose membership creation failed and reverted its
+// claim -- the narrow transient that lets the revoke simply try its own
+// claim again, for a bounded number of attempts, after which the coded
+// ErrConcurrentUpdate reports that the invitation's status stayed in flux
+// longer than this call's budget covers.
 func (s *InviteService) Revoke(ctx context.Context, invitationID string) error {
 	invitation, err := s.repo.FindByID(ctx, invitationID)
 	if err != nil {
@@ -444,8 +468,36 @@ func (s *InviteService) Revoke(ctx context.Context, invitationID string) error {
 	case InvitationStatusRevoked:
 		return nil
 	}
-	invitation.Status = InvitationStatusRevoked
-	return s.repo.Update(ctx, invitation)
+
+	const revokeAttemptBudget = 3
+	for attempt := 0; ; attempt++ {
+		won, casErr := s.repo.revokeIfPending(ctx, invitationID)
+		if casErr != nil {
+			return casErr
+		}
+		if won {
+			return nil
+		}
+		// Lost the race: re-read to learn the state a concurrent caller
+		// committed. Accept's lost-race reporter re-reads once and classifies;
+		// this loop exists only for the single narrow case where the row is
+		// STILL pending after the loss (an accept claimed it, failed to create
+		// the membership, and reverted) -- then the revoke's own claim is
+		// worth trying again, briefly.
+		current, findErr := s.repo.FindByID(ctx, invitationID)
+		if findErr != nil {
+			return findErr
+		}
+		switch current.Status {
+		case InvitationStatusAccepted:
+			return ErrInvitationAlreadyAccepted.WithParam("invitation_id", invitationID)
+		case InvitationStatusRevoked:
+			return nil
+		}
+		if attempt+1 >= revokeAttemptBudget {
+			return ErrConcurrentUpdate.WithParam("invitation_id", invitationID)
+		}
+	}
 }
 
 // List returns the caller tenant's pending invitations, newest first.
@@ -577,12 +629,18 @@ func (s *InviteService) deliver(ctx context.Context, invitation *Invitation, nod
 }
 
 // revokeAfterFailedDelivery withdraws an invitation whose message could not
-// be delivered. A failure to revoke is logged, not returned: the caller is
-// already receiving the delivery error, and reporting the second one would
-// hide the first.
+// be delivered. The write is revokeIfPending's compare-and-swap, never an
+// unconditional overwrite, for the same reason Revoke's own write is (see
+// Revoke's doc comment): this call's own token was handed to the caller of
+// Invite, so a host that passes it on can have an Accept in flight while the
+// delivery-failure revocation runs -- and a revoke stamping over a claim
+// that already produced a live membership would leave the invitation row and
+// the roster disagreeing. A lost CAS means the accept won and is left alone.
+// A failure to revoke is logged, not returned: the caller is already
+// receiving the delivery error, and reporting the second one would hide the
+// first.
 func (s *InviteService) revokeAfterFailedDelivery(ctx context.Context, invitation *Invitation) {
-	invitation.Status = InvitationStatusRevoked
-	if err := s.repo.Update(ctx, invitation); err != nil {
+	if _, err := s.repo.revokeIfPending(ctx, invitation.ID); err != nil {
 		obs.FromContext(ctx).Warn("org could not revoke an undelivered invitation",
 			"invitation_id", invitation.ID, "error", err)
 	}

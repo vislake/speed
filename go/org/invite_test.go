@@ -4,11 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"gorm.io/gorm"
+
+	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/org/internal/testutil"
+	"github.com/vislake/speed/go/org/migrations"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/ratelimit"
 )
@@ -956,4 +962,158 @@ func errParam(t *testing.T, err error, key string) any {
 		t.Fatalf("error %v carries no parameters", err)
 	}
 	return appErr.Params[key]
+}
+
+// TestInviteService_Revoke_RacingAccept_NoRevokedStatusWithLiveMembership is
+// the P2-6 regression proof: Revoke used to read the invitation's status and
+// then write Status = Revoked with a plain, unconditional Update. Racing an
+// Accept of the same invitation, that unconditional write could land AFTER
+// Accept's compare-and-swap claim (pending -> accepted) and its membership
+// creation had committed -- overwriting the accepted status with revoked and
+// leaving the invitation terminal-revoked while the membership Accept
+// created stays live: the row and the roster disagree about whether the
+// invitee joined. (Accept itself has always been single-use through
+// acceptIfPending's CAS; Revoke was the unguarded writer on the same row.)
+//
+// # Deterministic, exactly like the P1-2/P1-3 delete tests
+//
+// A second connection holds an open transaction that has already performed
+// Accept's two writes -- acceptIfPending's compare-and-swap UPDATE on the
+// invitation and ensure's membership INSERT (its node touch omitted: on
+// SQLite any writer holds the whole file, so the extra row lock is not
+// load-bearing for the interleaving this file-lock rig pins). Revoke's read
+// sees the still-pending committed state; its write parks behind the
+// holder; release lets the accept commit first, and Revoke's resumed write
+// executes against the now-accepted row -- the pre-fix unconditional Update
+// stamps revoked over it (assertions fail), while the fixed compare-and-swap
+// (revokeIfPending, gated on status = 'pending') matches nothing, re-reads,
+// and answers the same org.invitation_already_accepted a caller who had
+// observed the accepted state directly would have gotten.
+func TestInviteService_Revoke_RacingAccept_NoRevokedStatusWithLiveMembership(t *testing.T) {
+	ctx := tenantCtx("tenant-a")
+
+	dsn := filepath.Join(t.TempDir(), "revoke-accept-race.sqlite")
+	db1, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: dsn})
+	if err != nil {
+		t.Fatalf("dbkit.Open: %v", err)
+	}
+	db2, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: dsn})
+	if err != nil {
+		t.Fatalf("dbkit.Open (acceptor connection): %v", err)
+	}
+	t.Cleanup(func() {
+		for _, db := range []*gorm.DB{db1, db2} {
+			if sqlDB, dbErr := db.DB(); dbErr == nil {
+				_ = sqlDB.Close()
+			}
+		}
+	})
+	testutil.Migrate(t, db1, dbkit.DialectSQLite, moduleName, migrations.FS)
+
+	// The module wiring on db1, Invitation's encrypted serializer included
+	// (newInvitationTestDB's registration is a no-op repeat, so registering
+	// again here is harmless).
+	host := newTestHost(t)
+	m := NewModule(db1,
+		WithEmailIndexer(newTestEmailIndexer(t)),
+		WithMailFrom(testMailFrom),
+		WithInvitationLinkBuilder(testLinkBuilder),
+	)
+	m.attach(host)
+	cipher, err := dbkit.NewCipher(testEncryptionKey)
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	dbkit.RegisterEncryptedSerializer(EmailSerializerName, cipher)
+
+	tree, invites, members := m.Tree(), m.Invitations(), m.Members()
+	root := mustCreateRoot(t, tree, ctx, "root")
+	node := mustCreateChild(t, tree, ctx, root.ID, "store")
+	if _, err := members.Add(ctx, "u-inviter", root.ID); err != nil {
+		t.Fatalf("Add(inviter): %v", err)
+	}
+	result, err := invites.Invite(ctx, InviteRequest{
+		Email:         "race@example.test",
+		NodeID:        node.ID,
+		InviterUserID: "u-inviter",
+		Locale:        "en-US",
+	})
+	if err != nil {
+		t.Fatalf("Invite: %v", err)
+	}
+
+	// The concurrent acceptor on db2: perform Accept's two writes and hold
+	// the transaction open until release. The CAS's own completion closes
+	// `held`, never timing luck.
+	acceptedAt := time.Now()
+	held := make(chan struct{})
+	release := make(chan struct{})
+	holderErr := make(chan error, 1)
+	go func() {
+		holderErr <- dbkit.WithTenantSession(ctx, db2, func(tx *gorm.DB) error {
+			res := tx.
+				Where("id = ?", result.Invitation.ID).
+				Where("status = ?", InvitationStatusPending).
+				Updates(&Invitation{Status: InvitationStatusAccepted, AcceptedAt: &acceptedAt})
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected != 1 {
+				return fmt.Errorf("accept CAS matched %d rows, want 1", res.RowsAffected)
+			}
+			membership := &Membership{
+				ID:     "00000000-0000-4000-8000-00000000ace5",
+				UserID: "u-accept-racer",
+				NodeID: node.ID,
+				Status: MembershipStatusActive,
+			}
+			if err := tx.Create(membership).Error; err != nil {
+				return err
+			}
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+
+	select {
+	case <-held:
+	case err = <-holderErr:
+		t.Fatalf("acceptor failed before holding the accept open: %v", err)
+	}
+
+	// Revoke races the held accept: its read sees the still-pending
+	// committed state, and its write cannot complete until the acceptor
+	// commits.
+	revokeDone := make(chan struct{})
+	var revokeErr error
+	go func() {
+		defer close(revokeDone)
+		revokeErr = invites.Revoke(ctx, result.Invitation.ID)
+	}()
+	time.Sleep(200 * time.Millisecond) // Revoke's read has certainly landed by now
+	close(release)
+	<-revokeDone
+	if err = <-holderErr; err != nil {
+		t.Fatalf("acceptor commit: %v", err)
+	}
+
+	// The accept won the race, so the revoke must report that -- the same
+	// coded error a caller who had observed the accepted state directly
+	// would have gotten -- never a silent success.
+	assertCode(t, revokeErr, ErrInvitationAlreadyAccepted.Code)
+
+	// And the two sides must agree: the invitation reads back accepted, and
+	// the membership the accept created is live.
+	current, err := invites.repo.FindByID(ctx, result.Invitation.ID)
+	if err != nil {
+		t.Fatalf("re-read the invitation: %v", err)
+	}
+	if current.Status != InvitationStatusAccepted {
+		t.Fatalf("invitation status = %q after a revoke raced the winning accept, want %q -- the unconditional revoke overwrote the accepted status while the membership stayed live",
+			current.Status, InvitationStatusAccepted)
+	}
+	if _, err := members.Get(ctx, "u-accept-racer"); err != nil {
+		t.Fatalf("the membership the accept created is not live: %v", err)
+	}
 }

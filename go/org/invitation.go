@@ -386,6 +386,36 @@ func (r *InvitationRepository) acceptIfPending(ctx context.Context, id string, a
 	return rowsAffected == 1, nil
 }
 
+// revokeIfPending atomically transitions the invitation identified by id,
+// scoped to the caller's tenant, from InvitationStatusPending to
+// InvitationStatusRevoked, and reports whether this call is the one that
+// performed the transition -- the status-revoked twin of acceptIfPending
+// above, and the answer to the same problem on the other side of the token:
+// InviteService.Revoke used to write Status = Revoked with a plain,
+// unconditional Update after a status read, and an Accept that won its own
+// compare-and-swap between that read and that write was overwritten --
+// landing the invitation terminal-revoked while the membership the accept
+// created stayed live. Gating the write on the row still being pending
+// means the revoke can never overwrite a state another caller already
+// committed; the caller re-reads and classifies when won == false, exactly
+// as Accept's own caller does after a lost acceptIfPending.
+func (r *InvitationRepository) revokeIfPending(ctx context.Context, id string) (won bool, err error) {
+	var rowsAffected int64
+	dbErr := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		res := tx.
+			Where("id = ?", id).
+			Where("status = ?", InvitationStatusPending).
+			Select("Status").
+			Updates(&Invitation{Status: InvitationStatusRevoked})
+		rowsAffected = res.RowsAffected
+		return res.Error
+	})
+	if dbErr != nil {
+		return false, ErrInternal.WithCause(dbErr)
+	}
+	return rowsAffected == 1, nil
+}
+
 // createPending revokes every pending invitation already outstanding for
 // invitation's own address, then inserts invitation and its
 // invitationTokenIndex row, all inside ONE dbkit.WithTenantSession
