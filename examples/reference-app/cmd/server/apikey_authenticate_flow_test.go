@@ -11,6 +11,14 @@ package main
 // (apikeyRequest, decodeCreatedAPIKey) for the session-authenticated CRUD
 // half of the flow, and never imports go/integration itself, matching that
 // file's own wire-shape discipline.
+//
+// The rate-limit-hardening round's own regression lives here too: the same
+// route now carries its rate-limit guard BEFORE authentication (wired through
+// integration.WithAuthenticationGuard), and
+// TestBuildServer_APIKeyAuthenticateFlow_ForgedKeyFlood_GuardBudgetExhausted_Answers429
+// proves a forged-X-API-Key flood pays that budget and answers 429 once it
+// is spent, where the pre-correction composition answered 401 forever -- one
+// unbounded database-hit Authenticate per forged key.
 
 import (
 	"encoding/json"
@@ -18,6 +26,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/vislake/speed/go/ratelimit"
 )
 
 // testIntegrationWhoami is the wire shape of integrationWhoamiResponse.
@@ -148,4 +158,106 @@ func TestBuildServer_APIKeyAuthenticateFlow_RotateAndRevokeRefuseTheOldKey(t *te
 	if revokedResp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("whoami with the revoked key: status = %d, want %d", revokedResp.StatusCode, http.StatusUnauthorized)
 	}
+}
+
+// TestBuildServer_APIKeyAuthenticateFlow_ForgedKeyFlood_GuardBudgetExhausted_Answers429
+// is the app-level regression for the corrected rate-limit layering
+// (go/integration/middleware.go's "Deliberately separate from HTTPGuard"
+// section, and the WithAuthenticationGuard option's own doc comment): the
+// whoami route's rate-limit guard must run BEFORE authentication, so
+// requests bearing a forged X-API-Key pay its budget and -- once it is
+// spent -- answer 429 with no Authenticate call at all. Before the
+// correction this route composed the guard behind authentication (the
+// classic chain), where a forged key never reached it: every forged request
+// cost Service.Authenticate's two database lookups and answered 401,
+// charged against no budget, forever.
+//
+// The test bounds the demo route's budget by overriding the
+// integrationWhoamiLimits package var (field by field, without naming its
+// integration.LayeredLimits type, keeping this file's own never-imports-
+// go/integration wire-shape discipline) for the duration of the test:
+// buildServer freezes the var's current value into the guard's
+// LayeredLimiter at construction, and no other test in this package runs
+// concurrently (nothing here calls t.Parallel), so the override cannot leak
+// into a sibling server. With a budget of two global hits per minute, the
+// legs read: a valid key authenticates (leg 1, spending one hit); a forged
+// key passes the guard with one hit left and is refused by Authenticate
+// itself, 401 (leg 2, spending the budget); and every later attempt -- a
+// forged key, then the route's OWN valid key -- is refused by the guard,
+// 429, before authentication runs. That final leg is the strongest
+// app-level "never a DB-hit authenticate" signal available: had the request
+// reached Authenticate, the valid key would have answered 200.
+func TestBuildServer_APIKeyAuthenticateFlow_ForgedKeyFlood_GuardBudgetExhausted_Answers429(t *testing.T) {
+	originalLimits := integrationWhoamiLimits
+	integrationWhoamiLimits.Global = ratelimit.Limit{Rate: 2, Per: integrationWhoamiRateLimitWindow}
+	integrationWhoamiLimits.Tenant = ratelimit.Limit{}
+	integrationWhoamiLimits.Key = ratelimit.Limit{}
+	defer func() { integrationWhoamiLimits = originalLimits }()
+
+	srv, cfg, _ := buildTestServer(t)
+	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "apikey-auth-flood")
+
+	// Create a real key through the ordinary session-authenticated CRUD
+	// surface, the identical shape the rotate/revoke flow above uses.
+	createResp := apikeyRequest(t, srv, http.MethodPost, apikeyBasePath, acmeToken, demoOwnerUserID)
+	created := decodeCreatedAPIKey(t, createResp, http.StatusCreated, "create")
+	if created.Key == "" {
+		t.Fatal("created key carries no raw key")
+	}
+
+	// Leg 1: a valid key still authenticates through the pre-auth guard --
+	// the gate must not break the legitimate path. The request pays one of
+	// the two budget hits.
+	who := decodeWhoami(t, whoamiRequest(t, srv, created.Key), http.StatusOK, "whoami with the valid key")
+	if who.KeyID != created.ID {
+		t.Errorf("whoami key_id = %q, want %q", who.KeyID, created.ID)
+	}
+
+	// Leg 2: with one budget hit left, a forged key passes the guard and is
+	// refused by authentication itself -- 401 -- spending the last hit.
+	forgedOne := whoamiRequest(t, srv, "sk_forged-flood-1")
+	forgedOne.Body.Close()
+	if forgedOne.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("forged request before exhaustion: status = %d, want %d", forgedOne.StatusCode, http.StatusUnauthorized)
+	}
+
+	// assertGuard429 requires resp to be the guard's own denial: 429 with
+	// the module's rate-limited envelope and quota headers -- the exact
+	// answer a request refused BEFORE authentication produces, never a 401.
+	assertGuard429 := func(resp *http.Response, what string) {
+		t.Helper()
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("%s: read body: %v", what, err)
+		}
+		if resp.StatusCode != http.StatusTooManyRequests {
+			t.Fatalf("%s: status = %d, want %d; body = %s", what, resp.StatusCode, http.StatusTooManyRequests, body)
+		}
+		var envelope struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(body, &envelope); err != nil {
+			t.Fatalf("%s: decoding %s: %v", what, body, err)
+		}
+		if envelope.Code != "integration.rate_limited" {
+			t.Errorf("%s: code = %q, want %q", what, envelope.Code, "integration.rate_limited")
+		}
+		if got := resp.Header.Get("X-RateLimit-Layer"); got != "global" {
+			t.Errorf("%s: X-RateLimit-Layer = %q, want %q", what, got, "global")
+		}
+		if resp.Header.Get("Retry-After") == "" {
+			t.Errorf("%s: Retry-After is empty on the guard's 429", what)
+		}
+	}
+
+	// Leg 3: the very next forged request is refused BY THE GUARD -- 429,
+	// never 401 -- with the budget exhausted and no Authenticate call run.
+	assertGuard429(whoamiRequest(t, srv, "sk_forged-flood-2"), "forged request after exhaustion")
+
+	// Leg 4: even the route's own valid key answers 429 now. The guard
+	// gates authentication ATTEMPTS, not credentials, and this refusal --
+	// where Authenticate would have answered 200 -- proves the exhausted
+	// requests never reached authentication at all.
+	assertGuard429(whoamiRequest(t, srv, created.Key), "valid key after exhaustion")
 }

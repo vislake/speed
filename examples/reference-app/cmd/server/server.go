@@ -2671,15 +2671,22 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 
 	// wireIntegrationAuthenticated mounts go/integration round 6's
 	// mandatory-first-consumer route (cmd/server/integration_authenticate.go):
-	// a minimal "whoami" demo endpoint gated by the module's own new
+	// a minimal "whoami" demo endpoint gated by the module's own
 	// AuthMiddleware, proving the previously-undischargeable property
 	// go/integration/AGENTS.md's round-5 section named -- a key
 	// authenticates, a rotated-away key is refused, a revoked key is
-	// refused -- through this app's own real, composed HTTP stack, and
-	// wiring LayeredLimiter/HTTPGuard in front of a real Authenticate-gated
-	// surface for the first time. reg.KVStore() is the same resolved
-	// KVStore seam every other rate-limited mechanism in this codebase
-	// would use. The call cannot fail: nothing it does returns an error.
+	// refused -- through this app's own real, composed HTTP stack, with
+	// LayeredLimiter/HTTPGuard wired in front of a real Authenticate-gated
+	// surface for the first time. The rate-limit-hardening round corrected
+	// the guard's position to the module's documented layering: the route's
+	// guard is wired through integration.WithAuthenticationGuard -- applied
+	// inside wireIntegrationAuthenticated, once reg.KVStore() exists, since
+	// the guard's limiter is built over this same resolved KVStore seam --
+	// so AuthMiddleware runs it BEFORE authentication and a forged-X-API-Key
+	// flood pays the guard's budget instead of reaching
+	// Service.Authenticate's lookups unbounded (apikey_authenticate_flow_test.go's
+	// forged-flood regression pins the order). The call cannot fail: nothing
+	// it does returns an error.
 	wireIntegrationAuthenticated(mux, integrationModule, reg.KVStore())
 
 	// The middleware chain: authn.Middleware(verifier) FIRST, then

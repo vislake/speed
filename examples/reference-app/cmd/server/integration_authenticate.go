@@ -11,10 +11,24 @@
 // reasoning go/integration/AGENTS.md's round-5 section recorded for why
 // those two stayed unwired in front of anything here).
 //
+// The rate-limit-hardening round corrected where the guard sits: it is wired
+// through the module's WithAuthenticationGuard option, so AuthMiddleware
+// runs it BEFORE authenticating anything -- a forged-X-API-Key request pays
+// the route's global attempt budget instead of reaching
+// Service.Authenticate's database lookups with no bound at all (the "rate
+// limit BEFORE authentication" layering argument lives in
+// go/integration/middleware.go's own doc comment). This file's original
+// round-6 composition mounted the guard BEHIND AuthMiddleware -- the classic
+// usage-quota chain, whose Extractor read the resolved tenant and key out of
+// request context -- which left Authenticate itself unbounded against forged
+// keys; that composition is now gone, and
+// apikey_authenticate_flow_test.go's forged-flood regression pins the
+// corrected order.
+//
 // apikey_authenticate_flow_test.go drives this route through the composed
 // HTTP stack: create, authenticate, rotate, authenticate with the old key
 // (refused) and the new one (succeeds), revoke, authenticate again
-// (refused).
+// (refused), and the forged-flood regression above.
 package main
 
 import (
@@ -27,10 +41,10 @@ import (
 	"github.com/vislake/speed/go/ratelimit"
 )
 
-// integrationWhoamiRateLimitWindow is the sliding window every one of
-// integrationWhoamiLimits' three layers shares -- a single window kept this
-// route's own local constant rather than reused from elsewhere in this app,
-// since no other route in this codebase wires go/ratelimit at all yet.
+// integrationWhoamiRateLimitWindow is the sliding window the demo route's
+// authentication-attempt budget uses -- a single window kept this route's
+// own local constant rather than reused from elsewhere in this app, since no
+// other route in this codebase wires go/ratelimit at all yet.
 const integrationWhoamiRateLimitWindow = time.Minute
 
 // integrationWhoamiPath is this app's one demo route gated by
@@ -41,19 +55,24 @@ const integrationWhoamiRateLimitWindow = time.Minute
 // claimed.
 const integrationWhoamiPath = "/api/v1/demo/integration/whoami"
 
-// integrationWhoamiLimits is this demo route's own LayeredLimits: generous
-// enough that apikey_authenticate_flow_test.go's handful of requests never
-// trips them, but present and real (not LayeredLimits{}'s all-disabled zero
-// value) so the composed chain genuinely exercises LayeredLimiter/HTTPGuard
-// against this Authenticate-gated surface -- the concrete realization
-// go/integration/AGENTS.md's round-5 section deferred ("these rate-limit
-// requests authenticated BY an API key against a host's own inbound API
-// surface, a surface this module still does not build"). This round builds
-// exactly that surface and wires the two together over it.
+// integrationWhoamiLimits is this demo route's own pre-auth attempt budget:
+// a real, non-zero global bound over every request the guard sees -- forged
+// X-API-Key floods included -- generous enough that
+// apikey_authenticate_flow_test.go's handful of requests never trips it.
+// Only the global layer is set, and deliberately: the guard evaluates
+// BEFORE any Authenticate call (it is wired through
+// integration.WithAuthenticationGuard in wireIntegrationAuthenticated
+// below), when no tenant or key has been resolved for the request yet, so
+// per-tenant and per-key tiers would have nothing genuine to key on --
+// this is the Global-only shape go/integration's own
+// ExampleWithAuthenticationGuard demonstrates, and the module's
+// WithAuthenticationGuard doc comment explains why empty pre-auth
+// identifiers charging the global layer is "the usual answer for anonymous
+// floods". A var rather than a const so a test can bound the budget:
+// apikey_authenticate_flow_test.go's forged-flood regression overrides it
+// to two hits per window for the duration of that test.
 var integrationWhoamiLimits = integration.LayeredLimits{
 	Global: ratelimit.Limit{Rate: 1000, Per: integrationWhoamiRateLimitWindow},
-	Tenant: ratelimit.Limit{Rate: 200, Per: integrationWhoamiRateLimitWindow},
-	Key:    ratelimit.Limit{Rate: 60, Per: integrationWhoamiRateLimitWindow},
 }
 
 // integrationWhoamiResponse is the demo route's own response shape: the
@@ -68,14 +87,26 @@ type integrationWhoamiResponse struct {
 }
 
 // wireIntegrationAuthenticated mounts integrationWhoamiPath on mux, gated by
-// the composed integration.AuthMiddleware -> integration.HTTPGuard.Middleware
-// chain over m -- AuthMiddleware first, so HTTPGuard's own Extractor can
-// read the tenant and key Authenticate just resolved out of request
-// context, rather than re-deriving either itself (see AuthMiddleware's own
-// doc comment, "Deliberately separate from HTTPGuard"). kv backs the
-// LayeredLimiter's three counters -- this app's own resolved KVStore seam
-// (reg.KVStore()), the identical store every other rate-limited surface in
-// this codebase would use.
+// integration.AuthMiddleware over a Module carrying the module's own
+// pre-auth rate-limit guard -- integration.WithAuthenticationGuard, the same
+// wiring go/integration's ExampleWithAuthenticationGuard demonstrates.
+// AuthMiddleware then runs the guard BEFORE it authenticates anything (see
+// AuthMiddleware's own "Deliberately separate from HTTPGuard" doc section
+// for why the guard belongs outside authentication): a request presenting a
+// forged or unrecognized X-API-Key header -- which would otherwise reach
+// Service.Authenticate's lookups with no bound at all, refused after paying
+// for two database lookups and never charged against any budget -- pays
+// integrationWhoamiLimits' global attempt budget instead, and once that
+// budget is spent answers 429 with authentication never running.
+//
+// The option is applied here, not at integration.NewModule: the guard's
+// LayeredLimiter must be built over the kernel-resolved KVStore seam (kv
+// below -- reg.KVStore(), the identical store every other rate-limited
+// surface in this codebase would use), which exists only after Bootstrap has
+// run. That is sound because the option is a plain Module-field setter whose
+// field AuthMiddleware reads at call time, and no request can reach this
+// route before buildServer returns -- applying it here is equivalent to
+// NewModule-time wiring.
 //
 // This route is deliberately NOT gated by rbac: unlike the module's
 // spec-generated CRUD surfaces' own session-authenticated,
@@ -89,18 +120,23 @@ type integrationWhoamiResponse struct {
 // refusal is the whole of this route's access control.
 func wireIntegrationAuthenticated(mux *http.ServeMux, m *integration.Module, kv pkgcore.KVStore) {
 	limiter := integration.NewLayeredLimiter(ratelimit.New(kv), integrationWhoamiLimits)
-	guard := integration.NewHTTPGuard(limiter, "integration-demo-whoami", func(r *http.Request) (tenantKey, apiKeyID string) {
-		// Reads what AuthMiddleware (mounted below, ahead of this Extractor
-		// in the chain) already attached -- this module "takes no position
-		// on how a host authenticates a request" (HTTPGuard's own doc
-		// comment), and this is the host's own answer: the tenant and key
-		// Authenticate resolved, never re-derived.
-		authenticated, ok := integration.AuthenticatedAPIKeyFromContext(r.Context())
-		if !ok {
-			return "", ""
-		}
-		return authenticated.TenantID, authenticated.KeyID
+	guard := integration.NewHTTPGuard(limiter, "integration-demo-whoami", func(*http.Request) (tenantKey, apiKeyID string) {
+		// The guard evaluates BEFORE any Authenticate call (it is wired
+		// through WithAuthenticationGuard below), so no tenant or key has
+		// been resolved for this request yet and nothing exists in request
+		// context to derive identifiers from. Empty identifiers are ordinary
+		// keys to LayeredLimiter.Allow, so every attempt charges the global
+		// layer -- this route's budget is a global authentication-attempt
+		// bound, and the empty-answer shape is exactly what
+		// ExampleWithAuthenticationGuard and WithAuthenticationGuard's own
+		// doc comment describe for pre-auth guards.
+		return "", ""
 	})
+
+	// Wire the guard onto m so AuthMiddleware wraps the authenticate gate
+	// with it -- the request pays the budget before any Authenticate call,
+	// and a denial answers 429 with authentication never running.
+	integration.WithAuthenticationGuard(guard)(m)
 
 	whoami := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authenticated, ok := integration.AuthenticatedAPIKeyFromContext(r.Context())
@@ -122,5 +158,5 @@ func wireIntegrationAuthenticated(mux *http.ServeMux, m *integration.Module, kv 
 	})
 
 	mux.Handle(http.MethodGet+" "+integrationWhoamiPath,
-		integration.NewAuthMiddleware(m).Middleware(guard.Middleware(whoami)))
+		integration.NewAuthMiddleware(m).Middleware(whoami))
 }
