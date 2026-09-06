@@ -142,6 +142,15 @@ func TestRedact_TokenStemDoesNotOverRedactUnrelatedWords(t *testing.T) {
 // prompt_tokens and its camelCase plural "promptTokens" are equally
 // legitimate usage counts that must survive, and a bare "token" segment
 // joined either way is equally secret-bearing.
+//
+// A third class is terminal-position compounds: a segment that ENDS with
+// the bare stem -- all-lowercase run-together ("apitoken", "accesstoken")
+// or acronym-glued ("APIToken", "JWTToken") -- has nothing continuing the
+// stem, so the stem is the segment's last word and the compound is
+// secret-shaped whatever the glue before it (the terminal-suffix rule in
+// stemMatches). Run-together plurals ("prompttokens", "sessiontokens")
+// end in "...tokens", not in the bare stem, and stay benign like their
+// separated and camelCase twins.
 func TestRedact_TokenStemWordBoundary_AdversarialVocabulary(t *testing.T) {
 	benign := []string{
 		// Already covered by the original regression test; repeated here
@@ -161,6 +170,11 @@ func TestRedact_TokenStemWordBoundary_AdversarialVocabulary(t *testing.T) {
 		// stem is still the plural -- the same usage-count field as
 		// prompt_tokens, spelled camelCase, and equally legitimate.
 		"promptTokens", "completionTokens", "sessionTokens",
+		// Run-together lowercase plurals: the same usage-count family with
+		// no separator and no case transition anywhere. The plural "s"
+		// continues the stem, so the segment ends in "...tokens", never in
+		// the bare "...token" the terminal-suffix rule keys on.
+		"prompttokens", "sessiontokens",
 	}
 	for _, key := range benign {
 		t.Run("benign/"+key, func(t *testing.T) {
@@ -200,6 +214,19 @@ func TestRedact_TokenStemWordBoundary_AdversarialVocabulary(t *testing.T) {
 		// before the word-boundary narrowing and must redact again.
 		"accessToken", "sessionToken", "refreshToken", "apiToken",
 		"userToken", "idToken", "tokenValue",
+		// Run-together compounds whose last morpheme IS the stem, with no
+		// separator and no case transition at the join -- the terminal
+		// residue class. The all-lowercase forms glue the stem to a
+		// lowercase prefix ("apitoken" through the "i"->"t" pair, which the
+		// boundary rule reads as one word continuing); the acronym forms
+		// glue it to an all-caps prefix ("APIToken", "JWTToken"), an
+		// uppercase-to-uppercase join no case transition marks. Neither is
+		// a whole word to wordBoundaryASCII -- each is caught because the
+		// stem sits at the segment's own end, where the terminal-suffix
+		// rule treats a trailing stem as the secret word whatever the glue
+		// before it.
+		"apitoken", "accesstoken", "authtoken", "sessiontoken", "refreshtoken",
+		"APIToken", "JWTToken",
 	}
 	for _, key := range secretShaped {
 		t.Run("secret/"+key, func(t *testing.T) {

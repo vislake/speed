@@ -172,7 +172,30 @@ const RedactedValue = "[REDACTED]"
 // "completion_tokens" and their camelCase twins "promptTokens"/
 // "completionTokens" do not, since the "s" continuing the stem is a
 // lowercase letter and a lowercase continuation is the same word, not a
-// boundary. A field that
+// boundary.
+//
+// One letter-glued join the boundary rule cannot see is nevertheless
+// secret-shaped: a run-together compound that ENDS with the stem.
+// "apitoken", "accesstoken" and their all-caps-prefix twins "APIToken"/
+// "JWTToken" carry no separator and no case transition at the join (an
+// all-caps acronym glues through an uppercase-to-uppercase adjacency), so
+// wordBoundaryASCII reads each as one word continuing -- yet the stem is
+// the compound's last morpheme, and Go compound names place the secret
+// word last, the way "accessToken" and "api_token" do. stemMatches
+// therefore also matches when the stem is the segment's terminal suffix
+// (foldSuffixASCII): nothing continues a trailing stem, so only its left
+// side is in question, and a glued left side is exactly the
+// modifier+secret-word naming this rule exists for. The rule stops at the
+// segment's end -- a stem a lowercase letter continues past ("tokens",
+// "tokenizer_version", "detokenize", "subtoken_count", and their
+// run-together forms "prompttokens"/"sessiontokens", whose "...tokens"
+// ending is not the bare stem) stays a different word, so the
+// over-redaction class this paragraph's first half closed stays closed;
+// the newly accepted cost is a bare word that literally ends in the
+// stem's letters ("subtoken") being redacted, the safe-side direction
+// this table already declares.
+//
+// A field that
 // genuinely stores multiple real tokens under a plural key name (e.g. a
 // hypothetical "session_tokens") is not caught by the key rule any more --
 // the accepted cost of closing the over-redaction gap -- but the
@@ -191,12 +214,12 @@ var sensitiveStems = []string{
 }
 
 // stemMatches reports whether seg is marked sensitive by stem, dispatching
-// to the word-boundary rule for "token" and the permissive substring rule
-// for every other stem. See sensitiveStems' doc comment for why the two
-// stems need different rules.
+// to the word-boundary and terminal-suffix rules for "token" and the
+// permissive substring rule for every other stem. See sensitiveStems' doc
+// comment for why the stems need different rules.
 func stemMatches(stem, seg string) bool {
 	if stem == "token" {
-		return foldContainsWordASCII(seg, stem)
+		return foldContainsWordASCII(seg, stem) || foldSuffixASCII(seg, stem)
 	}
 	return foldContainsASCII(seg, stem)
 }
@@ -672,6 +695,23 @@ func foldContainsASCII(s, sub string) bool {
 	return false
 }
 
+// foldSuffixASCII reports whether s ends with sub, comparing ASCII letters
+// case-insensitively and everything else byte-exactly. Allocates nothing,
+// so it is safe on the logging hot path. This is the "token" stem's
+// terminal-suffix matcher (see sensitiveStems and stemMatches): a segment
+// that ends with the bare stem has nothing continuing it, so the stem is
+// the segment's last word and the segment is secret-shaped whatever glue
+// runs it together with its prefix -- "apitoken" and "APIToken" carry no
+// separator and no case transition at the join, but each ends with
+// "...token". A segment ending in the plural ("...tokens", "...Tokens")
+// does not end with the bare stem and stays out of this rule's reach.
+func foldSuffixASCII(s, sub string) bool {
+	if len(sub) > len(s) {
+		return false
+	}
+	return foldEqualASCII(s[len(s)-len(sub):], sub)
+}
+
 // foldEqualASCII reports whether a and b are equal under ASCII
 // case-folding, assuming len(a) == len(b).
 func foldEqualASCII(a, b string) bool {
@@ -713,9 +753,13 @@ func isUpperCaseASCII(b byte) bool { return 'A' <= b && b <= 'Z' }
 // "tokenizer"'s 'n'-'i' are the same word, not a boundary -- which is what
 // keeps the plural and the "-izer" suffix out of the "token" stem's net.
 // An all-caps acronym glued directly to a word ("APIToken", "JWTToken")
-// carries no case transition at the join and is not recognized as a
-// boundary: spelling such a compound with a separator or with mixed case
-// at the join is the convention this matcher keys on.
+// carries no case transition at the join, so the join is not a boundary
+// to this matcher either. When such a compound ends at the segment's own
+// end, the terminal-suffix rule (foldSuffixASCII, see stemMatches) still
+// catches it -- nothing continues a trailing stem -- so this matcher's
+// blindness is confined to a mid-segment acronym join ("JWTTokenValue"),
+// a shape no call site uses; spelling such a compound with a separator or
+// with mixed case at the join is the convention this matcher keys on.
 func wordBoundaryASCII(s string, left, right int) bool {
 	if left < 0 || right >= len(s) {
 		return true
