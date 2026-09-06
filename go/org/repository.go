@@ -183,6 +183,108 @@ func (r *Repository) findByIDIncludingDeleted(ctx context.Context, id string) (*
 	return &node, nil
 }
 
+// touchLockByID takes the dialect-neutral row lock on the live node
+// identified by id, inside an already-open transaction (tx, as handed to a
+// dbkit.WithTenantSession callback), and reports whether a live row existed
+// to lock.
+//
+// # The lock is a no-op write, and that is the point
+//
+// DeletedBy is dbkit's own soft-delete column, and a currently-live row
+// always carries the empty string in it: deleteLeaf and deleteSubtree below
+// only ever set DeletedBy together with DeletedAt, in the same statement, so
+// there is no path that leaves a live row (deleted_at IS NULL) with a
+// non-empty DeletedBy. Writing "" back is therefore a genuine no-op for the
+// data on any row this call is allowed to succeed against, but a genuine
+// WRITE for the database engine:
+//
+//   - On PostgreSQL it takes the row's write lock, held until this
+//     transaction commits or rolls back. A concurrent writer of the SAME
+//     row (deleteLeaf soft-deleting this exact node, say, or another call
+//     to this function racing to move it) either already committed --
+//     in which case this UPDATE's WHERE clause is re-evaluated against the
+//     now-current row and correctly fails to match a dead one -- or is
+//     still open, in which case this UPDATE blocks until it resolves
+//     rather than reading a stale, about-to-be-invalidated snapshot the
+//     way a plain SELECT would.
+//   - On SQLite it is the caller's transaction's FIRST database statement
+//     -- never preceded by a read -- which is exactly what keeps the whole
+//     transaction out of the read-then-write lock-upgrade hazard
+//     go/dbkit/AGENTS.md's "SQLite busy timeout" section documents: an
+//     ordinary contending writer waits out busy_timeout and succeeds once
+//     the holder commits, and only a transaction that read FIRST is
+//     refused immediately instead. Every caller of this function MUST
+//     call it before issuing any other statement on tx, or this guarantee
+//     is void and a contended call can fail immediately instead of
+//     waiting -- see withRetry in tree.go for the bounded-retry backstop
+//     every caller wraps itself in regardless, for the cases (PostgreSQL
+//     deadlocks between two such calls locking two different rows in
+//     opposite order, most notably) no single call's own lock order can
+//     rule out.
+func touchLockByID(tx *gorm.DB, id string) (bool, error) {
+	res := tx.
+		Where("id = ?", id).
+		Where("deleted_at IS NULL").
+		Select("DeletedBy").
+		Updates(&OrgNode{DeletedBy: ""})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected != 0, nil
+}
+
+// lockLiveNode wraps touchLockByID and reads the now-locked row back,
+// for callers (CreateChild, Move, Restore) that need the row's own current
+// data -- Path and Depth above all -- rather than merely a lock over some
+// OTHER statement.
+//
+// It reports gorm.ErrRecordNotFound -- never wrapped, so a caller matches it
+// with errors.Is directly -- for an id with no live row under ctx's tenant:
+// never existed, belongs to another tenant (the isolation plugin's own
+// filter), or is currently mark-deleted. The caller decides which org-level
+// not-found error that maps to (ErrParentNotFound, ErrNodeNotFound,
+// ErrRestoreParentNotLive), since an identical gap means a different thing
+// at each call site.
+//
+// The read after the lock is safe to issue -- unlike a read before it would
+// have been -- precisely because the write above already happened: this
+// transaction already holds whatever this dialect's write-lock shape is for
+// this row, so nothing else can change it before this read, or before this
+// transaction ends.
+func lockLiveNode(tx *gorm.DB, id string) (*OrgNode, error) {
+	locked, err := touchLockByID(tx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !locked {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var node OrgNode
+	if err := tx.Where("id = ?", id).First(&node).Error; err != nil {
+		return nil, err
+	}
+	return &node, nil
+}
+
+// assertNameFreeTx is assertNameFree's transaction-bound twin: the same
+// sibling-name pre-check, issued against an already-open tx instead of
+// opening its own dbkit.WithTenantSession, for callers composing it into a
+// larger atomic operation (CreateChild, Move). The database's own
+// UNIQUE(tenant_id, parent_id, name) index remains the backstop this
+// pre-check cannot close on its own; mapWriteError translates a lost race
+// against it into the identical ErrDuplicateSiblingName.
+func assertNameFreeTx(tx *gorm.DB, parentID, name string) error {
+	var existing OrgNode
+	err := tx.Where("parent_id = ?", parentID).Where("name = ?", name).First(&existing).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return nil
+	case err != nil:
+		return ErrInternal.WithCause(err)
+	}
+	return ErrDuplicateSiblingName.WithParam("name", name)
+}
+
 // errSubtreeSizeUnexpected aborts deleteLeaf's transaction when the prefix
 // matched a number of rows other than the single node the caller meant to
 // remove. It never escapes this file: deleteLeaf translates it into the
@@ -208,9 +310,9 @@ func softDeleteActor(ctx context.Context) string {
 	return ""
 }
 
-// deleteLeaf mark-deletes the single node whose path is exactly prefix, and
-// refuses -- rolling the whole statement back -- if that prefix turns out to
-// match more than one currently-live row.
+// deleteLeaf mark-deletes the single node identified by nodeID (whose path
+// is exactly prefix), and refuses -- rolling the whole statement back -- if
+// that prefix turns out to match more than one currently-live row.
 //
 // It is a bulk write, not the single-row dbkit.Repository[OrgNode].Delete
 // promoted onto Repository: it follows the exact shape dbkit's own
@@ -231,6 +333,39 @@ func softDeleteActor(ctx context.Context) string {
 // foreign_keys is turned on, which would make the two dialects behave
 // differently), so the guard has to be the transaction itself.
 //
+// # touchLockByID(nodeID) first, and why the bulk scan alone is not enough
+//
+// PostgreSQL's own re-check of a row a blocked UPDATE was waiting on
+// (EvalPlanQual, under READ COMMITTED) re-verifies only the SPECIFIC ROWS
+// the statement's original scan already selected as candidates -- it does
+// NOT expand that candidate set to rows that came to match the WHERE clause
+// only AFTER the scan ran, a newly INSERTed child above all. Concretely: if
+// this UPDATE's own "path LIKE prefix%" scan takes its snapshot BEFORE a
+// concurrent CreateChild's lockLiveNode(nodeID) call has locked nodeID, and
+// this UPDATE then blocks on nodeID (already locked by that CreateChild),
+// unblocking after CreateChild commits does NOT make this UPDATE notice the
+// row CreateChild just inserted -- that row never existed when the original
+// scan ran, so matched stays 1 (this node alone) instead of 2, and the
+// delete proceeds thinking the node is still a childless leaf. The result is
+// exactly the D1 orphan (a live child under a now-dead parent) despite
+// CreateChild's own lock having been real and properly held -- confirmed as
+// a genuine, reproducible failure against a real PostgreSQL server while
+// building this round's fix (integration_test/postgres_concurrency_test.go),
+// not merely a theoretical concern; SQLite's coarser, whole-file locking
+// does not share this specific blind spot; the deleteLeaf-and-Postgres
+// combination is not the property either one alone appeared to be. The fix
+// is touchLockByID(tx, nodeID) as this function's OWN first statement,
+// BEFORE the bulk scan below ever runs: it contends for the identical row
+// lockLiveNode(nodeID) takes, so a concurrent CreateChild (or Restore, or
+// Move locking this same node) is now forced to either have already fully
+// committed, or to block behind THIS call -- either way, the bulk scan that
+// follows always starts from a state where no such concurrent writer of
+// nodeID itself can still be in flight, so any child it inserted is already
+// visible to (or does not yet exist for) this fresh scan. touchLockByID
+// reporting nodeID absent-or-dead maps directly to matched == 0 without
+// running the bulk scan at all, matching what that scan would have found
+// anyway.
+//
 // The WHERE clause explicitly requires deleted_at IS NULL: only currently-
 // live rows count toward "does this node have children". A node whose only
 // remaining "descendant" is itself already soft-deleted (from some earlier,
@@ -240,10 +375,18 @@ func softDeleteActor(ctx context.Context) string {
 //
 // It reports the number of rows the prefix matched, so the caller can turn
 // "more than one" into org.node_has_children with a real count.
-func (r *Repository) deleteLeaf(ctx context.Context, prefix string) (matched int64, err error) {
+func (r *Repository) deleteLeaf(ctx context.Context, nodeID, prefix string) (matched int64, err error) {
 	now := time.Now()
 	deletedBy := softDeleteActor(ctx)
 	err = dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		locked, lockErr := touchLockByID(tx, nodeID)
+		if lockErr != nil {
+			return lockErr
+		}
+		if !locked {
+			matched = 0
+			return nil
+		}
 		m := OrgNode{DeletedAt: &now, DeletedBy: deletedBy}
 		res := tx.
 			Where("path LIKE ?", prefix+"%").
@@ -268,18 +411,28 @@ func (r *Repository) deleteLeaf(ctx context.Context, prefix string) (matched int
 	return matched, nil
 }
 
-// deleteSubtree mark-deletes the node whose path is exactly prefix and every
-// currently-live node beneath it, in one statement inside one transaction,
-// and reports how many rows it touched. Mark-deleting a subtree row by row
-// -- for instance by calling the promoted, single-row
-// dbkit.Repository[OrgNode].Delete once per descendant -- would leave a
-// partially soft-deleted tree behind on any mid-loop failure, and would
-// abandon the very atomicity go/org/AGENTS.md's "Known limitations" already
-// flags as missing for Move; one UPDATE cannot leave that window.
+// deleteSubtree mark-deletes the node identified by nodeID (whose path is
+// exactly prefix) and every currently-live node beneath it, in one statement
+// inside one transaction, and reports how many rows it touched. Mark-
+// deleting a subtree row by row -- for instance by calling the promoted,
+// single-row dbkit.Repository[OrgNode].Delete once per descendant -- would
+// leave a partially soft-deleted tree behind on any mid-loop failure, and
+// would abandon the very atomicity go/org/AGENTS.md's "Known limitations"
+// already flags as missing for Move; one UPDATE cannot leave that window.
 //
 // It follows dbkit's own unexported softDelete shape exactly, the same way
 // deleteLeaf's doc comment describes: a real *OrgNode, Model == Dest == &m,
 // never a map payload.
+//
+// touchLockByID(nodeID) runs first for the identical reason deleteLeaf's own
+// doc comment gives at length: without it, a concurrent Restore locking
+// THIS exact node (as the parent it is about to un-delete something under,
+// TreeService.Restore's own case) via lockLiveNode could commit -- reviving
+// a descendant -- in the gap between this statement's snapshot and its own
+// unblocking, and this bulk scan would never notice that newly-revived row,
+// leaving it live under what this call just made a dead parent: the D5
+// corruption, confirmed the same way against a real PostgreSQL server
+// (integration_test/postgres_concurrency_test.go).
 //
 // The statement is a plain Updates against a TenantScoped model, so the
 // isolation plugin injects the tenant filter here exactly as it did for the
@@ -287,11 +440,19 @@ func (r *Repository) deleteLeaf(ctx context.Context, prefix string) (matched int
 // already-soft-deleted descendant (from some earlier, independent
 // mark-delete) untouched rather than re-stamping its deleted_at/deleted_by
 // with this call's own attribution.
-func (r *Repository) deleteSubtree(ctx context.Context, prefix string) (int64, error) {
+func (r *Repository) deleteSubtree(ctx context.Context, nodeID, prefix string) (int64, error) {
 	now := time.Now()
 	deletedBy := softDeleteActor(ctx)
 	var affected int64
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		locked, lockErr := touchLockByID(tx, nodeID)
+		if lockErr != nil {
+			return lockErr
+		}
+		if !locked {
+			affected = 0
+			return nil
+		}
 		m := OrgNode{DeletedAt: &now, DeletedBy: deletedBy}
 		res := tx.
 			Where("path LIKE ?", prefix+"%").

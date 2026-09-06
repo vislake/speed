@@ -3,6 +3,7 @@ package org
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -153,39 +154,83 @@ func (s *TreeService) CreateRoot(ctx context.Context, name, kind string) (*OrgNo
 // from its stored depth, so the two can never disagree in a freshly written
 // row; a parent whose stored path is malformed reports ErrInternal rather
 // than propagating the corruption into a new row.
+//
+// # Atomicity against a concurrent delete of the parent
+//
+// findParent's read, the sibling-name check and the insert all run inside
+// ONE dbkit.WithTenantSession transaction, with the parent row locked first
+// through lockLiveNode -- never a plain read followed by a separate write,
+// which is exactly the shape that used to leave a window between reading
+// the parent as live and inserting the child: deleteLeaf's own mark-delete
+// is a single UPDATE inside its own single-statement transaction, so a
+// concurrent CreateChild whose parent-liveness check was a plain,
+// unlocked read could observe the parent as live in the gap between that
+// UPDATE and its COMMIT, and go on to insert a child whose stored path
+// still named the parent's old, about-to-be-invalidated position -- the
+// live-child-under-a-soft-deleted-parent corruption path.go's own doc
+// comment calls out as never a supported state. lockLiveNode's blind,
+// no-prior-read touch-update closes that: on PostgreSQL it takes the
+// parent row's write lock and blocks until any concurrent deleteLeaf either
+// commits (after which this call's own lock attempt correctly fails to
+// match a now-dead row) or rolls back; on SQLite it is this transaction's
+// first statement, which keeps it out of the read-then-write lock-upgrade
+// hazard go/dbkit/AGENTS.md's "SQLite busy timeout" section documents.
+//
+// The whole transaction is wrapped in withRetry: SQLite contention this
+// shape cannot itself avoid, and a PostgreSQL deadlock against an
+// unrelated concurrent Move locking the same parent in the opposite
+// order, both retry rather than surface as a raw, undocumented failure.
 func (s *TreeService) CreateChild(ctx context.Context, parentID, name, kind string) (*OrgNode, error) {
 	cleanName, err := validateName(name)
 	if err != nil {
 		return nil, err
 	}
-
-	parent, err := s.findParent(ctx, parentID)
-	if err != nil {
-		return nil, err
-	}
-
-	depth := depthOf(parent.Path) + 1
-	if depth > s.maxDepth {
-		return nil, ErrMaxDepthExceeded.WithParam("max_depth", s.maxDepth)
-	}
-	if err := s.assertNameFree(ctx, parentID, cleanName); err != nil {
-		return nil, err
+	if parentID == "" {
+		return nil, ErrParentNotFound.WithParam("parent_id", parentID)
 	}
 
 	id := s.newID()
-	if err := validateNodeID(id); err != nil {
-		return nil, ErrInternal.WithCause(err)
+	if idErr := validateNodeID(id); idErr != nil {
+		return nil, ErrInternal.WithCause(idErr)
 	}
 
-	node := OrgNode{
-		ID:       id,
-		ParentID: parent.ID,
-		Path:     buildPath(parent.Path, id),
-		Depth:    depth,
-		Name:     cleanName,
-		Kind:     kind,
-	}
-	if err := s.create(ctx, &node); err != nil {
+	var node OrgNode
+	err = withRetry(func() error {
+		return dbkit.WithTenantSession(ctx, s.repo.db, func(tx *gorm.DB) error {
+			parent, lockErr := lockLiveNode(tx, parentID)
+			if lockErr != nil {
+				if errors.Is(lockErr, gorm.ErrRecordNotFound) {
+					return ErrParentNotFound.WithParam("parent_id", parentID)
+				}
+				return ErrInternal.WithCause(lockErr)
+			}
+			if pathErr := validatePath(parent.Path); pathErr != nil {
+				return ErrInternal.WithCause(pathErr)
+			}
+
+			depth := depthOf(parent.Path) + 1
+			if depth > s.maxDepth {
+				return ErrMaxDepthExceeded.WithParam("max_depth", s.maxDepth)
+			}
+			if nameErr := assertNameFreeTx(tx, parentID, cleanName); nameErr != nil {
+				return nameErr
+			}
+
+			node = OrgNode{
+				ID:       id,
+				ParentID: parent.ID,
+				Path:     buildPath(parent.Path, id),
+				Depth:    depth,
+				Name:     cleanName,
+				Kind:     kind,
+			}
+			if createErr := tx.Create(&node).Error; createErr != nil {
+				return mapWriteError(createErr)
+			}
+			return nil
+		})
+	})
+	if err != nil {
 		return nil, err
 	}
 	s.publishCreated(ctx, node)
@@ -245,83 +290,172 @@ func (s *TreeService) Rename(ctx context.Context, nodeID, name string) (*OrgNode
 // property 4. No SQL string function is used, so the only structurally risky
 // operation in this module carries no dialect-specific SQL at all.
 //
-// KNOWN LIMITATION: the rewritten rows are saved one at a time through
-// dbkit.Repository[OrgNode].Update, each in its own transaction, because
-// Repository[T] exposes no transactional batch seam today. A process that
-// dies mid-move therefore leaves a partially re-parented subtree, whose rows'
-// paths disagree with their parent edges until the move is repeated. The
-// cheap fix -- one statement with a SQL replace() over the path column -- is
-// exactly what property 4 forbids, and the right fix is a dbkit round that
-// grows Repository[T] a transactional batch write. Recorded in go/org's
-// AGENTS.md.
+// The whole rewrite -- reading the node, reading the new parent, the
+// sibling-name check, the subtree scan and every rewritten row -- runs
+// inside ONE dbkit.WithTenantSession transaction, with the moved node's own
+// row and the new parent's row each locked through lockLiveNode BEFORE
+// either is read for its authoritative Path: a plain, unlocked read of
+// either (the shape this method used before) can observe a row as live and
+// still hand back a Path a concurrent writer of that SAME row is about to
+// invalidate -- a concurrent Delete soft-deleting the node or an ancestor,
+// or a concurrent Move re-parenting the SAME node again -- landing this
+// call's rewrite on a stale prefix once the concurrent writer commits.
+// lockLiveNode's blind, no-prior-read touch-update rules that out: on
+// PostgreSQL it takes the row's write lock and blocks until any concurrent
+// writer of the SAME row resolves, so the read that follows it always
+// reflects the true current state, not a snapshot from before that writer's
+// commit; on SQLite it is this transaction's first statement (see
+// lockLiveNode's own doc comment for why every subsequent read and write in
+// the same transaction is then safe from the read-then-write lock-upgrade
+// hazard go/dbkit/AGENTS.md's "SQLite busy timeout" section documents).
+// Every row of the subtree -- read fresh inside this same transaction,
+// after the moved node's own lock is already held -- is then rewritten by
+// its own conditional UPDATE (id + deleted_at IS NULL), so a descendant
+// soft-deleted or otherwise altered between the scan and its own rewrite
+// reports ErrInternal rather than silently landing a stale row.
+//
+// # Concurrent Move || Move, Move || CreateChild, Move || Delete
+//
+// Two overlapping Moves serialize on whichever row they both lock first
+// (the earlier one's moved-node lock, or its new-parent lock, blocking the
+// later one's attempt at the same row) and each observes the other's
+// committed result once unblocked -- outcome equal to some serial order of
+// the two, never a mix of both. A concurrent CreateChild targeting a node
+// this Move is relocating takes the identical row lock through the same
+// lockLiveNode primitive (tree.go's CreateChild), so the two calls
+// serialize on that row exactly the same way, and whichever runs second
+// re-reads the row's current Path after acquiring the lock -- never the
+// stale one read before it blocked. A concurrent Delete of the moved node
+// or an ancestor is likewise a writer of one of the same rows this call
+// locks, and is now inside this same locking discipline rather than racing
+// it as a wholly independent, unguarded statement.
+//
+// # Deadlock, honestly
+//
+// Two Moves whose lock orders genuinely cross -- A locks X then wants Y
+// while B locks Y then wants X -- can still deadlock under PostgreSQL's
+// row-level locking; PostgreSQL detects this itself and aborts one side
+// with a real, distinguishable error. withRetry (see concurrency.go) is
+// what turns that into a transparent retry rather than a surfaced failure:
+// the aborted side simply runs again from a clean read, and past a small,
+// bounded number of such losses (txRetryBudget) reports the coded
+// ErrConcurrentUpdate instead of hanging.
+//
+// KNOWN LIMITATION: a process that dies mid-transaction (after some rows
+// commit is impossible -- the whole rewrite is one transaction now, so it is
+// all-or-nothing -- but a process that dies BETWEEN this call returning and
+// its caller acting on the result can still leave that caller's own
+// downstream state stale, the same as any other successfully committed
+// write.
 func (s *TreeService) Move(ctx context.Context, nodeID, newParentID string) (*OrgNode, error) {
-	node, err := s.Get(ctx, nodeID)
-	if err != nil {
-		return nil, err
-	}
-	if pathErr := validatePath(node.Path); pathErr != nil {
-		return nil, ErrInternal.WithCause(pathErr)
-	}
 	if nodeID == newParentID {
 		return nil, ErrCycleNotAllowed.WithParam("node_id", nodeID)
 	}
 
-	newParent, err := s.findParent(ctx, newParentID)
-	if err != nil {
-		return nil, err
-	}
-	if isDescendantOf(newParent.Path, node.Path) {
-		return nil, ErrCycleNotAllowed.WithParam("node_id", nodeID)
-	}
-	if node.ParentID == newParent.ID {
-		return node, nil
-	}
-	if nameErr := s.assertNameFree(ctx, newParent.ID, node.Name); nameErr != nil {
-		return nil, nameErr
-	}
-
-	newPath := buildPath(newParent.Path, node.ID)
-	delta := depthOf(newPath) - depthOf(node.Path)
-
-	subtree, err := s.repo.subtree(ctx, subtreePrefix(node.Path))
-	if err != nil {
-		return nil, err
-	}
-	for _, n := range subtree {
-		if depthOf(n.Path)+delta > s.maxDepth {
-			return nil, ErrMaxDepthExceeded.WithParam("max_depth", s.maxDepth)
-		}
-	}
-
 	var moved *OrgNode
-	for i := range subtree {
-		n := subtree[i]
-		rebased, ok := rebasePath(n.Path, node.Path, newPath)
-		if !ok {
-			return nil, ErrInternal.WithCause(ErrInvalidNodeID.WithParam("path", n.Path))
-		}
-		n.Path = rebased
-		n.Depth = depthOf(rebased)
-		if n.ID == node.ID {
-			n.ParentID = newParent.ID
-		}
-		if err := s.repo.Update(ctx, &n); err != nil {
-			return nil, mapWriteError(err)
-		}
-		if n.ID == node.ID {
-			moved = &n
-		}
+	var oldParentID, oldPath string
+	var changed bool
+	err := withRetry(func() error {
+		moved, changed = nil, false
+		return dbkit.WithTenantSession(ctx, s.repo.db, func(tx *gorm.DB) error {
+			node, lockErr := lockLiveNode(tx, nodeID)
+			if lockErr != nil {
+				if errors.Is(lockErr, gorm.ErrRecordNotFound) {
+					return ErrNodeNotFound.WithParam("node_id", nodeID)
+				}
+				return ErrInternal.WithCause(lockErr)
+			}
+			if pathErr := validatePath(node.Path); pathErr != nil {
+				return ErrInternal.WithCause(pathErr)
+			}
+
+			newParent, lockErr := lockLiveNode(tx, newParentID)
+			if lockErr != nil {
+				if errors.Is(lockErr, gorm.ErrRecordNotFound) {
+					return ErrParentNotFound.WithParam("parent_id", newParentID)
+				}
+				return ErrInternal.WithCause(lockErr)
+			}
+			if pathErr := validatePath(newParent.Path); pathErr != nil {
+				return ErrInternal.WithCause(pathErr)
+			}
+
+			if isDescendantOf(newParent.Path, node.Path) {
+				return ErrCycleNotAllowed.WithParam("node_id", nodeID)
+			}
+			if node.ParentID == newParent.ID {
+				moved = node
+				return nil
+			}
+			if nameErr := assertNameFreeTx(tx, newParent.ID, node.Name); nameErr != nil {
+				return nameErr
+			}
+
+			newPath := buildPath(newParent.Path, node.ID)
+			delta := depthOf(newPath) - depthOf(node.Path)
+
+			var subtree []OrgNode
+			if findErr := tx.
+				Where("path LIKE ?", subtreePrefix(node.Path)+"%").
+				Order("depth, id").
+				Find(&subtree).Error; findErr != nil {
+				return ErrInternal.WithCause(findErr)
+			}
+			for _, n := range subtree {
+				if depthOf(n.Path)+delta > s.maxDepth {
+					return ErrMaxDepthExceeded.WithParam("max_depth", s.maxDepth)
+				}
+			}
+
+			oldParentID, oldPath = node.ParentID, node.Path
+			for i := range subtree {
+				n := subtree[i]
+				rebased, ok := rebasePath(n.Path, node.Path, newPath)
+				if !ok {
+					return ErrInternal.WithCause(ErrInvalidNodeID.WithParam("path", n.Path))
+				}
+				rowParentID := n.ParentID
+				if n.ID == node.ID {
+					rowParentID = newParent.ID
+				}
+				res := tx.
+					Where("id = ?", n.ID).
+					Where("deleted_at IS NULL").
+					Select("Path", "Depth", "ParentID").
+					Updates(&OrgNode{Path: rebased, Depth: depthOf(rebased), ParentID: rowParentID})
+				if res.Error != nil {
+					return mapWriteError(res.Error)
+				}
+				if res.RowsAffected == 0 {
+					return ErrInternal.WithCause(fmt.Errorf(
+						"org: descendant %s of moved node %s vanished mid-move", n.ID, nodeID))
+				}
+				n.Path = rebased
+				n.Depth = depthOf(rebased)
+				n.ParentID = rowParentID
+				if n.ID == node.ID {
+					moved = &n
+				}
+			}
+			changed = true
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
 	}
 	if moved == nil {
 		return nil, ErrInternal.WithCause(ErrNodeNotFound.WithParam("node_id", nodeID))
 	}
-	publishEvent(ctx, s.host, EventNodeMoved, NodeMoved{
-		NodeID:      moved.ID,
-		OldParentID: node.ParentID,
-		NewParentID: newParent.ID,
-		OldPath:     node.Path,
-		NewPath:     moved.Path,
-	})
+	if changed {
+		publishEvent(ctx, s.host, EventNodeMoved, NodeMoved{
+			NodeID:      moved.ID,
+			OldParentID: oldParentID,
+			NewParentID: moved.ParentID,
+			OldPath:     oldPath,
+			NewPath:     moved.Path,
+		})
+	}
 	return moved, nil
 }
 
@@ -354,7 +488,15 @@ func (s *TreeService) publishCreated(ctx context.Context, node OrgNode) {
 // Both paths are a single statement inside a single transaction, so a node
 // cannot be orphaned by a child arriving between a "does it have children?"
 // check and the delete itself -- see Repository.deleteLeaf for why that check
-// lives inside the transaction rather than ahead of it.
+// lives inside the transaction rather than ahead of it. Both now ALSO take
+// touchLockByID's own lock on nodeID as their transaction's first statement,
+// before the bulk LIKE-prefix scan runs, closing the cross-operation window
+// a concurrent CreateChild, Move or Restore locking this SAME node could
+// otherwise open even with deleteLeaf/deleteSubtree's own single-statement
+// guarantee intact -- see those methods' own doc comments in repository.go
+// for the exact PostgreSQL mechanism this closes, and withRetry (below) for
+// why the whole call is retried rather than left to surface a transient
+// conflict as a raw failure.
 func (s *TreeService) Delete(ctx context.Context, nodeID string, cascade bool) error {
 	node, err := s.Get(ctx, nodeID)
 	if err != nil {
@@ -373,15 +515,25 @@ func (s *TreeService) Delete(ctx context.Context, nodeID string, cascade bool) e
 	}
 
 	if cascade {
-		removed, deleteErr := s.repo.deleteSubtree(ctx, prefix)
-		if deleteErr != nil {
+		var removed int64
+		retryErr := withRetry(func() error {
+			var deleteErr error
+			removed, deleteErr = s.repo.deleteSubtree(ctx, nodeID, prefix)
 			return deleteErr
+		})
+		if retryErr != nil {
+			return retryErr
 		}
 		s.publishDeleted(ctx, *node, true, removed)
 		return nil
 	}
 
-	matched, err := s.repo.deleteLeaf(ctx, prefix)
+	var matched int64
+	err = withRetry(func() error {
+		var deleteErr error
+		matched, deleteErr = s.repo.deleteLeaf(ctx, nodeID, prefix)
+		return deleteErr
+	})
 	if err != nil {
 		return err
 	}
@@ -500,31 +652,89 @@ func (s *TreeService) publishDeleted(ctx context.Context, node OrgNode, cascade 
 // still-live-ancestor case; restoring the tenant root itself needs no such
 // check, since a root's ParentID is always the empty-string sentinel and it
 // is never itself deletable (ErrRootNotDeletable).
+//
+// # Atomicity against a concurrent cascade delete of the parent
+//
+// The initial findByIDIncludingDeleted read below stays its own, separate,
+// read-only call: existing.ParentID cannot itself go stale in a way that
+// matters, since nothing changes a soft-deleted row's ParentID before it is
+// restored (Move only ever touches live rows). What DOES need to be atomic
+// is the parent-liveness CHECK and the restore WRITE together: the original
+// shape here (a plain s.Get(parentID) read, then a separate
+// s.repo.Restore call) left exactly the window a concurrent cascade
+// TreeService.Delete of the ancestor could land in, committing between the
+// two and leaving the freshly restored node under a now-dead parent -- the
+// corrupt state this method's own "refuses to land a node on a dead parent"
+// section above exists to rule out.
+//
+// The fix runs both steps inside ONE dbkit.WithTenantSession transaction,
+// parent-lock first: lockLiveNode's blind, no-prior-read touch-update on
+// existing.ParentID either blocks until a concurrent cascade delete of that
+// same parent resolves (and then correctly fails to match once it commits),
+// or takes the lock itself, in which case a delete of THAT parent starting
+// afterward blocks behind this transaction instead of racing it -- so the
+// restore write that follows, inside the same transaction, can never
+// observe a parent that was live at lock time but dead by the time the
+// restore itself commits. withRetry wraps the whole thing for the same
+// contention reasons Move's own doc comment gives.
 func (s *TreeService) Restore(ctx context.Context, nodeID string) (*OrgNode, error) {
 	existing, err := s.repo.findByIDIncludingDeleted(ctx, nodeID)
 	if err != nil {
 		return nil, err
 	}
-	if !existing.IsRoot() {
-		if _, parentErr := s.Get(ctx, existing.ParentID); parentErr != nil {
-			if hasCode(parentErr, ErrNodeNotFound.Code) {
-				return nil, ErrRestoreParentNotLive.
-					WithParam("node_id", nodeID).
-					WithParam("parent_id", existing.ParentID)
+
+	err = withRetry(func() error {
+		return dbkit.WithTenantSession(ctx, s.repo.db, func(tx *gorm.DB) error {
+			if !existing.IsRoot() {
+				if _, lockErr := lockLiveNode(tx, existing.ParentID); lockErr != nil {
+					if errors.Is(lockErr, gorm.ErrRecordNotFound) {
+						return ErrRestoreParentNotLive.
+							WithParam("node_id", nodeID).
+							WithParam("parent_id", existing.ParentID)
+					}
+					return ErrInternal.WithCause(lockErr)
+				}
 			}
-			return nil, parentErr
+			return restoreNodeTx(tx, nodeID)
+		})
+	})
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNodeNotFound.WithParam("node_id", nodeID)
 		}
+		return nil, err
 	}
 
-	if restoreErr := s.repo.Restore(ctx, nodeID); restoreErr != nil {
-		return nil, mapFindError(restoreErr, ErrNodeNotFound, nodeID)
-	}
 	node, err := s.Get(ctx, nodeID)
 	if err != nil {
 		return nil, err
 	}
 	s.publishRestored(ctx, *node)
 	return node, nil
+}
+
+// restoreNodeTx clears deleted_at/deleted_by on the node identified by id,
+// inside an already-open transaction, mirroring
+// dbkit.Repository[OrgNode].Restore's own conditional shape (deleted_at IS
+// NOT NULL, so a live or never-existing row reports gorm.ErrRecordNotFound
+// rather than silently no-opping) without opening a second transaction of
+// its own -- TreeService.Restore needs this write in the SAME transaction as
+// its parent-liveness lock, which the promoted, single-call Restore method
+// cannot express.
+func restoreNodeTx(tx *gorm.DB, id string) error {
+	res := tx.
+		Where("id = ?", id).
+		Where("deleted_at IS NOT NULL").
+		Unscoped().
+		Select("DeletedAt", "DeletedBy").
+		Updates(&OrgNode{DeletedAt: nil, DeletedBy: ""})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 // publishRestored announces one node made visible again by Restore.
@@ -591,24 +801,6 @@ func (s *TreeService) create(ctx context.Context, node *OrgNode) error {
 		return mapWriteError(err)
 	}
 	return nil
-}
-
-// findParent resolves a parent node, reporting ErrParentNotFound for an
-// empty id, an unknown id, or an id belonging to another tenant. It also
-// rejects a parent whose stored path is malformed, so a corrupt row never
-// seeds a corrupt child.
-func (s *TreeService) findParent(ctx context.Context, parentID string) (*OrgNode, error) {
-	if parentID == "" {
-		return nil, ErrParentNotFound.WithParam("parent_id", parentID)
-	}
-	parent, err := s.repo.FindByID(ctx, parentID)
-	if err != nil {
-		return nil, mapFindError(err, ErrParentNotFound, parentID)
-	}
-	if err := validatePath(parent.Path); err != nil {
-		return nil, ErrInternal.WithCause(err)
-	}
-	return parent, nil
 }
 
 // assertNameFree reports ErrDuplicateSiblingName when parentID already has a

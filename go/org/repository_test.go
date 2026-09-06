@@ -278,7 +278,7 @@ func TestRepository_deleteSubtree(t *testing.T) {
 	seedNode(t, repo, ctxA, OrgNode{ID: "c", ParentID: "a", Path: "/r/a/c/", Depth: 2, Name: "c"})
 	seedNode(t, repo, ctxB, OrgNode{ID: "b-r", Path: "/r/", Depth: 0, Name: "root"})
 
-	affected, err := repo.deleteSubtree(ctxA, "/r/a/")
+	affected, err := repo.deleteSubtree(ctxA, "a", "/r/a/")
 	if err != nil {
 		t.Fatalf("deleteSubtree: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestRepository_deleteLeaf(t *testing.T) {
 	seedNode(t, repo, ctx, OrgNode{ID: "leaf", ParentID: "r", Path: "/r/leaf/", Depth: 1, Name: "leaf"})
 
 	t.Run("a genuine leaf is removed", func(t *testing.T) {
-		matched, err := repo.deleteLeaf(ctx, "/r/leaf/")
+		matched, err := repo.deleteLeaf(ctx, "leaf", "/r/leaf/")
 		if err != nil {
 			t.Fatalf("deleteLeaf: %v", err)
 		}
@@ -324,7 +324,7 @@ func TestRepository_deleteLeaf(t *testing.T) {
 	})
 
 	t.Run("a node with descendants is reported and rolled back", func(t *testing.T) {
-		matched, err := repo.deleteLeaf(ctx, "/r/a/")
+		matched, err := repo.deleteLeaf(ctx, "a", "/r/a/")
 		if err != nil {
 			t.Fatalf("deleteLeaf: %v", err)
 		}
@@ -340,7 +340,7 @@ func TestRepository_deleteLeaf(t *testing.T) {
 	})
 
 	t.Run("a prefix matching nothing removes nothing and reports zero", func(t *testing.T) {
-		matched, err := repo.deleteLeaf(ctx, "/r/gone/")
+		matched, err := repo.deleteLeaf(ctx, "gone", "/r/gone/")
 		if err != nil {
 			t.Fatalf("deleteLeaf: %v", err)
 		}
