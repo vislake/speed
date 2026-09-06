@@ -72,13 +72,6 @@ type counterEntry struct {
 // sitting, not from Aggregator internals).
 type Aggregator struct {
 	summaries *SummaryRepository
-	// receipts backs IngestBillingGrade's idempotency check -- see
-	// IngestReceipt's own doc comment. It is built over summaries' own
-	// connection (summaries.db), never Dispatcher's, so IngestBillingGrade
-	// can wrap the receipt insert and the summary upsert in one real
-	// database transaction regardless of which connection Dispatcher
-	// itself holds.
-	receipts *IngestReceiptRepository
 
 	bucket     string
 	thresholds OverageThresholds
@@ -96,7 +89,6 @@ type Aggregator struct {
 func NewAggregator(summaries *SummaryRepository) *Aggregator {
 	return &Aggregator{
 		summaries: summaries,
-		receipts:  NewIngestReceiptRepository(summaries.db),
 		bucket:    defaultPeriodBucket,
 	}
 }
