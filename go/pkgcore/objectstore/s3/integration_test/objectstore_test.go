@@ -3,7 +3,7 @@
 package s3_test
 
 // Integration tests for s3.NewObjectStore: each test drives the store
-// through the public ObjectStore interface against a real MinIO, asserting
+// through the public ObjectStore interface against a real RustFS, asserting
 // the exact semantics pkgcore's local store's unit tests pin -- a missing
 // key surfaces as pkgcore.ErrObjectNotFound, an empty object exists and is
 // distinct from a missing one, overwrites replace the object whole,
@@ -12,10 +12,12 @@ package s3_test
 // machinery intact, a mid-upload cancellation leaving no object behind, a
 // cancellation cutting an open reader's stream with the context's error, and
 // a prefix-overlapping pair of keys -- accepted by the service where the
-// local store refuses the clash -- showing that deleting the shorter key can
-// take the longer key's object with it. Everything the tests assert is
-// observable through the ObjectStore interface itself, so no raw client
-// doubles as an oracle here.
+// local store refuses the clash -- pinning what THIS backend does with the
+// overlap (see TestObjectStore_PrefixOverlap_DeletingTheShorterKeyLeavesTheLongerKeyIntact's
+// own doc comment: the answer is backend-specific and the interface
+// promises neither outcome). Everything the tests assert is observable
+// through the ObjectStore interface itself, so no raw client doubles as an
+// oracle here.
 
 import (
 	"bytes"
@@ -52,7 +54,7 @@ func readObject(t *testing.T, store pkgcore.ObjectStore, ctx context.Context, ke
 
 func TestObjectStore_PutGetDelete_RoundTrip(t *testing.T) {
 	ctx := context.Background()
-	store := startMinioObjectStore(t, ctx)
+	store := startRustfsObjectStore(t, ctx)
 
 	// A key that has never been stored reads as missing: the service's own
 	// NoSuchKey must surface as the interface's ErrObjectNotFound, and the
@@ -114,7 +116,7 @@ func TestObjectStore_PutGetDelete_RoundTrip(t *testing.T) {
 
 func TestObjectStore_StreamsAMultiMegabyteObjectIntact(t *testing.T) {
 	ctx := context.Background()
-	store := startMinioObjectStore(t, ctx)
+	store := startRustfsObjectStore(t, ctx)
 
 	// Every unknown-length put goes through minio-go's multipart machinery,
 	// whose memory use is bounded by its part buffer, never by the stream's
@@ -133,7 +135,7 @@ func TestObjectStore_StreamsAMultiMegabyteObjectIntact(t *testing.T) {
 
 func TestObjectStore_CancelledMidUpload_LeavesNoObjectBehind(t *testing.T) {
 	ctx := context.Background()
-	store := startMinioObjectStore(t, ctx)
+	store := startRustfsObjectStore(t, ctx)
 
 	// minio-go streams the source on the calling goroutine, so a reader that
 	// parks after its first bytes makes the cancellation deterministic: the
@@ -181,7 +183,7 @@ func TestObjectStore_ReaderFailsItsReadsOnceTheContextIsCancelled(t *testing.T) 
 	// request began: a Read issued once that context is done fails up front
 	// with the context's error, without touching the service again.
 	ctx := context.Background()
-	store := startMinioObjectStore(t, ctx)
+	store := startRustfsObjectStore(t, ctx)
 
 	const key = "exports/streaming/cancel-this-read.bin"
 	payload := strings.Repeat("0123456789abcdef", 256) // 4 KiB, far from exhausted by the reads below
@@ -208,12 +210,18 @@ func TestObjectStore_ReaderFailsItsReadsOnceTheContextIsCancelled(t *testing.T) 
 	// error, exactly as the local store's reader does. minio-go checks the
 	// request context against its already-buffered HTTP response bytes, so a
 	// Read() issued immediately after cancel() can still hand back bytes it
-	// had buffered before the cancellation took effect -- observed at a
-	// 40-50% rate under Docker-backed MinIO. Poll a bounded number of reads
-	// instead of asserting on the very first one, so the test pins "the
-	// cancellation is eventually observed" rather than "observed on read
-	// number one". The payload is sized well beyond what a buffered chunk
-	// could plausibly hold, so a total read count that reaches the object's
+	// had buffered before the cancellation took effect -- a real,
+	// nonzero-rate race under any Docker-backed S3-compatible server (a
+	// 40-50% rate was observed under Docker-backed MinIO; re-verified as
+	// still real, though not re-measured for its exact rate, against this
+	// exact RustFS pin -- 20/20 runs passed the polling loop below without
+	// needing more than a few attempts, but the raw single-read race the
+	// polling exists to route around was not independently instrumented).
+	// Poll a bounded number of reads instead of asserting on the very first
+	// one, so the test pins "the cancellation is eventually observed" rather
+	// than "observed on read number one". The payload is sized well beyond
+	// what a buffered chunk could plausibly hold, so a total read count that
+	// reaches the object's
 	// remaining bytes without ever seeing the cancellation error is itself
 	// a failure worth reporting, not an infinite spin.
 	cancel()
@@ -242,18 +250,26 @@ func TestObjectStore_ReaderFailsItsReadsOnceTheContextIsCancelled(t *testing.T) 
 	}
 }
 
-func TestObjectStore_PrefixOverlap_DeletingTheShorterKeyTakesTheLongerKeyWithIt(t *testing.T) {
+func TestObjectStore_PrefixOverlap_DeletingTheShorterKeyLeavesTheLongerKeyIntact(t *testing.T) {
 	// The interface's keyspace-tree rule (no key may be a proper prefix of
 	// another stored key) is caller discipline: the local store refuses the
 	// put that would create the clash, while the service accepts both keys.
 	// This test pins what the service does with them, so nobody mistakes the
-	// local store's refusal for pedantry: on this MinIO release, deleting the
-	// shorter key removes the longer key's object as well, and the interface
-	// deliberately makes no promise that a service will not. A caller that
-	// lets a key and an extension of it exist at the same time hands its data
-	// to whatever each backend happens to do with the overlap.
+	// local store's refusal for pedantry -- and the answer is backend-
+	// specific, which is exactly why the interface makes no promise either
+	// way. Under the MinIO release this repository ran before the RustFS
+	// swap, deleting the shorter key took the longer key's object with it
+	// (a real, previously pinned finding, kept in this comment's history
+	// rather than silently dropped). Under this RustFS pin, the two keys are
+	// independent: deleting the shorter key leaves the longer key's object
+	// completely intact, verified directly against this exact image before
+	// this test's assertion below was written to match it. A caller that
+	// lets a key and an extension of it exist at the same time hands its
+	// data to whatever each backend happens to do with the overlap -- MinIO
+	// cascades, RustFS does not, and the interface's contract asks for
+	// neither.
 	ctx := context.Background()
-	store := startMinioObjectStore(t, ctx)
+	store := startRustfsObjectStore(t, ctx)
 
 	const (
 		parentKey = "exports/orders/2024-09-02"
@@ -275,21 +291,15 @@ func TestObjectStore_PrefixOverlap_DeletingTheShorterKeyTakesTheLongerKeyWithIt(
 		t.Errorf("GetObject(%q) = %q, want the child object's own bytes", childKey, content)
 	}
 
-	// Deleting the shorter key takes the longer key's object with it -- the
-	// hazard the keyspace-tree rule exists to keep callers out of. Pinned
-	// against this MinIO release rather than asserted as universal: a
-	// different compatible service may behave differently, which is exactly
-	// why the contract leaves the overlap outside it.
+	// Deleting the shorter key leaves the longer key's object untouched on
+	// this RustFS pin -- the reverse of the MinIO-specific finding this test
+	// used to pin, and equally legal under the interface's contract, which
+	// promises the overlap's outcome to nobody.
 	if err := store.DeleteObject(ctx, parentKey); err != nil {
 		t.Fatalf("DeleteObject(%q) error = %v, want nil", parentKey, err)
 	}
-	reader, err := store.GetObject(ctx, childKey)
-	if !errors.Is(err, pkgcore.ErrObjectNotFound) {
-		t.Fatalf("GetObject() of the longer key after deleting its prefix error = %v, want ErrObjectNotFound", err)
-	}
-	if reader != nil {
-		reader.Close()
-		t.Error("GetObject() returned a reader alongside ErrObjectNotFound, want nil")
+	if content := readObject(t, store, ctx, childKey); string(content) != `{"id": 1042, "state": "paid"}` {
+		t.Errorf("GetObject(%q) after deleting its prefix = %q, want the child object's own bytes untouched", childKey, content)
 	}
 }
 
@@ -318,17 +328,17 @@ func (r *abortingReader) Read(p []byte) (int, error) {
 // TestObjectStore_ConformsToObjectStoreContract proves s3.NewObjectStore
 // satisfies the shared contract objectstoretest.AssertConforms checks --
 // the same suite go/pkgcore's own objectstore_conformance_test.go runs
-// against pkgcore.NewLocalObjectStore -- against a real MinIO, so drift
+// against pkgcore.NewLocalObjectStore -- against a real RustFS, so drift
 // between the two ObjectStore implementations under the deployment-
 // composition retrofit's N registered implementations per seam is caught
 // here once instead of pairwise. Every subtest AssertConforms runs shares
-// the one bucket startMinioObjectStore provisions for this test (one
+// the one bucket startRustfsObjectStore provisions for this test (one
 // container per test file); this is safe because AssertConforms derives a
 // distinct key per subtest from the subtest name (see its own conformKey),
 // so concurrent subtests never collide on an object key.
 func TestObjectStore_ConformsToObjectStoreContract(t *testing.T) {
 	ctx := context.Background()
-	store := startMinioObjectStore(t, ctx)
+	store := startRustfsObjectStore(t, ctx)
 
 	objectstoretest.AssertConforms(t, func() pkgcore.ObjectStore {
 		return store

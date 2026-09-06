@@ -31,7 +31,7 @@ const conformObjectSize = 100 * 1024
 // contract documented on pkgcore.ObjectStore. Each subtest calls factory to
 // get its own store handle and operates on a key it derives from the
 // subtest name (see conformKey), so subtests sharing a long-lived backing
-// store (as the S3/MinIO integration leg does, one container per test file)
+// store (as the S3/RustFS integration leg does, one container per test file)
 // never collide on object keys.
 //
 // What AssertConforms checks, in order: GetObject on a key that was never
@@ -137,7 +137,7 @@ func AssertConforms(t *testing.T, factory func() pkgcore.ObjectStore) {
 }
 
 // conformKey derives a key from t's name and suffix, so subtests sharing a
-// long-lived backing store (the S3/MinIO integration leg starts one
+// long-lived backing store (the S3/RustFS integration leg starts one
 // container per test file, not per case) never collide on object keys. The
 // derived key stays within a single "/"-separated segment, which every
 // pkgcore.ObjectStore implementation's key grammar accepts (see
