@@ -154,10 +154,18 @@ func ExampleKVStore() {
 	_, found, err = kv.Get(ctx, "session:u-2")
 	fmt.Printf("missing found=%t err=%v\n", found, err)
 
-	// IncrByFloat and CompareAndSwap are the only atomic primitives on the
-	// interface: build read-modify-write cycles from them, never from Get+Set.
+	// IncrByFloat, IncrByFloatWithTTL and CompareAndSwap are the only atomic
+	// primitives on the interface: build read-modify-write cycles from them,
+	// never from Get+Set.
 	used, err := kv.IncrByFloat(ctx, "quota:acme:credits", 2.5)
 	fmt.Printf("incr %v err=%v\n", used, err)
+
+	// IncrByFloatWithTTL is IncrByFloat plus an expiry attached atomically on
+	// the same call that creates the key -- the primitive a rate-limiting
+	// window counter needs so a fresh key's ttl can never be lost to a
+	// concurrent caller's increment landing between a separate Get and Set.
+	windowCount, err := kv.IncrByFloatWithTTL(ctx, "ratelimit:acme:window-1", 1, time.Minute)
+	fmt.Printf("incr-with-ttl %v err=%v\n", windowCount, err)
 
 	// Against an empty old value, CompareAndSwap is set-if-absent.
 	acquired, err := kv.CompareAndSwap(ctx, "lock:acme:import", nil, []byte("held"))
@@ -167,6 +175,7 @@ func ExampleKVStore() {
 	// get "token" found=true err=<nil>
 	// missing found=false err=<nil>
 	// incr 2.5 err=<nil>
+	// incr-with-ttl 1 err=<nil>
 	// cas true err=<nil>
 }
 
