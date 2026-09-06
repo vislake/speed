@@ -2,6 +2,7 @@ package metering
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -240,6 +241,54 @@ func upsertSummaryInto(tenantCtx context.Context, summaries *SummaryRepository, 
 	return summaries.Update(tenantCtx, existing)
 }
 
+// upsertSummaryTx is upsertSummaryInto's transaction-scoped twin: the
+// identical find-or-create/update sequence, composed directly against an
+// already-open transaction handle (tx) rather than through
+// dbkit.Repository[T] -- because foldIntoSummaryOnce's own
+// dbkit.WithTenantSession call already opened that transaction. Routing
+// through dbkit.Repository[T] here (as an earlier version of this function
+// did, via NewSummaryRepository(tx)) would nest a second WithTenantSession
+// transaction inside the first one; dbkit refuses that outright
+// (dbkit.ErrNestedTenantSession) precisely because a nested call's own nil
+// return does not mean the real, outermost transaction has genuinely
+// committed -- see that error's own doc comment in tenant_session.go.
+// Composing raw GORM calls against the tx a WithTenantSession callback
+// already received is the documented shape for "several statements, one
+// transaction" (go/dbkit/AGENTS.md's "Repository[T] growing a
+// transactional batch-write seam" entry; go/org's tree.go and
+// membership.go use the identical idiom against their own repositories).
+//
+// It writes no explicit "tenant_id = ?" clause -- unlike
+// dbkit.Repository[T]'s own methods, which are dbkit's own defense-in-depth
+// and exempt from this codebase's hand-written-tenant-filter discipline as
+// the infrastructure that discipline is built on. tx still carries the
+// tenant-scoping plugin every dbkit.Open connection installs (Aggregator
+// never builds its own *gorm.DB), and UsageSummary implements
+// dbkit.TenantScoped, so the plugin injects the filter on First/Save and
+// forces the column on Create exactly as it would through Repository[T] --
+// the same reliance go/org's tree.go and membership.go place on it inside
+// their own dbkit.WithTenantSession callbacks.
+func upsertSummaryTx(tx *gorm.DB, feature string, start, end time.Time, delta float64) error {
+	id := summaryID(feature, start)
+	var existing UsageSummary
+	err := tx.Where("id = ?", id).First(&existing).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return tx.Create(&UsageSummary{
+			ID:          id,
+			Feature:     feature,
+			PeriodStart: start,
+			PeriodEnd:   end,
+			Quantity:    delta,
+		}).Error
+	case err != nil:
+		return err
+	}
+	existing.Quantity += delta
+	existing.PeriodEnd = end
+	return tx.Where("id = ?", id).Select("*").Save(&existing).Error
+}
+
 // IngestBillingGrade is Ingest's billing-grade-only sibling: Dispatcher
 // calls this instead of Ingest so that redelivering the same event --
 // exactly what happens when a crash or a transient failure leaves an
@@ -293,26 +342,33 @@ func (a *Aggregator) IngestBillingGrade(ctx context.Context, event UsageEvent) e
 // foldIntoSummaryOnce atomically records event's idempotency receipt and
 // folds its Quantity into the UsageSummary row, in one real database
 // transaction opened on a.summaries' own connection (never Dispatcher's --
-// see IngestReceipt's doc comment for why that independence matters).
+// see IngestReceipt's doc comment for why that independence matters). The
+// transaction is dbkit.WithTenantSession itself, not a bare
+// db.Transaction: both writes below run as raw GORM calls directly against
+// the tx WithTenantSession hands its callback (see upsertSummaryTx's own
+// doc comment for why -- routing either write back through
+// dbkit.Repository[T] here would nest a second WithTenantSession
+// transaction inside this one, which dbkit refuses outright).
 // Reports (true, nil) when event.IdempotencyKey already has a receipt from
 // an earlier, successful call, in which case the transaction commits
 // having changed nothing.
 //
-// Callers must hold a.mu: dbkit.Repository[T]'s own transactions are not a
-// substitute for it here any more than they are for upsertSummary's plain
-// path -- see the Aggregator type's own doc comment for why summary writes
-// need a single serializing point at all.
+// Callers must hold a.mu: a single WithTenantSession transaction is not a
+// substitute for it here any more than dbkit.Repository[T]'s own
+// transactions are for upsertSummary's plain path -- see the Aggregator
+// type's own doc comment for why summary writes need a single serializing
+// point at all.
 func (a *Aggregator) foldIntoSummaryOnce(tenantCtx context.Context, event UsageEvent, start, end time.Time) (alreadyIngested bool, err error) {
-	txErr := a.summaries.db.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
+	txErr := dbkit.WithTenantSession(tenantCtx, a.summaries.db, func(tx *gorm.DB) error {
 		receipt := &IngestReceipt{ID: event.IdempotencyKey, TenantID: event.TenantID}
-		if createErr := NewIngestReceiptRepository(tx).Create(tenantCtx, receipt); createErr != nil {
+		if createErr := tx.Create(receipt).Error; createErr != nil {
 			if isUniqueViolation(createErr) {
 				alreadyIngested = true
 				return nil
 			}
 			return createErr
 		}
-		return upsertSummaryInto(tenantCtx, NewSummaryRepository(tx), event.Feature, start, end, event.Quantity)
+		return upsertSummaryTx(tx, event.Feature, start, end, event.Quantity)
 	})
 	if txErr != nil {
 		return false, txErr

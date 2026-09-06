@@ -41,14 +41,16 @@ const tableIngestReceipts = "metering_ingest_receipts"
 //
 // IngestReceipt closes it: IngestBillingGrade inserts one receipt row
 // keyed by (TenantID, IdempotencyKey) in the SAME database transaction as
-// the UsageSummary upsert it guards (GORM nests the inner
-// dbkit.Repository[T] transaction as a SAVEPOINT of the outer one, since
-// both run against the same connection) -- so either both commit (the
-// event was genuinely new) or neither does (the whole attempt failed and
-// left nothing behind to redo). A second IngestBillingGrade call for the
-// same event hits this row's own primary key as a unique-constraint
-// violation, recognizes the event as already-ingested, and applies
-// nothing: a safe no-op rather than a second application.
+// the UsageSummary upsert it guards -- Aggregator.foldIntoSummaryOnce's own
+// one dbkit.WithTenantSession call, both writes composed as raw GORM calls
+// against the tx it hands its callback (see upsertSummaryTx's doc comment
+// for why a second, nested dbkit.Repository[T] transaction is not how this
+// is done) -- so either both commit (the event was genuinely new) or
+// neither does (the whole attempt failed and left nothing behind to redo).
+// A second IngestBillingGrade call for the same event hits this row's own
+// primary key as a unique-constraint violation, recognizes the event as
+// already-ingested, and applies nothing: a safe no-op rather than a second
+// application.
 //
 // # Data domain
 //
