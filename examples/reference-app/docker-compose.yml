@@ -1,0 +1,105 @@
+# Local demo compose file for examples/reference-app -- the containerized
+# equivalent of `go run ./cmd/server` with nothing else running: one `app`
+# service, SQLite on a named volume so data survives a container restart,
+# standalone deployment mode, zero external dependencies. This is the
+# DEFAULT profile; bring it up with:
+#
+#   docker compose up --build
+#
+# from THIS directory (examples/reference-app/) -- compose resolves
+# `build.context` below relative to this file, which is why it reads
+# `../..` (the repository root the Dockerfile's own header explains it
+# needs) rather than `.`.
+#
+# docker-compose.distributed.yml is an OVERRIDE, not a separate demo: it
+# adds Redis, MinIO and a mailpit SMTP catcher alongside this same `app`
+# service and layers extra environment onto it, composing real
+# implementations for the EventBus/KVStore/ObjectStore/Mailer seams while
+# staying on the identical SQLite file this base file already wires (this
+# app's own cmd/server/server.go hard-codes the SQLite dialect -- see that
+# file's own comments on the deviation -- so no compose profile here
+# attempts a second dialect). Run both layered:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.distributed.yml up --build
+#
+# Two files rather than one file's `profiles:` key because the seams above
+# are driven by environment variables on this SAME `app` service (never a
+# second app service) -- compose profiles gate whole SERVICES on and off,
+# they do not let one service's own environment differ by profile, so an
+# override file (compose's own multi-file merge: matching keys in a later
+# file win, environment maps merge key-by-key) is the idiomatic shape for
+# "same service, different composition" rather than "different services".
+#
+# Real deployments must never lift SPEED_CONFIG_KEY/SPEED_ORG_INDEX_KEY/
+# SPEED_NOTIFICATION_INDEX_KEY from here or from .env.example -- see the
+# comment block on those three keys below.
+
+services:
+  app:
+    build:
+      context: ../..
+      dockerfile: examples/reference-app/Dockerfile
+    image: speed-reference-app:local
+    ports:
+      - "8080:8080"
+    volumes:
+      # Named volume, not a bind mount: this demo's whole point is "does
+      # the SQLite file survive a container restart", which a named volume
+      # answers regardless of the host filesystem, and it is what
+      # server.go's own comments mean by "a persistent one when the host
+      # injects its own" -- see server.go's dbkit.Open call site doc
+      # comment on the throwaway-vs-persistent ObjectStore split for the
+      # identical distinction applied to a different seam.
+      - reference-app-db:/data
+    environment:
+      # Mirrors .env.example's own documented variables and defaults --
+      # see that file for the full explanation of each; only the values
+      # this compose file's containerized shape actually needs to differ
+      # from a bare `go run ./cmd/server` are set explicitly below.
+      PORT: "8080"
+      SPEED_DEPLOYMENT_MODE: standalone
+      # A container filesystem is not the current working directory
+      # `go run` would use -- /data is the volume mounted above, so the
+      # SQLite file genuinely persists across `docker compose restart`
+      # and `docker compose down` (without `-v`) rather than living in the
+      # container's throwaway writable layer.
+      SPEED_DB_PATH: /data/reference-app.db
+      # Gates the boot-time demo-user seed (demo_users.go) exactly as
+      # .env.example documents; this is a local-demo passphrase, not a
+      # security secret -- README.md's own "Try it" section already
+      # publishes an equivalent example passphrase in its curl walkthrough.
+      # Set to empty (or delete this line) to skip seeding and use the
+      # X-Demo-User header path instead.
+      SPEED_DEMO_USERS_PASSWORD: local-demo-password
+      #
+      # SPEED_CONFIG_KEY / SPEED_ORG_INDEX_KEY / SPEED_NOTIFICATION_INDEX_KEY
+      # are DELIBERATELY UNSET here: cmd/server/server.go's own configFromEnv
+      # falls back to devConfigKey/devOrgIndexKey/devNotificationIndexKey --
+      # fixed, non-secret, already-committed-and-documented byte sequences
+      # meant for exactly this (zero-setup local development and demos),
+      # never for anything a real deployment serves. An illustrative
+      # example of what a REAL key looks like (generated with `openssl rand
+      # -hex 32`, used nowhere by this repository and not reused by
+      # anything that reads this file):
+      #   7619d61c0a55448ac7c2f9dc631fd66dada34fee697d580a6ff191208de8f776
+      # Generate your own the same way for anything beyond a disposable
+      # local demo, and set it here instead of leaving these three unset:
+      #   SPEED_CONFIG_KEY: <64 hex chars>
+      #   SPEED_ORG_INDEX_KEY: <64 hex chars, DIFFERENT from the above>
+      #   SPEED_NOTIFICATION_INDEX_KEY: <64 hex chars, DIFFERENT from both>
+      # Never commit real values for any of the three to this file.
+    healthcheck:
+      # Inherited from the image's own HEALTHCHECK (Dockerfile) -- restated
+      # here only so `docker compose ps`'s STATUS column and
+      # `depends_on: condition: service_healthy` (docker-compose.distributed.yml's
+      # minio-bucket-init step uses that condition against a DIFFERENT
+      # service) have an explicit, readable definition to point at without
+      # requiring a reader to open the Dockerfile too.
+      test: ["CMD", "/app/reference-app-server", "healthcheck"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+
+volumes:
+  reference-app-db:

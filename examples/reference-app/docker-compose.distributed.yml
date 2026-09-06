@@ -1,0 +1,149 @@
+# Override file, layered on top of docker-compose.yml -- NOT a standalone
+# compose file on its own (it declares no `app.build`/`app.image`, relying
+# on the base file for those). Run both together:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.distributed.yml up --build
+#
+# from examples/reference-app/. This demonstrates the distributed-mode-
+# shaped seam composition cmd/server/server.go's own env-var wiring
+# supports (see that file's redisAddrEnv/s3*Env/smtp*Env/smsGatewayURLEnv
+# doc comments, and README.md's "Real Redis inside a standalone topology"
+# section for the general pattern this extends to all four seams at once):
+#
+#   - Redis (redis:7-alpine)   backs BOTH the "eventbus" seam (Redis
+#     Streams) AND the "kv" seam (one client, two seams -- server.go's own
+#     SPEED_REDIS_ADDR doc comment explains why one address suffices).
+#   - MinIO (minio/minio, the same release pin
+#     examples/reference-app/integration_test/distributed_mode_test.go
+#     already uses) backs the "objectstore" seam (S3-compatible).
+#   - mailpit (axllent/mailpit, the same image and version pin that same
+#     test file uses -- no arm64 image exists for mailhog, mailpit's
+#     closest alternative, which is why this repository standardized on
+#     mailpit for every Docker-backed SMTP-catcher need) backs the
+#     "mailer" seam over real SMTP.
+#
+# SPEED_DEPLOYMENT_MODE flips to "distributed" below -- genuinely provable
+# now that all four registered seams (eventbus/kv/objectstore/mailer)
+# compose MultiReplicaSafe implementations, exactly the property
+# examples/reference-app/integration_test/distributed_mode_test.go proves
+# with two real replicas. This compose file runs only ONE `app` container,
+# so it demonstrates the SEAM composition passing Kernel.Bootstrap's
+# capability validation under the distributed mode, not multi-replica
+# convergence itself -- that stays integration_test/distributed_mode_test.go's
+# job, run via `go test -tags=integration ./...` (Docker required), not this
+# compose file's.
+#
+# The app's own database stays SQLite on the SAME named volume
+# docker-compose.yml already declares -- cmd/server/server.go hard-codes
+# the SQLite dialect (see that file's own comments on the deviation), and
+# distributed_mode_test.go's package doc comment records exactly why a
+# single shared SQLite file is the correct topology given that, not a
+# shortcut this compose file is taking on its own. Do not attempt a second
+# dialect here.
+
+services:
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  minio:
+    image: minio/minio:RELEASE.2024-01-16T16-07-38Z
+    command: server /data --console-address ":9001"
+    environment:
+      # Local-demo-only credentials -- MinIO requires SOME root
+      # credentials to start; these are the well-known MinIO quick-start
+      # defaults, never a real secret, and this compose file runs no
+      # network-exposed MinIO instance beyond the operator's own machine
+      # unless the operator chooses to publish these ports further.
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000" # S3 API -- optional, for poking at the bucket by hand
+      - "9001:9001" # Web console -- optional, same reason
+    volumes:
+      - reference-app-minio:/data
+    healthcheck:
+      # The minio/minio image bundles `mc` itself, and `mc ready local`
+      # resolves "local" against the container's OWN S3 API using its own
+      # MINIO_ROOT_USER/MINIO_ROOT_PASSWORD from the environment above --
+      # verified directly against this exact image pin before relying on
+      # it here (no curl or wget exist in this image to fall back to).
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-shot: creates the bucket this app's SPEED_S3_BUCKET names, then
+  # exits. minio-go (the client objectstore/s3.NewObjectStore builds on)
+  # never creates its own bucket -- see go/pkgcore/objectstore/s3's own
+  # Config doc comment -- so something must, exactly once, before `app`
+  # first calls Kernel.Bootstrap.
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    # entrypoint AND a single-element command list, deliberately -- Compose
+    # tokenizes a plain STRING command by whitespace into an exec-form
+    # array itself (never wrapping it in a shell), so a bare multi-line
+    # `command: >- mc alias set ... && mc mb ...` would hand /bin/sh -c
+    # only its first word ("mc") as the script and strand the rest as
+    # ignored positional parameters -- empirically confirmed against this
+    # exact shape before settling on the one below. Nesting the whole
+    # script as the SOLE element of a YAML list is what stops Compose from
+    # re-tokenizing it, so /bin/sh -c receives the complete two-command
+    # script as one argument, exactly as intended.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/reference-app
+    restart: "no"
+
+  mailpit:
+    image: axllent/mailpit:v1.31
+    ports:
+      - "1025:1025" # SMTP -- SPEED_SMTP_HOST/SPEED_SMTP_PORT point here
+      - "8025:8025" # Web UI -- open this to read captured mail
+    healthcheck:
+      # mailpit's own built-in healthcheck subcommand (verified directly
+      # against this exact image pin) -- no curl/wget needed.
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  app:
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_healthy
+    environment:
+      SPEED_DEPLOYMENT_MODE: distributed
+      SPEED_REDIS_ADDR: redis:6379
+      SPEED_S3_ENDPOINT: minio:9000
+      SPEED_S3_BUCKET: reference-app
+      SPEED_S3_ACCESS_KEY: minioadmin
+      SPEED_S3_SECRET_KEY: minioadmin
+      SPEED_S3_USE_SSL: "false"
+      SPEED_SMTP_HOST: mailpit
+      SPEED_SMTP_PORT: "1025"
+      # Deliberately unreachable -- the distributed deployment mode
+      # requires authn's "SMS sender" seam to be WIRED (a non-empty URL),
+      # never that it is reachable, and this demo never drives the
+      # phone-login flow that would dial it (authn.NewHTTPSMSSender's own
+      # construction dials nothing either). This is the identical
+      # convention examples/reference-app/integration_test/distributed_mode_test.go
+      # already uses for the same reason, spelled out in that file's own
+      # comment on this exact value.
+      SPEED_SMS_GATEWAY_URL: http://127.0.0.1:1/sms
+
+volumes:
+  reference-app-minio:
