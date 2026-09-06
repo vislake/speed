@@ -650,6 +650,89 @@ func (g orgFeatureGate) IsEnabled(ctx context.Context, key string) (bool, error)
 // compile-time check that orgFeatureGate satisfies org.FeatureGate.
 var _ org.FeatureGate = orgFeatureGate{}
 
+// readTenantDurationConfig is the shared core sharingConfigReader and
+// complianceConfigReader below both call into: it resolves key's
+// tenant-then-system-then-schema-default effective value through cfg
+// (go/config's own three-tier resolution, Service.Get's own doc comment)
+// and reports ok = false when it resolved at the schema default -- i.e.
+// neither a tenant nor a system row exists at all -- exactly the
+// "tenant has configured none" signal both go/sharing's TenantConfigReader
+// and go/compliance's ExportDeliveryExpiryReader document. Using Get
+// (rather than the type-erasing config.GetTyped) is what makes that
+// distinction visible at all: GetTyped throws away Value.Scope, so it
+// cannot tell a genuinely unset key from one that happens to resolve to
+// its own declared Default.
+func readTenantDurationConfig(ctx context.Context, cfg *config.Service, key string, tenant pkgcore.TenantID) (time.Duration, bool, error) {
+	tenantCtx := pkgcore.WithTenant(ctx, tenant)
+	v, err := cfg.Get(tenantCtx, key)
+	if err != nil {
+		return 0, false, err
+	}
+	if v.Scope == "" {
+		// Resolved to the schema default: no explicit tenant or system row
+		// exists, so report "unconfigured" and let the caller's own
+		// fallback (identical to that same schema Default) apply, exactly
+		// as if no reader were wired at all.
+		return 0, false, nil
+	}
+	d, ok := v.Data.(time.Duration)
+	if !ok {
+		return 0, false, fmt.Errorf("reference-app: config key %q did not resolve to a duration value", key)
+	}
+	return d, true, nil
+}
+
+// sharingConfigReader adapts a *config.Service that is filled in AFTER
+// this app's sharing.Module is constructed into sharing.TenantConfigReader,
+// read lazily -- the identical ordering problem and the identical fix
+// orgFeatureGate's own doc comment explains at length: configModule.Attach
+// (which produces the real *config.Service) runs strictly after
+// Kernel.Bootstrap returns, and sharing.Module must already be part of
+// that same Bootstrap call, so sharing.WithTenantConfigReader has to
+// receive something today that becomes live only later. Holding a
+// pointer to the configService variable, and dereferencing it only when
+// ShareDefaultExpiry is actually called (during a real request, long
+// after buildServer has finished wiring), sidesteps the ordering problem
+// exactly like orgFeatureGate does for org.FeatureGate.
+type sharingConfigReader struct{ service **config.Service }
+
+// ShareDefaultExpiry implements sharing.TenantConfigReader.
+func (r sharingConfigReader) ShareDefaultExpiry(ctx context.Context, tenant pkgcore.TenantID) (time.Duration, bool, error) {
+	svc := *r.service
+	if svc == nil {
+		return 0, false, fmt.Errorf("reference-app: the config service is not attached yet")
+	}
+	return readTenantDurationConfig(ctx, svc, sharing.ConfigDefaultExpiry, tenant)
+}
+
+// compile-time check that sharingConfigReader satisfies
+// sharing.TenantConfigReader.
+var _ sharing.TenantConfigReader = sharingConfigReader{}
+
+// complianceConfigReader is compliance's own copy of sharingConfigReader,
+// adapting the same lazily-filled *config.Service into
+// compliance.ExportDeliveryExpiryReader. It is a separate type, not a
+// shared one, because the two seams are structurally different Go
+// interfaces (ShareDefaultExpiry vs ExportDeliveryExpiry, per each
+// module's own declared method name) even though their bodies both do
+// nothing but call readTenantDurationConfig with a different config
+// key -- forcing one type to implement both method names would be a
+// coincidental unification neither module's own design asked for.
+type complianceConfigReader struct{ service **config.Service }
+
+// ExportDeliveryExpiry implements compliance.ExportDeliveryExpiryReader.
+func (r complianceConfigReader) ExportDeliveryExpiry(ctx context.Context, tenant pkgcore.TenantID) (time.Duration, bool, error) {
+	svc := *r.service
+	if svc == nil {
+		return 0, false, fmt.Errorf("reference-app: the config service is not attached yet")
+	}
+	return readTenantDurationConfig(ctx, svc, compliance.ConfigExportDeliveryExpiry, tenant)
+}
+
+// compile-time check that complianceConfigReader satisfies
+// compliance.ExportDeliveryExpiryReader.
+var _ compliance.ExportDeliveryExpiryReader = complianceConfigReader{}
+
 // serverConfig is main.go's own bootstrap wiring configuration -- the
 // values a process must know before anything else can start (deployment
 // mode, port, database path, the config master key, the optional Redis
@@ -1480,8 +1563,16 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// itself (resolver.go's own doc comment explains why), so this
 	// composition is entirely this app's own, the same way every other
 	// no-import-edge seam in this file (orgFeatureGate,
-	// demoOrgSubjectResolver, ...) is wired.
-	sharingModule := sharing.NewModule(db, sharing.WithResourceResolver(&storageSharingResolver{svc: storageModule.ObjectService()}))
+	// demoOrgSubjectResolver, ...) is wired. WithTenantConfigReader wires
+	// sharingConfigReader (defined above, alongside orgFeatureGate), so a
+	// tenant's own sharing.default_expiry override -- once config.Service
+	// exists, after Attach below -- actually governs Service.Create's
+	// resolved expiry instead of always falling back to
+	// defaultShareExpiry.
+	sharingModule := sharing.NewModule(db,
+		sharing.WithResourceResolver(&storageSharingResolver{svc: storageModule.ObjectService()}),
+		sharing.WithTenantConfigReader(sharingConfigReader{service: &configService}),
+	)
 
 	// integrationModule is the reference app's mandatory first consumer of
 	// go/integration's round-2 outbound-webhook surface (go/integration/
@@ -1626,10 +1717,17 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// module, so this is where compliance.ExportService.Export gains its
 	// first genuine delivery path (a real, single-view go/sharing link)
 	// rather than refusing every call with ErrSharingRequired.
+	// WithExportConfigReader wires complianceConfigReader (defined above,
+	// alongside orgFeatureGate and sharingConfigReader), so a tenant's own
+	// compliance.export_delivery_expiry override -- once config.Service
+	// exists, after Attach below -- actually governs
+	// ExportService.Export's minted delivery-link expiry instead of always
+	// falling back to defaultExportDeliveryExpiry.
 	complianceAuditRepo := audit.NewRepository(db)
 	complianceModule := compliance.NewModule(complianceAuditRepo,
 		compliance.WithQueue(standaloneQueue),
 		compliance.WithSharing(sharingModule.Service()),
+		compliance.WithExportConfigReader(complianceConfigReader{service: &configService}),
 	)
 
 	// adminModule is the reference app's mandatory first consumer of
