@@ -9,20 +9,32 @@
  * caller without notes:read with 403 rbac.permission_denied, so the
  * query is the real permission fetch -- the router-level RouteGuard
  * behind real fetches that the auth-ui census defers to this shell.
- * The three statuses map one-to-one onto the query's own states: no
- * answer yet is 'pending' (the guard's spinner), an error is 'denied'
- * (the surface fails closed -- a refused read means no surface), and a
- * served list is 'allowed'. A refetch failure with data still on hand
- * stays 'allowed' (the stale list keeps rendering); only a query with
- * no data can be pending or denied. The create form lives inside the
- * allowed branch, and a refused create (a caller without notes:write
- * answers the same 403) stays on the page with its code text -- the
- * write gate is probed by the mutation, never pre-empted client-side.
+ * The three statuses map onto the query's own states, checked in an
+ * order that fails closed: an error is 'denied' first, unconditionally
+ * -- a refused read means no surface, whether or not an earlier read
+ * on the very same query already left rows in the cache. tanstack
+ * query v5 never clears a query's `data` on a failed refetch (the last
+ * successful answer keeps rendering while the retry runs), so checking
+ * `data` ahead of `isError` -- this view's original shape -- left a
+ * permission revoked mid-session, or a different account signing into
+ * a tenant an earlier read already cached, showing the earlier read's
+ * stale rows instead of failing closed (reference-app-web.md P1-1). A
+ * served list is 'allowed' next, and no answer at all yet is 'pending'.
+ * The create form lives inside the allowed branch, and a refused
+ * create (a caller without notes:write answers the same 403) stays on
+ * the page with its code text -- the write gate is probed by the
+ * mutation, never pre-empted client-side.
  *
  * The list query key is tenant-namespaced per the frontend standard
  * (['tenant', tenantId, ...] over the generated bare key) so a tenant
- * switch can never read the previous tenant's cached notes; the create
- * invalidates exactly that namespaced key.
+ * switch can never read the previous tenant's cached notes -- user-
+ * menu.tsx evicts the departing tenant's ['tenant', tenantId] queries
+ * on every switch, and main.tsx's evictTenantQueriesOnSessionEnd evicts
+ * the same prefix again the moment the session ends (a sign-out or a
+ * session death), so a different account signing into the same tenant
+ * afterward starts from an empty cache rather than inheriting rows an
+ * earlier session's reads left behind. The create invalidates exactly
+ * the namespaced key.
  *
  * Created-at times render through Intl in the surface language (never
  * hand-formatted); an unparseable value renders as an empty cell
@@ -129,15 +141,21 @@ export function NotesView(): ReactElement {
   const createForm = useForm<NoteDraft>({ defaultValues: { text: '' } })
   const [submitErrorCode, setSubmitErrorCode] = useState<string | null>(null)
 
-  // The gate: no answer yet is pending, an error is denied (fail
-  // closed -- the read refusal is the permission answer), a served
-  // list is allowed. A refetch error with data on hand leaves the
-  // status 'allowed', so the stale list keeps rendering.
+  // The gate: an error is denied first and unconditionally -- fail
+  // closed even when the query still holds an earlier read's data,
+  // since tanstack query v5 never clears `data` on a failed refetch
+  // (see the file header). Checking `data` before `isError` (this
+  // view's original shape) was the fail-open bug reference-app-web.md
+  // P1-1 named: a permission revoked between two reads, or a different
+  // account signing into a tenant an earlier account's read already
+  // cached, refetches into a 403 whose stale `data` kept the gate
+  // 'allowed' -- so a served list is checked only once no error
+  // stands, and no answer at all yet is pending.
   const gateStatus: RouteGuardStatus =
-    notesQuery.data !== undefined
-      ? 'allowed'
-      : notesQuery.isError
-        ? 'denied'
+    notesQuery.isError
+      ? 'denied'
+      : notesQuery.data !== undefined
+        ? 'allowed'
         : 'pending'
 
   /** Creates the note, then turns the form over and refetches the list

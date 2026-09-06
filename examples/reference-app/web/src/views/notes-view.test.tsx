@@ -42,7 +42,11 @@ import zhCN from '../locales/zh-CN.json' with { type: 'json' }
 import enUS from '../locales/en-US.json' with { type: 'json' }
 import { demoServer } from '../test-utils/demo-server.js'
 import type { RealClientRig } from '../test-utils/real-client.js'
-import { makeRealClientRig, signInWithPassword } from '../test-utils/real-client.js'
+import {
+  errorResponse,
+  makeRealClientRig,
+  signInWithPassword,
+} from '../test-utils/real-client.js'
 import type { RenderWithProvidersOptions } from '../test-utils/render.js'
 import { renderWithAppServices } from '../test-utils/render.js'
 import { NotesView } from './notes-view.js'
@@ -220,6 +224,48 @@ describe('NotesView', () => {
     // The refusal came back before any refetch: still the one read.
     expect(noteCreates(rig)).toBe(1)
     expect(notesGets(rig)).toBe(1)
+  })
+
+  it('fails closed on a refetch 403 even though the previous read is still cached (reference-app-web.md P1-1)', async () => {
+    // The read succeeds once (the row lands in the query's cache),
+    // then the same query is refetched and refused -- tanstack query
+    // v5 keeps the prior successful `data` through a failed refetch,
+    // so the gate must fail closed on the error alone rather than on
+    // whether `data` happens to be defined, or the stale row would
+    // keep rendering past a permission revoked mid-session (or a
+    // different account signing into this tenant, the app-journey
+    // regression covering that shape end to end).
+    let denyRead = false
+    const server = demoServer({ initialNotes: [NOTE_ONE] })
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'GET' && call.path === '/api/v1/notes' && denyRead) {
+        return errorResponse(403, 'rbac.permission_denied')
+      }
+      return server(call)
+    })
+    await signInWithPassword(rig)
+    const view = renderNotes(rig)
+
+    // The first read serves the row and opens the gate.
+    expect(await view.findByText(NOTE_ONE_TEXT)).toBeInTheDocument()
+    expect(
+      view.queryByText(uiKitZhCN.emptyState.noPermission.title),
+    ).not.toBeInTheDocument()
+
+    // Access is revoked and the same query is forced to refetch --
+    // never a fresh mount, so whatever the query already cached is
+    // exactly what a real revoked-mid-session read would still hold.
+    denyRead = true
+    await act(async () => {
+      await view.queryClient.refetchQueries()
+    })
+
+    // The gate converges to denied and the stale row is gone -- never
+    // left on screen because `data` was still defined.
+    expect(
+      await view.findByText(uiKitZhCN.emptyState.noPermission.title),
+    ).toBeInTheDocument()
+    expect(view.queryByText(NOTE_ONE_TEXT)).not.toBeInTheDocument()
   })
 
   it('a refused read denies the gate: the no-permission empty state, no form', async () => {
