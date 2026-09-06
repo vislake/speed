@@ -17,7 +17,6 @@ require (
 	github.com/minio/minio-go/v7 v7.3.0
 	github.com/oapi-codegen/runtime v1.7.0
 	github.com/testcontainers/testcontainers-go v0.44.0
-	github.com/testcontainers/testcontainers-go/modules/minio v0.44.0
 	github.com/vislake/speed/go/dbkit v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/jobs v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000

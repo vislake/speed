@@ -99,7 +99,6 @@ require (
 	github.com/minio/minio-go/v7 v7.3.0
 	github.com/redis/go-redis/v9 v9.14.1
 	github.com/testcontainers/testcontainers-go v0.44.0
-	github.com/testcontainers/testcontainers-go/modules/minio v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/redis v0.44.0
 	github.com/vislake/speed/go/admin v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/ai-gateway v0.0.0-00010101000000-000000000000
