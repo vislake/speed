@@ -205,9 +205,17 @@ type Service struct {
 	// settleCredit settles -- see the package doc comment's "Credit
 	// accounting" section. Nil is legal: Simulate then performs no credit
 	// accounting at all (no PreDeduct call, never a refusal on balance),
-	// and settleCredit never calls Confirm/Refund -- mirroring how a
-	// Gateway with no wired Entitlements enforces no quota rather than
-	// panicking.
+	// and settleCredit never calls Confirm/Refund -- the same
+	// optional-seam convention go/ai-gateway's own Entitlements option
+	// follows for a host that leaves it unwired (it then enforces no
+	// quota rather than panicking). cmd/server wires BOTH seams for
+	// real -- a real *billing.CreditService here and the
+	// WithEntitlements closure over billingModule.Entitlements() there
+	// (server.go's own construction call at NewService, judged against
+	// the demo subscriptions demo_entitlements.go seeds at boot) -- so
+	// the nil states these field comments describe belong to other
+	// hosts and to this package's standalone unit tests, never to this
+	// app's booted wiring.
 	credits *billing.CreditService
 
 	// store durably persists the job-id-to-CreditTransaction-idempotency-key
@@ -225,9 +233,15 @@ type Service struct {
 	queue jobs.Queue
 
 	// bus is where NotifyOnCompletion publishes EventSimulationCompleted.
-	// Nil is legal: NotifyOnCompletion is then simply a no-op, mirroring
-	// how a Gateway with no wired Entitlements enforces no quota rather
-	// than panicking.
+	// Nil is legal: NotifyOnCompletion is then simply a no-op -- the
+	// same nil-legal convention the credits field above documents, where
+	// an unwired optional dependency enforces nothing rather than
+	// panicking (go/ai-gateway's own Entitlements option is the same
+	// shape for a host that leaves it unwired). cmd/server's booted
+	// Service passes a real one (reg.EventBus(), server.go's own
+	// construction call at NewService), so a nil bus, like a nil
+	// credits, describes other hosts and standalone unit tests, never
+	// this app.
 	bus pkgcore.EventBus
 
 	// mu guards recipients and notified, both keyed by the image job's id
