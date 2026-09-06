@@ -28,7 +28,7 @@ go run ./cmd/server
 
 This starts a server on `:8080` (override with `PORT`), backed by a SQLite file `reference-app.db` in the current directory (override with `SPEED_DB_PATH`), running in the standalone deployment mode (`SPEED_DEPLOYMENT_MODE=standalone`, the default) with every infrastructure seam resolved from the standalone preset to its in-process implementation — zero external dependencies. Nothing needs to be running to try it.
 
-`SPEED_DEPLOYMENT_MODE=distributed` is a different story: the deployment mode only *constrains* which implementations are permissible (see below), and this app never composes the implementations a distributed deployment would need (PostgreSQL, a Redis-backed KVStore, SMTP, S3) — so a distributed boot fails inside the Kernel's own composition validation with pkgcore's `ErrCapabilityUnsatisfied`, naming the seam, the implementation, the missing capability and the mode. That is the design working, not an app-level refusal: capability validation, not a hard-coded `if mode == "standalone"` check, is what decides. `cmd/server/server_test.go` pins both failure shapes.
+`SPEED_DEPLOYMENT_MODE=distributed` is a different story, though less of one than it used to be: the deployment mode only *constrains* which implementations are permissible (see below), and this app's env-driven wiring (`SPEED_REDIS_ADDR`/`SPEED_S3_*`/`SPEED_SMTP_*`/`SPEED_SMS_GATEWAY_URL`, all documented in `.env.example`) can compose a real, `MultiReplicaSafe` implementation for every registered seam except the database itself — `cmd/server/server.go` still hard-codes the SQLite dialect, a deliberate deviation that dialect covers on its own — so a distributed boot with all four sets of variables configured genuinely passes Bootstrap's capability validation and runs (proven both by `examples/reference-app/integration_test/distributed_mode_test.go`, which runs two such replicas against real Redis/MinIO/mailpit, and by `examples/reference-app/docker-compose.distributed.yml`'s own one-container demo, below). Configuring only *some* of them still fails exactly as before: capability validation, not a hard-coded `if mode == "standalone"` check, decides which seam trips first, and `cmd/server/server_test.go` pins several such partial-composition failure shapes.
 
 ### Real Redis inside a standalone topology
 
@@ -41,7 +41,35 @@ SPEED_REDIS_ADDR=127.0.0.1:6379 go run ./cmd/server
 
 `buildServer` constructs the go-redis client itself — the app is the assembly host `eventbus/redis`'s `NewEventBus` names as the client's owner, so cleanup closes the bus and the client in turn — and injects the bus via `WithEventBus(redisBus, MultiReplicaSafe|SurvivesRestart)`, the capabilities the Redis implementation genuinely carries (see `go/pkgcore/eventbus/redis/eventbus.go`). Standalone mode requires no capabilities, so the mixed composition passes Bootstrap's validation and runs; every event the app publishes — the notes audit-trail `audit.event.recorded` included — is appended to a real Redis stream before it reaches the in-process subscribers, so any other consumer group (a second replica, an observer process) reads the same events. The example's integration tier proves that crossing end to end: `TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses` in `integration_test/` boots this very binary against a real testcontainers Redis, creates a note over real HTTP, and sees the audit event arrive in a consumer group owned by the test process, then reads the SQLite row back through `go/dbkit/audit`'s own `Repository`.
 
-Injecting one seam composes only that one: `SPEED_DEPLOYMENT_MODE=distributed SPEED_REDIS_ADDR=127.0.0.1:6379` still fails Bootstrap's validation on the KV seam, which remains the in-process preset implementation a distributed deployment cannot use — the failure shape `TestBuildServer_DistributedDeploymentMode_InjectedEventBus_StillFailsOnKV` pins.
+Injecting some seams still isn't injecting all of them: `SPEED_REDIS_ADDR` alone composes both the "eventbus" and the "kv" seam (one shared `*redis.Client` backs both, see `buildServer`'s own kernel-options doc comment), so `SPEED_DEPLOYMENT_MODE=distributed SPEED_REDIS_ADDR=127.0.0.1:6379` with nothing else set now clears those two seams and fails Bootstrap's validation on the next one instead — "mailer", still on its in-process console default — the failure shape `TestBuildServer_DistributedDeploymentMode_RedisConfigured_StillFailsOnMailer` pins. Compose every seam's variables together (`SPEED_REDIS_ADDR` + `SPEED_S3_*` + `SPEED_SMTP_*` + `SPEED_SMS_GATEWAY_URL`) and the distributed boot succeeds outright — see "Running it in Docker" below for a one-command demo of exactly that.
+
+### Running it in Docker
+
+`Dockerfile` is a multi-stage build (`golang:1.26.8-bookworm` → `gcr.io/distroless/static-debian12:nonroot`, `CGO_ENABLED=0` since `go/dbkit`'s SQLite driver is pure Go) producing a ~47MB, non-root image. Build context is the **repository root**, not this directory — see the Dockerfile's own header for why:
+
+```
+docker build -f examples/reference-app/Dockerfile -t speed-reference-app .
+```
+
+`docker-compose.yml` is the zero-extra-services profile — one `app` service, SQLite on a named volume, standalone mode, nothing else running:
+
+```
+cd examples/reference-app
+docker compose up --build
+curl localhost:8080/healthz   # ok
+```
+
+Data survives a container restart (`docker compose restart app`), since the SQLite file lives on the named volume rather than the container's writable layer.
+
+`docker-compose.distributed.yml` is an override — not a second demo — that layers Redis, MinIO and a mailpit SMTP catcher onto the same `app` service and flips `SPEED_DEPLOYMENT_MODE` to `distributed`, genuinely passing Bootstrap's capability validation now that every registered seam composes a real, `MultiReplicaSafe` implementation (see the previous two sections):
+
+```
+docker compose -f docker-compose.yml -f docker-compose.distributed.yml up --build
+curl localhost:8080/healthz        # ok, deployment_mode=distributed in the boot log
+open http://localhost:8025         # mailpit's web UI
+```
+
+The database stays SQLite on the same volume either way — this app never attempts a second dialect (see "hard-codes the SQLite dialect" above).
 
 ### Tenants: an access token, not a `Host` header
 
