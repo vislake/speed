@@ -15,16 +15,42 @@ import (
 	"strings"
 )
 
-// signContent builds Alipay's RSA2 canonical string-to-sign
-// (https://opendocs.alipay.com/common/02kdnc, its sign/verify sections): every
+// signContent builds Alipay's canonical string-to-sign for VERIFYING an
+// inbound async notification
+// (https://opendocs.alipay.com/common/02kdnc, its verify section): every
 // param whose key is neither "sign" nor "sign_type", and whose value is
 // non-empty, sorted ascending by key (byte-wise, which for an
 // all-ASCII-parameter-name API is the same as Alipay's own dictionary
 // order), joined as "key1=value1&key2=value2&...&keyN=valueN" using each
 // value's raw (already URL-decoded) form -- never the URL-encoded wire
-// form. This exact string is what both signParams (outgoing requests) and
-// VerifySignature (inbound notifications) sign or verify, per Alipay's own
-// documented algorithm.
+// form.
+//
+// This canonical form is deliberately NOT the one used for signing this
+// package's own outgoing requests: Alipay's documented parameter sets for
+// the two directions are ASYMMETRIC, and conflating them (as an earlier
+// revision of this package did, using one function for both) signed every
+// outgoing request over a string missing a parameter Alipay's own server
+// includes when it verifies -- a guaranteed signature mismatch on the
+// first real call. The verified asymmetry, from the doc cited above and
+// Alipay's own reference SDKs (the official
+// alipay-sdk-java-all's AlipaySignature: request signing goes through
+// getSignContent, which removes nothing but empty values, while inbound
+// verification goes through getSignCheckContentV1, which removes both
+// "sign" and "sign_type"):
+//
+//   - OUTGOING REQUEST signing (requestSignContent below): the canonical
+//     string is every non-empty request parameter EXCEPT "sign" itself --
+//     which does not exist yet at signing time, it is added only after the
+//     signature is computed. "sign_type" PARTICIPATES: the string a
+//     request is signed over includes "sign_type=RSA2", and Alipay's
+//     gateway includes it too when it verifies the request.
+//   - INBOUND NOTIFICATION verification (this function): the canonical
+//     string excludes "sign" AND "sign_type" -- Alipay's own server signs
+//     its notifications over that reduced set, and this package verifies
+//     the identical reduced set.
+//
+// verifySignature with both names present therefore covers a parameter set
+// a real Alipay notification carries, and only that.
 func signContent(params map[string]string) string {
 	keys := make([]string, 0, len(params))
 	for k := range params {
@@ -50,12 +76,52 @@ func signContent(params map[string]string) string {
 	return b.String()
 }
 
-// signParams RSA2-signs params (Alipay's own canonical form, signContent
-// above) with priv and returns the base64-encoded signature -- the value
-// Alipay's own "sign" request parameter carries, and what CreateCharge
-// attaches to every outgoing alipay.trade.* call.
+// requestSignContent builds Alipay's canonical string-to-sign for an
+// OUTGOING request -- the asymmetric counterpart of signContent, per the
+// verified parameter-participation rules signContent's own doc comment
+// states (https://opendocs.alipay.com/common/02kdnc's own
+// implement-signing-yourself section and Alipay's own reference SDKs):
+// every non-empty request parameter
+// except "sign" itself, which is only added to the parameter set AFTER the
+// signature is computed. "sign_type" is deliberately NOT excluded -- it is
+// a request parameter like any other and participates in the string,
+// exactly as Alipay's gateway includes it when it verifies the request. An
+// implementation that signs requests with the notify-side canonical form
+// (sign_type excluded) produces a signature Alipay's server rejects.
+func requestSignContent(params map[string]string) string {
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		if k == "sign" {
+			// Not present at signing time in this package's own flow (call()
+			// adds it after signing); excluded defensively all the same.
+			continue
+		}
+		if params[k] == "" {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteByte('&')
+		}
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.WriteString(params[k])
+	}
+	return b.String()
+}
+
+// signParams RSA2-signs params (Alipay's own canonical form for an
+// outgoing REQUEST -- requestSignContent above, which includes sign_type)
+// with priv and returns the base64-encoded signature -- the value Alipay's
+// own "sign" request parameter carries, and what CreateCharge attaches to
+// every outgoing alipay.trade.* call.
 func signParams(params map[string]string, priv *rsa.PrivateKey) (string, error) {
-	digest := sha256.Sum256([]byte(signContent(params)))
+	digest := sha256.Sum256([]byte(requestSignContent(params)))
 	sig, err := rsa.SignPKCS1v15(rand.Reader, priv, crypto.SHA256, digest[:])
 	if err != nil {
 		return "", fmt.Errorf("billing/gateway/alipay: sign: %w", err)

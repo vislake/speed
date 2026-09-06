@@ -85,6 +85,15 @@ func (g *Gateway) CreateCharge(ctx context.Context, req billing.ChargeRequest) (
 	if err := requireCNY(req.Amount.Currency); err != nil {
 		return billing.ChargeHandle{}, err
 	}
+	if req.Amount.Cents <= 0 {
+		// Alipay's total_amount must be a strictly positive decimal yuan
+		// amount; a zero or negative request is refused at the boundary
+		// before formatAmount ever renders it -- pre-fix, -2950 cents
+		// reached Alipay as the garbage string "-29.-50" and 0 as "0.00",
+		// both of which Alipay's own gateway rejects anyway, after the
+		// merchant had already signed and sent them.
+		return billing.ChargeHandle{}, billing.ErrInvalidAmount.WithParam("amount", req.Amount.Cents)
+	}
 
 	outTradeNo := outTradeNoFor(req)
 	passback, err := encodePassback(req)
@@ -166,8 +175,26 @@ func outTradeNoFor(req billing.ChargeRequest) string {
 // for this product, so no currency conversion is performed here -- CreateCharge's
 // own requireCNY call already refused any non-CNY req.Amount before this is
 // reached.
+//
+// The CreateCharge boundary refuses every non-positive amount before this
+// is ever reached (see that method's own check), so formatAmount's inputs
+// here are always positive. A negative input -- reachable only by a
+// hypothetical future direct call, never by this package's own flow -- is
+// rendered SIGN-CORRECTLY ("-29.50") rather than as the garbage "-29.-50"
+// an earlier revision produced (its "%02d" of the negative remainder -50
+// fabricated a literal "-50" after the decimal point) or with the sign
+// dropped; no code path in this package can ever send such a string to
+// Alipay.
 func formatAmount(cents int64) string {
-	return strconv.FormatInt(cents/100, 10) + "." + fmt.Sprintf("%02d", cents%100)
+	negative := cents < 0
+	if negative {
+		cents = -cents
+	}
+	s := strconv.FormatInt(cents/100, 10) + "." + fmt.Sprintf("%02d", cents%100)
+	if negative {
+		return "-" + s
+	}
+	return s
 }
 
 // requireCNY refuses currency at the CreateCharge boundary unless it names
@@ -227,6 +254,11 @@ func (g *Gateway) QueryStatus(ctx context.Context, ref billing.ChannelReference)
 			SubMsg      string `json:"sub_msg"`
 			TradeStatus string `json:"trade_status"`
 			TotalAmount string `json:"total_amount"`
+			// RefundFee is the response's own refund marker -- the refunded
+			// amount (a decimal yuan string), per the alipay.trade.query response
+			// documentation: present on a paid trade that has been refunded
+			// and absent (or "0.00") on a trade nothing refunded.
+			RefundFee string `json:"refund_fee"`
 		} `json:"alipay_trade_query_response"`
 		Sign string `json:"sign"`
 	}
@@ -254,12 +286,21 @@ func (g *Gateway) QueryStatus(ctx context.Context, ref billing.ChannelReference)
 	// ever be created: every ref this method can be asked about genuinely is
 	// a CNY order, by construction, never an assumption papering over a
 	// silently-accepted foreign currency.
-	return tradeStatusToChannelStatus(resp.Response.TradeStatus), billing.Money{Cents: amount, Currency: "CNY"}, nil
+	return tradeStatusToChannelStatus(resp.Response.TradeStatus, resp.Response.RefundFee), billing.Money{Cents: amount, Currency: "CNY"}, nil
 }
 
 // parseAmount parses Alipay's decimal yuan string ("29.00") back into
-// integer cents.
+// integer cents. A negative string is refused outright -- amounts Alipay
+// actually sends (a query's total_amount, a notify's total_amount and
+// refund_fee) are never negative, so a leading minus is a protocol anomaly
+// this parser refuses rather than guessing at: the pre-fix parser returned
+// 50 for "-0.50" (the sign silently dropped, turning a negative value into
+// a small positive one) and -2850 for "-29.50" (the sign's arithmetic
+// corrupted).
 func parseAmount(s string) (int64, error) {
+	if strings.HasPrefix(s, "-") {
+		return 0, fmt.Errorf("billing/gateway/alipay: parse amount %q: negative amount", s)
+	}
 	parts := strings.SplitN(s, ".", 2)
 	yuan, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil {
@@ -283,13 +324,45 @@ func parseAmount(s string) (int64, error) {
 	return yuan*100 + cents, nil
 }
 
+// carriesRefund reports whether a decimal-yuan refund-fee string marks a
+// genuine refund: absent or "0.00" means no refund happened, and a fee
+// that does not parse as a positive amount is treated as no refund rather
+// than guessed at (the refunds this predicate cares about are always
+// positive sums). This is notifyCarriesRefund's refund_fee leg, shared with
+// the poll path so the two payload shapes' refund detection can never
+// drift apart.
+func carriesRefund(refundFee string) bool {
+	if refundFee == "" {
+		return false
+	}
+	cents, err := parseAmount(refundFee)
+	return err == nil && cents > 0
+}
+
 // tradeStatusToChannelStatus maps Alipay's own trade_status vocabulary
 // (https://opendocs.alipay.com/open/194/103296) onto billing.ChannelStatus.
-func tradeStatusToChannelStatus(status string) billing.ChannelStatus {
+// refundFee is the payload's own "refund_fee" parameter (the refunded
+// amount, a decimal yuan string) -- an empty string when the payload
+// carries no such field. TRADE_CLOSED covers two distinct fates, exactly
+// as the notify path's normalizeNotify already distinguishes (P1-4): an
+// unpaid trade closed by timeout, and a PAID trade closed by a FULL refund
+// -- the alipay.trade.query response's own trade_status definition says so
+// (closed by timeout unpaid, or fully refunded after payment), and the refund marker
+// (refund_fee) is what tells them apart, the identical detection the
+// notify payload uses. A closed-with-refund poll answer is a refund of the
+// earlier succeeded charge -- ChannelStatusRefunded, never the
+// ChannelStatusFailed a timed-out unpaid order gets. A PARTIAL refund
+// leaves the trade at TRADE_SUCCESS (only a full refund moves the order
+// off it), so a TRADE_SUCCESS answer stays Succeeded regardless of any
+// refund_fee the response carries.
+func tradeStatusToChannelStatus(status, refundFee string) billing.ChannelStatus {
 	switch status {
 	case "TRADE_SUCCESS", "TRADE_FINISHED":
 		return billing.ChannelStatusSucceeded
 	case "TRADE_CLOSED":
+		if carriesRefund(refundFee) {
+			return billing.ChannelStatusRefunded
+		}
 		return billing.ChannelStatusFailed
 	default: // "WAIT_BUYER_PAY"
 		return billing.ChannelStatusPending
@@ -300,6 +373,14 @@ func tradeStatusToChannelStatus(status string) billing.ChannelStatus {
 // posts it as application/x-www-form-urlencoded, verifies the response
 // envelope's own signature against the configured Alipay public key, and
 // JSON-decodes the whole envelope into out.
+//
+// The request's "timestamp" common parameter is rendered in ALIPAY'S OWN
+// TIME ZONE, never the host's: Alipay's gateway interprets the parameter
+// (and its gmt_* fields generally, despite the misleading prefix -- see
+// response.go's own alipayLocation note) as China Standard Time, UTC+8.
+// An earlier revision formatted time.Now() in the host's local zone, so a
+// host outside UTC+8 signed and sent a timestamp whose wall clock was off
+// by the host's whole UTC offset -- a skew Alipay's gateway refuses.
 func (g *Gateway) call(ctx context.Context, method, bizContent, passback, responseField string, out any) error {
 	params := map[string]string{
 		"app_id":      g.cfg.AppID,
@@ -307,7 +388,7 @@ func (g *Gateway) call(ctx context.Context, method, bizContent, passback, respon
 		"format":      "JSON",
 		"charset":     "utf-8",
 		"sign_type":   "RSA2",
-		"timestamp":   time.Now().Format(alipayTimeFormat),
+		"timestamp":   time.Now().In(alipayLocation()).Format(alipayTimeFormat),
 		"version":     "1.0",
 		"biz_content": bizContent,
 		"notify_url":  g.cfg.NotifyURL,

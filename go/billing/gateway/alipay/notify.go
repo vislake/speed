@@ -51,12 +51,12 @@ func notifyCarriesRefund(params map[string]string) bool {
 	if params["gmt_refund"] != "" {
 		return true
 	}
-	fee := params["refund_fee"]
-	if fee == "" {
-		return false
-	}
-	cents, err := parseAmount(fee)
-	return err == nil && cents > 0
+	// The refund_fee leg is the SHARED detection with the poll path
+	// (gateway.go's carriesRefund): an async notification and an
+	// alipay.trade.query response mark a refund with the identical
+	// decimal-yuan refund_fee parameter, so the two payload shapes must
+	// never drift apart on what counts as a refund.
+	return carriesRefund(params["refund_fee"])
 }
 
 // normalizeNotify maps a verified Alipay notify parameter set onto a
