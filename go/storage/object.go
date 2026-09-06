@@ -449,15 +449,19 @@ func (s *ObjectService) Upload(ctx context.Context, objectID string, contentLeng
 // The advance is a conditional commit (ObjectRepository.finalizeUpload):
 // only a row still uploading with its window still open may be finalized.
 // When the write commits zero rows -- the object vanished mid-pipeline,
-// its window closed, or another completion won the transition -- Complete
-// answers with the code that matches what a re-read finds
-// (storage.object_not_found, storage.content_missing,
-// storage.object_not_uploading) and runs no side effect: a finalize that
-// did not commit announces nothing, enqueues nothing and logs nothing.
-// One cleanup runs behind a lost finalize: when the sanitizer rewrote the
-// stored bytes (step 10) and the sweep reclaimed the row in the same moment,
-// the rewrite can be the only bytes left under the key, and they are taken
-// back (best effort) so a finalize that did not commit never orphans them.
+// its window closed, another completion won the transition, or a delete of
+// that completed row has begun -- Complete answers with the code that
+// matches what a re-read finds (storage.object_not_found,
+// storage.content_missing, storage.object_not_uploading) and runs no side
+// effect: a finalize that did not commit announces nothing, enqueues
+// nothing and logs nothing. One cleanup runs behind a lost finalize: when
+// the sanitizer rewrote the stored bytes (step 10) and the row the rewrite
+// describes is gone or doomed -- reclaimed, its window closed, or
+// mid-deletion -- the rewrite can be the only bytes left under the key, and
+// they are taken back (best effort) so a finalize that did not commit never
+// orphans them. A row another completion won is the exception: its own
+// writeback is the same sanitized content that completed row was finalized
+// from, so nothing is removed (the detail is at the cleanup site below).
 //
 // Side effects follow the finalize, and neither can fail the call: an
 // image object's thumbnail derivation is enqueued on the module's queue
@@ -565,8 +569,10 @@ func (s *ObjectService) Complete(ctx context.Context, objectID string) (Object, 
 		// between the entry checks and this write the row vanished (the
 		// expiry sweep reclaimed it), its upload window closed (the
 		// deadline is enforced at the write, not just at the entry check),
-		// or a concurrent completion won the transition first. Re-read to
-		// tell the three apart and answer with what the caller will find.
+		// a concurrent completion on another replica won the transition
+		// first, or a delete of that completed row has already begun.
+		// Re-read to tell the shapes apart and answer with what the caller
+		// will find.
 		// Reporting success for a finalize that did not commit would be a
 		// silent false success -- and so would running the log line, the
 		// thumbnail task or the completion event below it, which is why
@@ -601,6 +607,39 @@ func (s *ObjectService) Complete(ctx context.Context, objectID string) (Object, 
 				}
 			}
 			return Object{}, ErrContentMissing.WithParam("id", objectID)
+		}
+		// The row is neither uploading nor gone, and two shapes remain. They
+		// answer the same -- storage.object_not_uploading, what the caller
+		// will find on a retry -- but only one takes the writeback back:
+		//
+		//   - ObjectStateCompleted: a concurrent completion on another
+		//     replica won the transition first. Its own writeback is this
+		//     pipeline's too -- sanitize is deterministic over the same
+		//     generation of bytes, and a pipeline that read the winner's
+		//     already-sanitized bytes would have found nothing to strip and
+		//     written nothing -- so the bytes under the key are exactly what
+		//     the completed row's finalized metadata describes. Removing
+		//     them would empty a live completed object, the anomaly reads
+		//     report as store_error; nothing is taken back here.
+		//   - ObjectStateDeleting: a delete of that completed row has begun,
+		//     in the protocol's order -- mark, byte removal, row removal.
+		//     The byte removal has run (or is running), and a writeback that
+		//     landed after it is the only bytes left under the key: the
+		//     delete's convergence removes the row but never touches the key
+		//     again, so the rewrite would outlive the row it describes. Take
+		//     the writeback back (best effort -- in the other interleaving
+		//     the delete already removed it, and the store's delete is
+		//     idempotent) so the convergence does not orphan it. The shape
+		//     is unreachable within one process -- the per-object lock
+		//     serializes completions and no actor flips an uploading row to
+		//     deleting -- and reachable only across the replicas of a
+		//     distributed deployment, which share the store but not the
+		//     lock map.
+		if current.State == ObjectStateDeleting && changed {
+			if cleanupErr := st.DeleteObject(ctx, row.Key); cleanupErr != nil {
+				observability.FromContext(ctx).Warn("sanitized writeback removed after the row's deletion began",
+					"object_id", objectID, "error", cleanupErr)
+			}
 		}
 		return Object{}, ErrObjectNotUploading.WithParam("id", objectID)
 	}

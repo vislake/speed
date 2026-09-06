@@ -1086,6 +1086,129 @@ func TestObjectService_Complete_TakesBackItsWritebackWhenTheReclaimWins(t *testi
 	}
 }
 
+// TestObjectService_Complete_TakesBackItsWritebackWhenItsRowIsDeleting pins
+// the deleting shape of the lost finalize -- the third branch's residue: a
+// concurrent completion on another replica won the transition first, and a
+// delete of that completed row has begun -- its mark and its byte removal
+// have run, its row removal has not -- while this pipeline is between its
+// read of the bytes and its own sanitizer rewrite. The rewrite then recreates
+// bytes the delete already removed, and the finalize commits zero rows
+// against the deleting row; the completion answers storage.object_not_uploading
+// (what the caller will find) and removes the rewrite, so the delete's
+// convergence -- which removes the row but never touches the key again --
+// does not leave the writeback orphaned under it. (On the pre-fix code this
+// test failed with the key holding the rewritten bytes after the row was
+// gone. The shape is unreachable within one process -- the per-object lock
+// serializes every completion, and no actor flips an uploading row to
+// deleting -- so it stands in for the cross-replica race deterministically,
+// the same way the mid-run race tests above stand in for the sweep.)
+func TestObjectService_Complete_TakesBackItsWritebackWhenItsRowIsDeleting(t *testing.T) {
+	svc, store, queue, bus := newTestService(t, nil)
+	ctx := serviceCtx("tenant-a")
+	row := createAndUpload(t, svc, ctx, jpegWithExif(t), "image/jpeg")
+
+	// The hook replays the other side against the pipeline's schedule: right
+	// after the pipeline read the bytes, the winning completion commits and
+	// the delete begins -- mark first, then the byte removal, exactly as the
+	// delete protocol orders them -- so the sanitizer's rewrite of the
+	// stripped bytes is what outlives the emptied key. The delete's row
+	// removal is deferred to the end of the test, keeping the row present for
+	// the completion's re-read.
+	hooked := &hookedStore{fakeStore: store}
+	hooked.onGet = func() {
+		current, err := svc.objects.FindByID(ctx, row.ID)
+		if err != nil {
+			t.Errorf("FindByID(%s): %v", row.ID, err)
+			return
+		}
+		current.State = ObjectStateCompleted
+		if _, err := svc.objects.finalizeUpload(ctx, current, time.Now()); err != nil {
+			t.Errorf("finalizeUpload(%s): %v", row.ID, err)
+			return
+		}
+		if _, err := svc.objects.markDeleting(ctx, row.ID); err != nil {
+			t.Errorf("markDeleting(%s): %v", row.ID, err)
+			return
+		}
+		if err := hooked.DeleteObject(ctx, row.Key); err != nil {
+			t.Errorf("DeleteObject(%s): %v", row.Key, err)
+		}
+	}
+	svc.host = &fakeHost{store: hooked, bus: bus}
+
+	_, err := svc.Complete(ctx, row.ID)
+	assertCode(t, err, ErrObjectNotUploading.Code)
+	assertParam(t, err, "id", row.ID)
+	if len(bus.events) != 0 {
+		t.Errorf("events = %d, want none -- a finalize that did not commit announces nothing", len(bus.events))
+	}
+	if len(queue.tasks) != 0 {
+		t.Errorf("tasks = %d, want none -- a finalize that did not commit enqueues nothing", len(queue.tasks))
+	}
+	// The delete's convergence removes the row; nothing ever removes the key
+	// again, so the writeback must already be gone with it.
+	if _, err := svc.objects.deleteObjectRows(ctx, row.ID); err != nil {
+		t.Errorf("deleteObjectRows(%s): %v", row.ID, err)
+	}
+	if _, ok := store.bytes(row.Key); ok {
+		t.Error("the writeback survived the delete of its row -- the key holds bytes only the pipeline wrote")
+	}
+}
+
+// TestObjectService_Complete_KeepsTheWritebackWhenAnotherCompletionWon pins
+// the completed shape of the lost finalize: another replica's completion won
+// the transition first, so this finalize commits zero rows and the re-read
+// finds the row completed. The writeback this pipeline wrote is not an
+// orphan to reclaim -- the winning completion's own writeback is the same
+// deterministic sanitization of the same generation of bytes, and the
+// completed row's metadata describes exactly them -- so removing the key
+// here would empty a live completed object, the anomaly OpenContent reports
+// as store_error. The completion answers storage.object_not_uploading and
+// leaves the bytes alone; the object's own later deletion removes them with
+// everything else.
+func TestObjectService_Complete_KeepsTheWritebackWhenAnotherCompletionWon(t *testing.T) {
+	svc, store, queue, bus := newTestService(t, nil)
+	ctx := serviceCtx("tenant-a")
+	row := createAndUpload(t, svc, ctx, jpegWithExif(t), "image/jpeg")
+
+	// The hook commits the winning completion right after this pipeline read
+	// the bytes, so this pipeline's own rewrite lands on a row that is
+	// already completed when its finalize write runs.
+	hooked := &hookedStore{fakeStore: store}
+	hooked.onGet = func() {
+		current, err := svc.objects.FindByID(ctx, row.ID)
+		if err != nil {
+			t.Errorf("FindByID(%s): %v", row.ID, err)
+			return
+		}
+		current.State = ObjectStateCompleted
+		if _, err := svc.objects.finalizeUpload(ctx, current, time.Now()); err != nil {
+			t.Errorf("finalizeUpload(%s): %v", row.ID, err)
+		}
+	}
+	svc.host = &fakeHost{store: hooked, bus: bus}
+
+	_, err := svc.Complete(ctx, row.ID)
+	assertCode(t, err, ErrObjectNotUploading.Code)
+	assertParam(t, err, "id", row.ID)
+	if len(bus.events) != 0 {
+		t.Errorf("events = %d, want none -- a finalize that did not commit announces nothing", len(bus.events))
+	}
+	if len(queue.tasks) != 0 {
+		t.Errorf("tasks = %d, want none -- a finalize that did not commit enqueues nothing", len(queue.tasks))
+	}
+	if _, ok := store.bytes(row.Key); !ok {
+		t.Error("the key lost its bytes -- the writeback is the completed row's own content and must stay")
+	}
+	current, err := svc.objects.FindByID(ctx, row.ID)
+	if err != nil {
+		t.Fatalf("FindByID(%s) after the completion: %v", row.ID, err)
+	}
+	if current.State != ObjectStateCompleted {
+		t.Errorf("row %s state = %q after the completion, want %q", row.ID, current.State, ObjectStateCompleted)
+	}
+}
+
 // TestObjectService_Reads_CompletedRowsOnly pins the visibility rule Get and
 // OpenContent share: an object that is not completed reads exactly like an
 // object that does not exist -- uploading and deleting rows included -- and
