@@ -304,6 +304,13 @@ func (FailingKVStore) IncrByFloat(context.Context, string, float64) (float64, er
 	return 0, ErrKVUnavailable
 }
 
+// IncrByFloatWithTTL implements pkgcore.KVStore. Failing closed is the only
+// behaviour a deliberately failing store can have for it, exactly like every
+// other method here.
+func (FailingKVStore) IncrByFloatWithTTL(context.Context, string, float64, time.Duration) (float64, error) {
+	return 0, ErrKVUnavailable
+}
+
 // CompareAndSwap implements pkgcore.KVStore.
 func (FailingKVStore) CompareAndSwap(context.Context, string, []byte, []byte) (bool, error) {
 	return false, ErrKVUnavailable
