@@ -437,6 +437,111 @@ func TestCertificateRepository_AssertIsolated(t *testing.T) {
 	})
 }
 
+// TestCertificateRepository_RevokeIfActive_GuardedTransition pins the
+// guarded single-statement transition CAService.RevokeCertificate's
+// certificate-row half is built on (revocation.go): a still-active row
+// moves to revoked, carrying the given reason and timestamp, and reports
+// true; a row that is already revoked matches zero rows and reports
+// (false, nil) with its reason and timestamp untouched -- the guard that
+// keeps a concurrent loser from overwriting the winner's committed values
+// -- and a row of ANOTHER tenant is equally unmatchable, the isolation
+// plugin's injected tenant filter being what makes the guard cross-tenant
+// safe (the same layer org's and notification's conditional transitions
+// rely on; nothing here hand-writes a tenant_id filter).
+func TestCertificateRepository_RevokeIfActive_GuardedTransition(t *testing.T) {
+	repo := NewCertificateRepository(newTestDB(t))
+	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-acme"))
+	otherCtx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-other"))
+
+	now := time.Now().UTC()
+	mkCert := func(id string) *Certificate {
+		return &Certificate{
+			ID:             id,
+			AuthorityID:    "auth-1",
+			Purpose:        "tenant.jwt_signing",
+			Subject:        "CN=" + id,
+			Serial:         "serial-" + id,
+			CertificatePEM: "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n",
+			SignerName:     "local",
+			KeyRef:         "keyref-" + id,
+			Status:         CertificateStatusActive,
+			NotBefore:      now,
+			NotAfter:       now.Add(24 * time.Hour),
+		}
+	}
+	seed := func(ctx context.Context, id string) {
+		t.Helper()
+		if err := repo.Create(ctx, mkCert(id)); err != nil {
+			t.Fatalf("Create(%s): %v", id, err)
+		}
+	}
+
+	seed(ctx, "cert-acme")
+	seed(otherCtx, "cert-other")
+
+	revokedAt := now.Add(time.Second)
+	moved, err := repo.RevokeIfActive(ctx, "cert-acme", "compromised", revokedAt)
+	if err != nil {
+		t.Fatalf("RevokeIfActive(active): %v", err)
+	}
+	if !moved {
+		t.Fatal("RevokeIfActive(active row) moved = false, want true")
+	}
+
+	got, err := repo.FindByID(ctx, "cert-acme")
+	if err != nil {
+		t.Fatalf("FindByID after the transition: %v", err)
+	}
+	if got.Status != CertificateStatusRevoked {
+		t.Errorf("Status = %q after the transition, want %q", got.Status, CertificateStatusRevoked)
+	}
+	if got.RevokedAt == nil || !got.RevokedAt.Equal(revokedAt) {
+		t.Errorf("RevokedAt = %v, want the passed timestamp %v", got.RevokedAt, revokedAt)
+	}
+	if got.RevocationReason != "compromised" {
+		t.Errorf("RevocationReason = %q, want %q", got.RevocationReason, "compromised")
+	}
+
+	// A second call against the now-revoked row matches zero rows: it must
+	// report (false, nil) and leave the committed values untouched, never
+	// overwrite them with the second call's own reason and timestamp.
+	moved, err = repo.RevokeIfActive(ctx, "cert-acme", "superseded", revokedAt.Add(time.Second))
+	if err != nil {
+		t.Fatalf("RevokeIfActive(already revoked): %v", err)
+	}
+	if moved {
+		t.Fatal("RevokeIfActive(already revoked row) moved = true, want false")
+	}
+	got, err = repo.FindByID(ctx, "cert-acme")
+	if err != nil {
+		t.Fatalf("FindByID after the no-op call: %v", err)
+	}
+	if got.RevocationReason != "compromised" {
+		t.Errorf("RevocationReason = %q after the no-op call, want the first call's %q unchanged", got.RevocationReason, "compromised")
+	}
+	if got.RevokedAt == nil || !got.RevokedAt.Equal(revokedAt) {
+		t.Errorf("RevokedAt = %v after the no-op call, want the first call's %v unchanged", got.RevokedAt, revokedAt)
+	}
+
+	// Another tenant's active row is unmatchable from this tenant: the
+	// injected tenant filter is part of the guard, so a cross-tenant call
+	// can neither transition the row nor learn that it exists.
+	moved, err = repo.RevokeIfActive(ctx, "cert-other", "compromised", revokedAt)
+	if err != nil {
+		t.Fatalf("RevokeIfActive(other tenant's row): %v", err)
+	}
+	if moved {
+		t.Fatal("RevokeIfActive(other tenant's active row) moved = true, want false")
+	}
+	other, err := repo.FindByID(otherCtx, "cert-other")
+	if err != nil {
+		t.Fatalf("FindByID(other tenant's row): %v", err)
+	}
+	if other.Status != CertificateStatusActive {
+		t.Errorf("other tenant's row Status = %q after the cross-tenant call, want %q unchanged", other.Status, CertificateStatusActive)
+	}
+}
+
 // --- CertificateRevocationRepository -----------------------------------------
 
 // TestCertificateRevocationRepository_CreateAndListByAuthority proves round

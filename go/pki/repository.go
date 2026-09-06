@@ -315,14 +315,88 @@ func (r *AuthorityRepository) ListAll(ctx context.Context) ([]Authority, error) 
 // Certificate is tenant data, so this embeds dbkit.Repository[Certificate]
 // and inherits all three tenant-isolation layers, exactly like every other
 // tenant-owned repository in this codebase.
+//
+// RevokeIfActive, the one statement Repository[T]'s minimal surface cannot
+// express, is composed on the same *gorm.DB through dbkit.WithTenantSession
+// -- the identical dual shape go/notification's VerifiedContactRepository
+// documents for its own conditional status transitions: db is the same
+// connection the embedded Repository was built on, kept so a guarded
+// UPDATE runs with the isolation plugin's tenant filter and
+// WithTenantSession's RLS session variable engaged. Nothing here reaches
+// for db.Table, db.Model or db.Raw, and nothing hand-writes a tenant_id
+// filter.
 type CertificateRepository struct {
 	*dbkit.Repository[Certificate]
+
+	// db is the same connection the embedded Repository was built on, kept
+	// so RevokeIfActive's guarded conditional UPDATE can be composed on it.
+	// Every use routes through WithTenantSession against a TenantScoped
+	// destination, exactly as go/notification's VerifiedContactRepository
+	// documents for its own identical field -- never a raw query of any
+	// other shape.
+	db *gorm.DB
 }
 
 // NewCertificateRepository returns a CertificateRepository over db. db is
 // expected to come from dbkit.Open (for isolation layer 1 underneath).
 func NewCertificateRepository(db *gorm.DB) *CertificateRepository {
-	return &CertificateRepository{Repository: dbkit.NewRepository[Certificate](db)}
+	return &CertificateRepository{
+		Repository: dbkit.NewRepository[Certificate](db),
+		db:         db,
+	}
+}
+
+// RevokeIfActive transitions the certificate id to
+// CertificateStatusRevoked in one guarded statement -- the certificate-row
+// half of CAService.RevokeCertificate's two-statement transition
+// (revocation.go), mirroring SigningKeyRepository.Revoke's identical
+// guarded shape -- reporting (true, nil) when THIS call performed the
+// transition and (false, nil) when the row exists but is not currently
+// CertificateStatusActive (it was already revoked, by this call or a
+// concurrent one).
+//
+// The status guard is what makes concurrent revokes converge instead of
+// last-writer-wins: a caller whose FindByID saw an active row but whose
+// UPDATE matches zero rows has lost the certificate-row arbitration to a
+// concurrent caller, and writing its own reason and timestamp over the
+// winner's committed row would be exactly the blind-save disagreement the
+// round's follow-up review found (see go/pki/AGENTS.md's round entry).
+// RowsAffected == 0 sends RevokeCertificate into its re-read-and-supplement
+// path instead.
+//
+// The statement runs inside dbkit.WithTenantSession, like every
+// dbkit.Repository[T] method, so the PostgreSQL RLS session variable is
+// set for it; the tenant filter itself is injected by dbkit.Open's
+// isolation plugin on the update callback, the same layer org's
+// deleteSubtree and notification's conditional status transitions rely on
+// (their doc comments say so explicitly) -- which is why db must come from
+// dbkit.Open, the expectation NewCertificateRepository already documents.
+// Nothing here hand-writes a tenant_id filter.
+//
+// RowsAffected == 0 deliberately does not distinguish "id does not exist"
+// from "id exists but is already revoked": callers are expected to have
+// loaded the row through FindByID first, which answers the former with
+// ErrRecordNotFound.
+func (r *CertificateRepository) RevokeIfActive(ctx context.Context, id, reason string, now time.Time) (bool, error) {
+	var moved bool
+	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		res := tx.
+			Where("id = ? AND status = ?", id, CertificateStatusActive).
+			Updates(&Certificate{
+				Status:           CertificateStatusRevoked,
+				RevokedAt:        &now,
+				RevocationReason: reason,
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		moved = res.RowsAffected > 0
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return moved, nil
 }
 
 // CertificateRevocationRepository is the plain, non-tenant-scoped accessor
