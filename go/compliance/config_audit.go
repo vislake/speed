@@ -119,8 +119,15 @@ func configChangesJSON(payload config.ItemChangedEvent) []byte {
 // mirroring config's own itemChangedFromWire (unexported to package
 // config, so this subscriber cannot call it directly and duplicates its
 // exact two-shape contract here instead). ok is false, and the event
-// dropped by onConfigItemChanged, for any other shape or a payload missing
-// its mandatory Key field.
+// dropped by onConfigItemChanged, for any other shape or a map payload
+// missing Key or Scope as a string -- config's own decoder
+// (go/config/events.go's itemChangedFromJSONMap) treats exactly those two
+// fields as mandatory and drops the whole event without them, and a
+// payload config's own subscriber would refuse must never become an audit
+// row: the empty Scope such an event would otherwise decode to is a value
+// no real config.Set can produce (config.Scope's closed set of
+// ScopeSystem and ScopeTenant), so recording it would pollute the audit
+// trail with a change config itself never processed.
 func configItemChangedFromWire(payload any) (config.ItemChangedEvent, bool) {
 	switch p := payload.(type) {
 	case config.ItemChangedEvent:
@@ -130,9 +137,13 @@ func configItemChangedFromWire(payload any) (config.ItemChangedEvent, bool) {
 		if !ok {
 			return config.ItemChangedEvent{}, false
 		}
+		scope, ok := p["Scope"].(string)
+		if !ok {
+			return config.ItemChangedEvent{}, false
+		}
 		evt := config.ItemChangedEvent{
 			Key:       key,
-			Scope:     config.Scope(configStringFromWire(p["Scope"])),
+			Scope:     config.Scope(scope),
 			TenantID:  configStringFromWire(p["TenantID"]),
 			Actor:     configStringFromWire(p["Actor"]),
 			OldValue:  configStringFromWire(p["OldValue"]),

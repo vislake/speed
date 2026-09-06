@@ -182,3 +182,160 @@ func TestConfigItemChangedFromWire_RefusesAnUnrecognizedShape(t *testing.T) {
 		t.Error("configItemChangedFromWire(map without Key) ok = true, want false")
 	}
 }
+
+// TestConfigItemChangedFromWire_RequiresScopeAndKeyStrings pins the map
+// branch of configItemChangedFromWire to config's own decoder's acceptance
+// contract -- go/config/events.go's itemChangedFromJSONMap doc: "Only Key
+// and Scope are mandatory". Key AND Scope must both decode as strings; a
+// map missing either, or carrying either in a non-string form, is not this
+// event. This is the regression for the Scope-less wire delivery that used
+// to decode with Scope "" -- a scope no real config.Set can produce
+// (config.Scope's closed set of ScopeSystem and ScopeTenant) -- into an
+// audit row for a change config's own subscriber refused.
+func TestConfigItemChangedFromWire_RequiresScopeAndKeyStrings(t *testing.T) {
+	refused := []map[string]any{
+		{"Scope": "tenant"},                                 // Key absent.
+		{"Key": 42, "Scope": "tenant"},                      // Key present but not a string.
+		{"Key": ConfigDefaultRetentionWindow},               // Scope absent.
+		{"Key": ConfigDefaultRetentionWindow, "Scope": 42},  // Scope not a string.
+		{"Key": ConfigDefaultRetentionWindow, "Scope": nil}, // Scope JSON null.
+		{"Key": ConfigDefaultRetentionWindow, "Scope": []any{"tenant"}},
+	}
+	for i, payload := range refused {
+		if got, ok := configItemChangedFromWire(payload); ok {
+			t.Errorf("refusal case %d (%v): ok = true (decoded %+v), want false", i, payload, got)
+		}
+	}
+
+	// The mirror is a string-ness check, not a non-empty check: config's
+	// own decoder accepts an explicitly empty string in either mandatory
+	// field, so this decoder must too -- dropping those would diverge the
+	// other way, refusing a payload config's own subscriber processes.
+	accepted := []map[string]any{
+		{"Key": ConfigDefaultRetentionWindow, "Scope": "tenant"},
+		{"Key": ConfigDefaultRetentionWindow, "Scope": ""},
+		{"Key": "", "Scope": "tenant"},
+	}
+	for i, payload := range accepted {
+		if _, ok := configItemChangedFromWire(payload); !ok {
+			t.Errorf("acceptance case %d (%v): ok = false, want true", i, payload)
+		}
+	}
+}
+
+// TestModule_OnConfigItemChanged_ScopeMissingWireMap_MatchesConfigsOwnDrop
+// proves the parity config_audit.go's configItemChangedFromWire doc
+// claims ("exactly mirrors config's own ... contract") on the one shape
+// the two decoders disagree about: a distributed-bus delivery whose Scope
+// field is missing or corrupted. config's own subscriber drops such a
+// payload -- its decoder treats Key and Scope as the two mandatory fields
+// (go/config/events.go's itemChangedFromJSONMap) -- and this test proves
+// compliance's subscriber drops it too, by publishing the SAME payload on
+// ONE bus to BOTH modules and asserting both stay silent: config's
+// watcher on the changed key never fires (config's side decoded nothing)
+// and no audit row lands (compliance's side decoded nothing). Before the
+// fix this failed on the audit assertion: the Scope-less payload decoded
+// with Scope "" and was recorded as a config.item.set audit row for a
+// change config itself never processed. The positive leg then republishes
+// the identical payload WITH its Scope field, and both subscribers act:
+// the watcher fires and exactly one audit row lands -- pinning that the
+// fix dropped the malformed shape only, never the well-formed one.
+func TestModule_OnConfigItemChanged_ScopeMissingWireMap_MatchesConfigsOwnDrop(t *testing.T) {
+	db := newTestAuditDB(t)
+	auditRepo := audit.NewRepository(db)
+	compMod := NewModule(auditRepo, WithQueue(&recordingQueue{}))
+	configMod := config.NewModule(db, config.WithPollInterval(0))
+	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), compMod, configMod)
+	if err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	configSvc, err := configMod.Attach(reg)
+	if err != nil {
+		t.Fatalf("config Attach: %v", err)
+	}
+
+	// A watcher on a compliance-declared key: config fires it exactly when
+	// its own subscriber accepts an event for that key, so its silence is
+	// the observable verdict of config's own decoder on the payload below.
+	key := ConfigDefaultRetentionWindow
+	fired := make(chan config.Value, 4)
+	if err = configSvc.Watch(key, func(v config.Value) { fired <- v }); err != nil {
+		t.Fatalf("config Watch(%q): %v", key, err)
+	}
+
+	// The wire shape a Redis Streams reader hands subscribers for a real
+	// config.Set -- minus the Scope field, a delivery no honest publisher
+	// produces but a corrupted or foreign stream record can.
+	scopeMissing := map[string]any{
+		"Key":       key,
+		"TenantID":  "tenant-acme",
+		"Actor":     "user-42",
+		"OldValue":  "24h0m0s",
+		"NewValue":  "48h0m0s",
+		"Sensitive": false,
+		"ChangedAt": "2026-09-04T10:00:00Z",
+	}
+	if err = reg.EventBus().Publish(context.Background(), pkgcore.Event{
+		Type:     config.EventConfigItemChanged,
+		TenantID: "tenant-acme",
+		Payload:  scopeMissing,
+	}); err != nil {
+		t.Fatalf("Publish(Scope-less event): %v", err)
+	}
+
+	// config's verdict: its decoder refuses the payload, so its watcher
+	// never fired.
+	select {
+	case v := <-fired:
+		t.Fatalf("config watcher fired %+v for a Scope-less payload config's own decoder refuses", v)
+	default:
+	}
+
+	// compliance's verdict must be the same: no audit row for a change
+	// config itself never processed.
+	rows, err := auditRepo.ListByTenant(context.Background(), "tenant-acme")
+	if err != nil {
+		t.Fatalf("ListByTenant: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("Scope-less payload produced %d audit rows, want 0 (config's own decoder drops the same payload)", len(rows))
+	}
+
+	// Positive leg: the same payload carrying its Scope is a genuine
+	// change on both sides -- config fires the watcher, compliance records
+	// exactly one row.
+	scopeTenant := map[string]any{
+		"Key":       key,
+		"Scope":     "tenant",
+		"TenantID":  "tenant-acme",
+		"Actor":     "user-42",
+		"OldValue":  "24h0m0s",
+		"NewValue":  "48h0m0s",
+		"Sensitive": false,
+		"ChangedAt": "2026-09-04T10:00:00Z",
+	}
+	if err = reg.EventBus().Publish(context.Background(), pkgcore.Event{
+		Type:     config.EventConfigItemChanged,
+		TenantID: "tenant-acme",
+		Payload:  scopeTenant,
+	}); err != nil {
+		t.Fatalf("Publish(Scope-bearing event): %v", err)
+	}
+
+	select {
+	case v := <-fired:
+		if v.Scope != config.ScopeTenant {
+			t.Errorf("config watcher fired with Scope %q, want %q", v.Scope, config.ScopeTenant)
+		}
+	default:
+		t.Fatal("config watcher never fired for a well-formed payload its own decoder accepts")
+	}
+
+	rows, err = auditRepo.ListByTenant(context.Background(), "tenant-acme")
+	if err != nil {
+		t.Fatalf("ListByTenant: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("well-formed payload produced %d audit rows, want exactly 1", len(rows))
+	}
+}
