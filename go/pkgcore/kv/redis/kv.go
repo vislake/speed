@@ -31,6 +31,46 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
+// incrByFloatWithTTLScript atomically implements KVStore.IncrByFloatWithTTL
+// against Redis: it checks whether the key exists before incrementing --
+// EXISTS itself triggers Redis's own passive expiry check, so a logically
+// expired key reports as absent here exactly like every other operation in
+// this file -- runs the increment through the server's native INCRBYFLOAT,
+// and attaches ttl (already converted to whole milliseconds in Go) with
+// PEXPIRE only when the key did not exist before this script ran. A live key
+// keeps whatever expiry it already had; PEXPIRE is never called for it, so an
+// increment against an existing key can never extend or shorten its expiry.
+//
+// The existence check, the increment and the conditional expire all happen
+// inside one script, so no other client can observe or interleave a change
+// between them -- the same one-script atomicity casScript already gives
+// CompareAndSwap, applied here to close the gap go/ratelimit's own doc
+// comment describes: a caller-side IncrByFloat-then-Set-with-TTL sequence has
+// a Get-to-Set gap a concurrent increment can land in and be silently
+// overwritten, which this script cannot have, since nothing outside the
+// script ever runs between the increment and the conditional PEXPIRE.
+//
+// ARGV[2] of 0 or less means "no ttl:" the PEXPIRE call is skipped
+// altogether, matching every other method in this file treating a
+// zero-or-negative ttl as "store without an expiry."
+//
+// redis.call (not pcall) is used for INCRBYFLOAT deliberately: a non-numeric
+// existing value aborts the whole script with an error carrying the server's
+// own "value is not a valid float" wording, which IncrByFloatWithTTL below
+// detects with the identical substring match IncrByFloat already uses, so no
+// PEXPIRE is ever attempted against a failed increment.
+var incrByFloatWithTTLScript = redis.NewScript(`
+local existed = redis.call('EXISTS', KEYS[1]) == 1
+local result = redis.call('INCRBYFLOAT', KEYS[1], ARGV[1])
+if not existed then
+	local ttlMs = tonumber(ARGV[2])
+	if ttlMs > 0 then
+		redis.call('PEXPIRE', KEYS[1], ttlMs)
+	end
+end
+return result
+`)
+
 // kvNoExpiry is the ttl value that stores a key with no expiry -- go-redis's
 // own "no TTL option" sentinel, mirroring pkgcore's in-memory store's
 // zero-or-negative-ttl convention.
@@ -100,8 +140,10 @@ type kvStore struct {
 // The store preserves the in-memory store's semantics, including the ones a
 // shared server has to implement explicitly: Set replaces both the value and
 // any expiry, IncrByFloat keeps a live key's expiry and starts a missing key
-// at zero with no expiry, and CompareAndSwap compares the whole value and
-// never changes the key's expiry. The server is authoritative for a few
+// at zero with no expiry, IncrByFloatWithTTL does the same but atomically
+// attaches an expiry on the call that creates the key, and CompareAndSwap
+// compares the whole value and never changes the key's expiry. The server is
+// authoritative for a few
 // boundary details, which callers cannot depend on either way:
 //
 //   - Expiry is stored with millisecond granularity (Redis expires keys on a
@@ -204,6 +246,32 @@ func (s *kvStore) IncrByFloat(ctx context.Context, key string, delta float64) (f
 		return 0, pkgcore.ErrNotNumeric
 	}
 	return 0, fmt.Errorf("pkgcore/kv/redis: incr: %w", err)
+}
+
+// IncrByFloatWithTTL implements pkgcore.KVStore.IncrByFloatWithTTL. See
+// incrByFloatWithTTLScript's own doc comment for the single-script design and
+// its atomicity argument.
+func (s *kvStore) IncrByFloatWithTTL(ctx context.Context, key string, delta float64, ttl time.Duration) (float64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	var ttlMs int64
+	if ttl > kvNoExpiry {
+		ttlMs = ttl.Milliseconds()
+	}
+
+	result, err := incrByFloatWithTTLScript.Run(ctx, s.client, []string{key}, delta, ttlMs).Float64()
+	if err == nil {
+		return result, nil
+	}
+	// Identical detection to IncrByFloat's own: the server rejects a
+	// non-numeric or wrong-typed existing value with the same fixed error
+	// wording, wrapped by the script's own failure the same way.
+	if strings.Contains(err.Error(), "value is not a valid float") || strings.Contains(err.Error(), "WRONGTYPE") {
+		return 0, pkgcore.ErrNotNumeric
+	}
+	return 0, fmt.Errorf("pkgcore/kv/redis: incr with ttl: %w", err)
 }
 
 // CompareAndSwap implements pkgcore.KVStore.CompareAndSwap. The comparison

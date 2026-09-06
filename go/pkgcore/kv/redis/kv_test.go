@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -64,6 +65,10 @@ func TestKVStore_CancelledContext(t *testing.T) {
 		}},
 		{"IncrByFloat", func() error {
 			_, err := store.IncrByFloat(ctx, "k", 1)
+			return err
+		}},
+		{"IncrByFloatWithTTL", func() error {
+			_, err := store.IncrByFloatWithTTL(ctx, "k", 1, time.Hour)
 			return err
 		}},
 		{"CompareAndSwap", func() error {
