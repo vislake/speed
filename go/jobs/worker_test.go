@@ -346,3 +346,83 @@ func TestExecute_FailureHookPanic_RecoversInsteadOfCrashingProcess(t *testing.T)
 		t.Errorf("Status = %v, want StatusDeadLetter", got.Status)
 	}
 }
+
+// cancelledBeforeDeadLetterHandler always fails from Handle (so a Job with
+// MaxRetries == 0 exhausts retries on the first attempt) and records every
+// OnFailure call it receives on onFailureCh -- the execute-level counterpart
+// of standalone_queue_test.go's controlledFailureHandler, for tests that
+// drive the dead-letter failure path directly instead of through a live
+// worker.
+type cancelledBeforeDeadLetterHandler struct {
+	onFailureCh chan struct{}
+}
+
+func (*cancelledBeforeDeadLetterHandler) Type() string { return "cancel-race.dead_letter" }
+
+func (*cancelledBeforeDeadLetterHandler) Handle(context.Context, *Job, ProgressFn) (Result, error) {
+	return Result{}, errors.New("permanent failure")
+}
+
+func (h *cancelledBeforeDeadLetterHandler) OnFailure(context.Context, *Job, error) {
+	h.onFailureCh <- struct{}{}
+}
+
+var (
+	_ Handler     = (*cancelledBeforeDeadLetterHandler)(nil)
+	_ FailureHook = (*cancelledBeforeDeadLetterHandler)(nil)
+)
+
+// TestExecute_FinalFailureAfterCancel_DoesNotRunOnFailure is the regression
+// test for the defect where execute ran a FailureHook's OnFailure even when
+// a concurrent Cancel had already moved the Job to StatusCancelled: the
+// dead-letter write is a status-guarded no-op in that case (RowsAffected ==
+// 0, nil error), yet the worker still invoked business compensation for a
+// Job the caller deliberately cancelled, violating FailureHook's own
+// contract (handler.go) that OnFailure runs only after StatusDeadLetter is
+// actually persisted. Deterministic by construction -- markCancelled lands
+// before execute's failure path runs, so completeDeadLetter must report no
+// transition, no OnFailure may run, and the persisted terminal state must
+// stay StatusCancelled. Fails on the pre-fix code, where OnFailure runs
+// anyway. See store_test.go's
+// TestCompleteDeadLetter_NoTransitionWhenAlreadyCancelled for the
+// store-level half of the same race, and standalone_queue_test.go's
+// TestStandaloneQueue_CancelBeatsFinalFailure_NoOnFailure_DeadLetterNeverPersisted
+// for the live-worker half.
+func TestExecute_FinalFailureAfterCancel_DoesNotRunOnFailure(t *testing.T) {
+	q := NewStandaloneQueue(newTestDB(t))
+	onFailureCh := make(chan struct{}, 1)
+	h := &cancelledBeforeDeadLetterHandler{onFailureCh: onFailureCh}
+	if err := q.RegisterHandler(h); err != nil {
+		t.Fatalf("RegisterHandler() error = %v", err)
+	}
+
+	rec := fixtureRunningRecord("tenant-a", "cancel-race.dead_letter")
+	rec.MaxRetries = 0 // exhausted on the very first attempt
+	rec.Attempts = 1   // matches what claimOne would have set for a first attempt
+	if err := q.db.Create(rec).Error; err != nil {
+		t.Fatalf("seed running record: %v", err)
+	}
+
+	// The race execute loses: Cancel (markCancelled) persists
+	// StatusCancelled before the final attempt's failure path runs.
+	if err := markCancelled(context.Background(), q.db, rec.ID, time.Now()); err != nil {
+		t.Fatalf("markCancelled() error = %v", err)
+	}
+
+	q.execute(*rec)
+
+	select {
+	case <-onFailureCh:
+		t.Fatal("OnFailure ran for a Job a concurrent Cancel already moved to StatusCancelled; the failure outcome of a cancelled Job must be discarded, never compensated")
+	default:
+	}
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	got, err := q.Get(ctx, JobID(rec.ID))
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.Status != StatusCancelled {
+		t.Errorf("Status = %v, want %v (the dead-letter write must not overwrite the cancellation)", got.Status, StatusCancelled)
+	}
+}

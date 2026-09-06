@@ -560,6 +560,50 @@ func TestCompleteDeadLetter(t *testing.T) {
 	}
 }
 
+// TestCompleteDeadLetter_NoTransitionWhenAlreadyCancelled is the
+// store-level half of the concurrent-Cancel race completeDeadLetter's
+// (bool, error) report exists to surface: a row a Cancel already moved to
+// StatusCancelled while the final attempt was still executing must report
+// moved == false with a nil error (a no-op, exactly like
+// completeSucceeded's own guard), must never overwrite StatusCancelled,
+// and must not record its cause -- so execute (worker.go) can tell "this
+// attempt really dead-lettered the Job" from "a Cancel already settled
+// it" and skip OnFailure for the latter. See worker_test.go's
+// TestExecute_FinalFailureAfterCancel_DoesNotRunOnFailure for the OnFailure
+// half of the same race.
+func TestCompleteDeadLetter_NoTransitionWhenAlreadyCancelled(t *testing.T) {
+	db := newTestDB(t)
+	rec := fixtureRecord("tenant-a", "t")
+	if _, err := insertRecord(context.Background(), db, rec); err != nil {
+		t.Fatalf("insertRecord() error = %v", err)
+	}
+	if _, err := claimOne(context.Background(), db, *rec, time.Now()); err != nil {
+		t.Fatalf("claimOne() error = %v", err)
+	}
+	if err := markCancelled(context.Background(), db, rec.ID, time.Now()); err != nil {
+		t.Fatalf("markCancelled() error = %v", err)
+	}
+
+	moved, err := completeDeadLetter(context.Background(), db, rec.ID, "permanent failure", time.Now())
+	if err != nil {
+		t.Fatalf("completeDeadLetter() error = %v, want nil (no-op, not an error)", err)
+	}
+	if moved {
+		t.Error("completeDeadLetter() moved = true, want false (a Cancel already moved the row out of StatusRunning)")
+	}
+
+	got, err := findByID(context.Background(), db, JobID(rec.ID))
+	if err != nil {
+		t.Fatalf("findByID() error = %v", err)
+	}
+	if got.Status != string(StatusCancelled) {
+		t.Errorf("Status = %q, want %q (a dead-letter write must not overwrite a cancellation)", got.Status, StatusCancelled)
+	}
+	if got.Error != "" {
+		t.Errorf("Error = %q, want empty (a no-op dead-letter write must not record its cause)", got.Error)
+	}
+}
+
 func TestMarkCancelled_FromPendingAndRunning(t *testing.T) {
 	db := newTestDB(t)
 
