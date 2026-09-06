@@ -16,8 +16,11 @@
  *    can never exist in one language and silently miss in another;
  *  - leaves must be strings; nesting uses plain records only.
  *
- * Registration is atomic: any validation failure throws before a single
- * resource lands, and a namespace cannot be registered twice on the same
+ * Registration is atomic end to end: any validation failure throws before
+ * a single resource lands, a failure while a bundle is being added rolls
+ * the already-landed bundles back and leaves the namespace unregistered (a
+ * retry is a fresh registration), and the registered mark is set only
+ * after every bundle landed. A namespace registers exactly once per
  * instance (that catches double-init in tests and SSR).
  */
 
@@ -82,7 +85,10 @@ function listSample(paths: Set<string>): string {
  * language the instance supports, and every supported language must be
  * present with the same leaf key set (see the module docs). Throws --
  * before mutating anything -- when any of that fails, or when the
- * namespace is already registered on this instance.
+ * namespace is already registered on this instance. A failure while a
+ * bundle is being added rolls the already-landed bundles back, so the
+ * namespace is never left half-registered and any retry is a fresh
+ * registration.
  */
 export function registerNamespace(
   instance: I18nInstance,
@@ -177,10 +183,25 @@ export function registerNamespace(
     }
   }
 
+  try {
+    for (const language of languageKeys) {
+      instance.addResourceBundle(language, namespace, resources[language]!, true, true)
+    }
+  } catch (error) {
+    // Roll back the bundles that landed so the failed attempt leaves no
+    // trace; the namespace stays unregistered and a retry is a fresh
+    // registration.
+    for (const language of languageKeys) {
+      if (instance.hasResourceBundle(language, namespace)) {
+        instance.removeResourceBundle(language, namespace)
+      }
+    }
+    throw error
+  }
+
+  // The registered mark lands only after every bundle did: a namespace
+  // that failed mid-loop must never be reported as registered.
   const instanceNamespaces = registered ?? new Set<string>()
   instanceNamespaces.add(namespace)
   registeredNamespaces.set(instance, instanceNamespaces)
-  for (const language of languageKeys) {
-    instance.addResourceBundle(language, namespace, resources[language]!, true, true)
-  }
 }

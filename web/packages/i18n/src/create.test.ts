@@ -11,11 +11,40 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createInstance } from 'i18next'
-import { createI18n, switchLanguage, SPEED_LOCALE_STORAGE_KEY } from './index'
+import {
+  createI18n,
+  switchLanguage,
+  SPEED_LOCALE_STORAGE_KEY,
+  type StorageLike,
+} from './index'
 import { MemoryStorage } from '../test-utils/memory-storage'
 import { createTestI18n } from '../test-utils/welcome'
 import welcomeZh from '../test-utils/locales/welcome/zh-CN.json'
 import welcomeEn from '../test-utils/locales/welcome/en-US.json'
+
+/** Storage whose write always throws: persistence must stay best-effort. */
+class ThrowingWriteStorage implements StorageLike {
+  getItem(key: string): string | null {
+    void key
+    return null
+  }
+
+  setItem(key: string, value: string): void {
+    throw new Error(`storage write denied for "${key}" = "${value}"`)
+  }
+}
+
+/** Storage whose read always throws: creation must fall back to no choice. */
+class ThrowingReadStorage implements StorageLike {
+  getItem(key: string): string | null {
+    throw new Error(`storage read denied for "${key}"`)
+  }
+
+  setItem(key: string, value: string): void {
+    void key
+    void value
+  }
+}
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -150,6 +179,15 @@ describe('createI18n negotiation', () => {
     expect(instance.language).toBe('zh-CN')
   })
 
+  it('falls back to no stored choice when the storage read throws', () => {
+    const instance = createI18n({
+      storage: new ThrowingReadStorage(),
+      navigatorLanguages: [],
+      searchParams: new URLSearchParams(),
+    })
+    expect(instance.language).toBe('zh-CN')
+  })
+
   it('throws when the supported set is empty or the default is outside it', () => {
     expect(() => createI18n({ supportedLanguages: [] })).toThrow(
       /at least one supported language/,
@@ -157,6 +195,36 @@ describe('createI18n negotiation', () => {
     expect(() => createI18n({ defaultLanguage: 'fr-FR' })).toThrow(
       /defaultLanguage "fr-FR" is not among the supported languages/,
     )
+  })
+
+  it('refuses a non-canonical supported-language entry, naming its canonical form', () => {
+    expect(() => createI18n({ supportedLanguages: ['zh-CN', 'en_US'] })).toThrow(
+      /supported language "en_US" is not in canonical form; use "en-US"/,
+    )
+    expect(() => createI18n({ supportedLanguages: ['en-US ', 'zh-CN'] })).toThrow(
+      /supported language "en-US " is not in canonical form; use "en-US"/,
+    )
+    expect(() => createI18n({ supportedLanguages: ['zh-CN', 'e!'] })).toThrow(
+      /supported language "e!" is not a valid language tag/,
+    )
+  })
+
+  it('negotiates a subtagged request onto a supported bare tag of the same language', () => {
+    const fromNavigator = createI18n({
+      supportedLanguages: ['zh-CN', 'ja'],
+      defaultLanguage: 'zh-CN',
+      storage: new MemoryStorage(),
+      navigatorLanguages: ['ja-JP'],
+    })
+    expect(fromNavigator.language).toBe('ja')
+    const fromUrl = createI18n({
+      supportedLanguages: ['zh-CN', 'ja'],
+      defaultLanguage: 'zh-CN',
+      storage: new MemoryStorage(),
+      navigatorLanguages: [],
+      searchParams: new URLSearchParams('lang=ja-JP'),
+    })
+    expect(fromUrl.language).toBe('ja')
   })
 
   it('pins the discipline options on the underlying instance', () => {
@@ -208,6 +276,34 @@ describe('switchLanguage', () => {
   it('refuses a bare i18next instance that pins no supported set', async () => {
     const bare = createInstance()
     await expect(switchLanguage(bare, 'en-US')).rejects.toThrow(/createI18n/)
+  })
+
+  it('switches onto a supported bare tag from a subtagged request', async () => {
+    const storage = new MemoryStorage()
+    const instance = createI18n({
+      supportedLanguages: ['zh-CN', 'ja'],
+      defaultLanguage: 'zh-CN',
+      storage,
+      navigatorLanguages: [],
+    })
+    await switchLanguage(instance, 'ja-JP')
+    expect(instance.language).toBe('ja')
+    expect(storage.getItem(SPEED_LOCALE_STORAGE_KEY)).toBe('ja')
+  })
+
+  it('still completes the switch when persisting the choice fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const instance = createI18n({
+      storage: new ThrowingWriteStorage(),
+      navigatorLanguages: [],
+    })
+    await expect(switchLanguage(instance, 'en-US')).resolves.toBeUndefined()
+    expect(instance.language).toBe('en-US')
+    expect(warn).toHaveBeenCalledTimes(1)
+    const message = warn.mock.calls[0]![0] as string
+    expect(message).toContain('[speed-i18n]')
+    expect(message).toContain('en-US')
+    expect(message).toContain(SPEED_LOCALE_STORAGE_KEY)
   })
 })
 

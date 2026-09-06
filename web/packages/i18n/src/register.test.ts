@@ -171,4 +171,39 @@ describe('registerNamespace', () => {
       'greeting.hello',
     )
   })
+
+  it('leaves the namespace unregistered when a bundle fails to land mid-loop, so a retry is a fresh registration', () => {
+    const instance = createI18n({ storage: new MemoryStorage(), navigatorLanguages: [] })
+    const original = instance.addResourceBundle.bind(instance)
+    let calls = 0
+    instance.addResourceBundle = ((lng, ns, resources, deep, overwrite) => {
+      calls += 1
+      if (calls === 2) {
+        throw new Error('synthetic mid-loop landing failure')
+      }
+      original(lng, ns, resources, deep, overwrite)
+    }) as typeof instance.addResourceBundle
+    try {
+      expect(() => registerNamespace(instance, 'welcome', welcomeResources)).toThrow(
+        /synthetic mid-loop landing failure/,
+      )
+      // The failed attempt rolled its landed bundles back and marked
+      // nothing: no half-registered namespace may survive the throw.
+      expect(instance.hasResourceBundle('zh-CN', 'welcome')).toBe(false)
+      expect(instance.hasResourceBundle('en-US', 'welcome')).toBe(false)
+      expect(instance.t('greeting.hello', { ns: 'welcome', lng: 'zh-CN' })).toBe(
+        'greeting.hello',
+      )
+    } finally {
+      instance.addResourceBundle = original
+    }
+    // A retry is possible and lands the namespace completely.
+    registerWelcome(instance)
+    expect(instance.t('greeting.hello', { ns: 'welcome', lng: 'zh-CN' })).toBe(
+      welcomeZh.greeting.hello,
+    )
+    expect(instance.t('greeting.hello', { ns: 'welcome', lng: 'en-US' })).toBe(
+      welcomeEn.greeting.hello,
+    )
+  })
 })

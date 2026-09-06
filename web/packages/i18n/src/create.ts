@@ -29,6 +29,7 @@ import {
   DEFAULT_SUPPORTED_LANGUAGES,
   detectLanguage,
   matchSupportedLanguage,
+  normalizeLanguageTag,
   readSupportedLanguages,
 } from './languages.js'
 import {
@@ -45,7 +46,11 @@ export interface CreateI18nOptions {
    * Canonical tags the instance may speak. Defaults to
    * DEFAULT_SUPPORTED_LANGUAGES (zh-CN, en-US). Every later registration
    * must cover this whole set, so keep it in lockstep with the language
-   * resources the platform actually ships.
+   * resources the platform actually ships. Entries must already be in the
+   * package's canonical spelling (hyphen-separated, trimmed; see
+   * normalizeLanguageTag) -- creation refuses anything else, naming the
+   * canonical form, because a non-canonical entry could never be matched
+   * by a canonicalized negotiation source and would be dead weight.
    */
   readonly supportedLanguages?: readonly string[]
   /**
@@ -136,6 +141,21 @@ function readGlobalLocalStorage(): StorageLike | null {
   return null
 }
 
+/**
+ * Read the persisted choice, protected like every other storage access in
+ * this package: storage can throw on read (blocked cookies, opaque
+ * origins, a misbehaving host store), and a choice that cannot be read
+ * means "no stored language" -- negotiation proceeds without it, and
+ * instance creation never fails over storage.
+ */
+function readStoredLanguage(storage: StorageLike, key: string): string | null {
+  try {
+    return storage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
 function readGlobalNavigatorLanguages(): readonly string[] {
   const globalWithNavigator = globalThis as { navigator?: { languages?: unknown } }
   const raw = globalWithNavigator.navigator?.languages
@@ -159,6 +179,25 @@ export function createI18n(options: CreateI18nOptions = {}): I18nInstance {
         'supportedLanguages must not be empty.',
     )
   }
+  for (const language of supportedLanguages) {
+    const canonical = normalizeLanguageTag(language)
+    if (canonical === null) {
+      throw new Error(
+        `[speed-i18n] createI18n: supported language "${language}" is not a valid ` +
+          'language tag; the supported set must list canonical tags such as ' +
+          '"zh-CN", one per language the instance may speak.',
+      )
+    }
+    if (canonical !== language) {
+      throw new Error(
+        `[speed-i18n] createI18n: supported language "${language}" is not in ` +
+          `canonical form; use "${canonical}". Every negotiation source is ` +
+          'canonicalized before it is matched, so a non-canonical entry (an ' +
+          'underscore, stray whitespace or a malformed subtag) could never be ' +
+          'reached and would be dead weight in the set.',
+      )
+    }
+  }
   const defaultLanguage = options.defaultLanguage ?? DEFAULT_LANGUAGE
   const defaultMatched = matchSupportedLanguage(defaultLanguage, supportedLanguages)
   if (defaultMatched === null) {
@@ -172,7 +211,7 @@ export function createI18n(options: CreateI18nOptions = {}): I18nInstance {
     options.storage === undefined ? readGlobalLocalStorage() : options.storage
   const storageKey = options.storageKey ?? SPEED_LOCALE_STORAGE_KEY
   const storedLanguage =
-    storage === null ? null : storage.getItem(storageKey)
+    storage === null ? null : readStoredLanguage(storage, storageKey)
 
   // undefined means the default parameter name "lang"; null or an empty
   // string opts the URL source out of the negotiation chain entirely. The
@@ -218,6 +257,17 @@ export function createI18n(options: CreateI18nOptions = {}): I18nInstance {
  * language must be a member of the instance's supported set; anything else
  * throws instead of silently switching somewhere.
  *
+ * Ordering and failure semantics: the choice is written to storage first,
+ * then the instance switches. The write is protected -- persistence is a
+ * best-effort convenience (storage can be quota-full, disabled or throwing
+ * in embedded contexts), so a storage failure is reported as a visible
+ * `[speed-i18n]` console warning and never fails or aborts the switch. The
+ * promise therefore resolves exactly when the instance language changed,
+ * and a rejection always means the switch did not happen: the instance is
+ * still on its previous language. (A changeLanguage failure after a
+ * successful write leaves the user's expressed choice stored, which the
+ * next visit honors.)
+ *
  * The optional storage argument is three-state: undefined uses the storage
  * bound at creation, null persists nothing, and a StorageLike persists to
  * that store instead. Reads and writes always go through the binding's key.
@@ -241,11 +291,29 @@ export async function switchLanguage(
         `languages [${supported.join(', ')}].`,
     )
   }
-  await instance.changeLanguage(target)
   const binding = boundInstanceStorage(instance)
   const effectiveStorage =
     storage === undefined ? (binding?.storage ?? null) : storage
   if (effectiveStorage !== null) {
-    effectiveStorage.setItem(binding?.key ?? SPEED_LOCALE_STORAGE_KEY, target)
+    persistChoice(effectiveStorage, binding?.key ?? SPEED_LOCALE_STORAGE_KEY, target)
+  }
+  await instance.changeLanguage(target)
+}
+
+/**
+ * Write the persisted choice. Protected by design: a storage failure must
+ * never surface as a failed language change, so the failure is reported
+ * through the package's visible console warning (like the missing-key
+ * handler) and the switch proceeds.
+ */
+function persistChoice(storage: StorageLike, key: string, language: string): void {
+  try {
+    storage.setItem(key, language)
+  } catch {
+    console.warn(
+      `[speed-i18n] could not persist the language choice "${language}" under key ` +
+        `"${key}"; the instance still switched, but the choice will not survive a ` +
+        'reload. Storage failures never fail a language switch.',
+    )
   }
 }

@@ -26,6 +26,12 @@ nothing:
 4. **Navigator languages**, in preference order.
 5. **The default language** -- `zh-CN`.
 
+Matching relaxes language subtags in both directions, never crossing
+languages: an exact tag matches first, a subtagged request selects a
+supported bare tag of the same language (`ja-JP` selects supported `ja`),
+and a bare request selects the unique supported tag carrying it (`en`
+selects `en-US` unless several supported tags share the primary subtag).
+
 An unknown browser language resolving to the zh-CN default is a deliberate
 negotiation default (this product's home language), documented and
 overridable. It is a different rule from the missing-key rule below, which
@@ -38,6 +44,15 @@ const i18n = createI18n() // negotiates, synchronous; react-ready instance
 // language switch UI:
 await switchLanguage(i18n, 'en-US') // persists the canonical choice
 ```
+
+`switchLanguage` writes the choice to storage first and then switches the
+instance; persistence is best-effort by design. A storage write failure
+(quota, disabled storage, embedded contexts) never fails or aborts the
+switch -- it is reported by a `[speed-i18n]` console warning and the
+instance still switches, so the promise resolves exactly when the language
+changed and a rejection always means the switch did not happen. Reads are
+protected the same way: a throwing storage read at creation falls back to
+"no stored choice", never to a failed creation.
 
 ## React bindings
 
@@ -142,17 +157,21 @@ Chinese UI with English locale text. It is identity-stable per language.
 ## Error index
 
 All validation failures throw `Error` messages prefixed `[speed-i18n]` with
-the actionable fix inline: an unsupported language names the supported
-set; a parity gap lists the missing or extra leaf paths; a switch to an
-unsupported language lists the supported tags; registering on a bare
-i18next instance (no pinned supported set) names `createI18n` as the fix.
-The missing-key handler is the only non-throwing surface, by design (a
-production lookup must degrade visibly, not crash).
+the actionable fix inline: a non-canonical entry in the supported set at
+creation names its canonical spelling (or says it is not a language tag);
+an unsupported language names the supported set; a parity gap lists the
+missing or extra leaf paths; a switch to an unsupported language lists the
+supported tags; registering on a bare i18next instance (no pinned supported
+set) names `createI18n` as the fix. Storage is deliberately best-effort, by
+design: a failing write warns (`[speed-i18n]` console warning) without
+failing the switch, and a failing read at creation silently means "no
+stored choice". The missing-key handler is the other non-throwing surface
+(a production lookup must degrade visibly, not crash).
 
 ## Development
 
 From `web/packages/i18n`: `pnpm lint`, `pnpm typecheck`, `pnpm test`
-(64 tests), `pnpm build`. Bilingual fixtures live under
+(73 tests), `pnpm build`. Bilingual fixtures live under
 `test-utils/locales/` (repo CJK-scanner exemption); sources and tests
 assert against imported fixtures. `test-utils/` is test-only and never
 emitted into `dist/`.

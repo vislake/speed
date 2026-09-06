@@ -9,9 +9,13 @@
  * language wins only when every source misses, and the default is always a
  * member of the supported set -- an unknown language never selects anything
  * (createI18n validates the default up front). Matching is by canonical tag
- * (case-insensitive, region-exact first), then by a unique language-only
- * tag ("en" selects "en-US" only when no other supported tag shares the
- * primary subtag).
+ * (case-insensitive, exact first), then by language-subtag relaxation in
+ * both directions: a bare request selects a supported tag of the same
+ * language when unique ("en" selects "en-US" only when no other supported
+ * tag shares the primary subtag), and a subtagged request selects a
+ * supported bare tag of the same language ("ja-JP" selects supported "ja":
+ * once the request's region is unknown to the platform, its language is
+ * exactly what the bare tag names).
  */
 
 /** The canonical language tags the platform ships. zh-CN + en-US in M0. */
@@ -38,9 +42,13 @@ export function normalizeLanguageTag(input: string): string | null {
 
 /**
  * Match a candidate against the supported set, or null when nothing
- * supports it. Exact canonical match first (case-insensitive); otherwise a
- * bare primary subtag ("en") selects the supported tag with that primary
- * subtag, but only when the choice is unambiguous.
+ * supports it. Exact canonical match first (case-insensitive); otherwise
+ * language-subtag relaxation, two-directional: a subtagged request
+ * ("ja-JP") selects a supported bare tag of the same language, and a bare
+ * request ("en") selects the unique supported tag carrying its primary
+ * subtag. Relaxation never crosses languages: every match shares the
+ * candidate's primary subtag, and an ambiguous full-tag match stays
+ * refused.
  */
 export function matchSupportedLanguage(
   candidate: string,
@@ -57,6 +65,15 @@ export function matchSupportedLanguage(
     }
   }
   const primary = lower.split('-')[0] ?? lower
+  if (lower.includes('-')) {
+    // The request names a region the platform may not ship; a supported
+    // bare tag of the same language is the request's language exactly.
+    for (const language of supported) {
+      if (language.toLowerCase() === primary) {
+        return language
+      }
+    }
+  }
   const matches = supported.filter((language) =>
     language.toLowerCase().startsWith(`${primary}-`),
   )

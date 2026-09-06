@@ -52,6 +52,22 @@ describe('matchSupportedLanguage', () => {
     expect(matchSupportedLanguage('en', ['en-US', 'en-GB'])).toBeNull()
   })
 
+  it('selects a supported bare tag from a subtagged request', () => {
+    expect(matchSupportedLanguage('ja-JP', ['zh-CN', 'ja'])).toBe('ja')
+    expect(matchSupportedLanguage('ja-JP', ['ja'])).toBe('ja')
+    expect(matchSupportedLanguage('JA-jp', ['zh-CN', 'ja'])).toBe('ja')
+  })
+
+  it('keeps the exact region tag when the request matches a supported full tag', () => {
+    expect(matchSupportedLanguage('ja-JP', ['ja', 'ja-JP'])).toBe('ja-JP')
+    expect(matchSupportedLanguage('en-GB', ['en-GB', 'en-US'])).toBe('en-GB')
+  })
+
+  it('refuses a subtagged request when no bare tag exists and the full-tag match is ambiguous', () => {
+    expect(matchSupportedLanguage('ja-TH', ['ja-JP', 'ja-KR'])).toBeNull()
+    expect(matchSupportedLanguage('ja-JP', ['zh-CN', 'fr'])).toBeNull()
+  })
+
   it('returns null for tags no supported language matches', () => {
     expect(matchSupportedLanguage('fr', supported)).toBeNull()
     expect(matchSupportedLanguage('de-DE', supported)).toBeNull()
