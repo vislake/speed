@@ -116,9 +116,9 @@ export interface ReferenceAppBootstrap {
  * the same ['tenant', tenantId] prefix, the same queryClient.
  * removeQueries call -- rather than a new cache-management mechanism:
  * a tenant switch evicts the tenant being left mid-session, this
- * evicts the tenant the session was in when it ended. Without it nothing
- * in this app ever cleared a query cached under a tenant's key on
- * sign-out, so a later sign-in to the same tenant -- by the same
+ * evicts the tenant the session was in when it ended. Before this,
+ * nothing in the app ever cleared a query cached under a tenant's key
+ * on sign-out, so a later sign-in to the same tenant -- by the same
  * account after a session death, or a different account the operator
  * switches to on a shared machine -- inherited rows an earlier
  * session's reads left behind (reference-app-web.md P1-1): the read
