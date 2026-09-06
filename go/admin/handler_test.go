@@ -3,13 +3,18 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/rbac"
+	"github.com/vislake/speed/go/tenancy"
 )
 
 // decodedErrorCode decodes w's body as api.AdminError's own {"code": ...}
@@ -71,5 +76,126 @@ func TestHandler_StartImpersonation_MalformedBody_ReportsRequestBodyInvalid(t *t
 	if got := decodedErrorCode(t, w); got != ErrRequestBodyInvalid.Code {
 		t.Fatalf("code = %q, want %q (NOT %q, the pre-fix semantically-wrong code)",
 			got, ErrRequestBodyInvalid.Code, ErrImpersonationTargetRequired.Code)
+	}
+}
+
+// TestPaginate_ExtremeOffsetAndLimit_DoesNotPanic is P2-4's regression
+// test: an extreme caller-supplied limit (math.MaxInt, as an HTTP query
+// string could carry) combined with a small in-range offset used to
+// overflow the offset+limit addition inside paginate, wrap the computed
+// end negative, sail through both clamp conditions, and panic slicing
+// events[offset:negative]. The clamp must bound the limit by the remaining
+// tail BEFORE the addition so the addition itself can never overflow.
+func TestPaginate_ExtremeOffsetAndLimit_DoesNotPanic(t *testing.T) {
+	events := []audit.AuditEvent{
+		{ID: "evt-0"},
+		{ID: "evt-1"},
+		{ID: "evt-2"},
+	}
+
+	got := paginate(events, 1, math.MaxInt)
+	if len(got) != 2 || got[0].ID != "evt-1" || got[1].ID != "evt-2" {
+		t.Fatalf("paginate(3 events, offset=1, limit=MaxInt) = %+v, want the whole tail evt-1..evt-2 (no panic, no truncation)", got)
+	}
+}
+
+// TestHandler_UpdateTenant_InvalidStatus_RefusedAndNotPersisted is P2-5's
+// regression test: a status string outside the API enum's closed
+// vocabulary must be refused at the handler boundary (400,
+// admin.tenant_status_invalid), never persisted. On unfixed main the wire
+// value was written verbatim into admin_tenants.status -- and tenancy's
+// status gate (tenant_status.go: only TenantStatusActive is servable, an
+// out-of-vocabulary answer refused with ErrTenantSuspended) would then
+// refuse every request for that tenant, silently taking it offline until an
+// operator noticed.
+func TestHandler_UpdateTenant_InvalidStatus_RefusedAndNotPersisted(t *testing.T) {
+	env := buildTestAdminModule(t)
+	ctx := context.Background()
+	const tenant = "tenant-invalid-status"
+	if err := env.Admin.Tenants().Create(ctx, &Tenant{TenantID: tenant}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	body := strings.NewReader(`{"status": "bogus"}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/admin/tenants/"+tenant, body)
+	req = req.WithContext(authn.WithPrincipal(req.Context(), authn.Principal{UserID: "operator-status-1"}))
+	w := httptest.NewRecorder()
+	env.Admin.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for an out-of-vocabulary status", w.Code)
+	}
+	if got := decodedErrorCode(t, w); got != ErrTenantStatusInvalid.Code {
+		t.Fatalf("code = %q, want %q", got, ErrTenantStatusInvalid.Code)
+	}
+
+	row, err := env.Admin.Tenants().Get(ctx, tenant)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if row.Status != tenancy.TenantStatusActive {
+		t.Fatalf("stored status = %q, want %q -- the invalid status must never be persisted", row.Status, tenancy.TenantStatusActive)
+	}
+}
+
+// TestHandler_RoleWritePaths_BindingAndRoleEventsCarryActor is P2-6's
+// regression test, at the real event boundary: both role-management write
+// paths (POST /api/v1/admin/roles and POST
+// /api/v1/admin/roles/{id}/bindings) must resolve the calling operator and
+// install them as the rbac Subject on the ctx they hand to RoleService, so
+// rbac's own role-binding and role-changed events carry ActorUserID. On
+// unfixed main neither handler resolved the caller at all, so every event
+// those writes published carried an empty ActorUserID -- a role-management
+// write no audit trail could ever attribute.
+func TestHandler_RoleWritePaths_BindingAndRoleEventsCarryActor(t *testing.T) {
+	env := buildTestAdminModule(t)
+	env.Admin.AttachRBAC(env.RBAC)
+
+	const operator = "operator-rbac-1"
+	const tenant = "tenant-rbac-actor"
+
+	var bindingActors []string
+	env.Registry.EventBus().Subscribe(rbac.EventRoleBindingAssigned, func(_ context.Context, evt pkgcore.Event) error {
+		var p rbac.RoleBindingChangedEvent
+		if err := decodeEventPayload(evt.Payload, &p); err != nil {
+			return err
+		}
+		bindingActors = append(bindingActors, p.ActorUserID)
+		return nil
+	})
+	var roleActors []string
+	env.Registry.EventBus().Subscribe(rbac.EventRoleChanged, func(_ context.Context, evt pkgcore.Event) error {
+		var p rbac.RoleChangedEvent
+		if err := decodeEventPayload(evt.Payload, &p); err != nil {
+			return err
+		}
+		roleActors = append(roleActors, p.ActorUserID)
+		return nil
+	})
+
+	// Write path 1: define a role.
+	defineBody := strings.NewReader(fmt.Sprintf(`{"tenantId": %q, "key": "auditor", "permissions": ["%s"]}`, tenant, PermissionAccess))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/roles", defineBody)
+	req = req.WithContext(authn.WithPrincipal(req.Context(), authn.Principal{UserID: operator}))
+	w := httptest.NewRecorder()
+	env.Admin.handler.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("define-role status = %d, want 201", w.Code)
+	}
+	if len(roleActors) != 1 || roleActors[0] != operator {
+		t.Fatalf("role-changed event ActorUserID = %v, want exactly [%s] -- the defining operator must be on the event", roleActors, operator)
+	}
+
+	// Write path 2: bind the role to a user.
+	bindBody := strings.NewReader(fmt.Sprintf(`{"tenantId": %q, "userId": "grantee-rbac-1"}`, tenant))
+	bindReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/roles/auditor/bindings", bindBody)
+	bindReq = bindReq.WithContext(authn.WithPrincipal(bindReq.Context(), authn.Principal{UserID: operator}))
+	bindW := httptest.NewRecorder()
+	env.Admin.handler.ServeHTTP(bindW, bindReq)
+	if bindW.Code != http.StatusCreated {
+		t.Fatalf("bind-role status = %d, want 201", bindW.Code)
+	}
+	if len(bindingActors) != 1 || bindingActors[0] != operator {
+		t.Fatalf("role-binding event ActorUserID = %v, want exactly [%s] -- the binding operator must be on the event", bindingActors, operator)
 	}
 }

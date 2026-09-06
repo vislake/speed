@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -164,6 +165,22 @@ func (h *Handler) AdminUpdateTenant(w http.ResponseWriter, r *http.Request, id s
 	}
 	patch := TenantPatch{DisplayName: req.DisplayName, Notes: req.Notes, SuspendedReason: req.SuspendedReason}
 	if req.Status != nil {
+		// P2-5's fix: the wire value is validated against the generated
+		// enum's own Valid() before it is ever persisted. tenancy's
+		// TenantStatusResolver gate (the "landed tenancy default-refuse
+		// gate", tenant_status.go: only TenantStatusActive is servable)
+		// refuses ANY stored status other than "active", so an
+		// out-of-vocabulary string ("suspended-tomorrow", a typo) written
+		// verbatim into admin_tenants.status would silently take the
+		// tenant offline for every request until an operator noticed --
+		// the refusal belongs here, at the boundary where the untyped
+		// wire value enters, not in the repository, whose Status column is
+		// already typed with tenancy.TenantStatus for callers that go
+		// through it.
+		if !req.Status.Valid() {
+			writeError(w, ErrTenantStatusInvalid.WithParam("status", string(*req.Status)))
+			return
+		}
 		status := tenancy.TenantStatus(*req.Status)
 		patch.Status = &status
 	}
@@ -390,18 +407,33 @@ func (h *Handler) AdminListAuditEvents(w http.ResponseWriter, r *http.Request, p
 // paginate returns events[offset:offset+limit], clamped to a valid slice
 // range for any offset/limit combination -- including an offset beyond
 // the slice's length, which returns an empty (never a panicking) result.
+//
+// The clamp bounds limit by the remaining tail BEFORE the offset+limit
+// addition (P2-4's fix): the previous implementation computed
+// end := offset + limit first and only then compared it against
+// len(events), so an extreme caller-supplied limit (math.MaxInt, say) made
+// that addition overflow int on a slice of any non-trivial length, wrap
+// end negative, sail through both clamp conditions, and slice
+// events[offset:negative] -- a panic reachable from an HTTP query string
+// (an audit page with offset=1&limit=9223372036854775807 crashed the
+// handler). With limit pre-clamped to at most len(events)-offset, the
+// addition is bounded by len(events) and can never overflow.
 func paginate(events []audit.AuditEvent, offset, limit int) []audit.AuditEvent {
 	if offset < 0 {
 		offset = 0
 	}
+	// A negative limit means "no upper bound", this function's pre-existing
+	// contract (the old implementation clamped end to len(events) for it).
+	if limit < 0 {
+		limit = len(events)
+	}
 	if offset >= len(events) {
 		return nil
 	}
-	end := offset + limit
-	if end > len(events) || limit < 0 {
-		end = len(events)
+	if limit > len(events)-offset {
+		limit = len(events) - offset
 	}
-	return events[offset:end]
+	return events[offset : offset+limit]
 }
 
 func toAdminAuditEvent(e audit.AuditEvent) api.AdminAuditEvent {
@@ -464,6 +496,30 @@ func (h *Handler) AdminExportAuditEvents(w http.ResponseWriter, r *http.Request)
 
 // --- D8: role management -----------------------------------------------------
 
+// roleManagementContext resolves the calling operator from the request's
+// verified Principal and installs them as the rbac Subject on the ctx
+// handed to RoleService's write paths (P2-6's fix). rbac's own
+// role-binding and role-changed events carry the actor from exactly this
+// context carrier -- publishBindingChanged/publishRoleChanged read
+// rbac.SubjectFromContext through actorFrom (go/rbac/assign.go) -- and a
+// role-management request whose handler never installed one produced
+// events whose ActorUserID was empty: an unattributed role-management
+// write no audit trail could ever answer "who did this" for.
+//
+// The subject's tenant is rbac.SystemDomain, the pseudo-tenant every
+// admin:* permission is evaluated in (D1) -- the domain the operator was
+// admitted to the admin console through -- never the managed tenant the
+// write itself targets, which stays pkgcore.WithTenant's business inside
+// RoleService.
+func roleManagementContext(r *http.Request) (context.Context, error) {
+	callerID, err := callerUserID(r)
+	if err != nil {
+		return nil, err
+	}
+	ctx := rbac.WithSubject(r.Context(), rbac.Subject{TenantID: rbac.SystemDomain, UserID: callerID})
+	return ctx, nil
+}
+
 // AdminListDeclaredPermissions implements api.ServerInterface.
 func (h *Handler) AdminListDeclaredPermissions(w http.ResponseWriter, r *http.Request) {
 	perms, err := h.roles.DeclaredPermissions()
@@ -476,6 +532,11 @@ func (h *Handler) AdminListDeclaredPermissions(w http.ResponseWriter, r *http.Re
 
 // AdminDefineRole implements api.ServerInterface.
 func (h *Handler) AdminDefineRole(w http.ResponseWriter, r *http.Request) {
+	ctx, err := roleManagementContext(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	var req api.AdminDefineRoleRequest
 	if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
 		writeError(w, ErrRequestBodyInvalid.WithCause(decodeErr))
@@ -485,7 +546,7 @@ func (h *Handler) AdminDefineRole(w http.ResponseWriter, r *http.Request) {
 	if req.DescriptionKey != nil {
 		def.DescriptionKey = *req.DescriptionKey
 	}
-	role, err := h.roles.DefineRole(r.Context(), req.TenantID, def)
+	role, err := h.roles.DefineRole(ctx, req.TenantID, def)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -501,6 +562,11 @@ func (h *Handler) AdminDefineRole(w http.ResponseWriter, r *http.Request) {
 
 // AdminCreateRoleBinding implements api.ServerInterface.
 func (h *Handler) AdminCreateRoleBinding(w http.ResponseWriter, r *http.Request, id string) {
+	ctx, err := roleManagementContext(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	var req api.AdminCreateRoleBindingRequest
 	if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
 		writeError(w, ErrRequestBodyInvalid.WithCause(decodeErr))
@@ -510,7 +576,7 @@ func (h *Handler) AdminCreateRoleBinding(w http.ResponseWriter, r *http.Request,
 	if req.NodeID != nil {
 		nodeID = *req.NodeID
 	}
-	if err := h.roles.AssignRole(r.Context(), req.TenantID, req.UserID, id, nodeID); err != nil {
+	if err := h.roles.AssignRole(ctx, req.TenantID, req.UserID, id, nodeID); err != nil {
 		writeError(w, err)
 		return
 	}

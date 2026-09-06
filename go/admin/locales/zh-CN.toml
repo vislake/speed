@@ -9,6 +9,7 @@
 "admin.tenant_not_found" = "未找到该租户的台账记录。"
 "admin.tenant_already_exists" = "该租户已存在台账记录。"
 "admin.tenant_id_required" = "必须提供租户 ID。"
+"admin.tenant_status_invalid" = "租户状态值无效，仅支持 \"active\" 或 \"suspended\"。"
 "admin.impersonation_grant_not_found" = "未找到该模拟登录授权凭据。"
 "admin.impersonation_reason_required" = "发起模拟登录必须填写原因。"
 "admin.impersonation_target_required" = "必须同时提供目标用户 ID 和目标租户 ID。"

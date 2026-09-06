@@ -26,6 +26,17 @@ var (
 	// names no tenant id.
 	ErrTenantIDRequired = apperr.Invalid("admin.tenant_id_required")
 
+	// ErrTenantStatusInvalid is returned by the tenant-ledger PATCH handler
+	// when the request names a status outside the API enum's closed
+	// vocabulary ("active"/"suspended"), validated through the generated
+	// api.AdminTenantStatus.Valid() before anything is persisted (P2-5's
+	// fix). tenancy's own gate (tenant_status.go) refuses ANY status other
+	// than active -- including a value this version does not define -- so
+	// an out-of-vocabulary string persisted verbatim would silently take
+	// the tenant offline until an operator noticed; refusing the write
+	// here keeps that gate from ever being fed garbage.
+	ErrTenantStatusInvalid = apperr.Invalid("admin.tenant_status_invalid")
+
 	// ErrGrantNotFound reports that no admin_impersonation_grants row
 	// exists for the requested grant id.
 	ErrGrantNotFound = apperr.NotFound("admin.impersonation_grant_not_found")
@@ -205,6 +216,7 @@ var errorCodes = []string{
 	ErrTenantNotFound.Code,
 	ErrTenantAlreadyExists.Code,
 	ErrTenantIDRequired.Code,
+	ErrTenantStatusInvalid.Code,
 	ErrGrantNotFound.Code,
 	ErrImpersonationReasonRequired.Code,
 	ErrImpersonationTargetRequired.Code,

@@ -10,6 +10,7 @@
 "admin.tenant_not_found" = "No tenant ledger entry was found for this tenant id."
 "admin.tenant_already_exists" = "A tenant ledger entry already exists for this tenant id."
 "admin.tenant_id_required" = "A tenant id is required."
+"admin.tenant_status_invalid" = "The tenant status is not a known value; it must be \"active\" or \"suspended\"."
 "admin.impersonation_grant_not_found" = "No impersonation grant was found for this id."
 "admin.impersonation_reason_required" = "A reason is required to start an impersonation session."
 "admin.impersonation_target_required" = "A target user id and target tenant id are both required."
