@@ -135,6 +135,19 @@ export const DEMO_PASSWORD = process.env.E2E_DEMO_PASSWORD ?? 'e2e-demo-password
 
 export default defineConfig({
   testDir: './e2e',
+  // The @pending gates describe surfaces that do not exist yet
+  // (core-journey.pending.spec.ts: the upload / generate / compare /
+  // share / cost journey the product is for). They are written ahead of
+  // delivery on purpose -- each one is the acceptance criterion for a
+  // block, checkable the day it lands -- but a suite that is permanently
+  // red says nothing, so the default run leaves them out and they are
+  // asked for by name instead:
+  //
+  //   pnpm test:e2e --grep @pending
+  //
+  // A block's gate moves out of @pending when its surface ships, which is
+  // the moment it starts being a regression gate rather than a promise.
+  grepInvert: /@pending/,
   // One worker: the specs share one server, and that server's own
   // per-account rate limiting and progressive lockout (go/authn's
   // ratelimit.go) make concurrent sign-in attempts against the same demo
