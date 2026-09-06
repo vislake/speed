@@ -2,10 +2,15 @@
 // bootstrap configuration of the consumer projects saasctl generates and
 // upgrades. This build wires the group's print subcommand, which renders
 // how a project's bootstrap configuration resolves -- the deployment mode,
-// the port, the SQLite database path and the two key variables -- together
-// with each value's provenance: whether it came from the environment, and
-// if not, which default it resolved to. The two key variables are secrets
-// and render as [redacted] whatever the environment holds.
+// the port, the SQLite database path, the two key variables and the full
+// infrastructure surface (the Redis address, the S3 group, the SMTP pair
+// and the SMS gateway URL) -- together with each value's provenance:
+// whether it came from the environment, and if not, which default (or
+// which seam) it fell back to. Print refuses exactly when the generated
+// app's own bootstrap would refuse to boot, on the same incomplete S3
+// group or SMTP pair. The two key variables and the S3 secret key / SMTP
+// password are secrets and render as [redacted] whatever the environment
+// holds.
 //
 // The group shares the exit-code contract of the sibling commands and
 // groups: 0 for success and help, 2 for usage errors (an unknown
