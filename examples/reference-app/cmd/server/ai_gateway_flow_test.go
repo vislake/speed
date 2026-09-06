@@ -111,7 +111,7 @@ func assertAIGatewayCredentialAnswer(t *testing.T, resp *http.Response, what, pr
 // module.go's doc comment on the two write permissions for why they are
 // deliberately distinct.
 func TestAIGatewayCredentialWrites_TwoTierGateOnTheComposedStack(t *testing.T) {
-	srv, cfg := buildTestServer(t)
+	srv, cfg, _ := buildTestServer(t)
 	// The token signs a real account into tenant-acme; the demo user header
 	// then names which seeded demo grant the gate decides the request
 	// against (demo_subject.go's seedDemoGrants). No AIGateway* config keys

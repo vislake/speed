@@ -77,7 +77,7 @@ func decodeWhoami(t *testing.T, resp *http.Response, wantStatus int, what string
 // rotate it, use the OLD raw key value again (refused), use the NEW key
 // (succeeds), revoke it, use it again (refused).
 func TestBuildServer_APIKeyAuthenticateFlow_RotateAndRevokeRefuseTheOldKey(t *testing.T) {
-	srv, cfg := buildTestServer(t)
+	srv, cfg, _ := buildTestServer(t)
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "apikey-authn-flow")
 
 	// Create with an empty body, through the ordinary session-authenticated
