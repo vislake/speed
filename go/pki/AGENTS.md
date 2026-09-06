@@ -114,7 +114,7 @@ This is a deliberate "keep the column, skip the transition" choice, not a half-b
 - **`SignerRegistry` and `pkgcore.KeyNeverLeavesBoundary` are both landed (round 4).** `SignerRegistry` (`signer_registry.go`) is a package-level `pkgcore.SeamRegistry[Signer]` carrying `"signer.local"` (`LocalSigner`, `Capabilities: 0`) from this package's own `init()`, plus whatever names a host has blank-imported (`go/pki/signer/vault`'s `"signer.vault"`/`"signer.vault-direct"`, `go/pki/signer/kmsaws`'s `"signer.aws-kms"`/`"signer.aws-kms-direct"`). `Module.WithSigner(name string, signer Signer)` is kept alongside it, unchanged, as the escape hatch for a caller that already holds a concrete `Signer` value -- both exist simultaneously by design, the identical shape `pkgcore` itself keeps `WithEventBus`/`WithKVStore`/etc. alongside their own registries; see "Signer providers: `vault` and `kmsaws`" above for the full rationale, including why `"signer.local"`'s own registry entry opens an independent database connection from `pkgcore.Config` rather than sharing a `Module`'s `db` (`signer_registry.go`'s `localSignerFromConfig` doc comment). `KeyNeverLeavesBoundary` is declared in `go/pkgcore/capability.go`, following the exact pattern of `MultiReplicaSafe`/`SurvivesRestart`/`Stateless`; `LocalSigner` does not have it (unchanged), and `vault`/`kmsaws` have it only in `ModeDirectSign`.
 - **`KeyNeverLeavesBoundary` is declared but not enforced anywhere.** `pkgcore.Kernel.Bootstrap` (`go/pkgcore/registry.go`) resolves and validates capabilities only for the four fixed built-in seams (`EventBus`, `KVStore`, `Mailer`, `ObjectStore`) via `resolveKernelSeam`/`validateSeamCapability`; it has no knowledge of `pki.SignerRegistry` or `pki.Signer`. Nothing in this package calls an equivalent check: `Module.WithSigner` takes no `Capability`/requirement parameter, and `SignerRegistry.Build` returns a registration's declared `Capability` without comparing it against anything a caller wanted. So a host that wires `go/pki` with a `Signer` implementation lacking `KeyNeverLeavesBoundary` where it intended to require it -- `vault`/`kmsaws` in envelope mode instead of direct-sign, say -- gets no error at all; `go/pkgcore/capability.go`'s doc comment and `docs/internal/22-pki.md`'s capability-declarations section both now say this plainly rather than claiming `Kernel.Bootstrap` enforces it. A future round adding this needs either a `pki`-local check (`Module` or `SignerRegistry.Build` taking a required `Capability` and refusing a resolved `Signer` that lacks it) or a `pkgcore`-level generalization of `resolveKernelSeam` beyond the four hardcoded seams; neither is scoped or landed here.
 - **The X.509 layer is unverified by any real consumer**, and its public API is not frozen. See "X.509 layer: still no real consumer" above. Do not treat `CAService`'s current shape as a stable contract.
-- **No PostgreSQL integration tier.** `go/pki/internal/testutil.NewPostgres` exists (mirroring `NewSQLite`) so a later round's `integration_test/` package needs no `db.go` of its own, but no such package is shipped yet -- `docs/internal/22-pki.md`'s testing strategy names a PostgreSQL leg (dual-dialect migrations from zero, `pki_certificates`'s `AssertIsolated` and the other five tables' `AssertNotTenantScoped`, all against a real server) as this module's eventual requirement, not any round's yet. Every round's SQLite-backed unit suite runs the identical assertions against SQLite only -- round 3 carries this forward for its own additions: `pki_authorities`'s five new CRL columns (migration `0006`), the new `pki_certificate_revocations` table (migration `0007`), and the CRL-signature round trip (`crl_test.go`'s `x509.RevocationList.CheckSignatureFrom` proof) are all SQLite-only proofs today.
+- **The PostgreSQL integration tier exists but is not in the CI matrix.** The migration-dedupe round shipped this module's first `integration_test/` package (`go/pki/integration_test/postgres_migration_dedupe_test.go`, run as `go test -tags=integration ./integration_test/...` from the module directory against a real PostgreSQL 16 server started with testcontainers -- `go/pki/internal/testutil.NewPostgres`), proving migration 0008's duplicate-ledger upgrade on the second dialect. It is deliberately absent from `full-check.yml`'s integration-tiers matrix until a round wires it in, so no CI pipeline runs it today. `docs/internal/22-pki.md`'s testing strategy names the module's eventual PostgreSQL leg as broader than this one regression (dual-dialect migrations from zero, `pki_certificates`'s `AssertIsolated` and the other five tables' `AssertNotTenantScoped`, all against a real server) -- that remains future rounds' work. Every round's SQLite-backed unit suite runs the identical assertions against SQLite only -- round 3 carries this forward for its own additions: `pki_authorities`'s five new CRL columns (migration `0006`), the new `pki_certificate_revocations` table (migration `0007`), and the CRL-signature round trip (`crl_test.go`'s `x509.RevocationList.CheckSignatureFrom` proof) are all SQLite-only proofs today.
 - **`api-contract.yml` does not yet gate this fragment.** See "HTTP surface (round 3)" above -- `task api:gen` regenerates `pki-server.gen.go` correctly, but the CI workflow's own regenerate-then-diff enforcement was not extended to it this round.
 - **`ErrSignerUnavailable`'s first real trigger is CRL signing, not a KMS-backed signer's own network failure.** Round 1/2's AGENTS.md parenthetically associated this code with "a KMS-backed signer" (round 4's `vault`/`kmsaws`), but neither provider package declares or returns it -- their `Sign`/`Public`/`Destroy` failures are unwrapped `fmt.Errorf` (verified by grep against `go/pki/signer/{vault,kmsaws}/signer.go` before this line was written). `crl.go`'s `GenerateCRL` wraps ANY non-`*apperr.Error` failure from `x509.CreateRevocationList` this way, including the library's own template-validation errors, not only a genuine signer-transport fault -- an imprecision accepted because this module's own callers never produce an invalid template, so the ambiguity is theoretical today. See errors.go's own doc comment for the full accounting.
 - **`Service.PromoteNow` is a round-3 addition that is NOT itself revocation.** It exists as a companion to `RevokeSigningKey` (an emergency revocation leaves a purpose with no active key until something is promoted) but performs no revocation of its own, and nothing in this module ever calls it automatically -- a host must call it explicitly. See `lifecycle.go`'s own doc comment for why it lives next to `PromoteDuePending` rather than in `revocation.go`, and for why it honors, rather than bypasses, the propagation window.
@@ -176,6 +176,7 @@ This is a deliberate "keep the column, skip the transition" choice, not a half-b
 - `ca_test.go` covers serial-number uniqueness and shape, root/intermediate/end-entity issuance, and chain verification through the standard library's own `crypto/x509.Verify` -- never a hand-rolled verifier.
 - `module_test.go` covers `pkgcore.Module` identity, the dual-dialect migration layout, locale-file parity, `Register`'s full declared surface (bootstrapped through a real `pkgcore.Kernel`, which also proves the locale bundle survives `i18n.Builder.AddModule`'s parity check) -- now including all five declared events, every permission and audit action (round 1 through round 3), and the config-item additions -- coexistence with another module, the no-I/O contract of `Register`, that `WithQueue` (or its absence) correctly decides whether `reg.Jobs` claims BOTH the expiry-scan and (round 3) the CRL-regenerate handlers, and that exactly one route is mounted at `apiPath`.
 - **Round 3's additions**: `revocation_test.go` covers `Service.RevokeSigningKey` (the transition, idempotence, `ErrKeyNotFound`, and -- the round's central proof -- that a long-TTL cache is genuinely invalidated rather than merely not-yet-expired, so `ActiveSigner`/`VerificationKeys` immediately exclude the revoked key) and `CAService.RevokeCertificate`/`VerifyCertificate` (the transition, idempotence, the ledger write, a real chain-verification success, refusal on a revoked certificate, and refusal on a revoked authority anywhere in the chain -- seeded directly, since no round-3 method writes `AuthorityStatusRevoked` itself). `crl.go`'s tests cover an empty CRL still generating and incrementing `CRLNumber`, a real revoked-certificate CRL whose signature is verified through the standard library's own `x509.RevocationList.CheckSignatureFrom` (never a hand-rolled check), `ErrAuthorityNotFound`, `ErrSignerUnavailable`'s wrapping (a stubbed failing `Signer`), `RegenerateAllCRLs` across multiple authorities, `EnqueueCRLRegenerate`'s no-queue-wired failure and task shape, and `crlRegenerateHandler`'s `Type`/`Handle`/payload rejection. `jwks_test.go` covers `Service.ExportJWKS`'s active/retiring-only filter and empty-purpose answer, `CAService.ExportAuthorityChainJWKS`'s chain order (leaf-first, root-last) and root-only case, `ErrAuthorityNotFound`, and -- the round's explicit round-trip requirement -- both exports marshaled to JSON, asserted to carry no `"d"` (private-key) field, unmarshaled back through `go-jose`'s own `jose.JSONWebKeySet`, and the resulting public key used to verify a real signature (key-lifecycle layer) or matched byte-for-byte against the source certificate's own public key (X.509 layer). `lifecycle_test.go` gained `Service.PromoteNow`'s propagation-window refusal, its success path (mirroring `PromoteDuePending`'s demote-then-promote proof), `ErrKeyNotFound` for no pending key, and its zero-argument fallback to the `Service`'s own default. `handler_test.go` drives whole HTTP requests through `Handler`'s own mux over real `Service`/`CAService` instances (mirroring `go/storage/handler_test.go`'s shape): both revoke operations' success/validation/not-found paths, the wrong-tenant-reads-as-404 certificate case, both JWKS fetches, and the CRL fetch's not-generated-yet 404 and its stored-document 200 (byte-identical body, correct `Content-Type`). `ca_test.go` gained the `CRLDistributionPoints`-extension propagation proof: a parent's declared `CRLDistributionPoint` appears on the certificate it signs, and an undeclared one omits the extension entirely.
+- **Migration 0008's duplicate-ledger upgrade regression (the migration-dedupe round)**: `go/pki/internal/testutil/migration_dedupe_test.go` (SQLite unit legs) and `go/pki/integration_test/postgres_migration_dedupe_test.go` (real-PostgreSQL leg, `-tags=integration`) share the scenario helpers of `go/pki/internal/testutil/migration_dedupe.go`. Regression (a): a database rewound to the state a deployment stranded at 0008 is left in -- no `uq_pki_certificate_revocations_certificate`, 0007's plain per-certificate index restored, 0008 and 0009 unrecorded -- and seeded with two ledger rows for one certificate upgrades through the real `dbkit.MigrationRegistry` successfully and ends with exactly one row per certificate: the EARLIEST-created one (the seeded trap: the later-created duplicate carries the lexicographically smaller id, so a `MIN(id)` dedupe would fail the survivor assertion). Regression (b): a fully applied database with a real ledger row re-applies as a strict no-op -- the registry records applied files by `(module, filename)` and never re-runs a recorded file, so 0008's in-place content change cannot reach it. Both legs failed against the pre-fix 0008 file (`duplicated key not allowed` on SQLite; `ERROR: could not create unique index ... (SQLSTATE 23505)` on PostgreSQL) and pass after.
 - **A real bug round 2's own tests caught**: `SigningKeyRepository.PromoteToActive` originally promoted the pending key to active BEFORE demoting the previous active key, in the same transaction. `uq_pki_signing_keys_active_purpose` is a partial unique index checked at each statement, not deferred to commit, so that ordering momentarily left two active rows for one purpose and was refused by SQLite itself -- `TestService_PromoteDuePending_PromotesPastTheWindow_AndDemotesThePrevious` failed against the original ordering before the fix (demote first, promote second) landed. Recorded here per this repository's bug-fix test policy.
 - **Vault / AWS KMS unit tests**: `go/pki/signer/vault/signer_test.go` and `go/pki/signer/kmsaws/signer_test.go` stub each package's third-party client interface (`transitClient`, `kmsClient`) and exercise every request/response shape both packages build and parse, including a real `crypto/ed25519.Verify` round trip against each package's own signature-decoding path -- proof the code compiles and shapes requests correctly, never proof against a real backend.
 - **No Vault or AWS KMS integration leg.** `docs/internal/22-pki.md`'s testing-strategy section names a Docker-backed Vault leg (testcontainers, dev-mode server, both envelope and direct-sign modes) as this module's eventual target and records AWS KMS as never getting one (LocalStack's KMS implementation is known to diverge from the real service) -- this history adds neither: no `go/pki/signer/vault/integration_test/` package exists yet, and none is planned for `kmsaws`. Real verification against a live AWS account has not been performed; see "Signer providers: `vault` and `kmsaws`" above for the full statement of this gap.
@@ -624,3 +625,95 @@ ca_test.go:439: IssueCertificate(active intermediate under revoked root) error =
 direct authority is the walk's first member, so those refusals are
 unchanged. Full module suite green under plain `go test` and `-race`;
 `go vet` and `golangci-lint` clean.
+
+## Migration 0008's duplicate-ledger upgrade fix (round entry, 2026-09-07)
+
+Closing P0-pki-6: migration `0008_enforce_one_ledger_row_per_certificate.sql`
+(both dialect copies) created the ledger's `uq_pki_certificate_revocations_certificate`
+unique index with no dedupe before it. The index is only creatable when the
+ledger already holds one row per `certificate_id`, and the ledger as 0007
+left it carried no such guarantee: round 3's pre-arbitration
+`RevokeCertificate` wrote its ledger row through a check-then-act `Create`
+(the shape the file's own header names), so two callers revoking one active
+certificate concurrently could both pass the check and land TWO rows for it.
+A deployment that ran that code against 0007's non-unique schema and hit
+the race carried duplicates into the upgrade; the `CREATE UNIQUE INDEX`
+failed, and because `dbkit.MigrationRegistry` applies one module's files in
+a single transaction, 0008 and 0009 rolled back together, stranding the
+deployment at startup with 0008 unrecorded and no remediation path.
+
+**The registry-semantics finding that decides the fix shape.** Read-only
+evidence in `go/dbkit/migrations.go`: `schema_migrations` records applied
+files by `(module, filename)` alone (`isApplied`/`recordApplied`) -- no
+content hash is stored and a recorded file is never re-executed or
+re-compared, so a file whose content changed after it was recorded never
+runs again, while a file whose module transaction failed has NO record and
+re-runs in full on the next boot. Editing the shipped 0008 files in place
+-- a dedupe statement before the `CREATE UNIQUE INDEX`, keeping the
+earliest row per `certificate_id` (by `created_at`, `id` as the
+deterministic tiebreak), which is the row the database-arbitrated
+arbitration the index provides would itself have let win -- therefore
+rescues BOTH deployment classes with one change: the deployment stranded
+at 0008 (its rolled-back transaction left no record, so the next boot
+executes the edited file: dedupe, then the index, then 0009) and the
+deployment already past 0008 (its record makes the edited file a strict
+no-op, exactly as regression (b) proves). A new 0009-and-later migration
+was considered and rejected: it cannot help the stranded class at all,
+since that deployment can never get past the failing 0008 to reach it.
+The dedupe is a no-op on a duplicate-free ledger, and `ROW_NUMBER OVER` is
+standard SQL both dialects support (SQLite since 3.25), so the statement
+is byte-identical across the two copies like the rest of the file. No
+change to `go/dbkit`: its semantics are the reason the fix works, not a
+defect.
+
+**Regression tests** (fail before, pass after, both real engines): the
+SQLite unit legs and the real-PostgreSQL leg (this module's first
+`integration_test/` package, run with `-tags=integration` against a real
+postgres:16-alpine via testcontainers) share the scenario helpers in
+`go/pki/internal/testutil/migration_dedupe.go` -- see the Testing section
+above for what each leg seeds and asserts. Fail-before, run on the
+unmodified 0008 against the seeded duplicates:
+
+```
+internal/testutil: apply sqlite migrations for "pki": dbkit: module "pki": apply 0008_enforce_one_ledger_row_per_certificate.sql: duplicated key not allowed
+integration_test: apply postgres migrations for "pki": dbkit: module "pki": apply 0008_enforce_one_ledger_row_per_certificate.sql: duplicated key not allowed: ERROR: could not create unique index "uq_pki_certificate_revocations_certificate" (SQLSTATE 23505)
+```
+
+Both legs pass after the fix; regression (b)'s re-apply no-op passes on
+both sides of the change. Full module suite green under `go test` and
+`go test -race ./...`; `go vet ./...` and `golangci-lint run ./...`
+clean.
+
+**Twin-call-site enumeration** (every `CREATE UNIQUE INDEX` across all
+modules' migrations, per the standing rule; the postgres copies mirror
+their sqlite siblings byte-identically, so the sqlite-side scan covers
+both): the only unique indexes created over tables populated by EARLIER
+files are authn 0010, org 0004/0005/0007/0008, rbac 0002, pki
+0008/0009, and org 0005/0007 are the one other same-hazard class. Sites
+covered: none besides pki 0008 -- this fix. Not applicable: (i) every
+same-file creation (table created in the same migration file as its
+unique index, hence empty at index time): authn 0001 (users
+email/phone), 0003 (refresh_tokens token_hash), 0005 (user_identities
+provider+external_id), 0008 (mfa user_id+type); billing 0001 (plans),
+0006 (payment_events); integration 0001 (api_keys), 0003
+(webhook_deliveries); metering 0002 (outbox idempotency); notification
+0001/0002/0003 (in_app_messages, preferences, verified_contacts +
+platform_blacklist + send_records); org 0001/0002/0003 (nodes,
+memberships, invitations); pki 0001 (signing_keys active-purpose,
+partial from birth); rbac 0001 (three); sharing 0001; storage 0002. Not
+applicable: (ii) every narrowing re-creation whose dropped predecessor
+was strictly stronger, so existing rows already satisfy the new index:
+authn 0010 (full user_id+type unique narrowed to active rows only), org
+0004 and rbac 0002 (full uniques narrowed to live rows), org 0008
+(single-root narrowed to live roots; two LIVE roots were impossible
+under 0007), pki 0009 (re-creates 0001's partial active-purpose index
+shape-identically over rows that already satisfied it, and can never
+precede 0008 in apply order). Same hazard class, reviewed and left
+alone as out of this round's module scope: org 0005
+(`uq_org_invitations_pending_email`) and org 0007 (single-root) each
+create a unique index over a table earlier code could duplicate under a
+documented race (concurrent same-address Invite / concurrent CreateRoot),
+and shipped without a dedupe for the same reason 0008 needed one; a
+deployment carrying such data would fail them at upgrade exactly as 0008
+did. Each needs its own in-place dedupe (or an argued non-exposure) in
+an org-module round; recorded here per the standing enumeration rule.
