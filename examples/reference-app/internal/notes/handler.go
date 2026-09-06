@@ -57,6 +57,20 @@ var ErrTextRequired = apperr.Invalid("notes.text_required")
 // both reject it.
 const maxTextLength = 4000
 
+// maxRequestBodyBytes bounds the size of a create-note request body BEFORE
+// it is decoded. The bound is deliberately the same 64 KiB
+// go/authn/handler.go's maxRequestBodyBytes uses for its own
+// unauthenticated register and login endpoints: this surface is
+// authenticated, but the body still feeds an unbounded json.Decoder before
+// any validation has had a chance to refuse it, so an arbitrarily large
+// body would otherwise be buffered in full (go/authn/handler.go's own doc
+// comment gives the reasoning in full). A body any legitimate note can
+// produce stays far below the bound -- maxTextLength is 4000 Unicode code
+// points, and even an all-HTML-escaped text (the JSON encoder's widest
+// legal rendering, six bytes per character) tops out near 24 KiB of body,
+// leaving an order of magnitude of headroom.
+const maxRequestBodyBytes = 1 << 16
+
 // ErrTextTooLong is returned when a create-note request's text exceeds
 // maxTextLength characters (counted as in maxTextLength's own doc
 // comment above). Its localized text lives in this module's Locales()
@@ -198,6 +212,13 @@ func (h *Handler) NotesCreateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The body is bounded by maxRequestBodyBytes BEFORE decoding, exactly
+	// as go/authn/handler.go's decodeJSON bounds its own endpoints: a body
+	// that exceeds the bound fails with the same invalid-request-body error
+	// as malformed JSON, as soon as the read passes the limit rather than
+	// after the whole body has been buffered. Passing w lets net/http ask
+	// the server to close the connection after the oversized request.
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	var req api.NotesCreateNoteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, apperr.Invalid("notes.invalid_request_body").WithCause(err))
@@ -220,7 +241,7 @@ func (h *Handler) NotesCreateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.recordNoteCreatedAudit(ctx, note)
+	h.recordNoteCreatedAudit(ctx, note, creatorUserID)
 	h.publishNoteCreated(ctx, tenant, note, creatorUserID)
 
 	// obs.FromContext(ctx) attaches tenant_id (and trace_id/span_id, once
@@ -268,6 +289,23 @@ func (h *Handler) resolveSubject(w http.ResponseWriter, r *http.Request) (string
 // committed, so audit.Emit's own write against the same database opens a
 // fresh, uncontended session rather than nesting inside an open one.
 //
+// The recorded event is attributed to the creating user -- the SAME
+// creatorUserID NotesCreateNote resolved through the SubjectResolver seam
+// and stamped on the note and the note-created event -- by layering
+// pkgcore.WithActor onto the ctx audit.Emit reads (audit.Emit copies the
+// Actor from ctx at emit time; see go/dbkit/audit/emit.go), the exact
+// shape go/authn/handler.go's own recordAudit uses for its events. The
+// layer is applied HERE, at the narrowest point that needs it, rather than
+// by a middleware that would change every surface, because no layer in the
+// composed chain populates pkgcore.Actor today (authn's recordAudit doc
+// comment says so explicitly), and this handler is the one place that
+// knows the creator: the value comes from the SubjectResolver seam, never
+// from an ambient context value. An empty creatorUserID -- a seam bug, or
+// a create that somehow reached the audit call with no resolved creator
+// -- leaves ctx exactly as given, so Emit falls back to its own "no actor
+// set" zero value exactly as authn's recordAudit does for an unknown
+// actor, never an invented one.
+//
 // A failure is logged at Error level, not returned: the note itself was
 // already committed by the time this runs, so a failure to record its
 // audit trail must not turn an otherwise successful create into a 500 for
@@ -281,9 +319,12 @@ func (h *Handler) resolveSubject(w http.ResponseWriter, r *http.Request) (string
 // coding standard's "do not log an error and also return it" rule (§11)
 // is about not doing both for the SAME failure, and here nothing else
 // ever surfaces either one.
-func (h *Handler) recordNoteCreatedAudit(ctx context.Context, note *Note) {
+func (h *Handler) recordNoteCreatedAudit(ctx context.Context, note *Note, creatorUserID string) {
 	if h.bus == nil {
 		return
+	}
+	if creatorUserID != "" {
+		ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: creatorUserID})
 	}
 	// Resource.DisplayName is deliberately left empty rather than set to
 	// note.Text: a note's whole content is arbitrary, caller-supplied free

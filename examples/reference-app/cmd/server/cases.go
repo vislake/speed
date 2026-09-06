@@ -50,6 +50,17 @@ import (
 // smilesim.go's own writeSmileSimError applies.
 var casesErrInternal = apperr.Internal("cases.internal_error")
 
+// casesMaxRequestBodyBytes bounds a create-case request body BEFORE it is
+// decoded, mirroring go/authn/handler.go's maxRequestBodyBytes and notes'
+// own handler.go constant of the same value and reasoning: the body feeds
+// an unbounded json.Decoder before any validation has had a chance to
+// refuse it, so an arbitrarily large body would otherwise be buffered in
+// full. A body any legitimate create-case request can produce stays far
+// below the bound -- the request's own limits (a 200-rune patient name, a
+// 64-rune reference, 50 photo object ids of at most 64 runes) sum to a few
+// kilobytes.
+const casesMaxRequestBodyBytes = 1 << 16
+
 // casesHandler implements casesapi.ServerInterface -- the app-side
 // implementation of the spec fragment's three operations -- backed by
 // svc and resolving the acting user through subject, the attribution
@@ -96,6 +107,14 @@ func (h *casesHandler) CasesCreateCase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The body is bounded by casesMaxRequestBodyBytes BEFORE decoding, the
+	// identical shape notes' create handler and go/authn/handler.go's
+	// decodeJSON apply: a body that exceeds the bound fails with the same
+	// invalid-request-body error as malformed JSON, as soon as the read
+	// passes the limit rather than after the whole body has been buffered.
+	// Passing w lets net/http ask the server to close the connection after
+	// the oversized request.
+	r.Body = http.MaxBytesReader(w, r.Body, casesMaxRequestBodyBytes)
 	var body casesapi.CasesCreateCaseRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeCasesError(w, apperr.Invalid("cases.invalid_request_body").WithCause(err))

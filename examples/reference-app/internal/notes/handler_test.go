@@ -253,6 +253,18 @@ func TestHandler_Create_ValidText_RecordsAuditEvent(t *testing.T) {
 	if payload.TenantID != "tenant-acme" {
 		t.Fatalf("recorded event TenantID = %q, want %q", payload.TenantID, "tenant-acme")
 	}
+	// The recorded event must be attributed to the creating user -- the
+	// exact creator id the stub SubjectResolver answered, stamped on the
+	// note and the note-created event alike -- because audit.Emit copies
+	// pkgcore.ActorFromContext at emit time and nothing in the composed
+	// chain populates that carrier (recordNoteCreatedAudit's own doc
+	// comment says so in full). An empty actor here means the audit trail
+	// cannot answer "who created this note", the P1 finding this assertion
+	// pins.
+	if payload.Actor.Type != pkgcore.ActorTypeUser || payload.Actor.ID != "test-creator" {
+		t.Fatalf("recorded event Actor = %+v, want {Type: %q, ID: %q}",
+			payload.Actor, pkgcore.ActorTypeUser, "test-creator")
+	}
 }
 
 func TestHandler_Create_EmptyText_ReturnsTextRequiredError(t *testing.T) {
@@ -400,6 +412,61 @@ func TestHandler_Create_InvalidJSON_ReturnsInvalidRequestBodyError(t *testing.T)
 	}
 	if got.Code == nil || *got.Code != "notes.invalid_request_body" {
 		t.Fatalf("error code = %v, want %q", got.Code, "notes.invalid_request_body")
+	}
+}
+
+// TestHandler_Create_OversizedBody_RefusedWithInvalidRequestBody is the
+// P2-12 regression for the MaxBytesReader bound this handler now applies
+// (see maxRequestBodyBytes in handler.go -- the test's body is written in
+// terms of the bound's own value so the relationship cannot drift),
+// mirroring the identical regression go/authn/handler_test.go's
+// TestHandler_Register_OversizedBody_RefusedWithInvalidRequestBody pins
+// for authn's own endpoints: an arbitrarily large body must not be read in
+// full -- unbounded buffering of an attacker's payload before any
+// validation has run -- nor land its content in the database. The body
+// below is valid JSON whose SIZE alone exceeds the byte bound: everything
+// after the padding is a perfectly legal create-note request, so the ONLY
+// thing that can refuse it is the body bound, and the refusal must
+// surface as the catalogued invalid-request-body code rather than a
+// successful note creation (which is what an unbounded decoder did before
+// the fix).
+func TestHandler_Create_OversizedBody_RefusedWithInvalidRequestBody(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	// One byte over the bound, spent on JSON-leading whitespace (legal,
+	// and skipped by the decoder), so the payload that follows -- a valid
+	// create-note request -- is what an unbounded reader would have
+	// accepted and stored.
+	var body strings.Builder
+	body.WriteString(strings.Repeat(" ", maxRequestBodyBytes+1))
+	body.WriteString(`{"text":"buy milk"}`)
+
+	req := httptest.NewRequest(http.MethodPost, apiPath, strings.NewReader(body.String()))
+	rec := doRequest(h, req, "tenant-acme")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (an over-bound body must be refused); body = %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	var got api.NotesError
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if got.Code == nil || *got.Code != "notes.invalid_request_body" {
+		t.Fatalf("error code = %v, want %q", got.Code, "notes.invalid_request_body")
+	}
+
+	// Nothing was created: the same creator can still create a note
+	// afterwards.
+	notes, err := h.repo.List(pkgcore.WithTenant(context.Background(), "tenant-acme"))
+	if err != nil {
+		t.Fatalf("list notes: %v", err)
+	}
+	if len(notes) != 0 {
+		t.Fatalf("got %d notes persisted after the refused oversized body, want 0", len(notes))
+	}
+	rec = doRequest(h, httptest.NewRequest(http.MethodPost, apiPath, strings.NewReader(`{"text":"after the refused oversized body"}`)), "tenant-acme")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create after the refused oversized body = %d, want %d", rec.Code, http.StatusCreated)
 	}
 }
 

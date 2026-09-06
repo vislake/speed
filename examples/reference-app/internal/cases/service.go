@@ -32,6 +32,17 @@ const (
 	patientNameMaxLength = 200
 	patientRefMaxLength  = 64
 
+	// photoObjectIDMaxLength is the character bound for one photo's object
+	// id, matching casePhotoRecord.ObjectID's size:64 tag and its
+	// VARCHAR(64) column on both dialects (PostgreSQL's VARCHAR(n) is a
+	// character count, and SQLite -- which enforces no length limit at all
+	// under its type-affinity system -- is why the check lives here, the
+	// same reasoning patientNameMaxLength's own doc comment gives). 64 is
+	// also far beyond any real go/storage object id (application-generated
+	// UUIDs, 36 characters), so the bound refuses junk, never a legitimate
+	// id.
+	photoObjectIDMaxLength = 64
+
 	// maxPhotosPerCaseCreate bounds one create request's photo list. Each
 	// photo is its own row (never one unbounded value), so the cap exists
 	// to keep a single request sane, not to bound storage: 50 attachments
@@ -63,8 +74,16 @@ var (
 
 	// ErrPhotoObjectIDRequired is returned when a create request's photo
 	// list contains an empty object id -- a malformed entry, refused
-	// rather than silently skipped.
+	// rather than silently skipped. The check runs on the trimmed value
+	// (see Create's validation order), so a whitespace-only id -- which
+	// trims to empty -- is refused here too, exactly as an explicitly
+	// empty one is.
 	ErrPhotoObjectIDRequired = apperr.Invalid("cases.photo_object_id_required")
+
+	// ErrPhotoObjectIDTooLong is returned when a create request's photo
+	// list contains an object id longer than photoObjectIDMaxLength
+	// characters, with the limit and offending length in params.
+	ErrPhotoObjectIDTooLong = apperr.Invalid("cases.photo_object_id_too_long")
 
 	// ErrDuplicatePhotoObject is returned when a create request's photo
 	// list names the same object id twice, with the duplicate's object id
@@ -218,8 +237,11 @@ type CreateInput struct {
 //  2. patient reference trimmed (an empty one stays the "" sentinel) and
 //     bounded at patientRefMaxLength runes;
 //  3. photo list bounded at maxPhotosPerCaseCreate entries, every entry
-//     non-empty, no entry repeated (ErrDuplicatePhotoObject, naming the
-//     duplicate);
+//     trimmed once (the trimmed value is the only spelling that reaches
+//     any later check or any written row), non-empty after the trim
+//     (ErrPhotoObjectIDRequired), bounded at photoObjectIDMaxLength runes
+//     (ErrPhotoObjectIDTooLong), no entry repeated
+//     (ErrDuplicatePhotoObject, naming the duplicate);
 //  4. per photo, a tenant-scoped pre-flight that the object is not already
 //     attached to another case of the same tenant (ErrPhotoAlreadyAttached,
 //     naming the object). The pre-flight is the friendly answer to the
@@ -250,10 +272,27 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Case, []Photo, er
 	if len(in.PhotoObjectIDs) > maxPhotosPerCaseCreate {
 		return Case{}, nil, ErrTooManyPhotos.WithParam("limit", maxPhotosPerCaseCreate).WithParam("length", len(in.PhotoObjectIDs))
 	}
-	seen := make(map[string]struct{}, len(in.PhotoObjectIDs))
-	for _, objectID := range in.PhotoObjectIDs {
+	// Each photo object id is trimmed once, up front, and the trimmed
+	// value is what every later check and every written row sees: a
+	// spelling difference is a client accident, never a distinct storage
+	// key, so "abc" and " abc " must not become two object_id values that
+	// defeat the uq_case_photos_tenant_object invariant (the same photo
+	// attached to two cases under two spellings) or send smilesim's
+	// per-photo enumeration chasing two keys for one object.
+	photoObjectIDs := make([]string, len(in.PhotoObjectIDs))
+	for i, objectID := range in.PhotoObjectIDs {
+		photoObjectIDs[i] = strings.TrimSpace(objectID)
+	}
+
+	seen := make(map[string]struct{}, len(photoObjectIDs))
+	for _, objectID := range photoObjectIDs {
 		if objectID == "" {
 			return Case{}, nil, ErrPhotoObjectIDRequired
+		}
+		if length := utf8.RuneCountInString(objectID); length > photoObjectIDMaxLength {
+			return Case{}, nil, ErrPhotoObjectIDTooLong.
+				WithParam("limit", photoObjectIDMaxLength).
+				WithParam("length", length)
 		}
 		if _, dup := seen[objectID]; dup {
 			return Case{}, nil, ErrDuplicatePhotoObject.WithParam("object_id", objectID)
@@ -267,8 +306,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Case, []Photo, er
 		PatientRef:    patientRef,
 		CreatorUserID: in.CreatorUserID,
 	}
-	photos := make([]casePhotoRecord, 0, len(in.PhotoObjectIDs))
-	for position, objectID := range in.PhotoObjectIDs {
+	photos := make([]casePhotoRecord, 0, len(photoObjectIDs))
+	for position, objectID := range photoObjectIDs {
 		// Pre-flight before any insert: see Create's own doc comment above
 		// for what the sequential check catches and what the residual race
 		// looks like. The lookup is keyed on the object_id column, tenant-

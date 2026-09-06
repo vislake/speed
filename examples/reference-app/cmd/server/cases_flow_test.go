@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -341,4 +342,41 @@ func TestCasesFlow_Anonymous_Refused(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("anonymous GET %s status = %d, want 403 (tenancy's fail-closed default)", casesPath, resp.StatusCode)
 	}
+}
+
+// TestCasesFlow_OversizedBody_RefusedWithInvalidRequestBody is the P2-12
+// regression for the MaxBytesReader bound cmd/server/cases.go now applies
+// (see casesMaxRequestBodyBytes), mirroring the identical regressions
+// internal/notes/handler_test.go's own oversized-body test and
+// go/authn/handler_test.go's TestHandler_Register_OversizedBody_RefusedWithInvalidRequestBody
+// pin: an arbitrarily large create-case body must not be read in full --
+// unbounded buffering of an attacker's payload before any validation has
+// run -- nor land its content in the database. The body below is valid
+// JSON whose SIZE alone exceeds the byte bound: everything after the
+// padding is a perfectly legal create-case request, so the ONLY thing that
+// can refuse it is the body bound, and the refusal must surface as the
+// catalogued invalid-request-body code rather than a successful case
+// creation (which is what an unbounded decoder did before the fix).
+func TestCasesFlow_OversizedBody_RefusedWithInvalidRequestBody(t *testing.T) {
+	srv, cfg, _ := buildTestServer(t)
+	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-oversized")
+
+	// One byte over the bound -- casesMaxRequestBodyBytes's value, 1<<16,
+	// written as a literal so this test also compiles against the pre-fix
+	// handler, which defined no constant -- spent on JSON-leading
+	// whitespace (legal, and skipped by the decoder), so the payload that
+	// follows -- a valid create-case request -- is what an unbounded
+	// reader would have accepted and stored.
+	var body strings.Builder
+	body.WriteString(strings.Repeat(" ", (1<<16)+1))
+	body.WriteString(`{"patient_name":"Anna Meyer"}`)
+
+	resp := casesRequestAs(t, srv, http.MethodPost, casesPath, acmeToken, demoNotesCreatorUserID, strings.NewReader(body.String()))
+	assertCasesError(t, resp, http.StatusBadRequest, "cases.invalid_request_body", "create with an oversized body")
+
+	// Nothing was created: the same creator can still create a case
+	// afterwards.
+	_ = createCaseAs(t, srv, acmeToken, demoNotesCreatorUserID, caseCreateBody{
+		PatientName: "After the refused oversized body",
+	})
 }

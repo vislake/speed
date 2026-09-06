@@ -213,7 +213,13 @@ func guardAdminRoute(az rbac.Authorizer, handler http.Handler) http.Handler {
 // from an empty in-memory roster -- locking the operator out of admin's
 // own console until the database is wiped, the SystemDomain twin of the
 // customer-tenant restart defect this round's org-backed membership store
-// fixes.
+// fixes. The registration itself goes through registerDemoUserIfAbsent,
+// exactly like seedDemoUsers' accounts: an already-registered staff
+// account is discovered by the SearchUsers lookup and never POSTs the
+// public register route -- the route whose per-IP budget (10 per hour)
+// repeated restart boots used to exhaust under the distributed
+// deployment mode's shared KVStore (seedDemoUsers' own doc comment has
+// the arithmetic) -- so a restart consumes no register budget at all.
 //
 // It returns the registered user id, or an error naming exactly what
 // failed -- registration, membership or role assignment -- mirroring
@@ -233,15 +239,11 @@ func guardAdminRoute(az rbac.Authorizer, handler http.Handler) http.Handler {
 func seedDemoPlatformStaff(ctx context.Context, handler http.Handler, memberships *signInMemberships, svc *rbac.Service, authnService *authn.Service, password string) (string, error) {
 	logger := obs.FromContext(ctx)
 
-	userID, alreadyExists, err := registerDemoUser(ctx, handler, demoPlatformStaffEmail, password)
+	userID, alreadyExists, err := registerDemoUserIfAbsent(ctx, handler, authnService, demoPlatformStaffEmail, password)
 	if err != nil {
 		return "", err
 	}
 	if alreadyExists {
-		userID, err = registeredDemoUserID(ctx, authnService, demoPlatformStaffEmail)
-		if err != nil {
-			return "", err
-		}
 		logger.Info("demo platform-staff account already registered; re-asserting its system-domain membership and role",
 			"user_id", userID)
 	}

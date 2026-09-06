@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/rbac"
 )
@@ -286,6 +288,87 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T)
 		t.Fatalf("boot-two login as the platform-staff account: status = %d, code = %q, want %d "+
 			"(the staff account's SystemDomain membership must survive a restart)",
 			status, code, http.StatusOK)
+	}
+}
+
+// TestDemoUsers_RegisterDemoUser_RateLimitAnswerNamedDistinctly is the
+// P2-5 second half: registerDemoUser must distinguish authn's register
+// rate-limit answer from the other fatal answers honestly -- naming the
+// public per-IP register budget (10/hour, go/authn/ratelimit.go's
+// limitRegisterByIP) and its remedy -- rather than folding it into the
+// generic "answered HTTP %d with code %q" message that reads like a
+// misconfiguration. The budget here is one boot's own in-memory KVStore:
+// the test exhausts the register route's no-client-address bucket with 10
+// in-process register POSTs (the identical in-process, recorder-based
+// shape registerDemoUser itself uses, so every POST lands on the same
+// bucket the seed's own POSTs land on), then drives registerDemoUser
+// itself and asserts the refusal is named as the rate limit -- and that an
+// ordinary policy refusal (the control) never carries that name. Failing
+// before the fix: the 11th POST's refusal is reported through the generic
+// message, which contains neither the rate-limit name nor the remedy.
+func TestDemoUsers_RegisterDemoUser_RateLimitAnswerNamedDistinctly(t *testing.T) {
+	cfg := testConfig(t)
+	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("buildServer: %v", err)
+	}
+	t.Cleanup(func() {
+		if cleanupErr := cleanup(); cleanupErr != nil {
+			t.Errorf("cleanup: %v", cleanupErr)
+		}
+	})
+
+	ctx := context.Background()
+
+	// postRegister posts one register payload in-process, exactly the
+	// shape registerDemoUser uses (no client address, so the POST debits
+	// the same no-address bucket the seed's own POSTs debit), and returns
+	// the status.
+	postRegister := func(email, password string) int {
+		payload, err := json.Marshal(map[string]string{"email": email, "password": password})
+		if err != nil {
+			t.Fatalf("marshal register body: %v", err)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, authnAPIPath+"/register", bytes.NewReader(payload))
+		if err != nil {
+			t.Fatalf("build register request: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// Control first, while the budget still has room: a policy refusal (a
+	// password too short for authn's policy) must keep flowing through the
+	// generic classification -- never mistaken for the rate limit.
+	_, _, policyErr := registerDemoUser(ctx, handler, "policy-refused@example.com", "x")
+	if policyErr == nil {
+		t.Fatal("registerDemoUser with a policy-refused password: want error, got nil")
+	}
+	if strings.Contains(policyErr.Error(), "rate limit") {
+		t.Fatalf("policy-refusal error names the rate limit: %v", policyErr)
+	}
+
+	// Exhaust the register budget: 9 more in-process registrations on top
+	// of the debited policy attempt reach the 10-per-hour limit.
+	for i := 0; i < 9; i++ {
+		if status := postRegister("budget-"+strconv.Itoa(i)+"@example.com", demoSeedPassword); status != http.StatusCreated {
+			t.Fatalf("register %d status = %d, want 201", i, status)
+		}
+	}
+
+	// The 11th register POST (10 already debited) must answer 429, and
+	// registerDemoUser must name the answer as the public register rate
+	// limit with its remedy, not as the generic fatal refusal.
+	_, _, rateErr := registerDemoUser(ctx, handler, "rate-limited@example.com", demoSeedPassword)
+	if rateErr == nil {
+		t.Fatal("registerDemoUser with an exhausted register budget: want error, got nil")
+	}
+	for _, want := range []string{"public register rate limit", authn.ErrRateLimited.Code, "retry after the sliding window"} {
+		if !strings.Contains(rateErr.Error(), want) {
+			t.Fatalf("rate-limit error = %v, want it to name %q", rateErr, want)
+		}
 	}
 }
 

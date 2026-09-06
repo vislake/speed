@@ -201,6 +201,105 @@ func TestService_Create_Validation(t *testing.T) {
 	})
 }
 
+// TestService_Create_PhotoObjectIDTrimmedAndBounded pins the P2-11
+// normalization of a photo object id BEFORE the uniqueness checks run:
+// the trimmed spelling is the only spelling that reaches the duplicate
+// check, the already-attached pre-flight or a written row, so two
+// spellings of one id can never become two storage keys that bypass the
+// uq_case_photos_tenant_object invariant -- and an id longer than the
+// object_id column can hold is refused with its own coded error rather
+// than silently stored in full under SQLite (which enforces no VARCHAR
+// length limit at all). Failing before the fix: the padded duplicate was
+// accepted as two distinct values, a padded re-attachment of an attached
+// object was accepted as a distinct key, and an over-long id was stored.
+func TestService_Create_PhotoObjectIDTrimmedAndBounded(t *testing.T) {
+	svc := newService(t)
+	ctx := tenantCtx("tenant-acme")
+
+	t.Run("padded duplicate in one request is a duplicate", func(t *testing.T) {
+		_, _, err := svc.Create(ctx, CreateInput{
+			PatientName:    "ok",
+			PhotoObjectIDs: []string{"photo-1", " photo-1 "},
+			CreatorUserID:  "user-1",
+		})
+		assertCode(t, err, ErrDuplicatePhotoObject.Code)
+	})
+
+	t.Run("padded spelling cannot re-attach an attached object", func(t *testing.T) {
+		if _, _, err := svc.Create(ctx, CreateInput{
+			PatientName:    "First Case",
+			PhotoObjectIDs: []string{"photo-shared"},
+			CreatorUserID:  "user-1",
+		}); err != nil {
+			t.Fatalf("first Create() error = %v", err)
+		}
+		// " photo-shared " is the SAME object id spelled with padding: it
+		// must collide with the attachment above, never become a second key
+		// that a second case may attach.
+		_, _, err := svc.Create(ctx, CreateInput{
+			PatientName:    "Second Case",
+			PhotoObjectIDs: []string{" photo-shared "},
+			CreatorUserID:  "user-1",
+		})
+		assertCode(t, err, ErrPhotoAlreadyAttached.Code)
+	})
+
+	t.Run("padded id is stored trimmed", func(t *testing.T) {
+		created, photos, err := svc.Create(ctx, CreateInput{
+			PatientName:    "Trimmed",
+			PhotoObjectIDs: []string{"  photo-trimmed  "},
+			CreatorUserID:  "user-1",
+		})
+		if err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		if len(photos) != 1 || photos[0].ObjectID != "photo-trimmed" {
+			t.Fatalf("created photos = %+v, want exactly photo-trimmed (the trimmed spelling)", photos)
+		}
+		if _, got, err := svc.Get(ctx, created.ID); err != nil || len(got) != 1 || got[0].ObjectID != "photo-trimmed" {
+			t.Fatalf("Get() photos = (%+v, %v), want exactly photo-trimmed", got, err)
+		}
+	})
+
+	t.Run("whitespace-only id is required-error", func(t *testing.T) {
+		_, _, err := svc.Create(ctx, CreateInput{
+			PatientName:    "ok",
+			PhotoObjectIDs: []string{"   "},
+			CreatorUserID:  "user-1",
+		})
+		assertCode(t, err, ErrPhotoObjectIDRequired.Code)
+	})
+
+	t.Run("object id length boundary counts runes", func(t *testing.T) {
+		// objectIDLimit is photoObjectIDMaxLength's value (and the
+		// casePhotoRecord.ObjectID column's declared size on both
+		// dialects): a local literal rather than the package constant, so
+		// this test also compiles and fails against the pre-fix service
+		// (which defined neither). Changing the limit without changing
+		// this literal fails the boundary case below, the same drift alarm
+		// the constant's own doc comment serves.
+		const objectIDLimit = 64
+		maxID := strings.Repeat("\U0001F642", objectIDLimit)
+		if _, _, err := svc.Create(ctx, CreateInput{
+			PatientName:    "ok",
+			PhotoObjectIDs: []string{maxID},
+			CreatorUserID:  "user-1",
+		}); err != nil {
+			t.Fatalf("Create() with a %d-rune (%d-byte) id error = %v, want success", objectIDLimit, len(maxID), err)
+		}
+		_, _, err := svc.Create(ctx, CreateInput{
+			PatientName:    "ok",
+			PhotoObjectIDs: []string{maxID + "x"},
+			CreatorUserID:  "user-1",
+		})
+		// The code literal rather than ErrPhotoObjectIDTooLong.Code: the
+		// error's exported var is itself the fix, so this test must still
+		// compile (and fail) against the pre-fix service, which defines
+		// neither.
+		assertCode(t, err, "cases.photo_object_id_too_long")
+	})
+}
+
 // TestService_Create_PhotoAlreadyAttached pins the one-tenant-one-case-per-
 // photo rule with the coded conflict a sequential double-create sees, and
 // the cross-tenant counterpart: the same object id attached by another

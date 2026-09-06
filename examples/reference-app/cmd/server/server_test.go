@@ -1680,6 +1680,18 @@ func TestBuildServer_NoteCreate_PersistsAuditEvent(t *testing.T) {
 	if !got.Result().Success {
 		t.Fatalf("AuditEvent.Result().Success = %v, want true", got.Result().Success)
 	}
+	// The row must be attributed to the creating user -- the value
+	// createNoteAs sent as X-Demo-User-Id (demoNotesCreatorUserID), which
+	// demoNotesSubjectResolver answers for notes' SubjectResolver seam and
+	// recordNoteCreatedAudit now layers as the audit event's Actor (see its
+	// doc comment in internal/notes/handler.go). audit.Emit copies the
+	// Actor from ctx at emit time, and no middleware in the composed chain
+	// populates that carrier, so an empty actor_type/actor_id here means
+	// the audit trail cannot answer "who created this note".
+	if actor := got.Actor(); actor.Type != pkgcore.ActorTypeUser || actor.ID != demoNotesCreatorUserID {
+		t.Fatalf("AuditEvent.Actor() = %+v, want {Type: %q, ID: %q}",
+			actor, pkgcore.ActorTypeUser, demoNotesCreatorUserID)
+	}
 	if got.OccurredAt.IsZero() {
 		t.Fatal("AuditEvent.OccurredAt is zero, want a real timestamp")
 	}

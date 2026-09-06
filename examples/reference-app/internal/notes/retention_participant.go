@@ -4,7 +4,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // NewRetentionParticipant returns notes' pkgcore.RetentionParticipant --
@@ -33,6 +35,23 @@ import (
 // Repository over the very dbkit.Open *gorm.DB the notes Module already
 // uses -- share the connection, never a second pool -- and registers it on
 // the kernel's pkgcore.Registry.Retention seat during Bootstrap.
+//
+// Both destructive callbacks below tolerate a HardDelete that answers
+// record-not-found by counting the row as removed-elsewhere rather than
+// failing: a sweep and an on-demand erasure can legitimately converge on
+// the same rows (a soft-deleted note past the retention cutoff is exactly
+// what both target), and whichever orchestrator deletes a row first makes
+// the other's HardDelete -- issued after its own candidate list was
+// gathered -- answer ErrRecordNotFound. Reporting that as a failure would
+// surface compliance's ErrSweepPartialFailure / ErrErasurePartialFailure
+// for data that is in fact gone, which is convergence, not a partial
+// failure -- the identical tolerance pkgcore.RetentionParticipant's Erase
+// contract documents ("a participant with no data for subject returns
+// (0, nil) -- never an error -- so that re-running an erasure already
+// partially applied elsewhere converges instead of failing forever"),
+// applied to the mid-loop race the contract's own (0, nil) empty-list case
+// cannot cover. A row this callback did NOT remove is never counted in its
+// result, and any other HardDelete error stays a genuine failure.
 func NewRetentionParticipant(repo *Repository) pkgcore.RetentionParticipant {
 	return pkgcore.RetentionParticipant{
 		Name: "notes.note",
@@ -43,7 +62,13 @@ func NewRetentionParticipant(repo *Repository) pkgcore.RetentionParticipant {
 			}
 			reaped := 0
 			for _, row := range rows {
-				if err := repo.HardDelete(ctx, row.ID); err != nil {
+				err := repo.HardDelete(ctx, row.ID)
+				if hardDeleteSaysGone(err) {
+					// Already removed between the list above and this
+					// delete -- see hardDeleteSaysGone's doc comment.
+					continue
+				}
+				if err != nil {
 					return reaped, err
 				}
 				reaped++
@@ -66,7 +91,13 @@ func NewRetentionParticipant(repo *Repository) pkgcore.RetentionParticipant {
 			}
 			erased := 0
 			for _, row := range rows {
-				if err := repo.HardDelete(ctx, row.ID); err != nil {
+				err := repo.HardDelete(ctx, row.ID)
+				if hardDeleteSaysGone(err) {
+					// Already removed between the list above and this
+					// delete -- see hardDeleteSaysGone's doc comment.
+					continue
+				}
+				if err != nil {
 					return erased, err
 				}
 				erased++
@@ -80,4 +111,21 @@ func NewRetentionParticipant(repo *Repository) pkgcore.RetentionParticipant {
 			return repo.List(ctx)
 		},
 	}
+}
+
+// hardDeleteSaysGone reports whether err is the "the row is already gone"
+// answer a Repository.HardDelete gives when its physical DELETE matched no
+// row -- whether because the row never existed under ctx's tenant, or
+// because a concurrent removal (the other compliance orchestrator, or a
+// re-run of this one) got there between this callback's candidate list and
+// its own delete. It is matched by Code rather than by identity
+// (apperr.WithParam always derives a new *apperr.Error, so pointer
+// identity is not stable across the decoration the underlying repository
+// applies), the same way service.go's isRecordNotFound helper matches.
+func hardDeleteSaysGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	appErr, ok := apperr.As(err)
+	return ok && appErr.Code == dbkit.ErrRecordNotFound.Code
 }
