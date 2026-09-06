@@ -586,7 +586,10 @@ func (s *ObjectService) Complete(ctx context.Context, objectID string) (Object, 
 			// the two would outlive the row it describes. Take the writeback
 			// back (best effort -- in the other interleaving the reclaim
 			// already removed it, and the store's delete is idempotent) so a
-			// lost finalize never leaves orphaned content under the key.
+			// lost finalize never leaves orphaned content under the key. The
+			// take-back's own failure residue -- one-shot, nothing left to
+			// converge once the row is gone -- is the class AGENTS.md's Known
+			// limitations records alongside the deleting shape's.
 			if changed {
 				if cleanupErr := st.DeleteObject(ctx, row.Key); cleanupErr != nil {
 					observability.FromContext(ctx).Warn("sanitized writeback removed after the object vanished",
@@ -629,8 +632,14 @@ func (s *ObjectService) Complete(ctx context.Context, objectID string) (Object, 
 		//     again, so the rewrite would outlive the row it describes. Take
 		//     the writeback back (best effort -- in the other interleaving
 		//     the delete already removed it, and the store's delete is
-		//     idempotent) so the convergence does not orphan it. The shape
-		//     is unreachable within one process -- the per-object lock
+		//     idempotent) so the convergence does not orphan it. The take-back
+		//     is one-shot, unlike the delete protocol's own byte removal
+		//     (whose failure keeps the row deleting for the sweep to resume):
+		//     a transient store failure here is warned about and never
+		//     retried, and with the row's removal converging regardless, the
+		//     writeback then sits under a key nothing will ever revisit --
+		//     the residue class AGENTS.md's Known limitations records. The
+		//     shape is unreachable within one process -- the per-object lock
 		//     serializes completions and no actor flips an uploading row to
 		//     deleting -- and reachable only across the replicas of a
 		//     distributed deployment, which share the store but not the

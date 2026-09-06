@@ -14,10 +14,11 @@ package storage
 // content. Re-running a finished derive is a no-op (the row's existence is
 // checked before any work, and the repository's insert-if-absent closes the
 // same race at the write itself), and a derive of something that has nothing
-// to derive from -- an object that is gone, not completed, not an image, or
-// of a media type this service has no encoder for -- is a skip, not an error:
-// a job that converges on nothing to do must complete cleanly, or the queue
-// would re-run it into a dead letter. Only genuine failures (store errors,
+// to derive from -- an object that is gone, not completed, not an image, of
+// a media type this service has no encoder for, or one deleted between its
+// row read and its byte read -- is a skip, not an error: a job that
+// converges on nothing to do must complete cleanly, or the queue would
+// re-run it into a dead letter. Only genuine failures (store errors,
 // undecodable content, an over-limit pixel count) are errors, and those are
 // exactly what the jobs layer's retry policy exists for.
 //
@@ -117,11 +118,15 @@ func newDeriveService(objects *ObjectRepository, derivatives *DerivativeReposito
 // not exist (the delete protocol finished it between the enqueue and this
 // run), is not in the completed state (the same race, one step earlier), is
 // not an image, or is of an image media type this service has no encoder
-// for. It is idempotent: an object that already carries a thumbnail row is
-// left untouched. Real failures -- the store refusing the read or the write,
-// bytes that do not decode, a source over the pixel ceiling, a completed row
-// whose bytes or finalized metadata are missing -- are errors the jobs layer
-// retries.
+// for. A deletion that lands one step later -- after this run's row read
+// found the object completed but before its byte read answers -- is the same
+// cancellation one step later, and the not-found byte answer is re-checked
+// against the row to tell it apart from the genuine anomaly (the
+// discrimination is at the read below). It is idempotent: an object that
+// already carries a thumbnail row is left untouched. Real failures -- the
+// store refusing the read or the write, bytes that do not decode, a source
+// over the pixel ceiling, a completed row whose bytes or finalized metadata
+// are missing -- are errors the jobs layer retries.
 //
 // Skip decisions are logged, not silent, so a tenant that expected a
 // thumbnail for every uploaded image can see why a particular object never
@@ -195,9 +200,40 @@ func (s *DeriveService) DeriveThumbnail(ctx context.Context, objectID string) er
 	if err != nil {
 		// A completed row whose bytes the store cannot produce is the same
 		// anomaly OpenContent reports: the row promises content the store no
-		// longer holds. The delete protocol can cause this transiently --
-		// its byte removal races this read -- and a retry converges once the
-		// object's rows are gone.
+		// longer holds. A not-found answer has two faces, and they are told
+		// apart by re-reading the row. Two deleters can empty an object's key
+		// while this run is between its row read above and this byte read:
+		// the delete protocol's own byte removal, and -- across the replicas
+		// of a distributed deployment -- the lost-finalize take-back a losing
+		// completion runs when its re-read finds the row deleting (object.go's
+		// deleting shape). Every removal of an object's key is preceded by a
+		// committed deleting mark -- the protocol marks before its own byte
+		// removal, and the take-back runs only once a delete's mark is
+		// visible to its re-read -- so a re-read here is guaranteed to find
+		// the mark when a deletion caused the emptiness:
+		// a row that is gone or deleting means the deletion is converging and
+		// this run has nothing to derive -- a skip converging on nil exactly
+		// like the state check above, never an ErrStoreError the queue would
+		// re-run into a retry of a task whose object is being deleted. A row
+		// still completed is the genuine anomaly -- no deletion is converging
+		// to explain the emptiness away -- and stays ErrStoreError, the queue
+		// retry its horizon. A re-read that itself fails leaves the question
+		// unanswered, and the store error is reported rather than guessed at.
+		if errors.Is(err, pkgcore.ErrObjectNotFound) {
+			current, rerr := findObjectByID(ctx, s.objects, objectID)
+			if rerr == nil && current.State != ObjectStateCompleted {
+				observability.FromContext(ctx).Info("thumbnail derive skipped",
+					"object_id", objectID, "state", current.State,
+					"reason", "object deleted while its bytes were being read")
+				return nil
+			}
+			if hasCode(rerr, ErrObjectNotFound.Code) {
+				observability.FromContext(ctx).Info("thumbnail derive skipped",
+					"object_id", objectID,
+					"reason", "object deleted while its bytes were being read")
+				return nil
+			}
+		}
 		return ErrStoreError.WithCause(err)
 	}
 	// The read is bounded by the finalized size and checked against it: the

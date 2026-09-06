@@ -453,15 +453,20 @@ func TestDeriveService_DeriveThumbnail_ReChecksThePixelCeiling(t *testing.T) {
 }
 
 // hookedStore wraps a fakeStore and runs its hooks around the store
-// operations the mid-run race tests need to interleave with: onPut after
-// every successful byte write, onGet after every successful byte read. The
-// package's deletion and transfer-lifecycle races all drive the same shape --
-// the expiry sweep's or the delete protocol's removals landing while a
-// pipeline is between its own store operations -- through one of the two.
+// operations the mid-run race tests need to interleave with: beforeGet
+// before every byte read, onPut after every successful byte write, onGet
+// after every successful byte read. The package's deletion and
+// transfer-lifecycle races all drive the same shape -- the expiry sweep's or
+// the delete protocol's removals landing while a pipeline is between its own
+// store operations -- through one of the three. beforeGet exists for the
+// interleavings the after-hooks cannot express: a read that must fail, with
+// the other side's removal landed between the pipeline's row read and its
+// byte read.
 type hookedStore struct {
 	*fakeStore
-	onPut func()
-	onGet func()
+	beforeGet func()
+	onPut     func()
+	onGet     func()
 }
 
 func (s *hookedStore) PutObject(ctx context.Context, key string, r io.Reader) error {
@@ -475,6 +480,9 @@ func (s *hookedStore) PutObject(ctx context.Context, key string, r io.Reader) er
 }
 
 func (s *hookedStore) GetObject(ctx context.Context, key string) (io.ReadCloser, error) {
+	if s.beforeGet != nil {
+		s.beforeGet()
+	}
 	rc, err := s.fakeStore.GetObject(ctx, key)
 	if err != nil {
 		return nil, err
@@ -551,6 +559,123 @@ func TestDeriveService_DeriveThumbnail_DropsItsBytesWhenTheObjectDisappears(t *t
 			}
 		})
 	}
+}
+
+// TestDeriveService_DeriveThumbnail_CancelsCleanlyWhenTheDeletionRemovesItsBytes
+// proves the byte-read side of the derive/delete race, the mirror of the
+// insert-gate race above: the deletion has begun -- its mark committed, and
+// the key's bytes removed by the delete protocol's own byte removal or by a
+// losing completion's lost-finalize take-back, the second deleter object.go's
+// deleting shape adds, unsequenced with the delete protocol and able to
+// remove the key while this run is between its row read and its byte read --
+// and this run's row read saw the completed row a moment earlier. A
+// not-found byte answer for a row whose deletion is converging is a cancelled
+// derive, not a failure: the run must converge on nil exactly like a derive
+// that found the object already gone or deleting at its row read, never an
+// ErrStoreError the queue would re-run into a pointless retry of a task
+// whose object is being deleted. (On the pre-fix code this test failed: every
+// not-found byte answer -- the transient deletion race included -- was
+// reported as storage.store_error. The shape stands in for the cross-replica
+// interleaving deterministically, the same way the mid-run race tests above
+// stand in for the sweep.)
+func TestDeriveService_DeriveThumbnail_CancelsCleanlyWhenTheDeletionRemovesItsBytes(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		reclaim func(t *testing.T, svc *ObjectService, ctx context.Context, objectID string)
+	}{
+		{
+			// The delete marked the row and removed the bytes -- the shape a
+			// losing completion's take-back fires in, with the delete's row
+			// removal still ahead of it.
+			name: "the object is marked deleting and its bytes are removed",
+			reclaim: func(t *testing.T, svc *ObjectService, ctx context.Context, objectID string) {
+				t.Helper()
+				if _, err := svc.objects.markDeleting(ctx, objectID); err != nil {
+					t.Fatalf("markDeleting(%s): %v", objectID, err)
+				}
+			},
+		},
+		{
+			// The full protocol ran -- mark, byte removal, row removal -- so
+			// the re-read finds no row at all.
+			name: "the delete protocol finished before the byte read",
+			reclaim: func(t *testing.T, svc *ObjectService, ctx context.Context, objectID string) {
+				t.Helper()
+				if _, err := svc.objects.markDeleting(ctx, objectID); err != nil {
+					t.Fatalf("markDeleting(%s): %v", objectID, err)
+				}
+				if _, err := svc.objects.deleteObjectRows(ctx, objectID); err != nil {
+					t.Fatalf("deleteObjectRows(%s): %v", objectID, err)
+				}
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			derive, svc, store, _, bus := newDeriveHarness(t, nil)
+			ctx := serviceCtx("tenant-a")
+			row := createAndUpload(t, svc, ctx, testutil.PNG(t, 400, 300), "image/png")
+			if _, err := svc.Complete(ctx, row.ID); err != nil {
+				t.Fatalf("Complete(%s): %v", row.ID, err)
+			}
+
+			// Re-point the derive at a store that lands the deletion --
+			// mark, byte removal, and in the second variant the row removal
+			// too -- right before the byte read answers, so this run's row
+			// read saw the completed row and its byte read finds the key
+			// empty, exactly the interleaving across replicas.
+			hooked := &hookedStore{fakeStore: store}
+			hooked.beforeGet = func() {
+				tt.reclaim(t, svc, ctx, row.ID)
+				if err := hooked.DeleteObject(ctx, row.Key); err != nil {
+					t.Errorf("DeleteObject(%s): %v", row.Key, err)
+				}
+			}
+			host := &fakeHost{store: hooked, bus: bus}
+			derive.host = host
+
+			if err := derive.DeriveThumbnail(ctx, row.ID); err != nil {
+				t.Fatalf("DeriveThumbnail(%s): %v -- a derive whose object is mid-deletion must converge on nil, not error into a queue retry", row.ID, err)
+			}
+			rows, err := derive.derivatives.listByObject(ctx, row.ID)
+			if err != nil {
+				t.Fatalf("listByObject(%s): %v", row.ID, err)
+			}
+			if len(rows) != 0 {
+				t.Errorf("object %s gained %d derivative rows from a cancelled derive", row.ID, len(rows))
+			}
+		})
+	}
+}
+
+// TestDeriveService_DeriveThumbnail_StillReportsStoreErrorWhenBytesVanishFromACompletedRow
+// pins the far side of the same discrimination: a byte read that answers
+// not-found while the row still reads completed is the genuine anomaly --
+// the row promises content the store no longer holds, and no deletion is
+// converging to explain the emptiness away (every deleter marks the row
+// deleting before it removes the bytes, so a re-read would find the mark) --
+// reported as storage.store_error exactly as OpenContent reports it, with
+// the queue's retry as its horizon, never mistaken for a cancelled derive.
+func TestDeriveService_DeriveThumbnail_StillReportsStoreErrorWhenBytesVanishFromACompletedRow(t *testing.T) {
+	derive, svc, store, _, bus := newDeriveHarness(t, nil)
+	ctx := serviceCtx("tenant-a")
+	row := createAndUpload(t, svc, ctx, testutil.PNG(t, 400, 300), "image/png")
+	if _, err := svc.Complete(ctx, row.ID); err != nil {
+		t.Fatalf("Complete(%s): %v", row.ID, err)
+	}
+
+	// The key loses its bytes with the row untouched -- the anomaly, with no
+	// deletion behind it.
+	hooked := &hookedStore{fakeStore: store}
+	hooked.beforeGet = func() {
+		if err := hooked.DeleteObject(ctx, row.Key); err != nil {
+			t.Errorf("DeleteObject(%s): %v", row.Key, err)
+		}
+	}
+	host := &fakeHost{store: hooked, bus: bus}
+	derive.host = host
+
+	err := derive.DeriveThumbnail(ctx, row.ID)
+	assertCode(t, err, ErrStoreError.Code)
 }
 
 // TestDeriveHandler_Handle_DerivesFromTheEnqueuedTask proves the module's

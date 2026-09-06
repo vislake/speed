@@ -158,9 +158,14 @@ points at missing content. Re-running a finished derive is a no-op (the row's
 existence is checked before any work, and the repository's insert-if-absent
 write closes the same race at the insert), and a derive of something that has
 nothing to derive from — an object that is gone, not completed, not an image,
-or of an image media type this service has no encoder for — is a logged skip,
-not an error: a job that converges on nothing to do must complete cleanly, or
-the queue would re-run it into a dead letter. Genuine failures — store errors,
+or of an image media type this service has no encoder for, or one deleted
+between its row read and its byte read — is a logged skip, not an error: a
+job that converges on nothing to do must complete cleanly, or the queue
+would re-run it into a dead letter. The mid-run deletion is told apart from
+a genuinely vanished completed row's bytes by re-reading the row at the
+not-found byte answer (derive.go): a row that is gone or deleting cancels
+the derive; only a row still completed keeps the store-error classification.
+Genuine failures — store errors,
 undecodable content, a source over the pixel ceiling (re-checked against the
 stored bytes before the full decode, so a worker never decodes an image the
 transfer pipeline already refused) — are errors, which is exactly what the
@@ -368,7 +373,10 @@ plain unit suite under `-race`:
   configured edge, idempotent re-runs, logged skips on nothing-to-derive,
   store-failure errors, the pixel-ceiling re-check, the
   object-disappears-mid-derive race (the insert gate's refusal drops the
-  just-written bytes), and the handler's task shape and payload refusal;
+  just-written bytes; the byte-read side — a deletion landing between the
+  row read and the byte read — is re-checked against the row and cancels the
+  derive cleanly, while a still-completed row whose bytes are gone keeps its
+  store_error), and the handler's task shape and payload refusal;
 - `cleanup_test.go` — the delete protocol and the sweep: a full
   create→upload→complete→derive→delete journey whose `storage.object.deleted`
   lands exactly once (a second delete converges silently, cross-tenant runs see
@@ -487,6 +495,40 @@ invocation full-check.yml's integration-tiers job runs for this module:
   ObjectStore seam could carry in a later round; until then, the standalone
   shape (one process, one store) is airtight and the multi-replica one is not,
   recorded here rather than pretended away.
+- **A lost finalize's writeback take-back is one-shot best-effort
+  (2026-09-07).** When `Complete`'s finalize commits zero rows and the
+  re-read finds the row reclaimed, its upload window closed, or deleting, a
+  sanitizer writeback (`changed`) is taken back with one best-effort
+  `DeleteObject` call (object.go's lost-finalize branch, the deleting shape
+  added 2026-09-06); a failure is warned about, never retried -- the call is
+  answering the transfer pipeline's caller, not running a protocol it owns.
+  The delete protocol's own byte removal has different retry semantics on
+  purpose: a failure there keeps the row `deleting` and the sweep's first
+  phase re-runs the protocol until the removal lands. The take-back leaves
+  no such trace, and in two of its three shapes a failed take-back can be a
+  permanent residue: against a vanished row -- the reclaim already removed
+  the row, so nothing remains to re-run -- or against a deleting row whose
+  own delete run then finishes, removing the row the take-back's failure
+  could have been retried on. (A deleting row whose protocol is itself
+  interrupted is a different story: its rows stay for the sweep, whose
+  resumed run re-removes the key before the rows, so that interleaving
+  converges.) A permanent residue leaves the writeback's bytes orphaned
+  under the key: no row references them, no reader can reach them (reads
+  serve completed rows, and the row is gone or doomed), and nothing will
+  ever reclaim them -- the module never lists keys (the `ObjectStore` seam
+  has no listing) and object ids are never reused, so the key can neither be
+  claimed by a future object nor cleaned by a row-driven sweep. The
+  window-closed shape is bounded: the row stays listed as an expired upload,
+  so the next sweep's reclaim of it re-deletes the key. The residue is
+  reachable only across the replicas of a distributed deployment (within
+  one process the per-object lock serializes completions and no actor flips
+  an uploading row to deleting). Closing it needs machinery that revisits
+  keys, which this round does not ship: a key-reaping sweep over the store's
+  key space, or key removal folded into the delete protocol's own
+  convergence at a point guaranteed to follow any writeback (closing the
+  deleting shape; the vanished shape's row is already gone when its writeback
+  lands, so only a key sweep reaches it). Recorded here rather than pretended
+  away.
 
 ## Deferred and not shipped (with reasons)
 
