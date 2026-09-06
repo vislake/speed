@@ -2030,6 +2030,24 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return nil, nil, nil, seedErr
 	}
 
+	// seedDemoEntitlements is the demo, NOT-a-real-purchase stand-in for
+	// the "tenant buys a subscription, the payment channel confirms it"
+	// leg of docs/internal/06-billing-and-metering.md's full flow -- see
+	// that function's own doc comment for exactly why a real
+	// Stripe/Alipay/WeChat sandbox charge stays out of scope here. It runs
+	// unconditionally, like seedDemoCredits just above: since the gateway
+	// below is wired with WithEntitlements, every consult/smilesim request
+	// is gated on the calling tenant holding an Active subscription to a
+	// Plan granting that route's model key -- without this seed the demo
+	// tenants would have none and every demo AI route would answer
+	// aigateway.entitlement_denied. Running it here, before any route can
+	// serve, also means the seam is live (never nil and never judging an
+	// empty database) from the very first request.
+	if seedErr := seedDemoEntitlements(ctx, billingModule.Plans(), billingModule.Subscriptions(), cfg.HostTenants); seedErr != nil {
+		_ = cleanup()
+		return nil, nil, nil, seedErr
+	}
+
 	// notes' retention participant is registered here, after Bootstrap --
 	// compliance's Register is what attaches the Retention registrar the
 	// kernel's reg.Retention seat resolves to, so Add before Bootstrap
