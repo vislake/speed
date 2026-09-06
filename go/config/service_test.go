@@ -1100,6 +1100,107 @@ func TestService_Close_DoesNotDeadlockAgainstAnInFlightPollerRefresh(t *testing.
 	}
 }
 
+// TestService_Close_EveryConcurrentCallerWaitsForThePollerExit is the
+// regression test for a guarantee 8dc3d1b's deadlock fix silently dropped.
+// Before that commit Close held pollMu across <-pollDone, so two concurrent
+// Close calls serialized on the lock and "Close returned" implied "the
+// poller goroutine exited" for BOTH callers. The fix had to release pollMu
+// before waiting (a poller-triggered Refresh needs that same mutex to
+// finish and let the poller observe the closed pollStop -- see
+// TestService_Close_DoesNotDeadlockAgainstAnInFlightPollerRefresh), and in
+// doing so it cleared pollStop AND pollDone up front -- so a second Close
+// arriving while the first still waited on <-pollDone saw a nil pollStop
+// and returned immediately, with the poller possibly still running. The
+// Service stays usable after Close (direct reads and writes keep working),
+// so nothing made that early return observable in the module's own tests;
+// but a host that shuts the poller down while draining request traffic
+// relies on Close's return meaning the background goroutine is gone before
+// it tears down whatever that goroutine reads from.
+//
+// The fixed Close leaves pollDone in place as the terminal signal every
+// caller waits on; only pollStop is closed and cleared, by whichever caller
+// finds it non-nil. This test pins the per-caller guarantee: each Close
+// result, as it arrives, must find the poller's done channel already
+// closed. The choreography makes a second Close provably race a still-alive
+// poller, the only situation the lost guarantee could surface in: the
+// poller is parked inside a ticker-triggered Refresh (the afterRefreshLock
+// hook, holding pollMu), both Close calls queue behind it, and the release
+// is timed so the poller -- which owns the CPU the instant the parked
+// Refresh returns, before either queued Close can be scheduled -- selects
+// the provably pending second tick and re-enters another Refresh. On the
+// unfixed code the second Close then returns while the poller is still
+// queued inside that Refresh; on the fixed code it waits on pollDone like
+// the first caller, and only the poller's own exit releases both. The one
+// piece this cannot pin down is the rare case where the first Close is
+// scheduled before the poller's post-release select and the poller's select
+// then picks the closed stop over the pending tick -- an unforceable coin
+// flip by language design -- so the scenario is repeated enough times that
+// never once landing the failing half against the unfixed code is
+// vanishingly unlikely, while the fixed code passes every iteration
+// deterministically.
+func TestService_Close_EveryConcurrentCallerWaitsForThePollerExit(t *testing.T) {
+	const iterations = 25
+	for i := 0; i < iterations; i++ {
+		refreshLocked := make(chan struct{}, 1)
+		proceedRefresh := make(chan struct{})
+		hook := func() {
+			select {
+			case refreshLocked <- struct{}{}:
+			default:
+			}
+			<-proceedRefresh
+		}
+		svc := attachDefaultServiceForTest(t, WithPollInterval(200*time.Microsecond), withAfterRefreshLockForTest(hook))
+
+		// Capture the poller's terminal signal before any Close runs: the
+		// field has no concurrent writer at this instant (Close is its only
+		// writer and none has been called yet), so the read needs no lock --
+		// and a lock would in fact deadlock once the poller parks below,
+		// holding pollMu for the whole park.
+		done := svc.pollDone
+		if done == nil {
+			t.Fatalf("iteration %d: the service attached without a poller", i)
+		}
+
+		// Wait until the poller's own ticker-triggered Refresh holds pollMu,
+		// parked on the hook: the precondition both Close calls queue behind.
+		select {
+		case <-refreshLocked:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("iteration %d: the poller never entered Refresh within 5s", i)
+		}
+
+		closeResults := make(chan error, 2)
+		go func() { closeResults <- svc.Close() }()
+		go func() { closeResults <- svc.Close() }()
+
+		// Give both Close calls time to queue on pollMu behind the parked
+		// Refresh, and the short poll interval time to buffer a second,
+		// pending tick -- the release choreography below needs both.
+		time.Sleep(20 * time.Millisecond)
+		close(proceedRefresh)
+
+		// Every Close result, as it arrives, must find the poller already
+		// exited. The unfixed code's second caller returns here while the
+		// poller is still queued inside the Refresh it re-entered above.
+		for received := 0; received < 2; received++ {
+			select {
+			case err := <-closeResults:
+				if err != nil {
+					t.Fatalf("iteration %d: Close: %v", i, err)
+				}
+				select {
+				case <-done:
+				default:
+					t.Fatalf("iteration %d: a Close() returned while the poller goroutine was still running -- every Close caller must wait for the poller's exit, not just the one that closed the stop channel", i)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("iteration %d: a concurrent Close never returned within 5s", i)
+			}
+		}
+	}
+}
+
 // eventually polls probe until it reports true or timeout elapses. It is
 // the bounded loop the poller and async-delivery tests wait on.
 func eventually(t *testing.T, timeout time.Duration, probe func() bool) {

@@ -102,8 +102,12 @@ type Service struct {
 	// poller (tests use this or a short interval).
 	pollInterval time.Duration
 
-	// pollStop closes to stop the poller; pollDone signals the poller has
-	// exited. Both are nil when the poller never started.
+	// pollStop closes to request the poller stop; the first Close call
+	// closes it and clears the field. pollDone is closed by the poller
+	// goroutine when it has actually exited and is deliberately never
+	// cleared: it is the terminal signal every Close caller -- not just
+	// the one that closed pollStop -- waits on before returning (see
+	// Close's doc comment). Both are nil when the poller never started.
 	pollStop chan struct{}
 	pollDone chan struct{}
 
@@ -605,30 +609,44 @@ func (s *Service) Refresh(ctx context.Context) error {
 // host that shuts the poller down while request traffic drains does not
 // lose the ability to serve.
 //
-// pollMu is held only long enough to capture and clear the poller-lifecycle
-// fields, never across the wait: the poller goroutine calls Refresh on
-// every tick, and Refresh itself locks pollMu, so a Close that stayed
-// blocked on <-pollDone while still holding pollMu would deadlock against
-// a tick that fired the instant before pollStop closed -- the poller
-// could never finish that in-flight Refresh (it needs pollMu), and Close
-// would never release pollMu until the poller finished. Releasing the
-// lock before waiting lets that in-flight Refresh acquire and release
-// pollMu normally, so the poller's next loop iteration observes the
-// closed pollStop and exits.
+// pollMu is held only long enough to request the stop and read the
+// poller-lifecycle fields, never across the wait: the poller goroutine
+// calls Refresh on every tick, and Refresh itself locks pollMu, so a Close
+// that stayed blocked on <-pollDone while still holding pollMu would
+// deadlock against a tick that fired the instant before pollStop closed --
+// the poller could never finish that in-flight Refresh (it needs pollMu),
+// and Close would never release pollMu until the poller finished.
+// Releasing the lock before waiting lets that in-flight Refresh acquire
+// and release pollMu normally, so the poller's next loop iteration
+// observes the closed pollStop and exits.
+//
+// Every caller waits on the same terminal signal, not just the one that
+// closed pollStop: pollDone is deliberately never cleared once the poller
+// has started, so a Close arriving after a concurrent caller has already
+// closed and cleared pollStop still finds the channel to wait on. "Close
+// returned" therefore implies "the poller goroutine has exited" for every
+// caller -- the guarantee a host drains against before it tears down
+// whatever the poller reads from -- while the deadlock fix above keeps
+// each caller's wait free of pollMu.
 func (s *Service) Close() error {
 	s.pollMu.Lock()
-	stop := s.pollStop
-	done := s.pollDone
-	if stop == nil {
-		s.pollMu.Unlock()
-		return nil
+	if s.pollStop != nil {
+		// This caller requests the stop. Closing a channel never blocks,
+		// and clearing the field under the same lock hold is what keeps a
+		// concurrent caller from closing it a second time.
+		close(s.pollStop)
+		s.pollStop = nil
 	}
-	s.pollStop = nil
-	s.pollDone = nil
+	done := s.pollDone
 	s.pollMu.Unlock()
 
-	close(stop)
-	<-done
+	// done is nil only when the poller never started (pollInterval was
+	// zero). Every other caller -- the one that closed pollStop and any
+	// concurrent or later one -- waits here for the poller's exit; the
+	// wait is outside pollMu per the deadlock analysis above.
+	if done != nil {
+		<-done
+	}
 	return nil
 }
 
@@ -648,11 +666,11 @@ func (s *Service) startPoller() {
 	s.pollStop = stop
 	s.pollDone = done
 	// The goroutine below closes over the local stop/done copies, never
-	// the s.pollStop/s.pollDone fields themselves: Close clears those
-	// fields to nil (under pollMu) before this goroutine is guaranteed to
-	// have exited, and reading them directly here -- on every loop
-	// iteration's select, and in the deferred close -- would race against
-	// that write.
+	// the s.pollStop/s.pollDone fields themselves: the deferred close must
+	// close the exact channel startPoller created, whatever a concurrent
+	// Close later does to the fields, and reading s.pollStop directly on
+	// every loop iteration would race against Close clearing it (under
+	// pollMu) before this goroutine is guaranteed to have exited.
 	go func() {
 		defer close(done)
 		ticker := time.NewTicker(s.pollInterval)
