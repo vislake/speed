@@ -168,4 +168,19 @@ var (
 	// org.ErrSubjectUnresolved and notification.ErrSubjectUnresolved already
 	// enforce for their own structurally-identical seam.
 	ErrSubjectUnresolved = apperr.Unauthorized("integration.subject_unresolved")
+
+	// The round-6 error index: Service.Authenticate (authenticate.go) and
+	// its HTTP transport, Middleware (middleware.go).
+
+	// ErrAuthenticationFailed reports that a presented raw API key could not
+	// be authenticated, for ANY of three causes: no such hash exists
+	// anywhere, the key was revoked, or the key has expired. Authenticate
+	// deliberately never distinguishes which -- the identical no-enumeration
+	// discipline go/authn's ErrInvalidCredentials and go/sharing's
+	// ErrNotAccessible both apply to their own bearer-credential refusal
+	// answers (root CLAUDE.md's Security rules): a caller presenting a wrong
+	// or rotated-away key must learn nothing about whether the key ever
+	// existed, was revoked, or expired. See authenticate.go's Service.
+	// Authenticate for the full contract.
+	ErrAuthenticationFailed = apperr.Unauthorized("integration.authentication_failed")
 )

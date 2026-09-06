@@ -223,5 +223,5 @@ type APIKey struct {
 - 必备：**HMAC 签名 + 时间戳**（接收方可验真、防重放）、指数退避重试（走 `jobs`）、死信、投递日志、**出站地址 SSRF 防护**（禁止内网地址段，这是外发 Webhook 最常见的安全漏洞）。
 - **手动重投尚未实现，属延期项，不在必备清单内**：死信（`DeliveryStatusDeadLetter`）本身已落地，但没有任何接口把一条已死信的投递重新入队——`go/integration/AGENTS.md` 明确把它列为后续轮次的工作，同时说明这条路径需要的字段（`Payload`、`SubscriptionID`、`EventType`/`EventVersion`）已经都在行上，后续实现不需要新迁移。
 
-**实现状态**：本节是目标设计；`go/integration` 已作为独立模块轮落地至 round 3（round 1：API Key 签发/列表/轮换/吊销 + 三层限流与 429 翻译；round 2：外发 Webhook 全链路——租户订阅、内部→公开事件 schema 映射、经 `jobs` 的事件驱动投递、HMAC 签名、创建期与拨号期双重 SSRF 防护、带死信的重试；round 3：`WebhookSubscription` 接入 `dbkit.SoftDeletable` 与 `RestoreWebhookSubscription`，并新增该模块首个 PostgreSQL 集成测试层）。逐项差异与已知限制以 `go/integration/AGENTS.md` 为准。
+**实现状态**：本节是目标设计；`go/integration` 已作为独立模块轮落地至 round 6（round 1：API Key 签发/列表/轮换/吊销 + 三层限流与 429 翻译；round 2：外发 Webhook 全链路——租户订阅、内部→公开事件 schema 映射、经 `jobs` 的事件驱动投递、HMAC 签名、创建期与拨号期双重 SSRF 防护、带死信的重试；round 3：`WebhookSubscription` 接入 `dbkit.SoftDeletable` 与 `RestoreWebhookSubscription`，并新增该模块首个 PostgreSQL 集成测试层；round 4：参考应用成为外发 Webhook 全链路的强制首个消费者；round 5：round 1 的 API Key CRUD 获得真实的 OpenAPI 生成 HTTP 接口与参考应用消费者，冻结其公开 API；round 6：新增 `Service.Authenticate` 与可直接使用的 `AuthMiddleware`——之前"没有任何代码验证一个请求携带的密钥"的缺口就此补齐，"轮换/吊销后的旧密钥被拒绝"这条此前无法验证的性质，现在由参考应用自己的端到端测试真实证明；`LayeredLimiter`/`HTTPGuard` 也首次真实挂在一个 Authenticate 网关化的参考应用端点前）。逐项差异与已知限制以 `go/integration/AGENTS.md` 为准。
 

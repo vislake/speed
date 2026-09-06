@@ -2108,6 +2108,19 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// above. The call cannot fail: nothing it does returns an error.
 	wireIntegrationWebhooks(mux, rbacService, integrationService)
 
+	// wireIntegrationAuthenticated mounts go/integration round 6's
+	// mandatory-first-consumer route (cmd/server/integration_authenticate.go):
+	// a minimal "whoami" demo endpoint gated by the module's own new
+	// AuthMiddleware, proving the previously-undischargeable property
+	// go/integration/AGENTS.md's round-5 section named -- a key
+	// authenticates, a rotated-away key is refused, a revoked key is
+	// refused -- through this app's own real, composed HTTP stack, and
+	// wiring LayeredLimiter/HTTPGuard in front of a real Authenticate-gated
+	// surface for the first time. reg.KVStore() is the same resolved
+	// KVStore seam every other rate-limited mechanism in this codebase
+	// would use. The call cannot fail: nothing it does returns an error.
+	wireIntegrationAuthenticated(mux, integrationModule, reg.KVStore())
+
 	// The middleware chain: authn.Middleware(verifier) FIRST, then
 	// tenancy.Middleware(authn.NewPrincipalResolver()) -- the deliberate
 	// deviation from docs/internal/01-architecture.md's originally
@@ -2208,6 +2221,17 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			// reach it at all. GET only: the fragment defines no other
 			// method on this path.
 			tenancy.WithAllowlist(http.MethodGet, sharing.PathAccess),
+			// integrationWhoamiPath is the identical shape, one layer
+			// removed: its caller carries an API key, not a share token, and
+			// like sharing.PathAccess it resolves ITS OWN tenant --
+			// integration.AuthMiddleware, mounted ahead of this outer chain's
+			// tenancy.Middleware reaching this route at all, via
+			// Service.Authenticate (cmd/server/integration_authenticate.go).
+			// Without this allowlist entry, tenancy.Middleware would refuse
+			// every request here with tenancy.tenant_unresolved before
+			// AuthMiddleware ever got the chance to resolve one from the
+			// presented key.
+			tenancy.WithAllowlist(http.MethodGet, integrationWhoamiPath),
 		}, authnPreAuthAllowlist()...)...)(mux),
 	)
 

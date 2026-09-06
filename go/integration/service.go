@@ -160,7 +160,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreatedAPIKey, e
 		CreatedBy: in.CreatedBy,
 		ExpiresAt: expiresAt,
 	}
-	if err := s.repo.Create(ctx, row); err != nil {
+	// createWithHashIndex, not the embedded Repository[APIKey].Create: round
+	// 6's Authenticate needs the accompanying apiKeyHashIndex row to resolve
+	// a tenant from this key's hash alone -- see that method's, and model.go's
+	// apiKeyHashIndex's, own doc comments for why.
+	if err := s.repo.createWithHashIndex(ctx, row); err != nil {
 		return nil, ErrInternal.WithCause(err)
 	}
 

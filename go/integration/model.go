@@ -162,3 +162,98 @@ func parseScopes(stored datatypes.JSON) ([]string, error) {
 	}
 	return scopes, nil
 }
+
+// tableAPIKeyHashIndex is the integration_api_key_hash_index table name.
+const tableAPIKeyHashIndex = "integration_api_key_hash_index"
+
+// apiKeyHashIndex is the narrow, deliberately non-tenant-scoped row that
+// resolves a presented API key's owning tenant before any tenant is known at
+// all -- this round's answer to the gap keygen.go's own hashAPIKeyToken doc
+// comment named ("go/integration ships no Authenticate/Verify method yet ...
+// there is no lookup path today that could ever feed this function
+// attacker-influenced input"). Service.Authenticate is that lookup path, and
+// this is how it resolves a tenant from a raw key alone -- mirroring
+// go/sharing's shareTokenIndex (go/sharing/model.go) almost exactly, for the
+// identical reason: an inbound API-key-authenticated request, like an
+// anonymous share-link visitor, carries no separate tenant claim of its
+// own -- the bearer credential IS the only thing identifying both who is
+// calling and which tenant issued it, the same "sk_..." convention Stripe
+// and GitHub use (keygen.go's own doc comment already cites them for the
+// prefix choice alone; this round extends the analogy to how such a key is
+// actually verified).
+//
+// # Why this needed a new table rather than the existing (tenant_id, hash)
+// # unique index
+//
+// migrations/{sqlite,postgres}/0001_create_integration_api_keys.sql's own
+// comment on uq_integration_api_keys_tenant_hash assumed a future
+// authentication lookup would already know its tenant ("scoped by tenant
+// first since every lookup this module ever performs already knows its
+// tenant from request context") -- a reasonable guess at the time, since no
+// round had built the lookup yet to test it against a real caller. It did
+// not hold: dbkit's tenant-scope GORM plugin fails a TenantScoped model's
+// query closed the moment its context carries no tenant
+// (go/dbkit/tenant_scope.go's tenantScopeBeforeQuery), and there is no
+// legitimate way for go/integration to run a raw, tenant-less query against
+// APIKey itself -- that model implements dbkit.TenantScoped, so a `db.Table`/
+// `db.Model`/`db.Raw` workaround would be exactly the bypass root
+// CLAUDE.md's "Do not use db.Table/db.Model/db.Raw to work around the
+// Repository" rule forbids, and go/integration holds no
+// pkgcore.WithSystemContext grant (that escape hatch is restricted to
+// admin/compliance/jobs/authn). A second, genuinely non-tenant-scoped table
+// mapping hash -> tenant, exactly like sharing's shareTokenIndex, is the
+// only path the existing architecture leaves open for "resolve a tenant from
+// a credential alone" -- so this round adds one, without touching
+// uq_integration_api_keys_tenant_hash, Hash's stored format, or any existing
+// Service method's signature. migrations/postgres/0001's own comment is left
+// as-is (an honest historical record of round 1's assumption); this type's
+// migration (0006) records the correction in its own comment instead of
+// editing an already-shipped file.
+//
+// # Data domain
+//
+// Platform data (docs/internal/04-data-and-tenancy.md), NOT tenant data, and
+// deliberately so -- see shareTokenIndex's own doc comment for the identical
+// reasoning applied here: implements no dbkit.TenantScoped, reached only
+// through dbkit.Open()'s plain *gorm.DB (APIKeyRepository.tenantForHash),
+// never dbkit.Repository[T], and its isolation suite is
+// tenancytest.AssertNotTenantScoped, not AssertIsolated.
+//
+// # Deliberately narrow, and never updated after Create
+//
+// Two columns, nothing else -- no Scopes, no ExpiresAt, no RevokedAt. A row
+// here answers exactly one question ("which tenant does this hash belong
+// to") and nothing further; every other question about the key it names --
+// is it revoked, expired, what scopes does it carry -- is still answered
+// exclusively by the ordinary tenant-scoped APIKey row, reached only after
+// this lookup hands back a tenant to attach to ctx (Service.Authenticate).
+// APIKeyRepository.createWithHashIndex inserts this row in the same database
+// transaction as its APIKey, mirroring
+// (*sharing.ShareRepository).createWithTokenIndex exactly, so a key is never
+// left reachable by its own tenant's ordinary List/Rotate/Revoke calls while
+// being permanently unreachable by Authenticate. Service.Revoke never
+// touches this row: it stays in place after revocation (and after expiry),
+// because Authenticate needs it to resolve a tenant and reach the ordinary
+// tenant-scoped read even for a key that has since been revoked or expired
+// -- exactly how Authenticate is meant to answer that case (a refusal that
+// is outward-identical to "no such key", never a dead end before the
+// ordinary read is ever reached; see errors.go's ErrAuthenticationFailed).
+type apiKeyHashIndex struct {
+	// Hash is the exact same value APIKey.Hash stores -- hashAPIKeyToken's
+	// hex-encoded SHA-256 of the raw key -- and the primary key here: two
+	// keys hashing to the same value is cryptographically negligible (32
+	// bytes of crypto/rand entropy, keygen.go), so the constraint is cheap
+	// insurance, not a meaningfully defended invariant.
+	Hash string `gorm:"column:hash;primaryKey;size:64"`
+
+	// TenantID is the plain, unenforced tenant identifier this row exists to
+	// answer -- unenforced in the identical sense every other platform-data
+	// table's tenant_id column is (go/sharing's shareTokenIndex, go/jobs's
+	// jobRecord, go/config's row): a real column, never filtered or
+	// populated by dbkit's tenant-scope plugin, because this type implements
+	// no TenantScoped.
+	TenantID string `gorm:"column:tenant_id;size:64;not null"`
+}
+
+// TableName names the integration_api_key_hash_index table.
+func (apiKeyHashIndex) TableName() string { return tableAPIKeyHashIndex }

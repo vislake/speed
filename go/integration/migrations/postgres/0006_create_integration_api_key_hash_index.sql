@@ -1,0 +1,57 @@
+-- integration_api_key_hash_index holds the narrow, deliberately
+-- non-tenant-scoped hash -> tenant_id mapping go/integration/model.go's
+-- apiKeyHashIndex documents in full -- this round's mechanism that resolves
+-- a presented API key's owning tenant before any tenant is known at all, so
+-- a genuinely inbound, API-key-authenticated request (holding no separate
+-- tenant claim) can still reach the ordinary tenant-scoped
+-- Service.Authenticate -> APIKeyRepository.byHash path. This is the exact
+-- gap keygen.go's own hashAPIKeyToken doc comment named ("go/integration
+-- ships no Authenticate/Verify method yet ... there is no lookup path today
+-- that could ever feed this function attacker-influenced input").
+--
+-- This is platform data, deliberately never dbkit.TenantScoped -- the
+-- identical treatment go/sharing's sharing_token_index, go/authn's users
+-- table, go/jobs's jobRecord and go/config's row already get, for the same
+-- reason: something that must be resolvable before a tenant is known
+-- cannot itself be tenant-scoped, and dbkit's tenant-scope GORM plugin
+-- fails every tenant-scoped query closed when the context carries no
+-- tenant. Reached only through dbkit.Open()'s plain *gorm.DB
+-- (repository.go's (*APIKeyRepository).tenantForHash and
+-- createWithHashIndex), never through dbkit.Repository[T] -- whose generic
+-- constraint requires TenantScoped, which this table's model must NOT
+-- implement. Isolation proven by tenancytest.AssertNotTenantScoped, not
+-- AssertIsolated.
+--
+-- Deliberately narrow: two columns, nothing else -- no scopes, no
+-- expires_at, no revoked_at. This table answers exactly one question
+-- ("which tenant does this hash belong to") and nothing further; every
+-- other question about the key it names is still answered exclusively by
+-- the ordinary tenant-scoped integration_api_keys row, reached only after
+-- this lookup hands back a tenant.
+--
+-- Written in the same transaction as its integration_api_keys row
+-- (APIKeyRepository.createWithHashIndex), and never updated or deleted
+-- afterward -- Service.Revoke sets only integration_api_keys.revoked_at,
+-- leaving this row in place, since Service.Authenticate needs it to resolve
+-- a tenant and reach the ordinary tenant-scoped read even for a key that
+-- has since been revoked or expired, answering that case with the same
+-- outward-identical refusal a wrong key gets (errors.go's
+-- ErrAuthenticationFailed).
+--
+-- 0001_create_integration_api_keys.sql's own comment on
+-- uq_integration_api_keys_tenant_hash records round 1's original
+-- assumption that a future authentication lookup would already know its
+-- tenant. This round's real design need did not bear that out -- see
+-- model.go's apiKeyHashIndex doc comment for the full argument -- so this
+-- table is added instead of relying on that index; 0001's own comment is
+-- left unedited as the historical record, and
+-- uq_integration_api_keys_tenant_hash / APIKey.Hash's stored format are
+-- both untouched by this migration.
+--
+-- This is the PostgreSQL copy; see the sqlite/ sibling for the identical
+-- schema on that dialect.
+CREATE TABLE integration_api_key_hash_index (
+    hash      VARCHAR(64) NOT NULL,
+    tenant_id VARCHAR(64) NOT NULL,
+    PRIMARY KEY (hash)
+);

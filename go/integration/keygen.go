@@ -68,7 +68,7 @@ func newAPIKeyToken() (raw, prefix, hash string, err error) {
 }
 
 // hashAPIKeyToken returns the hex-encoded SHA-256 of a raw API key: what
-// APIKey.Hash stores, and what a lookup would key on. Plain SHA-256, not a
+// APIKey.Hash stores, and what a lookup keys on. Plain SHA-256, not a
 // deliberately-slow password hash, is correct here for the same reason
 // org.hashInvitationToken gives: the input is 32 bytes of full-entropy
 // randomness, not a human-chosen secret, so there is no dictionary an
@@ -76,14 +76,25 @@ func newAPIKeyToken() (raw, prefix, hash string, err error) {
 //
 // CodeQL's go/weak-sensitive-data-hashing alert on this function: reviewed
 // and confirmed a false positive, on the identical precedent as
-// org.hashInvitationToken. hashAPIKeyToken's only call site in non-test code
-// is newAPIKeyToken above, immediately after rand.Read fills the raw 32-byte
-// key -- it is never called with a caller- or attacker-supplied string.
-// go/integration ships no Authenticate/Verify method yet (round 1's scope is
-// issuance/list/rotate/revoke only), so there is no lookup path today that
-// could ever feed this function attacker-influenced, low-entropy input. If a
-// future round adds key verification, re-check this reasoning still holds
-// before assuming it does.
+// org.hashInvitationToken -- reviewed a SECOND time in round 6, which is the
+// round this doc comment's own former "if a future round adds key
+// verification, re-check this reasoning still holds" note asked for. The
+// reasoning still holds, unchanged: hashAPIKeyToken's call sites are
+// newAPIKeyToken above (immediately after rand.Read fills the raw 32-byte
+// key) and, as of round 6, authenticate.go's Service.Authenticate, called
+// with whatever raw string a caller presents as a bearer credential. That
+// second call site DOES now feed this function a caller- or
+// attacker-supplied string -- but the low-entropy-dictionary concern
+// go/weak-sensitive-data-hashing exists for is about the INPUT's own
+// entropy, not about who supplies it: a wrong guess here is still exactly as
+// implausible to land on a real 32-byte value as it was at issuance, because
+// Authenticate does not reward a near-miss with any observable difference
+// from a wildly-wrong one -- there is no timing or error-message oracle a
+// guesser could use to learn "closer" from "further", the identical
+// no-enumeration property errors.go's ErrAuthenticationFailed documents. A
+// slow hash defends against an attacker who can test many GUESSES cheaply
+// against a low-entropy space; it does nothing for an attacker who must
+// still produce the exact 32 bytes to begin with.
 func hashAPIKeyToken(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])

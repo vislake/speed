@@ -47,3 +47,5 @@
 "integration.invalid_request_body" = "无法解析请求体。"
 
 "integration.subject_unresolved" = "无法解析您的身份。"
+
+"integration.authentication_failed" = "该 API 密钥认证失败。"

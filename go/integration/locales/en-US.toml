@@ -50,3 +50,5 @@
 "integration.invalid_request_body" = "The request body could not be understood."
 
 "integration.subject_unresolved" = "Your identity could not be resolved."
+
+"integration.authentication_failed" = "That API key could not be authenticated."
