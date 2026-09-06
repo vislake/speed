@@ -286,6 +286,69 @@ func TestCAService_CreateIntermediateCA_NoParentCRLDistributionPoint_OmitsExtens
 	}
 }
 
+// TestCAService_CreateIntermediateCA_RevokedParent_Refused and
+// TestCAService_IssueCertificate_RevokedAuthority_Refused are the P2-1
+// regression pair: issuance under an AuthorityStatusRevoked authority must
+// be refused with ErrAuthorityRevoked, mirroring the chain-verification
+// path's existing stance (revocation.go's VerifyCertificate refuses a
+// revoked authority anywhere in a chain). Before the fix both issuance
+// paths checked only that the authority existed, so a revoked issuer could
+// keep minting certificates every downstream verifier rejects -- an
+// asymmetric hole: the module refused to TRUST a revoked authority's old
+// output but happily produced new output under it.
+//
+// The revoked state is seeded directly through AuthorityRepository.Update,
+// the same precedent
+// TestCAService_VerifyCertificate_RevokedAuthorityInChain_Refused
+// (revocation_test.go) sets: no public CAService method performs this
+// transition, so tests must.
+func TestCAService_CreateIntermediateCA_RevokedParent_Refused(t *testing.T) {
+	ca := newTestCAService(t)
+	ctx := context.Background()
+
+	root, err := ca.CreateRootCA(ctx, RootCAParams{
+		Subject:  pkix.Name{CommonName: "speed Root CA"},
+		NotAfter: time.Now().Add(48 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("CreateRootCA: %v", err)
+	}
+
+	root.Status = AuthorityStatusRevoked
+	if err = ca.authorities.Update(ctx, root); err != nil {
+		t.Fatalf("seed revoked parent authority: %v", err)
+	}
+
+	_, err = ca.CreateIntermediateCA(ctx, root.ID, IntermediateCAParams{
+		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
+		NotAfter: time.Now().Add(24 * time.Hour),
+	})
+	if !apperrIs(err, ErrAuthorityRevoked) {
+		t.Errorf("CreateIntermediateCA(revoked parent) error = %v, want ErrAuthorityRevoked", err)
+	}
+}
+
+func TestCAService_IssueCertificate_RevokedAuthority_Refused(t *testing.T) {
+	ca := newTestCAService(t)
+	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-acme"))
+
+	authority, _ := issueTestCertificate(t, ca, ctx)
+
+	authority.Status = AuthorityStatusRevoked
+	if err := ca.authorities.Update(ctx, authority); err != nil {
+		t.Fatalf("seed revoked issuing authority: %v", err)
+	}
+
+	_, err := ca.IssueCertificate(ctx, authority.ID, CertificateParams{
+		Purpose:  "tenant.jwt_signing",
+		Subject:  pkix.Name{CommonName: "another leaf"},
+		NotAfter: time.Now().Add(time.Hour),
+	})
+	if !apperrIs(err, ErrAuthorityRevoked) {
+		t.Errorf("IssueCertificate(revoked authority) error = %v, want ErrAuthorityRevoked", err)
+	}
+}
+
 // TestCAService_IssueCertificate_EmbedsAuthoritysCRLDistributionPoint mirrors
 // the intermediate-certificate proof above, for an end-entity certificate.
 func TestCAService_IssueCertificate_EmbedsAuthoritysCRLDistributionPoint(t *testing.T) {

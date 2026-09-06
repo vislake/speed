@@ -18,6 +18,8 @@
 
 "pki.certificate_revoked" = "That certificate -- or an authority in its issuing chain -- has been revoked."
 
+"pki.authority_revoked" = "That certificate authority has been revoked and can no longer issue certificates."
+
 "pki.signer_unavailable" = "The signer is temporarily unavailable. Try again later."
 
 "pki.propagation_window_not_elapsed" = "The propagation window has not elapsed yet; that pending key cannot be promoted now."

@@ -25,6 +25,7 @@ func TestErrors_HaveTheExpectedCodesAndStatuses(t *testing.T) {
 		{"ErrNoActiveKey", ErrNoActiveKey, "pki.no_active_key", 404},
 		{"ErrAlgorithmUnsupportedBySigner", ErrAlgorithmUnsupportedBySigner, "pki.algorithm_unsupported_by_signer", 400},
 		{"ErrCertificateRevoked", ErrCertificateRevoked, "pki.certificate_revoked", 409},
+		{"ErrAuthorityRevoked", ErrAuthorityRevoked, "pki.authority_revoked", 409},
 		{"ErrSignerUnavailable", ErrSignerUnavailable, "pki.signer_unavailable", 500},
 		{"ErrPropagationWindowNotElapsed", ErrPropagationWindowNotElapsed, "pki.propagation_window_not_elapsed", 409},
 		{"ErrCRLNotGenerated", ErrCRLNotGenerated, "pki.crl_not_generated", 404},

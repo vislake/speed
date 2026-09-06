@@ -51,6 +51,14 @@ import "github.com/vislake/speed/go/pkgcore/apperr"
 //     see decodeJSON and PkiRevokeSigningKey/PkiRevokeCertificate in
 //     handler.go -- matching the identical storage.ErrInvalidRequestBody
 //     sibling-module pattern.
+//
+// ErrAuthorityRevoked is the one code added after round 3 (the audit round
+// that closed the issuance/verification asymmetry): round 3's verification
+// path refused a revoked authority anywhere in a chain, but the issuance
+// path never checked the signing authority's own status, so a revoked
+// issuer could keep minting certificates every verifier rejects. Both
+// CreateIntermediateCA and IssueCertificate now refuse that state with this
+// code -- see its own comment in the var block below.
 var (
 	// ErrAuthorityNotFound reports that no authority with the requested id
 	// exists -- CAService.CreateIntermediateCA and IssueCertificate's
@@ -84,6 +92,20 @@ var (
 	// the identical reasoning org.ErrInvitationRevoked already applies to
 	// an accept against a revoked invitation.
 	ErrCertificateRevoked = apperr.Conflict("pki.certificate_revoked")
+
+	// ErrAuthorityRevoked reports that CAService.CreateIntermediateCA or
+	// IssueCertificate was asked to sign under an authority whose Status is
+	// AuthorityStatusRevoked -- an issuer that has been revoked (a
+	// compromised key) must not keep minting certificates every downstream
+	// verifier will reject, so issuance refuses the same state the
+	// verification path already refuses (revocation.go's VerifyCertificate).
+	// apperr.Conflict, not apperr.Invalid, for the identical reason
+	// ErrCertificateRevoked is: the request names a real authority, and it
+	// is the authority's current state -- revoked -- that conflicts with
+	// using it as an issuer. Where ErrCertificateRevoked answers "nothing
+	// this authority already signed is trustable anymore", this code
+	// answers "nothing NEW may be signed under it".
+	ErrAuthorityRevoked = apperr.Conflict("pki.authority_revoked")
 
 	// ErrSignerUnavailable reports that a Signer call this module made on
 	// the caller's behalf failed for a reason that is not itself a coded
@@ -135,6 +157,7 @@ var errorCodes = []string{
 	ErrNoActiveKey.Code,
 	ErrAlgorithmUnsupportedBySigner.Code,
 	ErrCertificateRevoked.Code,
+	ErrAuthorityRevoked.Code,
 	ErrSignerUnavailable.Code,
 	ErrPropagationWindowNotElapsed.Code,
 	ErrCRLNotGenerated.Code,

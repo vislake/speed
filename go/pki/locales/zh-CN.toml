@@ -16,6 +16,8 @@
 
 "pki.certificate_revoked" = "该证书(或其颁发链中的某个机构)已被吊销。"
 
+"pki.authority_revoked" = "该证书颁发机构已被吊销,无法再签发新的证书。"
+
 "pki.signer_unavailable" = "签名器暂时不可用,请稍后重试。"
 
 "pki.propagation_window_not_elapsed" = "传播窗口尚未届满,暂时无法提升该待启用密钥。"
