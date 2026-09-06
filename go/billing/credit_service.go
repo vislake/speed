@@ -66,6 +66,21 @@ type CreditService struct {
 	// identical bus == nil short-circuit for the same reason.
 	events       pkgcore.EventBus
 	auditActions pkgcore.AuditActionRegistrar
+
+	// testHookAfterBalanceDelta, when non-nil, is invoked synchronously by
+	// Grant right after applyBalanceDelta has applied this call's own
+	// delta and before readBalanceForAudit reads it back -- still inside
+	// the same open, not-yet-committed transaction. Nil in every
+	// production path (module.go's Register never sets it) and in every
+	// pre-existing test; it exists purely so
+	// TestCreditService_Grant_ConcurrentGrantForSameTenant_BlocksUntilPriorTransactionCommits
+	// can deterministically pause one Grant mid-transaction and prove a
+	// second, concurrent Grant for the SAME tenant cannot commit inside
+	// that window -- the exact property that makes reading the resulting
+	// balance INSIDE the transaction (readBalanceForAudit) safe, where a
+	// separate query issued only after commit (what this round's fix
+	// replaced) would not be.
+	testHookAfterBalanceDelta func()
 }
 
 // NewCreditService returns a CreditService over db. db is expected to come
@@ -165,6 +180,7 @@ func (s *CreditService) PreDeduct(ctx context.Context, in PreDeductInput) (*Cred
 	// call applies just as much to a harmless no-op retry as to an
 	// outright failure.
 	var reserved bool
+	var resultBalance *CreditBalance
 	txErr := dbkit.WithTenantSession(ctx, s.db, func(session *gorm.DB) error {
 		row := &CreditTransaction{
 			ID:     in.IdempotencyKey,
@@ -187,6 +203,7 @@ func (s *CreditService) PreDeduct(ctx context.Context, in PreDeductInput) (*Cred
 			}
 			result = row
 			reserved = true
+			resultBalance = s.readBalanceForAudit(ctx, session, string(tenant))
 			return nil
 		}
 		if !isUniqueViolationErr(insertErr) {
@@ -210,7 +227,7 @@ func (s *CreditService) PreDeduct(ctx context.Context, in PreDeductInput) (*Cred
 		return nil, txErr
 	}
 	if reserved {
-		s.emitCreditAudit(ctx, AuditActionCreditDeductReserve, tenant, result.ID, in.Amount, in.Reason)
+		s.emitCreditAudit(ctx, AuditActionCreditDeductReserve, tenant, result.ID, in.Amount, in.Reason, resultBalance)
 	}
 	return result, nil
 }
@@ -267,6 +284,7 @@ func (s *CreditService) resolve(
 
 	var result *CreditTransaction
 	var resolved bool
+	var resultBalance *CreditBalance
 	txErr := dbkit.WithTenantSession(ctx, s.db, func(session *gorm.DB) error {
 		// The tenant filter is never hand-written here (backend-coding-
 		// standards §3.2): CreditTransaction implements dbkit.TenantScoped,
@@ -304,6 +322,7 @@ func (s *CreditService) resolve(
 			}
 			result = row
 			resolved = true
+			resultBalance = s.readBalanceForAudit(ctx, session, string(tenant))
 			return nil
 		}
 
@@ -329,7 +348,7 @@ func (s *CreditService) resolve(
 		return nil, txErr
 	}
 	if resolved {
-		s.emitCreditAudit(ctx, auditAction, tenant, result.ID, result.Amount, result.Reason)
+		s.emitCreditAudit(ctx, auditAction, tenant, result.ID, result.Amount, result.Reason, resultBalance)
 	}
 	return result, nil
 }
@@ -363,6 +382,7 @@ func (s *CreditService) Grant(ctx context.Context, in GrantInput) (*CreditTransa
 		Amount: in.Amount,
 		Reason: in.Reason,
 	}
+	var resultBalance *CreditBalance
 	txErr := dbkit.WithTenantSession(ctx, s.db, func(session *gorm.DB) error {
 		if err := s.ensureBalance(session, tenant); err != nil {
 			return err
@@ -376,12 +396,19 @@ func (s *CreditService) Grant(ctx context.Context, in GrantInput) (*CreditTransa
 		if _, err := applyBalanceDelta(session, string(tenant), in.Amount, 0, s.now()); err != nil {
 			return err
 		}
-		return s.transactions.insert(ctx, session, row)
+		if s.testHookAfterBalanceDelta != nil {
+			s.testHookAfterBalanceDelta()
+		}
+		if err := s.transactions.insert(ctx, session, row); err != nil {
+			return err
+		}
+		resultBalance = s.readBalanceForAudit(ctx, session, string(tenant))
+		return nil
 	})
 	if txErr != nil {
 		return nil, txErr
 	}
-	s.emitCreditAudit(ctx, AuditActionCreditGrant, tenant, row.ID, in.Amount, in.Reason)
+	s.emitCreditAudit(ctx, AuditActionCreditGrant, tenant, row.ID, in.Amount, in.Reason, resultBalance)
 	return row, nil
 }
 
@@ -428,6 +455,7 @@ func (s *CreditService) Expire(ctx context.Context, in ExpireInput) (*CreditTran
 		Amount: in.Amount,
 		Reason: in.Reason,
 	}
+	var resultBalance *CreditBalance
 	txErr := dbkit.WithTenantSession(ctx, s.db, func(session *gorm.DB) error {
 		if err := s.ensureBalance(session, tenant); err != nil {
 			return err
@@ -439,12 +467,16 @@ func (s *CreditService) Expire(ctx context.Context, in ExpireInput) (*CreditTran
 		if !ok {
 			return ErrInsufficientCredits.WithParam("amount", in.Amount)
 		}
-		return s.transactions.insert(ctx, session, row)
+		if err := s.transactions.insert(ctx, session, row); err != nil {
+			return err
+		}
+		resultBalance = s.readBalanceForAudit(ctx, session, string(tenant))
+		return nil
 	})
 	if txErr != nil {
 		return nil, txErr
 	}
-	s.emitCreditAudit(ctx, AuditActionCreditExpire, tenant, row.ID, in.Amount, in.Reason)
+	s.emitCreditAudit(ctx, AuditActionCreditExpire, tenant, row.ID, in.Amount, in.Reason, resultBalance)
 	return row, nil
 }
 
@@ -566,6 +598,43 @@ func isUniqueViolationErr(err error) bool {
 	return errors.Is(err, gorm.ErrDuplicatedKey)
 }
 
+// readBalanceForAudit reads tenant's CreditBalance row through session --
+// the SAME *gorm.DB passed to the mutating transaction's own
+// dbkit.WithTenantSession closure, called only immediately after
+// applyBalanceDelta has just applied this operation's own delta inside
+// that transaction, and before it commits.
+//
+// This is deliberately NOT a fresh, post-commit read (what this method
+// replaced): a separate query opened after commit has no synchronization
+// with a concurrently-committing operation against the same tenant's
+// balance, so under concurrent mutations for one tenant it could observe
+// a LATER state than the one this specific operation actually produced
+// -- e.g. two concurrent Grants committing available 0->100 and
+// 100->200 could have the FIRST one's post-commit read land after the
+// SECOND'S commit and wrongly report resulting_available=200 for an
+// operation that itself only ever moved 0->100. Reading inside the same
+// transaction instead, before commit, ties the read to exactly this
+// operation's own applied delta: the row is exclusively locked by this
+// transaction's own prior UPDATE until it commits, so no concurrent
+// transaction's write can land in between the UPDATE and this read, and
+// the read sees this transaction's own uncommitted change via ordinary
+// transaction-local visibility, on both dialects.
+//
+// A read failure here is logged and nil returned, mirroring
+// emitCreditAudit's own "log, never fail the write" contract below: it
+// must never turn an already-decided balance mutation into a rolled-back
+// transaction merely because this follow-up read hit an error.
+func (s *CreditService) readBalanceForAudit(ctx context.Context, session *gorm.DB, tenantID string) *CreditBalance {
+	var out CreditBalance
+	err := session.Where("id = ?", tenantID).First(&out).Error
+	if err != nil {
+		obs.FromContext(ctx).Error("billing.credit audit: resulting balance read failed",
+			"tenant_id", tenantID, "error", err)
+		return nil
+	}
+	return &out
+}
+
 // emitCreditAudit records action against the credit ledger transaction
 // txID for tenant, following the exact declarative-Emit pattern
 // examples/reference-app/internal/notes/handler.go's recordNoteCreatedAudit
@@ -597,13 +666,15 @@ func isUniqueViolationErr(err error) bool {
 //
 // Changes.After carries the delta this specific action applied (amount,
 // and reason when the caller supplied one) plus, best effort, the
-// tenant's resulting balance -- read fresh via s.balances.FindByID after
-// the mutating transaction has committed, exactly like Balance's own read
-// path. A failure to read that resulting balance is logged and the two
-// balance fields are simply omitted from the payload; it must never turn
-// an already-succeeded credit mutation into a reported failure, matching
-// this method's own "log, never return" contract for a downstream
-// audit.Emit failure below.
+// tenant's resulting balance: resultingBalance, read by the caller via
+// readBalanceForAudit from INSIDE the same transaction that applied this
+// operation's delta (see that function's own doc comment for why it must
+// be read there and not here, after commit). A nil resultingBalance --
+// that in-transaction read having failed, already logged by
+// readBalanceForAudit -- simply omits the two balance fields from the
+// payload; it must never turn an already-succeeded credit mutation into
+// a reported failure, matching this method's own "log, never return"
+// contract for a downstream audit.Emit failure below.
 //
 // s.events is nil for a bare CreditService built directly through
 // NewCreditService (every unit test in this package) and non-nil only
@@ -612,7 +683,7 @@ func isUniqueViolationErr(err error) bool {
 // short-circuit, so emitCreditAudit is a no-op for every pre-existing
 // call site and test that constructs a CreditService without going
 // through a full Kernel.Bootstrap.
-func (s *CreditService) emitCreditAudit(ctx context.Context, action string, tenant pkgcore.TenantID, txID string, amount int64, reason string) {
+func (s *CreditService) emitCreditAudit(ctx context.Context, action string, tenant pkgcore.TenantID, txID string, amount int64, reason string, resultingBalance *CreditBalance) {
 	if s.events == nil {
 		return
 	}
@@ -621,12 +692,9 @@ func (s *CreditService) emitCreditAudit(ctx context.Context, action string, tena
 	if reason != "" {
 		payload["reason"] = reason
 	}
-	if bal, err := s.balances.FindByID(ctx, string(tenant)); err != nil {
-		obs.FromContext(ctx).Error("billing.credit audit: resulting balance read failed",
-			"tenant_id", string(tenant), "credit_transaction_id", txID, "error", err)
-	} else {
-		payload["resulting_available"] = bal.Available
-		payload["resulting_reserved"] = bal.Reserved
+	if resultingBalance != nil {
+		payload["resulting_available"] = resultingBalance.Available
+		payload["resulting_reserved"] = resultingBalance.Reserved
 	}
 
 	err := audit.Emit(ctx, s.events, s.auditActions, audit.Input{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
@@ -465,6 +466,128 @@ func TestCreditService_Grant_ConcurrentCallsForANewTenant_BothSucceed(t *testing
 	}
 	if bal.Available != 50 {
 		t.Errorf("Available = %d, want 50 (both grants applied)", bal.Available)
+	}
+}
+
+// TestCreditService_Grant_ConcurrentGrantForSameTenant_BlocksUntilPriorTransactionCommits
+// is a regression test for a real correctness bug in emitCreditAudit's
+// resulting_available/resulting_reserved fields: they used to be filled in
+// by a separate, post-commit query (the old emitCreditAudit called
+// s.balances.FindByID itself, AFTER the mutating dbkit.WithTenantSession
+// transaction had already committed) -- a read with no synchronization at
+// all against a second, concurrently-committing operation for the SAME
+// tenant. Two concurrent Grants (100 and 1 credits) racing for one tenant
+// could interleave as: the 100-credit grant commits (Available 0->100),
+// then the 1-credit grant commits (Available 100->101), then the
+// 100-credit grant's own post-commit read finally runs and observes 101 --
+// not the 100 its own operation actually produced -- so its audit event
+// would wrongly record resulting_available=101 for an operation whose own
+// effect was to move a starting balance of 0 to 100.
+//
+// The fix (credit_service.go's readBalanceForAudit) reads the balance
+// INSIDE the same transaction that applies the delta, before it commits.
+// This test proves the fix's actual load-bearing property directly rather
+// than hoping real goroutine scheduling happens to hit the old race's
+// narrow window (which it is not guaranteed to on every run, making a pure
+// racing test unreliable in either direction): using
+// testHookAfterBalanceDelta, it pauses Grant A's transaction right after
+// its own delta is applied -- exactly the point after which the old code
+// would have committed and only THEN opened its separate, unsynchronized
+// read -- and starts a second, concurrent Grant B for the SAME tenant
+// while A is paused there. If Grant B could commit during that window (the
+// old code's own exposure), this test's own next step -- reading back
+// Grant A's audit event once both finish -- would observe
+// resulting_available=101 for Grant A, exactly the bug's failure shape.
+// Under the fix, B's write is provably still blocked by A's own
+// not-yet-committed transaction throughout that window (asserted directly
+// below via a timeout), so it can only land after A commits, and Grant A's
+// own audit event deterministically shows resulting_available=100 -- its
+// own delta alone -- every time.
+func TestCreditService_Grant_ConcurrentGrantForSameTenant_BlocksUntilPriorTransactionCommits(t *testing.T) {
+	svc, received := newAuditedCreditService(t)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-lock")
+
+	const amountA int64 = 100
+	const amountB int64 = 1
+
+	reachedHook := make(chan struct{})
+	proceed := make(chan struct{})
+	var pauseOnce sync.Once
+	svc.testHookAfterBalanceDelta = func() {
+		// The hook fires for every Grant call against svc, including
+		// Grant B's own once it finally acquires the row -- pause exactly
+		// once, on the first (Grant A's) invocation, and let every later
+		// one through immediately.
+		pauseOnce.Do(func() {
+			close(reachedHook)
+			<-proceed
+		})
+	}
+
+	grantAErr := make(chan error, 1)
+	go func() {
+		_, err := svc.Grant(ctx, GrantInput{Amount: amountA})
+		grantAErr <- err
+	}()
+
+	select {
+	case <-reachedHook:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Grant A never reached testHookAfterBalanceDelta")
+	}
+
+	// Grant A's transaction has applied its own delta and is now paused,
+	// still open (not committed). Start Grant B for the SAME tenant here:
+	// under the fix, its own applyBalanceDelta UPDATE cannot proceed until
+	// A's transaction ends, which is exactly the property that makes
+	// reading the resulting balance INSIDE the transaction (rather than
+	// via a separate post-commit query) safe.
+	grantBErr := make(chan error, 1)
+	go func() {
+		_, err := svc.Grant(ctx, GrantInput{Amount: amountB})
+		grantBErr <- err
+	}()
+
+	select {
+	case err := <-grantBErr:
+		t.Fatalf("Grant B committed (err=%v) while Grant A's transaction was still open -- B should have been blocked by A's own not-yet-committed write, the exact property that makes reading the resulting balance inside the transaction safe", err)
+	case <-time.After(200 * time.Millisecond):
+		// Expected: B is still blocked waiting for A's transaction to end.
+	}
+
+	close(proceed) // let A finish its own read and commit.
+
+	if err := <-grantAErr; err != nil {
+		t.Fatalf("Grant A: %v", err)
+	}
+	if err := <-grantBErr; err != nil {
+		t.Fatalf("Grant B: %v", err)
+	}
+
+	var availA, availB int64
+	var sawA, sawB bool
+	for i := 0; i < 2; i++ {
+		evt := recvAuditEvent(t, received)
+		amount, _ := evt.Changes.After["amount"].(int64)
+		avail, _ := evt.Changes.After["resulting_available"].(int64)
+		switch amount {
+		case amountA:
+			availA, sawA = avail, true
+		case amountB:
+			availB, sawB = avail, true
+		default:
+			t.Fatalf("unexpected audit event amount %v", evt.Changes.After["amount"])
+		}
+	}
+	if !sawA || !sawB {
+		t.Fatal("did not receive one audit event per concurrent Grant call")
+	}
+
+	if availA != amountA {
+		t.Errorf("Grant A's Changes.After[resulting_available] = %d, want %d (its own delta alone -- it committed while B was still blocked)", availA, amountA)
+	}
+	if availB != amountA+amountB {
+		t.Errorf("Grant B's Changes.After[resulting_available] = %d, want %d (both deltas -- it committed after A)", availB, amountA+amountB)
 	}
 }
 
