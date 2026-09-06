@@ -166,7 +166,7 @@ func TestDemoPermissionFor_DependsOnlyOnTheMethod(t *testing.T) {
 func TestGuardModuleRoute_UnknownPath_RefusesToMount(t *testing.T) {
 	const unlisted = "/api/v1/invoices"
 
-	handler, err := guardModuleRoute(nil, unlisted, http.NotFoundHandler(), orgRouteGuardDeps{})
+	handler, err := guardModuleRoute(nil, unlisted, http.NotFoundHandler(), orgRouteGuardDeps{}, false)
 	if err == nil {
 		t.Fatal("an unlisted mounted path was accepted; it must fail the server build")
 	}
@@ -194,7 +194,7 @@ func TestGuardModuleRoute_PublicPath_IsNotGated(t *testing.T) {
 			// A nil Authorizer would make any gated route fail with
 			// rbac.service_not_attached, so reaching the handler proves no
 			// gate was applied rather than that a gate happened to allow.
-			handler, err := guardModuleRoute(nil, path, inner, orgRouteGuardDeps{})
+			handler, err := guardModuleRoute(nil, path, inner, orgRouteGuardDeps{}, false)
 			if err != nil {
 				t.Fatalf("guardModuleRoute(%q): %v", path, err)
 			}

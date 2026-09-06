@@ -1071,6 +1071,7 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	t.Setenv("APP_REDIS_ADDR", "")
 	t.Setenv("APP_DEMO_USERS_PASSWORD", "")
 	t.Setenv("APP_OBJECT_STORE_ROOT", "")
+	t.Setenv("APP_DISABLE_DEMO_USER_HEADER", "")
 
 	cfg, err := configFromEnv()
 	if err != nil {
@@ -1097,6 +1098,9 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	if cfg.ObjectStoreRoot != "" {
 		t.Fatalf("ObjectStoreRoot = %q, want the empty default (Preset local-store directory)", cfg.ObjectStoreRoot)
 	}
+	if cfg.DisableDemoUserHeader {
+		t.Fatal("DisableDemoUserHeader = true, want false (the default: demoUserHeader keeps winning, unchanged)")
+	}
 }
 
 // TestConfigFromEnv_ReadsOverrides verifies each environment variable
@@ -1109,6 +1113,7 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	t.Setenv("APP_REDIS_ADDR", "127.0.0.1:6380")
 	t.Setenv("APP_DEMO_USERS_PASSWORD", "env demo seed passphrase")
 	t.Setenv("APP_OBJECT_STORE_ROOT", "/var/lib/reference-app/objects")
+	t.Setenv("APP_DISABLE_DEMO_USER_HEADER", "1")
 
 	cfg, err := configFromEnv()
 	if err != nil {
@@ -1131,6 +1136,9 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	}
 	if cfg.ObjectStoreRoot != "/var/lib/reference-app/objects" {
 		t.Fatalf("ObjectStoreRoot = %q, want the APP_OBJECT_STORE_ROOT value", cfg.ObjectStoreRoot)
+	}
+	if !cfg.DisableDemoUserHeader {
+		t.Fatal("DisableDemoUserHeader = false, want true (APP_DISABLE_DEMO_USER_HEADER set to a non-empty value)")
 	}
 	wantKey := []byte{
 		0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09, 0x08,

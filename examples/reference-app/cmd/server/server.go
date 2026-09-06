@@ -301,6 +301,30 @@ const (
 	// this variable existed.
 	disableQueueWorkerEnv = "APP_DISABLE_QUEUE_WORKER"
 
+	// disableDemoUserHeaderEnv names the environment variable that, when set
+	// to any non-empty value, makes buildServer's rbac wiring stop reading
+	// demoUserHeader (demo_subject.go's "X-Demo-User") at all: every gated
+	// route resolves its acting Subject from the verified authn Principal
+	// alone, through demoSubjectResolverFor(true) -- see that function's own
+	// doc comment. This is the kill switch demoUserHeader's own doc comment
+	// describes for the header's remaining privilege-escalation hole: an
+	// unauthenticated header that still outranks a proven identity when both
+	// are present, so a caller holding nothing more than a low-privilege
+	// session could set the header to a higher-privileged demo actor's id
+	// and have rbac decide against that actor's grants instead of the
+	// caller's own. Left unset (the default), this variable changes nothing
+	// -- every existing demo journey and every test built around the header
+	// winning keeps behaving exactly as it did before this variable existed,
+	// which is deliberate: flipping the default would break every one of
+	// them at once (demo_subject_test.go, notesRequestAs and friends in
+	// server_test.go, and the flow tests across this package that drive a
+	// demo actor through the header). An operator deploying this reference
+	// app somewhere a real, non-demo user might reach it is the one case
+	// this variable exists for: setting it closes the hole with no code
+	// change. See DEPLOY.md's own section on this header for the operator-
+	// facing version of this same warning.
+	disableDemoUserHeaderEnv = "APP_DISABLE_DEMO_USER_HEADER"
+
 	// rootKeyPurposeConfigCipher, rootKeyPurposeOrgIndex,
 	// rootKeyPurposeNotificationIndex, rootKeyPurposePKILocalKeyCipher,
 	// rootKeyPurposeAuthnBlindIndex and rootKeyPurposeAuthnPIICipher are the
@@ -863,6 +887,16 @@ type serverConfig struct {
 	// to this field never having existed.
 	DisableQueueWorker bool
 
+	// DisableDemoUserHeader, when true, makes buildServer wire every
+	// permission-gated route's SubjectResolver through
+	// demoSubjectResolverFor(true) instead of the header-first default --
+	// see disableDemoUserHeaderEnv's own doc comment above for why this
+	// exists and exactly what it changes. configFromEnv sets it from
+	// APP_DISABLE_DEMO_USER_HEADER; false (the default) is byte-identical to
+	// this field never having existed, matching DisableQueueWorker's own
+	// contract just above.
+	DisableDemoUserHeader bool
+
 	// PeriodicTaskInterval is the cadence of this host's periodic-task
 	// scheduler (periodic_scheduler.go), the ticker that enqueues the
 	// jobs-driven mechanisms this app wired -- storage's per-tenant expiry
@@ -1213,30 +1247,31 @@ func configFromEnv() (serverConfig, error) {
 	}
 
 	cfg := serverConfig{
-		DeploymentMode:       deploymentMode,
-		Port:                 port,
-		SQLitePath:           dbPath,
-		ConfigKey:            configKey,
-		OrgIndexKey:          orgIndexKey,
-		NotificationIndexKey: notificationIndexKey,
-		PKILocalKeyCipherKey: pkiLocalKeyCipherKey,
-		AuthnBlindIndexKey:   authnBlindIndexKey,
-		AuthnPIICipherKey:    authnPIICipherKey,
-		RedisAddr:            redisAddr,
-		S3Endpoint:           s3Endpoint,
-		S3Bucket:             s3Bucket,
-		S3AccessKey:          s3AccessKey,
-		S3SecretKey:          s3SecretKey,
-		S3Region:             os.Getenv(s3RegionEnv),
-		S3UseSSL:             s3UseSSL,
-		ObjectStoreRoot:      objectStoreRoot,
-		SMTPHost:             smtpHost,
-		SMTPPort:             smtpPort,
-		SMTPUsername:         os.Getenv(smtpUsernameEnv),
-		SMTPPassword:         os.Getenv(smtpPasswordEnv),
-		SMSGatewayURL:        os.Getenv(smsGatewayURLEnv),
-		DisableQueueWorker:   os.Getenv(disableQueueWorkerEnv) != "",
-		HostTenants:          demoHostTenants,
+		DeploymentMode:        deploymentMode,
+		Port:                  port,
+		SQLitePath:            dbPath,
+		ConfigKey:             configKey,
+		OrgIndexKey:           orgIndexKey,
+		NotificationIndexKey:  notificationIndexKey,
+		PKILocalKeyCipherKey:  pkiLocalKeyCipherKey,
+		AuthnBlindIndexKey:    authnBlindIndexKey,
+		AuthnPIICipherKey:     authnPIICipherKey,
+		RedisAddr:             redisAddr,
+		S3Endpoint:            s3Endpoint,
+		S3Bucket:              s3Bucket,
+		S3AccessKey:           s3AccessKey,
+		S3SecretKey:           s3SecretKey,
+		S3Region:              os.Getenv(s3RegionEnv),
+		S3UseSSL:              s3UseSSL,
+		ObjectStoreRoot:       objectStoreRoot,
+		SMTPHost:              smtpHost,
+		SMTPPort:              smtpPort,
+		SMTPUsername:          os.Getenv(smtpUsernameEnv),
+		SMTPPassword:          os.Getenv(smtpPasswordEnv),
+		SMSGatewayURL:         os.Getenv(smsGatewayURLEnv),
+		DisableQueueWorker:    os.Getenv(disableQueueWorkerEnv) != "",
+		DisableDemoUserHeader: os.Getenv(disableDemoUserHeaderEnv) != "",
+		HostTenants:           demoHostTenants,
 		// Empty when unset: the demo-user seed is opt-in (its own doc
 		// comment in demo_users.go says why the default skips it).
 		DemoUsersPassword: os.Getenv(demoUsersPasswordEnv),
@@ -2410,7 +2445,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	mux.HandleFunc(http.MethodGet+" "+healthzPath, healthzHandler)
 	mux.HandleFunc(http.MethodGet+" "+metricsPath, metricsHandler)
 	orgGuardDeps := orgRouteGuardDeps{scope: orgModule.Scope(), members: orgModule.Members()}
-	adminHandler, mountErr := mountModuleRoutes(mux, reg, rbacService, orgGuardDeps)
+	adminHandler, mountErr := mountModuleRoutes(mux, reg, rbacService, orgGuardDeps, cfg.DisableDemoUserHeader)
 	if mountErr != nil {
 		_ = cleanup()
 		return nil, nil, nil, mountErr
@@ -2714,10 +2749,10 @@ func authnPreAuthAllowlist() []tenancy.MiddlewareOption {
 // entry), so the table's exhaustiveness check keeps covering it; only the
 // DESTINATION of the resulting handler differs. A path the table does not
 // name fails the build here rather than being served.
-func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Authorizer, orgDeps orgRouteGuardDeps) (http.Handler, error) {
+func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Authorizer, orgDeps orgRouteGuardDeps, demoHeaderDisabled bool) (http.Handler, error) {
 	var adminHandler http.Handler
 	for _, route := range reg.Routes.Routes() {
-		handler, err := guardModuleRoute(az, route.Path, route.Handler, orgDeps)
+		handler, err := guardModuleRoute(az, route.Path, route.Handler, orgDeps, demoHeaderDisabled)
 		if err != nil {
 			return nil, err
 		}

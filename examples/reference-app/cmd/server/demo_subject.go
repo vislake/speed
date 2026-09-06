@@ -61,6 +61,19 @@ import (
 // onto those real accounts nothing needs it, and it goes away together
 // with the resolver's fallback. The consumer-shell plan records that
 // removal as deferred to the org-web round.
+//
+// Its precedence over a verified Principal is a real hole for any
+// deployment where a non-demo user might reach this binary: a caller who
+// merely holds a low-privilege session can set this header to a
+// higher-privileged demo actor's id and the resolver hands rbac that
+// actor's Subject instead of the caller's own, no token forgery required.
+// disableDemoUserHeaderEnv (server.go) is the escape hatch -- an operator
+// who deploys this reference app somewhere a real user might reach sets
+// APP_DISABLE_DEMO_USER_HEADER and demoSubjectResolverFor makes every
+// gated route resolve from the verified Principal alone, the header no
+// longer consulted at all. Left unset (the default), nothing about this
+// header's behavior changes, which is what keeps every demo journey and
+// test built around it working exactly as before.
 const demoUserHeader = "X-Demo-User"
 
 // The demo users seeded into every configured tenant. Two of them, because
@@ -577,7 +590,7 @@ func integrationPermissionFor(r *http.Request) string {
 // change is confined to integrationPermissionFor's sub-path dispatch between
 // the two pairs above -- this fail-closed shape is pair-agnostic and
 // unchanged.
-func guardIntegrationRoute(az rbac.Authorizer, handler http.Handler) http.Handler {
+func guardIntegrationRoute(az rbac.Authorizer, handler http.Handler, demoHeaderDisabled bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		permission := integrationPermissionFor(r)
 		idx := strings.LastIndex(permission, ":")
@@ -591,7 +604,7 @@ func guardIntegrationRoute(az rbac.Authorizer, handler http.Handler) http.Handle
 		}
 		resource, action := permission[:idx], permission[idx+1:]
 
-		sub, ok := demoSubjectResolver(r)
+		sub, ok := demoResolveSubject(r, demoHeaderDisabled)
 		if !ok {
 			writeIntegrationError(w, rbac.ErrPermissionDenied.WithParam("permission", permission))
 			return
@@ -807,7 +820,7 @@ type orgRouteGuardDeps struct {
 //     once the coarse rbac.RequirePermissionFunc gate has already let it
 //     through, narrowing a subtree-scoped grant to its own subtree -- see
 //     that function's own doc comment.
-func guardOrgRoute(az rbac.Authorizer, handler http.Handler, deps orgRouteGuardDeps) http.Handler {
+func guardOrgRoute(az rbac.Authorizer, handler http.Handler, deps orgRouteGuardDeps, demoHeaderDisabled bool) http.Handler {
 	scopeChecked := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if appErr := enforceOrgNodeScope(r.Context(), az, deps, r); appErr != nil {
 			writeRBACGateError(w, appErr)
@@ -816,7 +829,7 @@ func guardOrgRoute(az rbac.Authorizer, handler http.Handler, deps orgRouteGuardD
 		handler.ServeHTTP(w, r)
 	})
 	permissionGated := rbac.RequirePermissionFunc(az, orgPermissionFor,
-		rbac.WithSubjectResolver(demoSubjectResolver),
+		rbac.WithSubjectResolver(demoSubjectResolverFor(demoHeaderDisabled)),
 	)(scopeChecked)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1152,16 +1165,46 @@ func splitDemoPermission(permission string) (resource, action string, ok bool) {
 // identity when both are present. It is only a demo affordance, and its
 // removal is the org-web round's deferred work (see demoUserHeader).
 //
+// demoUserHeader's own doc comment now names the real kill switch for
+// exactly that precedence problem (disableDemoUserHeaderEnv,
+// APP_DISABLE_DEMO_USER_HEADER): this function keeps its original,
+// unconditional header-first behavior unchanged -- every direct caller
+// (this file's own guardIntegrationRoute/guardOrgRoute/guardModuleRoute
+// default branch used to call it directly, and demo_subject_test.go still
+// does, pinning that exact behavior) -- while production wiring now goes
+// through demoSubjectResolverFor below, which is what actually honors the
+// switch.
+//
 // It fails closed: no tenant, no user (from either source), or an
 // incomplete pair reports (Subject{}, false), and rbac's gate turns that
 // into a 403.
 func demoSubjectResolver(r *http.Request) (rbac.Subject, bool) {
+	return demoResolveSubject(r, false)
+}
+
+// demoResolveSubject is demoSubjectResolver's implementation, parameterized
+// by headerDisabled so the kill switch demoUserHeader's doc comment
+// describes can turn the header off without touching the header-enabled
+// default's own behavior at all. headerDisabled=false reproduces
+// demoSubjectResolver's original body exactly (the header read first, the
+// Principal read only when the header is absent); headerDisabled=true skips
+// the header read entirely and resolves the user from the verified
+// Principal alone, exactly as if demoUserHeader had never been sent.
+//
+// The TENANT half is untouched by headerDisabled either way -- it always
+// comes from the request context (tenancy.Middleware's resolution), never
+// from anything the caller controls, per demoSubjectResolver's own doc
+// comment.
+func demoResolveSubject(r *http.Request, headerDisabled bool) (rbac.Subject, bool) {
 	tenantID, ok := pkgcore.TenantFromContext(r.Context())
 	if !ok || tenantID == "" {
 		return rbac.Subject{}, false
 	}
 
-	userID := r.Header.Get(demoUserHeader)
+	var userID string
+	if !headerDisabled {
+		userID = r.Header.Get(demoUserHeader)
+	}
 	if userID == "" {
 		principal, ok := authn.PrincipalFromContext(r.Context())
 		if !ok {
@@ -1175,6 +1218,28 @@ func demoSubjectResolver(r *http.Request) (rbac.Subject, bool) {
 		return rbac.Subject{}, false
 	}
 	return sub, true
+}
+
+// demoSubjectResolverFor returns the rbac.SubjectResolver production wiring
+// (guardIntegrationRoute, guardOrgRoute, guardModuleRoute's default branch)
+// plugs into rbac.WithSubjectResolver, chosen by headerDisabled -- the value
+// buildServer threads from cfg.DisableDemoUserHeader, itself read from
+// disableDemoUserHeaderEnv (APP_DISABLE_DEMO_USER_HEADER, server.go).
+//
+// headerDisabled=false (the default, byte-identical to this switch never
+// having existed) returns demoSubjectResolver itself, so every existing
+// demo journey and test that depends on the header winning keeps working
+// unchanged. headerDisabled=true returns a resolver that never reads
+// demoUserHeader at all -- the kill switch demoUserHeader's own doc comment
+// describes, for a deployment where a real, non-demo user might reach this
+// binary.
+func demoSubjectResolverFor(headerDisabled bool) func(*http.Request) (rbac.Subject, bool) {
+	if !headerDisabled {
+		return demoSubjectResolver
+	}
+	return func(r *http.Request) (rbac.Subject, bool) {
+		return demoResolveSubject(r, true)
+	}
 }
 
 // demoPermissionFor chooses the permission a request must hold, from the
@@ -1201,7 +1266,7 @@ func demoPermissionFor(resource string) func(*http.Request) string {
 // gate, or returns it untouched when demoRouteGuards marks the path
 // public. A path the table does not name is an error, so buildServer fails
 // to start rather than serving it ungated.
-func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler, orgDeps orgRouteGuardDeps) (http.Handler, error) {
+func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler, orgDeps orgRouteGuardDeps, demoHeaderDisabled bool) (http.Handler, error) {
 	resource, declared := demoRouteGuards[path]
 	if !declared {
 		return nil, fmt.Errorf(
@@ -1218,7 +1283,7 @@ func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler, org
 		// Not just a different action selector (like pki below) -- a
 		// wholly different gate, bypassing rbac.RequirePermissionFunc
 		// entirely. See integrationRouteSentinel's own doc comment for why.
-		return guardIntegrationRoute(az, handler), nil
+		return guardIntegrationRoute(az, handler, demoHeaderDisabled), nil
 	}
 	if resource == orgRouteSentinel {
 		// Also a wholly different gate, not just a different action
@@ -1226,7 +1291,7 @@ func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler, org
 		// comments for why (the accept-invitation bypass and the
 		// node-scope layer, neither of which fits rbac.RequirePermissionFunc
 		// alone).
-		return guardOrgRoute(az, handler, orgDeps), nil
+		return guardOrgRoute(az, handler, orgDeps, demoHeaderDisabled), nil
 	}
 	// pki, sharing and ai-gateway all need their own action selector, not
 	// demoPermissionFor's generic read/write split -- see pkiPermissionFor's,
@@ -1241,7 +1306,7 @@ func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler, org
 		permissionFor = aiGatewayPermissionFor
 	}
 	return rbac.RequirePermissionFunc(az, permissionFor,
-		rbac.WithSubjectResolver(demoSubjectResolver),
+		rbac.WithSubjectResolver(demoSubjectResolverFor(demoHeaderDisabled)),
 	)(handler), nil
 }
 
