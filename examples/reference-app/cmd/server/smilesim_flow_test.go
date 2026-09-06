@@ -87,6 +87,11 @@ type fakeOpenAIImageServer struct {
 	lastModel    string
 	lastPrompt   string
 	lastImageRaw []byte
+
+	// lastAuthorization is the request's Authorization header, recorded for
+	// ai_gateway_flow_test.go's tenant-BYOK redirect proof -- which
+	// credential's key the image provider presented is visible only here.
+	lastAuthorization string
 }
 
 func newFakeOpenAIImageServer(t *testing.T) *fakeOpenAIImageServer {
@@ -109,6 +114,10 @@ func newFakeOpenAIImageServer(t *testing.T) *fakeOpenAIImageServer {
 	f := &fakeOpenAIImageServer{generatedPNG: buf.Bytes()}
 	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.requests++
+		// Recorded for ai_gateway_flow_test.go's tenant-BYOK redirect
+		// proof: which credential's key the image provider presented is
+		// visible only in this header.
+		f.lastAuthorization = r.Header.Get("Authorization")
 		if r.Method != http.MethodPost || r.URL.Path != "/images/edits" {
 			http.NotFound(w, r)
 			return
@@ -257,6 +266,40 @@ func waitForSmileSimSucceeded(t *testing.T, srv *httptest.Server, token, jobID s
 	}
 }
 
+// smileSimulateAndWait enqueues one /simulate job for the completed photo
+// and polls the job-status route until it reaches a terminal status,
+// requiring the enqueue itself to succeed (202 carrying a job_id). It is
+// the shared orchestration TestSmileSimulation_ImageToImage_EndToEnd
+// performed inline before this helper existed, and
+// ai_gateway_flow_test.go's credential-redirect leg needs again -- it does
+// NOT require the terminal status to be "succeeded", since a caller
+// driving an unhappy path may legitimately land on dead_letter and wants
+// to assert that itself.
+func smileSimulateAndWait(t *testing.T, srv *httptest.Server, token string, photo testStorageObject, deadline time.Time) map[string]any {
+	t.Helper()
+
+	simulateBody, err := json.Marshal(map[string]string{"photo_object_id": photo.ID})
+	if err != nil {
+		t.Fatalf("marshal simulate request: %v", err)
+	}
+	resp := smileSimRequest(t, srv, http.MethodPost, smileSimulatePath, token, simulateBody)
+	var simulateOut struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&simulateOut); err != nil {
+		resp.Body.Close()
+		t.Fatalf("decode simulate response: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST %s status = %d, want %d; body = %+v", smileSimulatePath, resp.StatusCode, http.StatusAccepted, simulateOut)
+	}
+	if simulateOut.JobID == "" {
+		t.Fatal("simulate response carries no job_id")
+	}
+	return waitForSmileSimSucceeded(t, srv, token, simulateOut.JobID, deadline)
+}
+
 // TestSmileSimulation_ImageToImage_EndToEnd is round 2's mandatory
 // end-to-end proof: a patient photo really travels through
 // internal/smilesim.Service, through go/ai-gateway's Gateway.GenerateImage
@@ -298,29 +341,8 @@ func TestSmileSimulation_ImageToImage_EndToEnd(t *testing.T) {
 		t.Fatalf("GET stored photo content status = %d, want %d", contentResp.StatusCode, http.StatusOK)
 	}
 
-	// Enqueue the simulation.
-	simulateBody, err := json.Marshal(map[string]string{"photo_object_id": completedPhoto.ID})
-	if err != nil {
-		t.Fatalf("marshal simulate request: %v", err)
-	}
-	resp := smileSimRequest(t, srv, http.MethodPost, smileSimulatePath, token, simulateBody)
-	var simulateOut struct {
-		JobID string `json:"job_id"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&simulateOut); err != nil {
-		resp.Body.Close()
-		t.Fatalf("decode simulate response: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("POST %s status = %d, want %d; body = %+v", smileSimulatePath, resp.StatusCode, http.StatusAccepted, simulateOut)
-	}
-	if simulateOut.JobID == "" {
-		t.Fatal("simulate response carries no job_id")
-	}
-
-	// Poll until the async job completes.
-	final := waitForSmileSimSucceeded(t, srv, token, simulateOut.JobID, time.Now().Add(5*time.Second))
+	// Enqueue the simulation and poll until the async job completes.
+	final := smileSimulateAndWait(t, srv, token, completedPhoto, time.Now().Add(5*time.Second))
 	if status, _ := final["status"].(string); status != "succeeded" {
 		t.Fatalf("final job status = %v, want \"succeeded\"; body = %+v", final["status"], final)
 	}

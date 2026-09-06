@@ -34,12 +34,15 @@ import (
 // fixed, non-streaming JSON reply carrying reply as the assistant's
 // message -- the wire shape go/ai-gateway's OpenAICompatibleProvider parses
 // (go/ai-gateway/openai_compatible.go's openaiChatResponseWire). It records
-// the last request body it decoded, so a test can assert on exactly what
-// this app's wiring sent.
+// the last request body it decoded and the request's Authorization header,
+// so a test can assert on exactly what this app's wiring sent -- body,
+// and which credential's key the provider actually presented
+// (ai_gateway_flow_test.go's tenant-BYOK redirect proof reads the header).
 type fakeOpenAICompatibleServer struct {
 	*httptest.Server
-	reply       string
-	lastReqBody map[string]any
+	reply             string
+	lastReqBody       map[string]any
+	lastAuthorization string
 }
 
 func newFakeOpenAICompatibleServer(t *testing.T, reply string) *fakeOpenAICompatibleServer {
@@ -50,6 +53,7 @@ func newFakeOpenAICompatibleServer(t *testing.T, reply string) *fakeOpenAICompat
 			http.NotFound(w, r)
 			return
 		}
+		f.lastAuthorization = r.Header.Get("Authorization")
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "malformed request body", http.StatusBadRequest)
