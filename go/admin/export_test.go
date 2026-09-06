@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/compliance"
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
@@ -193,5 +194,83 @@ func TestHandler_AdminExportAuditEvents_AttributesOperatorAndEmitsAuditAction(t 
 	}
 	if !found {
 		t.Fatalf("no %q audit event recorded (recorded=%+v) -- the export left no attributable trace of itself", AuditActionAuditExport, recorded)
+	}
+}
+
+// TestExportService_Handle_ComplianceExportRequestAuditEvent_AttributesOperator
+// closes the gap the review found in
+// TestHandler_AdminExportAuditEvents_AttributesOperatorAndEmitsAuditAction's
+// own admin.audit_export proof: compliance.ExportService.Export fires its
+// own always-on compliance.export.request audit event (compliance's
+// export.go, emitExportAudit -> audit.Emit, reading Actor from the ctx
+// Export itself is called with), and on the unfixed code that ctx was the
+// raw worker ctx go/jobs rebuilds from the job record alone -- carrying no
+// Actor at all, so this event landed anonymous on the very audit table
+// admin.AuditService.Query reads from, for every admin-triggered export.
+// Handle must attach the operator as Actor to ctx before calling
+// s.export.Export, not only to a separate ctx used solely for its own
+// later admin.audit_export emission.
+func TestExportService_Handle_ComplianceExportRequestAuditEvent_AttributesOperator(t *testing.T) {
+	env := buildTestAdminModule(t)
+	if err := env.Queue.RegisterHandler(env.Admin.Export()); err != nil {
+		t.Fatalf("RegisterHandler() error = %v", err)
+	}
+
+	const tenant = pkgcore.TenantID("tenant-export-compliance-attribution")
+	if _, err := env.Org.Tree().CreateRoot(pkgcore.WithTenant(context.Background(), tenant), "Compliance Attribution Co", "workspace"); err != nil {
+		t.Fatalf("CreateRoot() error = %v", err)
+	}
+
+	var recorded []audit.RecordedEvent
+	env.Registry.EventBus().Subscribe(audit.EventRecorded, func(_ context.Context, evt pkgcore.Event) error {
+		if rec, ok := evt.Payload.(audit.RecordedEvent); ok {
+			recorded = append(recorded, rec)
+		}
+		return nil
+	})
+
+	const operatorID = "operator-compliance-attributed-7"
+	jobID, err := env.Admin.Export().Enqueue(context.Background(), string(tenant), operatorID)
+	if err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+
+	systemCtx, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{
+		Actor: "test", Purpose: SystemPurposeAdminCrossTenant,
+	})
+	if err != nil {
+		t.Fatalf("WithSystemContext() error = %v", err)
+	}
+	var job *jobs.Job
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		job, err = env.Queue.Get(systemCtx, jobID)
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		if job.Status == jobs.StatusSucceeded || job.Status == jobs.StatusDeadLetter {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if job.Status != jobs.StatusSucceeded {
+		t.Fatalf("job status = %s (error=%q), want %s", job.Status, job.Error, jobs.StatusSucceeded)
+	}
+
+	found := false
+	for _, evt := range recorded {
+		if evt.Action != compliance.AuditActionExportRequest {
+			continue
+		}
+		found = true
+		if evt.Actor.ID != operatorID {
+			t.Errorf("compliance.export.request Actor.ID = %q, want the calling operator %q -- an anonymous export-request row remains on the audit trail", evt.Actor.ID, operatorID)
+		}
+		if evt.Resource.ID != string(tenant) {
+			t.Errorf("compliance.export.request Resource.ID = %q, want the exported tenant %q", evt.Resource.ID, tenant)
+		}
+	}
+	if !found {
+		t.Fatalf("no %q audit event recorded (recorded=%+v)", compliance.AuditActionExportRequest, recorded)
 	}
 }

@@ -156,11 +156,23 @@ func (s *ExportService) Handle(ctx context.Context, job *jobs.Job, _ jobs.Progre
 		return jobs.Result{}, fmt.Errorf("admin: decode audit export job payload: %w", err)
 	}
 
+	// The operator is attached to ctx itself, before compliance's own
+	// Export runs -- not only to a separate ctx used later for this
+	// module's own admin.audit_export emission. compliance.ExportService.Export
+	// fires its own always-on compliance.export.request audit event
+	// (compliance's export.go) that reads Actor from this same ctx via
+	// pkgcore.ActorFromContext; without this, that event would carry a
+	// zero Actor for every admin-triggered export even though the
+	// operator identity was known and available the whole time.
+	if payload.OperatorUserID != "" {
+		ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: payload.OperatorUserID})
+	}
+
 	result, err := s.export.Export(ctx, job.TenantID)
 	if err != nil {
 		return jobs.Result{}, err
 	}
-	s.recordAudit(ctx, job.TenantID, payload.OperatorUserID)
+	s.recordAudit(ctx, job.TenantID)
 
 	encoded, marshalErr := json.Marshal(exportJobResult{
 		ObjectKey: result.ObjectKey,
@@ -176,7 +188,8 @@ func (s *ExportService) Handle(ctx context.Context, job *jobs.Job, _ jobs.Progre
 
 // recordAudit emits admin.audit_export once a tenant's audit-event export
 // has actually completed, with the operator who asked for it (Enqueue's
-// operatorUserID, carried through the job's own payload) as Actor -- an
+// operatorUserID, carried through the job's own payload, and already
+// attached to ctx as Actor by Handle before Export ran) as Actor -- an
 // ordinary, single-identity attribution, never OnBehalfOf: admin's own
 // routes deliberately never sit behind ImpersonationMiddleware
 // (AGENTS.md's "The impersonation request pipeline" section), so
@@ -191,15 +204,11 @@ func (s *ExportService) Handle(ctx context.Context, job *jobs.Job, _ jobs.Progre
 // surfacing an audit failure as this call's own error would report a
 // failure that did not happen -- matching
 // ImpersonationService.recordAudit's identical reasoning.
-func (s *ExportService) recordAudit(ctx context.Context, tenantID pkgcore.TenantID, operatorUserID string) {
+func (s *ExportService) recordAudit(ctx context.Context, tenantID pkgcore.TenantID) {
 	if s.bus == nil {
 		return
 	}
-	auditCtx := ctx
-	if operatorUserID != "" {
-		auditCtx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: operatorUserID})
-	}
-	err := audit.Emit(auditCtx, s.bus, s.auditActions, audit.Input{
+	err := audit.Emit(ctx, s.bus, s.auditActions, audit.Input{
 		Action:   AuditActionAuditExport,
 		Resource: audit.Resource{Type: "admin.tenant", ID: string(tenantID)},
 		Result:   audit.Result{Success: true},
