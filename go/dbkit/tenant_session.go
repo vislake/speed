@@ -2,6 +2,7 @@ package dbkit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"gorm.io/gorm"
@@ -52,6 +53,43 @@ const tenantSessionGUCName = "app.current_tenant"
 // shape that is one refactor away from someone reasonably trying to
 // parameterize it again and reintroducing the syntax error above.
 const setTenantSessionGUCSQL = "SELECT set_config('" + tenantSessionGUCName + "', ?, true)"
+
+// ErrNestedTenantSession is returned by WithTenantSession when db already
+// represents an open transaction — a *gorm.DB obtained from inside another
+// WithTenantSession call's own fn, or from a bare db.Begin() — rather than a
+// fresh connection or connection pool.
+//
+// This is not merely a style objection to nesting. WithTenantSession's own
+// audit-publish step (see the type's doc comment on auditCapturePlugin in
+// audit_capture.go) treats its own db.Transaction call returning nil as
+// proof the real, outermost transaction has genuinely committed, and
+// publishes every event this call's writes buffered only on the strength of
+// that proof. GORM's db.Transaction (gorm.io/gorm@v1.31.2/finisher_api.go)
+// does not make that distinction itself: called against a *gorm.DB whose
+// Statement.ConnPool already is a gorm.TxCommitter, it issues a SAVEPOINT
+// instead of a real BEGIN, and returns nil the instant that inner savepoint
+// is released — regardless of whether the real, still-open outer
+// transaction goes on to commit or roll back. A nested WithTenantSession
+// call would read that nil exactly like a top-level one, and publish its
+// buffered events immediately: a real, reproduced phantom audit event
+// surviving a real rollback of the enclosing transaction (see
+// tenant_session_test.go's
+// TestWithTenantSession_Nested_RefusesRatherThanPublishingBeforeOuterCommits,
+// which fails with exactly that outcome against a version of this function
+// that omits this check).
+//
+// Rather than special-case "nested, but only when audit capture happens to
+// be enabled" — a distinction a caller has no way to see from the outside,
+// and one more accident away from being wrong again the next time this
+// function grows a new commit-triggered side effect — WithTenantSession
+// refuses every nested call outright: fails closed before opening any
+// transaction, even a savepoint, and never calls fn at all, exactly like
+// the missing-tenant-context check just above this one. No caller in this
+// codebase nests WithTenantSession calls today: every real call site —
+// every Repository[T] method, and the documented raw-SQL escape hatch —
+// passes the base *gorm.DB dbkit.Open returns, never a tx handle obtained
+// from inside another WithTenantSession call's own fn.
+var ErrNestedTenantSession = errors.New("dbkit: WithTenantSession called with an already-open transaction")
 
 // WithTenantSession runs fn inside a transaction. When db is connected to
 // PostgreSQL, it first sets the session-local app.current_tenant GUC inside
@@ -105,10 +143,21 @@ const setTenantSessionGUCSQL = "SELECT set_config('" + tenantSessionGUCName + "'
 // operation, which must never happen without at minimum a loud, immediate
 // error — the same fail-closed philosophy every other tenant check in this
 // package follows.
+//
+// WithTenantSession refuses outright — before opening any transaction, even
+// a nested one, and without ever calling fn — when db already represents an
+// open transaction (see ErrNestedTenantSession's doc comment for why: the
+// audit-publish mechanism above depends on this call's own db.Transaction
+// returning nil meaning the real, outermost transaction genuinely
+// committed, which is not what a nested call's own nil return means).
 func WithTenantSession(ctx context.Context, db *gorm.DB, fn func(tx *gorm.DB) error) error {
 	tid, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
 		return err
+	}
+
+	if committer, ok := db.Statement.ConnPool.(gorm.TxCommitter); ok && committer != nil {
+		return ErrNestedTenantSession
 	}
 
 	isPostgres := db.Name() == string(DialectPostgres)

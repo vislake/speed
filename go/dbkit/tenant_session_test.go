@@ -3,6 +3,7 @@ package dbkit
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 
@@ -94,5 +95,94 @@ func TestWithTenantSession_NoTenantInContext_FailsClosedBeforeFnRuns(t *testing.
 	}
 	if got := calls.Load(); got != 0 {
 		t.Errorf("fn call count = %d, want 0 (WithTenantSession must fail closed before ever calling fn)", got)
+	}
+}
+
+// tenantSessionNestedTestDBSeq numbers this test's dbkit.Open databases so a
+// re-run never collides with a still-open in-memory database from a prior
+// run sharing the same process.
+var tenantSessionNestedTestDBSeq atomic.Int64
+
+// TestWithTenantSession_Nested_RefusesRatherThanPublishingBeforeOuterCommits
+// is the regression for a real, reproduced bug: calling WithTenantSession a
+// second time from inside an outer WithTenantSession's own fn — passing the
+// tx *gorm.DB the outer fn received, rather than the base db everything else
+// in this codebase passes — used to resurrect the exact phantom-audit-event
+// bug the buffered-publish mechanism (audit_capture.go, this file's sibling)
+// exists to close.
+//
+// Before ErrNestedTenantSession's check existed, the inner WithTenantSession
+// call allocated its own fresh *auditBuffer, saw its own
+// db.Transaction(...) call return nil (GORM issues a SAVEPOINT for a
+// *gorm.DB already inside a transaction and releases it, per
+// gorm.io/gorm@v1.31.2/finisher_api.go's Transaction — never a real BEGIN or
+// COMMIT), and published that buffer immediately — before the real, still-
+// open outer transaction was resolved at all. Forcing the outer fn to then
+// return a real error rolled back the widget row the inner call had
+// created, while the event the inner call had already published stayed on
+// the bus: a real phantom audit event surviving a real rollback, against a
+// real SQLite database, no mocking involved.
+//
+// Post-fix, the nested call is refused outright — ErrNestedTenantSession,
+// returned before any transaction (even a savepoint) opens and before fn
+// runs at all — so the inner Create never executes, nothing is ever
+// buffered, and nothing is ever published, independent of how the outer
+// transaction eventually resolves.
+func TestWithTenantSession_Nested_RefusesRatherThanPublishingBeforeOuterCommits(t *testing.T) {
+	dsn := fmt.Sprintf("file:tenant_session_nested_%d?mode=memory&cache=shared", tenantSessionNestedTestDBSeq.Add(1))
+
+	bus := pkgcore.NewMemoryEventBus()
+	var published atomic.Int64
+	bus.Subscribe(EventWriteCaptured, func(_ context.Context, _ pkgcore.Event) error {
+		published.Add(1)
+		return nil
+	})
+
+	db, err := Open(context.Background(), Options{Dialect: DialectSQLite, DSN: dsn, AuditBus: bus})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE widgets (
+		id        VARCHAR(26)  NOT NULL,
+		tenant_id VARCHAR(26)  NOT NULL,
+		name      VARCHAR(255) NOT NULL,
+		value     INTEGER      NOT NULL DEFAULT 0,
+		PRIMARY KEY (tenant_id, id)
+	)`).Error; err != nil {
+		t.Fatalf("create widgets table: %v", err)
+	}
+
+	ctx := ctxTenant("tenant-a")
+
+	var nestedErr error
+	var innerCreateRan bool
+	outerErr := WithTenantSession(ctx, db, func(tx *gorm.DB) error {
+		nestedErr = WithTenantSession(ctx, tx, func(innerTx *gorm.DB) error {
+			innerCreateRan = true
+			return innerTx.Create(&testutil.Widget{ID: "w-1", TenantID: "tenant-a", Name: "gadget"}).Error
+		})
+		return nestedErr
+	})
+
+	if !errors.Is(nestedErr, ErrNestedTenantSession) {
+		t.Fatalf("nested WithTenantSession() error = %v, want errors.Is(err, ErrNestedTenantSession)", nestedErr)
+	}
+	if innerCreateRan {
+		t.Error("the nested call's own fn ran; want it refused before fn is ever called, exactly like the missing-tenant-context check")
+	}
+	if !errors.Is(outerErr, ErrNestedTenantSession) {
+		t.Fatalf("outer WithTenantSession() error = %v, want errors.Is(err, ErrNestedTenantSession) (the outer fn returned the nested call's own error unchanged)", outerErr)
+	}
+
+	if got := published.Load(); got != 0 {
+		t.Errorf("published event count = %d, want 0 (the nested call must be refused before capturing or publishing anything)", got)
+	}
+
+	var count int64
+	if err := db.Raw(`SELECT count(*) FROM widgets WHERE id = ? AND tenant_id = ?`, "w-1", "tenant-a").Scan(&count).Error; err != nil {
+		t.Fatalf("count query: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("row count for w-1 = %d, want 0 (the nested Create never ran at all)", count)
 	}
 }
