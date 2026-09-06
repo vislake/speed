@@ -1,22 +1,38 @@
 /**
- * main.test.tsx -- exercises evictTenantQueriesOnSessionEnd in
+ * main.test.tsx -- the two contracts of the app's bootstrap module,
+ * each proven at the layer it belongs to:
+ *
+ * bootstrapReferenceApp -- a jsdom mount of the whole composition: the
+ * real bootstrap executed at least once in this repo, its client built
+ * over the (stubbed) environment fetch it captures, the anonymous
+ * sign-in surface rendering under the provider stack, and a clean
+ * unmount. Every other suite composes the tree by hand through the
+ * shared test-utils rigs; this is the one that runs the function a
+ * real page runs (reference-app-web.md P2-5). The browser-level half
+ * of that proof -- the real page in a real browser over the real
+ * server -- arrives with the Playwright e2e suite on the
+ * test/reference-app-e2e-suite branch, not yet on main.
+ *
+ * evictTenantQueriesOnSessionEnd -- the session-end cache eviction in
  * isolation, over a real AuthSession (createAuthSession, driven
  * through the real-client rig's own scripted responder) and a real
- * QueryClient, without mounting bootstrapReferenceApp's own DOM tree:
- * the wiring is pure session-and-cache plumbing, so nothing here needs
- * React, i18n, or the app's own views.
- *
- * The cross-account leak this pins is reference-app-web.md P1-1's
- * root cause -- nothing evicted a tenant's cached queries on
- * sign-out/session-death, only a tenant switch did -- and the
- * notes-view suite's own gate test covers the ternary-ordering half of
- * the same finding; the full end-to-end regression (a signed-out
- * account's cached notes never reaching a different, read-denied
- * account signing into the same tenant) lives in app-journey.test.tsx.
+ * QueryClient, without mounting any DOM tree: the wiring is pure
+ * session-and-cache plumbing, so nothing here needs React or the
+ * app's own views. The cross-account leak this pins is
+ * reference-app-web.md P1-1's root cause -- nothing evicted a
+ * tenant's cached queries on sign-out/session-death, only a tenant
+ * switch did -- and the notes-view suite's own gate test covers the
+ * ternary-ordering half of the same finding; the full end-to-end
+ * regression (a signed-out account's cached notes never reaching a
+ * different, read-denied account signing into the same tenant) lives
+ * in app-journey.test.tsx.
  */
 
 import { QueryClient } from '@tanstack/react-query'
-import { describe, expect, it } from 'vitest'
+import { act, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import zhCN from './locales/zh-CN.json' with { type: 'json' }
+import { bootstrapReferenceApp } from './main.js'
 import { evictTenantQueriesOnSessionEnd } from './main.js'
 import { jsonResponse, makeRealClientRig } from './test-utils/real-client.js'
 import type { RealResponder } from './test-utils/real-client.js'
@@ -53,6 +69,158 @@ function seedNotesCache(queryClient: QueryClient): void {
     { notes: [{ id: 'note-1', text: 'cached from the departing session' }] },
   )
 }
+
+describe('bootstrapReferenceApp', () => {
+  // The bootstrap's one runtime exercise in this repo at jsdom level.
+  // The whole composition -- i18n registration, the session, the
+  // client over the environment's own fetch (createClient captures
+  // globalThis.fetch at construction), the seam binding, the provider
+  // stack and the view machine -- runs exactly once per call, so a
+  // jsdom mount proves the real bootstrap executes at all
+  // (reference-app-web.md P2-5: no suite executed bootstrapReferenceApp
+  // until this one). The browser-level leg of that proof -- the real
+  // page over the real server -- arrives with the Playwright e2e suite
+  // (test/reference-app-e2e-suite), which is where a real network and
+  // a real browser belong; until it merges, this mount is the shipped
+  // floor.
+  let observedCalls: Array<{
+    readonly method: string
+    readonly path: string
+    readonly authorization: string | null
+  }>
+  let realFetch: typeof globalThis.fetch
+  let realLanguages: readonly string[] | undefined
+  let realLocalStorage: PropertyDescriptor | undefined
+
+  beforeEach(() => {
+    window.location.hash = ''
+    observedCalls = []
+    realFetch = globalThis.fetch
+    realLanguages = window.navigator.languages
+    // Deterministic language: pin the navigator-languages leg of
+    // createI18n's negotiation so the mounted surface speaks the
+    // zh-CN copy the assertions name. jsdom's own languages answer
+    // en-US; forcing the list makes the boot language a fact, not an
+    // environment accident.
+    Object.defineProperty(window.navigator, 'languages', {
+      value: ['zh-CN'],
+      configurable: true,
+    })
+    // The bootstrap's createI18n reads the stored-language choice from
+    // globalThis.localStorage. Under Node 26 that global is the
+    // engine's own experimental webstorage getter (it warns and offers
+    // nothing without --localstorage-file -- a Node 26 artifact: the
+    // pinned .nvmrc toolchain is Node 24, where the global does not
+    // exist and the read yields null the same way); stubbing a
+    // memory-backed storage keeps the composition's own storage leg
+    // exercised deterministically (an empty store reads back null)
+    // without tripping the engine global.
+    realLocalStorage = Object.getOwnPropertyDescriptor(
+      globalThis,
+      'localStorage',
+    )
+    Object.defineProperty(globalThis, 'localStorage', {
+      value: {
+        getItem: () => null,
+        setItem: () => undefined,
+      },
+      configurable: true,
+      writable: true,
+    })
+    // The environment fetch the bootstrap's client captures. A fresh
+    // stub per test, answering the pre-auth config GET the anonymous
+    // surface drives and failing loudly on anything else -- an
+    // unexpected request is a composition regression, not something to
+    // answer.
+    Object.defineProperty(window, 'fetch', {
+      value: async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input))
+        const authorization = new Headers(init?.headers).get('authorization')
+        observedCalls.push({
+          method: init?.method ?? 'GET',
+          path: url.pathname,
+          authorization,
+        })
+        if (url.pathname === '/api/config/public') {
+          return jsonResponse(200, { config: {}, features: [] })
+        }
+        throw new Error(`bootstrap mount: unexpected request ${url.pathname}`)
+      },
+      configurable: true,
+    })
+  })
+
+  afterEach(() => {
+    if (realLanguages !== undefined) {
+      Object.defineProperty(window.navigator, 'languages', {
+        value: realLanguages,
+        configurable: true,
+      })
+    }
+    Object.defineProperty(window, 'fetch', {
+      value: realFetch,
+      configurable: true,
+    })
+    if (realLocalStorage !== undefined) {
+      Object.defineProperty(globalThis, 'localStorage', realLocalStorage)
+    }
+    document.body.innerHTML = ''
+  })
+
+  it('mounts the whole composition into a container and renders the anonymous sign-in surface', async () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    let boot: ReturnType<typeof bootstrapReferenceApp> | undefined
+    await act(async () => {
+      boot = bootstrapReferenceApp(container)
+    })
+
+    // The composed app booted anonymous: the sign-in surface stands in
+    // the frame, speaking the pinned language.
+    expect(boot?.i18n.language).toBe('zh-CN')
+    expect(boot?.queryClient).toBeInstanceOf(QueryClient)
+    expect(
+      await screen.findByRole('button', { name: zhCN.signIn.registerAction }),
+    ).toBeInTheDocument()
+    // The frame is not up: no signed-in navigation exists.
+    expect(screen.queryByRole('link', { name: zhCN.nav.home })).not.toBeInTheDocument()
+
+    // The surface's one read reached the environment fetch the client
+    // captured, credential-less, through the real api-client machinery.
+    expect(observedCalls).toHaveLength(1)
+    expect(observedCalls[0]).toEqual({
+      method: 'GET',
+      path: '/api/config/public',
+      authorization: null,
+    })
+
+    // Tearing the page down unmounts the tree.
+    await act(async () => {
+      boot?.root.unmount()
+    })
+    container.remove()
+    expect(container.innerHTML).toBe('')
+  })
+
+  it('a second bootstrap into a fresh container mounts again (the composition is not single-use)', async () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    let boot: ReturnType<typeof bootstrapReferenceApp> | undefined
+    await act(async () => {
+      boot = bootstrapReferenceApp(container)
+    })
+    expect(
+      await screen.findByRole('button', { name: zhCN.signIn.registerAction }),
+    ).toBeInTheDocument()
+    // Each bootstrap builds its own client over the (stubbed) environment
+    // fetch, so each mount drives its own config read.
+    expect(observedCalls.length).toBeGreaterThanOrEqual(1)
+    await act(async () => {
+      boot?.root.unmount()
+    })
+    container.remove()
+  })
+})
 
 describe('evictTenantQueriesOnSessionEnd', () => {
   it('evicts the tenant a sign-out leaves behind', async () => {
