@@ -142,21 +142,30 @@ const (
 //     which carries no tenant; a handler needing tenant data must rebuild
 //     it from the event with pkgcore.WithTenant.
 //   - Delivery is at-least-once, not exactly-once, despite this package's
-//     earlier drafts having claimed the stronger guarantee: both
-//     deliverPendingForType's catch-up loop and Publish's own local
-//     delivery run a row's handlers BEFORE persisting that the row was
-//     delivered (advanceCursorAtLeast), so that a crash or connection loss
-//     landing in the gap between the two loses no event -- the unadvanced,
-//     persisted cursor simply causes the next catch-up cycle to redeliver
-//     the same row. advanceCursorAtLeast retries a bounded number of times
-//     over pool (see its own doc comment) precisely to shrink this window
-//     -- most single connection blips now recover inside that call instead
-//     of surfacing as a duplicate at all -- but a failure that outlasts
-//     every retry still redelivers rather than silently drops. This is the
-//     same trade eventbus/redis documents for its own cross-process path
-//     ("at-least-once-ish but not retried"): a host whose handlers are not
-//     idempotent must de-duplicate itself, by event id or by the payload's
-//     own natural key, exactly as it would have to for eventbus/redis.
+//     earlier drafts having claimed the stronger guarantee: a row's
+//     handlers always run BEFORE that row's delivery is recorded --
+//     Publish's own local delivery runs its handlers and then records
+//     the row id in an in-process mark (locallyDelivered), while
+//     deliverPendingForType's catch-up loop, the only cursor advancer,
+//     runs a row's handlers (or skips an already-marked row) before
+//     advanceCursorAtLeast persists the watermark past it -- so a crash
+//     or connection loss landing in either gap loses no event. A crash
+//     after the handlers but before the mark costs nothing (the poller
+//     simply delivers the row on its next cycle); a crash after the
+//     mark loses the in-process mark itself, so the row is delivered
+//     once more after restart -- duplicate, never loss; and a crash in
+//     the catch-up loop's own handler-then-advance gap redelivers the
+//     row for the same reason. advanceCursorAtLeast retries a bounded
+//     number of times over pool (see its own doc comment) precisely to
+//     shrink the catch-up side of this window -- most single connection
+//     blips now recover inside that call instead of surfacing as a
+//     duplicate at all -- but a failure that outlasts every retry still
+//     redelivers rather than silently drops. This is the same trade
+//     eventbus/redis documents for its own cross-process path
+//     ("at-least-once-ish but not retried"): a host whose handlers are
+//     not idempotent must de-duplicate itself, by event id or by the
+//     payload's own natural key, exactly as it would have to for
+//     eventbus/redis.
 //   - Unlike eventbus/redis, THIS implementation genuinely survives a
 //     replica's own restart without losing events published while it was
 //     down, provided the restarting process is built with the SAME
@@ -194,38 +203,68 @@ type EventBus struct {
 
 	// deliverMu serializes, for this bus instance alone, each short
 	// delivery-critical section against every other one: Publish's
-	// per-Type in-flight bookkeeping (below) and the catch-up poller's
-	// per-batch check of that bookkeeping plus its cursor read and outbox
-	// fetch. The lock is deliberately NEVER held while a handler runs:
-	// Publish's own synchronous local delivery and deliverPendingForType's
-	// catch-up loop both invoke every handler outside it, which is what
-	// makes a handler's re-entrant Publish (or Subscribe) on this same bus
-	// safe instead of a self-deadlock.
+	// per-Type in-flight bookkeeping and local-delivery marks (below) and
+	// the catch-up poller's per-batch check of that bookkeeping plus its
+	// cursor read and outbox fetch, and its per-row mark check and
+	// pruning. The lock is deliberately
+	// NEVER held while a handler runs: Publish's own synchronous local
+	// delivery and deliverPendingForType's catch-up loop both invoke every
+	// handler outside it, which is what makes a handler's re-entrant
+	// Publish (or Subscribe) on this same bus safe instead of a
+	// self-deadlock.
 	//
 	// What the lock actually buys is the no-double-delivery argument
 	// between the two delivery paths for one (replicaID, event Type)
 	// cursor row. Publish raises the Type's in-flight count BEFORE its
 	// outbox insert can make a row visible (the insert is that visibility
-	// point) and drops it only AFTER its local handlers ran and
-	// advanceCursorAtLeast persisted the watermark past every row they
-	// covered. The poller's check, cursor read and fetch share one
-	// critical section, so a fetch that sees the count at zero can only
-	// observe rows whose local delivery -- if any -- already advanced the
-	// persisted cursor past them, and a fetch that races a Publish either
-	// sees the raised count (and skips the batch, letting the Publish's
-	// own local delivery handle the rows) or runs entirely before that
-	// Publish's insert commits. Rows a skipped batch would have covered
-	// are not lost: delivery remains at-least-once, and the next catch-up
-	// cycle delivers what the concurrent Publish did not.
+	// point) and drops it only AFTER its local handlers ran and the row id
+	// was recorded in locallyDelivered. The poller's in-flight check,
+	// cursor read and fetch share one critical section, so a fetch that
+	// sees the count at zero can only run entirely before a concurrent
+	// Publish's insert commits, or entirely after that Publish recorded
+	// its mark -- it can never catch a committed row in the gap between
+	// the row's local handlers running and that delivery being recorded.
+	// A locally delivered row therefore always reaches the catch-up scan
+	// carrying its mark, and the scan skips it (advancing past it without
+	// re-running its handlers) instead of redelivering it; a fetch that
+	// races a Publish the other way -- seeing the raised count -- skips
+	// the batch entirely and lets that Publish's own local delivery handle
+	// its row, which the next catch-up cycle picks up if the publish
+	// covered less than the batch would have.
 	deliverMu sync.Mutex
 
 	// inFlight counts, per event Type, the Publish calls on this instance
 	// whose local delivery has not fully completed yet -- the count is
-	// raised before the outbox insert and dropped after the local
-	// handlers ran and the cursor advance persisted, so while it is
-	// non-zero the Type's committed rows are being handled synchronously
-	// and the catch-up poller must not fetch them. Guarded by deliverMu.
+	// raised before the outbox insert and dropped after the local handlers
+	// ran and the row's id was recorded in locallyDelivered (the drop is
+	// deferred, so even a panicking handler cannot wedge the poller; a
+	// panic also skips the mark, so the poller re-delivers the row rather
+	// than the panicked local path silently swallowing it). While the
+	// count is non-zero the Type's committed rows are being handled
+	// synchronously, or are about to be marked, so the catch-up poller
+	// must not fetch them; once it reaches zero, every row that publish
+	// committed already carries its mark. Guarded by deliverMu.
 	inFlight map[string]int
+
+	// locallyDelivered records, per event Type, the outbox row ids whose
+	// handlers this instance's own synchronous Publish path has already
+	// run (see Publish's own doc comment). A local Publish never advances
+	// the persisted cursor -- only the catch-up poller may move a
+	// watermark, and only past rows it has itself delivered or skipped --
+	// so a locally delivered row stays visible to the poller's scan, which
+	// skips it rather than running its handlers a second time. The marks
+	// are in-process by design: the row itself is durable in the outbox,
+	// so marks lost to a crash cost a redelivery on restart (at-least-once,
+	// never loss -- see the package doc's delivery-semantics note), while
+	// a mark at or below the persisted cursor is dead -- that row is never
+	// fetched again -- and is pruned by the poller as its own advance
+	// passes it (see deliverPendingForType). Keyed by event Type rather
+	// than holding a flat id set
+	// because pruning is per-Type: ids are allocated from one sequence
+	// shared across Types, so advancing one Type's cursor can pass rows of
+	// another Type whose own cursor -- and need for its marks -- still
+	// lags. Guarded by deliverMu.
+	locallyDelivered map[string]map[int64]struct{}
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -265,13 +304,14 @@ func NewEventBus(pool *pgxpool.Pool, replicaID string) *EventBus {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &EventBus{
-		pool:       pool,
-		replicaID:  replicaID,
-		handlers:   make(map[string][]pkgcore.EventHandler),
-		inFlight:   make(map[string]int),
-		ctx:        ctx,
-		cancel:     cancel,
-		listenDone: make(chan struct{}),
+		pool:             pool,
+		replicaID:        replicaID,
+		handlers:         make(map[string][]pkgcore.EventHandler),
+		inFlight:         make(map[string]int),
+		locallyDelivered: make(map[string]map[int64]struct{}),
+		ctx:              ctx,
+		cancel:           cancel,
+		listenDone:       make(chan struct{}),
 	}
 }
 
@@ -342,6 +382,15 @@ func (b *EventBus) Subscribe(eventType string, h pkgcore.EventHandler) {
 // Local handlers run without deliverMu held (see deliverMu's own doc
 // comment), so a handler may itself call Publish -- or Subscribe -- on this
 // bus re-entrantly; the nested publish is delivered exactly like any other.
+//
+// When this instance is locally subscribed to evt.Type, its handlers just
+// ran for the row the publish committed, and the row id is recorded in the
+// in-process locallyDelivered set instead of advancing the persisted
+// cursor: only the catch-up poller may move a watermark, and it skips a
+// marked row when its scan reaches it (see deliverPendingForType and
+// locallyDelivered). A replica with no local subscriber to evt.Type
+// records nothing, and the row reaches that replica only through the
+// catch-up scan, as usual.
 func (b *EventBus) Publish(ctx context.Context, evt pkgcore.Event) error {
 	if b.isClosed() {
 		return ErrEventBusClosed
@@ -357,11 +406,13 @@ func (b *EventBus) Publish(ctx context.Context, evt pkgcore.Event) error {
 
 	// Raise this Type's in-flight count BEFORE the insert below can make
 	// the row visible to the catch-up poller, and drop it only after the
-	// local handlers ran and the cursor advance persisted -- see
-	// deliverMu's own doc comment for why this ordering is the
-	// no-double-delivery argument. defer guarantees the count is dropped
-	// on every path out of this function, including a handler panic, so a
-	// wedged publish can never stall the poller.
+	// local handlers ran and the row id was recorded in locallyDelivered
+	// (the block near the end of this function) -- see deliverMu's own doc
+	// comment for why this ordering is the no-double-delivery argument.
+	// defer guarantees the count is dropped on every path out of this
+	// function, including a handler panic, so a wedged publish can never
+	// stall the poller; a panic also skips the mark, leaving the poller to
+	// deliver the row rather than the panicked local path swallowing it.
 	b.deliverMu.Lock()
 	b.inFlight[evt.Type]++
 	b.deliverMu.Unlock()
@@ -394,15 +445,29 @@ func (b *EventBus) Publish(ctx context.Context, evt pkgcore.Event) error {
 	}
 	if len(handlers) > 0 {
 		// This replica is locally subscribed to evt.Type, so its own
-		// handlers just ran for this row synchronously; advancing the
-		// cursor to cover it keeps the catch-up poller from redelivering
-		// the very event this call already handled. A replica with no
-		// local subscriber to evt.Type has no cursor to advance -- the row
-		// simply waits in the outbox for whichever OTHER replica (or a
-		// later Subscribe on this one) discovers it.
-		if err := advanceCursorAtLeast(ctx, b.pool, b.replicaID, evt.Type, id); err != nil {
-			failures = append(failures, fmt.Errorf("pkgcore/eventbus/postgres: advance local cursor for event %q: %w", evt.Type, err))
+		// handlers just ran for this row synchronously. Record the row id
+		// in the in-process locallyDelivered set instead of advancing the
+		// persisted cursor: only the catch-up poller may move a watermark,
+		// and a local advance could leap over same-type rows that are
+		// committed but not yet picked up by this replica's own (lagging)
+		// listener -- the loss shape this package's no-loss integration
+		// tests pin. The mark tells the poller's scan to skip this row
+		// rather than run its handlers again. The mark must land BEFORE
+		// the deferred in-flight drop above runs (it executes as this
+		// function returns), so any fetch the drop unblocks can only ever
+		// see an already-marked row -- the ordering deliverMu's own doc
+		// comment's no-double-delivery argument depends on. A replica with
+		// no local subscriber to evt.Type records nothing: the row simply
+		// waits in the outbox for whichever OTHER replica (or a later
+		// Subscribe on this one) discovers it.
+		b.deliverMu.Lock()
+		marked := b.locallyDelivered[evt.Type]
+		if marked == nil {
+			marked = make(map[int64]struct{})
+			b.locallyDelivered[evt.Type] = marked
 		}
+		marked[id] = struct{}{}
+		b.deliverMu.Unlock()
 	}
 	return errors.Join(failures...)
 }
@@ -549,17 +614,34 @@ func (b *EventBus) deliverPending(ctx context.Context) {
 // this replica's persisted cursor for it, in batches of catchUpBatchSize,
 // initializing the cursor at the live end on the very first call
 // (ensureCursor) and re-reading it from the database before every later
-// batch. Each batch is fetched inside one brief deliverMu critical
-// section: the section first skips the Type entirely when a Publish on
-// this same instance is delivering it locally right now -- see deliverMu's
-// own doc comment for why that check, the cursor read and the fetch must
-// share the section to rule out double delivery -- then reads the cursor
-// (re-read, never trusted from a previous batch's memory, because a
-// concurrent local Publish may have advanced it between batches) and
+// batch. This scan is the ONLY cursor advancer in the process: Publish's
+// local delivery never touches the watermark -- it records in-process
+// marks instead (see Publish and locallyDelivered) -- so no local publish
+// can ever move the cursor past rows the scan has not handled yet.
+//
+// Each batch is fetched inside one brief deliverMu critical section: the
+// section first skips the Type entirely when a Publish on this same
+// instance is delivering it locally right now -- see deliverMu's own doc
+// comment for why that check, the cursor read and the fetch must share
+// the section to rule out double delivery -- then reads the cursor and
 // fetches the batch. Every handler runs outside deliverMu
-// (deliverOutboxRow), and the cursor advances after each row, also outside
-// deliverMu: advanceCursorAtLeast's GREATEST upsert makes concurrent
-// advances from a simultaneous local Publish commute safely. A failure at
+// (deliverOutboxRow). Rows are then handled one at a time: a row whose id
+// the local path already marked is skipped -- that mark IS this instance's
+// synchronous delivery of the row, so running its handlers again would
+// duplicate it -- while an unmarked row is delivered normally. Every row,
+// marked or not, is then advanced past, outside deliverMu; on a failure
+// the scan stops and is retried from the unadvanced persisted cursor on
+// the next call (at-least-once; a marked row is no worse for it, since
+// the next scan skips it again rather than redelivering it -- see the
+// package doc's delivery-semantics note). After each successful advance
+// the scan prunes, under deliverMu, every mark of THIS type at or below
+// the advanced id: those rows now sit behind the cursor and will never be
+// fetched again, so their marks are dead. Pruning is deliberately
+// per-Type -- a mark of another Type is never touched, because that
+// Type's own cursor may still lag behind ids this advance just passed
+// (ids come from one sequence shared across Types; see locallyDelivered's
+// doc comment) -- and runs only after the advance succeeded, so a failed
+// advance never discards marks the next scan still needs. A failure at
 // any point here is swallowed rather than propagated -- there is no
 // caller left to report it to, the same "handlers on other replicas ...
 // errors are not observable by any publisher" contract eventbus/redis
@@ -576,12 +658,12 @@ func (b *EventBus) deliverPendingForType(ctx context.Context, eventType string) 
 		b.deliverMu.Lock()
 		if b.inFlight[eventType] > 0 {
 			// A local Publish on this instance is delivering eventType
-			// synchronously right now and will advance the cursor past
-			// every row it covers. Anything this scan would have fetched
-			// is either already being handled there or not yet committed,
-			// so skip the whole batch: the next catch-up cycle (a NOTIFY
-			// or the next listenBlock timeout) delivers what that Publish
-			// did not, and delivery stays at-least-once.
+			// synchronously right now and will mark every row it covers
+			// before its in-flight count drops. Anything this scan would
+			// have fetched is either already being handled there or not
+			// yet committed, so skip the whole batch: the next catch-up
+			// cycle (a NOTIFY or the next listenBlock timeout) delivers
+			// what that Publish did not, and delivery stays at-least-once.
 			b.deliverMu.Unlock()
 			return
 		}
@@ -590,10 +672,11 @@ func (b *EventBus) deliverPendingForType(ctx context.Context, eventType string) 
 			err    error
 		)
 		if cursorKnown {
-			// Re-read, never reuse the previous batch's value: a
-			// concurrent local Publish may have advanced the cursor since,
+			// Re-read, never reuse the previous batch's value: an earlier
+			// batch of this same scan (or a second instance mistakenly
+			// sharing this replicaID) may have advanced the cursor since,
 			// and fetching from a stale position would redeliver the rows
-			// it already handled.
+			// already handled.
 			cursor, err = readCursor(ctx, b.pool, b.replicaID, eventType)
 		} else {
 			cursor, err = ensureCursor(ctx, b.pool, b.replicaID, eventType)
@@ -611,10 +694,40 @@ func (b *EventBus) deliverPendingForType(ctx context.Context, eventType string) 
 			return
 		}
 		for _, row := range rows {
-			b.deliverOutboxRow(ctx, row)
+			// A brief deliverMu section per row answers the skip question:
+			// whether THIS instance's own Publish path already ran this
+			// row's handlers (see locallyDelivered). Reading under the
+			// lock synchronizes against the concurrent mark and prune
+			// writers; the answer itself cannot change underneath this
+			// scan, because a row fetched here was committed before this
+			// batch's snapshot, so any local publish of it completed its
+			// mark before this batch's critical section began -- the
+			// argument deliverMu's own doc comment makes.
+			b.deliverMu.Lock()
+			_, alreadyLocal := b.locallyDelivered[eventType][row.id]
+			b.deliverMu.Unlock()
+
+			if !alreadyLocal {
+				b.deliverOutboxRow(ctx, row)
+			}
 			if err := advanceCursorAtLeast(ctx, b.pool, b.replicaID, eventType, row.id); err != nil {
 				return // retried from the (unadvanced) persisted cursor next call
 			}
+			// The advance succeeded, so every mark of this type at or
+			// below row.id is dead -- those rows sit behind the cursor and
+			// will never be fetched again -- and is pruned here: per-Type,
+			// and only after the advance succeeds, for the reasons in the
+			// doc comment above.
+			b.deliverMu.Lock()
+			for markedID := range b.locallyDelivered[eventType] {
+				if markedID <= row.id {
+					delete(b.locallyDelivered[eventType], markedID)
+				}
+			}
+			if len(b.locallyDelivered[eventType]) == 0 {
+				delete(b.locallyDelivered, eventType)
+			}
+			b.deliverMu.Unlock()
 		}
 		if len(rows) < catchUpBatchSize {
 			return

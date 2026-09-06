@@ -212,16 +212,17 @@ func TestEventBus_FanOut_BothReplicasReceiveEveryEvent(t *testing.T) {
 // The proof: publish several events under a fixed, durable replicaID
 // with NO EventBus subscribed at all (so nothing is listening -- the
 // starkest form of "the listener is not yet connected"), then construct a
-// fresh EventBus with that SAME replicaID and Subscribe to it. Because the
-// cursor for (replicaID, eventType) has never been initialized, and this
-// is the type's first-ever Subscribe on this replicaID, the bus reads the
-// live-end semantics documented on EventBus... which is exactly why this
-// test seeds the cursor first: it initializes the cursor with the same
-// first-Subscribe/live-end shape via an earlier, throwaway EventBus under
-// this replicaID, THEN publishes while it is closed (simulating a genuine
-// restart window), and only then reconnects under the identical replicaID
-// to prove the persisted cursor -- not the live end -- is what the
-// reconnecting instance resumes from.
+// fresh EventBus with that SAME replicaID and Subscribe to it. Had the
+// cursor for (replicaID, eventType) never been created, this reconnect
+// would be the type's first-ever catch-up scan on this replicaID and
+// would read the live end (see ensureCursor) -- which is exactly why this
+// test seeds the cursor first, through an earlier, throwaway EventBus
+// under this replicaID whose listener is PROVEN, by a cross-replica
+// warm-up that only the listener's catch-up scan can deliver, to have run
+// the scan that creates the cursor row. It THEN publishes while the bus
+// is closed (simulating a genuine restart window), and only then
+// reconnects under the identical replicaID to prove the persisted cursor
+// -- not the live end -- is what the reconnecting instance resumes from.
 func TestEventBus_CatchUp_MissedNotifyIsDeliveredAfterReconnect(t *testing.T) {
 	ctx := context.Background()
 	pool := startPostgresPool(t, ctx)
@@ -232,20 +233,54 @@ func TestEventBus_CatchUp_MissedNotifyIsDeliveredAfterReconnect(t *testing.T) {
 	// Step 1: bring this replicaID's cursor for eventType into existence at
 	// the live end, then close the bus -- simulating a replica that has
 	// run before and is now down, the same as a real restart window.
+	//
+	// The cursor row is created by the listener goroutine's first catch-up
+	// scan (see ensureCursor), not by Subscribe and not by the
+	// local-delivery path, which only marks rows in memory and never writes
+	// the cursor table -- so a warm-up whose convergence never involved
+	// that scan would close this bus with no cursor row at all, and step
+	// 3's reconnecting instance would initialize one at the live end with
+	// the downtime events already committed, skipping them forever. A
+	// cross-replica warm-up -- the publisher's markers reaching warm's
+	// listener -- can only converge through that scan, which is why the
+	// publisher below must exist before warm closes.
+	publisher := eventbuspostgres.NewEventBus(pool, "catchup-publisher")
+	t.Cleanup(publisher.Close)
+
 	warm := eventbuspostgres.NewEventBus(pool, replicaID)
 	warmSpy := &eventSpy{}
 	warm.Subscribe(eventType, warmSpy.handler())
-	warmUp(t, ctx, warm, eventType, warmSpy)
+	warmUp(t, ctx, publisher, eventType, warmSpy)
+
+	// warmUp returned as soon as the spy received a marker, which can leave
+	// the listener mid-batch: its scan delivers row by row and advances the
+	// cursor only AFTER each row's handlers run, so Close right here could
+	// interrupt the scan between a marker's delivery and its cursor advance
+	// -- and the reconnecting instance below, resuming from that unadvanced
+	// cursor exactly as at-least-once demands, would redeliver the marker
+	// into the final count. Wait instead until the persisted cursor has
+	// reached the outbox's live end: because the scan advances rows in id
+	// order, a cursor at the current maximum id proves every published
+	// marker is delivered AND advanced past, leaving no redelivery tail for
+	// Close to sever.
+	eventually(t, "warm's cursor to reach the live end of the outbox before it closes", func() bool {
+		var caughtUp bool
+		err := pool.QueryRow(ctx,
+			`SELECT last_delivered_id >= (SELECT COALESCE(MAX(id), 0) FROM pkgcore_eventbus_outbox WHERE event_type = $1)
+			   FROM pkgcore_eventbus_cursor WHERE replica_id = $2 AND event_type = $1`,
+			eventType, replicaID,
+		).Scan(&caughtUp)
+		return err == nil && caughtUp
+	})
 	warm.Close()
 
 	// Step 2: with NO EventBus for replicaID open at all -- not merely
 	// disconnected, genuinely absent, the starkest "not yet connected"
-	// case the task asked this test to cover -- publish through an
-	// unrelated bus instance. NOTIFY is broadcast to whoever happens to be
-	// LISTENing at the moment it fires; nobody is, for replicaID, so this
-	// is squarely the loss LISTEN/NOTIFY alone cannot recover from.
-	publisher := eventbuspostgres.NewEventBus(pool, "catchup-publisher")
-	t.Cleanup(publisher.Close)
+	// case the task asked this test to cover -- publish through the
+	// unrelated bus instance created above. NOTIFY is broadcast to whoever
+	// happens to be LISTENing at the moment it fires; nobody is, for
+	// replicaID, so this is squarely the loss LISTEN/NOTIFY alone cannot
+	// recover from.
 
 	const missedDuringDowntime = 3
 	for i := 1; i <= missedDuringDowntime; i++ {

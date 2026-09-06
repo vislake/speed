@@ -27,11 +27,20 @@
 -- CLAUDE.md's migrations section) -- because the catch-up mechanism's
 -- whole job is answering "everything after row N for this event type",
 -- which needs a single total ordering source shared by every concurrent
--- publisher; only a database sequence gives that without the publishers
--- coordinating amongst themselves. This table is infrastructure
--- bookkeeping for the bus itself, not a business record, so the
--- generate-IDs-in-the-application rule does not bind it the way it binds
--- a domain table.
+-- publisher; only a database sequence gives that. The sequence alone
+-- orders the ids, though; Publish additionally serializes same-event-type
+-- publish transactions on a per-type advisory transaction lock taken
+-- before the insert (see advisoryLockKey and insertOutboxAndNotify in
+-- outbox.go), so same-type commits land in id order. That ordering is
+-- load-bearing: a replica's cursor is a single watermark per (replica,
+-- event type), and advancing it past row N implicitly claims every
+-- same-type row in (cursor, N] is delivered -- a claim that would skip an
+-- uncommitted smaller-id row forever if commits could overtake the id
+-- order a scan's snapshot saw. Cursors are per type, so different event
+-- types never contend on the lock and their transactions interleave
+-- freely. This table is infrastructure bookkeeping for the bus itself,
+-- not a business record, so the generate-IDs-in-the-application rule does
+-- not bind it the way it binds a domain table.
 --
 -- payload is stored as TEXT, never a native JSONB column with operator
 -- filtering, mirroring go/dbkit/audit's audit_events.changes column
