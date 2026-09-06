@@ -11,7 +11,8 @@
  *
  *   - a call to the bare global fetch identifier (`fetch('/api')`),
  *   - a call through the environment object (`window.fetch(...)`,
- *     `globalThis.fetch(...)`), and
+ *     `globalThis.fetch(...)`, `self.fetch(...)`, computed member
+ *     access included), and
  *   - a constructed XMLHttpRequest (`new XMLHttpRequest()`),
  *   - an import, dynamic import or require of the axios or node-fetch
  *     module -- deliberately path-free: any import of axios is this
@@ -23,6 +24,19 @@
  * global, so only an identifier with no binding in scope is reported.
  * Member-object forms report unconditionally -- a local binding cannot
  * shadow the environment object.
+ *
+ * The environment fetch is also flagged when it is captured rather
+ * than called: taking `window.fetch` out of a call (an alias
+ * `const f = window.fetch`, a `.bind`/`.call` capture) or
+ * destructuring it out of the environment object (`const { fetch } =
+ * window`) is the same hand-written HTTP waiting to happen, and a rule
+ * that answered "no call, no violation" left every alias form outside
+ * the check (reference-app-web.md P2-6). What stays outside is the
+ * residual the check deliberately does not chase: aliasing the
+ * environment OBJECT itself (`const win = window; win.fetch(...)`) or
+ * the bare global identifier (`const f = fetch`) needs dataflow across
+ * bindings, which this rule does not do -- code review owns that
+ * residue.
  *
  * Scope is applied in eslint.config.mjs over package runtime source,
  * with packages/api-client as the single whitelist; test files and
@@ -47,7 +61,47 @@ function isBound(name, node, sourceCode) {
 }
 
 /** The environment objects whose fetch member is the global fetch. */
-const ENVIRONMENT_OBJECTS = new Set(['window', 'globalThis'])
+const ENVIRONMENT_OBJECTS = new Set(['window', 'globalThis', 'self'])
+
+/** The environment object a member/destructure expression reads fetch
+ * from, or undefined when the expression is not one of the environment
+ * objects' fetch members. Computed access counts when its key is the
+ * literal 'fetch' -- window['fetch'] is the same member, not a
+ * different call shape. */
+function environmentFetchSource(node) {
+  if (
+    node.type !== 'MemberExpression' ||
+    node.object.type !== 'Identifier' ||
+    !ENVIRONMENT_OBJECTS.has(node.object.name)
+  ) {
+    return undefined
+  }
+  if (!node.computed) {
+    return node.property.type === 'Identifier' &&
+      node.property.name === 'fetch'
+      ? node.object.name
+      : undefined
+  }
+  return node.property.type === 'Literal' &&
+    node.property.value === 'fetch'
+    ? node.object.name
+    : undefined
+}
+
+/** The environment object an ObjectPattern destructures fetch out of,
+ * or undefined. */
+function environmentFetchPattern(pattern) {
+  if (pattern.type !== 'ObjectPattern') {
+    return undefined
+  }
+  const property = pattern.properties.find(
+    (candidate) =>
+      candidate.type === 'Property' &&
+      candidate.key.type === 'Identifier' &&
+      candidate.key.name === 'fetch',
+  )
+  return property === undefined ? undefined : property.key
+}
 
 export const noDirectHttpRule = {
   meta: {
@@ -61,6 +115,8 @@ export const noDirectHttpRule = {
         'A direct fetch() call is hand-written HTTP; route the request through the @speed/api-client request function (createClient) instead.',
       memberFetch:
         '{{object}}.fetch() bypasses the @speed/api-client request layer; route the request through the client instance instead.',
+      capturedFetch:
+        'Capturing {{object}}.fetch (or destructuring fetch out of {{object}}) takes the global fetch outside a call and outside @speed/api-client, the only package allowed to touch the network; route requests through its request function instead.',
       xmlHttpRequest:
         'XMLHttpRequest bypasses the @speed/api-client request layer; route the request through the client instance instead.',
       bannedModule:
@@ -102,15 +158,53 @@ export const noDirectHttpRule = {
           }
           return
         }
+        const object = environmentFetchSource(callee)
+        if (object !== undefined) {
+          report(callee, 'memberFetch', { object })
+        }
+      },
+      // A reference to the environment fetch that is not a call: the
+      // alias/capture forms (const f = window.fetch, a .bind or .call
+      // capture, window['fetch'] taken as a value). The call-callee
+      // case above reports first, so this visitor skips callee
+      // positions to avoid a double report.
+      MemberExpression(node) {
         if (
-          callee.type === 'MemberExpression' &&
-          !callee.computed &&
-          callee.property.type === 'Identifier' &&
-          callee.property.name === 'fetch' &&
-          callee.object.type === 'Identifier' &&
-          ENVIRONMENT_OBJECTS.has(callee.object.name)
+          node.parent !== null &&
+          node.parent.type === 'CallExpression' &&
+          node.parent.callee === node
         ) {
-          report(callee, 'memberFetch', { object: callee.object.name })
+          return
+        }
+        const object = environmentFetchSource(node)
+        if (object !== undefined) {
+          report(node, 'capturedFetch', { object })
+        }
+      },
+      VariableDeclarator(node) {
+        if (node.init === null || node.init === undefined) {
+          return
+        }
+        if (
+          node.init.type === 'Identifier' &&
+          ENVIRONMENT_OBJECTS.has(node.init.name)
+        ) {
+          const key = environmentFetchPattern(node.id)
+          if (key !== undefined) {
+            report(key, 'capturedFetch', { object: node.init.name })
+          }
+        }
+      },
+      AssignmentExpression(node) {
+        if (node.right.type !== 'Identifier') {
+          return
+        }
+        if (!ENVIRONMENT_OBJECTS.has(node.right.name)) {
+          return
+        }
+        const key = environmentFetchPattern(node.left)
+        if (key !== undefined) {
+          report(key, 'capturedFetch', { object: node.right.name })
         }
       },
       NewExpression(node) {

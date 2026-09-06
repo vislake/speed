@@ -120,6 +120,66 @@ describe('no-direct-http rule', () => {
             { messageId: 'memberFetch' },
           ],
         },
+        // Computed member access is the same environment fetch, not a
+        // different call shape (reference-app-web.md P2-6).
+        {
+          code: 'window["fetch"]("/api");',
+          errors: [{ messageId: 'memberFetch' }],
+        },
+        {
+          code: 'const data = await self.fetch("/api");',
+          errors: [{ messageId: 'memberFetch' }],
+        },
+        {
+          code: 'globalThis["fetch"]("/api"); self["fetch"]("/api");',
+          errors: [
+            { messageId: 'memberFetch' },
+            { messageId: 'memberFetch' },
+          ],
+        },
+      ],
+    )
+  })
+
+  it('flags the environment fetch captured out of a call: aliasing, references and destructuring', () => {
+    // A reference to window.fetch/globalThis.fetch/self.fetch that is
+    // NOT itself a call is still the global fetch leaving the api-client
+    // layer -- it exists to be called somewhere, and answering "no
+    // call, no violation" left every alias form (const f =
+    // window.fetch; f(url)) outside the rule (reference-app-web.md
+    // P2-6). Destructuring fetch out of the environment object is the
+    // same capture with a different syntax.
+    runRule(
+      [],
+      [
+        {
+          code: 'const f = window.fetch;',
+          errors: [{ messageId: 'capturedFetch' }],
+        },
+        {
+          code: 'const f = globalThis["fetch"];',
+          errors: [{ messageId: 'capturedFetch' }],
+        },
+        {
+          code: 'const f = window.fetch.bind(window);',
+          errors: [{ messageId: 'capturedFetch' }],
+        },
+        {
+          code: 'self.fetch.call(undefined, "/api");',
+          errors: [{ messageId: 'capturedFetch' }],
+        },
+        {
+          code: 'const { fetch } = window; fetch("/api");',
+          errors: [{ messageId: 'capturedFetch' }],
+        },
+        {
+          code: 'const { fetch: g } = globalThis;',
+          errors: [{ messageId: 'capturedFetch' }],
+        },
+        {
+          code: 'const { fetch = fallback } = self;',
+          errors: [{ messageId: 'capturedFetch' }],
+        },
       ],
     )
   })
