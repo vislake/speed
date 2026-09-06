@@ -273,16 +273,27 @@ func (s *Service) grantsFor(ctx context.Context, sub Subject) (map[string]permis
 		return grants, nil
 	}
 
-	// The generation is captured BEFORE the database read starts, not
-	// after. That ordering is what makes the fence below correct: if a
-	// revoke's invalidate() (or a role change's invalidateTenant())
-	// commits anywhere between this line and the eventual putIfCurrent,
-	// the generation will have moved on and the stale load below is
-	// discarded instead of cached -- see grantCache.putIfCurrent's doc
-	// comment for the full race this closes.
-	gen := s.cache.generation()
+	// The fence is captured BEFORE the database read starts, not after.
+	// That ordering is what makes it correct: beginLoad registers this
+	// load with the cache and returns THIS SUBJECT's own invalidation
+	// count at that moment. If a revoke's invalidate() of this subject --
+	// or a role change's invalidateTenant() of this subject's tenant --
+	// commits anywhere between here and the eventual putIfCurrent, the
+	// subject's fence moves on and the stale load below is discarded
+	// instead of cached. An invalidation of any OTHER subject never
+	// touches this fence, so it cannot discard this load either -- the
+	// per-subject narrowing that keeps a busy platform's writes from
+	// starving the decision cache (see grantCache.beginLoad's and
+	// putIfCurrent's doc comments for the full race and why the fence is
+	// keyed per subject rather than per process).
+	gen := s.cache.beginLoad(key)
 	grants, err := s.loadGrants(ctx, sub)
 	if err != nil {
+		// The load registered above must be released even though nothing
+		// will be stored: an unreleased slot would pin this subject's
+		// fence forever, and the fence's memory bound is exactly "slots
+		// live only while a load is in flight".
+		s.cache.abortLoad(key)
 		return nil, err
 	}
 	if s.afterLoadGrants != nil {

@@ -73,17 +73,21 @@ type permissionGrant struct {
 // grantCache is the process-local decision cache. The zero value is not
 // usable; build one with newGrantCache.
 type grantCache struct {
-	// mu guards entries and gen. It is a RWMutex because the read path
+	// mu guards entries and slots. It is a RWMutex because the read path
 	// (every authorization decision) vastly outnumbers the write path (a
 	// grant change, or the first read of a subject).
 	mu      sync.RWMutex
 	entries map[grantKey]grantEntry
 
-	// gen counts every invalidate and invalidateTenant call. It is the
-	// fencing token grantsFor uses to close the read-then-write race
-	// between a database load and a concurrent revoke: see generation and
-	// putIfCurrent below.
-	gen uint64
+	// slots holds the fence state of database loads currently in flight:
+	// one slot per subject, created by beginLoad and released by the
+	// load's putIfCurrent or abortLoad. It is the per-subject fencing
+	// token grantsFor uses to close the read-then-write race between a
+	// database load and a concurrent revoke of THAT subject: see
+	// fenceSlot, beginLoad and putIfCurrent below. Keying the fence by
+	// subject rather than by the whole process is what lets an
+	// invalidation of subject A leave subject B's in-flight load alone.
+	slots map[grantKey]*fenceSlot
 
 	// ttl is the anti-loss expiry from DefaultCacheTTL or WithCacheTTL.
 	ttl time.Duration
@@ -96,6 +100,32 @@ type grantCache struct {
 	done     chan struct{}
 }
 
+// fenceSlot is one subject's fencing state while one or more database
+// loads of that subject are in flight. A slot exists only between
+// beginLoad and the matching putIfCurrent or abortLoad; when the last
+// in-flight load of the subject ends, the slot is removed (putIfCurrent
+// and abortLoad), which keeps the fence's memory bounded by the number of
+// subjects loading right now -- a handful -- rather than by every subject
+// the process has ever seen. The cache's janitor bounds entries the same
+// way.
+type fenceSlot struct {
+	// gen counts the invalidations that have touched this subject since
+	// the slot was created. beginLoad returns it as the load's fence
+	// value, and putIfCurrent stores only while it is unchanged: if an
+	// invalidation of THIS subject lands between beginLoad and
+	// putIfCurrent, gen moves on and the load's result -- read before the
+	// invalidation -- is discarded instead of resurrecting what the
+	// invalidation just dropped. Invalidations of any OTHER subject never
+	// touch this slot, which is the whole point of the per-subject fence.
+	gen uint64
+
+	// inflight counts the loads that captured gen and have not yet stored
+	// or aborted. It is what lets the slot outlive one load when several
+	// concurrent loads of the same subject share it, and what lets the
+	// last of them remove the slot.
+	inflight int
+}
+
 // newGrantCache returns a cache whose entries expire after ttl and starts
 // its janitor. A ttl of zero or less yields a cache that never serves a
 // hit and starts no goroutine -- the "disabled" setting, useful in tests
@@ -103,6 +133,7 @@ type grantCache struct {
 func newGrantCache(ttl time.Duration) *grantCache {
 	c := &grantCache{
 		entries: make(map[grantKey]grantEntry),
+		slots:   make(map[grantKey]*fenceSlot),
 		ttl:     ttl,
 	}
 	c.startJanitor()
@@ -147,30 +178,55 @@ func (c *grantCache) put(key grantKey, grants map[string]permissionGrant, now ti
 	c.entries[key] = grantEntry{grants: grants, loadedAt: now}
 }
 
-// generation returns the cache's current invalidation counter. grantsFor
-// captures it BEFORE starting a database load and passes it to
-// putIfCurrent afterward, fencing the write against any invalidate or
-// invalidateTenant that lands in between. See putIfCurrent.
-func (c *grantCache) generation() uint64 {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.gen
+// beginLoad registers a database load of key as in flight and returns the
+// fence value the load's eventual putIfCurrent must carry: this subject's
+// own invalidation count at the moment the load started. grantsFor calls
+// it BEFORE starting the database read, in place of the process-global
+// generation counter the fence used to read: because the returned fence
+// is per-subject, an invalidation of a DIFFERENT subject (an assign or
+// revoke for someone else, in any tenant) cannot discard this load's
+// result -- only an invalidation of this subject itself, or of this
+// subject's tenant, moves the fence.
+//
+// The disabled setting (ttl <= 0) registers nothing and returns 0: with
+// no cache there is nothing to fence, and the matching putIfCurrent and
+// abortLoad no-op.
+func (c *grantCache) beginLoad(key grantKey) uint64 {
+	if c.ttl <= 0 {
+		return 0
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	slot, ok := c.slots[key]
+	if !ok {
+		slot = &fenceSlot{}
+		c.slots[key] = slot
+	}
+	slot.inflight++
+	return slot.gen
 }
 
 // putIfCurrent stores a subject's grants, but only if no invalidation
-// (invalidate or invalidateTenant) has been observed since gen was
-// captured by generation(). The caller must not mutate grants afterwards;
-// see grantEntry.
+// touching THIS subject (invalidate of the subject, or invalidateTenant
+// of its tenant) has been observed since gen was captured by beginLoad.
+// The caller must not mutate grants afterwards; see grantEntry.
 //
 // This is what closes the race a plain get-miss/load/put would otherwise
 // have: goroutine A takes a cache miss and starts a database read; while
-// that read is in flight, a revoke commits its DELETE and calls
+// that read is in flight, a revoke of A commits its DELETE and calls
 // invalidate(), which has nothing to drop yet because A has not written
-// anything -- but it DOES bump gen. When A's stale, pre-revoke read
-// finally returns, its put is fenced by the gen it captured before the
-// read started: since gen has moved on, the store is discarded instead of
-// resurrecting the just-revoked permission for a full cache TTL. See
-// grantsFor in service.go for the caller side of the fence.
+// anything -- but it DOES move A's fence slot. When A's stale, pre-revoke
+// read finally returns, its put is fenced by the gen it captured before
+// the read started: since the slot's gen has moved on, the store is
+// discarded instead of resurrecting the just-revoked permission for a
+// full cache TTL. See grantsFor in service.go for the caller side of the
+// fence, and beginLoad for why the fence is per-subject rather than
+// process-wide.
+//
+// Whether the store lands or is discarded, this call releases the load's
+// in-flight registration: the slot's inflight count drops, and the slot
+// itself is removed once no load of this subject remains.
 func (c *grantCache) putIfCurrent(key grantKey, grants map[string]permissionGrant, now time.Time, gen uint64) {
 	if c.ttl <= 0 {
 		return
@@ -178,33 +234,70 @@ func (c *grantCache) putIfCurrent(key grantKey, grants map[string]permissionGran
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.gen != gen {
-		// Something invalidated (this subject specifically, or this
-		// subject's whole tenant) after the load that produced grants
-		// started reading. That load's result may already be stale, so it
-		// must not be cached; the next read will load fresh instead.
-		return
+	slot, ok := c.slots[key]
+	if ok {
+		slot.inflight--
+		if slot.inflight <= 0 {
+			delete(c.slots, key)
+		}
+		if slot.gen != gen {
+			// Something invalidated this subject (or its tenant) after the
+			// load that produced grants started reading. That load's result
+			// may already be stale, so it must not be cached; the next read
+			// will load fresh instead.
+			return
+		}
 	}
+	// A missing slot means no beginLoad preceded this call (only direct
+	// callers can arrange that; grantsFor always pairs beginLoad with
+	// putIfCurrent): there is no fence to compare, so the store is
+	// unconditional, exactly like put.
 	c.entries[key] = grantEntry{grants: grants, loadedAt: now}
 }
 
-// invalidate drops one subject's entry. It is what an assign or a revoke
-// triggers: only that subject's grants changed.
+// abortLoad releases the in-flight registration beginLoad made when the
+// load ends in an error and nothing will be stored. Without it, a load
+// that failed would leave its subject's slot pinned forever -- the fence's
+// memory bound is exactly "slots live only while a load is in flight", and
+// a failure is the one path that would otherwise never release its slot.
+func (c *grantCache) abortLoad(key grantKey) {
+	if c.ttl <= 0 {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if slot, ok := c.slots[key]; ok {
+		slot.inflight--
+		if slot.inflight <= 0 {
+			delete(c.slots, key)
+		}
+	}
+}
+
+// invalidate drops one subject's entry and fences any in-flight load of
+// that subject. It is what an assign or a revoke triggers: only that
+// subject's grants changed, so no other subject's entry -- and no other
+// subject's in-flight load -- is disturbed.
 func (c *grantCache) invalidate(key grantKey) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.entries, key)
-	c.gen++
+	if slot, ok := c.slots[key]; ok {
+		slot.gen++
+	}
 }
 
-// invalidateTenant drops every entry belonging to one tenant. It is what a
-// role change triggers: the set of permissions a role carries changed, and
-// the cache stores grants already flattened through their roles, so every
+// invalidateTenant drops every entry belonging to one tenant and fences
+// every in-flight load of a subject in that tenant. It is what a role
+// change triggers: the set of permissions a role carries changed, and the
+// cache stores grants already flattened through their roles, so every
 // subject in that tenant may be affected and there is no index from role
 // back to subject that would let this be narrower.
 //
-// The scan is O(entries in the process) and runs on a role change, which
-// is an administrative action rather than a request-path one.
+// The scan is O(entries + in-flight loads in the process) and runs on a
+// role change, which is an administrative action rather than a
+// request-path one.
 func (c *grantCache) invalidateTenant(tenant pkgcore.TenantID) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -213,7 +306,17 @@ func (c *grantCache) invalidateTenant(tenant pkgcore.TenantID) {
 			delete(c.entries, key)
 		}
 	}
-	c.gen++
+	// An in-flight load of a subject in this tenant must be fenced even
+	// when the subject has no cached entry yet (its load has not stored):
+	// the load read the role's permissions before the change, so its
+	// result may be stale and must not be cached. The slots scan covers
+	// exactly those loads -- the entries scan alone would miss a subject
+	// whose load is in flight but whose entry does not exist yet.
+	for key, slot := range c.slots {
+		if key.tenant == tenant {
+			slot.gen++
+		}
+	}
 }
 
 // len reports how many entries are held, expired ones included. Only the
@@ -222,6 +325,16 @@ func (c *grantCache) len() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return len(c.entries)
+}
+
+// inflight reports how many subjects currently have a database load
+// registered by beginLoad and not yet released by putIfCurrent or
+// abortLoad. Only the fence's own tests need it, to prove a slot never
+// outlives the load that created it (the fence's memory bound).
+func (c *grantCache) inflight() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.slots)
 }
 
 // sweep removes every entry that has expired as of now.

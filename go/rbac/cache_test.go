@@ -224,37 +224,43 @@ func TestGrantCache_Close_StopsTheJanitor_AndIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestGrantCache_PutIfCurrent_SucceedsWhenGenerationUnchanged(t *testing.T) {
-	// The ordinary case: nothing invalidated between generation() and
-	// putIfCurrent, so the load's result is stored exactly like put would.
+func TestGrantCache_PutIfCurrent_SucceedsWhenFenceUnchanged(t *testing.T) {
+	// The ordinary case: nothing invalidated this subject between beginLoad
+	// and putIfCurrent, so the load's result is stored exactly like put
+	// would.
 	c := newGrantCache(time.Minute)
 	t.Cleanup(c.close)
 
 	key := grantKey{tenant: "tenant-a", user: "user-1"}
-	gen := c.generation()
+	gen := c.beginLoad(key) // captured "before the database read"
 	now := time.Now()
 	c.putIfCurrent(key, grantsOf("notes:read"), now, gen)
 
 	got, ok := c.get(key, now)
 	if !ok {
-		t.Fatal("putIfCurrent with an unchanged generation reported a miss, want a hit")
+		t.Fatal("putIfCurrent with an unchanged fence reported a miss, want a hit")
 	}
 	if _, granted := got["notes:read"]; !granted {
 		t.Fatalf("cached grants = %v, want notes:read", got)
+	}
+	// The stored load released its in-flight registration: a slot never
+	// outlives the load that created it (the fence's memory bound).
+	if c.inflight() != 0 {
+		t.Fatalf("%d slots remain after a load stored, want 0", c.inflight())
 	}
 }
 
 func TestGrantCache_PutIfCurrent_DiscardsAfterInterveningInvalidate(t *testing.T) {
 	// The fenced race this method exists to close (see its doc comment and
-	// the HIGH review finding on service.go's grantsFor): a load captures
-	// the generation, then something invalidates the SAME key before the
-	// load's result is written back. The stale result must not resurrect
-	// what the invalidation just dropped.
+	// the review finding on service.go's grantsFor): a load captures the
+	// fence, then something invalidates the SAME subject before the load's
+	// result is written back. The stale result must not resurrect what the
+	// invalidation just dropped.
 	c := newGrantCache(time.Minute)
 	t.Cleanup(c.close)
 
 	key := grantKey{tenant: "tenant-a", user: "user-1"}
-	gen := c.generation() // captured "before the database read"
+	gen := c.beginLoad(key) // captured "before the database read"
 
 	c.invalidate(key) // the concurrent revoke, landing mid-load
 
@@ -262,20 +268,24 @@ func TestGrantCache_PutIfCurrent_DiscardsAfterInterveningInvalidate(t *testing.T
 	c.putIfCurrent(key, grantsOf("notes:read"), now, gen) // the stale load finally writes
 
 	if _, ok := c.get(key, now); ok {
-		t.Fatal("putIfCurrent stored a load whose generation was stale, resurrecting a revoked grant")
+		t.Fatal("putIfCurrent stored a load whose fence was stale, resurrecting a revoked grant")
+	}
+	if c.inflight() != 0 {
+		t.Fatalf("%d slots remain after a discarded load, want 0", c.inflight())
 	}
 }
 
 func TestGrantCache_PutIfCurrent_DiscardsAfterInterveningInvalidateTenant(t *testing.T) {
 	// The tenant-wide counterpart: a role's permissions narrowed and
-	// invalidateTenant ran while an unrelated load for a subject in that
-	// tenant was in flight. onRoleChanged's invalidation must not be
-	// "un-invalidated" by that load's late write either.
+	// invalidateTenant ran while a load for a subject in that tenant was in
+	// flight. onRoleChanged's invalidation must not be "un-invalidated" by
+	// that load's late write either -- the load read the role's permissions
+	// before the change.
 	c := newGrantCache(time.Minute)
 	t.Cleanup(c.close)
 
 	key := grantKey{tenant: "tenant-a", user: "user-1"}
-	gen := c.generation()
+	gen := c.beginLoad(key)
 
 	c.invalidateTenant("tenant-a")
 
@@ -283,39 +293,145 @@ func TestGrantCache_PutIfCurrent_DiscardsAfterInterveningInvalidateTenant(t *tes
 	c.putIfCurrent(key, grantsOf("notes:read"), now, gen)
 
 	if _, ok := c.get(key, now); ok {
-		t.Fatal("putIfCurrent stored a load whose generation predated a tenant-wide invalidation")
+		t.Fatal("putIfCurrent stored a load whose fence predated a tenant-wide invalidation")
 	}
 }
 
-func TestGrantCache_InvalidateTenant_BumpsGenerationEvenWithNoMatchingEntries(t *testing.T) {
-	// The exact "no-op because A has not yet written anything" step of the
-	// documented race: invalidate/invalidateTenant must fence a future
-	// write even when there is nothing in the map yet to delete.
+// TestGrantCache_PutIfCurrent_FenceIsPerSubject_OtherSubjectsInvalidateSparesThisLoad
+// pins the review finding on the cache's fence: it used to be keyed on a
+// process-global generation counter, so ANY invalidation -- any tenant,
+// any subject -- discarded every unrelated subject's in-flight load. In
+// the distributed mode every replica hears every platform-wide authz
+// change, so under write load the cache would almost never fill and every
+// check became a full database read. The fence is per-subject now: an
+// invalidation of subject A must not discard subject B's load, while A's
+// own invalidation must still fence A's own stale load.
+func TestGrantCache_PutIfCurrent_FenceIsPerSubject_OtherSubjectsInvalidateSparesThisLoad(t *testing.T) {
 	c := newGrantCache(time.Minute)
 	t.Cleanup(c.close)
 
-	before := c.generation()
-	c.invalidateTenant("tenant-a")
-	if c.generation() == before {
-		t.Fatal("invalidateTenant with no matching entries left the generation unchanged")
+	keyA := grantKey{tenant: "tenant-a", user: "user-1"}
+	keyB := grantKey{tenant: "tenant-a", user: "user-2"}
+
+	genA := c.beginLoad(keyA) // A's database load starts
+	genB := c.beginLoad(keyB) // B's database load starts
+	c.invalidate(keyA)        // a revoke for A lands while both loads are in flight
+
+	now := time.Now()
+	c.putIfCurrent(keyB, grantsOf("notes:read"), now, genB) // B's fresh, post-revoke read writes back
+	if _, ok := c.get(keyB, now); !ok {
+		t.Fatal("B's in-flight load was discarded by an invalidation of A: nothing about B changed, so B's fresh read must land")
+	}
+
+	// And the fence must still hold for A itself: A's own pre-revoke read
+	// is stale and must not resurrect the revoked grant.
+	c.putIfCurrent(keyA, grantsOf("notes:read"), now, genA)
+	if _, ok := c.get(keyA, now); ok {
+		t.Fatal("A's stale load was cached despite A's own revoke landing mid-load")
 	}
 }
 
-func TestGrantCache_Invalidate_BumpsGenerationEvenWhenKeyAbsent(t *testing.T) {
+// TestGrantCache_PutIfCurrent_FenceIsPerTenant_OtherTenantsInvalidateSparesThisLoad
+// is the tenant-wide mirror of the per-subject regression above: a role
+// change in tenant B must not discard an in-flight load of a tenant-A
+// subject, while a role change in B's own tenant must fence B's own
+// in-flight load -- even one whose subject has no cached entry yet.
+func TestGrantCache_PutIfCurrent_FenceIsPerTenant_OtherTenantsInvalidateSparesThisLoad(t *testing.T) {
 	c := newGrantCache(time.Minute)
 	t.Cleanup(c.close)
 
-	before := c.generation()
-	c.invalidate(grantKey{tenant: "tenant-a", user: "nobody"})
-	if c.generation() == before {
-		t.Fatal("invalidate of an absent key left the generation unchanged")
+	keyA := grantKey{tenant: "tenant-a", user: "user-1"}
+	keyB := grantKey{tenant: "tenant-b", user: "user-1"}
+
+	genA := c.beginLoad(keyA)
+	genB := c.beginLoad(keyB)      // B's load: no cached entry exists for it yet
+	c.invalidateTenant("tenant-b") // a role change in B, landing mid-load
+
+	now := time.Now()
+	c.putIfCurrent(keyA, grantsOf("notes:read"), now, genA)
+	if _, ok := c.get(keyA, now); !ok {
+		t.Fatal("a tenant-b role change discarded tenant-a's in-flight load")
+	}
+	c.putIfCurrent(keyB, grantsOf("notes:read"), now, genB)
+	if _, ok := c.get(keyB, now); ok {
+		t.Fatal("a tenant-b role change failed to fence tenant-b's own in-flight load, even though it had no cached entry yet")
+	}
+}
+
+// TestGrantCache_PutIfCurrent_TwoConcurrentLoadsOfOneSubject_BothFencedByOneInvalidate
+// pins the slot bookkeeping: two loads of the SAME subject share one fence
+// slot, so a single intervening invalidation fences both, and the slot is
+// released only once both loads have landed.
+func TestGrantCache_PutIfCurrent_TwoConcurrentLoadsOfOneSubject_BothFencedByOneInvalidate(t *testing.T) {
+	c := newGrantCache(time.Minute)
+	t.Cleanup(c.close)
+
+	key := grantKey{tenant: "tenant-a", user: "user-1"}
+	genFirst := c.beginLoad(key)
+	genSecond := c.beginLoad(key)
+	if genFirst != genSecond {
+		t.Fatalf("two loads of one subject captured different fences (%d, %d), want the same", genFirst, genSecond)
+	}
+	c.invalidate(key) // one revoke, in flight while both loads run
+
+	now := time.Now()
+	c.putIfCurrent(key, grantsOf("notes:read"), now, genSecond)
+	c.putIfCurrent(key, grantsOf("notes:read"), now, genFirst)
+	if _, ok := c.get(key, now); ok {
+		t.Fatal("a fenced load of the subject was cached despite the intervening revoke")
+	}
+	if c.inflight() != 0 {
+		t.Fatalf("%d slots remain after both loads released, want 0", c.inflight())
+	}
+
+	// A fresh load after the dust settles captures a fresh fence and
+	// stores normally.
+	gen := c.beginLoad(key)
+	c.putIfCurrent(key, grantsOf("notes:read"), now, gen)
+	if _, ok := c.get(key, now); !ok {
+		t.Fatal("a fresh post-revoke load did not store")
+	}
+}
+
+// TestGrantCache_AbortLoad_ReleasesTheSlot pins the error half of the
+// fence's memory bound: a load that fails between beginLoad and any store
+// must release its registration, or its subject's slot would stay pinned
+// forever.
+func TestGrantCache_AbortLoad_ReleasesTheSlot(t *testing.T) {
+	c := newGrantCache(time.Minute)
+	t.Cleanup(c.close)
+
+	key := grantKey{tenant: "tenant-a", user: "user-1"}
+	c.beginLoad(key)
+	if c.inflight() != 1 {
+		t.Fatalf("%d slots during an in-flight load, want 1", c.inflight())
+	}
+
+	c.abortLoad(key) // the load failed; nothing will be stored
+	if c.inflight() != 0 {
+		t.Fatalf("%d slots remain after an aborted load, want 0 (the fence's memory bound)", c.inflight())
+	}
+
+	// A later load of the same subject is unaffected by the aborted one --
+	// including a fenced one that aborts again.
+	c.beginLoad(key)
+	c.invalidate(key)
+	c.abortLoad(key) // the fenced load failed too; the slot must still release
+	if c.inflight() != 0 {
+		t.Fatalf("%d slots remain after a fenced load aborted, want 0", c.inflight())
+	}
+	gen := c.beginLoad(key)
+	c.putIfCurrent(key, grantsOf("notes:read"), time.Now(), gen)
+	if _, ok := c.get(key, time.Now()); !ok {
+		t.Fatal("a fresh load after the aborted ones did not store")
 	}
 }
 
 func TestGrantCache_ConcurrentUse_IsRaceFree(t *testing.T) {
 	// The decision cache is the module's one concurrency hot spot (backend
-	// coding standard §13: caches require -race tests). Readers, writers
-	// and both invalidation paths run together against the same entries.
+	// coding standard §13: caches require -race tests). Readers, writers,
+	// both invalidation paths and both halves of the fenced write path run
+	// together against the same entries and slots.
 	c := newGrantCache(time.Minute)
 	t.Cleanup(c.close)
 
@@ -329,7 +445,7 @@ func TestGrantCache_ConcurrentUse_IsRaceFree(t *testing.T) {
 			defer wg.Done()
 			key := grantKey{tenant: "tenant-a", user: "user-1"}
 			for n := 0; n < iterations; n++ {
-				switch worker % 5 {
+				switch worker % 6 {
 				case 0:
 					c.put(key, grantsOf("notes:read"), time.Now())
 				case 1:
@@ -343,8 +459,13 @@ func TestGrantCache_ConcurrentUse_IsRaceFree(t *testing.T) {
 					c.invalidate(key)
 				case 3:
 					// The fenced write path grantsFor actually uses.
-					gen := c.generation()
+					gen := c.beginLoad(key)
 					c.putIfCurrent(key, grantsOf("notes:read"), time.Now(), gen)
+				case 4:
+					// The load failed: nothing is stored, but the slot must
+					// still release.
+					c.beginLoad(key)
+					c.abortLoad(key)
 				default:
 					c.invalidateTenant("tenant-a")
 				}
