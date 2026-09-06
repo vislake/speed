@@ -21,6 +21,7 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -160,6 +161,43 @@ func Example() {
 
 	// Output:
 	// reaped: 1
+}
+
+// ExampleRenderAuditReport renders one audit.AuditEvent -- the shape an
+// AuditQuery.Query call returns -- as a CSV audit report: the header row
+// first, then one RFC 4180 row per event. The report's bytes are exactly
+// what a future HTTP handler would set as a text/csv response body
+// (go/compliance/AGENTS.md's "no real consumer yet" record names that
+// deferral); this example stands in for that consumer as runnable,
+// compile-checked documentation of RenderAuditReport and ReportFormat, so
+// a change to their signatures fails the build instead of rotting in
+// prose.
+func ExampleRenderAuditReport() {
+	evt := audit.AuditEvent{
+		ID:         "audit-1",
+		Action:     "notes.note.create",
+		TenantID:   "tenant-acme",
+		IP:         "203.0.113.5",
+		UserAgent:  "curl/8.0",
+		TraceID:    "trace-1",
+		OccurredAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+	}
+	evt.SetActor(pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1", DisplayName: "Ada"})
+	evt.SetResource(audit.Resource{Type: "note", ID: "note-1", DisplayName: "Meeting notes"})
+	evt.SetResult(audit.Result{Success: true})
+
+	report, err := compliance.RenderAuditReport([]audit.AuditEvent{evt}, compliance.ReportFormatCSV)
+	if err != nil {
+		fmt.Println("render:", err)
+		return
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(report)), "\n") {
+		fmt.Println(line)
+	}
+
+	// Output:
+	// id,actor_type,actor_id,actor_display_name,has_on_behalf_of,on_behalf_of_type,on_behalf_of_id,on_behalf_of_display_name,action,resource_type,resource_id,resource_display_name,success,failure_reason,changes,tenant_id,ip,user_agent,trace_id,occurred_at
+	// audit-1,user,user-1,Ada,false,,,,notes.note.create,note,note-1,Meeting notes,true,,,tenant-acme,203.0.113.5,curl/8.0,trace-1,2026-01-02T03:04:05Z
 }
 
 // exampleNoopQueue is a minimal jobs.Queue satisfying Module.Register's
