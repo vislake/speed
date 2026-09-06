@@ -198,7 +198,7 @@ export function NotesView(): ReactElement {
   )
 
   return (
-    <Box sx={{ p: 3, maxWidth: 720 }}>
+    <Box sx={{ p: { xs: 2, sm: 3 }, maxWidth: 720 }}>
       <Typography component="h1" variant="h4" sx={{ fontWeight: 600 }}>
         {t('notes.heading')}
       </Typography>
