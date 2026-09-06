@@ -67,10 +67,15 @@
  *     the #root element exactly once, runnable through the vite dev
  *     server and the production build this directory now carries
  *     (vite.config.ts -- the one bundler in the workspace, since the
- *     library packages stay bundler-free by discipline). What still lands
- *     with the M4 html-runner work is serving that built page from the
- *     reference-app server itself; until then the shipped browser story
- *     is the dev-server page plus rendering under test harnesses.
+ *     library packages stay bundler-free by discipline). The built page
+ *     is also what the reference-app server itself serves in a deployed
+ *     shape: the Dockerfile builds this directory's dist/ into the image
+ *     and the server serves it from disk under APP_WEB_DIST (see
+ *     cmd/server/frontend.go -- the round that discharged the serving
+ *     deferral this comment used to record). What still lands with the
+ *     M4 e2e/html-runner work is browser automation driving that
+ *     server-served page; until then the shipped browser story is the
+ *     dev-server page plus rendering under test harnesses.
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'

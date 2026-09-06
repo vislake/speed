@@ -1011,6 +1011,16 @@ type serverConfig struct {
 	// contract just above.
 	DisableDemoUserHeader bool
 
+	// WebDistDir names the directory holding this app's built frontend
+	// (the dist/ examples/reference-app/web's `pnpm build` emits) when
+	// this process should serve that frontend itself -- see frontend.go's
+	// own package doc comment for the full serving design. configFromEnv
+	// sets it from APP_WEB_DIST; the empty default (the zero-external-
+	// dependency `go run ./cmd/server` experience, and every test's
+	// config) leaves the composed handler exactly as it was before the
+	// frontend-serving round: no static interception at all.
+	WebDistDir string
+
 	// PeriodicTaskInterval is the cadence of this host's periodic-task
 	// scheduler (periodic_scheduler.go), the ticker that enqueues the
 	// jobs-driven mechanisms this app wired -- storage's per-tenant expiry
@@ -1415,6 +1425,7 @@ func configFromEnv() (serverConfig, error) {
 		SMSGatewayURL:         os.Getenv(smsGatewayURLEnv),
 		DisableQueueWorker:    os.Getenv(disableQueueWorkerEnv) != "",
 		DisableDemoUserHeader: os.Getenv(disableDemoUserHeaderEnv) != "",
+		WebDistDir:            os.Getenv(webDistEnv),
 		HostTenants:           demoHostTenants,
 		// Empty when unset: the demo-user seed is opt-in (its own doc
 		// comment in demo_users.go says why the default skips it). The
@@ -2958,6 +2969,22 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			_ = cleanup()
 			return nil, nil, nil, seedErr
 		}
+	}
+
+	// Serve the built frontend when this boot is configured with one
+	// (cfg.WebDistDir, set by configFromEnv from APP_WEB_DIST -- the
+	// Dockerfile ships the dist and sets the variable itself). The wrap
+	// goes around the OUTSIDE of authn.Middleware's own output above, so
+	// the requests the frontend answers -- "/" itself, /assets/* and
+	// unknown non-API paths -- never fall into the authn/tenancy
+	// middleware chain at all: GET / answers the app's index.html to a
+	// caller with no tenant, which is exactly what a deployed sign-in page
+	// needs, while every request the frontend does not answer (the whole
+	// /api surface, /healthz, /metrics, and any non-GET/HEAD method)
+	// reaches the composed chain byte-for-byte as it always did -- see
+	// frontend.go's package doc comment for the full interception rules.
+	if cfg.WebDistDir != "" {
+		handler = withFrontend(cfg.WebDistDir, handler)
 	}
 	return handler, cleanup, complianceModule, nil
 }

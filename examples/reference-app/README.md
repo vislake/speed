@@ -73,7 +73,7 @@ Injecting some seams still isn't injecting all of them: `APP_REDIS_ADDR` alone c
 
 ### Running it in Docker
 
-`Dockerfile` is a multi-stage build (`golang:1.26.8-bookworm` → `gcr.io/distroless/static-debian12:nonroot`, `CGO_ENABLED=0` since `go/dbkit`'s SQLite driver is pure Go) producing a ~47MB, non-root image. Build context is the **repository root**, not this directory — see the Dockerfile's own header for why:
+`Dockerfile` is a multi-stage build — a `node:24-bookworm` frontend stage running this app's own `pnpm build` exactly as CI's npm-package-ci leg does (frozen-lockfile install from the `web/` workspace root, build from the app's web directory), a `golang:1.26.8-bookworm` builder (`CGO_ENABLED=0` since `go/dbkit`'s SQLite driver is pure Go), and a `gcr.io/distroless/static-debian12:nonroot` runtime carrying the static binary, the built frontend at `/app/web/dist` and `APP_WEB_DIST` naming it — so the deployed product URL serves its own page, not just the API (cmd/server/frontend.go). Build context is the **repository root**, not this directory — see the Dockerfile's own header for why:
 
 ```
 docker build -f examples/reference-app/Dockerfile -t speed-reference-app .
@@ -85,6 +85,7 @@ docker build -f examples/reference-app/Dockerfile -t speed-reference-app .
 cd examples/reference-app
 docker compose up --build
 curl localhost:8080/healthz   # ok
+curl localhost:8080/          # the app's own page: the composed sign-in surface
 ```
 
 Data survives a container restart (`docker compose restart app`), since the SQLite file lives on the named volume rather than the container's writable layer.

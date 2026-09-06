@@ -38,6 +38,15 @@
 # The go builder image's tag is pinned to go.work's own `go` directive
 # (1.26.8) exactly -- bump both together, and re-verify the CGO_ENABLED=0
 # claim above whenever the SQLite driver pin changes.
+#
+# The frontend stage (below the go builder's RUN) builds the app's web
+# bundle and the final stage copies its dist/ into the image at
+# /app/web/dist with APP_WEB_DIST naming it -- the deployed product URL
+# serves its own frontend (see cmd/server/frontend.go for the serving
+# design and why the dist is read from disk rather than go:embed'd). The
+# go build deliberately does NOT depend on the frontend stage: frontend.go
+# resolves its directory at runtime, so the two stages build in parallel
+# and either half can change without invalidating the other's cache.
 FROM golang:1.26.8-bookworm AS builder
 
 WORKDIR /src
@@ -100,6 +109,59 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 # can create no file there).
 RUN mkdir -p /data && chown 65532:65532 /data
 
+# ---------------------------------------------------------------------------
+# Frontend stage: builds examples/reference-app/web's production dist -- the
+# same `pnpm build` (tsc -p tsconfig.json, then vite build) the npm-package-ci
+# leg of fast-check.yml runs for this package, replicated inside the image
+# the same way that leg runs it:
+#
+#   - pnpm installed as an exact version via `npm install -g`, exactly the
+#     choice setup-node-env's own header documents (no corepack: gone from
+#     Node 25+, and its first-run download is a failure surface CI already
+#     rejected) -- 11.1.2 is web/package.json's own packageManager field,
+#     the single version source;
+#   - the frozen-lockfile install run from web/, the pnpm workspace root
+#     (web/pnpm-workspace.yaml lists ../examples/reference-app/web as an
+#     external member, so the one committed web/pnpm-lock.yaml must resolve
+#     this app's workspace:* dependencies, which only a web/-rooted install
+#     can);
+#   - the build run from inside the app directory, whose settings-only
+#     pnpm-workspace.yaml (verifyDepsBeforeRun: false, camelCase) keeps the
+#     run-gate off, exactly as in CI.
+#
+# The vite build resolves every @speed/* specifier onto the workspace
+# siblings' live src through the aliases in the app's vite.config.ts
+# (../../../web/packages/<pkg>/src/...), so this stage copies the whole
+# web/ tree (the same full-checkout file set CI builds against -- package
+# sources, shared tsconfig.base.json, the lockfile) plus the app's own web
+# directory, laid out at repository-relative paths so the aliases resolve
+# identically to a checkout. .dockerignore strips node_modules and dist
+# trees from the context; the image's own filesystem is where pnpm's
+# install and vite's output land.
+#
+# Node's tag tracks web/.nvmrc's "24" major, the single version source
+# actions/setup-node reads in CI; within the major the image's micro
+# version floats exactly as CI's node-version-file resolution floats.
+FROM node:24-bookworm AS frontend
+
+WORKDIR /src
+
+COPY web/ ./web/
+COPY examples/reference-app/web/ ./examples/reference-app/web/
+
+# The pnpm store cache mount mirrors CI's lockfile-keyed pnpm store cache:
+# an install whose lockfile is unchanged reuses the previous build's store
+# instead of re-fetching the registry. npm install -g pins pnpm exactly as
+# setup-node-env does (packageManager field, one source).
+RUN npm install -g pnpm@11.1.2
+
+WORKDIR /src/web
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
+
+WORKDIR /src/examples/reference-app/web
+RUN pnpm build
+
 # Runtime stage: distroless/static, nonroot -- no shell, no package
 # manager, no libc, just the static binary above, a CA certificate bundle
 # (ca-certificates.crt, already present in this image -- outbound TLS
@@ -110,6 +172,17 @@ FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --from=builder /out/reference-app-server ./reference-app-server
 COPY --from=builder --chown=65532:65532 /data /data
+
+# The built frontend, produced by the frontend stage above, and the
+# APP_WEB_DIST variable that makes the server serve it (cmd/server's
+# frontend.go -- the static surface never enters the authn/tenancy
+# middleware chain, and this ENV is what a plain `docker run` of this
+# image inherits; docker-compose.yml's own environment merges over, not
+# under, the image's ENV, so neither compose file needs its own copy).
+# Ownership matches /data's: the nonroot runtime user needs only read
+# access, but a uniform --chown keeps the image's files unambiguous.
+COPY --from=frontend --chown=65532:65532 /src/examples/reference-app/web/dist /app/web/dist
+ENV APP_WEB_DIST=/app/web/dist
 
 # PORT mirrors cmd/server/server.go's own defaultPort ("8080", used when
 # PORT is unset) -- setting it here is documentation as much as default;
