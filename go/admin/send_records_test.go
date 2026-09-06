@@ -6,6 +6,7 @@ import (
 
 	"github.com/vislake/speed/go/notification"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/tenancy"
 )
 
 // insertTestSendRecord writes one send_records row directly through
@@ -56,6 +57,51 @@ func TestSendRecordSearchService_SingleTenant_Filters(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].ID != "sr-2" {
 		t.Fatalf("Query(status=failed) = %+v, want exactly sr-2", got)
+	}
+}
+
+// TestSendRecordSearchService_SingleTenant_ReadIsAuditedSystemContext is
+// P2-7's regression test: even the NAMED-tenant path of D10's send-record
+// search must take D2's audited tenancy.WithSystemContext wrapper, exactly
+// like AuditService.Query's own single-tenant read -- a platform operator
+// reading one tenant's send records is still a cross-tenant read of
+// platform data, and it must leave the same tenancy.system_context.entered
+// audit trail (who read which tenant's records, under which declared
+// purpose) every other admin cross-tenant read does. On unfixed main the
+// single-tenant path called ListByFilter directly with no wrapper at all,
+// so such a read published no system-context event and left no trace.
+func TestSendRecordSearchService_SingleTenant_ReadIsAuditedSystemContext(t *testing.T) {
+	env := buildTestAdminModule(t)
+	repo := notification.NewSendRecordRepository(env.DB)
+
+	const tenant = "tenant-send-record-single-audited"
+	insertTestSendRecord(t, repo, tenant, "sr-1", notification.ChannelEmail, notification.SendRecordStatusSucceeded, "key-1")
+
+	var entered []tenancy.SystemContextEnteredEvent
+	env.Registry.EventBus().Subscribe(tenancy.EventSystemContextEntered, func(_ context.Context, evt pkgcore.Event) error {
+		var e tenancy.SystemContextEnteredEvent
+		if err := decodeEventPayload(evt.Payload, &e); err != nil {
+			return err
+		}
+		entered = append(entered, e)
+		return nil
+	})
+
+	svc := NewSendRecordSearchService(env.Notification.Deliveries(), env.Admin.Tenants())
+	svc.attach(env.Registry.EventBus())
+
+	got, err := svc.Query(context.Background(), "operator-audited-1", tenant, notification.SendRecordFilter{Limit: 50})
+	if err != nil {
+		t.Fatalf("Query() error = %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "sr-1" {
+		t.Fatalf("Query(tenantId=%s) = %+v, want exactly sr-1", tenant, got)
+	}
+	if len(entered) != 1 {
+		t.Fatalf("single-tenant Query() published %d tenancy.system_context.entered events, want exactly 1 -- the read must take the audited D2 wrapper, never a direct untrailed read", len(entered))
+	}
+	if entered[0].Actor != "operator-audited-1" || entered[0].Purpose != SystemPurposeAdminCrossTenant {
+		t.Fatalf("system-context event = %+v, want Actor operator-audited-1 under %s", entered[0], SystemPurposeAdminCrossTenant)
 	}
 }
 

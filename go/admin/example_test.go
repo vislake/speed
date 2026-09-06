@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/dbkit"
-	"github.com/vislake/speed/go/notification"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/rbac"
 
@@ -218,47 +217,4 @@ func ExampleNewUsageService() {
 
 	// Output:
 	// admin.usage_modules_not_wired
-}
-
-// ExampleNewSendRecordSearchService demonstrates D10's cross-tenant
-// notification send-record search (SendRecordSearchService)'s
-// single-tenant path: a tenantID given directly calls straight through to
-// notification.SendRecordRepository.ListByFilter, needing neither admin's
-// own tenant ledger nor an EventBus (both only matter for the empty-
-// tenantID cross-tenant path Module.Register wires via its unexported
-// attach -- see that method's own doc comment), so a bare
-// *notification.DeliveryService is enough to exercise it here.
-func ExampleNewSendRecordSearchService() {
-	ctx := context.Background()
-
-	db, err := dbkit.Open(ctx, dbkit.Options{
-		Dialect: dbkit.DialectSQLite,
-		DSN:     "file:admin_example_send_records?mode=memory&cache=shared",
-	})
-	if err != nil {
-		fmt.Println("open:", err)
-		return
-	}
-
-	notifModule := notification.NewModule(db)
-	migrations := dbkit.NewMigrationRegistry()
-	if regErr := migrations.Register(notifModule); regErr != nil {
-		fmt.Println("register migrations:", regErr)
-		return
-	}
-	if applyErr := migrations.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
-		fmt.Println("apply migrations:", applyErr)
-		return
-	}
-
-	search := admin.NewSendRecordSearchService(notifModule.Deliveries(), nil)
-	records, err := search.Query(ctx, "operator-1", "tenant-acme", notification.SendRecordFilter{Limit: 50})
-	if err != nil {
-		fmt.Println("query:", err)
-		return
-	}
-	fmt.Println("records found:", len(records))
-
-	// Output:
-	// records found: 0
 }
