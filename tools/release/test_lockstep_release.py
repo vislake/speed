@@ -192,6 +192,47 @@ class GoWorkParseTest(unittest.TestCase):
         with self.assertRaises(rel.ReleaseError):
             rel.parse_gowork_uses(")\nuse (\n\t./go/alpha\n)\n")
 
+    def test_replace_block_is_ignored_not_a_stray_closer(self) -> None:
+        # A legal replace ( ... ) block (the shape a consumer keeps
+        # between releases, and the first-release cleanup eventually
+        # deletes from go.mod siblings) must parse cleanly: its contents
+        # are never use entries, and its closing ')' is not stray. Fails
+        # before the block-kind fix: the closer tripped the stray-paren
+        # branch and aborted the parse with a misleading error.
+        text = (
+            "go 1.25.0\n"
+            "replace (\n"
+            "\tgithub.com/vislake/speed/go/alpha => ./go/alpha\n"
+            "\tgithub.com/vislake/speed/go/beta => ./go/beta\n"
+            ")\n"
+            "use (\n"
+            "\t./go/alpha\n"
+            "\t./go/beta\n"
+            ")\n"
+        )
+        self.assertEqual(
+            rel.parse_gowork_uses(text),
+            ["go/alpha", "go/beta"],
+        )
+
+    def test_replace_block_before_the_use_block_and_single_line_forms(self) -> None:
+        # The replace block may precede the use block, its last entry may
+        # share the closer's line, and the use directive itself may be the
+        # single-line form -- all in one file, all parsed cleanly.
+        text = (
+            "replace (\n"
+            "\tx.example/foo => ../foo)\n"
+            "use ./go/alpha ./go/beta\n"
+        )
+        self.assertEqual(
+            rel.parse_gowork_uses(text),
+            ["go/alpha", "go/beta"],
+        )
+
+    def test_replace_block_unterminated_raises_naming_the_kind(self) -> None:
+        with self.assertRaisesRegex(rel.ReleaseError, "unterminated replace"):
+            rel.parse_gowork_uses("replace (\n\tx.example/foo => ../foo\n")
+
 
 class DerivationDriftTest(unittest.TestCase):
     """Runtime Go module-set derivation and its drift gates."""

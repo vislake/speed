@@ -219,35 +219,46 @@ def parse_gowork_uses(go_work_text: str) -> list[str]:
     """Parse a go.work text into its use entries (relative, no ./ prefix).
 
     Understands the block form (use ( ... )) that gofmt emits, the single
-    form (use ./a ./b), comments and stray-parenthesis tolerance. Raises
-    ReleaseError with a go.work:LINE context on malformed input.
+    form (use ./a ./b), comments and stray-parenthesis tolerance. Every
+    block a go.work can legally carry -- use, replace, godebug, or any
+    other directive whose kind opens a parenthesized block -- is tracked
+    by its directive word (block_kind, the same tracking
+    first_release_replace_cleanup applies to go.mod text), so a legal
+    replace ( ... ) block is skipped like any other non-use content
+    instead of its closing ')' falling into the stray-paren branch and
+    aborting the parse with a misleading error. Raises ReleaseError with
+    a go.work:LINE context on malformed input.
     """
     entries: list[str] = []
-    in_block = False
+    block_kind: str | None = None
     for lineno, raw in enumerate(go_work_text.splitlines(), 1):
         s = raw.strip()
         if not s or s.startswith("//"):
             continue
-        if in_block:
+        if block_kind is not None:
+            kind = block_kind
             if s == ")":
-                in_block = False
+                block_kind = None
                 continue
             if s.endswith(")"):
+                # The block's last entry shares its closing line ("use (
+                # ... ./go/beta)"); the entry is still a use entry, so the
+                # kind is captured before the block closes.
                 s = s[:-1].strip()
-                in_block = False
-            if s:
+                block_kind = None
+            if kind == "use" and s:
                 entries.extend(s.split())
             continue
         if s.startswith("use"):
             rest = s[len("use"):].strip()
             if rest == "(":
-                in_block = True
+                block_kind = "use"
             elif rest.startswith("("):
                 rest = rest[1:].strip()
                 if rest.endswith(")"):
                     rest = rest[:-1].strip()
                 else:
-                    in_block = True
+                    block_kind = "use"
                 if rest:
                     entries.extend(rest.split())
             elif rest:
@@ -257,11 +268,23 @@ def parse_gowork_uses(go_work_text: str) -> list[str]:
                     f"go.work:{lineno}: 'use' with no module list"
                 )
             continue
+        # Any other directive that opens a parenthesized block (replace,
+        # godebug, ...): track its kind so its contents -- never use
+        # entries -- are skipped as a block, and only a ')' with no block
+        # open is stray. Directives without a block (go, toolchain,
+        # godebug on one line) fall through and are ignored.
+        if s.endswith("("):
+            kind = s[:-1].strip().split()[0] if s[:-1].strip() else ""
+            if kind.isalpha() and kind != ")":
+                block_kind = kind
+                continue
         if s == ")":
-            raise ReleaseError(f"go.work:{lineno}: stray ')' outside a use block")
-        # Any other directive (go, toolchain, godebug) is not a use entry.
-    if in_block:
-        raise ReleaseError("go.work: unterminated use ( block")
+            raise ReleaseError(
+                f"go.work:{lineno}: stray ')' outside any block (use, "
+                "replace, ...)"
+            )
+    if block_kind is not None:
+        raise ReleaseError(f"go.work: unterminated {block_kind} ( block")
     return [
         entry[2:] if entry.startswith("./") else entry
         for entry in entries
