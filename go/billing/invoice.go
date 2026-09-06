@@ -102,12 +102,20 @@ func (i *Invoice) SetAmount(m Money) {
 // tenant-owned repository in this codebase.
 type InvoiceRepository struct {
 	*dbkit.Repository[Invoice]
+
+	// db is the same connection the embedded Repository was built on, kept
+	// only so setStatusIf's guarded conditional UPDATE can be composed on
+	// it -- the identical dual shape SubscriptionRepository documents for
+	// its own compareAndSetStatus. Every use routes through
+	// dbkit.WithTenantSession against a TenantScoped destination, never a
+	// raw query of any other shape.
+	db *gorm.DB
 }
 
 // NewInvoiceRepository returns an InvoiceRepository over db. db is expected
 // to come from dbkit.Open with this module's migrations applied.
 func NewInvoiceRepository(db *gorm.DB) *InvoiceRepository {
-	return &InvoiceRepository{Repository: dbkit.NewRepository[Invoice](db)}
+	return &InvoiceRepository{Repository: dbkit.NewRepository[Invoice](db), db: db}
 }
 
 // CreateInvoiceInput names a new Invoice's starting shape. It is always
@@ -147,29 +155,87 @@ func (r *InvoiceRepository) Void(ctx context.Context, id string) (*Invoice, erro
 }
 
 func (r *InvoiceRepository) setStatus(ctx context.Context, id string, status InvoiceStatus) (*Invoice, error) {
-	inv, err := r.FindByID(ctx, id)
-	if err != nil {
-		if isDBKitNotFound(err) {
-			return nil, ErrInvoiceNotFound.WithParam("id", id)
+	// maxTransitionAttempts bounds how many read-validate-write rounds one
+	// transition may spend before giving up, exactly as
+	// SubscriptionService.transition's identical constant documents for
+	// subscriptions.
+	const maxTransitionAttempts = 5
+
+	for attempt := 1; attempt <= maxTransitionAttempts; attempt++ {
+		inv, err := r.FindByID(ctx, id)
+		if err != nil {
+			if isDBKitNotFound(err) {
+				return nil, ErrInvoiceNotFound.WithParam("id", id)
+			}
+			return nil, err
 		}
-		return nil, err
+		// Validate the move against the legal-transition table before the
+		// invoice's Status is touched -- the identical validation
+		// SubscriptionService.transition performs for subscriptions. A Void on
+		// a Paid invoice (or any other move out of a terminal status) is
+		// refused with ErrInvalidInvoiceTransition, never applied to the row:
+		// an invoice that recorded a settled payment is the record of that
+		// settlement and must not be rewritten into a voided one.
+		from := InvoiceStatus(inv.Status)
+		if !invoiceTransitions[from][status] {
+			return nil, ErrInvalidInvoiceTransition.
+				WithParam("from", string(from)).
+				WithParam("to", string(status))
+		}
+
+		// The move is applied by a guarded UPDATE whose WHERE carries the
+		// very status this round validated from (setStatusIf), never by a
+		// whole-row save of the read. An unconditional write would let two
+		// racing transitions that both validated from Open both commit -- a
+		// Void landing after a MarkPaid would rewrite a settled payment's
+		// record into a voided one, silently breaking the terminal-state
+		// invariant above, with no error to either caller. The guard makes
+		// at most one transition land; a caller whose UPDATE matched zero
+		// rows has lost to a concurrent transition and loops back to
+		// re-read and re-validate from the fresh status (a move that is
+		// legal from it still converges; a move out of the terminal state
+		// the winner committed is refused on the next round).
+		applied, err := r.setStatusIf(ctx, id, from, status)
+		if err != nil {
+			return nil, err
+		}
+		if applied {
+			inv.Status = string(status)
+			return inv, nil
+		}
 	}
-	// Validate the move against the legal-transition table before the
-	// invoice's Status is touched -- the identical validation
-	// SubscriptionService.transition performs for subscriptions. A Void on
-	// a Paid invoice (or any other move out of a terminal status) is
-	// refused with ErrInvalidInvoiceTransition, never applied to the row:
-	// an invoice that recorded a settled payment is the record of that
-	// settlement and must not be rewritten into a voided one.
-	from := InvoiceStatus(inv.Status)
-	if !invoiceTransitions[from][status] {
-		return nil, ErrInvalidInvoiceTransition.
-			WithParam("from", string(from)).
-			WithParam("to", string(status))
+	return nil, fmt.Errorf(
+		"billing: invoice %q transition to %q did not settle after %d attempts (concurrent transitions kept winning)",
+		id, status, maxTransitionAttempts)
+}
+
+// setStatusIf attempts ONE guarded status transition: an UPDATE whose WHERE
+// carries both the row id and the status the move was validated from, with
+// RowsAffected as the arbiter -- the identical compare-and-swap shape
+// SubscriptionRepository.compareAndSetStatus uses for subscription rows
+// (and CreditService's resolve for its ledger rows). It reports true only
+// when the UPDATE affected exactly one row, i.e. this call is the one that
+// genuinely performed the transition; a false result means the row no
+// longer carried `from` by the time this UPDATE ran (a concurrent
+// MarkPaid/Void won the race), never an error.
+//
+// The tenant filter is never hand-written here (backend-coding-standards
+// §3.2): Invoice implements dbkit.TenantScoped, so the isolation plugin
+// injects "WHERE tenant_id = ?" from ctx automatically, exactly like the
+// identical shape SubscriptionRepository.compareAndSetStatus relies on.
+func (r *InvoiceRepository) setStatusIf(ctx context.Context, id string, from, to InvoiceStatus) (bool, error) {
+	applied := false
+	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		res := tx.Where("id = ? AND status = ?", id, string(from)).
+			Updates(&Invoice{Status: string(to)})
+		if res.Error != nil {
+			return fmt.Errorf("billing: transition invoice %q: %w", id, res.Error)
+		}
+		applied = res.RowsAffected == 1
+		return nil
+	})
+	if err != nil {
+		return false, err
 	}
-	inv.Status = string(status)
-	if err := r.Update(ctx, inv); err != nil {
-		return nil, fmt.Errorf("billing: update invoice %q: %w", id, err)
-	}
-	return inv, nil
+	return applied, nil
 }
