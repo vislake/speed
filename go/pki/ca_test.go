@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 func newTestCAService(t *testing.T) *CAService {
@@ -302,6 +303,12 @@ func TestCAService_CreateIntermediateCA_NoParentCRLDistributionPoint_OmitsExtens
 // TestCAService_VerifyCertificate_RevokedAuthorityInChain_Refused
 // (revocation_test.go) sets: no public CAService method performs this
 // transition, so tests must.
+//
+// The two tests below these -- the *_RevokedRootAncestor_Refused pair --
+// pin the follow-up review finding that the original fix stopped at the
+// DIRECT authority: issuance under an active intermediate whose ROOT
+// ancestor is revoked must also be refused, the issuance-side mirror of
+// VerifyCertificate's whole-chain walk. See their own comments.
 func TestCAService_CreateIntermediateCA_RevokedParent_Refused(t *testing.T) {
 	ca := newTestCAService(t)
 	ctx := context.Background()
@@ -346,6 +353,94 @@ func TestCAService_IssueCertificate_RevokedAuthority_Refused(t *testing.T) {
 	})
 	if !apperrIs(err, ErrAuthorityRevoked) {
 		t.Errorf("IssueCertificate(revoked authority) error = %v, want ErrAuthorityRevoked", err)
+	}
+}
+
+// issueRootAndIntermediate builds a two-level root -> intermediate chain and
+// returns both rows -- the fixture the two revoked-distant-ancestor tests
+// below need. The intermediate stays AuthorityStatusActive while its ROOT
+// ancestor is seeded revoked, so issuance under the intermediate exercises
+// the ancestor half of the issuance-side chain walk rather than the
+// direct-authority check the two single-hop tests above already pin.
+func issueRootAndIntermediate(t *testing.T, ca *CAService, ctx context.Context) (*Authority, *Authority) {
+	t.Helper()
+	root, err := ca.CreateRootCA(ctx, RootCAParams{
+		Subject:  pkix.Name{CommonName: "speed Root CA"},
+		NotAfter: time.Now().Add(48 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("CreateRootCA: %v", err)
+	}
+	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, IntermediateCAParams{
+		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
+		NotAfter: time.Now().Add(24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("CreateIntermediateCA: %v", err)
+	}
+	return root, intermediate
+}
+
+// TestCAService_CreateIntermediateCA_RevokedRootAncestor_Refused and
+// TestCAService_IssueCertificate_RevokedRootAncestor_Refused are the chain-
+// walk regression pair for the same P2-1 guarantee: the direct authority is
+// AuthorityStatusActive but its ROOT ancestor is AuthorityStatusRevoked, so
+// a single-hop status check -- the shape the original fix shipped -- lets
+// issuance succeed under a chain VerifyCertificate refuses (revocation.go
+// refuses a revoked authority anywhere in a chain, root included). Before
+// this follow-up's fix both calls SUCCEEDED -- the tests' fail-before
+// output was "error = <nil>, want ErrAuthorityRevoked"; after it, issuance
+// mirrors the verification-side walk and refuses, the returned error naming
+// the revoked root in its authority_id param rather than the active direct
+// authority.
+func TestCAService_CreateIntermediateCA_RevokedRootAncestor_Refused(t *testing.T) {
+	ca := newTestCAService(t)
+	ctx := context.Background()
+
+	root, intermediate := issueRootAndIntermediate(t, ca, ctx)
+
+	root.Status = AuthorityStatusRevoked
+	if err := ca.authorities.Update(ctx, root); err != nil {
+		t.Fatalf("seed revoked root ancestor: %v", err)
+	}
+
+	_, err := ca.CreateIntermediateCA(ctx, intermediate.ID, IntermediateCAParams{
+		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
+		NotAfter: time.Now().Add(24 * time.Hour),
+	})
+	ae, ok := apperr.As(err)
+	if !ok || ae.Code != ErrAuthorityRevoked.Code {
+		t.Errorf("CreateIntermediateCA(active intermediate under revoked root) error = %v, want ErrAuthorityRevoked", err)
+		return
+	}
+	if ae.Params["authority_id"] != root.ID {
+		t.Errorf("authority_id param = %v, want the revoked root %q, not the active intermediate", ae.Params["authority_id"], root.ID)
+	}
+}
+
+func TestCAService_IssueCertificate_RevokedRootAncestor_Refused(t *testing.T) {
+	ca := newTestCAService(t)
+	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-acme"))
+
+	root, intermediate := issueRootAndIntermediate(t, ca, ctx)
+
+	root.Status = AuthorityStatusRevoked
+	if err := ca.authorities.Update(ctx, root); err != nil {
+		t.Fatalf("seed revoked root ancestor: %v", err)
+	}
+
+	_, err := ca.IssueCertificate(ctx, intermediate.ID, CertificateParams{
+		Purpose:  "tenant.jwt_signing",
+		Subject:  pkix.Name{CommonName: "tenant leaf"},
+		NotAfter: time.Now().Add(time.Hour),
+	})
+	ae, ok := apperr.As(err)
+	if !ok || ae.Code != ErrAuthorityRevoked.Code {
+		t.Errorf("IssueCertificate(active intermediate under revoked root) error = %v, want ErrAuthorityRevoked", err)
+		return
+	}
+	if ae.Params["authority_id"] != root.ID {
+		t.Errorf("authority_id param = %v, want the revoked root %q, not the active intermediate", ae.Params["authority_id"], root.ID)
 	}
 }
 

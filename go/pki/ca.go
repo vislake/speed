@@ -263,6 +263,51 @@ func (s *CAService) CreateRootCA(ctx context.Context, params RootCAParams) (*Aut
 	return authority, nil
 }
 
+// checkNoRevokedAuthorityInChain refuses issuance when authority itself or
+// any ancestor up to the root is AuthorityStatusRevoked -- the
+// issuance-side mirror of the chain-verification refusal VerifyCertificate
+// applies (revocation.go): a certificate minted under a chain containing a
+// revoked authority is a certificate every verifier refuses, so nothing NEW
+// may be signed under that chain, whether the revoked row is the direct
+// issuer or a distant ancestor. The direct authority is the walk's first
+// member (its own status check is what CreateIntermediateCA and
+// IssueCertificate historically applied to the issuer alone); the walk then
+// follows ParentID upward until a nil parent -- a root -- ends the chain.
+//
+// The returned error is ErrAuthorityRevoked, never ErrCertificateRevoked:
+// nothing is being verified here, only refused an issuer -- the direct-
+// authority refusal's own reasoning, applied to every ancestor -- and its
+// authority_id param names the revoked row the walk actually met, which is
+// the direct authority when that is the revoked one and the offending
+// ancestor otherwise.
+//
+// The walk is cycle-guarded the same way VerifyCertificate's own walk is
+// (revocation.go): Authority.ParentID values are application-generated and
+// this round adds no constraint preventing a corrupt cycle, so the loop
+// must not be able to spin forever on one. Each ancestor costs one
+// FindByID, which issuance -- never a hot path -- can afford.
+func (s *CAService) checkNoRevokedAuthorityInChain(ctx context.Context, authority *Authority) error {
+	seen := make(map[string]bool)
+	for {
+		if seen[authority.ID] {
+			return fmt.Errorf("pki: authority chain cycle detected at %q", authority.ID)
+		}
+		seen[authority.ID] = true
+
+		if authority.Status == AuthorityStatusRevoked {
+			return ErrAuthorityRevoked.WithParam("authority_id", authority.ID)
+		}
+		if authority.ParentID == nil {
+			return nil
+		}
+		parent, err := s.authorities.FindByID(ctx, *authority.ParentID)
+		if err != nil {
+			return err
+		}
+		authority = parent
+	}
+}
+
 // IntermediateCAParams configures CreateIntermediateCA.
 type IntermediateCAParams struct {
 	// Subject is the intermediate certificate's subject.
@@ -286,9 +331,11 @@ type IntermediateCAParams struct {
 // docs/internal/22-pki.md's diagnosed system used (root / intermediate /
 // end-entity).
 //
-// Refused with ErrAuthorityRevoked when parentID's authority is
-// AuthorityStatusRevoked: a revoked authority signs nothing new (the
-// issuance-side mirror of the chain-verification refusal revocation.go's
+// Refused with ErrAuthorityRevoked when parentID's authority -- or any of
+// its ancestors up to the root -- is AuthorityStatusRevoked: a certificate
+// minted under a chain containing a revoked authority is a certificate
+// every verifier refuses, so a revoked authority signs nothing new (the
+// issuance-side mirror of the whole-chain refusal revocation.go's
 // VerifyCertificate applies), checked before any key is generated.
 //
 // # CRL distribution point
@@ -306,15 +353,16 @@ func (s *CAService) CreateIntermediateCA(ctx context.Context, parentID string, p
 	if err != nil {
 		return nil, err
 	}
-	// An authority whose Status is AuthorityStatusRevoked must not keep
-	// signing -- nothing NEW may be minted under it once it has been
+	// A chain containing an AuthorityStatusRevoked authority must not keep
+	// signing -- nothing NEW may be minted under it once any of its
+	// members, the parent itself or an ancestor up to the root, has been
 	// revoked, the issuance-side mirror of VerifyCertificate's refusal to
-	// trust anything already signed under one (revocation.go). The check
-	// runs before GenerateKey so a refused call never creates a key it will
-	// not use. ErrAuthorityRevoked, never ErrCertificateRevoked: nothing is
-	// being verified here, only refused an issuer.
-	if parent.Status == AuthorityStatusRevoked {
-		return nil, ErrAuthorityRevoked.WithParam("authority_id", parentID)
+	// trust anything already signed under one (revocation.go). The walk
+	// runs before GenerateKey so a refused call never creates a key it
+	// will not use. ErrAuthorityRevoked, never ErrCertificateRevoked:
+	// nothing is being verified here, only refused an issuer.
+	if err = s.checkNoRevokedAuthorityInChain(ctx, parent); err != nil {
+		return nil, err
 	}
 	parentCert, err := parseCertificatePEM(parent.CertificatePEM)
 	if err != nil {
@@ -395,10 +443,11 @@ type CertificateParams struct {
 // certificate signed by authorityID's authority, for the tenant in ctx,
 // storing the result in pki_certificates.
 //
-// Refused with ErrAuthorityRevoked when authorityID's authority is
-// AuthorityStatusRevoked: a revoked authority signs nothing new (the
-// issuance-side mirror of the chain-verification refusal revocation.go's
-// VerifyCertificate applies), checked before any key is generated.
+// Refused with ErrAuthorityRevoked when authorityID's authority -- or any
+// of its ancestors up to the root -- is AuthorityStatusRevoked: a revoked
+// authority signs nothing new (the issuance-side mirror of the whole-chain
+// refusal revocation.go's VerifyCertificate applies), checked before any
+// key is generated.
 //
 // ctx must carry a tenant (pkgcore.WithTenant): Certificate is tenant data,
 // and CertificateRepository.Create -- reached through the embedded
@@ -409,12 +458,13 @@ func (s *CAService) IssueCertificate(ctx context.Context, authorityID string, pa
 	if err != nil {
 		return nil, err
 	}
-	// The same revoked-issuer refusal CreateIntermediateCA applies to its
-	// parent applies here to the issuing authority itself: a revoked
-	// authority signs nothing new, checked before GenerateKey so a refused
-	// call never creates a key it will not use.
-	if authority.Status == AuthorityStatusRevoked {
-		return nil, ErrAuthorityRevoked.WithParam("authority_id", authorityID)
+	// The same whole-chain revoked-issuer refusal CreateIntermediateCA
+	// applies to its parent applies here to the issuing authority itself:
+	// a chain containing a revoked authority -- the issuer or any ancestor
+	// up to the root -- signs nothing new, checked before GenerateKey so a
+	// refused call never creates a key it will not use.
+	if err = s.checkNoRevokedAuthorityInChain(ctx, authority); err != nil {
+		return nil, err
 	}
 	issuerCert, err := parseCertificatePEM(authority.CertificatePEM)
 	if err != nil {

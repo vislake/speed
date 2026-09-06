@@ -189,7 +189,7 @@ This is a deliberate "keep the column, skip the transition" choice, not a half-b
 | `pki.no_active_key` | `NotFound` | `SigningKeyRepository.FindActiveByPurpose`, and transitively `Service.ActiveSigner` |
 | `pki.algorithm_unsupported_by_signer` | `Invalid` | `LocalSigner.GenerateKey` for any algorithm other than `AlgorithmEd25519` |
 | `pki.certificate_revoked` | `Conflict` | `CAService.VerifyCertificate`, for a revoked certificate OR a revoked authority anywhere in its chain (round 3) |
-| `pki.authority_revoked` | `Conflict` | `CAService.CreateIntermediateCA` / `IssueCertificate`, when the signing authority's `Status` is `AuthorityStatusRevoked` (the issuance-gap round) |
+| `pki.authority_revoked` | `Conflict` | `CAService.CreateIntermediateCA` / `IssueCertificate`, when the signing authority's `Status` -- or any ancestor's up to the root -- is `AuthorityStatusRevoked` (the issuance-gap round; chain-wide since the chain-walk round below) |
 | `pki.signer_unavailable` | `Internal` | `CAService.GenerateCRL`, wrapping a non-`*apperr.Error` `Signer.Sign` failure during CRL signing (round 3) |
 | `pki.propagation_window_not_elapsed` | `Conflict` | `Service.PromoteNow`, for a pending key staged less than `propagationWindow` ago (round 3) |
 | `pki.crl_not_generated` | `NotFound` | `Handler.PkiGetAuthorityCrl`, when the authority's `CRLPEM` is still empty (round 3) |
@@ -356,7 +356,10 @@ deliberately defers:
   trusts as its source of truth, checked after the `FindByID` load and
   before any key is generated. Fail-before proof: with the checks reverted,
   both new tests reported `error = <nil>, want ErrAuthorityRevoked`;
-  they pass after.
+  they pass after. This round's check stopped at the DIRECT authority; a
+  follow-up review found a revoked root ancestor still left an active
+  intermediate free to mint, and the chain-walk round entry below closes
+  that gap.
 - **P2-3 (suspected, reproduced): concurrent CRL generation lost updates.**
   `GenerateCRL` persisted through a blind full-row save of a
   read-modify-write cycle -- two overlapping calls could both read
@@ -571,3 +574,53 @@ round knows when it is warranted):
   declared), and no event (it changes no row; retired keys are already
   outside every replica's verifiable set and active pointer, so no
   replica cache needs to converge).
+
+## Issuance refusal walks the whole chain (round entry, 2026-09-07)
+
+Follow-up to the issuance-gap round's P2-1 fix, closing the review finding
+that its `ErrAuthorityRevoked` check stopped at the DIRECT authority. With
+root R revoked but its intermediate I still `AuthorityStatusActive`, both
+`CreateIntermediateCA` and `IssueCertificate` under I succeeded -- minting
+certificates that the module's own `VerifyCertificate` refuses, the exact
+asymmetric hole P2-1 closed for the direct issuer still open one hop up
+the chain. Latent today (no production path sets
+`AuthorityStatusRevoked`; tests seed it directly, as recorded above) but
+real the moment authority-revocation wiring exists.
+
+**The fix.** Both issuance paths now apply the same status check
+VerifyCertificate applies to its whole chain, through one shared walk,
+`CAService.checkNoRevokedAuthorityInChain` (ca.go): starting from the
+direct authority the caller already loaded and following `ParentID`
+upward, cycle-guarded exactly like VerifyCertificate's own walk
+(revocation.go), it refuses with `ErrAuthorityRevoked` when any chain
+member -- the direct authority first, then each ancestor up to the root --
+is `AuthorityStatusRevoked`, so the direct-authority-only check it
+replaces is subsumed as the walk's first step. The returned error's
+`authority_id` param names the revoked row the walk actually met, the
+root in the regression below rather than the active intermediate it
+signs through. Cost: one `FindByID` per ancestor per issuance, acceptable
+for a path that is never hot. The doc comments and error-index row that
+called the single-hop check "the issuance-side mirror of the
+chain-verification refusal" without qualification now state the real
+whole-chain semantics (ca.go's and errors.go's comments; the P2-1 bullet
+above carries a pointer to this entry).
+
+**Regression tests.** `ca_test.go`'s
+`TestCAService_CreateIntermediateCA_RevokedRootAncestor_Refused` and
+`TestCAService_IssueCertificate_RevokedRootAncestor_Refused` build a
+root -> intermediate chain, seed the ROOT revoked through the same
+direct `AuthorityRepository.Update` the single-hop pair uses, and assert
+both issuance paths under the ACTIVE intermediate are refused with
+`ErrAuthorityRevoked` naming the root. Fail-before proof, run on the
+unmodified code: both calls succeeded --
+
+```
+ca_test.go:413: CreateIntermediateCA(active intermediate under revoked root) error = <nil>, want ErrAuthorityRevoked
+ca_test.go:439: IssueCertificate(active intermediate under revoked root) error = <nil>, want ErrAuthorityRevoked
+```
+
+-- and they pass after, with the existing single-hop pair
+(`*_RevokedParent_Refused` / `*_RevokedAuthority_Refused`) green: the
+direct authority is the walk's first member, so those refusals are
+unchanged. Full module suite green under plain `go test` and `-race`;
+`go vet` and `golangci-lint` clean.

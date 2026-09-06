@@ -94,10 +94,12 @@ var (
 	ErrCertificateRevoked = apperr.Conflict("pki.certificate_revoked")
 
 	// ErrAuthorityRevoked reports that CAService.CreateIntermediateCA or
-	// IssueCertificate was asked to sign under an authority whose Status is
-	// AuthorityStatusRevoked -- an issuer that has been revoked (a
+	// IssueCertificate was asked to sign under an authority whose Status --
+	// the authority's own, or any ancestor's up to the root -- is
+	// AuthorityStatusRevoked. An issuer that has been revoked (a
 	// compromised key) must not keep minting certificates every downstream
-	// verifier will reject, so issuance refuses the same state the
+	// verifier will reject, and the same holds for a chain containing a
+	// revoked ancestor: issuance refuses the same chain-wide state the
 	// verification path already refuses (revocation.go's VerifyCertificate).
 	// apperr.Conflict, not apperr.Invalid, for the identical reason
 	// ErrCertificateRevoked is: the request names a real authority, and it
