@@ -223,6 +223,92 @@ func TestExportService_Export_DeliversThroughSharing(t *testing.T) {
 	}
 }
 
+// fakeExportDeliveryExpiryReader is a minimal, in-test
+// ExportDeliveryExpiryReader double, mirroring go/sharing's own
+// fakeTenantConfigReader exactly.
+type fakeExportDeliveryExpiryReader struct {
+	d   time.Duration
+	ok  bool
+	err error
+}
+
+func (f fakeExportDeliveryExpiryReader) ExportDeliveryExpiry(context.Context, pkgcore.TenantID) (time.Duration, bool, error) {
+	return f.d, f.ok, f.err
+}
+
+// TestExportService_Export_UsesTenantConfiguredExpiry proves a wired
+// ExportDeliveryExpiryReader's answer is honored over
+// defaultExportDeliveryExpiry when the tenant has configured one.
+func TestExportService_Export_UsesTenantConfiguredExpiry(t *testing.T) {
+	svc, repo, _, fakeSharing := newExportHarness(t)
+	svc.cfg = fakeExportDeliveryExpiryReader{d: 2 * time.Hour, ok: true}
+	tenant := pkgcore.TenantID("tenant-a")
+	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
+
+	before := time.Now()
+	result, err := svc.Export(context.Background(), tenant)
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	after := time.Now()
+
+	call := fakeSharing.calls[0]
+	if call.ExpiresAt == nil {
+		t.Fatal("Create ExpiresAt must not be nil")
+	}
+	wantEarliest := before.Add(2 * time.Hour)
+	wantLatest := after.Add(2 * time.Hour)
+	if call.ExpiresAt.Before(wantEarliest) || call.ExpiresAt.After(wantLatest) {
+		t.Errorf("Create ExpiresAt = %v, want between %v and %v (the tenant-configured 2 hours)", *call.ExpiresAt, wantEarliest, wantLatest)
+	}
+	if !result.Delivery.ExpiresAt.Equal(*call.ExpiresAt) {
+		t.Errorf("Delivery.ExpiresAt = %v, want %v", result.Delivery.ExpiresAt, *call.ExpiresAt)
+	}
+}
+
+// TestExportService_Export_ConfigReaderReportingUnconfigured_FallsBackToDefault
+// proves ok == false (the tenant configured nothing) behaves exactly as if
+// no ExportDeliveryExpiryReader were wired at all: Export still uses
+// defaultExportDeliveryExpiry.
+func TestExportService_Export_ConfigReaderReportingUnconfigured_FallsBackToDefault(t *testing.T) {
+	svc, repo, _, fakeSharing := newExportHarness(t)
+	svc.cfg = fakeExportDeliveryExpiryReader{ok: false}
+	tenant := pkgcore.TenantID("tenant-a")
+	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
+
+	before := time.Now()
+	if _, err := svc.Export(context.Background(), tenant); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	after := time.Now()
+
+	call := fakeSharing.calls[0]
+	if call.ExpiresAt == nil {
+		t.Fatal("Create ExpiresAt must not be nil")
+	}
+	wantEarliest := before.Add(defaultExportDeliveryExpiry)
+	wantLatest := after.Add(defaultExportDeliveryExpiry)
+	if call.ExpiresAt.Before(wantEarliest) || call.ExpiresAt.After(wantLatest) {
+		t.Errorf("Create ExpiresAt = %v, want between %v and %v (defaultExportDeliveryExpiry)", *call.ExpiresAt, wantEarliest, wantLatest)
+	}
+}
+
+// TestExportService_Export_ConfigReaderError_ReportsDeliveryFailed proves a
+// genuine ExportDeliveryExpiryReader read failure is reported as
+// ErrExportDeliveryFailed -- the identical bucket a failed go/sharing.Create
+// itself reports through, since neither leaves a usable delivery behind.
+func TestExportService_Export_ConfigReaderError_ReportsDeliveryFailed(t *testing.T) {
+	svc, repo, _, _ := newExportHarness(t)
+	svc.cfg = fakeExportDeliveryExpiryReader{err: errors.New("config read failed")}
+	tenant := pkgcore.TenantID("tenant-a")
+	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
+
+	_, err := svc.Export(context.Background(), tenant)
+	if !hasCode(err, ErrExportDeliveryFailed.Code) {
+		t.Fatalf("Export error = %v, want %s", err, ErrExportDeliveryFailed.Code)
+	}
+}
+
 // TestExportService_Export_NoSharingWired_Refuses proves Export refuses
 // outright with ErrSharingRequired when the module was built with no
 // WithSharing option -- before gathering or storing anything.

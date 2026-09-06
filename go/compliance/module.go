@@ -137,6 +137,24 @@ func WithSharing(s SharingCreator) Option {
 	return func(m *Module) { m.export.sharing = s }
 }
 
+// WithExportConfigReader wires the live reader ExportService.Export
+// resolves a tenant's configured export-delivery-link expiry through.
+// Without it (the default), Export always falls back to
+// defaultExportDeliveryExpiry -- still correct, per this item's own
+// declared Default, just never per-tenant-tunable until a host wires
+// this. See ExportDeliveryExpiryReader's own doc comment (export.go) for
+// why this is a construction-time Option accepting a small interface
+// rather than a *config.Service field the way WithConfigService gives
+// RetentionService: config.Module.Attach's *config.Service is only
+// produced strictly after Kernel.Bootstrap returns, by which point
+// NewModule has already run, so a host wires a lazy adapter over a
+// **config.Service filled in later -- exactly the pattern
+// examples/reference-app/cmd/server/server.go's orgFeatureGate already
+// establishes for org.FeatureGate.
+func WithExportConfigReader(r ExportDeliveryExpiryReader) Option {
+	return func(m *Module) { m.export.cfg = r }
+}
+
 // NewModule returns a Module reading and writing audit events through
 // auditRepo -- the same *audit.Repository instance the host's dbkit/audit
 // wiring already constructs over its own database connection, sharing it

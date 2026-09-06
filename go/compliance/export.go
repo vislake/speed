@@ -48,17 +48,19 @@ func (m ExportManifest) HasErrors() bool { return len(m.Errors) > 0 }
 // data-export download link stays valid once Export mints it through
 // go/sharing. Declared, like sharing's own ConfigDefaultExpiry
 // (go/sharing/module.go), so the value is visible and, eventually,
-// editable through go/config's own admin-console machinery -- this round
-// does not wire a live per-tenant reader for it (ExportService holds no
-// *config.Service), so every export this round mints uses
-// defaultExportDeliveryExpiry regardless of what an operator sets here.
-// That is the identical, honestly-recorded limitation sharing's own
-// ConfigDefaultExpiry carries for the same reason (AGENTS.md's "Tenant-
-// configured default expiry" section).
+// editable through go/config's own admin-console machinery; a host reads
+// its tenant-resolved value live by wiring an ExportDeliveryExpiryReader
+// through WithExportConfigReader (its own doc comment has the wiring
+// detail) -- without one, every export mints
+// defaultExportDeliveryExpiry regardless of what an operator sets here,
+// exactly as sharing's own ConfigDefaultExpiry falls back to
+// defaultShareExpiry with no TenantConfigReader wired.
 const ConfigExportDeliveryExpiry = "compliance.export_delivery_expiry"
 
 // defaultExportDeliveryExpiry is ConfigExportDeliveryExpiry's own declared
-// Default, and, this round, the only value Export ever actually uses.
+// Default, and the value exportDeliveryExpiry falls back to when no
+// ExportDeliveryExpiryReader is wired or the wired one reports the tenant
+// has configured none.
 //
 // This is deliberately far shorter than sharing's own 30-day
 // defaultShareExpiry: an export bundles a subject's complete personal
@@ -86,6 +88,30 @@ const defaultExportDeliveryExpiry = 24 * time.Hour
 // link is spent the moment it is actually used, not merely until it
 // expires.
 const exportDeliveryMaxViews = 1
+
+// ExportDeliveryExpiryReader is the structurally-typed seam ExportService
+// reads a tenant's configured export-delivery-link expiry through -- the
+// same (d, ok, err) shape go/sharing's own TenantConfigReader uses for its
+// ConfigDefaultExpiry, even though compliance already imports go/config
+// directly elsewhere (RetentionService.cfg, a plain *config.Service field):
+// a construction-time Module Option cannot capture config.Module.Attach's
+// *config.Service, which per its own doc comment is only produced strictly
+// after Kernel.Bootstrap returns -- by which point every module's own
+// NewModule call, this one included, has already run. This interface
+// exists so a host can wire a lazy adapter over a later-filled
+// **config.Service the exact way examples/reference-app/cmd/server/
+// server.go's orgFeatureGate already does for org.FeatureGate, not to
+// avoid an import edge compliance does not have.
+//
+// ok is false when the tenant has configured none (the value resolved at
+// go/config's own schema default) -- Export then falls back to
+// defaultExportDeliveryExpiry, exactly as if no
+// ExportDeliveryExpiryReader had been wired at all. err is a genuine read
+// failure: Export reports it wrapped in ErrExportDeliveryFailed rather
+// than guessing at a default.
+type ExportDeliveryExpiryReader interface {
+	ExportDeliveryExpiry(ctx context.Context, tenant pkgcore.TenantID) (d time.Duration, ok bool, err error)
+}
 
 // SharingCreator is the read/write seam ExportService.Export uses to hand
 // a stored export off to go/sharing for delivery -- exactly
@@ -170,6 +196,11 @@ type ExportService struct {
 	actions   pkgcore.AuditActionRegistrar
 	store     pkgcore.ObjectStore
 	sharing   SharingCreator
+
+	// cfg is the optional live reader of a tenant's configured export
+	// delivery expiry. Nil is a legal, fully supported configuration --
+	// see ExportDeliveryExpiryReader's own doc comment.
+	cfg ExportDeliveryExpiryReader
 }
 
 // newExportService returns an ExportService with no seams wired yet;
@@ -271,7 +302,7 @@ func (s *ExportService) Export(ctx context.Context, tenant pkgcore.TenantID) (*E
 
 	result := &ExportResult{ObjectKey: key, Manifest: manifest}
 
-	delivery, deliverErr := s.deliverExport(ctx, key)
+	delivery, deliverErr := s.deliverExport(ctx, tenant, key)
 	if deliverErr != nil {
 		if auditErr := s.emitExportAudit(ctx, tenant, key, manifest, ExportDelivery{}, deliverErr); auditErr != nil {
 			return result, ErrAuditRecordFailed.WithCause(auditErr)
@@ -290,20 +321,24 @@ func (s *ExportService) Export(ctx context.Context, tenant pkgcore.TenantID) (*E
 }
 
 // deliverExport hands the manifest stored under key off to go/sharing: a
-// single-view (exportDeliveryMaxViews), defaultExportDeliveryExpiry-lived
-// share naming key as its opaque ResourceRef. Sensitive is always true --
-// an export is, by construction, a subject's complete personal data, so it
-// always qualifies for sharing's own sensitive-resource confirmation audit
-// (sharing.share.create_sensitive, go/sharing/AGENTS.md's "Sensitive-
-// resource confirmation" section), independently of and in addition to
-// this module's own AuditActionExportRequest event.
+// single-view (exportDeliveryMaxViews), exportDeliveryExpiry(ctx, tenant)-
+// lived share naming key as its opaque ResourceRef. Sensitive is always
+// true -- an export is, by construction, a subject's complete personal
+// data, so it always qualifies for sharing's own sensitive-resource
+// confirmation audit (sharing.share.create_sensitive, go/sharing/
+// AGENTS.md's "Sensitive-resource confirmation" section), independently of
+// and in addition to this module's own AuditActionExportRequest event.
 //
 // No password is set -- see exportDeliveryMaxViews's own doc comment for
 // why a single-view link over a 256-bit token is this round's chosen
 // mechanism instead.
-func (s *ExportService) deliverExport(ctx context.Context, key string) (ExportDelivery, error) {
+func (s *ExportService) deliverExport(ctx context.Context, tenant pkgcore.TenantID, key string) (ExportDelivery, error) {
 	maxViews := exportDeliveryMaxViews
-	expiresAt := time.Now().Add(defaultExportDeliveryExpiry)
+	expiry, err := s.exportDeliveryExpiry(ctx, tenant)
+	if err != nil {
+		return ExportDelivery{}, err
+	}
+	expiresAt := time.Now().Add(expiry)
 	created, err := s.sharing.Create(ctx, sharing.CreateParams{
 		ResourceRef: key,
 		ExpiresAt:   &expiresAt,
@@ -318,6 +353,26 @@ func (s *ExportService) deliverExport(ctx context.Context, key string) (ExportDe
 		delivery.ExpiresAt = *created.Share.ExpiresAt
 	}
 	return delivery, nil
+}
+
+// exportDeliveryExpiry resolves the expiry deliverExport should mint the
+// delivery share with: tenant's own ConfigExportDeliveryExpiry override
+// when one is set and an ExportDeliveryExpiryReader was wired
+// (WithExportConfigReader), defaultExportDeliveryExpiry otherwise --
+// exactly the same "optional wiring, honest fallback" shape
+// RetentionService.RetentionWindow gives ConfigDefaultRetentionWindow.
+func (s *ExportService) exportDeliveryExpiry(ctx context.Context, tenant pkgcore.TenantID) (time.Duration, error) {
+	if s.cfg == nil {
+		return defaultExportDeliveryExpiry, nil
+	}
+	d, ok, err := s.cfg.ExportDeliveryExpiry(ctx, tenant)
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
+		return defaultExportDeliveryExpiry, nil
+	}
+	return d, nil
 }
 
 // emitExportAudit records one AuditActionExportRequest event for a
