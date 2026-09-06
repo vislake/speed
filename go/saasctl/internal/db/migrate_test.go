@@ -318,29 +318,66 @@ func TestMigrateGoModRequiringOnlyNonMigrationModulesIsRefused(t *testing.T) {
 	}
 }
 
-// TestMigrateDistributedModeIsRefused: migrating is a standalone-mode
-// operation -- the distributed mode's schema lives in PostgreSQL, which
-// the command never touches -- so SPEED_DEPLOYMENT_MODE=distributed is
-// refused, naming the variable and the resolved mode.
-func TestMigrateDistributedModeIsRefused(t *testing.T) {
+// TestMigrateDistributedModeAppliesTheIdenticalSQLiteSchema:
+// SPEED_DEPLOYMENT_MODE=distributed is no longer refused -- an earlier
+// version of this test (TestMigrateDistributedModeIsRefused) pinned a
+// refusal reasoning ("the distributed mode's schema lives in PostgreSQL,
+// which this command never touches") that does not hold for what a
+// saasctl-generated project actually does: every generated
+// cmd/server/server.go blank-imports exactly go/dbkit/dialect/sqlite, with
+// no dialect selection anywhere in its wiring, under either deployment
+// mode (migrate.go's own migrate function doc comment has the full
+// argument, and examples/reference-app/integration_test/
+// distributed_mode_test.go's package doc comment records the identical
+// fact for the reference app). This test proves the corrected behavior: a
+// fresh database migrates identically under the distributed mode, applying
+// the same universe and ledger TestMigrateFreshDatabaseAppliesTheWholeRequiredUniverse
+// pins for the standalone default.
+func TestMigrateDistributedModeAppliesTheIdenticalSQLiteSchema(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "cli-app.db")
 	code, stdout, stderr := driveMigrate(t, []string{fixture(t, "full.mod")}, map[string]string{
 		appconfig.DBPathEnv:         dbPath,
 		appconfig.DeploymentModeEnv: "distributed",
 	})
-	if code != 1 {
-		t.Errorf("exit code = %d, want 1", code)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, stderr)
 	}
-	if stdout != "" {
-		t.Errorf("stdout = %q, want empty", stdout)
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
 	}
-	want := fmt.Sprintf("saasctl db migrate: db migrate applies the standalone deployment mode's SQLite schema; %s resolves to %q, and the distributed mode's schema lives in PostgreSQL, which this command never touches\n",
-		appconfig.DeploymentModeEnv, pkgcore.DeploymentModeDistributed)
-	if stderr != want {
-		t.Errorf("stderr = %q, want %q", stderr, want)
+	want := fmt.Sprintf("Migrated %s: applied 16 migration files (authn 9, config 1, org 4, rbac 2)\n", dbPath)
+	if stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
-	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
-		t.Errorf("database file exists after the refusal; a refused run must not create one (stat err = %v)", err)
+
+	gdb := openDB(t, dbPath)
+	if got := ledgerCounts(t, gdb); !reflect.DeepEqual(got, fullUniverseLedger) {
+		t.Errorf("ledger = %v, want %v", got, fullUniverseLedger)
+	}
+}
+
+// TestMigrateDistributedModeRerunReportsUpToDate proves the distributed
+// mode shares migrate's ordinary re-run idempotence with the standalone
+// default (TestMigrateRerunOverTheSameDatabaseReportsUpToDate): a second
+// run over the same file, still under SPEED_DEPLOYMENT_MODE=distributed,
+// applies nothing further.
+func TestMigrateDistributedModeRerunReportsUpToDate(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "cli-app.db")
+	env := map[string]string{
+		appconfig.DBPathEnv:         dbPath,
+		appconfig.DeploymentModeEnv: "distributed",
+	}
+	if code, _, stderr := driveMigrate(t, []string{fixture(t, "full.mod")}, env); code != 0 {
+		t.Fatalf("first run: exit code = %d, want 0; stderr:\n%s", code, stderr)
+	}
+
+	code, stdout, stderr := driveMigrate(t, []string{fixture(t, "full.mod")}, env)
+	if code != 0 {
+		t.Fatalf("second run: exit code = %d, want 0; stderr:\n%s", code, stderr)
+	}
+	want := fmt.Sprintf("%s is up to date: schema_migrations already records 16 migration files (authn 9, config 1, org 4, rbac 2)\n", dbPath)
+	if stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
 }
 

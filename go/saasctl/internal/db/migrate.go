@@ -58,9 +58,18 @@ migrates that project's own database whichever directory the command is
 invoked from. A set SPEED_DB_PATH always wins and is used exactly as the
 app would use it.
 
-Migrating is a standalone-mode operation: the distributed mode's schema
-lives in PostgreSQL, which this command never touches, so a deployment
-mode other than standalone is refused.
+SPEED_DEPLOYMENT_MODE may be standalone or distributed: a generated
+project's own database always speaks SQLite regardless of deployment
+mode (no second SQL dialect exists for a generated project today), so
+this command applies the identical schema either way. What changes
+under the distributed mode is which infrastructure seams the generated
+app's OWN cmd/server composes (Redis, S3, SMTP -- see the generated
+project's README), never which dialect its database speaks. Running
+migrate concurrently with another writer against the same SQLite file
+(another migrate invocation, or a replica's own startup Apply) is an
+operator hazard under EITHER mode, unrelated to this command's
+deployment-mode handling; run migrate to completion before booting any
+replica, exactly as this module's own end-to-end proof procedure does.
 
 Examples:
 
@@ -325,12 +334,56 @@ func migrate(modPath string) (string, error) {
 	// The deployment mode and database path resolve from the same
 	// environment surface the generated app boots from -- appconfig.Load
 	// is the app's configFromEnv twin, errors and all.
+	//
+	// cfg.DeploymentMode is resolved and validated (a malformed value still
+	// fails here, through appconfig.Load's own pkgcore.ParseDeploymentMode
+	// call) but no longer gates this command on being "standalone": an
+	// earlier version of this function refused any other mode, reasoning
+	// that "the distributed mode's schema lives in PostgreSQL, which this
+	// command never touches". That premise does not hold for what a
+	// saasctl-generated project actually does -- every generated
+	// cmd/server/server.go blank-imports exactly one dialect driver,
+	// go/dbkit/dialect/sqlite, with no environment variable or option
+	// anywhere in the generated wiring that selects a different one, the
+	// identical fact examples/reference-app/integration_test/
+	// distributed_mode_test.go's own package doc comment records for the
+	// reference app (the second-dialect axis for generated projects is
+	// explicitly out of scope, matching that file's own recorded
+	// deviation). A generated project's distributed deployment mode changes
+	// which infrastructure SEAMS compose real implementations (eventbus,
+	// kv, mailer, objectstore -- see cmd/server/config.go's
+	// SPEED_REDIS_ADDR/SPEED_S3_*/SPEED_SMTP_* wiring); it does not, today,
+	// change the SQL dialect the project's OWN database speaks. Refusing
+	// migrate under distributed mode on a dialect argument that is
+	// currently false would block a real, working operation for no reason
+	// tied to anything this command actually does.
+	//
+	// The genuine, still-real concern investigated here is a different one:
+	// concurrent writers against the SAME SQLite file. dbkit.Open sets no
+	// SQLite busy_timeout and pools up to 25 connections
+	// (go/dbkit/open.go's defaultMaxOpenConns), so two processes racing a
+	// write transaction against one file can hit SQLITE_BUSY -- a real risk
+	// this command shares with the generated app's OWN startup Apply, which
+	// runs unconditionally on every boot regardless of deployment mode (see
+	// each selection's server.go). That risk is not specific to running
+	// migrate under the distributed mode, though: an operator invoking
+	// migrate twice concurrently, or invoking it while a standalone-mode
+	// replica is already booting against the same file, carries the
+	// identical hazard today, with no code-level lock guarding either case
+	// in this repository -- distributed_mode_test.go's own package doc
+	// comment records the accepted mitigation this repository already
+	// relies on for the identical topology: sequential ordering (there,
+	// staggering which replica boots first; here, running migrate to
+	// completion before any replica's own first boot), never a database
+	// lock. This command does not invent a new safety mechanism for that
+	// existing, mode-independent hazard -- it is the operator's
+	// responsibility under either deployment mode, exactly as it already
+	// was under standalone alone, and the B4 end-to-end proof procedure
+	// this module's AGENTS.md records (migrate, THEN boot) is the ordering
+	// that avoids it.
 	cfg, err := appconfig.Load(proj.AppName, os.LookupEnv)
 	if err != nil {
 		return "", err
-	}
-	if cfg.DeploymentMode != pkgcore.DeploymentModeStandalone {
-		return "", fmt.Errorf("db migrate applies the standalone deployment mode's SQLite schema; %s resolves to %q, and the distributed mode's schema lives in PostgreSQL, which this command never touches", appconfig.DeploymentModeEnv, cfg.DeploymentMode)
 	}
 	// The app's default database path (<app name>.db, resolved when
 	// SPEED_DB_PATH is unset) is relative to the app's working directory;
