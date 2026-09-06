@@ -14,8 +14,30 @@ import (
 // query, and the cursor advances after each row so a crash mid-batch loses
 // at most the rows already delivered in the current batch to redelivery on
 // the next cycle -- see EventBus's own doc comment for the at-least-once
-// framing this shares with eventbus/redis's cross-process delivery.
+// framing this shares with eventbus/redis's cross-process delivery, and
+// advanceCursorAtLeast's own doc comment for the retry that narrows (but,
+// deliberately, does not claim to eliminate) the redelivery window.
 const catchUpBatchSize = 200
+
+// cursorAdvanceMaxAttempts bounds how many times advanceCursorAtLeast
+// retries a transient failure (a connection dropped mid-query, most
+// concretely) before giving up and letting the caller's own catch-up cycle
+// retry from the unadvanced, persisted cursor. Because every attempt goes
+// through pool -- not the deliverPendingForType caller's own dedicated
+// LISTEN connection, which pgxpool never lends out -- a fresh attempt
+// after the first one very likely lands on a different, healthy pooled
+// connection, so this retry converts the ordinary case (a single backend
+// killed or a brief network blip) from "redeliver the whole row next
+// cycle" into "recover within this call", without pretending to survive an
+// outage that outlasts cursorAdvanceMaxAttempts attempts.
+const cursorAdvanceMaxAttempts = 5
+
+// cursorAdvanceRetryDelay is the fixed delay advanceCursorAtLeast waits
+// between attempts, mirroring reconnectDelay's role for the listener
+// connection: short enough that a handful of retries still resolves well
+// within one listenBlock cycle, long enough that a retry is not simply
+// racing the same still-dying connection.
+const cursorAdvanceRetryDelay = 100 * time.Millisecond
 
 // outboxRow is one durable record read back from pkgcore_eventbus_outbox.
 type outboxRow struct {
@@ -149,20 +171,55 @@ func ensureCursor(ctx context.Context, pool *pgxpool.Pool, replicaID, eventType 
 // advance of the same row regardless of arrival order, though in practice
 // EventBus.deliverMu already serializes every caller of this function
 // against every other one for the same bus instance.
+//
+// # Why this call is retried, and what that does and does not guarantee
+//
+// Both of this function's callers (Publish's own synchronous local
+// delivery, and deliverPendingForType's catch-up loop) invoke every
+// subscribed handler for a row BEFORE calling this function to persist that
+// the row was delivered -- handler-then-advance, deliberately, so a crash
+// between the two loses at most the durability of "this row is done", never
+// the row's actual delivery. That ordering means a failure of THIS call,
+// after the handlers already ran, is an at-least-once hazard rather than an
+// at-most-once one: the caller's watermark stays behind the row it just
+// delivered, and the next catch-up cycle (the next NOTIFY, or the next
+// listenBlock timeout) redelivers that same row to every handler a second
+// time -- see EventBus's own doc comment for the honest, non-"exactly once"
+// framing this is part of.
+//
+// Retrying here does not remove that hazard, but it does shrink the window
+// it can occur in: pool.Exec acquires whichever pooled connection is free,
+// which after a single connection loss (one killed backend, one dropped
+// TCP session) is very likely to be a different, healthy one on the very
+// next attempt, so most real transient failures now recover inside this
+// call instead of surfacing as a duplicate at all. Only a failure that
+// outlasts cursorAdvanceMaxAttempts attempts -- a sustained outage of every
+// pooled connection, not a single blip -- still reaches the caller as an
+// error and lets the row redeliver.
 func advanceCursorAtLeast(ctx context.Context, pool *pgxpool.Pool, replicaID, eventType string, id int64) error {
 	now := time.Now().UTC()
-	_, err := pool.Exec(ctx,
-		`INSERT INTO pkgcore_eventbus_cursor (replica_id, event_type, last_delivered_id, updated_at)
-		 VALUES ($1, $2, $3, $4)
-		 ON CONFLICT (replica_id, event_type) DO UPDATE
-		   SET last_delivered_id = GREATEST(pkgcore_eventbus_cursor.last_delivered_id, EXCLUDED.last_delivered_id),
-		       updated_at = EXCLUDED.updated_at`,
-		replicaID, eventType, id, now,
-	)
-	if err != nil {
-		return fmt.Errorf("advance cursor for %q: %w", eventType, err)
+	var err error
+	for attempt := 1; attempt <= cursorAdvanceMaxAttempts; attempt++ {
+		if attempt > 1 {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("advance cursor for %q: %w", eventType, ctx.Err())
+			case <-time.After(cursorAdvanceRetryDelay):
+			}
+		}
+		_, err = pool.Exec(ctx,
+			`INSERT INTO pkgcore_eventbus_cursor (replica_id, event_type, last_delivered_id, updated_at)
+			 VALUES ($1, $2, $3, $4)
+			 ON CONFLICT (replica_id, event_type) DO UPDATE
+			   SET last_delivered_id = GREATEST(pkgcore_eventbus_cursor.last_delivered_id, EXCLUDED.last_delivered_id),
+			       updated_at = EXCLUDED.updated_at`,
+			replicaID, eventType, id, now,
+		)
+		if err == nil {
+			return nil
+		}
 	}
-	return nil
+	return fmt.Errorf("advance cursor for %q: %w", eventType, err)
 }
 
 // PurgeOutboxBefore deletes outbox rows older than olderThan, so a

@@ -101,9 +101,10 @@ const (
 // outbox for rows newer than its own persisted watermark, per event Type it
 // is locally subscribed to, and delivers them the same way. Every event a
 // Publish's transaction commits therefore reaches every subscribed handler
-// of every replica exactly once per replica: this is fan-out, not
+// of every replica AT LEAST once per replica: this is fan-out, not
 // load-balancing -- see the delivery-semantics note below for how that was
-// determined and why it matters.
+// determined, why it is at-least-once rather than exactly-once, and why
+// that matters.
 //
 // # Delivery-semantics note (read before choosing this bus)
 //
@@ -140,6 +141,22 @@ const (
 //   - Handlers on other replicas run on the bus's own background context,
 //     which carries no tenant; a handler needing tenant data must rebuild
 //     it from the event with pkgcore.WithTenant.
+//   - Delivery is at-least-once, not exactly-once, despite this package's
+//     earlier drafts having claimed the stronger guarantee: both
+//     deliverPendingForType's catch-up loop and Publish's own local
+//     delivery run a row's handlers BEFORE persisting that the row was
+//     delivered (advanceCursorAtLeast), so that a crash or connection loss
+//     landing in the gap between the two loses no event -- the unadvanced,
+//     persisted cursor simply causes the next catch-up cycle to redeliver
+//     the same row. advanceCursorAtLeast retries a bounded number of times
+//     over pool (see its own doc comment) precisely to shrink this window
+//     -- most single connection blips now recover inside that call instead
+//     of surfacing as a duplicate at all -- but a failure that outlasts
+//     every retry still redelivers rather than silently drops. This is the
+//     same trade eventbus/redis documents for its own cross-process path
+//     ("at-least-once-ish but not retried"): a host whose handlers are not
+//     idempotent must de-duplicate itself, by event id or by the payload's
+//     own natural key, exactly as it would have to for eventbus/redis.
 //   - Unlike eventbus/redis, THIS implementation genuinely survives a
 //     replica's own restart without losing events published while it was
 //     down, provided the restarting process is built with the SAME
