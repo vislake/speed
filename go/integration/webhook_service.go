@@ -286,19 +286,18 @@ func (s *Service) DeleteWebhookSubscription(ctx context.Context, id string) erro
 }
 
 // RestoreWebhookSubscription undoes the mark-delete DeleteWebhookSubscription
-// made to the subscription named by id, in the caller's tenant, wrapping the
-// promoted dbkit.Repository[WebhookSubscription].Restore -- symmetric with
-// DeleteWebhookSubscription's own (ctx, id) shape, since a subscription's
-// natural key genuinely is its own opaque id (unlike, say, go/rbac's
-// RoleBinding, whose RestoreRole instead takes the tuple that identifies a
-// grant, because a caller revoking a grant is not expected to have kept the
-// binding's own row id around -- see that method's doc comment). It reports
-// ErrWebhookSubscriptionNotFound both for an id with nothing to restore and
-// for an id that exists but is not currently mark-deleted -- the identical
-// collapsed not-found signal dbkit.Repository[T].Restore's own doc comment
-// describes, matching go/org's MemberService.Restore and go/rbac's
-// RestoreRole precedent, so a caller cannot learn which case it hit from the
-// error shape alone.
+// made to the subscription named by id, in the caller's tenant -- symmetric
+// with DeleteWebhookSubscription's own (ctx, id) shape, since a
+// subscription's natural key genuinely is its own opaque id (unlike, say,
+// go/rbac's RoleBinding, whose RestoreRole instead takes the tuple that
+// identifies a grant, because a caller revoking a grant is not expected to
+// have kept the binding's own row id around -- see that method's doc
+// comment). It reports ErrWebhookSubscriptionNotFound both for an id with
+// nothing to restore and for an id that exists but is not currently
+// mark-deleted -- the identical collapsed not-found signal
+// dbkit.Repository[T].Restore's own doc comment describes, matching go/org's
+// MemberService.Restore and go/rbac's RestoreRole precedent, so a caller
+// cannot learn which case it hit from the error shape alone.
 //
 // # Restore always lands the subscription PAUSED (Active = false),
 // regardless of what Active held at the moment it was deleted
@@ -330,6 +329,39 @@ func (s *Service) DeleteWebhookSubscription(ctx context.Context, id string) erro
 // Restore). A caller wanting the subscription resumed in one round trip
 // simply follows Restore with such a call; nothing here prevents that.
 //
+// # The restore and the forced pause land in ONE guarded write
+//
+// The unmark (clearing deleted_at/deleted_by) and the forced pause
+// (Active = false) are performed by a single UPDATE --
+// WebhookSubscriptionRepository.restorePaused -- never by the
+// restore-then-pause pair of separate writes this method first shipped
+// with. Two writes created a real window on both sides of the pause: the
+// row was LIVE with Active still true between the unmark's commit and the
+// pause's, which is the exact state handleDomainEvent's fan-out matches
+// (webhook_delivery.go's matchingSubscriptions, over ListActiveByTenant) --
+// so a matching domain event observed in that window was silently fanned
+// out to the external URL this pause exists to stop POSTing to -- and a
+// pause write that failed left the row permanently restored-ACTIVE while
+// this method reported ErrInternal, a half-restored state whose repair a
+// retry could never reach (the row was no longer mark-deleted, so the
+// retry answered the collapsed not-found). One statement closes both
+// hazards: no interleaving can observe the row live-and-active between two
+// writes that are one write, and a failure of the single write leaves the
+// row exactly as it was -- still mark-deleted, never restored at all --
+// failing closed toward "nothing resumes delivering" rather than toward an
+// unnoticed resumption.
+//
+// The write's own guard preserves every interleaving property this
+// method's contract promises: its WHERE requires deleted_at IS NOT NULL, so
+// only a row this call exists to restore matches -- the collapsed
+// not-found above, a row that is live (never deleted, or already restored,
+// or another tenant's, the tenant filter coming from the same tenant-scope
+// plugin the update path relies on) all match nothing and all answer the
+// one ErrWebhookSubscriptionNotFound -- and a concurrent
+// DeleteWebhookSubscription whose mark-delete commits first wins the race
+// (matched == false, the row stays dead) rather than being silently undone
+// by the restore, exactly as on the update path.
+//
 // Restore does not re-validate the restored row against
 // CreateWebhookSubscription's own preconditions beyond the collapsed
 // not-found check above (its URL is not re-run through ValidateWebhookURL,
@@ -337,32 +369,24 @@ func (s *Service) DeleteWebhookSubscription(ctx context.Context, id string) erro
 // columns and, per the paragraph above, Active. A caller wanting every
 // modern invariant re-checked calls UpdateWebhookSubscription afterward.
 func (s *Service) RestoreWebhookSubscription(ctx context.Context, id string) error {
-	if err := s.webhookRepo.Restore(ctx, id); err != nil {
-		return translateWebhookRepoErr(err)
+	matched, err := s.webhookRepo.restorePaused(ctx, id)
+	if err != nil {
+		return ErrInternal.WithCause(err)
 	}
-
-	// Land the restored subscription PAUSED through the same guarded,
-	// live-rows-only write the update path uses (updateFields carries
-	// deleted_at IS NULL in its WHERE and names only the columns in its
-	// change set), never a whole-row Repository.Update of a freshly read
-	// row. The read-then-whole-row-save shape this replaces resurrected a
-	// subscription a concurrent DeleteWebhookSubscription had already
-	// mark-deleted again between the restore's read and its save: the
-	// save wrote the snapshot's nil DeletedAt back over the deletion.
-	// Setting Active = false unconditionally is exact here -- a
-	// subscription restored inactive is the documented outcome either way,
-	// and the write is a no-op on a row that already reads inactive -- and
-	// the write's own guard makes the deletion win when it lands first
-	// (matched == false, row still dead: the FindByID below then reports
-	// ErrWebhookSubscriptionNotFound, exactly as if the deletion had
-	// landed before the restore).
-	inactive := false
-	if _, updateErr := s.webhookRepo.updateFields(ctx, id, webhookSubscriptionChanges{Active: &inactive}); updateErr != nil {
-		return ErrInternal.WithCause(updateErr)
+	if !matched {
+		// Nothing was mark-deleted under id in this tenant: the id never
+		// existed, the subscription is live (never deleted, or already
+		// restored), it belongs to another tenant, or a concurrent
+		// re-delete won the race. One collapsed signal, indistinguishable
+		// by design -- see the doc comment above.
+		return ErrWebhookSubscriptionNotFound
 	}
 
 	row, err := s.webhookRepo.FindByID(ctx, id)
 	if err != nil {
+		// A re-delete that committed between the restore's write and this
+		// read hides the row again: the deletion wins, indistinguishable
+		// from a restore that never happened.
 		return translateWebhookRepoErr(err)
 	}
 

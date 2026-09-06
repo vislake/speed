@@ -144,6 +144,68 @@ func (r *WebhookSubscriptionRepository) updateFields(ctx context.Context, id str
 	return matched, err
 }
 
+// restorePaused is the single guarded write Service.RestoreWebhookSubscription
+// performs: it undoes a mark-delete AND forces Active = false in ONE UPDATE,
+// and reports whether any row matched. It is the repository-level expression
+// of the restore contract webhook_service.go's RestoreWebhookSubscription doc
+// comment argues in full -- a restored subscription must always land PAUSED,
+// never live with Active still true, because handleDomainEvent's fan-out
+// (webhook_delivery.go's matchingSubscriptions, over ListActiveByTenant)
+// matches exactly that state and would silently resume POSTing the tenant's
+// live event data to the external URL the pause exists to stop POSTing to.
+//
+// # Why the restore and the pause must be one statement
+//
+// The method this write replaced performed the act as TWO writes -- first
+// dbkit's Repository[WebhookSubscription].Restore unmark, then an updateFields
+// call setting Active = false -- and the gap between them was a real hazard
+// on both sides. Between the unmark's commit and the pause's commit the row
+// was live with Active still true, the exact state the fan-out matches: a
+// matching domain event observed in that window was fanned out to it. And a
+// pause write that failed left the row permanently restored-ACTIVE while the
+// caller saw only an error -- a half-restored state whose repair a retry
+// could never reach, since the row was no longer mark-deleted for a second
+// restore to match. One statement closes both: no instant of the write has a
+// live-and-active row (the two column changes commit together), and a
+// failure of the write leaves the row exactly as it was -- still
+// mark-deleted, never restored at all -- failing closed toward "nothing
+// resumes delivering".
+//
+// # The statement, and why its shape is safe
+//
+// The write mirrors updateFields' guarded construction in every respect but
+// its WHERE: like updateFields it runs inside dbkit.WithTenantSession, so
+// the tenant-scope plugin injects WHERE tenant_id = ? from the TenantScoped
+// model the Updates payload resolves (never a hand-written tenant filter and
+// never a row of another tenant's), and like updateFields it names its SET
+// columns in Select -- load-bearing here too, since Active's replacement
+// value is false, DeletedAt's is nil and DeletedBy's is the empty string,
+// all zero values a Select-less struct update would silently omit from its
+// SET clause. Its WHERE instead requires deleted_at IS NOT NULL -- only a
+// row this call exists to restore matches. That is what preserves the
+// collapsed not-found semantics Service.RestoreWebhookSubscription always
+// reported: an id that never existed, a row that is live (never deleted, or
+// already restored), and another tenant's row all match nothing and all
+// answer the one ErrWebhookSubscriptionNotFound, exactly as dbkit's own
+// Repository[T].Restore behaved -- and a concurrent
+// DeleteWebhookSubscription whose mark-delete commits before this write
+// finds its deletion winning (matched == false) rather than being silently
+// undone by a stale unmark.
+func (r *WebhookSubscriptionRepository) restorePaused(ctx context.Context, id string) (bool, error) {
+	m := WebhookSubscription{Active: false}
+	var matched bool
+	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		res := tx.
+			Where("id = ?", id).
+			Where("deleted_at IS NOT NULL").
+			Select("DeletedAt", "DeletedBy", "Active").
+			Updates(&m)
+		matched = res.RowsAffected > 0
+		return res.Error
+	})
+	return matched, err
+}
+
 // ListActiveByTenant returns every WebhookSubscription of the tenant in ctx
 // whose Active is true, in no particular order -- handleDomainEvent filters
 // the result by EventTypes membership itself (webhook_delivery.go's

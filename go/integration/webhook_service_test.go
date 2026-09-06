@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -343,6 +344,172 @@ func TestService_RestoreWebhookSubscription_ConcurrentDelete_DeletionWins(t *tes
 		if _, err := svc.webhookRepo.FindByID(ctxFor(testTenant), created.ID); !apperrIs(err, dbkit.ErrRecordNotFound) {
 			t.Fatalf("iteration %d: the subscription is readable as live after the restore's write raced a delete that reported success (err = %v) -- the restore resurrected the deleted row", i, err)
 		}
+	}
+}
+
+// pauseShapedWebhookUpdate reports whether stmt is an UPDATE whose SET
+// clause names the Active column but NOT the DeletedAt unmark -- the exact
+// statement shape of Service.RestoreWebhookSubscription's separate pause
+// write as it shipped in the round that introduced the method (dbkit's
+// Repository[WebhookSubscription].Restore unmark carries DeletedAt and no
+// Active; the pause that followed it carried Active and no DeletedAt). The
+// two restore regression tests below use it to arm a gorm update-chain
+// callback that fires deterministically at that pause write and only at
+// it: in the pre-fix code the callback observes (or fails) the write
+// precisely between the unmark's commit and the pause's, while in the
+// post-fix code no such statement exists at all -- the restore is one
+// UPDATE carrying Active and DeletedAt together -- so the callback never
+// fires.
+func pauseShapedWebhookUpdate(stmt *gorm.Statement) bool {
+	hasActive, hasDeletedAt := false, false
+	for _, col := range stmt.Selects {
+		switch col {
+		case "Active":
+			hasActive = true
+		case "DeletedAt":
+			hasDeletedAt = true
+		}
+	}
+	return hasActive && !hasDeletedAt
+}
+
+// TestService_RestoreWebhookSubscription_NoDeliveryCanFireBetweenRestoreAndPause
+// is the regression test for the restore-then-pause window this fix
+// closes. RestoreWebhookSubscription used to land its restore and its
+// forced pause in TWO separate writes -- first dbkit's unmark
+// (Repository[WebhookSubscription].Restore), then an updateFields call
+// setting Active = false. Between the unmark's commit and the pause's
+// commit the subscription was LIVE with Active still true -- the exact row
+// handleDomainEvent's fan-out matches (webhook_delivery.go's
+// matchingSubscriptions, over ListActiveByTenant) -- so a matching domain
+// event observed in that window silently resumed POSTing the tenant's live
+// event data to an external, third-party URL nobody had looked at since
+// the deletion, the very outcome the forced pause exists to prevent.
+//
+// The window is probed deterministically -- no sleeps, no scheduling luck,
+// no goroutines: a gorm update-chain callback armed for the duration of
+// the restore call fires immediately before any pause-shaped UPDATE (see
+// pauseShapedWebhookUpdate). At that instant, in the pre-fix code, the
+// unmark has already committed (it is an earlier, separate statement) and
+// the pause has not, so the callback runs exactly the fan-out a matching
+// domain event observed between the two writes would trigger. In the
+// post-fix code the restore is one statement carrying Active and DeletedAt
+// together, no pause-shaped statement ever exists, and the callback never
+// fires: no instant of the call has a live-and-active row to fan out to.
+func TestService_RestoreWebhookSubscription_NoDeliveryCanFireBetweenRestoreAndPause(t *testing.T) {
+	fq := &fakeQueue{}
+	m, svc := newWebhookTestService(t, WithWebhookQueue(fq))
+	created, err := svc.CreateWebhookSubscription(ctxFor(testTenant), CreateWebhookSubscriptionInput{
+		URL: "https://example.com/hook", EventTypes: []string{"test.thing.happened"}, CreatedBy: "user-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateWebhookSubscription: %v", err)
+	}
+	if !created.Active {
+		t.Fatal("a freshly created subscription must start Active, this test's premise")
+	}
+	if delErr := svc.DeleteWebhookSubscription(ctxFor(testTenant), created.ID); delErr != nil {
+		t.Fatalf("DeleteWebhookSubscription: %v", delErr)
+	}
+
+	probe := struct {
+		fired    bool
+		enqueued int
+	}{}
+	const hookName = "integration-test:restore-pause-window"
+	if regErr := m.db.Callback().Update().Before("gorm:update").
+		Register(hookName, func(db *gorm.DB) {
+			if !pauseShapedWebhookUpdate(db.Statement) {
+				return
+			}
+			// The pre-fix interleave point: the unmark committed, the pause
+			// has not. Run the real fan-out a matching domain event observed
+			// at this instant would run.
+			probe.fired = true
+			_ = svc.handleDomainEvent(ctxFor(testTenant),
+				pkgcore.Event{Type: testMapping.InternalType, TenantID: testTenant})
+			probe.enqueued = len(fq.tasks)
+		}); regErr != nil {
+		t.Fatalf("registering the pause-window probe callback: %v", regErr)
+	}
+	defer m.db.Callback().Update().Remove(hookName)
+
+	if restoreErr := svc.RestoreWebhookSubscription(ctxFor(testTenant), created.ID); restoreErr != nil {
+		t.Fatalf("RestoreWebhookSubscription: %v", restoreErr)
+	}
+
+	if probe.fired {
+		t.Fatalf("the restore performed a separate pause-shaped write after the unmark, and the fan-out run at that instant enqueued %d delivery task(s) -- a subscription must never exist in the live-and-active state between a restore and its forced pause; the two must be one atomic write", probe.enqueued)
+	}
+	if len(fq.tasks) != 0 {
+		t.Fatalf("len(fq.tasks) = %d, want 0", len(fq.tasks))
+	}
+	list, err := svc.ListWebhookSubscriptions(ctxFor(testTenant))
+	if err != nil {
+		t.Fatalf("ListWebhookSubscriptions: %v", err)
+	}
+	if len(list) != 1 || list[0].Active {
+		t.Fatalf("restored subscription = %+v, want exactly one, paused", list)
+	}
+}
+
+// TestService_RestoreWebhookSubscription_PauseWriteFailure_LeavesNoRestoredActiveSubscription
+// is the regression test for the failure leg of the same two-write shape:
+// when the separate pause write FAILED, the pre-fix method reported
+// ErrInternal but the unmark had already committed -- leaving the
+// subscription permanently restored-ACTIVE, delivering again to a URL
+// nobody had looked at since the deletion, while every caller saw only an
+// error (and a retry would answer the collapsed not-found, since the row
+// was no longer mark-deleted for a second Restore to match).
+//
+// The failure is injected deterministically through the same gorm
+// update-chain callback: armed for the duration of the restore call, it
+// fails any pause-shaped UPDATE (see pauseShapedWebhookUpdate) before that
+// statement executes. In the pre-fix code that is exactly the pause write,
+// and the test observes the injected failure's aftermath: the unmark
+// committed, the pause did not, and the row is live with Active true --
+// matched by ListActiveByTenant, the fan-out's own query. In the post-fix
+// code no pause-shaped statement exists (the restore is one UPDATE
+// carrying Active and DeletedAt together), the injection cannot fire, and
+// the single write either lands the row paused or leaves it mark-deleted:
+// either way, never restored-active.
+func TestService_RestoreWebhookSubscription_PauseWriteFailure_LeavesNoRestoredActiveSubscription(t *testing.T) {
+	m, svc := newWebhookTestService(t)
+	created, err := svc.CreateWebhookSubscription(ctxFor(testTenant), CreateWebhookSubscriptionInput{
+		URL: "https://example.com/hook", EventTypes: []string{"test.thing.happened"}, CreatedBy: "user-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateWebhookSubscription: %v", err)
+	}
+	if delErr := svc.DeleteWebhookSubscription(ctxFor(testTenant), created.ID); delErr != nil {
+		t.Fatalf("DeleteWebhookSubscription: %v", delErr)
+	}
+
+	injected := errors.New("injected: the pause write failed")
+	const hookName = "integration-test:restore-pause-failure"
+	if regErr := m.db.Callback().Update().Before("gorm:update").
+		Register(hookName, func(db *gorm.DB) {
+			if pauseShapedWebhookUpdate(db.Statement) {
+				db.AddError(injected)
+			}
+		}); regErr != nil {
+		t.Fatalf("registering the pause-write failure callback: %v", regErr)
+	}
+	defer m.db.Callback().Update().Remove(hookName)
+
+	restoreErr := svc.RestoreWebhookSubscription(ctxFor(testTenant), created.ID)
+
+	// The invariant, however the restore call itself answered: the
+	// subscription must not be deliverable. Pre-fix the injected pause
+	// failure left it restored-ACTIVE -- ListActiveByTenant, the exact
+	// query the fan-out runs, matches it -- while restoreErr reported
+	// ErrInternal.
+	active, err := svc.webhookRepo.ListActiveByTenant(ctxFor(testTenant))
+	if err != nil {
+		t.Fatalf("ListActiveByTenant: %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("a RestoreWebhookSubscription whose write path failed (restore error: %v) left a live, ACTIVE subscription behind: %+v -- a failed restore must never leave the row restored-active, whether the restore failed outright or its pause did", restoreErr, active[0])
 	}
 }
 
