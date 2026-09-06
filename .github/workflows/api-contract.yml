@@ -82,6 +82,19 @@ name: api-contract
 #     integration/api/openapi.yaml's own header records why -- its one
 #     consumer is the reference app's own Go HTTP client, not a
 #     generated-SDK caller).
+#   * Regeneration consistency (ai-gateway): the same check runs an
+#     eighth time for ai-gateway's fragment (go/ai-gateway/api/
+#     openapi.yaml -> go/ai-gateway/api/ai-gateway-server.gen.go), the
+#     round that closed the "no admin/HTTP surface for writing
+#     platform or tenant BYOK credentials" gap the module's own
+#     AGENTS.md recorded in round 1 -- same pinned oapi-codegen
+#     invocation, same git diff --exit-code gate, its own step so
+#     this fragment's failure is unambiguous in the job log.
+#     Backend-only, like storage's, sharing's, admin's and
+#     integration's: this fragment feeds neither the merge nor orval
+#     below (go/ai-gateway/api/openapi.yaml's own header records why
+#     -- its consumers are host-side router gates and the reference
+#     app's own Go services, never a generated-SDK caller).
 #   * Spec merge + info stamp + naming-convention lint: the pinned
 #     redocly CLI (2.51.1, the same
 #     `pnpm --package=@redocly/cli@2.51.1 dlx redocly ...` invocation as
@@ -100,7 +113,7 @@ name: api-contract
 #     the committed build/openapi/speed.yaml is not what the three
 #     fragments merge -- plus the stamp -- to today -- the
 #     generated-artifact consistency check for the merged document,
-#     same shape as the four artifact checks above. These steps sit
+#     same shape as the eight artifact checks above. These steps sit
 #     before the frontend regeneration below because the merged
 #     document is that leg's input: order-dependent gates must see the
 #     fresh merge first, not a merged document the job itself will
@@ -125,18 +138,20 @@ name: api-contract
 #     entry); a version bump is visible in the regenerated header and
 #     must land in Taskfile, web/orval.config.ts and this file together.
 #   * Compile enforcement (notes, org, storage, notification, sharing,
-#     admin and integration): `go build ./...` of examples/reference-app.
-#     This is what makes "spec changed, handler not updated" fail here for
-#     ANY of the seven fragments: examples/reference-app imports go/org,
-#     go/storage, go/notification, go/sharing, go/admin and go/integration
-#     (root CLAUDE.md's mandatory-first-consumer rule), so a regenerated
+#     admin, integration and ai-gateway): `go build ./...` of
+#     examples/reference-app. This is what makes "spec changed, handler
+#     not updated" fail here for ANY of the eight fragments:
+#     examples/reference-app imports go/org, go/storage, go/notification,
+#     go/sharing, go/admin, go/integration and go/ai-gateway (root
+#     CLAUDE.md's mandatory-first-consumer rule), so a regenerated
 #     api.ServerInterface that outgrows any Handler's compile-time
 #     assertion (internal/notes/handler.go, go/org/handler.go,
 #     go/storage/handler.go, go/notification/handler.go,
 #     go/sharing/handler.go, go/admin/handler.go, go/integration/
-#     handler.go) fails this one build step, transitively, with no
-#     separate step needed for org's, storage's, notification's,
-#     sharing's, admin's or integration's own module build.
+#     handler.go, go/ai-gateway/handler.go) fails this one build step,
+#     transitively, with no separate step needed for org's, storage's,
+#     notification's, sharing's, admin's, integration's or ai-gateway's
+#     own module build.
 #     Without this leg a spec+artifact PR whose handler lagged
 #     would pass both this pipeline and fast-check (which does not build
 #     the reference app). Precise only for a parameter-free operation,
@@ -242,6 +257,17 @@ name: api-contract
 #                                                  this round is what closed
 #                                                  round 1's own "no mounted
 #                                                  HTTP surface" gap
+#   go/ai-gateway/api/**                          ai-gateway's fragment, its
+#                                                  generator config and its own
+#                                                  backend generated artifact --
+#                                                  same reasoning as the storage
+#                                                  row above; this round (the
+#                                                  credential-write HTTP
+#                                                  surface) is what closed the
+#                                                  "no admin/HTTP surface for
+#                                                  BYOK credentials" gap the
+#                                                  module's own AGENTS.md
+#                                                  recorded in round 1
 #   redocly.yaml                                   the merge/lint naming-
 #                                                  convention rules
 #   build/openapi/**                               the committed merged
@@ -266,6 +292,7 @@ on:
       - go/sharing/api/**
       - go/admin/api/**
       - go/integration/api/**
+      - go/ai-gateway/api/**
       - redocly.yaml
       - build/openapi/**
       - Taskfile.yml
@@ -450,6 +477,30 @@ jobs:
             echo "artifact + implementation ship in the same PR."
             exit 1
           }
+      - name: Regenerate ai-gateway's API surface (pinned oapi-codegen v2.8.0)
+        # The same command as Taskfile.yml's api:gen task's ai-gateway
+        # leg -- keep the two in lockstep (both pin the generator at
+        # v2.8.0). Run from the fragment's own directory, where
+        # oapi-codegen.yaml's paths are relative, mirroring the notes,
+        # org, storage, notification, sharing, admin and integration
+        # steps above exactly.
+        run: |
+          cd go/ai-gateway/api
+          go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
+            -config oapi-codegen.yaml openapi.yaml
+      - name: ai-gateway's generated artifact must match the committed spec
+        run: |
+          git diff --exit-code || {
+            echo "error: regenerating from the committed spec left the tree"
+            echo "dirty. The checked-in go/ai-gateway/api/"
+            echo "ai-gateway-server.gen.go is not what"
+            echo "go/ai-gateway/api/openapi.yaml generates -- did you"
+            echo "change the spec without running 'task api:gen' and"
+            echo "committing the result?"
+            echo "Per docs/internal/21-api-contract.md, spec + generated"
+            echo "artifact + implementation ship in the same PR."
+            exit 1
+          }
       - name: Set up pinned Node.js, pnpm and the pnpm store cache
         # Mirrors the npm CI jobs (reusable-npm-package-ci.yml): the same
         # composite action, the same single version sources (web/.nvmrc,
@@ -545,10 +596,14 @@ jobs:
       - name: Handler must still implement the generated ServerInterface
         # The compile-enforcement half: if a spec change (and with it the
         # generated interface) outgrew its Handler -- notes', org's,
-        # storage's, notification's, sharing's, admin's or integration's --
-        # this build of the reference app fails on the owning handler.go's
-        # compile-time assertion and shows exactly which method is
-        # missing.
+        # storage's, notification's, sharing's, admin's, integration's or
+        # ai-gateway's -- this build of the reference app fails on the
+        # owning handler.go's compile-time assertion and shows exactly
+        # which method is missing. ai-gateway's fragment is backend-only
+        # (it feeds neither the merge nor orval above), so this same
+        # reference-app build is also its compile-enforcement leg --
+        # examples/reference-app imports go/ai-gateway exactly like the
+        # seven modules above it.
         run: |
           cd examples/reference-app
           go build ./...
