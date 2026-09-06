@@ -10,18 +10,48 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	obs "github.com/vislake/speed/go/observability"
 )
 
+// healthcheckArg is the first os.Args element that diverts main into
+// runHealthcheck instead of the ordinary server boot (run, below). It exists
+// for exactly one caller: this example's Dockerfile's HEALTHCHECK
+// instruction. The distroless/static runtime image that Dockerfile's final
+// stage uses ships no shell, no curl and no wget -- the only executable
+// inside that container is this same statically-linked binary -- so an
+// exec-form HEALTHCHECK re-invokes it with this argument to probe its own
+// /healthz over loopback instead. Every other invocation (`go run
+// ./cmd/server`, the compiled binary with no arguments, every existing
+// test) is completely unaffected, since main only takes this branch when
+// os.Args[1] is exactly this string.
+const healthcheckArg = "healthcheck"
+
+// healthcheckTimeout bounds runHealthcheck's own probe -- generous for a
+// loopback call, but finite so a wedged server makes Docker's HEALTHCHECK
+// report unhealthy rather than hang indefinitely.
+const healthcheckTimeout = 3 * time.Second
+
 // main is deliberately thin process-lifecycle glue (signal handling,
-// http.Server start/stop) with no independently testable pure logic of its
-// own -- the testable seam is buildServer (server.go), which
-// server_test.go covers directly, and this file's own end-to-end behavior
-// is additionally proven by literally running it and curling it (see this
-// example's README.md). It has no main_test.go for that reason, matching
-// ordinary Go practice of not unit-testing os.Exit/signal-handling glue.
+// http.Server start/stop) with one independently testable seam beyond
+// buildServer (server.go, covered by server_test.go): runHealthcheck below,
+// covered directly by main_test.go. This file's own end-to-end behavior is
+// additionally proven by literally running it and curling it (see this
+// example's README.md), which is why the ordinary boot path (run) still has
+// no test of its own, matching ordinary Go practice of not unit-testing
+// os.Exit/signal-handling glue.
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == healthcheckArg {
+		ctx, cancel := context.WithTimeout(context.Background(), healthcheckTimeout)
+		defer cancel()
+		if err := runHealthcheck(ctx, os.Getenv("PORT")); err != nil {
+			fmt.Fprintln(os.Stderr, "reference-app: healthcheck:", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	// A JSON *slog.Logger, attached to a base context via obs.WithLogger
 	// before anything else is wired: this is the one legitimate place a
 	// logger gets constructed by hand (see WithLogger's own doc comment in
@@ -190,5 +220,43 @@ func run(baseCtx context.Context) error {
 		return fmt.Errorf("reference-app: graceful shutdown: %w", err)
 	}
 	obs.FromContext(ctx).Info("reference-app: server stopped cleanly")
+	return nil
+}
+
+// runHealthcheck probes this same server's own healthzPath over loopback and
+// reports whether it answered http.StatusOK -- see healthcheckArg's own doc
+// comment for why this exists and who calls it (this example's Dockerfile's
+// HEALTHCHECK, exec-form, re-invoking this binary with that argument rather
+// than shelling out to a probe tool the distroless/static runtime image does
+// not have). port mirrors configFromEnv's own PORT handling (empty falls
+// back to defaultPort) rather than calling configFromEnv itself, since a
+// healthcheck invocation must never pay for -- or fail on -- the full
+// configuration load (the master keys, the optional Redis/S3/SMTP
+// composition) buildServer's own caller needs; the port is the one fact
+// this probe actually requires, and the running server already bound it.
+func runHealthcheck(ctx context.Context, port string) error {
+	if port == "" {
+		port = defaultPort
+	}
+	// #nosec G704 -- gosec's taint analysis flags this as SSRF because port
+	// is a parameter, but the host part of the URL is the literal constant
+	// "127.0.0.1", never anything port (or any other input) can influence;
+	// port only ever widens which LOCAL port this same process's own
+	// listener is probed on. Its value comes from the PORT environment
+	// variable an operator (or this example's Dockerfile ENV) sets, exactly
+	// like configFromEnv's own identical PORT handling for the listener
+	// itself, never from a request this binary serves.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:"+port+healthzPath, nil)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req) // #nosec G704 -- see the request construction above
+	if err != nil {
+		return fmt.Errorf("request %s: %w", healthzPath, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s answered %d, want %d", healthzPath, resp.StatusCode, http.StatusOK)
+	}
 	return nil
 }
