@@ -134,6 +134,22 @@ var (
 	// go/storage as a new object.
 	ErrImageOutputWriteFailed = apperr.Internal("aigateway.image_output_write_failed")
 
+	// ErrImageJobClaimInFlight reports that imageGenerateHandler.Handle
+	// found ai_gateway_image_jobs already holding a "pending" row for this
+	// job -- either a genuinely concurrent Handle call for the same
+	// jobs.JobID is running right now (a redelivery race the standalone
+	// in-process queue cannot produce, but a lease-based distributed queue
+	// can -- see image_job_store.go's own doc comment), or an earlier
+	// attempt claimed the job and crashed before ever recording a vendor
+	// answer. Either way, THIS attempt must not call ImageProvider: doing
+	// so could bill the vendor a second time for work another attempt may
+	// already be doing or may have already done. The queue's own retry
+	// policy governs what happens next -- eventually a dead letter if the
+	// claim is never resolved, which is the safe failure mode (never a
+	// double vendor call) this package accepts in exchange for the rare
+	// case actually being a stuck claim that needs operator attention.
+	ErrImageJobClaimInFlight = apperr.Conflict("aigateway.image_job_claim_in_flight")
+
 	// ErrInternal reports an HTTP-layer failure Handler cannot classify --
 	// an error returned by something below it that is not an *apperr.Error
 	// (writeError's fallback), or the system-context reason

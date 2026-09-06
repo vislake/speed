@@ -23,12 +23,17 @@
 -- hits in practice) must never let the retry call the vendor a second
 -- time, since that both bills the tenant again and produces a second usage
 -- record for one logical job. imageGenerateHandler.Handle consults this
--- table FIRST, before ever calling ImageProvider, and only calls the
--- vendor when no row exists yet for the job.
+-- table FIRST, before ever calling ImageProvider, and claims a row (status
+-- "pending") BEFORE calling the vendor, never after -- see
+-- go/ai-gateway/image_job_store.go's own doc comment for why that ordering,
+-- not a marker written only once the vendor already answered, is what
+-- closes both a transient claim-write failure and two overlapping Handle
+-- calls for the same job, not merely a sequential retry.
 --
--- status is "generated" (the vendor answered; content/mime/image_count/
--- steps/resolution_tier below are its raw answer) or "completed" (the
--- generated image has been durably written to go/storage as
+-- status is "pending" (claimed, no vendor answer recorded yet -- content/
+-- mime/image_count/steps/resolution_tier are all still zero), "generated"
+-- (the vendor answered; those columns are its raw answer) or "completed"
+-- (the generated image has been durably written to go/storage as
 -- output_object_id, and content has been cleared -- once storage holds the
 -- bytes, keeping a second copy here serves no purpose). There is
 -- deliberately no row at all for "no attempt has reached the vendor yet";

@@ -402,11 +402,16 @@ func (h *imageGenerateHandler) Type() string { return TaskTypeImageGenerate }
 // bug -- see image_job_store.go's own doc comment for the full mechanism):
 // for one enqueued Job, at most one successful ImageProvider call and at
 // most one usage record ever reach the outside world, no matter how many
-// times go/jobs re-runs this method for it. The FIRST thing every attempt
-// does -- before decoding is even relevant to the invariant, but genuinely
-// before anything that could call the vendor -- is settle "has an earlier
-// attempt already gotten a successful answer for this exact job" by
-// consulting h.gateway.imageJobs, never the reverse.
+// times go/jobs re-runs this method for it, or how many overlapping calls
+// ever run for the same Job at once. The FIRST thing every attempt does --
+// before decoding is even relevant to the invariant, but genuinely before
+// anything that could call the vendor -- is settle "has an earlier attempt
+// already gotten a successful answer for this exact job, or claimed it and
+// not yet answered" by consulting h.gateway.imageJobs, never the reverse;
+// a job with no prior attempt claims it (imageJobRepository.claimPending)
+// BEFORE calling the vendor, not after, which is what makes both a
+// transient claim-write failure and two overlapping Handle calls for the
+// same job safe -- see image_job_store.go's own doc comment for why.
 func (h *imageGenerateHandler) Handle(ctx context.Context, job *jobs.Job, _ jobs.ProgressFn) (jobs.Result, error) {
 	var payload imageGenerateTaskPayload
 	if err := json.Unmarshal(job.Payload, &payload); err != nil {
@@ -432,7 +437,13 @@ func (h *imageGenerateHandler) Handle(ctx context.Context, job *jobs.Job, _ jobs
 	if err != nil {
 		return jobs.Result{}, err
 	}
-	if marker != nil && marker.Status == imageJobStatusCompleted {
+
+	var img ImageBytes
+	var usage ImageUsage
+	var providerName string
+
+	switch {
+	case marker != nil && marker.Status == imageJobStatusCompleted:
 		// The whole job already finished on an earlier attempt (a retry
 		// after markCompleted committed, or an at-least-once redelivery of
 		// an already-succeeded Job): answer from the row alone. No vendor
@@ -443,13 +454,8 @@ func (h *imageGenerateHandler) Handle(ctx context.Context, job *jobs.Job, _ jobs
 			return jobs.Result{}, fmt.Errorf("aigateway: encode image generation job result: %w", marshalErr)
 		}
 		return jobs.Result{Data: resultData}, nil
-	}
 
-	var img ImageBytes
-	var usage ImageUsage
-	var providerName string
-
-	if marker != nil && marker.Status == imageJobStatusGenerated {
+	case marker != nil && marker.Status == imageJobStatusGenerated:
 		// An earlier attempt already got a successful vendor answer but
 		// did not finish writing it to storage (image_job_store.go's own
 		// doc comment on the SQLITE_BUSY scenario this closes). Reuse that
@@ -459,55 +465,54 @@ func (h *imageGenerateHandler) Handle(ctx context.Context, job *jobs.Job, _ jobs
 		img = marker.image()
 		usage = marker.usage()
 		providerName = marker.Provider
-	} else {
-		provider, route, resolveErr := h.gateway.resolveImage(ctx, req.Model)
-		if resolveErr != nil {
-			return jobs.Result{}, resolveErr
-		}
-		providerName = route.Provider
 
-		var input, mask *ImageBytes
-		if req.InputObjectID != "" {
-			b, readErr := h.gateway.readImageObject(ctx, req.InputObjectID)
-			if readErr != nil {
-				return jobs.Result{}, readErr
-			}
-			input = &b
+	case marker != nil && marker.Status == imageJobStatusPending:
+		// A claim already exists for this job with no vendor answer
+		// recorded against it -- either a genuinely concurrent Handle call
+		// for this job is running right now, or an earlier attempt
+		// crashed before ever calling the vendor. Either way this attempt
+		// must not call it: see image_job_store.go's own doc comment for
+		// why a "pending" row is never resurrected here.
+		obs.FromContext(ctx).Warn("aigateway: image job claim already pending, refusing to call the vendor again",
+			"job_id", jobID)
+		return jobs.Result{}, ErrImageJobClaimInFlight.WithParam("job_id", jobID)
+
+	default: // marker == nil: no attempt has reached the vendor yet.
+		claimed, claimErr := h.gateway.imageJobs.claimPending(ctx, jobID)
+		if claimErr != nil {
+			// No vendor call has happened yet, so surfacing this error --
+			// including the exact transient contention image_job_store.go's
+			// own doc comment discusses -- as an ordinary attempt failure
+			// is always safe: a retry redoes the claim from a clean slate.
+			return jobs.Result{}, claimErr
 		}
-		if req.MaskObjectID != "" {
-			b, readErr := h.gateway.readImageObject(ctx, req.MaskObjectID)
-			if readErr != nil {
-				return jobs.Result{}, readErr
-			}
-			mask = &b
+		if !claimed {
+			// Lost the race to claim this job: a concurrent attempt's own
+			// INSERT committed first.
+			return jobs.Result{}, ErrImageJobClaimInFlight.WithParam("job_id", jobID)
 		}
 
-		var result ImageResult
-		switch req.Operation {
-		case ImageOperationTextToImage:
-			result, err = provider.TextToImage(ctx, TextToImageRequest{Model: route.VendorModel, Prompt: req.Prompt, Params: req.Params})
-		case ImageOperationImageToImage:
-			result, err = provider.ImageToImage(ctx, ImageToImageRequest{Model: route.VendorModel, Prompt: req.Prompt, Input: *input, Params: req.Params})
-		case ImageOperationInpaint:
-			result, err = provider.Inpaint(ctx, InpaintRequest{Model: route.VendorModel, Prompt: req.Prompt, Input: *input, Mask: *mask, Params: req.Params})
-		default:
-			// Unreachable: req.validate() above already refused any
-			// operation not among the three ImageOperation constants.
-			return jobs.Result{}, ErrInvalidImageOperation.WithParam("operation", payload.Operation)
+		result, resolvedProvider, callErr := h.callProvider(ctx, req)
+		if callErr != nil {
+			// No successful vendor answer exists to remember -- release
+			// the claim so the next attempt starts from a clean slate
+			// instead of being permanently refused by
+			// ErrImageJobClaimInFlight (image_job_store.go's own doc
+			// comment on releaseClaim).
+			if relErr := h.gateway.imageJobs.releaseClaim(ctx, jobID); relErr != nil {
+				obs.FromContext(ctx).Warn("aigateway: failed to release image job claim after a failed attempt",
+					"job_id", jobID, "error", relErr)
+			}
+			return jobs.Result{}, callErr
 		}
-		if err != nil {
-			// The vendor call itself failed (or was never reached): no
-			// side effect happened, so no marker is written -- a retry
-			// correctly calls the vendor again.
-			return jobs.Result{}, err
-		}
+		providerName = resolvedProvider
 
 		// The vendor call just succeeded. Persist that fact, verbatim,
 		// BEFORE attempting anything that could still fail -- this write,
 		// not the eventual storage write, is what closes the
 		// double-billing window (image_job_store.go's own doc comment).
-		if claimErr := h.gateway.imageJobs.claimGenerated(ctx, jobID, providerName, result.Image, result.Usage); claimErr != nil {
-			return jobs.Result{}, claimErr
+		if markErr := h.gateway.imageJobs.markGenerated(ctx, jobID, providerName, result.Image, result.Usage); markErr != nil {
+			return jobs.Result{}, markErr
 		}
 		img = result.Image
 		usage = result.Usage
@@ -548,6 +553,52 @@ func (h *imageGenerateHandler) Handle(ctx context.Context, job *jobs.Job, _ jobs
 		return jobs.Result{}, fmt.Errorf("aigateway: encode image generation job result: %w", err)
 	}
 	return jobs.Result{Data: resultData}, nil
+}
+
+// callProvider resolves the route/credential for req.Model, reads any
+// input/mask objects the operation needs, and dispatches to the resolved
+// ImageProvider's matching method -- the "everything that must succeed
+// before a claimed job can be marked generated" bundle, isolated from
+// Handle's own claim/release bookkeeping so a failure anywhere in it takes
+// the identical releaseClaim path.
+func (h *imageGenerateHandler) callProvider(ctx context.Context, req ImageRequest) (ImageResult, string, error) {
+	provider, route, resolveErr := h.gateway.resolveImage(ctx, req.Model)
+	if resolveErr != nil {
+		return ImageResult{}, "", resolveErr
+	}
+
+	var input, mask *ImageBytes
+	if req.InputObjectID != "" {
+		b, readErr := h.gateway.readImageObject(ctx, req.InputObjectID)
+		if readErr != nil {
+			return ImageResult{}, route.Provider, readErr
+		}
+		input = &b
+	}
+	if req.MaskObjectID != "" {
+		b, readErr := h.gateway.readImageObject(ctx, req.MaskObjectID)
+		if readErr != nil {
+			return ImageResult{}, route.Provider, readErr
+		}
+		mask = &b
+	}
+
+	var result ImageResult
+	var err error
+	switch req.Operation {
+	case ImageOperationTextToImage:
+		result, err = provider.TextToImage(ctx, TextToImageRequest{Model: route.VendorModel, Prompt: req.Prompt, Params: req.Params})
+	case ImageOperationImageToImage:
+		result, err = provider.ImageToImage(ctx, ImageToImageRequest{Model: route.VendorModel, Prompt: req.Prompt, Input: *input, Params: req.Params})
+	case ImageOperationInpaint:
+		result, err = provider.Inpaint(ctx, InpaintRequest{Model: route.VendorModel, Prompt: req.Prompt, Input: *input, Mask: *mask, Params: req.Params})
+	default:
+		// Unreachable: req.validate(), called by Handle before this method
+		// is ever reached, already refused any operation not among the
+		// three ImageOperation constants.
+		return ImageResult{}, route.Provider, ErrInvalidImageOperation.WithParam("operation", string(req.Operation))
+	}
+	return result, route.Provider, err
 }
 
 // compile-time check that *imageGenerateHandler satisfies jobs.Handler.

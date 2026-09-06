@@ -9,7 +9,9 @@ import (
 	"image/color"
 	"image/jpeg"
 	"io"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/jobs"
@@ -738,5 +740,171 @@ func TestImageUsageIdempotencyKey_StablePerJobAndFeature(t *testing.T) {
 	}
 	if got := imageUsageIdempotencyKey("job-2", usageFeatureImageCount); got == k1 {
 		t.Fatalf("imageUsageIdempotencyKey(%q, ...) = %q, want it to differ from job-1's key", "job-2", got)
+	}
+}
+
+// --- Adversarial idempotency audit: a transient claim-write failure and a
+// concurrent redelivery must never let the vendor be called twice --------
+
+// TestImageGenerateHandler_ClaimInsertFails_RetryCallsVendorExactlyOnce
+// reproduces an ordinary, non-crash transient failure of the FIRST write
+// this package's idempotency mechanism makes -- claimPending's own INSERT
+// -- standing in for real SQLITE_BUSY-class contention (this module's
+// AGENTS.md documents the shared-file scenario that hits this in
+// practice), via a SQLite trigger that aborts every INSERT into
+// ai_gateway_image_jobs for the whole duration of the first attempt.
+//
+// Because claimPending runs BEFORE ImageProvider is ever called
+// (image_job_store.go's own doc comment), a blocked claim means the FIRST
+// attempt fails before reaching the vendor at all -- unlike an earlier
+// version of this mechanism, which wrote its marker only after a
+// successful vendor call and so let a transient failure of that write
+// reopen the double-vendor-call window this test targets. The invariant
+// this test actually cares about is the one stated in root CLAUDE.md's bug-
+// fix test policy and this file's own doc comment: across every attempt
+// for one job, the vendor is called AT MOST once.
+func TestImageGenerateHandler_ClaimInsertFails_RetryCallsVendorExactlyOnce(t *testing.T) {
+	provider := &fakeImageProvider{result: ImageResult{
+		Image: ImageBytes{Content: tinyPNG, MIME: "image/png"},
+		Usage: ImageUsage{ImageCount: 1, Steps: 20, ResolutionTier: "512x512"},
+	}}
+	g, _, _ := imageGatewayTestFixture(t, provider)
+
+	// Block every INSERT into the marker table -- standing in for an
+	// ordinary transient write failure on claimPending's own INSERT.
+	if err := g.imageJobs.db.Exec(
+		`CREATE TRIGGER block_image_job_insert BEFORE INSERT ON ai_gateway_image_jobs
+		 BEGIN SELECT RAISE(ABORT, 'aigateway audit: injected claimPending failure'); END;`,
+	).Error; err != nil {
+		t.Fatalf("install blocking trigger: %v", err)
+	}
+
+	handler, ok := g.imageJobHandler()
+	if !ok {
+		t.Fatal("imageJobHandler() reported image generation not wired")
+	}
+	raw, err := json.Marshal(imageGenerateTaskPayload{
+		Model: "image:default", Operation: string(ImageOperationTextToImage), Prompt: "a bright smile",
+	})
+	if err != nil {
+		t.Fatalf("marshal task payload: %v", err)
+	}
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	job := &jobs.Job{ID: "job-claim-fail-1", Type: TaskTypeImageGenerate, TenantID: "tenant-acme", Payload: raw}
+
+	// First attempt: the claim itself is blocked, so this attempt must
+	// fail BEFORE ever calling the vendor.
+	if _, firstErr := handler.Handle(ctx, job, func(int, string) {}); firstErr == nil {
+		t.Fatal("first attempt succeeded, want the injected claimPending failure to surface")
+	}
+	if provider.textToImageCalls != 0 {
+		t.Fatalf("provider called %d times after the first (claim-blocked) attempt, want 0 -- a claim failure must happen before any vendor call", provider.textToImageCalls)
+	}
+
+	// Unblock the table -- the underlying transient condition has cleared,
+	// mirroring how a real SQLITE_BUSY/lock-contention window closes on
+	// its own before the queue's next retry runs.
+	if err := g.imageJobs.db.Exec(`DROP TRIGGER block_image_job_insert;`).Error; err != nil {
+		t.Fatalf("remove blocking trigger: %v", err)
+	}
+
+	job.Attempts++
+	if _, err := handler.Handle(ctx, job, func(int, string) {}); err != nil {
+		t.Fatalf("retry attempt: %v", err)
+	}
+
+	if provider.textToImageCalls != 1 {
+		t.Fatalf("provider called %d times across both attempts, want exactly 1 -- "+
+			"a claimPending INSERT failure (an ordinary transient DB error, not a crash) "+
+			"must never cause a double vendor call", provider.textToImageCalls)
+	}
+}
+
+// concurrentImageProvider is a minimal, concurrency-safe ImageProvider test
+// double that blocks inside TextToImage until release is closed, letting a
+// test force two goroutines to overlap deterministically instead of relying
+// on a wall-clock sleep.
+type concurrentImageProvider struct {
+	mu      sync.Mutex
+	calls   int
+	release chan struct{}
+}
+
+func (p *concurrentImageProvider) TextToImage(context.Context, TextToImageRequest) (ImageResult, error) {
+	p.mu.Lock()
+	p.calls++
+	p.mu.Unlock()
+	<-p.release
+	return ImageResult{
+		Image: ImageBytes{Content: tinyPNG, MIME: "image/png"},
+		Usage: ImageUsage{ImageCount: 1, Steps: 1},
+	}, nil
+}
+
+func (p *concurrentImageProvider) ImageToImage(context.Context, ImageToImageRequest) (ImageResult, error) {
+	return ImageResult{}, nil
+}
+
+func (p *concurrentImageProvider) Inpaint(context.Context, InpaintRequest) (ImageResult, error) {
+	return ImageResult{}, nil
+}
+
+var _ ImageProvider = (*concurrentImageProvider)(nil)
+
+// TestImageGenerateHandler_ConcurrentHandleForSameJob_OnlyOneVendorCall
+// reproduces two overlapping Handle calls for the SAME job.ID -- the
+// redelivery shape a lease-based distributed queue can produce (a worker's
+// visibility timeout expiring while a slow vendor call is still in flight,
+// or two workers racing a poll), which image_job_store.go's own doc
+// comment explains the claim-before-vendor-call ordering closes: only one
+// caller's claimPending INSERT can ever commit for one job id, so the
+// loser must refuse to call the vendor at all rather than raced through an
+// unlocked "no marker yet" read the way an earlier version of this
+// mechanism was.
+func TestImageGenerateHandler_ConcurrentHandleForSameJob_OnlyOneVendorCall(t *testing.T) {
+	provider := &concurrentImageProvider{release: make(chan struct{})}
+	g, _, _ := imageGatewayTestFixture(t, &fakeImageProvider{}, WithImageProviderRegistry(newFakeImageRegistry(t, provider)))
+
+	handler, ok := g.imageJobHandler()
+	if !ok {
+		t.Fatal("imageJobHandler() reported image generation not wired")
+	}
+	raw, err := json.Marshal(imageGenerateTaskPayload{
+		Model: "image:default", Operation: string(ImageOperationTextToImage), Prompt: "a bright smile",
+	})
+	if err != nil {
+		t.Fatalf("marshal task payload: %v", err)
+	}
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	job := &jobs.Job{ID: "job-concurrent-1", Type: TaskTypeImageGenerate, TenantID: "tenant-acme", Payload: raw}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _ = handler.Handle(ctx, job, func(int, string) {})
+	}()
+	go func() {
+		defer wg.Done()
+		_, _ = handler.Handle(ctx, job, func(int, string) {})
+	}()
+
+	// Release the vendor call (if any goroutine reaches it) after a bounded
+	// deadline, so this test can never hang even if the claim's own
+	// serialization means only one goroutine -- or, on an unlucky
+	// schedule, neither yet -- has entered TextToImage.
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		close(provider.release)
+	}()
+
+	wg.Wait()
+
+	provider.mu.Lock()
+	calls := provider.calls
+	provider.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("provider called %d times for two concurrent Handle invocations of the SAME job, want exactly 1 -- "+
+			"claimPending's primary-key INSERT must serialize concurrent claims so only one caller ever reaches the vendor", calls)
 	}
 }

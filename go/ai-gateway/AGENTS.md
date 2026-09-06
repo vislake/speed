@@ -461,3 +461,28 @@ called again.
   only the specific one this fix's own test reproduces
   (`image_gateway_test.go`'s
   `TestImageGenerateHandler_RetryAfterVendorSuccess_DoesNotRecallVendorOrDoubleRecordUsage`).
+  **Correction, 2026-09-06 (second pass):** an audit of the fix above found
+  the marker write it relied on -- `claimGenerated`'s own INSERT, run AFTER
+  the vendor call succeeded -- was itself exactly the kind of ordinary
+  write transaction this section's own WARN documents as losing the
+  `SQLITE_BUSY` race sometimes: a transient failure of THAT INSERT (not a
+  crash -- an everyday busy-timeout-exhausted contention) left no durable
+  row behind, so the next retry saw no marker at all and called the vendor
+  a second time regardless, reopening the identical bug the paragraph
+  above says is closed. `image_job_store.go` now claims a job (a
+  content-less "pending" row) BEFORE the vendor is ever called rather than
+  writing the vendor's answer only after -- see its own doc comment for
+  the full mechanism. This closes the transient-write-failure window (no
+  vendor call has happened by the time that first INSERT could fail) and,
+  as a side effect, also closes a concurrent-redelivery race a marker-
+  after-the-fact design left open (two overlapping `Handle` calls for the
+  same job could both pass the old unlocked "no marker yet" check before
+  either wrote anything; the claim's own primary-key uniqueness now
+  serializes them). Two narrow, explicitly accepted windows remain, both
+  bounded to "the job stalls and eventually dead-letters", never "the
+  vendor is billed twice" -- see `image_job_store.go`'s own "Accepted
+  residual risk" section for the exact shape of each and why closing them
+  further would need either an in-process retry loop this codebase
+  deliberately does not use for `SQLITE_BUSY`-class contention (see
+  `go/storage/derive.go`'s own doc comment) or a lease/staleness mechanism
+  out of proportion with how narrow the windows are.
