@@ -88,59 +88,110 @@ func (s *Service) RevokeSigningKey(ctx context.Context, kid, reason string) (boo
 }
 
 // RevokeCertificate transitions certificateID's certificate, in the
-// caller's ctx tenant, to CertificateStatusRevoked, records a
-// CertificateRevocation ledger entry (model.go) and publishes
-// EventCertificateRevoked -- round 3's addition.
+// caller's ctx tenant, to CertificateStatusRevoked, records its single
+// CertificateRevocation ledger row (model.go) -- the row CRL generation
+// reads -- and publishes EventCertificateRevoked. Round 3's addition,
+// reworked by the ledger-atomicity round into the arbitrated form below.
 //
-// Idempotent: revoking an already-revoked certificate reports (false, nil)
-// without writing a second ledger row or publishing a second event, the
-// identical shape RevokeSigningKey documents above. ErrRecordNotFound
-// (dbkit's own, via CertificateRepository.FindByID) when certificateID does
-// not name a certificate of ctx's tenant.
+// # One winner per certificate: the ledger insert arbitrates
 //
-// The ledger write is a second, non-atomic statement after the certificate
-// update -- see CertificateRevocation's own model.go doc comment for the
-// full "why this is safe" argument. A failure there is logged, not
-// returned: the certificate itself is by then correctly revoked (the
-// record CAService.VerifyCertificate actually trusts), and the accepted
-// risk is a CRL that omits this one serial until the ledger write is
-// retried or the row is reconstructed -- never an incorrect "not revoked"
-// answer, matching notes.recordNoteCreatedAudit's identical
-// log-not-return choice for its own post-commit side write.
+// The certificate update and the ledger write are two separate statements
+// (CertificateRevocation's own model.go doc comment explains why they
+// cannot share one transaction), and the certificate update itself is an
+// unguarded full-row save -- dbkit.Repository[T] exposes no conditional
+// update without reaching around it. Single-winner semantics come from the
+// LEDGER write instead: this call inserts its row through
+// CertificateRevocationRepository.InsertIfAbsent (repository.go), an
+// INSERT ... ON CONFLICT (certificate_id) DO NOTHING whose RowsAffected
+// verdict, enforced by migration 0008's
+// uq_pki_certificate_revocations_certificate unique index, names exactly
+// one winning call among any number of concurrent revokes of the same
+// certificate. Only the winner publishes EventCertificateRevoked.
+//
+// The returned bool reports whether THIS call won that arbitration --
+// whether this call is the invocation that durably recorded the
+// revocation: its ledger row inserted, its event published. Exactly one
+// concurrent call can report true for a given certificate; every loser
+// reports (false, nil) having changed nothing.
+//
+// # Retry and reconciliation
+//
+// Revoking an already-revoked certificate is not a bare no-op. Because the
+// ledger write is a separate statement that can fail or be lost after the
+// certificate update committed, a call that finds the certificate already
+// revoked still attempts the ledger insert. When the row is genuinely
+// missing -- a lost write -- the call inserts it, publishes the one event
+// the failed call could not, and reports true: the retry is the call that
+// completes the revocation. When the row already exists the insert no-ops
+// and the call reports (false, nil): a pure idempotent re-revoke that
+// writes nothing further. The reconstructed row and its event are built
+// from the certificate row's own committed fields, so a retry arriving
+// with a different reason never rewrites the original revocation's reason
+// or time.
+//
+// # Ledger-write failures are errors, never log-and-forget
+//
+// A failed ledger insert is RETURNED, wrapped to state the facts a
+// retrying caller needs: the certificate is already revoked (that write
+// committed), its ledger row is missing, and calling RevokeCertificate
+// again reconstructs the row. The old log-and-return-success behavior was
+// the bug this round fixes: a revocation whose ledger write failed was
+// reported as success, and every later call then found the certificate
+// already revoked and returned before ever reaching the ledger write again
+// -- a revoked certificate permanently missing from CRLs.
+//
+// ErrRecordNotFound (dbkit's own, via CertificateRepository.FindByID) when
+// certificateID does not name a certificate of ctx's tenant.
 func (s *CAService) RevokeCertificate(ctx context.Context, certificateID, reason string) (bool, error) {
 	cert, err := s.certificates.FindByID(ctx, certificateID)
 	if err != nil {
 		return false, err
 	}
-	if cert.Status == CertificateStatusRevoked {
-		return false, nil
+
+	if cert.Status != CertificateStatusRevoked {
+		now := time.Now().UTC()
+		cert.Status = CertificateStatusRevoked
+		cert.RevokedAt = &now
+		cert.RevocationReason = reason
+		if err = s.certificates.Update(ctx, cert); err != nil {
+			return false, fmt.Errorf("pki: revoke certificate %q: %w", certificateID, err)
+		}
+	}
+	if cert.RevokedAt == nil {
+		// Status and RevokedAt are always written together by this method's
+		// own transition above, so a row arriving here already revoked but
+		// timestamp-less was revoked outside it; refusing beats fabricating
+		// a ledger time for a revocation this method cannot date.
+		return false, fmt.Errorf("pki: revoke certificate %q: certificate is already revoked but has no RevokedAt, its revocation ledger entry cannot be reconstructed", certificateID)
 	}
 
-	now := time.Now().UTC()
-	cert.Status = CertificateStatusRevoked
-	cert.RevokedAt = &now
-	cert.RevocationReason = reason
-	if err := s.certificates.Update(ctx, cert); err != nil {
-		return false, fmt.Errorf("pki: revoke certificate %q: %w", certificateID, err)
-	}
-
-	tenant := cert.GetTenantID()
-	if err := s.revocations.Create(ctx, &CertificateRevocation{
+	// The ledger row is built from the certificate row's fields -- its
+	// serial, authority, tenant and the committed RevokedAt and
+	// RevocationReason -- never from this call's reason argument alone, so
+	// the certificate row and its ledger row can never disagree about when
+	// or why the revocation happened.
+	inserted, err := s.revocations.InsertIfAbsent(ctx, &CertificateRevocation{
 		ID:               uuid.NewString(),
 		CertificateID:    cert.ID,
 		AuthorityID:      cert.AuthorityID,
 		Serial:           cert.Serial,
-		TenantID:         string(tenant),
-		RevokedAt:        now,
-		RevocationReason: reason,
-	}); err != nil {
-		observability.FromContext(ctx).Error("pki certificate revocation ledger write failed",
-			"certificate_id", cert.ID,
-			"authority_id", cert.AuthorityID,
-			"error", err,
-		)
+		TenantID:         string(cert.GetTenantID()),
+		RevokedAt:        *cert.RevokedAt,
+		RevocationReason: cert.RevocationReason,
+	})
+	if err != nil {
+		return false, fmt.Errorf("pki: revoke certificate %q: certificate is revoked but its revocation ledger row could not be recorded -- retry RevokeCertificate to reconstruct the row: %w", certificateID, err)
+	}
+	if !inserted {
+		// Another call's insert won the arbitration for this certificate;
+		// that winner publishes the event. This call changed nothing.
+		return false, nil
 	}
 
+	// Row-then-event: the event is published only by the call whose insert
+	// landed the ledger row, so a subscriber never reads an event whose row
+	// does not exist, and a revocation is announced exactly once however
+	// many times it is retried.
 	observability.FromContext(ctx).Info("pki certificate revoked",
 		"certificate_id", cert.ID,
 		"authority_id", cert.AuthorityID,
@@ -148,12 +199,12 @@ func (s *CAService) RevokeCertificate(ctx context.Context, certificateID, reason
 	s.publish(ctx, pkgcore.Event{
 		Type: EventCertificateRevoked,
 		Payload: CertificateRevokedEvent{
-			TenantID:         string(tenant),
+			TenantID:         string(cert.GetTenantID()),
 			CertificateID:    cert.ID,
 			AuthorityID:      cert.AuthorityID,
 			Serial:           cert.Serial,
-			RevocationReason: reason,
-			OccurredAt:       now,
+			RevocationReason: cert.RevocationReason,
+			OccurredAt:       *cert.RevokedAt,
 		},
 	})
 	return true, nil

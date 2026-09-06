@@ -552,6 +552,57 @@ func TestCertificateRevocationRepository_CertificateIDUniqueness_IsEnforcedByThe
 	}
 }
 
+// TestCertificateRevocationRepository_InsertIfAbsent_NoOpsWhenRowExists
+// proves InsertIfAbsent's arbitration verdict -- the repository half of the
+// single-winner contract CAService.RevokeCertificate builds its concurrent
+// revoke on (revocation.go): the first insert for a certificate reports
+// (true, nil) and lands the row; the second, same certificate_id but a
+// different row, reports (false, nil) and changes nothing. The no-op is
+// the database's own ON CONFLICT DO NOTHING verdict, not a check-then-act
+// read that two racing callers could both pass.
+func TestCertificateRevocationRepository_InsertIfAbsent_NoOpsWhenRowExists(t *testing.T) {
+	repo := NewCertificateRevocationRepository(newTestDB(t))
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	first := &CertificateRevocation{
+		ID: "rev-1", CertificateID: "cert-1", AuthorityID: "auth-1",
+		Serial: "aa01", TenantID: "tenant-acme",
+		RevokedAt: now, RevocationReason: "compromised",
+	}
+	inserted, err := repo.InsertIfAbsent(ctx, first)
+	if err != nil {
+		t.Fatalf("InsertIfAbsent(first): %v", err)
+	}
+	if !inserted {
+		t.Errorf("InsertIfAbsent(first) = (false, nil), want (true, nil) -- the first insert for a certificate must win the arbitration")
+	}
+
+	duplicate := &CertificateRevocation{
+		ID: "rev-2", CertificateID: "cert-1", AuthorityID: "auth-1",
+		Serial: "aa01", TenantID: "tenant-acme",
+		RevokedAt: now, RevocationReason: "superseded",
+	}
+	inserted, err = repo.InsertIfAbsent(ctx, duplicate)
+	if err != nil {
+		t.Fatalf("InsertIfAbsent(duplicate): %v", err)
+	}
+	if inserted {
+		t.Errorf("InsertIfAbsent(duplicate) = (true, nil), want (false, nil) -- a second insert for the same certificate must no-op, not error and not overwrite")
+	}
+
+	rows, err := repo.ListByAuthority(ctx, "auth-1")
+	if err != nil {
+		t.Fatalf("ListByAuthority: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("ledger holds %d rows after an insert and its duplicate no-op, want exactly 1", len(rows))
+	}
+	if rows[0].ID != "rev-1" || rows[0].RevocationReason != "compromised" {
+		t.Errorf("ledger row = {id %q, reason %q} after the no-op, want the FIRST insert's row unchanged (id rev-1, reason compromised)", rows[0].ID, rows[0].RevocationReason)
+	}
+}
+
 // apperrIs reports whether err is (a decorated instance of) want, matching
 // on Code the way every *apperr.Error sentinel in this codebase must be
 // compared -- see errors.go's own doc comment.

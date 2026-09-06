@@ -431,8 +431,9 @@ func TestCAService_RevokeCertificate_ConcurrentDoubleRevoke_ExactlyOneWinner(t *
 // the failure and calling RevokeCertificate again must converge: exactly one
 // ledger row (the first call's revocation, reason and all), exactly one
 // EventCertificateRevoked (fired once, by the retry that reconstructed the
-// row), and (false, nil) -- the transition itself was the failed first
-// call's work, not the retry's.
+// row), and (true, nil) -- changed reports whether THIS call won the
+// ledger-insert arbitration, and the retry is the call whose insert
+// completed the revocation the failed first call left half-done.
 //
 // The failure is injected without an error seam: a SQLite trigger on the
 // test's own database handle ABORTs every ledger insert, and is dropped to
@@ -473,7 +474,7 @@ func TestCAService_RevokeCertificate_LedgerWriteFailure_ReturnsErrorAndRetryConv
 		t.Fatalf("failed revoke published %d EventCertificateRevoked, want 0 (the event follows the ledger row, which never landed)", len(rec.events))
 	}
 
-	if err := db.Exec(`DROP TRIGGER trg_block_revocation_ledger_insert`).Error; err != nil {
+	if err = db.Exec(`DROP TRIGGER trg_block_revocation_ledger_insert`).Error; err != nil {
 		t.Fatalf("drop blocking trigger: %v", err)
 	}
 
@@ -481,8 +482,8 @@ func TestCAService_RevokeCertificate_LedgerWriteFailure_ReturnsErrorAndRetryConv
 	if err != nil {
 		t.Fatalf("RevokeCertificate(retry after the ledger write recovered): %v", err)
 	}
-	if changed {
-		t.Errorf("RevokeCertificate(retry) changed = true, want false -- the running -> revoked transition was the failed first call's work; the retry only reconstructs the lost ledger row")
+	if !changed {
+		t.Errorf("RevokeCertificate(retry) changed = false, want true -- changed reports whether THIS call's insert won the ledger arbitration, and the retry is the call whose insert reconstructed the missing row (the failed first call never reached the ledger)")
 	}
 
 	revocations, err := ca.revocations.ListByAuthority(ctx, cert.AuthorityID)

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/vislake/speed/go/dbkit"
 )
@@ -339,11 +340,42 @@ func NewCertificateRevocationRepository(db *gorm.DB) *CertificateRevocationRepos
 	return &CertificateRevocationRepository{db: db}
 }
 
-// Create inserts rev. Called once per CAService.RevokeCertificate call, as
-// the second (non-atomic) write CertificateRevocation's own doc comment
-// describes.
+// Create inserts rev unconditionally -- the plain single-row write, for a
+// caller that asserts no row for rev.CertificateID exists yet, or that
+// deliberately wants a duplicate to FAIL as a unique-constraint error
+// (migration 0008's uq_pki_certificate_revocations_certificate index
+// refuses it). The certificate revocation path itself never calls this:
+// CAService.RevokeCertificate uses InsertIfAbsent instead, whose ON
+// CONFLICT no-op turns that same index into an arbitration verdict rather
+// than an error (see InsertIfAbsent's own doc comment).
 func (r *CertificateRevocationRepository) Create(ctx context.Context, rev *CertificateRevocation) error {
 	return r.db.WithContext(ctx).Create(rev).Error
+}
+
+// InsertIfAbsent inserts rev unless a ledger row for rev.CertificateID
+// already exists, reporting (true, nil) when THIS call inserted the row and
+// (false, nil) when the row was already present (the insert was a no-op).
+//
+// The no-op is expressed as INSERT ... ON CONFLICT (certificate_id) DO
+// NOTHING with a RowsAffected verdict -- dialect-neutral SQLite and
+// PostgreSQL DDL, backed by migration 0008's
+// uq_pki_certificate_revocations_certificate unique index -- never as a
+// check-then-act read, which two concurrent callers could both pass. That
+// database-arbitrated single-winner shape is what
+// CAService.RevokeCertificate (revocation.go) builds its revocation
+// transition on: of any number of racing calls for one certificate, exactly
+// one insert wins, and only the winner publishes EventCertificateRevoked.
+func (r *CertificateRevocationRepository) InsertIfAbsent(ctx context.Context, rev *CertificateRevocation) (bool, error) {
+	res := r.db.WithContext(ctx).
+		Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "certificate_id"}},
+			DoNothing: true,
+		}).
+		Create(rev)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
 
 // ListByAuthority returns every revocation ledger entry for authorityID, in

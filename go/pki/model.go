@@ -428,8 +428,11 @@ type LocalKey struct {
 func (LocalKey) TableName() string { return tableLocalKeys }
 
 // CertificateRevocation is one row of pki_certificate_revocations
-// (migration 0007, round 3): a denormalized, append-only ledger entry
-// written whenever CAService.RevokeCertificate revokes a certificate.
+// (migration 0007, round 3): a denormalized ledger entry recording the
+// revocation of one pki_certificates row. Migration 0008 added a UNIQUE
+// index on certificate_id, so the table holds at most one row per
+// certificate -- the database constraint CAService.RevokeCertificate's
+// single-winner transition arbitrates on (revocation.go).
 //
 // # Why this table exists at all -- the cross-tenant CRL problem
 //
@@ -468,24 +471,40 @@ func (LocalKey) TableName() string { return tableLocalKeys }
 // cross-module-FK rule, which applies here even though this is all one
 // module because the two tables sit in different domains).
 //
-// # Not atomic with the pki_certificates write
+// # Written separately from the pki_certificates write -- arbitrated, not silent
 //
-// RevokeCertificate (ca.go) writes this row as a SECOND statement after
-// updating pki_certificates, not inside one shared transaction --
+// RevokeCertificate (revocation.go) writes this row as a SECOND statement
+// after updating pki_certificates, not inside one shared transaction --
 // dbkit.Repository[T] exposes no hook to compose its own transaction with
 // a plain *gorm.DB write, and building one by hand would mean reaching
-// around Repository[T] with a raw *gorm.DB.Transaction, the exact
-// bypass this codebase's multi-tenant isolation discipline forbids for a
-// tenant-scoped write. The accepted risk is narrow: a crash between the
-// two writes leaves the certificate correctly marked revoked but
-// (temporarily) missing from this ledger, so a CRL generated before the
-// gap is noticed and retried would omit that one certificate. Both writes
-// are individually idempotent (RevokeCertificate treats an
-// already-revoked certificate as a no-op, and a lost ledger row is fixed
-// by revoking again, which is safe), so the failure mode is bounded
-// staleness, never an incorrect "not revoked" answer inside
-// pki_certificates itself, which is the record CAService.VerifyCertificate
-// actually trusts.
+// around Repository[T] with a raw *gorm.DB.Transaction, the exact bypass
+// this codebase's multi-tenant isolation discipline forbids for a
+// tenant-scoped write. What makes the two-statement shape safe is not
+// individually idempotent writes but the UNIQUE certificate_id constraint
+// (migration 0008) plus an arbitration protocol layered on it:
+//
+//   - the ledger insert is INSERT ... ON CONFLICT (certificate_id) DO
+//     NOTHING whose RowsAffected verdict (repository.go's InsertIfAbsent)
+//     names exactly one winner among any number of concurrent revokes of
+//     one certificate, so however many certificate-row updates race,
+//     exactly one ledger row lands and exactly one EventCertificateRevoked
+//     is published; and
+//   - a certificate that is revoked but has no ledger row -- a failed or
+//     lost insert between the two statements -- is repaired by the NEXT
+//     RevokeCertificate call: the call's insert reconstructs the row from
+//     the certificate row's own committed RevokedAt and RevocationReason,
+//     so a retry cannot rewrite the original revocation's facts, and it
+//     publishes the one event the failed call could not. A revocation
+//     whose ledger insert fails surfaces as a returned error, never as a
+//     log-and-return-success whose later retries are all swallowed by an
+//     already-revoked early return (the round's original bug).
+//
+// The failure mode left over is bounded staleness: between the two
+// statements a crash can leave the certificate correctly revoked but
+// missing from this ledger until a repair call runs, so a CRL generated
+// in that window omits that one serial. It is never an incorrect "not
+// revoked" answer inside pki_certificates itself, which is the record
+// CAService.VerifyCertificate actually trusts.
 type CertificateRevocation struct {
 	// ID is an application-generated UUID.
 	ID string `gorm:"column:id;primaryKey;size:36"`
