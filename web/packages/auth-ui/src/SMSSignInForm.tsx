@@ -15,9 +15,15 @@
  *
  * Busy states: the code-request button disables for the request's flight,
  * the code step's submit disables while the login commits (RHF's
- * isSubmitting). Nothing navigates; a successful login fires onSignedIn
- * once and the host decides what follows. The heading above the form is
- * host content.
+ * isSubmitting). A fresh code starts the code field empty: a successful
+ * request (the first send, a resend, or a request for a changed phone)
+ * resets any code typed against the code it invalidates, so a stale
+ * code can never ride along to a new code session. Nothing navigates; a
+ * successful login fires onSignedIn once and the host decides what
+ * follows -- the callback runs only after the login verdict settled,
+ * and a throwing host callback is contained (it is not a login
+ * failure, never renders an error, never escapes as an unhandled
+ * rejection). The heading above the form is host content.
  */
 
 import { useCallback, useState } from 'react'
@@ -62,6 +68,11 @@ export function SMSSignInForm({ session, onSignedIn }: SMSSignInFormProps) {
       setSendingCode(true)
       try {
         await session.requestSMSCode({ phone })
+        // A fresh code was just issued: any code typed against the one
+        // it replaces (a changed phone, a resend) is stale, so the code
+        // field starts empty for the new session. Harmless no-op on
+        // the first send, where no code was ever typed.
+        form.resetField('code', { defaultValue: '' })
         setSentTo(phone)
         setStep('code')
       } catch (error) {
@@ -70,7 +81,7 @@ export function SMSSignInForm({ session, onSignedIn }: SMSSignInFormProps) {
         setSendingCode(false)
       }
     },
-    [session],
+    [form, session],
   )
 
   const onSubmit: SubmitHandler<SmsFields> = async (values) => {
@@ -86,9 +97,16 @@ export function SMSSignInForm({ session, onSignedIn }: SMSSignInFormProps) {
         phone: sentTo ?? values.phone,
         code: values.code,
       })
-      onSignedIn?.()
     } catch (error) {
       setErrorCode(errorCodeOf(error))
+      return
+    }
+    try {
+      onSignedIn?.()
+    } catch {
+      // A throwing host callback is not a login failure: the login
+      // committed, nothing here renders the host's error, and the
+      // containment keeps the throw out of this submit promise.
     }
   }
 

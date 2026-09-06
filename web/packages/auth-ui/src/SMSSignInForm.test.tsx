@@ -319,4 +319,78 @@ describe('SMSSignInForm', () => {
     renderWithProviders(<SMSSignInForm session={harness.session} />)
     await expectNoAxeViolations()
   })
+
+  it('contain a throwing onSignedIn: the committed SMS login never looks like a failure', async () => {
+    const harness = makeHarness({
+      [REQUEST_SMS_CODE]: () => undefined,
+      [LOGIN_SMS]: () => makePair(),
+    })
+    const onSignedIn = vi.fn(() => {
+      throw new Error('host navigation failed')
+    })
+    renderWithProviders(
+      <SMSSignInForm session={harness.session} onSignedIn={onSignedIn} />,
+    )
+    await requestCode(PHONE)
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toBeInTheDocument(),
+    )
+    await completeCode(CODE)
+    await waitFor(() => expect(onSignedIn).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(harness.store.get()).toBe('access-1')
+  })
+
+  it('start the code field empty after the phone changed and a new code was requested', async () => {
+    const SECOND_PHONE = '+8613900139000'
+    const harness = makeHarness({
+      [REQUEST_SMS_CODE]: () => undefined,
+    })
+    renderWithProviders(<SMSSignInForm session={harness.session} />)
+    const user = userEvent.setup()
+    // A code for the first phone is typed on the code step.
+    await requestCode(PHONE)
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toBeInTheDocument(),
+    )
+    await user.type(screen.getByLabelText(zhCN.smsSignIn.codeLabel), CODE)
+    // The viewer changes the number and requests a code for it.
+    await user.click(
+      screen.getByRole('button', { name: zhCN.smsSignIn.editPhone }),
+    )
+    await user.clear(screen.getByLabelText(zhCN.smsSignIn.phoneLabel))
+    await user.type(screen.getByLabelText(zhCN.smsSignIn.phoneLabel), SECOND_PHONE)
+    await user.click(
+      screen.getByRole('button', { name: zhCN.smsSignIn.sendCode }),
+    )
+    await waitFor(() => expect(harness.calls).toHaveLength(2))
+    expect(harness.calls[1]?.options?.body).toEqual({ phone: SECOND_PHONE })
+    // The stale code for the old phone and the old code session is
+    // gone: the field starts empty for the freshly issued code.
+    await waitFor(() =>
+      expect(screen.getByLabelText(zhCN.smsSignIn.codeLabel)).toHaveValue(''),
+    )
+  })
+
+  it('clear the typed code when a new code is requested over the resend button', async () => {
+    const harness = makeHarness({
+      [REQUEST_SMS_CODE]: () => undefined,
+    })
+    renderWithProviders(<SMSSignInForm session={harness.session} />)
+    const user = userEvent.setup()
+    await requestCode(PHONE)
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toBeInTheDocument(),
+    )
+    await user.type(screen.getByLabelText(zhCN.smsSignIn.codeLabel), CODE)
+    await user.click(
+      screen.getByRole('button', { name: zhCN.smsSignIn.resendCode }),
+    )
+    await waitFor(() => expect(harness.calls).toHaveLength(2))
+    // A resent code invalidates whatever code was typed: the field
+    // starts empty again.
+    await waitFor(() =>
+      expect(screen.getByLabelText(zhCN.smsSignIn.codeLabel)).toHaveValue(''),
+    )
+  })
 })
