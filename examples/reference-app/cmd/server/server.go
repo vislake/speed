@@ -50,6 +50,7 @@ import (
 	_ "github.com/vislake/speed/go/observability/exporter/prometheus"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 	kvredis "github.com/vislake/speed/go/pkgcore/kv/redis"
 	objectstores3 "github.com/vislake/speed/go/pkgcore/objectstore/s3"
@@ -663,6 +664,36 @@ func (g orgFeatureGate) IsEnabled(ctx context.Context, key string) (bool, error)
 // compile-time check that orgFeatureGate satisfies org.FeatureGate.
 var _ org.FeatureGate = orgFeatureGate{}
 
+// orgSubtreeResolver adapts org.Scope's Path method onto rbac.SubtreeResolver's
+// NodePath -- the two no-import seams differ just enough (three return
+// values vs. two; "not found" folded into an error vs. a plain boolean)
+// that a one-line wrapper is needed, unlike orgFeatureGate/FeatureGate's
+// exact structural match above. org.Scope is safe to hold directly (unlike
+// *config.Service above): orgModule.Scope() is available the moment
+// org.NewModule returns, with no Attach-ordering constraint, so this
+// adapter captures it at construction rather than reading it lazily.
+type orgSubtreeResolver struct{ scope org.Scope }
+
+// NodePath implements rbac.SubtreeResolver.
+func (r orgSubtreeResolver) NodePath(ctx context.Context, nodeID string) (string, bool, error) {
+	path, err := r.scope.Path(ctx, nodeID)
+	if err != nil {
+		if appErr, ok := apperr.As(err); ok && appErr.Code == org.ErrNodeNotFound.Code {
+			// rbac's own contract: an unresolvable node DENIES the binding
+			// that named it rather than erroring, so the caller's Can/
+			// DataScope decision reports "no such node" as ok == false,
+			// never widening to the tenant (SubtreeResolver's own doc
+			// comment).
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return path, true, nil
+}
+
+// compile-time check that orgSubtreeResolver satisfies rbac.SubtreeResolver.
+var _ rbac.SubtreeResolver = orgSubtreeResolver{}
+
 // readTenantDurationConfig is the shared core sharingConfigReader and
 // complianceConfigReader below both call into: it resolves key's
 // tenant-then-system-then-schema-default effective value through cfg
@@ -965,6 +996,19 @@ type serverConfig struct {
 	// leaves on its real default" shape above.
 	WebhookURLValidator func(ctx context.Context, url string) error
 	WebhookHTTPClient   *http.Client
+
+	// OnRBACReady, when non-nil, receives the live *rbac.Service buildServer
+	// attaches, immediately after seedDemoGrants seeds every configured
+	// tenant's built-in roles and demo grants. It exists purely for a test
+	// that needs to grant a role scoped to an organization node CREATED
+	// AFTER the server starts serving HTTP -- the org-route-guards round's
+	// subtree-scoped grant test (org_route_guards_test.go), which cannot
+	// know a node's id at boot time, since org builds its tree through real
+	// HTTP calls the test itself drives once the server is up. Nil in every
+	// production boot and every other test is a complete no-op, mirroring
+	// WebhookURLValidator's identical "test-only override of what buildServer
+	// already wires, never a production weakening" shape above.
+	OnRBACReady func(*rbac.Service)
 }
 
 // parseHexKeyEnv decodes encoded -- envName's raw value -- as a hex-encoded
@@ -1657,12 +1701,17 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 
 	// rbac needs nothing from this host but a database: it declares its own
 	// permissions during Register and reads EVERY module's declarations
-	// once, in Attach, after Bootstrap. No SubtreeResolver is wired because
-	// this app has no organization tree yet -- see WithSubtreeResolver's
-	// doc comment for why that is a supported configuration rather than a
-	// gap, and demo_subject.go's seedDemoGrants for why every demo grant is
-	// therefore tenant-wide.
-	rbacModule := rbac.NewModule(db)
+	// once, in Attach, after Bootstrap. WithSubtreeResolver IS wired, onto
+	// orgModule's own Scope (orgSubtreeResolver below, an adapter over the
+	// two seams' slightly different signatures -- see its own doc comment):
+	// this app's organization tree is real (org_flow_test.go's multi-level
+	// DSO tree; the org-route-guards round's own subtree-scoped grant test),
+	// so a node-scoped rbac binding must actually resolve against it rather
+	// than deny for want of a resolver. Every demo grant seedDemoGrants
+	// makes is still tenant-wide (rbac.Scope{}) -- the wiring below is what
+	// makes a NARROWER grant (a role assigned with a real node id) mean
+	// something, for a host that wants one, not what makes one mandatory.
+	rbacModule := rbac.NewModule(db, rbac.WithSubtreeResolver(orgSubtreeResolver{scope: orgModule.Scope()}))
 
 	// storageModule is the reference app's first consumer of go/storage.
 	// Its asynchronous work -- the thumbnail-derive task every completed
@@ -2198,6 +2247,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		_ = cleanup()
 		return nil, nil, nil, seedErr
 	}
+	if cfg.OnRBACReady != nil {
+		cfg.OnRBACReady(rbacService)
+	}
 	// seedDemoCredits is the demo, NOT-a-real-payment stand-in for
 	// docs/internal/15-roadmap.md's M2 exit condition's buy-a-credit-pack
 	// leg -- see that function's own doc comment for exactly why a real
@@ -2357,7 +2409,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	mux := http.NewServeMux()
 	mux.HandleFunc(http.MethodGet+" "+healthzPath, healthzHandler)
 	mux.HandleFunc(http.MethodGet+" "+metricsPath, metricsHandler)
-	adminHandler, mountErr := mountModuleRoutes(mux, reg, rbacService)
+	orgGuardDeps := orgRouteGuardDeps{scope: orgModule.Scope(), members: orgModule.Members()}
+	adminHandler, mountErr := mountModuleRoutes(mux, reg, rbacService, orgGuardDeps)
 	if mountErr != nil {
 		_ = cleanup()
 		return nil, nil, nil, mountErr
@@ -2661,10 +2714,10 @@ func authnPreAuthAllowlist() []tenancy.MiddlewareOption {
 // entry), so the table's exhaustiveness check keeps covering it; only the
 // DESTINATION of the resulting handler differs. A path the table does not
 // name fails the build here rather than being served.
-func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Authorizer) (http.Handler, error) {
+func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Authorizer, orgDeps orgRouteGuardDeps) (http.Handler, error) {
 	var adminHandler http.Handler
 	for _, route := range reg.Routes.Routes() {
-		handler, err := guardModuleRoute(az, route.Path, route.Handler)
+		handler, err := guardModuleRoute(az, route.Path, route.Handler, orgDeps)
 		if err != nil {
 			return nil, err
 		}

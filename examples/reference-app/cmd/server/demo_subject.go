@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/integration"
+	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pki"
@@ -222,18 +225,35 @@ const aiGatewayRoutePath = "/api/v1/ai-gateway"
 // render before anyone has signed in, and they serve only what the design
 // marks public, never tenant data.
 //
-// org's path is routePublic for a different reason: org.Handler already
-// resolves and requires its own caller identity per operation through
-// SubjectResolver (demoOrgSubjectResolver in server.go) -- org_createNode
-// aside, which resolves none at all -- and org_flow_test.go's own demo
-// callers (an invitee accepting an invitation, most pointedly) are never
-// among the two users seedDemoGrants below seeds a role for, since a
-// person accepting their first invitation has by definition no rbac grant
-// yet. Gating this path on a coarse rbac permission on top of org's own
-// per-operation identity check would refuse exactly the flow org exists to
-// demonstrate. A real deployment layers a genuine permission check inside
-// org's own handlers (or wires org's Scope into rbac's DataScope, the
-// no-import seam org.md documents), not at this router gate.
+// org's path is gated for real, like storage's and sharing's: org's Handler
+// performs no PERMISSION check of its own for nine of its eleven operations
+// -- it resolves a caller's raw identity through SubjectResolver
+// (demoOrgSubjectResolver in server.go) for exactly two of them,
+// org_createInvitation and org_acceptInvitation, and reads only the tenant
+// from context for the other nine (go/org/AGENTS.md's own honest count) --
+// so this router gate is where the example enforces org's four declared
+// permissions (org:read/manage/invite_member/remove_member) per operation.
+// It is dispatched to guardOrgRoute, never demoPermissionFor's generic
+// read/write split or a single permissionFor override: org's operations
+// span FOUR permissions distinguished by sub-resource (tree vs. roster vs.
+// invitation), not by method alone, AND one operation -- accepting an
+// invitation addressed to the caller -- must stay reachable with NO
+// permission at all, since a person accepting their FIRST invitation has by
+// definition no rbac grant yet in the tenant they are about to join; gating
+// that path on a coarse permission on top of org's own identity check would
+// refuse exactly the flow org exists to demonstrate. See orgPermissionFor's
+// own doc comment for the per-operation mapping and guardOrgRoute's for the
+// accept-invitation bypass.
+//
+// guardOrgRoute additionally narrows a request past the coarse Can gate
+// when the caller's own grant is scoped to one subtree rather than the
+// whole tenant: it resolves the operation's target node (the path {nodeId},
+// a query parameter, or a JSON body field, depending on the operation) to
+// its materialized path through org's own Scope, and refuses a target
+// outside what Authorizer.DataScope reports the caller may reach --
+// rbac's DataScope machinery's first REAL consumer in this codebase (see
+// enforceOrgNodeScope's own doc comment for the full mechanism and its
+// known gaps).
 //
 // authn's path is routePublic for the same structural reason org's is:
 // authn.Handler resolves and requires its own caller identity per
@@ -288,7 +308,10 @@ const aiGatewayRoutePath = "/api/v1/ai-gateway"
 var demoRouteGuards = map[string]string{
 	notesRoutePath:   notesResource,
 	storageRoutePath: storageResource,
-	orgRoutePath:     routePublic,
+	// orgRouteSentinel, never a plain resource string -- see its own doc
+	// comment and guardOrgRoute's for why org's four permissions need their
+	// own dispatch rather than demoPermissionFor's generic read/write split.
+	orgRoutePath: orgRouteSentinel,
 	// notification's path constant mirrors the module's unexported
 	// apiPath; naming it here through the local constant keeps the two in
 	// sync the way the config entries do.
@@ -394,6 +417,19 @@ var demoRouteGuards = map[string]string{
 // routePublic and from any real resource string, so a reader (and
 // guardModuleRoute's own switch) cannot confuse it with either.
 const adminRouteSentinel = "ADMIN_SPECIAL_CASED_ROUTE"
+
+// orgRouteSentinel marks demoRouteGuards' entry for go/org's mounted
+// route. guardModuleRoute dispatches it to guardOrgRoute instead of the
+// generic demoPermissionFor(resource) gate, for the same class of reason
+// pki's and integration's own sentinel-dispatched paths need one:
+// demoPermissionFor's binary read/write split cannot express org's four
+// declared permissions (org:read/manage/invite_member/remove_member), and
+// unlike pki/sharing/ai-gateway (a custom permissionFor plugged into the
+// ordinary rbac.RequirePermissionFunc gate), one org operation --
+// accepting an invitation -- must bypass the permission gate ENTIRELY
+// rather than merely choosing a different permission for it. See
+// guardOrgRoute's own doc comment for the full shape.
+const orgRouteSentinel = "ORG_ROUTE_PER_OPERATION_PERMISSION"
 
 // integrationRouteSentinel marks demoRouteGuards' entry for go/integration's
 // mounted spec-generated fragments. guardModuleRoute dispatches it to
@@ -666,6 +702,385 @@ func aiGatewayPermissionFor(r *http.Request) string {
 	return aigateway.PermissionWrite
 }
 
+// orgNodesSubPath, orgMembersSubPath and orgInvitationsSubPath are org's
+// three sub-resources, relative to orgRoutePath -- the shape
+// orgPermissionFor and orgNodeScopeFor both switch on. Named once here
+// rather than repeating the literal in each function.
+const (
+	orgNodesSubPath       = "/nodes"
+	orgMembersSubPath     = "/members"
+	orgInvitationsSubPath = "/invitations"
+	orgAcceptSuffix       = "/accept"
+)
+
+// orgPermissionFor selects the org:* permission a request against
+// orgRoutePath must hold, from its path and method alone -- never a header,
+// a query parameter or a body field, the same rule demoPermissionFor's own
+// doc comment states.
+//
+// org's four permissions are distinguished by SUB-RESOURCE (tree vs.
+// roster vs. invitation), not by one resource's read/write split, so this
+// selector needs the request's sub-path the same way adminPermissionFor
+// (demo_admin.go) and integrationPermissionFor above do for their own
+// multi-permission modules:
+//
+//   - "/nodes" and "/nodes/{id}"[/move]: PermissionRead on GET/HEAD,
+//     PermissionManage on every write (create, rename, move, delete).
+//   - "/members" (list) and "/members/{userId}" (remove): PermissionRead on
+//     GET/HEAD, PermissionRemoveMember on the one write this sub-resource
+//     has.
+//   - "/invitations" (list) and "/invitations" (create, a POST):
+//     PermissionRead on GET/HEAD, PermissionInviteMember on the POST that
+//     creates one.
+//   - "/invitations/accept": never reaches this function at all --
+//     guardOrgRoute bypasses the whole permission gate for it before
+//     orgPermissionFor is ever called (see isOrgAcceptInvitationRequest and
+//     guardOrgRoute's own doc comment). Returning a permission here would be
+//     misleading dead code, so this function does not attempt to handle it.
+//
+// A path this function does not recognize falls through to the "/nodes"
+// case's read/write split -- unreachable for any path org's own Handler
+// mounts (org.Handler's ServeHTTP would 404 first before this gate's
+// permission choice even matters), but handled rather than assumed away,
+// matching this file's posture everywhere else. The fall-through still
+// requires a real permission (PermissionRead or PermissionManage), never an
+// empty string, so it stays on the fail-closed side even if it were ever
+// reached.
+func orgPermissionFor(r *http.Request) string {
+	path := strings.TrimPrefix(r.URL.Path, orgRoutePath)
+	isRead := r.Method == http.MethodGet || r.Method == http.MethodHead
+
+	switch {
+	case strings.HasPrefix(path, orgMembersSubPath):
+		if isRead {
+			return org.PermissionRead
+		}
+		return org.PermissionRemoveMember
+	case strings.HasPrefix(path, orgInvitationsSubPath):
+		if isRead {
+			return org.PermissionRead
+		}
+		return org.PermissionInviteMember
+	default: // orgNodesSubPath, or the bare mount root ("/nodes" or "").
+		if isRead {
+			return org.PermissionRead
+		}
+		return org.PermissionManage
+	}
+}
+
+// isOrgAcceptInvitationRequest reports whether r targets
+// org_acceptInvitation (POST /api/v1/org/invitations/accept) -- the one org
+// operation guardOrgRoute lets through with NO permission check at all. See
+// guardOrgRoute's own doc comment for why.
+func isOrgAcceptInvitationRequest(r *http.Request) bool {
+	return r.Method == http.MethodPost &&
+		r.URL.Path == orgRoutePath+orgInvitationsSubPath+orgAcceptSuffix
+}
+
+// orgRouteGuardDeps bundles the org-module runtime state guardOrgRoute's
+// node-scope check (enforceOrgNodeScope) needs to resolve a request's
+// TARGET node to its materialized path and to translate OrgRemoveMember's
+// target user into the node their membership binds them to -- org's own
+// Scope and MemberService, the exact instances buildServer's orgModule
+// wires. Bundled into one struct so guardModuleRoute's signature grows by
+// one parameter every OTHER module's dispatch branch simply ignores,
+// rather than by two.
+type orgRouteGuardDeps struct {
+	scope   org.Scope
+	members *org.MemberService
+}
+
+// guardOrgRoute wraps org's mounted route in rbac's permission gate, keyed
+// by orgPermissionFor rather than demoPermissionFor's generic resource
+// split -- the same per-operation-selector shape pki's, sharing's and
+// ai-gateway's own routes already use -- with two differences org's shape
+// needs that theirs does not:
+//
+//  1. org_acceptInvitation (isOrgAcceptInvitationRequest) bypasses the
+//     permission gate ENTIRELY: org.Handler's own resolveSubject is that
+//     operation's whole gate (org.ErrSubjectUnresolved on an unidentifiable
+//     caller), by design -- accepting an invitation addressed to you needs
+//     no standing rbac grant, see demoRouteGuards' own doc comment on
+//     org's path for the full argument.
+//  2. Every other operation additionally passes through enforceOrgNodeScope
+//     once the coarse rbac.RequirePermissionFunc gate has already let it
+//     through, narrowing a subtree-scoped grant to its own subtree -- see
+//     that function's own doc comment.
+func guardOrgRoute(az rbac.Authorizer, handler http.Handler, deps orgRouteGuardDeps) http.Handler {
+	scopeChecked := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if appErr := enforceOrgNodeScope(r.Context(), az, deps, r); appErr != nil {
+			writeRBACGateError(w, appErr)
+			return
+		}
+		handler.ServeHTTP(w, r)
+	})
+	permissionGated := rbac.RequirePermissionFunc(az, orgPermissionFor,
+		rbac.WithSubjectResolver(demoSubjectResolver),
+	)(scopeChecked)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isOrgAcceptInvitationRequest(r) {
+			handler.ServeHTTP(w, r)
+			return
+		}
+		permissionGated.ServeHTTP(w, r)
+	})
+}
+
+// orgNodeScopeTarget describes which node (if any) an org operation names
+// as its target, for enforceOrgNodeScope's DataScope check.
+//
+// destinationNodeID is set only for OrgMoveNode, whose write touches TWO
+// nodes at once: the node being moved (nodeID, the path parameter) and the
+// parent it moves INTO (destinationNodeID, the request body's parentId).
+// Both must lie in the caller's scope, or a subtree-scoped grant could move
+// a node it does not own into a subtree it does not own either, or move a
+// node it DOES own out into unmanaged territory.
+//
+// requireTenantWide is set when the operation has no single target node to
+// check -- a listing with no parentId/nodeId query parameter, a root node
+// creation with no parentId in the body, or listing invitations (which
+// carries no node filter at all) -- because these act on the WHOLE tenant
+// tree. A subtree-scoped grant, which by definition covers less than the
+// whole tenant, is refused rather than served a silently narrower answer
+// this router-level gate cannot compute: filtering LISTING ROWS by scope is
+// the handler's job, and org.Handler does not do it (a known, recorded
+// gap -- see enforceOrgNodeScope's own doc comment).
+type orgNodeScopeTarget struct {
+	applicable        bool
+	requireTenantWide bool
+	nodeID            string
+	destinationNodeID string
+	// removeMemberUserID is set only for OrgRemoveMember, whose path names
+	// a USER, not a node -- enforceOrgNodeScope resolves it to the node
+	// their membership binds them to through deps.members before it has a
+	// nodeID to check at all.
+	removeMemberUserID string
+}
+
+// orgNodeScopeFor computes r's orgNodeScopeTarget from its path, query and
+// (for the write operations that carry one) its JSON body. It never
+// consumes r.Body without restoring it -- see peekJSONBody.
+func orgNodeScopeFor(r *http.Request) orgNodeScopeTarget {
+	path := strings.TrimPrefix(r.URL.Path, orgRoutePath)
+	isRead := r.Method == http.MethodGet || r.Method == http.MethodHead
+
+	switch {
+	case path == orgInvitationsSubPath:
+		if !isRead {
+			// POST /invitations (org_createInvitation): target is the node
+			// the invitee will be bound to.
+			var body struct {
+				NodeID string `json:"nodeId"`
+			}
+			if peekJSONBody(r, &body) && body.NodeID != "" {
+				return orgNodeScopeTarget{applicable: true, nodeID: body.NodeID}
+			}
+		}
+		// GET /invitations (org_listInvitations): no node filter exists on
+		// this operation at all (api/openapi.yaml's OrgListInvitationsParams
+		// is empty), so a subtree-scoped grant cannot be served a correctly
+		// narrowed answer -- see the type's own doc comment.
+		return orgNodeScopeTarget{applicable: true, requireTenantWide: true}
+
+	case path == orgMembersSubPath:
+		if nodeID := r.URL.Query().Get("nodeId"); nodeID != "" {
+			return orgNodeScopeTarget{applicable: true, nodeID: nodeID}
+		}
+		return orgNodeScopeTarget{applicable: true, requireTenantWide: true}
+
+	case strings.HasPrefix(path, orgMembersSubPath+"/"):
+		// DELETE /members/{userId} (org_removeMember): the path names a
+		// USER; enforceOrgNodeScope resolves the node through deps.members.
+		userID := strings.TrimPrefix(path, orgMembersSubPath+"/")
+		return orgNodeScopeTarget{applicable: true, removeMemberUserID: userID}
+
+	case path == orgNodesSubPath || path == "":
+		if isRead {
+			// GET /nodes (org_listNodes): parentId, when given, names the
+			// node whose children are listed; absent, the whole tree.
+			if parentID := r.URL.Query().Get("parentId"); parentID != "" {
+				return orgNodeScopeTarget{applicable: true, nodeID: parentID}
+			}
+			return orgNodeScopeTarget{applicable: true, requireTenantWide: true}
+		}
+		// POST /nodes (org_createNode): parentId, when given, names the
+		// node the new child is created under; absent creates the tenant's
+		// ROOT, a tenant-wide structural change no subtree scope can cover.
+		var body struct {
+			ParentID *string `json:"parentId"`
+		}
+		if peekJSONBody(r, &body) && body.ParentID != nil && *body.ParentID != "" {
+			return orgNodeScopeTarget{applicable: true, nodeID: *body.ParentID}
+		}
+		return orgNodeScopeTarget{applicable: true, requireTenantWide: true}
+
+	default:
+		// "/nodes/{id}" and "/nodes/{id}/move".
+		rest := strings.TrimPrefix(path, orgNodesSubPath+"/")
+		if idx := strings.Index(rest, "/"); idx >= 0 {
+			// POST /nodes/{id}/move (org_moveNode): the node moving, AND the
+			// parent it moves into.
+			nodeID := rest[:idx]
+			var body struct {
+				ParentID string `json:"parentId"`
+			}
+			dest := ""
+			if peekJSONBody(r, &body) {
+				dest = body.ParentID
+			}
+			return orgNodeScopeTarget{applicable: true, nodeID: nodeID, destinationNodeID: dest}
+		}
+		// GET/PATCH/DELETE /nodes/{id} (org_getNode/org_renameNode/org_deleteNode).
+		return orgNodeScopeTarget{applicable: true, nodeID: rest}
+	}
+}
+
+// peekJSONBody decodes r's JSON body into dst WITHOUT consuming it: the
+// handler downstream (org.Handler's own decodeJSON) must still be able to
+// read the full body itself afterward. It reports whether decoding
+// succeeded; a malformed or unreadable body reports false and still
+// restores r.Body to its original bytes, so a bad request reaches the
+// handler's own decoder either way, which answers the caller with the real
+// "invalid body" error instead of a scope refusal manufactured from a
+// failed peek -- a malformed body can create or move nothing, so letting it
+// through this check is not a bypass of anything.
+func peekJSONBody(r *http.Request, dst any) bool {
+	if r.Body == nil {
+		return false
+	}
+	raw, err := io.ReadAll(r.Body)
+	_ = r.Body.Close()
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+	if err != nil {
+		return false
+	}
+	return json.Unmarshal(raw, dst) == nil
+}
+
+// enforceOrgNodeScope is guardOrgRoute's node-scope layer: it runs AFTER
+// rbac's coarse Can gate (rbac.RequirePermissionFunc, inside guardOrgRoute)
+// has already let the request through, and narrows it further for a
+// subject whose org grant is scoped to one subtree rather than the whole
+// tenant -- rbac's Authorizer.DataScope machinery's first REAL consumer in
+// this codebase (closing P2-2's substance: go/rbac/AGENTS.md and
+// docs/internal/16-verification.md have both described DataScope's
+// contract since M1, with no caller ever having exercised it end to end).
+//
+// A tenant-wide grant is untouched by this function: DataScope.TenantWide
+// short-circuits every branch below to "allowed" before orgNodeScopeFor is
+// even consulted, which is the overwhelmingly common case -- every demo
+// grant seedDemoGrants makes is tenant-wide (rbac.Scope{}), per its own
+// doc comment. Denying happens ONLY when the subject's DataScope for this
+// exact action:resource is neither tenant-wide NOR includes the request's
+// target node's materialized path.
+//
+// # Known gap: listing operations are gated, not filtered
+//
+// This function can only ALLOW or REFUSE a request as a whole; it cannot
+// make org.Handler's own listing operations (org_listNodes,
+// org_listMembers, org_listInvitations) return fewer ROWS than the handler
+// itself would compute. So a subtree-scoped grant either names a specific
+// node to list (allowed, checked against scope) or is refused outright when
+// it does not (orgNodeScopeTarget.requireTenantWide) -- never served a
+// silently truncated answer. A real per-row filter would need org.Handler
+// itself to consult DataScope, which is a change to go/org, not this
+// reference app's router gate; recorded here rather than half-built.
+func enforceOrgNodeScope(ctx context.Context, az rbac.Authorizer, deps orgRouteGuardDeps, r *http.Request) *apperr.Error {
+	sub, ok := rbac.SubjectFromContext(ctx)
+	if !ok {
+		// Unreachable in practice: rbac.RequirePermissionFunc, which wraps
+		// this handler, has already installed the exact Subject it decided
+		// Can against onto the context before calling next (its own doc
+		// comment). Handled anyway, never assumed away, matching this
+		// file's posture everywhere else.
+		return rbac.ErrPermissionDenied
+	}
+	permission := orgPermissionFor(r)
+	resource, action, ok := splitDemoPermission(permission)
+	if !ok {
+		return rbac.ErrPermissionDenied.WithParam("permission", permission)
+	}
+
+	scope, err := az.DataScope(ctx, sub, action, resource)
+	if err != nil {
+		return rbac.ErrStorage
+	}
+	if scope.TenantWide {
+		return nil
+	}
+
+	target := orgNodeScopeFor(r)
+	if !target.applicable {
+		return nil
+	}
+	if target.requireTenantWide {
+		return rbac.ErrPermissionDenied.WithParam("permission", permission)
+	}
+
+	nodeID := target.nodeID
+	if target.removeMemberUserID != "" {
+		membership, memErr := deps.members.Get(ctx, target.removeMemberUserID)
+		if memErr != nil {
+			// No such membership (or one in another tenant, which reads
+			// identically): let the request through to org.Handler's own
+			// Remove call, which answers its own not-found rather than this
+			// gate inventing a scope refusal for a target that may not even
+			// exist.
+			return nil
+		}
+		nodeID = membership.NodeID
+	}
+	if nodeID == "" {
+		return nil
+	}
+
+	if !nodeInScope(ctx, deps.scope, scope, nodeID) {
+		return rbac.ErrPermissionDenied.WithParam("permission", permission)
+	}
+	if target.destinationNodeID != "" && !nodeInScope(ctx, deps.scope, scope, target.destinationNodeID) {
+		return rbac.ErrPermissionDenied.WithParam("permission", permission)
+	}
+	return nil
+}
+
+// nodeInScope reports whether nodeID's materialized path (resolved through
+// orgScope, the real tree) lies within dataScope.
+//
+// A node orgScope cannot resolve -- deleted, or belonging to another
+// tenant, which org's own tenant-scoped repository reports identically --
+// is treated as IN scope here, deliberately: this function's caller lets
+// the request through to org.Handler's own lookup in that case, which
+// answers the real "not found" error, rather than this gate leaking
+// "exists but out of your scope" versus "does not exist" through two
+// different refusal shapes.
+func nodeInScope(ctx context.Context, orgScope org.Scope, dataScope rbac.DataScope, nodeID string) bool {
+	path, err := orgScope.Path(ctx, nodeID)
+	if err != nil {
+		return true
+	}
+	return dataScope.Includes(path)
+}
+
+// writeRBACGateError writes err (an *apperr.Error from go/rbac -- in
+// practice always ErrPermissionDenied or ErrStorage) as the same {code,
+// params} JSON envelope rbac.RequirePermissionFunc's own unexported
+// writeAuthzError produces. This app keeps its own copy of that shape
+// because enforceOrgNodeScope's refusal runs as a SEPARATE layer
+// downstream of RequirePermissionFunc (see guardOrgRoute), and a caller
+// must see one consistent response shape regardless of which of the two
+// layers refused the request.
+func writeRBACGateError(w http.ResponseWriter, err *apperr.Error) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(err.Status)
+	envelope := map[string]any{"code": err.Code}
+	if err.Params != nil {
+		envelope["params"] = err.Params
+	}
+	_ = json.NewEncoder(w).Encode(envelope)
+}
+
 // mustResourceOf returns the shared resource half of the given permission
 // strings, and panics when they do not agree on one.
 //
@@ -786,7 +1201,7 @@ func demoPermissionFor(resource string) func(*http.Request) string {
 // gate, or returns it untouched when demoRouteGuards marks the path
 // public. A path the table does not name is an error, so buildServer fails
 // to start rather than serving it ungated.
-func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler) (http.Handler, error) {
+func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler, orgDeps orgRouteGuardDeps) (http.Handler, error) {
 	resource, declared := demoRouteGuards[path]
 	if !declared {
 		return nil, fmt.Errorf(
@@ -804,6 +1219,14 @@ func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler) (ht
 		// wholly different gate, bypassing rbac.RequirePermissionFunc
 		// entirely. See integrationRouteSentinel's own doc comment for why.
 		return guardIntegrationRoute(az, handler), nil
+	}
+	if resource == orgRouteSentinel {
+		// Also a wholly different gate, not just a different action
+		// selector -- see orgRouteSentinel's and guardOrgRoute's own doc
+		// comments for why (the accept-invitation bypass and the
+		// node-scope layer, neither of which fits rbac.RequirePermissionFunc
+		// alone).
+		return guardOrgRoute(az, handler, orgDeps), nil
 	}
 	// pki, sharing and ai-gateway all need their own action selector, not
 	// demoPermissionFor's generic read/write split -- see pkiPermissionFor's,
