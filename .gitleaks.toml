@@ -65,7 +65,7 @@ paths = [
 ]
 
 [[allowlists]]
-description = "examples/reference-app/.env.example: a template file whose entire purpose is showing the shape of a real environment variable without a real value -- every flagged line is the literal placeholder string REPLACE_WITH_64_HEX_CHARS (SPEED_CONFIG_KEY, SPEED_ORG_INDEX_KEY, SPEED_NOTIFICATION_INDEX_KEY), and the file's own header comment already tells a reader to generate a real key with `openssl rand -hex 32` rather than use what is checked in here"
+description = "examples/reference-app/.env.example: a template file whose entire purpose is showing the shape of a real environment variable without a real value -- every flagged line is the literal placeholder string REPLACE_WITH_64_HEX_CHARS (APP_CONFIG_KEY, APP_ORG_INDEX_KEY, APP_NOTIFICATION_INDEX_KEY), and the file's own header comment already tells a reader to generate a real key with `openssl rand -hex 32` rather than use what is checked in here"
 paths = [
   "examples/reference-app/.env.example",
 ]
