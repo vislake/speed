@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -285,6 +287,98 @@ func TestAggregator_Ingest_OverageBusPublishFailure_DoesNotFailIngest(t *testing
 	}
 	if got != 5 {
 		t.Errorf("RealtimeCount = %v, want 5 (the measurement itself must still have landed)", got)
+	}
+}
+
+// TestAggregator_Ingest_SummaryWriteFailure_DoesNotSilentlyLoseOverage is
+// the regression proof for the overage-latch ordering bug: the event that
+// first crosses a configured threshold is also the event whose UsageSummary
+// write fails, and the old count-then-persist order had already latched
+// notifiedOverage and incremented the real-time counter before Ingest
+// returned the persistence error. The crossing was never published, and no
+// later event in the same period could publish it either -- the latch was
+// already set, so every subsequent event's crossed came back false while
+// the in-memory counter held a delta the database never received. The fix
+// persists the summary row before touching the counter, mirroring
+// IngestBillingGrade's own persist-then-count order: a failed write leaves
+// counter and latch untouched, so the next successful crossing event in
+// the same period still publishes EventOverageThresholdCrossed, and
+// real-time counter and summary row agree on what was actually accepted.
+func TestAggregator_Ingest_SummaryWriteFailure_DoesNotSilentlyLoseOverage(t *testing.T) {
+	db := newTestDB(t)
+	agg := NewAggregator(NewSummaryRepository(db))
+	threshold := 5.0
+	agg.thresholds = OverageThresholds{Default: &threshold}
+	bus := pkgcore.NewMemoryEventBus()
+	var captured capturedEvents
+	bus.Subscribe(EventOverageThresholdCrossed, captured.handler)
+	agg.bus = bus
+
+	// Arm a one-shot failure on the next summary-row insert, the same
+	// GORM-callback fault injection go/admin's own failingSingleRowTenantDB
+	// uses: the callback fires for the very next Create on this db -- the
+	// first event's summary upsert, whose FindByID finds no row yet, so the
+	// Create branch runs -- fails it, and disarms itself.
+	failNextSummaryCreate := true
+	const cbName = "metering_test:fail_next_summary_create"
+	if err := db.Callback().Create().Before("gorm:create").Register(cbName, func(tx *gorm.DB) {
+		if !failNextSummaryCreate {
+			return
+		}
+		failNextSummaryCreate = false
+		tx.Error = errors.New("forced usage_summaries create failure (test)")
+	}); err != nil {
+		t.Fatalf("register one-shot create failure callback: %v", err)
+	}
+	t.Cleanup(func() { db.Callback().Create().Remove(cbName) })
+
+	ctx := context.Background()
+	at := time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC)
+
+	// Event A would cross the threshold of 5 all on its own -- but its
+	// summary write fails, so Ingest must refuse it entirely.
+	err := agg.Ingest(ctx, UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 5, IdempotencyKey: idem(0), OccurredAt: at})
+	if err == nil {
+		t.Fatal("Ingest(crossing event with forced summary failure) = nil error, want the persistence failure to surface")
+	}
+
+	// Event B, still within the same period, must now be the crossing
+	// event: A's failed write left the counter and the latch untouched.
+	if err = agg.Ingest(ctx, UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 5, IdempotencyKey: idem(1), OccurredAt: at}); err != nil {
+		t.Fatalf("Ingest(after the failed write): %v", err)
+	}
+
+	if len(captured.events) != 1 {
+		t.Fatalf("published %d overage event(s), want exactly 1: the overage signal must not be lost to a transient summary-write failure", len(captured.events))
+	}
+	payload, ok := captured.events[0].Payload.(OverageThresholdCrossedEvent)
+	if !ok {
+		t.Fatalf("payload type = %T, want OverageThresholdCrossedEvent", captured.events[0].Payload)
+	}
+	if payload.Quantity != 5 {
+		t.Errorf("payload.Quantity = %v, want 5 (event B alone crossed)", payload.Quantity)
+	}
+
+	// Reconciliation: event A was refused, so only B's 5 may appear
+	// anywhere -- in the real-time counter and in the summary row alike.
+	gotRealtime, err := agg.RealtimeCount("tenant-a", "ai.generation", at)
+	if err != nil {
+		t.Fatalf("RealtimeCount: %v", err)
+	}
+	if gotRealtime != 5 {
+		t.Errorf("RealtimeCount = %v, want 5 (only the successfully persisted event counted)", gotRealtime)
+	}
+	tenantCtx := pkgcore.WithTenant(ctx, "tenant-a")
+	start, _, err := periodBounds(at, defaultPeriodBucket)
+	if err != nil {
+		t.Fatalf("periodBounds: %v", err)
+	}
+	summary, err := agg.summaries.FindByID(tenantCtx, summaryID("ai.generation", start))
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if summary.Quantity != 5 {
+		t.Errorf("summary Quantity = %v, want 5 (event A's failed write left no delta behind)", summary.Quantity)
 	}
 }
 

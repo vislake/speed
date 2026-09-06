@@ -109,8 +109,8 @@ func realtimeKey(tenantID, feature string, periodStart time.Time) string {
 }
 
 // Ingest is the one place both reliability tiers deliver a validated
-// UsageEvent into: it increments the real-time counter, upserts the
-// database summary row, and -- on the event that first crosses a
+// UsageEvent into: it upserts the database summary row, then increments
+// the real-time counter and -- on the event that first crosses a
 // configured overage threshold within the current period -- publishes
 // EventOverageThresholdCrossed. ctx need not carry a tenant (Ingest builds
 // its own tenant context from event.TenantID before touching
@@ -120,12 +120,22 @@ func realtimeKey(tenantID, feature string, periodStart time.Time) string {
 //
 // A zero event.OccurredAt is treated as time.Now().
 //
+// Persistence precedes the counter and the overage latch, mirroring
+// IngestBillingGrade's own persist-then-count order: an event whose
+// summary-row write fails is refused before the real-time counter or the
+// notifiedOverage latch is touched, so a later event that first reaches
+// the threshold within the period is still the crossing event and still
+// publishes. The count-then-persist order this replaces lost the crossing
+// forever -- the latch was already set when the summary write failed, so
+// no subsequent event ever crossed again, while the counter held a delta
+// the database never received.
+//
 // Publishing the overage event, if one fires, is best-effort: a publish
 // failure is logged and does NOT fail Ingest. The usage measurement
-// itself (the counter increment, the summary row) has already committed
-// by that point; failing the whole call over a secondary notification
-// signal would make a real, already-durable measurement look like it was
-// lost, which is worse than a missed notification.
+// itself (the summary row, then the counter increment) has already
+// committed by that point; failing the whole call over a secondary
+// notification signal would make a real, already-durable measurement look
+// like it was lost, which is worse than a missed notification.
 func (a *Aggregator) Ingest(ctx context.Context, event UsageEvent) error {
 	if err := event.validate(); err != nil {
 		return err
@@ -139,13 +149,12 @@ func (a *Aggregator) Ingest(ctx context.Context, event UsageEvent) error {
 		return err
 	}
 
-	quantity, crossed := a.ingestRealtime(event.TenantID, event.Feature, start, event.Quantity)
-
 	tenantCtx := pkgcore.WithTenant(ctx, pkgcore.TenantID(event.TenantID))
 	if err := a.upsertSummary(tenantCtx, event.Feature, start, end, event.Quantity); err != nil {
 		return err
 	}
 
+	quantity, crossed := a.ingestRealtime(event.TenantID, event.Feature, start, event.Quantity)
 	if crossed {
 		a.publishOverageCrossed(ctx, event, start, end, quantity, occurredAt)
 	}
@@ -156,6 +165,14 @@ func (a *Aggregator) Ingest(ctx context.Context, event UsageEvent) error {
 // periodStart) by delta, returning the counter's new value and whether
 // this call is the one that first crossed a configured overage threshold
 // within this period.
+//
+// Both callers (Ingest and IngestBillingGrade) run it only after the
+// event's usage has durably persisted -- the summary upsert, or the
+// receipt-plus-summary transaction -- so the increment and the
+// notifiedOverage latch below are never committed for an event whose
+// persistence failed: a refused event leaves the latch open, and a later
+// event that crosses can still be the one to publish
+// EventOverageThresholdCrossed.
 func (a *Aggregator) ingestRealtime(tenantID, feature string, periodStart time.Time, delta float64) (quantity float64, crossed bool) {
 	key := realtimeKey(tenantID, feature, periodStart)
 	entryAny, _ := a.counters.LoadOrStore(key, &counterEntry{})
