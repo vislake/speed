@@ -106,8 +106,11 @@ const SystemPurposeAdminCrossTenant pkgcore.SystemPurpose = "admin.cross_tenant"
 
 // NotificationTypeImpersonationStarted is the notification type D5
 // registers: the mandatory, non-unsubscribable security notification sent
-// to the target user the moment an impersonation grant is started (see
-// notifications.go for the full registration and its bilingual templates).
+// to the target user the moment an impersonation grant is started -- see
+// Register's own reg.Notifications.Add call below for the registration and
+// locales/{zh-CN,en-US}.toml for its bilingual templates (there is no
+// separate notifications.go file; both live here and in the locale
+// bundles).
 const NotificationTypeImpersonationStarted = "admin.impersonation_started"
 
 // notificationGroupSecurity is the preference-matrix group
@@ -341,12 +344,17 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // missing seam" shape org's ErrEmailIndexerRequired and config's
 // ErrCipherRequired already use.
 //
-// It deliberately declares only the round-1 subset of
-// docs/internal/23-admin.md's design: D3 (record-only, no D4 enforcement
-// seam), D5 in full, D6, and D7's read side only (no export leg, no D8
-// role-management permissions or audit actions -- admin.role.assigned/
-// revoked are round 2's, alongside rbac.AssignRole/RevokeRole's own
-// already-published domain events, which this module does not yet call).
+// It declares the full round 1 + round 2 surface docs/internal/23-admin.md
+// and AGENTS.md's "Status: round 2 of 2 landed" both describe: all nine
+// permissions (PermissionAccess through PermissionNotificationsRead), all
+// four audit actions, D3/D5/D6/D7's read side, D7's export leg (the
+// jobTypeAuditExport job handler registered on reg.Jobs.Handle), D9's usage
+// dashboard and D10's send-record search wiring. admin.role.assigned/
+// admin.role.revoked (D8) remain the one deliberate exception: rbac's own
+// AssignRole/RevokeRole already publish rbac.role_binding.assigned/revoked,
+// and RoleService's wrapper calls them exactly as any other caller would,
+// so admin declares no audit action of its own for either -- an unchanged
+// round-1 decision, not an omission this round left unfinished.
 func (m *Module) Register(reg *pkgcore.Registry) error {
 	if m.authnModule == nil {
 		return ErrAuthnServiceRequired
