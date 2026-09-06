@@ -309,6 +309,47 @@ func TestExportService_Export_ConfigReaderError_ReportsDeliveryFailed(t *testing
 	}
 }
 
+// TestExportService_Export_ConfigReaderReportingNonPositive_FallsBackToDefault
+// proves a wired ExportDeliveryExpiryReader answering a non-positive
+// duration with ok == true can never mint an already-expired (or already
+// long-past) delivery link: a zero or negative "configured" value is
+// nonsense as a link lifetime -- it would hand the subject a share that is
+// dead the instant it is created -- so exportDeliveryExpiry clamps it to
+// defaultExportDeliveryExpiry, the same <= 0 guard
+// RetentionService.RetentionWindow already applies to a configured
+// retention window. The minted share must land within the
+// defaultExportDeliveryExpiry window of the call, never at (or before) the
+// instant of the call itself.
+func TestExportService_Export_ConfigReaderReportingNonPositive_FallsBackToDefault(t *testing.T) {
+	for _, d := range []time.Duration{0, -time.Hour} {
+		t.Run(d.String(), func(t *testing.T) {
+			svc, repo, _, fakeSharing := newExportHarness(t)
+			svc.cfg = fakeExportDeliveryExpiryReader{d: d, ok: true}
+			tenant := pkgcore.TenantID("tenant-a")
+			seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
+
+			before := time.Now()
+			if _, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant); err != nil {
+				t.Fatalf("Export: %v", err)
+			}
+			after := time.Now()
+
+			call := fakeSharing.calls[0]
+			if call.ExpiresAt == nil {
+				t.Fatal("Create ExpiresAt must not be nil")
+			}
+			if !call.ExpiresAt.After(time.Now()) {
+				t.Errorf("Create ExpiresAt = %v, which is already in the past: a (d=%v, ok=true) reader answer must not mint an expired link", *call.ExpiresAt, d)
+			}
+			wantEarliest := before.Add(defaultExportDeliveryExpiry)
+			wantLatest := after.Add(defaultExportDeliveryExpiry)
+			if call.ExpiresAt.Before(wantEarliest) || call.ExpiresAt.After(wantLatest) {
+				t.Errorf("Create ExpiresAt = %v, want between %v and %v (defaultExportDeliveryExpiry, not the reader's non-positive %v)", *call.ExpiresAt, wantEarliest, wantLatest, d)
+			}
+		})
+	}
+}
+
 // TestExportService_Export_NoTenantContext_Refused proves Export refuses a
 // ctx that carries no tenant. The ctx tenant is the single data boundary an
 // export may ever read through -- every participant's Export callback reads

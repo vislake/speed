@@ -388,7 +388,16 @@ func (s *ExportService) deliverExport(ctx context.Context, tenant pkgcore.Tenant
 // when one is set and an ExportDeliveryExpiryReader was wired
 // (WithExportConfigReader), defaultExportDeliveryExpiry otherwise --
 // exactly the same "optional wiring, honest fallback" shape
-// RetentionService.RetentionWindow gives ConfigDefaultRetentionWindow.
+// RetentionService.RetentionWindow gives ConfigDefaultRetentionWindow. The
+// same guard carries over too: a wired reader answering a non-positive
+// duration -- zero or negative -- with ok == true falls back to
+// defaultExportDeliveryExpiry rather than being honored, mirroring
+// RetentionWindow's own `<= 0` clamp on a configured retention window. A
+// zero or negative value is nonsense as a link lifetime -- it would hand
+// the requesting subject a share already expired (or long past) at mint
+// time -- and the reader is a host-supplied seam whose answer this module
+// cannot trust to be sensible, so the nonsense must resolve to the honest
+// default, never to an instantly dead link minted silently.
 func (s *ExportService) exportDeliveryExpiry(ctx context.Context, tenant pkgcore.TenantID) (time.Duration, error) {
 	if s.cfg == nil {
 		return defaultExportDeliveryExpiry, nil
@@ -398,6 +407,9 @@ func (s *ExportService) exportDeliveryExpiry(ctx context.Context, tenant pkgcore
 		return 0, err
 	}
 	if !ok {
+		return defaultExportDeliveryExpiry, nil
+	}
+	if d <= 0 {
 		return defaultExportDeliveryExpiry, nil
 	}
 	return d, nil
