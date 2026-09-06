@@ -36,9 +36,17 @@ package integration_test
 // proven against a real httptest.Server in this module's own internal test
 // suite (webhook_delivery_test.go, ssrf_test.go) -- compiled and run by
 // `go test` exactly as this example is, just not as a godoc Example, since
-// exercising the SSRF-guarded transport is something only a white-box test
-// with this module's own unexported test seams can do without an actual
-// public receiver to dial.
+// exercising the SSRF-guarded transport this way needs an override
+// (WithWebhookURLValidator/WithWebhookHTTPClient, module.go -- promoted to
+// exported options in the round that follows this one, once a real host
+// needed them too, see AGENTS.md's "Seams" section) that a production
+// composition must never call, so it has no place in documentation code
+// meant to be copied. examples/reference-app/cmd/server/webhook_flow_test.go
+// is that real host: it drives this exact org.member.joined mapping through
+// a real, composed application, against a real receiver process it
+// controls, with an independently re-verified HMAC signature and a real
+// retry-then-dead-letter proof -- see go/integration/AGENTS.md's "Reference
+// app: mandatory first consumer (round 2's webhook surface)" section.
 import (
 	"context"
 	"encoding/json"

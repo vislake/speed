@@ -36,9 +36,10 @@ type Service struct {
 	mappings     eventMappingIndex
 	httpClient   *http.Client
 
-	// urlValidator overrides ValidateWebhookURL for this module's own tests
-	// (withWebhookURLValidator, module.go). Nil in every production Service
-	// -- see validateWebhookURL in webhook_service.go.
+	// urlValidator overrides ValidateWebhookURL for a test or demo host that
+	// explicitly opted in (WithWebhookURLValidator, module.go). Nil in every
+	// production Service that leaves the option unset -- see
+	// validateWebhookURL in webhook_service.go.
 	urlValidator func(ctx context.Context, url string) error
 }
 

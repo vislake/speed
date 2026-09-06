@@ -177,7 +177,7 @@ func TestService_handleDeliveryJob_Success_SignsAndDelivers(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, svc := newWebhookTestService(t, withHTTPClient(srv.Client()))
+	_, svc := newWebhookTestService(t, WithWebhookHTTPClient(srv.Client()))
 	subID, secret := createTestSubscription(t, svc, srv.URL)
 
 	delivery := createPendingDelivery(t, svc, subID)
@@ -228,7 +228,7 @@ func TestService_handleDeliveryJob_ReceiverError_MarksFailedAndRetries(t *testin
 	}))
 	defer srv.Close()
 
-	_, svc := newWebhookTestService(t, withHTTPClient(srv.Client()))
+	_, svc := newWebhookTestService(t, WithWebhookHTTPClient(srv.Client()))
 	subID, _ := createTestSubscription(t, svc, srv.URL)
 	delivery := createPendingDelivery(t, svc, subID)
 
@@ -376,7 +376,7 @@ func TestService_handleDeliveryJob_AlreadyDelivered_NoOp(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, svc := newWebhookTestService(t, withHTTPClient(srv.Client()))
+	_, svc := newWebhookTestService(t, WithWebhookHTTPClient(srv.Client()))
 	subID, _ := createTestSubscription(t, svc, srv.URL)
 	delivery := createPendingDelivery(t, svc, subID)
 

@@ -11,7 +11,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// alwaysAllowURL is a withWebhookURLValidator override that accepts any URL
+// alwaysAllowURL is a WithWebhookURLValidator override that accepts any URL
 // -- this module's own tests must be able to create subscriptions pointing
 // at an httptest.Server on loopback, which ValidateWebhookURL's real,
 // production behavior always refuses (this file's own point: SSRF
@@ -40,7 +40,7 @@ func newWebhookTestService(t *testing.T, opts ...Option) (*Module, *Service) {
 	t.Helper()
 	base := []Option{
 		WithEventMapping(testMapping),
-		withWebhookURLValidator(alwaysAllowURL),
+		WithWebhookURLValidator(alwaysAllowURL),
 	}
 	m := NewModule(newWebhookTestDB(t), append(base, opts...)...)
 	reg := newTestRegistry(t)
@@ -132,7 +132,7 @@ func TestService_CreateWebhookSubscription_UnknownEventType_Refused(t *testing.T
 // only unit-tested in isolation against ValidateWebhookURL) -- this test
 // uses the REAL validator, not alwaysAllowURL.
 func TestService_CreateWebhookSubscription_BlockedURL_Refused(t *testing.T) {
-	_, svc := newWebhookTestService(t, withWebhookURLValidator(nil)) // nil restores the production ValidateWebhookURL
+	_, svc := newWebhookTestService(t, WithWebhookURLValidator(nil)) // nil restores the production ValidateWebhookURL
 	_, err := svc.CreateWebhookSubscription(ctxFor(testTenant), CreateWebhookSubscriptionInput{
 		CreatedBy: "user-1", URL: "http://127.0.0.1/hook", EventTypes: []string{"test.thing.happened"},
 	})

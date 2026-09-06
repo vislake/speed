@@ -133,10 +133,12 @@ func tenantContext(tenant pkgcore.TenantID) context.Context {
 // over db, with no EventMapping declared. This tier's own tests exercise
 // Delete/Restore over rows seeded directly through SQL rather than through
 // Service.CreateWebhookSubscription, because Create refuses any EventTypes
-// selection naming a mapping nothing declared, and this test package
-// cannot reach the unit tier's unexported withWebhookURLValidator override
-// that would otherwise let it bypass ValidateWebhookURL's real SSRF
-// refusal -- see the individual tests' own row-seeding SQL.
+// selection naming a mapping nothing declared -- this tier deliberately
+// declares none, so seeding through SQL sidesteps that check in the same
+// motion it sidesteps ValidateWebhookURL's real SSRF refusal, without this
+// Module needing integration.WithWebhookURLValidator's now-exported
+// production-behavior override (module.go) at all; see the individual
+// tests' own row-seeding SQL.
 func attachIntegrationService(t *testing.T, db *gorm.DB) *integration.Service {
 	t.Helper()
 

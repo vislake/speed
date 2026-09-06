@@ -229,25 +229,54 @@ func WithWebhookQueue(queue jobs.Queue) Option {
 	return func(m *Module) { m.queue = queue }
 }
 
-// withHTTPClient overrides the http.Client webhook delivery attempts send
-// through (webhook_delivery.go's attemptDelivery), in place of
-// newSafeHTTPClient's SSRF-guarded default. Unexported: it exists for this
-// module's own tests, which must be able to deliver to an httptest.Server
-// listening on loopback -- exactly the address newSafeHTTPClient's transport
-// is built to refuse. Never for a host to call: a production Service always
-// uses the guarded default.
-func withHTTPClient(client *http.Client) Option {
-	return func(m *Module) { m.httpClient = client }
+// WithWebhookURLValidator overrides ValidateWebhookURL for
+// Service.CreateWebhookSubscription/UpdateWebhookSubscription's
+// creation/update-time SSRF check.
+//
+// # A deliberate, additive escape hatch for a test or demo host that
+// # explicitly opts in -- never a production weakening
+//
+// A Module built with no WithWebhookURLValidator option gets EXACTLY the
+// same behavior this module has always had: ValidateWebhookURL genuinely
+// refuses loopback, private, link-local and CGNAT addresses, with no other
+// option in this package able to relax that. This seam exists because
+// go/integration's first real consumer -- the reference-app round that
+// wired this module end to end -- found that this repository has no way to
+// stand up a "real" receiver an offline test can prove a genuine signed
+// HTTP delivery against without hitting exactly the class of address SSRF
+// protection exists to refuse: an httptest.Server listens on loopback, and
+// a sibling container reached the same way this repository's OTHER
+// Docker-backed integration tiers reach theirs (a testcontainers-mapped
+// port, or a container-to-container address on a Docker bridge network) is
+// either loopback or RFC 1918 private space either way. Relaxing this one
+// check for one Module instance a test or demo process builds for itself
+// is the only way to get a real round trip against a receiver that process
+// controls -- mirroring the identical shape go/authn's own
+// WithHTTPSMSSenderClient (go/authn/sms.go) already established for its own
+// SSRF-guarded SMS gateway client, for the same reason.
+//
+// This override MUST be wired together with WithWebhookHTTPClient, never
+// alone: overriding only this creation-time check while leaving
+// newSafeHTTPClient's dial-time re-check in place would simply move the
+// refusal from subscription creation to the first delivery attempt, and
+// overriding only the HTTP client while leaving this check in place would
+// refuse the subscription before a delivery is ever attempted.
+//
+// Never call this from a production host's own composition. It exists for
+// a test or demo process proving delivery against a receiver of its own,
+// and every production deployment must leave it unset.
+func WithWebhookURLValidator(validate func(ctx context.Context, url string) error) Option {
+	return func(m *Module) { m.urlValidator = validate }
 }
 
-// withWebhookURLValidator overrides ValidateWebhookURL for
-// Service.CreateWebhookSubscription/UpdateWebhookSubscription. Unexported,
-// for the identical reason withHTTPClient exists: this module's own tests
-// configure subscriptions pointing at an httptest.Server, which
-// ValidateWebhookURL's production behavior would always refuse. Never for a
-// host to call.
-func withWebhookURLValidator(validate func(ctx context.Context, url string) error) Option {
-	return func(m *Module) { m.urlValidator = validate }
+// WithWebhookHTTPClient overrides the http.Client webhook delivery attempts
+// send through (webhook_delivery.go's attemptDelivery), in place of
+// newSafeHTTPClient's SSRF-guarded default. See WithWebhookURLValidator's own
+// doc comment for why this seam exists, why it must always be wired
+// together with WithWebhookURLValidator, and why a production host must
+// never call it.
+func WithWebhookHTTPClient(client *http.Client) Option {
+	return func(m *Module) { m.httpClient = client }
 }
 
 // NewModule returns a Module whose table lives in db. Constructing a Module

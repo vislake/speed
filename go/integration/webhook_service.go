@@ -381,11 +381,10 @@ func (s *Service) validateEventTypes(types []string) error {
 	return nil
 }
 
-// validateWebhookURL runs ValidateWebhookURL unless a test has overridden
-// it through withWebhookURLValidator -- see that unexported Option's own
-// doc comment in module.go for why a test-only override exists at all
-// (httptest servers listen on loopback, which production validation must
-// always refuse).
+// validateWebhookURL runs ValidateWebhookURL unless a test or demo host
+// explicitly opted into an override through WithWebhookURLValidator -- see
+// that Option's own doc comment in module.go for why this seam exists at
+// all and why a production host must never call it.
 func (s *Service) validateWebhookURL(ctx context.Context, url string) error {
 	validate := s.urlValidator
 	if validate == nil {
