@@ -36,7 +36,7 @@ speed/
     docker-compose.standalone.yml     # 单容器，SQLite，零外部依赖
     docker-compose.yml                # app + postgres + redis
     docker-compose.observability.yml  # 叠加 LGTM 栈
-    docker-compose.dev-tools.yml      # 可选：MinIO / MailHog / 支付沙箱
+    docker-compose.dev-tools.yml      # 可选：RustFS / MailHog / 支付沙箱
     grafana/{provisioning,dashboards}/
   docs/
     internal/                                 # 内部设计文档（本目录）
