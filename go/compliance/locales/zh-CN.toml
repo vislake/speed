@@ -23,4 +23,6 @@
 
 "compliance.sharing_required" = "导出结果下发前必须先接入分享服务(WithSharing)。"
 
+"compliance.unsupported_report_format" = "请求的审计报表格式不受支持,请使用 csv 或 json。"
+
 "compliance.export_delivery_failed" = "导出已收集并存储完成,但未能生成分享链接下发。"

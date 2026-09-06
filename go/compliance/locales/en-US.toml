@@ -24,4 +24,6 @@
 
 "compliance.sharing_required" = "A sharing service must be wired (WithSharing) before an export can be delivered."
 
+"compliance.unsupported_report_format" = "The requested audit report format is not supported; use csv or json."
+
 "compliance.export_delivery_failed" = "The export was gathered and stored, but could not be delivered as a share link."

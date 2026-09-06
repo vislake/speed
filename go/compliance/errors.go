@@ -91,6 +91,12 @@ var (
 	// refusal for an optional seam.
 	ErrSharingRequired = apperr.Internal("compliance.sharing_required")
 
+	// ErrUnsupportedReportFormat is returned by RenderAuditReport when
+	// format is neither ReportFormatCSV nor ReportFormatJSON (including
+	// the zero value) -- a caller bug (a typo, an unwired new format),
+	// never a legal no-op.
+	ErrUnsupportedReportFormat = apperr.Invalid("compliance.unsupported_report_format")
+
 	// ErrExportDeliveryFailed wraps a failed go/sharing.Service.Create
 	// call once ExportService.Export has already gathered and stored the
 	// manifest. The manifest itself is not lost -- the caller still gets
