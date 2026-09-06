@@ -187,22 +187,43 @@ func (r *PaymentEventRepository) listPending(ctx context.Context, before time.Ti
 	return rows, nil
 }
 
-// markStatus updates one PaymentEvent row's Status to status, for the
-// caller's tenant. Used by the polling fallback to record what QueryStatus
-// found -- see PollingService.Poll's own doc comment for why this is the
-// row's own Status the poll updates, never Subscription or Invoice
-// directly (this round's own scope boundary: no processing loop exists yet
-// that would drive those transitions from a PaymentEvent row -- see
-// AGENTS.md's Known limitations).
-func (r *PaymentEventRepository) markStatus(ctx context.Context, id string, status ChannelStatus) error {
+// markStatus updates one PaymentEvent row's Status AND Amount to status and
+// amount, for the caller's tenant. Used by the polling fallback to record
+// what QueryStatus found -- see PollingService.Poll's own doc comment for
+// why this is the row's own Status the poll updates, never Subscription or
+// Invoice directly (this round's own scope boundary: no processing loop
+// exists yet that would drive those transitions from a PaymentEvent row --
+// see AGENTS.md's Known limitations).
+//
+// amount is always written, never left as whatever the row already held:
+// event.go's normalizeCheckoutSession deliberately zeroes Amount on the
+// ChannelStatusPending row a checkout.session.completed-but-unpaid webhook
+// inserts (an unsettled session carries no real amount yet), so this row's
+// AmountCents/Currency are provisional until this exact call resolves them
+// to what QueryStatus authoritatively reports -- a stale zero-amount
+// Succeeded row is precisely the "a genuinely successful, money-moved
+// payment is permanently recorded ... as a zero-amount success" defect this
+// method exists to prevent, since (per event.go's own doc comment on
+// eventTypeCheckoutSessionAsyncFailed/async_payment_succeeded not being
+// recognized) this polling fallback is often the ONLY path that ever
+// promotes such a row out of Pending.
+func (r *PaymentEventRepository) markStatus(ctx context.Context, id string, status ChannelStatus, amount Money) error {
 	// The tenant filter is never hand-written here (backend-coding-
 	// standards §3.2): PaymentEvent implements dbkit.TenantScoped, so the
 	// isolation plugin injects "WHERE tenant_id = ?" from ctx
 	// automatically. Updates is called with a struct pointer directly,
 	// never through .Model/.Table/.Raw -- the identical sanctioned shape
 	// CreditService's own CAS transitions use (credit_service.go).
+	update := PaymentEvent{Status: string(status)}
+	update.SetAmount(amount)
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
-		return tx.Where("id = ?", id).Updates(&PaymentEvent{Status: string(status)}).Error
+		// Select forces status/amount_cents/currency into the SET clause
+		// even when amount is itself zero-valued (a struct-based Updates
+		// otherwise silently drops zero-valued fields, the same reason
+		// go/storage's repository.go reaches for Select("*") on its own
+		// full-row saves) -- this call must always overwrite whatever
+		// AmountCents/Currency the row already held, never merge with it.
+		return tx.Select("status", "amount_cents", "currency").Where("id = ?", id).Updates(&update).Error
 	})
 	if err != nil {
 		return fmt.Errorf("billing: mark payment event %q status: %w", id, err)

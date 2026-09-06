@@ -152,7 +152,7 @@ func TestPaymentEventRepository_MarkStatus(t *testing.T) {
 		t.Fatalf("InsertIfNew: %v", err)
 	}
 
-	if err := repo.markStatus(ctx, evt.ID, ChannelStatusSucceeded); err != nil {
+	if err := repo.markStatus(ctx, evt.ID, ChannelStatusSucceeded, Money{Cents: 2900, Currency: "usd"}); err != nil {
 		t.Fatalf("markStatus: %v", err)
 	}
 
@@ -162,6 +162,51 @@ func TestPaymentEventRepository_MarkStatus(t *testing.T) {
 	}
 	if got.Status != string(ChannelStatusSucceeded) {
 		t.Errorf("Status = %q, want %q", got.Status, ChannelStatusSucceeded)
+	}
+	if got.Amount() != (Money{Cents: 2900, Currency: "usd"}) {
+		t.Errorf("Amount = %+v, want {2900 usd}", got.Amount())
+	}
+}
+
+// TestPaymentEventRepository_MarkStatus_OverwritesZeroAmount is the
+// regression test for the "a payment event zeroed to Amount=0 by the
+// pending-branch fix keeps Amount=0 forever even after resolving to
+// Succeeded" defect: a row inserted with a zero-valued Amount (exactly the
+// shape event.go's normalizeCheckoutSession's ChannelStatusPending branch
+// produces for an unsettled checkout.session.completed webhook) must have
+// its real, freshly re-queried Amount actually persisted when markStatus
+// later resolves it to Succeeded -- proving markStatus's third parameter is
+// wired all the way through, not silently dropped. This fails on the
+// pre-fix markStatus (which took no Money parameter at all and only ever
+// wrote Status, leaving AmountCents/Currency at their zero-valued insert-
+// time values forever).
+func TestPaymentEventRepository_MarkStatus_OverwritesZeroAmount(t *testing.T) {
+	repo := NewPaymentEventRepository(newTestDB(t))
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	evt := newTestPaymentEvent("stripe", "evt_zero_amount", ChannelStatusPending, time.Now())
+	evt.SetAmount(Money{}) // the zeroed shape normalizeCheckoutSession's pending branch inserts
+	if _, err := repo.InsertIfNew(ctx, evt); err != nil {
+		t.Fatalf("InsertIfNew: %v", err)
+	}
+
+	// The active-polling fallback re-queries and finds the payment actually
+	// succeeded, with a real amount -- QueryStatus's own authoritative
+	// answer, never the webhook's zeroed number.
+	resolved := Money{Cents: 2900, Currency: "usd"}
+	if err := repo.markStatus(ctx, evt.ID, ChannelStatusSucceeded, resolved); err != nil {
+		t.Fatalf("markStatus: %v", err)
+	}
+
+	got, err := repo.Get(ctx, evt.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != string(ChannelStatusSucceeded) {
+		t.Errorf("Status = %q, want %q", got.Status, ChannelStatusSucceeded)
+	}
+	if got.Amount() != resolved {
+		t.Errorf("Amount = %+v, want %+v -- a real, money-moved payment must not be permanently ledgered as a zero-amount success", got.Amount(), resolved)
 	}
 }
 

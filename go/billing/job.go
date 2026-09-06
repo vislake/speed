@@ -145,7 +145,7 @@ func (s *PollingService) Poll(ctx context.Context) error {
 			continue
 		}
 
-		status, _, err := gw.QueryStatus(ctx, ChannelReference(row.ChannelReference))
+		status, amount, err := gw.QueryStatus(ctx, ChannelReference(row.ChannelReference))
 		if err != nil {
 			log.Warn("payment poll: query status failed",
 				"channel", row.Channel, "payment_event_id", row.ID, "error", err)
@@ -155,7 +155,17 @@ func (s *PollingService) Poll(ctx context.Context) error {
 			// Still pending: nothing changed, nothing to write.
 			continue
 		}
-		if err := s.events.markStatus(ctx, row.ID, status); err != nil {
+		// amount is QueryStatus's own freshly re-queried Money, persisted
+		// alongside the status transition -- never discarded. A row can
+		// reach this point holding a zero-valued Amount (event.go's
+		// normalizeCheckoutSession deliberately zeroes it on the
+		// ChannelStatusPending row a checkout.session.completed-but-unpaid
+		// webhook inserts, since an unsettled session carries no real
+		// amount yet), and this is often the ONLY place that ever resolves
+		// such a row: recording only the Status here would permanently
+		// ledger a genuinely successful, money-moved payment as a
+		// zero-amount success.
+		if err := s.events.markStatus(ctx, row.ID, status, amount); err != nil {
 			log.Warn("payment poll: mark status failed",
 				"channel", row.Channel, "payment_event_id", row.ID, "error", err)
 			continue

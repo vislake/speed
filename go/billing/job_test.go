@@ -64,6 +64,51 @@ func TestPollingService_Poll_ResolvesStuckPendingRow(t *testing.T) {
 	if got.Status != string(ChannelStatusSucceeded) {
 		t.Errorf("Status = %q, want succeeded", got.Status)
 	}
+	if got.Amount() != gw.amount {
+		t.Errorf("Amount = %+v, want %+v -- QueryStatus's freshly re-queried Money must be persisted, not discarded", got.Amount(), gw.amount)
+	}
+}
+
+// TestPollingService_Poll_ResolvesZeroedAmountRow is the end-to-end
+// regression test for "a payment event zeroed to Amount=0 by the pending-
+// branch fix keeps Amount=0 forever even after resolving to Succeeded": a
+// row inserted with a zero-valued Amount -- exactly the shape event.go's
+// normalizeCheckoutSession's ChannelStatusPending branch produces for an
+// unsettled checkout.session.completed webhook -- must land with the real,
+// freshly re-queried Amount once Poll resolves it, driven through the whole
+// Poll call (not just markStatus directly, as
+// TestPaymentEventRepository_MarkStatus_OverwritesZeroAmount already proves
+// at the repository layer). This fails on the pre-fix Poll, which discarded
+// QueryStatus's Money entirely (`status, _, err := gw.QueryStatus(...)`)
+// and called markStatus with no amount to persist at all.
+func TestPollingService_Poll_ResolvesZeroedAmountRow(t *testing.T) {
+	events := NewPaymentEventRepository(newTestDB(t))
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	evt := newTestPaymentEvent("stripe", "evt_1", ChannelStatusPending, time.Now().Add(-time.Hour))
+	evt.SetAmount(Money{}) // the zeroed shape a completed-but-unpaid webhook inserts
+	if _, err := events.InsertIfNew(ctx, evt); err != nil {
+		t.Fatalf("InsertIfNew: %v", err)
+	}
+
+	resolved := Money{Cents: 2900, Currency: "usd"}
+	gw := &fakeGateway{status: ChannelStatusSucceeded, amount: resolved}
+	svc := newPollingService(events, map[string]PaymentGateway{"stripe": gw}, nil)
+
+	if err := svc.Poll(ctx); err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+
+	got, err := events.Get(ctx, evt.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != string(ChannelStatusSucceeded) {
+		t.Errorf("Status = %q, want succeeded", got.Status)
+	}
+	if got.Amount() != resolved {
+		t.Errorf("Amount = %+v, want %+v -- a real, money-moved payment must not be permanently ledgered as a zero-amount success", got.Amount(), resolved)
+	}
 }
 
 func TestPollingService_Poll_SkipsRowsNotYetStuck(t *testing.T) {
