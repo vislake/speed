@@ -7,10 +7,12 @@ import (
 	"testing"
 
 	aigateway "github.com/vislake/speed/go/ai-gateway"
+	"github.com/vislake/speed/go/billing"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/storage"
 )
 
@@ -82,11 +84,13 @@ var _ aigateway.ImageProvider = (*fakeImageProvider)(nil)
 // gateway_test.go/image_gateway_test.go), so this double exists only to let
 // GenerateImage's own enqueue succeed; nothing here runs the resulting job.
 type recordingQueue struct {
-	lastTask jobs.Task
-	jobID    jobs.JobID
+	lastTask     jobs.Task
+	jobID        jobs.JobID
+	enqueueCalls int
 }
 
 func (q *recordingQueue) Enqueue(_ context.Context, task jobs.Task, _ ...jobs.EnqueueOption) (jobs.JobID, error) {
+	q.enqueueCalls++
 	q.lastTask = task
 	return q.jobID, nil
 }
@@ -96,17 +100,41 @@ func (q *recordingQueue) Cancel(context.Context, jobs.JobID) error           { r
 // compile-time check that *recordingQueue satisfies jobs.Queue.
 var _ jobs.Queue = (*recordingQueue)(nil)
 
+// newTestCreditService returns a billing.CreditService backed by a fresh,
+// per-test SQLite database carrying go/billing's real migrations --
+// mirroring newTestService's own "apply the real, versioned migration
+// files from zero" rule, applied here to go/billing's tables instead of
+// go/ai-gateway's.
+func newTestCreditService(t *testing.T) *billing.CreditService {
+	t.Helper()
+
+	db := dbtest.NewSQLite(t)
+	billingModule := billing.NewModule(db, nil)
+
+	migrations := dbkit.NewMigrationRegistry()
+	if err := migrations.Register(billingModule); err != nil {
+		t.Fatalf("register billing migrations: %v", err)
+	}
+	if err := migrations.Apply(context.Background(), db, dbkit.DialectSQLite); err != nil {
+		t.Fatalf("apply billing migrations: %v", err)
+	}
+	return billingModule.Credits()
+}
+
 // newTestService returns a Service backed by a fresh, per-test SQLite
 // database carrying ai-gateway's real migrations, with provider registered
 // as the sole ImageProviderRegistry entry LogicalModel routes to. queue
-// records what Service.Simulate causes Gateway.GenerateImage to enqueue.
+// records what Service.Simulate causes Gateway.GenerateImage to enqueue,
+// and credits (nil is legal -- see Service's own doc comment on its
+// credits field) is the CreditService Simulate reserves against and
+// NotifyOnCompletion settles.
 //
 // The storage.ObjectService handed to WithImageGeneration is real but never
 // actually reads or writes bytes in this file's tests: Service.Simulate
 // only reaches Gateway.GenerateImage's enqueue path, never the job handler
 // that would call it -- go/ai-gateway's own image_gateway_test.go is where
 // that handler's storage I/O is proven.
-func newTestService(t *testing.T, provider aigateway.ImageProvider, queue *recordingQueue) *Service {
+func newTestService(t *testing.T, provider aigateway.ImageProvider, queue *recordingQueue, credits *billing.CreditService) *Service {
 	t.Helper()
 	registerCredentialSerializer()
 
@@ -153,13 +181,13 @@ func newTestService(t *testing.T, provider aigateway.ImageProvider, queue *recor
 		aigateway.WithImageGeneration(queue, storageModule.ObjectService()),
 	)
 
-	return NewService(gateway, pkgcore.NewMemoryEventBus())
+	return NewService(gateway, credits, pkgcore.NewMemoryEventBus())
 }
 
 func TestService_Simulate_EnqueuesImageToImageUnderTheLogicalModel(t *testing.T) {
 	provider := &fakeImageProvider{}
 	queue := &recordingQueue{jobID: "job-123"}
-	svc := newTestService(t, provider, queue)
+	svc := newTestService(t, provider, queue, nil)
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
 	jobID, err := svc.Simulate(ctx, "photo-object-1", "user-1")
@@ -179,7 +207,7 @@ func TestService_Simulate_EnqueuesImageToImageUnderTheLogicalModel(t *testing.T)
 }
 
 func TestService_Simulate_MissingTenant_Refused(t *testing.T) {
-	svc := newTestService(t, &fakeImageProvider{}, &recordingQueue{jobID: "job-unused"})
+	svc := newTestService(t, &fakeImageProvider{}, &recordingQueue{jobID: "job-unused"}, nil)
 
 	if _, err := svc.Simulate(context.Background(), "photo-object-1", "user-1"); err == nil {
 		t.Fatal("Simulate with no tenant context succeeded, want an error")
@@ -187,7 +215,7 @@ func TestService_Simulate_MissingTenant_Refused(t *testing.T) {
 }
 
 func TestService_Simulate_EmptyPhotoObjectID_Refused(t *testing.T) {
-	svc := newTestService(t, &fakeImageProvider{}, &recordingQueue{jobID: "job-unused"})
+	svc := newTestService(t, &fakeImageProvider{}, &recordingQueue{jobID: "job-unused"}, nil)
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
 	if _, err := svc.Simulate(ctx, "", "user-1"); err == nil {
@@ -220,7 +248,7 @@ func subscribeSimulationCompleted(bus pkgcore.EventBus) func() []SimulationCompl
 
 func TestService_NotifyOnCompletion_PublishesOnceForASucceededJobWithARecipient(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	svc := NewService(nil, bus)
+	svc := NewService(nil, nil, bus)
 	events := subscribeSimulationCompleted(bus)
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
@@ -264,7 +292,7 @@ func TestService_NotifyOnCompletion_PublishesOnceForASucceededJobWithARecipient(
 
 func TestService_NotifyOnCompletion_DeadLetterReportsFailureWithNoOutputObject(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	svc := NewService(nil, bus)
+	svc := NewService(nil, nil, bus)
 	events := subscribeSimulationCompleted(bus)
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
@@ -290,7 +318,7 @@ func TestService_NotifyOnCompletion_DeadLetterReportsFailureWithNoOutputObject(t
 
 func TestService_NotifyOnCompletion_NoRecipientOnFile_NeverPublishes(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	svc := NewService(nil, bus)
+	svc := NewService(nil, nil, bus)
 	events := subscribeSimulationCompleted(bus)
 
 	job := &jobs.Job{ID: "job-no-recipient", TenantID: "tenant-acme", Status: jobs.StatusSucceeded}
@@ -304,7 +332,7 @@ func TestService_NotifyOnCompletion_NoRecipientOnFile_NeverPublishes(t *testing.
 
 func TestService_NotifyOnCompletion_NonTerminalStatus_NeverPublishes(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	svc := NewService(nil, bus)
+	svc := NewService(nil, nil, bus)
 	events := subscribeSimulationCompleted(bus)
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
@@ -322,8 +350,198 @@ func TestService_NotifyOnCompletion_NonTerminalStatus_NeverPublishes(t *testing.
 	}
 }
 
+// TestService_Simulate_InsufficientCredits_RefusesBeforeAnyEnqueue is this
+// round's mandated proof (root CLAUDE.md's "Reference App" section, and the
+// task that opened this round): a tenant whose balance cannot cover
+// CreditsPerSimulation is refused with billing.ErrInsufficientCredits
+// BEFORE Gateway.GenerateImage ever reaches the queue -- queue.enqueueCalls
+// stays at zero, proving go/ai-gateway (and, transitively, any real
+// vendor) was never invoked.
+func TestService_Simulate_InsufficientCredits_RefusesBeforeAnyEnqueue(t *testing.T) {
+	credits := newTestCreditService(t)
+	queue := &recordingQueue{jobID: "job-should-never-run"}
+	svc := newTestService(t, &fakeImageProvider{}, queue, credits)
+
+	// tenant-acme's balance was never granted anything -- CreditService
+	// materializes a fresh, all-zero balance on first read, so
+	// CreditsPerSimulation (10) already exceeds it.
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	jobID, err := svc.Simulate(ctx, "photo-1", "")
+	if err == nil {
+		t.Fatalf("Simulate with an insufficient balance succeeded (job %q), want billing.ErrInsufficientCredits", jobID)
+	}
+	if jobID != "" {
+		t.Errorf("Simulate returned job id %q on refusal, want empty", jobID)
+	}
+	appErr, ok := apperr.As(err)
+	if !ok || appErr.Code != "billing.insufficient_credits" {
+		t.Fatalf("Simulate error = %v, want a coded billing.insufficient_credits error", err)
+	}
+	if queue.enqueueCalls != 0 {
+		t.Errorf("queue.enqueueCalls = %d, want 0 -- Gateway.GenerateImage (and go/ai-gateway) must never be reached on an insufficient balance", queue.enqueueCalls)
+	}
+
+	bal, err := credits.Balance(ctx)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.Available != 0 || bal.Reserved != 0 {
+		t.Errorf("balance after a refused reservation = %+v, want zero on both -- PreDeduct must leave no trace", bal)
+	}
+}
+
+// TestService_Simulate_SufficientCredits_ReservesBeforeEnqueue proves the
+// success half of the same ordering: a tenant with enough balance is
+// debited into Reserved (never Available -> nothing, and never a second,
+// unrelated bucket) BEFORE the enqueue happens, and the enqueue then
+// genuinely runs.
+func TestService_Simulate_SufficientCredits_ReservesBeforeEnqueue(t *testing.T) {
+	credits := newTestCreditService(t)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	if _, err := credits.Grant(ctx, billing.GrantInput{Amount: 100, Reason: "test:seed"}); err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+
+	queue := &recordingQueue{jobID: "job-99"}
+	svc := newTestService(t, &fakeImageProvider{}, queue, credits)
+
+	jobID, err := svc.Simulate(ctx, "photo-1", "")
+	if err != nil {
+		t.Fatalf("Simulate: %v", err)
+	}
+	if jobID != queue.jobID {
+		t.Fatalf("Simulate returned job id %q, want the queue's %q", jobID, queue.jobID)
+	}
+	if queue.enqueueCalls != 1 {
+		t.Fatalf("queue.enqueueCalls = %d, want exactly 1", queue.enqueueCalls)
+	}
+
+	bal, err := credits.Balance(ctx)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.Available != 100-CreditsPerSimulation {
+		t.Errorf("Available = %d, want %d", bal.Available, 100-CreditsPerSimulation)
+	}
+	if bal.Reserved != CreditsPerSimulation {
+		t.Errorf("Reserved = %d, want %d", bal.Reserved, CreditsPerSimulation)
+	}
+}
+
+// newSimulateResultJob builds the *jobs.Job NotifyOnCompletion expects for
+// a StatusSucceeded job carrying outputObjectID as its ImageJobResult.
+func newSimulateResultJob(t *testing.T, jobID jobs.JobID, tenantID pkgcore.TenantID, status jobs.Status, outputObjectID string) *jobs.Job {
+	t.Helper()
+	job := &jobs.Job{ID: jobID, TenantID: tenantID, Status: status}
+	if status == jobs.StatusSucceeded {
+		data, err := json.Marshal(aigateway.ImageJobResult{OutputObjectID: outputObjectID})
+		if err != nil {
+			t.Fatalf("marshal ImageJobResult: %v", err)
+		}
+		job.Result = &jobs.Result{Data: data}
+	}
+	return job
+}
+
+// TestService_NotifyOnCompletion_Succeeded_ConfirmsReservation proves the
+// Confirm half of settleCredit end to end: a succeeded job's reservation
+// becomes a permanent spend (Reserved returns to zero, Available stays
+// debited), and a second, repeated poll of the same already-terminal job
+// settles again without error or double-applying -- the "provably safe
+// under a retried job settlement" property the task that opened this round
+// requires.
+func TestService_NotifyOnCompletion_Succeeded_ConfirmsReservation(t *testing.T) {
+	credits := newTestCreditService(t)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	if _, err := credits.Grant(ctx, billing.GrantInput{Amount: 100, Reason: "test:seed"}); err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+
+	queue := &recordingQueue{jobID: "job-succeed-1"}
+	svc := newTestService(t, &fakeImageProvider{}, queue, credits)
+	jobID, err := svc.Simulate(ctx, "photo-1", "")
+	if err != nil {
+		t.Fatalf("Simulate: %v", err)
+	}
+
+	job := newSimulateResultJob(t, jobID, "tenant-acme", jobs.StatusSucceeded, "object-out-1")
+	if err = svc.NotifyOnCompletion(ctx, job); err != nil {
+		t.Fatalf("NotifyOnCompletion: %v", err)
+	}
+
+	bal, err := credits.Balance(ctx)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.Available != 100-CreditsPerSimulation {
+		t.Errorf("Available after confirm = %d, want %d", bal.Available, 100-CreditsPerSimulation)
+	}
+	if bal.Reserved != 0 {
+		t.Errorf("Reserved after confirm = %d, want 0", bal.Reserved)
+	}
+
+	// A repeated poll of the same, already-settled job must settle again
+	// without error and without moving the balance a second time.
+	if err = svc.NotifyOnCompletion(ctx, job); err != nil {
+		t.Fatalf("NotifyOnCompletion (repeated poll): %v", err)
+	}
+	balAgain, err := credits.Balance(ctx)
+	if err != nil {
+		t.Fatalf("Balance (after repeated poll): %v", err)
+	}
+	if *balAgain != *bal {
+		t.Errorf("balance changed on a repeated settle of an already-confirmed job: first %+v, second %+v", *bal, *balAgain)
+	}
+}
+
+// TestService_NotifyOnCompletion_DeadLetter_RefundsReservation proves the
+// Refund half: a dead-lettered job's reservation is released back to
+// Available in full, and a repeated poll settles again without error or
+// double-refunding.
+func TestService_NotifyOnCompletion_DeadLetter_RefundsReservation(t *testing.T) {
+	credits := newTestCreditService(t)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	if _, err := credits.Grant(ctx, billing.GrantInput{Amount: 100, Reason: "test:seed"}); err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+
+	queue := &recordingQueue{jobID: "job-fail-1"}
+	svc := newTestService(t, &fakeImageProvider{}, queue, credits)
+	jobID, err := svc.Simulate(ctx, "photo-1", "")
+	if err != nil {
+		t.Fatalf("Simulate: %v", err)
+	}
+
+	job := newSimulateResultJob(t, jobID, "tenant-acme", jobs.StatusDeadLetter, "")
+	if err = svc.NotifyOnCompletion(ctx, job); err != nil {
+		t.Fatalf("NotifyOnCompletion: %v", err)
+	}
+
+	bal, err := credits.Balance(ctx)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.Available != 100 {
+		t.Errorf("Available after refund = %d, want 100 (back to the pre-reservation balance)", bal.Available)
+	}
+	if bal.Reserved != 0 {
+		t.Errorf("Reserved after refund = %d, want 0", bal.Reserved)
+	}
+
+	if err = svc.NotifyOnCompletion(ctx, job); err != nil {
+		t.Fatalf("NotifyOnCompletion (repeated poll): %v", err)
+	}
+	balAgain, err := credits.Balance(ctx)
+	if err != nil {
+		t.Fatalf("Balance (after repeated poll): %v", err)
+	}
+	if *balAgain != *bal {
+		t.Errorf("balance changed on a repeated settle of an already-refunded job: first %+v, second %+v", *bal, *balAgain)
+	}
+}
+
 func TestService_NotifyOnCompletion_NilBus_IsANoOp(t *testing.T) {
-	svc := NewService(nil, nil)
+	svc := NewService(nil, nil, nil)
 	job := &jobs.Job{ID: "job-x", TenantID: "tenant-acme", Status: jobs.StatusSucceeded}
 	// Never given a recipient, so this would be a no-op regardless, but the
 	// point is that a nil bus must not panic even when it IS reached.

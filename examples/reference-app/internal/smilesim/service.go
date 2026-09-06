@@ -43,15 +43,49 @@
 // a process restart, which is an acceptable limitation for a reference
 // app's own demo feature, never for a real deployment's own notification
 // pipeline.
+//
+// # Credit accounting
+//
+// This is also the reference app's mandatory first consumer of
+// go/billing's CreditService (docs/internal/15-roadmap.md's M2 exit
+// condition's credit-pack-purchase, credit-reserve/refund and
+// usage/billing-display leg), following the identical "a module API that
+// it does not actually use is not considered done" rule root CLAUDE.md's
+// Reference App section states.
+// Simulate reserves (PreDeduct) CreditsPerSimulation credits BEFORE ever
+// calling Gateway.GenerateImage -- an insufficient balance refuses the
+// request with billing.ErrInsufficientCredits and never reaches
+// go/ai-gateway at all -- and NotifyOnCompletion settles that reservation
+// once the job reaches a terminal status: Confirm on StatusSucceeded,
+// Refund on StatusDeadLetter/StatusCancelled. Every credit-pack-purchase
+// leg (a real Stripe/Alipay/WeChat sandbox charge) is deliberately out of
+// scope here -- see cmd/server/server.go's seedDemoCredits for the
+// Grant-based demo stand-in this round ships instead, and
+// go/billing/gateway/AGENTS.md for why no live payment credentials exist
+// in this environment.
+//
+// creditKeys (below) is the same "in-memory, keyed by job id" shape
+// recipients/notified already establish, storing the CreditTransaction
+// idempotency key Simulate's PreDeduct used so NotifyOnCompletion's later
+// Confirm/Refund settles the SAME reservation rather than minting a new
+// one. A Service built with a nil CreditService (NewService's credits
+// parameter) performs no credit accounting at all -- the same nil-is-legal
+// default every other optional host seam in this codebase takes when
+// unwired (mirroring bus's own nil-is-legal contract just above).
 package smilesim
 
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 
+	"github.com/google/uuid"
+
 	aigateway "github.com/vislake/speed/go/ai-gateway"
+	"github.com/vislake/speed/go/billing"
 	"github.com/vislake/speed/go/jobs"
+	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -71,6 +105,27 @@ const LogicalModel = "image:smile-simulation"
 const simulationPrompt = "Simulate a bright, straight, natural-looking " +
 	"smile for this dental patient photo. Keep the rest of the face, " +
 	"lighting and background unchanged."
+
+// CreditsPerSimulation is the flat credit cost Simulate reserves for one
+// smile-simulation request -- a reference-app-level demo business policy
+// (this round's own scope), not a mechanism go/billing itself prescribes:
+// a real deployment would size this per vendor cost, per resolution tier,
+// or read it from a go/config item, none of which this round needs to
+// prove the reserve/confirm/refund mechanism end to end.
+const CreditsPerSimulation int64 = 10
+
+// creditReasonSimulate is the free-text Reason every credit reservation
+// this Service opens carries (billing.PreDeductInput.Reason) -- a short,
+// human-readable note on the resulting ledger entry, never parsed back by
+// code.
+//
+// #nosec G101 -- this is a ledger annotation string, not a credential:
+// gosec's hardcoded-credential heuristic matches on the "cred" substring
+// inside "creditReasonSimulate" alone, the same class of false positive
+// cmd/server/demo_users.go's own demoUsersPasswordEnv constant already
+// documents (there, the "Password" substring) for a differently-shaped
+// identifier.
+const creditReasonSimulate = "smilesim:simulate"
 
 // EventSimulationCompleted is the domain event type Service publishes
 // (via NotifyOnCompletion) once a smile-simulation job reaches a terminal
@@ -122,32 +177,54 @@ type SimulationCompletedPayload struct {
 type Service struct {
 	gateway *aigateway.Gateway
 
+	// credits is the billing.CreditService Simulate reserves against and
+	// NotifyOnCompletion settles -- see the package doc comment's "Credit
+	// accounting" section. Nil is legal: Simulate then performs no credit
+	// accounting at all (no PreDeduct call, never a refusal on balance),
+	// and NotifyOnCompletion never calls Confirm/Refund -- mirroring how a
+	// Gateway with no wired Entitlements enforces no quota rather than
+	// panicking.
+	credits *billing.CreditService
+
 	// bus is where NotifyOnCompletion publishes EventSimulationCompleted.
 	// Nil is legal: NotifyOnCompletion is then simply a no-op, mirroring
 	// how a Gateway with no wired Entitlements enforces no quota rather
 	// than panicking.
 	bus pkgcore.EventBus
 
-	// mu guards recipients and notified, both keyed by the image job's
-	// id -- Simulate writes to the first, NotifyOnCompletion reads both
-	// and writes to the second, and both may be called concurrently
-	// (a real client polls the job-status route from its own goroutine
-	// independent of any other request this process is serving).
+	// mu guards recipients, notified and creditKeys, all keyed by the
+	// image job's id -- Simulate writes to recipients and creditKeys,
+	// NotifyOnCompletion reads all three, and both methods may be called
+	// concurrently (a real client polls the job-status route from its own
+	// goroutine independent of any other request this process is
+	// serving).
 	mu         sync.Mutex
 	recipients map[jobs.JobID]string
 	notified   map[jobs.JobID]bool
+
+	// creditKeys remembers, for each job Simulate reserved credits for,
+	// the CreditTransaction idempotency key PreDeduct used -- so
+	// NotifyOnCompletion's later Confirm/Refund settles the SAME
+	// reservation Simulate opened rather than minting a new one. A job
+	// Simulate ran with credits == nil (or a Service with no CreditService
+	// wired at all) has no entry here, which is exactly what makes
+	// NotifyOnCompletion's credit-settlement step a no-op for it.
+	creditKeys map[jobs.JobID]string
 }
 
-// NewService returns a Service asking gateway for simulations and
-// publishing simulation-completed events on bus (nil is legal -- see
-// Service's own doc comment on the bus field). Constructing one performs
-// no I/O.
-func NewService(gateway *aigateway.Gateway, bus pkgcore.EventBus) *Service {
+// NewService returns a Service asking gateway for simulations, reserving
+// and settling credits against credits (nil is legal -- see Service's own
+// doc comment on the credits field), and publishing simulation-completed
+// events on bus (nil is legal -- see Service's own doc comment on the bus
+// field). Constructing one performs no I/O.
+func NewService(gateway *aigateway.Gateway, credits *billing.CreditService, bus pkgcore.EventBus) *Service {
 	return &Service{
 		gateway:    gateway,
+		credits:    credits,
 		bus:        bus,
 		recipients: make(map[jobs.JobID]string),
 		notified:   make(map[jobs.JobID]bool),
+		creditKeys: make(map[jobs.JobID]string),
 	}
 }
 
@@ -172,7 +249,57 @@ func NewService(gateway *aigateway.Gateway, bus pkgcore.EventBus) *Service {
 // user once the job reaches a terminal status. An empty recipientUserID
 // is legal and common (a caller with no one to notify, or a test) --
 // NotifyOnCompletion simply never publishes for that job.
+//
+// # Credit reservation
+//
+// When this Service was built with a non-nil CreditService (see the
+// package doc comment's "Credit accounting" section), Simulate reserves
+// CreditsPerSimulation credits via CreditService.PreDeduct BEFORE calling
+// Gateway.GenerateImage at all: an insufficient balance returns
+// billing.ErrInsufficientCredits (a coded 409, never a silent fallback)
+// and Gateway.GenerateImage -- and therefore go/ai-gateway, and any real
+// vendor it might eventually reach -- is never called.
+//
+// The reservation's idempotency key cannot be the eventual job id: PreDeduct
+// must run before GenerateImage even executes, and GenerateImage (via its
+// own jobs.Queue.Enqueue) is what mints the job id, so the key does not
+// exist yet at the point this method must already have decided whether to
+// refuse. Simulate instead mints one fresh, stable id per call
+// (uuid.NewString(), prefixed for readability) and reuses that SAME id for
+// every subsequent operation tied to this one generation request: it is
+// PreDeduct's IdempotencyKey now, and -- once GenerateImage has returned a
+// real job id -- creditKeys[jobID] remembers it so NotifyOnCompletion's
+// later Confirm/Refund settles this exact reservation, never a fresh one.
+// This is "stable, tied to the specific generation request" in the sense
+// CreditService's own idempotency contract requires (PreDeduct.go's doc
+// comment): minted once and reused verbatim by every settlement call for
+// this request, never regenerated per call the way that would defeat
+// Confirm/Refund's own idempotent-retry contract.
+//
+// If GenerateImage itself fails AFTER the reservation succeeded (an
+// unrouted model, a missing credential, an enqueue failure), the
+// reservation is refunded immediately -- there will be no job, and
+// therefore no later NotifyOnCompletion call, to settle it otherwise. A
+// refund failure at that point is logged and swallowed rather than masking
+// GenerateImage's own, more actionable error: the reservation is left
+// Reserved rather than lost, a bookkeeping loose end root CLAUDE.md's
+// audit/reconciliation tooling -- not this method -- is the right place to
+// resolve, exactly the "log and swallow, never fail an otherwise-complete
+// operation over a secondary side effect" stance recordImageUsage already
+// takes in go/ai-gateway for its own usage-reporting side effect.
 func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID string) (jobs.JobID, error) {
+	var creditKey string
+	if s.credits != nil {
+		creditKey = "smilesim:" + uuid.NewString()
+		if _, err := s.credits.PreDeduct(ctx, billing.PreDeductInput{
+			Amount:         CreditsPerSimulation,
+			IdempotencyKey: creditKey,
+			Reason:         creditReasonSimulate,
+		}); err != nil {
+			return "", err
+		}
+	}
+
 	jobID, err := s.gateway.GenerateImage(ctx, aigateway.ImageRequest{
 		Model:         LogicalModel,
 		Operation:     aigateway.ImageOperationImageToImage,
@@ -180,13 +307,23 @@ func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID s
 		InputObjectID: photoObjectID,
 	})
 	if err != nil {
+		if creditKey != "" {
+			if _, refundErr := s.credits.Refund(ctx, creditKey); refundErr != nil {
+				obs.FromContext(ctx).Warn("smilesim: refund credit reservation after a failed enqueue failed",
+					"credit_idempotency_key", creditKey, "error", refundErr)
+			}
+		}
 		return "", err
 	}
-	if recipientUserID != "" {
-		s.mu.Lock()
-		s.recipients[jobID] = recipientUserID
-		s.mu.Unlock()
+
+	s.mu.Lock()
+	if creditKey != "" {
+		s.creditKeys[jobID] = creditKey
 	}
+	if recipientUserID != "" {
+		s.recipients[jobID] = recipientUserID
+	}
+	s.mu.Unlock()
 	return jobID, nil
 }
 
@@ -213,6 +350,10 @@ func (s *Service) NotifyOnCompletion(ctx context.Context, job *jobs.Job) error {
 	case jobs.StatusSucceeded, jobs.StatusDeadLetter, jobs.StatusCancelled:
 	default:
 		return nil
+	}
+
+	if err := s.settleCredit(ctx, job); err != nil {
+		return err
 	}
 
 	s.mu.Lock()
@@ -247,4 +388,51 @@ func (s *Service) NotifyOnCompletion(ctx context.Context, job *jobs.Job) error {
 		TenantID: job.TenantID,
 		Payload:  payload,
 	})
+}
+
+// settleCredit is NotifyOnCompletion's credit half: Confirm on a succeeded
+// job, Refund on a dead-lettered or cancelled one, against the SAME
+// reservation Simulate opened for job -- see the package doc comment's
+// "Credit accounting" section and Simulate's own doc comment on its
+// idempotency-key shape. A no-op when this Service has no CreditService
+// wired, or when Simulate never reserved credits for job (job.ID has no
+// entry in creditKeys -- e.g. a Service built with credits == nil, or a
+// job that predates this round's own credit wiring).
+//
+// Confirm/Refund are themselves idempotent under retry (CreditService's
+// own compare-and-swap contract -- credit_service.go's Confirm doc
+// comment), so calling this again for an already-settled job on a later
+// poll is safe: it resolves to the existing, already-settled
+// CreditTransaction row rather than erroring or double-applying, exactly
+// the "provably safe" property Simulate's stable, per-request idempotency
+// key exists to guarantee.
+func (s *Service) settleCredit(ctx context.Context, job *jobs.Job) error {
+	if s.credits == nil {
+		return nil
+	}
+	s.mu.Lock()
+	creditKey, hasCredit := s.creditKeys[job.ID]
+	s.mu.Unlock()
+	if !hasCredit {
+		return nil
+	}
+
+	// Rebuilt explicitly from job.TenantID rather than trusted from ctx --
+	// root CLAUDE.md's "workers do not inherit tenant context" trap,
+	// applied defensively here even though every real caller's ctx already
+	// carries this exact tenant (go/jobs' own Queue.Get refuses an id
+	// outside ctx's tenant, so a caller could not have reached this job's
+	// status at all under a different tenant to begin with).
+	settleCtx := pkgcore.WithTenant(ctx, job.TenantID)
+
+	var err error
+	if job.Status == jobs.StatusSucceeded {
+		_, err = s.credits.Confirm(settleCtx, creditKey)
+	} else {
+		_, err = s.credits.Refund(settleCtx, creditKey)
+	}
+	if err != nil {
+		return fmt.Errorf("smilesim: settle credit reservation for job %q: %w", job.ID, err)
+	}
+	return nil
 }

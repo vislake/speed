@@ -23,6 +23,7 @@ import (
 	"github.com/vislake/speed/go/admin"
 	aigateway "github.com/vislake/speed/go/ai-gateway"
 	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/billing"
 	"github.com/vislake/speed/go/compliance"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
@@ -1362,6 +1363,25 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		aigateway.WithImageGeneration(standaloneQueue, storageModule.ObjectService()),
 	)
 
+	// billingModule is the reference app's mandatory first consumer of
+	// go/billing's CreditService (docs/internal/15-roadmap.md's M2 exit
+	// condition's credit-pack/reserve/refund/usage-display leg; root
+	// CLAUDE.md's Reference App section: "a module API that it does not
+	// actually use is not considered done"). It shares this app's own db
+	// connection, the same pattern every other module here uses, and is
+	// wired with no UsageReader (nil): the internal/smilesim consumer below
+	// only ever calls Credits() (PreDeduct/Confirm/Refund/Grant/Balance),
+	// never Entitlements() -- go/billing's own EntitlementsService is a
+	// fully separate judgment path this round has no caller for (see
+	// go/billing/AGENTS.md's "Credits are a separate path from
+	// Entitlements.Check"). No WithQueue either: this round wires no
+	// payment-channel gateway, so PollingService's active-polling fallback
+	// has nothing to poll -- see go/billing/AGENTS.md's own scope table for
+	// why an actual payment-gateway integration (a real Stripe/Alipay/
+	// WeChat sandbox charge) stays explicitly deferred, untouched by this
+	// round.
+	billingModule := billing.NewModule(db, nil)
+
 	// complianceModule is the reference app's first consumer of
 	// go/compliance: admin's D7 audit-query HTTP shell reads through
 	// complianceModule.AuditQuery(), which itself is a read-only wrapper
@@ -1459,6 +1479,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
+	if regErr := migrationRegistry.Register(billingModule); regErr != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	}
 	// complianceModule is deliberately absent from this registry too: it
 	// ships no migrations of its own (Migrations() is an empty FS) --
 	// every row it reads or writes lives in auditModule's own
@@ -1503,7 +1527,13 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// SystemPurposeCredentialWrite system purpose (go/ai-gateway/module.go's
 	// Register doc comment), which the platform-credential write below
 	// only needs registered before it runs, not before any other module's
-	// Register. complianceModule follows for the same not-load-bearing
+	// Register. billingModule follows aiGatewayModule for the same
+	// not-load-bearing reason: its own Register (module.go) declares only
+	// its permissions, its five credit-ledger audit actions and its two
+	// published events, none of which any other module's own Register
+	// depends on -- its DependsOn is nil, matching go/metering's and
+	// go/pki's own identical answer for the same reason. complianceModule
+	// follows for the same not-load-bearing
 	// reason (it ships no migrations and validates only its own queue seam);
 	// adminModule follows it and IS load-bearing in one respect --
 	// admin.Module.DependsOn() names "authn", so Bootstrap's own dependency
@@ -1616,7 +1646,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		}
 		kernelOptions = append(kernelOptions, pkgcore.WithMailer(cfg.Mailer, mailerCapabilities))
 	}
-	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, pkiModule, authnModule, notesModule, orgModule, configModule, rbacModule, storageModule, sharingModule, demoModule, notificationModule, aiGatewayModule, complianceModule, adminModule, auditModule)
+	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, pkiModule, authnModule, notesModule, orgModule, configModule, rbacModule, storageModule, sharingModule, demoModule, notificationModule, aiGatewayModule, billingModule, complianceModule, adminModule, auditModule)
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: bootstrap kernel: %w", err)
@@ -1637,6 +1667,20 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return nil, nil, fmt.Errorf("reference-app: attach the rbac module: %w", err)
 	}
 	if seedErr := seedDemoGrants(ctx, rbacService, cfg.HostTenants); seedErr != nil {
+		_ = cleanup()
+		return nil, nil, seedErr
+	}
+	// seedDemoCredits is the demo, NOT-a-real-payment stand-in for
+	// docs/internal/15-roadmap.md's M2 exit condition's buy-a-credit-pack
+	// leg -- see that function's own doc comment for exactly why a real
+	// Stripe/Alipay/WeChat sandbox charge stays out of scope here. It runs
+	// unconditionally, like seedDemoGrants just above,
+	// regardless of cfg.DemoUsersPassword: internal/smilesim's own tests
+	// (smilesim_flow_test.go) need a real, non-zero starting balance on
+	// tenant-acme to exercise the successful-generation leg, exactly the
+	// way seedDemoGrants' own roles are needed by every test that gates a
+	// route on a permission, demo password or not.
+	if seedErr := seedDemoCredits(ctx, billingModule.Credits(), cfg.HostTenants); seedErr != nil {
 		_ = cleanup()
 		return nil, nil, seedErr
 	}
@@ -1771,9 +1815,16 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// aiGatewayModule.Register validated -- to run an async smile
 	// simulation over a patient photo already uploaded through
 	// storageModule's own HTTP surface, and the job-status route polls the
-	// same standaloneQueue every other async task in this app shares. The
-	// call cannot fail: nothing it does returns an error.
-	smileSimService := smilesim.NewService(aiGatewayModule.Gateway(), reg.EventBus())
+	// same standaloneQueue every other async task in this app shares.
+	// billingModule.Credits() is the same *billing.CreditService instance
+	// seedDemoCredits granted the demo tenants' starting balance against
+	// above: smilesim.Service reserves smilesim.CreditsPerSimulation credits from it
+	// before ever calling Gateway.GenerateImage, and settles that
+	// reservation (Confirm/Refund) once the async job reaches a terminal
+	// status -- see internal/smilesim/service.go's own "Credit accounting"
+	// package doc section. The call cannot fail: nothing it does returns
+	// an error.
+	smileSimService := smilesim.NewService(aiGatewayModule.Gateway(), billingModule.Credits(), reg.EventBus())
 	wireSmileSim(mux, smileSimService, standaloneQueue)
 
 	// The middleware chain: authn.Middleware(verifier) FIRST, then

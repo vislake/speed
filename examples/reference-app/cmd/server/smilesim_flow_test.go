@@ -77,6 +77,13 @@ type fakeOpenAIImageServer struct {
 
 	generatedPNG []byte
 
+	// requests counts every request this server's handler was actually
+	// invoked for (matching /images/edits or not) -- billing_credit_flow_
+	// test.go's insufficient-balance scenario asserts this stays at zero to
+	// prove go/ai-gateway, and therefore any real vendor, was never reached
+	// once a credit reservation is refused.
+	requests int
+
 	lastModel    string
 	lastPrompt   string
 	lastImageRaw []byte
@@ -101,6 +108,7 @@ func newFakeOpenAIImageServer(t *testing.T) *fakeOpenAIImageServer {
 
 	f := &fakeOpenAIImageServer{generatedPNG: buf.Bytes()}
 	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.requests++
 		if r.Method != http.MethodPost || r.URL.Path != "/images/edits" {
 			http.NotFound(w, r)
 			return
