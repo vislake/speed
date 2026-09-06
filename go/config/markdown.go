@@ -65,11 +65,17 @@ func RenderMarkdown(items []ConfigItemDescriptor) string {
 // key with no default has no value to serve at all until a row exists at
 // some scope (ErrItemUnset), which is worth a reader seeing at a glance
 // rather than an empty, ambiguous cell.
+//
+// A Sensitive item's Default goes through redactIf first, exactly the same
+// idiom Service uses to keep a Sensitive value off the event bus (see
+// events.go) -- a generated configuration reference is a document meant to
+// be committed and shared just like that bus, so a secret's plaintext
+// Default has no more business landing here than on it.
 func renderDefault(it ConfigItemDescriptor) string {
 	if !it.HasDefault {
 		return "_(none)_"
 	}
-	return "`" + escapeMarkdownCell(it.Default) + "`"
+	return "`" + escapeMarkdownCell(redactIf(it.Sensitive, it.Default)) + "`"
 }
 
 // renderBounds renders one row's Bounds cell from Min/Max, both of which

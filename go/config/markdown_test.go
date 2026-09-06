@@ -53,6 +53,47 @@ func TestRenderMarkdown_RendersOneRowPerItemInGivenOrder(t *testing.T) {
 	}
 }
 
+// TestRenderMarkdown_SensitiveItemDefault_IsRedacted proves a Sensitive
+// item's Default is never rendered in the clear: it must carry the same
+// redactedMarker events.go's redactIf already uses to keep a Sensitive
+// value off the event bus, never the plaintext default -- a generated
+// configuration reference is a committed, shared document exactly like
+// that bus.
+func TestRenderMarkdown_SensitiveItemDefault_IsRedacted(t *testing.T) {
+	rendered := RenderMarkdown([]ConfigItemDescriptor{
+		{
+			Key: "billing.stripe_api_key", Type: "string", Sensitive: true,
+			Description: "The tenant's Stripe secret key.", Group: "billing",
+			HasDefault: true, Default: "sk_live_super_secret_value",
+		},
+	})
+
+	if strings.Contains(rendered, "sk_live_super_secret_value") {
+		t.Errorf("RenderMarkdown() leaked a Sensitive item's plaintext Default into the generated doc:\n%s", rendered)
+	}
+	want := "| `billing.stripe_api_key` | item | string | `" + redactedMarker + "` | -- | true | false | billing | The tenant's Stripe secret key. |"
+	if !strings.Contains(rendered, want) {
+		t.Errorf("RenderMarkdown() missing redacted row %q\nfull output:\n%s", want, rendered)
+	}
+}
+
+// TestRenderMarkdown_NonSensitiveItemDefault_RendersRealValue guards against
+// over-redaction: a non-Sensitive item's Default must still render its real
+// value, unchanged.
+func TestRenderMarkdown_NonSensitiveItemDefault_RendersRealValue(t *testing.T) {
+	rendered := RenderMarkdown([]ConfigItemDescriptor{
+		{
+			Key: "brand.site_name", Type: "string",
+			Description: "The tenant's display name", Group: "brand",
+			HasDefault: true, Default: "Smile Studio",
+		},
+	})
+
+	if !strings.Contains(rendered, "`Smile Studio`") {
+		t.Errorf("RenderMarkdown() over-redacted a non-Sensitive item's Default:\n%s", rendered)
+	}
+}
+
 func TestRenderMarkdown_EmptyInput_StillRendersTheHeader(t *testing.T) {
 	rendered := RenderMarkdown(nil)
 	if !strings.Contains(rendered, "| Key | Kind | Type") {
