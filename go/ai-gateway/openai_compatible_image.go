@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"strings"
 )
 
@@ -108,15 +109,29 @@ type openaiImageResponseWire struct {
 	Usage *openaiImageUsageWire `json:"usage"`
 }
 
-// imageResultFromWire decodes wire into an ImageResult: the first (and, for
-// this provider's own requests, only) image's bytes, base64-decoded, with
-// its MIME type detected from the decoded bytes themselves via
-// http.DetectContentType rather than trusted from any vendor-supplied
-// field -- the same "probe, never trust a header" discipline go/storage's
-// own revalidation pipeline applies to uploaded bytes.
+// imageResultFromWire decodes wire into an ImageResult: the one (for this
+// provider, single) image's bytes, base64-decoded, with its MIME type
+// detected from the decoded bytes themselves via http.DetectContentType
+// rather than trusted from any vendor-supplied field -- the same "probe,
+// never trust a header" discipline go/storage's own revalidation pipeline
+// applies to uploaded bytes.
+//
+// The decode path enforces this provider's single-image boundary: the
+// whole pipeline above it (the Gateway job handler's one go/storage write,
+// ImageJobResult's one OutputObjectID) carries exactly one image, so a
+// response signaling more -- a data array longer than one entry, or a
+// usage object claiming an image_count above one -- is refused with
+// ErrMultipleImageResults BEFORE any usage could be recorded for it. A
+// multi-image response is the ordinary answer to an "n" > 1 request, and
+// silently decoding it to the first image while recording the response's
+// own image_count would charge the tenant for images this pipeline never
+// delivers.
 func imageResultFromWire(wire openaiImageResponseWire) (ImageResult, error) {
 	if len(wire.Data) == 0 {
 		return ImageResult{}, ErrProviderResponseInvalid.WithParam("reason", "no image data in response")
+	}
+	if len(wire.Data) > 1 {
+		return ImageResult{}, ErrMultipleImageResults.WithParam("count", len(wire.Data))
 	}
 	raw, err := base64.StdEncoding.DecodeString(wire.Data[0].B64JSON)
 	if err != nil {
@@ -126,6 +141,9 @@ func imageResultFromWire(wire openaiImageResponseWire) (ImageResult, error) {
 
 	usage := ImageUsage{ImageCount: len(wire.Data)}
 	if wire.Usage != nil {
+		if wire.Usage.ImageCount > 1 {
+			return ImageResult{}, ErrMultipleImageResults.WithParam("count", wire.Usage.ImageCount)
+		}
 		if wire.Usage.ImageCount > 0 {
 			usage.ImageCount = wire.Usage.ImageCount
 		}
@@ -188,10 +206,10 @@ func (p *OpenAICompatibleImageProvider) TextToImage(ctx context.Context, req Tex
 }
 
 // extensionForMIME maps an image MIME type to the filename extension this
-// provider uses for the multipart form file part -- cosmetic only, since
-// this provider's own requests set the part's Content-Type explicitly, but
-// still a real, media-type-appropriate name rather than a fixed
-// placeholder.
+// provider uses for the multipart form file part's filename. The part's
+// Content-Type is set separately, from the real MIME (writeImagePart); the
+// extension is cosmetic -- a media-type-appropriate filename rather than a
+// fixed placeholder.
 func extensionForMIME(mime string) string {
 	switch mime {
 	case "image/png":
@@ -220,9 +238,23 @@ func formValue(v any) (string, error) {
 }
 
 // writeImagePart writes one image file part (field "image" or "mask") of a
-// multipart image-edit request.
+// multipart image-edit request. The part declares img.MIME as its
+// Content-Type: mime/multipart's CreateFormFile hardcodes
+// application/octet-stream, and an OpenAI-compatible image-edit host may
+// key part acceptance off the declared media type -- a type this gateway
+// always knows, since the job handler sets it from the source object's own
+// finalized MIME. An empty img.MIME (legal on a caller-built ImageBytes;
+// see image_types.go) falls back to application/octet-stream, the honest
+// "unknown media type" declaration.
 func writeImagePart(w *multipart.Writer, field string, img ImageBytes) error {
-	part, err := w.CreateFormFile(field, field+extensionForMIME(img.MIME))
+	contentType := img.MIME
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	part, err := w.CreatePart(textproto.MIMEHeader{
+		"Content-Disposition": []string{fmt.Sprintf(`form-data; name=%q; filename=%q`, field, field+extensionForMIME(img.MIME))},
+		"Content-Type":        []string{contentType},
+	})
 	if err != nil {
 		return fmt.Errorf("aigateway: create %s form part: %w", field, err)
 	}
@@ -235,7 +267,16 @@ func writeImagePart(w *multipart.Writer, field string, img ImageBytes) error {
 // buildImageEditMultipart builds the multipart/form-data body for an
 // image-edit call (ImageToImage or Inpaint): "model" and "prompt" fields,
 // an "image" file part, an optional "mask" file part (Inpaint only, when
-// mask is non-nil), and every Params entry as an additional form field.
+// mask is non-nil), and every Params entry except "model" and "prompt" as
+// an additional form field -- the two reserved names are written above and
+// must win over a same-named Params entry, the identical invariant the
+// JSON path's buildImageGenerationBody enforces by overriding map keys
+// (buildRequestBody's own doc comment states the rule for chat). A Params
+// entry smuggling either name must never reach the wire as a duplicate
+// form field: which duplicate a multipart parser honors is parser-defined,
+// so a duplicate could genuinely override the routed model or prompt on
+// some vendor.
+//
 // Returns the encoded body and its Content-Type header value (which
 // carries the boundary multipart.Writer generated).
 func buildImageEditMultipart(model, prompt string, input ImageBytes, mask *ImageBytes, params map[string]any) (*bytes.Buffer, string, error) {
@@ -257,6 +298,11 @@ func buildImageEditMultipart(model, prompt string, input ImageBytes, mask *Image
 		}
 	}
 	for k, v := range params {
+		if k == "model" || k == "prompt" {
+			// Already written above, from the routed values -- see this
+			// function's own doc comment.
+			continue
+		}
 		val, err := formValue(v)
 		if err != nil {
 			return nil, "", err

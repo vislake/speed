@@ -908,3 +908,188 @@ func TestImageGenerateHandler_ConcurrentHandleForSameJob_OnlyOneVendorCall(t *te
 			"claimPending's primary-key INSERT must serialize concurrent claims so only one caller ever reaches the vendor", calls)
 	}
 }
+
+// stagedPutObjectStore wraps a real pkgcore.ObjectStore and releases its
+// PutObject calls one at a time, in arrival order, each only when the test
+// closes that call's own release channel -- letting a test interleave two
+// overlapping Handle calls deterministically instead of relying on a
+// wall-clock sleep: the first caller can be held mid-storage-write while
+// the second caller completes its own marker read and starts (and parks
+// in) its storage write, which is exactly the interleaving a lease-based
+// queue's concurrent redelivery produces.
+type stagedPutObjectStore struct {
+	inner pkgcore.ObjectStore
+
+	mu       sync.Mutex
+	entered  int
+	enteredN chan int
+	release  []chan struct{}
+}
+
+func newStagedPutObjectStore(inner pkgcore.ObjectStore) *stagedPutObjectStore {
+	return &stagedPutObjectStore{
+		inner:    inner,
+		enteredN: make(chan int, 2),
+		release:  []chan struct{}{make(chan struct{}), make(chan struct{})},
+	}
+}
+
+func (s *stagedPutObjectStore) PutObject(ctx context.Context, key string, r io.Reader) error {
+	s.mu.Lock()
+	s.entered++
+	n := s.entered
+	s.mu.Unlock()
+	s.enteredN <- n
+	if n > len(s.release) {
+		return fmt.Errorf("aigateway test: unexpected %dth PutObject call", n)
+	}
+	<-s.release[n-1]
+	return s.inner.PutObject(ctx, key, r)
+}
+
+func (s *stagedPutObjectStore) GetObject(ctx context.Context, key string) (io.ReadCloser, error) {
+	return s.inner.GetObject(ctx, key)
+}
+
+func (s *stagedPutObjectStore) DeleteObject(ctx context.Context, key string) error {
+	return s.inner.DeleteObject(ctx, key)
+}
+
+var _ pkgcore.ObjectStore = (*stagedPutObjectStore)(nil)
+
+// TestImageGenerateHandler_ConcurrentRedelivery_AgreesOnOneOutputObjectID
+// reproduces a concurrent redelivery of a job whose marker already says
+// "generated": two overlapping Handle calls for the same job both read that
+// state before either finishes (a lease-based queue redelivering a job
+// whose first attempt completed its vendor call and marker but whose
+// storage write is still in flight). Both attempts therefore write their
+// own output object; markCompleted's guarded transition lets exactly one of
+// the two through. The losing attempt must answer from the marker's own
+// completed object id -- the winner's -- never its own freshly minted (and
+// now orphaned) one, so any two Handle runs for one job agree on the id the
+// caller reads out of Job.Result.
+//
+// This test FAILS on pre-fix code: the losing attempt returns the orphan
+// object id it just wrote, so the two results disagree and one names an
+// object the completed marker row never recorded.
+func TestImageGenerateHandler_ConcurrentRedelivery_AgreesOnOneOutputObjectID(t *testing.T) {
+	provider := &fakeImageProvider{}
+	var recordedEvents []UsageEvent
+	recorder := UsageRecorderFunc(func(_ context.Context, event UsageEvent) error {
+		recordedEvents = append(recordedEvents, event)
+		return nil
+	})
+	store := newStagedPutObjectStore(pkgcore.NewLocalObjectStore(t.TempDir()))
+	objects := newTestStorageObjectServiceWithStore(t, store)
+	g, _, _ := imageGatewayTestFixtureWithObjects(t, provider, objects, WithUsageRecorder(recorder))
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	jobID := "job-concurrent-redelivery-1"
+	img := ImageBytes{Content: tinyPNG, MIME: "image/png"}
+	usage := ImageUsage{ImageCount: 1, Steps: 20, ResolutionTier: "512x512"}
+
+	// Seed the marker at "generated" -- an earlier attempt already recorded
+	// the vendor's answer, exactly the state a redelivery whose Handle
+	// overlaps that attempt's storage write finds.
+	if claimed, err := g.imageJobs.claimPending(ctx, jobID); err != nil || !claimed {
+		t.Fatalf("claimPending: claimed=%v err=%v", claimed, err)
+	}
+	if err := g.imageJobs.markGenerated(ctx, jobID, fakeImageProviderName, img, usage); err != nil {
+		t.Fatalf("markGenerated: %v", err)
+	}
+
+	handler, ok := g.imageJobHandler()
+	if !ok {
+		t.Fatal("imageJobHandler() reported image generation not wired")
+	}
+	raw, err := json.Marshal(imageGenerateTaskPayload{
+		Model: "image:default", Operation: string(ImageOperationTextToImage), Prompt: "a bright smile",
+	})
+	if err != nil {
+		t.Fatalf("marshal task payload: %v", err)
+	}
+	job := &jobs.Job{ID: jobs.JobID(jobID), Type: TaskTypeImageGenerate, TenantID: "tenant-acme", Payload: raw}
+
+	results := make([]jobs.Result, 2)
+	handleErrs := make([]error, 2)
+
+	// Attempt 1 parks inside its own storage write (the first PutObject).
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		results[0], handleErrs[0] = handler.Handle(ctx, job, func(int, string) {})
+	}()
+	if n := <-store.enteredN; n != 1 {
+		t.Fatalf("first PutObject reported as call %d, want 1", n)
+	}
+
+	// Attempt 2 starts while attempt 1 is still parked: it reads the marker
+	// ("generated" -- attempt 1 has not completed yet), then parks inside
+	// its own storage write (the second PutObject).
+	secondDone := make(chan struct{})
+	go func() {
+		defer close(secondDone)
+		results[1], handleErrs[1] = handler.Handle(ctx, job, func(int, string) {})
+	}()
+	if n := <-store.enteredN; n != 2 {
+		t.Fatalf("second PutObject reported as call %d, want 2", n)
+	}
+
+	// Let attempt 1 finish first: its markCompleted is the guarded
+	// transition's winner, so the marker now durably names attempt 1's
+	// object id.
+	close(store.release[0])
+	<-firstDone
+	if handleErrs[0] != nil {
+		t.Fatalf("first Handle: %v", handleErrs[0])
+	}
+
+	// Let the losing attempt finish: it must answer from the marker's own
+	// completed id, never its own freshly written orphan's.
+	close(store.release[1])
+	<-secondDone
+	if handleErrs[1] != nil {
+		t.Fatalf("second (redelivered) Handle: %v", handleErrs[1])
+	}
+
+	var first, second ImageJobResult
+	if decErr := json.Unmarshal(results[0].Data, &first); decErr != nil {
+		t.Fatalf("decode first result: %v", decErr)
+	}
+	if decErr := json.Unmarshal(results[1].Data, &second); decErr != nil {
+		t.Fatalf("decode second result: %v", decErr)
+	}
+	if first.OutputObjectID == "" || second.OutputObjectID == "" {
+		t.Fatalf("results carry empty OutputObjectIDs: first=%+v second=%+v", first, second)
+	}
+	if first.OutputObjectID != second.OutputObjectID {
+		t.Fatalf("two Handle runs for one job returned different OutputObjectIDs (%q vs %q) -- the losing attempt must return the marker's completed id, never its own orphan's", first.OutputObjectID, second.OutputObjectID)
+	}
+
+	marker, err := g.imageJobs.get(ctx, jobID)
+	if err != nil {
+		t.Fatalf("read back marker row: %v", err)
+	}
+	if marker == nil || marker.Status != imageJobStatusCompleted {
+		t.Fatalf("marker row after both attempts = %+v, want status %q", marker, imageJobStatusCompleted)
+	}
+	if marker.OutputObjectID != first.OutputObjectID || marker.OutputObjectID != second.OutputObjectID {
+		t.Fatalf("marker row names object %q, but the two attempts returned %q and %q -- every attempt must agree with the marker", marker.OutputObjectID, first.OutputObjectID, second.OutputObjectID)
+	}
+
+	// The vendor was never re-called (the answer was reused from the
+	// marker), and usage was recorded exactly once, by the winning attempt
+	// alone.
+	if provider.textToImageCalls != 0 {
+		t.Fatalf("provider called %d times for a job whose marker already held the vendor answer, want 0", provider.textToImageCalls)
+	}
+	var imageCountEvents int
+	for _, e := range recordedEvents {
+		if e.Feature == usageFeatureImageCount {
+			imageCountEvents++
+		}
+	}
+	if imageCountEvents != 1 {
+		t.Fatalf("image_count usage recorded %d times across the two overlapping attempts, want 1", imageCountEvents)
+	}
+}

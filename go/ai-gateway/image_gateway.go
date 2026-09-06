@@ -403,7 +403,11 @@ func (h *imageGenerateHandler) Type() string { return TaskTypeImageGenerate }
 // for one enqueued Job, at most one successful ImageProvider call and at
 // most one usage record ever reach the outside world, no matter how many
 // times go/jobs re-runs this method for it, or how many overlapping calls
-// ever run for the same Job at once. The FIRST thing every attempt does --
+// ever run for the same Job at once -- and every Handle call answers with
+// the marker's own OutputObjectID: an attempt that loses the completion
+// race to a concurrent winner returns the winner's id from the marker row,
+// never a fresh orphan object id of its own. The FIRST thing every attempt
+// does --
 // before decoding is even relevant to the invariant, but genuinely before
 // anything that could call the vendor -- is settle "has an earlier attempt
 // already gotten a successful answer for this exact job, or claimed it and
@@ -449,11 +453,7 @@ func (h *imageGenerateHandler) Handle(ctx context.Context, job *jobs.Job, _ jobs
 		// an already-succeeded Job): answer from the row alone. No vendor
 		// call, no storage write, no usage record -- reported once,
 		// already, when this row was first written.
-		resultData, marshalErr := json.Marshal(ImageJobResult{OutputObjectID: marker.OutputObjectID, Usage: marker.usage()})
-		if marshalErr != nil {
-			return jobs.Result{}, fmt.Errorf("aigateway: encode image generation job result: %w", marshalErr)
-		}
-		return jobs.Result{Data: resultData}, nil
+		return completedMarkerResult(marker)
 
 	case marker != nil && marker.Status == imageJobStatusGenerated:
 		// An earlier attempt already got a successful vendor answer but
@@ -530,13 +530,35 @@ func (h *imageGenerateHandler) Handle(ctx context.Context, job *jobs.Job, _ jobs
 	if err != nil {
 		return jobs.Result{}, err
 	}
-	if completed {
-		// Gated on markCompleted's own guarded transition, not merely on
-		// having reached this line: this is what makes "at most one usage
-		// record ever" true even if this exact line somehow ran twice for
-		// one job (image_job_store.go's markCompleted doc comment).
-		h.gateway.recordImageUsage(ctx, req.Model, jobID, usage)
+	if !completed {
+		// Lost markCompleted's guarded transition: another attempt's
+		// transition committed first, so the marker now durably names that
+		// attempt's output object, and THIS attempt's freshly written one
+		// is the accepted orphan image_job_store.go's own doc comment
+		// describes. Answer from the marker row alone -- the same answer
+		// every later redelivery will give -- so two Handle runs for one
+		// job always agree on the OutputObjectID the caller reads from
+		// Job.Result, never this attempt's own brand-new id. No usage
+		// record here: the winning attempt's recordImageUsage, gated on the
+		// same guarded transition, already reported this job exactly once.
+		marker, getErr := h.gateway.imageJobs.get(ctx, jobID)
+		if getErr != nil {
+			// The job did succeed (the marker is completed); surfacing this
+			// read failure lets go/jobs retry, converging on Handle's own
+			// completed short-circuit above.
+			return jobs.Result{}, getErr
+		}
+		if marker == nil || marker.Status != imageJobStatusCompleted {
+			return jobs.Result{}, ErrInternal.WithParam("job_id", jobID).
+				WithParam("reason", "markCompleted lost its transition but no completed marker row exists")
+		}
+		return completedMarkerResult(marker)
 	}
+	// Gated on markCompleted's own guarded transition, not merely on
+	// having reached this line: this is what makes "at most one usage
+	// record ever" true even if this exact line somehow ran twice for
+	// one job (image_job_store.go's markCompleted doc comment).
+	h.gateway.recordImageUsage(ctx, req.Model, jobID, usage)
 
 	obs.FromContext(ctx).Info("aigateway: image generated",
 		"model", req.Model,
@@ -551,6 +573,20 @@ func (h *imageGenerateHandler) Handle(ctx context.Context, job *jobs.Job, _ jobs
 	resultData, err := json.Marshal(ImageJobResult{OutputObjectID: outputObjectID, Usage: usage})
 	if err != nil {
 		return jobs.Result{}, fmt.Errorf("aigateway: encode image generation job result: %w", err)
+	}
+	return jobs.Result{Data: resultData}, nil
+}
+
+// completedMarkerResult renders the jobs.Result a completed marker row
+// answers with: the row's own OutputObjectID and the ImageUsage it
+// recorded, nothing else. It is the shared answer shape of Handle's
+// completed short-circuit at the top and of an attempt that lost
+// markCompleted's guarded transition to a concurrent winner -- the two
+// paths on which a Handle call must report a job it did not itself finish.
+func completedMarkerResult(marker *imageJobRow) (jobs.Result, error) {
+	resultData, marshalErr := json.Marshal(ImageJobResult{OutputObjectID: marker.OutputObjectID, Usage: marker.usage()})
+	if marshalErr != nil {
+		return jobs.Result{}, fmt.Errorf("aigateway: encode image generation job result: %w", marshalErr)
 	}
 	return jobs.Result{Data: resultData}, nil
 }

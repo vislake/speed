@@ -136,6 +136,63 @@ func TestOpenAICompatibleImageProvider_TextToImage_EmptyData_ProviderResponseInv
 	}
 }
 
+// TestOpenAICompatibleImageProvider_TextToImage_MultipleDataEntries_Refused
+// pins the single-image boundary of this provider's decode path: the whole
+// pipeline (the Gateway job handler through ImageJobResult) carries exactly
+// one output object id, so a response whose data array holds more than one
+// image -- exactly what a request smuggling "n": 4 into Params produces
+// from a conforming vendor -- must be refused with a coded error BEFORE any
+// usage could be recorded, never silently decoded to the first image while
+// the response's own image_count bills for all of them ("charge 4, return
+// 1").
+func TestOpenAICompatibleImageProvider_TextToImage_MultipleDataEntries_Refused(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]string{
+				{"b64_json": base64.StdEncoding.EncodeToString(tinyPNG)},
+				{"b64_json": base64.StdEncoding.EncodeToString(tinyPNG)},
+			},
+			"usage": map[string]any{"image_count": 4, "steps": 20},
+		})
+	}))
+	defer srv.Close()
+
+	p := NewOpenAICompatibleImageProvider(srv.URL, "sk-test")
+	_, err := p.TextToImage(context.Background(), TextToImageRequest{
+		Model:  "dall-e-3",
+		Prompt: "a bright smile",
+		Params: map[string]any{"n": 4},
+	})
+	if got, ok := apperrCode(err); !ok || got != ErrMultipleImageResults.Code {
+		t.Fatalf("TextToImage err = %v, want the coded ErrMultipleImageResults -- n=4 must never charge 4 and silently return 1", err)
+	}
+}
+
+// TestOpenAICompatibleImageProvider_TextToImage_UsageClaimsMoreImagesThanDelivered_Refused
+// closes the same overcharge shape through its other door: a response
+// delivering a single data entry whose usage object claims an image_count
+// above one. Trusting that claim would bill the tenant for images this
+// provider never carries, so it is refused with the same coded error as a
+// multi-entry data array.
+func TestOpenAICompatibleImageProvider_TextToImage_UsageClaimsMoreImagesThanDelivered_Refused(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]string{{"b64_json": base64.StdEncoding.EncodeToString(tinyPNG)}},
+			"usage": map[string]any{
+				"image_count": 4,
+				"steps":       20,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	p := NewOpenAICompatibleImageProvider(srv.URL, "sk-test")
+	_, err := p.TextToImage(context.Background(), TextToImageRequest{Model: "dall-e-3", Prompt: "x"})
+	if got, ok := apperrCode(err); !ok || got != ErrMultipleImageResults.Code {
+		t.Fatalf("TextToImage err = %v, want the coded ErrMultipleImageResults for a usage claim above the delivered image count", err)
+	}
+}
+
 // --- ImageToImage / Inpaint (multipart) -------------------------------------
 
 // decodeMultipartRequest parses r's multipart/form-data body, returning the
@@ -249,6 +306,80 @@ func TestOpenAICompatibleImageProvider_Inpaint_SendsMultipartWithMask(t *testing
 	}
 	if got := readFilePart(t, gotForm, "mask"); string(got) != string(mask.Content) {
 		t.Fatalf("wire mask part = %q, want %q", got, mask.Content)
+	}
+}
+
+// TestOpenAICompatibleImageProvider_ImageEdit_ParamsCannotOverrideModelOrPrompt
+// pins the multipart half of the model/prompt-wins invariant the JSON
+// path's buildImageGenerationBody already enforces: a Params entry smuggled
+// under the name "model" or "prompt" must not reach the wire as a second,
+// duplicate form field -- which multipart parser wins a duplicate is
+// parser-defined, so a duplicate could genuinely override the routed model
+// on some vendor -- and buildImageEditMultipart drops the two names from
+// the Params passthrough loop instead.
+func TestOpenAICompatibleImageProvider_ImageEdit_ParamsCannotOverrideModelOrPrompt(t *testing.T) {
+	var gotForm *multipart.Form
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotForm = decodeMultipartRequest(t, r)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]string{{"b64_json": base64.StdEncoding.EncodeToString(tinyPNG)}},
+		})
+	}))
+	defer srv.Close()
+
+	p := NewOpenAICompatibleImageProvider(srv.URL, "sk-test")
+	_, err := p.ImageToImage(context.Background(), ImageToImageRequest{
+		Model:  "dall-e-3",
+		Prompt: "simulate a smile",
+		Input:  ImageBytes{Content: []byte("input-photo-bytes"), MIME: "image/jpeg"},
+		Params: map[string]any{"model": "smuggled-model", "prompt": "smuggled prompt"},
+	})
+	if err != nil {
+		t.Fatalf("ImageToImage: %v", err)
+	}
+	if got := gotForm.Value["model"]; len(got) != 1 || got[0] != "dall-e-3" {
+		t.Fatalf("wire model fields = %v, want exactly one, the routed vendor model %q -- a Params model entry must never reach the wire", got, "dall-e-3")
+	}
+	if got := gotForm.Value["prompt"]; len(got) != 1 || got[0] != "simulate a smile" {
+		t.Fatalf("wire prompt fields = %v, want exactly one, the routed prompt -- a Params prompt entry must never reach the wire", got)
+	}
+}
+
+// TestOpenAICompatibleImageProvider_ImageEdit_FilePartsCarryRealContentType
+// pins that a multipart image-edit request's file parts declare the image's
+// actual media type rather than mime/multipart.CreateFormFile's hardcoded
+// application/octet-stream: an OpenAI-compatible image-edit host may key
+// part acceptance off the Content-Type header, and this gateway always
+// knows the real MIME (the job handler sets it from the source object's own
+// finalized MIME).
+func TestOpenAICompatibleImageProvider_ImageEdit_FilePartsCarryRealContentType(t *testing.T) {
+	input := ImageBytes{Content: []byte("input-photo-bytes"), MIME: "image/jpeg"}
+	mask := ImageBytes{Content: []byte("mask-bytes"), MIME: "image/png"}
+	var gotForm *multipart.Form
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotForm = decodeMultipartRequest(t, r)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]string{{"b64_json": base64.StdEncoding.EncodeToString(tinyPNG)}},
+		})
+	}))
+	defer srv.Close()
+
+	p := NewOpenAICompatibleImageProvider(srv.URL, "sk-test")
+	if _, err := p.Inpaint(context.Background(), InpaintRequest{
+		Model:  "dall-e-3",
+		Prompt: "fix the teeth",
+		Input:  input,
+		Mask:   mask,
+	}); err != nil {
+		t.Fatalf("Inpaint: %v", err)
+	}
+	imagePart := gotForm.File["image"][0]
+	if got := imagePart.Header.Get("Content-Type"); got != input.MIME {
+		t.Fatalf("image part Content-Type = %q, want the real media type %q", got, input.MIME)
+	}
+	maskPart := gotForm.File["mask"][0]
+	if got := maskPart.Header.Get("Content-Type"); got != mask.MIME {
+		t.Fatalf("mask part Content-Type = %q, want the real media type %q", got, mask.MIME)
 	}
 }
 

@@ -84,6 +84,24 @@ var (
 	// parsed as the expected wire shape.
 	ErrProviderResponseInvalid = apperr.Internal("aigateway.provider_response_invalid")
 
+	// ErrProviderConfigInvalid reports Gateway.Chat/ChatStream/GenerateImage
+	// resolving a route whose stored credential cannot build the routed
+	// provider implementation. The module's own OpenAI-compatible providers
+	// (chat and image) both require a non-empty base_url, so a credential
+	// stored without one -- legal to store: the write API documents an
+	// omitted baseUrl as "leave the provider's own default in effect", a
+	// contract no provider in this module actually offers -- is a
+	// misconfiguration no call can ever succeed with. The refusal is
+	// declared at registry-constructor time, where the provider's own
+	// config needs are known, and classified Invalid with this code so a
+	// caller can tell "fix the stored credential" apart from a genuine
+	// provider/vendor failure -- never an uncoded error a transport layer
+	// must fold into a bare internal failure. The cause stays
+	// pkgcore.ErrMissingSeamConfig so errors.Is-based registry callers keep
+	// working unchanged.
+	ErrProviderConfigInvalid = apperr.Invalid("aigateway.provider_config_invalid").
+					WithCause(pkgcore.ErrMissingSeamConfig)
+
 	// ErrEmptyPrompt reports an ImageRequest whose Prompt is empty. Every
 	// ImageOperation requires one.
 	ErrEmptyPrompt = apperr.Invalid("aigateway.empty_prompt")
@@ -149,6 +167,21 @@ var (
 	// double vendor call) this package accepts in exchange for the rare
 	// case actually being a stuck claim that needs operator attention.
 	ErrImageJobClaimInFlight = apperr.Conflict("aigateway.image_job_claim_in_flight")
+
+	// ErrMultipleImageResults reports an OpenAI-compatible image response
+	// carrying more than one generated image -- a data array longer than
+	// one entry, or a usage object claiming an image_count above one. The
+	// whole image-generation pipeline (ImageJobResult through the job
+	// handler's single go/storage write) carries exactly one output object
+	// id, so a multi-image response -- the ordinary answer to an "n" > 1
+	// request smuggled through Params -- is refused with this coded error
+	// BEFORE any usage is recorded or any output object is written, never
+	// silently decoded to the first image while the response's own
+	// image_count bills for all of them. Classified Invalid since a caller
+	// can avoid it entirely (by not asking for more than one image); an
+	// image job that hits it fails the attempt and eventually dead-letters,
+	// exactly like the other request-shaped refusals the job handler makes.
+	ErrMultipleImageResults = apperr.Invalid("aigateway.multiple_image_results")
 
 	// ErrInternal reports an HTTP-layer failure Handler cannot classify --
 	// an error returned by something below it that is not an *apperr.Error

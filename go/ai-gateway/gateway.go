@@ -169,6 +169,17 @@ func (g *Gateway) checkEntitlement(ctx context.Context, logicalModel string) err
 // no-op when no UsageRecorder is wired, and it never fails the call it is
 // reporting for: a recording failure is logged and swallowed, per
 // UsageRecorder's own doc comment.
+//
+// The recorded Quantity is usage.TotalTokens, with one honest fallback:
+// a vendor-reported total of zero alongside nonzero prompt or completion
+// parts is self-contradictory (a genuinely token-free call would report
+// zero for all three), and some OpenAI-compatible hosts produce exactly
+// that shape by omitting total_tokens from a partial usage object -- the
+// parts' sum is recorded then, with a warning that the correction
+// happened, mirroring warnIfNoUsage's identical make-the-gap-visible
+// stance. The Usage the caller's ChatResponse/ChatChunk carries is never
+// rewritten: this correction is metering policy, applied at the one place
+// usage is turned into a billable quantity.
 func (g *Gateway) recordUsage(ctx context.Context, logicalModel string, usage Usage) {
 	if g.usage == nil {
 		return
@@ -182,10 +193,19 @@ func (g *Gateway) recordUsage(ctx context.Context, logicalModel string, usage Us
 		return
 	}
 
+	quantity := float64(usage.TotalTokens)
+	if usage.TotalTokens == 0 && (usage.PromptTokens > 0 || usage.CompletionTokens > 0) {
+		obs.FromContext(ctx).Warn("aigateway: vendor reported zero total tokens with nonzero prompt or completion tokens; recording their sum",
+			"prompt_tokens", usage.PromptTokens,
+			"completion_tokens", usage.CompletionTokens,
+		)
+		quantity = float64(usage.PromptTokens + usage.CompletionTokens)
+	}
+
 	event := UsageEvent{
 		TenantID:       string(tenant),
 		Feature:        usageFeatureChatTokens,
-		Quantity:       float64(usage.TotalTokens),
+		Quantity:       quantity,
 		IdempotencyKey: newIdempotencyKey(),
 		Metadata:       map[string]string{"model": logicalModel},
 	}
@@ -240,19 +260,11 @@ func (g *Gateway) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 		return ChatResponse{}, err
 	}
 
-	// The attribute keys below are deliberately "prompt_units"/
-	// "completion_units", never "prompt_tokens"/"completion_tokens":
-	// go/observability's on-by-default redaction (redact.go's
-	// sensitiveStems) redacts any attribute key containing the substring
-	// "token" -- including as part of a longer word -- wholesale, which
-	// would silently mask these integer counts as "[REDACTED]" in every
-	// deployment. See relayStream's identical rename below for the
-	// streaming path.
 	obs.FromContext(ctx).Info("aigateway: chat completed",
 		"model", logicalModel,
 		"provider", route.Provider,
-		"prompt_units", resp.Usage.PromptTokens,
-		"completion_units", resp.Usage.CompletionTokens,
+		"prompt_tokens", resp.Usage.PromptTokens,
+		"completion_tokens", resp.Usage.CompletionTokens,
 	)
 	g.recordUsage(ctx, logicalModel, resp.Usage)
 	return resp, nil
@@ -262,7 +274,10 @@ func (g *Gateway) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 // returns a channel of incremental chunks honoring ChatChunk's own channel
 // contract. Usage is reported to the wired UsageRecorder only once the
 // stream's terminal success chunk (real Usage) is observed -- never
-// speculatively at stream start, and never on the terminal error chunk.
+// speculatively at stream start, and never on the terminal error chunk --
+// and at most once per response: a provider that sets Usage on several
+// chunks is recorded once, never per chunk (relayStream's own doc
+// comment).
 func (g *Gateway) ChatStream(ctx context.Context, req ChatRequest) (<-chan ChatChunk, error) {
 	if err := req.validate(); err != nil {
 		return nil, err
@@ -301,19 +316,30 @@ func (g *Gateway) ChatStream(ctx context.Context, req ChatRequest) (<-chan ChatC
 // and report usage before forwarding it -- the "only after the final chunk
 // carries real usage" rule the design doc states explicitly. It closes out
 // exactly once, whenever upstream closes or ctx is done.
+//
+// Usage is reported at most once per response, whatever upstream sends:
+// ChatChunk's own doc contract promises Usage is non-nil only on the
+// terminal success chunk, but relayStream is the billing boundary and does
+// not trust a provider implementation to keep that promise -- a provider
+// setting Usage on many chunks must never multiply the tenant's metering
+// events, so the once-flag below admits only the first usage-bearing chunk
+// to the completion log and the recorder. Every chunk is still forwarded
+// unchanged; only the recording is gated.
 func (g *Gateway) relayStream(ctx context.Context, logicalModel, provider string, upstream <-chan ChatChunk, out chan<- ChatChunk) {
 	defer close(out)
 
+	// usageReported guards the completion log and usage recording below --
+	// see this method's own doc comment.
+	usageReported := false
+
 	for chunk := range upstream {
-		if chunk.Usage != nil {
-			// See the identical rename note in Chat above: "_units", never
-			// "_tokens", to dodge go/observability's key-substring
-			// redaction of anything containing "token".
+		if chunk.Usage != nil && !usageReported {
+			usageReported = true
 			obs.FromContext(ctx).Info("aigateway: chat stream completed",
 				"model", logicalModel,
 				"provider", provider,
-				"prompt_units", chunk.Usage.PromptTokens,
-				"completion_units", chunk.Usage.CompletionTokens,
+				"prompt_tokens", chunk.Usage.PromptTokens,
+				"completion_tokens", chunk.Usage.CompletionTokens,
 			)
 			g.recordUsage(ctx, logicalModel, *chunk.Usage)
 		}

@@ -211,6 +211,33 @@ func TestGateway_Chat_ReportsUsageAfterSuccess(t *testing.T) {
 	}
 }
 
+// TestGateway_Chat_ZeroTotalTokensWithNonzeroParts_RecordsTheirSum pins the
+// zero-total fallback in recordUsage: some OpenAI-compatible hosts omit
+// total_tokens from a usage object while still reporting real prompt and
+// completion counts, which decodes as Usage{TotalTokens: 0, PromptTokens: N,
+// CompletionTokens: M} -- a self-contradictory shape a genuinely token-free
+// call could never produce. The recorded Quantity must be the honest sum
+// (N+M), never 0.
+func TestGateway_Chat_ZeroTotalTokensWithNonzeroParts_RecordsTheirSum(t *testing.T) {
+	provider := &fakeChatProvider{chatResp: ChatResponse{
+		Message: ChatMessage{Role: RoleAssistant, Content: "ok"},
+		Usage:   Usage{PromptTokens: 10, CompletionTokens: 20}, // TotalTokens deliberately 0
+	}}
+	recorder := &fakeUsageRecorder{}
+	g := gatewayTestFixture(t, provider, WithUsageRecorder(recorder))
+
+	tenantCtx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	if _, err := g.Chat(tenantCtx, chatReq()); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if len(recorder.events) != 1 {
+		t.Fatalf("got %d usage events, want 1", len(recorder.events))
+	}
+	if recorder.events[0].Quantity != 30 {
+		t.Fatalf("recorded Quantity = %v, want the parts' sum 30, never 0", recorder.events[0].Quantity)
+	}
+}
+
 func TestGateway_Chat_NoTenantInContext_ReportsNoUsage(t *testing.T) {
 	provider := &fakeChatProvider{chatResp: ChatResponse{
 		Message: ChatMessage{Role: RoleAssistant, Content: "ok"},
@@ -281,6 +308,72 @@ func TestGateway_ChatStream_ReportsUsageOnlyOnTerminalChunk(t *testing.T) {
 	}
 }
 
+// TestGateway_ChatStream_UsageOnManyChunks_RecordsExactlyOnce pins the
+// exactly-once half of relayStream's usage reporting: a provider that --
+// violating ChatChunk's own channel contract, under which Usage is non-nil
+// only on the terminal success chunk -- sets Usage on many chunks must
+// still produce exactly ONE metering event per response, never one per
+// usage-bearing chunk. Usage recording is billing-grade; relayStream must
+// not multiply a misbehaving provider's usage.
+func TestGateway_ChatStream_UsageOnManyChunks_RecordsExactlyOnce(t *testing.T) {
+	usage1 := Usage{PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2}
+	usage2 := Usage{PromptTokens: 3, CompletionTokens: 4, TotalTokens: 7}
+	provider := &fakeChatProvider{streamOut: []ChatChunk{
+		{Usage: &usage1},
+		{Delta: "Hel"},
+		{Usage: &usage2},
+		{Delta: "lo"},
+		{Usage: &usage2},
+	}}
+	recorder := &fakeUsageRecorder{}
+	g := gatewayTestFixture(t, provider, WithUsageRecorder(recorder))
+
+	tenantCtx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	ch, err := g.ChatStream(tenantCtx, chatReq())
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	var got []ChatChunk
+	for chunk := range ch {
+		got = append(got, chunk)
+	}
+	if len(got) != len(provider.streamOut) {
+		t.Fatalf("got %d relayed chunks, want all %d forwarded unchanged", len(got), len(provider.streamOut))
+	}
+	if len(recorder.events) != 1 {
+		t.Fatalf("got %d usage events for a stream carrying usage on %d chunks, want exactly 1", len(recorder.events), 3)
+	}
+}
+
+// TestGateway_ChatStream_ZeroTotalTokensWithNonzeroParts_RecordsTheirSum is
+// the streaming-path twin of the Chat-path zero-total fallback test above:
+// the terminal chunk's Usage reaches the same recordUsage, so a vendor that
+// omits total_tokens must be metered for the parts' sum on this path too.
+func TestGateway_ChatStream_ZeroTotalTokensWithNonzeroParts_RecordsTheirSum(t *testing.T) {
+	usage := Usage{PromptTokens: 2, CompletionTokens: 3} // TotalTokens deliberately 0
+	provider := &fakeChatProvider{streamOut: []ChatChunk{
+		{Delta: "Hi"},
+		{Usage: &usage},
+	}}
+	recorder := &fakeUsageRecorder{}
+	g := gatewayTestFixture(t, provider, WithUsageRecorder(recorder))
+
+	tenantCtx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	ch, err := g.ChatStream(tenantCtx, chatReq())
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	for chunk := range ch {
+		_ = chunk
+	}
+	if len(recorder.events) != 1 {
+		t.Fatalf("got %d usage events, want 1", len(recorder.events))
+	}
+	if recorder.events[0].Quantity != 5 {
+		t.Fatalf("recorded Quantity = %v, want the parts' sum 5, never 0", recorder.events[0].Quantity)
+	}
+}
+
 func TestGateway_ChatStream_ErrorChunk_NeverReportsUsage(t *testing.T) {
 	provider := &fakeChatProvider{streamOut: []ChatChunk{
 		{Delta: "Hel"},
@@ -315,5 +408,71 @@ func TestGateway_ChatStream_UnroutedModel_Refused(t *testing.T) {
 	}
 	if provider.streamCalls != 0 {
 		t.Fatalf("provider was called %d times for an unrouted model, want 0", provider.streamCalls)
+	}
+}
+
+// --- provider-config classification -----------------------------------------
+
+// TestGateway_Chat_EmptyBaseURLCredential_RefusedWithCodedError pins the
+// call-time contract for a credential whose stored base_url is empty.
+// Storing one stays legal -- the write-side API documents an omitted
+// baseUrl as "leave the provider's own default in effect", and a provider
+// that DOES supply its own default is exactly what that contract exists
+// for -- but the module's own OpenAI-compatible providers both require a
+// base URL, and that refusal is declared where the provider's needs are
+// known: at registry-constructor time, as a coded, caller-distinguishable
+// error. The regression: resolving a route onto such a credential fails
+// with ErrProviderConfigInvalid, never an uncoded error a transport layer
+// can only fold into a bare internal 500.
+func TestGateway_Chat_EmptyBaseURLCredential_RefusedWithCodedError(t *testing.T) {
+	credentials := NewCredentialService(newTestDB(t))
+	sysCtx, err := pkgcore.WithSystemContext(context.Background(), systemTestCtx(t))
+	if err != nil {
+		t.Fatalf("WithSystemContext: %v", err)
+	}
+	// baseURL deliberately omitted -- the write path allows it.
+	if setErr := credentials.SetPlatformCredential(sysCtx, ProviderOpenAICompatible, "sk-test", ""); setErr != nil {
+		t.Fatalf("SetPlatformCredential: %v", setErr)
+	}
+	// No WithChatProviderRegistry: the package-level registry's real
+	// registered constructor (openaiCompatibleFromConfig) is what must
+	// classify the empty base_url.
+	g := NewGateway(credentials,
+		WithModelRoute("chat:default", ProviderOpenAICompatible, "gpt-4o-mini"),
+	)
+
+	tenantCtx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	_, err = g.Chat(tenantCtx, chatReq())
+	if got, ok := apperrCode(err); !ok || got != ErrProviderConfigInvalid.Code {
+		t.Fatalf("Chat err = %v, want the coded ErrProviderConfigInvalid -- a no-base_url credential must fail distinguishably, not as an uncoded error", err)
+	}
+}
+
+// TestGateway_GenerateImage_EmptyBaseURLCredential_RefusedWithCodedError is
+// the image-side twin of the Chat test above: resolveImage builds through
+// the image registry's own real constructor, which must classify an empty
+// base_url identically, before anything is enqueued.
+func TestGateway_GenerateImage_EmptyBaseURLCredential_RefusedWithCodedError(t *testing.T) {
+	credentials := NewCredentialService(newTestDB(t))
+	sysCtx, err := pkgcore.WithSystemContext(context.Background(), systemTestCtx(t))
+	if err != nil {
+		t.Fatalf("WithSystemContext: %v", err)
+	}
+	if setErr := credentials.SetPlatformCredential(sysCtx, ProviderOpenAICompatibleImage, "sk-test", ""); setErr != nil {
+		t.Fatalf("SetPlatformCredential: %v", setErr)
+	}
+	queue := &recordingImageQueue{jobID: "job-unused"}
+	g := NewGateway(credentials,
+		WithModelRoute("image:default", ProviderOpenAICompatibleImage, "dall-e-3"),
+		WithImageGeneration(queue, newTestStorageObjectService(t)),
+	)
+
+	tenantCtx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	_, err = g.GenerateImage(tenantCtx, imageReq())
+	if got, ok := apperrCode(err); !ok || got != ErrProviderConfigInvalid.Code {
+		t.Fatalf("GenerateImage err = %v, want the coded ErrProviderConfigInvalid", err)
+	}
+	if queue.calls != 0 {
+		t.Fatalf("queue was called %d times for a credential that can never build the provider, want 0", queue.calls)
 	}
 }

@@ -109,7 +109,11 @@ type UsageEvent struct {
 	// this seam's shape.
 	Feature string
 	// Quantity is how many units of Feature this event measures -- the
-	// call's Usage.TotalTokens for the "ai.chat_tokens" dimension.
+	// call's Usage.TotalTokens for the "ai.chat_tokens" dimension, with one
+	// correction: when the vendor reported a zero total alongside nonzero
+	// prompt or completion parts (some OpenAI-compatible hosts omit
+	// total_tokens), the parts' sum is recorded instead, with a warning
+	// (gateway.go's recordUsage).
 	Quantity float64
 	// IdempotencyKey is fresh and random for a Chat/ChatStream call
 	// (gateway.go's newIdempotencyKey): neither carries a caller-supplied

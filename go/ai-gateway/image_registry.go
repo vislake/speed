@@ -54,12 +54,17 @@ func mustRegisterImageProvider(r pkgcore.Registration[ImageProvider]) {
 
 // openaiCompatibleImageFromConfig adapts a flat pkgcore.Config onto
 // NewOpenAICompatibleImageProvider, mirroring openaiCompatibleFromConfig's
-// identical shape for the chat side.
+// identical shape for the chat side -- including its coded
+// ErrProviderConfigInvalid refusal of a config without base_url (or
+// api_key), with pkgcore.ErrMissingSeamConfig attached as the cause for
+// errors.Is-based registry callers.
 func openaiCompatibleImageFromConfig(cfg pkgcore.Config) (ImageProvider, error) {
 	baseURL := cfg["base_url"]
 	apiKey := cfg["api_key"]
 	if baseURL == "" || apiKey == "" {
-		return nil, fmt.Errorf("aigateway: builtin %s seam: %w: requires \"base_url\" and \"api_key\"", ProviderOpenAICompatibleImage, pkgcore.ErrMissingSeamConfig)
+		return nil, ErrProviderConfigInvalid.
+			WithParam("provider", ProviderOpenAICompatibleImage).
+			WithParam("reason", "credential carries no base_url or api_key")
 	}
 	return NewOpenAICompatibleImageProvider(baseURL, apiKey), nil
 }

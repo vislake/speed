@@ -75,11 +75,22 @@ func mustRegisterChatProvider(r pkgcore.Registration[ChatProvider]) {
 // go/pki/signer_registry.go's localSignerFromConfig, which opens a real
 // database connection -- performs no I/O at all; it only validates and
 // assigns fields.
+//
+// The refusal of a config without base_url (or api_key) is this
+// constructor's own declaration that OpenAICompatibleProvider has no
+// default endpoint of its own: it comes back as the coded, Invalid-
+// classified ErrProviderConfigInvalid, so a caller resolving a route onto
+// a credential stored without a base URL sees a distinguishable
+// configuration error rather than an uncoded one. pkgcore.ErrMissingSeamConfig
+// stays attached as the cause, so errors.Is-based registry callers keep
+// recognizing the refusal unchanged.
 func openaiCompatibleFromConfig(cfg pkgcore.Config) (ChatProvider, error) {
 	baseURL := cfg["base_url"]
 	apiKey := cfg["api_key"]
 	if baseURL == "" || apiKey == "" {
-		return nil, fmt.Errorf("aigateway: builtin %s seam: %w: requires \"base_url\" and \"api_key\"", ProviderOpenAICompatible, pkgcore.ErrMissingSeamConfig)
+		return nil, ErrProviderConfigInvalid.
+			WithParam("provider", ProviderOpenAICompatible).
+			WithParam("reason", "credential carries no base_url or api_key")
 	}
 	return NewOpenAICompatibleProvider(baseURL, apiKey), nil
 }

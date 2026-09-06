@@ -486,3 +486,55 @@ called again.
   deliberately does not use for `SQLITE_BUSY`-class contention (see
   `go/storage/derive.go`'s own doc comment) or a lease/staleness mechanism
   out of proportion with how narrow the windows are.
+**Review-fix round, 2026-09-07:** a code review of the module against its
+own documented promises closed seven findings (plus one cleanup), each
+shipped with a regression test that failed before the fix and passes
+after (`gateway_test.go`, `openai_compatible_image_test.go`,
+`image_gateway_test.go`):
+
+- `relayStream` now records usage at most once per response (a once-flag),
+  whatever a provider sends, so a stream carrying usage on many chunks --
+  a violation of `ChatChunk`'s own channel contract -- produces one
+  metering event, never one per chunk.
+- `recordUsage` falls back to the parts' sum (with a warning) when a
+  vendor reports a zero `total_tokens` alongside nonzero prompt/completion
+  parts -- the shape some OpenAI-compatible hosts produce by omitting
+  `total_tokens` -- so such a response is metered for the honest quantity,
+  never 0. The `Usage` values the caller sees are never rewritten; this is
+  metering policy at the one place usage becomes a billable quantity.
+- The OpenAI-compatible image decode path (`imageResultFromWire`) refuses
+  a response carrying more than one image -- a data array longer than one
+  entry, or a usage object claiming an `image_count` above one -- with the
+  new coded `ErrMultipleImageResults` BEFORE any usage could be recorded:
+  the whole pipeline (job handler, `ImageJobResult`) delivers one output
+  object id, so an `"n": 4` request can never "charge 4 and silently
+  return 1".
+- The multipart image-edit path enforces the same model/prompt-wins
+  invariant the JSON path promises: `buildImageEditMultipart` drops
+  same-named `"model"`/`"prompt"` Params entries instead of writing
+  duplicate form fields whose winner is parser-defined.
+- `writeImagePart` declares the part's real `Content-Type` from `img.MIME`
+  (custom part header, since `CreateFormFile` hardcodes
+  `application/octet-stream`); the old comment claiming the part's
+  Content-Type was set explicitly was wrong and is fixed.
+- A credential stored with an empty `base_url` (legal to store; the write
+  API documents an omitted `baseUrl` as leaving a provider default in
+  effect) now fails distinguishably at call time: the two registry
+  constructors refuse it with the coded, Invalid-classified
+  `ErrProviderConfigInvalid` (with `pkgcore.ErrMissingSeamConfig` still
+  attached as the cause, so `errors.Is`-based registry callers are
+  unchanged) instead of an uncoded error a transport layer must fold into
+  a bare internal failure.
+- `imageGenerateHandler.Handle`'s losing attempt in the concurrent
+  redelivery of a job whose marker already says "generated" now answers
+  from the marker's own completed `OutputObjectID` (shared
+  `completedMarkerResult` helper with the top-of-Handle completed
+  short-circuit) instead of returning its own freshly written orphan's
+  id, so two `Handle` runs for one job always agree on the id the caller
+  reads from `Job.Result`.
+- Log keys reverted from `prompt_units`/`completion_units` to
+  `prompt_tokens`/`completion_tokens`: go/observability's "token" stem
+  now uses a word-boundary rule (pinned by its own
+  `TestRedact_TokenStemDoesNotOverRedactUnrelatedWords`), so the rename
+  this module made to dodge the old substring redaction is obsolete and
+  the natural keys carry the counts unredacted.
