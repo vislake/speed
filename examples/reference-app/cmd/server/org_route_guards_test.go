@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/vislake/speed/examples/reference-app/internal/notes"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/rbac"
@@ -134,9 +135,69 @@ func orgRequestAs(t *testing.T, srv *httptest.Server, method, path, token, demoU
 // the tree. This test fails on pre-fix code and passes once org's route is
 // gated per operation (demo_subject.go's guardOrgRoute).
 func TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree(t *testing.T) {
-	srv, cfg, _ := buildTestServer(t)
+	// This test's own review flagged an unreproduced, once-in-roughly-eight
+	// flake where a full-package `go test ./... -race` run let demo-reader
+	// reach org's business logic despite holding no org:* permission --
+	// with no static logic error found in guardOrgRoute, orgPermissionFor,
+	// demoSubjectResolver or rbac's own Can/RequirePermissionFunc, and no
+	// reproduction across several full-package runs under real concurrent
+	// load while investigating it. cfg.OnRBACReady (buildServer, mirroring
+	// TestOrgRouteGuards_SubtreeScopedGrant_ManagesOwnSubtreeOnly below)
+	// replaces buildTestServer here so this test can assert the rbac
+	// DECISION directly -- exactly what the flake investigation checked by
+	// hand with temporary debug instrumentation -- rather than only the
+	// HTTP status the coarse gate produces from it. If the flake recurs,
+	// this pins whether the decision itself was wrong or the bug lies
+	// somewhere in the HTTP/route-table plumbing downstream of a correct
+	// decision, instead of requiring that distinction to be re-diagnosed
+	// from scratch.
+	cfg := testConfig(t)
+	var rbacService *rbac.Service
+	cfg.OnRBACReady = func(svc *rbac.Service) { rbacService = svc }
+
+	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("buildServer: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cleanup(); err != nil {
+			t.Errorf("cleanup: %v", err)
+		}
+	})
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	if rbacService == nil {
+		t.Fatal("cfg.OnRBACReady was never called by buildServer")
+	}
 
 	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "org-guard-caller")
+
+	// The rbac-level assertion the HTTP cases below are supposed to be a
+	// consequence of: demo-reader holds notes:read alone (seedDemoGrants'
+	// demoReaderRoleKey, demo_subject.go), no org:* permission whatsoever.
+	readerSub := rbac.Subject{TenantID: "tenant-acme", UserID: demoReaderUserID}
+	for _, perm := range []string{
+		org.PermissionRead, org.PermissionManage,
+		org.PermissionInviteMember, org.PermissionRemoveMember,
+	} {
+		resource, action, ok := splitDemoPermission(perm)
+		if !ok {
+			t.Fatalf("splitDemoPermission(%q): malformed", perm)
+		}
+		allowed, err := rbacService.Can(context.Background(), readerSub, action, resource)
+		if err != nil {
+			t.Fatalf("rbacService.Can(demo-reader, %q): %v", perm, err)
+		}
+		if allowed {
+			t.Fatalf("rbacService.Can(demo-reader, %q) = true, want false", perm)
+		}
+	}
+	if perms, err := rbacService.ListPermissions(context.Background(), readerSub); err != nil {
+		t.Fatalf("rbacService.ListPermissions(demo-reader): %v", err)
+	} else if len(perms) != 1 || perms[0] != notes.PermissionRead {
+		t.Fatalf("rbacService.ListPermissions(demo-reader) = %v, want exactly [%q]", perms, notes.PermissionRead)
+	}
 
 	// Build a real node to target, as demo-owner (BuiltinRoleOwner, seeded
 	// tenant-wide by seedDemoGrants) -- orgRequest sends that identity
