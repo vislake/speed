@@ -1046,6 +1046,157 @@ func TestDelivery_ContactPermanentFailureMarksTheContactBounced(t *testing.T) {
 	}
 }
 
+// TestDelivery_TerminalRefusalAfterASettledKeyDoesNotDowngradeTheSucceededRecord
+// pins the never-downgrade-succeeded invariant (delivery.go's settle doc) in
+// its sharpest form: the contact's delivery succeeds -- a succeeded send
+// record is settled -- and the contact then reaches a terminal state
+// (unsubscribed, or bounced). Running the SAME dispatch again afterwards --
+// a replay, a duplicate enqueue, or a job the queue re-delivered -- is
+// refused at the consent gate and settles a skipped record under the same
+// derived key. That later refusal settle must not overwrite the earlier
+// succeeded row, or the log would lose the historical fact that the key
+// already delivered -- the operator's whole audit answer. The stored record
+// must stay succeeded with every field intact and updated_at unmoved (the
+// guard drops the write; it does not rewrite).
+func TestDelivery_TerminalRefusalAfterASettledKeyDoesNotDowngradeTheSucceededRecord(t *testing.T) {
+	flips := []struct {
+		name string
+		flip func(t *testing.T, env *deliveryEnv, ctx context.Context, contactID string)
+	}{
+		{
+			name: "unsubscribed",
+			flip: func(t *testing.T, env *deliveryEnv, ctx context.Context, contactID string) {
+				t.Helper()
+				if _, err := env.contacts.Unsubscribe(ctx, UnsubscribeInput{ContactID: contactID}); err != nil {
+					t.Fatalf("unsubscribe the contact: %v", err)
+				}
+			},
+		},
+		{
+			name: "bounced",
+			flip: func(t *testing.T, env *deliveryEnv, ctx context.Context, contactID string) {
+				t.Helper()
+				if err := env.contacts.MarkBounced(ctx, contactID); err != nil {
+					t.Fatalf("mark the contact bounced: %v", err)
+				}
+			},
+		},
+	}
+
+	for _, flip := range flips {
+		t.Run(flip.name, func(t *testing.T) {
+			env := newDeliveryEnv(t)
+			ctx := tenantCtx(deliveryTenant)
+
+			contact, err := env.contacts.CreateContact(ctx, ContactCreateInput{
+				Channel:    ChannelEmail,
+				Address:    "wangfang@external.example.com",
+				ConsentRef: "consent-ref-1",
+			})
+			if err != nil {
+				t.Fatalf("create the verified contact: %v", err)
+			}
+			d := Dispatch{
+				TypeKey: fixtureTypeAppointment,
+				Recipient: DispatchRecipient{
+					Class:     RecipientClassExternal,
+					ContactID: contact.ID,
+				},
+				Locale: "zh-CN",
+				Params: renderTestParams,
+			}
+
+			if err := env.dispatchAndAttempt(t, d); err != nil {
+				t.Fatalf("first delivery attempt: %v", err)
+			}
+			if got := len(env.host.mailer.messages()); got != 1 {
+				t.Fatalf("first delivery sent %d mails, want 1", got)
+			}
+			before := env.sendRecordByChannel(t, ctx, d, ChannelEmail)
+			if before == nil || before.Status != SendRecordStatusSucceeded {
+				t.Fatalf("record after the first delivery = %+v, want succeeded", before)
+			}
+
+			flip.flip(t, env, ctx, contact.ID)
+
+			if err := env.dispatchAndAttempt(t, d); err != nil {
+				t.Fatalf("replay attempt after the %s flip: %v", flip.name, err)
+			}
+			if got := len(env.host.mailer.messages()); got != 1 {
+				t.Errorf("refused replay sent %d mails, want only the first delivery's one", got)
+			}
+
+			after := env.sendRecordByChannel(t, ctx, d, ChannelEmail)
+			if after == nil {
+				t.Fatal("replay refused the delivery but settled no record, want the succeeded row kept")
+			}
+			if after.Status != SendRecordStatusSucceeded {
+				t.Errorf("replay after the %s flip downgraded the record to %s (%q); the key already delivered and the succeeded row must survive the later settle", flip.name, after.Status, after.Error)
+			}
+			if after.ID != before.ID || after.Error != before.Error ||
+				after.DurationMs != before.DurationMs || !after.UpdatedAt.Equal(before.UpdatedAt) {
+				t.Errorf("the refused replay's settle rewrote the succeeded row: before = %+v, after = %+v", before, after)
+			}
+		})
+	}
+}
+
+// TestDelivery_ErrorSettleAfterASettledKeyDoesNotDowngradeTheSucceededRecord
+// pins the same never-downgrade-succeeded invariant on the error settle
+// paths: after a user's email delivery succeeded, a LATER attempt at the
+// same key that fails for its own reason settles through the same
+// failAndRetry the transient-failure legs call -- the acknowledged
+// double-send window, where a retry that never saw the first attempt's
+// record sends again and fails (delivery.go's deliverUserChannel doc spells
+// the window out). That failed settle must not overwrite the succeeded row
+// either: the record stays succeeded with every field intact, the attempt's
+// cause still returns unchanged (the job's retry answer is untouched by the
+// guard), and the job's own next retry converges on the alreadyDelivered
+// probe.
+func TestDelivery_ErrorSettleAfterASettledKeyDoesNotDowngradeTheSucceededRecord(t *testing.T) {
+	env := newDeliveryEnv(t)
+	env.resolver.byUser[deliveryUser] = deliveryAddresses
+	ctx := tenantCtx(deliveryTenant)
+
+	d := deliveryDispatch()
+	if err := env.dispatchAndAttempt(t, d); err != nil {
+		t.Fatalf("first delivery attempt: %v", err)
+	}
+	before := env.sendRecordByChannel(t, ctx, d, ChannelEmail)
+	if before == nil || before.Status != SendRecordStatusSucceeded {
+		t.Fatalf("record after the first delivery = %+v, want succeeded", before)
+	}
+
+	// A later attempt at the same key builds its record exactly as the
+	// delivery path does -- fresh, with an empty ID that settle adopts or
+	// invents -- and fails; failAndRetry is the transient-failure leg's own
+	// settle call.
+	rec := env.svc.sendRecordFor(deliveryTenant, d, ChannelEmail)
+	key, err := deriveDeliveryKey(deliveryTenant, d, ChannelEmail)
+	if err != nil {
+		t.Fatalf("deriveDeliveryKey: %v", err)
+	}
+	rec.IdempotencyKey = key
+	cause := errors.New("smtp 550 relay denied")
+
+	got := env.svc.failAndRetry(ctx, deliveryTenant, rec, cause)
+	if !errors.Is(got, cause) {
+		t.Fatalf("failAndRetry returned %v, want the cause itself -- the guard must not change the retry answer", got)
+	}
+
+	after := env.sendRecordByChannel(t, ctx, d, ChannelEmail)
+	if after == nil {
+		t.Fatal("the failed settle removed the record, want the succeeded row kept")
+	}
+	if after.Status != SendRecordStatusSucceeded {
+		t.Errorf("a failed settle after a succeeded key downgraded the record to %s (%q)", after.Status, after.Error)
+	}
+	if after.ID != before.ID || after.Error != before.Error ||
+		after.DurationMs != before.DurationMs || !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("the failed settle rewrote the succeeded row: before = %+v, after = %+v", before, after)
+	}
+}
+
 // TestDelivery_MissingTemplateCopyStopsTheAttempt pins the render failure
 // as a terminal, recorded stop: a delivery whose type has no copy for the
 // resolved channel (here clinic.reminder_only, whose fixture bundle carries
