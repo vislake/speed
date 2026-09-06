@@ -158,6 +158,34 @@ func (r *RoleBindingRepository) ByRole(ctx context.Context, roleID string) ([]Ro
 	})
 }
 
+// ByNodes returns every binding scoped to one of nodeIDs inside the tenant
+// ctx carries -- a third enumeration alongside ByUser and ByRole, for the
+// question org's org.node.deleted reap (reap.go's onNodeDeleted) needs
+// answered: a deleted node carries no user and no role, only the id (or,
+// for a cascade, ids) of what just disappeared from org's own tree, and
+// every binding scoped to any of them is what the reap must find
+// regardless of who holds it or which role it names.
+//
+// An empty nodeIDs returns an empty result with no query at all: node_id
+// IN () is not a clause this method exists to render, and it would be a
+// silent full-tenant no-op-turned-something-else on some dialects rather
+// than the trivially-correct "nothing named, nothing found" answer.
+func (r *RoleBindingRepository) ByNodes(ctx context.Context, nodeIDs []string) ([]RoleBinding, error) {
+	if len(nodeIDs) == 0 {
+		// Still validate the tenant even on the trivial path, so a caller
+		// that mistakenly holds no tenant context gets the same
+		// pkgcore.ErrNoTenant every other method here reports, rather than
+		// a silently successful empty answer that could mask the mistake.
+		if _, err := pkgcore.MustTenantFromContext(ctx); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	return findWithinTenant[RoleBinding](ctx, r.db, func(tx *gorm.DB) *gorm.DB {
+		return tx.Where("node_id IN ?", nodeIDs)
+	})
+}
+
 // Find returns the one binding that grants userID the role roleID at
 // exactly nodeID (empty nodeID meaning tenant-wide), inside the tenant ctx
 // carries. It reports ErrBindingNotFound when there is none.

@@ -209,12 +209,17 @@ func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
 	reg.Events.Subscribe(EventRoleBindingRestored, svc.onRoleBindingChanged)
 	reg.Events.Subscribe(EventRoleChanged, svc.onRoleChanged)
 
-	// One subscription is to a foreign event: org's org.member.removed, so
-	// a removed member's role bindings are reaped (reap.go). Unlike the
-	// four above it is never published or declared here -- Subscribe is
-	// this module's only contact with org's event surface, and it cannot
-	// fail, so a host that runs no org module simply never fires it.
+	// Two subscriptions are to foreign events org publishes: org.member.removed,
+	// so a removed member's role bindings are reaped, and org.node.deleted,
+	// so a binding left dangling on a node org just removed from its tree
+	// is reaped too (reap.go's onMemberRemoved and onNodeDeleted -- see
+	// that file's own header comment for why both exist and how they
+	// differ). Unlike the four above, neither is ever published or
+	// declared here -- Subscribe is this module's only contact with org's
+	// event surface, and it cannot fail, so a host that runs no org module
+	// simply never fires either.
 	reg.Events.Subscribe(eventMemberRemoved, svc.onMemberRemoved)
+	reg.Events.Subscribe(eventNodeDeleted, svc.onNodeDeleted)
 
 	m.service = svc
 	return svc, nil

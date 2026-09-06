@@ -377,3 +377,341 @@ func TestService_OnMemberRemoved_ReapOnOneReplica_ConvergesTheOther(t *testing.T
 		t.Fatal("replica B still grants a permission the member removal reaped on replica A")
 	}
 }
+
+// deletedNode is the shape org's own NodeDeleted payload takes on the wire:
+// a struct whose JSON tags are the snake_case field names a Redis delivery
+// decodes to. These tests must not import org -- exactly like
+// removedMember's own doc comment explains for the member-removed event --
+// so org's real struct is re-declared here, tags and all, and the
+// subscriber under test is fed it as data. Only the field this reap reads
+// is reproduced; org's RemovedCount/Path/Cascade fields carry nothing this
+// probe looks at.
+type deletedNode struct {
+	NodeID         string   `json:"node_id"`
+	DeletedNodeIds []string `json:"deleted_node_ids"`
+}
+
+// publishNodeDeleted delivers an org.node.deleted event the way org's own
+// bus.Publish would after a delete committed: on the registry's bus, under
+// the tenant the delete happened in. The in-memory bus runs every
+// subscriber synchronously inside Publish, so when this helper returns,
+// every reap the event triggers has already happened.
+func publishNodeDeleted(t *testing.T, reg *pkgcore.Registry, tenant pkgcore.TenantID, payload any) {
+	t.Helper()
+	bus := reg.Events.Bus()
+	if bus == nil {
+		t.Fatal("publishNodeDeleted: the registry carries no event bus")
+	}
+	if err := bus.Publish(pkgcore.WithTenant(context.Background(), tenant), pkgcore.Event{
+		Type:     eventNodeDeleted,
+		TenantID: tenant,
+		Payload:  payload,
+	}); err != nil {
+		t.Fatalf("publishing %s: %v", eventNodeDeleted, err)
+	}
+}
+
+func TestService_OnNodeDeleted_ReapsBindingsScopedToDeletedNodesAndSparesEveryoneElse(t *testing.T) {
+	// The reap must be precise to the node ids the event names: bindings at
+	// the deleted node go, while a binding for the same user at a different,
+	// live node, a tenant-wide binding for the same user, the same node id
+	// in another tenant, and another user entirely all keep their grants.
+	// A reap that spilled across any of those boundaries would withdraw
+	// access it had no authority to withdraw.
+	svc, reg := newTestServiceWithRegistry(t)
+
+	atDeletedNode := Subject{TenantID: "tenant-a", UserID: "user-1"}
+	sameUserOtherNode := Subject{TenantID: "tenant-a", UserID: "user-1"}
+	sameUserTenantWide := Subject{TenantID: "tenant-a", UserID: "user-1"}
+	otherUser := Subject{TenantID: "tenant-a", UserID: "user-2"}
+	sameNodeOtherTenant := Subject{TenantID: "tenant-b", UserID: "user-3"}
+
+	grant(t, svc, atDeletedNode, "writer", Scope{NodeID: "node-deleted"}, "notes:write")
+	grant(t, svc, sameUserOtherNode, "reader", Scope{NodeID: "node-live"}, "notes:read")
+	grant(t, svc, sameUserTenantWide, "reader", Scope{}, "notes:read")
+	grant(t, svc, otherUser, "writer", Scope{NodeID: "node-deleted"}, "notes:write")
+	grant(t, svc, sameNodeOtherTenant, "writer", Scope{NodeID: "node-deleted"}, "notes:write")
+
+	ctx := context.Background()
+	if ok, _ := svc.Can(ctx, atDeletedNode, "write", "notes"); !ok {
+		t.Fatal("the deleted-node binding was not live before the delete")
+	}
+
+	rec := recordEvents(reg)
+	publishNodeDeleted(t, reg, "tenant-a", deletedNode{
+		NodeID:         "node-deleted",
+		DeletedNodeIds: []string{"node-deleted"},
+	})
+
+	if ok, err := svc.Can(ctx, atDeletedNode, "write", "notes"); err != nil || ok {
+		t.Fatalf("Can(notes:write) at the deleted node after the delete = %v, %v; want false", ok, err)
+	}
+	if ok, err := svc.Can(ctx, sameUserOtherNode, "read", "notes"); err != nil || !ok {
+		t.Fatalf("the same user's binding at a live node was reaped: Can = %v, %v", ok, err)
+	}
+	if ok, err := svc.Can(ctx, otherUser, "write", "notes"); err != nil || ok {
+		t.Fatalf("another user's binding at the SAME deleted node survived: Can = %v, %v", ok, err)
+	}
+	if ok, err := svc.Can(ctx, sameNodeOtherTenant, "write", "notes"); err != nil || !ok {
+		t.Fatalf("the identical node id in another tenant was reaped: Can = %v, %v", ok, err)
+	}
+
+	revoked := rec.ofType(EventRoleBindingRevoked)
+	if len(revoked) != 2 {
+		t.Fatalf("got %d %s events, want 2 (one per binding scoped to the deleted node)", len(revoked), EventRoleBindingRevoked)
+	}
+	for _, evt := range revoked {
+		if evt.TenantID != "tenant-a" {
+			t.Errorf("revoked event carries tenant %q, want tenant-a", evt.TenantID)
+		}
+		p, ok := evt.Payload.(RoleBindingChangedEvent)
+		if !ok {
+			t.Fatalf("revoked event payload = %T, want RoleBindingChangedEvent", evt.Payload)
+		}
+		if p.NodeID != "node-deleted" {
+			t.Errorf("revoked event names node %q, want node-deleted", p.NodeID)
+		}
+	}
+
+	rows, err := svc.bindings.ByNodes(tenantCtx("tenant-a"), []string{"node-deleted"})
+	if err != nil {
+		t.Fatalf("listing remaining bindings at the deleted node: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("%d live bindings still scoped to the deleted node", len(rows))
+	}
+}
+
+func TestService_OnNodeDeleted_CascadeReapsEveryBindingInOnePass(t *testing.T) {
+	// A cascade delete's event carries every row the cascade removed, not
+	// just the root; the reap must walk all of them in one enumeration and
+	// one revoke loop, never one handler invocation per node.
+	svc, reg := newTestServiceWithRegistry(t)
+
+	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
+	grant(t, svc, sub, "reader", Scope{NodeID: "root"}, "notes:read")
+	grant(t, svc, sub, "writer", Scope{NodeID: "child-a"}, "notes:write")
+	// A second, distinct user bound at the third removed node, so the
+	// assertion below genuinely proves the reap is not merely scoped to one
+	// user -- it walks every binding at every id the event named.
+	other := Subject{TenantID: "tenant-a", UserID: "user-2"}
+	grant(t, svc, other, "writer", Scope{NodeID: "child-b"}, "notes:write")
+	// A sibling node outside the cascade, which must survive untouched.
+	grant(t, svc, sub, "reader", Scope{NodeID: "sibling"}, "notes:read")
+
+	rec := recordEvents(reg)
+	publishNodeDeleted(t, reg, "tenant-a", deletedNode{
+		NodeID:         "root",
+		DeletedNodeIds: []string{"root", "child-a", "child-b"},
+	})
+
+	// other holds exactly one binding, at child-b alone, so Can is an
+	// unambiguous check for it. sub, by contrast, keeps a live binding at
+	// the untouched sibling node carrying the identical notes:read
+	// permission the reaped root binding also carried, so Can's own
+	// tenant-wide aggregation (it does not evaluate per node) would report
+	// "still granted" whether or not the root binding was actually reaped
+	// -- the ByNodes check below is what actually proves sub's cascaded
+	// bindings are gone, precisely because it is scoped by node.
+	if ok, err := svc.Can(context.Background(), other, "write", "notes"); err != nil || ok {
+		t.Fatalf("other still holds notes:write after the cascade reap: %v, %v", ok, err)
+	}
+
+	revoked := rec.ofType(EventRoleBindingRevoked)
+	if len(revoked) != 3 {
+		t.Fatalf("got %d %s events, want 3 (one per binding across the cascaded nodes)", len(revoked), EventRoleBindingRevoked)
+	}
+
+	rows, err := svc.bindings.ByNodes(tenantCtx("tenant-a"), []string{"root", "child-a", "child-b", "sibling"})
+	if err != nil {
+		t.Fatalf("listing remaining bindings: %v", err)
+	}
+	if len(rows) != 1 || rows[0].NodeID != "sibling" {
+		t.Fatalf("remaining bindings = %+v, want exactly the sibling binding", rows)
+	}
+}
+
+func TestService_OnNodeDeleted_ForeignPayloadsAreDroppedWithoutError(t *testing.T) {
+	// The handler runs inside org's own Publish call on the in-memory bus;
+	// an error here would make a committed node delete report failure.
+	// Every payload rbac cannot read must therefore be dropped, and a
+	// payload arriving without a tenant must leave the tenant's bindings
+	// untouched.
+	svc, reg := newTestServiceWithRegistry(t)
+	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
+	grant(t, svc, sub, "reader", Scope{NodeID: "node-1"}, "notes:read")
+
+	rec := recordEvents(reg)
+
+	handler := svc.onNodeDeleted
+	base := pkgcore.Event{Type: eventNodeDeleted}
+	for _, payload := range []any{
+		nil,
+		"not a payload",
+		42,
+		map[string]any{"node_id": "node-1"}, // no deleted-ids field at all
+		map[string]any{"deleted_node_ids": []any{}},         // empty list
+		map[string]any{"deleted_node_ids": "node-1"},        // wrong type (not a list)
+		map[string]any{"deleted_node_ids": []any{42}},       // a list of the wrong element type
+		map[string]any{"DELETED_NODE_IDS": []any{"node-1"}}, // a key no accepted spelling matches
+	} {
+		evt := base
+		evt.TenantID = "tenant-a"
+		evt.Payload = payload
+		if err := handler(context.Background(), evt); err != nil {
+			t.Fatalf("onNodeDeleted with payload %v: %v", payload, err)
+		}
+	}
+
+	// A well-formed id list with no tenant: the tenant-less branch, skipped
+	// at Debug -- there is no tenant whose bindings could be reaped.
+	if err := handler(context.Background(), pkgcore.Event{
+		Type: eventNodeDeleted, Payload: deletedNode{DeletedNodeIds: []string{"node-1"}},
+	}); err != nil {
+		t.Fatalf("onNodeDeleted with a tenant-less event: %v", err)
+	}
+
+	if ok, err := svc.Can(context.Background(), sub, "read", "notes"); err != nil || !ok {
+		t.Fatalf("a dropped payload reaped a live binding: Can = %v, %v", ok, err)
+	}
+	if got := len(rec.ofType(EventRoleBindingRevoked)); got != 0 {
+		t.Fatalf("dropped payloads published %d revoke events", got)
+	}
+
+	// And the delivery itself must not fail either: a foreign payload
+	// published through the real bus surfaces no error to the publisher.
+	publishNodeDeleted(t, reg, sub.TenantID, "foreign payload")
+	if ok, err := svc.Can(context.Background(), sub, "read", "notes"); err != nil || !ok {
+		t.Fatalf("a foreign payload published on the bus reaped a live binding: Can = %v, %v", ok, err)
+	}
+}
+
+func TestService_OnNodeDeleted_WireShapesAllReapTheSameBindings(t *testing.T) {
+	// org's payload reaches rbac in three shapes: the same-process struct
+	// with snake_case JSON tags, the map a Redis delivery decodes to, and --
+	// for a payload struct published without tags -- the Go field-name
+	// spelling. All three must reap, because the bus implementation is the
+	// host's choice, not org's or rbac's.
+	svc, reg := newTestServiceWithRegistry(t)
+
+	// unit-level: the probe reads every accepted spelling.
+	structIDs, ok := nodeDeletedIDsFromPayload(deletedNode{DeletedNodeIds: []string{"n-1"}})
+	if !ok || len(structIDs) != 1 || structIDs[0] != "n-1" {
+		t.Fatalf("json-tagged struct payload probed as (%v, %v), want ([n-1], true)", structIDs, ok)
+	}
+	wireIDs, ok := nodeDeletedIDsFromPayload(map[string]any{"deleted_node_ids": []any{"n-2"}})
+	if !ok || len(wireIDs) != 1 || wireIDs[0] != "n-2" {
+		t.Fatalf("wire map payload probed as (%v, %v), want ([n-2], true)", wireIDs, ok)
+	}
+	untaggedIDs, ok := nodeDeletedIDsFromPayload(struct{ DeletedNodeIds []string }{DeletedNodeIds: []string{"n-3"}})
+	if !ok || len(untaggedIDs) != 1 || untaggedIDs[0] != "n-3" {
+		t.Fatalf("untagged struct payload probed as (%v, %v), want ([n-3], true)", untaggedIDs, ok)
+	}
+
+	// end to end: each shape published on the bus reaps the node it names.
+	byShape := []struct {
+		nodeID  string
+		payload any
+	}{
+		{"n-1", deletedNode{NodeID: "n-1", DeletedNodeIds: []string{"n-1"}}},
+		{"n-2", map[string]any{"deleted_node_ids": []any{"n-2"}}},
+		{"n-3", struct{ DeletedNodeIds []string }{DeletedNodeIds: []string{"n-3"}}},
+	}
+	for _, shape := range byShape {
+		sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
+		grant(t, svc, sub, "reader", Scope{NodeID: shape.nodeID}, "notes:read")
+		publishNodeDeleted(t, reg, sub.TenantID, shape.payload)
+		rows, err := svc.bindings.ByNodes(tenantCtx("tenant-a"), []string{shape.nodeID})
+		if err != nil {
+			t.Fatalf("listing bindings at %s: %v", shape.nodeID, err)
+		}
+		if len(rows) != 0 {
+			t.Fatalf("node %s (payload %T) still holds %d live bindings after the delete", shape.nodeID, shape.payload, len(rows))
+		}
+	}
+}
+
+func TestService_OnNodeDeleted_OneFailedReapDoesNotAbortTheRest(t *testing.T) {
+	// The reaper cannot abort on a failure -- a cascade that reaped one of
+	// two bindings has done real work, and surfacing an error would make
+	// org's committed delete look failed. Here two nodes were deleted, and
+	// the role behind one node's binding is gone (its row was physically
+	// deleted behind the scenes, which nothing in this module prevents a
+	// future delete path from doing). Resolving that binding's role fails;
+	// the other binding must still be reaped, and the handler must still
+	// return nil.
+	svc, reg := newTestServiceWithRegistry(t)
+	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
+
+	ctx := tenantCtx(sub.TenantID)
+	if _, err := svc.DefineRole(ctx, RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
+		t.Fatalf("DefineRole(reader): %v", err)
+	}
+	doomed, err := svc.DefineRole(ctx, RoleDefinition{Key: "doomed", Permissions: []string{"notes:write"}})
+	if err != nil {
+		t.Fatalf("DefineRole(doomed): %v", err)
+	}
+	if err = svc.AssignRole(ctx, sub, "reader", Scope{NodeID: "node-ok"}); err != nil {
+		t.Fatalf("AssignRole(reader): %v", err)
+	}
+	if err = svc.AssignRole(ctx, sub, "doomed", Scope{NodeID: "node-doomed"}); err != nil {
+		t.Fatalf("AssignRole(doomed): %v", err)
+	}
+	// Remove the role row the second binding names, leaving the binding a
+	// dangling reference.
+	if err = svc.roles.Delete(ctx, doomed.ID); err != nil {
+		t.Fatalf("deleting the role behind the second binding: %v", err)
+	}
+
+	rec := recordEvents(reg)
+	publishNodeDeleted(t, reg, sub.TenantID, deletedNode{
+		DeletedNodeIds: []string{"node-ok", "node-doomed"},
+	})
+
+	rows, err := svc.bindings.ByNodes(ctx, []string{"node-ok", "node-doomed"})
+	if err != nil {
+		t.Fatalf("listing remaining bindings: %v", err)
+	}
+	if len(rows) != 1 || rows[0].NodeID != "node-doomed" {
+		t.Fatalf("remaining bindings = %+v, want exactly the unresolvable one at node-doomed", rows)
+	}
+	revoked := rec.ofType(EventRoleBindingRevoked)
+	if len(revoked) != 1 {
+		t.Fatalf("got %d %s events, want 1 (only the resolvable binding)", len(revoked), EventRoleBindingRevoked)
+	}
+	if p := revoked[0].Payload.(RoleBindingChangedEvent); p.NodeID != "node-ok" {
+		t.Errorf("revoked event names node %q, want node-ok", p.NodeID)
+	}
+}
+
+func TestService_OnNodeDeleted_ReapOnOneReplica_ConvergesTheOther(t *testing.T) {
+	// Two Services over one database and one bus: the shape of a
+	// multi-replica deployment. The reaper runs on the replica that hears
+	// the delete, and its revokes travel to the other replica through
+	// EventRoleBindingRevoked -- replica B, which cached the grant and does
+	// not run the reap itself, must stop answering "granted" on the very
+	// next call, not one TTL later.
+	db := newRBACTestDB(t)
+	reg := newPlainRegistry()
+	if err := reg.Permissions.Add(testPermissions...); err != nil {
+		t.Fatalf("declaring permissions: %v", err)
+	}
+	replicaA := attachReplica(t, db, reg)
+	replicaB := attachReplica(t, db, reg)
+
+	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
+	grant(t, replicaA, sub, "reader", Scope{NodeID: "node-1"}, "notes:read")
+	if ok, _ := replicaB.Can(context.Background(), sub, "read", "notes"); !ok {
+		t.Fatal("replica B did not see the grant")
+	}
+
+	publishNodeDeleted(t, reg, sub.TenantID, deletedNode{DeletedNodeIds: []string{"node-1"}})
+
+	ok, err := replicaB.Can(context.Background(), sub, "read", "notes")
+	if err != nil {
+		t.Fatalf("Can on replica B: %v", err)
+	}
+	if ok {
+		t.Fatal("replica B still grants a permission the node delete reaped on replica A")
+	}
+}
