@@ -530,12 +530,13 @@ func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID s
 	}
 
 	if s.simulations != nil {
-		// tenant is always present here for the identical reason the
-		// reservation save just above gives: GenerateImage has already
-		// succeeded and never returns a job id without first resolving
-		// ctx's tenant.
-		tenant, _ := pkgcore.TenantFromContext(ctx)
-		if saveErr := s.simulations.save(ctx, jobID, tenant, photoObjectID, effective); saveErr != nil {
+		// save resolves the row's tenant from the ctx itself, through the
+		// embedded dbkit.Repository (see simulation_store.go's save doc
+		// comment) -- and the tenant is always present here for the
+		// identical reason the reservation save just above gives:
+		// GenerateImage has already succeeded and never returns a job id
+		// without first resolving ctx's tenant.
+		if saveErr := s.simulations.save(ctx, jobID, photoObjectID, effective); saveErr != nil {
 			// The same shape as the reservation-save failure logged just
 			// above, and the same verdict: the job is already enqueued and
 			// running, so refusing the call now would strand it with no
@@ -740,11 +741,15 @@ func (s *Service) OptionsForJob(ctx context.Context, jobID jobs.JobID) (Simulati
 	if s.simulations == nil {
 		return SimulationOptions{}, false, nil
 	}
-	tenant, ok := pkgcore.TenantFromContext(ctx)
-	if !ok {
+	// get resolves the tenant from the ctx itself (its tenant-scoped
+	// lookup filters by the ctx tenant, injected by dbkit's plugin -- see
+	// simulation_store.go's get doc comment); the guard below keeps this
+	// method's own contract of answering "no record" for a ctx without
+	// one rather than surfacing an error.
+	if _, ok := pkgcore.TenantFromContext(ctx); !ok {
 		return SimulationOptions{}, false, nil
 	}
-	row, has, err := s.simulations.get(ctx, tenant, jobID)
+	row, has, err := s.simulations.get(ctx, jobID)
 	if err != nil {
 		return SimulationOptions{}, false, err
 	}
@@ -777,12 +782,11 @@ func (s *Service) ListSimulationsByPhoto(ctx context.Context, photoObjectID stri
 	if s.simulations == nil || s.queue == nil {
 		return nil, nil
 	}
-	tenant, ok := pkgcore.TenantFromContext(ctx)
-	if !ok {
+	if _, ok := pkgcore.TenantFromContext(ctx); !ok {
 		return nil, pkgcore.ErrNoTenant
 	}
 
-	rows, err := s.simulations.listByPhoto(ctx, tenant, photoObjectID)
+	rows, err := s.simulations.listByPhoto(ctx, photoObjectID)
 	if err != nil {
 		return nil, err
 	}
@@ -797,9 +801,10 @@ func (s *Service) ListSimulationsByPhoto(ctx context.Context, photoObjectID stri
 		// Rebuilt from the row's own stored tenant, never trusted from ctx
 		// -- root CLAUDE.md's "workers do not inherit tenant context" trap,
 		// applied the way ReconcileOutstandingCredits already does. (The
-		// row's tenant is ctx's own by construction -- listByPhoto's WHERE
-		// clause -- so the rebuild is belt-and-braces, not a behavior
-		// difference.)
+		// row's tenant is ctx's own by construction -- listByPhoto only
+		// ever returns ctx's own tenant's rows, filtered by dbkit's
+		// tenant-scoping plugin -- so the rebuild is belt-and-braces, not
+		// a behavior difference.)
 		job, getErr := s.queue.Get(pkgcore.WithTenant(ctx, pkgcore.TenantID(row.TenantID)), jobs.JobID(row.JobID))
 		if getErr != nil {
 			return nil, fmt.Errorf("smilesim: fetch status for recorded simulation job %q: %w", row.JobID, getErr)
