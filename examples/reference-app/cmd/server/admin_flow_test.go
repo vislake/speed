@@ -145,7 +145,7 @@ func buildAdminTestServer(t *testing.T) (*httptest.Server, serverConfig, *captur
 	mailer := &capturingMailer{}
 	cfg.Mailer = mailer
 
-	handler, cleanup, err := buildServer(t.Context(), cfg)
+	handler, cleanup, _, err := buildServer(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("buildServer: %v", err)
 	}

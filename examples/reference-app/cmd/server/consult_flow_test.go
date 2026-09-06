@@ -88,7 +88,7 @@ func buildConsultTestServer(t *testing.T, aiServer *fakeOpenAICompatibleServer) 
 	cfg.AIGatewayBaseURL = aiServer.URL
 	cfg.AIGatewayAPIKey = "sk-test-consult-key"
 
-	handler, cleanup, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := buildServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("buildServer: %v", err)
 	}

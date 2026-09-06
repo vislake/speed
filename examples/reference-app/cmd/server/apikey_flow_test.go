@@ -149,7 +149,7 @@ const apikeyBasePath = "/api/v1/integration/apikeys"
 // could not hide a real regression), rotate (the predecessor is revoked and
 // the replacement works and differs) and revoke.
 func TestBuildServer_APIKeyFlow_CreateListRotateRevoke_EndToEnd(t *testing.T) {
-	srv, cfg := buildTestServer(t)
+	srv, cfg, _ := buildTestServer(t)
 	// The token signs a real account into tenant-acme; the demo user header
 	// then names which seeded demo grant the rbac gate decides the request
 	// against (demo_subject.go's seedDemoGrants) -- the owner role carries
@@ -291,7 +291,7 @@ func decodeListAPIKeys(t *testing.T, resp *http.Response, wantStatus int, what s
 // generic gate silently passing everything through: a router bug that
 // let every request past would make this test the one that fails.
 func TestBuildServer_APIKeyPermissionGate_EnforcesTheAPIKeyPermissions(t *testing.T) {
-	srv, cfg := buildTestServer(t)
+	srv, cfg, _ := buildTestServer(t)
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "apikey-gate")
 
 	// The reader may neither list nor create: both directions of the

@@ -333,7 +333,7 @@ func uploadAndComplete(t *testing.T, srv *httptest.Server, token string, content
 //  5. list (metadata only -- no fan-out), and delete, after which the id
 //     answers 404 like one that never existed.
 func TestBuildServer_StorageFlow_UploadSanitizeDeriveDownloadDelete_EndToEnd(t *testing.T) {
-	srv, cfg := buildTestServer(t)
+	srv, cfg, _ := buildTestServer(t)
 	// The token signs a real account into tenant-acme; the demo user header
 	// then names which seeded demo grant the gate decides the request
 	// against (demo_subject.go's seedDemoGrants).
@@ -473,7 +473,7 @@ func TestBuildServer_StorageFlow_UploadSanitizeDeriveDownloadDelete_EndToEnd(t *
 // ways, while the owner passes. The gate answers with rbac's structured
 // code, asserted on the code rather than on the status alone.
 func TestBuildServer_StoragePermissionGate_EnforcesTheStoragePermissions(t *testing.T) {
-	srv, cfg := buildTestServer(t)
+	srv, cfg, _ := buildTestServer(t)
 	// The token signs a real account into tenant-acme; the demo user header
 	// then names which seeded grant the gate decides the request against.
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "stg-gate")
@@ -523,7 +523,7 @@ func TestBuildServer_StoragePermissionGate_EnforcesTheStoragePermissions(t *test
 // in BOTH tenants, so the refusal cannot be the authorization layer's:
 // the same user, through the gate, is told the object does not exist.
 func TestBuildServer_StorageIsolation_CrossTenantObjectInvisible(t *testing.T) {
-	srv, cfg := buildTestServer(t)
+	srv, cfg, _ := buildTestServer(t)
 	// demoOwnerUserID holds the owner role in BOTH demo tenants
 	// (seedDemoGrants seeds every configured tenant), so a refusal cannot
 	// be the gate's: the tenant each request acts in comes from its bearer
@@ -594,7 +594,7 @@ func decodeList(t *testing.T, resp *http.Response, what string) testStorageListR
 // conflict code -- and the refusal advances nothing, so the object stays
 // uploading (and stays invisible on the read surface) afterwards.
 func TestBuildServer_StorageComplete_ChecksumMismatchConflicts(t *testing.T) {
-	srv, cfg := buildTestServer(t)
+	srv, cfg, _ := buildTestServer(t)
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "stg-cksum")
 
 	jpegBytes := jpegWithExif(t)

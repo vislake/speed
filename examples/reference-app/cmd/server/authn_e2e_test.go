@@ -154,7 +154,7 @@ func buildAuthnE2EServer(t *testing.T) (*httptest.Server, serverConfig, *bytes.B
 	}
 	cfg.RedirectAllowlist = allowlist
 
-	handler, cleanup, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := buildServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("buildServer: %v", err)
 	}

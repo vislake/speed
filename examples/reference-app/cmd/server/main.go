@@ -129,7 +129,12 @@ func run(baseCtx context.Context) error {
 	// before telemetry starts, and its error is the accurate one. Since
 	// nothing starts listening until after both calls below succeed,
 	// deferring obs.Init to second costs nothing.
-	handler, cleanup, err := buildServer(ctx, cfg)
+	// buildServer's fourth return value, the wired *compliance.Module, is
+	// the reach compliance_flow_test.go needs into the retention/erasure/
+	// export services; the real process has nothing to do with it -- the
+	// compliance module's own registered jobs handler drives its sweep on
+	// the queue this app starts below.
+	handler, cleanup, _, err := buildServer(ctx, cfg)
 	if err != nil {
 		return err
 	}

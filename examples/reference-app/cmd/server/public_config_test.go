@@ -70,7 +70,7 @@ func buildSeededTestServer(t *testing.T, seeds ...configSeed) (*httptest.Server,
 	t.Helper()
 
 	cfg := testConfig(t)
-	handler, cleanup, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := buildServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("buildServer: %v", err)
 	}

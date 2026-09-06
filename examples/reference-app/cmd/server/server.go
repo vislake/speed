@@ -1161,10 +1161,13 @@ func configFromEnv() (serverConfig, error) {
 // consult_flow_test.go) all call it, so the two can never drift into
 // testing a different wiring than the one that actually runs.
 //
-// It returns the composed handler and a cleanup function that closes
+// It returns the composed handler, a cleanup function that closes
 // everything buildServer opened (the services, the injected Redis bus and
-// its client when one was built, and the underlying database connection);
-// the caller must call cleanup once done with the handler.
+// its client when one was built, and the underlying database connection),
+// and the wired *compliance.Module -- the compliance_flow_test.go's one
+// reach into the retention/erasure/export services this app bootstraps,
+// since buildServer exposes no module itself otherwise. The caller must
+// call cleanup once done with the handler.
 //
 // The deployment mode no longer refuses anything here: the Kernel it
 // bootstraps is what validates the assembled composition against
@@ -1187,7 +1190,7 @@ func configFromEnv() (serverConfig, error) {
 // tests pin the positive half of, and
 // examples/reference-app/integration_test/distributed_mode_test.go proves
 // end to end against real Docker-backed infrastructure.
-func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() error, error) {
+func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() error, *compliance.Module, error) {
 	// Deliberately NOT setting dbkit.Options.AuditBus here, even though
 	// notes.Note implements dbkit.Auditable (see model.go): every note
 	// write in this app goes through dbkit.Repository[Note], which wraps
@@ -1218,10 +1221,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// #9 of this round's frozen plan).
 	piiCipher, err := dbkit.NewCipher(cfg.AuthnPIICipherKey)
 	if err != nil {
-		return nil, nil, fmt.Errorf("reference-app: build authn's PII cipher: %w", err)
+		return nil, nil, nil, fmt.Errorf("reference-app: build authn's PII cipher: %w", err)
 	}
 	if regErr := authn.RegisterPIISerializer(piiCipher); regErr != nil {
-		return nil, nil, fmt.Errorf("reference-app: register authn's PII serializer: %w", regErr)
+		return nil, nil, nil, fmt.Errorf("reference-app: register authn's PII serializer: %w", regErr)
 	}
 
 	// go/pki's LocalSigner private-key column needs its own serializer
@@ -1231,15 +1234,15 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// comment).
 	pkiLocalKeyCipher, err := dbkit.NewCipher(cfg.PKILocalKeyCipherKey)
 	if err != nil {
-		return nil, nil, fmt.Errorf("reference-app: build pki's local-key cipher: %w", err)
+		return nil, nil, nil, fmt.Errorf("reference-app: build pki's local-key cipher: %w", err)
 	}
 	if regErr := pki.RegisterLocalKeySerializer(pkiLocalKeyCipher); regErr != nil {
-		return nil, nil, fmt.Errorf("reference-app: register pki's local-key serializer: %w", regErr)
+		return nil, nil, nil, fmt.Errorf("reference-app: register pki's local-key serializer: %w", regErr)
 	}
 
 	db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: cfg.SQLitePath})
 	if err != nil {
-		return nil, nil, fmt.Errorf("reference-app: open database: %w", err)
+		return nil, nil, nil, fmt.Errorf("reference-app: open database: %w", err)
 	}
 
 	// configService and rbacService are filled by their Attach calls below
@@ -1317,7 +1320,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	cipher, err := dbkit.NewCipher(cfg.ConfigKey)
 	if err != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: build the config master cipher: %w", err)
+		return nil, nil, nil, fmt.Errorf("reference-app: build the config master cipher: %w", err)
 	}
 
 	// org's Invitation.Email column is encrypted at rest under this same
@@ -1330,7 +1333,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	orgIndexer, err := dbkit.NewBlindIndexer("email_index", cfg.OrgIndexKey, dbkit.NormalizeEmail)
 	if err != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: build the org email indexer: %w", err)
+		return nil, nil, nil, fmt.Errorf("reference-app: build the org email indexer: %w", err)
 	}
 
 	// notification's Contact.Address column is encrypted at rest under this
@@ -1346,12 +1349,12 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	contactEmailIndexer, err := dbkit.NewBlindIndexer("contact_email_index", cfg.NotificationIndexKey, dbkit.NormalizeEmail)
 	if err != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: build the notification contact email indexer: %w", err)
+		return nil, nil, nil, fmt.Errorf("reference-app: build the notification contact email indexer: %w", err)
 	}
 	contactPhoneIndexer, err := dbkit.NewBlindIndexer("contact_phone_index", cfg.NotificationIndexKey, dbkit.NormalizePhoneE164)
 	if err != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: build the notification contact phone indexer: %w", err)
+		return nil, nil, nil, fmt.Errorf("reference-app: build the notification contact phone indexer: %w", err)
 	}
 
 	// ai-gateway's ai_gateway_credentials.api_key column is encrypted at
@@ -1471,7 +1474,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	authnModule, err := authn.NewModule(db, authnOpts...)
 	if err != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: build the authn module: %w", err)
+		return nil, nil, nil, fmt.Errorf("reference-app: build the authn module: %w", err)
 	}
 
 	// notes' creator seam is demoNotesSubjectResolver (declared above):
@@ -1758,58 +1761,58 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	migrationRegistry := dbkit.NewMigrationRegistry()
 	if regErr := migrationRegistry.Register(pkiModule); regErr != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
 	if regErr := migrationRegistry.Register(authnModule); regErr != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
 	if regErr := migrationRegistry.Register(rbacModule); regErr != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
 	if regErr := migrationRegistry.Register(notesModule); regErr != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
 	if regErr := migrationRegistry.Register(orgModule); regErr != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
 	if regErr := migrationRegistry.Register(configModule); regErr != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
 	if regErr := migrationRegistry.Register(auditModule); regErr != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
 	if regErr := migrationRegistry.Register(storageModule); regErr != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
 	if regErr := migrationRegistry.Register(sharingModule); regErr != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
 	if regErr := migrationRegistry.Register(integrationModule); regErr != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
 	// demoModule is deliberately absent from this registry: it ships no
 	// migrations (its Migrations() is an empty FS -- see internal/demo's
 	// module doc), so there is nothing to register or apply for it.
 	if regErr := migrationRegistry.Register(notificationModule); regErr != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
 	if regErr := migrationRegistry.Register(aiGatewayModule); regErr != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
 	if regErr := migrationRegistry.Register(billingModule); regErr != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
 	// complianceModule is deliberately absent from this registry too: it
 	// ships no migrations of its own (Migrations() is an empty FS) --
@@ -1817,11 +1820,11 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// audit_events table, already registered above.
 	if regErr := migrationRegistry.Register(adminModule); regErr != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+		return nil, nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
 	if applyErr := migrationRegistry.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: apply migrations: %w", applyErr)
+		return nil, nil, nil, fmt.Errorf("reference-app: apply migrations: %w", applyErr)
 	}
 
 	// Bootstrap registers all ten modules in argument order -- authn
@@ -1977,7 +1980,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, pkiModule, authnModule, notesModule, orgModule, configModule, rbacModule, storageModule, sharingModule, integrationModule, demoModule, notificationModule, aiGatewayModule, billingModule, complianceModule, adminModule, auditModule)
 	if err != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: bootstrap kernel: %w", err)
+		return nil, nil, nil, fmt.Errorf("reference-app: bootstrap kernel: %w", err)
 	}
 	// integrationModule's Attach must run after Bootstrap for the same
 	// reason config's and rbac's do just below: its Service reads
@@ -1991,12 +1994,12 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	integrationService, err := integrationModule.Attach(reg)
 	if err != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: attach the integration module: %w", err)
+		return nil, nil, nil, fmt.Errorf("reference-app: attach the integration module: %w", err)
 	}
 	configService, err = configModule.Attach(reg)
 	if err != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: attach the config module: %w", err)
+		return nil, nil, nil, fmt.Errorf("reference-app: attach the config module: %w", err)
 	}
 	// rbac's Attach must also come after Bootstrap, and for a sharper
 	// reason than config's: what it freezes is the snapshot of every
@@ -2006,11 +2009,11 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	rbacService, err = rbacModule.Attach(reg)
 	if err != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: attach the rbac module: %w", err)
+		return nil, nil, nil, fmt.Errorf("reference-app: attach the rbac module: %w", err)
 	}
 	if seedErr := seedDemoGrants(ctx, rbacService, cfg.HostTenants); seedErr != nil {
 		_ = cleanup()
-		return nil, nil, seedErr
+		return nil, nil, nil, seedErr
 	}
 	// seedDemoCredits is the demo, NOT-a-real-payment stand-in for
 	// docs/internal/15-roadmap.md's M2 exit condition's buy-a-credit-pack
@@ -2024,7 +2027,23 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// route on a permission, demo password or not.
 	if seedErr := seedDemoCredits(ctx, billingModule.Credits(), cfg.HostTenants); seedErr != nil {
 		_ = cleanup()
-		return nil, nil, seedErr
+		return nil, nil, nil, seedErr
+	}
+
+	// notes' retention participant is registered here, after Bootstrap --
+	// compliance's Register is what attaches the Retention registrar the
+	// kernel's reg.Retention seat resolves to, so Add before Bootstrap
+	// would silently register onto a registrar nothing sweeps with (see
+	// internal/notes/retention_participant.go's own doc comment). The
+	// participant is built over the very dbkit.Open *gorm.DB the notes
+	// Module already uses -- share the connection, never a second pool --
+	// with notes.NewRepository(db) the same fresh-repository-over-the-
+	// shared-db shape every earlier host-side seam wiring in this file
+	// follows. Add returns ErrDuplicateRetentionParticipant on a repeated
+	// Name, refused here like any other wiring failure.
+	if err := reg.Retention.Add(notes.NewRetentionParticipant(notes.NewRepository(db))); err != nil {
+		_ = cleanup()
+		return nil, nil, nil, fmt.Errorf("reference-app: register notes retention participant: %w", err)
 	}
 
 	// admin's D8 role-management surface needs the real *rbac.Service --
@@ -2052,13 +2071,13 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		})
 		if sysErr != nil {
 			_ = cleanup()
-			return nil, nil, fmt.Errorf("reference-app: build the ai-gateway credential system context: %w", sysErr)
+			return nil, nil, nil, fmt.Errorf("reference-app: build the ai-gateway credential system context: %w", sysErr)
 		}
 		if credErr := aiGatewayModule.Credentials().SetPlatformCredential(
 			sysCtx, aigateway.ProviderOpenAICompatible, cfg.AIGatewayAPIKey, cfg.AIGatewayBaseURL,
 		); credErr != nil {
 			_ = cleanup()
-			return nil, nil, fmt.Errorf("reference-app: set the ai-gateway platform credential: %w", credErr)
+			return nil, nil, nil, fmt.Errorf("reference-app: set the ai-gateway platform credential: %w", credErr)
 		}
 	}
 	// The ai-gateway image-generation platform credential -- the same
@@ -2072,13 +2091,13 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		})
 		if sysErr != nil {
 			_ = cleanup()
-			return nil, nil, fmt.Errorf("reference-app: build the ai-gateway image credential system context: %w", sysErr)
+			return nil, nil, nil, fmt.Errorf("reference-app: build the ai-gateway image credential system context: %w", sysErr)
 		}
 		if credErr := aiGatewayModule.Credentials().SetPlatformCredential(
 			sysCtx, aigateway.ProviderOpenAICompatibleImage, cfg.AIGatewayImageAPIKey, cfg.AIGatewayImageBaseURL,
 		); credErr != nil {
 			_ = cleanup()
-			return nil, nil, fmt.Errorf("reference-app: set the ai-gateway image platform credential: %w", credErr)
+			return nil, nil, nil, fmt.Errorf("reference-app: set the ai-gateway image platform credential: %w", credErr)
 		}
 	}
 
@@ -2097,11 +2116,11 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		jobsHandler, ok := handler.(jobs.Handler)
 		if !ok {
 			_ = cleanup()
-			return nil, nil, fmt.Errorf("reference-app: registry job handler %q is not a jobs.Handler", jobType)
+			return nil, nil, nil, fmt.Errorf("reference-app: registry job handler %q is not a jobs.Handler", jobType)
 		}
 		if err := standaloneQueue.RegisterHandler(jobsHandler); err != nil {
 			_ = cleanup()
-			return nil, nil, fmt.Errorf("reference-app: register job handler %q: %w", jobType, err)
+			return nil, nil, nil, fmt.Errorf("reference-app: register job handler %q: %w", jobType, err)
 		}
 	}
 	// cfg.DisableQueueWorker skips Start entirely rather than merely
@@ -2113,7 +2132,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	if !cfg.DisableQueueWorker {
 		if err := standaloneQueue.Start(ctx); err != nil {
 			_ = cleanup()
-			return nil, nil, fmt.Errorf("reference-app: start the job queue: %w", err)
+			return nil, nil, nil, fmt.Errorf("reference-app: start the job queue: %w", err)
 		}
 	}
 
@@ -2123,7 +2142,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	adminHandler, mountErr := mountModuleRoutes(mux, reg, rbacService)
 	if mountErr != nil {
 		_ = cleanup()
-		return nil, nil, mountErr
+		return nil, nil, nil, mountErr
 	}
 
 	// wireDemoNotification adds the reference app's demo glue on top of the
@@ -2183,7 +2202,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	smileSimReservationStore := smilesim.NewReservationStore(db)
 	if err := smileSimReservationStore.EnsureSchema(ctx); err != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("reference-app: ensure smilesim credit reservation schema: %w", err)
+		return nil, nil, nil, fmt.Errorf("reference-app: ensure smilesim credit reservation schema: %w", err)
 	}
 	smileSimService := smilesim.NewService(aiGatewayModule.Gateway(), billingModule.Credits(), reg.EventBus(), standaloneQueue, smileSimReservationStore)
 	// context.Background(), never ctx, per StartReconciler's own doc
@@ -2347,7 +2366,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	if cfg.DemoUsersPassword != "" {
 		if seedErr := seedDemoUsers(ctx, handler, memberships, rbacService, cfg.HostTenants, cfg.DemoUsersPassword); seedErr != nil {
 			_ = cleanup()
-			return nil, nil, seedErr
+			return nil, nil, nil, seedErr
 		}
 		// seedDemoPlatformStaff is admin's own first-consumer demo account
 		// (demo_admin.go): a real registered user whose ONLY membership is
@@ -2356,10 +2375,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		// permission any module declared.
 		if _, seedErr := seedDemoPlatformStaff(ctx, handler, memberships, rbacService, cfg.DemoUsersPassword); seedErr != nil {
 			_ = cleanup()
-			return nil, nil, seedErr
+			return nil, nil, nil, seedErr
 		}
 	}
-	return handler, cleanup, nil
+	return handler, cleanup, complianceModule, nil
 }
 
 // authnAPIPath is authn's own HTTP mount point -- duplicated from

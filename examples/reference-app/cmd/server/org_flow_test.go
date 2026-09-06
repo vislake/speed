@@ -95,7 +95,7 @@ func buildOrgTestServer(t *testing.T) (*httptest.Server, serverConfig, *capturin
 	mailer := &capturingMailer{}
 	cfg.Mailer = mailer
 
-	handler, cleanup, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := buildServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("buildServer: %v", err)
 	}

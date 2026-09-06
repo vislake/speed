@@ -42,7 +42,7 @@ func buildSeededUsersTestServer(t *testing.T, password string) (*httptest.Server
 
 	cfg := testConfig(t)
 	cfg.DemoUsersPassword = password
-	handler, cleanup, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := buildServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("buildServer: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabaseFailsClosed(t *testing.T) {
 		cfg.SQLitePath = dbPath
 		cfg.Memberships = memberships
 		cfg.DemoUsersPassword = demoSeedPassword
-		handler, cleanup, err := buildServer(context.Background(), cfg)
+		handler, cleanup, _, err := buildServer(context.Background(), cfg)
 		if err != nil {
 			t.Fatalf("buildServer: %v", err)
 		}
@@ -250,7 +250,7 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabaseFailsClosed(t *testing.T) {
 // memberships, never from a field the caller typed, so an account with
 // no membership in any tenant is refused for every tenant at once.
 func TestDemoUsers_RegisteredButMemberless_BrowserShapedSignInRefused(t *testing.T) {
-	srv, _ := buildTestServer(t)
+	srv, _, _ := buildTestServer(t)
 
 	// Register a fresh account through authn's real register route. The
 	// answer is 201, and a membership nowhere.

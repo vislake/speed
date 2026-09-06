@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/compliance"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
@@ -79,12 +80,16 @@ func testConfig(t *testing.T) serverConfig {
 // real handler, and a real (if temp-file) SQLite database -- not a mock of
 // any of them. It returns the serverConfig alongside the server so a
 // caller can reach cfg.Memberships to grant a demo account tenant
-// membership after registering it (registerAndAuthenticate does this).
-func buildTestServer(t *testing.T) (*httptest.Server, serverConfig) {
+// membership after registering it (registerAndAuthenticate does this), and
+// buildServer's wired *compliance.Module -- the one reach a test has into
+// the retention/erasure/export services, which compliance_flow_test.go
+// drives (every other flow test in this package is HTTP-driven and discards
+// it, exactly as buildServer's own doc comment describes main.go doing).
+func buildTestServer(t *testing.T) (*httptest.Server, serverConfig, *compliance.Module) {
 	t.Helper()
 
 	cfg := testConfig(t)
-	handler, cleanup, err := buildServer(context.Background(), cfg)
+	handler, cleanup, complianceModule, err := buildServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("buildServer: %v", err)
 	}
@@ -96,7 +101,7 @@ func buildTestServer(t *testing.T) (*httptest.Server, serverConfig) {
 
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	return srv, cfg
+	return srv, cfg, complianceModule
 }
 
 // registerAndAuthenticate registers a fresh demo account through authn's
@@ -291,7 +296,7 @@ func listNotesAs(t *testing.T, srv *httptest.Server, token string) []testNote {
 // FindByID/Update/Delete's isolation guarantees. The two tests are
 // complementary, not redundant: neither can substitute for the other.
 func TestBuildServer_MultiTenantIsolation_EndToEnd(t *testing.T) {
-	srv, cfg := buildTestServer(t)
+	srv, cfg, _ := buildTestServer(t)
 
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "acme-isolation")
 	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "globex-isolation")
@@ -405,7 +410,7 @@ func assertPermissionDenied(t *testing.T, resp *http.Response, what string) {
 //   - an unknown user is authenticated as far as this demo goes and holds
 //     no grant at all, so it is refused both ways.
 func TestBuildServer_PermissionGate_EnforcesTheNotesPermissions(t *testing.T) {
-	srv, cfg := buildTestServer(t)
+	srv, cfg, _ := buildTestServer(t)
 	// The token signs a real account into tenant-acme; the demo user header
 	// then names which seeded demo grant the gate decides the request
 	// against (demo_subject.go's seedDemoGrants).
@@ -452,7 +457,7 @@ func TestBuildServer_PermissionGate_EnforcesTheNotesPermissions(t *testing.T) {
 // fail-closed 403, which is why the assertion is on rbac's code rather
 // than on the status alone.
 func TestBuildServer_PermissionGate_NoSubject_IsRefused(t *testing.T) {
-	srv, cfg := buildTestServer(t)
+	srv, cfg, _ := buildTestServer(t)
 	// The token resolves the tenant; no demo user header means no Subject
 	// for the rbac gate to decide for.
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "pg-nosubject")
@@ -477,7 +482,7 @@ func TestBuildServer_PermissionGate_NoSubject_IsRefused(t *testing.T) {
 // made in comes from the bearer token, never from anything the caller
 // sent -- the header only names WHO is acting.
 func TestBuildServer_PermissionGate_GrantsDoNotCrossTenants(t *testing.T) {
-	srv, cfg := buildTestServer(t)
+	srv, cfg, _ := buildTestServer(t)
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "pg-acme")
 	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "pg-globex")
 
@@ -511,7 +516,7 @@ func TestBuildServer_PermissionGate_GrantsDoNotCrossTenants(t *testing.T) {
 // pre-auth endpoints must keep answering with no identity whatsoever, or a
 // login page could never render its own brand.
 func TestBuildServer_PublicConfigEndpoints_StayUngated(t *testing.T) {
-	srv, _ := buildTestServer(t)
+	srv, _, _ := buildTestServer(t)
 
 	for _, path := range []string{config.PathPublic, config.PathSystemFeatures} {
 		t.Run(path, func(t *testing.T) {
@@ -542,7 +547,7 @@ func TestBuildServer_PublicConfigEndpoints_StayUngated(t *testing.T) {
 // so a liveness probe never depends on tenant-specific resolution
 // succeeding, an authenticated caller, or any particular Host at all.
 func TestBuildServer_Healthz_NoTenantRequired(t *testing.T) {
-	srv, _ := buildTestServer(t)
+	srv, _, _ := buildTestServer(t)
 
 	for _, host := range []string{"acme.demo.localhost", "totally-unrecognized-host.example"} {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
@@ -683,7 +688,7 @@ func TestHealthzAllowlist_GETOnlyAllowlist_LeavesHEADExposed(t *testing.T) {
 // verification that found this gap relied on, in isolation from whatever
 // obs.Init state this process happens to be in, by calling obs.Init itself.
 func TestBuildServer_Metrics_NoTenantRequired(t *testing.T) {
-	srv, _ := buildTestServer(t)
+	srv, _, _ := buildTestServer(t)
 
 	for _, host := range []string{"acme.demo.localhost", "totally-unrecognized-host.example"} {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
@@ -836,7 +841,7 @@ func TestBuildServer_DistributedDeploymentMode_FailsCapabilityValidation(t *test
 	cfg.DeploymentMode = pkgcore.DeploymentModeDistributed
 	cfg.SMSGatewayURL = fakeSMSGatewayURL
 
-	_, _, err := buildServer(context.Background(), cfg)
+	_, _, _, err := buildServer(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("buildServer with DeploymentModeDistributed: want error, got nil")
 	}
@@ -877,7 +882,7 @@ func TestBuildServer_DistributedDeploymentMode_RedisConfigured_StillFailsOnMaile
 	cfg.RedisAddr = "127.0.0.1:6379"
 	cfg.SMSGatewayURL = fakeSMSGatewayURL
 
-	_, _, err := buildServer(context.Background(), cfg)
+	_, _, _, err := buildServer(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("buildServer with DeploymentModeDistributed and Redis configured: want error, got nil")
 	}
@@ -909,7 +914,7 @@ func TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed(t *testi
 	cfg := testConfig(t)
 	cfg.DeploymentMode = pkgcore.DeploymentModeDistributed
 
-	_, _, err := buildServer(context.Background(), cfg)
+	_, _, _, err := buildServer(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("buildServer with DeploymentModeDistributed and no APP_SMS_GATEWAY_URL: want error, got nil")
 	}
@@ -996,7 +1001,7 @@ func notesRequest(t *testing.T, srv *httptest.Server, method, token string, body
 // nothing the first one might have planted, proving there is no shared
 // bucket left at all.
 func TestBuildServer_Unauthenticated_FailsClosed(t *testing.T) {
-	srv, _ := buildTestServer(t)
+	srv, _, _ := buildTestServer(t)
 
 	// Step 1: GET with no Authorization header must not succeed against an
 	// implicit shared tenant.
@@ -1383,7 +1388,7 @@ func TestBuildServer_RootKeyAlone_AllSixDerivedKeysWorkForTheirRealPurpose(t *te
 	// PKILocalKeyCipherKey, AuthnBlindIndexKey and AuthnPIICipherKey,
 	// together: boot the real composed server and drive a real
 	// register-then-login round trip through it.
-	handler, cleanup, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := buildServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("buildServer with APP_ROOT_KEY alone: %v", err)
 	}
@@ -1446,7 +1451,7 @@ func assertBlindIndexRoundTrip(t *testing.T, indexer *dbkit.BlindIndexer, raw st
 // go/tenancy/resolver.go's Resolver doc comment for the same rule stated
 // as a hard requirement on every implementation.
 func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
-	srv, cfg := buildTestServer(t)
+	srv, cfg, _ := buildTestServer(t)
 
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "acme-forgery-target")
 	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "globex-forgery-attacker")
@@ -1553,7 +1558,7 @@ func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
 // narrower unit-level claim).
 func TestBuildServer_NoteCreate_PersistsAuditEvent(t *testing.T) {
 	cfg := testConfig(t)
-	handler, cleanup, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := buildServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("buildServer: %v", err)
 	}

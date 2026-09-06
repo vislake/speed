@@ -190,7 +190,7 @@ func buildSmileSimTestServer(t *testing.T, imgServer *fakeOpenAIImageServer) (*h
 	cfg.AIGatewayImageBaseURL = imgServer.URL
 	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-key"
 
-	handler, cleanup, err := buildServer(t.Context(), cfg)
+	handler, cleanup, _, err := buildServer(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("buildServer: %v", err)
 	}
@@ -418,7 +418,7 @@ func TestSmileSimulation_CompletionNotifiesTheNamedRecipient(t *testing.T) {
 	sms := &lockedBuffer{}
 	cfg.SMSOutput = sms
 
-	handler, cleanup, err := buildServer(t.Context(), cfg)
+	handler, cleanup, _, err := buildServer(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("buildServer: %v", err)
 	}

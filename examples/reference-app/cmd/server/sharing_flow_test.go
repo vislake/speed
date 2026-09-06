@@ -131,7 +131,7 @@ func decodeSharingBody(t *testing.T, resp *http.Response, wantStatus int, what s
 // identical shape go/sharing's own example_test.go proves at the Service
 // level, proven here end to end through real HTTP.
 func TestBuildServer_SharingFlow_CreateAccessRevoke_EndToEnd(t *testing.T) {
-	srv, cfg := buildTestServer(t)
+	srv, cfg, _ := buildTestServer(t)
 	const tenantID = "tenant-acme"
 	acmeToken := registerAndAuthenticate(t, srv, cfg, tenantID, "sharing-flow")
 
@@ -260,7 +260,7 @@ func TestBuildServer_SharingFlow_CreateAccessRevoke_EndToEnd(t *testing.T) {
 // this route's own handler ever ran, on any path not on its allowlist --
 // and answers a real refusal rather than the tenant-unresolved error.
 func TestBuildServer_SharingFlow_UnknownToken_Answers404(t *testing.T) {
-	srv, _ := buildTestServer(t)
+	srv, _, _ := buildTestServer(t)
 	resp := sharingAccessRequest(t, srv, "a-token-nobody-ever-issued", "")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
@@ -290,7 +290,7 @@ func TestBuildServer_SharingFlow_UnknownToken_Answers404(t *testing.T) {
 // gate (TestBuildServer_SharingFlow_CreateAccessRevoke_EndToEnd's
 // demo-owner) may reach far enough to observe a real 404 for an unknown id.
 func TestBuildServer_SharingPermissionGate_EnforcesTheSharingPermissions(t *testing.T) {
-	srv, cfg := buildTestServer(t)
+	srv, cfg, _ := buildTestServer(t)
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "sharing-gate")
 
 	resp := storageRequest(t, srv, http.MethodPost, sharing.PathShares,

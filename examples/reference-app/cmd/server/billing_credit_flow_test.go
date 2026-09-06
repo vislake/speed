@@ -269,7 +269,7 @@ func TestSmileSimulation_FailedGeneration_PersistsRefundAuditEvent(t *testing.T)
 	cfg := testConfig(t)
 	cfg.AIGatewayImageBaseURL = imgServer.URL
 	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-refund-audit-key"
-	handler, cleanup, err := buildServer(t.Context(), cfg)
+	handler, cleanup, _, err := buildServer(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("buildServer: %v", err)
 	}
@@ -525,7 +525,7 @@ func TestSmileSimulation_FailedGeneration_RefundsReservation(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.AIGatewayImageBaseURL = imgServer.URL
 	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-fail-key"
-	handler, cleanup, err := buildServer(t.Context(), cfg)
+	handler, cleanup, _, err := buildServer(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("buildServer: %v", err)
 	}

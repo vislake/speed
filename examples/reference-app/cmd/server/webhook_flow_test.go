@@ -180,7 +180,7 @@ func buildWebhookFlowTestServer(t *testing.T, client *http.Client) (*httptest.Se
 	cfg.WebhookURLValidator = func(context.Context, string) error { return nil }
 	cfg.WebhookHTTPClient = client
 
-	handler, cleanup, err := buildServer(context.Background(), cfg)
+	handler, cleanup, _, err := buildServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("buildServer: %v", err)
 	}
