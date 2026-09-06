@@ -5,6 +5,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -229,6 +230,59 @@ func TestModule_Attach_RejectsASecondCall(t *testing.T) {
 
 	_, err := m.Attach(reg)
 	assertCode(t, err, ErrAlreadyAttached)
+}
+
+func TestModule_Attach_ExactlyOneCallSucceedsUnderConcurrentCallers(t *testing.T) {
+	// Attach's "called exactly once" guard must hold under concurrency, not
+	// only for sequential callers: two concurrent Attaches must not both
+	// pass the m.service == nil check, each building its own Service,
+	// subscribing it to the bus and starting its own poller -- the caller
+	// whose Service lost the write to m.service would hold a Service whose
+	// poller keeps running and whose bus subscription keeps firing, with no
+	// way to learn it was orphaned. Each round below releases a batch of
+	// callers against one fresh Module; exactly one must succeed and every
+	// other call must fail with ErrAlreadyAttached.
+	db := openModuleTestDB(t)
+	for round := 0; round < 8; round++ {
+		reg := newPlainRegistry()
+		if err := reg.Config.Add(serviceTestSchemaItems...); err != nil {
+			t.Fatalf("round %d reg.Config.Add: %v", round, err)
+		}
+		if err := reg.Features.Add(serviceTestSchemaFlags...); err != nil {
+			t.Fatalf("round %d reg.Features.Add: %v", round, err)
+		}
+		m := NewModule(db, WithCipher(buildTestCipher(t)), WithPollInterval(0))
+
+		const callers = 16
+		start := make(chan struct{})
+		results := make(chan error, callers)
+		var wg sync.WaitGroup
+		for i := 0; i < callers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				_, err := m.Attach(reg)
+				results <- err
+			}()
+		}
+		close(start)
+		wg.Wait()
+		close(results)
+
+		successes := 0
+		for err := range results {
+			if err == nil {
+				successes++
+				continue
+			}
+			assertCode(t, err, ErrAlreadyAttached)
+		}
+		if successes != 1 {
+			t.Fatalf("round %d: %d of %d concurrent Attach calls succeeded, want exactly 1 (the losers' pollers and bus subscriptions would be orphaned)",
+				round, successes, callers)
+		}
+	}
 }
 
 func TestModule_Attach_GuardsItsDependencies(t *testing.T) {

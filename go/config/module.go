@@ -4,6 +4,7 @@ import (
 	"embed"
 	"errors"
 	"net/http"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -71,6 +72,19 @@ type Module struct {
 	// mounted during Register resolve it lazily per request, so the
 	// window between Register and Attach reports ErrServiceNotAttached.
 	service *Service
+
+	// attachMu serializes Attach calls. Attach is a once-per-Module
+	// startup step, so the lock is uncontended in practice; it exists to
+	// make the exactly-once guard in Attach atomic -- without it, two
+	// concurrent Attach callers could both pass the m.service == nil
+	// check, each building its own Service, subscribing it to the bus and
+	// starting its own poller, and the caller whose Service lost the write
+	// to m.service would hold a Service whose poller keeps running and
+	// whose bus subscription keeps firing, with no way to learn it was
+	// orphaned. Held across the whole call, a second concurrent Attach
+	// deterministically observes the first's Service and fails with
+	// ErrAlreadyAttached.
+	attachMu sync.Mutex
 
 	// afterRefreshLock, forwarded onto the attached Service's own field of
 	// the same name before the poller starts, exists solely so a test can
@@ -208,8 +222,14 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 //
 // A second Attach on the same Module fails with ErrAlreadyAttached: the
 // schema snapshot freezes at the first call, and a second snapshot could
-// silently diverge from the first.
+// silently diverge from the first. The guard is atomic -- Attach holds an
+// internal lock for its whole body -- so the same holds under concurrent
+// callers: exactly one Attach succeeds and every other call fails with
+// ErrAlreadyAttached, never a second Service with its own poller and bus
+// subscription.
 func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
+	m.attachMu.Lock()
+	defer m.attachMu.Unlock()
 	if m.service != nil {
 		return nil, ErrAlreadyAttached
 	}
