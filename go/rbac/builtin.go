@@ -89,6 +89,13 @@ var builtinRoles = []builtinRole{
 // existed would have an owner who could not use it, with nothing in the
 // system reporting why.
 //
+// Seeding is also safe when two replicas run it concurrently for the same
+// fresh tenant: each role's check-then-create race is resolved by the
+// duplicate classification in defineRole (assign.go), and a seed that
+// loses the race treats the winner's row -- derived from the same frozen
+// catalog, so identical -- as its own success rather than failing the boot
+// that ran it.
+//
 // The seed runs entirely within one tenant: it reads the tenant's own
 // roles and writes the tenant's own rows. There is deliberately no
 // cross-tenant template table to copy from -- a template read would be the
@@ -122,9 +129,19 @@ func (s *Service) EnsureBuiltinRoles(ctx context.Context) error {
 				Key:            definition.key,
 				DescriptionKey: definition.descriptionKey,
 				Permissions:    want,
-			}, true); defineErr != nil {
+			}, true); defineErr != nil && !isDuplicateRole(defineErr) {
 				return defineErr
 			}
+			// defineRole succeeded, or lost a race with a concurrent
+			// identical seed (another replica booting the same fresh tenant,
+			// whose defineRole collided with uq_rbac_roles_tenant_key and
+			// was classified as the duplicate-role answer -- see assign.go).
+			// Both seeds derive the definition from the same frozen catalog,
+			// so the row that won the race is exactly what this call would
+			// have written; the loser treats the duplicate as the
+			// already-seeded success it is and continues. An
+			// EnsureBuiltinRoles that lost the race must never fail the boot
+			// that ran it over a row that is already there.
 			continue
 		case err != nil:
 			return err

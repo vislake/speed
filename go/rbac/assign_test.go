@@ -126,6 +126,45 @@ func TestService_DefineRole_DuplicateKey_IsRejected(t *testing.T) {
 	}
 }
 
+func TestService_DefineRole_ConcurrentIdenticalDefine_LoserConvergesOnTheDocumentedDuplicate(t *testing.T) {
+	// The review finding on defineRole: the existence check (ByKey) and the
+	// create are not atomic, so two concurrent identical DefineRole calls
+	// can both pass ByKey before either has written its row. Reproduced
+	// deterministically via the beforeRoleCreate test hook, the same
+	// technique TestService_AssignRole_ConcurrentIdenticalAssign_IsANoOp
+	// uses for the identical race on the binding index: the hook fires
+	// after THIS call's own ByKey already reported the key absent, and
+	// inside it a second, identical define is simulated, landing first and
+	// taking uq_rbac_roles_tenant_key. This call's own create then collides
+	// with that unique index and must surface as the same classified
+	// answer the sequential pre-check gives -- ErrDuplicateRole -- never as
+	// the ErrStorage a caller could not distinguish from an actual database
+	// failure. That classification is what lets a concurrent
+	// EnsureBuiltinRoles whose seed lost the race converge instead of
+	// failing a replica's startup.
+	svc := newTestService(t)
+	ctx := tenantCtx("tenant-a")
+	def := RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}
+
+	svc.beforeRoleCreate = func() {
+		svc.beforeRoleCreate = nil // run exactly once
+		winner := &Role{ID: newID(), Key: def.Key, DescriptionKey: def.DescriptionKey}
+		winnerRows := []RolePermission{{ID: newID(), RoleID: winner.ID, Permission: "notes:read"}}
+		if createErr := svc.roles.CreateWithPermissions(ctx, winner, winnerRows); createErr != nil {
+			t.Fatalf("simulated concurrent DefineRole's create: %v", createErr)
+		}
+	}
+
+	if _, err := svc.DefineRole(ctx, def); !hasCode(err, ErrDuplicateRole.Code) {
+		t.Fatalf("DefineRole racing a concurrent identical define = %v, want %s (the documented duplicate-role answer, not a storage failure)", err, ErrDuplicateRole.Code)
+	}
+
+	// The unique index did its job: exactly the winner's one row exists.
+	if _, err := svc.roles.ByKey(ctx, def.Key); err != nil {
+		t.Fatalf("the winning role row is not readable after the race: %v", err)
+	}
+}
+
 func TestService_DefineRole_SameKeyInAnotherTenant_IsAllowed(t *testing.T) {
 	// Role keys are unique WITHIN a tenant. Every tenant has an "owner";
 	// rejecting the second one would make the module single-tenant.

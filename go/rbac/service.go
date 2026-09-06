@@ -94,6 +94,15 @@ type Service struct {
 	// into that exact window instead of relying on goroutine scheduling to
 	// reproduce the race. Nil, and therefore a no-op, in production.
 	beforeBindingRestore func()
+
+	// beforeRoleCreate is beforeBindingCreate's counterpart for defineRole:
+	// it runs synchronously right after defineRole's existence check (ByKey)
+	// reports the key absent and right before its CreateWithPermissions, so
+	// a test can deterministically inject a second, concurrent identical
+	// DefineRole into that exact window instead of relying on goroutine
+	// scheduling to reproduce the check-then-create race. Nil, and
+	// therefore a no-op, in production.
+	beforeRoleCreate func()
 }
 
 // Close releases the Service's background resources: it stops the decision

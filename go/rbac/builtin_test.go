@@ -156,6 +156,61 @@ func TestService_EnsureBuiltinRoles_IsIdempotentAndSilentOnASecondRun(t *testing
 	}
 }
 
+func TestService_EnsureBuiltinRoles_ConcurrentSeeds_NeitherFailsTheBoot(t *testing.T) {
+	// EnsureBuiltinRoles runs at every boot, and replicas boot a freshly
+	// created tenant concurrently. Both see the built-in roles absent and
+	// both try to seed them; the loser's defineRole collides with
+	// uq_rbac_roles_tenant_key. That check-then-create race must not fail
+	// the loser's boot: both seeds derive identical definitions from the
+	// same frozen catalog, so the winner's rows are exactly what the loser
+	// would have written, and the loser treats the classified duplicate as
+	// already-seeded. Reproduced deterministically through the
+	// beforeRoleCreate hook: it fires inside replica A's first defineRole
+	// -- the exact window a second replica's boot would land in -- and
+	// replica B's whole real EnsureBuiltinRoles runs there, seeding all
+	// three roles before A's own create.
+	db := newRBACTestDB(t)
+	reg := newPlainRegistry()
+	if err := reg.Permissions.Add(testPermissions...); err != nil {
+		t.Fatalf("declaring permissions: %v", err)
+	}
+	replicaA := attachReplica(t, db, reg)
+	replicaB := attachReplica(t, db, reg)
+
+	ctx := tenantCtx("tenant-a")
+	replicaA.beforeRoleCreate = func() {
+		replicaA.beforeRoleCreate = nil // run exactly once
+		if err := replicaB.EnsureBuiltinRoles(ctx); err != nil {
+			t.Fatalf("replica B's EnsureBuiltinRoles racing replica A's: %v", err)
+		}
+	}
+
+	if err := replicaA.EnsureBuiltinRoles(ctx); err != nil {
+		t.Fatalf("replica A's EnsureBuiltinRoles whose seed lost the race = %v, want nil", err)
+	}
+
+	// One clean seed's worth of rows, readable from either replica.
+	for _, svc := range []*Service{replicaA, replicaB} {
+		for _, key := range []string{BuiltinRoleOwner, BuiltinRoleAdmin, BuiltinRoleMember} {
+			if _, err := svc.roles.ByKey(ctx, key); err != nil {
+				t.Fatalf("replica %p cannot read %s after the concurrent seeds: %v", svc, key, err)
+			}
+		}
+	}
+	roles, err := replicaA.roles.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(roles) != len(builtinRoles) {
+		t.Fatalf("after the racing seeds the tenant holds %d roles, want %d", len(roles), len(builtinRoles))
+	}
+	// And the reconciliation half still ran for the roles B seeded: the
+	// owner carries exactly every declared permission.
+	if got := permissionsOf(t, replicaA, ctx, BuiltinRoleOwner); !reflect.DeepEqual(got, replicaA.DeclaredPermissions()) {
+		t.Fatalf("owner's permissions = %v, want every declared permission %v", got, replicaA.DeclaredPermissions())
+	}
+}
+
 func TestService_EnsureBuiltinRoles_WidensOwnerWhenTheCatalogGrows(t *testing.T) {
 	// The reason reconciliation exists rather than create-only seeding.
 	// Adding a module to the host's build must widen every existing

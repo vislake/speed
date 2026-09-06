@@ -53,6 +53,13 @@ type RoleDefinition struct {
 // AGENTS.md deferral list for where role editing belongs -- so DefineRole
 // is create-only and built-in roles are reconciled by EnsureBuiltinRoles
 // instead.
+//
+// A key created by a CONCURRENT identical define between this call's own
+// existence check and its create is classified the same way: the loser's
+// create collides with uq_rbac_roles_tenant_key, and that conflict is
+// reported as ErrDuplicateRole rather than as a storage error, so a racing
+// seed converges on the same documented answer a sequential duplicate
+// gets (see the inline comment at the create below).
 func (s *Service) DefineRole(ctx context.Context, def RoleDefinition) (*Role, error) {
 	return s.defineRole(ctx, def, false)
 }
@@ -93,7 +100,30 @@ func (s *Service) defineRole(ctx context.Context, def RoleDefinition, builtin bo
 			Permission: perm,
 		})
 	}
+	if s.beforeRoleCreate != nil {
+		s.beforeRoleCreate()
+	}
 	if err := s.roles.CreateWithPermissions(ctx, role, rows); err != nil {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			// The ByKey above and this create are not atomic, so two
+			// concurrent identical DefineRole calls can both pass ByKey
+			// before either has written its row. The loser's create hits
+			// uq_rbac_roles_tenant_key, which dbkit.Open wires gorm's
+			// TranslateError to report as this driver-agnostic sentinel
+			// rather than a dialect-specific error. That unique index
+			// firing means exactly one thing here: a role with this key now
+			// exists in this tenant, which is the identical fact ByKey's own
+			// already-there branch reports. It is classified the same way --
+			// ErrDuplicateRole, never the ErrStorage a caller could not
+			// distinguish from an actual database failure -- mirroring
+			// AssignRole's own handling of the identical race on its unique
+			// index. The caller whose definition lost the race gets the same
+			// documented answer a sequential duplicate would, and a
+			// concurrent EnsureBuiltinRoles whose seed lost the race treats
+			// that answer as "already seeded" instead of failing a replica's
+			// startup (builtin.go).
+			return nil, ErrDuplicateRole.WithParam("key", def.Key)
+		}
 		return nil, err
 	}
 
@@ -422,3 +452,11 @@ func (s *Service) publishRoleChanged(ctx context.Context, tenant pkgcore.TenantI
 func isRoleNotFound(err error) bool { return hasCode(err, ErrRoleNotFound.Code) }
 
 func isBindingNotFound(err error) bool { return hasCode(err, ErrBindingNotFound.Code) }
+
+// isDuplicateRole classifies defineRole's "a role with this key already
+// exists" answer by code like its two siblings above. DefineRole itself
+// never sees this error (its pre-check returns it before any write), but
+// EnsureBuiltinRoles does when its seed loses the check-then-create race
+// to a concurrent one -- see that method for how the duplicate is
+// absorbed there.
+func isDuplicateRole(err error) bool { return hasCode(err, ErrDuplicateRole.Code) }
