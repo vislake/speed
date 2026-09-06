@@ -41,13 +41,17 @@ const (
 // deleting an absent key is not an error; a key set with a short TTL is
 // visible until the TTL elapses and reports a miss afterward, while a key
 // set with no TTL (zero) survives past the same wait; IncrByFloat on a
-// missing key starts from zero and accumulates across calls; IncrByFloat on
-// a key holding a non-numeric value fails with pkgcore.ErrNotNumeric and
-// leaves the value unchanged; CompareAndSwap on a missing key succeeds only
-// when old is empty (set-if-absent), and on an existing key succeeds only
-// when old matches the stored value, leaving the value untouched on a
-// mismatch; and a call made with an already-cancelled context fails with
-// that context's error instead of performing the operation.
+// missing key starts from zero and accumulates across calls; IncrByFloat
+// with a binary-inexact delta (0.1, repeated) lands on one of the two
+// legitimate float64 rounding outcomes real implementations produce, never
+// asserted bit-identical across backends (see that subtest's own comment
+// for why); IncrByFloat on a key holding a non-numeric value fails with
+// pkgcore.ErrNotNumeric and leaves the value unchanged; CompareAndSwap on a
+// missing key succeeds only when old is empty (set-if-absent), and on an
+// existing key succeeds only when old matches the stored value, leaving the
+// value untouched on a mismatch; and a call made with an already-cancelled
+// context fails with that context's error instead of performing the
+// operation.
 func AssertConforms(t *testing.T, factory func() pkgcore.KVStore) {
 	t.Helper()
 
@@ -155,6 +159,67 @@ func AssertConforms(t *testing.T, factory func() pkgcore.KVStore) {
 		}
 		if got != 4 {
 			t.Errorf("IncrByFloat() second call = %v, want 4", got)
+		}
+	})
+
+	t.Run("incr_by_float_with_a_binary_inexact_delta_rounds_correctly_per_implementation", func(t *testing.T) {
+		t.Helper()
+		store := factory()
+		key := conformKey(t, "binary-inexact")
+
+		// 0.1 has no exact float64 representation, so accumulating it three
+		// times is the case that actually exercises rounding behaviour
+		// (unlike 2.5/1.5 above, which are exact in binary and so round-trip
+		// through any implementation identically). KVStore's own doc comment
+		// promises the result is IncrByFloat's shortest exact encoding of
+		// *some* float64, parseable with strconv.ParseFloat -- it does not
+		// promise that value is bit-identical across implementations, so
+		// this subtest does not assert cross-backend equality. Instead it
+		// pins the two legitimate outcomes real backends actually produce,
+		// confirmed against all four of this repository's real
+		// implementations (redis, postgres, nats, memcached) plus the
+		// in-memory store:
+		//
+		//   - "successive rounding": each call parses the previously stored
+		//     text back to float64 and adds delta in plain float64
+		//     arithmetic, rounding after every single addition. This is what
+		//     the in-memory store, kv/nats and kv/memcached do (each reads
+		//     its current value, computes current+delta in Go, and
+		//     reformats). Reproduced here the same way, at runtime rather
+		//     than as a constant expression, so the compiler's arbitrary-
+		//     precision constant arithmetic cannot round differently than
+		//     the implementations under test.
+		//   - "round once": the delta is accumulated at a precision wider
+		//     than float64 (PostgreSQL's NUMERIC column; Redis's own
+		//     INCRBYFLOAT, which operates on a long double internally) and
+		//     only converted to float64 once, at the end -- which always
+		//     yields the correctly-rounded nearest float64 to the true
+		//     mathematical sum, i.e. the same value the float64 literal 0.3
+		//     denotes (Go rounds a float64 constant to nearest at compile
+		//     time). kv/postgres and kv/redis both take this path and, for
+		//     this delta sequence, land on this exact value.
+		//
+		// The two differ by exactly one float64 ULP at this magnitude; an
+		// implementation landing on neither is not a rounding-order
+		// difference but a genuine correctness bug (e.g. truncated
+		// precision, integer-only accumulation, or a wrong delta applied).
+		var successiveRounding float64
+		successiveRounding += 0.1
+		successiveRounding += 0.1
+		successiveRounding += 0.1
+		const roundOnce float64 = 0.3
+
+		var got float64
+		var err error
+		for i := 0; i < 3; i++ {
+			got, err = store.IncrByFloat(context.Background(), key, 0.1)
+			if err != nil {
+				t.Fatalf("IncrByFloat() call %d error = %v, want nil", i+1, err)
+			}
+		}
+		if got != successiveRounding && got != roundOnce {
+			t.Errorf("IncrByFloat() accumulating 0.1 three times = %v, want either %v (successive rounding) or %v (round once)",
+				got, successiveRounding, roundOnce)
 		}
 	})
 

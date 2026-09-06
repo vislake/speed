@@ -73,6 +73,17 @@ type KVStore interface {
 	// is stored as its shortest exact decimal encoding, which callers should
 	// parse with strconv.ParseFloat rather than compare as text. A key holding
 	// a non-numeric value fails with ErrNotNumeric and is left unchanged.
+	//
+	// The arithmetic itself is not guaranteed bit-identical across
+	// implementations for a delta not exactly representable in binary
+	// float64 (0.1, for instance): some backends round after every
+	// accumulation, others accumulate at a wider precision and round once at
+	// the end, and the two paths can land on different, equally valid,
+	// adjacent float64 values (kvstoretest.AssertConforms's own
+	// binary-inexact subtest pins both outcomes rather than asserting one).
+	// Callers that need cross-backend-identical results should keep to
+	// integer-valued deltas (exactly representable in float64), the shape
+	// every real caller in this codebase already uses.
 	IncrByFloat(ctx context.Context, key string, delta float64) (float64, error)
 
 	// CompareAndSwap replaces the value under key with newVal only if the
