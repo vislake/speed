@@ -464,7 +464,11 @@ func (s *Service) verifyStepUp(ctx context.Context, principal Principal, code, i
 	if session.UserID != principal.UserID {
 		return nil, ErrTokenInvalid
 	}
-	if session.Status != SessionStatusActive {
+	// The same idiom Rotate uses (session.go), and the identical fix
+	// SwitchTenant carries: a session that is Active in name but past its
+	// own ExpiresAt is not usable either, and nothing here ever flips
+	// Status away from active when a session merely times out.
+	if session.Status != SessionStatusActive || !s.now().Before(session.ExpiresAt) {
 		return nil, ErrSessionRevoked
 	}
 

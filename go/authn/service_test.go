@@ -493,6 +493,52 @@ func TestService_SwitchTenant_RefusesATenantTheUserDoesNotBelongTo(t *testing.T)
 	})
 }
 
+// TestService_SwitchTenant_RefusesAnExpiredSession is the regression for the
+// go/authn audit's other confirmed finding: SwitchTenant checked
+// session.Status but never session.ExpiresAt -- the one check Refresh
+// already performs -- so a session past its own configured TTL, whose
+// Status row nothing here ever proactively flips away from active, stayed
+// usable for as long as the caller's already-issued access token remained
+// valid, extending the session's practical lifetime by one access-token
+// lifetime.
+func TestService_SwitchTenant_RefusesAnExpiredSession(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	f.registerUser(t, "switch-after-expiry@example.com", testTenantA, testTenantB)
+
+	pair, err := f.svc.Login(t.Context(), LoginInput{Identifier: "switch-after-expiry@example.com", Password: testPassword})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	testutil.ExpireSession(t, f.db, pair.Principal.SessionID, f.clock.Now().Add(-time.Hour))
+
+	if _, err := f.svc.SwitchTenant(t.Context(), pair.Principal, testTenantB); !hasCode(err, ErrSessionRevoked.Code) {
+		t.Fatalf("SwitchTenant(expired session) error = %v, want code %q", err, ErrSessionRevoked.Code)
+	}
+}
+
+// TestService_SwitchTenant_StillValidSessionSucceeds guards the fix above
+// against over-refusing: a session that has not yet reached its own
+// ExpiresAt must keep switching tenants exactly as before.
+func TestService_SwitchTenant_StillValidSessionSucceeds(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	f.registerUser(t, "switch-still-valid@example.com", testTenantA, testTenantB)
+
+	pair, err := f.svc.Login(t.Context(), LoginInput{Identifier: "switch-still-valid@example.com", Password: testPassword})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	f.clock.Advance(time.Minute)
+	if _, err := f.svc.SwitchTenant(t.Context(), pair.Principal, testTenantB); err != nil {
+		t.Fatalf("SwitchTenant(still-valid session) error = %v, want success", err)
+	}
+}
+
 // TestService_Refresh_ReverifiesMembership is what makes removing someone from
 // a tenant actually end their access to it, instead of leaving them signed in
 // until the session expires weeks later.

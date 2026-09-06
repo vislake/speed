@@ -284,6 +284,54 @@ func TestVerifyStepUp_TOTPCode_CannotBeReplayed(t *testing.T) {
 	}
 }
 
+// TestVerifyStepUp_RefusesAnExpiredSession is the regression for the
+// go/authn audit's confirmed finding: VerifyStepUp checked session.Status
+// but never session.ExpiresAt -- the one check Refresh already performs --
+// so a session past its own configured TTL, whose Status row nothing here
+// ever proactively flips away from active, could still complete a step-up
+// challenge and mint a fresh access token for as long as the caller's
+// currently-held access token remained valid.
+func TestVerifyStepUp_RefusesAnExpiredSession(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	user := f.registerUser(t, "stepup-after-expiry@example.com", testTenantA)
+	secret, _ := enrollAndConfirmTOTP(t, f, user.ID)
+	principal := loginPrincipal(t, f, user, testTenantA)
+
+	testutil.ExpireSession(t, f.db, principal.SessionID, f.clock.Now().Add(-time.Hour))
+
+	// See TestVerifyStepUp_TOTPCode_EnrichesAMR's comment: the confirmation
+	// step already consumed the current time step's code.
+	code, err := totp.Code(secret, time.Now().Add(totp.Period))
+	if err != nil {
+		t.Fatalf("totp.Code() error = %v", err)
+	}
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, code, "203.0.113.13"); !hasCode(err, ErrSessionRevoked.Code) {
+		t.Fatalf("VerifyStepUp(expired session) error = %v, want code %q", err, ErrSessionRevoked.Code)
+	}
+}
+
+// TestVerifyStepUp_StillValidSessionSucceeds guards the fix above against
+// over-refusing: a session that has not yet reached its own ExpiresAt must
+// keep completing step-up exactly as before.
+func TestVerifyStepUp_StillValidSessionSucceeds(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	user := f.registerUser(t, "stepup-still-valid@example.com", testTenantA)
+	secret, _ := enrollAndConfirmTOTP(t, f, user.ID)
+	principal := loginPrincipal(t, f, user, testTenantA)
+
+	code, err := totp.Code(secret, time.Now().Add(totp.Period))
+	if err != nil {
+		t.Fatalf("totp.Code() error = %v", err)
+	}
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, code, "203.0.113.14"); err != nil {
+		t.Fatalf("VerifyStepUp(still-valid session) error = %v, want success", err)
+	}
+}
+
 // TestVerifyStepUp_RefusesWithoutMFAEnrolled proves a session with no
 // second factor to prove cannot satisfy step-up at all.
 func TestVerifyStepUp_RefusesWithoutMFAEnrolled(t *testing.T) {

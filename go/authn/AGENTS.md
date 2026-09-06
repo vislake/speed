@@ -460,6 +460,25 @@ expiry timer needed. Do not add one. Do not make `VerifyStepUp` persist the
 enriched AMR onto the session row "for convenience" — that removes the
 property entirely.
 
+### Every session-mutating call re-verifies `session.ExpiresAt`, not just `session.Status`
+
+A session past its own `ExpiresAt` is not usable, even while its `Status` row
+still reads `active` — nothing in this module proactively flips `Status` away
+from active when a session merely times out; expiry is a read-time check, not
+a write nobody performs. `Rotate` (`session.go`) has always checked both
+`session.Status != SessionStatusActive` and `!now().Before(session.ExpiresAt)`
+together, refusing either with `ErrSessionRevoked`. `SwitchTenant` and
+`VerifyStepUp` (`mfa.go`) were re-verifying only `Status`, so a session that
+had genuinely expired but whose row nobody had touched stayed usable through
+either call for as long as the caller's already-issued access token remained
+valid — a session's practical lifetime stretched past its own configured TTL
+by one access-token lifetime.
+
+Both now carry the identical `session.Status != SessionStatusActive ||
+!s.now().Before(session.ExpiresAt)` check `Rotate` always has, refusing with
+the same `ErrSessionRevoked`. Any new session-mutating method added to this
+module must carry the same pair of checks together — never `Status` alone.
+
 ### A bare access token cannot silently seize an already-active MFA factor
 
 `Service.EnrollTOTP` unconditionally deletes any existing factor (pending or

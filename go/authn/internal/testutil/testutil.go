@@ -80,6 +80,21 @@ func (c *Clock) Advance(d time.Duration) {
 	c.now = c.now.Add(d)
 }
 
+// ExpireSession forces sessionID's expires_at column to before, leaving its
+// status row untouched -- reproducing the "past its own TTL but nothing ever
+// flipped Status away from active" state nothing in authn proactively
+// converges to, so a test can prove whichever check is supposed to catch it
+// at read time actually does. It works against the raw "sessions" table
+// (authn.Session's TableName) rather than the model itself: this package
+// deliberately never imports authn, per the package doc comment.
+func ExpireSession(t *testing.T, db *gorm.DB, sessionID string, before time.Time) {
+	t.Helper()
+	if err := db.Table("sessions").Where("id = ?", sessionID).
+		Update("expires_at", before).Error; err != nil {
+		t.Fatalf("testutil.ExpireSession(%s): %v", sessionID, err)
+	}
+}
+
 // Memberships is an in-memory stand-in for the org module's membership store,
 // satisfying authn.MembershipReader structurally.
 type Memberships struct {

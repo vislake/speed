@@ -716,7 +716,14 @@ func (s *Service) SwitchTenant(ctx context.Context, principal Principal, target 
 		// Nothing legitimate produces this.
 		return nil, ErrTokenInvalid
 	}
-	if session.Status != SessionStatusActive {
+	// The same idiom Rotate uses: a session that is Active in name but past
+	// its own ExpiresAt is not usable either. Nothing here ever flips
+	// Status away from active when a session merely times out, so this
+	// check -- not the status one above -- is what actually catches it;
+	// without it a session's practical lifetime stretched past its
+	// configured TTL by however long the caller's already-issued access
+	// token still had left to run.
+	if session.Status != SessionStatusActive || !s.now().Before(session.ExpiresAt) {
 		return nil, ErrSessionRevoked
 	}
 
