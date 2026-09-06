@@ -70,10 +70,18 @@ var _ Handler = handlerFunc{}
 // a Handler that needs compensation implements this interface itself,
 // alongside Handler, and the queue calls it as a hook, nothing more.
 //
-// OnFailure runs at most once per Job, strictly after job's Status has
-// already been persisted as StatusDeadLetter, on the same rebuilt tenant
-// context Handle itself receives. Whatever OnFailure does is not retried or
-// otherwise observed by the queue.
+// OnFailure runs at most once per Job, strictly after a worker has actually
+// persisted job's Status as StatusDeadLetter — the final attempt's failure
+// path only invokes it once its dead-letter write really transitioned the
+// row from StatusRunning (worker.go's execute consults
+// completeDeadLetter's transition report). It therefore does NOT run for a
+// Job a concurrent Cancel already moved to StatusCancelled while that final
+// attempt was executing: the cancellation wins, the attempt's failure
+// outcome is discarded in favor of StatusCancelled (Queue.Cancel's own doc
+// comment), no dead-letter is ever persisted, and no compensation runs.
+// Whatever OnFailure does is not retried or otherwise observed by the
+// queue. OnFailure receives the same rebuilt tenant context Handle itself
+// receives.
 type FailureHook interface {
 	OnFailure(ctx context.Context, job *Job, cause error)
 }

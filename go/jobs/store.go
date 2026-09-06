@@ -315,17 +315,28 @@ func completeRetrying(ctx context.Context, db *gorm.DB, id string, cause string,
 }
 
 // completeDeadLetter conditionally transitions id from StatusRunning to
-// StatusDeadLetter. Same concurrent-Cancel no-op guard as
-// completeSucceeded.
-func completeDeadLetter(ctx context.Context, db *gorm.DB, id string, cause string, now time.Time) error {
-	return db.WithContext(ctx).Model(&jobRecord{}).
+// StatusDeadLetter, recording cause, and reports whether the transition
+// actually happened. Like claimOne, the WHERE ... status = 'running' guard
+// turns a concurrent Cancel's markCancelled into the winner of the race
+// (RowsAffected == 0, nil error) rather than letting this write overwrite
+// StatusCancelled — and the returned bool is what lets execute (worker.go)
+// distinguish "this attempt really dead-lettered the Job" from "a Cancel
+// already settled it", so that a FailureHook's OnFailure runs only for a
+// genuine running -> dead-letter transition. See FailureHook's own doc
+// comment for the boundary.
+func completeDeadLetter(ctx context.Context, db *gorm.DB, id string, cause string, now time.Time) (bool, error) {
+	result := db.WithContext(ctx).Model(&jobRecord{}).
 		Where("id = ? AND status = ?", id, string(StatusRunning)).
 		Updates(map[string]any{
 			"status":        string(StatusDeadLetter),
 			"error_message": cause,
 			"updated_at":    now,
 			"completed_at":  now,
-		}).Error
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
 }
 
 // markCancelled conditionally transitions id to StatusCancelled from any

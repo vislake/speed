@@ -351,8 +351,26 @@ func (q *StandaloneQueue) execute(rec jobRecord) {
 			"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS, "error", err)
 		q.recordJobMetrics(rec.Type, StatusDeadLetter, duration)
 		q.recordDeadLetter(rec.Type)
-		if werr := completeDeadLetter(bg, q.db, rec.ID, err.Error(), now); werr != nil {
+		moved, werr := completeDeadLetter(bg, q.db, rec.ID, err.Error(), now)
+		if werr != nil {
 			log.Error("jobs: persisting dead letter failed", "job_id", rec.ID, "error", werr)
+			return
+		}
+		if !moved {
+			// A concurrent Cancel (markCancelled) already moved the row out
+			// of StatusRunning while this final attempt was executing, so
+			// the dead-letter write was a no-op: the persisted terminal
+			// state is StatusCancelled, never StatusDeadLetter. Cancel wins
+			// over a concurrent final failure by design (Queue.Cancel's own
+			// doc comment), so this attempt's failure outcome -- and any
+			// compensation it would have triggered -- is discarded: OnFailure
+			// must NOT run, since its contract (handler.go) requires the
+			// dead-letter to actually have been persisted first, and a
+			// cancelled Job has no dead-letter. The in-memory job mirrors
+			// the persisted terminal state instead.
+			log.Info("job cancelled before its final failure could dead-letter, outcome discarded",
+				"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS)
+			job.Status = StatusCancelled
 			return
 		}
 		if hook, ok := handler.(FailureHook); ok {

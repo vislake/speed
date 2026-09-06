@@ -537,8 +537,12 @@ func TestCompleteDeadLetter(t *testing.T) {
 		t.Fatalf("claimOne() error = %v", err)
 	}
 
-	if err := completeDeadLetter(context.Background(), db, rec.ID, "permanent failure", time.Now()); err != nil {
+	moved, err := completeDeadLetter(context.Background(), db, rec.ID, "permanent failure", time.Now())
+	if err != nil {
 		t.Fatalf("completeDeadLetter() error = %v", err)
+	}
+	if !moved {
+		t.Error("completeDeadLetter() moved = false, want true (the row was StatusRunning)")
 	}
 
 	got, err := findByID(context.Background(), db, JobID(rec.ID))
@@ -672,8 +676,10 @@ func TestDeadLetterRecords(t *testing.T) {
 	if _, err := claimOne(context.Background(), db, *dead, time.Now()); err != nil {
 		t.Fatalf("claimOne() error = %v", err)
 	}
-	if err := completeDeadLetter(context.Background(), db, dead.ID, "boom", time.Now()); err != nil {
+	if moved, err := completeDeadLetter(context.Background(), db, dead.ID, "boom", time.Now()); err != nil {
 		t.Fatalf("completeDeadLetter() error = %v", err)
+	} else if !moved {
+		t.Error("completeDeadLetter() moved = false, want true (the row was StatusRunning)")
 	}
 
 	alive := fixtureRecord("tenant-a", "t")
