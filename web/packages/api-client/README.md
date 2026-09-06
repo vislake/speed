@@ -153,14 +153,18 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
 ## What it does
 
 - **One error type.** Every failed request rejects an `ApiError`.
-  Responses carrying the API's envelope (`{ code, traceId, params?,
-  message?, details? }` -- the contract in `docs/internal/21-api-contract.md`)
-  surface the envelope's `code`/`traceId`/`params`/`details` verbatim.
-  Responses without a valid envelope (a proxy error page, a 500 from an
-  upstream, a timeout, a dead network) get a synthesized code in the
-  reserved `client.` namespace: `client.network`, `client.timeout`,
-  `client.protocol` (a 2xx whose body is not JSON), `client.http.<status>`.
-  `error.attempts` reports how many HTTP attempts were made.
+  Responses carrying the API's envelope (`{ code, traceId?, params?,
+  message?, details? }`) surface the envelope's fields verbatim. `code`
+  is the only required wire field -- `traceId` is optional and surfaced
+  for correlation when a backend sends one; the backend today sends
+  `{code, params}` only, so requiring anything beyond `code` would
+  discard every real module code into the `client.` fallback. Responses
+  without a valid envelope (a proxy error page, a 500 from an upstream
+  that is not JSON with a `code`, a timeout, a dead network) get a
+  synthesized code in the reserved `client.` namespace:
+  `client.network`, `client.timeout`, `client.protocol` (a 2xx whose
+  body is not JSON), `client.http.<status>`. `error.attempts` reports
+  how many HTTP attempts were made.
 - **Bearer auth without a storage API.** The token store is a plain
   two-method interface (`get(): string | null`, `set(token: string |
   null): void`); the memory implementation is the only one the package

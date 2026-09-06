@@ -27,8 +27,10 @@
  *      backoff per RetryPolicy, Retry-After honoured on 429 and 503;
  *   5. normalize the outcome: 2xx bodies parse as JSON (empty bodies
  *      resolve undefined), and every failure rejects an ApiError --
- *      envelope errors keep code/traceId/params/details, everything
- *      else gets the reserved client.* vocabulary from errors.ts.
+ *      envelope errors keep the envelope's code (plus its traceId,
+ *      params, message and details when the backend sent them --
+ *      code is the only required wire field), everything else gets
+ *      the reserved client.* vocabulary from errors.ts.
  *
  * The tenant never appears here: no tenant header exists anywhere in
  * the package (docs/internal/12-frontend.md) -- tenant context travels
@@ -204,10 +206,13 @@ interface FailureOutcome {
 
 type AttemptOutcome = HttpOutcome | FailureOutcome
 
-/** A valid envelope, structurally checked. */
+/** A valid envelope, structurally checked. `code` is the one required
+ * wire field; `traceId` is optional (undefined when the backend does
+ * not send one -- the shape every module's handlers actually write is
+ * `{code, params}`), as are `message`, `params` and `details`. */
 interface Envelope {
   code: string
-  traceId: string
+  traceId: string | undefined
   message: string | undefined
   params: Record<string, unknown> | undefined
   details: FieldError[] | undefined
@@ -216,7 +221,9 @@ interface Envelope {
 /**
  * Parses a response body into the ApiError envelope, or undefined when
  * the body is empty, not JSON, not an object, or lacks the required
- * code/traceId strings -- those stay bare and get a client.http.* code.
+ * `code` string -- those stay bare and get a client.http.* code. All
+ * other fields are optional: a `{code, params}` body is a valid
+ * envelope even though it carries no traceId.
  */
 function parseEnvelope(text: string | null): Envelope | undefined {
   if (text === null || text.trim() === '') {
@@ -232,18 +239,18 @@ function parseEnvelope(text: string | null): Envelope | undefined {
     return undefined
   }
   const candidate = parsed as Record<string, unknown>
-  if (
-    typeof candidate.code !== 'string' ||
-    typeof candidate.traceId !== 'string'
-  ) {
+  if (typeof candidate.code !== 'string') {
     return undefined
   }
   const envelope: Envelope = {
     code: candidate.code,
-    traceId: candidate.traceId,
+    traceId: undefined,
     message: undefined,
     params: undefined,
     details: undefined,
+  }
+  if (typeof candidate.traceId === 'string') {
+    envelope.traceId = candidate.traceId
   }
   if (typeof candidate.message === 'string') {
     envelope.message = candidate.message
@@ -703,8 +710,8 @@ export function createClient(options: ClientOptions): RequestFn {
           }
           // Refresh failed: read the 401 body once and reuse it for
           // the report and the error, so the warning carries the
-          // envelope's code and traceId -- correlating it to server
-          // logs -- instead of firing blind.
+          // envelope's code (and traceId, when the backend sent one) --
+          // correlating it to server logs -- instead of firing blind.
           const envelope = await readEnvelope(outcome)
           // An abort during that read wins over the auth error.
           throwIfAborted(signal)
@@ -712,7 +719,9 @@ export function createClient(options: ClientOptions): RequestFn {
             status: outcome.status,
             ...(envelope === undefined
               ? {}
-              : { code: envelope.code, traceId: envelope.traceId }),
+              : envelope.traceId === undefined
+                ? { code: envelope.code }
+                : { code: envelope.code, traceId: envelope.traceId }),
           })
           throw envelopeError(outcome, envelope, attempts)
         }

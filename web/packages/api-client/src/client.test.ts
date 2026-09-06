@@ -539,6 +539,36 @@ describe('401 and the refresh hook', () => {
     ])
   })
 
+  it('reports a traceId-less refresh-failure envelope with its real code', async () => {
+    // The 401 path of the same backend-shaped envelope regression: a
+    // code-only body must keep its real module code through the
+    // refresh-failure report, and the report's attrs must not carry an
+    // undefined-valued traceId key when the envelope had none.
+    const memory = createMemoryReporter()
+    const store = createMemoryAccessTokenStore()
+    store.set('stale-token')
+    const standin = scriptedStandin(
+      jsonResponse(401, { code: 'authn.session_expired' }),
+    )
+    const api = createClient({
+      baseUrl: BASE_URL,
+      fetch: standin.fetch,
+      accessTokenStore: store,
+      refreshAccessToken: async () => false,
+      reporter: memory.reporter,
+    })
+    const error = await expectApiError(api<{ ok: boolean }>('/notes'))
+    expect(error.auth).toBe(true)
+    expect(error.code).toBe('authn.session_expired')
+    expect(error.traceId).toBeUndefined()
+    expect(memory.warns).toEqual([
+      {
+        message: 'access token refresh failed',
+        attrs: { status: 401, code: 'authn.session_expired' },
+      },
+    ])
+  })
+
   it('treats a throwing refresh hook as a failed refresh', async () => {
     const memory = createMemoryReporter()
     const store = createMemoryAccessTokenStore()
@@ -1093,6 +1123,48 @@ describe('error normalization', () => {
     ])
     expect(error.auth).toBe(false)
     expect(error.attempts).toBe(1)
+  })
+
+  it('parses a real backend-shaped envelope: code and params, no traceId', async () => {
+    // The wire shape every module's handler actually writes: a
+    // {code, params} body with no traceId (go/authn/middleware.go's
+    // errorBody, and every module's own writeError, encode only those
+    // two fields -- the OpenAPI fragments document {code, params} as
+    // the error contract). traceId is optional, kept only for
+    // correlation when a backend sends one; the code of a traceId-less
+    // body must not be discarded into client.http.<status>, or every
+    // real backend error would degrade to the generic fallback.
+    const standin = scriptedStandin(
+      jsonResponse(400, {
+        code: 'authn.password_too_short',
+        params: { min_length: 12 },
+      }),
+    )
+    const api = createClient({ baseUrl: BASE_URL, fetch: standin.fetch })
+    const error = await expectApiError(api<{ ok: boolean }>('/notes'))
+    expect(error.status).toBe(400)
+    expect(error.code).toBe('authn.password_too_short')
+    expect(error.params).toEqual({ min_length: 12 })
+    expect(error.traceId).toBeUndefined()
+    expect(error.details).toBeUndefined()
+  })
+
+  it('keeps a traceId-bearing envelope correlated when params are absent', async () => {
+    // The optional-field counterpart: a body that does carry traceId
+    // still surfaces it on the ApiError, so user reports can be
+    // correlated to server logs even though no backend sends one yet.
+    const standin = scriptedStandin(
+      jsonResponse(500, {
+        code: 'config.internal_error',
+        traceId: 'trace-50',
+      }),
+    )
+    const api = createClient({ baseUrl: BASE_URL, fetch: standin.fetch })
+    const error = await expectApiError(api<{ ok: boolean }>('/notes'))
+    expect(error.status).toBe(500)
+    expect(error.code).toBe('config.internal_error')
+    expect(error.traceId).toBe('trace-50')
+    expect(error.params).toBeUndefined()
   })
 
   it('drops structurally invalid entries from envelope details', async () => {

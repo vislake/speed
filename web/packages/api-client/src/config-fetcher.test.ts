@@ -5,18 +5,16 @@
  * exactly as a consumer would use them: pass the RequestFn, get back
  * a typed response or a rejected ApiError/AbortError.
  *
- * A note on the two "surfaces a non-2xx envelope ... with its code"
- * tests below: their mocked body includes `traceId`, matching the API
- * contract's envelope schema (docs/internal/21-api-contract.md requires
- * both `code` and `traceId`), which is what client.ts's parseEnvelope
- * demands before it will trust a body's `code` at all. go/config's real
- * handlers do not send `traceId` (go/config/http.go's `errorEnvelope`
- * only ever encodes `{code, params}`), so those two tests exercise
- * spec-compliant envelope handling in general, not the literal
- * go/config wire shape. The "actual go/config error shape" tests
- * further down pin what a real go/config failure looks like today --
- * see their comments and AGENTS.md's Known limitations entry for the
- * gap and its deferred follow-up.
+ * A note on the envelope tests below: client.ts's parseEnvelope treats
+ * `code` as the envelope's only required field and `traceId` as
+ * optional, so the two wire shapes a consumer can actually meet are
+ * both exercised -- the traceId-bearing bodies of the "surfaces a
+ * non-2xx envelope ... with its code" tests (a backend that sends a
+ * trace id, for correlation) and the bare `{code, params}` bodies of
+ * the "carries the real go/config error shape" tests, which pin the
+ * literal go/config wire shape: go/config/http.go's `errorEnvelope`
+ * encodes only `{code, params}`, never a `traceId`. A real failure
+ * against either shape must surface the module's real code.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -97,18 +95,14 @@ describe('fetchPublicConfig', () => {
     }
   })
 
-  it('degrades the real go/config error shape (no traceId) to a synthetic client.http code', async () => {
+  it('carries the real go/config error shape (code only, no traceId) with its code', async () => {
     // go/config/http.go's writeError encodes only {"code", "params"} --
-    // never a traceId. client.ts's parseEnvelope requires traceId to
-    // trust a body as an envelope at all, so this is what a genuine
-    // fetchPublicConfig failure against go/config looks like today: the
-    // real module code (config.internal_error) is discarded and the
-    // caller sees the synthetic client.http.500 code instead. This is a
-    // known, pre-existing gap between go/config and the API contract's
-    // required-traceId envelope schema (docs/internal/21-api-contract.md)
-    // -- see AGENTS.md's Known limitations for the deferred follow-up.
-    // This test exists to keep that reality pinned and visible rather
-    // than only ever exercised against a fabricated, spec-compliant body.
+    // never a traceId. parseEnvelope trusts a body as an envelope on its
+    // `code` string alone (traceId is optional), so a genuine
+    // fetchPublicConfig failure against go/config surfaces its real
+    // module code: config.internal_error, not a synthetic
+    // client.http.500. This test pins the literal wire shape a real
+    // failure produces, not a fabricated, traceId-padded body.
     const standin = createStandinFetch(() =>
       jsonResponse(500, { code: 'config.internal_error' }),
     )
@@ -123,8 +117,8 @@ describe('fetchPublicConfig', () => {
 
     expect(isApiError(caught)).toBe(true)
     if (isApiError(caught)) {
-      expect(caught.code).toBe('client.http.500')
-      expect(caught.code).not.toBe('config.internal_error')
+      expect(caught.code).toBe('config.internal_error')
+      expect(caught.code).not.toBe('client.http.500')
       expect(caught.traceId).toBeUndefined()
     }
   })
@@ -187,9 +181,10 @@ describe('fetchSystemFeatures', () => {
     }
   })
 
-  it('degrades the real go/config error shape (no traceId) to a synthetic client.http code', async () => {
-    // Same gap as fetchPublicConfig's equivalent test above: go/config
-    // never sends traceId, so its real code is discarded here too.
+  it('carries the real go/config error shape (code only, no traceId) with its code', async () => {
+    // The same literal go/config wire shape as fetchPublicConfig's
+    // equivalent test above: {code} with no traceId, which must keep
+    // its real module code rather than degrade to client.http.404.
     const standin = createStandinFetch(() =>
       jsonResponse(404, { code: 'config.not_found' }),
     )
@@ -204,8 +199,8 @@ describe('fetchSystemFeatures', () => {
 
     expect(isApiError(caught)).toBe(true)
     if (isApiError(caught)) {
-      expect(caught.code).toBe('client.http.404')
-      expect(caught.code).not.toBe('config.not_found')
+      expect(caught.code).toBe('config.not_found')
+      expect(caught.code).not.toBe('client.http.404')
       expect(caught.traceId).toBeUndefined()
     }
   })

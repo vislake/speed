@@ -4,22 +4,34 @@
  * Every speed API answers non-2xx responses with one shared envelope
  * (docs/internal/21-api-contract.md):
  *
- *   { code: string, traceId: string,
+ *   { code: string, traceId?: string,
  *     params?: object, message?: string, details?: FieldError[] }
  *
- * `code` and `traceId` are required; `message` is an English log-triage
- * fallback that must never be rendered to users (frontends resolve
- * `code` through the i18n catalog instead). Responses that do not carry
- * a valid envelope are still errors, but they cannot be mapped onto
- * module error codes -- they get a synthesized code in the reserved
- * `client.` namespace instead, so callers can tell "the API answered a
- * real error" from "the API layer itself broke":
+ * `code` is the envelope's only required field; `traceId`, `params`,
+ * `message` and `details` are optional, parsed whenever present. In
+ * practice the backend today sends `{code, params}` only: the module
+ * handlers' shared error body carries no trace id (go/authn's
+ * errorBody and every module's writeError encode just those two
+ * fields, and the OpenAPI fragments document {code, params} as the
+ * contract), so a client must trust a body's `code` on its own --
+ * demanding `traceId` too would discard every real backend code into
+ * the client.* fallback. `traceId` stays in the shape for the day a
+ * backend does send one: it is surfaced on the ApiError and in the
+ * reporter's attributes for correlating user reports to server logs.
+ * `message` is an English log-triage fallback that must never be
+ * rendered to users (frontends resolve `code` through the i18n
+ * catalog instead). Responses that do not carry a valid envelope are
+ * still errors, but they cannot be mapped onto module error codes --
+ * they get a synthesized code in the reserved `client.` namespace
+ * instead, so callers can tell "the API answered a real error" from
+ * "the API layer itself broke":
  *
  *   client.network   -- the request never completed (DNS, refused,
  *                       TLS, CORS, mid-body read failure...).
  *   client.timeout   -- the client's own timeout fired and aborted it.
  *   client.http.<n>  -- a non-2xx response without a parseable envelope
- *                       (non-JSON body, or JSON without code+traceId).
+ *                       (non-JSON body, or JSON without a `code`
+ *                       string).
  *   client.protocol  -- a 2xx whose body is not a JSON object/array.
  *
  * Codes from a valid envelope always win over the client.* vocabulary:

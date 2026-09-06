@@ -36,9 +36,12 @@ this one may issue HTTP requests itself.
 - **Every failure rejects an `ApiError`** -- except caller
   cancellation, which rejects the raw `AbortError` (never retried,
   never wrapped). Envelope-bearing non-2xx responses surface the
-  envelope's code/traceId/params/details; everything else synthesizes a
-  reserved `client.*` code (`client.network`, `client.timeout`,
-  `client.protocol`, `client.http.<status>`).
+  envelope's code plus its traceId/params/message/details whenever the
+  backend sent them (`code` is the only required wire field --
+  `parseEnvelope` must never demand `traceId`, which no backend sends
+  today); everything else synthesizes a reserved `client.*` code
+  (`client.network`, `client.timeout`, `client.protocol`,
+  `client.http.<status>`).
 - **Refresh is once per request, single-flight -- and bearer-only.**
   The hook fires only for a refused request that itself presented a
   bearer token; a 401 on a credential-less request means the endpoint
@@ -139,28 +142,30 @@ Deferred with reasons:
 
 ## Known limitations
 
-- **go/config's error responses do not carry `traceId`, so their real
-  module code never reaches an `ApiError`.** `client.ts`'s
-  `parseEnvelope` treats a body as a trustworthy envelope only when
-  both `code` and `traceId` are strings (matching the API contract's
-  required-fields schema, `docs/internal/21-api-contract.md`); a body
-  missing either falls back to a synthetic `client.http.<status>` code.
-  go/config's `errorEnvelope` (`go/config/http.go`) only ever encodes
-  `{code, params}` -- it has no `traceId` field, and neither does
-  `apperr` (no `TraceID` concept exists there), so every genuine
-  `fetchPublicConfig` / `fetchSystemFeatures` failure against go/config
-  degrades its real `config.*` code to `client.http.<status>` today.
-  `config-fetcher.test.ts`'s two "actual go/config error shape" tests
-  pin this behavior with a traceId-less mock so it stays visible rather
-  than only ever exercised against a fabricated, spec-compliant body.
-  This is a pre-existing gap in go/config (and the reference app's
-  notes handler, which has the same omission), not something this
-  package can fix on its own -- the correct fix is on the Go side
-  (either `errorEnvelope` starts emitting a real `traceId`, sourced from
-  request tracing, or the contract schema is revisited for hand-kept
-  endpoints outside the spec-first flow). Deferred to a future backend
-  round; tracked here so it is not mistaken for `client.ts` silently
-  losing data it was handed.
+- **No backend sends `traceId`, so an `ApiError` never carries one
+  against the real API -- resolved on the client side, with a
+  correlation follow-up left to the backend.** `parseEnvelope` used to
+  treat a body as a trustworthy envelope only when both `code` and
+  `traceId` were strings, so every real module error -- go/config's
+  `errorEnvelope` (`go/config/http.go`) and every other module's
+  writeError encode only `{code, params}`, and `apperr` has no
+  `TraceID` concept -- degraded its real module code to a synthetic
+  `client.http.<status>`, which rendered as the consuming UI's generic
+  fallback instead of the specific error text. That client-side
+  overreach is fixed: `code` is the envelope's only required field and
+  `traceId` is optional (parsed and surfaced when present, omitted from
+  reporter attributes when absent), so real `{code, params}` bodies
+  keep their codes end to end. `config-fetcher.test.ts`'s two
+  traceId-less fixture tests and `client.test.ts`'s backend-shaped
+  envelope test pin the literal wire shape. What remains is the
+  correlation half, deliberately a backend follow-up rather than this
+  round's fix: a backend-wide change for every module's error writer
+  to emit a real `traceId` (sourced from request tracing), so user
+  reports can be tied to server logs. The contract schema recorded in
+  `docs/internal/21-api-contract.md` still describes `traceId` as a
+  required field and needs the same revisit -- tracked for the docs
+  drift sweep, since this package's doc comments now describe the
+  actual wire contract.
 
 ## Public surface
 
