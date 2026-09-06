@@ -528,11 +528,11 @@ func TestAllow_ContextCanceled_ReturnsContextError(t *testing.T) {
 
 // setInjectsConcurrentIncrementKVStore wraps a real KVStore and, on every
 // Set call against injectKey, first performs a real IncrByFloat(+1) against
-// that same key -- through the embedded, unwrapped store, not through
-// itself -- before delegating to the embedded store's own Set. injected
-// records whether this ever actually fired, so a test can compute how many
-// real increments landed against the key regardless of which code path
-// Allow takes to get there.
+// that same key (the promoted method of the embedded store, since this type
+// itself never overrides IncrByFloat) before delegating to the embedded
+// store's own Set. injected records whether this ever actually fired, so a
+// test can compute how many real increments landed against the key
+// regardless of which code path Allow takes to get there.
 //
 // This models a concurrent caller's increment landing in the exact
 // Get-to-Set gap the pre-fix attachWindowTTL left open: attachWindowTTL Gets
@@ -553,7 +553,7 @@ type setInjectsConcurrentIncrementKVStore struct {
 func (s *setInjectsConcurrentIncrementKVStore) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
 	if key == s.injectKey {
 		s.injected = true
-		if _, err := s.KVStore.IncrByFloat(ctx, key, 1); err != nil {
+		if _, err := s.IncrByFloat(ctx, key, 1); err != nil {
 			return err
 		}
 	}
@@ -806,7 +806,6 @@ func TestAllow_KVStoreErrors_PropagatedToCaller(t *testing.T) {
 		}
 	})
 }
-
 
 // TestClampRemaining pins clampRemaining's contract directly, independent of
 // any Limiter or KVStore: negative floors to zero, an ordinary value
