@@ -5,7 +5,7 @@ package main
 // (go/integration/AGENTS.md's round-7 record names this the compensating
 // obligation the round carried until a real host wired it end to end). It
 // drives the module's own spec-generated HTTP surface --
-// go/integration/api/openapi.yaml's seven operations under
+// go/integration/api/openapi.yaml's six operations under
 // /api/v1/integration/webhooks, mounted through server.go's integrationModule
 // wiring and the same generic mountModuleRoutes loop every other module's
 // fragment uses, gated by demo_subject.go's guardIntegrationRoute with its
