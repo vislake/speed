@@ -188,12 +188,14 @@ that scoped the round):
   constraint on `certificate_id`, so two racing transitions could both pass
   the check, both insert, and both publish `EventCertificateRevoked`.
 
-The fix ships in two commits: `d10960d` (the fail-before proof, three red
-tests) and `8510769` (the fix). Mechanism and rationale:
+The fix ships in two commits: `2af97aa` (the fail-before proof, three red
+tests) and `823cafb` (the fix). Mechanism and rationale:
 
-- **The ledger insert arbitrates.** The certificate update is an unguarded
-  full-row save (`dbkit.Repository[T]` exposes no conditional update and is
-  not modified), so single-winner semantics come from the ledger write:
+- **The ledger insert arbitrates.** The certificate update was left
+  unguarded by this first fix -- a plain full-row save, since
+  `dbkit.Repository[T]` exposed no conditional update and was not modified
+  (the follow-up section below closes that gap) -- so single-winner
+  semantics came entirely from the ledger write:
   `CertificateRevocationRepository.InsertIfAbsent` (repository.go) is an
   `INSERT ... ON CONFLICT (certificate_id) DO NOTHING` whose `RowsAffected`
   verdict names exactly one winning call among any number of concurrent
@@ -228,7 +230,7 @@ tests) and `8510769` (the fix). Mechanism and rationale:
   implied the log-and-forget behavior; both now describe the arbitrated
   transition, the retry/reconciliation contract and the error contract.
 
-Tests (fails-before proofs recorded in commit `d10960d`'s message, now
+Tests (fails-before proofs recorded in commit `2af97aa`'s message, now
 green under `-race`): a concurrent double-revoke test (goroutines released
 through a channel barrier, no sleeps) asserting exactly one ledger row, one
 event, one `true` winner and revoked status across 25 trials; a
@@ -239,3 +241,58 @@ sequential idempotent re-revoke pin; and a repository-level proof that the
 unique constraint is database-enforced. `Create` is retained unchanged
 alongside `InsertIfAbsent` for callers that want a duplicate to fail;
 nothing in the revocation path calls it.
+
+### Follow-up review finding: guard the certificate-row transition too
+
+The same review discipline that scoped the round reopened `823cafb`'s
+shape: the ledger insert arbitrates only the ledger, and the certificate
+row was still open to a loser's blind overwrite. The first fix's doc
+claims ("a loser writes nothing") over-claimed what the code delivered --
+the certificate-row transition remained the unguarded full-row save
+above, so a concurrent double-revoke carrying different reasons could
+still leave the certificate row holding one caller's reason while the
+ledger and the event held the winner's (the reviewer's natural-concurrency
+repro disagreed on 91/200 trials, 45.5%). The round's original
+double-revoke test raced identical reasons and could not see this.
+
+- **Both writes are now guarded, database-arbitrated single-winner
+  statements.** `CertificateRepository.RevokeIfActive` (repository.go) --
+  a new method on the module's dual-hold repository shape (`*dbkit.Repository[T]`
+  plus the same-connection `*gorm.DB`, the shape `go/notification`'s
+  `VerifiedContactRepository` documents for its own conditional updates) --
+  is one conditional `UPDATE` matching only a row still active, returning
+  `RowsAffected`: exactly one racing call's statement matches and commits,
+  and a loser's matches zero rows, so a loser can never write its own
+  reason and timestamp over the winner's committed row. The ledger write
+  (`InsertIfAbsent`) is the second guarded write. Between them the
+  certificate row and its ledger row can never disagree about when or why
+  the revocation happened: every ledger payload is built from values the
+  certificate row already held committed -- the transition winner's own
+  write, or the re-read every other path takes.
+- **The loser reconciles instead of overwriting.** A call whose UPDATE
+  matches zero rows re-reads the committed row and falls through to the
+  same reconciliation path an idempotent re-revoke takes: it only
+  supplements the ledger write, from the committed row's own
+  `RevokedAt`/`RevocationReason`, and its returned bool still reports
+  whether THIS call's insert won the ledger arbitration. The P1-1
+  self-healing story is unchanged -- a call that finds the certificate
+  already revoked still repairs a genuinely missing ledger row.
+- **The new fail-before proof races different reasons.**
+  `TestCAService_RevokeCertificate_ConcurrentDifferentReasons_CertificateAndLedgerNeverDisagree`
+  (revocation_test.go) releases eight goroutines, each carrying its own
+  reason, through the same channel-barrier harness across 25 trials, and
+  asserts the certificate row and the ledger row agree with each other
+  and with the single event. It failed before the fix under plain
+  `go test` (no `-race` needed -- trial 23 reproduced the review's
+  "certificate = reason-5, ledger = reason-7" disagreement verbatim) and
+  passes after. A repository-level test,
+  `TestCertificateRepository_RevokeIfActive_GuardedTransition`
+  (repository_test.go), pins the guard's semantics: one move per row,
+  idempotent no-op on the second call with a different reason, and no
+  cross-tenant move.
+- **Docs corrected a second time.** `revocation.go`'s and `model.go`'s
+  claims now describe the two guarded writes and the consistency argument
+  above; `RevokeIfActive`'s own doc comment records the guard's full
+  contract (RowsAffected == 0 does not distinguish missing from
+  already-revoked -- `FindByID` answers the former; the tenant filter is
+  the dbkit isolation plugin's injection, never hand-written).

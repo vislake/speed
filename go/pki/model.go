@@ -479,25 +479,42 @@ func (LocalKey) TableName() string { return tableLocalKeys }
 // a plain *gorm.DB write, and building one by hand would mean reaching
 // around Repository[T] with a raw *gorm.DB.Transaction, the exact bypass
 // this codebase's multi-tenant isolation discipline forbids for a
-// tenant-scoped write. What makes the two-statement shape safe is not
-// individually idempotent writes but the UNIQUE certificate_id constraint
-// (migration 0008) plus an arbitration protocol layered on it:
+// tenant-scoped write. What makes the two-statement shape safe is that
+// BOTH statements are guarded, database-arbitrated writes, so however
+// many concurrent revokes of one certificate race, the certificate row
+// and this ledger row cannot end up disagreeing:
 //
+//   - the certificate-row transition is a single-statement conditional
+//     UPDATE matching only a row still active (repository.go's
+//     RevokeIfActive). Exactly one racing call's UPDATE matches and
+//     commits; every loser's matches zero rows, so a loser can never write
+//     its own reason and timestamp over the winner's committed row -- the
+//     blind full-row save this module's round entry once shipped, which
+//     left the certificate row holding a loser's revocation while the
+//     ledger and the event held the winner's;
 //   - the ledger insert is INSERT ... ON CONFLICT (certificate_id) DO
-//     NOTHING whose RowsAffected verdict (repository.go's InsertIfAbsent)
-//     names exactly one winner among any number of concurrent revokes of
-//     one certificate, so however many certificate-row updates race,
+//     NOTHING whose RowsAffected verdict (repository.go's InsertIfAbsent),
+//     enforced by migration 0008's
+//     uq_pki_certificate_revocations_certificate unique index, names
+//     exactly one winner among any number of concurrent inserts, so
 //     exactly one ledger row lands and exactly one EventCertificateRevoked
-//     is published; and
-//   - a certificate that is revoked but has no ledger row -- a failed or
-//     lost insert between the two statements -- is repaired by the NEXT
-//     RevokeCertificate call: the call's insert reconstructs the row from
-//     the certificate row's own committed RevokedAt and RevocationReason,
-//     so a retry cannot rewrite the original revocation's facts, and it
-//     publishes the one event the failed call could not. A revocation
-//     whose ledger insert fails surfaces as a returned error, never as a
-//     log-and-return-success whose later retries are all swallowed by an
-//     already-revoked early return (the round's original bug).
+//     is published (row-then-event); and
+//   - every ledger row is built from values the certificate row already
+//     held committed -- the transition winner builds it from its own
+//     just-written reason and timestamp, every other call from the row a
+//     re-read returns -- so the two rows can never disagree about when or
+//     why the revocation happened. A losing call's reason argument reaches
+//     neither table.
+//
+// A certificate that is revoked but has no ledger row -- a failed or lost
+// insert between the two statements -- is repaired by the NEXT
+// RevokeCertificate call: the call's insert reconstructs the row from the
+// certificate row's own committed RevokedAt and RevocationReason, so a
+// retry cannot rewrite the original revocation's facts, and it publishes
+// the one event the failed call could not. A revocation whose ledger insert
+// fails surfaces as a returned error, never as a log-and-return-success
+// whose later retries are all swallowed by an already-revoked early return
+// (the round's original bug).
 //
 // The failure mode left over is bounded staleness: between the two
 // statements a crash can leave the certificate correctly revoked but
