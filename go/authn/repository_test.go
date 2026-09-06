@@ -589,3 +589,128 @@ func TestRegisterPIISerializer_RejectsANilCipher(t *testing.T) {
 		t.Error("RegisterPIISerializer(nil) error = nil, want a rejection")
 	}
 }
+
+// TestUserRepository_MarkPhoneVerified_OnlySetsTheFlagAndOnlyForTheVerifiedPhone
+// pins MarkPhoneVerified's write scope: a single-column, guarded update
+// that can never regress a column another caller committed between a
+// caller's read and this write (the whole-row Save it replaced would have),
+// and that never blesses a phone which is no longer the one the caller
+// verified. It fails if the write ever grows back to whole-row scope.
+func TestUserRepository_MarkPhoneVerified_OnlySetsTheFlagAndOnlyForTheVerifiedPhone(t *testing.T) {
+	t.Parallel()
+
+	db := testutil.NewDB(t)
+	repo := newTestUserRepository(t, db)
+	ctx := t.Context()
+
+	user := &User{Email: "phone.mark@example.com", DisplayName: "Phone Mark", Phone: "+15550000001", PasswordHash: "hash"}
+	if err := repo.Create(ctx, user); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	index, err := repo.PhoneIndexOf("+15550000001")
+	if err != nil {
+		t.Fatalf("PhoneIndexOf: %v", err)
+	}
+	if user.PhoneIndex == nil || *user.PhoneIndex != index {
+		t.Fatalf("PhoneIndex = %v, want %q (the blind index of the stored phone)", user.PhoneIndex, index)
+	}
+
+	// A committed write to a DIFFERENT column lands before the flag write:
+	// a concurrent sign-in's rehash stands in for it. The flag write must
+	// leave it alone.
+	rehash := &User{PasswordHash: "a-freshly-rehashed-hash"}
+	seedErr := db.Table("users").Where("id = ?", user.ID).Update("password_hash", rehash.PasswordHash).Error
+	if seedErr != nil {
+		t.Fatalf("seed a concurrent password write: %v", seedErr)
+	}
+
+	landed, err := repo.MarkPhoneVerified(ctx, user.ID, index)
+	if err != nil {
+		t.Fatalf("MarkPhoneVerified: %v", err)
+	}
+	if !landed {
+		t.Fatal("MarkPhoneVerified = false, want true (the row still carries the verified phone)")
+	}
+
+	fresh, err := repo.FindByID(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if !fresh.PhoneVerified {
+		t.Error("PhoneVerified = false after MarkPhoneVerified")
+	}
+	if fresh.PasswordHash != rehash.PasswordHash {
+		t.Errorf("PasswordHash = %q, want the concurrent write %q to have survived the flag update",
+			fresh.PasswordHash, rehash.PasswordHash)
+	}
+
+	// A stale caller -- one whose read predates a phone change -- must not
+	// bless the phone that now occupies the row: the guard is the
+	// phone_index itself.
+	staleIndex, err := repo.PhoneIndexOf("+15550000002")
+	if err != nil {
+		t.Fatalf("PhoneIndexOf(other): %v", err)
+	}
+	landed, err = repo.MarkPhoneVerified(ctx, user.ID, staleIndex)
+	if err != nil {
+		t.Fatalf("MarkPhoneVerified(stale index): %v", err)
+	}
+	if landed {
+		t.Error("MarkPhoneVerified with a stale phone_index = true, want false (no write to a row whose phone moved)")
+	}
+}
+
+// TestUserRepository_ReplacePasswordHashIfStillCurrent_OnlyWritesWhenTheStoredHashMatches
+// pins ReplacePasswordHashIfStillCurrent's guard: the hash write lands only
+// while the row's stored hash is still the one the caller verified, and the
+// write's SET clause names nothing but the hash (the whole-row Save it
+// replaced would regress every other column of the caller's stale read).
+func TestUserRepository_ReplacePasswordHashIfStillCurrent_OnlyWritesWhenTheStoredHashMatches(t *testing.T) {
+	t.Parallel()
+
+	db := testutil.NewDB(t)
+	repo := newTestUserRepository(t, db)
+	ctx := t.Context()
+
+	user := &User{Email: "rehash.guard@example.com", DisplayName: "Rehash Guard", PasswordHash: "the-verified-hash"}
+	if err := repo.Create(ctx, user); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	// A committed write to a DIFFERENT column lands before the hash write:
+	// a concurrent SMS sign-in's phone-verified flag stands in for it. The
+	// hash write must leave it alone.
+	flagSeedErr := db.Table("users").Where("id = ?", user.ID).Update("phone_verified", true).Error
+	if flagSeedErr != nil {
+		t.Fatalf("seed a concurrent flag write: %v", flagSeedErr)
+	}
+
+	landed, err := repo.ReplacePasswordHashIfStillCurrent(ctx, user.ID, "the-verified-hash", "a-rehashed-hash")
+	if err != nil {
+		t.Fatalf("ReplacePasswordHashIfStillCurrent: %v", err)
+	}
+	if !landed {
+		t.Fatal("ReplacePasswordHashIfStillCurrent = false, want true (the stored hash still matched)")
+	}
+
+	fresh, err := repo.FindByID(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if fresh.PasswordHash != "a-rehashed-hash" {
+		t.Errorf("PasswordHash = %q, want the rehashed value", fresh.PasswordHash)
+	}
+	if !fresh.PhoneVerified {
+		t.Error("PhoneVerified = false after the hash write -- the whole-row save regressed the concurrent flag write")
+	}
+
+	// A caller whose verified hash is no longer stored must not overwrite
+	// whatever replaced it.
+	landed, err = repo.ReplacePasswordHashIfStillCurrent(ctx, user.ID, "the-verified-hash", "a-stale-rehash")
+	if err != nil {
+		t.Fatalf("ReplacePasswordHashIfStillCurrent(stale): %v", err)
+	}
+	if landed {
+		t.Error("ReplacePasswordHashIfStillCurrent with a stale expected hash = true, want false (no write over a replaced hash)")
+	}
+}

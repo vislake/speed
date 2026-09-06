@@ -158,6 +158,69 @@ func (r *UserRepository) Save(ctx context.Context, u *User) error {
 	return r.db.WithContext(ctx).Save(u).Error
 }
 
+// MarkPhoneVerified sets PhoneVerified true on the row named by userID --
+// but only while that row's phone_index still equals phoneIndex, the blind
+// index of the very phone number whose ownership the caller just proved.
+//
+// The single-column, guarded scope is the whole point. The alternative --
+// a full-row Save of the freshly read user, which is what
+// Service.LoginWithSMSCode used to do -- writes every column of that read's
+// snapshot back, silently undoing any column a concurrent caller committed
+// between the read and the write (a password rehash from a concurrent
+// sign-in, say). A write whose SET clause names only phone_verified cannot
+// undo anything else, whichever way the race resolves; and the phone_index
+// guard in the WHERE keeps the flag honest on top of that: a row whose
+// phone moved on since the read (or that no longer exists) is left
+// unverified rather than blessing the new occupant of the address.
+//
+// Reports whether the write landed:
+//   - (true, nil): the flag was set on a row still carrying phoneIndex.
+//   - (false, nil): the row's phone_index no longer equals phoneIndex, or
+//     the flag was already true -- nothing to change in either case.
+//   - (false, err): the database call itself failed; nothing was written.
+func (r *UserRepository) MarkPhoneVerified(ctx context.Context, userID, phoneIndex string) (bool, error) {
+	res := r.db.WithContext(ctx).
+		Where("id = ? AND phone_index = ?", userID, phoneIndex).
+		Where("phone_verified = ?", false).
+		Updates(&User{PhoneVerified: true})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
+}
+
+// ReplacePasswordHashIfStillCurrent stores newHash on the row named by
+// userID -- but only while that row's password_hash still equals
+// expectedHash, the hash the caller's own flow actually verified.
+//
+// The single-column, guarded scope is the whole point. The alternative --
+// a full-row Save of the sign-in's user snapshot, which is what
+// Service.upgradePasswordHash used to do -- writes every column of that
+// pre-verification read back, silently undoing any column a concurrent
+// caller committed between the read and the write (a phone-verified flag
+// from a concurrent SMS sign-in, say); and the password_hash guard keeps
+// even the hash itself honest: a hash a concurrent caller replaced since
+// this sign-in read the row (a password change, or a racing rehash that
+// already won) is never overwritten with this call's stale-derived value.
+// A write whose SET clause names only password_hash cannot undo anything
+// else, whichever way the race resolves.
+//
+// Reports whether the write landed:
+//   - (true, nil): newHash is now stored, on a row whose stored hash was
+//     still expectedHash at write time.
+//   - (false, nil): the row's password_hash no longer equals expectedHash
+//     -- a concurrent writer replaced it first. The caller drops its write.
+//   - (false, err): the database call itself failed; nothing was written.
+func (r *UserRepository) ReplacePasswordHashIfStillCurrent(ctx context.Context, userID, expectedHash, newHash string) (bool, error) {
+	res := r.db.WithContext(ctx).
+		Where("id = ? AND password_hash = ?", userID, expectedHash).
+		Updates(&User{PasswordHash: newHash})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
+}
+
 // FindByID returns the user with the given id, or ErrNotFound.
 func (r *UserRepository) FindByID(ctx context.Context, id string) (*User, error) {
 	var u User

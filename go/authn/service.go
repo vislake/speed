@@ -960,6 +960,15 @@ func (s *Service) burnPasswordWork(password string) {
 // A failure here is logged and swallowed: the sign-in already succeeded, and
 // refusing it because an optimisation did not apply would be a worse outcome
 // than an un-upgraded hash.
+//
+// The write is one guarded single-column UPDATE
+// (UserRepository.ReplacePasswordHashIfStillCurrent), never a whole-row
+// save of this sign-in's pre-verification snapshot: user was read before
+// the argon2 derivation ran, and saving that snapshot back in full would
+// silently undo whatever another caller committed on the row in between --
+// a phone-verified flag from a concurrent SMS sign-in, or a password hash
+// a concurrent writer already replaced (which the password_hash guard
+// refuses outright).
 func (s *Service) upgradePasswordHash(ctx context.Context, user *User, password string) {
 	stale, err := NeedsRehash(user.PasswordHash, s.params)
 	if err != nil || !stale {
@@ -970,9 +979,14 @@ func (s *Service) upgradePasswordHash(ctx context.Context, user *User, password 
 		obs.FromContext(ctx).Warn("password rehash failed", "user_id", user.ID, "error", err)
 		return
 	}
-	user.PasswordHash = hash
-	if err := s.users.Save(ctx, user); err != nil {
+	updated, err := s.users.ReplacePasswordHashIfStillCurrent(ctx, user.ID, user.PasswordHash, hash)
+	if err != nil {
 		obs.FromContext(ctx).Warn("password rehash could not be stored", "user_id", user.ID, "error", err)
+		return
+	}
+	if !updated {
+		obs.FromContext(ctx).Warn("password rehash skipped: the stored hash changed since this sign-in read it",
+			"user_id", user.ID)
 	}
 }
 

@@ -1179,3 +1179,80 @@ func TestRegisterAuthMetrics_Smoke(t *testing.T) {
 		t.Fatalf("registerAuthMetrics() = (%v, %v), want two non-nil instruments", count, duration)
 	}
 }
+
+// TestService_UpgradePasswordHash_DoesNotRegressACommittedColumn is the
+// regression test for upgradePasswordHash's write shape. The method used to
+// persist its rehash through UserRepository.Save -- a whole-row rewrite of
+// the user the sign-in read BEFORE the argon2 verification ran. Any column
+// another caller committed on that row between the read and the save (a
+// concurrent SMS sign-in marking the phone verified, the shape this test
+// stands in for) was silently undone by the stale snapshot's write-back.
+//
+// The test is deterministic rather than a timed race because the hazard
+// does not need real concurrency to materialize: the stale snapshot IS the
+// bug, so handing upgradePasswordHash a user object that predates a
+// committed column change reproduces it exactly. Sequence:
+//
+//  1. an account whose password hash was minted under WEAKER parameters
+//     than this Service's own (so NeedsRehash says the corpus is stale);
+//  2. a sign-in-shaped read of that user;
+//  3. a committed phone-verified flag landing between the read and the
+//     write (written directly here -- it stands in for a concurrent SMS
+//     sign-in's own commit);
+//  4. the rehash.
+//
+// Before the fix, step 4's whole-row Save writes the step-2 snapshot's
+// PhoneVerified == false back over step 3's commit: the flag regresses. The
+// rehash must persist exactly the one column it owns.
+func TestService_UpgradePasswordHash_DoesNotRegressACommittedColumn(t *testing.T) {
+	// An account whose stored hash is stale against this Service's current
+	// parameters: minted under weaker ones.
+	weak := testParams()
+	weak.Iterations = 1
+	strong := weak
+	strong.Iterations = 3
+	svc := newServiceFixture(t, WithPasswordParams(strong)).svc
+
+	email := "rehash-regression@example.com"
+	password := testPassword
+	oldHash, err := HashPassword(password, weak)
+	if err != nil {
+		t.Fatalf("HashPassword(weak): %v", err)
+	}
+	seed := &User{Email: email, DisplayName: "Rehash Regression", PasswordHash: oldHash}
+	createErr := svc.Users().Create(t.Context(), seed)
+	if createErr != nil {
+		t.Fatalf("Create: %v", createErr)
+	}
+
+	// The sign-in-shaped read: the snapshot upgradePasswordHash would be
+	// handed, taken before the interfering commit below.
+	stale, err := svc.Users().FindByEmail(t.Context(), email)
+	if err != nil {
+		t.Fatalf("FindByEmail: %v", err)
+	}
+
+	// The interfering commit: a concurrent SMS sign-in proved the phone and
+	// marked the row verified between the snapshot's read and the rehash's
+	// write.
+	seedErr := svc.Users().db.Table("users").Where("id = ?", seed.ID).Update("phone_verified", true).Error
+	if seedErr != nil {
+		t.Fatalf("interfering commit: %v", seedErr)
+	}
+
+	svc.upgradePasswordHash(t.Context(), stale, password)
+
+	fresh, err := svc.Users().FindByID(t.Context(), seed.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if !fresh.PhoneVerified {
+		t.Errorf("PhoneVerified = false after the rehash -- the rehash's whole-row save regressed the committed flag")
+	}
+	if fresh.PasswordHash == oldHash {
+		t.Errorf("PasswordHash unchanged after the rehash -- the corpus migration did not apply")
+	}
+	if ok, err := VerifyPassword(fresh.PasswordHash, password); err != nil || !ok {
+		t.Errorf("stored hash does not verify the password (ok=%v err=%v)", ok, err)
+	}
+}

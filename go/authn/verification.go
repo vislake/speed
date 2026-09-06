@@ -441,9 +441,22 @@ func (s *Service) LoginWithSMSCode(ctx context.Context, in SMSLoginInput) (*Toke
 	}
 
 	if !user.PhoneVerified {
-		user.PhoneVerified = true
-		if err := s.users.Save(ctx, user); err != nil {
+		// A guarded single-column write, never a whole-row Save of the
+		// freshly read user: saving the read's snapshot back in full would
+		// silently undo whatever another caller committed on the row
+		// between this read and the write (a password rehash from a
+		// concurrent sign-in, say). MarkPhoneVerified sets only
+		// phone_verified, and only while the row still carries the blind
+		// index of the very phone this call verified -- a row whose phone
+		// moved on since the read is left unverified rather than blessing
+		// the new occupant.
+		updated, err := s.users.MarkPhoneVerified(ctx, user.ID, index)
+		switch {
+		case err != nil:
 			obs.FromContext(ctx).Warn("phone-verified flag could not be persisted", "user_id", user.ID, "error", err)
+		case !updated:
+			obs.FromContext(ctx).Debug("phone-verified flag left as-is: the row already reads verified or its phone changed since this login read it",
+				"user_id", user.ID)
 		}
 	}
 
