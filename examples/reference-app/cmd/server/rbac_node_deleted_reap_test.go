@@ -43,10 +43,11 @@ import (
 // two modules -- org and rbac -- over a fresh SQLite file, migrated and
 // bootstrapped the same way buildServer composes the full app, just without
 // every other module the full app also wires. It returns the real
-// TreeService and the real rbac Service, both backed by the same
-// pkgcore.Registry and its real event bus, so a delete published by one is
-// delivered to the other exactly as it is in production.
-func newOrgRBACReapHarness(t *testing.T) (*org.TreeService, *rbac.Service) {
+// TreeService, the real MemberService and the real rbac Service, all backed
+// by the same pkgcore.Registry and its real event bus, so a delete or a
+// removal published by one is delivered to the other exactly as it is in
+// production.
+func newOrgRBACReapHarness(t *testing.T) (*org.TreeService, *org.MemberService, *rbac.Service) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -108,7 +109,7 @@ func newOrgRBACReapHarness(t *testing.T) (*org.TreeService, *rbac.Service) {
 		}
 	})
 
-	return orgModule.Tree(), rbacService
+	return orgModule.Tree(), orgModule.Members(), rbacService
 }
 
 // testOrgRBACIndexKey is a fixed 32-byte HMAC key for this file's blind
@@ -124,7 +125,7 @@ var testOrgRBACIndexKey = []byte("org-rbac-reap-test-blind-index32")
 // that binding reaped once the real org.node.deleted event has travelled
 // the real bus.
 func TestOrgRBACReap_NodeDeleted_ReapsDanglingBinding(t *testing.T) {
-	tree, rbacService := newOrgRBACReapHarness(t)
+	tree, _, rbacService := newOrgRBACReapHarness(t)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
 
 	root, err := tree.CreateRoot(ctx, "root", "workspace")
@@ -194,7 +195,7 @@ func TestOrgRBACReap_NodeDeleted_ReapsDanglingBinding(t *testing.T) {
 // real Delete, must leave rbac showing every binding across that subtree
 // reaped in the one pass this round's reap runs.
 func TestOrgRBACReap_NodeDeleted_CascadeReapsEveryBinding(t *testing.T) {
-	tree, rbacService := newOrgRBACReapHarness(t)
+	tree, _, rbacService := newOrgRBACReapHarness(t)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
 
 	root, err := tree.CreateRoot(ctx, "root", "workspace")
