@@ -35,6 +35,7 @@ import (
 	// regardless of which deployment mode its other infrastructure seams
 	// compose under.
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
+	"github.com/vislake/speed/go/integration"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/notification"
 	obs "github.com/vislake/speed/go/observability"
@@ -702,6 +703,26 @@ type serverConfig struct {
 	// doc comment describes; smilesim_flow_test.go is what sets both.
 	AIGatewayImageBaseURL string
 	AIGatewayImageAPIKey  string
+
+	// WebhookURLValidator and WebhookHTTPClient override go/integration's
+	// two SSRF enforcement points together (integration.
+	// WithWebhookURLValidator's own doc comment explains why the two must
+	// always move together) for ONE Module instance this buildServer call
+	// composes -- never a production weakening, since configFromEnv never
+	// sets either and buildServer leaves both options unset (the module's
+	// own strict default) whenever WebhookURLValidator is nil. This exists
+	// for webhook_flow_test.go alone: it is this app's only way to prove a
+	// genuine signed HTTP delivery against a receiver it controls, since
+	// neither an httptest.Server (loopback) nor a sibling Docker container
+	// (RFC 1918 private space, exactly like every other Docker-backed
+	// integration tier's own sibling containers in this repository) can
+	// ever produce an address go/integration's production SSRF check is
+	// willing to accept -- see integration.WithWebhookURLValidator's own
+	// doc comment for the full argument. Mirrors AIGatewayBaseURL's and
+	// cfg.Mailer's identical "test-only override of a seam production
+	// leaves on its real default" shape above.
+	WebhookURLValidator func(ctx context.Context, url string) error
+	WebhookHTTPClient   *http.Client
 }
 
 // configFromEnv reads serverConfig from the environment, defaulting to the
@@ -1109,6 +1130,17 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// double as.
 	dbkit.RegisterEncryptedSerializer(aigateway.CredentialAPIKeySerializerName, cipher)
 
+	// integration's WebhookSubscription.Secret column is encrypted at rest
+	// under this same config cipher, registered here for the identical
+	// "before anything touches the model" reason as every registration
+	// above. Like a webhook secret must be READ BACK IN PLAINTEXT to sign
+	// every delivery attempt (go/integration/AGENTS.md's "Round 2's two
+	// tables" section), never merely compared, so no separate HMAC blind
+	// index is needed here either -- the identical reasoning
+	// aigateway.CredentialAPIKeySerializerName's own registration comment
+	// gives.
+	dbkit.RegisterEncryptedSerializer(integration.WebhookSecretSerializerName, cipher)
+
 	// hostByTenant is demoHostTenants' reverse index: which demo Host
 	// belongs to a given tenant, which is what an invitation's accept link
 	// must point at -- InviteService.Accept resolves strictly inside the
@@ -1299,6 +1331,32 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// demoOrgSubjectResolver, ...) is wired.
 	sharingModule := sharing.NewModule(db, sharing.WithResourceResolver(&storageSharingResolver{svc: storageModule.ObjectService()}))
 
+	// integrationModule is the reference app's mandatory first consumer of
+	// go/integration's round-2 outbound-webhook surface (go/integration/
+	// AGENTS.md's "No reference-app consumer yet" section named this the
+	// compensating obligation the round carried until a real host wired
+	// it). orgMemberJoinedWebhookMapping (webhooks.go) is this app's own
+	// EventMapping -- a Module construction-time Option, per
+	// integration.WithEventMapping's own doc comment, since the mapping's
+	// Transform closes over org's own MemberJoined payload shape, which
+	// go/integration may not import. WithWebhookQueue shares the same
+	// standaloneQueue every other module's asynchronous work already runs
+	// on. WebhookURLValidator/WebhookHTTPClient are test-only overrides
+	// (see their own doc comments on serverConfig above): nil in every
+	// production boot, which leaves go/integration's SSRF protection
+	// exactly as strict as it has always been.
+	integrationOpts := []integration.Option{
+		integration.WithEventMapping(orgMemberJoinedWebhookMapping),
+		integration.WithWebhookQueue(standaloneQueue),
+	}
+	if cfg.WebhookURLValidator != nil {
+		integrationOpts = append(integrationOpts, integration.WithWebhookURLValidator(cfg.WebhookURLValidator))
+	}
+	if cfg.WebhookHTTPClient != nil {
+		integrationOpts = append(integrationOpts, integration.WithWebhookHTTPClient(cfg.WebhookHTTPClient))
+	}
+	integrationModule := integration.NewModule(db, integrationOpts...)
+
 	// notificationModule is the reference app's first consumer of
 	// go/notification, wired as the round's mandatory-first-consumer proof
 	// (see cmd/server/demo_notification.go for the host-side glue that
@@ -1474,6 +1532,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
 	if regErr := migrationRegistry.Register(sharingModule); regErr != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
+	}
+	if regErr := migrationRegistry.Register(integrationModule); regErr != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: register migrations: %w", regErr)
 	}
@@ -1655,10 +1717,24 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		}
 		kernelOptions = append(kernelOptions, pkgcore.WithMailer(cfg.Mailer, mailerCapabilities))
 	}
-	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, pkiModule, authnModule, notesModule, orgModule, configModule, rbacModule, storageModule, sharingModule, demoModule, notificationModule, aiGatewayModule, billingModule, complianceModule, adminModule, auditModule)
+	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, pkiModule, authnModule, notesModule, orgModule, configModule, rbacModule, storageModule, sharingModule, integrationModule, demoModule, notificationModule, aiGatewayModule, billingModule, complianceModule, adminModule, auditModule)
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("reference-app: bootstrap kernel: %w", err)
+	}
+	// integrationModule's Attach must run after Bootstrap for the same
+	// reason config's and rbac's do just below: its Service reads
+	// reg.Events.Bus() and reg.AuditActions, which Bootstrap only finishes
+	// wiring once every module's Register call has returned (module.go's
+	// own Attach doc comment). Unlike config's and rbac's Attach calls, its
+	// ordering relative to them is not load-bearing -- nothing here reads a
+	// permission or configuration snapshot -- so it runs first simply
+	// because webhooks.go's wireIntegrationWebhooks needs the resulting
+	// *integration.Service below.
+	integrationService, err := integrationModule.Attach(reg)
+	if err != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: attach the integration module: %w", err)
 	}
 	configService, err = configModule.Attach(reg)
 	if err != nil {
@@ -1859,6 +1935,19 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// buildServer's own ctx.
 	smileSimReconcilerStop = smileSimService.StartReconciler(context.Background(), 0)
 	wireSmileSim(mux, smileSimService, standaloneQueue)
+
+	// wireIntegrationWebhooks mounts go/integration round 2's
+	// mandatory-first-consumer route (cmd/server/webhooks.go): a demo
+	// tenant creates a webhook subscription against
+	// orgMemberJoinedWebhookMapping's public event type, gated on the
+	// module's own integration.PermissionWebhookManage permission -- the
+	// same rbacService every other permission-gated route in this app
+	// checks against. go/integration mounts no HTTP surface of its own for
+	// subscription CRUD (go/integration/AGENTS.md's "Deliberately not in
+	// scope" table), so this route is hand-mounted, outside the OpenAPI
+	// machinery, exactly like wireConsult's and wireSmileSim's own routes
+	// above. The call cannot fail: nothing it does returns an error.
+	wireIntegrationWebhooks(mux, rbacService, integrationService)
 
 	// The middleware chain: authn.Middleware(verifier) FIRST, then
 	// tenancy.Middleware(authn.NewPrincipalResolver()) -- the deliberate

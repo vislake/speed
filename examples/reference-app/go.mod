@@ -85,6 +85,15 @@ replace github.com/vislake/speed/go/compliance => ../../go/compliance
 
 replace github.com/vislake/speed/go/admin => ../../go/admin
 
+// go/integration is imported directly by this app: buildServer wires the
+// outbound-webhook consumer proof (see server.go and webhooks.go). Like
+// every other workspace-local module it carries no published version, so
+// this app's own go.mod needs its own replace for it too -- root
+// CLAUDE.md's per-module standalone-build rule (`GOWORK=off go build`)
+// means `go mod tidy` must resolve every dependency without relying on the
+// workspace.
+replace github.com/vislake/speed/go/integration => ../../go/integration
+
 require (
 	github.com/google/uuid v1.6.0
 	github.com/minio/minio-go/v7 v7.3.0
@@ -99,6 +108,7 @@ require (
 	github.com/vislake/speed/go/compliance v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/config v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/dbkit v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/integration v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/jobs v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/notification v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000
