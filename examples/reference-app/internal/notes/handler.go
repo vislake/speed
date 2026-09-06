@@ -214,7 +214,7 @@ func (h *Handler) NotesCreateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	note := &Note{ID: uuid.NewString(), Text: text}
+	note := &Note{ID: uuid.NewString(), Text: text, CreatorUserID: creatorUserID}
 	if err := h.repo.Create(ctx, note); err != nil {
 		writeError(w, err)
 		return

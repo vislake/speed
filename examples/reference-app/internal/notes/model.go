@@ -50,6 +50,26 @@ type Note struct {
 	// real field(s) a later milestone's module will actually need.
 	Text string `gorm:"column:text;size:4000;not null"`
 
+	// CreatorUserID is the user id of the note's creator, attributed by the
+	// host's SubjectResolver seam at create time (handler.go's
+	// NotesCreateNote resolves it before the body is even read) -- never by
+	// the request itself, and never written after Create. It is the
+	// attribute that makes a note addressable as the compliance mechanism's
+	// subject: retention_participant.go's Erase erases every note whose
+	// CreatorUserID matches a pkgcore.SubjectRef's SubjectID, and Export
+	// gathers a tenant's notes by creator. It shares its source with
+	// NoteCreatedPayload.CreatorUserID (module.go) -- both carry the exact
+	// string h.resolveSubject returned for the creating request -- so an
+	// event subscriber and a later compliance read of the row can never
+	// disagree about who created it.
+	//
+	// The column carries a NOT NULL DEFAULT '' so pre-existing rows and any
+	// caller that creates a note without a resolvable creator (tests, seed
+	// code) stay valid: an empty CreatorUserID is the "no attributable
+	// creator" sentinel, and no compliance operation will ever target it,
+	// just as resolveSubject treats an empty resolver answer as no answer.
+	CreatorUserID string `gorm:"column:creator_user_id;size:64;not null;default:''"`
+
 	// CreatedAt is populated by gorm's autoCreateTime on Create -- never
 	// written by application code, and never NOW() in a migration (backend
 	// coding standard §5's dual-dialect rule: SQLite has no NOW()).
