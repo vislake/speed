@@ -2,7 +2,9 @@ package metering
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -361,4 +363,142 @@ func TestDispatcher_StartStop_IsIdempotent(t *testing.T) {
 func TestDispatcher_Stop_BeforeStart_IsSafe(t *testing.T) {
 	d, _, _ := newTestDispatcher(t)
 	d.Stop() // must not block or panic
+}
+
+// TestDispatcher_Stop_BeforeStart_DoesNotPreventStoppingALaterLoop pins
+// the lifecycle finding in its Dispatcher form: an early Stop (before any
+// Start) consumed the stop signal, so the poll loop Started afterwards
+// could never be stopped and the later Stop blocked forever on the
+// never-closed done channel -- a goroutine leak plus a hang. Stop before
+// Start must leave a later Start's loop fully stoppable.
+func TestDispatcher_Stop_BeforeStart_DoesNotPreventStoppingALaterLoop(t *testing.T) {
+	d, _, _ := newTestDispatcher(t)
+	d.Stop() // before Start -- must not consume the ability to stop a later loop
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d.Start(ctx)
+
+	stopped := make(chan struct{})
+	go func() {
+		d.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not return after a Start that followed an earlier Stop: the started poll loop can never be stopped")
+	}
+}
+
+// TestDispatcher_ConcurrentStartAndStop_NoDataRace drives Start and Stop
+// from racing goroutines -- one Start racing two Stops, so a Stop can
+// also land while another Stop is mid-wait and a Start has already
+// replaced the loop generation. Before the fix the two sync.Once
+// critical sections wrote and read the stop/done fields without any
+// synchronization between them, which the race detector can see when the
+// calls actually overlap. After the fix every lifecycle field is guarded
+// by the lifecycle mutex (or passed to the goroutine by value), and a
+// Stop only clears the started flag for the generation it actually
+// waited on, so any interleaving is race-free and every order converges.
+func TestDispatcher_ConcurrentStartAndStop_NoDataRace(t *testing.T) {
+	for i := 0; i < 10; i++ {
+		d, _, _ := newTestDispatcher(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		var wg sync.WaitGroup
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			d.Start(ctx)
+		}()
+		go func() {
+			defer wg.Done()
+			d.Stop()
+		}()
+		go func() {
+			defer wg.Done()
+			d.Stop()
+		}()
+		wg.Wait()
+		cancel()
+		d.Stop() // whichever order the race resolved in, this returns and stops any started loop
+	}
+}
+
+// TestDispatcher_RunOnce_FailedRowsAtTheHead_DoNotStarveNewerRows pins
+// the claim-query finding: claimPendingOutboxRecords ordered purely by
+// created_at, so a pile of permanently failing rows at the head of the
+// queue (rows Enqueue-era validation could never produce but an older
+// build or a corruption could leave behind -- here: an empty Feature,
+// which delivery-time validation refuses forever) filled every batch and
+// a healthy row enqueued behind them was never even claimed. The claim
+// must consider Attempts so that never-failed rows are attempted before
+// already-failed ones, whatever their age.
+func TestDispatcher_RunOnce_FailedRowsAtTheHead_DoNotStarveNewerRows(t *testing.T) {
+	d, agg, db := newTestDispatcher(t)
+	d.batchSize = 50
+	ctx := context.Background()
+
+	const poisonCount = 50 // fills exactly one full batch
+	poisonAt := time.Now()
+	for i := 0; i < poisonCount; i++ {
+		rec := newTestOutboxRecord(fmt.Sprintf("poison-%02d", i), "tenant-p", fmt.Sprintf("idem-poison-%02d", i))
+		rec.Feature = "" // validation poison: delivery can never succeed
+		rec.CreatedAt = poisonAt.Add(time.Duration(i) * time.Millisecond)
+		if _, err := insertOutboxRecord(ctx, db, rec); err != nil {
+			t.Fatalf("insertOutboxRecord(poison-%02d): %v", i, err)
+		}
+	}
+
+	// One full cycle: every poison row fails once and stays pending, now
+	// carrying Attempts = 1 -- the state a real pile of failing rows has.
+	delivered, err := d.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("RunOnce (poison cycle): %v", err)
+	}
+	if delivered != 0 {
+		t.Fatalf("delivered during the poison cycle = %d, want 0 (every poison row must fail)", delivered)
+	}
+	pending, err := claimPendingOutboxRecords(ctx, db, poisonCount)
+	if err != nil {
+		t.Fatalf("claimPendingOutboxRecords: %v", err)
+	}
+	if len(pending) != poisonCount {
+		t.Fatalf("pending rows after the poison cycle = %d, want %d", len(pending), poisonCount)
+	}
+	for _, rec := range pending {
+		if rec.Attempts != 1 {
+			t.Fatalf("poison row %s Attempts = %d, want 1", rec.ID, rec.Attempts)
+		}
+	}
+
+	// A fresh, healthy row enqueued behind the pile.
+	event := UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 5, IdempotencyKey: "idem-fresh", OccurredAt: time.Now()}
+	if _, enqueueErr := Enqueue(ctx, db, event); enqueueErr != nil {
+		t.Fatalf("Enqueue: %v", enqueueErr)
+	}
+
+	delivered, err = d.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("RunOnce (fresh cycle): %v", err)
+	}
+	if delivered != 1 {
+		t.Fatalf("delivered = %d, want 1 (the fresh row must be claimed ahead of the %d already-failed head rows)", delivered, poisonCount)
+	}
+
+	got, err := agg.RealtimeCount("tenant-a", "ai.generation", event.OccurredAt)
+	if err != nil {
+		t.Fatalf("RealtimeCount: %v", err)
+	}
+	if got != 5 {
+		t.Errorf("RealtimeCount = %v, want 5 (the fresh row was delivered exactly once)", got)
+	}
+
+	remaining, err := claimPendingOutboxRecords(ctx, db, poisonCount+1)
+	if err != nil {
+		t.Fatalf("claimPendingOutboxRecords (final): %v", err)
+	}
+	if len(remaining) != poisonCount {
+		t.Errorf("pending rows after the fresh cycle = %d, want %d (the poison pile is still retried, never dropped)", len(remaining), poisonCount)
+	}
 }

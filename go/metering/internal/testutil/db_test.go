@@ -37,7 +37,9 @@ func TestNewSQLite_AppliesMeteringMigrationsFromZero(t *testing.T) {
 		"idx_metering_usage_summaries_period",
 		"idx_metering_usage_summaries_feature",
 		"uq_metering_outbox_records_tenant_idempotency",
-		"idx_metering_outbox_records_status_created",
+		// 0004 replaced 0002's (status, created_at) index with
+		// (status, attempts, created_at) -- see that file's header for why.
+		"idx_metering_outbox_records_status_attempts_created",
 	}
 	var gotIndexes []string
 	if err := db.Raw(

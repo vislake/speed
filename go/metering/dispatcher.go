@@ -39,6 +39,18 @@ const (
 // has already failed -- a real backoff curve is future hardening, not
 // this round's job (see AGENTS.md).
 //
+// # Failed rows never jump the queue
+//
+// The claim orders never-failed rows ahead of already-failed ones
+// (attempts ASC, then created_at ASC -- see claimPendingOutboxRecords), so
+// a pile of permanently failing rows at the head of the queue cannot
+// occupy batch after batch ahead of a healthy row enqueued behind them:
+// the healthy row is claimed on the very next cycle, whatever the pile's
+// age or size, while the pile keeps being retried whenever the batch has
+// room -- the same "a retried unit of work waits its turn behind new
+// work" discipline go/jobs' own scheduled_at backoff gives its retrying
+// jobs, without a timer column.
+//
 // # Single in-process dispatcher assumed
 //
 // claimPendingOutboxRecords is a read, not an atomic claim-and-lock: it
@@ -56,10 +68,17 @@ type Dispatcher struct {
 	interval  time.Duration
 	batchSize int
 
-	startOnce sync.Once
-	stopOnce  sync.Once
-	stop      chan struct{}
-	done      chan struct{}
+	// mu guards every lifecycle field below, exactly as on
+	// AnalyticsRecorder. The poll goroutine reads stop/done only through
+	// the channel values Start passes it as arguments (see run), so no
+	// lifecycle field is ever read outside mu -- the sync.Once pair this
+	// replaces left stop/done readable from Stop's goroutine while a
+	// concurrent Start wrote them, a race the detector could see.
+	mu         sync.Mutex
+	started    bool // a poll goroutine is running (spawned, not yet stopped)
+	stopClosed bool // stop has been closed (at most once per loop generation)
+	stop       chan struct{}
+	done       chan struct{}
 }
 
 // NewDispatcher returns a Dispatcher polling db for aggregator's pending
@@ -76,19 +95,28 @@ func NewDispatcher(db *gorm.DB, aggregator *Aggregator) *Dispatcher {
 }
 
 // Start runs the poll loop until ctx is done or Stop is called. Safe to
-// call at most once per Dispatcher (sync.Once), matching
-// AnalyticsRecorder.Start's and go/jobs.StandaloneQueue.Start's identical
-// contract.
+// call with one loop running at a time: a Start while a loop is already
+// running is a no-op, and a Start after a completed Stop runs a fresh
+// loop with the new ctx.
 func (d *Dispatcher) Start(ctx context.Context) {
-	d.startOnce.Do(func() {
-		d.stop = make(chan struct{})
-		d.done = make(chan struct{})
-		go d.run(ctx)
-	})
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.started {
+		return
+	}
+	d.started = true
+	d.stopClosed = false
+	d.stop = make(chan struct{})
+	d.done = make(chan struct{})
+	stop, done := d.stop, d.done
+	go d.run(ctx, stop, done)
 }
 
-func (d *Dispatcher) run(ctx context.Context) {
-	defer close(d.done)
+// run is the poll loop. stop and done are passed as arguments, never read
+// off the receiver: Start and Stop exchange them under mu, and the
+// goroutine must not touch fields the caller is mutating.
+func (d *Dispatcher) run(ctx context.Context, stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
 	ticker := time.NewTicker(d.interval)
 	defer ticker.Stop()
 	for {
@@ -97,7 +125,7 @@ func (d *Dispatcher) run(ctx context.Context) {
 		}
 		select {
 		case <-ticker.C:
-		case <-d.stop:
+		case <-stop:
 			return
 		case <-ctx.Done():
 			return
@@ -106,16 +134,32 @@ func (d *Dispatcher) run(ctx context.Context) {
 }
 
 // Stop signals the poll loop to exit and waits for it to actually do so.
-// Calling Stop before Start, or more than once, is safe.
+// Safe to call before Start, or more than once: a Stop before any Start
+// leaves a later Start's loop fully stoppable (nothing is consumed by
+// the early call), and a Start after a completed Stop runs a fresh loop.
 func (d *Dispatcher) Stop() {
-	d.stopOnce.Do(func() {
-		if d.stop != nil {
-			close(d.stop)
-		}
-	})
-	if d.done != nil {
-		<-d.done
+	d.mu.Lock()
+	if !d.started {
+		d.mu.Unlock()
+		return
 	}
+	if !d.stopClosed {
+		d.stopClosed = true
+		close(d.stop)
+	}
+	done := d.done
+	d.mu.Unlock()
+
+	<-done
+
+	d.mu.Lock()
+	// Clear started only if the loop this Stop waited on is still the
+	// live one: a Start racing this Stop's wait has replaced the channels
+	// with a fresh generation, whose started flag must survive.
+	if d.done == done {
+		d.started = false
+	}
+	d.mu.Unlock()
 }
 
 // RunOnce claims up to one batch of pending outbox records and attempts to

@@ -3,8 +3,10 @@ package metering
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 
@@ -221,6 +223,44 @@ func TestClaimPendingOutboxRecords(t *testing.T) {
 	}
 }
 
+// TestClaimPendingOutboxRecords_LeastFailedFirst pins the claim query's
+// anti-starvation ordering: among pending rows, never-failed rows
+// (Attempts 0) are claimed before already-failed ones, whatever their
+// age, so a pile of permanently failing rows at the head of the queue
+// (older, high-Attempts) can never occupy a whole batch ahead of a fresh
+// row. Within one Attempts tier the oldest row still goes first -- the
+// FIFO order the sibling test above pins -- so the two orderings
+// disagree only exactly where the starvation hazard lives.
+func TestClaimPendingOutboxRecords_LeastFailedFirst(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	// An older row that has already failed three times...
+	failed := newTestOutboxRecord("failed-3", "tenant-a", "idem-failed-3")
+	failed.Attempts = 3
+	failed.CreatedAt = time.Now().Add(-time.Hour)
+	if _, err := insertOutboxRecord(ctx, db, failed); err != nil {
+		t.Fatalf("insertOutboxRecord(failed): %v", err)
+	}
+	// ...and a brand-new row that has never been attempted.
+	fresh := newTestOutboxRecord("fresh-0", "tenant-a", "idem-fresh-0")
+	fresh.CreatedAt = time.Now()
+	if _, err := insertOutboxRecord(ctx, db, fresh); err != nil {
+		t.Fatalf("insertOutboxRecord(fresh): %v", err)
+	}
+
+	got, err := claimPendingOutboxRecords(ctx, db, 10)
+	if err != nil {
+		t.Fatalf("claimPendingOutboxRecords: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("claimPendingOutboxRecords returned %d rows, want 2", len(got))
+	}
+	if got[0].ID != "fresh-0" || got[1].ID != "failed-3" {
+		t.Errorf("claimPendingOutboxRecords order = [%s, %s], want never-failed-first [fresh-0, failed-3]", got[0].ID, got[1].ID)
+	}
+}
+
 func TestMarkOutboxDelivered(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
@@ -292,6 +332,77 @@ func TestTruncateError(t *testing.T) {
 	got := truncateError(string(long))
 	if len(got) != maxLastErrorLength {
 		t.Errorf("truncateError(long) length = %d, want %d", len(got), maxLastErrorLength)
+	}
+}
+
+// TestTruncateError_DoesNotSplitAMultiByteRune pins the UTF-8 boundary
+// finding: truncateError cut on byte 500 unconditionally, so a cause
+// whose 500th byte fell inside a multi-byte rune stored an invalid-UTF-8
+// tail -- a value PostgreSQL rejects on write with SQLSTATE 22021, taking
+// the failure-record write (markOutboxAttemptFailed) down with it. The
+// truncation must end on a rune boundary, whatever the byte offset of the
+// cut.
+func TestTruncateError_DoesNotSplitAMultiByteRune(t *testing.T) {
+	// A 4-byte rune (U+1F600), placed so the 500-byte cut lands at each of
+	// the three possible offsets inside it.
+	smile := "\U0001F600"
+	for _, prefixLen := range []int{maxLastErrorLength - 3, maxLastErrorLength - 2, maxLastErrorLength - 1} {
+		prefix := strings.Repeat("a", prefixLen)
+		cause := prefix + smile + strings.Repeat("b", 50)
+		got := truncateError(cause)
+		if !utf8.ValidString(got) {
+			t.Errorf("truncateError(cause with a rune straddling byte %d) = invalid UTF-8: %q", maxLastErrorLength, got)
+			continue
+		}
+		if len(got) > maxLastErrorLength {
+			t.Errorf("truncateError length = %d, want at most %d", len(got), maxLastErrorLength)
+		}
+		if got != prefix {
+			t.Errorf("truncateError = %q, want the cut to drop the whole straddling rune: %q", got, prefix)
+		}
+	}
+}
+
+// TestMarkOutboxAttemptFailed_LongMultiByteCause_StoredValueStaysValidUTF8
+// pins the finding at the write path itself -- the stored value is the
+// assertion target, exactly as PostgreSQL would validate it on its way
+// into the column: a cause whose byte-truncation used to split a rune is
+// stored whole-rune-truncated, valid UTF-8 and within the column's byte
+// bound.
+func TestMarkOutboxAttemptFailed_LongMultiByteCause_StoredValueStaysValidUTF8(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	rec := newTestOutboxRecord("rec-1", "tenant-a", "idem-1")
+	if _, err := insertOutboxRecord(ctx, db, rec); err != nil {
+		t.Fatalf("insertOutboxRecord: %v", err)
+	}
+
+	// 200 three-byte runes: comfortably over the 500-byte column bound.
+	cause := strings.Repeat("界", 200)
+	if err := markOutboxAttemptFailed(ctx, db, rec.ID, cause); err != nil {
+		t.Fatalf("markOutboxAttemptFailed: %v", err)
+	}
+
+	pending, err := claimPendingOutboxRecords(ctx, db, 10)
+	if err != nil {
+		t.Fatalf("claimPendingOutboxRecords: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending rows = %d, want 1", len(pending))
+	}
+	got := pending[0]
+	if got.Attempts != 1 {
+		t.Errorf("Attempts = %d, want 1", got.Attempts)
+	}
+	if !utf8.ValidString(got.LastError) {
+		t.Errorf("stored LastError = invalid UTF-8: %q (PostgreSQL would refuse this write with SQLSTATE 22021)", got.LastError)
+	}
+	if len(got.LastError) > maxLastErrorLength {
+		t.Errorf("stored LastError length = %d, want at most %d", len(got.LastError), maxLastErrorLength)
+	}
+	if !strings.HasPrefix(cause, got.LastError) {
+		t.Errorf("stored LastError = %q, want a prefix of the cause (truncated, never rewritten)", got.LastError)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"time"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -81,16 +82,23 @@ func findOutboxByIdempotencyKey(ctx context.Context, db *gorm.DB, tenantID, idem
 	return &rec, true, nil
 }
 
-// claimPendingOutboxRecords returns up to limit outboxStatusPending rows,
-// oldest first. It is a read only -- it does not mark anything as
-// in-flight -- because this round runs exactly one in-process Dispatcher;
-// see Dispatcher's and OutboxRecord's doc comments for what a second
-// concurrent dispatcher process would need that this round does not build.
+// claimPendingOutboxRecords returns up to limit outboxStatusPending rows:
+// never-failed rows (Attempts 0) first, then oldest-first within each
+// Attempts tier. The Attempts ordering is what keeps a pile of
+// permanently failing rows at the head of the queue from starving the
+// healthy rows enqueued behind them -- see Dispatcher's "Failed rows
+// never jump the queue" doc comment for the full argument; created_at
+// still breaks ties within a tier, so the queue stays FIFO among rows
+// that have failed the same number of times. It is a read only -- it
+// does not mark anything as in-flight -- because this round runs exactly
+// one in-process Dispatcher; see Dispatcher's and OutboxRecord's doc
+// comments for what a second concurrent dispatcher process would need
+// that this round does not build.
 func claimPendingOutboxRecords(ctx context.Context, db *gorm.DB, limit int) ([]OutboxRecord, error) {
 	var recs []OutboxRecord
 	err := db.WithContext(ctx).
 		Where("status = ?", outboxStatusPending).
-		Order("created_at ASC").
+		Order("attempts ASC, created_at ASC").
 		Limit(limit).
 		Find(&recs).Error
 	return recs, err
@@ -120,7 +128,8 @@ func markOutboxDelivered(ctx context.Context, db *gorm.DB, id string, deliveredA
 // its LastError, leaving Status untouched (still outboxStatusPending) so
 // the row is retried on the next Dispatcher cycle -- billing-grade
 // delivery retries indefinitely, per Dispatcher's own doc comment. cause
-// is truncated to fit OutboxRecord.LastError's column width.
+// is truncated to fit OutboxRecord.LastError's column width, always on a
+// UTF-8 rune boundary (see truncateError).
 func markOutboxAttemptFailed(ctx context.Context, db *gorm.DB, id string, cause string) error {
 	var rec OutboxRecord
 	err := db.WithContext(ctx).Where("id = ?", id).First(&rec).Error
@@ -139,10 +148,21 @@ func markOutboxAttemptFailed(ctx context.Context, db *gorm.DB, id string, cause 
 const maxLastErrorLength = 500
 
 // truncateError bounds cause to maxLastErrorLength bytes, never writing
-// more into the database than the column can hold.
+// more into the database than the column can hold, and never splitting a
+// multi-byte UTF-8 rune: a byte-level cut through a rune leaves invalid
+// UTF-8 in the string, which SQLite stores happily but PostgreSQL refuses
+// on the very write this truncation feeds (SQLSTATE 22021, invalid byte
+// sequence for encoding "UTF8") -- taking the failure-record write down
+// with the failure it was recording. The cut backs off to the nearest
+// rune boundary; only the final, partial rune can straddle the cut, so
+// at most three bytes ever come off.
 func truncateError(cause string) string {
 	if len(cause) <= maxLastErrorLength {
 		return cause
 	}
-	return cause[:maxLastErrorLength]
+	cut := cause[:maxLastErrorLength]
+	for len(cut) > 0 && !utf8.ValidString(cut) {
+		cut = cut[:len(cut)-1]
+	}
+	return cut
 }
