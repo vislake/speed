@@ -5,7 +5,9 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io/fs"
+	"log/slog"
 	"path"
 	"slices"
 	"strings"
@@ -173,6 +175,33 @@ func (r *MigrationRegistry) Register(m pkgcore.Module) error {
 // ctx is checked before each module, so a cancelled context stops Apply
 // between modules rather than only once every module has been attempted;
 // ctx must not be nil.
+//
+// Cross-process coordination (PostgreSQL only). A real multi-replica
+// distributed-mode boot can have N processes calling Apply against the same
+// shared PostgreSQL database at the same time on first startup. Without
+// coordination, two replicas' step-4 "already applied?" checks can both see
+// "no" for the same not-yet-applied file before either's CREATE TABLE
+// commits, so the second replica's statement fails with a duplicate-object
+// error and that replica's boot fails -- a genuine first-boot hazard, not a
+// theoretical one. When dialect is DialectPostgres, Apply therefore pins a
+// single physical connection (gorm.DB.Connection) for the whole call and
+// takes out a PostgreSQL session-level advisory lock on it before step 2
+// (see acquireMigrationLock), releasing it after step 4 win or lose (see
+// releaseMigrationLock); a second process's concurrent Apply call for the
+// same database simply waits its turn -- bounded, so a genuinely stuck
+// first replica produces a named ErrMigrationLockTimeout rather than an
+// indefinite hang -- instead of racing this one. The lock is taken out
+// around steps 2-4 as a whole, never inside a single module's own
+// transaction, so it adds coordination without changing step 4's
+// all-or-nothing-per-module guarantee in any way.
+//
+// SQLite gets no such lock. Every SQLite caller in this codebase -- the
+// reference app's own startup Apply and saasctl's "db migrate" command --
+// opens the database file from exactly one OS process at a time (SQLite has
+// no distributed deployment mode in this codebase's actual topology; see
+// docs/internal/03-deployment-modes.md), so there is no second process to
+// race against and adding lock overhead to the SQLite path would protect
+// against a hazard that cannot occur here.
 func (r *MigrationRegistry) Apply(ctx context.Context, db *gorm.DB, dialect Dialect) error {
 	dir, err := dialectDir(dialect)
 	if err != nil {
@@ -191,6 +220,30 @@ func (r *MigrationRegistry) Apply(ctx context.Context, db *gorm.DB, dialect Dial
 		return err
 	}
 
+	if dialect != DialectPostgres {
+		return applyOrdered(ctx, db, dir, ordered)
+	}
+	return db.WithContext(ctx).Connection(func(conn *gorm.DB) error {
+		if err := acquireMigrationLock(ctx, conn); err != nil {
+			return err
+		}
+		// releaseMigrationLock runs on the same pinned connection with a
+		// context that has ctx's values but never its cancellation -- see
+		// its own doc comment for why an already-cancelled ctx here must
+		// never stop the unlock statement itself from running.
+		defer releaseMigrationLock(context.WithoutCancel(ctx), conn)
+		return applyOrdered(ctx, conn, dir, ordered)
+	})
+}
+
+// applyOrdered creates dbkit's own schema_migrations bookkeeping table (see
+// createSchemaMigrationsTableSQL) if it does not already exist, then applies
+// every module in ordered, in order, via applyModule. It is Apply's own
+// step 2-4 body, factored out so that Apply's PostgreSQL branch can run it
+// inside the single physical connection its advisory lock requires (see
+// acquireMigrationLock), while its non-PostgreSQL branch runs it directly
+// against db with no such wrapping.
+func applyOrdered(ctx context.Context, db *gorm.DB, dir string, ordered []pkgcore.Module) error {
 	if err := db.WithContext(ctx).Exec(createSchemaMigrationsTableSQL).Error; err != nil {
 		return fmt.Errorf("dbkit: create %s table: %w", schemaMigrationsTable, err)
 	}
@@ -204,6 +257,150 @@ func (r *MigrationRegistry) Apply(ctx context.Context, db *gorm.DB, dialect Dial
 		}
 	}
 	return nil
+}
+
+// migrationLockNamespace is dbkit's own fixed identifier for the PostgreSQL
+// session-level advisory lock Apply takes out for the whole duration of one
+// PostgreSQL migration run (see acquireMigrationLock). It is a constant,
+// deliberately never derived from anything a caller supplies:
+// pg_advisory_lock's key space (a single 64-bit integer) is shared by every
+// advisory-lock user of the target database, so a caller-suppliable key
+// could collide with an unrelated advisory-lock user; a fixed, dbkit-owned
+// namespace string hashed into the key guarantees it never does.
+const migrationLockNamespace = "dbkit.migrations.apply.v1"
+
+// migrationAdvisoryLockKey deterministically derives the single bigint
+// pg_advisory_lock / pg_try_advisory_lock / pg_advisory_unlock key from
+// migrationLockNamespace -- the same key on every call, in every process,
+// against every database -- via FNV-1a, a wide, well-distributed
+// non-cryptographic hash. The resulting 64-bit pattern is reinterpreted as a
+// signed int64 (the type pg_advisory_lock's own parameter takes); advisory
+// lock keys have no notion of sign, so this is a plain bit reinterpretation,
+// never a range reduction that would narrow the key space.
+func migrationAdvisoryLockKey() int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(migrationLockNamespace))
+	return int64(h.Sum64()) //nolint:gosec // deliberate bit reinterpretation, not a narrowing conversion
+}
+
+// ErrMigrationLockTimeout is returned (wrapped) by Apply when a PostgreSQL
+// migration run could not acquire the migration advisory lock (see
+// acquireMigrationLock) within migrationLockMaxWait, or ctx was done first.
+// It means a concurrent replica genuinely held the lock for the whole wait
+// -- most often because it is still running its own first-boot Apply, more
+// rarely because it is stuck -- and this replica's boot must be retried
+// rather than silently proceeding unlocked.
+var ErrMigrationLockTimeout = errors.New("dbkit: timed out waiting for the migration advisory lock")
+
+const (
+	// migrationLockRetryInitialDelay is the first backoff delay between
+	// failed pg_try_advisory_lock attempts.
+	migrationLockRetryInitialDelay = 50 * time.Millisecond
+	// migrationLockRetryMaxDelay caps the exponential backoff between
+	// attempts, so a long wait still polls at a bounded rate rather than
+	// slowing down without limit.
+	migrationLockRetryMaxDelay = 2 * time.Second
+	// migrationLockMaxWait is the internal ceiling acquireMigrationLock
+	// waits before giving up with ErrMigrationLockTimeout, applied in
+	// addition to -- never instead of -- ctx's own deadline: a caller
+	// passing context.Background() (no deadline of its own) still gets a
+	// bounded wait rather than a true indefinite hang if the first replica
+	// is genuinely stuck. This is the deliberate reason Apply's PostgreSQL
+	// coordination is a bounded pg_try_advisory_lock retry loop rather than
+	// a single blocking pg_advisory_lock call: a blocking call's only bound
+	// would be ctx cancellation, which depends on the database driver
+	// correctly propagating a context cancellation into an abandoned server
+	// wait -- true of this codebase's pgx driver, but not a property this
+	// mechanism should have to rely on to fail safely. A bounded retry loop
+	// is simpler to prove correct (a fixed, inspectable polling loop) and
+	// guarantees a named, diagnosable error surfaces here even against a
+	// caller that never sets a ctx deadline at all.
+	migrationLockMaxWait = 2 * time.Minute
+)
+
+// acquireMigrationLock blocks until db's connection holds the PostgreSQL
+// session-level advisory lock keyed by migrationAdvisoryLockKey, retrying
+// pg_try_advisory_lock with exponential backoff (migrationLockRetryInitialDelay
+// up to migrationLockRetryMaxDelay), or returns a wrapped
+// ErrMigrationLockTimeout once migrationLockMaxWait elapses or ctx is done,
+// whichever comes first.
+//
+// db must be a *gorm.DB whose ConnPool is pinned to one physical connection
+// for the whole surrounding call (gorm.DB.Connection's own contract, which
+// Apply uses for exactly this reason): pg_advisory_lock and
+// pg_advisory_unlock are session-level primitives, so acquiring the lock on
+// one pooled connection and later checking or releasing it on a different
+// connection taken from the same pool would not observe the same lock at
+// all -- database/sql's own pooling can otherwise hand out any physical
+// connection for any statement.
+func acquireMigrationLock(ctx context.Context, db *gorm.DB) error {
+	waitCtx, cancel := context.WithTimeout(ctx, migrationLockMaxWait)
+	defer cancel()
+
+	key := migrationAdvisoryLockKey()
+	delay := migrationLockRetryInitialDelay
+	for {
+		var acquired bool
+		row := db.WithContext(waitCtx).Raw("SELECT pg_try_advisory_lock(?)", key).Row()
+		if err := row.Scan(&acquired); err != nil {
+			return fmt.Errorf("dbkit: acquire migration advisory lock: %w", err)
+		}
+		if acquired {
+			return nil
+		}
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-waitCtx.Done():
+			timer.Stop()
+			return fmt.Errorf("%w: %w", ErrMigrationLockTimeout, waitCtx.Err())
+		case <-timer.C:
+		}
+		if delay < migrationLockRetryMaxDelay {
+			delay *= 2
+			if delay > migrationLockRetryMaxDelay {
+				delay = migrationLockRetryMaxDelay
+			}
+		}
+	}
+}
+
+// releaseMigrationLock releases the advisory lock acquireMigrationLock took
+// out, on the same pinned connection. Apply calls it, unconditionally, from
+// its own defer once acquireMigrationLock has already succeeded -- including
+// when applyOrdered itself failed -- so a failed migration run never leaves
+// the lock held for a later Apply call, in this process or another, to wait
+// out needlessly.
+//
+// ctx is expected to be a context.WithoutCancel-derived copy of the
+// original call's context, not that context itself: the unlock statement
+// must still be able to run even when the original ctx is already done (a
+// timed-out or cancelled Apply call is exactly when releasing the lock
+// matters most), and issuing it against an already-done context would make
+// the unlock itself fail before it ever reached PostgreSQL, leaving the
+// session -- and therefore the lock, until its pooled connection eventually
+// closes for good -- stuck.
+//
+// A release failure is reported as a warning via log/slog (mirroring
+// audit_capture.go's auditPublishFailed idiom, and for the identical reason
+// -- dbkit cannot depend on go/observability; see AGENTS.md's "One
+// dependency, and why there is only one") rather than returned: by this
+// point Apply's own result is already determined, and there is nothing left
+// to roll back. An operator seeing this warning knows the advisory lock may
+// still be held by this session until its pooled connection is closed for
+// good, and should investigate rather than assume a future Apply call that
+// blocks on this lock will simply resolve itself.
+func releaseMigrationLock(ctx context.Context, db *gorm.DB) {
+	key := migrationAdvisoryLockKey()
+	var released bool
+	row := db.WithContext(ctx).Raw("SELECT pg_advisory_unlock(?)", key).Row()
+	if err := row.Scan(&released); err != nil {
+		slog.Default().WarnContext(ctx, "dbkit: migration advisory lock release failed", "error", err)
+		return
+	}
+	if !released {
+		slog.Default().WarnContext(ctx, "dbkit: migration advisory lock release reported not held")
+	}
 }
 
 // applyModule applies every not-yet-applied migration file m declares for
