@@ -1,0 +1,293 @@
+openapi: 3.0.3
+info:
+  title: cases
+  description: >-
+    The reference app's case-domain HTTP surface (internal/cases, mounted
+    by the app in cmd/server/cases.go): create a case (a clinic staff
+    member naming a patient and the photos already uploaded through
+    go/storage's own HTTP surface), list the caller's own cases, and read
+    one case's detail with its photos. Product round P3a promoted the
+    three routes from hand-written registrations to this fragment: the
+    app's handlers now implement the generated interface below, so a spec
+    change without a matching handler change cannot compile, and the
+    fragment joins the merged application document
+    (build/openapi/speed.yaml), so the operations ship in the generated
+    @speed/api-sdk surface the P3 web UI calls. A case detail's
+    per-photo simulations deliberately stay on the smile-simulation
+    surface (smilesim's own fragment), fetched per photo by the P3 view.
+    This fragment follows the operationId (<module>_<action><Resource>)
+    and schema-name (<Module><Type>) conventions from
+    docs/internal/21-api-contract.md; task api:gen regenerates
+    cases-server.gen.go (in this directory) from this file, with
+    oapi-codegen pinned at v2.8.0.
+  version: 0.0.0
+paths:
+  /api/v1/cases:
+    post:
+      operationId: cases_createCase
+      tags: [cases]
+      summary: Create a case under the caller's tenant.
+      description: >-
+        The case groups one patient (the clinic-given name required,
+        the optional clinic-given reference) with the photos of the case
+        as already-uploaded go/storage object ids, in attachment order.
+        Both the photo list and the reference may be absent or empty -- a
+        case can be created for an intake whose photos arrive later.
+        There is deliberately no tenant_id field and no creator field
+        anywhere on the request: the tenant is the one tenancy.Middleware
+        already resolved into the request context, and the creator comes
+        from the host's SubjectResolver seam, never from the request
+        (a request no resolver can attribute is refused with
+        cases.subject_unresolved before the body is even read).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CasesCreateCaseRequest'
+      responses:
+        '201':
+          description: The case was created, with its photos in attachment order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesCase'
+        '400':
+          description: >-
+            The request body was missing or malformed, or a documented
+            bound was violated (cases.invalid_request_body,
+            cases.patient_name_required, cases.patient_name_too_long,
+            cases.patient_ref_too_long, cases.photo_object_id_required,
+            cases.duplicate_photo_object, cases.too_many_photos).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesError'
+        '401':
+          description: >-
+            The request could not be attributed to a user
+            (cases.subject_unresolved).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesError'
+        '403':
+          description: >-
+            The request carried no tenant -- an anonymous request to a
+            tenant-scoped route (tenancy.tenant_unresolved).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesError'
+        '409':
+          description: >-
+            A named photo object is already attached to another case of
+            the same tenant (cases.photo_already_attached).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesError'
+        '500':
+          description: An unexpected server failure (cases.internal_error).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesError'
+    get:
+      operationId: cases_listCases
+      tags: [cases]
+      summary: List the caller's own cases.
+      description: >-
+        Lists every case the caller created, newest first, each entry
+        carrying its photos in attachment order (an empty list for a
+        case whose photos arrive later). The list is keyed on the
+        creator the host's SubjectResolver seam attributes the request
+        to; a request no resolver can attribute is refused with
+        cases.subject_unresolved.
+      responses:
+        '200':
+          description: The caller's own cases, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesListResponse'
+        '401':
+          description: >-
+            The request could not be attributed to a user
+            (cases.subject_unresolved).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesError'
+        '403':
+          description: >-
+            The request carried no tenant -- an anonymous request to a
+            tenant-scoped route (tenancy.tenant_unresolved).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesError'
+        '500':
+          description: An unexpected server failure (cases.internal_error).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesError'
+  /api/v1/cases/{caseId}:
+    get:
+      operationId: cases_getCase
+      tags: [cases]
+      summary: Read one case of the caller's tenant.
+      description: >-
+        Reads one case of the caller's tenant with its photos in
+        attachment order. An unknown case id, and a case of another
+        tenant, both answer cases.not_found -- never a cross-tenant
+        confirmation of a case's existence.
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The case's application-generated id.
+      responses:
+        '200':
+          description: The case, with its photos in attachment order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesCase'
+        '403':
+          description: >-
+            The request carried no tenant -- an anonymous request to a
+            tenant-scoped route (tenancy.tenant_unresolved).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesError'
+        '404':
+          description: >-
+            No such case under the caller's tenant (cases.not_found --
+            the same answer for another tenant's case id).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesError'
+        '500':
+          description: An unexpected server failure (cases.internal_error).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesError'
+components:
+  schemas:
+    CasesCreateCaseRequest:
+      type: object
+      required:
+        - patient_name
+      properties:
+        patient_name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: >-
+            The patient's display name as the clinic entered it at
+            intake. Required, length-bounded in the application (SQLite
+            does not enforce a VARCHAR length limit, so the check lives
+            in the service).
+        patient_ref:
+          type: string
+          maxLength: 64
+          description: >-
+            The optional clinic-given identifier for the patient (a
+            chart number, an internal reference). An absent or empty
+            value means the clinic gave none.
+        photo_object_ids:
+          type: array
+          maxItems: 50
+          items:
+            type: string
+            minLength: 1
+          description: >-
+            The case's initial photos, in attachment order: references to
+            already-uploaded go/storage objects of the caller's tenant.
+            Optional -- an absent or empty list creates a case with no
+            photos yet. Each entry must be a non-empty object id, unique
+            within the list and not already attached to another case of
+            the same tenant.
+      description: The create route's request body.
+    CasesPhoto:
+      type: object
+      required:
+        - object_id
+      properties:
+        object_id:
+          type: string
+          description: >-
+            The referenced go/storage photo object's id -- the value that
+            feeds the smile-simulation surface's per-photo enumeration.
+      description: One photo of a case, as a case read answers it.
+    CasesCase:
+      type: object
+      required:
+        - id
+        - patient_name
+        - patient_ref
+        - creator_user_id
+        - created_at
+        - photos
+      properties:
+        id:
+          type: string
+          description: The case's application-generated id.
+        patient_name:
+          type: string
+          description: The patient's display name as the clinic entered it.
+        patient_ref:
+          type: string
+          description: >-
+            The clinic-given patient reference; empty means the clinic
+            gave none.
+        creator_user_id:
+          type: string
+          description: The user id of the staff member who created the case -- the "my cases" list's key.
+        created_at:
+          type: string
+          format: date-time
+          description: When the case was created, whole seconds, UTC.
+        photos:
+          type: array
+          items:
+            $ref: '#/components/schemas/CasesPhoto'
+          description: >-
+            The case's photos in attachment order. Always present -- an
+            empty list for a case whose photos arrive later.
+      description: >-
+        A case as the create answer, the list entries and the detail
+        answer all render it -- one shape a P3 view renders with one
+        component.
+    CasesListResponse:
+      type: object
+      required:
+        - cases
+      properties:
+        cases:
+          type: array
+          items:
+            $ref: '#/components/schemas/CasesCase'
+          description: The caller's own cases, newest first.
+      description: The list route's 200 answer.
+    CasesError:
+      type: object
+      description: >-
+        The structured {code, params} error envelope every speed API
+        returns instead of localized text (backend coding standard §6.2;
+        docs/internal/11-cross-cutting.md) -- a client resolves code
+        through its own i18n catalog.
+      properties:
+        code:
+          type: string
+          example: cases.patient_name_required
+        params:
+          type: object
+          additionalProperties: true
