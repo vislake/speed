@@ -45,11 +45,16 @@ const (
 // The attribute keys Middleware attaches to both the span and the metrics
 // below. These three are the ONLY labels the metrics ever carry -- see the
 // package doc comment's "tenant_id is not a metric label" section and
-// middleware_test.go's cardinality tests. They deliberately reuse
-// OpenTelemetry semantic-convention names (http.request.method,
-// http.route, http.response.status_code) rather than inventing
-// speed-specific ones, so a generic OTel-aware dashboard recognizes them
-// unmodified.
+// middleware_test.go's cardinality tests. Two of the three
+// (http.request.method and http.route) are derived from request inputs an
+// unauthenticated caller controls verbatim and are each bounded against
+// cardinality attack before they reach an instrument -- see Middleware's
+// own "Metric label cardinality caveats" section; the third
+// (http.response.status_code) is a small bounded integer by construction.
+// They deliberately reuse OpenTelemetry semantic-convention names
+// (http.request.method, http.route, http.response.status_code) rather
+// than inventing speed-specific ones, so a generic OTel-aware dashboard
+// recognizes them unmodified.
 const (
 	httpRouteKey      = attribute.Key("http.route")
 	httpMethodKey     = attribute.Key("http.request.method")
@@ -59,8 +64,8 @@ const (
 // MaxRouteLabelValues bounds how many distinct http.route metric label
 // values a single Middleware instance will ever emit before it starts
 // collapsing new ones into RouteLabelOverflowValue -- see Middleware's own
-// "Route label caveat" doc comment for the live, unauthenticated exploit
-// this defends against, and middleware_test.go's
+// "Metric label cardinality caveats" doc comment for the live,
+// unauthenticated exploit this defends against, and middleware_test.go's
 // TestMiddleware_UnboundedRoutePaths_CardinalityIsBounded for the
 // negative-control proof. Exported so that proof (and any consumer
 // auditing this behavior) checks the actual enforced value rather than a
@@ -73,8 +78,8 @@ const (
 // series growth to a small, fixed number instead of the unbounded growth
 // an attacker-supplied path previously produced. If a legitimate route
 // count ever approaches this, that is a signal to build the route-capture
-// mechanism the "Route label caveat" section below already anticipates,
-// not to raise this constant.
+// mechanism the "Metric label cardinality caveats" section below already
+// anticipates, not to raise this constant.
 const MaxRouteLabelValues = 256
 
 // RouteLabelOverflowValue replaces the http.route metric label once
@@ -123,6 +128,71 @@ const RouteLabelOverflowValue = "{overflow}"
 // signal to revisit this constant deliberately, not evidence it was set
 // too low by accident.
 const MaxRouteLabelLength = 512
+
+// MethodLabelOverflowValue replaces the http.request.method METRIC label
+// for every method token that is not one of the nine standard HTTP methods
+// (net/http's MethodGet through MethodTrace constants, recorded verbatim --
+// the only values a generic OTel-aware dashboard's method dimension is built
+// to recognize). See methodMetricLabel for where the collapse happens, and
+// Middleware's own "Metric label cardinality caveats" doc comment for the
+// live, unauthenticated exploit this defends against and middleware_test.go's
+// TestMiddleware_UnboundedMethodTokens_CardinalityIsBounded for the
+// negative-control proof. Exported so that proof (and any consumer auditing
+// this behavior) checks the actual enforced value rather than a hardcoded
+// guess that could silently drift out of sync with it.
+//
+// The value is "_OTHER", the OpenTelemetry semantic-convention reserved
+// value for enum-like attributes such as http.request.method: this package
+// deliberately reuses OTel semantic-convention names and values so a generic
+// dashboard recognizes them unmodified, and _OTHER is the convention's own
+// collapse value for a method outside its known enum. It cannot collide with
+// a standard-method label: matching is exact and case-sensitive -- HTTP
+// method tokens are case-sensitive per RFC 7230, so "get" is not GET and
+// folds here exactly like any other non-standard token -- and none of the
+// nine known tokens equals "_OTHER". An attacker CAN send the literal token
+// "_OTHER"; it simply collapses onto this same fixed value, growing nothing.
+//
+// Unlike the route dimension, no per-value LENGTH bound (MaxRouteLabelLength
+// style) and no distinct-value COUNT cap (MaxRouteLabelValues style) are
+// needed here, and one is deliberately not bolted on: routeLabelLimiter
+// must retain every seen path as a map key for the process lifetime, which
+// is exactly why its two bounds exist; a set-collapse scheme like this one
+// never retains the attacker's token at all -- the match against the nine
+// known constants either succeeds and yields a fixed known string, or fails
+// and yields this other fixed string -- so series growth stays fixed at
+// (9 known methods + 1) x (route bound) x status codes per Middleware
+// instance and memory stays constant, whatever token an attacker sends.
+//
+// If a tenth method ever needs recording verbatim (a standards-body
+// addition, say), that is a deliberate decision to make in methodMetricLabel
+// with this constant's doc comment updated in the same edit -- the known set
+// is exactly the nine net/http constants and nothing else, by construction.
+const MethodLabelOverflowValue = "_OTHER"
+
+// methodMetricLabel returns the value Middleware records for the
+// http.request.method METRIC label given the request line's method token:
+// the token itself when it is one of the nine standard HTTP methods (the
+// net/http MethodGet through MethodTrace constants), MethodLabelOverflowValue
+// for everything else. Matching is exact and case-sensitive -- HTTP method
+// tokens are case-sensitive per RFC 7230, so "get" folds to
+// MethodLabelOverflowValue exactly like an attacker-chosen garbage token
+// does. This is a pure, allocation-free, state-free function: nothing about
+// the token is retained, which is why (unlike the route dimension, whose
+// limiter keeps a "seen" map) the method dimension needs no value-length or
+// distinct-value-count bound -- see MethodLabelOverflowValue's own doc
+// comment for that reasoning, and Middleware's "Metric label cardinality
+// caveats" section for the exploit this closes. The SPAN attribute is
+// deliberately NOT run through this function (see the same section).
+func methodMetricLabel(method string) string {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
+		http.MethodPatch, http.MethodDelete, http.MethodConnect,
+		http.MethodOptions, http.MethodTrace:
+		return method
+	default:
+		return MethodLabelOverflowValue
+	}
+}
 
 // Middleware wraps next to start a trace span per request (via otelhttp,
 // which also extracts/injects W3C trace-context propagation headers) and
@@ -174,7 +244,16 @@ const MaxRouteLabelLength = 512
 // authn.Middleware or rbac.RequirePermission -- can still enrich the exact
 // span this middleware started, using the tenant it has by then resolved.
 //
-// # Route label caveat
+// # Metric label cardinality caveats
+//
+// Two of the three metric labels -- http.route and http.request.method --
+// are derived from request inputs an unauthenticated caller controls
+// verbatim, and each is bounded against the cardinality-explosion failure
+// mode CLAUDE.md's tenant_id rule targets before it can feed an
+// instrument. The third, http.response.status_code, is a small bounded
+// integer by construction and needs no bound.
+//
+// # Route dimension
 //
 // The route label is derived from (*http.Request).URL.Path, not the
 // lower-cardinality (*http.Request).Pattern net/http.ServeMux populates
@@ -196,40 +275,71 @@ const MaxRouteLabelLength = 512
 // (*http.Request).URL.Path exactly as the caller sent it. Left unbounded,
 // an attacker can grow this metric's series count without limit simply by
 // requesting distinct nonexistent URLs, no code change or new route
-// required anywhere in the app -- the same cardinality-explosion failure
-// mode CLAUDE.md's tenant_id rule targets, just via a different
-// attacker-controlled input.
+// required anywhere in the app.
 //
-// The metric attrs below are therefore built from routeLabels.label(...),
-// not the raw path directly: routeLabelLimiter (see its own doc comment)
-// caps the number of distinct http.route METRIC label values this
-// Middleware instance will ever emit at MaxRouteLabelValues, collapsing
-// every value beyond that into the fixed RouteLabelOverflowValue, AND caps
-// the length of any individual value at MaxRouteLabelLength bytes before
-// it can become either routeLabelLimiter's map key or the label value
-// itself (see MaxRouteLabelLength's own doc comment for why value SIZE,
-// not just value COUNT, is its own exploitable dimension here). This does
-// not require knowing an application's real route set in advance -- it
-// just stops minting new distinct values, and bloating any single one of
-// them, once comfortably past what any real, bounded route table could
-// produce. The SPAN attributes are deliberately NOT run through this
-// limiter: a trace is not a Prometheus series, so it does not share the
-// metric instruments' cardinality (or per-value size) problem, matching
-// how AnnotateTenant treats tenant_id (span attribute, never a metric
-// label) for exactly the same reason.
+// # Method dimension
 //
-// This bound is a circuit breaker, not a precision fix: a legitimate,
-// low-cardinality parameterized route (for example
+// The http.request.method label has the identical hole, one dimension
+// over: it is fed by (*http.Request).Method -- the request line's raw
+// method token, which net/http accepts from any caller with no set
+// constraint, no normalization and no truncation (RFC 7230 token
+// characters only, but that still leaves the token space effectively
+// unbounded). The same pre-auth 404s and 403s the route exploit above
+// uses reach this middleware's metric-recording code with r.Method
+// exactly as the caller sent it, so without a bound an attacker sending
+// one distinct method token per request creates one new, permanent
+// series per token, multiplied against the (bounded) route and status
+// dimensions. Bounding the route dimension while leaving this sibling
+// raw would only be a half-fix; both request-controlled dimensions are
+// bounded, and middleware_test.go carries a negative control for each.
+//
+// The metric attrs below are therefore bounded on BOTH request-controlled
+// dimensions before they reach the instruments:
+//
+//   - http.route comes from routeLabels.label(...), never the raw path
+//     directly: routeLabelLimiter (see its own doc comment) caps the
+//     number of distinct http.route METRIC label values this Middleware
+//     instance will ever emit at MaxRouteLabelValues, collapsing every
+//     value beyond that into the fixed RouteLabelOverflowValue, AND caps
+//     the length of any individual value at MaxRouteLabelLength bytes
+//     before it can become either routeLabelLimiter's map key or the
+//     label value itself (see MaxRouteLabelLength's own doc comment for
+//     why value SIZE, not just value COUNT, is its own exploitable
+//     dimension here). This does not require knowing an application's
+//     real route set in advance -- it just stops minting new distinct
+//     values, and bloating any single one of them, once comfortably past
+//     what any real, bounded route table could produce.
+//   - http.request.method comes from methodMetricLabel(r.Method), never
+//     the raw token directly: the nine standard methods (net/http's
+//     MethodGet through MethodTrace constants) are recorded verbatim, so
+//     existing dashboards keep working unchanged, and every other token
+//     -- attacker-chosen or merely exotic -- collapses to the single
+//     fixed MethodLabelOverflowValue. A set-collapse scheme retains
+//     nothing, so unlike the route limiter it needs neither a
+//     distinct-value count cap nor a per-value length bound (see
+//     MethodLabelOverflowValue's own doc comment for that reasoning).
+//
+// The SPAN attributes are deliberately NOT run through either bound: the
+// span keeps the exact raw method token AND the exact raw path. A trace
+// is not a Prometheus series, so it does not share the metric
+// instruments' cardinality (or per-value size) problem, matching how
+// AnnotateTenant treats tenant_id (span attribute, never a metric label)
+// for exactly the same reason.
+//
+// The route bound is a circuit breaker, not a precision fix: a
+// legitimate, low-cardinality parameterized route (for example
 // "/api/v1/billing/subscriptions/{id}") mounted downstream of
 // tenancy.Middleware would still record one distinct value per ID up to
 // the cap, silently losing per-route granularity once past it, rather
 // than collapsing cleanly to the route template the way a real
 // route-capture mechanism (mirroring AnnotateTenant, but for the matched
 // pattern) would. Building that mechanism remains future work this
-// foundational round does not do; this limiter exists so the interim
-// state is "bounded but occasionally imprecise" instead of "unbounded and
-// exploitable today." Flag this explicitly before adding a parameterized
-// route anywhere downstream of this middleware.
+// foundational round does not do; the route limiter exists so the
+// interim state is "bounded but occasionally imprecise" instead of
+// "unbounded and exploitable today." Flag this explicitly before adding
+// a parameterized route anywhere downstream of this middleware. The
+// method bound has no equivalent imprecision: its known set is complete
+// by construction, so the method dimension is never approximate.
 func Middleware(next http.Handler) http.Handler {
 	meter := otel.Meter(instrumentationName)
 	requestCount, _ := meter.Int64Counter(
@@ -260,24 +370,29 @@ func Middleware(next http.Handler) http.Handler {
 		duration := time.Since(start).Seconds()
 		ctx := r.Context()
 
-		// Metric attrs use routeLabels.label(...), NOT the raw path
-		// directly -- see the "Route label caveat" section above for the
-		// live, unauthenticated exploit this closes. tenant_id is, and
-		// must remain, absent from this slice entirely: see
-		// middleware_test.go's TestMiddleware_MetricsExcludeTenant_NoPerTenantSeries
-		// for the negative control.
+		// Metric attrs bound BOTH request-controlled label dimensions
+		// before recording: http.request.method through
+		// methodMetricLabel(...) and http.route through
+		// routeLabels.label(...), never the raw token or raw path directly
+		// -- see the "Metric label cardinality caveats" section above for
+		// the live, unauthenticated exploit each bound closes. tenant_id
+		// is, and must remain, absent from this slice entirely: see
+		// middleware_test.go's
+		// TestMiddleware_MetricsExcludeTenant_NoPerTenantSeries for the
+		// negative control.
 		metricAttrs := []attribute.KeyValue{
-			httpMethodKey.String(r.Method),
+			httpMethodKey.String(methodMetricLabel(r.Method)),
 			httpRouteKey.String(routeLabels.label(r.URL.Path)),
 			httpStatusCodeKey.Int(rec.status),
 		}
 		requestCount.Add(ctx, 1, metric.WithAttributes(metricAttrs...))
 		requestDuration.Record(ctx, duration, metric.WithAttributes(metricAttrs...))
 
-		// The span, unlike the metrics above, always carries the exact
-		// raw path, never routeLabels' bounded one: a trace is not a
-		// Prometheus series, so it does not share the metric instruments'
-		// cardinality problem -- see the "Route label caveat" section
+		// The span, unlike the metrics above, always carries the exact raw
+		// method token and the exact raw path, never methodMetricLabel's
+		// or routeLabels' bounded values: a trace is not a Prometheus
+		// series, so it does not share the metric instruments' cardinality
+		// problem -- see the "Metric label cardinality caveats" section
 		// above, and docs/internal/09-observability.md for why Tempo
 		// tolerates high-cardinality dimensions that Prometheus cannot.
 		span := trace.SpanFromContext(ctx)
@@ -352,13 +467,18 @@ func AnnotateTenant(ctx context.Context) {
 // collapsing every value seen after that into RouteLabelOverflowValue, AND
 // bounds the length of any individual value to MaxRouteLabelLength bytes
 // (see label's own doc comment for exactly where that second, orthogonal
-// bound is applied). See Middleware's own "Route label caveat" doc comment
-// for the live, unauthenticated exploit the count bound exists to close:
+// bound is applied). See Middleware's own "Metric label cardinality
+// caveats" doc comment for the live, unauthenticated exploit the count
+// bound exists to close:
 // without it, an attacker can create one new, permanent Prometheus/OTel
 // metric series per distinct URL path they send, whether or not it
 // matches a real route. MaxRouteLabelLength's own doc comment covers the
 // narrower, value-SIZE variant of that same exploit the count bound alone
-// does not close.
+// does not close. The sibling http.request.method dimension is bounded by
+// its own mechanism (methodMetricLabel) -- a fixed set-collapse that needs
+// no per-instance state and therefore no count or length bound of its own
+// -- so this limiter is the route half of a two-dimension story, never the
+// whole of it.
 //
 // It is created once per Middleware call and shared, via the closure
 // Middleware returns, across every concurrent request that handler serves
