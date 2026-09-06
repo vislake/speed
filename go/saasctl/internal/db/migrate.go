@@ -42,7 +42,7 @@ Apply the SQL migrations of the speed modules a consumer project requires
 to the project's SQLite database, exactly as the generated app's startup
 Apply would: read the go.mod (the [go.mod] argument, defaulting to
 ./go.mod), resolve the project's bootstrap environment the way the
-generated app resolves it (SPEED_DEPLOYMENT_MODE, SPEED_DB_PATH, ...),
+generated app resolves it (APP_DEPLOYMENT_MODE, APP_DB_PATH, ...),
 construct every github.com/vislake/speed/go/* module the go.mod requires
 that ships its own migrations (authn, config, org, pki and rbac), and apply
 their sqlite migration files through dbkit's MigrationRegistry -- one
@@ -50,15 +50,15 @@ transaction per module, in dependency order, each file recorded in
 schema_migrations as it lands, so a re-run applies only what is not yet
 recorded.
 
-With SPEED_DB_PATH unset, the database defaults to <app name>.db, and this
+With APP_DB_PATH unset, the database defaults to <app name>.db, and this
 command resolves that default next to the [go.mod] argument -- the
 directory the generated app is documented to run from, where its default
 database lands -- so a go.mod argument naming another directory's project
 migrates that project's own database whichever directory the command is
-invoked from. A set SPEED_DB_PATH always wins and is used exactly as the
+invoked from. A set APP_DB_PATH always wins and is used exactly as the
 app would use it.
 
-SPEED_DEPLOYMENT_MODE may be standalone or distributed: a generated
+APP_DEPLOYMENT_MODE may be standalone or distributed: a generated
 project's own database always speaks SQLite regardless of deployment
 mode (no second SQL dialect exists for a generated project today), so
 this command applies the identical schema either way. What changes
@@ -352,7 +352,7 @@ func migrate(modPath string) (string, error) {
 	// deviation). A generated project's distributed deployment mode changes
 	// which infrastructure SEAMS compose real implementations (eventbus,
 	// kv, mailer, objectstore -- see cmd/server/config.go's
-	// SPEED_REDIS_ADDR/SPEED_S3_*/SPEED_SMTP_* wiring); it does not, today,
+	// APP_REDIS_ADDR/APP_S3_*/APP_SMTP_* wiring); it does not, today,
 	// change the SQL dialect the project's OWN database speaks. Refusing
 	// migrate under distributed mode on a dialect argument that is
 	// currently false would block a real, working operation for no reason
@@ -386,13 +386,13 @@ func migrate(modPath string) (string, error) {
 		return "", err
 	}
 	// The app's default database path (<app name>.db, resolved when
-	// SPEED_DB_PATH is unset) is relative to the app's working directory;
+	// APP_DB_PATH is unset) is relative to the app's working directory;
 	// this command anchors it to the directory of the go.mod argument it
 	// was handed instead -- the directory the app is documented to run
 	// from, where its default database actually lands -- so a go.mod
 	// argument pointing at another directory's project migrates that
 	// project's own database rather than silently creating one in the
-	// caller's working directory. An explicit SPEED_DB_PATH always wins
+	// caller's working directory. An explicit APP_DB_PATH always wins
 	// and is used exactly as the app would use it.
 	dbPath := cfg.SQLitePath
 	if !cfg.SQLitePathFromEnv {

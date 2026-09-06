@@ -17,7 +17,7 @@ name: scaffold-verify
 # touch), a genuine `go mod tidy` against the real network, a genuine `go
 # build`, `saasctl db migrate` and a full boot-and-smoke cycle under the
 # standalone default, then the identical migrate-and-boot cycle again under
-# SPEED_DEPLOYMENT_MODE=distributed against real Redis, RustFS
+# APP_DEPLOYMENT_MODE=distributed against real Redis, RustFS
 # (S3-compatible) and Mailpit containers this test starts itself --
 # mirroring examples/reference-app/integration_test/distributed_mode_test.go's
 # own image pins so every Docker-backed tier in this repository exercises

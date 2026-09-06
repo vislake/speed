@@ -177,7 +177,7 @@ func TestMigrate_PKIRequired_MigratesPKITablesToo(t *testing.T) {
 	}
 }
 
-// TestMigrateDefaultDatabaseAnchorsAtTheGoModArgument: with SPEED_DB_PATH
+// TestMigrateDefaultDatabaseAnchorsAtTheGoModArgument: with APP_DB_PATH
 // unset, the database defaults to <app name>.db, resolved -- by this
 // command -- next to the go.mod argument, not the caller's working
 // directory: `saasctl db migrate /path/to/project/go.mod` migrates the
@@ -319,7 +319,7 @@ func TestMigrateGoModRequiringOnlyNonMigrationModulesIsRefused(t *testing.T) {
 }
 
 // TestMigrateDistributedModeAppliesTheIdenticalSQLiteSchema:
-// SPEED_DEPLOYMENT_MODE=distributed is no longer refused -- an earlier
+// APP_DEPLOYMENT_MODE=distributed is no longer refused -- an earlier
 // version of this test (TestMigrateDistributedModeIsRefused) pinned a
 // refusal reasoning ("the distributed mode's schema lives in PostgreSQL,
 // which this command never touches") that does not hold for what a
@@ -359,7 +359,7 @@ func TestMigrateDistributedModeAppliesTheIdenticalSQLiteSchema(t *testing.T) {
 // TestMigrateDistributedModeRerunReportsUpToDate proves the distributed
 // mode shares migrate's ordinary re-run idempotence with the standalone
 // default (TestMigrateRerunOverTheSameDatabaseReportsUpToDate): a second
-// run over the same file, still under SPEED_DEPLOYMENT_MODE=distributed,
+// run over the same file, still under APP_DEPLOYMENT_MODE=distributed,
 // applies nothing further.
 func TestMigrateDistributedModeRerunReportsUpToDate(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "cli-app.db")
@@ -402,7 +402,7 @@ func TestMigrateMalformedDeploymentModeIsReportedVerbatim(t *testing.T) {
 }
 
 // TestMigrateMalformedConfigKeyNamesTheAppAndVariable: a malformed
-// SPEED_CONFIG_KEY fails with the generated app's own error text -- app
+// APP_CONFIG_KEY fails with the generated app's own error text -- app
 // name and variable named, the required shape stated -- before the
 // database is ever touched.
 func TestMigrateMalformedConfigKeyNamesTheAppAndVariable(t *testing.T) {
@@ -414,7 +414,7 @@ func TestMigrateMalformedConfigKeyNamesTheAppAndVariable(t *testing.T) {
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
-	want := "saasctl db migrate: cli-app: SPEED_CONFIG_KEY must hold 64 hex characters (a 32-byte key), got 3\n"
+	want := "saasctl db migrate: cli-app: APP_CONFIG_KEY must hold 64 hex characters (a 32-byte key), got 3\n"
 	if stderr != want {
 		t.Errorf("stderr = %q, want %q", stderr, want)
 	}

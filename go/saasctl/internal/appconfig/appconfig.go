@@ -1,6 +1,6 @@
 // Package appconfig parses the bootstrap environment surface of a generated
-// consumer project: SPEED_DEPLOYMENT_MODE, PORT, SPEED_DB_PATH,
-// SPEED_CONFIG_KEY and SPEED_ORG_INDEX_KEY, resolved exactly as the
+// consumer project: APP_DEPLOYMENT_MODE, PORT, APP_DB_PATH,
+// APP_CONFIG_KEY and APP_ORG_INDEX_KEY, resolved exactly as the
 // generated project's own cmd/server/config.go resolves them.
 //
 // saasctl's db and config commands must see what the app they act on would
@@ -37,21 +37,21 @@ const (
 	// DeploymentModeEnv names the environment variable selecting a
 	// generated project's deployment mode. Empty defaults to standalone
 	// (Load), so a generated project boots with zero external dependencies.
-	DeploymentModeEnv = "SPEED_DEPLOYMENT_MODE"
+	DeploymentModeEnv = "APP_DEPLOYMENT_MODE"
 
 	// PortEnv names the HTTP listen port environment variable.
 	PortEnv = "PORT"
 
 	// DBPathEnv names the SQLite database path environment variable.
-	DBPathEnv = "SPEED_DB_PATH"
+	DBPathEnv = "APP_DB_PATH"
 
 	// ConfigKeyEnv names the environment variable holding the hex-encoded
 	// 32-byte master key the config module seals Sensitive values with.
-	ConfigKeyEnv = "SPEED_CONFIG_KEY"
+	ConfigKeyEnv = "APP_CONFIG_KEY"
 
 	// OrgIndexKeyEnv names the environment variable holding the hex-encoded
 	// 32-byte HMAC key an org-wiring project's blind indexer is built from.
-	OrgIndexKeyEnv = "SPEED_ORG_INDEX_KEY"
+	OrgIndexKeyEnv = "APP_ORG_INDEX_KEY"
 )
 
 // defaultPort is used when the PORT environment variable is unset, the

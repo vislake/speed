@@ -58,7 +58,7 @@ paths = [
 ]
 
 [[allowlists]]
-description = "saasctl config-loading test fixture keys: go/saasctl/internal/appconfig/appconfig_test.go's configKeyHex/orgIndexKeyHex and go/saasctl/internal/config/print_test.go's copies of the same values are deliberately patterned, non-random hex literals (a strictly ascending run \"000102...1e1f\" and a strictly descending run \"ffe0f1...ddee\") used only to prove that appconfig.Load parses SPEED_CONFIG_KEY/SPEED_ORG_INDEX_KEY from the environment and that saasctl config print never renders their bytes -- print_test.go's own TestPrintNeverRendersTheKeyBytes asserts the opposite property gitleaks is checking for, that these values are exactly what must never reach real output"
+description = "saasctl config-loading test fixture keys: go/saasctl/internal/appconfig/appconfig_test.go's configKeyHex/orgIndexKeyHex and go/saasctl/internal/config/print_test.go's copies of the same values are deliberately patterned, non-random hex literals (a strictly ascending run \"000102...1e1f\" and a strictly descending run \"ffe0f1...ddee\") used only to prove that appconfig.Load parses APP_CONFIG_KEY/APP_ORG_INDEX_KEY from the environment and that saasctl config print never renders their bytes -- print_test.go's own TestPrintNeverRendersTheKeyBytes asserts the opposite property gitleaks is checking for, that these values are exactly what must never reach real output"
 paths = [
   "go/saasctl/internal/appconfig/appconfig_test.go",
   "go/saasctl/internal/config/print_test.go",

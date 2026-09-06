@@ -16,7 +16,7 @@ const (
 	// defaultPort is used when the PORT environment variable is unset.
 	defaultPort = "8080"
 
-	// defaultSQLitePath is used when SPEED_DB_PATH is unset. It is a
+	// defaultSQLitePath is used when APP_DB_PATH is unset. It is a
 	// relative path so `go run ./cmd/server` works with zero setup, per the
 	// standalone deployment mode's no-external-dependencies promise applied
 	// to the generated project's own entry point.
@@ -25,13 +25,13 @@ const (
 	// deploymentModeEnv names the environment variable selecting the
 	// deployment mode. Empty defaults to standalone (configFromEnv), so the
 	// generated project boots with zero external dependencies.
-	deploymentModeEnv = "SPEED_DEPLOYMENT_MODE"
+	deploymentModeEnv = "APP_DEPLOYMENT_MODE"
 
 	// portEnv names the HTTP listen port environment variable.
 	portEnv = "PORT"
 
 	// dbPathEnv names the SQLite database path environment variable.
-	dbPathEnv = "SPEED_DB_PATH"
+	dbPathEnv = "APP_DB_PATH"
 
 	// configKeyEnv names the environment variable holding the hex-encoded
 	// 32-byte master key the config module seals Sensitive values with
@@ -41,11 +41,11 @@ const (
 	// cannot live in the table -- so it arrives through the environment
 	// like every other bootstrap value, with the documented development
 	// default below.
-	configKeyEnv = "SPEED_CONFIG_KEY"
+	configKeyEnv = "APP_CONFIG_KEY"
 
 	// configKeyHexLength is the encoded length of the required 32-byte key
 	// (2 hex characters per byte), checked so a short or malformed
-	// SPEED_CONFIG_KEY fails configuration loading with a precise message
+	// APP_CONFIG_KEY fails configuration loading with a precise message
 	// rather than surfacing later as an opaque NewCipher error.
 	configKeyHexLength = 64
 
@@ -60,14 +60,14 @@ const (
 	// compositions whose server.go calls org.NewModule actually consume it
 	// (server.go's buildServer doc comment says which modules a selection
 	// wires).
-	orgIndexKeyEnv = "SPEED_ORG_INDEX_KEY"
+	orgIndexKeyEnv = "APP_ORG_INDEX_KEY"
 
 	// redisAddrEnv names the environment variable holding the Redis server
 	// address ("host:port") that composes a REAL, MultiReplicaSafe
 	// implementation for both the "eventbus" and "kv" seams -- one Redis
 	// instance backs both, sharing one client, mirroring
 	// examples/reference-app/cmd/server/server.go's own identical
-	// SPEED_REDIS_ADDR wiring byte for byte (that file's own doc comment on
+	// APP_REDIS_ADDR wiring byte for byte (that file's own doc comment on
 	// this variable has the full reasoning, including why wiring only one of
 	// the two seams can never let a distributed composition pass Bootstrap).
 	// Empty -- the default -- leaves both seams on the Preset's in-process
@@ -78,7 +78,7 @@ const (
 	// Bootstrap's capability validation naming "eventbus" (or "kv") rather
 	// than starting on an implementation that cannot actually share state
 	// across replicas.
-	redisAddrEnv = "SPEED_REDIS_ADDR"
+	redisAddrEnv = "APP_REDIS_ADDR"
 
 	// s3EndpointEnv, s3BucketEnv, s3AccessKeyEnv and s3SecretKeyEnv together
 	// compose a real S3-compatible ObjectStore for the "objectstore" seam
@@ -97,15 +97,15 @@ const (
 	// (MinIO- and RustFS-compatible servers ignore it), and s3UseSSLEnv,
 	// parsed as a Go bool, defaults to false -- plain HTTP, the common case
 	// for a local S3-compatible test/demo server -- when unset.
-	s3EndpointEnv  = "SPEED_S3_ENDPOINT"
-	s3BucketEnv    = "SPEED_S3_BUCKET"
-	s3AccessKeyEnv = "SPEED_S3_ACCESS_KEY"
+	s3EndpointEnv  = "APP_S3_ENDPOINT"
+	s3BucketEnv    = "APP_S3_BUCKET"
+	s3AccessKeyEnv = "APP_S3_ACCESS_KEY"
 	// #nosec G101 -- this is an ENVIRONMENT VARIABLE NAME, not a credential
 	// value: gosec's hardcoded-credential heuristic matches on the substring
 	// "Secret" in the identifier alone.
-	s3SecretKeyEnv = "SPEED_S3_SECRET_KEY"
-	s3RegionEnv    = "SPEED_S3_REGION"
-	s3UseSSLEnv    = "SPEED_S3_USE_SSL"
+	s3SecretKeyEnv = "APP_S3_SECRET_KEY"
+	s3RegionEnv    = "APP_S3_REGION"
+	s3UseSSLEnv    = "APP_S3_USE_SSL"
 
 	// smtpHostEnv and smtpPortEnv together compose a real SMTP Mailer
 	// (pkgcore.NewSMTPMailer) for the "mailer" seam; both are required
@@ -115,13 +115,13 @@ const (
 	// (pkgcore.SMTPConfig.Username's own doc comment). Unset -- the default
 	// -- leaves the "mailer" seam on the Preset's console default, exactly
 	// like every other seam here.
-	smtpHostEnv     = "SPEED_SMTP_HOST"
-	smtpPortEnv     = "SPEED_SMTP_PORT"
-	smtpUsernameEnv = "SPEED_SMTP_USERNAME"
+	smtpHostEnv     = "APP_SMTP_HOST"
+	smtpPortEnv     = "APP_SMTP_PORT"
+	smtpUsernameEnv = "APP_SMTP_USERNAME"
 	// #nosec G101 -- this is an ENVIRONMENT VARIABLE NAME, not a credential
 	// value, the identical false positive s3SecretKeyEnv's own #nosec
 	// comment above excepts.
-	smtpPasswordEnv = "SPEED_SMTP_PASSWORD"
+	smtpPasswordEnv = "APP_SMTP_PASSWORD"
 
 	// smsGatewayURLEnv names the environment variable holding the endpoint
 	// authn's real SMS transport (authn.NewHTTPSMSSender) posts delivery
@@ -139,10 +139,10 @@ const (
 	// a distributed replica pool is reading -- the identical three-way
 	// branch examples/reference-app/cmd/server/server.go's own
 	// smsGatewayURLEnv doc comment describes.
-	smsGatewayURLEnv = "SPEED_SMS_GATEWAY_URL"
+	smsGatewayURLEnv = "APP_SMS_GATEWAY_URL"
 )
 
-// devConfigKey is the master key used when SPEED_CONFIG_KEY is unset.
+// devConfigKey is the master key used when APP_CONFIG_KEY is unset.
 // Zero-setup standalone development must work with no environment at all,
 // while config's Sensitive items demand a real 32-byte key the moment one
 // is declared (the config module's Attach fails with ErrCipherRequired
@@ -153,7 +153,7 @@ const (
 //
 // This default is a documented trade-off, not a pattern to copy: a key
 // committed to the repository is not a secret, and real hosts must never
-// do this. A real deployment sets SPEED_CONFIG_KEY from a secret store
+// do this. A real deployment sets APP_CONFIG_KEY from a secret store
 // (or refuses to start); rotating the key loses every value the cipher
 // sealed, so a real deployment's key must be stable for the life of its
 // data.
@@ -164,7 +164,7 @@ var devConfigKey = []byte{
 	0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
 }
 
-// devOrgIndexKey is the HMAC key used when SPEED_ORG_INDEX_KEY is unset:
+// devOrgIndexKey is the HMAC key used when APP_ORG_INDEX_KEY is unset:
 // the descending 0xff..0xe0 byte sequence, chosen precisely so it is
 // visibly a DIFFERENT 32 bytes from devConfigKey's ascending 0x00..0x1f
 // (orgIndexKeyEnv's doc comment explains why the two must never be the
@@ -252,7 +252,7 @@ func configFromEnv() (serverConfig, error) {
 		dbPath = defaultSQLitePath
 	}
 
-	// The config master key: SPEED_CONFIG_KEY when set (a hex-encoded
+	// The config master key: APP_CONFIG_KEY when set (a hex-encoded
 	// 32-byte key -- see configKeyEnv's doc comment), the documented
 	// development default otherwise (see devConfigKey's). A malformed value
 	// must fail startup with a precise message rather than surface later as
@@ -273,7 +273,7 @@ func configFromEnv() (serverConfig, error) {
 		configKey = decoded
 	}
 
-	// The org invitation blind-index key: SPEED_ORG_INDEX_KEY when set,
+	// The org invitation blind-index key: APP_ORG_INDEX_KEY when set,
 	// devOrgIndexKey otherwise -- the same parsing and the same failure
 	// shape as configKey above, and see orgIndexKeyEnv's doc comment for
 	// why this must be a key distinct from configKey rather than the same
@@ -335,7 +335,7 @@ func configFromEnv() (serverConfig, error) {
 	}
 
 	// smtpHost/smtpPortRaw mirror s3Endpoint/... above: both unset leaves
-	// the "mailer" seam on its Preset default, and a partial SPEED_SMTP_*
+	// the "mailer" seam on its Preset default, and a partial APP_SMTP_*
 	// set is refused rather than silently ignored.
 	smtpHost := os.Getenv(smtpHostEnv)
 	smtpPortRaw := os.Getenv(smtpPortEnv)

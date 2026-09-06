@@ -28,8 +28,8 @@
 // as a nested module root -- so a go.mod named as such would silently
 // vanish from the embedded tree. new renames go.mod.txt to go.mod when it
 // materializes. config.go still parses the full uniform env surface of a generated
-// project -- SPEED_CONFIG_KEY, SPEED_ORG_INDEX_KEY, SPEED_DB_PATH,
-// SPEED_DEPLOYMENT_MODE, PORT -- so a consumer's bootstrap contract never
+// project -- APP_CONFIG_KEY, APP_ORG_INDEX_KEY, APP_DB_PATH,
+// APP_DEPLOYMENT_MODE, PORT -- so a consumer's bootstrap contract never
 // changes with the selection; the files' doc comments say which envs the
 // selected modules actually consume.
 //

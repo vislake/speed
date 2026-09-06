@@ -15,7 +15,7 @@ the generated code's doc comments as the owner's first tasks.
 .
 ├── cmd/server/        # the whole generated project
 │   ├── main.go        # process lifecycle: configuration, buildServer, graceful shutdown
-│   ├── config.go      # bootstrap environment parsing (SPEED_*) and the committed dev keys
+│   ├── config.go      # bootstrap environment parsing (APP_*) and the committed dev keys
 │   └── server.go      # kernel wiring: migrations, module set, routes, middleware chain
 ├── go.mod             # requires plus replace directives onto the speed checkout
 ├── README.md
@@ -40,7 +40,7 @@ go run ./cmd/server
 
 The server boots in standalone deployment mode on SQLite at
 `__APP_NAME__.db` and listens on `:8080`; `GET /healthz` answers 200 once
-the kernel is up. Set `SPEED_DEPLOYMENT_MODE=distributed` to see the
+the kernel is up. Set `APP_DEPLOYMENT_MODE=distributed` to see the
 kernel's capability validation refuse the assembled composition at startup
 -- naming the seam, the implementation and the missing capability -- never
 at runtime.
@@ -57,10 +57,10 @@ environment instead.
 | Variable | Meaning |
 | --- | --- |
 | `PORT` | HTTP listen port (default `8080`) |
-| `SPEED_DB_PATH` | SQLite database file (default `__APP_NAME__.db`) |
-| `SPEED_DEPLOYMENT_MODE` | `standalone` (default) or `distributed` |
-| `SPEED_CONFIG_KEY` | 64 hex characters: the master key the config module's cipher is built from |
-| `SPEED_ORG_INDEX_KEY` | 64 hex characters: the blind-index HMAC key; consumed only by compositions that wire the org module, parsed unconditionally so the bootstrap contract never changes with the selection |
+| `APP_DB_PATH` | SQLite database file (default `__APP_NAME__.db`) |
+| `APP_DEPLOYMENT_MODE` | `standalone` (default) or `distributed` |
+| `APP_CONFIG_KEY` | 64 hex characters: the master key the config module's cipher is built from |
+| `APP_ORG_INDEX_KEY` | 64 hex characters: the blind-index HMAC key; consumed only by compositions that wire the org module, parsed unconditionally so the bootstrap contract never changes with the selection |
 
 The committed dev keys are recognizable placeholders for zero-setup
 development, never secrets: `config.go` holds `devConfigKey` and
@@ -110,7 +110,7 @@ lockstep release, `saasctl db migrate` applies the required modules' SQL
 migrations to the project's SQLite database from the command line (the
 operator-driven twin of this app's own startup Apply), and `saasctl config
 print` shows how this project's bootstrap environment resolves -- each
-`SPEED_*` variable's value and provenance, the two key variables rendered
+`APP_*` variable's value and provenance, the two key variables rendered
 `[redacted]`. Dynamic-configuration value print and editing (the `configs`
 table's values with their tenant scopes and schema-driven redaction) and
 the web-side scaffolds are later `saasctl` rounds. Speed modules are

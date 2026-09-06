@@ -103,7 +103,7 @@ func TestLoadParseModeErrorIsReturnedVerbatim(t *testing.T) {
 	}
 }
 
-// TestLoadMalformedConfigKeyErrorMatchesTheTemplate: a SPEED_CONFIG_KEY of
+// TestLoadMalformedConfigKeyErrorMatchesTheTemplate: a APP_CONFIG_KEY of
 // the wrong encoded length fails with the template's exact message, app
 // name where the template has its __APP_NAME__ token.
 func TestLoadMalformedConfigKeyErrorMatchesTheTemplate(t *testing.T) {
@@ -111,13 +111,13 @@ func TestLoadMalformedConfigKeyErrorMatchesTheTemplate(t *testing.T) {
 	if err == nil {
 		t.Fatal("Load accepted a short config key")
 	}
-	want := "cli-app: SPEED_CONFIG_KEY must hold 64 hex characters (a 32-byte key), got 3"
+	want := "cli-app: APP_CONFIG_KEY must hold 64 hex characters (a 32-byte key), got 3"
 	if err.Error() != want {
 		t.Errorf("error = %q, want %q", err, want)
 	}
 }
 
-// TestLoadNonHexConfigKeyErrorNamesTheVariable: a SPEED_CONFIG_KEY of the
+// TestLoadNonHexConfigKeyErrorNamesTheVariable: a APP_CONFIG_KEY of the
 // right length that is not valid hex fails under the template's decode
 // message, naming the variable so an operator knows which secret is
 // malformed.
@@ -127,8 +127,8 @@ func TestLoadNonHexConfigKeyErrorNamesTheVariable(t *testing.T) {
 	if err == nil {
 		t.Fatal("Load accepted a non-hex config key")
 	}
-	if !strings.HasPrefix(err.Error(), "cli-app: SPEED_CONFIG_KEY: ") {
-		t.Errorf("error = %q, want the cli-app: SPEED_CONFIG_KEY: prefix", err)
+	if !strings.HasPrefix(err.Error(), "cli-app: APP_CONFIG_KEY: ") {
+		t.Errorf("error = %q, want the cli-app: APP_CONFIG_KEY: prefix", err)
 	}
 	if !strings.Contains(err.Error(), "invalid byte") {
 		t.Errorf("error = %q, want hex's invalid-byte detail", err)
@@ -143,7 +143,7 @@ func TestLoadOrgIndexKeySharesTheConfigKeyFailureShape(t *testing.T) {
 	if err == nil {
 		t.Fatal("Load accepted a short org index key")
 	}
-	want := "cli-app: SPEED_ORG_INDEX_KEY must hold 64 hex characters (a 32-byte key), got 3"
+	want := "cli-app: APP_ORG_INDEX_KEY must hold 64 hex characters (a 32-byte key), got 3"
 	if err.Error() != want {
 		t.Errorf("error = %q, want %q", err, want)
 	}
@@ -216,7 +216,7 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 	// asserted separately so a rewording fails on both sides at once.
 	if _, err := Load("__APP_NAME__", envFromMap(map[string]string{ConfigKeyEnv: "abc"})); err == nil {
 		t.Fatal("Load accepted a short key during the parity check")
-	} else if want := `__APP_NAME__: SPEED_CONFIG_KEY must hold 64 hex characters (a 32-byte key), got 3`; err.Error() != want {
+	} else if want := `__APP_NAME__: APP_CONFIG_KEY must hold 64 hex characters (a 32-byte key), got 3`; err.Error() != want {
 		t.Errorf("Load error = %q, want the template's %q", err, want)
 	}
 	if !strings.Contains(src, `"__APP_NAME__: %s must hold %d hex characters (a 32-byte key), got %d"`) {

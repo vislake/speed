@@ -35,11 +35,11 @@ back to its default.
 
 The five bootstrap variables:
 
-  SPEED_DEPLOYMENT_MODE   the deployment mode (standalone or distributed)
+  APP_DEPLOYMENT_MODE     the deployment mode (standalone or distributed)
   PORT                    the HTTP port
-  SPEED_DB_PATH           the SQLite database path
-  SPEED_CONFIG_KEY        the configuration master key (64 hex characters)
-  SPEED_ORG_INDEX_KEY     the org blind-index key (64 hex characters)
+  APP_DB_PATH             the SQLite database path
+  APP_CONFIG_KEY          the configuration master key (64 hex characters)
+  APP_ORG_INDEX_KEY       the org blind-index key (64 hex characters)
 
 The two key variables are secrets: their values never print, only a
 [redacted] marker in their place, whatever the environment holds.

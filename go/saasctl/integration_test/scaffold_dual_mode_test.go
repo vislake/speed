@@ -10,7 +10,7 @@
 // the SAME real end-to-end procedure this module's own AGENTS.md Testing
 // section already documents for the B4 milestone gate (new -> tidy -> build
 // -> boot -> smoke), extended with a second boot under
-// SPEED_DEPLOYMENT_MODE=distributed against real Docker-backed
+// APP_DEPLOYMENT_MODE=distributed against real Docker-backed
 // infrastructure -- the identical Redis/RustFS/mailpit trio and image pins
 // examples/reference-app/integration_test/distributed_mode_test.go already
 // uses, so every Docker-backed tier in this repository exercises the same
@@ -98,7 +98,7 @@ const (
 // (exactly the B4 procedure), build its cmd/server, run `saasctl db
 // migrate` against it (internal/db.Run, in-process) under the standalone
 // default, boot the built binary and smoke it, then repeat the migrate step
-// and the boot under SPEED_DEPLOYMENT_MODE=distributed with real
+// and the boot under APP_DEPLOYMENT_MODE=distributed with real
 // Redis/RustFS/SMTP infrastructure this test starts itself.
 func TestScaffoldNewProject_AuthnOrgRbac_BootsInBothDeploymentModes(t *testing.T) {
 	speedRoot, err := newcmd.ResolveSpeedRoot("")
@@ -132,7 +132,7 @@ func TestScaffoldNewProject_AuthnOrgRbac_BootsInBothDeploymentModes(t *testing.T
 	// Distributed leg: real Redis, RustFS (S3-compatible) and Mailpit
 	// containers, the identical trio and image pins
 	// distributed_mode_test.go already uses, started fresh for this test
-	// alone (t.Cleanup terminates each). SPEED_SMS_GATEWAY_URL is set to a
+	// alone (t.Cleanup terminates each). APP_SMS_GATEWAY_URL is set to a
 	// deliberately unreachable address -- authn's distributed-mode
 	// validation requires the "SMS sender" seam to be WIRED (a non-empty
 	// URL), never that it is reachable, and this test never drives the
@@ -146,16 +146,16 @@ func TestScaffoldNewProject_AuthnOrgRbac_BootsInBothDeploymentModes(t *testing.T
 	smtpAddr := startMailpit(t, ctx)
 
 	distributedEnv := []string{
-		"SPEED_DEPLOYMENT_MODE=distributed",
-		"SPEED_REDIS_ADDR=" + redisAddr,
-		"SPEED_S3_ENDPOINT=" + s3Endpoint,
-		"SPEED_S3_BUCKET=" + s3Bucket,
-		"SPEED_S3_ACCESS_KEY=" + s3AccessKey,
-		"SPEED_S3_SECRET_KEY=" + s3SecretKey,
-		"SPEED_S3_USE_SSL=false",
-		"SPEED_SMTP_HOST=" + smtpHost(smtpAddr),
-		"SPEED_SMTP_PORT=" + smtpPort(smtpAddr),
-		"SPEED_SMS_GATEWAY_URL=http://127.0.0.1:1/sms",
+		"APP_DEPLOYMENT_MODE=distributed",
+		"APP_REDIS_ADDR=" + redisAddr,
+		"APP_S3_ENDPOINT=" + s3Endpoint,
+		"APP_S3_BUCKET=" + s3Bucket,
+		"APP_S3_ACCESS_KEY=" + s3AccessKey,
+		"APP_S3_SECRET_KEY=" + s3SecretKey,
+		"APP_S3_USE_SSL=false",
+		"APP_SMTP_HOST=" + smtpHost(smtpAddr),
+		"APP_SMTP_PORT=" + smtpPort(smtpAddr),
+		"APP_SMS_GATEWAY_URL=http://127.0.0.1:1/sms",
 	}
 
 	// db migrate is the round's own relaxed-refusal proof: an earlier
@@ -185,7 +185,7 @@ func runTool(t *testing.T, dir, name string, args ...string) {
 }
 
 // runDBMigrate runs `saasctl db migrate` in-process (internal/db.Run)
-// against modPath with SPEED_DB_PATH set to dbPath and every other
+// against modPath with APP_DB_PATH set to dbPath and every other
 // bootstrap variable cleared, so the standalone leg's migrate call is
 // insulated from whatever the test process's own environment happens to
 // hold.
@@ -194,15 +194,15 @@ func runDBMigrate(t *testing.T, modPath, dbPath string, extraEnv []string) {
 	runDBMigrateWithEnv(t, modPath, dbPath, extraEnv)
 }
 
-// runDBMigrateWithEnv sets SPEED_DB_PATH (and every key=value pair in
+// runDBMigrateWithEnv sets APP_DB_PATH (and every key=value pair in
 // extraEnv) on the TEST PROCESS's own environment via t.Setenv -- internal/
 // db.Run reads os.LookupEnv directly, being the same in-process call the
 // real `saasctl db migrate` CLI dispatches to -- runs migrate, and fails
 // the test on a non-zero exit.
 func runDBMigrateWithEnv(t *testing.T, modPath, dbPath string, extraEnv []string) {
 	t.Helper()
-	t.Setenv("SPEED_DB_PATH", dbPath)
-	t.Setenv("SPEED_DEPLOYMENT_MODE", "")
+	t.Setenv("APP_DB_PATH", dbPath)
+	t.Setenv("APP_DEPLOYMENT_MODE", "")
 	for _, kv := range extraEnv {
 		key, value, ok := strings.Cut(kv, "=")
 		if !ok {
@@ -216,7 +216,7 @@ func runDBMigrateWithEnv(t *testing.T, modPath, dbPath string, extraEnv []string
 	}
 }
 
-// smokeBoot boots binPath as a subprocess with SPEED_DB_PATH=dbPath plus
+// smokeBoot boots binPath as a subprocess with APP_DB_PATH=dbPath plus
 // extraEnv, waits for /healthz to answer 200, issues one real smoke request
 // against /api/config/public and one against the authn register endpoint
 // (proving the composed authn+tenancy chain actually answers, not merely
@@ -229,7 +229,7 @@ func smokeBoot(t *testing.T, binPath, dbPath string, extraEnv []string) {
 
 	port := freePort(t)
 	env := append([]string{
-		"SPEED_DB_PATH=" + dbPath,
+		"APP_DB_PATH=" + dbPath,
 		"PORT=" + strconv.Itoa(port),
 	}, extraEnv...)
 
@@ -324,7 +324,7 @@ func freePort(t *testing.T) int {
 }
 
 // startRedis starts a disposable Redis container and returns its
-// "host:port" address, exactly the shape SPEED_REDIS_ADDR wants.
+// "host:port" address, exactly the shape APP_REDIS_ADDR wants.
 func startRedis(t *testing.T, ctx context.Context) string {
 	t.Helper()
 	req := testcontainers.ContainerRequest{
@@ -448,7 +448,7 @@ func startMailpit(t *testing.T, ctx context.Context) string {
 }
 
 // smtpHost and smtpPort split a "host:port" address into the two separate
-// SPEED_SMTP_HOST/SPEED_SMTP_PORT values the generated project's
+// APP_SMTP_HOST/APP_SMTP_PORT values the generated project's
 // configFromEnv wants.
 func smtpHost(addr string) string {
 	host, _, err := net.SplitHostPort(addr)

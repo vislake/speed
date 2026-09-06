@@ -99,11 +99,11 @@ func TestPrintReportsEveryValueThatCameFromTheEnvironment(t *testing.T) {
 	if stderr != "" {
 		t.Errorf("stderr = %q, want empty", stderr)
 	}
-	want := "deployment mode  distributed  from SPEED_DEPLOYMENT_MODE\n" +
+	want := "deployment mode  distributed  from APP_DEPLOYMENT_MODE\n" +
 		"port             9090         from PORT\n" +
-		"sqlite path      db.sqlite    from SPEED_DB_PATH\n" +
-		"config key       [redacted]   from SPEED_CONFIG_KEY\n" +
-		"org index key    [redacted]   from SPEED_ORG_INDEX_KEY\n"
+		"sqlite path      db.sqlite    from APP_DB_PATH\n" +
+		"config key       [redacted]   from APP_CONFIG_KEY\n" +
+		"org index key    [redacted]   from APP_ORG_INDEX_KEY\n"
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
@@ -155,7 +155,7 @@ func TestPrintMalformedDeploymentModeIsReportedVerbatim(t *testing.T) {
 }
 
 // TestPrintMalformedConfigKeyNamesTheAppAndVariable: a malformed
-// SPEED_CONFIG_KEY fails with the generated app's own error text -- app
+// APP_CONFIG_KEY fails with the generated app's own error text -- app
 // name and variable named, the required shape stated.
 func TestPrintMalformedConfigKeyNamesTheAppAndVariable(t *testing.T) {
 	code, stdout, stderr := drivePrint(t, []string{fixture(t, "print.mod")}, map[string]string{
@@ -167,7 +167,7 @@ func TestPrintMalformedConfigKeyNamesTheAppAndVariable(t *testing.T) {
 	if stdout != "" {
 		t.Errorf("stdout = %q, want empty", stdout)
 	}
-	want := "saasctl config print: cli-app: SPEED_CONFIG_KEY must hold 64 hex characters (a 32-byte key), got 3\n"
+	want := "saasctl config print: cli-app: APP_CONFIG_KEY must hold 64 hex characters (a 32-byte key), got 3\n"
 	if stderr != want {
 		t.Errorf("stderr = %q, want %q", stderr, want)
 	}
