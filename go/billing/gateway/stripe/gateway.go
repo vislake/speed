@@ -107,6 +107,28 @@ func (g *Gateway) CreateCharge(ctx context.Context, req billing.ChargeRequest) (
 			metadataSubscriptionID: req.SubscriptionID,
 			metadataInvoiceID:      req.InvoiceID,
 		},
+		// The SAME identifiers must also ride in subscription_data.metadata
+		// -- the subset of parameters Stripe applies to the Subscription it
+		// creates when this Checkout Session completes (the Create Session
+		// API's own subscription_data description: "A subset of parameters
+		// to be passed to subscription creation"). The session-level
+		// Metadata above is what checkout.session.* events carry and is
+		// read back by normalizeCheckoutSession -- but it is NOT copied
+		// onto that Subscription: only subscription_data.metadata is.
+		// Without this second copy the Subscription -- and every object
+		// downstream of it, customer.subscription.updated deliveries and
+		// each renewal invoice's parent snapshot
+		// (parent.subscription_details.metadata, event.go's normalizeInvoice)
+		// -- carries no speed_* keys, and those events are refused as
+		// unrecognized: the platform would see a subscription's first cycle
+		// and then go blind for every later one (P1-2).
+		SubscriptionData: &stripego.CheckoutSessionSubscriptionDataParams{
+			Metadata: map[string]string{
+				metadataTenantID:       req.TenantID,
+				metadataSubscriptionID: req.SubscriptionID,
+				metadataInvoiceID:      req.InvoiceID,
+			},
+		},
 	}
 	params.Context = ctx
 	if req.IdempotencyKey != "" {

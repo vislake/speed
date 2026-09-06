@@ -151,23 +151,36 @@ func normalizeCheckoutSession(event stripego.Event, rawBody []byte) (billing.Nor
 
 // normalizeInvoice handles invoice.paid and invoice.payment_failed --
 // Stripe's own announcement of a subscription's later billing cycles (see
-// eventTypeInvoicePaid's own doc comment above). Stripe copies a
-// subscription's own Metadata onto every invoice it generates for that
-// subscription at the invoice's own creation time, which is itself
-// populated from the originating Checkout Session's Metadata when the
-// subscription was first created (an unbroken Session -> Subscription ->
-// Invoice metadata chain, all keyed under the same
-// metadataTenantID/metadataSubscriptionID/metadataInvoiceID this package's
-// CreateCharge attaches once) -- so this event's own Invoice.Metadata is
-// read exactly like the checkout session's, never a second lookup table.
+// eventTypeInvoicePaid's own doc comment above).
+//
+// The correlation identifiers are read from the invoice's PARENT snapshot,
+// never from the Invoice object's own metadata field. An invoice a
+// subscription generated carries the subscription's metadata -- set from
+// CreateCharge's own subscription_data.metadata (gateway.go) when the
+// subscription was first created -- as an immutable copy under
+// parent.subscription_details.metadata, captured at the invoice's
+// finalization. That is the real, documented delivery shape (stripe-go
+// v82.5.1's own field comment on InvoiceParentSubscriptionDetails.Metadata:
+// "Set of key-value pairs defined as subscription metadata when an invoice
+// is created. Becomes an immutable snapshot of the subscription metadata at
+// the time of invoice finalization"); Stripe does not copy the keys onto
+// the invoice's own metadata field, so reading inv.Metadata -- as an
+// earlier revision of this function did, with a unit fixture hand-seeded to
+// match -- sees nothing on a real delivery and refuses every renewal event
+// (P1-3). An invoice whose parent is missing, is not a subscription, or
+// whose snapshot carries no speed_* keys is refused exactly like any other
+// uncorrelatable event: the only invoices this package's subscription-mode
+// Checkout flow ever produces are subscription invoices of the platform's
+// own subscriptions, so there is no legitimate invoice.paid delivery
+// without the snapshot keys.
 //
 // NormalizedEvent.InvoiceID here is a KNOWN LIMITATION worth stating
-// plainly rather than leaving implicit: Stripe's own metadata cascade
-// carries forward the id CreateCharge attached to the FIRST cycle's own
-// billing.Invoice, verbatim, on every later cycle's Stripe-generated
-// invoice -- this package has no way to mint a fresh billing.Invoice id for
-// a cycle it was never asked to create one for (CreateCharge is called
-// exactly once, at Subscription activation; docs/internal/06's own
+// plainly rather than leaving implicit: the parent snapshot carries forward
+// the id CreateCharge attached to the FIRST cycle's own billing.Invoice,
+// verbatim, on every later cycle's Stripe-generated invoice -- this package
+// has no way to mint a fresh billing.Invoice id for a cycle it was never
+// asked to create one for (CreateCharge is called exactly once, at
+// Subscription activation; docs/internal/06's own
 // domestic-plus-international dual payment mode write-up and this package's
 // own doc.go explain why). A later round's live webhook processing loop
 // (go/billing/AGENTS.md's own Known limitations records that no such loop
@@ -179,7 +192,11 @@ func normalizeInvoice(event stripego.Event, rawBody []byte) (billing.NormalizedE
 		return billing.NormalizedEvent{}, billing.ErrWebhookPayloadUnrecognized.WithCause(err)
 	}
 
-	tenantID, subscriptionID, invoiceID, err := metadataIdentifiers(inv.Metadata)
+	var metadata map[string]string
+	if parent := inv.Parent; parent != nil && parent.SubscriptionDetails != nil {
+		metadata = parent.SubscriptionDetails.Metadata
+	}
+	tenantID, subscriptionID, invoiceID, err := metadataIdentifiers(metadata)
 	if err != nil {
 		return billing.NormalizedEvent{}, err
 	}

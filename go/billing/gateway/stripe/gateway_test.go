@@ -30,11 +30,20 @@ type fakeCall struct {
 	method, path   string
 	idempotencyKey string
 	expand         []string
+	// subscriptionMetadata is the metadata CreateCharge attached under the
+	// session's subscription_data block -- the request parameter that
+	// becomes the SUBSCRIPTION's own metadata when the session completes
+	// (gateway.go's CreateCharge doc comment), and therefore what
+	// subscription lifecycle events (customer.subscription.updated) and
+	// their invoices' parent snapshots actually carry. Captured here so a
+	// test can assert CreateCharge really sent it.
+	subscriptionMetadata map[string]string
 }
 
 func (f *fakeBackend) Call(method, path, _ string, params stripego.ParamsContainer, v stripego.LastResponseSetter) error {
 	var idem string
 	var expand []string
+	var subMetadata map[string]string
 	if params != nil {
 		if params.GetParams().IdempotencyKey != nil {
 			idem = *params.GetParams().IdempotencyKey
@@ -51,9 +60,12 @@ func (f *fakeBackend) Call(method, path, _ string, params stripego.ParamsContain
 					expand = append(expand, *e)
 				}
 			}
+			if sp.SubscriptionData != nil {
+				subMetadata = sp.SubscriptionData.Metadata
+			}
 		}
 	}
-	f.calls = append(f.calls, fakeCall{method: method, path: path, idempotencyKey: idem, expand: expand})
+	f.calls = append(f.calls, fakeCall{method: method, path: path, idempotencyKey: idem, expand: expand, subscriptionMetadata: subMetadata})
 
 	body, err := f.respond(method, path)
 	if err != nil {
@@ -118,6 +130,32 @@ func TestGateway_CreateCharge_SendsExpectedRequest(t *testing.T) {
 	}
 	if backend.calls[0].idempotencyKey != "idem-1" {
 		t.Errorf("idempotencyKey = %q, want idem-1", backend.calls[0].idempotencyKey)
+	}
+	// P1-2: the correlation identifiers must ride in subscription_data's
+	// own metadata, not only the session's. The session-level metadata is
+	// read back by the checkout.session.* events this package recognizes,
+	// but it is NOT copied onto the Subscription Stripe creates when the
+	// session completes -- only subscription_data.metadata is applied to
+	// that Subscription (the Create Session API's own subscription_data
+	// description: "A subset of parameters to be passed to subscription
+	// creation"). Without it, every later lifecycle object -- the
+	// subscription itself, and each renewal invoice's parent snapshot --
+	// carries no speed_* keys, and customer.subscription.updated /
+	// invoice.paid / invoice.payment_failed deliveries are refused as
+	// unrecognized.
+	wantSubMeta := map[string]string{
+		metadataTenantID:       "tenant-a",
+		metadataSubscriptionID: "sub-1",
+		metadataInvoiceID:      "inv-1",
+	}
+	got := backend.calls[0].subscriptionMetadata
+	if len(got) != len(wantSubMeta) {
+		t.Fatalf("subscription_data.metadata = %v, want %v", got, wantSubMeta)
+	}
+	for k, v := range wantSubMeta {
+		if got[k] != v {
+			t.Errorf("subscription_data.metadata[%q] = %q, want %q", k, got[k], v)
+		}
 	}
 }
 
@@ -540,11 +578,21 @@ func hasCode(err error, code string) bool {
 
 // invoiceEventPayload builds a minimal, realistic invoice.paid or
 // invoice.payment_failed event body -- the shape event.go's normalizeInvoice
-// parses. Mirrors the metadata cascade normalizeInvoice's own doc comment
-// describes: Stripe copies a subscription's Metadata onto every invoice it
-// generates for that subscription, so this fixture's Invoice object carries
-// the identical tenant/subscription/invoice keys checkoutSessionPayload's
-// Session object carries.
+// parses. This fixture models the REAL Stripe delivery shape for an invoice
+// a subscription generated (the only invoices this package's
+// subscription-mode Checkout flow ever produces): the Invoice object's own
+// top-level metadata carries NO speed_* keys -- Stripe does not copy a
+// subscription's metadata onto the invoice's own metadata field -- and the
+// correlation keys live under parent.subscription_details.metadata, the
+// immutable snapshot of the subscription's metadata taken at the invoice's
+// finalization (stripe-go v82.5.1's own field comment on
+// InvoiceParentSubscriptionDetails.Metadata: "defined as subscription
+// metadata when an invoice is created. Becomes an immutable snapshot of the
+// subscription metadata at the time of invoice finalization"). The earlier
+// revision of this fixture hand-seeded the keys onto the invoice's own
+// metadata field -- a shape real Stripe deliveries do not have, which is
+// exactly why the code reading that field could not see the identifiers on
+// real events (P1-3).
 func invoiceEventPayload(t *testing.T, eventType, eventID, invoiceID, tenantID, subID, origInvoiceID string, amountCents int64, currency string) []byte {
 	t.Helper()
 	var amountField string
@@ -565,6 +613,48 @@ func invoiceEventPayload(t *testing.T, eventType, eventID, invoiceID, tenantID, 
 				"id":        invoiceID,
 				amountField: amountCents,
 				"currency":  currency,
+				// The invoice's own metadata is genuinely empty in the real
+				// flow; see the doc comment above.
+				"metadata": map[string]string{},
+				"parent": map[string]any{
+					"type": "subscription_details",
+					"subscription_details": map[string]any{
+						"subscription": "sub_stripe_1",
+						"metadata": map[string]string{
+							metadataTenantID:       tenantID,
+							metadataSubscriptionID: subID,
+							metadataInvoiceID:      origInvoiceID,
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal fixture: %v", err)
+	}
+	return body
+}
+
+// invoiceEventPayloadWithInvoiceLevelMetadata builds an invoice.paid event
+// whose identifiers sit ONLY on the Invoice object's own metadata field --
+// the hand-seeded shape the earlier revision of invoiceEventPayload used,
+// which real Stripe subscription-invoice deliveries do not carry (see
+// invoiceEventPayload's own doc comment). Used by
+// TestGateway_VerifyWebhook_InvoicePaid_InvoiceLevelMetadataOnly_StillUnrecognized
+// to pin that normalizeInvoice reads the parent snapshot, never the
+// invoice's own metadata.
+func invoiceEventPayloadWithInvoiceLevelMetadata(t *testing.T, eventID, invoiceID, tenantID, subID, origInvoiceID string, amountCents int64, currency string) []byte {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"id":      eventID,
+		"type":    "invoice.paid",
+		"created": time.Now().Unix(),
+		"data": map[string]any{
+			"object": map[string]any{
+				"id":          invoiceID,
+				"amount_paid": amountCents,
+				"currency":    currency,
 				"metadata": map[string]string{
 					metadataTenantID:       tenantID,
 					metadataSubscriptionID: subID,
@@ -622,13 +712,17 @@ func signAndVerify(t *testing.T, payload []byte) (billing.NormalizedEvent, error
 	}, signed.Payload)
 }
 
-// TestGateway_VerifyWebhook_InvoicePaid_RecognizedAsChargeSucceeded is
-// P1-2's regression test for the renewal-succeeded leg: invoice.paid is the
-// event that actually announces a Stripe-native subscription's later
-// billing cycles (gateway.go's CreateCharge is called exactly once, at
-// first activation) -- on pre-fix code this event fell to normalizeEvent's
-// default case and was refused as ErrWebhookPayloadUnrecognized, silently
-// dropping a real renewal.
+// TestGateway_VerifyWebhook_InvoicePaid_RecognizedAsChargeSucceeded is the
+// P1-3 regression for the renewal-succeeded leg: invoice.paid is the event
+// that actually announces a Stripe-native subscription's later billing
+// cycles (gateway.go's CreateCharge is called exactly once, at first
+// activation). Its fixture carries the identifiers where real Stripe
+// deliveries carry them -- parent.subscription_details.metadata, the
+// immutable snapshot of the subscription's metadata at finalization -- and
+// never on the invoice's own metadata field. On pre-fix code, which read
+// inv.Metadata, this fixture's identifiers were invisible and the event was
+// refused as ErrWebhookPayloadUnrecognized, silently dropping a real
+// renewal.
 func TestGateway_VerifyWebhook_InvoicePaid_RecognizedAsChargeSucceeded(t *testing.T) {
 	payload := invoiceEventPayload(t, "invoice.paid", "evt_inv_paid_1", "in_1", "tenant-a", "sub-1", "inv-1", 2900, "usd")
 	event, err := signAndVerify(t, payload)
@@ -653,11 +747,12 @@ func TestGateway_VerifyWebhook_InvoicePaid_RecognizedAsChargeSucceeded(t *testin
 }
 
 // TestGateway_VerifyWebhook_InvoicePaymentFailed_RecognizedAsChargeFailed is
-// P1-2's regression test for the renewal-failed leg: invoice.payment_failed
-// is what should turn a subscription past_due -- on pre-fix code this event
-// was likewise refused as ErrWebhookPayloadUnrecognized, the exact "renewal
-// payment failure is completely silent to the platform" gap the audit
-// named.
+// the P1-3 regression for the renewal-failed leg: invoice.payment_failed is
+// what should turn a subscription past_due -- on pre-fix code, which read
+// the identifiers off the invoice's own (really empty) metadata field, this
+// event was likewise refused as ErrWebhookPayloadUnrecognized, the exact
+// "renewal payment failure is completely silent to the platform" gap the
+// audit named.
 func TestGateway_VerifyWebhook_InvoicePaymentFailed_RecognizedAsChargeFailed(t *testing.T) {
 	payload := invoiceEventPayload(t, "invoice.payment_failed", "evt_inv_failed_1", "in_2", "tenant-a", "sub-1", "inv-1", 2900, "usd")
 	event, err := signAndVerify(t, payload)
@@ -672,6 +767,26 @@ func TestGateway_VerifyWebhook_InvoicePaymentFailed_RecognizedAsChargeFailed(t *
 	}
 	if event.Amount.Cents != 2900 || event.Amount.Currency != "usd" {
 		t.Errorf("Amount = %+v", event.Amount)
+	}
+}
+
+// TestGateway_VerifyWebhook_InvoicePaid_InvoiceLevelMetadataOnly_StillUnrecognized
+// pins the P1-3 fix's direction: normalizeInvoice reads the correlation
+// identifiers from the invoice's parent snapshot
+// (parent.subscription_details.metadata), never from the Invoice object's
+// own metadata field. An invoice.paid delivery whose identifiers sit only
+// on inv.Metadata -- the hand-seeded fixture shape the earlier revision
+// used, which real Stripe subscription-invoice deliveries do not produce --
+// stays ErrWebhookPayloadUnrecognized, exactly like any other event this
+// package cannot correlate. On pre-fix code, which read inv.Metadata, this
+// fixture WAS recognized -- the wrong source, and precisely why real
+// deliveries (whose identifiers live in the parent snapshot instead) were
+// not.
+func TestGateway_VerifyWebhook_InvoicePaid_InvoiceLevelMetadataOnly_StillUnrecognized(t *testing.T) {
+	payload := invoiceEventPayloadWithInvoiceLevelMetadata(t, "evt_inv_invmeta_1", "in_3", "tenant-a", "sub-1", "inv-1", 2900, "usd")
+	_, err := signAndVerify(t, payload)
+	if !hasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
+		t.Errorf("err = %v, want billing.ErrWebhookPayloadUnrecognized (invoice-level metadata is not where real deliveries carry the identifiers)", err)
 	}
 }
 
