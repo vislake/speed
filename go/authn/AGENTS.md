@@ -290,6 +290,18 @@ and sign straight into any platform user's account at that domain. With it,
 the worst they can reach is an account already inside their own tenant, which
 they already administer.
 
+The same verified-assertion bar governs SSO's just-in-time branch: for a
+subject with no account yet, an account is minted **only** from a claim the
+identity provider asserted as verified. An unverified address claim —
+`email_verified` absent or false — is refused with `ErrIdentityRequiresBinding`
+before any account lookup, whether the address is registered or not, and
+provisions nothing: an unverified claim is not usable evidence of anyone's
+control over the address, and minting would seat the claimed address in the
+platform-unique email index. The mint still grants no membership and no
+session; membership of the tenant is the host's decision, made in reaction to
+the published `EventUserCreated`, and the subject's next attempt completes
+the sign-in.
+
 A channel that reports **no email at all** (WeChat) can never satisfy either
 rule's first condition, so it never auto-links. It is not an error path: with
 no address to match against, the safe and correct behaviour is to provision a

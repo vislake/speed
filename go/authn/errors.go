@@ -158,11 +158,13 @@ var (
 	ErrSocialIdentityIncomplete = apperr.Invalid("authn.social_identity_incomplete")
 
 	// ErrIdentityRequiresBinding is the refusal at the heart of this
-	// module's social-login rules. The channel authorized somebody whose
+	// module's automatic-link rules. The channel authorized somebody whose
 	// email address already belongs to an account here, but the conditions
 	// for automatically linking the two were not met -- the provider did
-	// not assert the address was verified, or the provider is not on the
-	// platform's trusted list.
+	// not assert the address was verified, or (for social channels) the
+	// provider is not on the platform's trusted list, or (for enterprise
+	// SSO) the account is not an active member of the tenant that
+	// configured the identity provider.
 	//
 	// Auto-linking on a matching address alone is the classic social-login
 	// account-takeover: an attacker registers at a third-party provider
@@ -170,6 +172,15 @@ var (
 	// account here. The safe path, which this error asks the client to
 	// follow, is "sign in the way you already can, then bind the new
 	// identity from your settings page".
+	//
+	// Enterprise SSO refuses with the same error when the identity
+	// provider did not assert the address was verified -- whether the
+	// address is registered or not, since an unverified claim must neither
+	// link an existing account nor provision a new one (the claim is not
+	// usable evidence of anyone's control over the address, so nothing is
+	// created from it). The safe path for SSO is not "sign in another way
+	// and bind"; it is verification through the identity provider itself,
+	// which is the tenant administrator's fix.
 	ErrIdentityRequiresBinding = apperr.Conflict("authn.identity_requires_binding")
 
 	// ErrIdentityAlreadyBound is returned when the external identity is

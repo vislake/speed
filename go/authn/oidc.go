@@ -378,19 +378,36 @@ type ssoClaims struct {
 
 // Callback completes an enterprise sign-in and returns the new session.
 //
-// The account resolution here is deliberately stricter than the social one.
-// An existing account is linked automatically only when all three hold: the
-// identity provider asserts the address is verified, the address's domain is
-// one the tenant registered, AND the existing account is already an ACTIVE
-// MEMBER of that tenant.
+// An address claim the identity provider did not assert as verified is worth
+// nothing in this resolution: it neither links an existing account nor mints
+// a new one, and the refusal is ErrIdentityRequiresBinding either way -- the
+// same error, before any account lookup, so the answer never discloses
+// whether the address is registered. Many enterprise identity providers omit
+// the email_verified claim from their ID tokens by default; a tenant that
+// configures one of those gets its enterprise sign-ins refused until the
+// addresses are verified through the identity provider, which is the
+// intended safe state.
 //
-// The third condition is the one that is easy to leave out and expensive to
-// leave out. Without it, a tenant administrator -- who is the person that
-// configures the issuer and the allowed domains, and who may run the identity
-// provider themselves -- could allowlist a public email domain and sign
-// straight into the account of any platform user who happens to use an
-// address there. With it, the worst they can do is take over an account that
-// was already inside their own tenant, which they already administer.
+// An existing account is linked automatically only when the identity provider
+// asserts the address is verified, the address's domain is one the tenant
+// registered, AND the existing account is already an ACTIVE MEMBER of that
+// tenant. The membership condition is the one that is easy to leave out and
+// expensive to leave out. Without it, a tenant administrator -- who is the
+// person that configures the issuer and the allowed domains, and who may run
+// the identity provider themselves -- could allowlist a public email domain
+// and sign straight into the account of any platform user who happens to use
+// an address there. With it, the worst they can do is take over an account
+// that was already inside their own tenant, which they already administer.
+//
+// A verified address claim on an allowed domain, for a subject that has no
+// account yet, is provisioned just-in-time: the account is created carrying
+// the claimed address as verified, EventUserCreated is published, and the
+// subject is bound to the account. The membership condition cannot apply to
+// that mint -- the account does not exist yet, so there is nothing to be a
+// member of -- but no session and no membership is granted by it either:
+// authn never grants tenant membership on its own, the host's membership
+// machinery grants it in reaction to EventUserCreated, and the subject's
+// next sign-in attempt completes the session.
 func (s *SSOService) Callback(ctx context.Context, in SSOCallbackInput) (*SocialLoginResult, error) {
 	if in.TenantID == "" {
 		return nil, ErrSSONotConfigured
@@ -509,8 +526,25 @@ func (s *SSOService) signIn(ctx context.Context, config *TenantSSOConfig, extern
 }
 
 // resolveAccount decides which account an unrecognised enterprise subject
-// belongs to. See Callback's doc comment for the three linking conditions and
-// why the membership one is there.
+// belongs to, and refuses everything an unverified claim must not reach:
+//
+//   - An address the identity provider did not assert as verified is refused
+//     with ErrIdentityRequiresBinding before any account lookup, so the
+//     answer never discloses whether the address is registered and nothing
+//     is ever provisioned from such a claim.
+//   - An address outside the tenant's domain allowlist is refused with
+//     ErrSSODomainNotAllowed.
+//   - An existing account is linked only when its holder is already an ACTIVE
+//     MEMBER of the tenant that configured the identity provider; the
+//     verified bar above already cleared, the same ErrIdentityRequiresBinding
+//     covers a would-be link to a non-member.
+//   - Only a verified, domain-allowed address with no account is minted
+//     just-in-time: the account is created carrying the address as verified,
+//     EventUserCreated is published, and the caller binds the subject to it.
+//
+// The membership condition cannot apply to the mint -- the account does not
+// exist yet, so there is nothing to be a member of -- but the mint grants
+// neither membership nor a session (see Callback's doc comment).
 func (s *SSOService) resolveAccount(ctx context.Context, config *TenantSSOConfig, external *ExternalIdentity) (*User, bool, error) {
 	email := strings.TrimSpace(external.Email)
 	if email == "" {
@@ -518,6 +552,13 @@ func (s *SSOService) resolveAccount(ctx context.Context, config *TenantSSOConfig
 	}
 	if !config.AllowsDomain(email) {
 		return nil, false, ErrSSODomainNotAllowed
+	}
+	if !external.EmailVerified {
+		obs.FromContext(ctx).Info("sso sign-in refused an unverified address claim",
+			"tenant_id", config.TenantID,
+			"domain_allowed", true,
+		)
+		return nil, false, ErrIdentityRequiresBinding
 	}
 
 	existing, err := s.svc.users.FindByEmail(ctx, email)
@@ -527,27 +568,30 @@ func (s *SSOService) resolveAccount(ctx context.Context, config *TenantSSOConfig
 		if memberErr != nil {
 			return nil, false, memberErr
 		}
-		if !external.EmailVerified || !member {
+		if !member {
 			obs.FromContext(ctx).Info("sso sign-in refused an automatic account link",
 				"tenant_id", config.TenantID,
 				"user_id", existing.ID,
-				"email_verified", external.EmailVerified,
 				"already_a_member", member,
 			)
 			return nil, false, ErrIdentityRequiresBinding
 		}
 		return existing, false, nil
 	case errors.Is(err, ErrNotFound):
-		// Just-in-time provisioning. The address is stored as verified
-		// because the identity provider that asserted it is one this
-		// tenant's own administrator configured AND the address is in a
-		// domain they registered -- which together is the strongest
-		// assertion about an address this module ever gets.
+		// Just-in-time provisioning, reached only with the verified
+		// assertion from above. The identity provider that asserted the
+		// address is one this tenant's own administrator configured AND
+		// the address is in a domain they registered -- together the
+		// strongest assertion about an address this module ever gets --
+		// so the account is created carrying the address as verified. The
+		// memberOf gate the linking branch applies is structurally
+		// impossible here: the account does not exist yet, and nothing
+		// about minting it grants membership or a session.
 		user := &User{
 			DisplayName:   external.Name,
 			Status:        UserStatusActive,
 			Email:         email,
-			EmailVerified: bool(external.EmailVerified),
+			EmailVerified: true,
 		}
 		if createErr := s.svc.users.Create(ctx, user); createErr != nil {
 			return nil, false, createErr
