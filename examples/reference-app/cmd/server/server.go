@@ -2473,7 +2473,20 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		_ = cleanup()
 		return nil, nil, nil, fmt.Errorf("reference-app: ensure smilesim credit reservation schema: %w", err)
 	}
-	smileSimService := smilesim.NewService(aiGatewayModule.Gateway(), billingModule.Credits(), reg.EventBus(), standaloneQueue, smileSimReservationStore)
+	// smileSimulationStore is the P2a round's per-photo result index (see
+	// internal/smilesim's package doc comment's "Per-photo result index"
+	// section): each generation request's photo, effective options and job
+	// id land in this app's own SQLite the moment its enqueue succeeds,
+	// surviving a restart exactly like the job row they point at, so the
+	// per-photo enumeration route (cmd/server/smilesim.go) and the P3
+	// gallery that will read it have their data source. Same
+	// EnsureSchema-before-first-use shape as the reservation store above.
+	smileSimulationStore := smilesim.NewSimulationStore(db)
+	if err := smileSimulationStore.EnsureSchema(ctx); err != nil {
+		_ = cleanup()
+		return nil, nil, nil, fmt.Errorf("reference-app: ensure smilesim simulation index schema: %w", err)
+	}
+	smileSimService := smilesim.NewService(aiGatewayModule.Gateway(), billingModule.Credits(), reg.EventBus(), standaloneQueue, smileSimReservationStore, smileSimulationStore)
 	// context.Background(), never ctx, per StartReconciler's own doc
 	// comment: the sweep must keep running until cleanup's own
 	// smileSimReconcilerStop call, not be cut short by whatever cancels

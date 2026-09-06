@@ -3,6 +3,8 @@ package smilesim
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -224,7 +226,12 @@ func newTestServiceWithDB(t *testing.T, db *gorm.DB, provider aigateway.ImagePro
 		t.Fatalf("EnsureSchema: %v", err)
 	}
 
-	return NewService(gateway, credits, pkgcore.NewMemoryEventBus(), queue, store)
+	simulations := NewSimulationStore(db)
+	if err := simulations.EnsureSchema(context.Background()); err != nil {
+		t.Fatalf("EnsureSchema (simulation index): %v", err)
+	}
+
+	return NewService(gateway, credits, pkgcore.NewMemoryEventBus(), queue, store, simulations)
 }
 
 func TestService_Simulate_EnqueuesImageToImageUnderTheLogicalModel(t *testing.T) {
@@ -291,7 +298,7 @@ func subscribeSimulationCompleted(bus pkgcore.EventBus) func() []SimulationCompl
 
 func TestService_NotifyOnCompletion_PublishesOnceForASucceededJobWithARecipient(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	svc := NewService(nil, nil, bus, nil, nil)
+	svc := NewService(nil, nil, bus, nil, nil, nil)
 	events := subscribeSimulationCompleted(bus)
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
@@ -335,7 +342,7 @@ func TestService_NotifyOnCompletion_PublishesOnceForASucceededJobWithARecipient(
 
 func TestService_NotifyOnCompletion_DeadLetterReportsFailureWithNoOutputObject(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	svc := NewService(nil, nil, bus, nil, nil)
+	svc := NewService(nil, nil, bus, nil, nil, nil)
 	events := subscribeSimulationCompleted(bus)
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
@@ -361,7 +368,7 @@ func TestService_NotifyOnCompletion_DeadLetterReportsFailureWithNoOutputObject(t
 
 func TestService_NotifyOnCompletion_NoRecipientOnFile_NeverPublishes(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	svc := NewService(nil, nil, bus, nil, nil)
+	svc := NewService(nil, nil, bus, nil, nil, nil)
 	events := subscribeSimulationCompleted(bus)
 
 	job := &jobs.Job{ID: "job-no-recipient", TenantID: "tenant-acme", Status: jobs.StatusSucceeded}
@@ -375,7 +382,7 @@ func TestService_NotifyOnCompletion_NoRecipientOnFile_NeverPublishes(t *testing.
 
 func TestService_NotifyOnCompletion_NonTerminalStatus_NeverPublishes(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	svc := NewService(nil, nil, bus, nil, nil)
+	svc := NewService(nil, nil, bus, nil, nil, nil)
 	events := subscribeSimulationCompleted(bus)
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
@@ -584,7 +591,7 @@ func TestService_NotifyOnCompletion_DeadLetter_RefundsReservation(t *testing.T) 
 }
 
 func TestService_NotifyOnCompletion_NilBus_IsANoOp(t *testing.T) {
-	svc := NewService(nil, nil, nil, nil, nil)
+	svc := NewService(nil, nil, nil, nil, nil, nil)
 	job := &jobs.Job{ID: "job-x", TenantID: "tenant-acme", Status: jobs.StatusSucceeded}
 	// Never given a recipient, so this would be a no-op regardless, but the
 	// point is that a nil bus must not panic even when it IS reached.
@@ -704,7 +711,7 @@ func TestService_ReconcileOutstandingCredits_NonTerminalJob_LeavesReservationInP
 // other optional-seam nil-safety test in this file: a Service missing
 // credits, store or queue must not panic, and must settle nothing.
 func TestService_ReconcileOutstandingCredits_NilWiring_IsANoOp(t *testing.T) {
-	svc := NewService(nil, nil, nil, nil, nil)
+	svc := NewService(nil, nil, nil, nil, nil, nil)
 	settled, err := svc.ReconcileOutstandingCredits(context.Background())
 	if err != nil {
 		t.Fatalf("ReconcileOutstandingCredits: %v", err)
@@ -753,7 +760,11 @@ func TestService_CreditReservation_SurvivesRestart(t *testing.T) {
 	if schemaErr := store.EnsureSchema(context.Background()); schemaErr != nil {
 		t.Fatalf("EnsureSchema: %v", schemaErr)
 	}
-	serviceB := NewService(nil, credits, pkgcore.NewMemoryEventBus(), queue, store)
+	simulations := NewSimulationStore(db)
+	if schemaErr := simulations.EnsureSchema(context.Background()); schemaErr != nil {
+		t.Fatalf("EnsureSchema (simulation index): %v", schemaErr)
+	}
+	serviceB := NewService(nil, credits, pkgcore.NewMemoryEventBus(), queue, store, simulations)
 
 	queue.setJob(&jobs.Job{ID: jobID, TenantID: "tenant-acme", Status: jobs.StatusSucceeded})
 
@@ -826,7 +837,352 @@ func TestService_StartReconciler_AutomaticallySettlesWithoutAnyPoll(t *testing.T
 // StartReconciler on a Service with nothing wired must not panic, and its
 // returned stop func must be safe to call.
 func TestService_StartReconciler_NilWiring_ReturnsAHarmlessStop(t *testing.T) {
-	svc := NewService(nil, nil, nil, nil, nil)
+	svc := NewService(nil, nil, nil, nil, nil, nil)
 	stop := svc.StartReconciler(context.Background(), time.Millisecond)
 	stop()
+}
+
+// TestService_Simulate_InvalidOptions_RefusedBeforeReservationOrEnqueue
+// pins the refusal ordering this round's parameterization promises: an
+// option set with any out-of-vocabulary or out-of-range value is refused
+// with its coded smilesim.* error BEFORE any credit is reserved and before
+// Gateway.GenerateImage -- and therefore go/ai-gateway, and any real
+// vendor -- is ever reached, and it leaves no record behind for the
+// per-photo index.
+func TestService_Simulate_InvalidOptions_RefusedBeforeReservationOrEnqueue(t *testing.T) {
+	credits := newTestCreditService(t)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	if _, err := credits.Grant(ctx, billing.GrantInput{Amount: 100, Reason: "test:seed"}); err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+
+	queue := &recordingQueue{jobID: "job-should-never-run"}
+	svc := newTestService(t, &fakeImageProvider{}, queue, credits)
+
+	invalidAttempts := []struct {
+		name    string
+		options []SimulateOption
+		wantErr string
+	}{
+		{name: "unknown smile style", options: []SimulateOption{WithSmileStyle("dazzling")}, wantErr: "smilesim.unsupported_smile_style"},
+		{name: "unknown tooth shade", options: []SimulateOption{WithToothShade("glittering")}, wantErr: "smilesim.unsupported_tooth_shade"},
+		{name: "strength above the upper bound", options: []SimulateOption{WithStrength(1.5)}, wantErr: "smilesim.strength_out_of_range"},
+		{name: "strength at the excluded lower bound", options: []SimulateOption{WithStrength(0)}, wantErr: "smilesim.strength_out_of_range"},
+		{name: "valid style with an invalid shade", options: []SimulateOption{WithSmileStyle(SmileStyleBright), WithToothShade("grey")}, wantErr: "smilesim.unsupported_tooth_shade"},
+	}
+	for _, attempt := range invalidAttempts {
+		t.Run(attempt.name, func(t *testing.T) {
+			jobID, err := svc.Simulate(ctx, "photo-1", "", attempt.options...)
+			if err == nil {
+				t.Fatalf("Simulate with %v succeeded (job %q), want a coded error", attempt.options, jobID)
+			}
+			if jobID != "" {
+				t.Errorf("Simulate returned job id %q on refusal, want empty", jobID)
+			}
+			appErr, ok := apperr.As(err)
+			if !ok || appErr.Code != attempt.wantErr {
+				t.Fatalf("Simulate error = %v, want coded %s", err, attempt.wantErr)
+			}
+		})
+	}
+
+	if queue.enqueueCalls != 0 {
+		t.Errorf("queue.enqueueCalls = %d, want 0 -- Gateway.GenerateImage must never be reached for an invalid option set", queue.enqueueCalls)
+	}
+	bal, err := credits.Balance(ctx)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.Available != 100 || bal.Reserved != 0 {
+		t.Errorf("balance after refused simulations = %+v, want Available 100 Reserved 0 -- validation must run before any PreDeduct", bal)
+	}
+	sims, err := svc.ListSimulationsByPhoto(ctx, "photo-1")
+	if err != nil {
+		t.Fatalf("ListSimulationsByPhoto: %v", err)
+	}
+	if len(sims) != 0 {
+		t.Errorf("ListSimulationsByPhoto after refused simulations returned %d entries, want 0 -- a refused simulation must leave no per-photo record", len(sims))
+	}
+
+	// The same Service still works for a legal option set afterwards --
+	// the refusals above must not have wedged anything.
+	jobID, err := svc.Simulate(ctx, "photo-1", "", WithSmileStyle(SmileStyleBright))
+	if err != nil {
+		t.Fatalf("Simulate with a legal option set: %v", err)
+	}
+	if jobID != queue.jobID {
+		t.Fatalf("Simulate returned job id %q, want the queue's %q", jobID, queue.jobID)
+	}
+	if queue.enqueueCalls != 1 {
+		t.Errorf("queue.enqueueCalls = %d, want exactly 1 after the legal simulation", queue.enqueueCalls)
+	}
+}
+
+// TestService_Simulate_SamePhotoSameOptions_IsANewGeneration pins this
+// round's regenerate decision (see the package doc comment's
+// "Parameterized simulation options" section): calling Simulate again with
+// the SAME photo and the SAME options enqueues a genuinely NEW generation --
+// a fresh job id, a fresh credit reservation, a second enqueue -- and
+// records both in the per-photo index; an option differing in any dimension
+// is likewise always a new generation.
+func TestService_Simulate_SamePhotoSameOptions_IsANewGeneration(t *testing.T) {
+	credits := newTestCreditService(t)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	if _, err := credits.Grant(ctx, billing.GrantInput{Amount: 100, Reason: "test:seed"}); err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+
+	queue := &recordingQueue{}
+	svc := newTestService(t, &fakeImageProvider{}, queue, credits)
+
+	const photo = "photo-1"
+	nextJob := 0
+	simulate := func(opts ...SimulateOption) jobs.JobID {
+		t.Helper()
+		nextJob++
+		queue.jobID = jobs.JobID(fmt.Sprintf("job-same-%d", nextJob))
+		jobID, err := svc.Simulate(ctx, photo, "", opts...)
+		if err != nil {
+			t.Fatalf("Simulate: %v", err)
+		}
+		// The job exists in the queue's world so the per-photo listing can
+		// resolve it (the recording queue double answers what setJob gave
+		// it).
+		queue.setJob(&jobs.Job{ID: jobID, TenantID: "tenant-acme", Status: jobs.StatusPending})
+		return jobID
+	}
+
+	first := simulate(WithSmileStyle(SmileStyleBright), WithToothShade(ToothShadeWhite), WithStrength(0.5))
+	second := simulate(WithSmileStyle(SmileStyleBright), WithToothShade(ToothShadeWhite), WithStrength(0.5))
+	if first == second {
+		t.Fatalf("two same-photo same-options Simulate calls returned the same job id %q -- a regenerate must be a NEW generation", first)
+	}
+	if queue.enqueueCalls != 2 {
+		t.Fatalf("queue.enqueueCalls = %d, want 2 -- each same-option call must really enqueue", queue.enqueueCalls)
+	}
+
+	bal, err := credits.Balance(ctx)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.Reserved != 2*CreditsPerSimulation {
+		t.Errorf("Reserved = %d, want %d -- each same-option generation must carry its own credit reservation", bal.Reserved, 2*CreditsPerSimulation)
+	}
+
+	third := simulate(WithSmileStyle(SmileStyleSubtle), WithToothShade(ToothShadeWhite), WithStrength(0.5))
+	if third == first || third == second {
+		t.Fatalf("a different-options call returned an earlier job id -- different options must always be a new generation")
+	}
+
+	sims, err := svc.ListSimulationsByPhoto(ctx, photo)
+	if err != nil {
+		t.Fatalf("ListSimulationsByPhoto: %v", err)
+	}
+	if len(sims) != 3 {
+		t.Fatalf("ListSimulationsByPhoto returned %d entries, want 3", len(sims))
+	}
+	byJob := map[jobs.JobID]SimulationOutcome{}
+	for _, sim := range sims {
+		byJob[sim.JobID] = sim
+	}
+	for _, jobID := range []jobs.JobID{first, second, third} {
+		if _, ok := byJob[jobID]; !ok {
+			t.Fatalf("per-photo index missing job %q -- every generation, same-option or not, must be recorded", jobID)
+		}
+	}
+	firstOutcome := byJob[first]
+	wantOptions := SimulationOptions{SmileStyle: SmileStyleBright, ToothShade: ToothShadeWhite, Strength: 0.5}
+	if firstOutcome.Options != wantOptions {
+		t.Errorf("first generation's recorded options = %+v, want %+v", firstOutcome.Options, wantOptions)
+	}
+	if byJob[third].Options.SmileStyle != SmileStyleSubtle {
+		t.Errorf("third generation's recorded smile style = %q, want %q", byJob[third].Options.SmileStyle, SmileStyleSubtle)
+	}
+}
+
+// TestService_Simulate_DefaultOptions_AreRecordedExplicitly pins that a
+// Simulate call naming no options records the DOCUMENTED defaults in the
+// per-photo index -- never an empty option set -- so a later read of what
+// produced a default generation answers the real option set.
+func TestService_Simulate_DefaultOptions_AreRecordedExplicitly(t *testing.T) {
+	queue := &recordingQueue{jobID: "job-defaults-1"}
+	svc := newTestService(t, &fakeImageProvider{}, queue, nil)
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	jobID, err := svc.Simulate(ctx, "photo-defaults", "")
+	if err != nil {
+		t.Fatalf("Simulate: %v", err)
+	}
+	queue.setJob(&jobs.Job{ID: jobID, TenantID: "tenant-acme", Status: jobs.StatusPending})
+
+	sims, err := svc.ListSimulationsByPhoto(ctx, "photo-defaults")
+	if err != nil {
+		t.Fatalf("ListSimulationsByPhoto: %v", err)
+	}
+	if len(sims) != 1 {
+		t.Fatalf("ListSimulationsByPhoto returned %d entries, want 1", len(sims))
+	}
+	if sims[0].Options != DefaultSimulationOptions() {
+		t.Errorf("recorded options = %+v, want the documented defaults %+v -- a defaulted generation must be recorded with its effective options", sims[0].Options, DefaultSimulationOptions())
+	}
+}
+
+// TestService_OptionsAndListing_SurviveRestart is this round's restart
+// proof for the per-photo index: a generation recorded through one Service
+// instance -- photo, effective options and job id -- is still enumerated,
+// with its options and its live job status/output, by a brand new Service
+// instance sharing nothing in memory (the restart shape
+// TestService_CreditReservation_SurvivesRestart already establishes), over
+// the same database and the same (queue-double-modeled) persisted queue.
+func TestService_OptionsAndListing_SurviveRestart(t *testing.T) {
+	db := dbtest.NewSQLite(t)
+	queue := &recordingQueue{jobID: "job-restart-sim-1"}
+	serviceA := newTestServiceWithDB(t, db, &fakeImageProvider{}, queue, nil)
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	wantOptions := SimulationOptions{SmileStyle: SmileStyleBright, ToothShade: ToothShadeWhite, Strength: 0.25}
+	jobID, err := serviceA.Simulate(ctx, "photo-1", "",
+		WithSmileStyle(SmileStyleBright), WithToothShade(ToothShadeWhite), WithStrength(0.25))
+	if err != nil {
+		t.Fatalf("Simulate: %v", err)
+	}
+
+	// The "restart": a fresh Service over the same database with its own
+	// fresh store instances -- gateway nil because nothing here calls
+	// Simulate on serviceB, only reads. The job finished while the
+	// process was down; the queue double records that terminal state the
+	// way the real persisted queue would.
+	simulations := NewSimulationStore(db)
+	if schemaErr := simulations.EnsureSchema(context.Background()); schemaErr != nil {
+		t.Fatalf("EnsureSchema (simulation index): %v", schemaErr)
+	}
+	queue.setJob(newSimulateResultJob(t, jobID, "tenant-acme", jobs.StatusSucceeded, "object-out-9"))
+	serviceB := NewService(nil, nil, pkgcore.NewMemoryEventBus(), queue, nil, simulations)
+
+	sims, err := serviceB.ListSimulationsByPhoto(ctx, "photo-1")
+	if err != nil {
+		t.Fatalf("ListSimulationsByPhoto after restart: %v", err)
+	}
+	if len(sims) != 1 {
+		t.Fatalf("ListSimulationsByPhoto after restart returned %d entries, want 1 -- the recorded index row must survive the restart", len(sims))
+	}
+	sim := sims[0]
+	if sim.JobID != jobID {
+		t.Errorf("enumerated job id = %q, want %q", sim.JobID, jobID)
+	}
+	if sim.PhotoObjectID != "photo-1" {
+		t.Errorf("enumerated photo = %q, want photo-1", sim.PhotoObjectID)
+	}
+	if sim.Options != wantOptions {
+		t.Errorf("enumerated options = %+v, want %+v -- the options must survive the restart with their exact values", sim.Options, wantOptions)
+	}
+	if sim.Status != jobs.StatusSucceeded {
+		t.Errorf("enumerated status = %q, want %q -- the live job status must be read through the queue", sim.Status, jobs.StatusSucceeded)
+	}
+	if sim.OutputObjectID != "object-out-9" {
+		t.Errorf("enumerated output object id = %q, want object-out-9", sim.OutputObjectID)
+	}
+	if sim.CreatedAt.IsZero() {
+		t.Error("enumerated created_at is zero")
+	}
+
+	gotOptions, has, err := serviceB.OptionsForJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("OptionsForJob after restart: %v", err)
+	}
+	if !has {
+		t.Fatal("OptionsForJob after restart found no record for the simulated job")
+	}
+	if gotOptions != wantOptions {
+		t.Errorf("OptionsForJob options = %+v, want %+v", gotOptions, wantOptions)
+	}
+
+	// A photo that was never simulated, and a job that was never recorded,
+	// both answer "nothing" -- never an error, never another tenant's row.
+	others, err := serviceB.ListSimulationsByPhoto(ctx, "photo-never-simulated")
+	if err != nil {
+		t.Fatalf("ListSimulationsByPhoto (unknown photo): %v", err)
+	}
+	if len(others) != 0 {
+		t.Errorf("ListSimulationsByPhoto (unknown photo) returned %d entries, want 0", len(others))
+	}
+	if _, has, err := serviceB.OptionsForJob(ctx, "job-never-recorded"); err != nil || has {
+		t.Errorf("OptionsForJob (unknown job) = has %v err %v, want false nil", has, err)
+	}
+}
+
+// TestService_PerPhotoIndex_TenantScoped pins the index's isolation: two
+// tenants may simulate the SAME photo object id (a string collision that is
+// meaningless across tenants' storage), and each tenant's enumeration and
+// OptionsForJob see exactly its own rows -- the tenant filter lives in the
+// query, never in a post-read filter. A listing context carrying no tenant
+// at all is refused rather than listing across tenants.
+func TestService_PerPhotoIndex_TenantScoped(t *testing.T) {
+	queue := &recordingQueue{}
+	svc := newTestService(t, &fakeImageProvider{}, queue, nil)
+
+	acmeCtx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	bcorpCtx := pkgcore.WithTenant(context.Background(), "tenant-bcorp")
+
+	queue.jobID = "job-acme-1"
+	acmeJob, err := svc.Simulate(acmeCtx, "photo-shared", "")
+	if err != nil {
+		t.Fatalf("Simulate (acme): %v", err)
+	}
+	queue.setJob(&jobs.Job{ID: acmeJob, TenantID: "tenant-acme", Status: jobs.StatusPending})
+
+	queue.jobID = "job-bcorp-1"
+	bcorpJob, err := svc.Simulate(bcorpCtx, "photo-shared", "")
+	if err != nil {
+		t.Fatalf("Simulate (bcorp): %v", err)
+	}
+	queue.setJob(&jobs.Job{ID: bcorpJob, TenantID: "tenant-bcorp", Status: jobs.StatusPending})
+
+	acmeSims, err := svc.ListSimulationsByPhoto(acmeCtx, "photo-shared")
+	if err != nil {
+		t.Fatalf("ListSimulationsByPhoto (acme): %v", err)
+	}
+	if len(acmeSims) != 1 || acmeSims[0].JobID != acmeJob {
+		t.Fatalf("acme's enumeration of the shared photo id = %+v, want exactly its own job %q", acmeSims, acmeJob)
+	}
+	bcorpSims, err := svc.ListSimulationsByPhoto(bcorpCtx, "photo-shared")
+	if err != nil {
+		t.Fatalf("ListSimulationsByPhoto (bcorp): %v", err)
+	}
+	if len(bcorpSims) != 1 || bcorpSims[0].JobID != bcorpJob {
+		t.Fatalf("bcorp's enumeration of the shared photo id = %+v, want exactly its own job %q", bcorpSims, bcorpJob)
+	}
+
+	// OptionsForJob is tenant-scoped the same way: acme's record is not
+	// visible to bcorp, even though both asked over the same photo id.
+	if _, has, err := svc.OptionsForJob(bcorpCtx, acmeJob); err != nil || has {
+		t.Errorf("OptionsForJob (bcorp asking for acme's job) = has %v err %v, want false nil", has, err)
+	}
+	if _, has, err := svc.OptionsForJob(acmeCtx, acmeJob); err != nil || !has {
+		t.Errorf("OptionsForJob (acme asking for its own job) = has %v err %v, want true nil", has, err)
+	}
+
+	if _, err := svc.ListSimulationsByPhoto(context.Background(), "photo-shared"); !errors.Is(err, pkgcore.ErrNoTenant) {
+		t.Errorf("ListSimulationsByPhoto with no tenant context error = %v, want pkgcore.ErrNoTenant", err)
+	}
+}
+
+// TestService_PerPhotoIndex_NilWiring_IsANoOp mirrors the optional-seam
+// nil-safety tests this file applies to every other method: a Service
+// built with no simulation store and no queue must not panic, and its
+// per-photo reads answer "nothing".
+func TestService_PerPhotoIndex_NilWiring_IsANoOp(t *testing.T) {
+	svc := NewService(nil, nil, nil, nil, nil, nil)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+
+	sims, err := svc.ListSimulationsByPhoto(ctx, "photo-1")
+	if err != nil {
+		t.Fatalf("ListSimulationsByPhoto with nil wiring error = %v, want nil", err)
+	}
+	if len(sims) != 0 {
+		t.Errorf("ListSimulationsByPhoto with nil wiring returned %d entries, want 0", len(sims))
+	}
+	if _, has, err := svc.OptionsForJob(ctx, "job-1"); err != nil || has {
+		t.Errorf("OptionsForJob with nil wiring = has %v err %v, want false nil", has, err)
+	}
 }

@@ -23,6 +23,17 @@ package main
 // distinct from the input, that this app's own storage HTTP surface can
 // read back.
 //
+// The P2a parameterization round added two further legs at the bottom of
+// this file: TestSmileSimulation_ParameterizedOptions_ReachTheVendorAndTheResultIndex
+// drives an options-carrying simulate body end to end (the rendered
+// option clauses reach the fake vendor's prompt, the job-status response
+// echoes the recorded options, a same-photo same-options regenerate is a
+// distinct generation, and the per-photo enumeration route lists every
+// generation with its options, status and output object), and
+// TestSmileSimulation_InvalidOptions_RefusedWithCodedErrors proves an
+// out-of-vocabulary or out-of-range option set is refused with its coded
+// 400 before the vendor is ever reached.
+//
 // Known, non-flaky WARN log this test deterministically surfaces: the
 // uploaded photo's own storage.object.derive.thumbnail job (enqueued by
 // its Complete) and this round's ai-gateway.image.generate job for the
@@ -75,6 +86,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -297,6 +309,17 @@ func smileSimulateAndWait(t *testing.T, srv *httptest.Server, token string, phot
 	if err != nil {
 		t.Fatalf("marshal simulate request: %v", err)
 	}
+	return smileSimulateBodyAndWait(t, srv, token, simulateBody, deadline)
+}
+
+// smileSimulateBodyAndWait is smileSimulateAndWait's own implementation,
+// parametrized on an arbitrary already-marshaled request body -- the P2a
+// round's parameterized-options tests need it to enqueue simulations whose
+// body carries an "options" object (smile_style/tooth_shade/strength), which
+// the plain photo-only helper cannot express.
+func smileSimulateBodyAndWait(t *testing.T, srv *httptest.Server, token string, simulateBody []byte, deadline time.Time) map[string]any {
+	t.Helper()
+
 	resp := smileSimRequest(t, srv, http.MethodPost, smileSimulatePath, token, simulateBody)
 	var simulateOut struct {
 		JobID string `json:"job_id"`
@@ -313,6 +336,49 @@ func smileSimulateAndWait(t *testing.T, srv *httptest.Server, token string, phot
 		t.Fatal("simulate response carries no job_id")
 	}
 	return waitForSmileSimSucceeded(t, srv, token, simulateOut.JobID, deadline)
+}
+
+// enumerateSimulations GETs the per-photo enumeration route for photoID and
+// returns the decoded "simulations" array -- the P3 gallery's data source,
+// asserted on by the parameterized-options flow tests.
+func enumerateSimulations(t *testing.T, srv *httptest.Server, token, photoID string) []map[string]any {
+	t.Helper()
+
+	path := "/api/v1/smile-simulation/photos/" + photoID + "/simulations"
+	resp := smileSimRequest(t, srv, http.MethodGet, path, token, nil)
+	var out struct {
+		Simulations []map[string]any `json:"simulations"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		resp.Body.Close()
+		t.Fatalf("decode enumeration response: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s status = %d, want %d; body = %+v", path, resp.StatusCode, http.StatusOK, out)
+	}
+	return out.Simulations
+}
+
+// assertOptionsIn asserts that map m's "options" object carries exactly the
+// given effective option set -- the shape both the job-status route's
+// options echo and the enumeration route's per-entry options field share.
+func assertOptionsIn(t *testing.T, m map[string]any, wantStyle, wantShade string, wantStrength float64) {
+	t.Helper()
+
+	options, ok := m["options"].(map[string]any)
+	if !ok {
+		t.Fatalf("response carries no options object: %+v", m)
+	}
+	if style, _ := options["smile_style"].(string); style != wantStyle {
+		t.Errorf("options.smile_style = %q, want %q (options: %+v)", style, wantStyle, options)
+	}
+	if shade, _ := options["tooth_shade"].(string); shade != wantShade {
+		t.Errorf("options.tooth_shade = %q, want %q (options: %+v)", shade, wantShade, options)
+	}
+	if strength, _ := options["strength"].(float64); strength != wantStrength {
+		t.Errorf("options.strength = %v, want %v (options: %+v)", strength, wantStrength, options)
+	}
 }
 
 // TestSmileSimulation_ImageToImage_EndToEnd is round 2's mandatory
@@ -505,5 +571,210 @@ func TestSmileSimulation_CompletionNotifiesTheNamedRecipient(t *testing.T) {
 	// (internal/smilesim's own service_test.go).
 	if got := smsLinesTo(sms, "+8613800138099"); len(got) != 1 {
 		t.Errorf("recorded %d SMS lines to the recipient, want exactly 1 (repeated polling must not double-send)", len(got))
+	}
+}
+
+// TestSmileSimulation_ParameterizedOptions_ReachTheVendorAndTheResultIndex
+// is the P2a parameterization round's end-to-end proof, in three legs over
+// the real composed HTTP stack:
+//
+//  1. an options-carrying /simulate body (bright style, ultra-white shade,
+//     strength 0.4) produces a job whose vendor prompt -- as recorded by
+//     the fake image server -- renders exactly that option set's clauses,
+//     ends with the verbatim preservation sentence, and names the exact
+//     strength value, and whose job-status response echoes the recorded
+//     options;
+//  2. repeating the SAME photo and SAME options is a NEW generation (a
+//     distinct job id) -- the regenerate decision, pinned at the HTTP
+//     layer;
+//  3. the per-photo enumeration route lists all three generations of this
+//     photo -- the one made twice with the same options and a third with
+//     different ones -- each carrying the options that produced it, its
+//     status and its output object: the P3 gallery's data source.
+func TestSmileSimulation_ParameterizedOptions_ReachTheVendorAndTheResultIndex(t *testing.T) {
+	imgServer := newFakeOpenAIImageServer(t)
+	srv, cfg := buildSmileSimTestServer(t, imgServer)
+
+	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "smilesim-params-owner")
+
+	photo := jpegWithExif(t)
+	completedPhoto := uploadAndComplete(t, srv, token, photo, "")
+	if completedPhoto.State != "completed" {
+		t.Fatalf("photo state = %q, want completed", completedPhoto.State)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	simulateBody := func(options map[string]any) []byte {
+		t.Helper()
+		body := map[string]any{"photo_object_id": completedPhoto.ID}
+		if options != nil {
+			body["options"] = options
+		}
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal simulate body: %v", err)
+		}
+		return raw
+	}
+
+	// Leg 1: a fully-specified option set reaches the vendor's prompt and
+	// comes back on the job-status response.
+	brightOpts := map[string]any{"smile_style": "bright", "tooth_shade": "ultra-white", "strength": 0.4}
+	final := smileSimulateBodyAndWait(t, srv, token, simulateBody(brightOpts), deadline)
+	if status, _ := final["status"].(string); status != "succeeded" {
+		t.Fatalf("final job status = %v, want \"succeeded\"", final["status"])
+	}
+	prompt := imgServer.lastPrompt
+	for _, want := range []string{
+		"Shape the mouth into a bright, open smile with clearly visible, evenly aligned teeth.",
+		"Give the teeth a bright ultra-white shade.",
+		"Apply the smile transformation at a strength of 0.4, where 1.0 means the complete simulated smile",
+		"Preserve the patient's facial identity, proportions, skin tone, lip color and pose.",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("vendor prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if !strings.HasSuffix(prompt, "Keep the rest of the face, lighting and background unchanged.") {
+		t.Errorf("vendor prompt does not end with the verbatim preservation sentence:\n%s", prompt)
+	}
+	assertOptionsIn(t, final, "bright", "ultra-white", 0.4)
+
+	// Leg 2: the regenerate decision at the HTTP layer -- the same photo,
+	// the same options, a distinct job id, and the same option clauses in
+	// the vendor prompt (a second real vendor call, not a cached reply).
+	promptBeforeRegenerate := imgServer.lastPrompt
+	final2 := smileSimulateBodyAndWait(t, srv, token, simulateBody(brightOpts), deadline)
+	if status, _ := final2["status"].(string); status != "succeeded" {
+		t.Fatalf("second (regenerate) job status = %v, want \"succeeded\"", final2["status"])
+	}
+	if imgServer.lastPrompt != promptBeforeRegenerate {
+		t.Errorf("regenerate with identical options rendered a different prompt:\nfirst: %s\nsecond: %s", promptBeforeRegenerate, imgServer.lastPrompt)
+	}
+
+	// Leg 3: different options on the same photo -- a subtle style with
+	// everything else defaulted (natural shade, strength 1).
+	final3 := smileSimulateBodyAndWait(t, srv, token, simulateBody(map[string]any{"smile_style": "subtle"}), deadline)
+	if status, _ := final3["status"].(string); status != "succeeded" {
+		t.Fatalf("third job status = %v, want \"succeeded\"", final3["status"])
+	}
+	if !strings.Contains(imgServer.lastPrompt, "subtle, gentle smile with only a slight curve") {
+		t.Errorf("third vendor prompt missing the subtle style clause:\n%s", imgServer.lastPrompt)
+	}
+	assertOptionsIn(t, final3, "subtle", "natural", 1)
+
+	// The per-photo enumeration lists all three generations, each with the
+	// options that produced it, its status and its output object.
+	sims := enumerateSimulations(t, srv, token, completedPhoto.ID)
+	if len(sims) != 3 {
+		t.Fatalf("enumeration returned %d simulations, want 3 (two same-option generations plus one different-option one)", len(sims))
+	}
+	byJob := make(map[string]map[string]any, len(sims))
+	jobIDs := make(map[string]bool, len(sims))
+	for _, sim := range sims {
+		jobID, _ := sim["job_id"].(string)
+		if jobID == "" {
+			t.Fatalf("enumeration entry carries no job_id: %+v", sim)
+		}
+		jobIDs[jobID] = true
+		byJob[jobID] = sim
+		if photoID, _ := sim["photo_object_id"].(string); photoID != completedPhoto.ID {
+			t.Errorf("enumeration entry photo_object_id = %q, want %q", photoID, completedPhoto.ID)
+		}
+		if status, _ := sim["status"].(string); status != "succeeded" {
+			t.Errorf("enumeration entry status = %q, want succeeded (entry: %+v)", status, sim)
+		}
+		if out, _ := sim["output_object_id"].(string); out == "" {
+			t.Errorf("enumeration entry for a succeeded job carries no output_object_id: %+v", sim)
+		}
+		if createdAt, _ := sim["created_at"].(string); createdAt == "" {
+			t.Errorf("enumeration entry carries no created_at: %+v", sim)
+		}
+	}
+	if len(jobIDs) != 3 {
+		t.Fatalf("enumeration returned %d distinct job ids, want 3 -- a same-option regenerate must be a distinct generation", len(jobIDs))
+	}
+	// Match entries to what each leg asked for by their recorded options.
+	byOptions := make(map[string][]string)
+	for jobID, sim := range byJob {
+		options, ok := sim["options"].(map[string]any)
+		if !ok {
+			t.Fatalf("enumeration entry carries no options: %+v", sim)
+		}
+		style, _ := options["smile_style"].(string)
+		shade, _ := options["tooth_shade"].(string)
+		strength, _ := options["strength"].(float64)
+		key := style + "/" + shade + "/" + strengthTextForTest(strength)
+		byOptions[key] = append(byOptions[key], jobID)
+	}
+	if got := byOptions["bright/ultra-white/0.4"]; len(got) != 2 {
+		t.Errorf("same-option generations recorded = %v, want 2 (the regenerate must be recorded as its own generation)", got)
+	}
+	if got := byOptions["subtle/natural/1"]; len(got) != 1 {
+		t.Errorf("defaulted-option generation recorded = %v, want exactly 1 with the documented defaults", got)
+	}
+}
+
+// strengthTextForTest renders a decoded JSON strength value (float64) the
+// way this test's option keys expect -- shortest decimal, no exponent --
+// matching how the server itself stores and echoes the value.
+func strengthTextForTest(v float64) string {
+	return strconv.FormatFloat(v, 'f', -1, 64)
+}
+
+// TestSmileSimulation_InvalidOptions_RefusedWithCodedErrors pins the
+// parameterization round's rejection contract at the HTTP layer: an option
+// outside the vocabulary or range is refused with its coded 400 error --
+// never clamped, never silently replaced by a default -- and the refusal
+// happens before go/ai-gateway (and therefore any real vendor) is ever
+// reached, leaving no job and no per-photo record behind.
+func TestSmileSimulation_InvalidOptions_RefusedWithCodedErrors(t *testing.T) {
+	imgServer := newFakeOpenAIImageServer(t)
+	srv, cfg := buildSmileSimTestServer(t, imgServer)
+
+	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "smilesim-invalid-owner")
+
+	invalidBodies := []struct {
+		name     string
+		options  map[string]any
+		wantCode string
+	}{
+		{name: "unknown smile style", options: map[string]any{"smile_style": "dazzling"}, wantCode: "smilesim.unsupported_smile_style"},
+		{name: "unknown tooth shade", options: map[string]any{"tooth_shade": "grey"}, wantCode: "smilesim.unsupported_tooth_shade"},
+		{name: "strength above the upper bound", options: map[string]any{"strength": 1.5}, wantCode: "smilesim.strength_out_of_range"},
+		{name: "strength at the excluded lower bound", options: map[string]any{"strength": 0}, wantCode: "smilesim.strength_out_of_range"},
+	}
+	for _, tt := range invalidBodies {
+		t.Run(tt.name, func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{
+				"photo_object_id": "photo-does-not-matter",
+				"options":         tt.options,
+			})
+			if err != nil {
+				t.Fatalf("marshal body: %v", err)
+			}
+			resp := smileSimRequest(t, srv, http.MethodPost, smileSimulatePath, token, body)
+			var out map[string]any
+			if decErr := json.NewDecoder(resp.Body).Decode(&out); decErr != nil {
+				resp.Body.Close()
+				t.Fatalf("decode error response: %v", decErr)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("POST status = %d, want %d; body = %+v", resp.StatusCode, http.StatusBadRequest, out)
+			}
+			if code, _ := out["code"].(string); code != tt.wantCode {
+				t.Errorf("error code = %q, want %q; body = %+v", code, tt.wantCode, out)
+			}
+		})
+	}
+
+	// None of the refusals reached the vendor, and none left a per-photo
+	// record or a job behind.
+	if imgServer.requests != 0 {
+		t.Errorf("fake vendor received %d requests, want 0 -- an invalid option set must never reach the provider", imgServer.requests)
+	}
+	if sims := enumerateSimulations(t, srv, token, "photo-does-not-matter"); len(sims) != 0 {
+		t.Errorf("enumeration after refused simulations returned %d entries, want 0", len(sims))
 	}
 }

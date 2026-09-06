@@ -10,12 +10,14 @@
 //
 // Like internal/consult (round 1's chat consumer), it deliberately does not
 // go through the OpenAPI machinery: ai-gateway itself ships no HTTP surface
-// for either round's spec fragment to grow into. Its two routes (POST
+// for either round's spec fragment to grow into. Its three routes (POST
 // /api/v1/smile-simulation/simulate, GET
-// /api/v1/smile-simulation/jobs/{id}) are mounted by hand in cmd/server
-// (cmd/server/smilesim.go), the same pattern consult.go and the
-// notification module's own demo patient-message route already establish
-// in this app.
+// /api/v1/smile-simulation/jobs/{id}, and -- since the P2a round -- GET
+// /api/v1/smile-simulation/photos/{photoObjectID}/simulations, the
+// per-photo enumeration that is the P3 gallery's data source) are mounted
+// by hand in cmd/server (cmd/server/smilesim.go), the same pattern
+// consult.go and the notification module's own demo patient-message route
+// already establish in this app.
 //
 // # Completion notification
 //
@@ -96,6 +98,112 @@
 // same nil-is-legal default every other optional host seam in this
 // codebase takes when unwired (mirroring bus's own nil-is-legal contract
 // just above).
+//
+// # Parameterized simulation options
+//
+// Since this round (the product's backend parameterization milestone, P2a),
+// Simulate accepts an optional, validated option set -- variadic
+// SimulateOption helpers (WithSmileStyle/WithToothShade/WithStrength) over
+// DefaultSimulationOptions, so a call that names no options behaves exactly
+// as this service always did. The effective set is rendered into the vendor
+// prompt by prompt.go's renderSimulationPrompt; each dimension's meaning
+// and legal vocabulary live on its own type (SmileStyle, ToothShade,
+// SimulationOptions.Strength in options.go). An option outside the
+// vocabulary or range is refused with a coded smilesim.* error BEFORE any
+// credit is reserved and before any job is enqueued -- never silently
+// clamped -- with the reason recorded at options.go's Strength bound
+// constants (a clamped value would make both the durable record and the
+// rendered prompt lie about what the caller asked for on a billed
+// operation). The prompt template keeps this product's core promise
+// intact: every render ends with the pre-parameterization preservation
+// sentence verbatim ("Keep the rest of the face, lighting and background
+// unchanged."), preceded by the strengthening identity sentence this round
+// added (identity, proportions, skin tone, lip color, pose) -- the
+// preservation instruction is never weakened, only extended (prompt.go,
+// pinned by prompt_test.go).
+//
+// Calling Simulate again with the SAME photo and the SAME options is an
+// explicit NEW generation: a fresh credit charge and a fresh job, never an
+// idempotent return of the earlier result. "Regenerate" in this product
+// means "draw another variant from the same stochastic vendor call", which
+// is exactly what a same-option repeat is for -- deduplicating it would
+// remove the one thing the action does -- and each attempt bills honestly
+// because each one is a real, new vendor call. Options differing in any
+// dimension are of course always a new generation. The choice is pinned by
+// TestService_Simulate_SamePhotoSameOptions_IsANewGeneration.
+//
+// # Per-photo result index (the P3 gallery's data source)
+//
+// Every Simulate whose enqueue succeeds also durably records, in this app's
+// own SQLite (SimulationStore, simulation_store.go's smilesim_simulations
+// table), which photo the generation was requested for, which EFFECTIVE
+// option set produced it, and which go/ai-gateway job carries its outcome.
+// An app-side record is necessary because no go/ module table may grow
+// columns for one host's feature and go/jobs' own Queue offers no listing
+// API -- the existing job row cannot answer "which simulations were
+// generated from photo X, and with which options". The row survives a
+// process restart exactly like the job row it points at, and is never
+// deleted or updated: it is this package's append-only per-photo index.
+// The outcome itself -- live status, and the generated image's output
+// object id once the job succeeded -- is deliberately NOT duplicated into
+// the record: Service.ListSimulationsByPhoto reads it per record from the
+// job through the same jobs.Queue a client polls, so the job row stays the
+// single source of truth for status/result and the index carries only what
+// no existing record can. The job-status route answers
+// Service.OptionsForJob, so a polled result also names the options that
+// produced it.
+//
+// # Provider capability assessment (honest record, P2a)
+//
+// The provider behind this service is whatever image provider this app's
+// wiring routes smilesim.LogicalModel to -- today cmd/server/server.go
+// routes the logical key to an OpenAI-compatible image provider serving the
+// vendor model id "dall-e-3" over the provider's /images/edits multipart
+// schema (an image-to-image call: the patient photo plus this package's
+// rendered prompt, no mask). What is known about facial preservation on
+// this path: the prompt is the ONLY preservation mechanism (no mask, no
+// face-anchoring pipeline), the provider is reached through a generic
+// OpenAI-compatible wire shape rather than a documented
+// vendor-specific face-preserving capability, and everything this
+// repository can prove offline is about the plumbing (the photo's bytes
+// reach the vendor verbatim, the prompt renders correctly, the generated
+// bytes come back as a new object) -- none of it about the vendor's actual
+// image quality. Nothing is known, from this repository, about how well
+// the routed model preserves a real patient's identity, proportions,
+// lips, skin tone, lighting or pose under a smile edit, and claims in
+// either direction would be fabrication. What a real acceptance run
+// against a real provider would need to verify, at minimum: (1) the
+// routed model/endpoint genuinely accepts and meaningfully answers an
+// edit-shaped request (the "dall-e-3" id is a routing choice this app
+// made, not a verified vendor capability on an edit endpoint); (2) on a
+// panel of real patient photos, identity preservation -- measured by a
+// face-similarity metric between input and output, not by eyeballing one
+// image -- plus preservation of skin tone, lip color, lighting and pose,
+// and absence of artifacts around the mouth region; and (3) per-option
+// behavior, that higher SmileStyle/Strength options change the smile
+// without degrading preservation. Whether that requires a dedicated
+// face-preserving provider or a masking pipeline (mask the mouth region,
+// inpaint the smile only -- a mask path go/ai-gateway's ImageRequest
+// already supports via MaskObjectID) is a P2b-or-later product decision
+// that should be made on the acceptance run's evidence, not before it;
+// this round records the question rather than guessing.
+//
+// # Patient and case entities (a clean P2b, not this round)
+//
+// The product vision's eventual domain -- a Patient record owning its
+// photos, and a Case (a treatment scenario) owning that patient's
+// simulations of one photo -- does NOT belong in this round, and was
+// deliberately not smuggled in: the per-photo index above is keyed by
+// go/storage photo object id only, which is the natural key at this
+// milestone because photos are already first-class objects with no
+// patient/case table anywhere in this app to attach to. Building a
+// patient/case dimension now would mean inventing the domain model before
+// the P3 gallery UI exists to validate its shape, on a record whose
+// photo-object-id key remains correct under either future model (a
+// patient/case layer would sit ABOVE the photo, adding its own tables and
+// referencing these records or their photos). Recommendation: P2b, done
+// as its own round alongside the gallery, when the gallery's queries make
+// the needed shape concrete.
 package smilesim
 
 import (
@@ -103,6 +211,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -120,15 +229,6 @@ import (
 // aigateway.WithModelRoute for this exact key onto whatever image provider
 // should actually answer it (cmd/server/server.go's buildServer).
 const LogicalModel = "image:smile-simulation"
-
-// simulationPrompt primes every request this service sends: a short,
-// deterministic instruction, never varying by tenant or by photo, so it
-// carries no user-facing text of its own to localize -- it is sent to the
-// vendor as part of the image request, never rendered to a person, exactly
-// like consult.systemPrompt's identical role for chat.
-const simulationPrompt = "Simulate a bright, straight, natural-looking " +
-	"smile for this dental patient photo. Keep the rest of the face, " +
-	"lighting and background unchanged."
 
 // CreditsPerSimulation is the flat credit cost Simulate reserves for one
 // smile-simulation request -- a reference-app-level demo business policy
@@ -225,6 +325,13 @@ type Service struct {
 	// nil credits.
 	store *ReservationStore
 
+	// simulations durably records each generation request's photo, its
+	// effective options and its job id -- see the package doc comment's
+	// "Per-photo result index" section. Nil is legal: Simulate then
+	// records nothing, and ListSimulationsByPhoto/OptionsForJob answer
+	// "no record", the same optional-seam convention as store.
+	simulations *SimulationStore
+
 	// queue is the jobs.Queue ReconcileOutstandingCredits polls for each
 	// outstanding reservation's current job status -- the SAME queue
 	// go/ai-gateway's own job handler runs on, never a second queue of
@@ -262,19 +369,23 @@ type Service struct {
 // doc comment on the credits field), persisting the reservation-settlement
 // mapping in store and checking job status for ReconcileOutstandingCredits
 // through queue (nil is legal for either -- see Service's own doc comments
-// on the store and queue fields), and publishing simulation-completed
-// events on bus (nil is legal -- see Service's own doc comment on the bus
-// field). Constructing one performs no I/O; call store's own EnsureSchema
-// once, separately, before first use (cmd/server's wiring does this).
-func NewService(gateway *aigateway.Gateway, credits *billing.CreditService, bus pkgcore.EventBus, queue jobs.Queue, store *ReservationStore) *Service {
+// on the store and queue fields), durably recording each generation
+// request's photo/options/job mapping in simulations (nil is legal -- see
+// Service's own doc comment on the simulations field), and publishing
+// simulation-completed events on bus (nil is legal -- see Service's own doc
+// comment on the bus field). Constructing one performs no I/O; call each
+// store's own EnsureSchema once, separately, before first use (cmd/server's
+// wiring does this).
+func NewService(gateway *aigateway.Gateway, credits *billing.CreditService, bus pkgcore.EventBus, queue jobs.Queue, store *ReservationStore, simulations *SimulationStore) *Service {
 	return &Service{
-		gateway:    gateway,
-		credits:    credits,
-		store:      store,
-		queue:      queue,
-		bus:        bus,
-		recipients: make(map[jobs.JobID]string),
-		notified:   make(map[jobs.JobID]bool),
+		gateway:     gateway,
+		credits:     credits,
+		store:       store,
+		simulations: simulations,
+		queue:       queue,
+		bus:         bus,
+		recipients:  make(map[jobs.JobID]string),
+		notified:    make(map[jobs.JobID]bool),
 	}
 }
 
@@ -282,6 +393,23 @@ func NewService(gateway *aigateway.Gateway, credits *billing.CreditService, bus 
 // existing, completed go/storage object of ctx's own tenant (typically
 // uploaded through storage's own HTTP surface just before this call) -- and
 // returns immediately with the job's id.
+//
+// options, when given, adjust the option set the simulation is generated
+// with (see the package doc comment's "Parameterized simulation options"
+// section); with none given, DefaultSimulationOptions applies. An invalid
+// or out-of-range option set is refused with the coded smilesim.* error
+// Validate returns (options.go) BEFORE any credit is reserved and before
+// any job is enqueued -- see SimulateOption's own doc comment. The rendered
+// prompt is prompt.go's renderSimulationPrompt over the effective set; the
+// effective set itself (defaults applied) is what the durable per-photo
+// record stores, so an outcome always names exactly which options produced
+// it.
+//
+// Calling Simulate again with the same photo and the same options is an
+// explicit NEW generation -- a fresh credit charge and a fresh job, per the
+// package doc comment's "Parameterized simulation options" section -- so
+// there is no deduplication to reason about here: every call is a new
+// generation by design.
 //
 // This never touches storage or a vendor itself: Gateway.GenerateImage's
 // own pipeline (the entitlement gate, route/credential resolution, and the
@@ -339,7 +467,15 @@ func NewService(gateway *aigateway.Gateway, credits *billing.CreditService, bus 
 // resolve, exactly the "log and swallow, never fail an otherwise-complete
 // operation over a secondary side effect" stance recordImageUsage already
 // takes in go/ai-gateway for its own usage-reporting side effect.
-func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID string) (jobs.JobID, error) {
+func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID string, options ...SimulateOption) (jobs.JobID, error) {
+	effective := DefaultSimulationOptions()
+	for _, apply := range options {
+		apply(&effective)
+	}
+	if err := effective.Validate(); err != nil {
+		return "", err
+	}
+
 	var creditKey string
 	if s.credits != nil {
 		creditKey = "smilesim:" + uuid.NewString()
@@ -355,7 +491,7 @@ func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID s
 	jobID, err := s.gateway.GenerateImage(ctx, aigateway.ImageRequest{
 		Model:         LogicalModel,
 		Operation:     aigateway.ImageOperationImageToImage,
-		Prompt:        simulationPrompt,
+		Prompt:        renderSimulationPrompt(effective),
 		InputObjectID: photoObjectID,
 	})
 	if err != nil {
@@ -390,6 +526,29 @@ func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID s
 			// section).
 			obs.FromContext(ctx).Error("smilesim: persisting the credit reservation for a just-enqueued job failed -- it cannot be automatically settled and must be reconciled by hand",
 				"job_id", string(jobID), "credit_idempotency_key", creditKey, "error", saveErr)
+		}
+	}
+
+	if s.simulations != nil {
+		// tenant is always present here for the identical reason the
+		// reservation save just above gives: GenerateImage has already
+		// succeeded and never returns a job id without first resolving
+		// ctx's tenant.
+		tenant, _ := pkgcore.TenantFromContext(ctx)
+		if saveErr := s.simulations.save(ctx, jobID, tenant, photoObjectID, effective); saveErr != nil {
+			// The same shape as the reservation-save failure logged just
+			// above, and the same verdict: the job is already enqueued and
+			// running, so refusing the call now would strand it with no
+			// way for the caller to ever retrieve it, which is worse than
+			// the alternative logged here. The consequence differs -- this
+			// generation is missing from the per-photo index
+			// (ListSimulationsByPhoto/OptionsForJob answer "no record" for
+			// it, so the P3 gallery would not show it) rather than stuck
+			// Reserved -- but the failure mode is the same narrow, clearly
+			// logged one of the durable store itself (see this package's
+			// doc comment's "Per-photo result index" section).
+			obs.FromContext(ctx).Error("smilesim: persisting the photo/options index row for a just-enqueued job failed -- this generation will be missing from per-photo listings",
+				"job_id", string(jobID), "photo_object_id", photoObjectID, "error", saveErr)
 		}
 	}
 
@@ -527,4 +686,144 @@ func (s *Service) settleCredit(ctx context.Context, job *jobs.Job) error {
 			"job_id", string(job.ID), "error", delErr)
 	}
 	return nil
+}
+
+// SimulationOutcome is one entry of Service.ListSimulationsByPhoto's answer:
+// a simulation generated from one photo, with the effective options that
+// produced it and its outcome read live from the job at query time.
+type SimulationOutcome struct {
+	// JobID is the go/ai-gateway image-generation job's id.
+	JobID jobs.JobID
+
+	// PhotoObjectID is the go/storage object id of the photo the
+	// simulation was generated from -- the enumeration's grouping key,
+	// echoed per entry for a caller rendering a row on its own.
+	PhotoObjectID string
+
+	// Options is the effective option set that produced this simulation,
+	// durably recorded at request time (see the package doc comment's
+	// "Per-photo result index" section).
+	Options SimulationOptions
+
+	// Status is the job's LIVE status, read from the queue at call time --
+	// never a snapshot stored by this package, so an enumeration always
+	// reflects what a job-status poll would answer right now.
+	Status jobs.Status
+
+	// OutputObjectID is the generated image's go/storage object id, set
+	// only when Status is StatusSucceeded and the job's own result names
+	// one.
+	OutputObjectID string
+
+	// Error is the job's recorded failure message, set only when the job
+	// carries one (dead-lettered, cancelled after a failed attempt, or
+	// retrying).
+	Error string
+
+	// CreatedAt is when the generation was requested.
+	CreatedAt time.Time
+}
+
+// OptionsForJob returns the effective option set durably recorded for job,
+// and whether a record exists at all -- false with a nil error means this
+// Service never recorded one for a job under ctx's own tenant (the job
+// predates this round's per-photo index, Simulate was called on a Service
+// built with a nil simulations store, or the row belongs to another
+// tenant). The lookup is tenant-scoped: it answers only for ctx's own
+// tenant, mirroring jobs.Queue.Get's own scoping so a caller that could
+// not poll the job could not learn its options either.
+//
+// It is how the job-status route attaches the producing options to a
+// polled result -- see the package doc comment's "Per-photo result index"
+// section.
+func (s *Service) OptionsForJob(ctx context.Context, jobID jobs.JobID) (SimulationOptions, bool, error) {
+	if s.simulations == nil {
+		return SimulationOptions{}, false, nil
+	}
+	tenant, ok := pkgcore.TenantFromContext(ctx)
+	if !ok {
+		return SimulationOptions{}, false, nil
+	}
+	row, has, err := s.simulations.get(ctx, tenant, jobID)
+	if err != nil {
+		return SimulationOptions{}, false, err
+	}
+	if !has {
+		return SimulationOptions{}, false, nil
+	}
+	opts, err := row.options()
+	if err != nil {
+		return SimulationOptions{}, false, fmt.Errorf("smilesim: decode recorded options for job %q: %w", jobID, err)
+	}
+	return opts, true, nil
+}
+
+// ListSimulationsByPhoto returns every simulation generated from
+// photoObjectID under ctx's own tenant -- the P3 gallery's data source --
+// newest first. Each outcome's Status/OutputObjectID/Error are read LIVE
+// from the job through the same jobs.Queue a client polls (per row, under
+// the job's own rebuilt tenant context, per root CLAUDE.md's worker-context
+// trap), so the job row stays the single source of truth for the outcome
+// and this index carries only what no existing record can: the
+// photo-to-generation mapping and the options (see the package doc
+// comment's "Per-photo result index" section).
+//
+// ctx must carry a tenant; one without refuses with pkgcore.ErrNoTenant
+// rather than listing across tenants. A Service built with a nil
+// simulations store or a nil queue -- the optional-seam convention this
+// package's other methods follow -- answers an empty list, mirroring
+// ReconcileOutstandingCredits' own nil-wiring no-op.
+func (s *Service) ListSimulationsByPhoto(ctx context.Context, photoObjectID string) ([]SimulationOutcome, error) {
+	if s.simulations == nil || s.queue == nil {
+		return nil, nil
+	}
+	tenant, ok := pkgcore.TenantFromContext(ctx)
+	if !ok {
+		return nil, pkgcore.ErrNoTenant
+	}
+
+	rows, err := s.simulations.listByPhoto(ctx, tenant, photoObjectID)
+	if err != nil {
+		return nil, err
+	}
+
+	outcomes := make([]SimulationOutcome, 0, len(rows))
+	for _, row := range rows {
+		opts, optErr := row.options()
+		if optErr != nil {
+			return nil, fmt.Errorf("smilesim: decode recorded options for job %q: %w", row.JobID, optErr)
+		}
+
+		// Rebuilt from the row's own stored tenant, never trusted from ctx
+		// -- root CLAUDE.md's "workers do not inherit tenant context" trap,
+		// applied the way ReconcileOutstandingCredits already does. (The
+		// row's tenant is ctx's own by construction -- listByPhoto's WHERE
+		// clause -- so the rebuild is belt-and-braces, not a behavior
+		// difference.)
+		job, getErr := s.queue.Get(pkgcore.WithTenant(ctx, pkgcore.TenantID(row.TenantID)), jobs.JobID(row.JobID))
+		if getErr != nil {
+			return nil, fmt.Errorf("smilesim: fetch status for recorded simulation job %q: %w", row.JobID, getErr)
+		}
+		if job == nil {
+			return nil, fmt.Errorf("smilesim: recorded simulation job %q has no job row on file -- the jobs queue lost a job this store still indexes", row.JobID)
+		}
+
+		outcome := SimulationOutcome{
+			JobID:         job.ID,
+			PhotoObjectID: row.PhotoObjectID,
+			Options:       opts,
+			Status:        job.Status,
+			Error:         job.Error,
+			CreatedAt:     row.CreatedAt,
+		}
+		if job.Status == jobs.StatusSucceeded && job.Result != nil {
+			var result aigateway.ImageJobResult
+			if decErr := json.Unmarshal(job.Result.Data, &result); decErr != nil {
+				return nil, fmt.Errorf("smilesim: decode succeeded job %q's image result: %w", row.JobID, decErr)
+			}
+			outcome.OutputObjectID = result.OutputObjectID
+		}
+		outcomes = append(outcomes, outcome)
+	}
+	return outcomes, nil
 }
