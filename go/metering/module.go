@@ -170,15 +170,16 @@ func (m *Module) Dispatcher() *Dispatcher { return m.dispatcher }
 // Start begins both background pipelines: AnalyticsRecorder's flush loop
 // and Dispatcher's poll loop. It must be called after Bootstrap has
 // returned (Register itself performs no I/O and starts nothing). Safe to
-// call at most once; a second call is a no-op for each loop, per
-// AnalyticsRecorder.Start's and Dispatcher.Start's own sync.Once contract.
+// call while a pipeline is already running (a no-op for that pipeline);
+// after a completed Stop, a fresh Start runs both loops again.
 func (m *Module) Start(ctx context.Context) {
 	m.analytics.Start(ctx)
 	m.dispatcher.Start(ctx)
 }
 
 // Stop signals both background pipelines to exit and waits for them to do
-// so. Safe to call before Start, or more than once.
+// so, and delivers whatever AnalyticsRecorder still had buffered. Safe to
+// call before Start, or more than once.
 func (m *Module) Stop() {
 	m.analytics.Stop()
 	m.dispatcher.Stop()

@@ -2,6 +2,7 @@ package metering
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -88,6 +89,154 @@ func TestAnalyticsRecorder_StartStop_IsIdempotent(t *testing.T) {
 func TestAnalyticsRecorder_Stop_BeforeStart_IsSafe(t *testing.T) {
 	r := NewAnalyticsRecorder(newTestAggregator(t))
 	r.Stop() // must not block or panic
+}
+
+// TestAnalyticsRecorder_Stop_DeliversEventsBufferedAtStopTime pins the
+// recorder's "only lost when full, and counted" promise across the
+// shutdown boundary: events sitting in the buffer when Stop is called are
+// delivered into the aggregator before Stop returns (drained by Stop
+// itself, since the flush goroutine may already be exiting and must never
+// be the only deliverer), rather than silently vanishing with Dropped()
+// none the wiser. Before the fix Stop simply returned, leaving every
+// buffered event unaccounted for.
+func TestAnalyticsRecorder_Stop_DeliversEventsBufferedAtStopTime(t *testing.T) {
+	agg := newTestAggregator(t)
+	r := NewAnalyticsRecorder(agg)
+	r.events = make(chan UsageEvent, 8) // roomy buffer, and the flush loop is never Started, so nothing drains it but Stop itself
+
+	at := time.Now()
+	total := 0.0
+	for i := 0; i < 3; i++ {
+		q := float64(i + 2)
+		total += q
+		event := UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: q, IdempotencyKey: idem(i), OccurredAt: at}
+		if err := r.Record(context.Background(), event); err != nil {
+			t.Fatalf("Record(%d): %v", i, err)
+		}
+	}
+
+	r.Stop()
+
+	got, err := agg.RealtimeCount("tenant-a", "ai.generation", at)
+	if err != nil {
+		t.Fatalf("RealtimeCount: %v", err)
+	}
+	if got != total {
+		t.Errorf("RealtimeCount after Stop = %v, want %v (every buffered event delivered by Stop, none silently lost)", got, total)
+	}
+	if dropped := r.Dropped(); dropped != 0 {
+		t.Errorf("Dropped() = %d, want 0 (nothing overflowed; the buffer was drained, not dropped)", dropped)
+	}
+}
+
+// TestAnalyticsRecorder_Record_AfterStop_DropsAndCounts pins the other
+// half of the shutdown contract: once Stop has been called, a Record can
+// no longer be buffered for delivery (Stop's drain has already run or is
+// about to), so it is dropped and counted exactly like a full-buffer drop
+// -- an event recorded into a stopped recorder is never silently
+// buffered into oblivion.
+func TestAnalyticsRecorder_Record_AfterStop_DropsAndCounts(t *testing.T) {
+	agg := newTestAggregator(t)
+	r := NewAnalyticsRecorder(agg)
+
+	at := time.Now()
+	if err := r.Record(context.Background(), UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 1, IdempotencyKey: "idem-before", OccurredAt: at}); err != nil {
+		t.Fatalf("Record(before Stop): %v", err)
+	}
+	r.Stop() // delivers the buffered event, then latches the recorder closed
+
+	for i := 0; i < 2; i++ {
+		if err := r.Record(context.Background(), UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 1, IdempotencyKey: idem(i), OccurredAt: at}); err != nil {
+			t.Fatalf("Record(after Stop, %d): %v", i, err)
+		}
+	}
+
+	if dropped := r.Dropped(); dropped != 2 {
+		t.Errorf("Dropped() = %d, want 2 (post-Stop Records are counted drops, never silent buffer enqueues)", dropped)
+	}
+	got, err := agg.RealtimeCount("tenant-a", "ai.generation", at)
+	if err != nil {
+		t.Fatalf("RealtimeCount: %v", err)
+	}
+	if got != 1 {
+		t.Errorf("RealtimeCount = %v, want 1 (only the pre-Stop event was delivered)", got)
+	}
+}
+
+// TestAnalyticsRecorder_Stop_BeforeStart_DoesNotPreventStoppingALaterLoop
+// pins the lifecycle finding: an early Stop (before any Start) consumed
+// the stop signal, so a loop Started afterwards could never be stopped
+// and the later Stop blocked forever on the never-closed done channel --
+// a goroutine leak plus a hang. Stop before Start must leave a later
+// Start's loop fully stoppable.
+func TestAnalyticsRecorder_Stop_BeforeStart_DoesNotPreventStoppingALaterLoop(t *testing.T) {
+	agg := newTestAggregator(t)
+	r := NewAnalyticsRecorder(agg)
+	r.Stop() // before Start -- must not consume the ability to stop a later loop
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.Start(ctx)
+
+	at := time.Now()
+	if err := r.Record(context.Background(), UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 1, IdempotencyKey: "idem-lifecycle", OccurredAt: at}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		r.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not return after a Start that followed an earlier Stop: the started loop can never be stopped")
+	}
+
+	got, err := agg.RealtimeCount("tenant-a", "ai.generation", at)
+	if err != nil {
+		t.Fatalf("RealtimeCount: %v", err)
+	}
+	if got != 1 {
+		t.Errorf("RealtimeCount = %v, want 1 (the event recorded while the loop ran was delivered, by the loop or by Stop's own drain)", got)
+	}
+}
+
+// TestAnalyticsRecorder_ConcurrentStartAndStop_NoDataRace drives Start
+// and Stop from racing goroutines -- one Start racing two Stops, so a
+// Stop can also land while another Stop is mid-wait and a Start has
+// already replaced the loop generation. Before the fix the two
+// sync.Once critical sections wrote and read the stop/done fields
+// without any synchronization between them, which the race detector can
+// see when the calls actually overlap. After the fix every lifecycle
+// field is guarded by the lifecycle mutex (or passed to the goroutine by
+// value), and a Stop only clears the started flag for the generation it
+// actually waited on, so any interleaving is race-free and every order
+// converges.
+func TestAnalyticsRecorder_ConcurrentStartAndStop_NoDataRace(t *testing.T) {
+	agg := newTestAggregator(t)
+	for i := 0; i < 10; i++ {
+		r := NewAnalyticsRecorder(agg)
+		ctx, cancel := context.WithCancel(context.Background())
+		var wg sync.WaitGroup
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			r.Start(ctx)
+		}()
+		go func() {
+			defer wg.Done()
+			r.Stop()
+		}()
+		go func() {
+			defer wg.Done()
+			r.Stop()
+		}()
+		wg.Wait()
+		cancel()
+		r.Stop() // whichever order the race resolved in, this returns and stops any started loop
+	}
 }
 
 // waitFor polls cond until it reports true or the test times out, the
