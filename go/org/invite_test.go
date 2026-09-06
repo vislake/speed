@@ -1117,3 +1117,67 @@ func TestInviteService_Revoke_RacingAccept_NoRevokedStatusWithLiveMembership(t *
 		t.Fatalf("the membership the accept created is not live: %v", err)
 	}
 }
+
+// TestInviteService_Accept_NodeDeletedUnderTheInvitation_SettlesToRevoked is
+// the P2-org-12 regression proof. Accept claims an invitation (pending ->
+// accepted), and only then creates the membership; when that creation fails
+// because the very node the invitation points into no longer exists
+// (members.ensure answers ErrNodeNotFound), the invitation can NEVER be
+// fulfilled. The pre-fix failure path (revertAcceptClaim) answered that
+// permanent failure with an unconditional full-row Update putting the row
+// back to pending: a bearer token stayed acceptable for the rest of its TTL
+// while every accept it admitted failed identically, List kept showing an
+// invitation that could only fail, and a concurrent caller who observed the
+// brief accepted interlude was told org.invitation_already_accepted though
+// no membership ever came of it. The honest end state is revoked: the claim
+// is settled, the token is dead, and the row records the withdrawal.
+func TestInviteService_Accept_NodeDeletedUnderTheInvitation_SettlesToRevoked(t *testing.T) {
+	f := newInviteFixture(t)
+	result := f.invite(t, "ada@example.test") // the invitation points into f.left
+
+	// The sub-org the invitation points into is deleted before the invitee
+	// ever clicks the link -- an admin removes it.
+	if err := f.m.Tree().Delete(f.ctx, f.left.ID, false); err != nil {
+		t.Fatalf("Delete(the invited node): %v", err)
+	}
+
+	if _, err := f.m.Invitations().Accept(f.ctx, result.Token, "u-ada"); !hasCode(err, ErrNodeNotFound.Code) {
+		t.Fatalf("Accept into a deleted node error = %v, want org.node_not_found", err)
+	}
+
+	// The failed accept must NOT have given the invitation back to pending
+	// with its token still acceptable: it ends revoked.
+	current, err := f.m.Invitations().Repository().FindByID(f.ctx, result.Invitation.ID)
+	if err != nil {
+		t.Fatalf("re-read the invitation: %v", err)
+	}
+	if current.Status != InvitationStatusRevoked {
+		t.Fatalf("invitation status = %q after an accept whose membership creation failed, want %q -- the failed accept must settle the claim to revoked, never back to pending with a live token",
+			current.Status, InvitationStatusRevoked)
+	}
+	if current.AcceptedAt != nil {
+		t.Errorf("AcceptedAt = %v on a revoked invitation, want nil", current.AcceptedAt)
+	}
+
+	// The token is unusable: a second accept of the same token answers
+	// revoked -- never a false already-accepted, never another doomed
+	// acceptance attempt.
+	if _, replayErr := f.m.Invitations().Accept(f.ctx, result.Token, "u-ada"); !hasCode(replayErr, ErrInvitationRevoked.Code) {
+		t.Fatalf("second Accept error = %v, want org.invitation_revoked -- the token stayed live after the failed accept", replayErr)
+	}
+
+	// No membership ever came of the claim, and no pending zombie stays on
+	// the tenant's list.
+	if f.userHasMembership(t, "u-ada") {
+		t.Error("the failed accept left a membership behind")
+	}
+	pending, err := f.m.Invitations().List(f.ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, inv := range pending {
+		if inv.ID == result.Invitation.ID {
+			t.Errorf("List still shows the unfulfillable invitation %q as pending", inv.ID)
+		}
+	}
+}

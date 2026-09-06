@@ -125,21 +125,26 @@ func (s *TreeService) Children(ctx context.Context, nodeID string) ([]OrgNode, e
 //
 // findRoot above is the fast, coded-error path; it is deliberately NOT the
 // enforcement. The backstop is the partial unique index
-// uq_org_nodes_single_root (migrations/{sqlite,postgres}/0007_single_root.sql)
+// uq_org_nodes_single_root (migrations/{sqlite,postgres}/0007_single_root.sql,
+// narrowed to live rows only by 0008_single_root_live.sql -- the same
+// WHERE deleted_at IS NULL predicate 0004 applied to the sibling-name and
+// membership indexes, closing the finding that 0007's parent_id = "" scope
+// alone left a mark-deleted root occupying its tenant's root slot forever)
 // -- UNIQUE (tenant_id) over exactly the rows whose parent_id holds the
-// empty-string root sentinel, so at most one live root row per tenant,
-// however it is created -- because the pre-check alone leaves a real race
-// against a second, concurrent CreateRoot of the SAME tenant with a
-// DIFFERENT name: both calls can read "no root yet" before either has
-// written, and the sibling-name index does not catch two differently-named
-// roots. The insert below is where the race is actually arbitrated: exactly
-// one of the two concurrent inserts lands, and the loser's gorm
-// ErrDuplicatedKey is translated into the identical ErrRootAlreadyExists
-// the pre-check reports, so a caller sees one error for one condition
-// however the collision was detected. (This is the same shape as the
-// sibling-name index behind CreateChild and the pending-invitation index
-// behind Invite, and the same translation discipline mapWriteError applies
-// to those races.)
+// empty-string root sentinel and whose deleted_at is NULL, so at most one
+// LIVE root row per tenant, however it is created, and a soft-deleted
+// root's slot is free again the moment its mark-delete commits -- because
+// the pre-check alone leaves a real race against a second, concurrent
+// CreateRoot of the SAME tenant with a DIFFERENT name: both calls can read
+// "no root yet" before either has written, and the sibling-name index does
+// not catch two differently-named roots. The insert below is where the race
+// is actually arbitrated: exactly one of the two concurrent inserts lands,
+// and the loser's gorm ErrDuplicatedKey is translated into the identical
+// ErrRootAlreadyExists the pre-check reports, so a caller sees one error
+// for one condition however the collision was detected. (This is the same
+// shape as the sibling-name index behind CreateChild and the
+// pending-invitation index behind Invite, and the same translation
+// discipline mapWriteError applies to those races.)
 func (s *TreeService) CreateRoot(ctx context.Context, name, kind string) (*OrgNode, error) {
 	cleanName, err := validateName(name)
 	if err != nil {
@@ -273,6 +278,12 @@ func (s *TreeService) CreateChild(ctx context.Context, parentID, name, kind stri
 // returns the node unchanged rather than an ErrDuplicateSiblingName against
 // itself.
 //
+// The returned node is the row re-read inside the same transaction AFTER the
+// update -- never the pre-write snapshot the lock's read-back returned -- so
+// its UpdatedAt is the post-write value a subsequent Get answers (the shape
+// Restore's own doc comment already promised "exactly as Rename does after
+// its own write").
+//
 // A rename never touches Path: the path is built from ids, so a node's
 // identity in every subtree query survives any number of renames.
 //
@@ -335,8 +346,19 @@ func (s *TreeService) Rename(ctx context.Context, nodeID, name string) (*OrgNode
 				return ErrInternal.WithCause(fmt.Errorf(
 					"org: node %s vanished between rename lock and update", nodeID))
 			}
-			node.Name = cleanName
-			renamed = node
+			// The UPDATE stamped the row's updated_at itself (gorm's
+			// autoUpdateTime); hand the caller back the row as it now reads,
+			// not the pre-write snapshot the lock's read-back returned -- a
+			// response whose updated_at disagrees with the very next Get
+			// would answer a write this call just committed with a stale
+			// row. The read stays inside this same transaction, which
+			// already holds the row's lock, so it cannot observe a state
+			// between the update and the return.
+			var current OrgNode
+			if readErr := tx.Where("id = ?", node.ID).First(&current).Error; readErr != nil {
+				return ErrInternal.WithCause(readErr)
+			}
+			renamed = &current
 			return nil
 		})
 	})
@@ -364,6 +386,10 @@ func (s *TreeService) Rename(ctx context.Context, nodeID, name string) (*OrgNode
 // tenant descends from its single root, so every candidate target is one of
 // the root's own descendants. That falls out of the invariant rather than
 // needing a rule of its own.
+//
+// The returned node is the moved row re-read inside the same transaction
+// AFTER the rewrite loop -- never the pre-write snapshot read under the
+// lock -- so its UpdatedAt is the post-write value a subsequent Get answers.
 //
 // The rewrite is done entirely in Go -- see path.go's dialect-identity proof,
 // property 4. No SQL string function is used, so the only structurally risky
@@ -529,14 +555,20 @@ func (s *TreeService) Move(ctx context.Context, nodeID, newParentID string) (*Or
 					return ErrInternal.WithCause(fmt.Errorf(
 						"org: descendant %s of moved node %s vanished mid-move", n.ID, nodeID))
 				}
-				n.Path = rebased
-				n.Depth = depthOf(rebased)
-				n.ParentID = rowParentID
-				if n.ID == node.ID {
-					moved = &n
-				}
 			}
 			changed = true
+			// Re-read the moved node's own row inside this same transaction:
+			// each rewrite above stamped its own updated_at (gorm's
+			// autoUpdateTime), and the caller must get the post-write row --
+			// the updated_at a subsequent Get answers -- never the pre-write
+			// snapshot the lock's read-back returned. The transaction holds
+			// the row's lock, so the read cannot observe a state between the
+			// rewrite and the return.
+			var current OrgNode
+			if err := tx.Where("id = ?", node.ID).First(&current).Error; err != nil {
+				return ErrInternal.WithCause(err)
+			}
+			moved = &current
 			return nil
 		})
 	})
@@ -786,13 +818,19 @@ func (s *TreeService) publishDeleted(ctx context.Context, node OrgNode, cascade 
 // that took the node's old place while it was invisible: the narrowed
 // partial indexes deliberately free a deleted node's constraint slots for
 // immediate reuse -- a sibling name under the same parent (0004, WHERE
-// deleted_at IS NULL) and the tenant root slot (0007) -- so restoring into
-// a slot a live row now occupies trips the same unique index a concurrent
-// CreateChild's insert would trip. TreeService.Restore maps that
-// gorm.ErrDuplicatedKey through the identical mapWriteError CreateChild's
-// own transaction applies, answering ErrDuplicateSiblingName rather than a
-// bare database error: the slot is taken, whichever operation tries to
-// take it again.
+// deleted_at IS NULL) and the tenant root slot (0007, itself narrowed to
+// live rows by 0008_single_root_live.sql, the P1-org-11 fix: 0007's
+// parent_id = "" scope alone never freed a mark-deleted root's slot, which
+// is exactly the reuse this paragraph is about) -- so restoring into a slot
+// a live row now occupies trips the same unique index a concurrent
+// CreateChild's insert would trip. A root's slot can be freed only through
+// the host-visible Repository surface -- TreeService.Delete refuses the
+// root by design, ErrRootNotDeletable -- but once it has been, restoring
+// the old root into the taken slot is refused exactly like any other.
+// TreeService.Restore maps that gorm.ErrDuplicatedKey through the identical
+// mapWriteError CreateChild's own transaction applies, answering
+// ErrDuplicateSiblingName rather than a bare database error: the slot is
+// taken, whichever operation tries to take it again.
 //
 // # Restore is per-node, never cascading
 //

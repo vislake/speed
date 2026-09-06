@@ -377,12 +377,18 @@ func (s *InviteService) Accept(ctx context.Context, token, userID string) (*Memb
 	membership, created, err := s.members.ensure(ctx, userID, invitation.NodeID)
 	if err != nil {
 		// This call won the claim above but failed to turn it into a
-		// membership. Best-effort give the invitation back to pending so a
-		// retry after a transient failure is not permanently locked out by
-		// the claim this call just won; a failure to revert is logged, not
-		// returned, since the caller is already receiving ensure's own
-		// error and reporting a second one would hide the first.
-		s.revertAcceptClaim(ctx, invitation)
+		// membership. The failure's own nature decides how the claim is
+		// settled (settleFailedAccept's doc comment): when the very node
+		// this invitation points into no longer exists the invitation can
+		// never be fulfilled and ends REVOKED -- never back to pending,
+		// which would leave a bearer token acceptable for the rest of its
+		// TTL while every accept it admits fails identically. Only a
+		// transient failure gives the claim back to pending, so a retry is
+		// not permanently locked out. Either way the settle is a guarded
+		// write over the accepted state this call won, and a settle failure
+		// is logged, not returned: the caller is already receiving ensure's
+		// own error, and reporting a second one would hide the first.
+		s.settleFailedAccept(ctx, invitation, err)
 		return nil, err
 	}
 
@@ -413,16 +419,52 @@ func (s *InviteService) reportLostAcceptRace(ctx context.Context, token string) 
 	return ErrInvitationAlreadyAccepted.WithParam("invitation_id", current.ID)
 }
 
-// revertAcceptClaim gives an invitation this call just claimed via
-// acceptIfPending back to InvitationStatusPending, after members.ensure
-// failed to produce a membership for it. See Accept's own comment for why
-// this is best-effort.
-func (s *InviteService) revertAcceptClaim(ctx context.Context, invitation *Invitation) {
-	invitation.Status = InvitationStatusPending
-	invitation.AcceptedAt = nil
-	if err := s.repo.Update(ctx, invitation); err != nil {
-		obs.FromContext(ctx).Warn("org could not revert an invitation claim after membership creation failed",
+// settleFailedAccept ends the claim Accept won on an invitation whose
+// membership creation just failed. See Accept's own comment for why this is
+// best-effort -- the caller is already receiving ensure's own error, so the
+// settle's own outcome is logged, never returned.
+//
+// # The failure's nature decides the end state
+//
+//   - ensure answered the coded ErrNodeNotFound: the very node this
+//     invitation would bind its invitee to no longer exists, so the
+//     invitation can never be fulfilled. It ends REVOKED -- never back to
+//     pending, which is the state the pre-fix code left it in: a bearer
+//     token stayed acceptable for the rest of its TTL while every accept it
+//     admitted failed identically, List kept showing an invitation that
+//     could only fail, and a caller who observed the brief accepted
+//     interlude was answered org.invitation_already_accepted though no
+//     membership ever came of it. This is the P2-org-12 state change.
+//   - any other failure is treated as the transient it is (a busy SQLite, a
+//     lost insert race) and the claim is given back to pending, exactly as
+//     the pre-fix code did, so a retry after the transient is not locked
+//     out -- the revert Revoke's own lost-race handling presupposes.
+//
+// # The write is a guarded transition, never an unconditional overwrite
+//
+// Whichever end state the failure earns, the write itself is
+// InvitationRepository.settleClaim's guarded transition: it executes only
+// against a row still in the accepted state THIS call won, and touches only
+// the Status and AcceptedAt columns. The pre-fix failure path (then named
+// revertAcceptClaim) issued an unconditional, full-row Repository.Update of
+// the caller's in-memory snapshot instead, which would stamp its stale view
+// of every column over whatever state the row had moved to. A settle that
+// errors, or that matches nothing (the accepted state this call won is
+// already gone -- a concurrent writer moved the row first, and that
+// writer's outcome must not be overwritten), is logged and left alone.
+func (s *InviteService) settleFailedAccept(ctx context.Context, invitation *Invitation, cause error) {
+	status := InvitationStatusPending
+	if hasCode(cause, ErrNodeNotFound.Code) {
+		status = InvitationStatusRevoked
+	}
+	won, err := s.repo.settleClaim(ctx, invitation.ID, status)
+	switch {
+	case err != nil:
+		obs.FromContext(ctx).Warn("org could not settle an invitation claim after membership creation failed",
 			"invitation_id", invitation.ID, "error", err)
+	case !won:
+		obs.FromContext(ctx).Warn("org could not settle an invitation claim: the accepted state the accept won was already gone",
+			"invitation_id", invitation.ID)
 	}
 }
 
@@ -449,11 +491,14 @@ func (s *InviteService) revertAcceptClaim(ctx context.Context, invitation *Invit
 // and classifies like Accept's own lost-race reporter does: an accepted
 // invitation answers ErrInvitationAlreadyAccepted, a revoked one (another
 // revoke won) is the idempotent success, and a row still pending means the
-// winner was an Accept whose membership creation failed and reverted its
-// claim -- the narrow transient that lets the revoke simply try its own
-// claim again, for a bounded number of attempts, after which the coded
-// ErrConcurrentUpdate reports that the invitation's status stayed in flux
-// longer than this call's budget covers.
+// winner was an Accept whose membership creation failed on a TRANSIENT
+// error and settled its claim back to pending -- a permanent failure (the
+// invitation's node is gone) settles the claim to revoked instead, which
+// this re-read sees as the revoked case above. The pending-after-loss
+// transient is what lets the revoke simply try its own claim again, for a
+// bounded number of attempts, after which the coded ErrConcurrentUpdate
+// reports that the invitation's status stayed in flux longer than this
+// call's budget covers.
 func (s *InviteService) Revoke(ctx context.Context, invitationID string) error {
 	invitation, err := s.repo.FindByID(ctx, invitationID)
 	if err != nil {
@@ -481,9 +526,12 @@ func (s *InviteService) Revoke(ctx context.Context, invitationID string) error {
 		// Lost the race: re-read to learn the state a concurrent caller
 		// committed. Accept's lost-race reporter re-reads once and classifies;
 		// this loop exists only for the single narrow case where the row is
-		// STILL pending after the loss (an accept claimed it, failed to create
-		// the membership, and reverted) -- then the revoke's own claim is
-		// worth trying again, briefly.
+		// STILL pending after the loss (an accept claimed it, failed to
+		// create the membership on a transient error, and settled its claim
+		// back to pending -- a permanent failure settles the claim to
+		// revoked instead, which the re-read's switch above already reports
+		// as the idempotent success) -- then the revoke's own claim is worth
+		// trying again, briefly.
 		current, findErr := s.repo.FindByID(ctx, invitationID)
 		if findErr != nil {
 			return findErr

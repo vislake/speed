@@ -204,3 +204,55 @@ func TestMemberService_Restore_ThenGet_Postgres(t *testing.T) {
 		t.Errorf("Get(restored member) returned id %q, want %q", got.ID, membership.ID)
 	}
 }
+
+// TestTreeService_CreateRoot_AfterSoftDeletedRoot_Succeeds_Postgres re-runs
+// go/org's own tree_test.go case of the same name against a real PostgreSQL
+// server. It is the P1-org-11 regression proof on the dialect the fix's
+// migration was shipped for as much as for SQLite: 0007's single-root index
+// scoped on parent_id = "" alone, so a mark-deleted root kept occupying its
+// tenant's root slot and every later CreateRoot collided with the invisible
+// row (org.root_already_exists, forever); 0008_single_root_live.sql narrows
+// the index to WHERE parent_id = "" AND deleted_at IS NULL, and this test
+// pins that a soft-deleted root's slot frees immediately on real
+// PostgreSQL, whose partial-index behaviour genuinely differs from SQLite's.
+func TestTreeService_CreateRoot_AfterSoftDeletedRoot_Succeeds_Postgres(t *testing.T) {
+	tree := org.NewTreeService(newPostgres(t))
+	ctx := tenantCtx("tenant-a")
+
+	original, err := tree.CreateRoot(ctx, "Acme Dental", "group")
+	if err != nil {
+		t.Fatalf("CreateRoot: %v", err)
+	}
+
+	// A host removes the tenant root through the exported Repository surface
+	// (TreeService.Delete refuses the root by design).
+	if err := tree.Repository().Delete(ctx, original.ID); err != nil {
+		t.Fatalf("soft-delete the root through the repository: %v", err)
+	}
+
+	replacement, err := tree.CreateRoot(ctx, "Acme Dental Reborn", "group")
+	if err != nil {
+		t.Fatalf("CreateRoot after the tenant root was soft-deleted: %v, want success -- 0007's single-root index still counted the invisible row on PostgreSQL", err)
+	}
+	if replacement.ID == original.ID {
+		t.Fatal("CreateRoot returned the soft-deleted row instead of inserting a new one")
+	}
+	got, err := tree.Root(ctx)
+	if err != nil {
+		t.Fatalf("Root() after the replacement root: %v, want the new root", err)
+	}
+	if got.ID != replacement.ID {
+		t.Errorf("Root() = %q, want the replacement %q", got.ID, replacement.ID)
+	}
+
+	// The narrowed index still enforces one LIVE root per tenant.
+	if _, err := tree.CreateRoot(ctx, "Another Root", "group"); !hasCode(err, org.ErrRootAlreadyExists.Code) {
+		t.Errorf("a second live root error = %v, want org.root_already_exists", err)
+	}
+
+	// Restoring the original root collides with the live replacement at the
+	// database and answers the coded slot-taken error.
+	if _, err := tree.Restore(ctx, original.ID); !hasCode(err, org.ErrDuplicateSiblingName.Code) {
+		t.Errorf("Restore of the original root whose root slot was re-taken = %v, want the coded org.duplicate_sibling_name", err)
+	}
+}

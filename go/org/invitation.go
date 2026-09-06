@@ -416,6 +416,46 @@ func (r *InvitationRepository) revokeIfPending(ctx context.Context, id string) (
 	return rowsAffected == 1, nil
 }
 
+// settleClaim transitions the invitation identified by id, scoped to the
+// caller's tenant, OUT of the accepted state a claim currently holds and
+// INTO status, clearing AcceptedAt, and reports whether this call performed
+// the transition.
+//
+// It is the claim-holder's counterpart to acceptIfPending and revokeIfPending
+// above: InviteService.Accept wins pending -> accepted on this row, and if
+// it then fails to produce the membership the claim was for it settles the
+// claim (InviteService.settleFailedAccept) -- back to pending when the
+// failure was transient, to revoked when the invitation can never be
+// fulfilled. Settling is a write over a state THIS CALL won, so it is gated
+// on the row still holding that claim (status = 'accepted'), exactly as the
+// other two transitions are gated on pending. It is deliberately never the
+// unconditional, full-row Update Accept's old failure path issued, which
+// wrote whatever the caller's stale in-memory snapshot held over whatever
+// state the row had moved to; when the guard matches nothing, the accepted
+// state this call won is already gone (a concurrent writer moved the row
+// first) and the caller leaves that writer's outcome alone.
+//
+// The write selects Status and AcceptedAt only: the invitee's address, the
+// expiry and the rest of the row are not this transition's to touch, the
+// same column discipline revokeIfPending applies to its own single-column
+// transition.
+func (r *InvitationRepository) settleClaim(ctx context.Context, id, status string) (won bool, err error) {
+	var rowsAffected int64
+	dbErr := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		res := tx.
+			Where("id = ?", id).
+			Where("status = ?", InvitationStatusAccepted).
+			Select("Status", "AcceptedAt").
+			Updates(&Invitation{Status: status, AcceptedAt: nil})
+		rowsAffected = res.RowsAffected
+		return res.Error
+	})
+	if dbErr != nil {
+		return false, ErrInternal.WithCause(dbErr)
+	}
+	return rowsAffected == 1, nil
+}
+
 // createPending revokes every pending invitation already outstanding for
 // invitation's own address, then inserts invitation and its
 // invitationTokenIndex row, all inside ONE dbkit.WithTenantSession

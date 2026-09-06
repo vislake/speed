@@ -1,0 +1,43 @@
+-- Narrows uq_org_nodes_single_root -- the one-root-per-tenant index 0007
+-- shipped -- to LIVE rows only, closing the P1-org-11 finding: 0007's
+-- predicate (parent_id = '') admitted every root-shaped row, soft-deleted
+-- ones included, so a mark-deleted root kept occupying its tenant's single
+-- root slot. CreateRoot's insert then collided with an invisible row on
+-- every attempt -- translated into org.root_already_exists -- and a tenant
+-- whose root had been removed (through the exported Repository surface;
+-- TreeService.Delete itself refuses the root, so no org-level path can
+-- restore the slot) had no way back to a tree: unrecoverable tenant state.
+--
+-- 0004_add_soft_delete.sql narrowed this module's two pre-existing unique
+-- indexes to WHERE deleted_at IS NULL in the same migration that added the
+-- soft-delete columns, and both go/org's own conventions
+-- (docs/internal/04-data-and-tenancy.md, delete-semantics section) and the
+-- sibling 0004/0005 migrations' precedent require every unique index over a
+-- soft-deletable row to count live rows only. 0007 shipped after that round
+-- and its own predicate should have carried the same deleted_at IS NULL
+-- clause -- the oversight this file repairs. The index is dropped and
+-- re-created under the SAME name, exactly as 0004 did, so every other
+-- reference to the name (error mapping via gorm.ErrDuplicatedKey, this
+-- module's own tests and Restore's slot-reuse handling in tree.go) needs no
+-- change.
+--
+-- With the narrowed index a soft-deleted root's slot frees immediately: a
+-- fresh CreateRoot succeeds for the tenant, and TreeService.Restore of the
+-- old root then collides at the database with the new live root and answers
+-- the coded org.duplicate_sibling_name mapWriteError gives every other
+-- slot-reuse collision -- the root-slot reuse tree.go's Restore doc comment
+-- already promises, and which 0007 as shipped could not deliver.
+--
+-- A database that already carries two live root rows for one tenant (the
+-- pre-0007 race's own output) fails this CREATE INDEX loudly rather than
+-- being silently repaired; such a database could not have applied 0007
+-- either, which fails on the identical condition.
+--
+-- This is the postgres/ copy; the sqlite/ sibling carries the full
+-- rationale. The two are byte-identical -- partial unique indexes with an
+-- extra boolean-typed predicate are standard SQL both dialects support with
+-- the same syntax.
+DROP INDEX uq_org_nodes_single_root;
+CREATE UNIQUE INDEX uq_org_nodes_single_root
+    ON org_nodes (tenant_id)
+    WHERE parent_id = '' AND deleted_at IS NULL;

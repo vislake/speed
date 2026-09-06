@@ -2348,3 +2348,134 @@ func TestTreeService_Restore_ReusedSiblingNameSlot_AnswersDuplicateSiblingName(t
 		t.Fatalf("live children of root = %v, want exactly the replacement %q", idsOf(got), replacement.ID)
 	}
 }
+
+// TestTreeService_CreateRoot_AfterSoftDeletedRoot_Succeeds is the P1-org-11
+// regression proof. uq_org_nodes_single_root shipped (0007_single_root.sql)
+// scoped on parent_id = "" alone, so a mark-deleted root row still occupied
+// the tenant's single root slot: once a host had removed a tenant's root
+// through the exported Repository surface (TreeService.Delete refuses the
+// root by design), every CreateRoot for that tenant collided with the
+// invisible row -- translated into ErrRootAlreadyExists -- and the tenant
+// had no way back to a tree. 0008_single_root_live.sql narrows the index to
+// live rows only (WHERE deleted_at IS NULL, the same predicate 0004 applied
+// to the sibling-name and membership indexes), and this test pins the
+// behavior that narrowing exists to restore: a soft-deleted root frees the
+// root slot immediately, while one LIVE root per tenant stays enforced.
+func TestTreeService_CreateRoot_AfterSoftDeletedRoot_Succeeds(t *testing.T) {
+	tree := newTestTree(t)
+	ctx := tenantCtx("tenant-a")
+
+	original := mustCreateRoot(t, tree, ctx, "Acme Dental")
+
+	// A host removes the tenant root through the exported Repository surface.
+	// This is the only path that can mark-delete a root: TreeService.Delete
+	// itself refuses (ErrRootNotDeletable) by design, and dbkit's promoted
+	// Repository.Delete is host-visible, which is exactly how the row got
+	// into the state the regression starts from.
+	if err := tree.Repository().Delete(ctx, original.ID); err != nil {
+		t.Fatalf("soft-delete the root through the repository: %v", err)
+	}
+	if _, err := tree.Root(ctx); !hasCode(err, ErrNodeNotFound.Code) {
+		t.Fatalf("Root() after the soft-delete = %v, want org.node_not_found (the mark-deleted root is hidden)", err)
+	}
+
+	// The regression: on the 0007 index this insert collided with the
+	// soft-deleted row (ErrRootAlreadyExists, forever); on the 0008-narrowed
+	// index the slot is free again.
+	replacement, err := tree.CreateRoot(ctx, "Acme Dental Reborn", "group")
+	if err != nil {
+		t.Fatalf("CreateRoot after the tenant root was soft-deleted: %v, want success -- 0007's single-root index still counted the invisible row", err)
+	}
+	if replacement.ID == original.ID {
+		t.Fatal("CreateRoot returned the soft-deleted row instead of inserting a new one")
+	}
+	got, err := tree.Root(ctx)
+	if err != nil {
+		t.Fatalf("Root() after the replacement root: %v, want the new root", err)
+	}
+	if got.ID != replacement.ID {
+		t.Errorf("Root() = %q, want the replacement %q", got.ID, replacement.ID)
+	}
+
+	// The narrowed index still enforces the invariant among LIVE rows: a
+	// second live root for the same tenant is refused, however it is
+	// attempted.
+	if _, secondRootErr := tree.CreateRoot(ctx, "Another Root", "group"); !hasCode(secondRootErr, ErrRootAlreadyExists.Code) {
+		t.Errorf("a second live root error = %v, want org.root_already_exists", secondRootErr)
+	}
+
+	// Restoring the original root now collides with the live replacement at
+	// the database, and must answer the coded slot-taken error rather than a
+	// bare database error -- the reuse of the freed root slot Restore's own
+	// doc comment promises once the narrowed index is in place.
+	if _, restoreErr := tree.Restore(ctx, original.ID); !hasCode(restoreErr, ErrDuplicateSiblingName.Code) {
+		t.Errorf("Restore of the original root whose root slot was re-taken = %v, want the coded org.duplicate_sibling_name", restoreErr)
+	}
+	// The row the refused restore raced stays the tenant's live one.
+	still, err := tree.Root(ctx)
+	if err != nil {
+		t.Fatalf("Root() after the refused restore: %v", err)
+	}
+	if still.ID != replacement.ID {
+		t.Errorf("Root() = %q after the refused restore, want %q", still.ID, replacement.ID)
+	}
+}
+
+// TestTreeService_Rename_ReturnsThePostWriteUpdatedAt is the P3-org-13
+// regression proof for Rename: Rename used to return the node as read under
+// the lock -- the PRE-write snapshot, whose UpdatedAt predates the rename's
+// own UPDATE (gorm's autoUpdateTime stamps the row at write time). A caller
+// that rendered that returned row (the handler's PATCH response does,
+// verbatim) showed an updated_at older than the very next GET answers --
+// the response and the next read disagreeing about when the write happened.
+func TestTreeService_Rename_ReturnsThePostWriteUpdatedAt(t *testing.T) {
+	tree := newTestTree(t)
+	ctx := tenantCtx("tenant-a")
+	root := mustCreateRoot(t, tree, ctx, "root")
+	node := mustCreateChild(t, tree, ctx, root.ID, "before")
+
+	renamed, err := tree.Rename(ctx, node.ID, "after")
+	if err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	got, err := tree.Get(ctx, node.ID)
+	if err != nil {
+		t.Fatalf("Get after the rename: %v", err)
+	}
+	if !renamed.UpdatedAt.Equal(got.UpdatedAt) {
+		t.Fatalf("Rename returned updated_at %v but a subsequent Get reads %v -- the response must carry the post-write row, not the pre-write snapshot",
+			renamed.UpdatedAt, got.UpdatedAt)
+	}
+	if renamed.UpdatedAt.Equal(node.UpdatedAt) {
+		t.Errorf("Rename's returned updated_at %v equals the pre-rename value -- the rename never stamped the row it returned", renamed.UpdatedAt)
+	}
+}
+
+// TestTreeService_Move_ReturnsThePostWriteUpdatedAt is the P3-org-13
+// regression proof for Move, Rename's twin: Move used to return the moved
+// node as read under the lock, before the rewrite loop's own UPDATEs
+// (updated_at stamped per row at write time), so the returned row's
+// UpdatedAt disagreed with the value a subsequent Get reads back.
+func TestTreeService_Move_ReturnsThePostWriteUpdatedAt(t *testing.T) {
+	tree := newTestTree(t)
+	ctx := tenantCtx("tenant-a")
+	root := mustCreateRoot(t, tree, ctx, "root")
+	a := mustCreateChild(t, tree, ctx, root.ID, "a")
+	b := mustCreateChild(t, tree, ctx, root.ID, "b")
+
+	moved, err := tree.Move(ctx, b.ID, a.ID)
+	if err != nil {
+		t.Fatalf("Move: %v", err)
+	}
+	got, err := tree.Get(ctx, b.ID)
+	if err != nil {
+		t.Fatalf("Get after the move: %v", err)
+	}
+	if !moved.UpdatedAt.Equal(got.UpdatedAt) {
+		t.Fatalf("Move returned updated_at %v but a subsequent Get reads %v -- the response must carry the post-write row, not the pre-write snapshot",
+			moved.UpdatedAt, got.UpdatedAt)
+	}
+	if moved.UpdatedAt.Equal(b.UpdatedAt) {
+		t.Errorf("Move's returned updated_at %v equals the pre-move value -- the move never stamped the row it returned", moved.UpdatedAt)
+	}
+}
