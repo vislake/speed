@@ -238,7 +238,8 @@ func TestWebhookSubscriptionRepository_GuardedFlip_CannotResurrectADeleteThatLan
 		t.Fatalf("delete (interfering): %v", delErr)
 	}
 	// The restore's tail flip: Active = false, through the guarded write.
-	matched, err := repo.updateFields(ctx, row.ID, map[string]any{"active": false})
+	inactive := false
+	matched, err := repo.updateFields(ctx, row.ID, webhookSubscriptionChanges{Active: &inactive})
 	if err != nil {
 		t.Fatalf("updateFields (the restore's flip): %v", err)
 	}

@@ -356,7 +356,8 @@ func (s *Service) RestoreWebhookSubscription(ctx context.Context, id string) err
 	// (matched == false, row still dead: the FindByID below then reports
 	// ErrWebhookSubscriptionNotFound, exactly as if the deletion had
 	// landed before the restore).
-	if _, updateErr := s.webhookRepo.updateFields(ctx, id, map[string]any{"active": false}); updateErr != nil {
+	inactive := false
+	if _, updateErr := s.webhookRepo.updateFields(ctx, id, webhookSubscriptionChanges{Active: &inactive}); updateErr != nil {
 		return ErrInternal.WithCause(updateErr)
 	}
 
