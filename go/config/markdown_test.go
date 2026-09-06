@@ -94,6 +94,58 @@ func TestRenderMarkdown_NonSensitiveItemDefault_RendersRealValue(t *testing.T) {
 	}
 }
 
+// TestRenderMarkdown_SensitiveAndNonSensitiveItems_DoNotCrossContaminate is
+// an adversarial check for P2-3: render several items together -- a
+// Sensitive one first, a Sensitive one with an empty-string Default, and a
+// non-Sensitive one whose real Default happens to look distinctive -- and
+// confirm each row's redaction decision is independent of its neighbours'.
+// A bug that redacted (or failed to redact) based on prior-row state, or
+// that leaked a secret across a shared string-builder append, would show up
+// here even though it would not show up testing one item at a time.
+func TestRenderMarkdown_SensitiveAndNonSensitiveItems_DoNotCrossContaminate(t *testing.T) {
+	rendered := RenderMarkdown([]ConfigItemDescriptor{
+		{
+			Key: "billing.stripe_api_key", Type: "string", Sensitive: true,
+			Group: "billing", HasDefault: true, Default: "sk_live_first_secret",
+		},
+		{
+			// A Sensitive item whose Default is the empty string: HasDefault
+			// is true (a real, deliberate empty default), so this must still
+			// render the redacted marker, not "_(none)_" and not a bare
+			// empty code span that would let a reader wrongly infer "empty,
+			// therefore safe, therefore not worth checking Sensitive for".
+			Key: "billing.empty_secret", Type: "string", Sensitive: true,
+			Group: "billing", HasDefault: true, Default: "",
+		},
+		{
+			Key: "brand.site_name", Type: "string",
+			Group: "brand", HasDefault: true, Default: "Acme Dental",
+		},
+		{
+			Key: "billing.webhook_secret", Type: "string", Sensitive: true,
+			Group: "billing", HasDefault: true, Default: "sk_live_second_secret",
+		},
+	})
+
+	for _, leaked := range []string{"sk_live_first_secret", "sk_live_second_secret"} {
+		if strings.Contains(rendered, leaked) {
+			t.Errorf("RenderMarkdown() leaked %q into the generated doc:\n%s", leaked, rendered)
+		}
+	}
+	if !strings.Contains(rendered, "`Acme Dental`") {
+		t.Errorf("RenderMarkdown() over-redacted the non-Sensitive neighbour's Default:\n%s", rendered)
+	}
+	wantEmptySecretRow := "| `billing.empty_secret` | item | string | `" + redactedMarker + "` | -- | true | false | billing |  |"
+	if !strings.Contains(rendered, wantEmptySecretRow) {
+		t.Errorf("RenderMarkdown() must redact a Sensitive item's empty-string Default too, not render it as blank or none:\nwant row %q\nfull output:\n%s", wantEmptySecretRow, rendered)
+	}
+	// Every Sensitive row's Default cell must carry the marker exactly once,
+	// each on its own row.
+	if got := strings.Count(rendered, redactedMarker); got != 3 {
+		t.Errorf("RenderMarkdown() rendered %d occurrences of %q, want exactly 3 (one per Sensitive item)\nfull output:\n%s", got, redactedMarker, rendered)
+	}
+}
+
 func TestRenderMarkdown_EmptyInput_StillRendersTheHeader(t *testing.T) {
 	rendered := RenderMarkdown(nil)
 	if !strings.Contains(rendered, "| Key | Kind | Type") {

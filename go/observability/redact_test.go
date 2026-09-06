@@ -116,6 +116,81 @@ func TestRedact_TokenStemDoesNotOverRedactUnrelatedWords(t *testing.T) {
 	}
 }
 
+// TestRedact_TokenStemWordBoundary_AdversarialVocabulary is a broader
+// adversarial pass on P2-5's word-boundary fix, checked in both
+// directions at once against a wider vocabulary than the original
+// regression test:
+//
+//  1. legitimate diagnostic keys where "token" is merely a substring of a
+//     longer, different word must survive unredacted (the over-redaction
+//     class the fix closed), and
+//  2. every genuinely secret-shaped "token" key from the existing
+//     TestRedact_SensitiveKeyValues vocabulary, plus several additional
+//     realistic secret-shaped names built the same way (an underscore-
+//     joined "token" segment), must still redact (the fix must not have
+//     narrowed the word-boundary check so far that it stops matching
+//     "token" as a whole segment).
+func TestRedact_TokenStemWordBoundary_AdversarialVocabulary(t *testing.T) {
+	benign := []string{
+		// Already covered by the original regression test; repeated here
+		// so this table is a self-contained adversarial pass.
+		"tokens", "prompt_tokens", "completion_tokens", "tokenizer_version",
+		// "token" glued to a preceding letter with no separator at all --
+		// the class the original regression test did not exercise.
+		"detokenize", "retokenized", "subtoken_count",
+		// "token" glued to a following letter with no separator, a
+		// different word shape than the "...tokens" plural.
+		"tokenized_length", "tokenify",
+		// "token" as an interior fragment of an unrelated compound word,
+		// letters on both sides.
+		"autotokenizer",
+	}
+	for _, key := range benign {
+		t.Run("benign/"+key, func(t *testing.T) {
+			var buf bytes.Buffer
+			ctx := textLoggerCtx(context.Background(), &buf)
+
+			obs.FromContext(ctx).Info("event", key, 7)
+
+			out := buf.String()
+			if !strings.Contains(out, key+"=7") {
+				t.Errorf("expected %q=7 to survive unredacted; got: %s", key, out)
+			}
+			if strings.Contains(out, obs.RedactedValue) {
+				t.Errorf("attribute %q was wrongly redacted; got: %s", key, out)
+			}
+		})
+	}
+
+	secretShaped := []string{
+		// From the existing 34-row table (TestRedact_SensitiveKeyValues) --
+		// re-verified here so this adversarial pass is self-contained.
+		"token", "access_token", "refresh_token", "session_token",
+		"id_token", "api_token", "csrf_token", "auth_token", "Token",
+		// Additional realistic secret-shaped names built the same way
+		// (an underscore-joined "token" segment), not present verbatim in
+		// the 34-row table, to widen the net past exactly what was already
+		// pinned.
+		"oauth_token", "bearer_token", "reset_token", "verification_token",
+		"TOKEN", "x_auth_token",
+	}
+	for _, key := range secretShaped {
+		t.Run("secret/"+key, func(t *testing.T) {
+			var buf bytes.Buffer
+			ctx := textLoggerCtx(context.Background(), &buf)
+
+			out := logThrough(ctx, &buf, "event", key, testSecret)
+
+			if strings.Contains(out, testSecret) {
+				t.Errorf("attribute %q leaked its value into the sink; got: %s", key, out)
+			}
+			if want := key + "=" + obs.RedactedValue; !strings.Contains(out, want) {
+				t.Errorf("expected %q to still be redacted after the word-boundary narrowing; got: %s", key, out)
+			}
+		})
+	}
+}
+
 // TestRedact_ScalarKindsUnderSensitiveKey pins the type-consistency rule:
 // whatever the value's slog kind -- an int, a duration, a struct -- a
 // sensitive key replaces it with the same String-typed RedactedValue.
