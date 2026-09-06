@@ -175,6 +175,58 @@ func TestRoleBindingRepository_ByRole_DoesNotCrossTenants(t *testing.T) {
 	}
 }
 
+func TestRoleBindingRepository_ByNodes_DoesNotCrossTenants(t *testing.T) {
+	// A node id is a tenant's own opaque value with no cross-tenant
+	// meaning, but the SAME literal id string could coincidentally collide
+	// across two tenants' otherwise-unrelated trees -- ByNodes must not
+	// let that collision leak a binding across the tenant boundary.
+	repo := NewRoleBindingRepository(newRBACTestDB(t))
+	ctxA := pkgcore.WithTenant(context.Background(), "tenant-a")
+	ctxB := pkgcore.WithTenant(context.Background(), "tenant-b")
+
+	nodeID := uuid.NewString()
+	userInA := uuid.NewString()
+	if err := repo.Create(ctxA, &RoleBinding{ID: uuid.NewString(), UserID: userInA, RoleID: uuid.NewString(), NodeID: nodeID}); err != nil {
+		t.Fatalf("Create in tenant-a: %v", err)
+	}
+	if err := repo.Create(ctxB, &RoleBinding{ID: uuid.NewString(), UserID: uuid.NewString(), RoleID: uuid.NewString(), NodeID: nodeID}); err != nil {
+		t.Fatalf("Create in tenant-b: %v", err)
+	}
+
+	gotA, err := repo.ByNodes(ctxA, []string{nodeID})
+	if err != nil {
+		t.Fatalf("ByNodes in tenant-a: %v", err)
+	}
+	if len(gotA) != 1 || gotA[0].UserID != userInA {
+		t.Fatalf("ByNodes in tenant-a = %+v, want exactly the tenant's own binding", gotA)
+	}
+
+	// A second node in tenant-a alone, queried alongside the shared id, so
+	// the "many ids at once" shape a cascade delivers is exercised too.
+	secondNode := uuid.NewString()
+	secondUser := uuid.NewString()
+	if err = repo.Create(ctxA, &RoleBinding{ID: uuid.NewString(), UserID: secondUser, RoleID: uuid.NewString(), NodeID: secondNode}); err != nil {
+		t.Fatalf("Create second binding in tenant-a: %v", err)
+	}
+	gotBoth, err := repo.ByNodes(ctxA, []string{nodeID, secondNode})
+	if err != nil {
+		t.Fatalf("ByNodes over two ids in tenant-a: %v", err)
+	}
+	if len(gotBoth) != 2 {
+		t.Fatalf("ByNodes over two ids in tenant-a = %+v, want 2 bindings", gotBoth)
+	}
+
+	// An empty id list returns empty with no query at all -- ByNodes' own
+	// documented trivial path -- but still validates the tenant.
+	gotEmpty, err := repo.ByNodes(ctxA, nil)
+	if err != nil {
+		t.Fatalf("ByNodes with no ids: %v", err)
+	}
+	if len(gotEmpty) != 0 {
+		t.Fatalf("ByNodes with no ids = %+v, want empty", gotEmpty)
+	}
+}
+
 func TestFilteredReads_NoTenantContext_FailClosed(t *testing.T) {
 	// Every filtered read resolves the tenant before touching the
 	// database, exactly as dbkit.Repository[T] does, and reports pkgcore's
@@ -194,6 +246,14 @@ func TestFilteredReads_NoTenantContext_FailClosed(t *testing.T) {
 	}
 	if _, err := NewRoleBindingRepository(db).ByRole(ctx, "r1"); !errors.Is(err, pkgcore.ErrNoTenant) {
 		t.Fatalf("RoleBindingRepository.ByRole without a tenant = %v, want pkgcore.ErrNoTenant", err)
+	}
+	if _, err := NewRoleBindingRepository(db).ByNodes(ctx, []string{"n1"}); !errors.Is(err, pkgcore.ErrNoTenant) {
+		t.Fatalf("RoleBindingRepository.ByNodes without a tenant = %v, want pkgcore.ErrNoTenant", err)
+	}
+	// The trivial empty-list path still validates the tenant -- see
+	// ByNodes' own doc comment for why.
+	if _, err := NewRoleBindingRepository(db).ByNodes(ctx, nil); !errors.Is(err, pkgcore.ErrNoTenant) {
+		t.Fatalf("RoleBindingRepository.ByNodes(nil) without a tenant = %v, want pkgcore.ErrNoTenant", err)
 	}
 }
 
