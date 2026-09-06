@@ -142,26 +142,27 @@ func TestOrgRBACReap_NodeDeleted_ReapsDanglingBinding(t *testing.T) {
 		t.Fatalf("CreateChild(sibling): %v", err)
 	}
 
-	if _, err := rbacService.DefineRole(ctx, rbac.RoleDefinition{
+	if _, err = rbacService.DefineRole(ctx, rbac.RoleDefinition{
 		Key: "reader", Permissions: []string{"org:read"},
 	}); err != nil {
 		t.Fatalf("DefineRole: %v", err)
 	}
 	sub := rbac.Subject{TenantID: "tenant-a", UserID: "user-1"}
-	if err := rbacService.AssignRole(ctx, sub, "reader", rbac.Scope{NodeID: leaf.ID}); err != nil {
+	if err = rbacService.AssignRole(ctx, sub, "reader", rbac.Scope{NodeID: leaf.ID}); err != nil {
 		t.Fatalf("AssignRole at the leaf: %v", err)
 	}
-	if err := rbacService.AssignRole(ctx, sub, "reader", rbac.Scope{NodeID: sibling.ID}); err != nil {
+	if err = rbacService.AssignRole(ctx, sub, "reader", rbac.Scope{NodeID: sibling.ID}); err != nil {
 		t.Fatalf("AssignRole at the sibling: %v", err)
 	}
 
-	if ok, err := rbacService.Can(ctx, sub, "read", "org"); err != nil || !ok {
+	ok, err := rbacService.Can(ctx, sub, "read", "org")
+	if err != nil || !ok {
 		t.Fatalf("the grant was not live before the delete: Can = %v, %v", ok, err)
 	}
 
 	// The real delete, through org's real TreeService -- not a fake event,
 	// not a direct call into rbac's reap machinery.
-	if err := tree.Delete(ctx, leaf.ID, false); err != nil {
+	if err = tree.Delete(ctx, leaf.ID, false); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
@@ -217,24 +218,25 @@ func TestOrgRBACReap_NodeDeleted_CascadeReapsEveryBinding(t *testing.T) {
 		t.Fatalf("CreateChild(sibling): %v", err)
 	}
 
-	if _, err := rbacService.DefineRole(ctx, rbac.RoleDefinition{
+	if _, err = rbacService.DefineRole(ctx, rbac.RoleDefinition{
 		Key: "reader", Permissions: []string{"org:read"},
 	}); err != nil {
 		t.Fatalf("DefineRole: %v", err)
 	}
 	sub := rbac.Subject{TenantID: "tenant-a", UserID: "user-1"}
 	for _, nodeID := range []string{parent.ID, childA.ID, childB.ID, sibling.ID} {
-		if err := rbacService.AssignRole(ctx, sub, "reader", rbac.Scope{NodeID: nodeID}); err != nil {
+		if err = rbacService.AssignRole(ctx, sub, "reader", rbac.Scope{NodeID: nodeID}); err != nil {
 			t.Fatalf("AssignRole at %s: %v", nodeID, err)
 		}
 	}
 
-	if err := tree.Delete(ctx, parent.ID, true); err != nil {
+	if err = tree.Delete(ctx, parent.ID, true); err != nil {
 		t.Fatalf("Delete(cascade): %v", err)
 	}
 
 	for _, deletedID := range []string{parent.ID, childA.ID, childB.ID} {
-		live, err := isReaderLiveAtNode(ctx, rbacService, sub, deletedID)
+		var live bool
+		live, err = isReaderLiveAtNode(ctx, rbacService, sub, deletedID)
 		if err != nil {
 			t.Fatalf("checking node %s: %v", deletedID, err)
 		}
