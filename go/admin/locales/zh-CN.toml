@@ -27,6 +27,10 @@
 "admin.export_operator_required" = "发起审计导出必须提供操作员用户 ID。"
 "admin.principal_required" = "该请求未携带已验证的身份。"
 "admin.internal" = "发生意外的内部错误。"
+"admin.request_body_invalid" = "请求体无法解析。"
+"admin.impersonation_target_not_member" = "目标用户不是目标租户的成员。"
+"admin.impersonation_target_validation_unavailable" = "无法校验目标用户的账号或租户成员身份。"
+"admin.tenant_concurrent_update" = "该租户的台账记录已被另一个请求修改，请刷新后重试。"
 
 "admin.impersonation_started.in_app.title" = "有管理员正在查看你的账号"
 "admin.impersonation_started.in_app.body" = "一名平台管理员对你的账号发起了模拟登录会话。如果你没有预期到这次操作，请联系客服。"

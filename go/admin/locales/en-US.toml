@@ -28,6 +28,10 @@
 "admin.export_operator_required" = "An operator user id is required to enqueue an audit export."
 "admin.principal_required" = "This request carries no verified identity."
 "admin.internal" = "An unexpected internal error occurred."
+"admin.request_body_invalid" = "The request body could not be parsed."
+"admin.impersonation_target_not_member" = "The target user is not a member of the target tenant."
+"admin.impersonation_target_validation_unavailable" = "The target's account or tenant membership could not be verified."
+"admin.tenant_concurrent_update" = "This tenant's ledger entry was changed by another request; reload and try again."
 
 "admin.impersonation_started.in_app.title" = "An administrator is viewing your account"
 "admin.impersonation_started.in_app.body" = "A platform administrator started an impersonation session on your account. If you did not expect this, contact support."

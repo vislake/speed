@@ -122,7 +122,7 @@ func (h *Handler) AdminCreateTenant(w http.ResponseWriter, r *http.Request) {
 	}
 	var req api.AdminCreateTenantRequest
 	if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
-		writeError(w, ErrTenantIDRequired.WithCause(decodeErr))
+		writeError(w, ErrRequestBodyInvalid.WithCause(decodeErr))
 		return
 	}
 	t := &Tenant{TenantID: req.TenantID, CreatedBy: callerID}
@@ -158,7 +158,7 @@ func (h *Handler) AdminUpdateTenant(w http.ResponseWriter, r *http.Request, id s
 	}
 	var req api.AdminUpdateTenantRequest
 	if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
-		writeError(w, ErrTenantIDRequired.WithCause(decodeErr))
+		writeError(w, ErrRequestBodyInvalid.WithCause(decodeErr))
 		return
 	}
 	patch := TenantPatch{DisplayName: req.DisplayName, Notes: req.Notes, SuspendedReason: req.SuspendedReason}
@@ -258,7 +258,7 @@ func (h *Handler) AdminStartImpersonation(w http.ResponseWriter, r *http.Request
 	}
 	var req api.AdminStartImpersonationRequest
 	if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
-		writeError(w, ErrImpersonationTargetRequired.WithCause(decodeErr))
+		writeError(w, ErrRequestBodyInvalid.WithCause(decodeErr))
 		return
 	}
 	locale := ""
@@ -450,7 +450,7 @@ func (h *Handler) AdminExportAuditEvents(w http.ResponseWriter, r *http.Request)
 	}
 	var req api.AdminExportAuditEventsRequest
 	if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
-		writeError(w, ErrTenantIDRequired.WithCause(decodeErr))
+		writeError(w, ErrRequestBodyInvalid.WithCause(decodeErr))
 		return
 	}
 	jobID, err := h.exportSvc.Enqueue(r.Context(), req.TenantID, callerID)
@@ -477,7 +477,7 @@ func (h *Handler) AdminListDeclaredPermissions(w http.ResponseWriter, r *http.Re
 func (h *Handler) AdminDefineRole(w http.ResponseWriter, r *http.Request) {
 	var req api.AdminDefineRoleRequest
 	if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
-		writeError(w, ErrTenantIDRequired.WithCause(decodeErr))
+		writeError(w, ErrRequestBodyInvalid.WithCause(decodeErr))
 		return
 	}
 	def := rbac.RoleDefinition{Key: req.Key, Permissions: req.Permissions}
@@ -502,7 +502,7 @@ func (h *Handler) AdminDefineRole(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) AdminCreateRoleBinding(w http.ResponseWriter, r *http.Request, id string) {
 	var req api.AdminCreateRoleBindingRequest
 	if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
-		writeError(w, ErrTenantIDRequired.WithCause(decodeErr))
+		writeError(w, ErrRequestBodyInvalid.WithCause(decodeErr))
 		return
 	}
 	nodeID := ""

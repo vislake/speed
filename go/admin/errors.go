@@ -155,6 +155,46 @@ var (
 	// other admin write path); this is reachable only through a direct,
 	// non-HTTP caller of Enqueue.
 	ErrExportOperatorRequired = apperr.Invalid("admin.export_operator_required")
+
+	// ErrRequestBodyInvalid is returned by every handler.go operation whose
+	// request body failed to json.Decode -- malformed JSON or a field of
+	// the wrong wire type, nothing to do with which fields the decoded
+	// value then carries. P3-5's fix: six sites used to wrap a genuine
+	// decode failure in ErrTenantIDRequired (five of them) or
+	// ErrImpersonationTargetRequired (the sixth), both semantically wrong
+	// -- a caller who sent syntactically broken JSON was told "you forgot
+	// the tenant id" or "you forgot the target", neither of which is what
+	// happened. This code is used ONLY at the decode step itself; every
+	// site's own SEPARATE, correct field-validation refusal (an
+	// actually-missing tenant id or target AFTER a successful decode) is
+	// unchanged.
+	ErrRequestBodyInvalid = apperr.Invalid("admin.request_body_invalid")
+
+	// ErrImpersonationTargetNotMember is returned by ImpersonationService.Start
+	// (P3-4's fix) when the target user id resolves to a real authn account
+	// but that account holds no membership in the target tenant at all --
+	// a grant scoped to a tenant the target does not even belong to would
+	// substitute an identity that could never legitimately act there in
+	// the first place.
+	ErrImpersonationTargetNotMember = apperr.Invalid("admin.impersonation_target_not_member")
+
+	// ErrImpersonationTargetValidationUnavailable is returned by Start
+	// (P3-4's fix) when the target's existence or tenant membership could
+	// not be determined for a reason OTHER than "does not exist" or "not a
+	// member" -- the cross-tenant system-context grant needed to check
+	// membership could not be entered, or the membership lookup itself
+	// failed. Start refuses rather than writing a grant no one has
+	// actually verified the target may even use.
+	ErrImpersonationTargetValidationUnavailable = apperr.Internal("admin.impersonation_target_validation_unavailable")
+
+	// ErrTenantConcurrentUpdate is returned by TenantRepository.Update
+	// (P3-3's fix) when the conditional UPDATE's guard finds the row no
+	// longer matches what was read moments earlier -- a concurrent PATCH
+	// (suspend racing resume, say) already landed in between. The caller's
+	// own patch is refused rather than silently overwriting the
+	// concurrent write with a stale read; a retry re-reads the current row
+	// and reapplies its intent against it.
+	ErrTenantConcurrentUpdate = apperr.Conflict("admin.tenant_concurrent_update")
 )
 
 // errorCodes lists every code this module can return, in catalog order. It
@@ -182,5 +222,9 @@ var errorCodes = []string{
 	ErrRBACServiceRequired.Code,
 	ErrUsageModulesNotWired.Code,
 	ErrExportOperatorRequired.Code,
+	ErrRequestBodyInvalid.Code,
+	ErrImpersonationTargetNotMember.Code,
+	ErrImpersonationTargetValidationUnavailable.Code,
+	ErrTenantConcurrentUpdate.Code,
 	errInternal.Code,
 }
