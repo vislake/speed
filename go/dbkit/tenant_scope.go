@@ -252,28 +252,30 @@ func tenantScopeBeforeDelete(db *gorm.DB) {
 
 // groupExistingWhereConditions collapses every WHERE expression the caller
 // has already attached to stmt (if any) into a single AndConditions group,
-// so that the tenant filter appended immediately afterward by
-// tenantScopeBeforeQuery/Update/Delete always binds to the caller's entire
-// pre-existing condition as one AND'd sibling, never only to the last
-// top-level branch of it.
+// so that the filter appended immediately afterward — the tenant filter of
+// tenantScopeBeforeQuery/Update/Delete, and the soft-delete "deleted_at IS
+// NULL" predicate of soft_delete.go's softDeleteScopeBeforeQuery — always
+// binds to the caller's entire pre-existing condition as one AND'd sibling,
+// never only to the last top-level branch of it.
 //
 // Left alone, gorm's clause.Where.MergeClause (see gorm.io/gorm/clause/
-// where.go) simply appends the tenant filter as one more top-level element
-// of Where.Exprs, and SQL gives AND strictly higher precedence than OR:
-// "a OR b AND tenant_id = ?" parses as "a OR (b AND tenant_id = ?)", not
-// "(a OR b) AND tenant_id = ?". A caller query built with the chained
-// .Or(...) method — e.g. db.Where("name = ?", x).Or("name = ?", y) — would
-// therefore have its first OR branch left completely unfiltered by tenant:
-// a cross-tenant read on the query path, and a cross-tenant mutation on the
-// update/delete path. Grouping the existing expressions into one explicit
-// AndConditions first, before the tenant condition is appended as a new
-// sibling, turns the same merge into the intended
-// "(a OR b) AND tenant_id = ?" instead — AndConditions.Build parenthesizes
-// its contents whenever it holds more than one expression, and gorm's own
-// raw-SQL heuristic (clause.buildExprs' Expr case, matched via the
-// AndConditions case that wraps it) continues to parenthesize a single
-// caller-supplied raw string that itself visibly contains " AND "/" OR ",
-// exactly as it already did before this grouping was introduced.
+// where.go) simply appends the new filter as one more top-level element of
+// Where.Exprs, and SQL gives AND strictly higher precedence than OR:
+// "a OR b AND <filter>" parses as "a OR (b AND <filter>)", not
+// "(a OR b) AND <filter>". A caller query built with the chained .Or(...)
+// method — e.g. db.Where("name = ?", x).Or("name = ?", y) — would therefore
+// have its first OR branch left completely unfiltered: a cross-tenant read
+// or mutation on the tenant path (tenantScopeBeforeQuery/Update/Delete), a
+// soft-deleted row surfacing in an ordinary read on the soft-delete path
+// (softDeleteScopeBeforeQuery). Grouping the existing expressions into one
+// explicit AndConditions first, before the new filter is appended as a
+// sibling, turns the same merge into the intended "(a OR b) AND <filter>"
+// instead — AndConditions.Build parenthesizes its contents whenever it holds
+// more than one expression, and gorm's own raw-SQL heuristic
+// (clause.buildExprs' Expr case, matched via the AndConditions case that
+// wraps it) continues to parenthesize a single caller-supplied raw string
+// that itself visibly contains " AND "/" OR ", exactly as it already did
+// before this grouping was introduced.
 //
 // A statement with no existing WHERE clause — the overwhelmingly common
 // case, since dbkit.Repository[T] never builds one before the plugin runs —

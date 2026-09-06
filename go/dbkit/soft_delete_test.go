@@ -131,3 +131,156 @@ func TestSoftDeleteScopePlugin_NonSoftDeletableModel_Unaffected(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Or()-composition regression tests.
+// ---------------------------------------------------------------------------
+
+// seedSoftDeleteOrScenario populates db with the three rows every test in
+// this section queries: a live row named "x" (id live-x), a soft-deleted row
+// also named "x" (id deleted-x), and a live row named "y" (id live-y). The
+// two same-named x rows are what make the shape dangerous: "the row named
+// x" is ambiguous between a live row and a soft-deleted one, so a filter
+// that fails to bind to the query's first OR branch is caught by exactly
+// this pairing.
+//
+// The soft-deleted x row is created and marked deleted FIRST, then the live
+// x row is inserted — the fixture table's partial unique index on
+// (tenant_id, name) WHERE deleted_at IS NULL (soft_delete_unique_index_test.go's
+// adjudicated answer) is exactly what makes that order legal, and it is the
+// order a real soft-delete-then-recreate lifecycle produces.
+func seedSoftDeleteOrScenario(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	mustCreateSoftDeletableWidget(t, db, &testutil.SoftDeletableWidget{
+		ID: "deleted-x", TenantID: "tenant-a", Name: "x",
+	})
+	if err := db.Exec(
+		`UPDATE soft_deletable_widgets SET deleted_at = ?, deleted_by = ? WHERE id = ?`,
+		"2026-01-01 00:00:00", "user-1", "deleted-x",
+	).Error; err != nil {
+		t.Fatalf("mark deleted-x deleted via raw SQL: %v", err)
+	}
+	mustCreateSoftDeletableWidget(t, db, &testutil.SoftDeletableWidget{
+		ID: "live-x", TenantID: "tenant-a", Name: "x",
+	})
+	mustCreateSoftDeletableWidget(t, db, &testutil.SoftDeletableWidget{
+		ID: "live-y", TenantID: "tenant-a", Name: "y",
+	})
+}
+
+// This section covers a gap none of the core-contract tests above exercise:
+// what softDeleteScopeBeforeQuery actually produces when the CALLER's own
+// query already carries an Or(...) branch, rather than the plain,
+// single-condition (or no-condition) shapes every other test in this file
+// builds. It is the soft-delete mirror of tenant_scope_test.go's own
+// Or()-composition section, and the analysis is identical to that section's:
+//
+// SQL gives AND strictly higher precedence than OR, and gorm's own
+// clause-building only auto-parenthesizes a *raw string* condition whose
+// SQL text itself visibly contains "AND "/"OR " — it does NOT parenthesize a
+// structured chain built via the separate .Or(...) builder method before a
+// later, unrelated condition is merged onto it. So:
+//
+//	db.Where("name = ?", "x").Or("name = ?", "y")     // caller code
+//	// ... softDeleteScopeBeforeQuery later appends:
+//	db.Statement.Where("deleted_at IS NULL")
+//
+// would render as `name = ? OR name = ? AND deleted_at IS NULL`, which — by
+// normal SQL operator precedence — parses as
+// `name = ? OR (name = ? AND deleted_at IS NULL)`, not the intended
+// `(name = ? OR name = ?) AND deleted_at IS NULL`. The first branch of the
+// OR carries no soft-delete filter at all, so it matches soft-deleted rows
+// just like live ones — breaching the plugin's whole documented purpose,
+// "soft-deleted rows are invisible to ordinary reads", the moment a caller's
+// query shape includes an Or(). The fix mirrors tenant_scope.go's own:
+// group the caller's existing conditions first, then append the
+// soft-delete predicate as one AND'd sibling.
+func TestSoftDeleteScopeBeforeQuery_CallerOrCondition_DeletedAtFilterAppliesToEveryBranch(t *testing.T) {
+	db := newSoftDeleteScopedTestDB(t)
+	seedSoftDeleteOrScenario(t, db)
+
+	var got []testutil.SoftDeletableWidget
+	err := db.
+		Where("name = ?", "x").
+		Or("name = ?", "y").
+		Find(&got).Error
+	if err != nil {
+		t.Fatalf("Find() error = %v", err)
+	}
+
+	for _, w := range got {
+		if w.ID == "deleted-x" {
+			t.Errorf("Where(name=x).Or(name=y) query returned soft-deleted row %+v; "+
+				"the appended deleted_at IS NULL filter must bind to every OR branch, not just the last one "+
+				"(SQL operator precedence makes 'a OR b AND deleted_at IS NULL' mean 'a OR (b AND deleted_at IS NULL)', "+
+				"leaving the first branch completely unfiltered by soft-delete)", w)
+		}
+	}
+	if len(got) != 2 {
+		t.Errorf("Where(name=x).Or(name=y) query returned %d rows %+v, want exactly 2 (live-x and live-y; the soft-deleted x row must stay hidden)",
+			len(got), got)
+	}
+}
+
+// TestSoftDeleteScopeBeforeQuery_CallerRawOrExpression_DeletedAtFilterAppliesToEveryBranch
+// is the contrasting, currently-safe shape: the same logical OR, expressed
+// as a single raw SQL string instead of the chained .Or(...) builder. gorm
+// heuristically parenthesizes a raw condition string whenever it visibly
+// contains " AND "/" OR " and more than one WHERE expression is present, so
+// this shape composes correctly with the plugin's appended clause even
+// though the .Or(...) shape above does not. It is kept here — exactly as its
+// tenant_scope_test.go counterpart is — so a future fix to the case above
+// has a passing witness of the shape it must not regress.
+func TestSoftDeleteScopeBeforeQuery_CallerRawOrExpression_DeletedAtFilterAppliesToEveryBranch(t *testing.T) {
+	db := newSoftDeleteScopedTestDB(t)
+	seedSoftDeleteOrScenario(t, db)
+
+	var got []testutil.SoftDeletableWidget
+	err := db.
+		Where("name = ? OR name = ?", "x", "y").
+		Find(&got).Error
+	if err != nil {
+		t.Fatalf("Find() error = %v", err)
+	}
+
+	for _, w := range got {
+		if w.ID == "deleted-x" {
+			t.Errorf("raw 'name = ? OR name = ?' query returned soft-deleted row %+v, want it hidden", w)
+		}
+	}
+	if len(got) != 2 {
+		t.Errorf("raw 'name = ? OR name = ?' query returned %d rows %+v, want exactly 2 (live-x and live-y)", len(got), got)
+	}
+}
+
+// TestSoftDeleteScopeBeforeQuery_UnscopedOrCondition_SeesSoftDeletedRows is
+// the bypass-semantics witness for the shape above: the very same
+// Where(name=x).Or(name=y) query under db.Unscoped() — the documented route
+// past the auto-appended "deleted_at IS NULL" filter, per soft_delete.go's
+// own doc comment — must return the soft-deleted x row alongside the two
+// live ones. It pins what the scope is supposed to do (hide soft-deleted
+// rows from ordinary reads only) so the regression test above cannot be
+// "fixed" by weakening the filter instead of strengthening its binding.
+func TestSoftDeleteScopeBeforeQuery_UnscopedOrCondition_SeesSoftDeletedRows(t *testing.T) {
+	db := newSoftDeleteScopedTestDB(t)
+	seedSoftDeleteOrScenario(t, db)
+
+	var got []testutil.SoftDeletableWidget
+	err := db.Unscoped().
+		Where("name = ?", "x").
+		Or("name = ?", "y").
+		Find(&got).Error
+	if err != nil {
+		t.Fatalf("Unscoped().Where(name=x).Or(name=y).Find() error = %v", err)
+	}
+
+	ids := make(map[string]bool, len(got))
+	for _, w := range got {
+		ids[w.ID] = true
+	}
+	for _, want := range []string{"live-x", "deleted-x", "live-y"} {
+		if !ids[want] {
+			t.Errorf("Unscoped() query returned rows %+v, missing %q (bypassing the scope must reveal the soft-deleted row)", got, want)
+		}
+	}
+}

@@ -122,6 +122,20 @@ var _ gorm.Plugin = (*softDeleteScopePlugin)(nil)
 // softDeleteScopeBeforeQuery appends "deleted_at IS NULL" ahead of every
 // query against a SoftDeletable model, unless the statement is Unscoped
 // (db.Statement.Unscoped), GORM's own general bypass mechanism.
+//
+// Like tenantScopeBeforeQuery/Update/Delete, it groups whatever WHERE
+// expressions the caller already attached (groupExistingWhereConditions)
+// before appending its predicate, so the soft-delete filter always binds to
+// the caller's entire pre-existing condition as one AND'd sibling, never
+// only to the last top-level branch of it. Left alone, gorm's
+// clause.Where.MergeClause (see gorm.io/gorm/clause/where.go) merges the
+// predicate onto the end of the caller's top-level conditions, and SQL gives
+// AND strictly higher precedence than OR — a caller query built with the
+// chained .Or(...) method, e.g. db.Where("name = ?", "x").Or("name = ?", "y"),
+// would compile to "name = ? OR (name = ? AND deleted_at IS NULL)", leaving
+// its first OR branch to match soft-deleted rows exactly like live ones and
+// breaching the filter's whole purpose. See groupExistingWhereConditions'
+// own doc comment in tenant_scope.go for the full analysis.
 func softDeleteScopeBeforeQuery(db *gorm.DB) {
 	if db.Statement.Unscoped {
 		return
@@ -129,6 +143,7 @@ func softDeleteScopeBeforeQuery(db *gorm.DB) {
 	if !isSoftDeletableStatement(db.Statement) {
 		return
 	}
+	groupExistingWhereConditions(db.Statement)
 	db.Statement.Where(softDeleteScopeColumn + " IS NULL")
 }
 
