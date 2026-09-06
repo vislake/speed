@@ -46,12 +46,18 @@ const (
 // legitimate float64 rounding outcomes real implementations produce, never
 // asserted bit-identical across backends (see that subtest's own comment
 // for why); IncrByFloat on a key holding a non-numeric value fails with
-// pkgcore.ErrNotNumeric and leaves the value unchanged; CompareAndSwap on a
-// missing key succeeds only when old is empty (set-if-absent), and on an
-// existing key succeeds only when old matches the stored value, leaving the
-// value untouched on a mismatch; and a call made with an already-cancelled
-// context fails with that context's error instead of performing the
-// operation.
+// pkgcore.ErrNotNumeric and leaves the value unchanged; IncrByFloatWithTTL on
+// a missing key stores the result with the given ttl attached, which expires
+// it exactly like a Set-with-ttl key; IncrByFloatWithTTL on an existing, live
+// key accumulates the delta without extending (or otherwise touching) the
+// expiry it already carries, verified by outliving a shorter ttl passed
+// alongside the increment itself; IncrByFloatWithTTL with a ttl of zero or
+// less on a missing key behaves exactly like IncrByFloat (no expiry);
+// CompareAndSwap on a missing key succeeds only when old is empty
+// (set-if-absent), and on an existing key succeeds only when old matches the
+// stored value, leaving the value untouched on a mismatch; and a call made
+// with an already-cancelled context fails with that context's error instead
+// of performing the operation.
 func AssertConforms(t *testing.T, factory func() pkgcore.KVStore) {
 	t.Helper()
 
@@ -246,6 +252,100 @@ func AssertConforms(t *testing.T, factory func() pkgcore.KVStore) {
 		}
 	})
 
+	t.Run("incr_by_float_with_ttl_on_a_missing_key_attaches_the_ttl_which_then_expires_it", func(t *testing.T) {
+		t.Helper()
+		store := factory()
+		key := conformKey(t, "incr-ttl-missing")
+
+		got, err := store.IncrByFloatWithTTL(context.Background(), key, 3, conformShortTTL)
+		if err != nil {
+			t.Fatalf("IncrByFloatWithTTL() error = %v, want nil", err)
+		}
+		if got != 3 {
+			t.Errorf("IncrByFloatWithTTL() = %v, want 3", got)
+		}
+
+		if _, found, err := store.Get(context.Background(), key); err != nil || !found {
+			t.Fatalf("Get() immediately after IncrByFloatWithTTL = (found=%v, err=%v), want (true, nil)", found, err)
+		}
+
+		time.Sleep(conformExpiryWait)
+
+		if _, found, err := store.Get(context.Background(), key); err != nil || found {
+			t.Errorf("Get() after the ttl elapsed = (found=%v, err=%v), want (false, nil): a refresh-on-every-increment bug would keep this key alive forever", found, err)
+		}
+	})
+
+	t.Run("incr_by_float_with_ttl_on_a_live_key_accumulates_without_extending_its_expiry", func(t *testing.T) {
+		t.Helper()
+		store := factory()
+		key := conformKey(t, "incr-ttl-live")
+
+		// Give the key a short-lived expiry first, then increment it again
+		// with a much longer ttl -- if the implementation wrongly refreshed
+		// the expiry on every call, the key would still be alive after
+		// conformExpiryWait; the contract requires the original short expiry
+		// to govern regardless of what a later call's ttl argument asks for.
+		if _, err := store.IncrByFloatWithTTL(context.Background(), key, 1, conformShortTTL); err != nil {
+			t.Fatalf("IncrByFloatWithTTL() first call error = %v, want nil", err)
+		}
+		got, err := store.IncrByFloatWithTTL(context.Background(), key, 2, time.Hour)
+		if err != nil {
+			t.Fatalf("IncrByFloatWithTTL() second call error = %v, want nil", err)
+		}
+		if got != 3 {
+			t.Errorf("IncrByFloatWithTTL() second call = %v, want 3 (accumulated)", got)
+		}
+
+		time.Sleep(conformExpiryWait)
+
+		if _, found, err := store.Get(context.Background(), key); err != nil || found {
+			t.Errorf("Get() after the original short ttl elapsed = (found=%v, err=%v), want (false, nil): a later call's ttl must never extend a live key's expiry", found, err)
+		}
+	})
+
+	t.Run("incr_by_float_with_ttl_of_zero_or_less_on_a_missing_key_behaves_like_incr_by_float", func(t *testing.T) {
+		t.Helper()
+		store := factory()
+
+		for _, ttl := range []time.Duration{0, -time.Second} {
+			key := conformKey(t, "incr-ttl-noexpiry") + ":" + ttl.String()
+
+			if _, err := store.IncrByFloatWithTTL(context.Background(), key, 1, ttl); err != nil {
+				t.Fatalf("IncrByFloatWithTTL(ttl=%v) error = %v, want nil", ttl, err)
+			}
+
+			time.Sleep(conformExpiryWait)
+
+			if _, found, err := store.Get(context.Background(), key); err != nil || !found {
+				t.Errorf("Get(ttl=%v) after waiting = (found=%v, err=%v), want (true, nil): ttl<=0 must mean no expiry", ttl, found, err)
+			}
+		}
+	})
+
+	t.Run("incr_by_float_with_ttl_on_a_non_numeric_value_fails_and_leaves_it_unchanged", func(t *testing.T) {
+		t.Helper()
+		store := factory()
+		key := conformKey(t, "incr-ttl-non-numeric")
+		want := []byte("not a number")
+
+		if err := store.Set(context.Background(), key, want, 0); err != nil {
+			t.Fatalf("Set() error = %v, want nil", err)
+		}
+
+		if _, err := store.IncrByFloatWithTTL(context.Background(), key, 1, time.Hour); !errors.Is(err, pkgcore.ErrNotNumeric) {
+			t.Errorf("IncrByFloatWithTTL() on a non-numeric value error = %v, want errors.Is(err, pkgcore.ErrNotNumeric)", err)
+		}
+
+		got, found, err := store.Get(context.Background(), key)
+		if err != nil || !found {
+			t.Fatalf("Get() after a failed IncrByFloatWithTTL = (found=%v, err=%v), want (true, nil)", found, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("value after a failed IncrByFloatWithTTL = %q, want unchanged %q", got, want)
+		}
+	})
+
 	t.Run("compare_and_swap_set_if_absent_then_matched_swap_then_mismatch_leaves_it_untouched", func(t *testing.T) {
 		t.Helper()
 		store := factory()
@@ -295,6 +395,9 @@ func AssertConforms(t *testing.T, factory func() pkgcore.KVStore) {
 
 		if err := store.Set(ctx, key, []byte("v"), 0); !errors.Is(err, context.Canceled) {
 			t.Errorf("Set() with a cancelled context error = %v, want context.Canceled", err)
+		}
+		if _, err := store.IncrByFloatWithTTL(ctx, key, 1, time.Hour); !errors.Is(err, context.Canceled) {
+			t.Errorf("IncrByFloatWithTTL() with a cancelled context error = %v, want context.Canceled", err)
 		}
 		if _, found, err := store.Get(ctx, key); !errors.Is(err, context.Canceled) {
 			t.Errorf("Get() with a cancelled context error = %v, want context.Canceled", err)
