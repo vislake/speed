@@ -1,0 +1,79 @@
+# Build-context excludes for examples/reference-app/Dockerfile, whose build
+# context is the REPOSITORY ROOT (not examples/reference-app/) -- the
+# Dockerfile's own header comment explains why: this app's go.mod replace
+# directives point at sibling go/* modules by relative path, and it builds
+# under go.work workspace mode, so the build stage needs go.work,
+# go.work.sum, every go/* module and examples/reference-app all visible in
+# one context.
+#
+# This file follows .gitignore's own patterns rather than duplicating its
+# reasoning (see that file for the comments this one deliberately omits);
+# it adds a few entries .gitignore has no reason to carry (docs/site's own
+# build output, the two web node_modules trees) purely because a
+# COMMITTED file can never bloat the git-tracked tree the way an untracked
+# build artifact can bloat a naively-sent Docker build context.
+
+# Version control and agent tooling -- never needed inside a build context.
+.git/
+.claude/
+
+# IDE and OS cruft (.gitignore's own entries).
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Environment files -- may hold real local secrets; never sent to the
+# daemon, and never needed by the Dockerfile's own COPY list either.
+.env
+.env.local
+*.local
+
+# Go build artifacts (.gitignore's own entries) -- test binaries and
+# coverage output, never build inputs.
+**/*.test
+*.out
+go/**/bin/
+
+# Python tooling caches (.gitignore's own entries).
+**/__pycache__/
+*.pyc
+
+# Node -- both pnpm workspaces (web/ and examples/reference-app/web, an
+# external member of the same workspace) can carry a node_modules tree
+# large enough on its own to dwarf the rest of this repository, and the
+# Dockerfile's backend build needs neither: it never touches web/ or
+# examples/reference-app/web at all.
+node_modules/
+**/node_modules/
+dist/
+.turbo/
+*.tsbuildinfo
+
+# Generated build artifacts (.gitignore's own /build/* plus its committed
+# openapi carve-out) -- the merged OpenAPI document is a real release
+# artifact worth keeping in the repository, but the Go build this
+# Dockerfile runs never reads it.
+build/*
+!build/openapi/
+
+/tmp/
+
+# Local SQLite data (.gitignore's own entries) -- a stray reference-app.db
+# from local development must never ride along into the image or even the
+# build context.
+*.db
+*.db-journal
+*.sqlite
+
+# Hugo's generated docs-site output and build lock (.gitignore's own
+# entries) -- can be large once built, and the Dockerfile never reads
+# docs/ at all.
+docs/site/public/
+docs/site/resources/
+docs/site/.hugo_build.lock
+
+# This file and the Dockerfile it configures are the two build-context
+# inputs docker itself always needs regardless of ignore rules, so neither
+# is listed here to exclude.
