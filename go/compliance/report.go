@@ -19,7 +19,12 @@ const (
 	// first, then one row per event, in auditReportCSVHeader's column
 	// order -- using encoding/csv's RFC 4180 quoting, so a field
 	// containing a comma, a double quote or a newline is quoted (and its
-	// internal quotes doubled) exactly as that standard requires.
+	// internal quotes doubled) exactly as that standard requires. Every
+	// data cell whose content begins with a spreadsheet-formula character
+	// (= + - @ tab or carriage return) is additionally single-quote-
+	// prefixed (protectCSVCell), so no cell a hostile subject or request
+	// header managed to plant in the report can execute as a formula when
+	// the file is opened in a spreadsheet application.
 	ReportFormatCSV ReportFormat = "csv"
 
 	// ReportFormatJSON renders events as a JSON array of audit.AuditEvent
@@ -124,11 +129,14 @@ func renderAuditReportCSV(events []audit.AuditEvent) ([]byte, error) {
 }
 
 // auditEventCSVRow flattens evt into one CSV row matching
-// auditReportCSVHeader's column order field for field. OccurredAt is
-// rendered as UTC RFC3339Nano, matching the wire convention
-// dbkit/audit/module.go's own timeFromWire already uses for the identical
-// reason: nanosecond precision round-trips exactly, and UTC removes any
-// ambiguity a local offset could introduce.
+// auditReportCSVHeader's column order field for field, every cell passed
+// through protectCSVCell first so a cell whose content begins with a
+// spreadsheet-formula character cannot execute as a formula when the
+// report is opened in a spreadsheet application. OccurredAt is rendered as
+// UTC RFC3339Nano, matching the wire convention dbkit/audit/module.go's own
+// timeFromWire already uses for the identical reason: nanosecond precision
+// round-trips exactly, and UTC removes any ambiguity a local offset could
+// introduce.
 func auditEventCSVRow(evt audit.AuditEvent) []string {
 	hasOnBehalfOf := "false"
 	var onBehalfOfType, onBehalfOfID, onBehalfOfDisplayName string
@@ -139,7 +147,7 @@ func auditEventCSVRow(evt audit.AuditEvent) []string {
 		onBehalfOfDisplayName = ob.DisplayName
 	}
 
-	return []string{
+	row := []string{
 		evt.ID,
 		evt.ActorType, evt.ActorID, evt.ActorDisplayName,
 		hasOnBehalfOf, onBehalfOfType, onBehalfOfID, onBehalfOfDisplayName,
@@ -149,5 +157,45 @@ func auditEventCSVRow(evt audit.AuditEvent) []string {
 		string(evt.Changes),
 		evt.TenantID, evt.IP, evt.UserAgent, evt.TraceID,
 		evt.OccurredAt.UTC().Format(time.RFC3339Nano),
+	}
+	for i := range row {
+		row[i] = protectCSVCell(row[i])
+	}
+	return row
+}
+
+// protectCSVCell returns s prefixed with a single quote when s begins with
+// one of the spreadsheet-formula characters (OWASP's CSV-injection list:
+// = + - @ tab and carriage return), and s unchanged otherwise. A cell a
+// spreadsheet would otherwise interpret as a formula -- an actor display
+// name, a failure reason or a user agent crafted by the very subject an
+// audit report records are exactly such cells -- becomes inert text instead
+// (a leading single quote is text, never a formula, in every mainstream
+// spreadsheet), while the report itself stays RFC 4180-valid: the quote is
+// an ordinary character encoding/csv's Writer quotes further only as that
+// standard requires.
+//
+// Protection is deliberately uniform across every data column rather than
+// whitelisted per "user-influenced" column: a column's provenance is a
+// maintenance liability (the next column added to auditReportCSVHeader
+// inherits the guarantee for free), and the prefix costs nothing where no
+// legitimate value of this report begins with a formula character anyway --
+// ids, timestamps, booleans and the module's own action strings never do.
+// The one honest cost is documented, not hidden: a protected cell does not
+// round-trip byte-identically through this module's own test parser (its
+// "true" content sits behind the prefixing quote, which a machine reader
+// that knows this convention strips exactly once). Refusing such a cell
+// outright was considered and rejected: a report's whole export would then
+// fail over one hostile field, handing the attacker denial of service over
+// a document's content.
+func protectCSVCell(s string) string {
+	if s == "" {
+		return s
+	}
+	switch s[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + s
+	default:
+		return s
 	}
 }

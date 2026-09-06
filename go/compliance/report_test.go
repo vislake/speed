@@ -276,6 +276,100 @@ func escapeCSVField(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
+// TestRenderAuditReport_CSV_ProtectsFormulaInjectionCells proves the CSV
+// rendering protects a report opened in a spreadsheet application against
+// formula injection: an audit report's cells carry content whose provenance
+// is the very subjects and requests the report records (actor and resource
+// display names, failure reasons, request headers), so a value beginning
+// with a spreadsheet-formula character -- OWASP's CSV-injection list:
+// = + - @ tab and carriage return -- must come out single-quote-prefixed,
+// never executable as a formula. It asserts three things on the rendered
+// report parsed back exactly as a spreadsheet (or any RFC 4180 reader)
+// would see it: no data cell begins with a formula character; each hostile
+// value survives intact behind exactly one prefixing single quote
+// (protection, never mangling or silent dropping of data); and an ordinary
+// value is never touched.
+func TestRenderAuditReport_CSV_ProtectsFormulaInjectionCells(t *testing.T) {
+	hostile := audit.AuditEvent{
+		Action:     "notes.note.delete",
+		TenantID:   "tenant-c",
+		IP:         "203.0.113.9",
+		UserAgent:  "\t+1",
+		TraceID:    "trace-9",
+		OccurredAt: time.Date(2026, 1, 2, 3, 4, 8, 0, time.UTC),
+	}
+	hostile.SetActor(pkgcore.Actor{
+		Type:        pkgcore.ActorTypeSystem,
+		ID:          "system",
+		DisplayName: `=HYPERLINK("https://evil.example/","click me")`,
+	})
+	hostile.SetOnBehalfOf(&pkgcore.Actor{
+		Type:        pkgcore.ActorTypePlatformAdmin,
+		ID:          "admin-1",
+		DisplayName: `@SUM(1,1)`,
+	})
+	hostile.SetResource(audit.Resource{
+		Type:        "note",
+		ID:          "note-1",
+		DisplayName: `+cmd|'/C calc'!A0`,
+	})
+	hostile.SetResult(audit.Result{Success: false, FailureReason: `-1+1`})
+
+	b, err := RenderAuditReport([]audit.AuditEvent{hostile}, ReportFormatCSV)
+	if err != nil {
+		t.Fatalf("RenderAuditReport(CSV) error = %v", err)
+	}
+	r := csv.NewReader(strings.NewReader(string(b)))
+	records, err := r.ReadAll()
+	if err != nil {
+		t.Fatalf("csv.ReadAll(rendered report): %v -- rendered = %s", err, b)
+	}
+	if len(records) != 2 {
+		t.Fatalf("got %d CSV rows for one event, want 2 (header plus one data row)", len(records))
+	}
+	row := records[1]
+	if len(row) != len(auditReportCSVHeader) {
+		t.Fatalf("CSV row %v has %d fields, want %d", row, len(row), len(auditReportCSVHeader))
+	}
+
+	// No cell may begin with a spreadsheet-formula character. Asserted over
+	// every cell of the data row -- not just over the five hand-named
+	// columns below -- so a column added to auditReportCSVHeader later
+	// inherits the guarantee instead of silently re-opening the hole.
+	for i, cell := range row {
+		if cell == "" {
+			continue
+		}
+		if strings.ContainsRune("=+-@\t\r", rune(cell[0])) {
+			t.Errorf("CSV column %d (%s) begins with formula character %q: cell = %q; a spreadsheet would treat it as a formula",
+				i, auditReportCSVHeader[i], cell[0], cell)
+		}
+	}
+
+	// Each hostile value survives intact behind exactly one prefixing single
+	// quote, by column index into auditReportCSVHeader (3 = actor display
+	// name, 7 = on-behalf-of display name, 11 = resource display name,
+	// 13 = failure reason, 17 = user agent).
+	want := map[int]string{
+		3:  `'=HYPERLINK("https://evil.example/","click me")`,
+		7:  `'@SUM(1,1)`,
+		11: `'+cmd|'/C calc'!A0`,
+		13: `'-1+1`,
+		17: "'\t+1",
+	}
+	for col, wantCell := range want {
+		if row[col] != wantCell {
+			t.Errorf("CSV column %d (%s) = %q, want %q", col, auditReportCSVHeader[col], row[col], wantCell)
+		}
+	}
+
+	// An ordinary value is untouched: protection fires only on the formula-
+	// character prefix, never on benign content.
+	if row[2] != "system" || row[8] != "notes.note.delete" {
+		t.Errorf("benign cells were altered: actor id = %q, action = %q", row[2], row[8])
+	}
+}
+
 func TestRenderAuditReport_CSV_EmptyEvents_RendersHeaderOnly(t *testing.T) {
 	b, err := RenderAuditReport(nil, ReportFormatCSV)
 	if err != nil {
