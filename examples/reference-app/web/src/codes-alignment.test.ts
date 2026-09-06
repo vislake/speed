@@ -22,8 +22,17 @@
  *     server code with no surface text would render a raw key (a code
  *     added server-side and forgotten here fails with the code in hand);
  *   - every non-client code a surface whitelists has a GO_PINNED
- *     citation -- a whitelist entry for a code no server answers here is
- *     dead copy and fails with its surface named.
+ *     citation or a recorded WHITELISTED_BEYOND_THIS_APP exemption --
+ *     a whitelist entry for a code no server answers here is dead copy
+ *     and fails with its surface named. The exemption list exists
+ *     because a package whitelist is consumer-facing: it serves every
+ *     deployment that can be answered with the code, which can be a
+ *     wider composition than THIS app wires. Exempting such a code from
+ *     the no-dead-entries direction -- instead of adding a citation
+ *     this app's routes cannot earn -- keeps the two hand lists honest:
+ *     GO_PINNED stays the set of codes the app itself can answer with,
+ *     and the exemption records the reasoning that keeps a code out of
+ *     it.
  *
  * The client.network / client.timeout / client.protocol codes are the
  * @speed/api-client transport contract, not server answers, so they sit
@@ -75,11 +84,13 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   'authn.password_too_short': 'go/authn/errors.go:69 (ErrPasswordTooShort)',
   'authn.password_too_long': 'go/authn/errors.go:72 (ErrPasswordTooLong)',
   'authn.password_too_weak': 'go/authn/errors.go:76 (ErrPasswordTooWeak)',
+  'authn.display_name_too_long': 'go/authn/errors.go:82 (ErrDisplayNameTooLong)',
   'authn.token_expired': 'go/authn/errors.go:95 (ErrTokenExpired)',
   'authn.session_revoked': 'go/authn/errors.go:99 (ErrSessionRevoked)',
   'authn.refresh_token_invalid': 'go/authn/errors.go:103 (ErrRefreshTokenInvalid)',
   'authn.refresh_token_reused': 'go/authn/errors.go:109 (ErrRefreshTokenReused)',
   'authn.tenant_membership_required': 'go/authn/errors.go:115 (ErrTenantMembershipRequired)',
+  'authn.tenant_membership_unavailable': 'go/authn/errors.go:131 (ErrTenantMembershipUnavailable)',
   'authn.oauth_state_invalid': 'go/authn/errors.go:135 (ErrOAuthStateInvalid)',
   'authn.redirect_uri_not_allowed': 'go/authn/errors.go:139 (ErrRedirectURINotAllowed)',
   'authn.provider_unknown': 'go/authn/errors.go:144 (ErrProviderUnknown)',
@@ -91,6 +102,7 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   'authn.rate_limited': 'go/authn/errors.go:232 (ErrRateLimited)',
   'authn.account_locked': 'go/authn/errors.go:240 (ErrAccountLocked)',
   'authn.verification_code_invalid': 'go/authn/errors.go:258 (ErrVerificationCodeInvalid)',
+  'authn.channel_disabled': 'go/authn/errors.go:260 (ErrChannelDisabled)',
   'authn.mfa_not_enrolled': 'go/authn/errors.go:268 (ErrMFANotEnrolled)',
   'authn.mfa_already_enrolled': 'go/authn/errors.go:272 (ErrMFAAlreadyEnrolled)',
   'authn.mfa_invalid_code': 'go/authn/errors.go:278 (ErrMFAInvalidCode)',
@@ -104,6 +116,26 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   'notes.text_required': 'examples/reference-app/internal/notes/handler.go:31 (ErrTextRequired)',
   'notes.text_too_long': 'examples/reference-app/internal/notes/handler.go:66 (ErrTextTooLong)',
   'notes.internal_error': 'examples/reference-app/internal/notes/handler.go:70 (errInternal)',
+}
+
+/**
+ * Whitelisted codes this app's own surfaces cannot be answered with --
+ * the deliberate, reasoning-carrying exceptions to the no-dead-entries
+ * direction (see the file header). Each entry names the code and why it
+ * has no in-app answer, so it must not gain a GO_PINNED citation either:
+ * the two hand lists would otherwise start confirming each other for a
+ * code no surface here can reach.
+ */
+const WHITELISTED_BEYOND_THIS_APP: Readonly<Record<string, string>> = {
+  'authn.social_identity_incomplete':
+    'auth-ui whitelists the social exchange answers for its SocialCallbackHandler ' +
+    'surface, which any host with a wired, enabled social channel can be answered ' +
+    'with (the provider authorized the person but reported no stable identifier). ' +
+    'This app wires no social channel: cfg.SocialProviders is empty, so ' +
+    'openConfiguredAuthnChannels opens no flag rows and every social feature flag ' +
+    'stays OFF -- an exchange attempt here refuses at the channel gate (go/authn/' +
+    'identity.go, SocialCallback\'s gate, which runs before any identity analysis) ' +
+    'with authn.channel_disabled. The code therefore has no in-app answer.',
 }
 
 /** The transport codes of the @speed/api-client contract: reserved to
@@ -131,11 +163,14 @@ const SURFACE_WHITELISTS: Readonly<Record<string, readonly string[]>> = {
 
 describe('reachable-error whitelists vs the server code set', () => {
   it('keeps the hand-maintained enumeration at its audited size', () => {
-    // 30 authn sentinels + rbac.permission_denied + the three notes
-    // sentinels. The size guard makes a GO_PINNED edit (in either
-    // direction) fail loudly here rather than silently through the
-    // subset assertions below.
-    expect(Object.keys(GO_PINNED)).toHaveLength(34)
+    // 33 authn sentinels (the 30 of the previous audit plus the three
+    // answers this round's auth-ui whitelist extension covers:
+    // authn.channel_disabled, authn.display_name_too_long and
+    // authn.tenant_membership_unavailable, each cited above) +
+    // rbac.permission_denied + the three notes sentinels. The size
+    // guard makes a GO_PINNED edit (in either direction) fail loudly
+    // here rather than silently through the subset assertions below.
+    expect(Object.keys(GO_PINNED)).toHaveLength(37)
   })
 
   it('whitelists every code the server can answer with (GO_PINNED is covered)', () => {
@@ -154,10 +189,33 @@ describe('reachable-error whitelists vs the server code set', () => {
     for (const [surface, codes] of Object.entries(SURFACE_WHITELISTS)) {
       for (const code of nonClientCodes(codes)) {
         expect(
-          GO_PINNED[code] !== undefined,
-          `${surface} whitelists ${code}, which no server sentinel cited here defines`,
+          GO_PINNED[code] !== undefined ||
+            WHITELISTED_BEYOND_THIS_APP[code] !== undefined,
+          `${surface} whitelists ${code}, which no server sentinel cited here defines and no recorded exemption explains`,
         ).toBe(true)
       }
+    }
+  })
+
+  it('keeps the beyond-this-app exemption list honest in both directions', () => {
+    const whitelisted = new Set(
+      Object.values(SURFACE_WHITELISTS).flatMap(nonClientCodes),
+    )
+    for (const [code, reasoning] of Object.entries(WHITELISTED_BEYOND_THIS_APP)) {
+      // An exemption for a code no surface whitelists would be dead
+      // copy of its own kind: the exempted code must actually be
+      // reachable text somewhere on these surfaces.
+      expect(
+        whitelisted.has(code),
+        `${code} is exempted but whitelisted by no surface: ${reasoning}`,
+      ).toBe(true)
+      // An exemption for a code the enumeration already carries is
+      // redundant: once the app answers a code, it belongs in GO_PINNED
+      // with its citation, not in the exemption list.
+      expect(
+        GO_PINNED[code],
+        `${code} is exempted but already carries a GO_PINNED citation: ${reasoning}`,
+      ).toBeUndefined()
     }
   })
 
