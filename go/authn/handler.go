@@ -117,6 +117,42 @@ func decodeJSON(r *http.Request, v any) error {
 // succeeded (or failed, for a login-failure record) is unaffected either
 // way.
 //
+// tenantID is the tenant the recorded action happened in: the acting
+// Principal's own TenantID claim wherever one exists, empty for a
+// platform-level or pre-auth action. audit.Emit reads the tenant from ctx
+// via pkgcore.TenantFromContext, but this Handler's routes are deliberately
+// NOT downstream of tenancy.Middleware (see the Handler doc comment), so
+// there is no ambient tenant to read -- every call site below names one
+// itself. The argument is authoritative: it is layered onto ctx
+// unconditionally, so an empty tenantID stamps a row with NO tenant
+// (pkgcore.WithTenant stores an empty id, which the readers never report)
+// rather than inheriting whatever a non-standard composition might have
+// left in ctx. Audit rows are platform data whose tenant_id column is not
+// enforced, but the tenant-scoped read paths
+// (audit.Repository.ListByTenant, compliance.AuditQuery) filter on it, so
+// a row must carry exactly the tenant its call site decided on, never one
+// that leaked in by accident.
+//
+// Two shapes of call site pass "": a PRE-AUTH event (registration, a failed
+// sign-in), where the caller is not yet authenticated and the tenant_id a
+// request merely asserts is not an attestation -- an unauthenticated caller
+// must not be able to stamp rows into a tenant's ledger by naming it -- and
+// the social-callback BIND, which is recorded at an unauthenticated
+// callback (the flow authenticates by the single-use state the signed-in
+// authorize step minted, and no session is started), so no tenant is
+// attested at recording time. Every protected operation below -- logout,
+// identity unbind, MFA changes, tenant switch, session revoke -- carries
+// its principal's tenant, and every sign-in success this Handler records
+// (password, SMS, social) carries the tenant the new session resolved
+// (enterprise SSO sign-ins have no recordAudit site: the SSO service has no
+// mounted HTTP surface, the gap AGENTS.md's known-limitation table records
+// for AuditActionSSOConfigure). AuthnSwitchTenant
+// records the PRINCIPAL'S tenant (the tenant the session acted in before
+// the switch): the row answers "a member of which tenant performed this
+// action", and the switch's own destination is the request's business,
+// visible in the returned pair and in EventTenantSwitched's
+// FromTenantID/ToTenantID payload.
+//
 // Unlike notes' own call site, this sets the acting Actor explicitly on
 // ctx before calling Emit (see pkgcore.WithActor) rather than relying on
 // one already present: no middleware in this chain populates
@@ -131,13 +167,14 @@ func decodeJSON(r *http.Request, v any) error {
 // recordNoteCreatedAudit's own doc comment gives: the underlying
 // operation has already been committed and answered to the caller, so an
 // audit-write failure must not turn that answer into something else.
-func (h *Handler) recordAudit(ctx context.Context, actorID, action string, resource audit.Resource, result audit.Result) {
+func (h *Handler) recordAudit(ctx context.Context, tenantID pkgcore.TenantID, actorID, action string, resource audit.Resource, result audit.Result) {
 	if h.bus == nil {
 		return
 	}
 	if actorID != "" {
 		ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: actorID})
 	}
+	ctx = pkgcore.WithTenant(ctx, tenantID)
 	if err := audit.Emit(ctx, h.bus, h.auditActions, audit.Input{
 		Action:   action,
 		Resource: resource,
@@ -272,7 +309,11 @@ func (h *Handler) AuthnRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.recordAudit(ctx, user.ID, AuditActionUserRegister,
+	// Registration is pre-tenant: the caller is unauthenticated and the
+	// account has no membership yet (org's own machinery grants one on
+	// authn.user.created), so no tenant is attested -- recordAudit's
+	// pre-auth case, documented on the method itself.
+	h.recordAudit(ctx, "", user.ID, AuditActionUserRegister,
 		audit.Resource{Type: "user", ID: user.ID},
 		audit.Result{Success: true})
 	obs.FromContext(ctx).Info("account registered", "user_id", user.ID)
@@ -298,14 +339,17 @@ func (h *Handler) AuthnLoginWithPassword(w http.ResponseWriter, r *http.Request)
 		IP:         clientIP(r),
 	})
 	if err != nil {
-		h.recordAudit(ctx, "", AuditActionUserLogin,
+		// A failed sign-in is a pre-auth event: no tenant is attested,
+		// and the tenant_id this request's own body may name is a client
+		// assertion, not one -- recordAudit's pre-auth case.
+		h.recordAudit(ctx, "", "", AuditActionUserLogin,
 			audit.Resource{Type: "user"},
 			audit.Result{Success: false, FailureReason: auditFailureReason(err)})
 		writeAppError(w, err)
 		return
 	}
 
-	h.recordAudit(ctx, pair.Principal.UserID, AuditActionUserLogin,
+	h.recordAudit(ctx, pair.Principal.TenantID, pair.Principal.UserID, AuditActionUserLogin,
 		audit.Resource{Type: "user", ID: pair.Principal.UserID},
 		audit.Result{Success: true})
 	obs.FromContext(ctx).Info("password sign-in succeeded", "user_id", pair.Principal.UserID, "session_id", pair.Principal.SessionID)
@@ -346,14 +390,16 @@ func (h *Handler) AuthnLoginWithSMSCode(w http.ResponseWriter, r *http.Request) 
 		IP:        clientIP(r),
 	})
 	if err != nil {
-		h.recordAudit(ctx, "", AuditActionUserLogin,
+		// Pre-auth event, exactly as the password leg above: no tenant
+		// is attested at a failed sign-in.
+		h.recordAudit(ctx, "", "", AuditActionUserLogin,
 			audit.Resource{Type: "user"},
 			audit.Result{Success: false, FailureReason: auditFailureReason(err)})
 		writeAppError(w, err)
 		return
 	}
 
-	h.recordAudit(ctx, pair.Principal.UserID, AuditActionUserLogin,
+	h.recordAudit(ctx, pair.Principal.TenantID, pair.Principal.UserID, AuditActionUserLogin,
 		audit.Resource{Type: "user", ID: pair.Principal.UserID},
 		audit.Result{Success: true})
 	obs.FromContext(ctx).Info("sms sign-in succeeded", "user_id", pair.Principal.UserID, "session_id", pair.Principal.SessionID)
@@ -387,7 +433,7 @@ func (h *Handler) AuthnLogout(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err)
 		return
 	}
-	h.recordAudit(ctx, principal.UserID, AuditActionSessionRevoke,
+	h.recordAudit(ctx, principal.TenantID, principal.UserID, AuditActionSessionRevoke,
 		audit.Resource{Type: "session", ID: principal.SessionID},
 		audit.Result{Success: true})
 	w.WriteHeader(http.StatusNoContent)
@@ -474,11 +520,26 @@ func (h *Handler) AuthnSocialCallback(w http.ResponseWriter, r *http.Request, pr
 	// and audits as a login, matching AuthnLoginWithPassword/
 	// AuthnLoginWithSMSCode's identical action above.
 	if result.Bound {
-		h.recordAudit(ctx, result.User.ID, AuditActionIdentityBind,
+		// A bind is recorded with no tenant: it completes at an
+		// unauthenticated callback (the flow authenticates by the
+		// single-use state the signed-in authorize step minted, and no
+		// session is started), so the caller's tenant is not attested at
+		// recording time -- recordAudit's account-level case.
+		h.recordAudit(ctx, "", result.User.ID, AuditActionIdentityBind,
 			audit.Resource{Type: "identity", ID: result.Identity.ID},
 			audit.Result{Success: true})
 	} else {
-		h.recordAudit(ctx, result.User.ID, AuditActionUserLogin,
+		// A social sign-in starts a real session, so the row carries the
+		// tenant that session resolved -- exactly like the password and
+		// SMS legs above.
+		tenantID := pkgcore.TenantID("")
+		if result.Tokens != nil {
+			// SocialLoginResult's contract makes !Bound imply non-nil
+			// Tokens; the guard keeps a future contract break from
+			// panicking this already-committed sign-in.
+			tenantID = result.Tokens.Principal.TenantID
+		}
+		h.recordAudit(ctx, tenantID, result.User.ID, AuditActionUserLogin,
 			audit.Resource{Type: "user", ID: result.User.ID},
 			audit.Result{Success: true})
 	}
@@ -515,7 +576,7 @@ func (h *Handler) AuthnUnbindIdentity(w http.ResponseWriter, r *http.Request, id
 		writeAppError(w, err)
 		return
 	}
-	h.recordAudit(ctx, principal.UserID, AuditActionIdentityUnbind,
+	h.recordAudit(ctx, principal.TenantID, principal.UserID, AuditActionIdentityUnbind,
 		audit.Resource{Type: "identity", ID: identityID},
 		audit.Result{Success: true})
 	w.WriteHeader(http.StatusNoContent)
@@ -559,7 +620,7 @@ func (h *Handler) AuthnConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err)
 		return
 	}
-	h.recordAudit(ctx, principal.UserID, AuditActionMFAEnroll,
+	h.recordAudit(ctx, principal.TenantID, principal.UserID, AuditActionMFAEnroll,
 		audit.Resource{Type: "mfa_factor", ID: principal.UserID},
 		audit.Result{Success: true})
 	writeJSON(w, http.StatusOK, api.AuthnRecoveryCodesResponse{RecoveryCodes: &codes})
@@ -584,7 +645,7 @@ func (h *Handler) AuthnRegenerateRecoveryCodes(w http.ResponseWriter, r *http.Re
 			writeAppError(w, err)
 			return
 		}
-		h.recordAudit(ctx, principal.UserID, AuditActionMFARecoveryCodesRegenerate,
+		h.recordAudit(ctx, principal.TenantID, principal.UserID, AuditActionMFARecoveryCodesRegenerate,
 			audit.Resource{Type: "mfa_recovery_codes", ID: principal.UserID},
 			audit.Result{Success: true})
 		writeJSON(w, http.StatusOK, api.AuthnRecoveryCodesResponse{RecoveryCodes: &codes})
@@ -627,7 +688,10 @@ func (h *Handler) AuthnSwitchTenant(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err)
 		return
 	}
-	h.recordAudit(ctx, principal.UserID, AuditActionTenantSwitch,
+	// The row is stamped with the principal's tenant -- the tenant the
+	// session acted in before the switch -- per recordAudit's own doc
+	// comment on this site; the destination tenant is the pair's business.
+	h.recordAudit(ctx, principal.TenantID, principal.UserID, AuditActionTenantSwitch,
 		audit.Resource{Type: "session", ID: principal.SessionID},
 		audit.Result{Success: true})
 	writeJSON(w, http.StatusOK, toTokenPairResponse(pair))
@@ -662,7 +726,7 @@ func (h *Handler) AuthnRevokeSession(w http.ResponseWriter, r *http.Request, ses
 		writeAppError(w, err)
 		return
 	}
-	h.recordAudit(ctx, principal.UserID, AuditActionSessionRevoke,
+	h.recordAudit(ctx, principal.TenantID, principal.UserID, AuditActionSessionRevoke,
 		audit.Resource{Type: "session", ID: sessionID},
 		audit.Result{Success: true})
 	w.WriteHeader(http.StatusNoContent)
@@ -685,7 +749,7 @@ func (h *Handler) AuthnRevokeOtherSessions(w http.ResponseWriter, r *http.Reques
 	// count, not the individual session ids, and Changes.After is exactly
 	// where a value that does not fit Resource's {Type, ID, DisplayName}
 	// shape belongs.
-	h.recordAudit(ctx, principal.UserID, AuditActionSessionRevoke,
+	h.recordAudit(ctx, principal.TenantID, principal.UserID, AuditActionSessionRevoke,
 		audit.Resource{Type: "session", ID: principal.SessionID, DisplayName: "other sessions"},
 		audit.Result{Success: true})
 	writeJSON(w, http.StatusOK, api.AuthnRevokeOtherSessionsResponse{RevokedCount: &revoked})

@@ -259,6 +259,33 @@ func findAuditEvent(t *testing.T, recorder *testutil.EventRecorder, action strin
 	return audit.RecordedEvent{}
 }
 
+// auditTenantIs asserts that evt's tenant_id equals want -- the P1-4
+// regression's shared assertion helper. authn's routes are not downstream
+// of tenancy.Middleware, so the tenant on every audit row it records comes
+// from the call site itself (recordAudit's tenant argument, handler.go);
+// these assertions pin that each site really names the tenant it decided
+// on, rather than leaving the row tenant-less.
+func auditTenantIs(t *testing.T, evt audit.RecordedEvent, want pkgcore.TenantID) {
+	t.Helper()
+	if evt.TenantID != string(want) {
+		t.Errorf("TenantID = %q, want %q", evt.TenantID, string(want))
+	}
+}
+
+// auditTenantIsEmpty is auditTenantIs's counterpart for the sites that
+// deliberately stamp no tenant -- a pre-auth event (register, a failed
+// sign-in) or an account-level event recorded at an unauthenticated
+// callback (a social bind). Empty is the fail-closed answer there: the
+// tenant a pre-auth request merely asserts is not an attestation, and an
+// unauthenticated caller must not be able to stamp rows into a tenant's
+// ledger by naming it.
+func auditTenantIsEmpty(t *testing.T, evt audit.RecordedEvent) {
+	t.Helper()
+	if evt.TenantID != "" {
+		t.Errorf("TenantID = %q, want empty: no tenant is attested for this event", evt.TenantID)
+	}
+}
+
 // TestHandler_LoginWithPassword_ValidCredentials_RecordsLoginAuditEvent is
 // one of the P2-5 regression's representative sample (root round prompt's
 // own named example, "login success"): 9 audit actions were declared on
@@ -286,6 +313,11 @@ func TestHandler_LoginWithPassword_ValidCredentials_RecordsLoginAuditEvent(t *te
 	if evt.Actor.ID != user.ID {
 		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, user.ID)
 	}
+	// The new session resolved tenant A (the caller's only membership),
+	// so the login record must carry it: tenant-scoped audit reads
+	// (audit.Repository.ListByTenant) filter on tenant_id, and authn's
+	// routes carry no ambient tenant for Emit to read.
+	auditTenantIs(t, evt, testTenantA)
 }
 
 // TestHandler_LoginWithPassword_WrongPassword_RecordsLoginFailureAuditEvent
@@ -311,6 +343,10 @@ func TestHandler_LoginWithPassword_WrongPassword_RecordsLoginFailureAuditEvent(t
 	if evt.Result.FailureReason != ErrInvalidCredentials.Code {
 		t.Errorf("Result.FailureReason = %q, want %q", evt.Result.FailureReason, ErrInvalidCredentials.Code)
 	}
+	// A failed sign-in is a pre-auth event: no tenant is attested, and
+	// stamping the tenant this request's own body asserted would let an
+	// unauthenticated caller write rows into any tenant's ledger.
+	auditTenantIsEmpty(t, evt)
 }
 
 // TestHandler_LoginWithPassword_Locked_Returns429WithRetryAfter is the
@@ -394,7 +430,7 @@ func mustSetPhone(t *testing.T, f *serviceFixture, email, phone string) *User {
 func TestHandler_LoginWithSMSCode_ValidCode_ReturnsTokenPair(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	h, f := newTestHandler(t, WithSMSSender(NewConsoleSMSSender(&out)))
+	h, f, recorder := newAuditTestHandler(t, WithSMSSender(NewConsoleSMSSender(&out)))
 	f.registerUser(t, "smslogin@example.com", testTenantA)
 	if err := f.svc.Users().Save(t.Context(), mustSetPhone(t, f, "smslogin@example.com", "+15550000002")); err != nil {
 		t.Fatalf("save the registered phone: %v", err)
@@ -416,6 +452,14 @@ func TestHandler_LoginWithSMSCode_ValidCode_ReturnsTokenPair(t *testing.T) {
 	if pair.AccessToken == nil || *pair.AccessToken == "" {
 		t.Error("response carries no access token")
 	}
+	// The SMS sign-in's audit record is this module's login action with the
+	// tenant the new session resolved, exactly like the password leg --
+	// pinned here because this call site is otherwise unpinned.
+	evt := findAuditEvent(t, recorder, AuditActionUserLogin)
+	if !evt.Result.Success {
+		t.Errorf("Result.Success = false, want true")
+	}
+	auditTenantIs(t, evt, testTenantA)
 }
 
 // smsCodeRunPattern matches a maximal run of ASCII digits, so
@@ -531,6 +575,9 @@ func TestHandler_Logout_ValidPrincipal_RecordsSessionRevokeAuditEvent(t *testing
 	if evt.Actor.ID != user.ID {
 		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, user.ID)
 	}
+	// The acting principal's tenant claim -- authn's only source of a
+	// tenant on its own routes (recordAudit's tenant argument).
+	auditTenantIs(t, evt, pair.Principal.TenantID)
 }
 
 // The eight tests below close a code-review gap the P2-5 round's own
@@ -572,6 +619,10 @@ func TestHandler_Register_ValidBody_RecordsUserRegisterAuditEvent(t *testing.T) 
 	if evt.Actor.ID != *resp.ID {
 		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, *resp.ID)
 	}
+	// Registration is pre-tenant: the caller is unauthenticated and the
+	// account has no membership yet, so the row deliberately carries no
+	// tenant.
+	auditTenantIsEmpty(t, evt)
 }
 
 // TestHandler_SwitchTenant_ActiveMember_RecordsTenantSwitchAuditEvent covers
@@ -603,6 +654,11 @@ func TestHandler_SwitchTenant_ActiveMember_RecordsTenantSwitchAuditEvent(t *test
 	if evt.Actor.ID != user.ID {
 		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, user.ID)
 	}
+	// The row is stamped with the tenant the session acted in BEFORE the
+	// switch (the acting principal's claim, tenant A), not the switch's
+	// destination B -- the choice handler.go's recordAudit doc comment
+	// records for this site.
+	auditTenantIs(t, evt, testTenantA)
 }
 
 // TestHandler_SocialCallback_BindToSignedInAccount_RecordsIdentityBindAuditEvent
@@ -676,6 +732,10 @@ func TestHandler_SocialCallback_BindToSignedInAccount_RecordsIdentityBindAuditEv
 	if evt.Actor.ID != pair.Principal.UserID {
 		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, pair.Principal.UserID)
 	}
+	// The bind completes at an unauthenticated callback (the signed-in
+	// authorize step's state is what authenticates it), so the caller's
+	// tenant is not attested at recording time and the row carries none.
+	auditTenantIsEmpty(t, evt)
 }
 
 // TestHandler_UnbindIdentity_OwnedBySelfWithPasswordRemaining_RecordsIdentityUnbindAuditEvent
@@ -733,6 +793,7 @@ func TestHandler_UnbindIdentity_OwnedBySelfWithPasswordRemaining_RecordsIdentity
 	if evt.Actor.ID != user.ID {
 		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, user.ID)
 	}
+	auditTenantIs(t, evt, testTenantA)
 }
 
 // TestHandler_ConfirmTOTP_ValidCode_RecordsMFAEnrollAuditEvent covers
@@ -774,6 +835,7 @@ func TestHandler_ConfirmTOTP_ValidCode_RecordsMFAEnrollAuditEvent(t *testing.T) 
 	if evt.Actor.ID != user.ID {
 		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, user.ID)
 	}
+	auditTenantIs(t, evt, testTenantA)
 }
 
 // TestHandler_RegenerateRecoveryCodes_SteppedUp_RecordsMFARecoveryCodesRegenerateAuditEvent
@@ -839,6 +901,7 @@ func TestHandler_RegenerateRecoveryCodes_SteppedUp_RecordsMFARecoveryCodesRegene
 	if evt.Actor.ID != user.ID {
 		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, user.ID)
 	}
+	auditTenantIs(t, evt, testTenantA)
 }
 
 // TestHandler_RevokeSession_OwnSession_RecordsSessionRevokeAuditEvent covers
@@ -874,6 +937,7 @@ func TestHandler_RevokeSession_OwnSession_RecordsSessionRevokeAuditEvent(t *test
 	if evt.Actor.ID != user.ID {
 		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, user.ID)
 	}
+	auditTenantIs(t, evt, testTenantA)
 }
 
 // TestHandler_RevokeOtherSessions_RecordsSessionRevokeAuditEvent covers
@@ -915,6 +979,7 @@ func TestHandler_RevokeOtherSessions_RecordsSessionRevokeAuditEvent(t *testing.T
 	if evt.Actor.ID != user.ID {
 		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, user.ID)
 	}
+	auditTenantIs(t, evt, testTenantA)
 }
 
 func TestHandler_GetMe_NoPrincipal_Returns401(t *testing.T) {
@@ -979,7 +1044,7 @@ func TestHandler_SocialSignIn_FullRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRedirectAllowlist() error = %v", err)
 	}
-	h, f := newTestHandler(t, WithSocialProviders(provider), WithRedirectAllowlist(allowlist), WithTrustedProviders(ProviderGoogle))
+	h, f, recorder := newAuditTestHandler(t, WithSocialProviders(provider), WithRedirectAllowlist(allowlist), WithTrustedProviders(ProviderGoogle))
 	f.registerUser(t, "social@example.com", testTenantA)
 
 	authorizeReq := httptest.NewRequest(http.MethodGet, "/api/v1/authn/social/google/authorize?redirect_uri="+testRedirectURI, nil)
@@ -1022,6 +1087,14 @@ func TestHandler_SocialSignIn_FullRoundTrip(t *testing.T) {
 	if callbackResp.Tokens == nil || callbackResp.Tokens.AccessToken == nil {
 		t.Fatal("callback response carries no session for a sign-in flow")
 	}
+	// A social sign-in starts a real session, so its audit record is the
+	// login action stamped with the tenant that session resolved -- this
+	// callback branch (the non-Bound one) is otherwise unpinned.
+	evt := findAuditEvent(t, recorder, AuditActionUserLogin)
+	if !evt.Result.Success {
+		t.Errorf("Result.Success = false, want true")
+	}
+	auditTenantIs(t, evt, testTenantA)
 }
 
 // TestHandler_SocialCallback_NoCookie_Returns401 proves the cookie is load
