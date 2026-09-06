@@ -86,7 +86,10 @@ var (
 	// ErrDuplicateSiblingName reports a create, rename or move that would
 	// give two children of the same parent the same name. The database
 	// carries the matching UNIQUE(tenant_id, parent_id, name) constraint,
-	// so this error is also what a lost race on that constraint reports.
+	// so this error is also what a lost race on that constraint reports --
+	// and what a Restore reports when the restored node's sibling-name slot
+	// (or root slot) a live row has since taken makes the un-delete collide
+	// with it (see TreeService.Restore's doc comment).
 	ErrDuplicateSiblingName = apperr.Conflict("org.duplicate_sibling_name")
 
 	// ErrInvalidNodeID reports an id (or a stored path built from ids) that
@@ -151,7 +154,9 @@ var (
 	// ErrMembershipExists reports an attempt to give a user a second
 	// membership in one tenant. A user sits at exactly one place in a tenant's
 	// tree; the database carries the matching UNIQUE(tenant_id, user_id)
-	// index, so this is also what a lost race on that constraint reports.
+	// index, so this is also what a lost race on that constraint reports --
+	// and what MemberService.Restore reports when the removed row's seat a
+	// fresh Add has since taken makes the un-delete collide with it.
 	ErrMembershipExists = apperr.Conflict("org.membership_exists")
 
 	// ErrMemberNotRemovable reports a removal that would leave the tenant with

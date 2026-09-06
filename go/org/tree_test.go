@@ -2309,3 +2309,42 @@ func TestTreeService_Delete_CascadeOfAConcurrentlyDeletedNode_AnswersNodeNotFoun
 			len(evts))
 	}
 }
+
+// TestTreeService_Restore_ReusedSiblingNameSlot_AnswersDuplicateSiblingName
+// is the P2-8 regression proof: the partial unique index on
+// (tenant_id, parent_id, name) WHERE deleted_at IS NULL (0004_add_soft_delete.sql)
+// deliberately lets a deleted node's sibling-name slot be reused by a fresh
+// CreateChild -- the whole point of narrowing the index. Restoring the
+// ORIGINAL, soft-deleted node then collides with the live replacement at the
+// database, and TreeService.Restore used to surface that collision as a bare
+// gorm.ErrDuplicatedKey. The collision is the sibling-name rule enforced by
+// the database (restore-vs-reuse, exactly the race CreateChild's own
+// mapWriteError translation already covers in the other direction), so it
+// must answer the same coded org.duplicate_sibling_name.
+func TestTreeService_Restore_ReusedSiblingNameSlot_AnswersDuplicateSiblingName(t *testing.T) {
+	tree := newTestTree(t)
+	ctx := tenantCtx("tenant-a")
+
+	root := mustCreateRoot(t, tree, ctx, "root")
+	original := mustCreateChild(t, tree, ctx, root.ID, "same-name")
+	if err := tree.Delete(ctx, original.ID, false); err != nil {
+		t.Fatalf("Delete(original): %v", err)
+	}
+	replacement := mustCreateChild(t, tree, ctx, root.ID, "same-name")
+
+	// Restoring the original row would put two live same-name siblings under
+	// the same parent: the database refuses, and the service must translate.
+	if _, err := tree.Restore(ctx, original.ID); !hasCode(err, ErrDuplicateSiblingName.Code) {
+		t.Fatalf("Restore of a deleted node whose sibling-name slot was reused = %v, want the coded org.duplicate_sibling_name, not a bare database error", err)
+	}
+
+	// Nothing changed: the replacement is still the parent's one live
+	// same-name child, and the original row is still soft-deleted.
+	got, err := tree.Children(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("Children after refused Restore: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != replacement.ID {
+		t.Fatalf("live children of root = %v, want exactly the replacement %q", idsOf(got), replacement.ID)
+	}
+}

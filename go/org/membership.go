@@ -634,10 +634,17 @@ func (s *MemberService) Remove(ctx context.Context, userID string) error {
 // alone.
 //
 // Restore does not re-validate the restored membership against Add's own
-// rules (a live membership already at the same node, the tenant's node
-// still existing): those were true when the row was created and Restore
-// changes nothing about the row but its two soft-delete columns. A caller
-// wanting the modern invariants re-checked calls Add instead of Restore.
+// rules: the tenant's node still existing was true when the row was created
+// and Restore changes nothing about the row but its two soft-delete columns.
+// The one-seat rule is different -- the partial unique index on
+// (tenant_id, user_id) WHERE deleted_at IS NULL (0004_add_soft_delete.sql)
+// exists precisely so a removed member's seat can be RE-TAKEN by a fresh
+// Add, and restoring the earlier row into an occupied seat collides at the
+// database. That collision is the seat rule enforced by the database (the
+// same race ensure's own duplicate handling covers in the other direction)
+// and reports the coded ErrMembershipExists -- never a bare database error.
+// A caller wanting the modern invariants re-checked calls Add instead of
+// Restore.
 //
 // Restore is deliberately not exposed over HTTP this round; see
 // go/org/AGENTS.md's "Soft deletion" section for why.
@@ -645,6 +652,12 @@ func (s *MemberService) Restore(ctx context.Context, membershipID string) (*Memb
 	if err := s.repo.Restore(ctx, membershipID); err != nil {
 		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
 			return nil, ErrMembershipNotFound.WithParam("membership_id", membershipID)
+		}
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			// The removed row's seat was re-taken by a live membership since
+			// the removal: restoring would put two live rows on one
+			// (tenant, user), and the partial unique index refused.
+			return nil, ErrMembershipExists.WithParam("membership_id", membershipID).WithCause(err)
 		}
 		return nil, err
 	}

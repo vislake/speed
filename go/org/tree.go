@@ -780,6 +780,20 @@ func (s *TreeService) publishDeleted(ctx context.Context, node OrgNode, cascade 
 // already applies everywhere else in this file, so a caller cannot learn
 // which case it hit from the error shape alone.
 //
+// # Restore answers the coded error when the restored row's slot was reused
+//
+// Clearing a node's deleted_at can collide at the database with a LIVE row
+// that took the node's old place while it was invisible: the narrowed
+// partial indexes deliberately free a deleted node's constraint slots for
+// immediate reuse -- a sibling name under the same parent (0004, WHERE
+// deleted_at IS NULL) and the tenant root slot (0007) -- so restoring into
+// a slot a live row now occupies trips the same unique index a concurrent
+// CreateChild's insert would trip. TreeService.Restore maps that
+// gorm.ErrDuplicatedKey through the identical mapWriteError CreateChild's
+// own transaction applies, answering ErrDuplicateSiblingName rather than a
+// bare database error: the slot is taken, whichever operation tries to
+// take it again.
+//
 // # Restore is per-node, never cascading
 //
 // Restoring nodeID undoes exactly the mark-delete of nodeID itself. It does
@@ -878,7 +892,14 @@ func (s *TreeService) Restore(ctx context.Context, nodeID string) (*OrgNode, err
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrNodeNotFound.WithParam("node_id", nodeID)
 		}
-		return nil, err
+		// mapWriteError also translates a lost race on the narrowed partial
+		// unique indexes into the coded error the live-side operation reports:
+		// a restored node whose sibling-name slot (or root-ness) a live row
+		// has since taken collides at the database exactly the way a
+		// concurrent CreateChild collides, and must answer the identical
+		// ErrDuplicateSiblingName rather than surfacing a bare
+		// gorm.ErrDuplicatedKey -- see Restore's doc comment above.
+		return nil, mapWriteError(err)
 	}
 
 	node, err := s.Get(ctx, nodeID)

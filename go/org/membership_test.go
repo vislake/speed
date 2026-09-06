@@ -746,3 +746,50 @@ func TestMemberService_Remove_ConcurrentDistinctUsers_BothSucceed(t *testing.T) 
 		}
 	}
 }
+
+// TestMemberService_Restore_SeatReused_AnswersMembershipExists is the P2-7
+// regression proof: the partial unique index on (tenant_id, user_id) WHERE
+// deleted_at IS NULL (0004_add_soft_delete.sql) deliberately lets a removed
+// member's seat be taken by a fresh Add -- the whole point of narrowing the
+// index. Restoring the ORIGINAL, soft-deleted membership row then collides
+// with the live replacement at the database, and MemberService.Restore used
+// to surface that collision as a bare gorm.ErrDuplicatedKey. The database's
+// own arbitration is the backstop of the module's "one seat per person per
+// tenant" rule, so the collision must answer the same coded
+// org.membership_exists Add itself answers when the seat is taken.
+func TestMemberService_Restore_SeatReused_AnswersMembershipExists(t *testing.T) {
+	m, _ := newTestModule(t)
+	ctx := tenantCtx("tenant-a")
+	root, left, _ := seedTree(t, m.Tree(), ctx)
+
+	if _, err := m.Members().Add(ctx, "u-owner", root.ID); err != nil {
+		t.Fatalf("Add(owner): %v", err)
+	}
+	original, err := m.Members().Add(ctx, "u-returning", left.ID)
+	if err != nil {
+		t.Fatalf("Add(returning): %v", err)
+	}
+	if err := m.Members().Remove(ctx, "u-returning"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	replacement, err := m.Members().Add(ctx, "u-returning", root.ID)
+	if err != nil {
+		t.Fatalf("re-Add (the seat reuse the partial index exists to allow): %v", err)
+	}
+
+	// Restoring the original row would put two live memberships on one
+	// (tenant, user): the database refuses, and the service must translate.
+	if _, err := m.Members().Restore(ctx, original.ID); !hasCode(err, ErrMembershipExists.Code) {
+		t.Fatalf("Restore of a removed membership whose seat was re-taken = %v, want the coded org.membership_exists, not a bare database error", err)
+	}
+
+	// Nothing changed: the replacement is still the tenant's one live seat
+	// for the user, and the original row is still soft-deleted.
+	current, err := m.Members().Get(ctx, "u-returning")
+	if err != nil {
+		t.Fatalf("Get after refused Restore: %v", err)
+	}
+	if current.ID != replacement.ID {
+		t.Fatalf("live membership = %q, want the replacement %q", current.ID, replacement.ID)
+	}
+}
