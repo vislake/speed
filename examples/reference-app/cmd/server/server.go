@@ -240,6 +240,19 @@ const (
 	s3RegionEnv    = "APP_S3_REGION"
 	s3UseSSLEnv    = "APP_S3_USE_SSL"
 
+	// objectStoreRootEnv names the environment variable that points the
+	// "objectstore" seam at a fixed local directory instead of the
+	// Preset's throwaway temp directory: pkgcore.NewLocalObjectStore over
+	// APP_OBJECT_STORE_ROOT, injected with the SurvivesRestart capability
+	// alone -- a directory this process wrote survives this process's
+	// restart, but nothing about a single-process local store is safe
+	// across replicas, so MultiReplicaSafe is never claimed for it. This
+	// is the local twin of the APP_S3_* composition above and an
+	// alternative to it: setting both names two different stores for one
+	// seam, so configFromEnv refuses the combination for the same
+	// fail-loud-on-ambiguous-config reason the S3 completeness rule gives.
+	objectStoreRootEnv = "APP_OBJECT_STORE_ROOT"
+
 	// smtpHostEnv and smtpPortEnv name the environment variables that
 	// together compose a real SMTP Mailer (pkgcore.NewSMTPMailer) for the
 	// "mailer" seam; both are required together, for the same
@@ -781,6 +794,21 @@ type serverConfig struct {
 	S3Region    string
 	S3UseSSL    bool
 
+	// ObjectStoreRoot, when non-empty, replaces the "objectstore" seam's
+	// Preset default with pkgcore.NewLocalObjectStore over this fixed
+	// directory -- the local twin of the S3 fields above, and an
+	// alternative to them (configFromEnv refuses both a complete S3
+	// composition and APP_OBJECT_STORE_ROOT, per objectStoreRootEnv's own
+	// doc comment). buildServer injects it declaring the SurvivesRestart
+	// capability alone, never MultiReplicaSafe: the directory survives a
+	// process restart, but nothing about a single-process local store is
+	// replica-safe. The field exists because a host that needs its objects
+	// to outlive one process must name the directory itself -- the Preset
+	// default is a throwaway MkdirTemp -- which is exactly what the
+	// two-boot expiry-sweep flow test (periodic_scheduler_flow_test.go)
+	// needs: boot 2's sweep must find the bytes boot 1 wrote.
+	ObjectStoreRoot string
+
 	// SMTPHost, SMTPPort, SMTPUsername and SMTPPassword compose a real SMTP
 	// Mailer for the "mailer" seam (pkgcore.NewSMTPMailer) when SMTPHost is
 	// non-empty -- smtpHostEnv's own doc comment above has the completeness
@@ -1105,6 +1133,21 @@ func configFromEnv() (serverConfig, error) {
 		s3UseSSL = parsed
 	}
 
+	// objectStoreRoot is the local-directory twin of the S3 composition
+	// above: unset leaves "objectstore" on the Preset's throwaway
+	// temp-directory default, set names a fixed directory whose contents
+	// survive this process's restart (objectStoreRootEnv's own doc
+	// comment has the capability reasoning). Both compositions at once
+	// would name two different stores for the one seam, so a non-empty
+	// root alongside a complete S3 target is refused rather than
+	// silently preferring one.
+	objectStoreRoot := os.Getenv(objectStoreRootEnv)
+	if objectStoreRoot != "" && s3Endpoint != "" {
+		return serverConfig{}, fmt.Errorf(
+			"reference-app: %s and an APP_S3_* composition name two different ObjectStores for one seam; set only one of them",
+			objectStoreRootEnv)
+	}
+
 	// smtpHost/smtpPortRaw mirror s3Endpoint/... above: both unset leaves
 	// the "mailer" seam on the Preset's console default, and a partial
 	// APP_SMTP_* set is refused rather than silently ignored.
@@ -1142,6 +1185,7 @@ func configFromEnv() (serverConfig, error) {
 		S3SecretKey:          s3SecretKey,
 		S3Region:             os.Getenv(s3RegionEnv),
 		S3UseSSL:             s3UseSSL,
+		ObjectStoreRoot:      objectStoreRoot,
 		SMTPHost:             smtpHost,
 		SMTPPort:             smtpPort,
 		SMTPUsername:         os.Getenv(smtpUsernameEnv),
@@ -1199,7 +1243,8 @@ func configFromEnv() (serverConfig, error) {
 // kv, mailer, objectstore, plus authn's own "SMS sender" seam -- can now be
 // pointed at a real, MultiReplicaSafe-capable implementation through the
 // environment variables configFromEnv reads (redisAddrEnv, s3EndpointEnv
-// and friends, smtpHostEnv and friends, smsGatewayURLEnv); every one of
+// and friends, objectStoreRootEnv, smtpHostEnv and friends,
+// smsGatewayURLEnv); every one of
 // them defaults to the standalone Preset's in-process implementation when
 // unset, so a plain `go run ./cmd/server` is unaffected by this round. With
 // none of them set, the distributed deployment mode still always fails
@@ -2036,7 +2081,15 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// injects a REAL S3-compatible ObjectStore (objectstore/s3.
 	// NewObjectStore, reaching MinIO, Aliyun OSS or AWS S3 through the
 	// minio-go client), declaring the same MultiReplicaSafe|SurvivesRestart
-	// the "objectstore.s3" builtin registration itself declares.
+	// the "objectstore.s3" builtin registration itself declares. A
+	// non-empty cfg.ObjectStoreRoot (from APP_OBJECT_STORE_ROOT, or
+	// injected straight onto the struct by a test) is the local twin of
+	// that composition and an alternative to it: WithObjectStore then
+	// injects pkgcore.NewLocalObjectStore over the fixed directory,
+	// declaring SurvivesRestart alone -- the directory genuinely survives
+	// a process restart, and genuinely nothing about a single-process
+	// local store is replica-safe, so MultiReplicaSafe is never claimed
+	// for it.
 	//
 	// The Mailer override -- cfg.Mailer, non-nil either because
 	// configFromEnv composed a real pkgcore.NewSMTPMailer from the
@@ -2084,6 +2137,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 				Region:    cfg.S3Region,
 				UseSSL:    cfg.S3UseSSL,
 			}), pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
+	}
+	if cfg.ObjectStoreRoot != "" {
+		kernelOptions = append(kernelOptions,
+			pkgcore.WithObjectStore(pkgcore.NewLocalObjectStore(cfg.ObjectStoreRoot), pkgcore.SurvivesRestart))
 	}
 	if cfg.Mailer != nil {
 		mailerCapabilities := cfg.MailerCapabilities

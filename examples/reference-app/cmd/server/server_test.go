@@ -1070,6 +1070,7 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	t.Setenv("APP_DB_PATH", "")
 	t.Setenv("APP_REDIS_ADDR", "")
 	t.Setenv("APP_DEMO_USERS_PASSWORD", "")
+	t.Setenv("APP_OBJECT_STORE_ROOT", "")
 
 	cfg, err := configFromEnv()
 	if err != nil {
@@ -1093,6 +1094,9 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	if cfg.DemoUsersPassword != "" {
 		t.Fatalf("DemoUsersPassword = %q, want the empty default (demo-user seed skipped)", cfg.DemoUsersPassword)
 	}
+	if cfg.ObjectStoreRoot != "" {
+		t.Fatalf("ObjectStoreRoot = %q, want the empty default (Preset local-store directory)", cfg.ObjectStoreRoot)
+	}
 }
 
 // TestConfigFromEnv_ReadsOverrides verifies each environment variable
@@ -1104,6 +1108,7 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	t.Setenv("APP_CONFIG_KEY", "0f0e0d0c0b0a090807060504030201001f1e1d1c1b1a19181716151413121110")
 	t.Setenv("APP_REDIS_ADDR", "127.0.0.1:6380")
 	t.Setenv("APP_DEMO_USERS_PASSWORD", "env demo seed passphrase")
+	t.Setenv("APP_OBJECT_STORE_ROOT", "/var/lib/reference-app/objects")
 
 	cfg, err := configFromEnv()
 	if err != nil {
@@ -1124,6 +1129,9 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	if cfg.DemoUsersPassword != "env demo seed passphrase" {
 		t.Fatalf("DemoUsersPassword = %q, want the APP_DEMO_USERS_PASSWORD value", cfg.DemoUsersPassword)
 	}
+	if cfg.ObjectStoreRoot != "/var/lib/reference-app/objects" {
+		t.Fatalf("ObjectStoreRoot = %q, want the APP_OBJECT_STORE_ROOT value", cfg.ObjectStoreRoot)
+	}
 	wantKey := []byte{
 		0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09, 0x08,
 		0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x00,
@@ -1132,6 +1140,38 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	}
 	if !bytes.Equal(cfg.ConfigKey, wantKey) {
 		t.Fatalf("ConfigKey = %x, want the decoded APP_CONFIG_KEY %x", cfg.ConfigKey, wantKey)
+	}
+}
+
+// TestConfigFromEnv_ObjectStoreRootWithS3_ReturnsError proves the
+// "objectstore"-seam ambiguity rule objectStoreRootEnv's own doc comment
+// states: a complete APP_S3_* composition and APP_OBJECT_STORE_ROOT both
+// name a store for the one seam, so configFromEnv refuses the combination
+// loudly -- never by silently preferring one -- while each composition on
+// its own stays accepted. TestConfigFromEnv_ReadsOverrides already pins
+// the root-alone side; the S3-alone control below is the other half,
+// proving the refusal is caused by the combination rather than by the S3
+// set itself.
+func TestConfigFromEnv_ObjectStoreRootWithS3_ReturnsError(t *testing.T) {
+	t.Setenv("APP_DEPLOYMENT_MODE", "")
+	t.Setenv("PORT", "")
+	t.Setenv("APP_DB_PATH", "")
+
+	t.Setenv(s3EndpointEnv, "https://objects.example.test")
+	t.Setenv(s3BucketEnv, "bucket")
+	t.Setenv(s3AccessKeyEnv, "key")
+	t.Setenv(s3SecretKeyEnv, "secret")
+
+	t.Setenv(objectStoreRootEnv, "/var/lib/reference-app/objects")
+	if _, err := configFromEnv(); err == nil {
+		t.Fatal("configFromEnv with both APP_OBJECT_STORE_ROOT and a complete APP_S3_* composition: want error, got nil")
+	} else if !strings.Contains(err.Error(), objectStoreRootEnv) {
+		t.Fatalf("configFromEnv error = %v, want it to name %s", err, objectStoreRootEnv)
+	}
+
+	t.Setenv(objectStoreRootEnv, "")
+	if _, err := configFromEnv(); err != nil {
+		t.Fatalf("configFromEnv with the complete S3 composition alone: %v", err)
 	}
 }
 
