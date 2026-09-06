@@ -82,8 +82,9 @@ func postNoteWithDemoHeader(t *testing.T, srv *httptest.Server, bearerToken, dem
 // login route, holding notes:read and nothing else) additionally sends
 // X-Demo-User: demo-owner (rbac's built-in owner role, every permission any
 // module declared) on a POST /api/v1/notes -- the exact escalation the
-// audit's failure scenario describes ("note-reader 会话加 X-Demo-User:
-// demo-owner 即获该租户 owner 一切权限").
+// audit's failure scenario describes: a note-reader session that adds the
+// X-Demo-User: demo-owner header thereby gains that tenant's owner-level
+// access to everything.
 //
 // The first subtest is the confirmed bug, reproduced against the real
 // composed HTTP stack: with the kill switch left at its default (unset),
