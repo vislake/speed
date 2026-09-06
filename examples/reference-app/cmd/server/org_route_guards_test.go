@@ -155,12 +155,18 @@ func TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree(t *testing.T) {
 		body   any
 	}{
 		{"list_nodes", http.MethodGet, "/api/v1/org/nodes", nil},
-		{"create_node", http.MethodPost, "/api/v1/org/nodes",
-			map[string]string{"name": "unauthorized child", "kind": "store", "parentId": root.ID}},
-		{"rename_node", http.MethodPatch, "/api/v1/org/nodes/" + root.ID,
-			map[string]string{"name": "hijacked"}},
-		{"move_node", http.MethodPost, "/api/v1/org/nodes/" + root.ID + "/move",
-			map[string]string{"parentId": root.ID}},
+		{
+			"create_node", http.MethodPost, "/api/v1/org/nodes",
+			map[string]string{"name": "unauthorized child", "kind": "store", "parentId": root.ID},
+		},
+		{
+			"rename_node", http.MethodPatch, "/api/v1/org/nodes/" + root.ID,
+			map[string]string{"name": "hijacked"},
+		},
+		{
+			"move_node", http.MethodPost, "/api/v1/org/nodes/" + root.ID + "/move",
+			map[string]string{"parentId": root.ID},
+		},
 		{"list_members", http.MethodGet, "/api/v1/org/members?nodeId=" + root.ID, nil},
 		{"remove_member", http.MethodDelete, "/api/v1/org/members/some-other-user", nil},
 		// The scenario the audit named explicitly: a cascade delete of the
