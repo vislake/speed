@@ -171,8 +171,10 @@ type kvStore struct {
 // The store preserves the same observable KVStore semantics kv/redis and the
 // in-memory store do -- Set replaces both the value and any expiry,
 // IncrByFloat keeps a live key's expiry and starts a missing key at zero with
-// no expiry, and CompareAndSwap compares the whole value and never changes
-// the key's expiry -- by keeping its own logical expiry envelope on top of
+// no expiry, IncrByFloatWithTTL does the same but atomically attaches an
+// expiry on the call that creates the key, and CompareAndSwap compares the
+// whole value and never changes the key's expiry -- by keeping its own
+// logical expiry envelope on top of
 // Memcached's coarser, whole-second native one (see the package doc
 // comment's "why TTL needs an envelope" section).
 //
@@ -317,6 +319,84 @@ func (s *kvStore) IncrByFloat(ctx context.Context, key string, delta float64) (f
 		return result, nil
 	}
 	return 0, fmt.Errorf("pkgcore/kv/memcached: incr: %w", errCASAttemptsExhausted)
+}
+
+// IncrByFloatWithTTL implements pkgcore.KVStore.IncrByFloatWithTTL. It is the
+// identical compare-and-swap retry loop IncrByFloat runs, with one
+// difference: when readLive reports the key absent (found is false --
+// readLive already collapses "genuinely never set" and "logically expired"
+// into that one signal, unlike this store's own envelope-decoding internals
+// for other operations), the new envelope's expiry is computed from ttl
+// instead of always being time.Time{} ("never"). A live key's own expiresAt,
+// read straight from its envelope, is carried through unchanged on every
+// retry -- ttl is never consulted for it, matching IncrByFloat's own
+// non-extension rule.
+func (s *kvStore) IncrByFloatWithTTL(ctx context.Context, key string, delta float64, ttl time.Duration) (float64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	for attempt := 0; attempt < kvMaxCASAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		if attempt > 0 {
+			time.Sleep(casBackoff(attempt))
+		}
+
+		payload, expiresAt, casID, found, err := s.readLive(key)
+		if err != nil {
+			return 0, err
+		}
+
+		var current float64
+		if found {
+			parsed, perr := strconv.ParseFloat(string(payload), kvFloatBitSize)
+			if perr != nil {
+				return 0, pkgcore.ErrNotNumeric
+			}
+			current = parsed
+		} else {
+			// Only a fresh (missing or logically expired) key ever gets ttl
+			// attached; a live key's own expiresAt above is used untouched.
+			expiresAt = expiryFromTTL(ttl)
+		}
+
+		result := current + delta
+		newValue := strconv.AppendFloat(nil, result, kvFloatFormat, kvFloatPrecisionShortest, kvFloatBitSize)
+
+		if !found {
+			item := &memcache.Item{
+				Key:        key,
+				Value:      encodeEnvelope(newValue, expiresAt),
+				Expiration: physicalExptime(expiresAt),
+			}
+			err = s.client.Add(item)
+			if isLostCASRace(err) {
+				continue
+			}
+			if err != nil {
+				return 0, fmt.Errorf("pkgcore/kv/memcached: incr with ttl: %w", err)
+			}
+			return result, nil
+		}
+
+		item := &memcache.Item{
+			Key:        key,
+			Value:      encodeEnvelope(newValue, expiresAt),
+			Expiration: physicalExptime(expiresAt),
+			CasID:      casID,
+		}
+		err = s.client.CompareAndSwap(item)
+		if isLostCASRace(err) {
+			continue
+		}
+		if err != nil {
+			return 0, fmt.Errorf("pkgcore/kv/memcached: incr with ttl: %w", err)
+		}
+		return result, nil
+	}
+	return 0, fmt.Errorf("pkgcore/kv/memcached: incr with ttl: %w", errCASAttemptsExhausted)
 }
 
 // CompareAndSwap implements pkgcore.KVStore.CompareAndSwap. A missing or
