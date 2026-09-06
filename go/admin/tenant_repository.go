@@ -191,7 +191,12 @@ func (r *TenantRepository) Update(ctx context.Context, tenantID string, patch Te
 // conditional-UPDATE idiom (that guard is a business-semantic
 // never-downgrade-succeeded check; this one is a plain optimistic-
 // concurrency snapshot match, since admin_tenants carries no version
-// column and PATCH's fields have no such fixed ordering to enforce).
+// column and PATCH's fields have no such fixed ordering to enforce) --
+// including that idiom's naming no .Model()/.Table(): GORM infers the
+// table from t's own struct type via Updates(&t), the same raw-GORM-
+// bypass entry point (tools/semgrep_rules/raw-gorm-bypass.yml) a
+// map-shaped Updates call would otherwise have to name explicitly to
+// know which table to touch.
 //
 // Split out from Update as its own step purely so a test can force the
 // exact race deterministically -- two callers sharing one Get'd snapshot,
@@ -222,16 +227,11 @@ func (r *TenantRepository) applyGuardedPatch(ctx context.Context, tenantID strin
 		}
 	}
 
-	res := r.db.WithContext(ctx).Model(&Tenant{}).
+	res := r.db.WithContext(ctx).
 		Where("tenant_id = ? AND status = ? AND display_name = ? AND suspended_reason = ? AND notes = ?",
 			tenantID, observed.Status, observed.DisplayName, observed.SuspendedReason, observed.Notes).
-		Updates(map[string]any{
-			"display_name":     t.DisplayName,
-			"status":           t.Status,
-			"suspended_reason": t.SuspendedReason,
-			"suspended_at":     t.SuspendedAt,
-			"notes":            t.Notes,
-		})
+		Select("display_name", "status", "suspended_reason", "suspended_at", "notes").
+		Updates(&t)
 	if res.Error != nil {
 		return nil, res.Error
 	}

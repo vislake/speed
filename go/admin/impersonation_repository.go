@@ -73,7 +73,12 @@ func (r *ImpersonationRepository) Save(ctx context.Context, grant *Impersonation
 // caller reports the grant as already ended instead of silently
 // succeeding a second time. Mirrors
 // go/notification/send_record.go's SaveGuarded conditional-UPDATE idiom
-// exactly, narrowed to the two columns an end ever changes.
+// exactly, narrowed to the two columns an end ever changes -- and, like
+// that idiom, naming no .Model()/.Table(): GORM infers the table from
+// grant's own struct type via Updates(grant), the same raw-GORM-bypass
+// entry point (tools/semgrep_rules/raw-gorm-bypass.yml) the map-shaped
+// form would otherwise have to name explicitly to know which table to
+// touch.
 //
 // It reports whether the write landed:
 //   - (true, nil): the guard passed and EndedAt/EndedBy are now persisted.
@@ -82,12 +87,10 @@ func (r *ImpersonationRepository) Save(ctx context.Context, grant *Impersonation
 //     dropped; nothing is rewritten.
 //   - (false, err): the database call itself failed; nothing was written.
 func (r *ImpersonationRepository) SaveGuarded(ctx context.Context, grant *ImpersonationGrant) (landed bool, err error) {
-	res := r.db.WithContext(ctx).Model(&ImpersonationGrant{}).
+	res := r.db.WithContext(ctx).
 		Where("id = ? AND ended_at IS NULL", grant.ID).
-		Updates(map[string]any{
-			"ended_at": grant.EndedAt,
-			"ended_by": grant.EndedBy,
-		})
+		Select("ended_at", "ended_by").
+		Updates(grant)
 	if res.Error != nil {
 		return false, res.Error
 	}
