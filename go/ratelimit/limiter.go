@@ -252,6 +252,13 @@ func New(store pkgcore.KVStore) Limiter {
 // hundreds of goroutines to create one fresh window key at once and proves
 // both that no increment is lost and that the key still ends up with its
 // ttl attached.
+//
+// Do not "fix" a future correctness question in this algorithm by reading
+// the key before calling IncrByFloatWithTTL to decide whether to skip
+// straight to some other call: a Get-then-branch ahead of the atomic
+// increment reintroduces a real lost-update race on every hit, not just the
+// first one in a window, which is strictly worse than anything this section
+// used to document.
 type slidingWindowLimiter struct {
 	store pkgcore.KVStore
 }
