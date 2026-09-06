@@ -2491,6 +2491,17 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// The call cannot fail: nothing it does returns an error.
 	wireDemoNotification(mux, reg.EventBus(), notificationModule)
 
+	// wireDemoOrgMembershipSync closes the gap Finding 3 of the
+	// reference-app-go.md audit confirmed: without this subscription, a real
+	// accepted invitation created a real org Membership row that
+	// demoMemberships (authn's MembershipReader stand-in) never learned
+	// about, so an invited user could accept for real and still never sign
+	// in. See demo_org_membership_sync.go's own doc comment for the full
+	// mechanism; memberships is the same store authn.WithMembershipReader
+	// was wired with above, so a grant this subscription makes is visible
+	// to the very next sign-in attempt.
+	wireDemoOrgMembershipSync(reg.EventBus(), memberships)
+
 	// wireConsult mounts go/ai-gateway's mandatory-first-consumer route
 	// (cmd/server/consult.go): consultService shares notesModule's own
 	// database connection through a fresh notes.Repository, exactly the way
