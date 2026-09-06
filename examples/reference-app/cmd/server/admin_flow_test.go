@@ -137,13 +137,22 @@ func adminRequest(t *testing.T, srv *httptest.Server, method, path, token string
 // accounts (and admin's own demo platform-staff account) seeded, and a
 // capturing mailer so org invitation tokens can be recovered the same way
 // org_flow_test.go's buildOrgTestServer does.
-func buildAdminTestServer(t *testing.T) (*httptest.Server, serverConfig, *capturingMailer) {
+// opts, applied in order after the shared defaults above, let a caller
+// customize the config buildServer boots from -- the org-route-guards
+// round's TestAdminFlow_SuspendTenant_... test uses it to add its own
+// ad hoc tenant to cfg.HostTenants (never demoHostTenants directly, a
+// shared package-level map every other test relies on unmodified), which
+// is what makes seedDemoGrants seed demoOwnerUserID's rbac grant there too.
+func buildAdminTestServer(t *testing.T, opts ...func(*serverConfig)) (*httptest.Server, serverConfig, *capturingMailer) {
 	t.Helper()
 
 	cfg := testConfig(t)
 	cfg.DemoUsersPassword = demoSeedPassword
 	mailer := &capturingMailer{}
 	cfg.Mailer = mailer
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 
 	handler, cleanup, _, err := buildServer(t.Context(), cfg)
 	if err != nil {
@@ -514,7 +523,13 @@ type tenancyErrorBody struct {
 // adminRequest/orgRequest, it never fatals on an unexpected status, since
 // this suite's whole point is asserting a REFUSAL happens, not just a
 // success.
-func rawStatusRequest(t *testing.T, srv *httptest.Server, method, path, token string) (int, tenancyErrorBody) {
+//
+// demoUser, when non-empty, is sent as the rbac demo header (demoUserHeader)
+// naming which seeded identity org-route-guards' per-operation gate
+// evaluates -- empty omits it entirely, which is right for a path (admin's)
+// whose own subject resolver never reads it in the first place
+// (adminSubjectResolver's own doc comment).
+func rawStatusRequest(t *testing.T, srv *httptest.Server, method, path, token, demoUser string) (int, tenancyErrorBody) {
 	t.Helper()
 	req, err := http.NewRequest(method, srv.URL+path, nil)
 	if err != nil {
@@ -522,6 +537,9 @@ func rawStatusRequest(t *testing.T, srv *httptest.Server, method, path, token st
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if demoUser != "" {
+		req.Header.Set(demoUserHeader, demoUser)
 	}
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -553,20 +571,33 @@ func rawStatusRequest(t *testing.T, srv *httptest.Server, method, path, token st
 // go/metering carry the identical "real, tested, but not yet a reference-
 // app HTTP consumer" exception elsewhere in this codebase).
 func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
-	srv, cfg, _ := buildAdminTestServer(t)
+	const tenant = pkgcore.TenantID("tenant-suspend-flow")
+
+	// This test's own tenant is not one of demoHostTenants' two entries, so
+	// it must add itself to cfg.HostTenants before buildServer boots --
+	// otherwise seedDemoGrants never seeds demoOwnerUserID's rbac grant
+	// there, and the org_createNode call below (which rides on that seeded
+	// identity like every other orgRequest caller, org-route-guards round)
+	// would be refused before D4's own tenant-suspension check ever runs.
+	srv, cfg, _ := buildAdminTestServer(t, func(c *serverConfig) {
+		c.HostTenants = map[string]pkgcore.TenantID{"tenant-suspend-flow.demo.localhost": tenant}
+	})
 	staffToken := platformStaffToken(t, srv)
 
-	const tenant = pkgcore.TenantID("tenant-suspend-flow")
 	ownerToken := registerAndAuthenticate(t, srv, cfg, tenant, "suspend-flow-owner")
 
 	// Creating the tenant's root node is both this test's ordinary,
-	// tenant-scoped request (org mounts no rbac gate of its own in this
-	// app -- root CLAUDE.md's notes-only rbac-gating note -- so it depends
-	// on nothing but tenancy.Middleware resolving the tenant) AND what
-	// lazily registers "tenant-suspend-flow" in admin's own D3 ledger
-	// (org.node.created -> TenantService.handleOrgNodeCreated), so no
-	// separate manual ledger-registration call is needed before D4's
-	// PATCH below.
+	// tenant-scoped request AND what lazily registers "tenant-suspend-flow"
+	// in admin's own D3 ledger (org.node.created -> TenantService.
+	// handleOrgNodeCreated), so no separate manual ledger-registration call
+	// is needed before D4's PATCH below. orgRequest itself sends the demo
+	// rbac header naming demoOwnerUserID (org-route-guards round: org's
+	// route is gated per operation like every other module's, so ownerToken's
+	// freshly-registered account -- which holds no rbac grant of its own --
+	// rides on the pre-seeded owner identity's grant for this call. This
+	// test's whole point is D4's tenant-suspension gate, not org's
+	// permission gate, so borrowing the seeded identity here is a setup
+	// choice, not a weakening of what either gate enforces).
 	var root orgNode
 	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", ownerToken, "",
 		map[string]string{"name": "Suspend Flow Co", "kind": "group"}, &root)
@@ -577,8 +608,13 @@ func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 
 	// Before suspension: the tenant is active (either its own explicit
 	// TenantStatusActive, or a WithTenantStatusResolver-wired but
-	// not-yet-suspended ledger row), so the ordinary request succeeds.
-	if status, _ := rawStatusRequest(t, srv, http.MethodGet, nodePath, ownerToken); status != http.StatusOK {
+	// not-yet-suspended ledger row), so the ordinary request succeeds. The
+	// demo owner header rides along here too, for the same reason as the
+	// create call above -- D4's tenant-suspension check runs in
+	// tenancy.Middleware, upstream of org's own rbac permission gate, so
+	// the caller must already clear THAT gate for D4's own refusal (below)
+	// to be the one this test is actually proving.
+	if status, _ := rawStatusRequest(t, srv, http.MethodGet, nodePath, ownerToken, demoOwnerUserID); status != http.StatusOK {
 		t.Fatalf("GET %s before suspension: status = %d, want %d", nodePath, status, http.StatusOK)
 	}
 
@@ -595,7 +631,7 @@ func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 	// through an entirely different module's route, org's, not admin's
 	// own -- is refused, with the coded error tenancy.Middleware writes,
 	// never a bare status with no code.
-	status, body := rawStatusRequest(t, srv, http.MethodGet, nodePath, ownerToken)
+	status, body := rawStatusRequest(t, srv, http.MethodGet, nodePath, ownerToken, demoOwnerUserID)
 	if status != http.StatusForbidden {
 		t.Fatalf("GET %s after suspension: status = %d, want %d", nodePath, status, http.StatusForbidden)
 	}
@@ -612,7 +648,7 @@ func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 
 	// The same request that was refused a moment ago now succeeds again,
 	// with no restart and nothing else changed.
-	if status, _ := rawStatusRequest(t, srv, http.MethodGet, nodePath, ownerToken); status != http.StatusOK {
+	if status, _ := rawStatusRequest(t, srv, http.MethodGet, nodePath, ownerToken, demoOwnerUserID); status != http.StatusOK {
 		t.Fatalf("GET %s after resume: status = %d, want %d", nodePath, status, http.StatusOK)
 	}
 }
@@ -742,7 +778,7 @@ func TestAdminFlow_Round2Routes_ReachableForPlatformStaff(t *testing.T) {
 	// property this test actually needs is that it is no longer the
 	// fail-closed 403 an empty adminPermissionFor entry would have
 	// produced.
-	status, body := rawStatusRequest(t, srv, http.MethodGet, "/api/v1/admin/usage-summary", staffToken)
+	status, body := rawStatusRequest(t, srv, http.MethodGet, "/api/v1/admin/usage-summary", staffToken, "")
 	if status == http.StatusForbidden {
 		t.Fatalf("GET /api/v1/admin/usage-summary for platform-staff = 403 %+v, want it to reach admin's Handler (not be refused by an unmapped permission)", body)
 	}

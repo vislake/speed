@@ -154,6 +154,20 @@ type orgListMembersResponse struct {
 // omits the header entirely, which the operations that resolve no caller
 // identity must do (org_createNode).
 //
+// Every call also sends the rbac demo header (demoUserHeader) naming
+// demoOwnerUserID, the seeded identity seedDemoGrants grants BuiltinRoleOwner
+// in every configured tenant -- since the org-route-guards round, org's
+// route is gated per operation on its own declared permissions like every
+// other module's (go/org/AGENTS.md's own permission table), and this
+// helper's callers register throwaway accounts through registerAndAuthenticate
+// that hold no rbac grant of their own. Riding on the pre-seeded owner
+// identity here is a SETUP choice -- which demo identity rbac evaluates the
+// request for -- not a weakening of the gate itself: a caller who does NOT
+// hold org's permissions is refused exactly the same way regardless (see
+// org_route_guards_test.go's own THE-scenario test, which exercises that
+// refusal directly). It is harmless on org_acceptInvitation, the one
+// operation the gate never checks a permission for at all.
+//
 // It fails the test outright on anything outside 2xx, and otherwise decodes
 // the response into out (nil to skip decoding, for 204 No Content
 // responses).
@@ -179,6 +193,7 @@ func orgRequest(t *testing.T, srv *httptest.Server, method, path, token, subject
 	if reader != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	req.Header.Set(demoUserHeader, demoOwnerUserID)
 	if subjectUserID != "" {
 		req.Header.Set(demoOrgUserHeader, subjectUserID)
 	}
