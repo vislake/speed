@@ -438,6 +438,14 @@ func (s *MemberService) Get(ctx context.Context, userID string) (*Membership, er
 	return s.repo.byUser(ctx, userID)
 }
 
+// errMembershipInsertLostRace is ensure's internal signal that the
+// membership insert collided with a concurrent create of the same
+// (tenant, user) row on the partial unique index. It is returned from
+// the transaction body so the transaction ends the moment the race is
+// lost, and translated by ensure's own recovery below; it never escapes
+// this file.
+var errMembershipInsertLostRace = errors.New("org: membership insert lost its unique-index race")
+
 // Add binds userID to nodeID as an active member of the caller's tenant.
 //
 // It reports ErrMembershipExists when the user already has a membership in
@@ -489,6 +497,31 @@ func (s *MemberService) Add(ctx context.Context, userID, nodeID string) (*Member
 // completing the insert). withRetry covers the same SQLite-contention and
 // PostgreSQL-deadlock cases every other lockLiveNode caller in this module
 // already retries through.
+//
+// # The insert race: the database is the backstop, and the recovery must
+// leave the failed transaction behind
+//
+// The byUser pre-check above and the insert are not atomic: two concurrent
+// ensures of the same (tenant, user) can both pass the pre-check before
+// either has written, and uq_memberships_tenant_user -- the partial unique
+// index on (tenant_id, user_id) WHERE deleted_at IS NULL -- is the backstop
+// that admits exactly one of their inserts. The loser of that race reports
+// the row that won rather than an error, so ensure stays idempotent under
+// concurrency and not only under sequential redelivery. That recovery used
+// to re-read the winner on the SAME transaction as the failed insert --
+// tolerated by SQLite, where a failed statement does not poison the
+// transaction around it, and broken on PostgreSQL, where a unique-violation
+// error aborts the whole transaction and the follow-up read died with
+// SQLSTATE 25P02 ("current transaction is aborted") in exactly the
+// concurrent case the branch exists to absorb. The insert therefore ends
+// its transaction the moment it loses the race (errMembershipInsertLostRace,
+// which the enclosing WithTenantSession rolls back), and the winner is
+// re-read on a FRESH session; when that read finds nothing -- a concurrent
+// Remove mark-deleted the winning row between the winner's commit and the
+// read -- the seat is free again and the whole insert is re-attempted,
+// bounded by the same txRetryBudget the contention retries draw on and
+// answering ErrConcurrentUpdate on exhaustion, exactly as withRetry's own
+// does.
 func (s *MemberService) ensure(ctx context.Context, userID, nodeID string) (*Membership, bool, error) {
 	if userID == "" {
 		return nil, false, ErrMembershipNotFound.WithParam("user_id", userID)
@@ -506,51 +539,65 @@ func (s *MemberService) ensure(ctx context.Context, userID, nodeID string) (*Mem
 	}
 
 	var created *Membership
-	var winner *Membership
-	err := withRetry(func() error {
-		created, winner = nil, nil
-		return dbkit.WithTenantSession(ctx, s.repo.db, func(tx *gorm.DB) error {
-			node, lockErr := lockLiveNode(tx, nodeID)
-			if lockErr != nil {
-				if errors.Is(lockErr, gorm.ErrRecordNotFound) {
-					return ErrNodeNotFound.WithParam("node_id", nodeID)
-				}
-				return ErrInternal.WithCause(lockErr)
-			}
-
-			m := &Membership{
-				ID:     id,
-				UserID: userID,
-				NodeID: node.ID,
-				Status: MembershipStatusActive,
-			}
-			if createErr := tx.Create(m).Error; createErr != nil {
-				if errors.Is(createErr, gorm.ErrDuplicatedKey) {
-					// Lost the race against a concurrent create of the same
-					// membership. The unique index is the backstop behind
-					// the byUser pre-check above; report the row that won
-					// rather than an error, so ensure stays idempotent under
-					// concurrency and not only under sequential redelivery.
-					var existing Membership
-					if findErr := tx.Where("user_id = ?", userID).First(&existing).Error; findErr != nil {
-						return ErrInternal.WithCause(findErr)
+	for attempt := 0; attempt < txRetryBudget; attempt++ {
+		created = nil
+		err := withRetry(func() error {
+			return dbkit.WithTenantSession(ctx, s.repo.db, func(tx *gorm.DB) error {
+				node, lockErr := lockLiveNode(tx, nodeID)
+				if lockErr != nil {
+					if errors.Is(lockErr, gorm.ErrRecordNotFound) {
+						return ErrNodeNotFound.WithParam("node_id", nodeID)
 					}
-					winner = &existing
-					return nil
+					return ErrInternal.WithCause(lockErr)
 				}
-				return ErrInternal.WithCause(createErr)
-			}
-			created = m
-			return nil
+
+				m := &Membership{
+					ID:     id,
+					UserID: userID,
+					NodeID: node.ID,
+					Status: MembershipStatusActive,
+				}
+				if createErr := tx.Create(m).Error; createErr != nil {
+					if errors.Is(createErr, gorm.ErrDuplicatedKey) {
+						// Lost the race against a concurrent create of the
+						// same membership. The unique index is the backstop
+						// behind the byUser pre-check above. End the
+						// transaction HERE: on PostgreSQL the
+						// unique-violation error has already aborted it, so
+						// any further statement on tx -- a re-read of the
+						// winner included -- fails with SQLSTATE 25P02. The
+						// winner is resolved below, on a fresh session.
+						return errMembershipInsertLostRace
+					}
+					return ErrInternal.WithCause(createErr)
+				}
+				created = m
+				return nil
+			})
 		})
-	})
-	if err != nil {
-		return nil, false, err
+		if err == nil {
+			return created, true, nil
+		}
+		if !errors.Is(err, errMembershipInsertLostRace) {
+			return nil, false, err
+		}
+		// The insert collided with a row the winner committed (an
+		// uncommitted rival would have made this insert wait, not fail), so
+		// this read reports the row that won rather than an error and keeps
+		// ensure idempotent under concurrency, not only under sequential
+		// redelivery.
+		switch existing, readErr := s.repo.byUser(ctx, userID); {
+		case readErr == nil:
+			return existing, false, nil
+		case !hasCode(readErr, ErrMembershipNotFound.Code):
+			return nil, false, readErr
+		}
+		// The colliding row is already gone -- a concurrent Remove
+		// mark-deleted it between the winner's commit and the read above --
+		// so the seat is free again and this loop's next attempt re-runs
+		// the whole insert from a clean transaction.
 	}
-	if winner != nil {
-		return winner, false, nil
-	}
-	return created, true, nil
+	return nil, false, ErrConcurrentUpdate.WithCause(errMembershipInsertLostRace)
 }
 
 // List returns every membership bound to nodeID or to any node beneath it,
