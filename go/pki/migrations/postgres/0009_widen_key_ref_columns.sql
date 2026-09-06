@@ -1,0 +1,37 @@
+-- pki_signing_keys.key_ref, pki_authorities.key_ref and
+-- pki_certificates.key_ref hold whichever pki.Signer implementation owns a
+-- key's material, as that implementation's own opaque handle -- and for the
+-- vault and kmsaws providers in envelope mode that handle is the base64 of
+-- the whole provider-side ciphertext (go/pki/signer/kmsaws/signer.go:
+-- keyRef = base64.StdEncoding.EncodeToString of the KMS Encrypt
+-- CiphertextBlob; go/pki/AGENTS.md's P1-2 record carries the assessment).
+-- The arithmetic is deterministic: base64 of any blob of 192 bytes or more
+-- exceeds the 255 characters every key_ref column declared at creation
+-- (0001/0002/0003), and a real KMS symmetric ciphertext blob for an
+-- ~80-byte PKCS8 ed25519 key is empirically 0.5-2KB raw, i.e. up to ~2732
+-- base64 characters -- so PostgreSQL, which enforces VARCHAR(255) where
+-- SQLite does not, refuses the write a real envelope-mode deployment must
+-- make, at insert time.
+--
+-- This migration widens the three columns to VARCHAR(4096). 4096 is the
+-- next power-of-two bound above the arithmetic: base64 of the full
+-- observed 0.5-2KB window tops out at 2732 characters, and a 4096-character
+-- column admits any raw blob up to 3072 bytes, comfortably past the
+-- observed maximum. The bound stays finite on purpose: a key_ref is a
+-- handle, not a document, and an unbounded TEXT column would let a handle
+-- silently grow into a document store without a schema review -- the
+-- migration that widens this bound again.
+--
+-- The GORM model size tags (go/pki/model.go, the Atlas-style source of the
+-- schema) were widened in lockstep with this file: a mismatch between the
+-- two is the drift class this repo punishes.
+--
+-- This is the PostgreSQL copy. The widening is a plain ALTER COLUMN TYPE
+-- here; SQLite cannot ALTER a column type, so the sqlite/ sibling rebuilds
+-- each of the three tables (rename, recreate widened, copy, drop,
+-- re-create the indexes) -- see that file for why the rebuild is safe
+-- under this repo's MigrationRegistry, which applies one module's files in
+-- a single transaction.
+ALTER TABLE pki_signing_keys ALTER COLUMN key_ref TYPE VARCHAR(4096);
+ALTER TABLE pki_authorities ALTER COLUMN key_ref TYPE VARCHAR(4096);
+ALTER TABLE pki_certificates ALTER COLUMN key_ref TYPE VARCHAR(4096);

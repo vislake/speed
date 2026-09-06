@@ -1,6 +1,8 @@
 package pki
 
 import (
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/vislake/speed/go/dbkit"
@@ -28,6 +30,39 @@ func TestCertificate_TableName(t *testing.T) {
 func TestLocalKey_TableName(t *testing.T) {
 	if got := (LocalKey{}).TableName(); got != tableLocalKeys {
 		t.Errorf("TableName() = %q, want %q", got, tableLocalKeys)
+	}
+}
+
+// TestKeyRef_ModelTagsMatchMigration0009 pins the widened key_ref size tag
+// on the three tables migration 0009 widens (pki_signing_keys,
+// pki_authorities, pki_certificates) to 4096 -- the model is the
+// Atlas-style source of the schema, so a tag that drifts from the shipped
+// migration is exactly the drift class the codebase punishes. LocalKey is
+// deliberately absent: pki_local_keys.key_ref is LocalSigner's own 64-char
+// handle (uuid.NewString), not the provider-ciphertext handle this widening
+// exists for.
+func TestKeyRef_ModelTagsMatchMigration0009(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		model any
+	}{
+		{name: "SigningKey", model: SigningKey{}},
+		{name: "Authority", model: Authority{}},
+		{name: "Certificate", model: Certificate{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			field, ok := reflect.TypeOf(tc.model).FieldByName("KeyRef")
+			if !ok {
+				t.Fatal("KeyRef field not found")
+			}
+			tag := field.Tag.Get("gorm")
+			if !strings.Contains(tag, "size:4096") {
+				t.Errorf("KeyRef gorm tag = %q, want it to carry size:4096 (migration 0009)", tag)
+			}
+			if strings.Contains(tag, "size:255") {
+				t.Errorf("KeyRef gorm tag = %q, still carries the pre-0009 size:255", tag)
+			}
+		})
 	}
 }
 

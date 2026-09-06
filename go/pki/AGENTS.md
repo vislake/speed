@@ -381,28 +381,43 @@ deliberately defers:
   repository-level pin of the guard (`TestAuthorityRepository_UpdateCRLIfCurrent_GuardedTransition`:
   a stale expected number lands nothing and leaves the winner's row
   untouched).
-- **P1-2 (suspected, assessed, deferred -- schema widening is a migration
-  plus a design decision).** In `go/pki/signer/kmsaws`'s envelope mode the
-  `keyRef` is the base64 of the whole KMS `CiphertextBlob`. The arithmetic
-  is deterministic: base64 of any blob of 192 bytes or more exceeds 255
-  characters, the `size:255` every `key_ref` column in this module's schema
-  declares (`pki_signing_keys`, `pki_authorities`, `pki_certificates`), and
-  a real KMS symmetric ciphertext blob for an ~80-byte PKCS8 ed25519 key
-  is empirically 0.5-2KB raw -- PostgreSQL, which enforces `VARCHAR(255)`
-  where SQLite does not, would refuse the write. No unit-level proof can
-  pin the REAL blob size without a live AWS account (the module records
-  that no KMS integration leg exists, by design), and the genuine fix is
-  not in scope for an audit round: either a dual-dialect migration (0009)
-  widening `key_ref` to `TEXT` on all three tables (SQLite cannot ALTER a
-  column type, so its half of the migration rebuilds each table), or a
-  design change making the envelope `keyRef` a short name resolved through
-  host-owned storage -- which reverses round 4's deliberate "the
+- **P1-2 (suspected, assessed -- LANDED, migration 0009, both dialects).**
+  In `go/pki/signer/kmsaws`'s envelope mode the `keyRef` is the base64 of
+  the whole KMS `CiphertextBlob`. The arithmetic is deterministic: base64
+  of any blob of 192 bytes or more exceeds 255 characters, the width every
+  `key_ref` column in this module's schema originally declared
+  (`pki_signing_keys`, `pki_authorities`, `pki_certificates`), and a real
+  KMS symmetric ciphertext blob for an ~80-byte PKCS8 ed25519 key is
+  empirically 0.5-2KB raw (up to ~2732 base64 characters) -- PostgreSQL,
+  which enforces `VARCHAR(255)` where SQLite does not, would refuse the
+  write at insert time. Migration 0009 widens the three columns to
+  `VARCHAR(4096)` -- the next power-of-two bound above that window,
+  admitting any raw blob up to 3072 bytes and kept finite on purpose so an
+  opaque handle cannot silently grow into a document store; the full
+  rationale is in the migration's own header -- with the GORM model size
+  tags (model.go, the Atlas-style source of the schema) widened in
+  lockstep. PostgreSQL's half of 0009 is a plain `ALTER COLUMN TYPE`; the
+  SQLite half rebuilds each table (SQLite cannot ALTER a column type) via
+  rename/create-widened/copy-by-explicit-column-list/drop, re-creating
+  every index under its original name -- safe under dbkit's
+  `MigrationRegistry`, which applies one module's files inside a single
+  transaction. The alternative the assessment weighed -- a design change
+  making the envelope `keyRef` a short name resolved through host-owned
+  storage -- was rejected: it reverses round 4's deliberate "the
   ciphertext itself IS the keyRef, the package keeps no storage" posture.
-  Recommendation: ship migration 0009 and widen to `TEXT`; the round-4
-  envelope mode is the headline capability of both cloud providers, and a
-  Postgres-hosted deployment choosing it currently fails at insert time.
-  Until then the safe combination is `ModeDirectSign` on PostgreSQL, or
-  envelope mode on SQLite, where the length is unenforced.
+  Verification limits, stated honestly: the module has no PostgreSQL
+  integration tier (recorded above), so 0009's PostgreSQL half has been
+  reviewed for dialect correctness but never executed against a real
+  server, and the over-length-refusal itself is not exercisable in this
+  repository at all. The unit gates are (a) the migration set applies
+  from zero on SQLite through the MigrationRegistry path every test DB
+  boots with, (b) `key_ref_widening_test.go` round-trips a
+  2732-character envelope-length keyRef through all three repositories
+  against the migrated schema and pins the declared `VARCHAR(4096)` type
+  SQLite reports -- the pre-0009 schema fails that PRAGMA pin, since it
+  declares `VARCHAR(255)` -- and (c) `model_test.go` pins the three
+  `size:4096` model tags. A future pki PostgreSQL integration tier should
+  re-prove the widening there.
 - **P2-2 (confirmed, assessed, deferred -- no clean wiring point).**
   `Signer.Destroy` has zero production callers across the repository: the
   key-lifecycle layer's expiry scan stops at `retired` and never destroys

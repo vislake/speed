@@ -90,7 +90,11 @@ type SigningKey struct {
 	SignerName string `gorm:"column:signer_name;size:64;not null"`
 
 	// KeyRef is that Signer implementation's own opaque handle. Never a key.
-	KeyRef string `gorm:"column:key_ref;size:255;not null"`
+	// For the vault/kmsaws envelope-mode providers that handle is the base64
+	// of the whole provider-side ciphertext, so migration 0009 widened the
+	// column to 4096 -- this size tag and that migration are the same fact
+	// twice.
+	KeyRef string `gorm:"column:key_ref;size:4096;not null"`
 
 	// Status is one of the SigningKeyStatus constants.
 	Status string `gorm:"column:status;size:16;not null"`
@@ -206,7 +210,9 @@ type Authority struct {
 	CertificatePEM string `gorm:"column:certificate_pem;not null"`
 
 	SignerName string `gorm:"column:signer_name;size:64;not null"`
-	KeyRef     string `gorm:"column:key_ref;size:255;not null"`
+	// KeyRef -- same opaque-handle contract and same 0009-widened width as
+	// SigningKey.KeyRef (see its doc comment).
+	KeyRef string `gorm:"column:key_ref;size:4096;not null"`
 
 	// Status is one of the AuthorityStatus constants.
 	Status string `gorm:"column:status;size:16;not null;default:'active'"`
@@ -334,7 +340,9 @@ type Certificate struct {
 	CertificatePEM string `gorm:"column:certificate_pem;not null"`
 
 	SignerName string `gorm:"column:signer_name;size:64;not null"`
-	KeyRef     string `gorm:"column:key_ref;size:255;not null"`
+	// KeyRef -- same opaque-handle contract and same 0009-widened width as
+	// SigningKey.KeyRef (see its doc comment).
+	KeyRef string `gorm:"column:key_ref;size:4096;not null"`
 
 	// Status is one of the CertificateStatus constants.
 	Status string `gorm:"column:status;size:16;not null;default:'active'"`
