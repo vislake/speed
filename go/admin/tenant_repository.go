@@ -160,11 +160,45 @@ type TenantPatch struct {
 // ("nil means not currently suspended"); a patch that does not change
 // Status at all, or restates the row's current Status, leaves SuspendedAt
 // untouched.
+//
+// The read (this call's own Get) and the write are NOT one atomic
+// operation -- see applyGuardedPatch's own doc comment for the
+// compare-and-set guard that closes the resulting race (P3-3's fix).
 func (r *TenantRepository) Update(ctx context.Context, tenantID string, patch TenantPatch) (*Tenant, error) {
-	t, err := r.Get(ctx, tenantID)
+	observed, err := r.Get(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
+	return r.applyGuardedPatch(ctx, tenantID, *observed, patch)
+}
+
+// applyGuardedPatch computes patch's effect on observed -- a snapshot this
+// method's caller read moments earlier, ordinarily via Get -- and writes
+// the result back under a conditional UPDATE whose WHERE clause requires
+// every mutable column to still hold EXACTLY the value observed carried.
+//
+// This is P3-3's CAS fix: Update used to Get, mutate the struct in Go, and
+// unconditionally Save every column, so two concurrent PATCH calls (one
+// suspending, one resuming, say) both reading the row before either wrote
+// back would race -- the second Save always won, silently discarding the
+// first's intent with no error to either caller, and the
+// admin.tenant.status_changed audit event TenantService.SetStatus records
+// from the CALLER'S OWN patch (never a re-read of what actually landed)
+// would then describe a status the row never actually reached. The guard
+// makes the second of two such concurrent writes fail (0 rows affected)
+// instead: refused with ErrTenantConcurrentUpdate rather than silently
+// overwriting, mirroring go/notification/send_record.go's SaveGuarded
+// conditional-UPDATE idiom (that guard is a business-semantic
+// never-downgrade-succeeded check; this one is a plain optimistic-
+// concurrency snapshot match, since admin_tenants carries no version
+// column and PATCH's fields have no such fixed ordering to enforce).
+//
+// Split out from Update as its own step purely so a test can force the
+// exact race deterministically -- two callers sharing one Get'd snapshot,
+// racing their writes -- rather than relying on incidental goroutine
+// timing to reproduce two real overlapping Update calls.
+func (r *TenantRepository) applyGuardedPatch(ctx context.Context, tenantID string, observed Tenant, patch TenantPatch) (*Tenant, error) {
+	t := observed
 	wasSuspended := t.Status == TenantStatusSuspended
 
 	if patch.DisplayName != nil {
@@ -187,8 +221,22 @@ func (r *TenantRepository) Update(ctx context.Context, tenantID string, patch Te
 			t.SuspendedAt = nil
 		}
 	}
-	if err := r.db.WithContext(ctx).Save(t).Error; err != nil {
-		return nil, err
+
+	res := r.db.WithContext(ctx).Model(&Tenant{}).
+		Where("tenant_id = ? AND status = ? AND display_name = ? AND suspended_reason = ? AND notes = ?",
+			tenantID, observed.Status, observed.DisplayName, observed.SuspendedReason, observed.Notes).
+		Updates(map[string]any{
+			"display_name":     t.DisplayName,
+			"status":           t.Status,
+			"suspended_reason": t.SuspendedReason,
+			"suspended_at":     t.SuspendedAt,
+			"notes":            t.Notes,
+		})
+	if res.Error != nil {
+		return nil, res.Error
 	}
-	return t, nil
+	if res.RowsAffected == 0 {
+		return nil, ErrTenantConcurrentUpdate.WithParam("tenant_id", tenantID)
+	}
+	return &t, nil
 }

@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/vislake/speed/go/admin/internal/testutil"
@@ -166,6 +167,86 @@ func TestTenantRepository_Update_Missing_ReportsNotFound(t *testing.T) {
 	_, err := repo.Update(context.Background(), "does-not-exist", TenantPatch{})
 	if !isCode(err, ErrTenantNotFound.Code) {
 		t.Fatalf("Update() error = %v, want ErrTenantNotFound", err)
+	}
+}
+
+// TestTenantRepository_Update_ConcurrentConflictingPatches_SecondRefused is
+// Finding P3-3's regression test: two concurrent PATCH calls that both
+// read the row before either wrote back (a suspend racing a resume, the
+// audit finding's own example) must not both silently succeed with the
+// second's stale read overwriting the first's intent.
+//
+// The race is forced deterministically, not by hoping two real Update
+// calls interleave within a narrow timing window: both goroutines are
+// handed the SAME pre-read snapshot (read via one real Get, matching
+// exactly what two callers who both read the row moments apart would each
+// have observed) and call applyGuardedPatch directly, concurrently, so the
+// database's own conditional UPDATE -- not incidental goroutine scheduling
+// -- is what decides which one lands.
+func TestTenantRepository_Update_ConcurrentConflictingPatches_SecondRefused(t *testing.T) {
+	db := testutil.NewDB(t)
+	repo := NewTenantRepository(db)
+	ctx := context.Background()
+
+	if err := repo.Create(ctx, &Tenant{TenantID: "tenant-race", Status: TenantStatusActive, DisplayName: "Race Co"}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	observed, err := repo.Get(ctx, "tenant-race")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+
+	suspended := TenantStatusSuspended
+	renamed := "Renamed Co"
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	errs := make([]error, 2)
+	results := make([]*Tenant, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		results[0], errs[0] = repo.applyGuardedPatch(ctx, "tenant-race", *observed, TenantPatch{Status: &suspended})
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		results[1], errs[1] = repo.applyGuardedPatch(ctx, "tenant-race", *observed, TenantPatch{DisplayName: &renamed})
+	}()
+	close(start)
+	wg.Wait()
+
+	succeeded, refused := 0, 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			succeeded++
+		case isCode(err, ErrTenantConcurrentUpdate.Code):
+			refused++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if succeeded != 1 || refused != 1 {
+		t.Fatalf("got succeeded=%d refused=%d (errs=%v), want exactly one success and one ErrTenantConcurrentUpdate refusal", succeeded, refused, errs)
+	}
+
+	// The persisted row must match EXACTLY the winner's own intended
+	// write -- never a hybrid of both patches, and never the loser's
+	// patch silently applied on top.
+	final, err := repo.Get(ctx, "tenant-race")
+	if err != nil {
+		t.Fatalf("final Get() error = %v", err)
+	}
+	var winner *Tenant
+	if errs[0] == nil {
+		winner = results[0]
+	} else {
+		winner = results[1]
+	}
+	if final.Status != winner.Status || final.DisplayName != winner.DisplayName {
+		t.Fatalf("persisted row = %+v, want exactly the winner's own write %+v", final, winner)
 	}
 }
 
