@@ -10,12 +10,13 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { PasswordSignInForm } from './PasswordSignInForm.js'
 import { renderWithProviders } from '../test-utils/render.js'
 import {
   LOGIN_PASSWORD,
+  SOCIAL_CALLBACK,
   apiError,
   makeHarness,
   makePair,
@@ -144,5 +145,76 @@ describe('PasswordSignInForm', () => {
     const harness = makeHarness({ [LOGIN_PASSWORD]: () => makePair() })
     renderWithProviders(<PasswordSignInForm session={harness.session} />)
     await expectNoAxeViolations()
+  })
+
+  it('contain a throwing onSignedIn: the committed login never looks like a failure', async () => {
+    // A host callback that throws is not a login failure (the login
+    // committed -- the store holds the issued token): it must not paint
+    // the failure banner, and the containment keeps the throw out of
+    // the submit promise as an unhandled rejection.
+    const harness = makeHarness({ [LOGIN_PASSWORD]: () => makePair() })
+    const onSignedIn = vi.fn(() => {
+      throw new Error('host navigation failed')
+    })
+    renderWithProviders(
+      <PasswordSignInForm session={harness.session} onSignedIn={onSignedIn} />,
+    )
+    await fillAndSubmit('alice@example.com', 's3cret-pass', ZH_LABELS)
+    await waitFor(() => expect(onSignedIn).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(harness.store.get()).toBe('access-1')
+  })
+
+  it('treat a superseded submit as the lost race it is, rendering no error', async () => {
+    // A concurrent sign-in (here a social exchange committed through
+    // the same session while this form's own login was still in
+    // flight) makes auth-core reject this submit with
+    // OperationSupersededError when its answer arrives: the losing
+    // submit must not render the generic error banner -- it is not a
+    // failure, and the session being authenticated now is the host's
+    // own snapshot to observe.
+    let releasePassword: (value: unknown) => void = () => {}
+    const passwordGate = new Promise((resolve) => {
+      releasePassword = resolve
+    })
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => passwordGate,
+      [SOCIAL_CALLBACK]: () => ({ tokens: makePair() }),
+    })
+    const onSignedIn = vi.fn()
+    renderWithProviders(
+      <PasswordSignInForm session={harness.session} onSignedIn={onSignedIn} />,
+    )
+    const user = userEvent.setup()
+    await user.type(
+      screen.getByLabelText(zhCN.passwordSignIn.identifierLabel),
+      'alice@example.com',
+    )
+    await user.type(
+      screen.getByLabelText(zhCN.passwordSignIn.passwordLabel),
+      's3cret-pass',
+    )
+    const submit = screen.getByRole('button', { name: SUBMIT_ZH })
+    await user.click(submit)
+    await waitFor(() => expect(submit).toBeDisabled())
+    // The winning sign-in commits while the password login is in
+    // flight.
+    await act(async () => {
+      await harness.session.completeSocialLogin('google', {
+        code: 'oauth-code-1',
+        state: 'csrf-state-1',
+      })
+    })
+    expect(harness.store.get()).toBe('access-1')
+    // The password answer arrives after the winner committed: auth-core
+    // rejects it as superseded, and the form treats that as the lost
+    // race it is -- quiet, retryable, no error banner.
+    await act(async () => {
+      releasePassword(makePair())
+    })
+    await waitFor(() => expect(submit).toBeEnabled())
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(onSignedIn).not.toHaveBeenCalled()
+    expect(harness.store.get()).toBe('access-1')
   })
 })

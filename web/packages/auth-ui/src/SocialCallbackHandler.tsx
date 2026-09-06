@@ -14,9 +14,15 @@
  * failed exchange (authn.oauth_state_invalid,
  * authn.social_exchange_failed, authn.identity_requires_binding) renders
  * its code text in the InlineError banner under a retry button that
- * re-runs the exchange for the same pair. Nothing here navigates: the
- * props come from the host's own route and the success callback is the
- * host's.
+ * re-runs the exchange for the same pair. The exchange verdict settles
+ * before the host callback runs, and a throwing onSignedIn is contained
+ * the tenancy-ui way: it is not an exchange failure (the exchange
+ * committed), so it never flips the handler to the failed state -- which
+ * would offer a retry of an already-consumed single-use code -- and
+ * never escapes as an unhandled rejection; the success outcome (the
+ * pending notice and the authenticated session) stays in place.
+ * Nothing here navigates: the props come from the host's own route and
+ * the success callback is the host's.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -98,13 +104,22 @@ export function SocialCallbackHandler({
     void (async () => {
       try {
         await session.completeSocialLogin(provider, { code, state })
-        if (run === runRef.current) {
-          onSignedIn?.()
-        }
       } catch (error) {
         if (run === runRef.current) {
           setErrorCode(errorCodeOf(error))
           setStatus('failed')
+        }
+        return
+      }
+      if (run === runRef.current) {
+        try {
+          onSignedIn?.()
+        } catch {
+          // A throwing host callback is not an exchange failure: the
+          // exchange verdict (success) settled first, so nothing here
+          // flips to the failed state -- which would offer a retry of
+          // the already-consumed code -- and the containment keeps the
+          // throw out of this fire-and-forget promise.
         }
       }
     })()

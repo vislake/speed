@@ -289,4 +289,26 @@ describe('RegisterForm', () => {
     renderWithProviders(<RegisterForm session={harness.session} />)
     await expectNoAxeViolations()
   })
+
+  it('contain a throwing onRegistered: the success can never look like a failure', async () => {
+    // A host callback that throws is not a registration failure (the
+    // account was created server-side): it must not paint the failure
+    // banner -- which would invite a duplicate resubmission of an
+    // already-registered account -- and the containment keeps the
+    // throw out of the submit promise as an unhandled rejection.
+    const harness = makeHarness({ [REGISTER]: () => ALICE })
+    const onRegistered = vi.fn(() => {
+      throw new Error('host navigation failed')
+    })
+    renderWithProviders(
+      <RegisterForm session={harness.session} onRegistered={onRegistered} />,
+    )
+    await fillAndSubmit('alice@example.com', 's3cret-pass', ZH_LABELS)
+    await waitFor(() => expect(onRegistered).toHaveBeenCalledTimes(1))
+    expect(onRegistered).toHaveBeenCalledWith(ALICE)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    // The successful register fired exactly one request.
+    expect(harness.calls).toHaveLength(1)
+    expect(harness.store.get()).toBeNull()
+  })
 })

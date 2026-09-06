@@ -15,8 +15,13 @@
  * Registration never signs in (register is not a session operation): the
  * created user is handed to onRegistered -- the host navigates to its
  * sign-in screen -- or, when no callback is given, rendered as a success
- * panel in place of the form. Nothing here navigates, and the heading
- * above the form is host content.
+ * panel in place of the form. The callback runs only after the
+ * register verdict settled, and a throwing host callback is contained
+ * the tenancy-ui way: it is not a registration failure (the account
+ * exists server-side), never renders the failure banner -- which would
+ * invite a duplicate resubmission of an already-registered account --
+ * and never escapes as an unhandled rejection. Nothing here navigates,
+ * and the heading above the form is host content.
  */
 
 import { useState } from 'react'
@@ -81,16 +86,25 @@ export function RegisterForm({ session, onRegistered }: RegisterFormProps) {
     if (name.length > 0) {
       request.display_name = name
     }
+    let user: AuthnUser
     try {
-      const user = await session.register(request)
-      if (onRegistered !== undefined) {
-        onRegistered(user)
-      } else {
-        setCreated(user)
-      }
+      user = await session.register(request)
     } catch (error) {
       setErrorCode(errorCodeOf(error))
+      return
     }
+    if (onRegistered !== undefined) {
+      try {
+        onRegistered(user)
+      } catch {
+        // A throwing host callback is not a registration failure (the
+        // account was created): nothing here renders an error -- which
+        // would invite a duplicate resubmission -- and the containment
+        // keeps the throw out of this submit promise.
+      }
+      return
+    }
+    setCreated(user)
   }
 
   if (created !== null) {

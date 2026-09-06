@@ -266,4 +266,42 @@ describe('SocialCallbackHandler', () => {
     await expectNoAxeViolations()
     resolveExchange(makePair())
   })
+
+  it('contain a throwing onSignedIn after a successful exchange: the success outcome never flips to the failed state', async () => {
+    // The exchange verdict settles first; the host callback runs after.
+    // A host callback that throws is not an exchange failure: it must
+    // not flip the screen to the failed state -- which would offer a
+    // retry of an already-consumed single-use code -- and must not
+    // suppress the success outcome (the session holds the issued
+    // token, and the containment keeps the throw from becoming an
+    // unhandled rejection).
+    const harness = makeHarness({
+      [SOCIAL_CALLBACK]: () => ({ tokens: makePair() }),
+    })
+    const onSignedIn = vi.fn(() => {
+      throw new Error('host navigation failed')
+    })
+    renderWithProviders(
+      <SocialCallbackHandler
+        session={harness.session}
+        provider="google"
+        code={CODE}
+        state={STATE}
+        onSignedIn={onSignedIn}
+      />,
+    )
+    await waitFor(() => expect(onSignedIn).toHaveBeenCalledTimes(1))
+    expect(harness.store.get()).toBe('access-1')
+    // Still the success outcome: no failed-state banner, no retry of
+    // the consumed pair, and the pending notice stays up.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: zhCN.socialCallback.retry }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByText(zhCN.socialCallback.pending),
+    ).toBeInTheDocument()
+    // Exactly one exchange ran.
+    expect(harness.calls).toHaveLength(1)
+  })
 })

@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SocialSignInSection } from './SocialSignInSection.js'
 import type { SocialProviderConfig } from './SocialSignInSection.js'
@@ -155,5 +155,126 @@ describe('SocialSignInSection', () => {
       <SocialSignInSection session={harness.session} providers={PROVIDERS} />,
     )
     await expectNoAxeViolations()
+  })
+
+  it('contain a throwing onAuthorizeUrl: the built URL never looks like a failure', async () => {
+    const harness = makeHarness({
+      [SOCIAL_AUTHORIZE]: () => ({ authorize_url: GOOGLE_AUTH_URL }),
+    })
+    const onAuthorizeUrl = vi.fn(() => {
+      throw new Error('host navigation failed')
+    })
+    renderWithProviders(
+      <SocialSignInSection
+        session={harness.session}
+        providers={PROVIDERS}
+        onAuthorizeUrl={onAuthorizeUrl}
+      />,
+    )
+    const user = userEvent.setup()
+    await user.click(
+      screen.getByRole('button', { name: zhCN.social.provider.google }),
+    )
+    await waitFor(() => expect(onAuthorizeUrl).toHaveBeenCalledTimes(1))
+    expect(onAuthorizeUrl).toHaveBeenCalledWith('google', GOOGLE_AUTH_URL)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(harness.calls).toHaveLength(1)
+  })
+
+  it('keep both overlapping attempts locked until each settles on its own', async () => {
+    // Two provider attempts in flight at once: each button must stay
+    // locked until ITS OWN attempt settles -- an earlier return must
+    // not re-enable the later provider's button mid-flight.
+    let resolveGoogle: (value: unknown) => void = () => {}
+    let resolveGithub: (value: unknown) => void = () => {}
+    const googleGate = new Promise((resolve) => {
+      resolveGoogle = resolve
+    })
+    const githubGate = new Promise((resolve) => {
+      resolveGithub = resolve
+    })
+    const harness = makeHarness({
+      [SOCIAL_AUTHORIZE]: () => googleGate,
+      'GET /api/v1/authn/social/github/authorize': () => githubGate,
+    })
+    renderWithProviders(
+      <SocialSignInSection session={harness.session} providers={PROVIDERS} />,
+    )
+    const user = userEvent.setup()
+    const google = screen.getByRole('button', {
+      name: zhCN.social.provider.google,
+    })
+    const github = screen.getByRole('button', {
+      name: zhCN.social.provider.github,
+    })
+    await user.click(google)
+    await waitFor(() => expect(google).toBeDisabled())
+    await user.click(github)
+    // Both in flight: both buttons locked.
+    await waitFor(() => expect(github).toBeDisabled())
+    expect(google).toBeDisabled()
+    // The earlier attempt settles first: its own button re-enables,
+    // the still-pending later one stays locked.
+    resolveGoogle({ authorize_url: GOOGLE_AUTH_URL })
+    await waitFor(() => expect(google).toBeEnabled())
+    expect(github).toBeDisabled()
+    // The later attempt settles: its button re-enables too.
+    resolveGithub({
+      authorize_url: 'https://github.com/login/oauth/authorize',
+    })
+    await waitFor(() => expect(github).toBeEnabled())
+    expect(harness.calls).toHaveLength(2)
+  })
+
+  it('never paint an earlier attempt failure over a newer attempt success', async () => {
+    // Google's flight started first and fails only after the newer
+    // GitHub attempt is in flight; GitHub then succeeds. The section's
+    // failure banner must not show the stale Google failure after the
+    // GitHub success -- a failure can only belong to the newest
+    // attempt.
+    let rejectGoogle: (error: unknown) => void = () => {}
+    let resolveGithub: (value: unknown) => void = () => {}
+    const googleGate = new Promise((_resolve, reject) => {
+      rejectGoogle = reject
+    })
+    const githubGate = new Promise((resolve) => {
+      resolveGithub = resolve
+    })
+    const harness = makeHarness({
+      [SOCIAL_AUTHORIZE]: () => googleGate,
+      'GET /api/v1/authn/social/github/authorize': () => githubGate,
+    })
+    const onAuthorizeUrl = vi.fn()
+    renderWithProviders(
+      <SocialSignInSection
+        session={harness.session}
+        providers={PROVIDERS}
+        onAuthorizeUrl={onAuthorizeUrl}
+      />,
+    )
+    const user = userEvent.setup()
+    await user.click(
+      screen.getByRole('button', { name: zhCN.social.provider.google }),
+    )
+    await user.click(
+      screen.getByRole('button', { name: zhCN.social.provider.github }),
+    )
+    // The older Google flight fails while GitHub is still in flight;
+    // GitHub then succeeds.
+    await act(async () => {
+      rejectGoogle(apiError(404, 'authn.provider_unknown'))
+    })
+    await act(async () => {
+      resolveGithub({
+        authorize_url: 'https://github.com/login/oauth/authorize',
+      })
+    })
+    await waitFor(() => expect(onAuthorizeUrl).toHaveBeenCalledTimes(1))
+    expect(onAuthorizeUrl).toHaveBeenCalledWith(
+      'github',
+      'https://github.com/login/oauth/authorize',
+    )
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(harness.calls).toHaveLength(2)
   })
 })
