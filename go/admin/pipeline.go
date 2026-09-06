@@ -106,6 +106,27 @@ type GrantLookup interface {
 //     it fires once, when the grant is created, never on every
 //     subsequent request the grant authorizes.
 //
+// Two more boundaries this middleware enforces beyond the five properties
+// (P1-2's and P1-3's fixes), governing what the substituted Principal does
+// NOT carry across the impersonation boundary:
+//
+//   - SessionID is NOT copied from the administrator's principal. authn's
+//     session lifecycle keys on a session id alone (Service.Logout revokes
+//     whatever id it is handed), so an impersonated request presenting the
+//     administrator's session id could sign the administrator out of their
+//     own console session. The substituted principal's SessionID is the
+//     GRANT's id instead -- the grant is the short-lived, revocable
+//     session this principal acts through -- so a session-scoped operation
+//     during impersonation pairs (target user, grant), never (target user,
+//     administrator session).
+//   - AMR is never copied either. The administrator's authentication
+//     methods (a second factor above all) describe how the ADMINISTRATOR
+//     proved themselves, not the target; inheriting them would let an
+//     administrator whose own session carries mfa:totp satisfy an MFA gate
+//     as the target. The target proved no method in this session, so the
+//     substituted principal's AMR is empty and no "requires a second
+//     factor" policy can be satisfied by impersonation alone.
+//
 // An extra, conservative tightening beyond the document's own text: a
 // grant is honored ONLY when its AdminUserID matches the CURRENT request's
 // own verified Principal. A grant id that leaked or was guessed is
@@ -142,11 +163,29 @@ func ImpersonationMiddleware(lookup GrantLookup) func(http.Handler) http.Handler
 				return
 			}
 
+			// The substituted principal deliberately carries NOTHING that
+			// belongs to the administrator's own session (P1-2's and
+			// P1-3's fixes). SessionID names the ADMIN's real session, and
+			// authn's session lifecycle keys on it alone -- Service.Logout
+			// revokes whatever session id it is handed with no user-pairing
+			// check -- so an inherited session id would let a request
+			// acting as the target sign the administrator out of their own
+			// console session, and pair (target user, admin session) in
+			// every session-scoped operation. The impersonation's own
+			// session identity is the GRANT -- the short-lived, revocable
+			// credential this principal acts through, whose id every admin
+			// session-scoped call already names -- so SessionID carries
+			// grant.ID, never the administrator's. AMR lists the
+			// authentication methods the ADMINISTRATOR proved, and
+			// inheriting it would let the administrator's own second
+			// factor (mfa:totp, say) satisfy an MFA gate as the target; the
+			// target proved no method in this session, so AMR stays empty
+			// and no downstream "requires a second factor" policy can be
+			// satisfied by this principal.
 			targetPrincipal := authn.Principal{
 				UserID:    grant.TargetUserID,
 				TenantID:  pkgcore.TenantID(grant.TargetTenantID),
-				SessionID: adminPrincipal.SessionID,
-				AMR:       adminPrincipal.AMR,
+				SessionID: grant.ID,
 			}
 
 			ctx := authn.WithPrincipal(r.Context(), targetPrincipal)
