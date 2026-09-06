@@ -209,17 +209,23 @@ func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
 	reg.Events.Subscribe(EventRoleBindingRestored, svc.onRoleBindingChanged)
 	reg.Events.Subscribe(EventRoleChanged, svc.onRoleChanged)
 
-	// Two subscriptions are to foreign events org publishes: org.member.removed,
-	// so a removed member's role bindings are reaped, and org.node.deleted,
-	// so a binding left dangling on a node org just removed from its tree
-	// is reaped too (reap.go's onMemberRemoved and onNodeDeleted -- see
-	// that file's own header comment for why both exist and how they
-	// differ). Unlike the four above, neither is ever published or
-	// declared here -- Subscribe is this module's only contact with org's
-	// event surface, and it cannot fail, so a host that runs no org module
-	// simply never fires either.
+	// Four subscriptions are to foreign events org publishes, in two
+	// matched pairs (reap.go's own header comment has the full picture):
+	// org.member.removed, so a removed member's role bindings are reaped,
+	// and org.node.deleted, so a binding left dangling on a node org just
+	// removed from its tree is reaped too (svc.onMemberRemoved and
+	// svc.onNodeDeleted); and the two restore counterparts that undo those
+	// reaps when org makes the removed member or the deleted node visible
+	// again -- org.member.restored and org.node.restored (svc.onMemberRestored
+	// and svc.onNodeRestored), re-instating the very bindings the matching
+	// removal or delete reaped. Unlike the four above, none of these is
+	// ever published or declared here -- Subscribe is this module's only
+	// contact with org's event surface, and it cannot fail, so a host that
+	// runs no org module simply never fires any of them.
 	reg.Events.Subscribe(eventMemberRemoved, svc.onMemberRemoved)
 	reg.Events.Subscribe(eventNodeDeleted, svc.onNodeDeleted)
+	reg.Events.Subscribe(eventMemberRestored, svc.onMemberRestored)
+	reg.Events.Subscribe(eventNodeRestored, svc.onNodeRestored)
 
 	m.service = svc
 	return svc, nil

@@ -186,6 +186,103 @@ func (r *RoleBindingRepository) ByNodes(ctx context.Context, nodeIDs []string) (
 	})
 }
 
+// RevokedByUser returns every currently mark-deleted binding held by
+// userID inside the tenant ctx carries -- the enumeration
+// Service.onMemberRestored needs: org restored a removed member, and the
+// bindings the removal reap revoked (reap.go's reapRoleBindings) are
+// exactly the soft-deleted rows of that (tenant, user). ByUser answers the
+// mirror question for live rows only (the auto-scope plugin hides the
+// rest); this read goes through db.Unscoped() -- GORM's own general
+// query-scope bypass, which the tenant-scope plugin does not consult
+// (tenant_scope.go), so this read stays fully tenant-scoped exactly like
+// every other method in this file -- and keeps the rows the plugin would
+// otherwise hide by requiring deleted_at IS NOT NULL itself, the identical
+// technique findMostRecentlyRevoked uses to recover one revoked row.
+// Every returned row is re-verified to belong to ctx's tenant in Go
+// afterwards, the same defense-in-depth check findWithinTenant applies to
+// its own rows.
+//
+// A userID with no revoked bindings, and a userID whose revoked bindings
+// all live in another tenant, both yield an empty slice and no error.
+func (r *RoleBindingRepository) RevokedByUser(ctx context.Context, userID string) ([]RoleBinding, error) {
+	tenant, err := pkgcore.MustTenantFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var rows []RoleBinding
+	err = dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.
+			Unscoped().
+			Where("user_id = ?", userID).
+			Where("deleted_at IS NOT NULL").
+			Find(&rows).Error
+	})
+	switch {
+	case errors.Is(err, pkgcore.ErrNoTenant):
+		return nil, err
+	case err != nil:
+		return nil, ErrStorage.WithCause(err)
+	}
+
+	owned := make([]RoleBinding, 0, len(rows))
+	for _, row := range rows {
+		if row.GetTenantID() != tenant {
+			continue
+		}
+		owned = append(owned, row)
+	}
+	return owned, nil
+}
+
+// RevokedByNodes returns every currently mark-deleted binding scoped to
+// one of nodeIDs inside the tenant ctx carries -- the enumeration
+// Service.onNodeRestored needs: org restored one node, and the bindings
+// the node-deletion reap revoked at it (reap.go's reapRoleBindingsForNodes)
+// are exactly the soft-deleted rows scoped to that node. It is
+// RevokedByUser's per-node sibling, sharing its Unscoped, tenant-scoped
+// technique and its Go-side tenant re-verification; see that method's own
+// doc comment for the full reasoning.
+//
+// An empty nodeIDs returns an empty result with no query at all, the same
+// choice ByNodes documents for its own empty-id case.
+func (r *RoleBindingRepository) RevokedByNodes(ctx context.Context, nodeIDs []string) ([]RoleBinding, error) {
+	if len(nodeIDs) == 0 {
+		if _, err := pkgcore.MustTenantFromContext(ctx); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	tenant, err := pkgcore.MustTenantFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var rows []RoleBinding
+	err = dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.
+			Unscoped().
+			Where("node_id IN ?", nodeIDs).
+			Where("deleted_at IS NOT NULL").
+			Find(&rows).Error
+	})
+	switch {
+	case errors.Is(err, pkgcore.ErrNoTenant):
+		return nil, err
+	case err != nil:
+		return nil, ErrStorage.WithCause(err)
+	}
+
+	owned := make([]RoleBinding, 0, len(rows))
+	for _, row := range rows {
+		if row.GetTenantID() != tenant {
+			continue
+		}
+		owned = append(owned, row)
+	}
+	return owned, nil
+}
+
 // Find returns the one binding that grants userID the role roleID at
 // exactly nodeID (empty nodeID meaning tenant-wide), inside the tenant ctx
 // carries. It reports ErrBindingNotFound when there is none.
