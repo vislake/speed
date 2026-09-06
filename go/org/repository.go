@@ -546,16 +546,66 @@ func (r *Repository) deleteLeaf(ctx context.Context, nodeID, prefix string, guar
 // It also returns the real id set the bulk mark-delete matched -- every row
 // the cascade actually touched, the node itself included -- which is what
 // TreeService.publishDeleted needs to widen org.node.deleted's
-// DeletedNodeIds beyond a bare count. That set is read INSIDE this same
-// transaction, right after guard runs and strictly BEFORE the mark-delete
-// UPDATE below: the UPDATE's own RowsAffected is a count with no row
-// identity behind it, and reading afterward would see nothing (the
-// auto-scope plugin hides a row the moment its deleted_at is set), so the
-// only place to capture the set is here, against the exact same WHERE
-// clause the UPDATE uses next, inside the one transaction that already
-// holds nodeID's lock and -- per this method's own atomicity fix above --
-// admits no concurrent insert into this subtree in the gap between the two
-// statements.
+// DeletedNodeIds beyond a bare count.
+//
+// # Why the id set is captured via lockSubtree, not a plain Find
+//
+// An earlier version of this method captured deletedIDs with one plain,
+// unlocked "path LIKE prefix%" Find issued right after nodeID's own lock,
+// on the theory that locking nodeID alone already closes the gap before the
+// mark-delete UPDATE that follows. That is exactly the same reasoning
+// lockSubtree's own doc comment (above) already recorded as insufficient
+// for Move's rewrite loop, and it fails deleteSubtree for the identical
+// reason: locking nodeID does nothing to serialize against a concurrent
+// writer of an INTERIOR descendant, since CreateChild/Move/Restore lock
+// only the row they act on (a descendant's own id, or the parent a new
+// child attaches under) and never nodeID itself unless that row happens to
+// BE nodeID. Both directions are genuine, and both are proven
+// deterministically -- never by wall-clock luck -- against a real
+// PostgreSQL server by the row-lock orchestration in
+// integration_test/postgres_delete_race_test.go, whose two tests fail on
+// the plain-Find shape and pass on this one:
+//
+//   - Move-OUT over-count. A concurrent Move carries an interior descendant
+//     OUT of the subtree and commits while the cascade's mark-delete UPDATE
+//     is blocked on the very row the mover holds. The plain Find has
+//     already captured that id, and when the Move commits the UPDATE's
+//     EvalPlanQual re-check skips the row, its committed path no longer
+//     matching the prefix: the event names a node the cascade never
+//     removed, and rbac would revoke the bindings of a node that is still
+//     live.
+//   - Move-IN under-count. A concurrent Move lands a whole subtree INTO the
+//     deleted subtree and commits while the cascade's mark-delete UPDATE is
+//     parked on the row lock the mover holds. Both the Find's snapshot and
+//     the UPDATE's own statement-start snapshot predate that commit, so the
+//     arriving rows are neither captured nor candidates for the UPDATE:
+//     they survive as LIVE rows under a mark-deleted parent -- a deletion
+//     whose event, faithful to the rows it did remove, cannot even name
+//     them for rbac's onNodeDeleted reaper, precisely the dangling-binding
+//     bug this round exists to close.
+//
+// The orchestration parks the Move with a third transaction's row lock,
+// starts the cascade only once the Move is confirmed parked, verifies the
+// cascade is itself blocked on the Move's lock through a pg_locks barrier,
+// and only then releases the Move to commit -- so every statement lands at
+// a precisely known point. The tests then assert the two consequences a
+// subscriber depends on: no live row remains under the prefix once the
+// delete has returned, and the event's DeletedNodeIds equals the set of
+// rows the mark-delete actually matched.
+//
+// The fix is the one lockSubtree already applies to Move: lock every
+// currently-live row matching prefix, to a fixed point, before trusting the
+// set is complete. Once every row is locked by this transaction,
+// CreateChild's lockLiveNode(parentID) and Move's own
+// lockLiveNode(nodeID)/lockSubtree calls against any row in that set either
+// have already fully committed (so lockSubtree's own re-scan already
+// reflects the result) or block behind this transaction entirely -- so the
+// exact row set lockSubtree returns is what the mark-delete UPDATE below is
+// guaranteed to match too, closing both directions of the race. The set is
+// still read strictly BEFORE the UPDATE (reading afterward would see
+// nothing, the auto-scope plugin hiding a row the moment its deleted_at is
+// set), but now under a lock that survives until this transaction ends
+// rather than a snapshot two statements could drift out from under.
 func (r *Repository) deleteSubtree(ctx context.Context, nodeID, prefix string, guard func(tx *gorm.DB) error) (int64, []string, error) {
 	now := time.Now()
 	deletedBy := softDeleteActor(ctx)
@@ -575,12 +625,9 @@ func (r *Repository) deleteSubtree(ctx context.Context, nodeID, prefix string, g
 				return guardErr
 			}
 		}
-		var rows []OrgNode
-		if err := tx.
-			Where("path LIKE ?", prefix+"%").
-			Where("deleted_at IS NULL").
-			Find(&rows).Error; err != nil {
-			return ErrInternal.WithCause(err)
+		rows, lockSubErr := lockSubtree(tx, prefix)
+		if lockSubErr != nil {
+			return ErrInternal.WithCause(lockSubErr)
 		}
 		deletedIDs = nodeIDs(rows)
 		m := OrgNode{DeletedAt: &now, DeletedBy: deletedBy}
