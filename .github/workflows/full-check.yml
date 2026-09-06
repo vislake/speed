@@ -114,6 +114,22 @@ name: full-check
 #                     (postgres_ingest_receipts_test.go), and validate's
 #                     byte bounds refusing an over-long field before any
 #                     write (postgres_validation_test.go)
+#       go/billing    PostgreSQL -- its integration_test/ (added in the
+#                     billing-P1 round) applies the module's migrations
+#                     from zero on the real server, re-runs both
+#                     tenant-scoped models' AssertIsolated suites
+#                     (postgres_isolation_test.go), and carries the
+#                     round's PreDeduct regression -- proven to fail
+#                     pre-fix and pass post-fix on real PostgreSQL with
+#                     SQLSTATE 25P02: PreDeduct's idempotent-retry
+#                     recovery read the duplicate row back on the same
+#                     transaction a unique-violation error had already
+#                     aborted, so a retried reservation could never
+#                     succeed on PostgreSQL though SQLite stayed green
+#                     (postgres_credit_transactions_test.go), plus the
+#                     full reserve/confirm/refund lifecycle and the
+#                     concurrent over-balance single-winner proof
+#                     re-run against the real server
 #   * reference-app job: examples/reference-app's golangci-lint leg, unit
 #     suite under -race, and its Docker-backed integration tier
 #     (-tags=integration -- testcontainers Redis, RustFS and a Mailpit SMTP
@@ -256,6 +272,7 @@ jobs:
           - go/notification
           - go/integration
           - go/metering
+          - go/billing
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
