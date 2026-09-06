@@ -17,5 +17,8 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "build": "tsc -p tsconfig.build.json"
+  },
+  "devDependencies": {
+    "@mui/material": "^9.4.0"
   }
 }

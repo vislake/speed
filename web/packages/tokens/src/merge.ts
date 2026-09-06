@@ -18,6 +18,9 @@ import type { DeepPartial } from './types.js'
  * - No argument is ever mutated. Copy-on-write: a branch that no override
  *   touches is shared with `base` by identity; every branch some override
  *   does touch is rebuilt.
+ * - The result is a faithful copy of `base`: every own key of `base`
+ *   survives, even one whose value is `undefined` -- an override that
+ *   omits a key never causes that key to vanish from the result.
  * - `undefined` values in overrides are skipped, so a partial override never
  *   blanks a token. Every other value (including null) replaces wholesale.
  * - Two plain objects at the same key merge recursively; anything else at
@@ -25,7 +28,10 @@ import type { DeepPartial } from './types.js'
  * - Overrides apply in argument order; later overrides win.
  * - Every key lands as an own data property, written through
  *   Object.defineProperty, so a hostile override key such as "__proto__"
- *   can neither mutate the result's prototype nor be dropped silently.
+ *   can neither mutate the result's prototype nor be dropped silently:
+ *   "__proto__" is defined non-enumerably (deep-merged like any other key,
+ *   still readable off the result), so no [[Set]]-based copy such as
+ *   Object.assign can ever carry it onto another object's prototype.
  */
 export function deepMerge<T extends object>(
   base: T,
@@ -47,13 +53,15 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null
 }
 
-/** Shallow-copy every own value of `source` onto `target` (own data props). */
+/**
+ * Shallow-copy every own key of `source` onto `target` as an own data
+ * property, values verbatim (an `undefined` value is copied too: this side
+ * copies `base` data, and the result must stay a faithful copy of it -- the
+ * skip-undefined rule belongs to the override side in mergeInto only).
+ */
 function copyInto(target: Record<string, unknown>, source: Record<string, unknown>): void {
   for (const key of Object.keys(source)) {
-    const value = source[key]
-    if (value !== undefined) {
-      writeOwn(target, key, value)
-    }
+    writeOwn(target, key, source[key])
   }
 }
 
@@ -85,7 +93,12 @@ function writeOwn(target: Record<string, unknown>, key: string, value: unknown):
   Object.defineProperty(target, key, {
     value,
     writable: true,
-    enumerable: true,
+    // "__proto__" must never be enumerable: an enumerable own "__proto__"
+    // data property is picked up by downstream [[Set]]-based copies
+    // (Object.assign) and would reassign the receiving object's prototype.
+    // Non-enumerable, the payload stays on the result -- own, readable,
+    // deep-merged like any other key -- but no copy operation can carry it.
+    enumerable: key !== '__proto__',
     configurable: true,
   })
 }

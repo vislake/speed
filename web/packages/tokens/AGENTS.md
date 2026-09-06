@@ -18,11 +18,19 @@ no React bindings and no stylesheet output in this package, by design.
   theme (shadow-array interpolation, grey-ramp mapping, typography slot
   assignment) is an adapter decision owned by `ui-kit`; do not preempt it
   by adding adapter-shaped exports.
-- **MUI-parity rows are contracts.** `breakpoints.values` and
-  `zIndex.values` intentionally equal MUI's defaults, and tests pin them.
-  When an MUI major changes those defaults, the test failure here tells the
-  adapter round exactly what to re-decide. Never "fix" the test by
-  loosening it; update the parity decision deliberately.
+- **MUI-parity rows are contracts.** `breakpoints.values`, `zIndex.values`
+  and the spacing unit intentionally equal MUI's defaults, and tests pin
+  them against the **installed MUI theme itself** -- the tests import
+  MUI's real `createTheme` through a dev-only `@mui/material` dependency
+  (the zero-runtime-dependency rule above is about what ships, and nothing
+  here ships). The reference is never an in-tree copy of the expected
+  values: a copied expectation can only agree with the tokens it was
+  copied from. When an MUI upgrade changes those defaults, the test
+  failure here tells the adapter round exactly what to re-decide. Never
+  "fix" the test by loosening it; update the parity decision deliberately.
+  `shape.borderRadius` is the recorded exception: tokens ship 8 where MUI
+  defaults to 4, and the deviation is pinned as one (the test fails if
+  MUI's default ever converges on the token value).
 - **Color literals live in one place per section.** `defaultTokens`
   assembles from the section modules; the hex values are spelled only in
   `color.ts` (and friends). Duplicated literals drift.

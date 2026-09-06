@@ -4,11 +4,18 @@
  * These pin the *shape* guarantees a theme factory can rely on: every section
  * the SpeedTokens interface declares is populated, every color is a full hex
  * literal, scales are monotone where order matters, and the spots that
- * deliberately mirror MUI defaults (breakpoint values, z-index slots,
- * spacing unit, borderRadius single number) equal those defaults -- that
- * parity is what keeps the ui-kit theme mapping free of contortions.
+ * deliberately mirror MUI defaults -- breakpoint values, z-index slots and
+ * the spacing unit -- equal those defaults, which is what keeps the ui-kit
+ * theme mapping free of contortions. That parity is anchored on the real
+ * installed MUI theme (a dev-only @mui/material import; the package itself
+ * ships zero runtime dependencies), never on in-tree copies of the expected
+ * values, so an MUI default change fails here instead of passing a
+ * self-comparison. shape.borderRadius is deliberately NOT a parity spot --
+ * tokens ship 8 where MUI defaults to 4 -- and the deviation is pinned as
+ * one, so it is re-decided loudly rather than drifting silently.
  */
 
+import { createTheme } from '@mui/material/styles'
 import { describe, expect, it } from 'vitest'
 import { defaultTokens, deepMerge, type TokensOverride } from './index'
 
@@ -94,29 +101,32 @@ describe('defaultTokens', () => {
   })
 
   it('ships the MUI breakpoint keys and values unchanged', () => {
-    // Parity spot checks with the MUI default theme: the keys and values the
-    // MUI theme uses, which the ui-kit adapter assigns 1:1.
-    expect(defaultTokens.breakpoints.values).toEqual({
-      xs: 0,
-      sm: 600,
-      md: 900,
-      lg: 1200,
-      xl: 1536,
-    })
+    // Parity against the real installed MUI theme -- the values the ui-kit
+    // adapter assigns 1:1. The reference is the live library, never an
+    // in-tree copy of the expectation: a copied expectation could only
+    // agree with the tokens it was copied from.
+    const { values } = createTheme({}).breakpoints
+    expect(defaultTokens.breakpoints.values).toEqual(values)
   })
 
-  it('ships the MUI z-index slots with the MUI default ordering', () => {
-    // Parity spot checks with the MUI theme zIndex defaults (1000..1500).
-    expect(defaultTokens.zIndex.values).toEqual({
-      mobileStepper: 1000,
-      fab: 1050,
-      speedDial: 1050,
-      appBar: 1100,
-      drawer: 1200,
-      modal: 1300,
-      snackbar: 1400,
-      tooltip: 1500,
-    })
+  it('ships the MUI z-index slots with the MUI default values', () => {
+    const mui = createTheme({})
+    // Comparing the whole zIndex object also pins the slot-name set: an
+    // MUI slot added, renamed or revalued fails here.
+    expect(defaultTokens.zIndex.values).toEqual(mui.zIndex)
+  })
+
+  it('anchors the spacing and border-radius claims on the installed MUI theme', () => {
+    const mui = createTheme({})
+    // The spacing unit mirrors MUI's default spacing base: the token unit
+    // IS the MUI unit, so the adapter needs no rescaling.
+    expect(mui.spacing(1)).toBe(`${defaultTokens.spacing.unit}px`)
+    // Border radius is the recorded deviation: MUI defaults to 4, tokens
+    // ship 8 (the README parity row documents both sides). Assert both
+    // against the live library so an MUI default change re-decides the
+    // deviation instead of letting it drift.
+    expect(mui.shape.borderRadius).toBe(4)
+    expect(defaultTokens.shape.borderRadius).not.toBe(mui.shape.borderRadius)
   })
 
   it('ships a layered rgba box-shadow for every elevation slot', () => {

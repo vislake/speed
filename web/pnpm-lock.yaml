@@ -495,7 +495,11 @@ importers:
         specifier: ^19.2.8
         version: 19.2.8(react@19.2.8)
 
-  packages/tokens: {}
+  packages/tokens:
+    devDependencies:
+      '@mui/material':
+        specifier: ^9.4.0
+        version: 9.4.0(@emotion/react@11.14.0(@types/react@19.2.18)(react@19.2.8))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@19.2.18)(react@19.2.8))(@types/react@19.2.18)(react@19.2.8))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
 
   packages/ui-kit:
     dependencies:

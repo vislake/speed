@@ -35,14 +35,20 @@ adapter in `ui-kit` maps them onto the MUI theme **without contortions**:
 | `typography.fontFamily.sans/mono` | `typography.fontFamily` | stack carries CJK fallbacks |
 | `typography.fontSize/lineHeight/letterSpacing` | font size/weight/line-height slots | adapter decision |
 | `spacing.unit` | `theme.spacing` base | equal (8) |
-| `shape.borderRadius` | `theme.shape.borderRadius` | equal (8) |
+| `shape.borderRadius` | `theme.shape.borderRadius` | **not equal**: tokens ship 8; MUI defaults to 4. Deliberate product deviation, pinned as one |
 | `breakpoints.values` | `theme.breakpoints.values` | **equal by contract** (tests pin it) |
 | `zIndex.values` | `theme.zIndex` | **slot names and values equal by contract** |
 | `shadows` | `theme.shadows` | token decision is the layered shadow per elevation; interpolation to MUI's 25-slot array is an adapter decision |
 
-The equal-by-contract rows are pinned in tests so an MUI major upgrade that
-changes defaults fails loudly in this package, before any adapter ships
-silently-wrong chrome.
+The equal-by-contract rows (spacing unit, breakpoints, z-index) are pinned
+against the installed MUI theme itself: the tests import MUI's real
+`createTheme` (dev-only `@mui/material`, so the package keeps its zero
+runtime dependencies) and compare the token rows to the live defaults. A
+stale in-tree expectation could only agree with the tokens it was copied
+from, so an MUI upgrade that changes a default now fails loudly in this
+package -- before any adapter ships silently-wrong chrome. `shape.borderRadius`
+is the recorded exception (8 where MUI ships 4), and the deviation test
+fails if MUI's default ever converges on the token value.
 
 ## deepMerge lives here -- why
 
@@ -53,9 +59,13 @@ a React-bearing package just to override a palette. Semantics, all pinned in
 `merge.test.ts`:
 
 - no input mutation; copy-on-write -- untouched branches of the base keep
-  their identity, touched branches are rebuilt (fresh objects, so hostile
-  `__proto__` keys become own data properties and the prototype is never
-  polluted);
+  their identity, touched branches are rebuilt (fresh objects; a hostile
+  `__proto__` key lands as a non-enumerable own property, deep-merged but
+  invisible to every copy surface, so neither the result's prototype nor
+  any downstream `Object.assign`/spread copy can be polluted);
+- the result is a faithful copy of the base -- every own key of `base`
+  survives an override that omits it (`undefined` skipping applies to the
+  override side only);
 - `undefined` override values are skipped (a partial override can never
   blank a token);
 - plain objects merge recursively; arrays and every other value (null,
@@ -81,5 +91,5 @@ Shape drift (an unknown section, a string where a hex belongs) is a
 ## Development
 
 From `web/packages/tokens`: `pnpm lint`, `pnpm typecheck`, `pnpm test`
-(24 tests), `pnpm build` (emits `dist/`). No locales: this package carries
+(28 tests), `pnpm build` (emits `dist/`). No locales: this package carries
 no user-facing text.

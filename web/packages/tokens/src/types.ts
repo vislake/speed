@@ -27,16 +27,21 @@ export interface SpeedTokens {
 }
 
 /**
- * A recursive partial of an object type. Arrays and functions are treated as
- * leaves (they replace wholesale); the token tree contains neither, but the
- * helper is generic and must not fabricate array members.
+ * A recursive partial of an object type. Arrays and functions are leaves:
+ * an override supplies the whole array or function, which replaces
+ * wholesale. The token tree contains neither, but the helper is generic
+ * and must not fabricate array members -- and a function-typed field must
+ * only ever be overridden by a function, never by a value that would
+ * replace a callable with non-callable data.
  */
 export type DeepPartial<T> = {
-  [K in keyof T]?: T[K] extends readonly unknown[]
+  [K in keyof T]?: T[K] extends (...args: never[]) => unknown
     ? T[K]
-    : T[K] extends object
-      ? DeepPartial<T[K]>
-      : T[K]
+    : T[K] extends readonly unknown[]
+      ? T[K]
+      : T[K] extends object
+        ? DeepPartial<T[K]>
+        : T[K]
 }
 
 /** What a project overrides of the speed defaults: any partial token tree. */
