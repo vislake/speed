@@ -548,20 +548,26 @@ const demoOrgUserHeader = "X-Demo-User-Id"
 // requirement.
 type demoOrgSubjectResolver struct{}
 
-// Subject implements org.SubjectResolver and notification.SubjectResolver.
-// It fails closed: no header reports ("", false), and the module's own
-// per-operation refusal (notification.subject_unresolved, org's sibling)
-// is what a caller then sees.
+// Subject implements org.SubjectResolver, notification.SubjectResolver and
+// integration.SubjectResolver -- the third round-4 wired this same type
+// onto, since all three seams share the identical
+// (r *http.Request) (string, bool) shape with the identical fail-closed
+// contract, and this app already has one instance to hand each of them. It
+// fails closed: no header reports ("", false), and the module's own
+// per-operation refusal (notification.subject_unresolved,
+// integration.subject_unresolved, org's sibling) is what a caller then
+// sees.
 func (demoOrgSubjectResolver) Subject(r *http.Request) (string, bool) {
 	userID := r.Header.Get(demoOrgUserHeader)
 	return userID, userID != ""
 }
 
 // compile-time checks that demoOrgSubjectResolver satisfies the identical
-// SubjectResolver seam the two modules it serves declare.
+// SubjectResolver seam the three modules it serves declare.
 var (
 	_ org.SubjectResolver          = demoOrgSubjectResolver{}
 	_ notification.SubjectResolver = demoOrgSubjectResolver{}
+	_ integration.SubjectResolver  = demoOrgSubjectResolver{}
 )
 
 // demoNotesSubjectResolver is what notes' create handler resolves the
@@ -1490,10 +1496,17 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// on. WebhookURLValidator/WebhookHTTPClient are test-only overrides
 	// (see their own doc comments on serverConfig above): nil in every
 	// production boot, which leaves go/integration's SSRF protection
-	// exactly as strict as it has always been.
+	// exactly as strict as it has always been. WithSubjectResolver is
+	// round 4's own addition, over the identical demoOrgSubjectResolver
+	// instance org's and notification's own wiring already share -- it is
+	// what lets integration_createAPIKey (the module's own spec-generated
+	// HTTP surface, mounted below through the generic mountModuleRoutes
+	// loop) resolve a creator at all; round 1's Service-level API
+	// (exercised directly by this module's own tests) never needed one.
 	integrationOpts := []integration.Option{
 		integration.WithEventMapping(orgMemberJoinedWebhookMapping),
 		integration.WithWebhookQueue(standaloneQueue),
+		integration.WithSubjectResolver(demoOrgSubjectResolver{}),
 	}
 	if cfg.WebhookURLValidator != nil {
 		integrationOpts = append(integrationOpts, integration.WithWebhookURLValidator(cfg.WebhookURLValidator))

@@ -1,0 +1,297 @@
+openapi: 3.0.3
+info:
+  title: integration
+  description: >-
+    A tenant's outward-facing API-key surface: issuance, listing, rotation
+    and revocation of the API keys a tenant issues to its own scripts and
+    third-party systems (see the module's own doc.go and AGENTS.md). This
+    fragment follows the operationId (integration_<action><Resource>) and
+    schema-name (Integration<Type>) conventions from
+    .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
+    regenerates integration-server.gen.go (in this directory) from this
+    file, with oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
+    .github/workflows/api-contract.yml.
+
+    There is deliberately no tenant_id anywhere on this surface, in any
+    path, query, header or request/response body: the tenant is always the
+    one tenancy.Middleware already resolved from the request
+    (docs/internal/04-data-and-tenancy.md; root CLAUDE.md's multi-tenant
+    isolation rule).
+
+    This fragment covers round 1's API-key surface only
+    (Service.Create/List/Rotate/Revoke) -- round 2's outbound-webhook
+    subscription CRUD (CreateWebhookSubscription and friends) is
+    deliberately out of scope for this fragment; see AGENTS.md's
+    "Deliberately not in scope" table for where that stands.
+
+    Merging this fragment into the application-wide build/openapi/speed.yaml
+    is deliberately deferred, the identical carve-out org's, storage's and
+    sharing's own fragments already draw: this surface has no in-workspace
+    web (@speed/api-sdk / orval) consumer yet, only the reference app's Go
+    HTTP client in apikey_flow_test.go, so joining the merged document and
+    generating a frontend SDK for it would be generating code nothing
+    calls. See Taskfile.yml's api:gen/api:merge task comments for the exact
+    "which fragments join the merge" rationale this fragment follows.
+  version: 0.0.0
+paths:
+  /api/v1/integration/apikeys:
+    post:
+      operationId: integration_createAPIKey
+      summary: Issue a new API key for the caller's tenant.
+      description: >-
+        The creator is the caller's own authenticated identity (resolved
+        server-side, never a request field) -- Service.Create's CreatedBy.
+        scopes, when given, must each be one of the creator's own
+        permissions right now; an empty or omitted scopes issues a key that
+        authenticates identity alone. expiresAt, when given, must be
+        strictly in the future and no further out than this deployment's
+        MaxAPIKeyLifetime from now; omitted, it defaults to exactly that
+        ceiling. The response's key field is the raw, plaintext credential
+        -- the one and only time this API ever returns it; nothing else
+        this fragment exposes, including integration_listAPIKeys, ever
+        reproduces it.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntegrationCreateAPIKeyRequest'
+      responses:
+        '201':
+          description: The key was created. key is shown here exactly once.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationCreatedAPIKey'
+        '400':
+          description: >-
+            The request body was malformed, expiresAt was not strictly in
+            the future, or expiresAt was further out than this
+            deployment's forced expiry ceiling.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationError'
+        '401':
+          description: The caller's identity could not be resolved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationError'
+        '403':
+          description: A requested scope is not one of the caller's own permissions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationError'
+    get:
+      operationId: integration_listAPIKeys
+      summary: List the caller's tenant's API keys.
+      description: >-
+        Never exposes the raw key or its stored hash -- every summary row
+        omits both, per Service.List's own "credential-material-free"
+        contract. Order is not guaranteed; a caller that needs one sorts
+        the result itself.
+      responses:
+        '200':
+          description: The caller's tenant's API keys.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationListAPIKeysResponse'
+  /api/v1/integration/apikeys/{keyId}:
+    delete:
+      operationId: integration_revokeAPIKey
+      summary: Revoke an API key, permanently.
+      description: >-
+        Sets the key's RevokedAt mark; the key never authenticates again.
+        This does not physically remove the row (Service.Revoke's own
+        doc comment) -- it is refused, not silently no-op'd, against a key
+        that is already revoked, since a caller revoking a key it believes
+        is still live has a stale view of the world.
+      parameters:
+        - $ref: '#/components/parameters/KeyID'
+      responses:
+        '204':
+          description: The key was revoked.
+        '404':
+          description: keyId does not name a key of the caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationError'
+        '409':
+          description: The key was already revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationError'
+  /api/v1/integration/apikeys/{keyId}/rotate:
+    post:
+      operationId: integration_rotateAPIKey
+      summary: Issue a replacement key and revoke the named key.
+      description: >-
+        Create-new-then-revoke-old, not an in-place swap (Service.Rotate's
+        own doc comment): the response's id names a BRAND NEW key, never
+        keyId itself. The new key carries the predecessor's Scopes and
+        CreatedBy forward, re-validated against that creator's CURRENT
+        permissions -- a creator whose permissions shrank since the
+        predecessor was issued can have this fail with 403 on a scope it no
+        longer holds. ExpiresAt is NOT carried forward: the new key gets a
+        fresh full-lifetime expiry. The two writes are not one database
+        transaction; a failure revoking the predecessor after the
+        replacement was already created is reported as this operation's own
+        error, but the replacement key still exists (a safe-direction
+        surplus, never a lockout) -- see Service.Rotate's own doc comment
+        for the full argument.
+      parameters:
+        - $ref: '#/components/parameters/KeyID'
+      responses:
+        '200':
+          description: >-
+            The replacement key. key is shown here exactly once, identically
+            to integration_createAPIKey's own contract.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationCreatedAPIKey'
+        '403':
+          description: >-
+            The predecessor's own scopes are no longer all held by its
+            creator.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationError'
+        '404':
+          description: keyId does not name a key of the caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationError'
+        '409':
+          description: keyId is already revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationError'
+components:
+  parameters:
+    KeyID:
+      name: keyId
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    IntegrationCreateAPIKeyRequest:
+      type: object
+      properties:
+        scopes:
+          type: array
+          items:
+            type: string
+          description: >-
+            A subset of the caller's own permissions right now. Omitted or
+            empty issues a key that authenticates identity alone.
+        expiresAt:
+          type: string
+          format: date-time
+          description: >-
+            Omitted defaults to this deployment's forced expiry ceiling
+            (MaxAPIKeyLifetime) from now.
+    IntegrationCreatedAPIKey:
+      type: object
+      description: >-
+        Service.Create's (and Service.Rotate's) result: the one and only
+        place the raw key value is ever available. key is never logged and
+        never returned again by any other operation.
+      properties:
+        id:
+          type: string
+          description: Application-generated UUID. Pass this to rotate or revoke.
+        key:
+          type: string
+          description: >-
+            The raw, plaintext credential the caller must record now. It
+            authenticates as itself; nothing else this fragment returns
+            ever reproduces it.
+        prefix:
+          type: string
+          description: The display-safe portion also visible later through list.
+        scopes:
+          type: array
+          items:
+            type: string
+        createdBy:
+          type: string
+          description: The authn user id of whoever issued this key.
+        expiresAt:
+          type: string
+          format: date-time
+    IntegrationAPIKeySummary:
+      type: object
+      description: >-
+        One row of integration_listAPIKeys' response -- every field of the
+        stored key except the raw value and its hash (Service.List's own
+        "credential-material-free" contract).
+      properties:
+        id:
+          type: string
+        prefix:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        createdBy:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        lastUsedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When this key last authenticated a request. Null until first use.
+        revokedAt:
+          type: string
+          format: date-time
+          nullable: true
+        revoked:
+          type: boolean
+        expired:
+          type: boolean
+        creatorLeft:
+          type: boolean
+          description: >-
+            Whether CreatedBy is no longer an active member of the tenant --
+            a display flag only, computed through the optional
+            MembershipChecker seam; false when no seam is wired, exactly as
+            if every creator were still active.
+    IntegrationListAPIKeysResponse:
+      type: object
+      properties:
+        apiKeys:
+          type: array
+          items:
+            $ref: '#/components/schemas/IntegrationAPIKeySummary'
+    IntegrationError:
+      type: object
+      description: >-
+        The structured {code, params} error envelope every speed API
+        returns instead of localized text (backend coding standard §6.2;
+        docs/internal/11-cross-cutting.md) -- a client resolves code
+        through its own i18n catalog, populated from this module's
+        Locales() resources for the codes documented in AGENTS.md's error
+        index.
+      properties:
+        code:
+          type: string
+          example: integration.key_not_found
+        params:
+          type: object
+          additionalProperties: true

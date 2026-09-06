@@ -46,3 +46,7 @@
 "integration.invalid_event_mapping" = "The event mapping declaration is missing its required {{.field}} field."
 
 "integration.duplicate_event_mapping" = "The internal event type {{.internal_type}} is already declared by another mapping."
+
+"integration.invalid_request_body" = "The request body could not be understood."
+
+"integration.subject_unresolved" = "Your identity could not be resolved."

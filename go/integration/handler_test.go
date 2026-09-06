@@ -1,0 +1,279 @@
+package integration
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/vislake/speed/go/integration/api"
+)
+
+// fixedSubject is a SubjectResolver that answers the same way for every
+// request, standing in for the authn-backed resolver a real host wires --
+// the identical test double org's own handler_test.go uses for its
+// structurally-identical seam.
+type fixedSubject struct {
+	userID string
+	ok     bool
+}
+
+func (f fixedSubject) Subject(_ *http.Request) (string, bool) { return f.userID, f.ok }
+
+// compile-time check that the test double satisfies the seam.
+var _ SubjectResolver = fixedSubject{}
+
+// newTestHandler builds a Handler over a freshly Registered-and-Attached
+// Module, mirroring newTestRegistry's own "the same arrangement every other
+// file in this package uses" convention. Unlike org's identical helper --
+// which builds Handler directly from concrete services NewModule already
+// built -- this one must go through Register and Attach first, since this
+// module's own Service is built in Attach, not NewModule (see module.go's
+// "Register-time wiring, Attach-time Service" doc comment): m.handler is
+// nil, and every request would answer this module's own "ran before
+// Attach" internal error, without it.
+func newTestHandler(t *testing.T, subject SubjectResolver, opts ...Option) (*Handler, *Module) {
+	t.Helper()
+	allOpts := append([]Option{WithSubjectResolver(subject)}, opts...)
+	m := NewModule(newTestDB(t), allOpts...)
+	reg := newTestRegistry(t)
+	if err := m.Register(reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if _, err := m.Attach(reg); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	return m.handler, m
+}
+
+// doRequest sends req through h and returns the recorded response. req's
+// context is always overridden with ctx, so the tenant (or its deliberate
+// absence) is explicit at every call site rather than hidden in a shared
+// helper default -- the identical shape org's own doRequest test helper
+// uses.
+func doRequest(h *Handler, ctx context.Context, method, path string, body any) *httptest.ResponseRecorder {
+	var reader *bytes.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			panic(err)
+		}
+		reader = bytes.NewReader(encoded)
+	} else {
+		reader = bytes.NewReader(nil)
+	}
+	req := httptest.NewRequest(method, path, reader).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// assertErrorCode fails t unless rec's body is an IntegrationError carrying
+// code, at wantStatus.
+func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, code string) {
+	t.Helper()
+	if rec.Code != wantStatus {
+		t.Fatalf("status = %d, want %d (body %q)", rec.Code, wantStatus, rec.Body.String())
+	}
+	var got api.IntegrationError
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response body %q: %v", rec.Body.String(), err)
+	}
+	if got.Code == nil {
+		t.Fatalf("error code = <nil>, want %q", code)
+	}
+	if *got.Code != code {
+		t.Fatalf("error code = %q, want %q", *got.Code, code)
+	}
+}
+
+func TestHandler_IntegrationCreateAPIKey_EmptyBody_IssuesScopelessKey(t *testing.T) {
+	h, _ := newTestHandler(t, fixedSubject{userID: "user-1", ok: true})
+
+	rec := doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/apikeys", nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body %q", rec.Code, rec.Body.String())
+	}
+	var got api.IntegrationCreatedAPIKey
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.ID == nil || *got.ID == "" {
+		t.Error("id is empty")
+	}
+	if got.Key == nil || *got.Key == "" {
+		t.Error("key is empty -- the raw value must be returned exactly once")
+	}
+	if got.CreatedBy == nil || *got.CreatedBy != "user-1" {
+		t.Errorf("createdBy = %v, want %q (from SubjectResolver, never a request field)", got.CreatedBy, "user-1")
+	}
+}
+
+func TestHandler_IntegrationCreateAPIKey_WithScopes_ValidatedAgainstLister(t *testing.T) {
+	h, _ := newTestHandler(t, fixedSubject{userID: "user-1", ok: true}, WithPermissionLister(alwaysHeld("notes:read")))
+
+	rec := doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/apikeys",
+		api.IntegrationCreateAPIKeyRequest{Scopes: &[]string{"notes:read"}})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body %q", rec.Code, rec.Body.String())
+	}
+
+	rec = doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/apikeys",
+		api.IntegrationCreateAPIKeyRequest{Scopes: &[]string{"notes:write"}})
+	assertErrorCode(t, rec, http.StatusForbidden, ErrScopeNotHeldByCreator.Code)
+}
+
+func TestHandler_IntegrationCreateAPIKey_NoSubjectResolver_Unresolved(t *testing.T) {
+	h, _ := newTestHandler(t, nil)
+
+	rec := doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/apikeys", nil)
+	assertErrorCode(t, rec, http.StatusUnauthorized, ErrSubjectUnresolved.Code)
+}
+
+func TestHandler_IntegrationCreateAPIKey_ResolverReportsNotOK_Unresolved(t *testing.T) {
+	h, _ := newTestHandler(t, fixedSubject{ok: false})
+
+	rec := doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/apikeys", nil)
+	assertErrorCode(t, rec, http.StatusUnauthorized, ErrSubjectUnresolved.Code)
+}
+
+func TestHandler_IntegrationCreateAPIKey_MalformedBody_InvalidRequestBody(t *testing.T) {
+	h, _ := newTestHandler(t, fixedSubject{userID: "user-1", ok: true})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/integration/apikeys", bytes.NewBufferString("{not json")).
+		WithContext(ctxFor(testTenant))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	assertErrorCode(t, rec, http.StatusBadRequest, ErrInvalidRequestBody.Code)
+}
+
+func TestHandler_IntegrationListAPIKeys_NeverExposesRawKeyOrHash(t *testing.T) {
+	h, _ := newTestHandler(t, fixedSubject{userID: "user-1", ok: true})
+	doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/apikeys", nil)
+
+	rec := doRequest(h, ctxFor(testTenant), http.MethodGet, "/api/v1/integration/apikeys", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %q", rec.Code, rec.Body.String())
+	}
+
+	// The response is decoded through the raw map, not
+	// api.IntegrationListAPIKeysResponse/IntegrationAPIKeySummary: those
+	// generated types have no Key or Hash field at all, so decoding
+	// through them could never prove the wire body omits one -- only a
+	// generic map decode can.
+	var raw map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	items, _ := raw["apiKeys"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("len(apiKeys) = %d, want 1 (body %q)", len(items), rec.Body.String())
+	}
+	row, _ := items[0].(map[string]any)
+	for _, forbidden := range []string{"key", "hash"} {
+		if _, present := row[forbidden]; present {
+			t.Errorf("listed row carries %q, want it absent entirely: %v", forbidden, row)
+		}
+	}
+	if _, present := row["prefix"]; !present {
+		t.Error("listed row is missing prefix, the display-safe field List does expose")
+	}
+}
+
+func TestHandler_IntegrationRotateAPIKey_NotFound(t *testing.T) {
+	h, _ := newTestHandler(t, fixedSubject{userID: "user-1", ok: true})
+
+	rec := doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/apikeys/no-such-id/rotate", nil)
+	assertErrorCode(t, rec, http.StatusNotFound, ErrKeyNotFound.Code)
+}
+
+func TestHandler_IntegrationRotateAPIKey_Success_NewIDDiffersFromPredecessor(t *testing.T) {
+	h, _ := newTestHandler(t, fixedSubject{userID: "user-1", ok: true})
+
+	createRec := doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/apikeys", nil)
+	var created api.IntegrationCreatedAPIKey
+	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	rotateRec := doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/apikeys/"+*created.ID+"/rotate", nil)
+	if rotateRec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %q", rotateRec.Code, rotateRec.Body.String())
+	}
+	var rotated api.IntegrationCreatedAPIKey
+	if err := json.NewDecoder(rotateRec.Body).Decode(&rotated); err != nil {
+		t.Fatalf("decode rotate response: %v", err)
+	}
+	if rotated.ID == nil || *rotated.ID == *created.ID {
+		t.Errorf("rotated id = %v, want a value different from the predecessor %q", rotated.ID, *created.ID)
+	}
+	if rotated.Key == nil || *rotated.Key == *created.Key {
+		t.Error("rotated key must be a fresh raw value, never the predecessor's")
+	}
+
+	// The predecessor is now revoked -- rotating it again reports the
+	// already-revoked conflict rather than issuing a further replacement.
+	rec := doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/apikeys/"+*created.ID+"/rotate", nil)
+	assertErrorCode(t, rec, http.StatusConflict, ErrKeyAlreadyRevoked.Code)
+}
+
+func TestHandler_IntegrationRevokeAPIKey_Success_NoContent(t *testing.T) {
+	h, _ := newTestHandler(t, fixedSubject{userID: "user-1", ok: true})
+
+	createRec := doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/apikeys", nil)
+	var created api.IntegrationCreatedAPIKey
+	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	rec := doRequest(h, ctxFor(testTenant), http.MethodDelete, "/api/v1/integration/apikeys/"+*created.ID, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, body %q", rec.Code, rec.Body.String())
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("204 response carries a body: %q", rec.Body.String())
+	}
+}
+
+func TestHandler_IntegrationRevokeAPIKey_AlreadyRevoked_Conflict(t *testing.T) {
+	h, _ := newTestHandler(t, fixedSubject{userID: "user-1", ok: true})
+
+	createRec := doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/apikeys", nil)
+	var created api.IntegrationCreatedAPIKey
+	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	doRequest(h, ctxFor(testTenant), http.MethodDelete, "/api/v1/integration/apikeys/"+*created.ID, nil)
+
+	rec := doRequest(h, ctxFor(testTenant), http.MethodDelete, "/api/v1/integration/apikeys/"+*created.ID, nil)
+	assertErrorCode(t, rec, http.StatusConflict, ErrKeyAlreadyRevoked.Code)
+}
+
+func TestHandler_IntegrationRevokeAPIKey_NotFound(t *testing.T) {
+	h, _ := newTestHandler(t, fixedSubject{userID: "user-1", ok: true})
+
+	rec := doRequest(h, ctxFor(testTenant), http.MethodDelete, "/api/v1/integration/apikeys/no-such-id", nil)
+	assertErrorCode(t, rec, http.StatusNotFound, ErrKeyNotFound.Code)
+}
+
+// TestHandler_ServedBeforeAttach_WritesInternalError proves handler.go's own
+// forwarding-wrapper guard: a Handler built (as Register does) before
+// Attach has produced a Service answers a coded internal error rather than
+// panicking on a nil Service. Reaching this state through the exported API
+// needs building the Handler directly, bypassing newTestHandler's own
+// Register-then-Attach sequence.
+func TestHandler_ServedBeforeAttach_WritesInternalError(t *testing.T) {
+	m := &Module{}
+	h := NewHandler(m, fixedSubject{userID: "user-1", ok: true})
+
+	rec := doRequest(h, ctxFor(testTenant), http.MethodGet, "/api/v1/integration/apikeys", nil)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d (body %q)", rec.Code, http.StatusInternalServerError, rec.Body.String())
+	}
+}
+
+func TestHandler_ImplementsServerInterface(t *testing.T) {
+	var _ api.ServerInterface = (*Handler)(nil)
+}

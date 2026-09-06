@@ -43,3 +43,7 @@
 "integration.invalid_event_mapping" = "事件映射声明缺少必填字段 {{.field}}。"
 
 "integration.duplicate_event_mapping" = "内部事件类型 {{.internal_type}} 已经被另一个映射声明过。"
+
+"integration.invalid_request_body" = "无法解析请求体。"
+
+"integration.subject_unresolved" = "无法解析您的身份。"

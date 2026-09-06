@@ -8,6 +8,7 @@ import (
 
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
+	"github.com/vislake/speed/go/integration"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pki"
@@ -151,6 +152,21 @@ const notificationRoutePath = "/api/v1/notifications"
 // unexported-path situation notesRoutePath's own comment explains.
 const pkiRoutePath = "/api/v1/pki"
 
+// integrationAPIKeyRoutePath is where go/integration's round-4 API-key CRUD
+// fragment mounts its routes -- the same unexported-path situation
+// notesRoutePath's own comment explains. It is a SEPARATE path from
+// webhooks.go's own hand-mounted webhookSubscriptionsPath: that one is a
+// demo-only route outside the OpenAPI machinery for round 2's still-
+// unmounted webhook surface, while this one is the module's own
+// spec-generated, api:gen-produced fragment for round 1's API-key surface.
+//
+// #nosec G101 -- this is an HTTP ROUTE PATH, not a credential value: gosec's
+// hardcoded-credential heuristic matches on "APIKey" in the identifier name
+// alone, the same false positive s3SecretKeyEnv's and
+// demoUsersPasswordEnv's own #nosec comments elsewhere in this package
+// except.
+const integrationAPIKeyRoutePath = "/api/v1/integration"
+
 // demoRouteGuards declares, for every path a module mounts, the resource
 // whose permissions gate it -- or routePublic when the path is
 // deliberately reachable without one.
@@ -213,6 +229,21 @@ const pkiRoutePath = "/api/v1/pki"
 // permission a router gate could meaningfully require, and its own
 // per-operation subject check is where its gate lives, exactly as org's
 // invitation endpoints' gate lives inside org.
+//
+// integration's API-key path is gated for real, like storage's and pki's --
+// its Handler performs no identity check of its own beyond resolving a
+// creator for integration_createAPIKey (see integration.SubjectResolver),
+// which is a different question from whether the CALLER may reach the
+// route at all. It is dispatched to guardIntegrationAPIKeyRoute, never
+// demoPermissionFor, for the same class of reason pki's path needed its own
+// permissionFor: this module's own permission strings
+// ("integration:apikey:read"/"integration:apikey:manage") carry an extra
+// segment neither demoPermissionFor's generic composition nor
+// rbac.RequirePermissionFunc's own splitPermission (go/rbac/middleware.go)
+// can parse -- see integrationAPIKeySentinel's own doc comment for the full
+// argument, which is the identical shape mismatch webhooks.go's own
+// wireIntegrationWebhooks route already found and worked around for this
+// module's OTHER permission pair.
 var demoRouteGuards = map[string]string{
 	notesRoutePath:   notesResource,
 	storageRoutePath: storageResource,
@@ -274,10 +305,19 @@ var demoRouteGuards = map[string]string{
 	// one) rather than relying on this router-level gate alone.
 	pkiRoutePath: pkiResource,
 
-	// admin's path is the one entry in this table whose value is never
-	// read as a "resource": guardModuleRoute special-cases it to
-	// guardAdminRoute (demo_admin.go), which gates by SUB-PATH (tenants,
-	// users, impersonation, audit-events), not by one resource's
+	// integration's path is one of two entries in this table whose value is
+	// never read as a plain "resource" (admin's, just below, is the
+	// other) -- guardModuleRoute special-cases it to
+	// guardIntegrationAPIKeyRoute, which derives resource and action from
+	// this module's own three-segment permission names directly, never
+	// from rbac.Permission/splitPermission's "<resource>:<action>" round
+	// trip. integrationAPIKeySentinel exists purely so this map stays
+	// exhaustive.
+	integrationAPIKeyRoutePath: integrationAPIKeySentinel,
+
+	// admin's path is the other such entry: guardModuleRoute special-cases
+	// it to guardAdminRoute (demo_admin.go), which gates by SUB-PATH
+	// (tenants, users, impersonation, audit-events), not by one resource's
 	// read/write split. adminRouteSentinel exists purely so this map
 	// stays exhaustive -- mountModuleRoutes still refuses to start for any
 	// mounted path this table does not name at all.
@@ -290,6 +330,41 @@ var demoRouteGuards = map[string]string{
 // routePublic and from any real resource string, so a reader (and
 // guardModuleRoute's own switch) cannot confuse it with either.
 const adminRouteSentinel = "ADMIN_SPECIAL_CASED_ROUTE"
+
+// integrationAPIKeySentinel marks demoRouteGuards' entry for go/integration's
+// round-4 API-key CRUD fragment. guardModuleRoute dispatches it to
+// guardIntegrationAPIKeyRoute instead of the generic demoPermissionFor
+// (resource) gate.
+//
+// # Why this needs its own dispatch, not just its own permissionFor (unlike pki)
+//
+// pki's path (above) still goes through rbac.RequirePermissionFunc -- only
+// ITS CHOICE of permission per request needed a dedicated function
+// (pkiPermissionFor), because pki's own permission strings
+// ("pki:read"/"pki:revoke") are ordinary one-colon "<resource>:<action>"
+// values that RequirePermissionFunc's splitPermission (go/rbac/
+// middleware.go) parses just fine. go/integration's round-1 permissions are
+// declared one segment deeper -- "integration:apikey:read" and
+// "integration:apikey:manage", following this codebase's
+// "<module>:<entity>:<verb>" convention for a module with more than one
+// gated entity (go/integration/module.go's own doc comment on
+// PermissionRead/PermissionManage) -- and splitPermission's own doc comment
+// is explicit that a string with a second colon in its action half is
+// refused outright, regardless of what the caller holds: "a:b:c" denies
+// unconditionally. rbac.RequirePermissionFunc is therefore not usable here
+// AT ALL, not even with a custom permissionFor, so guardIntegrationAPIKeyRoute
+// below reimplements its fail-closed shape by hand, deriving resource and
+// action directly from this module's own permission constants instead of
+// round-tripping them through rbac.Permission/splitPermission. This is the
+// identical shape mismatch webhooks.go's own wireIntegrationWebhooks route
+// already found (see that function's own "Why this calls az.Can directly"
+// doc comment) for this module's OTHER permission pair
+// (integration:webhook:*) -- guardIntegrationAPIKeyRoute applies the
+// identical fix as a router-level gate instead of an inline per-route
+// check, since this fragment's routes are mounted through the generic
+// mountModuleRoutes loop (reg.Routes.Routes()), not hand-mounted the way
+// webhooks.go's own demo route is.
+const integrationAPIKeySentinel = "INTEGRATION_APIKEY_THREE_SEGMENT_PERMISSION"
 
 // notesResource is the resource half of notes' permission strings. It is
 // derived from the module's own exported constants rather than retyped, so
@@ -330,6 +405,70 @@ func pkiPermissionFor(r *http.Request) string {
 	default:
 		return pki.PermissionRevoke
 	}
+}
+
+// integrationAPIKeyPermissionFor selects the permission a request against
+// go/integration's round-4 API-key fragment must hold, the same GET/HEAD-
+// is-read/everything-else-is-write split demoPermissionFor and
+// pkiPermissionFor both apply, naming this module's own two round-1
+// permissions directly -- see integrationAPIKeySentinel's own doc comment
+// for why neither demoPermissionFor's generic composition nor
+// rbac.RequirePermissionFunc itself can be used for this module's
+// permission vocabulary.
+func integrationAPIKeyPermissionFor(r *http.Request) string {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		return integration.PermissionRead
+	default:
+		return integration.PermissionManage
+	}
+}
+
+// guardIntegrationAPIKeyRoute wraps go/integration's round-4 API-key CRUD
+// route in rbac's permission gate, reproducing
+// rbac.RequirePermissionFunc's own fail-closed shape (nil-safety aside --
+// az and demoSubjectResolver are both always non-nil in this app's own
+// wiring, unlike the general-purpose middleware) by hand instead of calling
+// it, for the reason integrationAPIKeySentinel's own doc comment gives in
+// full: this module's permission strings do not fit
+// rbac.RequirePermissionFunc's "<resource>:<action>" contract at all.
+// resource and action are derived by cutting integrationAPIKeyPermissionFor's
+// answer at its LAST colon -- "integration:apikey" and "read"/"manage" --
+// the identical split wireIntegrationWebhooks (webhooks.go) already
+// hand-derives for this module's OTHER permission pair, just generalized
+// here into a reusable middleware since this fragment's routes are mounted
+// through the generic mountModuleRoutes loop rather than hand-mounted one
+// at a time.
+func guardIntegrationAPIKeyRoute(az rbac.Authorizer, handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		permission := integrationAPIKeyPermissionFor(r)
+		idx := strings.LastIndex(permission, ":")
+		if idx <= 0 || idx == len(permission)-1 {
+			// Unreachable for either permission integrationAPIKeyPermissionFor
+			// can actually return -- both are known-good constants -- but
+			// handled anyway rather than assumed away, the same "never trust
+			// a string shape silently" posture splitPermission itself takes.
+			writeIntegrationError(w, rbac.ErrPermissionDenied.WithParam("permission", permission))
+			return
+		}
+		resource, action := permission[:idx], permission[idx+1:]
+
+		sub, ok := demoSubjectResolver(r)
+		if !ok {
+			writeIntegrationError(w, rbac.ErrPermissionDenied.WithParam("permission", permission))
+			return
+		}
+		allowed, err := az.Can(r.Context(), sub, action, resource)
+		if err != nil {
+			writeIntegrationError(w, rbac.ErrStorage)
+			return
+		}
+		if !allowed {
+			writeIntegrationError(w, rbac.ErrPermissionDenied.WithParam("permission", permission))
+			return
+		}
+		handler.ServeHTTP(w, r)
+	})
 }
 
 // mustResourceOf returns the shared resource half of the given permission
@@ -464,6 +603,12 @@ func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler) (ht
 	}
 	if resource == adminRouteSentinel {
 		return guardAdminRoute(az, handler), nil
+	}
+	if resource == integrationAPIKeySentinel {
+		// Not just a different action selector (like pki below) -- a
+		// wholly different gate, bypassing rbac.RequirePermissionFunc
+		// entirely. See integrationAPIKeySentinel's own doc comment for why.
+		return guardIntegrationAPIKeyRoute(az, handler), nil
 	}
 	// pki needs its own action selector, not demoPermissionFor's generic
 	// read/write split -- see pkiPermissionFor's own doc comment.

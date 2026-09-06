@@ -71,6 +71,17 @@ name: api-contract
 #     closes the gap the fragment's own header used to record -- neither
 #     Taskfile.yml's api:gen task nor this workflow included it before
 #     go/admin's round 2.
+#   * Regeneration consistency (integration): the same check runs a
+#     seventh time for integration's fragment (go/integration/api/
+#     openapi.yaml -> go/integration/api/integration-server.gen.go), the
+#     round that closed round 1's own "no mounted HTTP surface" gap --
+#     same pinned oapi-codegen invocation, same git diff --exit-code
+#     gate, its own step so this fragment's failure is unambiguous in
+#     the job log. Backend-only, like storage's, sharing's and admin's:
+#     this fragment feeds neither the merge nor orval below (go/
+#     integration/api/openapi.yaml's own header records why -- its one
+#     consumer is the reference app's own Go HTTP client, not a
+#     generated-SDK caller).
 #   * Spec merge + info stamp + naming-convention lint: the pinned
 #     redocly CLI (2.51.1, the same
 #     `pnpm --package=@redocly/cli@2.51.1 dlx redocly ...` invocation as
@@ -113,18 +124,19 @@ name: api-contract
 #     orval itself is never a workspace dependency (pnpm dlx, no lockfile
 #     entry); a version bump is visible in the regenerated header and
 #     must land in Taskfile, web/orval.config.ts and this file together.
-#   * Compile enforcement (notes, org, storage, notification, sharing
-#     and admin): `go build ./...` of examples/reference-app. This is
-#     what makes "spec changed, handler not updated" fail here for ANY of
-#     the six fragments: examples/reference-app imports go/org,
-#     go/storage, go/notification, go/sharing and go/admin (root
-#     CLAUDE.md's mandatory-first-consumer rule), so a regenerated
+#   * Compile enforcement (notes, org, storage, notification, sharing,
+#     admin and integration): `go build ./...` of examples/reference-app.
+#     This is what makes "spec changed, handler not updated" fail here for
+#     ANY of the seven fragments: examples/reference-app imports go/org,
+#     go/storage, go/notification, go/sharing, go/admin and go/integration
+#     (root CLAUDE.md's mandatory-first-consumer rule), so a regenerated
 #     api.ServerInterface that outgrows any Handler's compile-time
 #     assertion (internal/notes/handler.go, go/org/handler.go,
 #     go/storage/handler.go, go/notification/handler.go,
-#     go/sharing/handler.go, go/admin/handler.go) fails this one build
-#     step, transitively, with no separate step needed for org's,
-#     storage's, notification's, sharing's or admin's own module build.
+#     go/sharing/handler.go, go/admin/handler.go, go/integration/
+#     handler.go) fails this one build step, transitively, with no
+#     separate step needed for org's, storage's, notification's,
+#     sharing's, admin's or integration's own module build.
 #     Without this leg a spec+artifact PR whose handler lagged
 #     would pass both this pipeline and fast-check (which does not build
 #     the reference app). Precise only for a parameter-free operation,
@@ -222,6 +234,14 @@ name: api-contract
 #                                                  task nor this workflow
 #                                                  includes this fragment
 #                                                  yet")
+#   go/integration/api/**                          integration's fragment,
+#                                                  its generator config and
+#                                                  its own backend generated
+#                                                  artifact -- same reasoning
+#                                                  as the storage row above;
+#                                                  this round is what closed
+#                                                  round 1's own "no mounted
+#                                                  HTTP surface" gap
 #   redocly.yaml                                   the merge/lint naming-
 #                                                  convention rules
 #   build/openapi/**                               the committed merged
@@ -245,6 +265,7 @@ on:
       - go/notification/api/**
       - go/sharing/api/**
       - go/admin/api/**
+      - go/integration/api/**
       - redocly.yaml
       - build/openapi/**
       - Taskfile.yml
@@ -405,6 +426,30 @@ jobs:
             echo "artifact + implementation ship in the same PR."
             exit 1
           }
+      - name: Regenerate integration's API surface (pinned oapi-codegen v2.8.0)
+        # The same command as Taskfile.yml's api:gen task's integration
+        # leg -- keep the two in lockstep (both pin the generator at
+        # v2.8.0). Run from the fragment's own directory, where
+        # oapi-codegen.yaml's paths are relative, mirroring the notes,
+        # org, storage, notification, sharing and admin steps above
+        # exactly.
+        run: |
+          cd go/integration/api
+          go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
+            -config oapi-codegen.yaml openapi.yaml
+      - name: Integration's generated artifact must match the committed spec
+        run: |
+          git diff --exit-code || {
+            echo "error: regenerating from the committed spec left the tree"
+            echo "dirty. The checked-in go/integration/api/"
+            echo "integration-server.gen.go is not what"
+            echo "go/integration/api/openapi.yaml generates -- did you"
+            echo "change the spec without running 'task api:gen' and"
+            echo "committing the result?"
+            echo "Per docs/internal/21-api-contract.md, spec + generated"
+            echo "artifact + implementation ship in the same PR."
+            exit 1
+          }
       - name: Set up pinned Node.js, pnpm and the pnpm store cache
         # Mirrors the npm CI jobs (reusable-npm-package-ci.yml): the same
         # composite action, the same single version sources (web/.nvmrc,
@@ -500,9 +545,10 @@ jobs:
       - name: Handler must still implement the generated ServerInterface
         # The compile-enforcement half: if a spec change (and with it the
         # generated interface) outgrew its Handler -- notes', org's,
-        # storage's or notification's -- this build of the reference app
-        # fails on the owning handler.go's compile-time assertion and
-        # shows exactly which method is missing.
+        # storage's, notification's, sharing's, admin's or integration's --
+        # this build of the reference app fails on the owning handler.go's
+        # compile-time assertion and shows exactly which method is
+        # missing.
         run: |
           cd examples/reference-app
           go build ./...

@@ -1,6 +1,9 @@
 package integration
 
-import "context"
+import (
+	"context"
+	"net/http"
+)
 
 // PermissionLister lists every permission a subject currently holds, inside
 // one tenant. Service.Create calls it exactly once per request, to validate
@@ -111,4 +114,35 @@ type MembershipCheckerFunc func(ctx context.Context, tenantID, userID string) (b
 // IsActiveMember implements MembershipChecker.
 func (f MembershipCheckerFunc) IsActiveMember(ctx context.Context, tenantID, userID string) (bool, error) {
 	return f(ctx, tenantID, userID)
+}
+
+// SubjectResolver reports the user id of the request's authenticated
+// caller, for the one round-1 operation that needs one: Handler's
+// integration_createAPIKey (handler.go), which passes it on as
+// CreateInput.CreatedBy. Every other operation this fragment mounts --
+// list, rotate, revoke -- needs no caller identity at all: List reads only
+// the tenant, and Rotate/Revoke resolve CreatedBy from the EXISTING key row
+// (Service.Rotate carries the predecessor's own CreatedBy forward), never
+// from whoever is calling the HTTP endpoint.
+//
+// This is the identical structurally-typed, no-import seam org.SubjectResolver
+// and notification.SubjectResolver already declare -- same signature, same
+// contract, so a host implementing either of those (see
+// examples/reference-app/cmd/server/server.go's demoOrgSubjectResolver) can
+// hand the identical value to WithSubjectResolver here with no adapter code
+// at all. go/integration still does not import go/authn to get this: the
+// seam is the mandatory injection point (root CLAUDE.md's module-boundary
+// rule), structurally satisfied by whatever the host's authenticating layer
+// actually is.
+//
+// A nil resolver, or one that reports ok=false, makes integration_createAPIKey
+// fail closed with ErrSubjectUnresolved rather than inventing a default
+// creator -- CreatedBy is both the audit trail's responsible party and the
+// identity Service.Create validates Scopes against, so there is no
+// meaningful "anonymous" key to issue over HTTP.
+type SubjectResolver interface {
+	// Subject reports r's authenticated caller's user id. ok is false when
+	// no caller could be identified, in which case userID is meaningless and
+	// must not be used.
+	Subject(r *http.Request) (userID string, ok bool)
 }
