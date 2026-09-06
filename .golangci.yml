@@ -193,6 +193,24 @@ linters:
           deny:
             - pkg: github.com/nats-io/nats.go
               desc: "the NATS client (and its jetstream subpackage) -- go/pkgcore/eventbus/nats's EventBus implementation -- belongs there alone; business code depends on the pkgcore EventBus interface"
+        memcached-only-in-pkgcore:
+          # go/pkgcore/kv/memcached is a second distributed-mode KVStore
+          # implementation, added the same way eventbus/nats was: a package
+          # of its own from day one so the client never reaches a consumer
+          # that only wires the in-process or Redis-backed implementations.
+          # Unlike kv.redis, this implementation is honestly NOT
+          # SurvivesRestart (see the package's own doc comment) and is not
+          # named by any built-in Preset, but the packaging rule is
+          # identical either way: an implementation must not share a
+          # package with a different seam's implementation, or with the
+          # KVStore interface itself.
+          files:
+            - "**/go/**"
+            - "!**/go/pkgcore/kv/memcached/**"
+          list-mode: lax
+          deny:
+            - pkg: github.com/bradfitz/gomemcache
+              desc: "the Memcached client -- go/pkgcore/kv/memcached's KVStore implementation -- belongs there alone; business code depends on the pkgcore KVStore interface"
         asynq-only-in-jobs:
           # Narrowed from the whole go/jobs module to its queue/asynq
           # subpackage by the jobs/asynq packaging-isolation round: asynq

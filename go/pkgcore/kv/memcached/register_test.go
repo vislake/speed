@@ -1,0 +1,52 @@
+package memcached
+
+import (
+	"testing"
+
+	"github.com/vislake/speed/go/pkgcore"
+)
+
+// TestInit_RegistersKVMemcachedOnTheSharedRegistry proves this package's
+// init() lands "kv.memcached" on pkgcore's shared KVStoreRegistry with the
+// honest capability bits this implementation actually has -- MultiReplicaSafe
+// alone, deliberately never SurvivesRestart (see the package doc comment).
+// Unlike kv/redis's "kv.redis", no built-in Preset names this implementation
+// (preset_test.go pins PresetDistributed's "kv" entry as "kv.redis", not
+// this one), so this test is the only place that proves the name resolves at
+// all once this package is imported.
+func TestInit_RegistersKVMemcachedOnTheSharedRegistry(t *testing.T) {
+	impl, caps, err := pkgcore.KVStoreRegistry.Build("kv.memcached", pkgcore.Config{})
+	if err != nil {
+		t.Fatalf("Build(%q) error = %v, want nil", "kv.memcached", err)
+	}
+	if impl == nil {
+		t.Error("Build(\"kv.memcached\") returned a nil KVStore")
+	}
+	if want := pkgcore.MultiReplicaSafe; caps != want {
+		t.Errorf("Build(%q) capabilities = %v, want %v (never SurvivesRestart)", "kv.memcached", caps, want)
+	}
+}
+
+// TestClientFromConfig_DefaultsAddrsWhenUnset pins the fallback address a
+// zero-configuration build relies on.
+func TestClientFromConfig_DefaultsAddrsWhenUnset(t *testing.T) {
+	client, err := clientFromConfig(pkgcore.Config{})
+	if err != nil {
+		t.Fatalf("clientFromConfig(Config{}) error = %v, want nil", err)
+	}
+	if client == nil {
+		t.Fatal("clientFromConfig(Config{}) returned a nil client")
+	}
+}
+
+// TestClientFromConfig_SplitsCommaSeparatedAddrs pins that multiple servers
+// can be configured for gomemcache's own rendezvous-hashing ServerList.
+func TestClientFromConfig_SplitsCommaSeparatedAddrs(t *testing.T) {
+	client, err := clientFromConfig(pkgcore.Config{"addrs": "10.0.0.1:11211, 10.0.0.2:11211"})
+	if err != nil {
+		t.Fatalf("clientFromConfig() error = %v, want nil", err)
+	}
+	if client == nil {
+		t.Fatal("clientFromConfig() returned a nil client")
+	}
+}
