@@ -45,13 +45,14 @@ func TestAllow_InvalidLimit_ReturnsErrInvalidLimit(t *testing.T) {
 		{name: "negative per", limit: Limit{Rate: 5, Per: -time.Second}},
 		{name: "both zero", limit: Limit{Rate: 0, Per: 0}},
 		// Per is positive and well within time.Duration's own ~292-year
-		// range, but windowTTLFactor*Per (see attachWindowTTL's call site in
-		// Allow) is computed as a time.Duration, so doubling a Per this large
-		// overflows int64 nanoseconds and wraps to a negative duration. A
-		// negative ttl reaching KVStore.Set would store the window's counter
-		// key with no expiry at all (Set's own documented contract: "a ttl of
-		// zero or less stores the key without an expiry"), pinning it in the
-		// store forever instead of letting it age out with its window.
+		// range, but windowTTLFactor*Per (see Allow's call to
+		// IncrByFloatWithTTL) is computed as a time.Duration, so doubling a
+		// Per this large overflows int64 nanoseconds and wraps to a negative
+		// duration. A negative ttl reaching KVStore.IncrByFloatWithTTL would
+		// store the window's counter key with no expiry at all (its own
+		// documented contract: "a ttl of zero or less stores it without
+		// one"), pinning it in the store forever instead of letting it age
+		// out with its window.
 		{name: "per so large 2x overflows time.Duration", limit: Limit{Rate: 5, Per: 200 * 365 * 24 * time.Hour}},
 	}
 
@@ -393,7 +394,7 @@ func TestAllow_WindowExpiry_OldWindowKeyExpires(t *testing.T) {
 		t.Fatalf("Get right after the first hit: found=%t err=%v, want found=true", found, err)
 	}
 
-	// windowTTLFactor * per is the TTL attachWindowTTL attaches; sleep
+	// windowTTLFactor * per is the ttl IncrByFloatWithTTL attaches; sleep
 	// comfortably past it so the key is guaranteed to have expired.
 	time.Sleep(time.Duration(windowTTLFactor)*per + 100*time.Millisecond)
 
@@ -410,18 +411,16 @@ func TestAllow_WindowExpiry_OldWindowKeyExpires(t *testing.T) {
 // the sliding-window behavior already covered above. Run with -race.
 //
 // The window is warmed up with one sequential call before the concurrent
-// burst starts. That is deliberate, not incidental: warming up first
-// establishes the window's counter key and attaches its TTL
-// (attachWindowTTL) with no concurrent contention, so every hit in the
-// burst that follows is a pure KVStore.IncrByFloat call against a key that
-// already exists and already has its TTL attached -- exactly the case
-// KVStore's own contract guarantees is atomic and lossless under
-// concurrency, which is the property this test exists to prove. See
-// slidingWindowLimiter's doc comment ("The TTL-attachment race") for why
-// concurrently *creating* the same brand-new key is the one scenario this
-// package's algorithm cannot make equally race-free with KVStore's given
-// primitives -- which is exactly why this test warms the key up first
-// rather than starting the burst against a fresh one.
+// burst starts, so every hit in the burst that follows lands against a key
+// that already exists -- isolating "many concurrent hits against a live
+// key" from "many concurrent hits racing to create a fresh one", which
+// TestAllow_ConcurrentFirstHits_SameFreshKey_NoIncrementLostAndTTLAttached
+// covers separately (pkgcore.KVStore.IncrByFloatWithTTL makes that race-free
+// too, closing what used to be this package's one remaining concurrency gap
+// -- see slidingWindowLimiter's doc comment, "The TTL-attachment race,
+// closed"). Both scenarios are now equally covered; this test keeps its
+// warm-up because it is still the cleanest way to isolate "concurrent hits
+// against a live key" as its own, narrower claim.
 //
 // The outcome is not just bounded but exactly determined: with Per a full
 // minute and no prior activity, every one of the 200 concurrent calls lands
@@ -598,7 +597,12 @@ func (s *setInjectsConcurrentIncrementKVStore) Set(ctx context.Context, key stri
 // non-vacuously, precisely because the fix makes that injection point
 // structurally unreachable from Allow.
 func TestAllow_ConcurrentIncrementInTTLAttachGap_NeverLost(t *testing.T) {
-	const per = time.Minute // a single window is all this test needs
+	// A single sequential Allow call, not a burst spanning any real
+	// duration, so a short window is all this test needs -- no risk of
+	// crossing a window boundary mid-test the way a long-running concurrent
+	// burst would carry, which is why other tests in this file use a much
+	// longer Per.
+	const per = time.Second
 	limit := Limit{Rate: 1_000_000, Per: per}
 	ctx := context.Background()
 	key := "ttl-attach-gap"
@@ -757,6 +761,13 @@ func (s *erroringKVStore) IncrByFloat(ctx context.Context, key string, delta flo
 	return s.KVStore.IncrByFloat(ctx, key, delta)
 }
 
+func (s *erroringKVStore) IncrByFloatWithTTL(ctx context.Context, key string, delta float64, ttl time.Duration) (float64, error) {
+	if s.failMethod == "IncrByFloatWithTTL" {
+		return 0, s.err
+	}
+	return s.KVStore.IncrByFloatWithTTL(ctx, key, delta, ttl)
+}
+
 // TestAllow_KVStoreErrors_PropagatedToCaller covers every point in Allow
 // that returns a KVStore-originated error, proving each one surfaces to the
 // caller unmodified.
@@ -765,8 +776,11 @@ func TestAllow_KVStoreErrors_PropagatedToCaller(t *testing.T) {
 	limit := Limit{Rate: 5, Per: time.Minute}
 	ctx := context.Background()
 
-	t.Run("IncrByFloat", func(t *testing.T) {
-		fake := &erroringKVStore{KVStore: pkgcore.NewMemoryKVStore(), failMethod: "IncrByFloat", err: wantErr}
+	t.Run("IncrByFloatWithTTL", func(t *testing.T) {
+		// The one write call left on Allow's fixed path: every hit, first or
+		// not, goes through it -- there is no longer a separate
+		// TTL-attachment step to fail independently.
+		fake := &erroringKVStore{KVStore: pkgcore.NewMemoryKVStore(), failMethod: "IncrByFloatWithTTL", err: wantErr}
 		dec, err := New(fake).Allow(ctx, "k1", limit)
 		if !errors.Is(err, wantErr) {
 			t.Fatalf("err = %v, want %v", err, wantErr)
@@ -776,29 +790,9 @@ func TestAllow_KVStoreErrors_PropagatedToCaller(t *testing.T) {
 		}
 	})
 
-	t.Run("AttachTTL_Get", func(t *testing.T) {
-		// The first hit against a fresh key triggers attachWindowTTL, whose
-		// own first step is a Get.
-		fake := &erroringKVStore{KVStore: pkgcore.NewMemoryKVStore(), failMethod: "Get", err: wantErr}
-		_, err := New(fake).Allow(ctx, "k2", limit)
-		if !errors.Is(err, wantErr) {
-			t.Fatalf("err = %v, want %v", err, wantErr)
-		}
-	})
-
-	t.Run("AttachTTL_Set", func(t *testing.T) {
-		fake := &erroringKVStore{KVStore: pkgcore.NewMemoryKVStore(), failMethod: "Set", err: wantErr}
-		_, err := New(fake).Allow(ctx, "k3", limit)
-		if !errors.Is(err, wantErr) {
-			t.Fatalf("err = %v, want %v", err, wantErr)
-		}
-	})
-
 	t.Run("PreviousWindow_Get", func(t *testing.T) {
-		// A second hit in the same window skips attachWindowTTL entirely --
-		// only the call whose IncrByFloat creates the key attaches a TTL --
-		// so once warmed up with one successful call, the only Get left on
-		// the path is readWindowCount's read of the previous window.
+		// The only Get left on Allow's fixed path is readWindowCount's read
+		// of the previous window, once a first hit has landed successfully.
 		fake := &erroringKVStore{KVStore: pkgcore.NewMemoryKVStore()}
 		lim := New(fake)
 		if _, err := lim.Allow(ctx, "k4", limit); err != nil {
@@ -813,224 +807,6 @@ func TestAllow_KVStoreErrors_PropagatedToCaller(t *testing.T) {
 	})
 }
 
-// setCountingKVStore wraps a real KVStore and counts calls to Set. Set is
-// the one store method attachWindowTTL ever calls (see limiter.go's Allow
-// and attachWindowTTL) -- nothing else on Allow's path touches it, since
-// readWindowCount only ever calls Get -- so counting it in isolation is a
-// precise, unambiguous signal for "did attachWindowTTL run on this call",
-// independent of the exact-count reasoning
-// TestAllow_ConcurrentCallers_SameKey_NeverExceedsLimit relies on below.
-type setCountingKVStore struct {
-	pkgcore.KVStore
-	setCalls int
-}
-
-func (s *setCountingKVStore) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
-	s.setCalls++
-	return s.KVStore.Set(ctx, key, value, ttl)
-}
-
-// TestAllow_AttachWindowTTL_SkippedAfterFirstHitInWindow directly and
-// specifically isolates the property slidingWindowLimiter's own doc comment
-// calls out as deliberate ("The TTL-attachment race") and that Allow's call
-// site gates on (currentCount == firstHitInWindow): attachWindowTTL runs
-// only on the one call whose IncrByFloat is the first hit in a window, and
-// is skipped on every later hit in that same window. Calling it
-// unconditionally on every hit would reintroduce the Get-then-Set
-// lost-update race described there on every single hit rather than just the
-// first -- see the doc comment just above slidingWindowLimiter's own
-// declaration: "Do not fix this by reading the key before calling
-// IncrByFloat ... a Get-then-branch ahead of the atomic increment
-// reintroduces a real lost-update race on every hit, not just the first one
-// in a window, which is strictly worse."
-//
-// Set is called nowhere else on Allow's path, so counting Set calls with
-// setCountingKVStore pins the gate down directly and unambiguously: two
-// sequential hits against the same key inside one window must produce
-// exactly one Set, not two. Before this test, the only thing that happened
-// to notice a regression in this exact gate was
-// TestAllow_ConcurrentCallers_SameKey_NeverExceedsLimit's exact-count
-// assertion -- and only incidentally, as a side effect of the lost-update
-// race the extra Set calls reintroduce under concurrency, not because that
-// test names or documents this gate as a property of its own (confirmed by
-// mutation: removing the gate so attachWindowTTL runs unconditionally is
-// caught by that concurrency test's exact-count assertion, but leaves
-// TestAllow_KVStoreErrors_PropagatedToCaller passing unchanged, since both
-// of its Get failure points return the same error either way). This test
-// isolates the gate with no concurrency involved at all.
-func TestAllow_AttachWindowTTL_SkippedAfterFirstHitInWindow(t *testing.T) {
-	fake := &setCountingKVStore{KVStore: pkgcore.NewMemoryKVStore()}
-	lim := New(fake)
-	ctx := context.Background()
-	limit := Limit{Rate: 5, Per: time.Minute} // long window: both hits land in the same one
-	key := "ttl-gate-key"
-
-	if _, err := lim.Allow(ctx, key, limit); err != nil {
-		t.Fatalf("first hit in the window: Allow: %v", err)
-	}
-	if got := fake.setCalls; got != 1 {
-		t.Fatalf("Set calls after the first hit in a fresh window = %d, want exactly 1 "+
-			"(attachWindowTTL must run once, on the hit that creates the window's key)", got)
-	}
-
-	if _, err := lim.Allow(ctx, key, limit); err != nil {
-		t.Fatalf("second hit in the same window: Allow: %v", err)
-	}
-	if got := fake.setCalls; got != 1 {
-		t.Fatalf("Set calls after a second hit in the same window = %d, want still exactly 1 "+
-			"(attachWindowTTL must be skipped on every hit after the first, or the Get-then-Set "+
-			"race described in slidingWindowLimiter's doc comment reopens on every hit, not just "+
-			"the first)", got)
-	}
-}
-
-// flakyKVStore wraps a real KVStore and makes one named method fail a fixed
-// number of times before delegating to the wrapped store as normal. It
-// models a *transient* KVStore fault -- one that clears after a bounded
-// number of attempts -- as opposed to erroringKVStore above, which fails
-// permanently and exists to prove Allow's error-passthrough contract.
-// attempts counts every call made to failMethod, including ones after
-// failsRemaining has reached zero, so a test can pin down exactly how many
-// attempts a retry loop actually made.
-type flakyKVStore struct {
-	pkgcore.KVStore
-	failMethod     string
-	err            error
-	failsRemaining int
-	attempts       int
-}
-
-func (s *flakyKVStore) Get(ctx context.Context, key string) ([]byte, bool, error) {
-	if s.failMethod == "Get" {
-		s.attempts++
-		if s.failsRemaining > 0 {
-			s.failsRemaining--
-			return nil, false, s.err
-		}
-	}
-	return s.KVStore.Get(ctx, key)
-}
-
-func (s *flakyKVStore) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
-	if s.failMethod == "Set" {
-		s.attempts++
-		if s.failsRemaining > 0 {
-			s.failsRemaining--
-			return s.err
-		}
-	}
-	return s.KVStore.Set(ctx, key, value, ttl)
-}
-
-// TestAllow_AttachWindowTTL_TransientError_RetriedUntilKeyGetsExpiry
-// reproduces the bug attachWindowTTLMaxAttempts fixes. Before that retry
-// budget existed, currentCount == firstHitInWindow gated the *only* call to
-// attachWindowTTL for a given window (see Allow's call site and
-// attachWindowTTLMaxAttempts's own doc comment), so any error there -- even
-// one from an ordinary transient fault, not just a process crash -- made
-// Allow return the error to the caller with no retry at all. A caller that
-// then retried the logical request got back an IncrByFloat count > 1 on the
-// identical key (it already existed), which skips attachWindowTTL for the
-// rest of that window's life -- stranding the key without a TTL forever,
-// not just until the next hit.
-//
-// This test proves a fault that clears within the retry budget no longer
-// has that effect: Allow must succeed with no error at all (the underlying
-// fault clears before the budget is exhausted), and the window's key must
-// still end up with a real, working TTL -- checked the same way
-// TestAllow_WindowExpiry_OldWindowKeyExpires checks it, directly against the
-// store, after waiting past the expiry. Before the fix, this test fails at
-// the very first assertion: a single Get or Set failure surfaced as an
-// error from Allow, with no retry to recover from it.
-func TestAllow_AttachWindowTTL_TransientError_RetriedUntilKeyGetsExpiry(t *testing.T) {
-	const per = 80 * time.Millisecond
-	limit := Limit{Rate: 5, Per: per}
-	ctx := context.Background()
-
-	for _, failMethod := range []string{"Get", "Set"} {
-		t.Run(failMethod, func(t *testing.T) {
-			real := pkgcore.NewMemoryKVStore()
-			// Fails on every attempt except the very last one the retry
-			// budget allows -- the tightest in-budget recovery there is.
-			fake := &flakyKVStore{
-				KVStore:        real,
-				failMethod:     failMethod,
-				err:            errors.New("transient kvstore hiccup"),
-				failsRemaining: attachWindowTTLMaxAttempts - 1,
-			}
-			key := "flaky-" + failMethod
-
-			// Land solidly at the start of a real window so the window
-			// index computed here for the storage key matches the one
-			// Allow computes for the same hit an instant later (same
-			// pattern as TestAllow_WindowExpiry_OldWindowKeyExpires).
-			windowStart := waitForFreshWindowStart(per)
-			windowIndex := windowStart.UnixNano() / int64(per)
-			storeKey := windowKey(key, windowIndex)
-
-			dec, err := New(fake).Allow(ctx, key, limit)
-			if err != nil {
-				t.Fatalf("Allow: %v, want no error -- a transient failure that clears within "+
-					"attachWindowTTLMaxAttempts attempts must not surface to the caller", err)
-			}
-			if !dec.Allowed {
-				t.Fatalf("Decision.Allowed = false, want true for a first hit within limit")
-			}
-			if fake.failsRemaining != 0 {
-				t.Fatalf("failsRemaining = %d, want 0 -- the retry loop should have exhausted "+
-					"every injected failure before Allow returned successfully", fake.failsRemaining)
-			}
-
-			if _, found, getErr := real.Get(ctx, storeKey); getErr != nil || !found {
-				t.Fatalf("Get(%q) right after the hit: found=%t err=%v, want found=true", storeKey, found, getErr)
-			}
-
-			// windowTTLFactor * per is the TTL attachWindowTTL attaches;
-			// sleep comfortably past it so the key is guaranteed to have
-			// expired -- if, and only if, a TTL was actually attached.
-			time.Sleep(time.Duration(windowTTLFactor)*per + 100*time.Millisecond)
-
-			if _, found, getErr := real.Get(ctx, storeKey); getErr != nil || found {
-				t.Fatalf("Get(%q) once the TTL should have elapsed: found=%t err=%v, want found=false -- "+
-					"the key never expired, meaning the retry did not actually attach a TTL", storeKey, found, getErr)
-			}
-		})
-	}
-}
-
-// TestAllow_AttachWindowTTL_ExhaustsRetryBudget_ThenPropagatesError proves
-// the retry attachWindowTTLMaxAttempts adds is bounded, not unconditional
-// resilience: a fault that persists for the whole retry budget still
-// surfaces to Allow's caller exactly as before -- fail-closed, per this
-// package's documented error-passthrough contract -- after making exactly
-// attachWindowTTLMaxAttempts attempts: neither giving up after only one
-// (which was the pre-fix behavior this whole fix changes) nor retrying
-// forever (which would turn a sustained outage into an Allow call that never
-// returns).
-func TestAllow_AttachWindowTTL_ExhaustsRetryBudget_ThenPropagatesError(t *testing.T) {
-	wantErr := errors.New("sustained kvstore outage")
-	limit := Limit{Rate: 5, Per: time.Minute}
-	ctx := context.Background()
-
-	fake := &flakyKVStore{
-		KVStore:        pkgcore.NewMemoryKVStore(),
-		failMethod:     "Get",
-		err:            wantErr,
-		failsRemaining: attachWindowTTLMaxAttempts + 5, // outlasts the whole retry budget
-	}
-
-	dec, err := New(fake).Allow(ctx, "exhausted-budget", limit)
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("err = %v, want %v", err, wantErr)
-	}
-	if dec != (Decision{}) {
-		t.Fatalf("Decision = %+v, want the zero value on error", dec)
-	}
-	if fake.attempts != attachWindowTTLMaxAttempts {
-		t.Fatalf("attempts = %d, want exactly attachWindowTTLMaxAttempts (%d) -- "+
-			"the retry loop must neither give up early nor retry unboundedly", fake.attempts, attachWindowTTLMaxAttempts)
-	}
-}
 
 // TestClampRemaining pins clampRemaining's contract directly, independent of
 // any Limiter or KVStore: negative floors to zero, an ordinary value
@@ -1172,40 +948,24 @@ func TestWindowKey_DistinctPairsNeverCollide(t *testing.T) {
 }
 
 // TestAllow_EveryWindowRollover_MintsFreshKey pins down, deterministically
-// and with no concurrency involved, what the "TTL-attachment race" doc
-// comment above (and AGENTS.md's "Known limitations") spell out explicitly:
-// windowKey mints a brand-new, never-before-used storage key every single
-// Per interval, for as long as a caller's key keeps being hit. "The first
-// hit in this window" -- the one condition that triggers attachWindowTTL,
-// and therefore the one call per window exposed to the TTL-attachment race
-// -- is not a rare, once-per-caller-key event: it recurs on every window
-// boundary, forever, for any continuously-hit key.
+// and with no concurrency involved, a structural fact the former
+// "TTL-attachment race" doc comment relied on to explain why that race
+// recurred rather than being a one-time event: windowKey mints a
+// brand-new, never-before-used storage key every single Per interval, for
+// as long as a caller's key keeps being hit. That recurrence is what used
+// to matter for the race (now closed -- see slidingWindowLimiter's doc
+// comment, "The TTL-attachment race, closed") and still matters on its own
+// structural merits: "the first hit in this window" is not a rare,
+// once-per-caller-key event, it recurs on every window boundary, forever,
+// for any continuously-hit key, which is worth pinning down independent of
+// any race it once exposed.
 //
-// This test proves the structural half of that claim directly against the
-// store: across several consecutive real windows, the storage key Allow is
-// about to use has never existed before its own hit lands -- every single
-// time, not just on the very first window ever seen. Before the doc fix
-// this test guards, "a key's first-ever hit" and "removes the gap for that
-// key entirely" (of the pre-warming mitigation) were easy to misread as
-// describing a one-time event in a caller key's whole lifetime; this test
-// would have flagged that misreading immediately, since it fails outright
-// if any of these per-window keys turns out to already exist (which would
-// mean windowKey were reusing keys across windows instead of minting a new
-// one each time).
-//
-// The companion, probabilistic half of the finding -- that a concurrent
-// burst landing on one of these freshly-minted keys can actually exceed the
-// configured rate, and that pre-warming one window does not protect the
-// next -- is exactly the TTL-attachment race already covered by this
-// file's other tests and the package doc comment. It is deliberately not
-// repeated here as a hard pass/fail assertion: like
-// TestAllow_ConcurrentCallers_SameKey_NeverExceedsLimit's own doc comment
-// explains, how much a race like this bites on any given run depends on
-// scheduler luck, not just on whether the code is correct, so asserting an
-// exact overshoot count would make this suite flaky rather than more
-// trustworthy. The structural fact this test does pin down is what makes
-// that race recurring rather than a one-off, which is the part the
-// documentation previously understated.
+// This test proves exactly that against the store: across several
+// consecutive real windows, the storage key Allow is about to use has never
+// existed before its own hit lands -- every single time, not just on the
+// very first window ever seen -- which fails outright if any of these
+// per-window keys turns out to already exist (meaning windowKey were
+// reusing keys across windows instead of minting a new one each time).
 func TestAllow_EveryWindowRollover_MintsFreshKey(t *testing.T) {
 	const per = 80 * time.Millisecond
 	const windows = 4
@@ -1249,9 +1009,13 @@ func TestAllow_EveryWindowRollover_MintsFreshKey(t *testing.T) {
 		if err != nil || !found {
 			t.Fatalf("iteration %d: Get(%q) right after the hit: found=%t err=%v, want found=true", i, storeKey, found, err)
 		}
-		if want := encodeCount(firstHitInWindow); string(value) != string(want) {
-			t.Fatalf("iteration %d: stored value = %q, want %q (firstHitInWindow) -- "+
-				"this hit should be the first ever recorded against this window's brand-new key", i, value, want)
+		got, err := strconv.ParseFloat(string(value), floatEncodingBitSize)
+		if err != nil {
+			t.Fatalf("iteration %d: stored value %q does not parse as a float: %v", i, value, err)
+		}
+		if got != 1 {
+			t.Fatalf("iteration %d: stored value = %v, want 1 -- "+
+				"this hit should be the first ever recorded against this window's brand-new key", i, got)
 		}
 
 		// Sleep past this window's end so the next iteration lands in a
