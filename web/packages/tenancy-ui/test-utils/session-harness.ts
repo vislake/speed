@@ -11,7 +11,9 @@
  * This is a mirror of @speed/auth-core's own test-utils/session-harness
  * (and of auth-ui's copy of it), trimmed to the operations the
  * tenancy-ui surface drives -- the password login a host journey performs
- * before a tenant switch can exist, and the switch operation itself. The
+ * before a tenant switch can exist, the switch operation itself, and the
+ * token refresh the no-silent-drift regression drives (the refresh mints
+ * for the server-stored current tenant, which is the drift probe). The
  * endpoint path constants are the same literal keys. The core package's
  * harness is deliberately not published, so a package whose tests drive
  * sessions carries its own copy -- keeping the copies in lockstep when
@@ -37,6 +39,7 @@ import type { AuthSession } from '@speed/auth-core'
 
 export const LOGIN_PASSWORD = 'POST /api/v1/authn/login/password'
 export const SWITCH_TENANT = 'POST /api/v1/authn/tenant/switch'
+export const REFRESH = 'POST /api/v1/authn/token/refresh'
 
 function principal(
   userId = 'user-1',

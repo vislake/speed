@@ -55,28 +55,42 @@ under a real host composition. It depends on `@speed/auth-core`
 ## Error text
 
 The failure banner resolves a switch answer to text only through the
-reachable-code whitelist in `src/internal/error-text.ts`: the nine
-codes `authn.tenant_membership_required`, `authn.session_not_found`,
+reachable-code whitelist in `src/internal/error-text.ts`: the
+membership and account-status codes the switch endpoint answers
+(`authn.tenant_membership_required`, `authn.tenant_membership_unavailable`,
+`authn.invalid_credentials`), the token-verification codes the authn
+middleware answers on the protected switch route
+(`authn.authentication_required`, `authn.token_invalid`), the five
+session-lifecycle codes (`authn.session_not_found`,
 `authn.session_revoked`, `authn.refresh_token_invalid`,
-`authn.refresh_token_reused`, `authn.token_expired`, `client.network`,
-`client.timeout`, `client.protocol` -- plus `errors.unknown`, the
-fallback for everything else. A raw code must never render.
+`authn.refresh_token_reused`, `authn.token_expired`), and
+`client.network`, `client.timeout`, `client.protocol` -- thirteen codes
+plus `errors.unknown`, the fallback for everything else. A raw code
+must never render.
 
-The `errors.authn.*` and `errors.client.*` texts are deliberate
-verbatim copies of `@speed/auth-ui`'s error texts for the same codes
-(same-tier packages cannot import one another's catalogs; two versions
-of one server code's text must not diverge). When auth-ui's texts
-change, copy the change here. The suite pins the pairing in both
-directions inside this package -- a whitelist code without its two
+Where the switch answer and the sign-in answer share one meaning, the
+`errors.authn.*` and `errors.client.*` texts are deliberate verbatim
+copies of `@speed/auth-ui`'s error texts for the same codes (same-tier
+packages cannot import one another's catalogs; two versions of one
+server code's text must not diverge). When auth-ui's texts change, copy
+the change here. Three codes are NOT copies: `authn.invalid_credentials`
+means the account is not active on the switch surface (never a wrong
+password), and the two middleware answers cannot be answered on the
+pre-auth sign-in surface at all, so auth-ui carries no text to copy --
+their texts are authored here, each recorded in the error-text suite's
+`SWITCH_AUTHORED_TEXTS` with the reason. The suite pins the pairing in
+both directions inside this package -- a whitelist code without its two
 bundle leaves fails, a bundle leaf without its whitelist code fails --
-and pins the copies to their source too: the error-text suite imports
-the auth-ui bundles themselves as test data, so a drift between the
-packages' texts fails here rather than reaching the product.
+and pins the shared-answer copies to their source too: the error-text
+suite imports the auth-ui bundles themselves as test data, so a drift
+between the packages' texts fails here rather than reaching the
+product.
 
 ## i18n
 
 Every built-in string lives in the bilingual `tenancy-ui` namespace,
-twelve leaves per language (`tenantSwitcher` two, `errors` ten). Keep
+sixteen leaves per language (`tenantSwitcher` two, `errors` fourteen:
+ten `authn`, three `client`, `unknown`). Keep
 the leaf key sets of `zh-CN.json` and `en-US.json` identical --
 `registerNamespace` refuses to register a namespace whose languages'
 leaf key sets differ, so the failure surfaces at registration, before
@@ -113,6 +127,15 @@ tenant's data and removing the previous tenant's query cache
 (`queryClient.removeQueries` under the tenant-namespaced key rule of
 docs/internal/12-frontend.md), and re-attach `/me`-derived permission
 lists after a commit. None of that happens here, by design.
+
+One behavioural note for hosts that mount more than one `TenantSwitcher`
+on a session (chrome plus a drawer copy): two instances racing the same
+session produce two genuine commits -- the winner's, and the superseded
+loser's reconciliation re-issue, which converges the session onto the
+tenant the server actually committed (never a silent drift). The host's
+`onSwitched` fires once per commit, so it may report a tenant that a
+reconciling commit supersedes moments later; a handler that refetches
+for whatever tenant it is told ends consistent with the session.
 
 ## Language
 

@@ -7,20 +7,32 @@
  * render, or a pre-auth mount). Clicking it opens the host-supplied
  * tenant list; picking a row that is not the current tenant drives
  * session.switchTenant(id) and closes the menu immediately. While the
- * switch is in flight the trigger is disabled and a role="status" notice
+ * switch is in flight the trigger is inert and a role="status" notice
  * renders the switching text -- a live-region announcement, never a
  * blocking overlay, and the trigger label itself stays put so the current
- * tenant never visually flickers mid-switch. A successful switch is
- * deliberately quiet: the session committed (the store holds the fresh
- * access token, the snapshot flipped), the host observes the principal
- * change through its own auth-core hooks, and onSwitched fires exactly
- * once, after the commit -- refetching, navigation, permission-list
- * re-attachment and previous-tenant query-cache cleanup are the host's
- * to run then. A throwing host callback is contained: it is not a switch
- * failure (the onSwitched contract) and never surfaces as one -- no
- * error banner, and no unhandled rejection from the fire-and-forget row
- * handler. When this instance's own switch request answers successfully
- * but a concurrent sibling operation on the same session -- another
+ * tenant never visually flickers mid-switch. "Inert" is deliberately not
+ * the native disabled attribute here: the menu closes onto the trigger
+ * at the moment the flight starts, and MUI's focus trap restores focus
+ * to the trigger on close -- a native-disabled control cannot take
+ * focus in a real browser, so the restore would no-op and the round
+ * trip would strand focus on document.body, leaving a failed switch
+ * unreachable from where the keyboard user is. The trigger therefore
+ * stays focusable while the flight is pending, inert in the accessible
+ * way: aria-disabled, its open handler refusing while pending, and the
+ * disabled look rendered from the theme tokens (see the Button below).
+ * A successful switch is deliberately quiet: the session committed (the
+ * store holds the fresh access token, the snapshot flipped), the host
+ * observes the principal change through its own auth-core hooks, and
+ * onSwitched fires exactly once per committed switch, after the commit
+ * -- refetching, navigation, permission-list re-attachment and
+ * previous-tenant query-cache cleanup are the host's to run then. A
+ * throwing host callback is contained: it is not a switch failure (the
+ * onSwitched contract) and never surfaces as one -- no error banner,
+ * and no unhandled rejection from the fire-and-forget row handler.
+ *
+ * A switch that loses a commit race reconciles instead of vanishing.
+ * When this instance's own switch request answers successfully but a
+ * concurrent sibling operation on the same session -- another
  * TenantSwitcher instance's switch, most plausibly, since this
  * component's own entry guard already rules out a second concurrent
  * call through itself -- committed first, auth-core's switchTenant
@@ -28,21 +40,47 @@
  * request did go through server-side, but the session it would have
  * described is not the one now current, so treating the answer as a
  * commit would fire onSwitched for a tenant the session is not actually
- * running under. That case is handled like a lost race rather than a
- * failure: no alert renders, onSwitched does not fire, and the trigger
- * simply re-enables showing whichever tenant the session now holds (the
- * host's currentTenantId prop, updated through its own auth-core hooks
- * once the winner's onSwitched ran) -- the exactly-once contract holds
- * for the winning call, and this superseded one contributes nothing. A
- * failed switch leaves the state exactly as it was (the
+ * running under. The session row the server keeps, however, is a shared
+ * fact both racing requests wrote: the server stores the current tenant
+ * per session, and the authn refresh mints the next access token for
+ * whatever request wrote it last -- normally this superseded one, since
+ * a browser's requests arrive in order. A quiet swallow would therefore
+ * leave the session able to DRIFT into this request's tenant on the
+ * next silent refresh: the principal flips with no commit, no
+ * onSwitched, no cache invalidation, and the tenant-domain permission
+ * list silently dropped -- the host's caches and lists would describe
+ * the tenant it was told about, not the one the session runs. The
+ * superseded path therefore reconciles: it re-issues the same switch
+ * request while the drift condition holds -- the winning snapshot still
+ * shows the same user (the component's proxy for "the held token family
+ * still reaches this request's server-side write": a logout or another
+ * user's login replaced or cleared the family, so the write is
+ * unreachable and the superseded call contributes nothing; a same-user
+ * login is the one case the proxy cannot tell apart, and the re-issue
+ * then simply lands the requested switch on the fresh session,
+ * announced, if the membership still holds) and the session runs under
+ * a tenant other than the one requested -- so the tenant the server
+ * actually committed lands as a real, announced commit and no silent
+ * drift can follow. The reconciliation is bounded: at most
+ * MAX_SWITCH_ATTEMPTS
+ * requests per user intent (see below), and a superseded call gives up
+ * quietly when the bound is spent -- the residual drift window then
+ * needs three or more concurrent commits to the same session inside one
+ * flight, vanishing enough to record rather than engineer for. The
+ * reconciliation's commit fires onSwitched for the requested tenant
+ * exactly once, so in a two-instance race the host observes the
+ * winner's commit and then the reconciling one, each truthful at the
+ * moment it fired; the exactly-once contract holds per commit, not per
+ * race. A failed switch leaves the state exactly as it was (the
  * auth-core contract: a raw ApiError rejection with zero state change)
  * and renders the answer's code text in one InlineError under the
- * control -- the whitelist of reachable codes (authn.tenant_membership_required,
- * the session-lifecycle codes, the transport-level client.* codes) or
+ * control -- the whitelist of reachable codes (the membership and
+ * account-status answers, the token-verification answers, the
+ * session-lifecycle codes, the transport-level client.* codes) or
  * the unknown fallback, never a raw key -- with the trigger re-enabled
  * and the same row retryable on the next open. The flight is also guarded
  * at the entry of the switch handler itself: one switch at a time, with
- * the guard checked synchronously, because the disabled trigger renders
+ * the guard checked synchronously, because the inert trigger renders
  * only on the next frame and cannot stop a repeat activation of a row of
  * the still-closing list in the same window -- such an attempt is
  * refused, never queued, and never reaches the session.
@@ -75,6 +113,16 @@ import type { AuthSession } from '@speed/auth-core'
 import { isOperationSuperseded } from '@speed/auth-core'
 import { errorCodeOf, InlineError } from './internal/inline-error.js'
 import { useTenancyUiTranslation } from './internal/translation.js'
+
+/**
+ * The most switch requests one user intent may issue: the original plus
+ * the corrective re-issues a superseded outcome triggers (see the file
+ * header). Each re-issue is a fresh session operation, so the bound is
+ * what keeps a pathological pile-up of racing commits from looping this
+ * component's requests forever; when the bound is spent the superseded
+ * call gives up quietly.
+ */
+const MAX_SWITCH_ATTEMPTS = 3
 
 /** One switchable tenant: the id the switch is called with, and the name
  * the trigger and the list show. */
@@ -120,7 +168,18 @@ export function TenantSwitcher({
   const menuOpen = anchorEl !== null
   const currentTenant =
     tenants.find((tenant) => tenant.id === currentTenantId) ?? null
-  const triggerDisabled = pending || currentTenant === null
+  // With no current tenant the trigger is native-disabled: there is
+  // nothing to switch from, and a control that can never open a list
+  // does not belong in the tab order. While a switch is in flight the
+  // trigger is INERT instead -- aria-disabled, its open handler
+  // refusing, the disabled look applied from the theme tokens below --
+  // but never native-disabled, so it stays focusable: the menu closes
+  // onto it at the moment the flight starts, MUI's focus trap restores
+  // focus to the trigger on close, and a native-disabled control cannot
+  // take focus in a real browser (the restore no-ops and the round trip
+  // strands focus on document.body; see the file header).
+  const triggerInert = pending
+  const triggerNativeDisabled = currentTenant === null
 
   // The in-flight flag the entry guard checks. It is a ref, not state,
   // because the guard must be synchronous: pending renders only on the
@@ -131,39 +190,80 @@ export function TenantSwitcher({
   const switchTo = async (tenantId: string): Promise<void> => {
     // One switch at a time: a second attempt while a flight is pending
     // is refused before any await, never queued. The first flight's
-    // commit wins and fires onSwitched exactly once.
+    // commit wins and fires onSwitched for its tenant exactly once --
+    // unless that commit is superseded and reconciled below.
     if (switching.current) {
       return
     }
     switching.current = true
     setErrorCode(null)
     setPending(true)
+    // The principal this switch speaks for, captured before the first
+    // attempt: a superseded outcome can only still reach the session
+    // through a later refresh while the SAME user owns it. The user_id
+    // is the proxy for "the held token family still reaches this
+    // request's server-side write" (a logout or another user's login
+    // replaced or cleared the family; see the file header for the one
+    // case the proxy cannot tell apart).
+    const issuedBy = session.getSnapshot().principal
     try {
-      await session.switchTenant(tenantId)
-      // Success is the host's to observe: the snapshot flipped to the new
-      // tenant and onSwitched fires exactly once below, after the
-      // in-flight state cleared, so the commit never surfaces as an
-      // error through this component.
-    } catch (error) {
-      if (isOperationSuperseded(error)) {
-        // This request's own switch went through server-side, but a
-        // concurrent sibling operation committed to the session first
-        // (see the file header). Treat it as a lost race, not a
-        // failure: no error renders, and onSwitched must not fire for
-        // a tenant the session is not actually running under -- the
-        // winning call already fired it for its own tenant.
-        setPending(false)
-        switching.current = false
-        return
+      // One request per attempt, staying pending across them. When the
+      // attempt is superseded -- a sibling operation committed to the
+      // session first -- this request's own server write may be the one
+      // the session row now holds, so the outcome reconciles by
+      // re-issuing the switch: the tenant the server actually committed
+      // must land as a real, announced commit, or a later silent
+      // refresh drifts the session into it behind the host's back (no
+      // onSwitched, no cache invalidation, the tenant permission list
+      // silently dropped).
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          await session.switchTenant(tenantId)
+          break
+        } catch (error) {
+          if (!isOperationSuperseded(error)) {
+            throw error
+          }
+          if (attempt + 1 >= MAX_SWITCH_ATTEMPTS) {
+            // The reconciliation budget is spent: racing operations keep
+            // owning the session. Contribute nothing -- no alert, no
+            // onSwitched (the residual drift window needs three or more
+            // concurrent commits; see the file header).
+            return
+          }
+          const winner = error.snapshot.principal
+          const canStillDrift =
+            winner !== null &&
+            issuedBy !== null &&
+            winner.user_id === issuedBy.user_id &&
+            winner.tenant_id !== tenantId
+          if (!canStillDrift) {
+            // The session already runs under the requested tenant (the
+            // race was redundant), or a different principal took it
+            // over (the token family was replaced -- no drift can
+            // follow). Contribute nothing.
+            return
+          }
+          // The drift condition holds: re-issue the same request. The
+          // flight stays pending; the loop breaks only on a commit.
+        }
       }
+    } catch (error) {
+      // A genuine failure of the switch (the membership, account-status,
+      // token-verification, session-lifecycle or transport answers): the
+      // state is exactly as it was (the auth-core contract) and the
+      // answer's code text renders below.
       setErrorCode(errorCodeOf(error))
+      return
+    } finally {
       setPending(false)
       switching.current = false
-      return
     }
-    setPending(false)
-    switching.current = false
     try {
+      // The commit is the host's to observe: the snapshot flipped to the
+      // requested tenant and onSwitched fires exactly once, after the
+      // in-flight state cleared, so the commit never surfaces as an
+      // error through this component.
       onSwitched?.(tenantId)
     } catch {
       // A throwing host callback is not a switch failure (onSwitched's
@@ -180,14 +280,35 @@ export function TenantSwitcher({
         <Button
           type="button"
           variant="outlined"
-          disabled={triggerDisabled}
+          disabled={triggerNativeDisabled}
+          aria-disabled={triggerInert || undefined}
           aria-haspopup="menu"
           aria-expanded={menuOpen}
           aria-controls={menuOpen ? menuId : undefined}
           onClick={(event) => {
+            if (triggerInert) {
+              // Inert while a switch is in flight: the list must not
+              // open under the flight (the entry guard would refuse the
+              // row anyway, but an inert control opens nothing).
+              return
+            }
             setErrorCode(null)
             setAnchorEl(event.currentTarget)
           }}
+          sx={
+            triggerInert
+              ? {
+                  // The disabled look of a control that must stay
+                  // focusable: MUI's own outlined-disabled recipe
+                  // (color + border from the theme tokens) -- the native
+                  // disabled attribute would drop the trigger out of the
+                  // tab order and break the menu-close focus restore.
+                  color: 'action.disabled',
+                  borderColor: 'action.disabledBackground',
+                  cursor: 'default',
+                }
+              : undefined
+          }
         >
           {currentTenant === null
             ? t('tenantSwitcher.noCurrentTenant')

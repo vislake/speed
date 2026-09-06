@@ -6,6 +6,10 @@
   "errors": {
     "authn": {
       "tenant_membership_required": "Your account is not a member of this organization.",
+      "tenant_membership_unavailable": "Your membership could not be verified. Contact an administrator for help.",
+      "invalid_credentials": "This account is not active. Contact an administrator for help.",
+      "authentication_required": "You need to sign in to continue.",
+      "token_invalid": "Your sign-in could not be verified. Please sign in again.",
       "session_not_found": "The session does not exist. Please sign in again.",
       "session_revoked": "The session was revoked. Please sign in again.",
       "refresh_token_invalid": "Your sign-in is no longer valid. Please sign in again.",

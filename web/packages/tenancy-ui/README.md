@@ -191,12 +191,36 @@ Behaviour, all of it controlled and test-pinned:
   is the generated operation over the host-bound client; the tenant
   travels in the switch request body, never in a header (tenant context
   travels in the access token, per the frontend standards).
-- **While the switch is in flight the trigger is disabled and a
+- **While the switch is in flight the trigger is inert and a
   `role="status"` notice renders the `tenantSwitcher.switching` text**,
   so the affordance never queues a second switch behind the first.
+  Inert means `aria-disabled` plus a refused open handler, never the
+  native `disabled` attribute: the menu closes onto the trigger at the
+  moment the flight starts, and the focus MUI restores to the trigger
+  on close can only land if the trigger stays focusable -- a
+  native-disabled control cannot take focus in a browser, and the
+  round trip would strand focus on `document.body`, leaving a failed
+  switch unreachable from where the keyboard user is.
 - **A successful switch is quiet**: the list closes, the trigger
-  re-enables and no alert renders. `onSwitched` fires exactly once,
-  after the commit -- never for a failed switch.
+  re-enables and no alert renders. `onSwitched` fires exactly once per
+  committed switch, after the commit -- never for a failed one.
+- **A switch that loses a race on the same session reconciles instead
+  of vanishing.** Two `TenantSwitcher` instances (chrome plus a drawer
+  copy) racing `switchTenant` to different tenants both succeed
+  server-side; the session row keeps whichever request wrote it last,
+  and auth-core rejects the client-side loser with
+  `OperationSupersededError`. The superseded call re-issues its own
+  switch (bounded), so the tenant the server actually committed lands
+  as a real, announced commit -- without it, the next silent refresh
+  (which mints for the server-stored current tenant) would drift the
+  session into the loser's tenant behind the host's back: no
+  `onSwitched`, no cache invalidation, the tenant permission list
+  silently dropped. A race whose loser is a different principal (a
+  login or logout replaced the token family) cannot drift and stays
+  quiet. The host's `onSwitched` fires once per commit, so in a race it
+  may report a tenant a reconciling commit supersedes moments later; a
+  handler that refetches for whatever tenant it is told ends consistent
+  with the session.
 - **A refused switch renders the answer's code text in one
   `role="alert"` banner and changes nothing locally**: the store keeps
   its token, the trigger stays enabled on the same current tenant, and
@@ -214,14 +238,15 @@ Behaviour, all of it controlled and test-pinned:
 ## Text and i18n
 
 Every built-in string ships in the bilingual `tenancy-ui` namespace,
-twelve leaves per language under two sections:
+sixteen leaves per language under two sections:
 
 - `tenantSwitcher` -- the two component states: `noCurrentTenant` and
   `switching`.
 - `errors` -- the code-to-text table of the tenant-switch surface,
-  nested per source: `errors.authn.*` (the session-lifecycle answers a
-  switch can draw), `errors.client.*` (transport failures) and the
-  `errors.unknown` fallback.
+  nested per source: `errors.authn.*` (the endpoint's membership and
+  account-status answers, the middleware's token-verification answers,
+  the session-lifecycle answers a switch can draw), `errors.client.*`
+  (transport failures) and the `errors.unknown` fallback.
 
 `registerNamespace` enforces the standing discipline -- canonical
 language keys, full coverage, identical leaf key sets across languages
@@ -232,11 +257,15 @@ importing the shipped JSON bundles, never by inlining language.
 ### Error text: the reachable-code whitelist
 
 The switch surface resolves a failure to text only for the codes it can
-actually draw, nine of them:
+actually draw, thirteen of them:
 
 | Code | When |
 |---|---|
 | `authn.tenant_membership_required` | the switch was refused: the principal is not a member of the target tenant |
+| `authn.tenant_membership_unavailable` | membership could not be established at all -- an unwired `MembershipReader` fails closed |
+| `authn.invalid_credentials` | the switch was refused: the account is not active (the endpoint's user-status check -- never a wrong password on this surface) |
+| `authn.authentication_required` | the switch request presented no credential |
+| `authn.token_invalid` | the presented access token did not verify |
 | `authn.session_not_found` | the session the switch travelled on no longer exists server-side |
 | `authn.session_revoked` | the session was revoked |
 | `authn.refresh_token_invalid` | a refresh was refused -- the session is over |
@@ -253,12 +282,20 @@ against the bundles by the internal error-text suite: a code added to
 the whitelist without its two bundle keys, or a bundle key added
 without its whitelist code, fails the suite.
 
-The `errors.authn.*` and `errors.client.*` texts are deliberate,
-verbatim copies of the `auth-ui` error texts for the same codes:
-same-tier packages cannot import one another's catalogs, and two
-versions of one server code's text must not drift apart in the product.
-The copy is noted in `resources.ts`, and the error-text suite imports
-the auth-ui bundles themselves as test data, so a divergence from the
+Where the switch answer and the sign-in answer share one meaning, the
+`errors.authn.*` and `errors.client.*` texts are deliberate, verbatim
+copies of the `auth-ui` error texts for the same codes: same-tier
+packages cannot import one another's catalogs, and two versions of one
+server code's text must not drift apart in the product. Three codes
+are not copies: `authn.invalid_credentials`, whose switch-surface
+meaning (account not active) is not the sign-in surface's (wrong
+password), and the two middleware token-verification answers
+`authn.authentication_required` / `authn.token_invalid`, which the
+pre-auth sign-in surface cannot be answered with and auth-ui therefore
+carries no text for -- those three texts are authored here, each
+recorded in the error-text suite's `SWITCH_AUTHORED_TEXTS`. The copy
+is noted in `resources.ts`, and the error-text suite imports the
+auth-ui bundles themselves as test data, so a divergence from the
 auth-ui bundle is a translation bug that fails that suite.
 
 ## Accessibility
@@ -267,9 +304,12 @@ The trigger is a `Button` with `aria-haspopup="menu"`, `aria-expanded`
 and `aria-controls` on the open list; the menu renders MUI's menu
 semantics, with the current-tenant row `disabled` -- announced and
 skipped by assistive tech, and inert even to synthetic clicks. The
-in-flight notice is a `role="status"` live region (announced without
-interrupting), the failure banner a `role="alert"`. The component suite
-runs axe over the open list on every relevant state. As in `ui-kit`
+in-flight trigger carries `aria-disabled` (inert, announced, and
+focusable -- never the native attribute, which would strand the
+menu-close focus restore), the in-flight notice is a `role="status"`
+live region (announced without interrupting), the failure banner a
+`role="alert"`. The component suite runs axe over the open list on
+every relevant state. As in `ui-kit`
 and `auth-ui`, `color-contrast` stays axe-disabled in jsdom (no real
 paint) and is verified browser-side in a later round.
 

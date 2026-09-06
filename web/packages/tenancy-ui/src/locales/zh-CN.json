@@ -6,6 +6,10 @@
   "errors": {
     "authn": {
       "tenant_membership_required": "你的账户尚未加入此组织。",
+      "tenant_membership_unavailable": "无法验证你的成员身份，请联系管理员。",
+      "invalid_credentials": "你的账户当前不可用，请联系管理员。",
+      "authentication_required": "请先登录后继续操作。",
+      "token_invalid": "登录状态无法识别，请重新登录。",
       "session_not_found": "会话不存在，请重新登录。",
       "session_revoked": "会话已被撤销，请重新登录。",
       "refresh_token_invalid": "登录状态已失效，请重新登录。",

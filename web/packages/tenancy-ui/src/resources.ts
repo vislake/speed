@@ -14,16 +14,25 @@
  * dist/ and the published package ships them through the "." entry, never
  * as separate locale subpaths.
  *
- * The errors section repeats the subset of @speed/auth-ui's error texts
- * the switch operation can answer with (authn.tenant_membership_required,
- * the five session-lifecycle codes, the three transport-level client.*
- * codes, errors.unknown). Same-tier packages cannot import one another's
- * catalogs, so the texts are deliberate duplicates, kept verbatim -- the
- * error-text suite beside inline-error.tsx imports the auth-ui bundles
- * themselves as test data and pins every copied leaf to its source, so
- * a divergence between the two packages' copies is a translation bug
- * that fails there, to fix in both, never a reason to introduce a
- * dependency edge.
+ * The errors section holds the code-to-text table of the switch
+ * surface's reachable answers: the membership and account-status codes
+ * the switch endpoint answers (authn.tenant_membership_required,
+ * authn.tenant_membership_unavailable, authn.invalid_credentials), the
+ * token-verification codes the authn middleware answers on the
+ * protected switch route (authn.authentication_required,
+ * authn.token_invalid), the five session-lifecycle codes, the three
+ * transport-level client.* codes, and errors.unknown. Where the switch
+ * answer and the sign-in answer share one meaning, the texts are
+ * deliberate duplicates of @speed/auth-ui's own, kept verbatim; where
+ * they diverge -- the middleware answers the pre-auth sign-in surface
+ * cannot draw, and invalid_credentials' account-status meaning on the
+ * switch surface -- the texts are authored here (the error-text suite's
+ * SWITCH_AUTHORED_TEXTS records each). Same-tier packages cannot import
+ * one another's catalogs; the error-text suite beside inline-error.tsx
+ * imports the auth-ui bundles themselves as test data and pins every
+ * copied leaf to its source, so a divergence between the two packages'
+ * copies is a translation bug that fails there, to fix in both, never a
+ * reason to introduce a dependency edge.
  */
 
 import type { ResourceBundle } from '@speed/i18n'

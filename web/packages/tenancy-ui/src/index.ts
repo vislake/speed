@@ -5,13 +5,19 @@
  * session: a trigger showing the current tenant (host-supplied name, or
  * the noCurrentTenant text when the host has no current tenant yet) that
  * opens the host-supplied tenant list; picking a row that is not the
- * current tenant calls session.switchTenant(id), disables the control
- * while the switch is in flight behind a role="status" notice, stays
- * silent on success (the host observes the principal flip through its own
- * auth-core hooks) and fires onSwitched exactly once, and renders a
+ * current tenant calls session.switchTenant(id), makes the control inert
+ * while the switch is in flight behind a role="status" notice (the
+ * trigger stays focusable, aria-disabled, so the menu-close focus
+ * restore lands on a live control), stays silent on success (the host
+ * observes the principal flip through its own auth-core hooks) and
+ * fires onSwitched exactly once per committed switch, and renders a
  * reachable error's code text -- never a raw key -- on failure, leaving
- * the state unchanged and the row retryable. The current-tenant row is
- * disabled and never re-triggers a switch.
+ * the state unchanged and the row retryable. When a switch loses a
+ * concurrent race on the same session (a second TenantSwitcher
+ * instance), the superseded call reconciles by re-issuing its own
+ * request (bounded) so the tenant the server actually committed lands
+ * as a real, announced commit instead of a later silent refresh drift.
+ * The current-tenant row is disabled and never re-triggers a switch.
  *
  * The component is controlled: the session arrives as a prop, the tenant
  * list is host data, and the current tenant id is a host value. Nothing
