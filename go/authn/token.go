@@ -122,10 +122,19 @@ const accessTokenKeyAlgorithm = "ed25519"
 type KeySource interface {
 	// EnsurePurpose declares that purpose needs a signing key of algorithm,
 	// with a retiring overlap period that must eventually cover
-	// maxCredentialLifetime. Signer calls it lazily, once, on its first
-	// Issue (see Signer.ensureOnce) -- not from Module.Register, which per
-	// pkgcore.Module's own contract may perform no I/O, and this call
-	// necessarily does (it may create a signing key on first boot).
+	// maxCredentialLifetime. Signer calls it lazily, on the first Issue,
+	// under one mutex that serializes concurrent callers -- not from
+	// Module.Register, which per pkgcore.Module's own contract may perform
+	// no I/O, and this call necessarily does (it may create a signing key
+	// on first boot). Success is remembered permanently: every later Issue
+	// skips straight to ActiveSigner. A failed call is not cached for the
+	// process's lifetime -- it is returned loudly to every Issue inside a
+	// bounded retry window, and the first Issue after that window calls
+	// this method once more under the mutex -- so an implementation must
+	// tolerate being invoked again after a failure, and the call is an
+	// idempotent no-op once the purpose has an active key: a key that is
+	// genuinely missing keeps every Issue failing with the same error,
+	// while one that merely hiccuped self-heals.
 	EnsurePurpose(ctx context.Context, purpose, algorithm string, maxCredentialLifetime time.Duration) error
 
 	// ActiveSigner returns the kid, algorithm and a context-aware signing
