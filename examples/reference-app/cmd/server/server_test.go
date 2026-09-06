@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -48,7 +50,12 @@ const testPassword = "a perfectly fine passphrase"
 // module's two contact indexers from the struct field directly -- the
 // APP_NOTIFICATION_INDEX_KEY environment default only exists on the
 // configFromEnv path, which this helper never takes -- and an empty key
-// fails the boot before the first request.
+// fails the boot before the first request. PKILocalKeyCipherKey,
+// AuthnBlindIndexKey and AuthnPIICipherKey are set for the identical
+// reason: buildServer reads all three straight off cfg (APP_ROOT_KEY's
+// derivation and each key's own individual env var both live in
+// configFromEnv, which this helper bypasses entirely), so an empty value
+// here fails the boot the same way an empty ConfigKey would.
 func testConfig(t *testing.T) serverConfig {
 	t.Helper()
 	return serverConfig{
@@ -58,6 +65,9 @@ func testConfig(t *testing.T) serverConfig {
 		ConfigKey:            devConfigKey,
 		OrgIndexKey:          devOrgIndexKey,
 		NotificationIndexKey: devNotificationIndexKey,
+		PKILocalKeyCipherKey: devPKILocalKeyCipherKey,
+		AuthnBlindIndexKey:   devBlindIndexKey,
+		AuthnPIICipherKey:    devPIICipherKey,
 		HostTenants:          demoHostTenants,
 		Memberships:          newDemoMemberships(),
 	}
@@ -1160,6 +1170,259 @@ func TestConfigFromEnv_InvalidDeploymentMode_ReturnsError(t *testing.T) {
 	}
 	if !errors.Is(err, pkgcore.ErrInvalidDeploymentMode) {
 		t.Fatalf("configFromEnv error = %v, want it to wrap %v", err, pkgcore.ErrInvalidDeploymentMode)
+	}
+}
+
+// rootKeyEnvVars lists every environment variable an explicit individual
+// key can be set through, in the same order rootKeyEnv's own doc comment
+// lists the six key materials. The root-key tests below clear all six
+// before setting APP_ROOT_KEY, so every key is proven to resolve through
+// the derivation path with nothing left over from the ambient environment.
+var rootKeyEnvVars = []string{
+	configKeyEnv, orgIndexKeyEnv, notificationIndexKeyEnv,
+	pkiLocalKeyCipherKeyEnv, authnBlindIndexKeyEnv, authnPIICipherKeyEnv,
+}
+
+// clearRootKeyOverrides sets every one of rootKeyEnvVars to "" via
+// t.Setenv, so a root-key test's outcome depends only on APP_ROOT_KEY
+// and never on an individual override left set by a previous test or the
+// ambient shell.
+func clearRootKeyOverrides(t *testing.T) {
+	t.Helper()
+	for _, env := range rootKeyEnvVars {
+		t.Setenv(env, "")
+	}
+}
+
+// TestConfigFromEnv_RootKey_DerivesAllSixKeys proves APP_ROOT_KEY alone
+// -- no individual key env var set -- derives every one of the six key
+// materials rootKeyEnv's own doc comment lists, and that configFromEnv's
+// derivation matches dbkit.DeriveKey called directly with this file's own
+// rootKeyPurpose* constants: not merely "some non-default bytes landed in
+// cfg", but the exact key a caller who knew the root and the purpose
+// string could reproduce independently.
+func TestConfigFromEnv_RootKey_DerivesAllSixKeys(t *testing.T) {
+	t.Setenv("APP_DEPLOYMENT_MODE", "")
+	t.Setenv("PORT", "")
+	t.Setenv("APP_DB_PATH", "")
+	clearRootKeyOverrides(t)
+
+	rootKey := sha256.Sum256([]byte("TestConfigFromEnv_RootKey_DerivesAllSixKeys root secret"))
+	t.Setenv(rootKeyEnv, hex.EncodeToString(rootKey[:]))
+
+	cfg, err := configFromEnv()
+	if err != nil {
+		t.Fatalf("configFromEnv: %v", err)
+	}
+
+	for _, tt := range []struct {
+		name    string
+		got     []byte
+		purpose string
+	}{
+		{"ConfigKey", cfg.ConfigKey, rootKeyPurposeConfigCipher},
+		{"OrgIndexKey", cfg.OrgIndexKey, rootKeyPurposeOrgIndex},
+		{"NotificationIndexKey", cfg.NotificationIndexKey, rootKeyPurposeNotificationIndex},
+		{"PKILocalKeyCipherKey", cfg.PKILocalKeyCipherKey, rootKeyPurposePKILocalKeyCipher},
+		{"AuthnBlindIndexKey", cfg.AuthnBlindIndexKey, rootKeyPurposeAuthnBlindIndex},
+		{"AuthnPIICipherKey", cfg.AuthnPIICipherKey, rootKeyPurposeAuthnPIICipher},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			want, deriveErr := dbkit.DeriveKey(rootKey[:], tt.purpose)
+			if deriveErr != nil {
+				t.Fatalf("dbkit.DeriveKey(rootKey, %q): %v", tt.purpose, deriveErr)
+			}
+			if !bytes.Equal(tt.got, want) {
+				t.Fatalf("cfg.%s = %x, want dbkit.DeriveKey(rootKey, %q) = %x", tt.name, tt.got, tt.purpose, want)
+			}
+		})
+	}
+
+	// The six derived keys must also be pairwise distinct -- a purpose
+	// string collision (or a resolveKey wiring mistake reusing one
+	// derived value for two fields) would silently reintroduce the exact
+	// key-material reuse dbkit's key-separation rule forbids.
+	keys := map[string][]byte{
+		"ConfigKey": cfg.ConfigKey, "OrgIndexKey": cfg.OrgIndexKey,
+		"NotificationIndexKey": cfg.NotificationIndexKey, "PKILocalKeyCipherKey": cfg.PKILocalKeyCipherKey,
+		"AuthnBlindIndexKey": cfg.AuthnBlindIndexKey, "AuthnPIICipherKey": cfg.AuthnPIICipherKey,
+	}
+	seen := make(map[string]string, len(keys))
+	for name, key := range keys {
+		digest := hex.EncodeToString(key)
+		if other, ok := seen[digest]; ok {
+			t.Fatalf("%s and %s derived to the identical key %s", name, other, digest)
+		}
+		seen[digest] = name
+	}
+}
+
+// TestConfigFromEnv_RootKey_IndividualOverrideWins proves the precedence
+// order rootKeyEnv's own doc comment states: with both APP_ROOT_KEY and
+// one individual key env var (APP_CONFIG_KEY) set, the explicit
+// individual value wins for that one key, while every other key still
+// resolves through the root-key derivation -- the "power users can still
+// override any single one" half of the design.
+func TestConfigFromEnv_RootKey_IndividualOverrideWins(t *testing.T) {
+	t.Setenv("APP_DEPLOYMENT_MODE", "")
+	t.Setenv("PORT", "")
+	t.Setenv("APP_DB_PATH", "")
+	clearRootKeyOverrides(t)
+
+	rootKey := sha256.Sum256([]byte("TestConfigFromEnv_RootKey_IndividualOverrideWins root secret"))
+	t.Setenv(rootKeyEnv, hex.EncodeToString(rootKey[:]))
+
+	explicitConfigKey := sha256.Sum256([]byte("TestConfigFromEnv_RootKey_IndividualOverrideWins explicit APP_CONFIG_KEY"))
+	t.Setenv(configKeyEnv, hex.EncodeToString(explicitConfigKey[:]))
+
+	cfg, err := configFromEnv()
+	if err != nil {
+		t.Fatalf("configFromEnv: %v", err)
+	}
+
+	if !bytes.Equal(cfg.ConfigKey, explicitConfigKey[:]) {
+		t.Fatalf("cfg.ConfigKey = %x, want the explicit %s value %x (it must win over the APP_ROOT_KEY derivation)",
+			cfg.ConfigKey, configKeyEnv, explicitConfigKey[:])
+	}
+
+	wantOrgIndexKey, err := dbkit.DeriveKey(rootKey[:], rootKeyPurposeOrgIndex)
+	if err != nil {
+		t.Fatalf("dbkit.DeriveKey: %v", err)
+	}
+	if !bytes.Equal(cfg.OrgIndexKey, wantOrgIndexKey) {
+		t.Fatalf("cfg.OrgIndexKey = %x, want it to still resolve through the APP_ROOT_KEY derivation (%x) since %s was never set",
+			cfg.OrgIndexKey, wantOrgIndexKey, orgIndexKeyEnv)
+	}
+}
+
+// TestBuildServer_RootKeyAlone_AllSixDerivedKeysWorkForTheirRealPurpose is
+// this round's own end-to-end proof: APP_ROOT_KEY set alone (every
+// individual key env var cleared), configFromEnv resolves all six key
+// materials through dbkit.DeriveKey, buildServer boots a real composed
+// server from the result, and every one of the six derived keys is
+// exercised through the real mechanism it protects -- never merely "no
+// error from NewCipher/NewBlindIndexer".
+//
+// ConfigKey, OrgIndexKey and NotificationIndexKey are proven with a real
+// encrypt/decrypt or Index/Equal round trip through the exact dbkit
+// primitive (and, for the two blind-index keys, the exact column name and
+// normalizer) buildServer itself wires them into -- see server.go's own
+// dbkit.NewBlindIndexer("email_index", ...) and
+// dbkit.NewBlindIndexer("contact_email_index"/"contact_phone_index", ...)
+// call sites. PKILocalKeyCipherKey, AuthnBlindIndexKey and
+// AuthnPIICipherKey are proven together by a real register-then-login
+// round trip through the actual composed HTTP stack: registration
+// encrypts the new user's email under AuthnPIICipherKey and blind-indexes
+// it under AuthnBlindIndexKey, and login can only succeed if the very
+// same derived AuthnBlindIndexKey both wrote and reads back that index
+// value -- while the returned, verified access token proves
+// PKILocalKeyCipherKey correctly round-tripped pki's persisted signing
+// key well enough to both mint and verify a real EdDSA-signed token.
+func TestBuildServer_RootKeyAlone_AllSixDerivedKeysWorkForTheirRealPurpose(t *testing.T) {
+	t.Setenv("APP_DEPLOYMENT_MODE", "")
+	t.Setenv("PORT", "0")
+	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "reference-app-rootkey-e2e-test.db"))
+	t.Setenv("APP_REDIS_ADDR", "")
+	t.Setenv("APP_DEMO_USERS_PASSWORD", "")
+	clearRootKeyOverrides(t)
+
+	rootKey := sha256.Sum256([]byte("TestBuildServer_RootKeyAlone root secret"))
+	t.Setenv(rootKeyEnv, hex.EncodeToString(rootKey[:]))
+
+	cfg, err := configFromEnv()
+	if err != nil {
+		t.Fatalf("configFromEnv: %v", err)
+	}
+	cfg.HostTenants = demoHostTenants
+	cfg.Memberships = newDemoMemberships()
+
+	// ConfigKey: the exact mechanism go/config's Sensitive values are
+	// sealed with (config.WithCipher over dbkit.NewCipher, per
+	// go/config/AGENTS.md) -- a real Encrypt/Decrypt round trip under the
+	// derived key.
+	configCipher, err := dbkit.NewCipher(cfg.ConfigKey)
+	if err != nil {
+		t.Fatalf("dbkit.NewCipher(cfg.ConfigKey): %v", err)
+	}
+	const configPlaintext = "sensitive config value protected by the derived ConfigKey"
+	ciphertext, err := configCipher.Encrypt([]byte(configPlaintext))
+	if err != nil {
+		t.Fatalf("configCipher.Encrypt: %v", err)
+	}
+	decrypted, err := configCipher.Decrypt(ciphertext)
+	if err != nil {
+		t.Fatalf("configCipher.Decrypt: %v", err)
+	}
+	if string(decrypted) != configPlaintext {
+		t.Fatalf("configCipher round trip = %q, want %q", decrypted, configPlaintext)
+	}
+
+	// OrgIndexKey and NotificationIndexKey: the exact BlindIndexer
+	// construction (column name and normalizer included) buildServer
+	// itself wires org.WithEmailIndexer and the notification contact
+	// indexers from -- a real Index/Equal round trip under each derived
+	// key.
+	orgIndexer, err := dbkit.NewBlindIndexer("email_index", cfg.OrgIndexKey, dbkit.NormalizeEmail)
+	if err != nil {
+		t.Fatalf("dbkit.NewBlindIndexer(org email_index): %v", err)
+	}
+	assertBlindIndexRoundTrip(t, orgIndexer, "invitee@example.com")
+
+	contactEmailIndexer, err := dbkit.NewBlindIndexer("contact_email_index", cfg.NotificationIndexKey, dbkit.NormalizeEmail)
+	if err != nil {
+		t.Fatalf("dbkit.NewBlindIndexer(notification contact_email_index): %v", err)
+	}
+	assertBlindIndexRoundTrip(t, contactEmailIndexer, "contact@example.com")
+
+	contactPhoneIndexer, err := dbkit.NewBlindIndexer("contact_phone_index", cfg.NotificationIndexKey, dbkit.NormalizePhoneE164)
+	if err != nil {
+		t.Fatalf("dbkit.NewBlindIndexer(notification contact_phone_index): %v", err)
+	}
+	assertBlindIndexRoundTrip(t, contactPhoneIndexer, "+15550100")
+
+	// PKILocalKeyCipherKey, AuthnBlindIndexKey and AuthnPIICipherKey,
+	// together: boot the real composed server and drive a real
+	// register-then-login round trip through it.
+	handler, cleanup, err := buildServer(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("buildServer with APP_ROOT_KEY alone: %v", err)
+	}
+	t.Cleanup(func() {
+		if cleanupErr := cleanup(); cleanupErr != nil {
+			t.Errorf("cleanup: %v", cleanupErr)
+		}
+	})
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "root-key-proof")
+	if token == "" {
+		t.Fatal("registerAndAuthenticate returned an empty access token")
+	}
+}
+
+// assertBlindIndexRoundTrip proves indexer genuinely functions as a blind
+// index: Index(raw) is deterministic, and Equal(raw)'s returned condition
+// carries exactly the value Index(raw) computed -- the write side and the
+// query side agreeing is what makes "WHERE <column> = ?" actually find the
+// row Index wrote, the real purpose a blind-index key exists to serve.
+func assertBlindIndexRoundTrip(t *testing.T, indexer *dbkit.BlindIndexer, raw string) {
+	t.Helper()
+
+	indexed, err := indexer.Index(raw)
+	if err != nil {
+		t.Fatalf("Index(%q): %v", raw, err)
+	}
+	if indexed == "" {
+		t.Fatalf("Index(%q) returned an empty index", raw)
+	}
+
+	cond, err := indexer.Equal(raw)
+	if err != nil {
+		t.Fatalf("Equal(%q): %v", raw, err)
+	}
+	if cond.Value != indexed {
+		t.Fatalf("Equal(%q) condition value = %v, want it to match Index(%q) = %q", raw, cond.Value, raw, indexed)
 	}
 }
 

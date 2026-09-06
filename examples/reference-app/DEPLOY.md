@@ -49,14 +49,12 @@ Run every command below from the **repository root** (where `fly.toml` lives):
 fly launch --name <your-unique-app-name> --region <your-region> --no-deploy \
   --copy-config --org <your-org>
 
-# 2. Set the three bootstrap secrets configFromEnv treats as
-#    security-sensitive (see "Secrets to set first" below). Generate real
-#    values -- never reuse the example below, never commit real values
-#    anywhere in this repository.
+# 2. Set the one root secret configFromEnv derives all six of its
+#    bootstrap key materials from (see "Secrets to set first" below).
+#    Generate a real value -- never reuse the example below, never commit
+#    a real value anywhere in this repository.
 fly secrets set \
-  APP_CONFIG_KEY="$(openssl rand -hex 32)" \
-  APP_ORG_INDEX_KEY="$(openssl rand -hex 32)" \
-  APP_NOTIFICATION_INDEX_KEY="$(openssl rand -hex 32)"
+  APP_ROOT_KEY="$(openssl rand -hex 32)"
 
 # 3. First deploy. Creates the volume declared in fly.toml's [[mounts]] on
 #    first deploy if it does not already exist (recent flyctl versions do
@@ -82,13 +80,28 @@ curl -s "https://<your-app-name>.fly.dev/api/config/public"
 
 ### Secrets to set first
 
-Every one of these is named, never valued, by this repository — generate real values yourself (`openssl rand -hex 32` for the three 32-byte hex keys) and set them only through `fly secrets set`, never in `fly.toml`'s `[env]` (which is plaintext and committed) or anywhere else in this repository. `cmd/server/server.go`'s `configFromEnv` is the authority for what each one does; `.env.example` has the equivalent local-development explanation for each.
+**Set `APP_ROOT_KEY` — that is the whole recommended path.** `cmd/server/server.go`'s `configFromEnv` derives all six of the bootstrap key materials below from this one 32-byte hex secret via `dbkit.DeriveKey` (HKDF-SHA256, one distinct, versioned purpose string per key — `go/dbkit/AGENTS.md`'s "Key derivation" section has the full mechanism and its honest trade-off: a leaked root key compromises all six at once, and rotating it rotates all six together). Generate one value and set it, never valued by this repository — generate it yourself (`openssl rand -hex 32`) and set it only through `fly secrets set`, never in `fly.toml`'s `[env]` (which is plaintext and committed) or anywhere else in this repository:
+
+```bash
+fly secrets set APP_ROOT_KEY="$(openssl rand -hex 32)"
+```
+
+**Why this matters before real public traffic, not just as a convenience.** Before `APP_ROOT_KEY` existed, three of these six key materials — `APP_PKI_LOCAL_KEY_CIPHER_KEY`, `APP_AUTHN_BLIND_INDEX_KEY` and `APP_AUTHN_PII_CIPHER_KEY` — had **no environment-variable override path at all**: the only way to change them was editing the hardcoded, committed-to-source-control development defaults in `server.go` itself. A reference-app deployment that set only the three older keys (`APP_CONFIG_KEY`/`APP_ORG_INDEX_KEY`/`APP_NOTIFICATION_INDEX_KEY`) was, without anyone necessarily realizing it, still running its `pki` signing-key storage, its `authn` email/phone blind index and its `authn` PII encryption (email, phone, TOTP secrets) on keys committed to this very repository's source — a real, live gap this round closes. Setting `APP_ROOT_KEY` (or, at minimum, the three individual variables in the table below) before real public traffic reaches a deployment is what actually closes it.
+
+| Secret | Why it is sensitive |
+|---|---|
+| `APP_ROOT_KEY` | **Recommended default.** The single root secret `configFromEnv` derives every other key below from. Set this and skip the rest of this table entirely for a normal deployment. |
+
+Advanced: setting one or more of the six individual keys directly, instead of (or in addition to) `APP_ROOT_KEY`, for fine-grained per-key rotation. **An explicitly-set individual variable always wins over what `APP_ROOT_KEY` would derive for that same key** — the two compose freely, so a deployment can derive five keys from the root and rotate the sixth independently by setting only its own variable.
 
 | Secret | Why it is sensitive |
 |---|---|
 | `APP_CONFIG_KEY` | The master key `config.WithCipher` seals every Sensitive dynamic-configuration value with. The key that encrypts the `configs` table cannot live in that table, so it must come from the environment — and a real deployment must never fall back to the committed, documented-as-non-secret `devConfigKey` development default. |
 | `APP_ORG_INDEX_KEY` | The HMAC key org's blind indexer normalizes and indexes invitation email addresses with. A dbkit rule (an AES key must never double as an HMAC key) is why this is a separate secret from `APP_CONFIG_KEY`, never the same value. |
 | `APP_NOTIFICATION_INDEX_KEY` | The HMAC key the notification module's blind indexers index encrypted contact email/phone addresses with. Same separate-secret rule as above, and separate again from `APP_ORG_INDEX_KEY`. |
+| `APP_PKI_LOCAL_KEY_CIPHER_KEY` | The AES key that seals go/pki's `LocalSigner` private-key column — the key authn's access tokens are ultimately signed with. Had no override path before this round; a deployment that never set this was running signing-key storage on a key committed to this repository. |
+| `APP_AUTHN_BLIND_INDEX_KEY` | The HMAC key authn indexes `users.email_index`/`phone_index` with, so a user can be found by email or phone without decrypting every row. Must stay identical across restarts (changing it — including by rotating `APP_ROOT_KEY` — makes every already-stored index unfindable until a rebuild) — had no override path before this round. |
+| `APP_AUTHN_PII_CIPHER_KEY` | The AES key that seals authn's encrypted PII columns (email, phone, TOTP secrets). Had no override path before this round; deliberately a separate secret from `APP_CONFIG_KEY` and from `APP_PKI_LOCAL_KEY_CIPHER_KEY` — dbkit's key-separation rule applies across modules, not only within one. |
 
 Optional, but recommended to set as a secret rather than leave in `[env]` **for a real deployment reachable over the public internet** — `APP_DEMO_USERS_PASSWORD` (gates the boot-time demo-user seed, `demo_users.go`). The app's own code and `.env.example` treat this as a non-secret local-demo passphrase, which is true on a laptop nobody else can reach; on a public Fly.io URL, though, whoever knows this value can sign in as `demo-owner@example.com`, a real account holding every permission any module declared. This deployment's `fly.toml` leaves it **unset entirely**, which skips the demo-account seed — the safer default for a fresh public deployment. Set it only if you deliberately want the demo accounts reachable, and set it via `fly secrets set APP_DEMO_USERS_PASSWORD=...`, never `[env]`.
 

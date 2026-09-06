@@ -139,6 +139,69 @@ const (
 	// between them.
 	notificationIndexKeyEnv = "APP_NOTIFICATION_INDEX_KEY"
 
+	// pkiLocalKeyCipherKeyEnv names the environment variable holding the
+	// hex-encoded 32-byte AES key that seals go/pki's LocalSigner private-key
+	// column (pki_local_keys, via pki.RegisterLocalKeySerializer). Before
+	// this round it had NO override path at all -- only the hardcoded
+	// devPKILocalKeyCipherKey development default existed -- so a real
+	// deployment that set none of this file's other keys was silently
+	// running its signing-key storage on a key committed to this
+	// repository's own source. It is a SEPARATE bootstrap secret from every
+	// other key in this file: dbkit's key-separation rule applies across
+	// modules, not only within one (devPKILocalKeyCipherKey's own doc
+	// comment).
+	pkiLocalKeyCipherKeyEnv = "APP_PKI_LOCAL_KEY_CIPHER_KEY"
+
+	// authnBlindIndexKeyEnv names the environment variable holding the
+	// hex-encoded 32-byte HMAC key authn.WithBlindIndexKey indexes its
+	// users.email_index/phone_index columns with (dbkit.NewBlindIndexer).
+	// Like pkiLocalKeyCipherKeyEnv above, this had NO override path before
+	// this round -- only the hardcoded devBlindIndexKey development default
+	// existed. This key must stay IDENTICAL across restarts (devBlindIndexKey's
+	// own doc comment) or every already-stored email/phone blind index
+	// becomes unfindable, so setting this env var (or APP_ROOT_KEY, which
+	// derives it) and then changing it has the same operational
+	// consequences a real key rotation always has -- see "Key derivation"
+	// in go/dbkit/AGENTS.md for the rotation-granularity trade-off.
+	authnBlindIndexKeyEnv = "APP_AUTHN_BLIND_INDEX_KEY"
+
+	// authnPIICipherKeyEnv names the environment variable holding the
+	// hex-encoded 32-byte AES key that seals authn's encrypted PII columns
+	// (email, phone, TOTP secrets) via authn.RegisterPIISerializer. Like
+	// its two siblings above, this had NO override path before this round --
+	// only the hardcoded devPIICipherKey development default existed --
+	// deliberately a SEPARATE secret from every other key in this file,
+	// including pkiLocalKeyCipherKeyEnv (devPIICipherKey's own doc comment).
+	authnPIICipherKeyEnv = "APP_AUTHN_PII_CIPHER_KEY"
+
+	// rootKeyEnv names the environment variable holding a single
+	// hex-encoded 32-byte high-entropy root secret that, when set, derives
+	// ALL SIX of the key materials this file otherwise requires
+	// individually (configKeyEnv, orgIndexKeyEnv, notificationIndexKeyEnv,
+	// pkiLocalKeyCipherKeyEnv, authnBlindIndexKeyEnv, authnPIICipherKeyEnv)
+	// via dbkit.DeriveKey, one distinct, versioned purpose string per key
+	// (see the rootKeyPurpose* constants below) -- so a deployer can set
+	// ONE secret instead of six and still end up with six independent
+	// derived keys, none of them reused across two differently-designed
+	// constructions (go/dbkit/AGENTS.md's "Key derivation" section has the
+	// full rationale and the honest trade-off: a leaked root key
+	// compromises every derived key at once, and rotating the root
+	// rotates all six simultaneously).
+	//
+	// Precedence, applied independently per key: an explicitly-set
+	// individual environment variable (e.g. APP_ORG_INDEX_KEY) always
+	// wins over what APP_ROOT_KEY would have derived for that same key,
+	// which in turn always wins over the hardcoded development default --
+	// so setting APP_ROOT_KEY alone is the recommended default for a
+	// real deployment (examples/reference-app/DEPLOY.md documents this),
+	// while a deployment that wants fine-grained, independent rotation for
+	// one specific key keeps setting that key's own variable instead, and
+	// the two compose freely. Leaving APP_ROOT_KEY unset changes nothing
+	// about this file's behavior before this round existed -- every one of
+	// the six keys still falls back to its own hardcoded development
+	// default exactly as before.
+	rootKeyEnv = "APP_ROOT_KEY"
+
 	// redisAddrEnv names the environment variable holding the Redis server
 	// address ("host:port") the injected EventBus AND KVStore connect to --
 	// one Redis instance backs both seams, sharing one *redis.Client the
@@ -223,6 +286,26 @@ const (
 	// (the default), buildServer's behavior is exactly what it was before
 	// this variable existed.
 	disableQueueWorkerEnv = "APP_DISABLE_QUEUE_WORKER"
+
+	// rootKeyPurposeConfigCipher, rootKeyPurposeOrgIndex,
+	// rootKeyPurposeNotificationIndex, rootKeyPurposePKILocalKeyCipher,
+	// rootKeyPurposeAuthnBlindIndex and rootKeyPurposeAuthnPIICipher are the
+	// six dbkit.DeriveKey purpose strings APP_ROOT_KEY's derivation uses,
+	// one per key material rootKeyEnv's doc comment above lists, in the
+	// same order. Each is distinct (so no two ever derive the same bytes)
+	// and versioned (a trailing ".v1", per DeriveKey's own doc comment on
+	// why: a deliberate future re-derivation bumps the suffix rather than
+	// editing a string already used in production, which would silently
+	// re-derive a different key for whatever it named). Never rename or
+	// reuse one of these strings once APP_ROOT_KEY ships to a real
+	// deployment -- doing so is operationally identical to rotating that
+	// one key without telling anyone.
+	rootKeyPurposeConfigCipher      = "speed.reference-app.config.cipher.v1"
+	rootKeyPurposeOrgIndex          = "speed.reference-app.org.blind_index.v1"
+	rootKeyPurposeNotificationIndex = "speed.reference-app.notification.blind_index.v1"
+	rootKeyPurposePKILocalKeyCipher = "speed.reference-app.pki.local_key_cipher.v1"
+	rootKeyPurposeAuthnBlindIndex   = "speed.reference-app.authn.blind_index.v1"
+	rootKeyPurposeAuthnPIICipher    = "speed.reference-app.authn.pii_cipher.v1"
 )
 
 // devConfigKey is the master key used when APP_CONFIG_KEY is unset. It is
@@ -263,7 +346,12 @@ var devOrgIndexKey = []byte{
 // (and pki's) own committed-key placeholders, the same documented trade-off
 // as devConfigKey immediately above -- a real deployment must replace every
 // one of them with real secret-manager material, never commit real keys the
-// way this demo commits these.
+// way this demo commits these. Each now has a real override path
+// (pkiLocalKeyCipherKeyEnv / authnBlindIndexKeyEnv / authnPIICipherKeyEnv,
+// or APP_ROOT_KEY deriving all three at once -- see rootKeyEnv's own doc
+// comment); these three vars are consulted only as resolveKey's devDefault
+// fallback in configFromEnv now, never referenced directly by buildServer
+// any more.
 //
 // Each protects something different and each MUST stay stable across
 // restarts for a different reason: devPKILocalKeyCipherKey seals go/pki's
@@ -573,8 +661,23 @@ type serverConfig struct {
 	ConfigKey            []byte
 	OrgIndexKey          []byte
 	NotificationIndexKey []byte
-	RedisAddr            string
-	HostTenants          map[string]pkgcore.TenantID
+
+	// PKILocalKeyCipherKey, AuthnBlindIndexKey and AuthnPIICipherKey are
+	// the three key materials that had NO environment-variable override
+	// path at all before this round -- see pkiLocalKeyCipherKeyEnv's,
+	// authnBlindIndexKeyEnv's and authnPIICipherKeyEnv's own doc comments
+	// above for what each protects and why each is a separate secret.
+	// configFromEnv resolves all six key fields on this struct (these
+	// three plus ConfigKey/OrgIndexKey/NotificationIndexKey above) through
+	// the same three-tier precedence: an explicitly-set individual
+	// environment variable wins over a APP_ROOT_KEY derivation, which
+	// wins over the hardcoded development default.
+	PKILocalKeyCipherKey []byte
+	AuthnBlindIndexKey   []byte
+	AuthnPIICipherKey    []byte
+
+	RedisAddr   string
+	HostTenants map[string]pkgcore.TenantID
 
 	// S3Endpoint, S3Bucket, S3AccessKey, S3SecretKey, S3Region and S3UseSSL
 	// compose a real S3-compatible ObjectStore for the "objectstore" seam
@@ -725,6 +828,56 @@ type serverConfig struct {
 	WebhookHTTPClient   *http.Client
 }
 
+// parseHexKeyEnv decodes encoded -- envName's raw value -- as a hex-encoded
+// 32-byte key, returning a precise error naming envName when encoded is not
+// exactly configKeyHexLength hex characters or is not valid hex, rather than
+// letting a subtly wrong value surface later as an opaque dbkit.NewCipher /
+// dbkit.NewBlindIndexer / dbkit.DeriveKey error. Every one of this file's
+// six key-material environment variables, plus rootKeyEnv itself, share
+// this exact validation.
+func parseHexKeyEnv(envName, encoded string) ([]byte, error) {
+	if len(encoded) != configKeyHexLength {
+		return nil, fmt.Errorf(
+			"reference-app: %s must hold %d hex characters (a 32-byte key), got %d",
+			envName, configKeyHexLength, len(encoded))
+	}
+	decoded, err := hex.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("reference-app: %s: %w", envName, err)
+	}
+	return decoded, nil
+}
+
+// resolveKey applies the three-tier precedence configFromEnv uses for every
+// one of the six key materials rootKeyEnv's own doc comment lists: an
+// explicitly-set individualEnv always wins, over a rootKey-derived value
+// (dbkit.DeriveKey(rootKey, purpose), computed only when rootKey is
+// non-nil -- i.e. APP_ROOT_KEY was set), which in turn always wins over
+// devDefault, the hardcoded development fallback that existed before this
+// round and still applies unchanged when neither rootKey nor individualEnv
+// is set. This precedence lets a deployment set one root secret and still
+// override any single derived key independently, for a fine-grained
+// rotation cadence that key alone needs (go/dbkit/AGENTS.md's "Key
+// derivation" section has the full rationale).
+func resolveKey(rootKey []byte, purpose, individualEnv string, devDefault []byte) ([]byte, error) {
+	key := devDefault
+	if rootKey != nil {
+		derived, err := dbkit.DeriveKey(rootKey, purpose)
+		if err != nil {
+			return nil, fmt.Errorf("reference-app: derive %s from %s: %w", individualEnv, rootKeyEnv, err)
+		}
+		key = derived
+	}
+	if encoded := os.Getenv(individualEnv); encoded != "" {
+		decoded, err := parseHexKeyEnv(individualEnv, encoded)
+		if err != nil {
+			return nil, err
+		}
+		key = decoded
+	}
+	return key, nil
+}
+
 // configFromEnv reads serverConfig from the environment, defaulting to the
 // standalone deployment mode on SQLite so `go run ./cmd/server` genuinely
 // starts a working server with zero external dependencies.
@@ -754,63 +907,53 @@ func configFromEnv() (serverConfig, error) {
 	// default intact.
 	redisAddr := os.Getenv(redisAddrEnv)
 
-	// The config master key: APP_CONFIG_KEY when set (a hex-encoded
-	// 32-byte key -- see configKeyEnv's doc comment), the documented
-	// development default otherwise (see devConfigKey's). A malformed
-	// value must fail startup with a precise message rather than surface
-	// later as an opaque cipher error; hex.DecodeString rejects anything
-	// that is not valid lowercase-or-uppercase hex, and the length check
-	// below rejects anything that does not decode to exactly 32 bytes.
-	configKey := devConfigKey
-	if encoded := os.Getenv(configKeyEnv); encoded != "" {
-		if len(encoded) != configKeyHexLength {
-			return serverConfig{}, fmt.Errorf(
-				"reference-app: %s must hold %d hex characters (a 32-byte key), got %d",
-				configKeyEnv, configKeyHexLength, len(encoded))
+	// The root secret: APP_ROOT_KEY when set (a hex-encoded 32-byte key --
+	// see rootKeyEnv's own doc comment), nil otherwise. nil is the signal
+	// resolveKey below reads as "no root key configured" -- every one of
+	// the six key materials then falls back to its own hardcoded
+	// development default exactly as if this round had never landed.
+	var rootKey []byte
+	if encoded := os.Getenv(rootKeyEnv); encoded != "" {
+		decoded, decodeErr := parseHexKeyEnv(rootKeyEnv, encoded)
+		if decodeErr != nil {
+			return serverConfig{}, decodeErr
 		}
-		decoded, err := hex.DecodeString(encoded)
-		if err != nil {
-			return serverConfig{}, fmt.Errorf("reference-app: %s: %w", configKeyEnv, err)
-		}
-		configKey = decoded
+		rootKey = decoded
 	}
 
-	// The org invitation blind-index key: APP_ORG_INDEX_KEY when set,
-	// devOrgIndexKey otherwise -- same parsing and same failure shape as
-	// configKey above, and see orgIndexKeyEnv's own doc comment for why
-	// this must be a key distinct from configKey rather than the same one
-	// reused.
-	orgIndexKey := devOrgIndexKey
-	if encoded := os.Getenv(orgIndexKeyEnv); encoded != "" {
-		if len(encoded) != configKeyHexLength {
-			return serverConfig{}, fmt.Errorf(
-				"reference-app: %s must hold %d hex characters (a 32-byte key), got %d",
-				orgIndexKeyEnv, configKeyHexLength, len(encoded))
-		}
-		decoded, err := hex.DecodeString(encoded)
-		if err != nil {
-			return serverConfig{}, fmt.Errorf("reference-app: %s: %w", orgIndexKeyEnv, err)
-		}
-		orgIndexKey = decoded
+	// Each of the six key materials this app assembles resolves through
+	// the identical three-tier precedence: an explicitly-set individual
+	// environment variable wins over what APP_ROOT_KEY would derive for
+	// it, which wins over the hardcoded development default -- see
+	// resolveKey's own doc comment and rootKeyEnv's above for the full
+	// rationale. A malformed individual value fails startup with a precise
+	// message rather than surfacing later as an opaque cipher error;
+	// hex.DecodeString rejects anything that is not valid
+	// lowercase-or-uppercase hex, and the length check parseHexKeyEnv runs
+	// first rejects anything that does not decode to exactly 32 bytes.
+	configKey, err := resolveKey(rootKey, rootKeyPurposeConfigCipher, configKeyEnv, devConfigKey)
+	if err != nil {
+		return serverConfig{}, err
 	}
-
-	// The notification contact-address blind-index key:
-	// APP_NOTIFICATION_INDEX_KEY when set, devNotificationIndexKey
-	// otherwise -- same parsing and same failure shape as configKey above,
-	// and see notificationIndexKeyEnv's own doc comment for why this must
-	// be a key distinct from configKey rather than the same one reused.
-	notificationIndexKey := devNotificationIndexKey
-	if encoded := os.Getenv(notificationIndexKeyEnv); encoded != "" {
-		if len(encoded) != configKeyHexLength {
-			return serverConfig{}, fmt.Errorf(
-				"reference-app: %s must hold %d hex characters (a 32-byte key), got %d",
-				notificationIndexKeyEnv, configKeyHexLength, len(encoded))
-		}
-		decoded, err := hex.DecodeString(encoded)
-		if err != nil {
-			return serverConfig{}, fmt.Errorf("reference-app: %s: %w", notificationIndexKeyEnv, err)
-		}
-		notificationIndexKey = decoded
+	orgIndexKey, err := resolveKey(rootKey, rootKeyPurposeOrgIndex, orgIndexKeyEnv, devOrgIndexKey)
+	if err != nil {
+		return serverConfig{}, err
+	}
+	notificationIndexKey, err := resolveKey(rootKey, rootKeyPurposeNotificationIndex, notificationIndexKeyEnv, devNotificationIndexKey)
+	if err != nil {
+		return serverConfig{}, err
+	}
+	pkiLocalKeyCipherKey, err := resolveKey(rootKey, rootKeyPurposePKILocalKeyCipher, pkiLocalKeyCipherKeyEnv, devPKILocalKeyCipherKey)
+	if err != nil {
+		return serverConfig{}, err
+	}
+	authnBlindIndexKey, err := resolveKey(rootKey, rootKeyPurposeAuthnBlindIndex, authnBlindIndexKeyEnv, devBlindIndexKey)
+	if err != nil {
+		return serverConfig{}, err
+	}
+	authnPIICipherKey, err := resolveKey(rootKey, rootKeyPurposeAuthnPIICipher, authnPIICipherKeyEnv, devPIICipherKey)
+	if err != nil {
+		return serverConfig{}, err
 	}
 
 	// s3Endpoint/s3Bucket/s3AccessKey/s3SecretKey stay empty when unset,
@@ -878,6 +1021,9 @@ func configFromEnv() (serverConfig, error) {
 		ConfigKey:            configKey,
 		OrgIndexKey:          orgIndexKey,
 		NotificationIndexKey: notificationIndexKey,
+		PKILocalKeyCipherKey: pkiLocalKeyCipherKey,
+		AuthnBlindIndexKey:   authnBlindIndexKey,
+		AuthnPIICipherKey:    authnPIICipherKey,
 		RedisAddr:            redisAddr,
 		S3Endpoint:           s3Endpoint,
 		S3Bucket:             s3Bucket,
@@ -981,7 +1127,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// serializer while it parses the schema, and this module's registry is
 	// process-global (authn.RegisterPIISerializer's own doc comment; trap
 	// #9 of this round's frozen plan).
-	piiCipher, err := dbkit.NewCipher(devPIICipherKey)
+	piiCipher, err := dbkit.NewCipher(cfg.AuthnPIICipherKey)
 	if err != nil {
 		return nil, nil, fmt.Errorf("reference-app: build authn's PII cipher: %w", err)
 	}
@@ -994,7 +1140,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// authn.RegisterPIISerializer does -- GORM resolves a model's serializer
 	// while it parses the schema (pki.RegisterLocalKeySerializer's own doc
 	// comment).
-	pkiLocalKeyCipher, err := dbkit.NewCipher(devPKILocalKeyCipherKey)
+	pkiLocalKeyCipher, err := dbkit.NewCipher(cfg.PKILocalKeyCipherKey)
 	if err != nil {
 		return nil, nil, fmt.Errorf("reference-app: build pki's local-key cipher: %w", err)
 	}
@@ -1208,7 +1354,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 
 	authnOpts := []authn.Option{
 		authn.WithKeySource(pkiModule.Service()),
-		authn.WithBlindIndexKey(devBlindIndexKey),
+		authn.WithBlindIndexKey(cfg.AuthnBlindIndexKey),
 		authn.WithMembershipReader(memberships),
 		authn.WithDeploymentMode(cfg.DeploymentMode),
 		authn.WithSocialProviders(cfg.SocialProviders...),

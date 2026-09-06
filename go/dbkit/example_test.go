@@ -272,7 +272,7 @@ func ExampleBlindIndexer() {
 func ExampleDeriveKey() {
 	// A real deployment reads this from a secret manager (or generates it
 	// once with `openssl rand -hex 32`, as examples/reference-app's
-	// DEPLOY.md documents for SPEED_ROOT_KEY); a fixed value keeps this
+	// DEPLOY.md documents for APP_ROOT_KEY); a fixed value keeps this
 	// example's output reproducible.
 	rootKey, err := exampleRandomKey()
 	if err != nil {
