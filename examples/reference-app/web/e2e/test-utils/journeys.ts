@@ -110,7 +110,12 @@ export async function submitPasswordSignIn(
 export async function signInAs(page: Page, account: DemoAccount): Promise<void> {
   await visitSignIn(page)
   await submitPasswordSignIn(page, account.email, account.password)
-  await expect(page.getByRole('link', { name: APP_TEXT.navNotes })).toBeVisible()
+  // The sign-out control, not a nav link: below the md breakpoint the
+  // AppShell collapses its navigation behind the menu button, so a nav
+  // link is absent from the DOM until a person opens the drawer. Waiting
+  // on one made this helper quietly desktop-only, which a spec that
+  // resizes to a phone found the hard way.
+  await expect(page.getByRole('button', { name: SESSION_TEXT.signOut })).toBeVisible()
 }
 
 /**
