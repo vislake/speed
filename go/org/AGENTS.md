@@ -161,7 +161,7 @@ Feature **flags** are different, and org does declare two: a flag is a boolean, 
 | `func (m *Module) Invitations() *InviteService` | The invitation runtime |
 | `func (m *Module) Scope() Scope` | The read-only query view consumers accept structurally |
 | `Name` / `DependsOn` / `Migrations` / `Locales` / `OpenAPISpec` / `Register` | `pkgcore.Module`. `DependsOn` is nil — a real answer, not a stub (see the doc comment) |
-| `PermissionRead`, `PermissionManage`, `PermissionInviteMember`, `PermissionRemoveMember` | Declared in `Register`; enforcement is rbac's |
+| `PermissionRead`, `PermissionManage`, `PermissionInviteMember`, `PermissionRemoveMember` | Declared in `Register`; enforcement is the host's, through rbac. `examples/reference-app` gates its mounted route on exactly these four, per operation (`cmd/server/demo_subject.go`'s `orgPermissionFor`/`guardOrgRoute` — the org-route-guards round), the same per-operation-gate contract `storage`'s and `sharing`'s own routes already demonstrate; `OrgAcceptInvitation` is the one operation that stays reachable with none of the four, since accepting an invitation addressed to you needs no standing grant — see "The HTTP surface" below |
 | `AuditActionNodeCreate` / `Rename` / `Move` / `Delete`, `AuditActionMemberInvite` / `Accept` / `Remove` | The audit vocabulary org contributes |
 | `FeatureInvitations`, `FeatureInvitationEmail` | The two feature flags, both on by default; the second `DependsOn` the first |
 | `EventNodeCreated`, `EventNodeMoved`, `EventNodeDeleted`, `EventNodeRestored` | Published by `TreeService`. `org.node.moved` matters widely: a move changes every descendant's path, the dimension rbac's prefix policies and every subtree listing are written against. `org.node.restored` is per-node only — see "Soft deletion" |
@@ -249,7 +249,7 @@ Each is written as option 1 of `go/dbkit/AGENTS.md`'s Known-limitations guidance
 |---|---|
 | `func NewHandler(tree, members, invites, subject) *Handler` | The three services are the exact instances `Module.Register` holds; `Handler` owns no data access of its own |
 | `Handler` (11 methods) | Implements `api.ServerInterface` — `var _ api.ServerInterface = (*Handler)(nil)` at the bottom of `handler.go` is what makes a spec change that outgrows the handler fail to compile, not merely fail a test |
-| `SubjectResolver.Subject(r) (userID string, ok bool)` | See "Three seams that exist so no import does". Only `org_createInvitation` and `org_acceptInvitation` call it — every other operation reads only the tenant from context |
+| `SubjectResolver.Subject(r) (userID string, ok bool)` | See "Three seams that exist so no import does". Only `org_createInvitation` and `org_acceptInvitation` call it — every other operation reads only the tenant from context. This module's own authorization stops there: it is the HOST's job to gate the other nine operations on the permissions above, exactly as `storage`'s and `sharing`'s own handlers leave their enforcement to the host (see the `PermissionRead`/`PermissionManage`/... row above for where `examples/reference-app` does it) |
 | `writeError(w, err)` | Folds any non-`*apperr.Error` into `ErrInternal`; a caller never sees raw Go error text |
 
 Every response type omits the invitation's plaintext address (`toInvitationResponse` never reads `inv.Email`, only `inv.EmailIndex`) — the module's blind-index convention applied to its HTTP surface, not only its storage layer. `OrgCreateInvitationRequest`'s `email` field is the one input the surface accepts in the clear, exactly once, on the way in.
