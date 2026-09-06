@@ -64,9 +64,11 @@
 import { act, configure, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import type { NotesNote } from '@speed/api-sdk'
 import { switchLanguage } from '@speed/i18n'
 import accountUiZhCN from '../../../../web/packages/account-ui/src/locales/zh-CN.json' with { type: 'json' }
 import authUiZhCN from '../../../../web/packages/auth-ui/src/locales/zh-CN.json' with { type: 'json' }
+import layoutKitZhCN from '../../../../web/packages/layout-kit/src/locales/zh-CN.json' with { type: 'json' }
 import uiKitZhCN from '../../../../web/packages/ui-kit/src/locales/zh-CN.json' with { type: 'json' }
 import zhCN from './locales/zh-CN.json' with { type: 'json' }
 import enUS from './locales/en-US.json' with { type: 'json' }
@@ -86,8 +88,11 @@ import {
   DEMO_MFA_SECRET,
   DEMO_OWNER_IDENTIFIER,
   DEMO_READER_IDENTIFIER,
+  demoServer,
 } from './test-utils/demo-server.js'
 import type { RealCall, RealClientRig } from './test-utils/real-client.js'
+import { errorResponse, makeRealClientRig } from './test-utils/real-client.js'
+import { evictTenantQueriesOnSessionEnd } from './main.js'
 
 /** The identifier the register turn creates -- an account the demo
  * seed granted no membership, whose own sign-in the day then answers
@@ -100,6 +105,16 @@ const NOTE_TEXT = 'A journey note written in tenant-acme'
 
 /** The draft a reader's refused create leaves behind. */
 const READER_NOTE_TEXT = 'A note the reader cannot create'
+
+/** The note text a first account's read caches, whose leak into a
+ * second, read-denied account's session the cross-account regression
+ * below proves closed. */
+const CACHED_NOTE_TEXT = 'A note only the first account should see'
+const CACHED_NOTE: NotesNote = {
+  id: 'note-1',
+  text: CACHED_NOTE_TEXT,
+  created_at: '2026-09-04T00:00:00Z',
+}
 
 /** A refused sign-in's identifier input holds its failed value; the
  * owner's sign-in follows it, so the journeys clear the field first. */
@@ -629,5 +644,98 @@ describe('the app journey', () => {
       'GET /api/v1/notes',
     ])
     expect(callOf(rig, 2).authorization).toBe('Bearer access-1')
+  })
+
+  it('never shows a second, read-denied account the notes an earlier account cached in the same tenant (reference-app-web.md P1-1)', async () => {
+    // The demo server's own denyNotesRead switch is global (it denies
+    // every principal, the shape the previous test drives); this
+    // regression needs exactly the opposite -- one principal's read
+    // served, a later one's refused -- which the shared demo server
+    // has no per-account knob for. The rig issues bearer tokens
+    // deterministically (access-1 the first sign-in, access-2 the
+    // second -- the same numbering the owner-day journey above pins
+    // request by request), so the second signed-in account's read is
+    // refused right here, by its own bearer, rather than by extending
+    // the shared demo server for one test's shape.
+    //
+    // The second account's read is held open on a gate this test
+    // releases by hand -- proving the cache-eviction half of the fix,
+    // not only the gate-reorder half: without evictTenantQueriesOn
+    // SessionEnd, the query's cache still holds the first account's
+    // row the instant the second account's view remounts, and that
+    // row would render for the whole time this gate stays held (data
+    // defined, isError still false) -- a real, observable leak this
+    // test can catch mid-flight, before the deferred 403 ever settles
+    // isError and lets the reordered ternary alone paper over it.
+    let releaseSecondRead: (() => void) | undefined
+    const secondReadGate = new Promise<void>((resolve) => {
+      releaseSecondRead = resolve
+    })
+    const server = demoServer({ initialNotes: [CACHED_NOTE] })
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'GET' && call.path === '/api/v1/notes') {
+        if (call.authorization === 'Bearer access-2') {
+          await secondReadGate
+          return errorResponse(403, 'rbac.permission_denied')
+        }
+      }
+      return server(call)
+    })
+    const view = rendered(rig)
+    // The harness's rendered() -- like every suite here -- composes the
+    // tree by hand rather than calling bootstrapReferenceApp itself (no
+    // suite mounts a real DOM root; see main.tsx's own doc comment), so
+    // the bootstrap's own session-end cache eviction is wired here
+    // explicitly, exactly as the real bootstrap wires it, over the same
+    // rig session and the same QueryClient this render uses.
+    evictTenantQueriesOnSessionEnd(rig.session, view.queryClient)
+    const user = userEvent.setup()
+
+    // The first account signs in and reads the tenant's notes -- the
+    // read that populates the shared QueryClient's cache under this
+    // tenant's namespaced key.
+    await signInWithPasswordUi(view, user)
+    navigateTo('#/notes')
+    expect(await view.findByText(CACHED_NOTE_TEXT)).toBeInTheDocument()
+
+    // It signs out: the session-ended screen, then back to sign-in --
+    // the same authenticated -> anonymous transition a session death
+    // produces (main.tsx's evictTenantQueriesOnSessionEnd fires on
+    // either).
+    await user.click(
+      view.getByRole('button', { name: authUiZhCN.signOut.label }),
+    )
+    await view.findByText(authUiZhCN.sessionEnded.title)
+    await user.click(
+      view.getByRole('button', { name: authUiZhCN.sessionEnded.signInAction }),
+    )
+
+    // A second account signs into the SAME tenant, lacking notes:read.
+    // The hash is still '#/notes' from before (sign-out never changes
+    // it), so the frame renders the notes surface again the moment
+    // this sign-in commits, with no extra navigation -- and its read
+    // is held open on the gate above.
+    await signInWithPasswordUi(view, user, 'demo-no-notes-read@example.test')
+
+    // While the second account's read is still in flight, the cached
+    // row must already be gone and the guard's pending spinner must
+    // stand in its place -- proof the tenant's cache was evicted at
+    // sign-out rather than surviving to be raced against the refusal.
+    expect(
+      await view.findByRole('progressbar', {
+        name: layoutKitZhCN.routeGuard.pending,
+      }),
+    ).toBeInTheDocument()
+    expect(view.queryByText(CACHED_NOTE_TEXT)).not.toBeInTheDocument()
+
+    // Releasing the gate lets the refusal land: the guard converges to
+    // denied, never back to the first account's row.
+    await act(async () => {
+      releaseSecondRead?.()
+    })
+    expect(
+      await view.findByText(uiKitZhCN.emptyState.noPermission.title),
+    ).toBeInTheDocument()
+    expect(view.queryByText(CACHED_NOTE_TEXT)).not.toBeInTheDocument()
   })
 }, 30_000)

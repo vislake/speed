@@ -123,7 +123,21 @@ export const NOTE_ERROR_TEXT_KEYS: Readonly<Record<string, string>> = {
 export function NotesView(): ReactElement {
   const { t, i18n } = useTranslation(REFERENCE_APP_NAMESPACE)
   const queryClient = useQueryClient()
-  const tenantId = useCurrentTenant()
+  // useCurrentTenant returns { tenantId } | null, not a bare string --
+  // the plain string is what the frontend standard's own tenant-
+  // namespaced-key convention documents (['tenant', tenantId, ...]) and
+  // what user-menu.tsx's tenant-switch eviction and main.tsx's session-
+  // end eviction both key their removeQueries call on, so it is
+  // extracted here rather than embedding the hook's object wholesale --
+  // a previous version of this view did exactly that, which meant
+  // every removeQueries call keyed on a bare tenant id could never
+  // structurally match the real cached key (['tenant', {tenantId},
+  // ...]) and silently evicted nothing (reference-app-web.md P1-1's
+  // root cause: without a real eviction, only a query key that itself
+  // changes -- as it does on an actual tenant switch -- ever produced
+  // fresh data; the same tenant reused across two sessions never did).
+  const currentTenant = useCurrentTenant()
+  const tenantId = currentTenant?.tenantId ?? null
 
   // The tenant-namespaced list key. The view only ever mounts inside
   // the signed-in frame (where the tenant is always present); a null
