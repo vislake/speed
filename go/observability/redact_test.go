@@ -89,6 +89,33 @@ func TestRedact_SensitiveKeyValues(t *testing.T) {
 	}
 }
 
+// TestRedact_TokenStemDoesNotOverRedactUnrelatedWords is the regression for
+// the "token" stem's over-redaction bug: a legitimate, non-secret
+// diagnostic key that merely contains "token" as a substring of a
+// different word ("tokens", the ordinary plural for an LLM/usage count --
+// ai-gateway's own prompt_tokens/completion_tokens fields, which its
+// gateway.go renamed to prompt_units/completion_units specifically to
+// dodge this redactor) must survive verbatim, both key and value.
+func TestRedact_TokenStemDoesNotOverRedactUnrelatedWords(t *testing.T) {
+	keys := []string{"prompt_tokens", "completion_tokens", "tokens", "tokenizer_version"}
+	for _, key := range keys {
+		t.Run(key, func(t *testing.T) {
+			var buf bytes.Buffer
+			ctx := textLoggerCtx(context.Background(), &buf)
+
+			obs.FromContext(ctx).Info("event", key, 42)
+
+			out := buf.String()
+			if !strings.Contains(out, key+"=42") {
+				t.Errorf("expected %q=42 to survive unredacted; got: %s", key, out)
+			}
+			if strings.Contains(out, obs.RedactedValue) {
+				t.Errorf("attribute %q was wrongly redacted; got: %s", key, out)
+			}
+		})
+	}
+}
+
 // TestRedact_ScalarKindsUnderSensitiveKey pins the type-consistency rule:
 // whatever the value's slog kind -- an int, a duration, a struct -- a
 // sensitive key replaces it with the same String-typed RedactedValue.

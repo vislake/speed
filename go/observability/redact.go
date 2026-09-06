@@ -103,6 +103,27 @@ package observability
 //     redaction belongs to the API layer, and audit-log redaction is the
 //     M1+ compliance work (docs/internal/10-compliance-and-audit.md); this
 //     package guards the ops-logging and span-attribute channel only.
+//
+// # No redaction-decision trace, by deliberate choice
+//
+// Redaction here is silent: nothing records which attribute keys were
+// redacted, by which stem, on which record. That silence is exactly what
+// let the "token" stem's substring match swallow ai-gateway's
+// prompt_tokens/completion_tokens fields for a full round with no signal
+// anywhere that redaction had even run (the fix: see sensitiveStems' own
+// doc comment). Adding a debug-level trace of redaction decisions was
+// considered for this same round and deliberately deferred rather than
+// built: Handle is on the hot path of every FromContext call site in the
+// codebase, and redactHandler.Handle's zero-allocation forwarding of an
+// unchanged record (see below) is a documented, tested property this
+// package guards deliberately -- a trace call on every redacted attribute,
+// gated correctly behind Enabled(LevelDebug) or not, is a real design
+// surface (recursive-logging risk if the trace itself goes through
+// FromContext, an allocation cost on a path this file measures explicitly)
+// that deserves its own round rather than riding in on a stem-matching
+// bugfix. Until then, the mitigation is what this round actually shipped:
+// narrowing "token" so the false-positive class the silence hid is gone,
+// rather than merely making it audible.
 
 import (
 	"context"
@@ -122,13 +143,34 @@ const RedactedValue = "[REDACTED]"
 
 // sensitiveStems are the substrings that mark a key-path segment (an
 // attribute key, a dotted config-style key segment, or a slog group name)
-// as secret-bearing. Matching is case-insensitive and errs on the safe
-// side: an attribute whose name contains any of these is redacted
-// wholesale even when its value is not secret-shaped, because the cost of
-// an over-redacted field is noise while the cost of a leaked secret is a
-// breach. None of the shared snake_case correlation keys (tenant_id,
-// user_id, job_id, trace_id, span_id) contains a stem; see neverRedactKeys
-// for the belt-and-braces exemption from value scanning.
+// as secret-bearing. Matching is case-insensitive and, for every stem but
+// "token" (see below), a bare substring match that errs on the safe side:
+// an attribute whose name contains any of these is redacted wholesale even
+// when its value is not secret-shaped, because the cost of an
+// over-redacted field is noise while the cost of a leaked secret is a
+// breach -- "apikey" (no separator) and "credentials" (plural) both rely
+// on exactly this permissiveness, and both are pinned by
+// TestRedact_SensitiveKeyValues. None of the shared snake_case correlation
+// keys (tenant_id, user_id, job_id, trace_id, span_id) contains a stem;
+// see neverRedactKeys for the belt-and-braces exemption from value
+// scanning.
+//
+// "token" is the one stem that cannot use a bare substring match: "token"
+// is also a substring of "tokens", the ordinary plural for an LLM/usage
+// count (ai-gateway's PromptTokens/CompletionTokens), which the naive
+// substring rule swallowed with no warning -- ai-gateway's own gateway.go
+// carries a "rename to _units to dodge this redactor" comment as the paper
+// trail. stemMatches therefore checks "token" with a word-boundary rule
+// (foldContainsWordASCII) instead: "access_token" and
+// "session_token_duration" still match through the '_' boundary, "token"
+// alone matches at the segment's own start/end, but "tokens"/
+// "prompt_tokens"/"completion_tokens" do not, since the letter "s"
+// immediately following "token" fails the boundary check. A field that
+// genuinely stores multiple real tokens under a plural key name (e.g. a
+// hypothetical "session_tokens") is not caught by the key rule any more --
+// the accepted cost of closing the over-redaction gap -- but the
+// value-shape net (maskSecretText) still catches a real bearer token, JWT,
+// or provider-prefixed key logged under any key, plural or not.
 var sensitiveStems = []string{
 	"token",
 	"secret",
@@ -139,6 +181,17 @@ var sensitiveStems = []string{
 	"cookie",
 	"credential",
 	"key",
+}
+
+// stemMatches reports whether seg is marked sensitive by stem, dispatching
+// to the word-boundary rule for "token" and the permissive substring rule
+// for every other stem. See sensitiveStems' doc comment for why the two
+// stems need different rules.
+func stemMatches(stem, seg string) bool {
+	if stem == "token" {
+		return foldContainsWordASCII(seg, stem)
+	}
+	return foldContainsASCII(seg, stem)
 }
 
 // neverRedactKeys are the correlation field names
@@ -313,10 +366,11 @@ func pathSensitive(segs []string) bool {
 }
 
 // segmentSensitive reports whether seg contains any sensitiveStems entry,
-// compared ASCII-case-insensitively.
+// compared ASCII-case-insensitively (see stemMatches for the per-stem match
+// rule).
 func segmentSensitive(seg string) bool {
 	for _, stem := range sensitiveStems {
-		if foldContainsASCII(seg, stem) {
+		if stemMatches(stem, seg) {
 			return true
 		}
 	}
@@ -628,4 +682,37 @@ func foldByte(b byte) byte {
 		return b + ('a' - 'A')
 	}
 	return b
+}
+
+// isASCIILetter reports whether b is an ASCII letter.
+func isASCIILetter(b byte) bool {
+	return ('a' <= b && b <= 'z') || ('A' <= b && b <= 'Z')
+}
+
+// foldContainsWordASCII reports whether s contains sub as a whole word:
+// every occurrence of sub (ASCII case-insensitive) is checked, and a match
+// only counts when neither side is an ASCII letter -- the start/end of s
+// counts as a non-letter boundary. This is the "token" stem's own matcher
+// (see sensitiveStems and stemMatches): "access_token" and
+// "session_token_duration" still match through the '_' boundary, but
+// "tokens"/"prompt_tokens" do not, because the "s" immediately following
+// "token" is itself a letter.
+func foldContainsWordASCII(s, sub string) bool {
+	if len(sub) > len(s) {
+		return false
+	}
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if !foldEqualASCII(s[i:i+len(sub)], sub) {
+			continue
+		}
+		if i > 0 && isASCIILetter(s[i-1]) {
+			continue
+		}
+		end := i + len(sub)
+		if end < len(s) && isASCIILetter(s[end]) {
+			continue
+		}
+		return true
+	}
+	return false
 }
