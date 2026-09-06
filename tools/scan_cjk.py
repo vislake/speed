@@ -31,15 +31,40 @@ Carve-outs (a whole subtree is exempt, matching CLAUDE.md's exceptions):
   docs/internal/          Chinese by rule; never scanned
   docs/site/              public documentation site (English-first, zh-CN
                           by need, per docs/internal/13); never scanned
-  <dir>/locales, locale, i18n, translations   i18n resource directories;
-                          files there legitimately carry CJK user-facing
-                          text (e.g. .../notes/locales/zh-CN.toml). The
-                          basename set is a module constant below; extend it
-                          when a new i18n directory convention appears.
+  resource directories    i18n resource directories, judged by CONTENT
+                          rather than by directory name: a directory that
+                          directly holds a zh-CN.* or en-US.* file is a
+                          resource directory (files there legitimately
+                          carry CJK user-facing text, e.g.
+                          .../notes/locales/zh-CN.toml) and its whole
+                          subtree is exempt. This is the same discovery
+                          rule tools/check_i18n_keys.py uses, so the two
+                          tools agree on what a locale directory is; a
+                          directory merely NAMED locales/locale/i18n/
+                          translations that holds no such file is scanned
+                          like any other source tree (go/pkgcore/i18n and
+                          web/packages/i18n, source directories whose
+                          catalogs live in sibling locales/ trees, are
+                          scanned like every other package).
   vendor/, node_modules/, .git/   vendored dependencies and VCS metadata
   .idea/, .vscode/                IDE-local directories holding developer
                                   machine state (UI strings etc.); they are
                                   gitignored, never exist in CI
+
+Go comments additionally exempt one fixture-in-comment shape: a godoc
+Example function's "Output:" block -- the comment lines that follow a
+"// Output:" marker inside a godoc Example (see
+go/pkgcore/i18n/example_test.go, whose Example demonstrates zh-CN catalog
+rendering and whose expected output is Chinese text). The Go toolchain
+REQUIRES an Example's expected output to be spelled in comments -- the
+godoc Output convention -- and CI compiles and runs every Example, so an
+Example demonstrating zh-CN catalog rendering must carry Chinese output
+text verbatim in comment syntax. That text is executed-and-verified
+fixture data, the same class as the CJK string literals that stay exempt
+(see the Scan semantics section), merely forced into comment syntax by
+the toolchain; only the lines after an "Output:" marker within one
+contiguous comment run are exempt, so a CJK comment anywhere else in the
+same file is still a violation.
 
 CJK means Han script, classified by the same rune ranges Go's unicode.Han
 covers (unicode.Is(unicode.Han, r) in the language_test.go precedent); the
@@ -70,10 +95,14 @@ import bisect
 import os
 import sys
 
-# Directory basenames holding user-facing translation resources. Files under
-# them legitimately contain CJK text (zh-CN catalogs), so whole subtrees are
-# exempt from the scan.
-LOCALE_DIR_NAMES = frozenset({"locales", "locale", "i18n", "translations"})
+# File-name prefixes identifying user-facing translation resources: the
+# zh-CN.* / en-US.* pair files every locale directory ships (the same
+# discovery rule tools/check_i18n_keys.py applies). Resource-directory
+# exemption is judged by CONTENT: a directory that directly holds a file
+# with one of these prefixes is a resource directory (whole subtree
+# exempt), whatever its name -- and a directory that holds no such file
+# is scanned like any other source tree, whatever its name.
+LOCALE_FILE_PREFIXES = ("zh-CN.", "en-US.")
 
 # Directories never scanned regardless of content: VCS metadata, vendored
 # dependencies, and IDE-local directories that live only on developer
@@ -244,6 +273,66 @@ def scan_text(text: str, kind_label: str) -> list[Hit]:
     return hits
 
 
+def _example_output_lines(
+    text: str,
+    spans: list[tuple[int, int, str]],
+    starts: list[int],
+) -> set[int]:
+    """1-based line numbers of the godoc Example "Output:" block lines.
+
+    The godoc Output convention requires an Example function's expected
+    output to be spelled as comment lines following a "// Output:" marker
+    within the same contiguous comment run, and CI compiles and runs every
+    Example -- so an Example demonstrating zh-CN catalog rendering must
+    carry Chinese output verbatim in comment syntax. Those lines are
+    executed-and-verified fixture text, the same class as the CJK string
+    literals the scanner leaves alone (see the module docstring's
+    carve-outs section), so they are exempt from the comment scan -- and
+    ONLY they are: the marker's own line, comment lines before it, and any
+    CJK comment elsewhere in the file stay violations.
+
+    The run ends where the comments end: a non-line comment, or a line
+    comment whose content does not start on the very next line (a blank
+    line between two examples). The marker itself is a comment content
+    whose stripped text is exactly "Output:" (the content spans exclude
+    the "//" markers, per go_comment_spans).
+    """
+    output_lines: set[int] = set()
+    in_output = False
+    prev_end: int | None = None
+    for content_start, content_end, kind in spans:
+        if kind != "line":
+            in_output = False
+            prev_end = None
+            continue
+        # Two line comments belong to one contiguous run when the text
+        # between them is exactly the previous comment's own terminating
+        # newline, the next line's indentation and its "//" prefix -- i.e.
+        # no blank line between the two. Content spans exclude the "//"
+        # markers, so the check reads the raw text rather than comparing
+        # offsets.
+        contiguous = (
+            prev_end is not None
+            and text[prev_end:content_start].count("\n") == 1
+            and text[content_start - 2:content_start] == "//"
+        )
+        prev_end = content_end
+        if not in_output:
+            if text[content_start:content_end].strip() == "Output:":
+                in_output = True
+            continue
+        if not contiguous:
+            in_output = False
+            continue
+        # This span's content is expected-output text: mark its physical
+        # line. The span's first character falls on the line after the
+        # previous span (contiguity above), which is the line index bisect
+        # derives; a line comment never spans lines, so one line suffices.
+        idx = bisect.bisect_right(starts, content_start) - 1
+        output_lines.add(idx + 1)
+    return output_lines
+
+
 def scan_go(text: str) -> list[Hit]:
     """Comment-only scan of Go source, per the repo's Language Rule."""
     hits: list[Hit] = []
@@ -252,6 +341,7 @@ def scan_go(text: str) -> list[Hit]:
     starts = _line_starts(text)
     ends = starts[1:] + [len(text)]
     spans = go_comment_spans(text)
+    output_lines = _example_output_lines(text, spans, starts)
     seen_lines: set[int] = set()
     for content_start, content_end, kind in spans:
         if content_start >= content_end:
@@ -267,7 +357,11 @@ def scan_go(text: str) -> list[Hit]:
             seg_end = min(content_end, line_end)
             if seg_start < seg_end:
                 ch = first_han_char(text[seg_start:seg_end])
-                if ch is not None and idx not in seen_lines:
+                if (
+                    ch is not None
+                    and idx not in seen_lines
+                    and idx + 1 not in output_lines
+                ):
                     seen_lines.add(idx)
                     hits.append(
                         Hit(
@@ -286,13 +380,24 @@ def _pruned_dirnames(dirnames: list[str], rel_dir: str) -> list[str]:
     """Return the subdirectories worth descending into."""
     kept: list[str] = []
     for name in dirnames:
-        if name in NON_SCANNED_DIR_NAMES or name in LOCALE_DIR_NAMES:
+        if name in NON_SCANNED_DIR_NAMES:
             continue
         rel = name if rel_dir == "." else f"{rel_dir}/{name}"
         if rel in CARVED_SUBTREES:
             continue
         kept.append(name)
     return kept
+
+
+def _is_resource_dir(filenames: list[str]) -> bool:
+    """Whether this directory is a locale resource directory, by content.
+
+    A directory that directly holds a zh-CN.* or en-US.* file is a
+    resource directory (the discovery rule tools/check_i18n_keys.py
+    applies); its whole subtree -- the pair files and anything beside them
+    -- legitimately carries CJK user-facing text and is exempt.
+    """
+    return any(fn.startswith(LOCALE_FILE_PREFIXES) for fn in filenames)
 
 
 def _print_hit(rel_path: str, hit: Hit) -> None:
@@ -312,6 +417,12 @@ def scan_root(root: str) -> int:
     n_skipped = 0
     for dirpath, dirnames, filenames in os.walk(root):
         rel_dir = os.path.relpath(dirpath, root)
+        if _is_resource_dir(filenames):
+            # A locale resource directory: its own files are the zh-CN /
+            # en-US pair members (or content beside them), and everything
+            # under it is resource content too -- never descended into.
+            dirnames[:] = []
+            continue
         dirnames[:] = sorted(_pruned_dirnames(dirnames, rel_dir))
         for filename in sorted(filenames):
             if filename == ".git":  # worktree pointer file, not a checkout
@@ -367,10 +478,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Scan a repository tree for CJK characters outside the carved-out "
-            "docs/internal/, docs/site/ and i18n-resource directories, "
-            "enforcing root CLAUDE.md's Language Rule (English outside "
-            "docs/internal/). Go files are checked comment-only; every other "
-            "UTF-8 text file is checked in full."
+            "docs/internal/, docs/site/ and locale resource directories "
+            "(a directory holding a zh-CN.* or en-US.* file -- judged by "
+            "content, never by directory name), enforcing root CLAUDE.md's "
+            "Language Rule (English outside docs/internal/). Go files are "
+            "checked comment-only -- except godoc Example Output: blocks, "
+            "which carry expected-output fixture text in comment syntax --; "
+            "every other UTF-8 text file is checked in full."
         )
     )
     parser.add_argument(
