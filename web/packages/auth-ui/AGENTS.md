@@ -18,6 +18,19 @@ never decides what happens after a sign-in.
   navigates, or touches HTTP. A successful sign-in fires the host's
   `onSignedIn` callback exactly once; the host observes session
   transitions through its own auth-core hooks and navigates.
+- **Host callbacks run after the verdict and are contained.** Every
+  documented callback (`onSignedIn`, `onRegistered`, `onAuthorizeUrl`,
+  `onSignIn`) fires only after the operation it follows settled, and a
+  throwing callback is not a failure of that operation (the tenancy-ui
+  discipline): the commit already happened, so nothing here renders an
+  error banner, re-classifies the outcome into a failure state or
+  offers a retry of an operation that succeeded, and the containment
+  keeps the throw out of the fire-and-forget promise as an unhandled
+  rejection. A submit whose login lost a concurrent sign-in race
+  (auth-core's `OperationSupersededError`) is likewise not an error:
+  the form renders nothing and fires no callback -- the winning call
+  fires its own exactly once, and the host observes the authenticated
+  snapshot through its own hooks.
 - **Headless logic lives in `@speed/auth-core`.** `loginWithPassword`,
   `requestSMSCode`, `loginWithSMSCode`, `register`,
   `socialAuthorizeUrl`, `completeSocialLogin`, `logout`, `refresh` —
@@ -51,13 +64,18 @@ never decides what happens after a sign-in.
 3. **New reachable error codes join the whitelist and both locale
    files in one commit.** `src/internal/error-text.ts`'s
    `ERROR_TEXT_CODES` is the reachable-subset whitelist this family
-   renders (the 27 authn/session-lifecycle/client codes the README's
+   renders (the 31 authn/session-lifecycle/client codes the README's
    Text and i18n section tables, plus the `errors.unknown` fallback for
    anything else). When a code becomes reachable through a submit path
    of this family, it is added there and to both `errors.*` sections at
    once. Codes deliberately not whitelisted: any `client.http.*` answer
    and `client.unknown` (the classifier's landing slot for
    non-`ApiError` throws) — those render `errors.unknown` by design.
+   A code whitelisted here may reach surfaces beyond this app's own
+   composition (the reference-app alignment suite records such codes
+   in its `WHITELISTED_BEYOND_THIS_APP` list with the reasoning); the
+   whitelist serves the family's consumer-facing reachable set, and
+   the alignment suite's GO_PINNED side stays the app's own answers.
 4. **No direct HTTP in `src/`.** Every request flows through the
    session's generated operations over the `bindRequestFn` seam; this
    package is not on the `speed/no-direct-http` whitelist. Tests bind
@@ -86,6 +104,14 @@ never decides what happens after a sign-in.
    host. Screens that exist in this package are `SignInScreen` and
    `SessionEndedScreen`; everything else is a section, form or action
    the host composes.
+8. **`SessionEndedScreen`'s title is a real page heading.** The screen
+   replaces the whole authenticated page (product-shell's ended branch
+   mounts it with no ancestor heading), so its `EmptyState` title
+   renders as an `h1` by default; `headingLevel` is forwarded for a
+   host embedding the screen under a heading of its own. A future
+   `EmptyState` call site that stands in for a section header must
+   pass the hidden header's real level the way account-ui's sections
+   do.
 
 ## Public surface
 

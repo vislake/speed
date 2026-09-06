@@ -11,10 +11,14 @@ the auth-core hooks, never read session state, never attach or
 persist a session, never navigate, and never touch the network
 directly -- a successful sign-in fires the host's `onSignedIn`
 callback once, and everything that happens next is the host's. Every
-built-in string renders from the bilingual `auth-ui` namespace
-registered through `@speed/i18n`, and the form fields render through
-`ui-kit`'s `FormField`/`FormLayout`, the same discipline the other
-packages established.
+host callback runs only after the operation's verdict settled, and a
+throwing callback is contained the tenancy-ui way: it is not a failure
+of the operation it follows -- no error banner, no re-classified
+outcome, no unhandled rejection -- because the commit already
+happened. Every built-in string renders from the bilingual `auth-ui`
+namespace registered through `@speed/i18n`, and the form fields render
+through `ui-kit`'s `FormField`/`FormLayout`, the same discipline the
+other packages established.
 
 ## What ships
 
@@ -177,6 +181,12 @@ across surfaces. A successful sign-in on any channel fires `onSignedIn`
 once. The screen renders no heading of its own: the page above
 (branding, the heading, the register link) is host content.
 
+The tab strip is wired to the mounted channel panel the ARIA tabs way:
+each `Tab` carries an id and `aria-controls` naming its own panel, and
+the mounted channel renders as the `role="tabpanel"` with that id and
+the tab as its `aria-labelledby` -- only the active panel exists in
+the DOM, since switching unmounts the previous form.
+
 | Prop | Type | Notes |
 |---|---|---|
 | `session` | `AuthSession` (required) | the session every channel on the screen drives |
@@ -210,6 +220,14 @@ code to current-language text (see Text and i18n below); a successful
 one fires `onSignedIn` once and the host navigates. None of them reads
 the session snapshot or renders a title.
 
+A password submit that lost a concurrent sign-in race -- another
+channel's login, or a second instance of this form, committed to the
+session while this submit was in flight -- is answered by auth-core
+with `OperationSupersededError`, which the form treats as the lost
+race it is: no error banner, no `onSignedIn` (the winning call fires
+its own exactly once), and the session being authenticated now is the
+host's own snapshot to observe through its auth-core hooks.
+
 ### PasswordSignInForm
 
 One identifier field -- email or phone, the backend decides which --
@@ -228,7 +246,11 @@ account-existence ambiguity the endpoint answers with, is the phone
 step's terminal state -- then the code step completes the sign-in with
 `session.loginWithSMSCode`. The sent notice announces the receiving
 number (`role="status"`); resend repeats the request against the same
-number; changing the phone returns to the first step. The request
+number; changing the phone returns to the first step. A fresh code
+starts the code field empty: a successful request (the first send, a
+resend, or a request for a changed phone) resets any code typed
+against the one it invalidates, so a stale code can never ride along
+to a new code session. The request
 step renders the code the server answers: `authn.invalid_phone` when
 the number has no E.164 form (no leading '+' and country code) and
 `authn.rate_limited` when the attempt trips the send policy, each
@@ -269,10 +291,16 @@ bundle's name for it (`social.provider.<provider>`). Clicking a
 provider asks the session for that channel's authorization URL -- a
 pure request, never a navigation: the URL is reported upward through
 `onAuthorizeUrl` and the host decides what it is for (a redirect in
-the host's router, a popup, a new tab). While one request is in flight
-its button disables and the others stay live; a failed answer
+the host's router, a popup, a new tab). Each flight is tracked per
+provider: while one request is in flight its own button disables and
+the others stay live, and an earlier attempt's return can never
+re-enable a later provider's button mid-flight. A failed answer
 (`authn.provider_unknown`, `authn.redirect_uri_not_allowed`) renders
-through the one banner.
+through the one banner -- but the banner belongs to the newest attempt
+only (attempts are numbered at start; a failure writes its code only
+while it is still the newest attempt, and each new attempt clears the
+banner), so an earlier attempt's failure can never paint over a newer
+attempt's success or linger past it.
 
 ```ts
 export type SocialProvider =
@@ -359,9 +387,18 @@ variant -- the lock icon, because the content is gated again until the
 user signs in -- with every text slot overridden from the auth-ui
 namespace, so nothing of `ui-kit`'s built-in texts can leak through.
 
+The screen replaces the whole authenticated page (product-shell's
+ended branch mounts it with no frame and no ancestor heading), so its
+title is the page's own heading: `ui-kit`'s `EmptyState` heading level
+is forwarded through `headingLevel`, defaulting to `h1` -- the level
+that continues nothing, which is what a whole-page placeholder needs
+-- and a host embedding the screen under a heading of its own passes
+the level that continues the page's order.
+
 | Prop | Type | Notes |
 |---|---|---|
 | `onSignIn` | `() => void` (required) | fired when the viewer asks to sign in again; the host navigates |
+| `headingLevel` | `EmptyStateProps['headingLevel']` | the real heading element the title renders as; defaults to `'h1'` |
 
 ## Text and i18n
 
@@ -396,8 +433,8 @@ codes of the `@speed/api-client` contract:
 
 | Area | Codes with dedicated text |
 |---|---|
-| Sign-in and register (identifier, canonical-format, credential, policy, attempt answers) | `authn.invalid_credentials`, `authn.tenant_membership_required`, `authn.account_locked`, `authn.rate_limited`, `authn.verification_code_invalid`, `authn.email_already_registered`, `authn.phone_already_registered`, `authn.identifier_required`, `authn.invalid_email`, `authn.invalid_phone`, `authn.password_too_short`, `authn.password_too_long`, `authn.password_too_weak` |
-| Social endpoints | `authn.provider_unknown`, `authn.redirect_uri_not_allowed`, `authn.oauth_state_invalid`, `authn.social_exchange_failed`, `authn.identity_requires_binding`, `authn.identity_already_bound` |
+| Sign-in and register (identifier, canonical-format, credential, policy, attempt and membership answers) | `authn.invalid_credentials`, `authn.tenant_membership_required`, `authn.tenant_membership_unavailable`, `authn.account_locked`, `authn.rate_limited`, `authn.verification_code_invalid`, `authn.email_already_registered`, `authn.phone_already_registered`, `authn.identifier_required`, `authn.invalid_email`, `authn.invalid_phone`, `authn.password_too_short`, `authn.password_too_long`, `authn.password_too_weak`, `authn.display_name_too_long` |
+| Social endpoints and channel gates | `authn.channel_disabled`, `authn.provider_unknown`, `authn.redirect_uri_not_allowed`, `authn.oauth_state_invalid`, `authn.social_exchange_failed`, `authn.social_identity_incomplete`, `authn.identity_requires_binding`, `authn.identity_already_bound` |
 | Session lifecycle (a sign-out call can answer with these; a host renders them for its own protected operations too) | `authn.session_not_found`, `authn.session_revoked`, `authn.refresh_token_invalid`, `authn.refresh_token_reused`, `authn.token_expired` |
 | Transport (the api-client contract) | `client.network`, `client.timeout`, `client.protocol` |
 
@@ -424,7 +461,11 @@ announce through `role="status"` containers (the pending spinner is
 `aria-hidden`, so the notice is not read twice), every failure renders
 in one `role="alert"`, buttons disable while their request is in
 flight, the channel strip is MUI `Tabs` (arrow-key navigation, labelled
-by the channel titles), and each field carries the `autoComplete` value
+by the channel titles) whose tabs each carry an `id` and the
+`aria-controls` of their own panel -- the mounted channel renders as
+the `role="tabpanel"` with that id and the tab as its
+`aria-labelledby`, so the tabs never point at nothing -- and each
+field carries the `autoComplete` value
 matching its channel (`username`, `current-password`,
 `new-password`, `tel`, `one-time-code`) plus `inputMode="numeric"`
 for the SMS code.

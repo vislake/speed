@@ -31,6 +31,7 @@ export const ERROR_TEXT_CODES = [
   // authn: register, password/SMS logins, SMS request, social endpoints.
   'authn.invalid_credentials',
   'authn.tenant_membership_required',
+  'authn.tenant_membership_unavailable',
   'authn.account_locked',
   'authn.rate_limited',
   'authn.verification_code_invalid',
@@ -45,10 +46,20 @@ export const ERROR_TEXT_CODES = [
   'authn.password_too_short',
   'authn.password_too_long',
   'authn.password_too_weak',
+  'authn.display_name_too_long',
+  // Channel answers: a sign-in channel a deployment turned off refuses
+  // with authn.channel_disabled (the login page reads the same flags
+  // from the pre-auth features endpoint, so a channel the page does not
+  // even render is the pairing note -- the answer still needs its own
+  // text for a surface that does render the channel), and the social
+  // endpoints answer authn.provider_unknown for a channel this module
+  // does not know.
+  'authn.channel_disabled',
   'authn.provider_unknown',
   'authn.redirect_uri_not_allowed',
   'authn.oauth_state_invalid',
   'authn.social_exchange_failed',
+  'authn.social_identity_incomplete',
   'authn.identity_requires_binding',
   'authn.identity_already_bound',
   // authn: session lifecycle -- a sign-out call can answer with these,
