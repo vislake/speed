@@ -269,7 +269,7 @@ func (s *kvStore) IncrByFloat(ctx context.Context, key string, delta float64) (f
 			}
 		}
 
-		current, expiresAt, revision, err := s.readNumeric(ctx, encKey)
+		current, expiresAt, _, revision, err := s.readNumeric(ctx, encKey)
 		if err != nil {
 			return 0, err
 		}
@@ -308,43 +308,122 @@ func (s *kvStore) IncrByFloat(ctx context.Context, key string, delta float64) (f
 		maxIncrAttempts, key, lastConflict)
 }
 
-// readNumeric reads the current numeric value, expiry and NATS-level
-// revision for a key already hex-encoded by the caller, in the shape
-// IncrByFloat's retry loop needs to decide between Create and Update:
+// IncrByFloatWithTTL implements pkgcore.KVStore.IncrByFloatWithTTL. It is the
+// identical revision-guarded compare-and-swap retry loop IncrByFloat runs,
+// with one difference: when readNumeric reports the key not live (wasLive
+// false -- covering both a key JetStream has never held and one whose
+// envelope-encoded expiry has already passed), the new envelope's expiry is
+// computed from ttl instead of always being time.Time{} ("never"). A live
+// key's own expiresAt -- read straight from readNumeric, whether or not it
+// happens to be the zero time itself -- is carried through unchanged on
+// every retry; ttl is never consulted for it, matching IncrByFloat's own
+// non-extension rule.
+func (s *kvStore) IncrByFloatWithTTL(ctx context.Context, key string, delta float64, ttl time.Duration) (float64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	encKey := encodeKey(key)
+	backoff := incrBackoffBase
+	var lastConflict error
+
+	for attempt := 0; attempt < maxIncrAttempts; attempt++ {
+		if attempt > 0 {
+			if err := sleepOrDone(ctx, backoff); err != nil {
+				return 0, err
+			}
+			backoff *= 2
+			if backoff > incrBackoffCap {
+				backoff = incrBackoffCap
+			}
+		}
+
+		current, expiresAt, wasLive, revision, err := s.readNumeric(ctx, encKey)
+		if err != nil {
+			return 0, err
+		}
+		if !wasLive {
+			// Only a fresh (missing or logically expired) key ever gets ttl
+			// attached; a live key's own expiresAt above is used untouched.
+			expiresAt = expiryFromTTL(ttl)
+		}
+
+		result := current + delta
+		encoded := encodeEnvelope(
+			strconv.AppendFloat(nil, result, kvFloatFormat, kvFloatPrecisionShortest, kvFloatBitSize),
+			expiresAt,
+		)
+
+		if revision == 0 {
+			if _, err := s.kv.Create(ctx, encKey, encoded); err != nil {
+				if errors.Is(err, jetstream.ErrKeyExists) {
+					lastConflict = err
+					continue
+				}
+				return 0, fmt.Errorf("pkgcore/kv/nats: incr with ttl: %w", err)
+			}
+			return result, nil
+		}
+
+		if _, err := s.kv.Update(ctx, encKey, encoded, revision); err != nil {
+			if errors.Is(err, jetstream.ErrKeyRevisionMismatch) {
+				lastConflict = err
+				continue
+			}
+			return 0, fmt.Errorf("pkgcore/kv/nats: incr with ttl: %w", err)
+		}
+		return result, nil
+	}
+
+	return 0, fmt.Errorf("pkgcore/kv/nats: incr with ttl: exceeded %d compare-and-swap attempts without winning the race on %q: %w",
+		maxIncrAttempts, key, lastConflict)
+}
+
+// readNumeric reads the current numeric value, expiry, liveness and
+// NATS-level revision for a key already hex-encoded by the caller, in the
+// shape IncrByFloat's and IncrByFloatWithTTL's retry loops need to decide
+// between Create and Update, and (IncrByFloatWithTTL only) whether a ttl
+// argument should apply:
 //
 //   - A key JetStream has never held (jetstream.ErrKeyNotFound) reports
-//     (0, zero time, 0, nil): the zero revision is the loop's own signal to
-//     attempt Create.
+//     (0, zero time, false, 0, nil): the zero revision is the loop's own
+//     signal to attempt Create, and wasLive is false -- this is a fresh key.
 //   - A key whose envelope-encoded expiry has passed reports (0, zero time,
-//     entry.Revision(), nil): the value restarts at zero exactly like a
-//     genuinely absent key, but the non-zero revision tells the loop the
-//     NATS-level message is still live, so the write that follows must go
-//     through Update at that revision, never Create (which would fail
-//     ErrKeyExists against a message that, to JetStream, was never deleted).
+//     false, entry.Revision(), nil): the value restarts at zero exactly like
+//     a genuinely absent key (wasLive is false here too -- IncrByFloatWithTTL
+//     treats this identically to a genuinely missing key), but the non-zero
+//     revision tells the loop the NATS-level message is still live, so the
+//     write that follows must go through Update at that revision, never
+//     Create (which would fail ErrKeyExists against a message that, to
+//     JetStream, was never deleted).
 //   - A live key holding a non-numeric value reports pkgcore.ErrNotNumeric,
 //     read-side, before anything is written.
-func (s *kvStore) readNumeric(ctx context.Context, encKey string) (current float64, expiresAt time.Time, revision uint64, err error) {
+//   - A live key holding a numeric value -- whether or not it happens to
+//     carry an expiry of its own -- reports wasLive true, with expiresAt
+//     exactly the entry's own (the zero time.Time if it has none, which
+//     IncrByFloatWithTTL must then leave alone, never mistaking for "fresh").
+func (s *kvStore) readNumeric(ctx context.Context, encKey string) (current float64, expiresAt time.Time, wasLive bool, revision uint64, err error) {
 	entry, err := s.kv.Get(ctx, encKey)
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
-		return 0, time.Time{}, 0, nil
+		return 0, time.Time{}, false, 0, nil
 	}
 	if err != nil {
-		return 0, time.Time{}, 0, fmt.Errorf("pkgcore/kv/nats: incr: %w", err)
+		return 0, time.Time{}, false, 0, fmt.Errorf("pkgcore/kv/nats: incr: %w", err)
 	}
 
 	value, entryExpiresAt, decodeErr := decodeEnvelope(entry.Value())
 	if decodeErr != nil {
-		return 0, time.Time{}, 0, fmt.Errorf("pkgcore/kv/nats: incr: %w", decodeErr)
+		return 0, time.Time{}, false, 0, fmt.Errorf("pkgcore/kv/nats: incr: %w", decodeErr)
 	}
 	if expired(entryExpiresAt) {
-		return 0, time.Time{}, entry.Revision(), nil
+		return 0, time.Time{}, false, entry.Revision(), nil
 	}
 
 	parsed, parseErr := strconv.ParseFloat(string(value), kvFloatBitSize)
 	if parseErr != nil {
-		return 0, time.Time{}, 0, pkgcore.ErrNotNumeric
+		return 0, time.Time{}, false, 0, pkgcore.ErrNotNumeric
 	}
-	return parsed, entryExpiresAt, entry.Revision(), nil
+	return parsed, entryExpiresAt, true, entry.Revision(), nil
 }
 
 // CompareAndSwap implements pkgcore.KVStore.CompareAndSwap. The read
@@ -479,6 +558,17 @@ func decodeEnvelope(data []byte) ([]byte, time.Time, error) {
 // expires, mirroring pkgcore's own in-memory kvEntry.expired.
 func expired(expiresAt time.Time) bool {
 	return !expiresAt.IsZero() && !time.Now().Before(expiresAt)
+}
+
+// expiryFromTTL turns a KVStore ttl argument into this package's own absolute
+// expiry, the zero time.Time for "no expiry" -- mirroring every other
+// backend's identical zero-or-less-means-no-expiry convention (see, e.g.,
+// kv/memcached's own expiryFromTTL).
+func expiryFromTTL(ttl time.Duration) time.Time {
+	if ttl <= kvNoExpiry {
+		return time.Time{}
+	}
+	return time.Now().Add(ttl)
 }
 
 // sleepOrDone waits for d, or returns ctx's error immediately if ctx is
