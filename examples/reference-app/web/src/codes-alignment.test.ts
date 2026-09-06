@@ -54,47 +54,56 @@ import { NOTE_ERROR_TEXT_KEYS } from './views/notes-view.js'
  * live in go/authn/errors.go; rbac.permission_denied is go/rbac's
  * ErrPermissionDenied, and the notes codes are the notes module
  * handler's own sentinels.
+ *
+ * Each citation names the file, the sentinel's current line AND the
+ * sentinel identifier that defines the code -- the identifier is the
+ * stable half an audit greps for when a Go edit moves the line, which
+ * is how the reference-app-web.md P2-1 drift (a sentinel inserted above
+ * the authn block shifted 25 of 30 line citations and stayed silent
+ * until an audit re-measured them) became visible at all: a citation
+ * carrying only a line number cannot be checked without re-opening the
+ * Go file, one carrying the identifier can.
  */
 const GO_PINNED: Readonly<Record<string, string>> = {
   // go/authn/errors.go -- the authn module's error sentinels.
-  'authn.invalid_credentials': 'go/authn/errors.go:37',
-  'authn.identifier_required': 'go/authn/errors.go:41',
-  'authn.invalid_email': 'go/authn/errors.go:45',
-  'authn.invalid_phone': 'go/authn/errors.go:49',
-  'authn.email_already_registered': 'go/authn/errors.go:53',
-  'authn.phone_already_registered': 'go/authn/errors.go:57',
-  'authn.password_too_short': 'go/authn/errors.go:60',
-  'authn.password_too_long': 'go/authn/errors.go:63',
-  'authn.password_too_weak': 'go/authn/errors.go:67',
-  'authn.token_expired': 'go/authn/errors.go:86',
-  'authn.session_revoked': 'go/authn/errors.go:90',
-  'authn.refresh_token_invalid': 'go/authn/errors.go:94',
-  'authn.refresh_token_reused': 'go/authn/errors.go:100',
-  'authn.tenant_membership_required': 'go/authn/errors.go:106',
-  'authn.oauth_state_invalid': 'go/authn/errors.go:126',
-  'authn.redirect_uri_not_allowed': 'go/authn/errors.go:130',
-  'authn.provider_unknown': 'go/authn/errors.go:135',
-  'authn.social_exchange_failed': 'go/authn/errors.go:142',
-  'authn.identity_requires_binding': 'go/authn/errors.go:164',
-  'authn.identity_already_bound': 'go/authn/errors.go:168',
-  'authn.identity_not_found': 'go/authn/errors.go:174',
-  'authn.last_login_method': 'go/authn/errors.go:180',
-  'authn.rate_limited': 'go/authn/errors.go:212',
-  'authn.account_locked': 'go/authn/errors.go:220',
-  'authn.verification_code_invalid': 'go/authn/errors.go:228',
-  'authn.mfa_not_enrolled': 'go/authn/errors.go:238',
-  'authn.mfa_already_enrolled': 'go/authn/errors.go:242',
-  'authn.mfa_invalid_code': 'go/authn/errors.go:248',
-  'authn.step_up_required': 'go/authn/errors.go:252',
-  'authn.session_not_found': 'go/authn/errors.go:261',
+  'authn.invalid_credentials': 'go/authn/errors.go:37 (ErrInvalidCredentials)',
+  'authn.identifier_required': 'go/authn/errors.go:41 (ErrIdentifierRequired)',
+  'authn.invalid_email': 'go/authn/errors.go:45 (ErrInvalidEmail)',
+  'authn.invalid_phone': 'go/authn/errors.go:49 (ErrInvalidPhone)',
+  'authn.email_already_registered': 'go/authn/errors.go:62 (ErrEmailAlreadyRegistered)',
+  'authn.phone_already_registered': 'go/authn/errors.go:66 (ErrPhoneAlreadyRegistered)',
+  'authn.password_too_short': 'go/authn/errors.go:69 (ErrPasswordTooShort)',
+  'authn.password_too_long': 'go/authn/errors.go:72 (ErrPasswordTooLong)',
+  'authn.password_too_weak': 'go/authn/errors.go:76 (ErrPasswordTooWeak)',
+  'authn.token_expired': 'go/authn/errors.go:95 (ErrTokenExpired)',
+  'authn.session_revoked': 'go/authn/errors.go:99 (ErrSessionRevoked)',
+  'authn.refresh_token_invalid': 'go/authn/errors.go:103 (ErrRefreshTokenInvalid)',
+  'authn.refresh_token_reused': 'go/authn/errors.go:109 (ErrRefreshTokenReused)',
+  'authn.tenant_membership_required': 'go/authn/errors.go:115 (ErrTenantMembershipRequired)',
+  'authn.oauth_state_invalid': 'go/authn/errors.go:135 (ErrOAuthStateInvalid)',
+  'authn.redirect_uri_not_allowed': 'go/authn/errors.go:139 (ErrRedirectURINotAllowed)',
+  'authn.provider_unknown': 'go/authn/errors.go:144 (ErrProviderUnknown)',
+  'authn.social_exchange_failed': 'go/authn/errors.go:151 (ErrSocialExchangeFailed)',
+  'authn.identity_requires_binding': 'go/authn/errors.go:184 (ErrIdentityRequiresBinding)',
+  'authn.identity_already_bound': 'go/authn/errors.go:188 (ErrIdentityAlreadyBound)',
+  'authn.identity_not_found': 'go/authn/errors.go:194 (ErrIdentityNotFound)',
+  'authn.last_login_method': 'go/authn/errors.go:200 (ErrLastLoginMethod)',
+  'authn.rate_limited': 'go/authn/errors.go:232 (ErrRateLimited)',
+  'authn.account_locked': 'go/authn/errors.go:240 (ErrAccountLocked)',
+  'authn.verification_code_invalid': 'go/authn/errors.go:258 (ErrVerificationCodeInvalid)',
+  'authn.mfa_not_enrolled': 'go/authn/errors.go:268 (ErrMFANotEnrolled)',
+  'authn.mfa_already_enrolled': 'go/authn/errors.go:272 (ErrMFAAlreadyEnrolled)',
+  'authn.mfa_invalid_code': 'go/authn/errors.go:278 (ErrMFAInvalidCode)',
+  'authn.step_up_required': 'go/authn/errors.go:282 (ErrStepUpRequired)',
+  'authn.session_not_found': 'go/authn/errors.go:291 (ErrSessionNotFound)',
   // go/rbac/errors.go -- the permission-denied sentinel the notes route's
   // rbac gate answers with.
-  'rbac.permission_denied': 'go/rbac/errors.go:56',
+  'rbac.permission_denied': 'go/rbac/errors.go:56 (ErrPermissionDenied)',
   // examples/reference-app/internal/notes/handler.go -- the notes module
   // handler's own sentinels.
-  'notes.text_required': 'examples/reference-app/internal/notes/handler.go:31',
-  'notes.text_too_long': 'examples/reference-app/internal/notes/handler.go:66',
-  'notes.internal_error': 'examples/reference-app/internal/notes/handler.go:70',
+  'notes.text_required': 'examples/reference-app/internal/notes/handler.go:31 (ErrTextRequired)',
+  'notes.text_too_long': 'examples/reference-app/internal/notes/handler.go:66 (ErrTextTooLong)',
+  'notes.internal_error': 'examples/reference-app/internal/notes/handler.go:70 (errInternal)',
 }
 
 /** The transport codes of the @speed/api-client contract: reserved to
