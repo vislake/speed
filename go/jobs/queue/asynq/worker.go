@@ -122,6 +122,18 @@ func isFailure(err error) bool {
 // nothing itself, so this is reading asynq's documented MaxRetry contract,
 // not reimplementing its retry machinery. See AGENTS.md's dead-letter
 // mapping section.
+//
+// Because handleFailedMessage calls this BEFORE its own switch statement's
+// archive branch (p.archive, which is what makes a Job's Get() answer
+// StatusDeadLetter), this is genuinely unreorderable within asynq's own
+// dispatch loop: the library exposes no hook that runs after
+// broker.Archive persists, so handleErrorAttempt's own FailureHook.OnFailure
+// call below unavoidably runs before that write. This is the reason
+// go/jobs's handler.go documents a weaker FailureHook ordering guarantee for
+// this Queue than for StandaloneQueue -- see that type's own doc comment --
+// and TestAsynqQueue_OnFailure_ObservesTaskNotYetArchived
+// (integration_test/failure_hook_ordering_test.go) pins it against a real
+// asynq/Redis backend.
 func (q *Queue) handleError(ctx context.Context, t *asynqlib.Task, err error) {
 	retried, _ := asynqlib.GetRetryCount(ctx)
 	maxRetry, _ := asynqlib.GetMaxRetry(ctx)

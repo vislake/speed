@@ -70,18 +70,41 @@ var _ Handler = handlerFunc{}
 // a Handler that needs compensation implements this interface itself,
 // alongside Handler, and the queue calls it as a hook, nothing more.
 //
-// OnFailure runs at most once per Job, strictly after a worker has actually
-// persisted job's Status as StatusDeadLetter — the final attempt's failure
-// path only invokes it once its dead-letter write really transitioned the
-// row from StatusRunning (worker.go's execute consults
-// completeDeadLetter's transition report). It therefore does NOT run for a
-// Job a concurrent Cancel already moved to StatusCancelled while that final
-// attempt was executing: the cancellation wins, the attempt's failure
-// outcome is discarded in favor of StatusCancelled (Queue.Cancel's own doc
-// comment), no dead-letter is ever persisted, and no compensation runs.
-// Whatever OnFailure does is not retried or otherwise observed by the
-// queue. OnFailure receives the same rebuilt tenant context Handle itself
-// receives.
+// OnFailure runs at most once per Job, on the final attempt's failure path
+// only, and never for a Job a concurrent Cancel already moved to
+// StatusCancelled while that final attempt was executing: the cancellation
+// wins, the attempt's failure outcome is discarded in favor of
+// StatusCancelled (Queue.Cancel's own doc comment), no dead-letter is ever
+// persisted, and no compensation runs. Whatever OnFailure does is not
+// retried or otherwise observed by the queue. OnFailure receives the same
+// rebuilt tenant context Handle itself receives.
+//
+// The two deployment modes' Queue implementations do NOT give OnFailure the
+// identical ordering guarantee relative to dead-letter persistence, and a
+// FailureHook must be written for the weaker of the two:
+//
+//   - StandaloneQueue runs OnFailure strictly AFTER its dead-letter write has
+//     actually persisted job's Status as StatusDeadLetter — the final
+//     attempt's failure path only invokes it once that write really
+//     transitioned the row from StatusRunning (worker.go's execute consults
+//     completeDeadLetter's transition report first). A FailureHook may
+//     safely read the Job back through Queue.Get from inside OnFailure here
+//     and observe StatusDeadLetter.
+//   - go/jobs/queue/asynq's Queue runs OnFailure BEFORE that same
+//     information is durable: asynq's own archival write (its dead-letter
+//     equivalent, the "archived" state) happens inside the library's own
+//     dispatch loop strictly after the registered ErrorHandler — this
+//     package's own hook point — already returned, with no separate
+//     post-archive callback asynq exposes to reorder around (see
+//     go/jobs/queue/asynq/AGENTS.md's "FailureHook has no direct asynq
+//     equivalent to hook into" section, and its worker.go's handleError doc
+//     comment, for the mechanism). A FailureHook that reads its own Job back
+//     through Queue.Get from inside OnFailure under this implementation
+//     observes StatusRunning, not StatusDeadLetter — a FailureHook must
+//     therefore never depend on its own job's dead-letter persistence
+//     having already happened by the time OnFailure runs, and must instead
+//     treat the OnFailure call itself, not a Get() read-back, as its one
+//     and only "this Job has failed for good" signal.
 type FailureHook interface {
 	OnFailure(ctx context.Context, job *Job, cause error)
 }
