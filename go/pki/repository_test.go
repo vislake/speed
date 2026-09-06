@@ -511,6 +511,47 @@ func TestCertificateRevocationRepository_AssertNotTenantScoped(t *testing.T) {
 	tenancytest.AssertNotTenantScoped(t, db, CertificateRevocation{}, createFn, findFn)
 }
 
+// TestCertificateRevocationRepository_CertificateIDUniqueness_IsEnforcedByTheDatabase
+// proves migration 0008's UNIQUE index on certificate_id is real: a second
+// ledger row for a certificate that already has one must be refused by the
+// database, not merely avoided by well-behaved callers -- the arbitration
+// RevokeCertificate's insert-if-absent ledger write is built on (see
+// repository.go's InsertIfAbsent) depends on exactly that refusal. Mirrors
+// TestSigningKeyRepository_ActivePurposeUniqueness_IsEnforcedByTheDatabase's
+// identical proof shape for its own partial unique index.
+func TestCertificateRevocationRepository_CertificateIDUniqueness_IsEnforcedByTheDatabase(t *testing.T) {
+	repo := NewCertificateRevocationRepository(newTestDB(t))
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	first := &CertificateRevocation{
+		ID: "rev-1", CertificateID: "cert-1", AuthorityID: "auth-1",
+		Serial: "aa01", TenantID: "tenant-acme",
+		RevokedAt: now, RevocationReason: "compromised",
+	}
+	if err := repo.Create(ctx, first); err != nil {
+		t.Fatalf("Create(first ledger row): %v", err)
+	}
+
+	second := &CertificateRevocation{
+		ID: "rev-2", CertificateID: "cert-1", AuthorityID: "auth-1",
+		Serial: "aa01", TenantID: "tenant-acme",
+		RevokedAt: now, RevocationReason: "compromised",
+	}
+	err := repo.Create(ctx, second)
+	if err == nil {
+		t.Fatalf("Create(second ledger row for the same certificate) succeeded, want a unique-constraint error")
+	}
+
+	rows, err := repo.ListByAuthority(ctx, "auth-1")
+	if err != nil {
+		t.Fatalf("ListByAuthority: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("ledger holds %d rows after the refused duplicate insert, want exactly 1", len(rows))
+	}
+}
+
 // apperrIs reports whether err is (a decorated instance of) want, matching
 // on Code the way every *apperr.Error sentinel in this codebase must be
 // compared -- see errors.go's own doc comment.

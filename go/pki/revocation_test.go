@@ -3,6 +3,7 @@ package pki
 import (
 	"context"
 	"crypto/x509/pkix"
+	"sync"
 	"testing"
 	"time"
 
@@ -192,8 +193,15 @@ func TestCAService_RevokeCertificate_TransitionsToRevoked(t *testing.T) {
 	}
 }
 
+// TestCAService_RevokeCertificate_IsIdempotent pins the sequential
+// idempotent re-revoke contract end to end: a second call on an
+// already-revoked certificate reports (false, nil) and -- the ledger
+// atomicity round's regression pin -- leaves both the ledger and the event
+// stream exactly as the first call left them: one ledger row, one
+// EventCertificateRevoked, and the FIRST call's revocation reason
+// unchanged on both the certificate row and the ledger row.
 func TestCAService_RevokeCertificate_IsIdempotent(t *testing.T) {
-	ca, _ := newTestCAServiceWithBus(t)
+	ca, rec := newTestCAServiceWithBus(t)
 	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-acme"))
 
 	_, cert := issueTestCertificate(t, ca, ctx)
@@ -215,6 +223,20 @@ func TestCAService_RevokeCertificate_IsIdempotent(t *testing.T) {
 	}
 	if len(revocations) != 1 {
 		t.Errorf("revocation ledger has %d rows after two revoke calls, want exactly 1", len(revocations))
+	}
+	if len(rec.events) != 1 {
+		t.Errorf("published %d EventCertificateRevoked across two sequential revoke calls, want exactly 1 (an idempotent re-revoke publishes nothing)", len(rec.events))
+	}
+	if revocations[0].RevocationReason != "first" {
+		t.Errorf("ledger row RevocationReason = %q after an idempotent second call, want the first call's reason %q unchanged", revocations[0].RevocationReason, "first")
+	}
+
+	got, err := ca.certificates.FindByID(ctx, cert.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if got.RevocationReason != "first" {
+		t.Errorf("certificate row RevocationReason = %q after an idempotent second call, want the first call's reason %q unchanged", got.RevocationReason, "first")
 	}
 }
 
@@ -319,6 +341,163 @@ func TestCAService_VerifyCertificate_CertificateNotFound(t *testing.T) {
 	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-acme"))
 	if _, err := ca.VerifyCertificate(ctx, "does-not-exist"); err == nil {
 		t.Fatalf("VerifyCertificate(missing certificate) succeeded, want an error")
+	}
+}
+
+// --- ledger single-winner and honest-failure contract --------------------
+
+// TestCAService_RevokeCertificate_ConcurrentDoubleRevoke_ExactlyOneWinner
+// proves the running -> revoked transition is single-winner under concurrent
+// RevokeCertificate calls for the same still-active certificate: N racing
+// calls must converge on exactly one (true, nil) answer, one ledger row and
+// one EventCertificateRevoked, with every loser reporting (false, nil) --
+// the property the ledger's UNIQUE(certificate_id) arbitration exists for.
+//
+// The barrier shape (a closed start channel plus a WaitGroup, no sleeps)
+// follows the org and notification concurrency tests' identical rig; the
+// trial is repeated because one race is a scheduling accident and twenty-five
+// are a property. 8 goroutines race per trial so that several FindByID
+// reads routinely complete before the first winner's certificate update
+// commits -- the overlap the old check-then-act revoke turned into a second
+// ledger row and a second event.
+func TestCAService_RevokeCertificate_ConcurrentDoubleRevoke_ExactlyOneWinner(t *testing.T) {
+	const (
+		goroutines = 8
+		trials     = 25
+	)
+	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-acme"))
+
+	for trial := 0; trial < trials; trial++ {
+		ca, rec := newTestCAServiceWithBus(t)
+		_, cert := issueTestCertificate(t, ca, ctx)
+
+		changed := make([]bool, goroutines)
+		errs := make([]error, goroutines)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i := 0; i < goroutines; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				changed[i], errs[i] = ca.RevokeCertificate(ctx, cert.ID, "compromised")
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+
+		winners := 0
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("trial %d: RevokeCertificate goroutine %d: %v", trial, i, err)
+			}
+			if changed[i] {
+				winners++
+			}
+		}
+		if winners != 1 {
+			t.Fatalf("trial %d: %d of %d concurrent RevokeCertificate calls reported changed = true, want exactly 1", trial, winners, goroutines)
+		}
+
+		got, err := ca.certificates.FindByID(ctx, cert.ID)
+		if err != nil {
+			t.Fatalf("trial %d: FindByID: %v", trial, err)
+		}
+		if got.Status != CertificateStatusRevoked {
+			t.Fatalf("trial %d: certificate Status = %q after the race, want %q", trial, got.Status, CertificateStatusRevoked)
+		}
+
+		revocations, err := ca.revocations.ListByAuthority(ctx, cert.AuthorityID)
+		if err != nil {
+			t.Fatalf("trial %d: ListByAuthority: %v", trial, err)
+		}
+		if len(revocations) != 1 {
+			t.Fatalf("trial %d: revocation ledger has %d rows after %d concurrent revoke calls, want exactly 1", trial, len(revocations), goroutines)
+		}
+
+		if len(rec.events) != 1 {
+			t.Fatalf("trial %d: published %d EventCertificateRevoked, want exactly 1 (only the ledger insert winner publishes)", trial, len(rec.events))
+		}
+	}
+}
+
+// TestCAService_RevokeCertificate_LedgerWriteFailure_ReturnsErrorAndRetryConverges
+// proves the ledger write's honest failure contract end to end. A revocation
+// whose ledger insert fails must surface as an ERROR -- never as the
+// log-and-return-success the old code had, whose already-revoked early
+// return then meant no later call could ever retry the lost ledger write.
+// The error contract carries the state the caller needs to retry: the
+// certificate itself is revoked and its ledger entry is missing. Dropping
+// the failure and calling RevokeCertificate again must converge: exactly one
+// ledger row (the first call's revocation, reason and all), exactly one
+// EventCertificateRevoked (fired once, by the retry that reconstructed the
+// row), and (false, nil) -- the transition itself was the failed first
+// call's work, not the retry's.
+//
+// The failure is injected without an error seam: a SQLite trigger on the
+// test's own database handle ABORTs every ledger insert, and is dropped to
+// let the retry through (semgrep exempts test files wholesale).
+func TestCAService_RevokeCertificate_LedgerWriteFailure_ReturnsErrorAndRetryConverges(t *testing.T) {
+	ca, rec := newTestCAServiceWithBus(t)
+	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-acme"))
+
+	_, cert := issueTestCertificate(t, ca, ctx)
+
+	db := ca.revocations.db
+	if err := db.Exec(`CREATE TRIGGER trg_block_revocation_ledger_insert
+		BEFORE INSERT ON pki_certificate_revocations
+		BEGIN
+			SELECT RAISE(ABORT, 'pki test: revocation ledger insert blocked');
+		END`).Error; err != nil {
+		t.Fatalf("install blocking trigger: %v", err)
+	}
+
+	changed, err := ca.RevokeCertificate(ctx, cert.ID, "first")
+	if err == nil {
+		t.Fatalf("RevokeCertificate with the ledger insert failing returned (changed=%v, nil) -- a failed ledger write must surface as an error, never as a reported success whose ledger row no later call will retry", changed)
+	}
+
+	got, err := ca.certificates.FindByID(ctx, cert.ID)
+	if err != nil {
+		t.Fatalf("FindByID after the failed revoke: %v", err)
+	}
+	if got.Status != CertificateStatusRevoked {
+		t.Errorf("certificate Status = %q after the failed revoke, want %q -- the certificate row transition commits before the ledger write", got.Status, CertificateStatusRevoked)
+	}
+	if got.RevocationReason != "first" {
+		t.Errorf("certificate row RevocationReason = %q after the failed revoke, want the failed call's reason %q", got.RevocationReason, "first")
+	}
+	// Row-then-event: a revoke that never recorded its ledger row must not
+	// have published the event that announces the row.
+	if len(rec.events) != 0 {
+		t.Fatalf("failed revoke published %d EventCertificateRevoked, want 0 (the event follows the ledger row, which never landed)", len(rec.events))
+	}
+
+	if err := db.Exec(`DROP TRIGGER trg_block_revocation_ledger_insert`).Error; err != nil {
+		t.Fatalf("drop blocking trigger: %v", err)
+	}
+
+	changed, err = ca.RevokeCertificate(ctx, cert.ID, "second")
+	if err != nil {
+		t.Fatalf("RevokeCertificate(retry after the ledger write recovered): %v", err)
+	}
+	if changed {
+		t.Errorf("RevokeCertificate(retry) changed = true, want false -- the running -> revoked transition was the failed first call's work; the retry only reconstructs the lost ledger row")
+	}
+
+	revocations, err := ca.revocations.ListByAuthority(ctx, cert.AuthorityID)
+	if err != nil {
+		t.Fatalf("ListByAuthority: %v", err)
+	}
+	if len(revocations) != 1 {
+		t.Fatalf("revocation ledger has %d rows after the failed revoke and its retry, want exactly 1", len(revocations))
+	}
+	if revocations[0].RevocationReason != "first" {
+		t.Errorf("ledger row RevocationReason = %q, want the first call's reason %q -- the reconstructed row must match the certificate row, not the retry's argument", revocations[0].RevocationReason, "first")
+	}
+
+	if len(rec.events) != 1 {
+		t.Fatalf("published %d EventCertificateRevoked after the failed revoke and its retry, want exactly 1 (fired once, by the retry that inserted the missing row)", len(rec.events))
 	}
 }
 
