@@ -5,6 +5,7 @@ import (
 
 	"github.com/vislake/speed/go/billing"
 	"github.com/vislake/speed/go/metering"
+	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/tenancy"
 )
@@ -110,6 +111,20 @@ func (s *UsageService) Summary(ctx context.Context, actorUserID string) ([]Usage
 		row := UsageSummaryRow{TenantID: id}
 		if t, getErr := s.tenants.Get(ctx, id); getErr == nil {
 			row.DisplayName = t.DisplayName
+		} else {
+			// DisplayName is cosmetic (the row's TenantID is already
+			// authoritative -- it came from the ledger's own ListAllIDs a
+			// moment ago), so a failure here does not abort the whole
+			// call the way a real metering/billing read failure does
+			// below -- but this file's own no-silent-omission discipline
+			// (see this method's doc comment) means the failure must
+			// still be SURFACED, not silently swallowed into an
+			// unexplained blank name. A Warn log is the honest middle
+			// ground: the row still renders, and an operator staring at
+			// a blank DisplayName can find out why in the logs instead
+			// of assuming the ledger genuinely has none recorded.
+			obs.FromContext(ctx).Warn("admin could not read a tenant's display name for the usage summary row",
+				"tenant_id", id, "error", getErr)
 		}
 
 		if s.metering != nil {
