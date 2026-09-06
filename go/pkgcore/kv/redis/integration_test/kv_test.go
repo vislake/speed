@@ -180,6 +180,56 @@ func TestKVStore_IncrByFloat_KeepsALiveKeysExpiry(t *testing.T) {
 	}
 }
 
+// TestKVStore_IncrByFloatWithTTL_SubMillisecondTTLStillExpiresTheKey pins
+// the conversion boundary the shared contract suite never touches:
+// kvstoretest.AssertConforms sizes its expiries in tens of milliseconds, so
+// a positive ttl under one millisecond never reaches a real backend there.
+// A conversion that truncates such a ttl to zero whole milliseconds turns
+// it into the script's "no ttl" sentinel on the very call that creates the
+// key -- the PEXPIRE guard (ttl > 0) skips the expiry and a key that was
+// asked to die is stored without one, forever. The store must instead round
+// a positive sub-millisecond ttl up to the server's 1ms floor, the same
+// conversion go-redis's own formatMs applies to Set()'s expiry, so the two
+// paths agree on what a given ttl means.
+func TestKVStore_IncrByFloatWithTTL_SubMillisecondTTLStillExpiresTheKey(t *testing.T) {
+	ctx := context.Background()
+	client := startRedisClient(t, ctx)
+	kv := kvredis.NewKVStore(client)
+
+	const key = "kvstoretest:incr-ttl-submillisecond"
+	if _, err := kv.IncrByFloatWithTTL(ctx, key, 1, 500*time.Microsecond); err != nil {
+		t.Fatalf("IncrByFloatWithTTL() error = %v, want nil", err)
+	}
+
+	// The freshly created key must carry an expiry. PTTL answers -1 exactly
+	// when the key is present with no expiry attached -- the truncation
+	// bug's own state, which is stable (a key without an expiry never dies),
+	// so this check is deterministic on both sides: -2 (already expired) and
+	// a positive remaining time are equally legitimate, only -1 is the bug.
+	// The check runs immediately after the increment, before any wait, so no
+	// timing assumption is involved.
+	ttl, err := client.PTTL(ctx, key).Result()
+	if err != nil {
+		t.Fatalf("PTTL() error = %v, want nil", err)
+	}
+	if ttl == -1 {
+		t.Fatalf("PTTL = -1 right after IncrByFloatWithTTL: the new key was stored without an expiry; a positive sub-millisecond ttl must not truncate to \"no expiry\"")
+	}
+
+	// The attached expiry must actually end the key: even at the rounded-up
+	// 1ms minimum the wait below is hundreds of times the key's whole life,
+	// the same margin the expiry tests above use.
+	time.Sleep(200 * time.Millisecond)
+
+	_, found, err := kv.Get(ctx, key)
+	if err != nil {
+		t.Fatalf("Get() error = %v, want nil", err)
+	}
+	if found {
+		t.Error("Get() found the key after its sub-millisecond ttl elapsed, want it treated as absent")
+	}
+}
+
 func TestKVStore_IncrByFloat_NonNumericValueFailsAndStaysUntouched(t *testing.T) {
 	ctx := context.Background()
 	kv := kvredis.NewKVStore(startRedisClient(t, ctx))

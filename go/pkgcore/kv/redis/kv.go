@@ -147,7 +147,9 @@ type kvStore struct {
 // boundary details, which callers cannot depend on either way:
 //
 //   - Expiry is stored with millisecond granularity (Redis expires keys on a
-//     millisecond clock), where the in-memory store keeps nanoseconds.
+//     millisecond clock), where the in-memory store keeps nanoseconds. A
+//     positive ttl under a millisecond counts as one whole millisecond, so a
+//     key asked to expire is never stored without an expiry.
 //   - IncrByFloat stores the server's own decimal rendering of the result,
 //     which is exact but not always the shortest form; as with the in-memory
 //     store, callers must parse the value with strconv.ParseFloat rather than
@@ -256,9 +258,20 @@ func (s *kvStore) IncrByFloatWithTTL(ctx context.Context, key string, delta floa
 		return 0, err
 	}
 
+	// The script's PEXPIRE needs whole milliseconds. The conversion mirrors
+	// go-redis's own formatMs -- the conversion Set()'s expiry goes through
+	// -- so both paths agree on what a given ttl means: a positive duration
+	// under a millisecond counts as 1ms (Milliseconds() alone would truncate
+	// it to zero, the script's "no ttl" sentinel, and a key that was asked
+	// to die would be stored without an expiry, forever), and anything from
+	// a millisecond up truncates to whole milliseconds, since Redis expires
+	// keys on a millisecond clock anyway.
 	var ttlMs int64
 	if ttl > kvNoExpiry {
-		ttlMs = ttl.Milliseconds()
+		ttlMs = int64(ttl / time.Millisecond)
+		if ttlMs == 0 {
+			ttlMs = 1
+		}
 	}
 
 	result, err := incrByFloatWithTTLScript.Run(ctx, s.client, []string{key}, delta, ttlMs).Float64()
