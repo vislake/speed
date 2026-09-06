@@ -179,6 +179,88 @@ func noteCreatedFieldsFromPayload(payload any) (noteID, creatorUserID string, ok
 	return noteID, creator, true
 }
 
+// simulationCompletedFieldKeys are the field spellings accepted for the
+// recipient user id and the success flag inside a
+// smilesim.EventSimulationCompleted payload, probed in order by
+// simulationCompletedFieldsFromPayload.
+//
+// Both sides of this subscription are reference-app code, but that does NOT
+// make the payload's wire shape unambiguous: pkgcore's in-memory EventBus
+// delivers the publisher's exact Go value, so a same-process subscriber on
+// that bus sees the real smilesim.SimulationCompletedPayload struct, but
+// pkgcore/eventbus/redis's EventBus always round-trips a payload through
+// JSON before a subscriber on a different bus instance sees it -- including
+// a subscriber in the SAME process, if that subscriber's own bus instance is
+// not the one that published (a genuinely distributed deployment's normal
+// shape, since every replica subscribes on its own instance and the bus
+// fans a publish out to all of them). This subscription and smilesim's own
+// publisher happen to share one bus instance in this app's current wiring,
+// but nothing about the pkgcore.EventBus contract guarantees that stays
+// true, and the note-created subscription's own noteCreatedFieldsFromPayload
+// probe exists for the identical reason. smilesim.SimulationCompletedPayload
+// carries no JSON tags (like notes' own payload, its fields are facts, not
+// an API contract), so the map spellings below are the plain struct field
+// names.
+var simulationCompletedFieldKeys = struct {
+	recipientUserID []string
+	succeeded       []string
+}{
+	recipientUserID: []string{"recipient_user_id", "RecipientUserID", "recipientUserID"},
+	succeeded:       []string{"succeeded", "Succeeded"},
+}
+
+// simulationCompletedFieldsFromPayload extracts the recipient user id and
+// the success flag from a smilesim.EventSimulationCompleted payload of any
+// shape, by round-tripping it through JSON into a map and probing the
+// accepted key spellings -- mirroring noteCreatedFieldsFromPayload exactly,
+// down to returning ok=false rather than an error for every unusable shape
+// (the subscription's contract is to log and drop the event, never to fail
+// the publisher; see wireDemoNotification). recipientUserID must be a
+// non-empty string to count as present, matching
+// SimulationCompletedPayload.RecipientUserID's own "never empty" invariant;
+// succeeded is read as whatever bool value is actually present -- false is
+// a meaningful, valid answer (a failed or cancelled simulation), so its
+// presence is tracked separately from its value.
+func simulationCompletedFieldsFromPayload(payload any) (recipientUserID string, succeeded, ok bool) {
+	if payload == nil {
+		return "", false, false
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", false, false
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return "", false, false
+	}
+	probeString := func(spellings []string) (string, bool) {
+		for _, key := range spellings {
+			if value, present := fields[key]; present {
+				if s, isString := value.(string); isString && s != "" {
+					return s, true
+				}
+			}
+		}
+		return "", false
+	}
+	probeBool := func(spellings []string) (bool, bool) {
+		for _, key := range spellings {
+			if value, present := fields[key]; present {
+				if b, isBool := value.(bool); isBool {
+					return b, true
+				}
+			}
+		}
+		return false, false
+	}
+	recipient, hasRecipient := probeString(simulationCompletedFieldKeys.recipientUserID)
+	succeededValue, hasSucceeded := probeBool(simulationCompletedFieldKeys.succeeded)
+	if !hasRecipient || !hasSucceeded {
+		return "", false, false
+	}
+	return recipient, succeededValue, true
+}
+
 // wireDemoNotification mounts the reference app's demo glue for the
 // notification module on mux: the subscription that turns notes'
 // note-created event into a notification dispatch for the note's creator,
@@ -313,26 +395,28 @@ func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 	// demo.TypeKeySimulationReady type (a DIFFERENT string from the event
 	// type -- see that constant's own doc comment for why) to that
 	// recipient -- the identical "business fact published as a
-	// pkgcore.Event,
-	// notification consumes it as a dispatch trigger" shape, with the
-	// smilesim-owned payload decoded directly (both sides of this
-	// subscription are reference-app code, so there is no cross-module
-	// wire-shape ambiguity the note-created subscription's
-	// noteCreatedFieldsFromPayload probe has to handle).
+	// pkgcore.Event, notification consumes it as a dispatch trigger" shape
+	// notes.EventNoteCreated's subscription above uses, and for the
+	// identical reason it too reads the payload through a probe
+	// (simulationCompletedFieldsFromPayload) rather than a naked type
+	// assertion: both sides of this subscription are reference-app code,
+	// but that does not make the payload's wire shape unambiguous -- see
+	// the probe's own doc comment for why a same-process subscriber is not
+	// automatically safe from the Redis EventBus's JSON round-trip.
 	//
-	// A failed simulation (Succeeded: false) is deliberately never
+	// A failed simulation (succeeded: false) is deliberately never
 	// dispatched: "your simulation is ready to view" would be actively
 	// wrong for a job that dead-lettered or was cancelled, and this app
 	// has no distinct "your simulation failed" copy to send instead.
 	bus.Subscribe(smilesim.EventSimulationCompleted, func(ctx context.Context, evt pkgcore.Event) error {
 		logger := observability.FromContext(ctx)
-		payload, ok := evt.Payload.(smilesim.SimulationCompletedPayload)
+		recipientUserID, succeeded, ok := simulationCompletedFieldsFromPayload(evt.Payload)
 		if !ok {
 			logger.Warn("demo notification glue dropped a smilesim.simulation_completed event with an unreadable payload",
 				"event_type", evt.Type)
 			return nil
 		}
-		if !payload.Succeeded {
+		if !succeeded {
 			return nil
 		}
 		dispatchCtx := pkgcore.WithTenant(ctx, evt.TenantID)
@@ -340,13 +424,13 @@ func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 			TypeKey: demo.TypeKeySimulationReady,
 			Recipient: notification.DispatchRecipient{
 				Class:  notification.RecipientClassUser,
-				UserID: payload.RecipientUserID,
+				UserID: recipientUserID,
 			},
 			Locale: i18n.LocaleZHCN,
 			Params: map[string]any{},
 		}); err != nil {
 			logger.Warn("demo notification glue could not dispatch the simulation-completed delivery",
-				"event_type", evt.Type, "user_id", payload.RecipientUserID, "error", err)
+				"event_type", evt.Type, "user_id", recipientUserID, "error", err)
 		}
 		return nil
 	})
