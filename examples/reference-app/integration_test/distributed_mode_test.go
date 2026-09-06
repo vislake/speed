@@ -114,28 +114,32 @@
 //
 // # A recorded fact about the demo identity layer under two replicas
 //
-// cmd/server/demo_subject.go's demoMemberships (which authn's
-// WithMembershipReader reads to decide "does this user belong to this
-// tenant") is an IN-PROCESS map, never persisted -- so a demo account
-// registered and granted membership during replica A's boot-time seed
-// (APP_DEMO_USERS_PASSWORD, demo_users.go) is invisible to replica B's
-// OWN, separate demoMemberships instance: an interactive LOGIN attempt
-// against replica B for that same account, if it depended on a successful
-// membership resolution, would be refused (membership unavailable), even
-// though the account genuinely exists in the shared database replica B
-// reads. This file's scenario is designed around that real, documented
-// limitation rather than working around it:
+// A demo account's membership is org's own memberships row -- the
+// membership-reality round's signInMemberships (cmd/server/sign_in_memberships.go),
+// which authn's WithMembershipReader reads to decide "does this user
+// belong to this tenant", answers customer-tenant questions from that
+// table, live -- and org's rows live in the SHARED database, so an
+// account the boot-time seed registered and placed during replica A's
+// boot (APP_DEMO_USERS_PASSWORD, demo_users.go) is visible to replica B's
+// OWN, separate reader instance too: a fresh, successful login against
+// replica B for that account would resolve its membership from the same
+// rows A's seed wrote. This file's scenario is nevertheless shaped the
+// way it is, and the reason is no longer the membership store's
+// per-process blindness (that was the pre-round in-process roster, closed
+// by the same round):
 //
 //   - The one SUCCESSFUL, token-minting login happens exactly once,
 //     against replica A, and that one access token is reused against
 //     replica B for every subsequent request (the SSE stream included).
-//     Token verification does not consult demoMemberships at all -- it is
-//     a stateless check against the Ed25519 material go/pki's LocalSigner
-//     persists in the SAME shared database, so the token replica A mints
-//     is genuinely verified by replica B's own independent
-//     authn.Middleware, which is itself a real cross-replica proof (a
-//     shared signing key via the shared database, never a shared
-//     process).
+//     This keeps the proof single-writer where it can be -- the demo seed
+//     already made replica A the boot-time writer this file's shared-
+//     SQLite topology staggers -- and token verification does not consult
+//     the membership reader at all: it is a stateless check against the
+//     Ed25519 material go/pki's LocalSigner persists in the SAME shared
+//     database, so the token replica A mints is genuinely verified by
+//     replica B's own independent authn.Middleware, which is itself a
+//     real cross-replica proof (a shared signing key via the shared
+//     database, never a shared process).
 //
 //   - The two WRONG-password attempts the "kv" proof drives never reach
 //     the membership-resolution step at all: authn's own login sequence
@@ -145,13 +149,8 @@
 //     was actually correct. A wrong password against either replica fails
 //     at the password check (or, for the second attempt, at the lockout
 //     check before the password is ever touched), never at membership --
-//     so demoMemberships' per-process separation is simply never on the
-//     path this proof exercises.
-//
-// A genuinely fresh, successful login against an arbitrary replica is a
-// real gap this file does not attempt to close -- it belongs to
-// demoMemberships becoming a real, shared store, which is business
-// (demo-glue) code this round's brief says not to touch.
+//     so the membership store is simply never on the path this proof
+//     exercises.
 //
 // # Why no Postgres/S3/SMTP touch the CORE assertion, and why they are still real
 //
@@ -799,13 +798,14 @@ func TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructur
 	httpClient := apiClient()
 
 	// One real, SUCCESSFUL login, against replica A only -- see this
-	// file's package doc comment on why a second, independent successful
-	// login against replica B would fail today (demoMemberships is
-	// in-process, not shared) and why that does not weaken this test:
-	// every subsequent request, including the ones against replica B
-	// below, reuses this ONE token, and its verification on replica B is
-	// itself a real cross-replica proof (the shared go/pki signing key
-	// material, read from the shared database).
+	// file's package doc comment on why the proof keeps to one
+	// token-minting login (single-writer topology, and the membership
+	// store's per-process blindness that used to make a second one fail
+	// against replica B is closed by the membership-reality round
+	// anyway): every subsequent request, including the ones against
+	// replica B below, reuses this ONE token, and its verification on
+	// replica B is itself a real cross-replica proof (the shared go/pki
+	// signing key material, read from the shared database).
 	accessToken := demoAccessToken(t, httpClient, replicaA.baseURL, acmeTenantID)
 
 	// The "kv" cross-replica proof: two wrong-password login attempts,

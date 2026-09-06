@@ -41,11 +41,11 @@ const testPassword = "a perfectly fine passphrase"
 
 // testConfig returns a serverConfig backed by a fresh, per-test temp-file
 // SQLite database, so tests never share state and never touch a real file
-// outside t.TempDir(). Memberships is always a fresh, empty demoMemberships
-// -- tests that need a demo account to actually reach a tenant grant it
-// explicitly via registerAndAuthenticate below, keeping the same reference
-// buildServer itself wires so a test's grant is visible to the running
-// server.
+// outside t.TempDir(). Memberships is always a fresh, empty
+// signInMemberships -- tests that need an account to actually reach a
+// tenant grant it explicitly via registerAndAuthenticate below, keeping
+// the same reference buildServer itself wires (and attaches to org) so a
+// test's grant is visible to the running server.
 //
 // NotificationIndexKey is set because every boot wires the notification
 // module's two contact indexers from the struct field directly -- the
@@ -70,7 +70,7 @@ func testConfig(t *testing.T) serverConfig {
 		AuthnBlindIndexKey:   devBlindIndexKey,
 		AuthnPIICipherKey:    devPIICipherKey,
 		HostTenants:          demoHostTenants,
-		Memberships:          newDemoMemberships(),
+		Memberships:          newSignInMemberships(),
 	}
 }
 
@@ -107,9 +107,11 @@ func buildTestServer(t *testing.T) (*httptest.Server, serverConfig, *compliance.
 // registerAndAuthenticate registers a fresh demo account through authn's
 // real HTTP surface (POST /api/v1/authn/register), grants it membership in
 // tenant via cfg.Memberships (the seam buildServer itself wires authn's
-// MembershipReader to -- see demoMemberships' own doc comment in
-// server.go), signs it in with a tenant_id request naming tenant, and
-// returns the resulting bearer access token.
+// MembershipReader to -- see sign_in_memberships.go's own doc comment:
+// org's rows answer customer-tenant questions first, and the grant this
+// helper records is the in-process test shortcut that answers when org has
+// no row for the pair), signs it in with a tenant_id request naming
+// tenant, and returns the resulting bearer access token.
 //
 // That token is now the ONLY thing that selects a tenant for a protected
 // route in this app: with authn.Middleware running ahead of
@@ -1387,7 +1389,7 @@ func TestBuildServer_RootKeyAlone_AllSixDerivedKeysWorkForTheirRealPurpose(t *te
 		t.Fatalf("configFromEnv: %v", err)
 	}
 	cfg.HostTenants = demoHostTenants
-	cfg.Memberships = newDemoMemberships()
+	cfg.Memberships = newSignInMemberships()
 
 	// ConfigKey: the exact mechanism go/config's Sensitive values are
 	// sealed with (config.WithCipher over dbkit.NewCipher, per

@@ -170,13 +170,29 @@ func guardAdminRoute(az rbac.Authorizer, handler http.Handler) http.Handler {
 // holding an ordinary RoleBinding under the "system" pseudo-tenant, no
 // special-cased identity model of its own.
 //
+// The SystemDomain membership is granted into the app's sign-in
+// membership store (sign_in_memberships.go) -- the one membership that
+// store holds by design, because "system" is a pseudo-tenant with no org
+// tree for a row to live in -- and, unlike a customer-tenant membership,
+// that grant has no database home, so this seed re-asserts it on every
+// boot: an account it finds already registered is looked up by its email
+// through authn.Service.SearchUsers (the same exact-email recovery
+// seedDemoUsers uses, documented there) and granted afresh. Without that
+// re-assertion a process restart would leave the platform-staff account
+// permanently unable to sign in -- 403 authn.tenant_membership_required
+// from an empty in-memory roster -- locking the operator out of admin's
+// own console until the database is wiped, the SystemDomain twin of the
+// customer-tenant restart defect this round's org-backed membership store
+// fixes.
+//
 // It returns the registered user id, or an error naming exactly what
 // failed -- registration, membership or role assignment -- mirroring
-// seedDemoUsers' own fail-the-boot-rather-than-half-seed discipline. Like
-// seedDemoUsers, a second boot against a database that already has this
-// account logs a warning and skips re-granting rather than pretending to
-// reseed what a prior boot's in-process membership store cannot recover.
-func seedDemoPlatformStaff(ctx context.Context, handler http.Handler, memberships *demoMemberships, svc *rbac.Service, password string) (string, error) {
+// seedDemoUsers' own fail-the-boot-rather-than-half-seed discipline. The
+// role half is idempotent (EnsureBuiltinRoles and AssignRole both are),
+// so re-asserting on an already-seeded account changes nothing an
+// operator may have revoked; the membership half cannot be revoked from
+// anywhere but this seed.
+func seedDemoPlatformStaff(ctx context.Context, handler http.Handler, memberships *signInMemberships, svc *rbac.Service, authnService *authn.Service, password string) (string, error) {
 	logger := obs.FromContext(ctx)
 
 	userID, alreadyExists, err := registerDemoUser(ctx, handler, demoPlatformStaffEmail, password)
@@ -184,8 +200,12 @@ func seedDemoPlatformStaff(ctx context.Context, handler http.Handler, membership
 		return "", err
 	}
 	if alreadyExists {
-		logger.Warn("demo platform-staff account already exists; leaving it unseeded so it fails closed")
-		return "", nil
+		userID, err = registeredDemoUserID(ctx, authnService, demoPlatformStaffEmail)
+		if err != nil {
+			return "", err
+		}
+		logger.Info("demo platform-staff account already registered; re-asserting its system-domain membership and role",
+			"user_id", userID)
 	}
 
 	memberships.Grant(userID, rbac.SystemDomain)

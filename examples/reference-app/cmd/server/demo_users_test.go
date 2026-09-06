@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/rbac"
 )
 
 // demo_users_test.go is the consumer proof of seedDemoUsers: when an
@@ -20,11 +21,18 @@ import (
 // and rbac role under the user id authn assigned, and those grants are then
 // reachable from a browser-shaped request -- a bearer token and no
 // demoUserHeader at all -- because demoSubjectResolver falls back to the
-// verified Principal. The second test pins the honest fail-closed half of
-// the seed's idempotence story: a second boot against the same database
-// finds the accounts already registered, skips them, and the sign-in that
-// worked under boot one is refused, because memberships do not survive a
-// restart.
+// verified Principal. The second test pins the restart half of the seed's
+// idempotence story: the memberships live in org's own memberships table
+// (authn's sign-in path reads them through sign_in_memberships.go), so a
+// second boot against the same database finds the accounts already
+// registered, re-asserts their grants under the ids authn assigned the
+// first time, and every sign-in that worked under boot one -- the demo
+// customer accounts AND the platform-staff account's SystemDomain
+// membership -- still works under boot two. Before this round, memberships
+// lived in an in-process roster that died with the boot that granted them,
+// and the second boot's sign-ins were refused with 403
+// authn.tenant_membership_required until the database was wiped: this test
+// pinned that failure (as ...FailsClosed) and now pins its fix.
 
 // demoSeedPassword is what the tests below seed demo accounts with. It must
 // satisfy go/authn's password policy (length-based) -- which is exactly the
@@ -165,26 +173,37 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 	}
 }
 
-// TestDemoUsers_SecondBootAgainstTheSameDatabaseFailsClosed pins what a
+// TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive pins what a
 // process restart against the same database actually does to the demo-user
-// seed. Boot one registers every account and signs in fine; boot two, with
-// the seed switched on again and a fresh, empty demoMemberships (the honest
-// image of a restart), finds the registrations already in authn's users
-// table and skips them -- and because the memberships lived in the
-// in-process store boot one owned, the account's sign-in is now refused
-// with authn's membership code even though the password is exactly right.
-// That is the fail-closed half of seedDemoUsers' contract: a skip is never
-// dressed up as a seed.
-func TestDemoUsers_SecondBootAgainstTheSameDatabaseFailsClosed(t *testing.T) {
+// seed. Boot one registers every account, signs in fine, and shuts down.
+// Boot two, with the seed switched on again, finds the registrations
+// already in authn's users table, re-asserts each account's grants under
+// the user id authn assigned on boot one (seedDemoUsers' own doc comment),
+// and every sign-in that worked under boot one still works: the demo
+// accounts' memberships are org rows that predate boot two and are read
+// straight from the database, and the platform-staff account's
+// rbac.SystemDomain membership is re-granted by seedDemoPlatformStaff on
+// the same already-exists path.
+//
+// Before this round the memberships lived in an in-process roster each
+// boot owned, so boot two (the honest image of a restart) answered "not a
+// member" for every account and refused the sign-ins with
+// authn.tenant_membership_required no matter how right the password was --
+// the failure this test previously pinned as
+// TestDemoUsers_SecondBootAgainstTheSameDatabaseFailsClosed, and the
+// scale-to-zero restart defect that killed every demo account (and locked
+// the platform-staff account out of admin's console) whenever an idle
+// instance stopped and came back.
+func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "reference-app-seed-restart.db")
 
-	// boot composes a server against the shared dbPath with the given
-	// membership store, without any test cleanup: the caller closes and
-	// cleans up each boot explicitly, in order.
-	boot := func(memberships *demoMemberships) (*httptest.Server, func() error) {
+	// boot composes a server against the shared dbPath, without any test
+	// cleanup: the caller closes and cleans up each boot explicitly, in
+	// order. Each boot carries its own fresh membership store -- the honest
+	// image of a restart, where nothing boot one held in memory exists.
+	boot := func() (*httptest.Server, func() error) {
 		cfg := testConfig(t)
 		cfg.SQLitePath = dbPath
-		cfg.Memberships = memberships
 		cfg.DemoUsersPassword = demoSeedPassword
 		handler, cleanup, _, err := buildServer(context.Background(), cfg)
 		if err != nil {
@@ -194,7 +213,7 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabaseFailsClosed(t *testing.T) {
 	}
 
 	// Boot one seeds every demo account and proves the seed works.
-	srv1, cleanup1 := boot(newDemoMemberships())
+	srv1, cleanup1 := boot()
 	status, code, ownerToken := demoLogin(t, srv1, demoOwnerEmail, demoSeedPassword, "tenant-acme")
 	if status != http.StatusOK {
 		t.Fatalf("boot-one login as the seeded owner: status = %d, code = %q, want %d", status, code, http.StatusOK)
@@ -215,13 +234,12 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabaseFailsClosed(t *testing.T) {
 	}
 
 	// Boot two re-runs the seed against the same database. Every account is
-	// already registered, so the seed skips them (warn + fail closed); the
-	// right password no longer signs the owner in, because membership died
-	// with boot one -- the sign-in now asks for a tenant the account is not
-	// an active member of, and authn answers with the membership-required
-	// code (the reader that answers is present and working; the answer it
-	// gives is no).
-	srv2, cleanup2 := boot(newDemoMemberships())
+	// already registered, so the seed's register leg reports the conflict
+	// and its grant leg re-asserts: the org rows survive boot one, and the
+	// platform-staff SystemDomain grant is re-made from the recovered user
+	// id. All three accounts' sign-ins must work exactly as they did under
+	// boot one.
+	srv2, cleanup2 := boot()
 	defer func() {
 		srv2.Close()
 		if err := cleanup2(); err != nil {
@@ -229,10 +247,31 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabaseFailsClosed(t *testing.T) {
 		}
 	}()
 
-	status, code, _ = demoLogin(t, srv2, demoOwnerEmail, demoSeedPassword, "tenant-acme")
-	if status != http.StatusForbidden || code != "authn.tenant_membership_required" {
-		t.Fatalf("boot-two login as the seeded owner: status = %d, code = %q, want 403 %q (memberships do not survive a restart)",
-			status, code, "authn.tenant_membership_required")
+	status, code, ownerToken2 := demoLogin(t, srv2, demoOwnerEmail, demoSeedPassword, "tenant-acme")
+	if status != http.StatusOK {
+		t.Fatalf("boot-two login as the seeded owner: status = %d, code = %q, want %d "+
+			"(a demo account's org membership row must survive a restart)",
+			status, code, http.StatusOK)
+	}
+	resp = notesRequestAs(t, srv2, http.MethodGet, ownerToken2, "", nil)
+	func() {
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("boot-two GET as the seeded owner: status = %d, want %d; body = %s", resp.StatusCode, http.StatusOK, body)
+		}
+	}()
+
+	status, code, _ = demoLogin(t, srv2, demoReaderEmail, demoSeedPassword, "tenant-acme")
+	if status != http.StatusOK {
+		t.Fatalf("boot-two login as the seeded reader: status = %d, code = %q, want %d", status, code, http.StatusOK)
+	}
+
+	status, code, _ = demoLogin(t, srv2, demoPlatformStaffEmail, demoSeedPassword, rbac.SystemDomain)
+	if status != http.StatusOK {
+		t.Fatalf("boot-two login as the platform-staff account: status = %d, code = %q, want %d "+
+			"(the staff account's SystemDomain membership must survive a restart)",
+			status, code, http.StatusOK)
 	}
 }
 

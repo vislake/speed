@@ -15,7 +15,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -472,104 +471,32 @@ var demoHostTenants = map[string]pkgcore.TenantID{
 	"globex.demo.localhost": "tenant-globex",
 }
 
-// demoMemberships is this app's small, in-process stand-in for a real
-// authn.MembershipReader (go/authn/service.go) -- seeded by hand rather
-// than backed by a real store. org and rbac are NOT the reason this exists:
-// both are real, tested, landed modules, and this app wires both for real
-// (org.NewModule at this file's own orgModule composition; rbac.NewModule
-// alongside it) -- root CLAUDE.md's "org / rbac rounds" deferral this
-// comment used to cite was stale by the time it was written, since both
-// rounds had already shipped.
-//
-// The real reason is a structural one: authn's MembershipReader seam asks
-// two questions -- "is this (user, tenant) pair an active membership" and
-// "which tenants is this user a member of, at all" -- and authn never
-// imports org (root CLAUDE.md's own module-boundary rule: authn and org sit
-// at the same dependency tier, peers, neither importing the other), so
-// whatever answers those questions must be host glue supplied by the
-// assembling application, exactly like demoNotesSubjectResolver and
-// orgSubtreeResolver below are. A real org-backed answer is possible in
-// principle -- org.MemberService.Get(ctx, userID) answers the first
-// question for a caller who already knows which tenant to ask, since
-// Membership is tenant-scoped -- but the second question, "every tenant
-// this user belongs to", has no single-query answer in org's own schema:
-// each tenant's memberships live in that tenant's own scoped table, so
-// answering it for an arbitrary user would mean iterating every tenant org
-// has ever seen (or a system-context aggregate query org does not expose),
-// which is real, unscoped engineering this app's own small, fixed set of
-// demo tenants and accounts does not need. demoMemberships remains the
-// pragmatic choice for that reason, not because org or rbac are unfinished
-// -- an org-backed MembershipReader adapter is a real option for a
-// consumer project with its own bounded tenant set, left to that
-// consumer's own wiring rather than built here as a second stand-in this
-// example does not need.
-//
-// It starts empty, and who fills it depends on the boot:
+// signInMemberships -- the authn.MembershipReader this app wires, whose
+// customer-tenant answers read org's own memberships table live -- lives
+// in sign_in_memberships.go with its full rationale. The short version of
+// why host glue must exist here at all is structural: authn never imports
+// org (root CLAUDE.md's own module-boundary rule -- authn and org sit at
+// the same dependency tier, peers, neither importing the other), so
+// whatever answers authn's two membership questions must be supplied by
+// the assembling application, exactly like demoNotesSubjectResolver and
+// orgSubtreeResolver below are. The app's membership store starts empty,
+// and who fills it depends on the boot:
 //
 //   - Every boot seeds the fixed demo header actors' rbac grants
 //     (seedDemoGrants) but NO memberships: those actors have no database
 //     row, so nothing can sign in as them.
 //   - A boot with APP_DEMO_USERS_PASSWORD set additionally registers the
 //     three demo accounts of demo_users.go through the real register route
-//     and records their memberships here -- which is what makes those real
-//     sign-ins succeed (authn's resolveTenant refuses an account with no
-//     membership: go/authn/service.go's nil-or-unseeded MembershipReader
-//     answer refuses rather than allows, and this store is exactly that
-//     unseeded case on a boot that skipped the seed).
+//     and places each into org's memberships table under every tenant its
+//     actor model names -- which is what makes those real sign-ins succeed,
+//     in this process and in any later one against the same database
+//     (authn's resolveTenant refuses an account with no membership:
+//     go/authn/service.go's nil-or-unseeded MembershipReader answer refuses
+//     rather than allows, and the org rows are that answer now).
 //   - Tests grant membership explicitly after registering an account
 //     through the real HTTP surface (registerAndAuthenticate in
 //     server_test.go, authn_e2e_test.go), keeping a reference to the same
 //     store buildServer itself wires.
-//
-// Because this store is in-process, a membership never survives a restart:
-// an account registered by an earlier boot answers "not a member" on the
-// next one and sign-in fails closed -- the honest state for an account
-// whose seed cannot be replayed (demo_users.go documents why), not a bug
-// to paper over.
-type demoMemberships struct {
-	mu      sync.Mutex
-	tenants map[string][]pkgcore.TenantID
-}
-
-// newDemoMemberships returns an empty membership store.
-func newDemoMemberships() *demoMemberships {
-	return &demoMemberships{tenants: make(map[string][]pkgcore.TenantID)}
-}
-
-// Grant records userID as an active member of tenant. It is idempotent:
-// granting the same pair twice does not duplicate the entry.
-func (m *demoMemberships) Grant(userID string, tenant pkgcore.TenantID) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, existing := range m.tenants[userID] {
-		if existing == tenant {
-			return
-		}
-	}
-	m.tenants[userID] = append(m.tenants[userID], tenant)
-}
-
-// ActiveMembership implements authn.MembershipReader.
-func (m *demoMemberships) ActiveMembership(_ context.Context, userID string, tenant pkgcore.TenantID) (bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, existing := range m.tenants[userID] {
-		if existing == tenant {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// TenantsOf implements authn.MembershipReader.
-func (m *demoMemberships) TenantsOf(_ context.Context, userID string) ([]pkgcore.TenantID, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return append([]pkgcore.TenantID(nil), m.tenants[userID]...), nil
-}
-
-// compile-time check that *demoMemberships satisfies authn.MembershipReader.
-var _ authn.MembershipReader = (*demoMemberships)(nil)
 
 // demoOrgUserHeader is the header demoOrgSubjectResolver reads to identify the
 // HTTP caller: a placeholder for the verified access-token claims authn
@@ -969,12 +896,15 @@ type serverConfig struct {
 	MailerCapabilities pkgcore.Capability
 
 	// Memberships is the seam authn asks tenant-membership questions
-	// through. Nil defaults to a fresh, empty demoMemberships in
-	// buildServer; a test that needs to seed membership after registering
-	// a demo user keeps its own reference by setting this field before
-	// calling buildServer, rather than reaching into buildServer's
-	// internals.
-	Memberships *demoMemberships
+	// through (authn.WithMembershipReader below): customer-tenant answers
+	// read org's own memberships table, and this store carries the
+	// rbac.SystemDomain grants plus any test shortcut. Nil defaults to a
+	// fresh, empty signInMemberships in buildServer; a test that needs to
+	// seed membership after registering a demo user keeps its own reference
+	// by setting this field before calling buildServer, rather than
+	// reaching into buildServer's internals. See sign_in_memberships.go's
+	// own doc comment for the full shape.
+	Memberships *signInMemberships
 
 	// DemoUsersPassword, when non-empty, makes buildServer seed the three
 	// demo accounts of demo_users.go at the end of its composition --
@@ -1668,8 +1598,15 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 
 	memberships := cfg.Memberships
 	if memberships == nil {
-		memberships = newDemoMemberships()
+		memberships = newSignInMemberships()
 	}
+	// Bind the org-backed half of the membership store: from here on,
+	// customer-tenant membership questions are answered by org's own rows
+	// (sign_in_memberships.go's own doc comment). orgModule is already
+	// composed above, and cfg.HostTenants is this host's whole tenant
+	// universe -- the only tenants that can ever accrue an org memberships
+	// row in this app.
+	memberships.attach(orgModule.Members(), cfg.HostTenants)
 	smsOutput := cfg.SMSOutput
 	if smsOutput == nil {
 		smsOutput = os.Stdout
@@ -2491,17 +2428,6 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// The call cannot fail: nothing it does returns an error.
 	wireDemoNotification(mux, reg.EventBus(), notificationModule)
 
-	// wireDemoOrgMembershipSync closes the gap Finding 3 of the
-	// reference-app-go.md audit confirmed: without this subscription, a real
-	// accepted invitation created a real org Membership row that
-	// demoMemberships (authn's MembershipReader stand-in) never learned
-	// about, so an invited user could accept for real and still never sign
-	// in. See demo_org_membership_sync.go's own doc comment for the full
-	// mechanism; memberships is the same store authn.WithMembershipReader
-	// was wired with above, so a grant this subscription makes is visible
-	// to the very next sign-in attempt.
-	wireDemoOrgMembershipSync(reg.EventBus(), memberships)
-
 	// wireConsult mounts go/ai-gateway's mandatory-first-consumer route
 	// (cmd/server/consult.go): consultService shares notesModule's own
 	// database connection through a fresh notes.Repository, exactly the way
@@ -2694,7 +2620,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// (APP_DEMO_USERS_PASSWORD, see configFromEnv); an empty password
 	// leaves everything above exactly as it was.
 	if cfg.DemoUsersPassword != "" {
-		if seedErr := seedDemoUsers(ctx, handler, memberships, rbacService, orgModule, cfg.HostTenants, cfg.DemoUsersPassword); seedErr != nil {
+		if seedErr := seedDemoUsers(ctx, handler, authnModule.Service(), rbacService, orgModule, cfg.HostTenants, cfg.DemoUsersPassword); seedErr != nil {
 			_ = cleanup()
 			return nil, nil, nil, seedErr
 		}
@@ -2703,7 +2629,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		// rbac.SystemDomain, holding BuiltinRoleOwner there -- every
 		// admin:* permission included, since owner carries every
 		// permission any module declared.
-		if _, seedErr := seedDemoPlatformStaff(ctx, handler, memberships, rbacService, cfg.DemoUsersPassword); seedErr != nil {
+		if _, seedErr := seedDemoPlatformStaff(ctx, handler, memberships, rbacService, authnModule.Service(), cfg.DemoUsersPassword); seedErr != nil {
 			_ = cleanup()
 			return nil, nil, nil, seedErr
 		}

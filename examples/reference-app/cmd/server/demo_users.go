@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -113,18 +112,29 @@ var demoSeedAccounts = []demoSeedAccount{
 // parallel account-creation path that could drift from them. A password
 // the policy refuses therefore fails startup, naming authn's answer code.
 //
-// The seed is idempotent only up to a point, and the point is deliberate:
-// registering an account that already exists is reported as a conflict
-// (authn's exists-answers never disclose more than the code), and the
-// account's memberships live in stores that do not survive a restart --
-// demoMemberships is in-process, and the role bindings sit in the database
-// under the user id the FIRST boot registered. A second boot against the
-// same database therefore cannot reach into the past and grant what the
-// first boot granted: it logs a warning and leaves that account alone,
-// fail-closed, and the operator who wants the demo accounts back starts
-// from a fresh database (APP_DB_PATH). That honest skip is preferred
-// over pretending a skip is a seed.
-func seedDemoUsers(ctx context.Context, handler http.Handler, memberships *demoMemberships, svc *rbac.Service, orgModule *org.Module, tenants map[string]pkgcore.TenantID, password string) error {
+// The seed is idempotent, and now the idempotence reaches all the way to
+// the grants, not just the registrations: the account's memberships live
+// in org's own memberships table and its roles in rbac's bindings table,
+// both durable, both written under the user id authn assigned -- so a
+// second boot against the same database finds the registration already
+// there (authn's exists-answers never disclose more than the code),
+// recovers the user id authn assigned the first time through the exact
+// email match of authn.Service.SearchUsers (the platform-operator lookup
+// go/admin's own user search goes through), and re-runs the grant leg,
+// which is safe to repeat by construction: the org membership is ensured
+// idempotently (addDemoOrgMembership) and AssignRole is idempotent. A
+// boot that finds a demo account pre-existing therefore restores whatever
+// the boot that created it left half-done -- a crash between registration
+// and grants can no longer strand a memberless demo account -- and a
+// restart against the same database loses none of the accounts' sign-in
+// power. SearchUsers is used only on the already-exists path, exactly
+// because registration itself never answers with the existing account's
+// id (enumeration suppression); the boot-time demo seed is operator
+// configuration, the same trust level as the registration it performs,
+// which is what makes the platform-operator lookup appropriate here
+// without an admin:search_users gate around it (that gate protects HTTP
+// callers; this call is the operator's own boot).
+func seedDemoUsers(ctx context.Context, handler http.Handler, authnService *authn.Service, svc *rbac.Service, orgModule *org.Module, tenants map[string]pkgcore.TenantID, password string) error {
 	logger := obs.FromContext(ctx)
 	for _, account := range demoSeedAccounts {
 		userID, alreadyExists, err := registerDemoUser(ctx, handler, account.email, password)
@@ -132,23 +142,44 @@ func seedDemoUsers(ctx context.Context, handler http.Handler, memberships *demoM
 			return fmt.Errorf("reference-app: seed demo users: %w", err)
 		}
 		if alreadyExists {
-			// A previous boot against this database created the account.
-			// Its memberships live in the in-process store that boot
-			// owned, and its rbac grants sit in the database under the
-			// user id only that boot knew -- neither can be recovered
-			// from here, and inventing grants would misrepresent state.
-			logger.Warn("demo user already exists; leaving it unseeded so it fails closed",
-				"demo_user", account.actor)
-			continue
+			// A previous boot against this database created the account;
+			// re-run the grant leg under its original id so a restart (or
+			// an interrupted first boot) cannot leave it stranded.
+			userID, err = registeredDemoUserID(ctx, authnService, account.email)
+			if err != nil {
+				return fmt.Errorf("reference-app: seed demo users: %w", err)
+			}
+			logger.Info("demo user already registered; re-asserting its org memberships and roles",
+				"demo_user", account.actor,
+				"user_id", userID)
 		}
-		if err := grantDemoSeedAccount(ctx, account, userID, memberships, svc, orgModule, tenants); err != nil {
+		if err := grantDemoSeedAccount(ctx, account, userID, svc, orgModule, tenants); err != nil {
 			return fmt.Errorf("reference-app: seed demo users: %w", err)
 		}
-		logger.Info("seeded demo user",
-			"demo_user", account.actor,
-			"user_id", userID)
+		if !alreadyExists {
+			logger.Info("seeded demo user",
+				"demo_user", account.actor,
+				"user_id", userID)
+		}
 	}
 	return nil
+}
+
+// registeredDemoUserID resolves the user id authn assigned to an email that
+// is already registered -- the one thing the register conflict answer never
+// discloses. The exact-email SearchUsers match is the platform-operator
+// lookup of go/authn/search.go; the seed's boot-time use is documented on
+// seedDemoUsers' own doc comment above.
+func registeredDemoUserID(ctx context.Context, authnService *authn.Service, email string) (string, error) {
+	users, err := authnService.SearchUsers(ctx, authn.UserSearchQuery{Email: email})
+	if err != nil {
+		return "", fmt.Errorf("look up pre-existing demo registration for %q: %w", email, err)
+	}
+	if len(users) != 1 {
+		return "", fmt.Errorf("look up pre-existing demo registration for %q: SearchUsers answered %d accounts, want exactly 1",
+			email, len(users))
+	}
+	return users[0].ID, nil
 }
 
 // registerDemoUser registers one demo account by POSTing the register
@@ -203,15 +234,23 @@ func registerDemoUser(ctx context.Context, handler http.Handler, email, password
 	return created.ID, false, nil
 }
 
-// grantDemoSeedAccount records the membership and role of one freshly
-// registered demo account, mirroring seedDemoGrants' per-tenant model: the
-// membership goes to the same seam authn asks about at sign-in
-// (demoMemberships) AND to org's own memberships table (addDemoOrgMembership,
-// below), the role to rbac, each under the tenant's own context. Which
-// tenants an account reaches is the account's own decision
-// (inEveryTenant), never "all tenants map iteration happens to visit" --
-// the same reason seedDemoGrants pins demoSingleTenantID as a literal.
-func grantDemoSeedAccount(ctx context.Context, account demoSeedAccount, userID string, memberships *demoMemberships, svc *rbac.Service, orgModule *org.Module, tenants map[string]pkgcore.TenantID) error {
+// grantDemoSeedAccount records the membership and role of one demo
+// account, mirroring seedDemoGrants' per-tenant model: the membership goes
+// to org's own memberships table (addDemoOrgMembership, below) -- the same
+// table authn's sign-in path reads through signInMemberships, so this one
+// write is what makes the account's sign-in succeed -- and the role to
+// rbac, each under the tenant's own context. Which tenants an account
+// reaches is the account's own decision (inEveryTenant), never "all
+// tenants map iteration happens to visit" -- the same reason seedDemoGrants
+// pins demoSingleTenantID as a literal.
+//
+// Every step is repeatable, which is what lets seedDemoUsers re-run this
+// on a boot that finds the account already registered: the org seat is
+// ensured idempotently and AssignRole is idempotent (its own doc
+// comment), so a repeat never duplicates a row or a binding and never
+// moves an existing seat -- a demo account a flow later re-placed into a
+// deeper org node keeps that node.
+func grantDemoSeedAccount(ctx context.Context, account demoSeedAccount, userID string, svc *rbac.Service, orgModule *org.Module, tenants map[string]pkgcore.TenantID) error {
 	seeded := make(map[pkgcore.TenantID]struct{}, len(tenants))
 	for _, tenantID := range tenants {
 		if !account.inEveryTenant && tenantID != demoSingleTenantID {
@@ -224,8 +263,6 @@ func grantDemoSeedAccount(ctx context.Context, account demoSeedAccount, userID s
 		seeded[tenantID] = struct{}{}
 
 		tenantCtx := pkgcore.WithTenant(ctx, tenantID)
-
-		memberships.Grant(userID, tenantID)
 
 		if err := addDemoOrgMembership(tenantCtx, orgModule, userID); err != nil {
 			return fmt.Errorf("reference-app: add demo account to org roster in %q: %w", tenantID, err)
@@ -243,24 +280,27 @@ func grantDemoSeedAccount(ctx context.Context, account demoSeedAccount, userID s
 }
 
 // addDemoOrgMembership gives userID a real org.Membership row in the
-// caller's tenant (ctx) -- the row go/admin's impersonation-target
-// membership check (validateTargetMembership) and any other
-// org.MemberService.Get caller actually consult. demoMemberships and the
-// rbac.AssignRole grant above are a separate, org-unrelated bookkeeping
-// surface (demo_subject.go's sign-in shortcut and rbac's own
-// authorization decision), and org itself knows nothing about either: a
-// demo account with no row here is, as far as org and anything built on
-// it are concerned, not a member of the tenant at all.
+// caller's tenant (ctx) -- the row authn's sign-in path reads through
+// signInMemberships (server.go), go/admin's impersonation-target
+// membership check (validateTargetMembership) and every other
+// org.MemberService.Get caller consult. The rbac.AssignRole grant above
+// is a separate surface (rbac's own authorization decision); org knows
+// nothing about it, and the sign-in store knows nothing beyond the row.
 //
 // It idempotently ensures the tenant's org root node exists (CreateRoot
 // on the first account seeded into a given tenant, Root thereafter, both
 // under the tenant context ctx already carries) and binds userID to it --
 // the reference app seeds no deeper organization tree, so the root is the
-// only node there is to place a demo account into.
+// only node there is to place a demo account into. A seat that already
+// exists somewhere in the tenant (org.MemberService.Add's own
+// ErrMembershipExists answer -- one seat per person per tenant) is left
+// exactly where it is, never moved and never duplicated: this helper is
+// safe to call on every boot, which is what makes the demo seed's
+// idempotence extend to membership rows and not only to user rows.
 func addDemoOrgMembership(ctx context.Context, orgModule *org.Module, userID string) error {
 	root, err := orgModule.Tree().Root(ctx)
 	if err != nil {
-		if !errors.Is(err, org.ErrNodeNotFound) {
+		if !orgCodeIs(err, org.ErrNodeNotFound.Code) {
 			return fmt.Errorf("look up tenant's org root: %w", err)
 		}
 		root, err = orgModule.Tree().CreateRoot(ctx, "Demo Tenant", "group")
@@ -269,7 +309,9 @@ func addDemoOrgMembership(ctx context.Context, orgModule *org.Module, userID str
 		}
 	}
 	if _, err := orgModule.Members().Add(ctx, userID, root.ID); err != nil {
-		return fmt.Errorf("add member to org roster: %w", err)
+		if !orgCodeIs(err, org.ErrMembershipExists.Code) {
+			return fmt.Errorf("add member to org roster: %w", err)
+		}
 	}
 	return nil
 }

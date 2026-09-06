@@ -19,10 +19,11 @@ package main
 // deferred brand-new-JIT-account path (go/authn/AGENTS.md's Known
 // limitations: a brand-new account from an unmatched external identity
 // cannot start a session until something grants it tenant membership,
-// which this app's demoMemberships never does automatically -- see its own
-// doc comment in server.go). Registering first and granting membership by
-// hand sidesteps exactly that limitation, honestly, rather than working
-// around it.
+// which this app's sign-in membership store never does automatically --
+// org rows and explicit grants are the only memberships there are, see
+// sign_in_memberships.go's own doc comment). Registering first and
+// granting membership by hand sidesteps exactly that limitation, honestly,
+// rather than working around it.
 
 import (
 	"bytes"
