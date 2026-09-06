@@ -34,7 +34,7 @@ Repository Status 一节，本页刻意不重复它——逐模块的重复统�
 | 流水线 | 触发条件 | 覆盖范围 |
 |---|---|---|
 | `fast-check.yml` | 每一个 pull request，加上每一次推送到 `main` | 21 个模块矩阵的 lint、vet 与开启 race 检测的单元测试；11 个 npm 包加 reference-app web host 的 lint/typecheck/test/build；仓库级检查（`docs/internal` 之外的 CJK 扫描、workspace 级构建、`go.work` 漂移检测、架构纪律相关的 semgrep 规则）。 |
-| `full-check.yml` | 打了 `full-ci` 标签的 PR，加上每一次推送到 `main` | 同一份模块矩阵，再加上基于 Docker 的 PostgreSQL/Redis/MinIO 集成测试层，以及 reference app 自己的组合式 HTTP 流程测试。 |
+| `full-check.yml` | 打了 `full-ci` 标签的 PR，加上每一次推送到 `main` | 同一份模块矩阵，再加上基于 Docker 的 PostgreSQL/Redis/RustFS 集成测试层，以及 reference app 自己的组合式 HTTP 流程测试。 |
 | `docs-check.yml` | 触碰文档或 i18n 资源的 PR | i18n key 集合的一致性（zh-CN 对 en-US），以及本站自己的结构检查（`tools/check_docs_site.py`，现在对照一次真实的 `hugo build` 产物执行）。 |
 | `api-contract.yml` | 触碰 API 契约工具链的 PR | 从 OpenAPI spec 重新生成后端接口（对已合并的片段，同时重新生成前端 SDK），并重新构建 reference app，让没有对应实现的 spec 变更无法通过编译。 |
 | `security.yml` | 每一个 PR，加上每天一次的定时任务 | 依赖审计、密钥扫描、CodeQL、许可证检查。 |

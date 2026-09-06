@@ -36,7 +36,7 @@ treat it as an orientation, not a source.
 | Pipeline | Trigger | Covers |
 |---|---|---|
 | `fast-check.yml` | Every pull request, plus every push to `main` | Lint, vet and race-tested unit tests for the 21-module Go matrix; lint/typecheck/test/build for the 11 npm packages plus the reference-app web host; repository-wide checks (CJK-outside-`docs/internal` scan, a workspace-wide build, a `go.work` drift gate, the architecture-discipline semgrep rules). |
-| `full-check.yml` | PRs labeled `full-ci`, plus every push to `main` | The same module matrix plus the Docker-backed PostgreSQL/Redis/MinIO integration tiers, and the reference app's own composed-HTTP flow tests. |
+| `full-check.yml` | PRs labeled `full-ci`, plus every push to `main` | The same module matrix plus the Docker-backed PostgreSQL/Redis/RustFS integration tiers, and the reference app's own composed-HTTP flow tests. |
 | `docs-check.yml` | PRs touching docs or i18n resources | i18n key-set parity (zh-CN vs en-US) and this site's own structural check (`tools/check_docs_site.py`, run against a real `hugo build` output). |
 | `api-contract.yml` | PRs touching the API-contract toolchain | Regenerates backend interfaces (and, for the merged fragments, the frontend SDK) from the OpenAPI specs and rebuilds the reference app, so a spec change nobody implemented cannot compile. |
 | `security.yml` | Every PR plus a daily schedule | Dependency audit, secret scan, CodeQL, license check. |
