@@ -74,10 +74,15 @@ var _ Handler = handlerFunc{}
 // only, and never for a Job a concurrent Cancel already moved to
 // StatusCancelled while that final attempt was executing: the cancellation
 // wins, the attempt's failure outcome is discarded in favor of
-// StatusCancelled (Queue.Cancel's own doc comment), no dead-letter is ever
-// persisted, and no compensation runs. Whatever OnFailure does is not
-// retried or otherwise observed by the queue. OnFailure receives the same
-// rebuilt tenant context Handle itself receives.
+// StatusCancelled (Queue.Cancel's own doc comment), and no compensation
+// runs. Both Queue implementations consult their own cancellation state at
+// the failure-processing point before invoking this hook -- StandaloneQueue
+// through completeDeadLetter's transition report, go/jobs/queue/asynq's
+// Queue through its cancellation marker (see the mode-by-mode bullets
+// below for what each one guarantees about the dead-letter record of a
+// cancelled Job). Whatever OnFailure does is not retried or otherwise
+// observed by the queue. OnFailure receives the same rebuilt tenant context
+// Handle itself receives.
 //
 // The two deployment modes' Queue implementations do NOT give OnFailure the
 // identical ordering guarantee relative to dead-letter persistence, and a
@@ -87,9 +92,11 @@ var _ Handler = handlerFunc{}
 //     actually persisted job's Status as StatusDeadLetter — the final
 //     attempt's failure path only invokes it once that write really
 //     transitioned the row from StatusRunning (worker.go's execute consults
-//     completeDeadLetter's transition report first). A FailureHook may
-//     safely read the Job back through Queue.Get from inside OnFailure here
-//     and observe StatusDeadLetter.
+//     completeDeadLetter's transition report first). The no-transition case
+//     is exactly a concurrent Cancel: the row stays StatusCancelled, no
+//     dead-letter is ever persisted for a cancelled Job, and no OnFailure
+//     runs. A FailureHook may safely read the Job back through Queue.Get
+//     from inside OnFailure here and observe StatusDeadLetter.
 //   - go/jobs/queue/asynq's Queue runs OnFailure BEFORE that same
 //     information is durable: asynq's own archival write (its dead-letter
 //     equivalent, the "archived" state) happens inside the library's own
@@ -105,6 +112,19 @@ var _ Handler = handlerFunc{}
 //     having already happened by the time OnFailure runs, and must instead
 //     treat the OnFailure call itself, not a Get() read-back, as its one
 //     and only "this Job has failed for good" signal.
+//
+// The cancel-wins guarantee holds under asynq's Queue the same way it does
+// under StandaloneQueue — handleError (queue/asynq/worker.go) reads the
+// cancellation marker Cancel wrote before invoking OnFailure, and Cancel
+// (queue/asynq/queue.go) writes that marker BEFORE sending its best-effort
+// CancelProcessing interruption signal, so every failure-processing path
+// that signal itself triggers observes the cancellation as already durable.
+// What differs is the cancelled Job's dead-letter record: asynq's own
+// dispatch loop may still archive the underlying task record strictly after
+// the ErrorHandler returns, so the raw task can land in asynq's archive —
+// visible only through asynq's own Inspector/asynqmon, never through this
+// package's API, since Get()/DeadLetterJobs keep reporting StatusCancelled
+// for it from the very marker that silenced OnFailure.
 type FailureHook interface {
 	OnFailure(ctx context.Context, job *Job, cause error)
 }

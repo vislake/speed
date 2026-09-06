@@ -262,12 +262,15 @@ func invokeOnFailure(ctx context.Context, hook FailureHook, job *Job, cause erro
 // "jobs.job.duration" Histogram and "jobs.job.attempts" Counter
 // registerJobMetrics wires (standalone_queue.go), labeled by jobType and status
 // -- status is always one of StatusSucceeded/StatusRetrying/
-// StatusDeadLetter, the exact three outcomes execute can reach. Both
-// instruments share one attribute set, computed once. A nil q.jobDuration
-// (registerJobMetrics never ran, or failed) is the guard: registration
-// always sets both fields together, so checking one stands for both --
-// see the struct field's own doc comment for why this must never panic a
-// job execution.
+// StatusDeadLetter, the exact three outcomes whose attempt records exist:
+// an attempt whose failure a concurrent Cancel already discarded (the
+// !moved dead-letter branch of execute) is deliberately recorded under
+// none of them, so a cancelled Job never shows up as dead-lettered on
+// either instrument. Both instruments share one attribute set, computed
+// once. A nil q.jobDuration (registerJobMetrics never ran, or failed) is
+// the guard: registration always sets both fields together, so checking
+// one stands for both -- see the struct field's own doc comment for why
+// this must never panic a job execution.
 func (q *StandaloneQueue) recordJobMetrics(jobType string, status Status, duration time.Duration) {
 	if q.jobDuration == nil {
 		return
@@ -282,8 +285,12 @@ func (q *StandaloneQueue) recordJobMetrics(jobType string, status Status, durati
 
 // recordDeadLetter records one job moving to StatusDeadLetter on the
 // "jobs.job.dead_letter" Counter registerJobMetrics wires, labeled by
-// jobType only. See recordJobMetrics's own doc comment for the nil-guard
-// rationale, which applies identically here.
+// jobType only. Called only from execute's dead-letter branch, strictly
+// after completeDeadLetter reported a genuine running -> dead-letter
+// transition -- never for a cancelled job whose dead-letter write no-op'd
+// -- so the counter counts dead-letters actually persisted. See
+// recordJobMetrics's own doc comment for the nil-guard rationale, which
+// applies identically here.
 func (q *StandaloneQueue) recordDeadLetter(jobType string) {
 	if q.jobDeadLetter == nil {
 		return
@@ -360,10 +367,6 @@ func (q *StandaloneQueue) execute(rec jobRecord) {
 	}
 
 	if rec.Attempts > rec.MaxRetries {
-		log.Error("job exhausted retries, moving to dead letter",
-			"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS, "error", err)
-		q.recordJobMetrics(rec.Type, StatusDeadLetter, duration)
-		q.recordDeadLetter(rec.Type)
 		moved, werr := completeDeadLetter(bg, q.db, rec.ID, err.Error(), now)
 		if werr != nil {
 			log.Error("jobs: persisting dead letter failed", "job_id", rec.ID, "error", werr)
@@ -379,13 +382,29 @@ func (q *StandaloneQueue) execute(rec jobRecord) {
 			// compensation it would have triggered -- is discarded: OnFailure
 			// must NOT run, since its contract (handler.go) requires the
 			// dead-letter to actually have been persisted first, and a
-			// cancelled Job has no dead-letter. The in-memory job mirrors
-			// the persisted terminal state instead.
+			// cancelled Job has no dead-letter. Nothing is recorded for it
+			// beyond this one truthful Info line: no dead-letter log, no
+			// dead-letter metric, no attempt-outcome metric -- the outcome
+			// was discarded, not dead-lettered, and ops dashboards must not
+			// show a cancelled Job as dead-lettered. The in-memory job
+			// mirrors the persisted terminal state instead.
 			log.Info("job cancelled before its final failure could dead-letter, outcome discarded",
 				"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS)
 			job.Status = StatusCancelled
 			return
 		}
+		// The transition report above (moved == true) is the one and only
+		// ground truth that a dead-letter really was persisted, so the
+		// dead-letter log line and metrics record -- recordJobMetrics'
+		// StatusDeadLetter attempt-outcome row and recordDeadLetter's
+		// jobs.job.dead_letter counter -- fire strictly AFTER it, never
+		// before: a record emitted ahead of the write would survive a
+		// no-op write (a concurrent Cancel) or a failed write and show a
+		// cancelled or still-running Job as dead-lettered.
+		log.Error("job exhausted retries, moved to dead letter",
+			"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS, "error", err)
+		q.recordJobMetrics(rec.Type, StatusDeadLetter, duration)
+		q.recordDeadLetter(rec.Type)
 		if hook, ok := handler.(FailureHook); ok {
 			job.Status = StatusDeadLetter
 			job.Error = err.Error()

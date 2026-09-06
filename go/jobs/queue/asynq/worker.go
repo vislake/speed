@@ -134,28 +134,91 @@ func isFailure(err error) bool {
 // and TestAsynqQueue_OnFailure_ObservesTaskNotYetArchived
 // (integration_test/failure_hook_ordering_test.go) pins it against a real
 // asynq/Redis backend.
+//
+// One more check lives here, at the same hook point: whether a concurrent
+// Cancel (writeCancelMarker, queue.go) already settled this Job while the
+// failed attempt was executing. OnFailure must not run for a cancelled Job
+// (handler.go's FailureHook contract), and because a terminal attempt's
+// failure reaches this hook in every interleaving asynq offers -- the
+// handler's own error, and equally a ctx cancellation that the attempt's
+// own interruption (CancelProcessing's signal) triggered, which asynq's
+// dispatch loop turns into a failure of the very same attempt -- the
+// marker is what tells the two apart. Cancel writes it BEFORE sending that
+// signal (queue.go's Cancel), so whenever the signal's own effects reach
+// this hook the cancellation is already durably observable here, never
+// racing it.
 func (q *Queue) handleError(ctx context.Context, t *asynqlib.Task, err error) {
 	retried, _ := asynqlib.GetRetryCount(ctx)
 	maxRetry, _ := asynqlib.GetMaxRetry(ctx)
 	taskID, _ := asynqlib.GetTaskID(ctx)
-	q.handleErrorAttempt(t, err, retried, maxRetry, taskID)
+	log := obs.FromContext(ctx)
+
+	// Only a terminal attempt can ever reach OnFailure (handleErrorAttempt's
+	// retried < maxRetry early return below), so the marker -- one extra
+	// Redis GET -- is read only for those, never for a retryable failure or
+	// a tenant-concurrency bounce that still has retries left.
+	//
+	// The read deliberately runs on a context stripped of the failed
+	// attempt's own cancellation, not on ctx itself: the interleaving where
+	// CancelProcessing's signal (queue.go's Cancel) already cancelled this
+	// attempt's ctx is exactly one of the two ways a terminal attempt's
+	// failure reaches this hook -- handleFailedMessage fails the attempt on
+	// the queue's own behalf once ctx is done -- and on that path ctx is
+	// already cancelled here, so a Redis GET under it would abort with
+	// "context canceled" before ever asking Redis, silently defeating the
+	// very check this exists to make. WithoutCancel keeps the read live
+	// while changing nothing else; the marker write Cancel made is ordered
+	// before that signal, so the read still finds it.
+	var cancelledAt *time.Time
+	if retried >= maxRetry {
+		readCtx := context.WithoutCancel(ctx)
+		if c, cerr := q.readCancelMarker(readCtx, taskID); cerr != nil {
+			log.Warn("jobs: reading cancellation marker failed", "job_id", taskID, "error", cerr)
+		} else {
+			cancelledAt = c
+		}
+	}
+	q.handleErrorAttempt(t, err, retried, maxRetry, taskID, cancelledAt, log)
 }
 
 // handleErrorAttempt is handleError's ctx-free core: everything handleError
 // needs from ctx (retried, maxRetry, taskID -- asynqlib.GetRetryCount/
 // GetMaxRetry/GetTaskID, all backed by an internal, package-private context
 // key this package cannot fabricate on its own) is passed in explicitly
-// instead, so this logic -- the archive-boundary replication and the
-// FailureHook invocation itself -- is unit-testable without a real asynq
-// server ever having dequeued anything; see worker_test.go. Only
-// handleError's own three GetXxx(ctx) calls are, correctly, untested at the
-// unit level: they are asynq's own accessors, not this package's logic.
-func (q *Queue) handleErrorAttempt(t *asynqlib.Task, err error, retried, maxRetry int, taskID string) {
+// instead, plus cancelledAt (the cancellation marker handleError read back
+// for a terminal attempt, nil when no Cancel has landed) and the
+// ctx-derived logger, so this logic -- the archive-boundary replication,
+// the Cancel-wins-over-the-terminal-failure check and the FailureHook
+// invocation itself -- is unit-testable without a real asynq server ever
+// having dequeued anything; see worker_test.go. Only handleError's own
+// three GetXxx(ctx) calls and the marker read are, correctly, untested at
+// the unit level: they are asynq's own accessors plus a Redis read, not
+// this package's logic.
+func (q *Queue) handleErrorAttempt(t *asynqlib.Task, err error, retried, maxRetry int, taskID string, cancelledAt *time.Time, log *slog.Logger) {
 	if errors.Is(err, errTenantAtCapacity) {
 		return // a bounce is never itself a dead-letter-worthy event.
 	}
 	if retried < maxRetry {
 		return // more retries remain; asynq will retry, not archive.
+	}
+	if cancelledAt != nil {
+		// A concurrent Cancel (writeCancelMarker, queue.go) already settled
+		// this Job as StatusCancelled while this final attempt was
+		// executing, so the cancellation wins over the attempt's failure
+		// outcome, exactly mirroring StandaloneQueue's completeDeadLetter
+		// no-transition guard (jobs' own worker.go, 91a929a): the
+		// failure's compensation -- FailureHook.OnFailure, whose contract
+		// (jobs' handler.go) requires the Job to actually dead-letter first
+		// -- must NOT run for a cancelled Job. Nothing here flips or
+		// records any state of its own: the cancellation marker Cancel
+		// wrote is the cancelled state, it stays in place, and every
+		// read-back through Get()/DeadLetterJobs keeps reporting
+		// StatusCancelled from it regardless of what asynq's own archive
+		// write (which the dispatch loop still performs after this hook
+		// returns) does to the underlying task record.
+		log.Info("job cancelled before its final failure was processed; failure hook skipped",
+			"job_id", taskID, "job_type", t.Type(), "attempts", retried+1)
+		return
 	}
 
 	h := q.handler(t.Type())

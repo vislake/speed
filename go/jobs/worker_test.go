@@ -1,8 +1,11 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -424,5 +427,107 @@ func TestExecute_FinalFailureAfterCancel_DoesNotRunOnFailure(t *testing.T) {
 	}
 	if got.Status != StatusCancelled {
 		t.Errorf("Status = %v, want %v (the dead-letter write must not overwrite the cancellation)", got.Status, StatusCancelled)
+	}
+}
+
+// TestExecute_FinalFailureAfterCancel_RecordsNoDeadLetterLogOrMetric is the
+// regression test for the defect where execute's dead-letter branch logged
+// "job exhausted retries, moving to dead letter" and recorded the
+// jobs.job.dead_letter counter -- plus the StatusDeadLetter rows of the
+// attempts/duration instruments -- BEFORE calling completeDeadLetter, so
+// even after 91a929a made OnFailure correctly skip a Job a concurrent
+// Cancel had already settled (the !moved branch), the log line and the
+// dead-letter metrics still fired for that Job: ops logs and dashboards
+// showed a cancelled Job as dead-lettered although no dead-letter was ever
+// persisted. The records must now fire strictly AFTER completeDeadLetter's
+// transition report and only for a genuine running -> dead-letter move,
+// leaving a cancelled Job exactly one truthful record: the "job cancelled
+// before its final failure could dead-letter, outcome discarded" Info
+// line. Fails on the pre-fix code, where the dead-letter log and both
+// metric instruments fire before the no-op write is discovered.
+func TestExecute_FinalFailureAfterCancel_RecordsNoDeadLetterLogOrMetric(t *testing.T) {
+	reader := setupTestMeterProvider(t)
+	q := NewStandaloneQueue(newTestDB(t))
+	if err := q.registerJobMetrics(); err != nil {
+		t.Fatalf("registerJobMetrics() error = %v", err)
+	}
+
+	// Capture execute's log lines: execute derives its logger from
+	// obs.FromContext over a freshly built context carrying no attached
+	// logger, which falls back to slog.Default() read fresh per call
+	// (go/observability's FromContext contract) -- so a temporary
+	// slog.SetDefault is the module's established capture seam for worker
+	// logging. No test in this package runs in parallel, so the process-wide
+	// swap cannot leak into a concurrent test.
+	prevDefault := slog.Default()
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prevDefault) })
+
+	h := &cancelledBeforeDeadLetterHandler{onFailureCh: make(chan struct{}, 1)}
+	if err := q.RegisterHandler(h); err != nil {
+		t.Fatalf("RegisterHandler() error = %v", err)
+	}
+
+	const jobType = "cancel-race.dead_letter"
+
+	// Control first: a genuine dead-letter must still be logged and counted
+	// exactly once. It also guarantees the metric data points exist to read
+	// back -- a Counter never Add()-ed emits no data point at all, which
+	// would make the cancelled Job's expected absence indistinguishable from
+	// a never-instrumented run.
+	control := fixtureRunningRecord("tenant-a", jobType)
+	control.MaxRetries = 0 // exhausted on the very first attempt
+	control.Attempts = 1
+	if err := q.db.Create(control).Error; err != nil {
+		t.Fatalf("seed control running record: %v", err)
+	}
+	q.execute(*control)
+
+	// The cancelled Job: Cancel (markCancelled) settles the row before the
+	// final attempt's failure path runs -- the same deterministic race
+	// TestExecute_FinalFailureAfterCancel_DoesNotRunOnFailure constructs.
+	rec := fixtureRunningRecord("tenant-a", jobType)
+	rec.MaxRetries = 0 // exhausted on the very first attempt
+	rec.Attempts = 1
+	if err := q.db.Create(rec).Error; err != nil {
+		t.Fatalf("seed running record: %v", err)
+	}
+	if err := markCancelled(context.Background(), q.db, rec.ID, time.Now()); err != nil {
+		t.Fatalf("markCancelled() error = %v", err)
+	}
+	q.execute(*rec)
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	got, err := q.Get(ctx, JobID(rec.ID))
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.Status != StatusCancelled {
+		t.Errorf("Status = %v, want %v (the dead-letter write must not overwrite the cancellation)", got.Status, StatusCancelled)
+	}
+
+	deadLetter := collectMetric(t, reader, jobDeadLetterMetricName)
+	if got := counterValue(t, deadLetter, jobType, ""); got != 1 {
+		t.Errorf("%s{job_type=%s} = %d, want 1 (the control's genuine dead-letter only; the cancelled Job's discarded failure must not be counted)", jobDeadLetterMetricName, jobType, got)
+	}
+	attempts := collectMetric(t, reader, jobAttemptsMetricName)
+	if got := counterValue(t, attempts, jobType, string(StatusDeadLetter)); got != 1 {
+		t.Errorf("%s{job_type=%s,status=dead_letter} = %d, want 1 (the control's genuine dead-letter only)", jobAttemptsMetricName, jobType, got)
+	}
+	duration := collectMetric(t, reader, jobDurationMetricName)
+	if got := histogramCount(t, duration, jobType, string(StatusDeadLetter)); got != 1 {
+		t.Errorf("%s{job_type=%s,status=dead_letter} count = %d, want 1 (the control's genuine dead-letter only)", jobDurationMetricName, jobType, got)
+	}
+
+	out := buf.String()
+	if strings.Contains(out, "moving to dead letter") {
+		t.Error("dead-letter log fired before completeDeadLetter's transition report; a cancelled Job must never be logged as moving to dead letter")
+	}
+	if got := strings.Count(out, "moved to dead letter"); got != 1 {
+		t.Errorf("dead-letter log line appears %d times, want exactly 1 (the control's genuine dead-letter only)", got)
+	}
+	if !strings.Contains(out, "job cancelled before its final failure could dead-letter, outcome discarded") {
+		t.Error("missing the cancelled-outcome Info line -- the one truthful record a cancelled Job's discarded failure is allowed to emit")
 	}
 }

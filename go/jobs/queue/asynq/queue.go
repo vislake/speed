@@ -509,6 +509,21 @@ func (q *Queue) Get(ctx context.Context, id jobs.JobID) (*jobs.Job, error) {
 // allowed to" keep executing, never that it is guaranteed to). Its failure
 // is logged, never returned, since the marker alone already satisfies the
 // contract either way.
+//
+// The marker is written BEFORE the CancelProcessing signal is sent, and
+// deliberately so: the signal's only effect is to interrupt the in-flight
+// attempt, and every failure-processing path that interruption can trigger
+// inside asynq's own dispatch loop (processor.go's handleFailedMessage
+// invokes this package's handleError -- and through it handleErrorAttempt's
+// cancel-marker check -- for a ctx-cancelled attempt exactly as for a
+// handler-returned error) must find the cancellation already durably
+// observable, never race it. A Cancel that has returned therefore
+// guarantees: any OnFailure decision made for this Job from then on sees
+// StatusCancelled, mirroring StandaloneQueue's "the cancellation wins"
+// semantics. Writing the marker first also means a marker-write failure
+// leaves the attempt completely uninterrupted -- previously the signal
+// could go out and only the marker fail, interrupting an attempt whose
+// cancellation was never recorded.
 func (q *Queue) Cancel(ctx context.Context, id jobs.JobID) error {
 	info, err := q.findTaskInfo(string(id))
 	if err != nil {
@@ -526,14 +541,14 @@ func (q *Queue) Cancel(ctx context.Context, id jobs.JobID) error {
 		return nil // idempotent: already otherwise terminal.
 	}
 
+	if merr := q.writeCancelMarker(ctx, string(id)); merr != nil {
+		return fmt.Errorf("jobs: record cancellation: %w", merr)
+	}
+
 	if info.State == asynqlib.TaskStateActive {
 		if cerr := q.inspector.CancelProcessing(string(id)); cerr != nil {
 			obs.FromContext(ctx).Warn("jobs: best-effort CancelProcessing signal failed", "job_id", string(id), "error", cerr)
 		}
-	}
-
-	if merr := q.writeCancelMarker(ctx, string(id)); merr != nil {
-		return fmt.Errorf("jobs: record cancellation: %w", merr)
 	}
 	return nil
 }
