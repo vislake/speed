@@ -191,16 +191,20 @@ func (r *UserIdentityRepository) DeleteUnlessLastLoginMethod(ctx context.Context
 			return err
 		}
 
-		var remaining int64
-		if err := tx.Model(&UserIdentity{}).Where("user_id = ?", userID).
-			Count(&remaining).Error; err != nil {
+		// The rows that remain ARE the re-derived count: LoginMethodCount
+		// credits every bound identity exactly once, so reading the list
+		// is the count -- the same derivation Service.UnbindIdentity runs
+		// against ListByUser -- in the module's model-argument shape
+		// rather than a COUNT(*) that would need a raw table anchor.
+		var remaining []UserIdentity
+		if err := tx.Where("user_id = ?", userID).Find(&remaining).Error; err != nil {
 			return err
 		}
 		var user User
 		if err := tx.Where("id = ?", userID).First(&user).Error; err != nil {
 			return err
 		}
-		if LoginMethodCount(&user, int(remaining)) < 1 {
+		if LoginMethodCount(&user, len(remaining)) < 1 {
 			// This deletion would leave the account with no way in at all.
 			// Rolling the transaction back undoes the delete above.
 			return ErrLastLoginMethod

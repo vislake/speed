@@ -32,6 +32,22 @@
 #     path ever writes, precisely so a real test can prove the read-time
 #     check catches it -- the same reason test files are excluded
 #     wholesale rather than enumerated (see header below).
+#   * go/authn/identity.go   -- identity-domain rows (users,
+#     user_identities) that dbkit.Repository[T] cannot serve: the generic
+#     constraint requires TenantScoped, which identity data deliberately
+#     does not implement (this module's model comments and repository.go
+#     file comment document that, pinned by its AssertNotTenantScoped
+#     suite), and the raw *gorm.DB dbkit.Open returns is that domain's
+#     documented pattern. One flagged call, DeleteUnlessLastLoginMethod's
+#     serializing touch-lock (tx.Model(&User{}).Where("id = ?", userID).
+#     Update("updated_at", at)): a value-preserving single-column
+#     conditional UPDATE gorm can only express anchored to a model -- the
+#     struct-argument Updates idiom every other authn write uses would
+#     send updated_at through the auto-update-time machinery, which
+#     overwrites the explicit value, and a row Save would clobber every
+#     column from a stale read. The method's doc comment records why the
+#     UPDATE-touch is the lock at all (the dialect-neutral SELECT ... FOR
+#     UPDATE equivalent).
 #
 # Residual gaps: only the three named entry points are matched -- a
 # workaround through another method on *gorm.DB (e.g. Exec with hand-
@@ -63,3 +79,4 @@ rules:
         - "**/go/dbkit/**"
         - "**/go/jobs/store.go"
         - "**/go/authn/internal/testutil/testutil.go"
+        - "**/go/authn/identity.go"
