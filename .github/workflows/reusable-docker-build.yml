@@ -1,44 +1,206 @@
 name: docker-build
 
-# Reusable multi-architecture container-image build -- a wiring-ready shape,
-# not a runnable check. No workflow calls it, and the guard step below makes
-# any invocation fail loudly instead of passing silently; it stays that way
-# until an image-producing app exists.
+# Reusable multi-architecture container-image build. Genuinely runnable as
+# of the reference-app-docker-image round (docs/internal/18-cicd.md's own
+# implementation-status note has the detail): examples/reference-app now
+# ships a real multi-stage Dockerfile, and this workflow builds it for
+# every platform a caller names, proving the build itself -- not yet the
+# full release shape.
 #
-# INTENDED SHAPE (docs/internal/18-cicd.md pipeline table and cost control):
-#   * inputs (final set settled by the first consumer): image name and tag
-#     set, build context, platforms (amd64/arm64 per the release row's
-#     multi-arch artifact requirement), registry and cache scope.
-#   * buildx setup, multi-arch build/push, Docker layer cache keyed per the
-#     18-cicd caching rule -- the docker/* third-party actions are pinned to
-#     full-length commit SHAs here when wired, exactly like the official
-#     actions pinned in this repository's other workflows.
-#   * registry credentials live in GitHub Environments/org secrets and need
-#     their own permission review (20-quality-and-security.md secret
-#     management section); none are declared today.
+# WHAT THIS ROUND SHIPS:
+#   * buildx setup (QEMU for cross-platform emulation, then buildx itself)
+#     and a multi-arch `docker buildx build` over every platform `platforms`
+#     names, with no destination: no push (no registry exists to push to --
+#     see NOT YET below) and no --load for a genuinely multi-platform build,
+#     because the default docker-container buildx driver cannot load a
+#     multi-platform result into the local daemon at all (only a
+#     single-platform image can be loaded) -- so this leg's proof is
+#     "every named platform's layers actually build", discarded on success,
+#     which is exactly `docker buildx build` without --push/--load's own
+#     documented default behavior, not a workaround this file invented.
+#   * a SECOND build, single-platform (linux/amd64, the GitHub-hosted
+#     runner's own native architecture -- no QEMU emulation needed to
+#     actually EXECUTE it, unlike the multi-arch leg above), with --load
+#     into the runner's local Docker daemon, so the image can be run for
+#     real: this leg boots a container from it, curls the health route the
+#     caller names, and confirms the image's own HEALTHCHECK (if the
+#     Dockerfile declares one) converges to "healthy" -- the same two
+#     proofs examples/reference-app's own Dockerfile round performed by
+#     hand, now repeatable in CI.
+#   * Docker layer caching via actions/cache, keyed on the Dockerfile's own
+#     hash plus the runner OS -- the "no facility exists yet" gap
+#     18-cicd's cost-control section used to record for this exact
+#     workflow is closed by this round, for this workflow specifically.
 #
-# WHO NEEDS IT: the e2e pipeline (service images for reference-app flows),
-# the release pipeline (multi-arch image artifacts) and nightly. None of
-# those are enabled yet, and no Dockerfile exists anywhere in the repository
-# -- the first image-producing app lands with the reference-app/e2e or
-# release rounds (roadmap M4 e2e item; M0 lockstep-release item for the
-# release artifacts).
+# INPUTS
+#   image_name  -- image name to tag (no registry prefix -- there is
+#                  nowhere real to push to yet, see NOT YET below).
+#   image_tag   -- tag for the built image (caller's choice -- a commit SHA,
+#                  a run id, or a fixed string for a smoke build).
+#   context     -- build context path, relative to the repository root.
+#   dockerfile  -- Dockerfile path, relative to the repository root.
+#   platforms   -- comma-separated platform list for the multi-arch
+#                  (never-loaded) leg. Defaults to linux/amd64,linux/arm64
+#                  -- the pair root CLAUDE.md's release-artifact rule and
+#                  this repository's own release.yml design note both name.
+#   healthcheck_path -- HTTP path the single-platform smoke leg curls after
+#                  booting the loaded image (default /healthz, matching
+#                  examples/reference-app's own route).
+#   healthcheck_port -- container port the smoke leg publishes and curls
+#                  (default 8080, examples/reference-app's own default
+#                  PORT).
+#
+# NOT YET (this round's own stated boundary, not an oversight):
+#   * No registry push of any kind -- this repository holds no registry
+#     credentials and must never acquire any (root CLAUDE.md's Security
+#     rules; security.yml's own header states the identical constraint for
+#     trivy). Real publishing, multi-arch manifest lists actually pushed
+#     and tagged, and goreleaser-produced binaries riding alongside them
+#     are all M4 release-pipeline work (docs/internal/18-cicd.md's
+#     lockstep-release section, step 5).
+#   * No caller wires this into e2e/release/nightly yet -- those three
+#     stay gated stubs in their own right (see each file's own header).
+#     The only live caller today is docker-image-ci.yml, workflow_dispatch-
+#     only, proving this reusable genuinely works end to end.
+#   * trivy image scanning (security.yml's own DEFERRED note) still has
+#     nothing to scan from a live per-PR pipeline -- this workflow builds
+#     an image on manual dispatch only, not on every PR, so it does not by
+#     itself give trivy a standing target.
 
 on:
   workflow_call:
+    inputs:
+      image_name:
+        description: Image name to tag (no registry prefix).
+        required: true
+        type: string
+      image_tag:
+        description: Tag for the built image.
+        required: true
+        type: string
+      context:
+        description: Build context path, relative to the repository root.
+        required: true
+        type: string
+      dockerfile:
+        description: Dockerfile path, relative to the repository root.
+        required: true
+        type: string
+      platforms:
+        description: Comma-separated platform list for the multi-arch (never-loaded) build leg.
+        required: false
+        type: string
+        default: linux/amd64,linux/arm64
+      healthcheck_path:
+        description: HTTP path the single-platform smoke leg curls after booting the loaded image.
+        required: false
+        type: string
+        default: /healthz
+      healthcheck_port:
+        description: Container port the smoke leg publishes and curls.
+        required: false
+        type: string
+        default: "8080"
 
 permissions:
   contents: read
 
 jobs:
   docker-build:
-    name: docker build (stub guard -- no image-producing app yet)
+    name: docker build (${{ inputs.image_name }}:${{ inputs.image_tag }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Gated stub
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      # QEMU is what lets buildx assemble non-native-architecture layers
+      # (linux/arm64 on this x86_64 runner) -- required for the multi-arch
+      # leg below, unused by the amd64-only smoke leg.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a  # v4.3.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
+
+      # Docker layer cache -- keyed on the Dockerfile's own content hash
+      # plus the runner OS, exactly the cache-key shape 18-cicd's own
+      # caching rule names ("by lockfile hash" generalized to "by the input
+      # that defines the build" for a Dockerfile). A cache miss (the
+      # Dockerfile changed, or this is the first run) costs one full build;
+      # every unchanged rebuild after that reuses it.
+      - name: Cache Docker layers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: /tmp/.buildx-cache
+          key: docker-buildx-${{ runner.os }}-${{ hashFiles(inputs.dockerfile) }}
+          restore-keys: |
+            docker-buildx-${{ runner.os }}-
+
+      # Multi-arch leg: builds every named platform's layers with no
+      # destination (no --push, no --load) -- see this file's own header
+      # for why that is docker buildx build's own documented behavior for
+      # a genuinely multi-platform result, not a workaround. A platform
+      # that fails to build fails this step, which is the whole proof.
+      - name: Build (multi-arch, discarded on success)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          platforms: ${{ inputs.platforms }}
+          push: false
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+
+      # actions/cache has no update-in-place -- swap the new cache into the
+      # restored path so the NEXT run's restore-keys sees this run's layers
+      # rather than a stale one from whenever the key was first populated.
+      - name: Move new Docker layer cache into place
         run: |
-          echo "docker-build is a wiring-ready shape. Implement it (buildx,"
-          echo "multi-arch push, layer cache, pinned docker/* actions) in the"
-          echo "round that lands the first image-producing app."
-          exit 1
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      # Single-platform (native, linux/amd64) leg: --load puts the result
+      # into the runner's own Docker daemon so the smoke steps below can
+      # actually run it, which a multi-platform result never allows.
+      - name: Build (linux/amd64, loaded into the local daemon)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          platforms: linux/amd64
+          load: true
+          tags: ${{ inputs.image_name }}:${{ inputs.image_tag }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+
+      - name: Report image size
+        run: docker image inspect ${{ inputs.image_name }}:${{ inputs.image_tag }} --format '{{ .Size }} bytes'
+
+      - name: Boot the loaded image and smoke-test its health route
+        run: |
+          set -euo pipefail
+          container_id=$(docker run -d -p "${{ inputs.healthcheck_port }}:${{ inputs.healthcheck_port }}" "${{ inputs.image_name }}:${{ inputs.image_tag }}")
+          trap 'docker logs "$container_id" || true; docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
+
+          echo "waiting for the container's own HEALTHCHECK (if any) and health route to answer..."
+          ready=""
+          for _ in $(seq 1 30); do
+            status=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' "$container_id")
+            if curl -fsS "http://127.0.0.1:${{ inputs.healthcheck_port }}${{ inputs.healthcheck_path }}" >/tmp/healthcheck-response 2>/dev/null; then
+              if [ "$status" = "healthy" ] || [ "$status" = "no-healthcheck" ]; then
+                ready=1
+                break
+              fi
+            fi
+            sleep 2
+          done
+
+          if [ -z "$ready" ]; then
+            echo "::error::the image never answered ${{ inputs.healthcheck_path }} with a healthy status"
+            exit 1
+          fi
+
+          echo "health route response:"
+          cat /tmp/healthcheck-response
+          echo
+          echo "container HEALTHCHECK status: $status"

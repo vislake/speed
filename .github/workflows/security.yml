@@ -106,9 +106,18 @@ name: security
 # DEFERRED (a real prerequisite is still missing; wiring it now would
 # produce a permanently red check -- the half-wired state this repo
 # refuses to ship, see the gated-stub rationale in fast-check.yml):
-#   * trivy (container image scanning): the repository builds no images
-#     today -- nothing ships a Dockerfile -- so there is nothing to
-#     scan. Wire when the release round produces an image.
+#   * trivy (container image scanning): UPDATED by the
+#     reference-app-docker-image round -- the repository now builds a real
+#     image (examples/reference-app/Dockerfile, proven via
+#     docker-image-ci.yml calling reusable-docker-build.yml), so "nothing
+#     ships a Dockerfile" is no longer the reason to defer. What still
+#     blocks wiring trivy HERE, on this workflow's own every-PR/daily
+#     triggers, is that the image build is workflow_dispatch-only, not
+#     part of any PR or scheduled run -- there is no STANDING image this
+#     job could reach to scan on its own schedule, only an on-demand one a
+#     human triggers by hand. Wire trivy once an image build genuinely
+#     runs on a trigger this workflow shares (the release round, or a
+#     later round that makes image builds part of full-check/nightly).
 #
 # SECRETS: the repo holds no real credentials of any kind and must never
 # acquire any (20-quality-and-security.md secret management); CI secrets

@@ -1,0 +1,43 @@
+name: docker-image-ci
+
+# Manual proof that the reusable Docker build (reusable-docker-build.yml)
+# genuinely works, over the reference app's real Dockerfile
+# (examples/reference-app/Dockerfile, the reference-app-docker-image
+# round). workflow_dispatch-only, matching this repository's stated
+# boundary for this round: e2e, release and nightly -- the reusable
+# workflow's own eventual real callers -- are not live yet (each stays a
+# gated stub in its own right), so this file is the one live caller until
+# one of those three rounds lands and wires it in for real. No push
+# anywhere: reusable-docker-build.yml's own header explains why (no
+# registry, no credentials, by deliberate and permanent policy until this
+# repository's own M4 release round).
+#
+# Flat under .github/workflows/, never a subdirectory -- this repository
+# hit a real GitHub Actions constraint earlier over exactly that mistake
+# (workflows must live directly under .github/workflows/ to be discovered
+# at all).
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Tag to build the image as (defaults to this run's own id, so repeated dispatches never collide).
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build-reference-app:
+    name: build examples/reference-app
+    uses: ./.github/workflows/reusable-docker-build.yml
+    with:
+      image_name: speed-reference-app
+      image_tag: ${{ inputs.image_tag != '' && inputs.image_tag || format('ci-{0}', github.run_id) }}
+      context: .
+      dockerfile: examples/reference-app/Dockerfile
+      platforms: linux/amd64,linux/arm64
+      healthcheck_path: /healthz
+      healthcheck_port: "8080"
