@@ -804,6 +804,28 @@ type serverConfig struct {
 	// to this field never having existed.
 	DisableQueueWorker bool
 
+	// PeriodicTaskInterval is the cadence of this host's periodic-task
+	// scheduler (periodic_scheduler.go), the ticker that enqueues the
+	// jobs-driven mechanisms this app wired -- storage's per-tenant expiry
+	// sweep and pki's signing-key expiry scan. configFromEnv never sets
+	// it, so zero (the default) means the scheduler's own default,
+	// defaultPeriodicTaskSchedulerInterval, and the flow tests inject a
+	// sub-second interval to drive real ticks within test time -- the same
+	// test-override shape Mailer and Memberships below use.
+	PeriodicTaskInterval time.Duration
+
+	// PKIPropagationWindow and PKIRenewalLeadTime override pki's rotation
+	// timing when non-zero: buildServer applies pki.WithPropagationWindow
+	// and pki.WithRenewalLeadTime only for values above zero, so the zero
+	// default (what configFromEnv always leaves them at) keeps the
+	// module's own DefaultPropagationWindow / DefaultRenewalLeadTime in
+	// force, byte-identical to the fields never having existed. The pki
+	// flow test injects a renewal lead time past a signing key's validity
+	// so the very next expiry scan stages its replacement within test
+	// time.
+	PKIPropagationWindow time.Duration
+	PKIRenewalLeadTime   time.Duration
+
 	// Mailer overrides the console mailer the standalone Preset resolves
 	// for the "mailer" seam when set. configFromEnv sets it to a real
 	// pkgcore.NewSMTPMailer composition when SMTPHost is configured (see
@@ -1246,25 +1268,28 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	}
 
 	// configService and rbacService are filled by their Attach calls below
-	// (nil until then), standaloneQueue by the storage module's wiring next
-	// to rbacModule (nil until then); redisBus and redisClient are filled
-	// below when cfg.RedisAddr selects the injected Redis-backed
-	// composition (nil otherwise). cleanup closes the services and the job
-	// queue first -- stopping config's anti-loss poller, rbac's cache
-	// janitor and the queue's workers so none of them drains a job or a
-	// poll against a connection that is being torn down -- then the
-	// injected bus, stopping its readers so no remote event can still be
-	// delivered to a handler writing the database, then the client this
-	// host owns (eventbusredis.EventBus never closes it), and the database
-	// last. Every close is attempted even when an earlier one failed; the
-	// first error wins.
+	// (nil until then), standaloneQueue by the pki module's wiring above
+	// (nil until then), and smileSimReconcilerStop and
+	// periodicTaskSchedulerStop by their start calls below (both nil until
+	// then); redisBus and redisClient are filled below when cfg.RedisAddr
+	// selects the injected Redis-backed composition (nil otherwise).
+	// cleanup closes the services and the job queue first -- stopping the
+	// two ticker loops, config's anti-loss poller, rbac's cache janitor
+	// and the queue's workers so none of them drains a job, enqueues a
+	// task or runs a poll against a connection that is being torn down --
+	// then the injected bus, stopping its readers so no remote event can
+	// still be delivered to a handler writing the database, then the
+	// client this host owns (eventbusredis.EventBus never closes it), and
+	// the database last. Every close is attempted even when an earlier one
+	// failed; the first error wins.
 	var (
-		configService          *config.Service
-		rbacService            *rbac.Service
-		standaloneQueue        *jobs.StandaloneQueue
-		redisBus               *eventbusredis.EventBus
-		redisClient            *redis.Client
-		smileSimReconcilerStop func()
+		configService             *config.Service
+		rbacService               *rbac.Service
+		standaloneQueue           *jobs.StandaloneQueue
+		redisBus                  *eventbusredis.EventBus
+		redisClient               *redis.Client
+		smileSimReconcilerStop    func()
+		periodicTaskSchedulerStop func()
 	)
 
 	cleanup := func() error {
@@ -1287,6 +1312,15 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			// smilesim.ReservationStore), so it must not still be ticking
 			// against either while they are being torn down.
 			smileSimReconcilerStop()
+		}
+		if periodicTaskSchedulerStop != nil {
+			// Stopped next, before standaloneQueue.Close below for the
+			// same reason: the scheduler's tick body enqueues onto the
+			// queue's task table, so it must not still be ticking while
+			// the pool that drains it is being torn down (the blocking
+			// stop also guarantees no enqueue is in flight when Close
+			// runs -- see periodic_scheduler.go's own doc comment).
+			periodicTaskSchedulerStop()
 		}
 		if configService != nil {
 			keepErr(configService.Close())
@@ -1423,6 +1457,21 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		}),
 	)
 
+	// standaloneQueue is this app's one job queue, shared by every module
+	// whose asynchronous work runs on the jobs mechanism: a
+	// jobs.StandaloneQueue over this app's own database connection, the
+	// standalone mode's SQLite-backed worker pool whose task table its
+	// own Start creates below (no migration of this host's is involved).
+	// It is constructed here, ahead of pkiModule just below -- the first
+	// module whose NewModule options need the queue -- and ahead of the
+	// storage, integration, notification, ai-gateway, compliance and
+	// admin modules that take it as well. Its lifecycle is bound to this
+	// host's: the drain loop below moves every registry-declared task
+	// handler onto it and Start launches the pool, both after Bootstrap
+	// (only then do Register's declarations exist), and cleanup's Close
+	// stops the pool before the shared database closes.
+	standaloneQueue = jobs.NewStandaloneQueue(db)
+
 	// pki owns authn's signing-key lifecycle: LocalSigner (its own
 	// zero-external-dependency default) generates and stores the key in
 	// cfg.SQLitePath, so it persists across restarts with no dev-seed
@@ -1433,7 +1482,30 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// but the reference app assembles authn directly rather than through
 	// saasctl, so it wires pki here exactly as any authn-containing
 	// generated project's own server.go now does.
-	pkiModule := pki.NewModule(db)
+	//
+	// The queue is part of that wiring too: WithQueue hands pki the
+	// standaloneQueue constructed above, which is what makes Register
+	// attach the queue to Service and CAService and declare the module's
+	// two job handlers onto the registry -- the signing-key expiry-scan
+	// task (pki.expiry_scan), which this host's periodic-task scheduler
+	// enqueues on its tick, and the CRL-regenerate task, declared and
+	// drained like every other registered handler but never scheduled:
+	// this app consumes no X.509/CRL surface, so regenerating a CRL
+	// nobody reads would be work for its own sake (periodic_scheduler.go's
+	// doc comment and go/pki/AGENTS.md record that honestly). The two
+	// rotation knobs below are applied only when a test injects them: a
+	// zero PKIPropagationWindow or PKIRenewalLeadTime (what configFromEnv
+	// always leaves them at) keeps pki's own DefaultPropagationWindow /
+	// DefaultRenewalLeadTime in force, byte-identical to this app's
+	// pre-round rotation behavior.
+	pkiOpts := []pki.Option{pki.WithQueue(standaloneQueue)}
+	if cfg.PKIPropagationWindow > 0 {
+		pkiOpts = append(pkiOpts, pki.WithPropagationWindow(cfg.PKIPropagationWindow))
+	}
+	if cfg.PKIRenewalLeadTime > 0 {
+		pkiOpts = append(pkiOpts, pki.WithRenewalLeadTime(cfg.PKIRenewalLeadTime))
+	}
+	pkiModule := pki.NewModule(db, pkiOpts...)
 
 	memberships := cfg.Memberships
 	if memberships == nil {
@@ -1538,22 +1610,13 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// therefore tenant-wide.
 	rbacModule := rbac.NewModule(db)
 
-	// authn's migrations register first: it depends on nothing, and the
-	// frozen plan for this round asks that its tables exist before notes'
-	// and config's Apply runs, matching the order Bootstrap uses just
-	// below.
-	standaloneQueue = jobs.NewStandaloneQueue(db)
-
 	// storageModule is the reference app's first consumer of go/storage.
 	// Its asynchronous work -- the thumbnail-derive task every completed
-	// image object enqueues -- runs on a jobs.StandaloneQueue sharing this
-	// app's own database connection: the standalone mode's SQLite-backed
-	// worker pool, whose task table StandaloneQueue.Start creates for
-	// itself (no migration of this host's is involved). The queue is
-	// drained and started below, after Bootstrap, because storage's
-	// Register declares its task handlers on the registry and only the
-	// host can move them onto a concrete queue; cleanup's Close stops the
-	// pool before the shared database closes.
+	// image object enqueues, and the expiry-sweep task this host's
+	// periodic-task scheduler enqueues per tenant (periodic_scheduler.go)
+	// -- runs on the host's standaloneQueue above
+	// (storage.WithQueue), drained and claimed below like every other
+	// registry-declared handler.
 	storageModule := storage.NewModule(db, storage.WithQueue(standaloneQueue))
 
 	// sharingModule is the reference app's first real consumer of
@@ -1875,9 +1938,13 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return nil, nil, nil, fmt.Errorf("reference-app: apply migrations: %w", applyErr)
 	}
 
-	// Bootstrap registers all ten modules in argument order -- authn
-	// first of all, so its Register-time declarations (its config items,
-	// its permissions, its events) precede the modules that lean on them,
+	// Bootstrap registers the modules in argument order -- pki leads the
+	// set (a position no other module's Register depends on, mirroring
+	// its lead in the migration registry above: authn's construction
+	// already consumed pkiModule.Service(), so this app's composition
+	// order simply starts with pki), with authn immediately behind it, so
+	// authn's Register-time declarations (its config items, its
+	// permissions, its events) precede the modules that lean on them,
 	// then notes and org before config, so the configuration items and
 	// feature flags their Register calls declare (notes' own, and org's
 	// read-only reliance on the org.invitations / org.invitation_email
@@ -2171,15 +2238,16 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 
 	// Drain the registry's job handlers onto the standalone queue and
 	// start the pool. Only now -- after Bootstrap -- can the handlers be
-	// moved: storage's Register declared them on the registry (their
-	// backing services attached its seams in the same call), and
-	// reg.Jobs.Handlers() is the map that declaration filled. Each entry
-	// must actually be a jobs.Handler; anything else is a wiring bug
-	// between a module and the queue contract, refused here rather than
-	// mis-typed into a worker at job-claim time. Start is non-blocking --
-	// it launches the dispatcher and worker goroutines and returns -- so
-	// the first enqueued job (a completed object's thumbnail derivation)
-	// waits only as long as a poll of the queue's own task table.
+	// moved: the modules' Register calls declared them on the registry
+	// (each handler's backing service attached its seams in the same
+	// call), and reg.Jobs.Handlers() is the map those declarations
+	// filled. Each entry must actually be a jobs.Handler; anything else
+	// is a wiring bug between a module and the queue contract, refused
+	// here rather than mis-typed into a worker at job-claim time. Start
+	// is non-blocking -- it launches the dispatcher and worker goroutines
+	// and returns -- so the first enqueued job (a completed object's
+	// thumbnail derivation) waits only as long as a poll of the queue's
+	// own task table.
 	for jobType, handler := range reg.Jobs.Handlers() {
 		jobsHandler, ok := handler.(jobs.Handler)
 		if !ok {
@@ -2202,6 +2270,22 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			_ = cleanup()
 			return nil, nil, nil, fmt.Errorf("reference-app: start the job queue: %w", err)
 		}
+		// Start the host's periodic-task scheduler on the same gate: a
+		// task this replica can never execute is pointless to enqueue, so
+		// the ticker that enqueues the wired mechanisms' tasks (storage's
+		// per-tenant expiry sweep over cfg.HostTenants, pki's signing-key
+		// expiry scan) only starts once the queue worker did --
+		// see periodic_scheduler.go. context.Background(), never ctx, per
+		// startPeriodicTaskScheduler's own doc comment: the enqueues must
+		// keep running until cleanup's own periodicTaskSchedulerStop call,
+		// not be cut short by whatever cancels buildServer's own ctx.
+		periodicTaskSchedulerStop = startPeriodicTaskScheduler(
+			context.Background(),
+			cfg.PeriodicTaskInterval,
+			cfg.HostTenants,
+			storageModule.LifecycleService(),
+			pkiModule.Service(),
+		)
 	}
 
 	mux := http.NewServeMux()
