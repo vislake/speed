@@ -2,15 +2,17 @@
 
 The reference app's web frontend: the directory where the `@speed` packages get composed the way a delivered consumer project composes them, and the frontend consumer proof of the whole shipped web surface at once. It deliberately lives at `examples/reference-app/web` — outside the `web/` pnpm workspace, at exactly the location a delivered project occupies — and joins that workspace as an external member (`web/pnpm-workspace.yaml` lists it): it shares the workspace's single frozen lockfile while staying `private`, never versioned, with no changesets fixed-group entry and no release tag.
 
-What ships here is the composition and its tests: the vitest suites bind the real packages — a genuine `@speed/api-client` over a scripted fetch stand-in, a real session, the generated hooks, the packages' own components — through the app's own bootstrap, and pin the composed answers. What does not ship yet is recorded rather than half-built (a real browser page served by the reference-app server, among other items — see Evidence boundary and Deferred).
+What ships here is the composition and its tests, plus a browser-runner host: the vitest suites bind the real packages — a genuine `@speed/api-client` over a scripted fetch stand-in, a real session, the generated hooks, the packages' own components — through the app's own bootstrap, and pin the composed answers; `index.html` and `vite.config.ts` mount that same bootstrap in a real browser page (Running in the browser). What does not ship yet is recorded rather than half-built (the reference-app server serving this directory's built page, among other items — see Evidence boundary and Deferred).
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `package.json` | The app manifest (`reference-app-web`, `private`): the four package scripts (lint / typecheck / test / build) and `workspace:*` dependencies spanning every shipped `@speed` package, tokens through product-shell. |
+| `package.json` | The app manifest (`reference-app-web`, `private`): the five package scripts (lint / typecheck / test / dev / build) and `workspace:*` dependencies spanning every shipped `@speed` package, tokens through product-shell. The one non-workspace devDependency is `vite` — this host's dev server and bundler, never a runtime dependency of any library package. |
+| `index.html` | The real HTML entry: the `#root` container the bootstrap mounts into and an inline module script that imports `/src/main.tsx` and calls `bootstrapReferenceApp` exactly once — the host-side mount `main.tsx`'s no-module-side-effect design leaves to the page (The composition). |
+| `vite.config.ts` | The host's dev server and production bundler — the one bundler in the workspace, since the packages stay bundler-free by discipline: the vitest aliases mirrored as resolve aliases onto the siblings' live `src`, the `/api` proxy to the reference-app backend (Running in the browser), and the `fs.allow` entry that lets the dev server serve the aliased sibling sources. |
 | `pnpm-workspace.yaml` | A settings-only workspace manifest — no packages list, so no web/-rooted command ever treats this directory as a workspace root. It carries one key, `verifyDepsBeforeRun: false`, because a dependency-sync run started here cannot resolve the `workspace:*` specifiers (they resolve only from the web/ root, where the frozen `web/pnpm-lock.yaml` install happens); the file's own comment records the reasoning, including the casing pitfall that broke this exact setting once (pnpm merges only camelCase keys from a workspace manifest — `verify-deps-before-run`, the kebab-case spelling, is silently ignored) and why the setting lives here rather than in a plain `.npmrc` (a real, reproduced CI failure: a project `.npmrc` in this directory is not merged into pnpm's config resolution at all, since the directory is not itself a workspace root until this file makes it one). The empty `.npmrc` sits alongside for pnpm's project-level hooks — pnpm 11 reads run-gate settings from the workspace manifest, not from project `.npmrc` files. |
-| `tsconfig.json` | Extends `web/tsconfig.base.json`; `src/` resolves every `@speed` specifier — subpaths included — onto the workspace sibling's live source through `paths`, because a sibling's `dist/` is never committed and not guaranteed to exist when this app runs. The `build` script is this same no-emit typecheck until the M4 html-runner round lands a bundler (the file's comment records that). |
+| `tsconfig.json` | Extends `web/tsconfig.base.json`; `src/` resolves every `@speed` specifier — subpaths included — onto the workspace sibling's live source through `paths`, because a sibling's `dist/` is never committed and not guaranteed to exist when this app runs. Type-checking stays no-emit; the runtime artifacts (`index.html`, `vite.config.ts`) mirror the same map as resolve aliases, so the dev server and the built bundle run against the same live sibling sources (the file's comment records the shape). |
 | `vitest.config.ts` | The test config: jsdom environment, the shared `src/test-utils/setup.ts` setup, and the tsconfig `paths` mirrored as resolve aliases (prefix-matched, so `@speed/api-sdk/runtime` comes before `@speed/api-sdk`), keeping tests on the same live sibling sources. |
 | `eslint.config.mjs` | The app's flat ESLint config: it imports the web config wholesale (walk-up discovery cannot reach `web/eslint.config.mjs` from this directory) and appends the two speed discipline rules — `no-literal-text` and `no-direct-http` — over the app's own runtime `src/` (tests and `test-utils/` exempt). HTTP belongs to `@speed/api-client` alone; this app reaches the backend through the generated operations over the `bindRequestFn` seam. |
 | `src/main.tsx` | `bootstrapReferenceApp` — the composition root (The composition). |
@@ -36,7 +38,7 @@ What ships here is the composition and its tests: the vitest suites bind the rea
 - wires `evictTenantQueriesOnSessionEnd(session, queryClient)`: the moment the session goes from authenticated to anonymous — a sign-out or a session death (a silently refused refresh) — it evicts the departing tenant's `['tenant', tenantId]`-namespaced queries, mirroring `user-menu.tsx`'s own tenant-switch eviction so a different account signing into the same tenant afterward never inherits rows an earlier session's reads cached (The gate);
 - composes the provider tree in the documented order — I18next, theme, QueryClient, app services, the view layer — under StrictMode.
 
-The browser page that mounts this bootstrap, served by the reference-app server, is M4 e2e/html-runner work; the bootstrap's doc comment records that deferral, and until it lands "renders under test harnesses" is the whole of the shipped browser story.
+A browser page mounting this bootstrap is no longer deferred work: this directory's `index.html` mounts it, runnable through the vite dev server and the production build (Running in the browser). What remains M4 e2e/html-runner work is the reference-app server serving that built page itself; the bootstrap's doc comment records that remaining deferral.
 
 ## The view layer
 
@@ -95,23 +97,39 @@ From this directory, each script is a plain package script:
 pnpm lint        # eslint . -- the flat config, discipline rules included
 pnpm typecheck   # tsc -p tsconfig.json
 pnpm test        # vitest run -- jsdom, setup from src/test-utils/setup.ts
-pnpm build       # tsc -p tsconfig.json -- no-emit until the M4 html-runner
-                 # round lands a bundler (see the tsconfig comment)
+pnpm dev         # vite -- the dev server on http://localhost:5173, /api
+                 # proxied to the backend (Running in the browser)
+pnpm build       # tsc -p tsconfig.json && vite build -- the type-check gate
+                 # followed by a real production bundle into dist/
 ```
 
 CI runs the same four legs as this directory's row in fast-check's npm matrix: the app is one row of the matrix through the same reusable `npm-package-ci` workflow as the eleven web packages — a frozen-lockfile workspace install from the web/ root first, then each leg with this directory as the working directory (recorded in `.github/workflows/fast-check.yml`). From the web/ root, the workspace-wide `pnpm -r` forms reach this app the same way they reach any member.
 
-Type and test resolution of the `@speed/*` imports map every specifier — subpaths included — onto the workspace sibling's live source (tsconfig `paths`, mirrored in the vitest config's aliases), because a sibling's `dist/` is never committed and may not exist when this app runs; the mapped set covers the transitive graph (tokens, `@speed/i18n/mui-locale`, `@speed/api-sdk/runtime`), with subpath entries ordered before their prefixes.
+Type and test resolution of the `@speed/*` imports map every specifier — subpaths included — onto the workspace sibling's live source (tsconfig `paths`, mirrored in the vitest config's and the vite config's aliases), because a sibling's `dist/` is never committed and may not exist when this app runs; the mapped set covers the transitive graph (tokens, `@speed/i18n/mui-locale`, `@speed/api-sdk/runtime`), with subpath entries ordered before their prefixes.
+
+## Running in the browser
+
+This directory ships a browser-runner host: `index.html` mounts `bootstrapReferenceApp` into the `#root` element (the bootstrap stays side-effect-free by design — importing `main.tsx` does nothing, so the page is the host that calls it, exactly once per load), and `vite.config.ts` serves it in dev and bundles it for production. The host is this directory's own concern: the web packages stay bundler-free by discipline, so `vite` is a devDependency here and nowhere else.
+
+```
+pnpm dev        # from this directory: the vite dev server on
+                # http://localhost:5173, serving index.html and
+                # transforming the app's modules on demand
+```
+
+The page talks to the same origin it is served from (the api client's `baseUrl` is `window.location.origin`), and every path it uses sits under `/api` — the generated operations under `/api/v1/*`, plus the pre-auth `/api/config/public` and `/api/system/features` — so the dev server proxies `/api` to the reference-app backend: default `http://localhost:8080` (the Go server's own default `PORT`), overridable with `REFERENCE_APP_API_PROXY`. The page loads and renders with the backend down — only the API calls fail — and the proxy is exercised only when a call actually goes out. Signing in needs the backend running with its demo identity layer (the Go server's demo section). With no backend, every network answer is a refused one and the sign-in surface is where the page settles, exactly as its fail-closed design intends.
+
+`pnpm build` runs the type-check gate first, then `vite build` emits the production bundle into `dist/` (gitignored like every `dist/` in the repo). Whether the reference-app server's image embeds that `dist/` is the image round's decision (`examples/reference-app/DEPLOY.md`), not this directory's.
 
 ## Evidence boundary
 
 - The shell's vitest suites prove the composed frontend answers over the scripted demo-server stand-in: a real api-client (real transport machinery — the session's silent refresh bound into the client's `refreshAccessToken` seam as the bootstrap binds it, a leg no journey rides here because the demo-server answers no 401), a real bound session, the generated hooks, the packages' components, and the app's own composition. They touch no network: no fetch leaves the process, and nothing in this directory spawns, connects to, or requires the Go server.
 - The real-server leg of the same demo facts is the Go side's: `cmd/server/demo_users_test.go` and `cmd/server/demo_subject_test.go` drive the real composed stack — real register and sign-in routes, real membership and rbac policy, real fail-closed shapes. The demo-server's header cites those tests line by line, which is what keeps the mirror honest.
-- The browser-page leg — this bootstrap mounted in a real browser page served by the reference-app server — lands with the M4 e2e/html-runner work (recorded in the bootstrap's doc comment). Until then, rendering under test harnesses is the whole of the shipped browser story.
+- The browser-page leg is this directory's own surface since the browser-runner host shipped: `index.html` mounted in a real browser page over the vite dev server, with `/api` proxied to a running reference-app backend (Running in the browser). The server-served leg — the same page served by the reference-app server itself — lands with the M4 e2e/html-runner work (recorded in the bootstrap's doc comment).
 
 ## Deferred
 
-- Browser-page mount (the html runner) — M4 e2e; recorded in `src/main.tsx`'s doc comment.
+- The reference-app server serving this directory's built page (the image-embedding decision) — M4 e2e; recorded in `src/main.tsx`'s doc comment. The browser page itself ships now: `index.html` over the vite dev server and the production build (Running in the browser).
 - `X-Demo-User` header removal — the org-web round; recorded in `cmd/server/server.go`'s demo identity section.
 - Shared rig package extraction — the rig is layer-local by design; extraction is DEFERRED, recorded in `src/test-utils/real-client.ts`'s header.
 - Machine-extracted server-side code census for the whitelist alignment — `GO_PINNED` is hand-maintained with citations; the extractor is DEFERRED, reasons recorded in `src/codes-alignment.test.ts`'s header.

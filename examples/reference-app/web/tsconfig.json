@@ -15,10 +15,13 @@
     // published "types" of the workspace siblings point into their dist/,
     // which is never committed and not yet built in a fresh checkout, so
     // type resolution maps every workspace specifier straight onto the
-    // sibling's source. Emitted dist/ (none yet: the build script is this
-    // same no-emit typecheck until the M4 html runner lands a bundler)
-    // would keep the bare specifiers, which consumers resolve against the
-    // real published packages. Relative depth: this app lives outside
+    // sibling's source. The app's own runtime artifacts follow the same
+    // map: index.html and vite.config.ts ship a dev server and a
+    // production build whose resolve aliases mirror these paths, so the
+    // browser runs against the same live sibling sources the tests do
+    // (a sibling's published dist/ is never committed and may not exist
+    // when the dev server or build runs). Relative depth: this app lives
+    // outside
     // web/, so sibling paths climb out of examples/reference-app/web to
     // the workspace root first.
     //

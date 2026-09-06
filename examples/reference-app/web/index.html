@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>speed reference app</title>
+  </head>
+  <body>
+    <!-- The one DOM root the app's bootstrap mounts into (main.tsx's
+         bootstrapReferenceApp takes a caller-supplied container and runs
+         no module-scope side effects, so this page is the caller: it
+         imports the bootstrap and mounts it exactly once, the shape
+         main.tsx's doc comment calls "wherever the host mounts it"). -->
+    <div id="root"></div>
+    <script type="module">
+      import { bootstrapReferenceApp } from '/src/main.tsx'
+      const root = document.getElementById('root')
+      if (root) bootstrapReferenceApp(root)
+    </script>
+  </body>
+</html>

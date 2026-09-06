@@ -56,11 +56,15 @@
  *     to the session-ended screen), with the frame's nav, header brand
  *     (the server-served Public brand.site_name value) and user menu
  *     (tenant switcher over the demo roster, sign-out) all host
- *     content. The html runner that mounts this bootstrap into a real
- *     browser page served by the reference-app server lands with the
- *     M4 html-runner work -- until then this module compiles,
- *     typechecks and renders under test harnesses, which is the whole
- *     of the shipped browser story.
+ *     content. The host page itself ships with this directory: index.html
+ *     is a real HTML entry that imports this bootstrap and mounts it into
+ *     the #root element exactly once, runnable through the vite dev
+ *     server and the production build this directory now carries
+ *     (vite.config.ts -- the one bundler in the workspace, since the
+ *     library packages stay bundler-free by discipline). What still lands
+ *     with the M4 html-runner work is serving that built page from the
+ *     reference-app server itself; until then the shipped browser story
+ *     is the dev-server page plus rendering under test harnesses.
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
