@@ -80,7 +80,12 @@ import { NOTE_ERROR_TEXT_KEYS } from './views/notes-view.js'
  * round's sentinel insertions had shifted).
  */
 const GO_PINNED: Readonly<Record<string, string>> = {
-  // go/authn/errors.go -- the authn module's error sentinels.
+  // go/authn/errors.go -- the authn module's error sentinels, in current
+  // file order (re-measured this round: a Go edit inserted a block above
+  // ErrPasswordTooWeak since the last audit, shifting every sentinel
+  // from there to ErrSessionNotFound by +10 to +17 lines; the two
+  // middleware token-verification answers below entered the enumeration
+  // with this re-measurement).
   'authn.invalid_credentials': 'go/authn/errors.go:37 (ErrInvalidCredentials)',
   'authn.identifier_required': 'go/authn/errors.go:41 (ErrIdentifierRequired)',
   'authn.invalid_email': 'go/authn/errors.go:45 (ErrInvalidEmail)',
@@ -89,8 +94,19 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   'authn.phone_already_registered': 'go/authn/errors.go:66 (ErrPhoneAlreadyRegistered)',
   'authn.password_too_short': 'go/authn/errors.go:69 (ErrPasswordTooShort)',
   'authn.password_too_long': 'go/authn/errors.go:72 (ErrPasswordTooLong)',
-  'authn.password_too_weak': 'go/authn/errors.go:86 (ErrPasswordTooWeak)',
   'authn.display_name_too_long': 'go/authn/errors.go:82 (ErrDisplayNameTooLong)',
+  'authn.password_too_weak': 'go/authn/errors.go:86 (ErrPasswordTooWeak)',
+  // The token-verification answers of the authn middleware, cited for
+  // the tenancy-ui switch surface's protected route: the middleware
+  // writes authn.authentication_required for a request that presented
+  // no credential (go/authn/middleware.go, ErrAuthenticationRequired --
+  // also written by requirePrincipal when no Principal reached the
+  // switch handler) and authn.token_invalid for one whose access token
+  // did not verify, both on every protected route of this app, the
+  // tenant-switch one included. The pre-auth sign-in surfaces cannot be
+  // answered with either; the switch surface can.
+  'authn.authentication_required': 'go/authn/errors.go:93 (ErrAuthenticationRequired)',
+  'authn.token_invalid': 'go/authn/errors.go:98 (ErrTokenInvalid)',
   'authn.token_expired': 'go/authn/errors.go:105 (ErrTokenExpired)',
   'authn.session_revoked': 'go/authn/errors.go:109 (ErrSessionRevoked)',
   'authn.refresh_token_invalid': 'go/authn/errors.go:113 (ErrRefreshTokenInvalid)',
@@ -107,8 +123,8 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   'authn.last_login_method': 'go/authn/errors.go:210 (ErrLastLoginMethod)',
   'authn.rate_limited': 'go/authn/errors.go:242 (ErrRateLimited)',
   'authn.account_locked': 'go/authn/errors.go:250 (ErrAccountLocked)',
-  'authn.verification_code_invalid': 'go/authn/errors.go:268 (ErrVerificationCodeInvalid)',
   'authn.channel_disabled': 'go/authn/errors.go:260 (ErrChannelDisabled)',
+  'authn.verification_code_invalid': 'go/authn/errors.go:268 (ErrVerificationCodeInvalid)',
   'authn.mfa_not_enrolled': 'go/authn/errors.go:285 (ErrMFANotEnrolled)',
   'authn.mfa_already_enrolled': 'go/authn/errors.go:289 (ErrMFAAlreadyEnrolled)',
   'authn.mfa_invalid_code': 'go/authn/errors.go:295 (ErrMFAInvalidCode)',
@@ -221,14 +237,14 @@ describe('reachable-error whitelists vs the server code set', () => {
   })
 
   it('keeps the hand-maintained enumeration at its audited size', () => {
-    // 33 authn sentinels (the 30 of the previous audit plus the three
-    // answers this round's auth-ui whitelist extension covers:
-    // authn.channel_disabled, authn.display_name_too_long and
-    // authn.tenant_membership_unavailable, each cited above) +
+    // 35 authn sentinels (the 33 of the previous audit plus this
+    // round's two middleware token-verification answers --
+    // authn.authentication_required and authn.token_invalid, each
+    // cited above for the switch surface's protected route) +
     // rbac.permission_denied + the three notes sentinels. The size
     // guard makes a GO_PINNED edit (in either direction) fail loudly
     // here rather than silently through the subset assertions below.
-    expect(Object.keys(GO_PINNED)).toHaveLength(37)
+    expect(Object.keys(GO_PINNED)).toHaveLength(39)
   })
 
   it('whitelists every code the server can answer with (GO_PINNED is covered)', () => {
@@ -287,16 +303,29 @@ describe('reachable-error whitelists vs the server code set', () => {
     }
   })
 
-  it('keeps the tenancy-ui reachable set a subset of the auth-ui one', () => {
-    // The switch surface's session-lifecycle answers reuse the sign-in
-    // surface's texts verbatim (tenancy-ui's own error-text module
-    // records the copy), so its code set must never grow beyond the
-    // auth-ui family it shares texts with.
+  it('keeps the tenancy-ui-only codes exactly the switch surface\'s token-verification answers', () => {
+    // Every tenancy-ui code except the two middleware token-verification
+    // answers sits inside the auth-ui family whose shared texts it
+    // copies verbatim. The two exceptions are real: the switch surface
+    // is a protected operation, so the authn middleware can answer it
+    // with authn.authentication_required and authn.token_invalid -- a
+    // pre-auth sign-in surface cannot be answered with either, which is
+    // why auth-ui whitelists neither and tenancy-ui authors their texts
+    // instead of copying. Both carry GO_PINNED citations above, so the
+    // no-dead-entries direction holds for them server-side too.
     const authUi = new Set(nonClientCodes(AUTH_UI_ERROR_TEXT_CODES))
-    for (const code of nonClientCodes(TENANCY_UI_ERROR_TEXT_CODES)) {
-      expect(authUi.has(code), `${code} is reachable on tenancy-ui but not whitelisted by auth-ui`).toBe(
-        true,
-      )
+    const tenancyOnly = nonClientCodes(TENANCY_UI_ERROR_TEXT_CODES).filter(
+      (code) => !authUi.has(code),
+    )
+    expect([...tenancyOnly].sort()).toEqual([
+      'authn.authentication_required',
+      'authn.token_invalid',
+    ])
+    for (const code of tenancyOnly) {
+      expect(
+        GO_PINNED[code],
+        `${code} is reachable on tenancy-ui but carries no GO_PINNED citation`,
+      ).toBeDefined()
     }
   })
 })
