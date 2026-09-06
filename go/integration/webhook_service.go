@@ -341,16 +341,28 @@ func (s *Service) RestoreWebhookSubscription(ctx context.Context, id string) err
 		return translateWebhookRepoErr(err)
 	}
 
+	// Land the restored subscription PAUSED through the same guarded,
+	// live-rows-only write the update path uses (updateFields carries
+	// deleted_at IS NULL in its WHERE and names only the columns in its
+	// change set), never a whole-row Repository.Update of a freshly read
+	// row. The read-then-whole-row-save shape this replaces resurrected a
+	// subscription a concurrent DeleteWebhookSubscription had already
+	// mark-deleted again between the restore's read and its save: the
+	// save wrote the snapshot's nil DeletedAt back over the deletion.
+	// Setting Active = false unconditionally is exact here -- a
+	// subscription restored inactive is the documented outcome either way,
+	// and the write is a no-op on a row that already reads inactive -- and
+	// the write's own guard makes the deletion win when it lands first
+	// (matched == false, row still dead: the FindByID below then reports
+	// ErrWebhookSubscriptionNotFound, exactly as if the deletion had
+	// landed before the restore).
+	if _, updateErr := s.webhookRepo.updateFields(ctx, id, map[string]any{"active": false}); updateErr != nil {
+		return ErrInternal.WithCause(updateErr)
+	}
+
 	row, err := s.webhookRepo.FindByID(ctx, id)
 	if err != nil {
 		return translateWebhookRepoErr(err)
-	}
-
-	if row.Active {
-		row.Active = false
-		if updateErr := s.webhookRepo.Update(ctx, row); updateErr != nil {
-			return ErrInternal.WithCause(updateErr)
-		}
 	}
 
 	return s.emitWebhookAudit(ctx, AuditActionWebhookSubscriptionRestore, row)

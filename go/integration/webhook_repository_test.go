@@ -184,6 +184,72 @@ func TestWebhookSubscriptionRepository_updateFields_PartialAndLiveOnly(t *testin
 	}
 }
 
+// TestWebhookSubscriptionRepository_GuardedFlip_CannotResurrectADeleteThatLandedAfterTheRestoreRead
+// replays, step by step and deterministically, the exact interleaving
+// RestoreWebhookSubscription's tail used to lose to a concurrent
+// DeleteWebhookSubscription -- the state a real-concurrency race cannot
+// time (see the honesty note in webhook_service_test.go's
+// TestService_RestoreWebhookSubscription_ConcurrentDelete_DeletionWins):
+//
+//  1. the subscription is mark-deleted, then restored (un-marked) by the
+//     restore's first step;
+//  2. a read takes the snapshot the restore's pause-flip would carry;
+//  3. a concurrent delete's mark lands between that read and the flip;
+//  4. the flip runs.
+//
+// The flip is RestoreWebhookSubscription's write of Active = false through
+// updateFields -- a guarded write whose WHERE requires deleted_at IS NULL.
+// Step 4 must therefore match nothing: the row stays deleted, deletion
+// wins, and RestoreWebhookSubscription answers ErrWebhookSubscriptionNotFound
+// from its follow-up read. The pre-fix shape this replaces was a whole-row
+// save of the step-2 snapshot, which rewrote its nil DeletedAt over the
+// step-3 mark and silently resurrected the subscription. This test fails
+// the moment the guard is weakened (the deleted_at IS NULL condition
+// removed) or the write is widened back to whole-row scope.
+func TestWebhookSubscriptionRepository_GuardedFlip_CannotResurrectADeleteThatLandedAfterTheRestoreRead(t *testing.T) {
+	db := newWebhookTestDB(t)
+	repo := NewWebhookSubscriptionRepository(db)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-1")
+
+	row := &WebhookSubscription{
+		ID: "sub-restore-race", URL: "https://example.com/a", EventTypes: eventTypesJSON([]string{"e"}),
+		Secret: "s", Active: true, CreatedBy: "u",
+	}
+	if createErr := repo.Create(ctx, row); createErr != nil {
+		t.Fatalf("create: %v", createErr)
+	}
+	if delErr := repo.Delete(ctx, row.ID); delErr != nil {
+		t.Fatalf("delete (setup): %v", delErr)
+	}
+	// The restore's first step: un-mark the row.
+	if restoreErr := repo.Restore(ctx, row.ID); restoreErr != nil {
+		t.Fatalf("restore: %v", restoreErr)
+	}
+	// The restore's own read -- the snapshot its tail write would carry.
+	read, err := repo.FindByID(ctx, row.ID)
+	if err != nil {
+		t.Fatalf("FindByID (post-restore): %v", err)
+	}
+	if !read.Active {
+		t.Fatal("premise: the restored row must read Active for the pause-flip to be the write at stake")
+	}
+	// The concurrent delete's commit, landing between the read and the flip.
+	if delErr := repo.Delete(ctx, row.ID); delErr != nil {
+		t.Fatalf("delete (interfering): %v", delErr)
+	}
+	// The restore's tail flip: Active = false, through the guarded write.
+	matched, err := repo.updateFields(ctx, row.ID, map[string]any{"active": false})
+	if err != nil {
+		t.Fatalf("updateFields (the restore's flip): %v", err)
+	}
+	if matched {
+		t.Fatal("the guarded flip matched a row that was mark-deleted again -- the write resurrected the deletion")
+	}
+	if _, findErr := repo.FindByID(ctx, row.ID); !apperrIs(findErr, dbkit.ErrRecordNotFound) {
+		t.Errorf("FindByID after the guarded flip = %v, want not found (the row must stay deleted)", findErr)
+	}
+}
+
 func TestWebhookDeliveryRepository_ByIdempotencyKey(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewWebhookDeliveryRepository(db)

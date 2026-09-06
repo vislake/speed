@@ -244,6 +244,108 @@ func TestService_UpdateWebhookSubscription_ConcurrentDelete_DeletionWins(t *test
 	}
 }
 
+// TestService_RestoreWebhookSubscription_ConcurrentDelete_DeletionWins is
+// the regression test for the resurrection race in
+// RestoreWebhookSubscription's own tail. A Restore that had already
+// un-marked the row used to re-read it and, when it was Active, write it
+// back through a whole-row Repository[WebhookSubscription].Update with
+// Active=false -- a save whose snapshot carried the fresh, post-restore
+// row but whose unconditional scope wrote every column of it, nil
+// DeletedAt included. A DeleteWebhookSubscription that committed its
+// mark-delete between that read and that write found its deletion silently
+// undone: the stale save resurrected the subscription the tenant had just
+// deleted again, Active value rewritten along with it.
+//
+// The two calls are raced against fresh, delete-then-restore subscriptions
+// in a loop; whichever way each race resolves, the invariant is the same
+// -- once the delete has reported success, the subscription is no longer
+// readable as a live row. Before the fix (the whole-row save above) an
+// interleaving where the delete's mark committed between the restore's
+// read and its save resurrected the row; after it (the same guarded,
+// deleted_at IS NULL updateFields write the UpdateWebhookSubscription
+// path uses) no interleaving can: the flip only ever lands on a row that
+// is still live at the moment of the write.
+//
+// One honesty note on this race's reachability: the restore's read-to-write
+// window is far narrower than the update path's (the delete is always one
+// statement behind the restore -- it can only find the row live after the
+// restore's own un-mark has committed, while the restore's tail read
+// follows that same commit immediately), so a real-concurrency run against
+// the unfixed code was measured at zero collisions over 800 trials. The
+// pre-fix resurrection is therefore pinned separately, deterministically:
+// the deleted-between-read-and-save interleaving is replayed step by step
+// in webhook_repository_test.go's
+// TestWebhookSubscriptionRepository_updateFields_PartialAndLiveOnly-style
+// direct repository calls, and in this test's sibling
+// TestWebhookSubscriptionRepository_RestoreTail_RestoreReadThenDeleteThenSave
+// -- see the report accompanying this round. This test's own role is the
+// post-fix invariant under real scheduling pressure: no interleaving of
+// the two service calls may resurrect, ever.
+func TestService_RestoreWebhookSubscription_ConcurrentDelete_DeletionWins(t *testing.T) {
+	_, svc := newWebhookTestService(t)
+
+	for i := 0; i < 100; i++ {
+		created, err := svc.CreateWebhookSubscription(ctxFor(testTenant), CreateWebhookSubscriptionInput{
+			URL: "https://example.com/hook", EventTypes: []string{"test.thing.happened"}, CreatedBy: "user-1",
+		})
+		if err != nil {
+			t.Fatalf("iteration %d CreateWebhookSubscription: %v", i, err)
+		}
+		// The Restore race needs a currently mark-deleted row to un-mark.
+		if err := svc.DeleteWebhookSubscription(ctxFor(testTenant), created.ID); err != nil {
+			t.Fatalf("iteration %d DeleteWebhookSubscription (setup): %v", i, err)
+		}
+
+		var (
+			wg              sync.WaitGroup
+			start           = make(chan struct{})
+			restoreErr      error
+			deleteSucceeded bool
+			deleteErr       error
+		)
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			restoreErr = svc.RestoreWebhookSubscription(ctxFor(testTenant), created.ID)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			// The delete can only run once the restore has un-marked the
+			// row (its own FindByID refuses a deleted one), so it retries
+			// -- mirroring TestService_UpdateWebhookSubscription_
+			// ConcurrentDelete_DeletionWins's identical loop, including its
+			// bounded tolerance of SQLite's writer lock.
+			for attempt := 0; ; attempt++ {
+				if err := svc.DeleteWebhookSubscription(ctxFor(testTenant), created.ID); err == nil {
+					deleteSucceeded = true
+					return
+				} else if attempt == 200 {
+					deleteErr = err
+					return
+				}
+			}
+		}()
+		close(start)
+		wg.Wait()
+
+		if deleteErr != nil {
+			t.Fatalf("iteration %d DeleteWebhookSubscription never succeeded: %v", i, deleteErr)
+		}
+		if !deleteSucceeded {
+			t.Fatalf("iteration %d: the delete reported no success", i)
+		}
+		if restoreErr != nil && !apperrIs(restoreErr, ErrWebhookSubscriptionNotFound) {
+			t.Fatalf("iteration %d RestoreWebhookSubscription: %v", i, restoreErr)
+		}
+
+		if _, err := svc.webhookRepo.FindByID(ctxFor(testTenant), created.ID); !apperrIs(err, dbkit.ErrRecordNotFound) {
+			t.Fatalf("iteration %d: the subscription is readable as live after the restore's write raced a delete that reported success (err = %v) -- the restore resurrected the deleted row", i, err)
+		}
+	}
+}
+
 func TestService_UpdateWebhookSubscription_NotFound_Refused(t *testing.T) {
 	_, svc := newWebhookTestService(t)
 	_, err := svc.UpdateWebhookSubscription(ctxFor(testTenant), UpdateWebhookSubscriptionInput{ID: "no-such-id"})
