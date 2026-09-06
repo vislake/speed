@@ -83,6 +83,23 @@ func insertPNGChunk(t *testing.T, raw []byte, chunkType string, data []byte) []b
 	return out
 }
 
+// appendTailSegment splices a length-carrying APP segment carrying payload
+// after a JPEG's EOI marker, the position an uploader's appended metadata or
+// a second writer's edit trail would land in. Marker codes and payloads are
+// as in insertAPPSegment. Calling it repeatedly stacks segments after the
+// same EOI; the caller is responsible for payloads that contain no 0xFF 0xD9
+// sequence of their own.
+func appendTailSegment(t *testing.T, raw []byte, marker byte, payload []byte) []byte {
+	t.Helper()
+	if bytes.LastIndex(raw, []byte{jpegMarkerPrefix, jpegEOI}) < 0 {
+		t.Fatalf("base jpeg has no EOI marker to append after")
+	}
+	seg := []byte{jpegMarkerPrefix, marker}
+	seg = binary.BigEndian.AppendUint16(seg, uint16(len(payload)+2))
+	seg = append(seg, payload...)
+	return append(append([]byte(nil), raw...), seg...)
+}
+
 // assertDecodesEqual decodes both byte slices and asserts their pixel grids
 // are identical. It is the "the strip took only metadata" proof: metadata
 // removal never touches entropy data, so the decoded output of a stripped
@@ -199,11 +216,97 @@ func TestSanitizeJPEG_StructureErrors(t *testing.T) {
 	corrupt(t, "reserved marker code", reserved)
 	corrupt(t, "truncated before scan data", base[:sos])
 	corrupt(t, "segment cut mid-payload", base[:sos-3])
-	// A truncation after the SOS carries the tail verbatim and is not an
-	// error -- that is the walker's contract, not a hole.
-	tailCut := base[:sos+5]
-	if _, err := sanitizeJPEG(tailCut); err != nil {
-		t.Fatalf("post-SOS truncation refused: %v", err)
+	// SOS is itself a length-carrying marker and its scan data must run to
+	// EOI; a file cut inside either is structurally broken and refused, never
+	// carried over on good faith. segEnd is where the entropy-coded data
+	// begins; eoi is the terminating marker's offset.
+	segEnd := sos + 2 + int(binary.BigEndian.Uint16(base[sos+2:sos+4]))
+	eoi := bytes.LastIndex(base, []byte{jpegMarkerPrefix, jpegEOI})
+	if segEnd >= eoi || eoi >= len(base) {
+		t.Fatalf("test jpeg layout unexpected: segEnd=%d eoi=%d len=%d", segEnd, eoi, len(base))
+	}
+	corrupt(t, "SOS without header", base[:sos+2])
+	corrupt(t, "scan header cut short", base[:sos+5])
+	midScan := segEnd + (eoi-segEnd)/2
+	if midScan <= segEnd || midScan >= eoi {
+		t.Fatalf("mid-scan cut lands outside scan data: segEnd=%d mid=%d eoi=%d", segEnd, midScan, eoi)
+	}
+	corrupt(t, "scan data without end-of-image marker", base[:midScan])
+}
+
+// TestSanitizeJPEG_TrailingGarbageDiscarded pins the EOI boundary: the scan
+// data's terminating marker is the end of the image, and anything an uploader
+// appended after it -- an EXIF segment a second writer stuck on, XMP, or
+// arbitrary bytes -- must not survive into the sanitized output. The drop is
+// silent, exactly as the PNG walker drops chunks after IEND.
+func TestSanitizeJPEG_TrailingGarbageDiscarded(t *testing.T) {
+	base := testutil.JPEG(t, 48, 32)
+	trailing := appendTailSegment(t, base, jpegApp1, exifPayload())
+	trailing = appendTailSegment(t, trailing, jpegApp1, xmpPayload())
+	trailing = append(trailing, "garbage bytes after end-of-image"...)
+	out, err := sanitizeJPEG(trailing)
+	if err != nil {
+		t.Fatalf("sanitizeJPEG: %v", err)
+	}
+	if !bytes.Equal(out, base) {
+		t.Fatal("post-EOI bytes were carried into the output")
+	}
+	if bytes.Contains(out, exifSignature) || bytes.Contains(out, xmpSignature) {
+		t.Fatal("post-EOI metadata survives the strip")
+	}
+	assertDecodesEqual(t, "post-EOI garbage", out, base)
+}
+
+// TestSanitizeJPEG_TrailingFillCarriedOver pins the tail policy at the EOI
+// boundary. Pure 0xFF padding after EOI is the JPEG fill convention and is
+// carried over, so a padded clean file stays byte-identical through the
+// strip -- a no-op the caller has nothing to write back. A tail that mixes
+// fill with any other byte is appended data, and the whole tail goes: the
+// output ends at the EOI marker itself.
+func TestSanitizeJPEG_TrailingFillCarriedOver(t *testing.T) {
+	base := testutil.JPEG(t, 48, 32)
+	filled := append(append([]byte(nil), base...), 0xFF, 0xFF, 0xFF)
+	out, err := sanitizeJPEG(filled)
+	if err != nil {
+		t.Fatalf("sanitizeJPEG with fill after EOI: %v", err)
+	}
+	if !bytes.Equal(out, filled) {
+		t.Fatal("post-EOI fill bytes were stripped")
+	}
+	assertDecodesEqual(t, "post-EOI fill", out, base)
+
+	mixed := append(append([]byte(nil), filled...), 0x00, 0x01)
+	out, err = sanitizeJPEG(mixed)
+	if err != nil {
+		t.Fatalf("sanitizeJPEG with mixed tail: %v", err)
+	}
+	if !bytes.Equal(out, base) {
+		t.Fatal("mixed fill-and-garbage tail was not dropped at the EOI boundary")
+	}
+	assertDecodesEqual(t, "mixed tail dropped", out, base)
+}
+
+// TestSanitizeJPEG_EntropyWalkSkipsStuffedAndRestartBytes pins the scan walk:
+// the entropy-coded data between the SOS header and the EOI is byte-stuffed
+// (0xFF 0x00), may hold restart markers (0xFFD0-0xFFD7) and ends with 0xFF
+// fill before its terminating marker. The walk must treat all of those as
+// scan content and end only at the real EOI, carrying the scan through
+// verbatim -- byte for byte, with no refusal.
+func TestSanitizeJPEG_EntropyWalkSkipsStuffedAndRestartBytes(t *testing.T) {
+	base := testutil.JPEG(t, 48, 32)
+	sos := bytes.Index(base, []byte{jpegMarkerPrefix, jpegSOS})
+	if sos < 0 {
+		t.Fatal("test jpeg has no SOS marker")
+	}
+	segEnd := sos + 2 + int(binary.BigEndian.Uint16(base[sos+2:sos+4]))
+	crafted := append(append([]byte(nil), base[:segEnd]...),
+		0x12, 0x34, 0xFF, 0x00, 0x56, 0xFF, 0xD1, 0x78, 0xFF, 0xFF, 0xFF, 0xD9)
+	out, err := sanitizeJPEG(crafted)
+	if err != nil {
+		t.Fatalf("sanitizeJPEG over crafted scan data: %v", err)
+	}
+	if !bytes.Equal(out, crafted) {
+		t.Fatal("scan walk did not carry the entropy data through verbatim")
 	}
 }
 
@@ -310,6 +413,20 @@ func TestSanitizeContent(t *testing.T) {
 			t.Fatal("exif survives sanitizeContent")
 		}
 		assertDecodesEqual(t, "jpeg exif strip", out, baseJPEG)
+	})
+	t.Run("jpeg trailing exif stripped", func(t *testing.T) {
+		withTail := appendTailSegment(t, baseJPEG, jpegApp1, exifPayload())
+		out, changed, err := sanitizeContent(withTail, "image/jpeg")
+		if err != nil {
+			t.Fatalf("sanitizeContent: %v", err)
+		}
+		if !changed {
+			t.Fatal("post-EOI exif-bearing jpeg reported unchanged")
+		}
+		if !bytes.Equal(out, baseJPEG) {
+			t.Fatal("post-EOI metadata survives sanitizeContent")
+		}
+		assertDecodesEqual(t, "jpeg trailing exif strip", out, baseJPEG)
 	})
 	t.Run("png without metadata unchanged", func(t *testing.T) {
 		out, changed, err := sanitizeContent(basePNG, "image/png")
