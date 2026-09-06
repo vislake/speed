@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 )
@@ -69,18 +70,26 @@ import (
 //     host without authn never fires org's own authn.user.created handler.
 //
 // Both reaps are deliberately NOT a bulk delete. Each live binding is
-// revoked one at a time through Service.RevokeRole, the same soft-delete
-// path an administrator's manual revoke takes: the row is mark-deleted
-// (so a later restore of the membership -- or, for onNodeDeleted, a later
-// grant reassigned onto a reused node id -- can restore the grant), the
-// process-local decision cache is invalidated, and EventRoleBindingRevoked
-// is published so every replica converges -- the exact convergence path
-// this module's own revoke tests pin. A bulk statement would skip all
-// three. The restore side of that sentence is the whole reason the reaps
-// mark-delete instead of physically deleting: the rows they revoke stay
-// in place with the full grant tuple on them, which is precisely what
-// onMemberRestored and onNodeRestored need to hand back to
-// Service.RestoreRole.
+// revoked one at a time through the same three effects an administrator's
+// manual revoke performs -- the row is mark-deleted (so a later restore of
+// the membership -- or, for onNodeDeleted, a later grant reassigned onto a
+// reused node id -- can restore the grant), the process-local decision
+// cache is invalidated, and EventRoleBindingRevoked is published so every
+// replica converges. The reason the loop stays per-binding rather than
+// becoming one bulk statement is precisely that triple: a bulk write would
+// skip the per-row mark (the restore side needs every revoked row intact
+// with its full grant tuple, which is what onMemberRestored and
+// onNodeRestored hand back to Service.RestoreRole), the per-subject cache
+// invalidation (the cache is keyed by subject; only the loop knows which
+// subjects to drop), and the per-binding convergence events. What the loop
+// does NOT do is re-read the row it is withdrawing: revokeReapedBindings
+// revokes each enumerated binding BY ID and resolves its role once per
+// distinct role per pass, where the public RevokeRole -- which takes a
+// subject, a role key and a scope and re-resolves both -- would cost one
+// full read-modify-delete cycle per binding. The two reaps run
+// synchronously inside org's own request (the in-memory bus delivers
+// in-process), so that per-binding overhead is what a many-binding
+// cascade would otherwise drag into org's single HTTP DELETE.
 //
 // See onMemberRemoved's, onNodeDeleted's, onMemberRestored's and
 // onNodeRestored's own doc comments for each handler's resilience
@@ -183,9 +192,9 @@ func memberUserIDFromPayload(payload any) (string, bool) {
 //     event (pkgcore.WithTenant) because a handler invoked by the
 //     distributed mode's bus runs on a context that carries none, and
 //     every Repository call would otherwise fail closed. Then the
-//     member's live bindings are revoked one by one; see reapRoleBindings
-//     for why the failures inside that loop are logged and continued
-//     rather than returned.
+//     member's live bindings are revoked one by one; see
+//     revokeReapedBindings for why the failures inside that pass are
+//     logged and continued rather than returned.
 //
 // The handler never returns an error. On the in-memory bus it runs
 // synchronously inside org's Remove call, after org's transaction has
@@ -216,27 +225,12 @@ func (s *Service) onMemberRemoved(ctx context.Context, evt pkgcore.Event) error 
 // happened to carry (a bus subscriber context has none anyway, and a
 // publisher's identity must never steer whose grants get revoked).
 //
-// Each binding is revoked through Service.RevokeRole with the scope the
-// binding was granted at, which reuses the entire tested revoke path: the
-// soft-delete mark, the local cache invalidation and the
-// EventRoleBindingRevoked announcement that converges the other replicas
-// are exactly what an administrator's manual revoke performs, and the
-// errors it can return are the ones that path already classifies.
-//
-// The loop never aborts on a failure, for the same reason the handler
-// never returns one: an org.member.removed delivery that reaped nine of
-// ten bindings has done real work, and reporting failure on it would make
-// org's committed removal look failed. Each failure is logged at Warn and
-// the reap moves on; the residual bindings keep the tenant's own
-// subsequent revokes (or a re-delivery, which finds nothing left to do --
-// the reap is idempotent because ByUser only returns live rows) as their
-// backstop. The one classified case is ErrBindingNotFound from RevokeRole,
-// which means a concurrent administrator revoke already withdrew the
-// binding between the enumeration above and the revoke -- exactly the
-// caller's goal, so it is not even worth a log line.
+// The revoking itself is delegated to revokeReapedBindings, which both
+// reaps share; see that method's doc comment for why each binding is
+// withdrawn by id rather than through the public RevokeRole and what that
+// keeps and what it skips.
 func (s *Service) reapRoleBindings(ctx context.Context, evt pkgcore.Event, userID string) {
 	log := observability.FromContext(ctx)
-	sub := Subject{TenantID: evt.TenantID, UserID: userID}
 
 	bindings, err := s.bindings.ByUser(ctx, userID)
 	if err != nil {
@@ -244,25 +238,7 @@ func (s *Service) reapRoleBindings(ctx context.Context, evt pkgcore.Event, userI
 			"event_type", evt.Type, "user_id", userID, "error", err)
 		return
 	}
-	for _, binding := range bindings {
-		// The binding names the role by id; RevokeRole names it by key, so
-		// the id is resolved once here. Roles have no delete path in this
-		// module, so a binding whose role cannot be found is an anomaly
-		// worth a log line rather than a crash.
-		role, err := s.roles.FindByID(ctx, binding.RoleID)
-		if err != nil {
-			log.Warn("rbac could not resolve a removed member's binding role",
-				"event_type", evt.Type, "user_id", userID, "role_id", binding.RoleID, "error", err)
-			continue
-		}
-		if err := s.RevokeRole(ctx, sub, role.Key, Scope{NodeID: binding.NodeID}); err != nil {
-			if isBindingNotFound(err) {
-				continue
-			}
-			log.Warn("rbac could not revoke a removed member's role binding",
-				"event_type", evt.Type, "user_id", userID, "role", role.Key, "error", err)
-		}
-	}
+	s.revokeReapedBindings(ctx, evt, bindings)
 }
 
 // eventNodeDeleted is org's org.node.deleted event, the string rbac
@@ -353,9 +329,8 @@ func nodeDeletedIDsFromPayload(payload any) ([]string, bool) {
 //  4. The event carries a tenant and a non-empty id set. The tenant
 //     context is rebuilt from the event for the same reason
 //     onMemberRemoved's does, and every binding scoped to any of the
-//     deleted ids is revoked; see reapRoleBindingsForNodes for why
-//     failures inside that loop are logged and continued rather than
-//     returned.
+//     deleted ids is revoked; see revokeReapedBindings for why failures
+//     inside that pass are logged and continued rather than returned.
 //
 // The handler never returns an error, for the same reason onMemberRemoved's
 // does not: on the in-memory bus it runs synchronously inside org's Delete
@@ -388,21 +363,12 @@ func (s *Service) onNodeDeleted(ctx context.Context, evt pkgcore.Event) error {
 // Unlike reapRoleBindings, which enumerates by user, this enumerates by
 // node: a node-deleted event carries no user at all, only the set of node
 // ids org just removed from its tree, and every binding scoped to any of
-// them is what this reap targets regardless of who holds it. Every one is
-// revoked through the identical RevokeRole path reapRoleBindings already
-// reuses (see this file's own header comment), in one pass over every id
-// the event named -- a single event for a cascade can carry many ids, and
-// this runs one enumeration and one revoke loop over all of them, never
-// one handler invocation per node.
-//
-// The loop never aborts on a failure, for the identical reason
-// reapRoleBindings' own doc comment gives: a node-deleted delivery that
-// reaped some bindings and not others has done real work, and every
-// failure is logged at Warn rather than surfaced. ErrBindingNotFound (a
-// concurrent administrator revoke, or a re-delivery that finds nothing
-// left -- the reap is idempotent because ByNodes only returns live rows)
-// is not even worth a log line, mirroring reapRoleBindings' own
-// classification of the identical case.
+// them is what this reap targets regardless of who holds it. The revoking
+// is delegated to the shared revokeReapedBindings (see its doc comment for
+// the per-binding cost shape), in one pass over every id the event named
+// -- a single event for a cascade can carry many ids, and this runs one
+// enumeration and one revoke loop over all of them, never one handler
+// invocation per node.
 func (s *Service) reapRoleBindingsForNodes(ctx context.Context, evt pkgcore.Event, nodeIDs []string) {
 	log := observability.FromContext(ctx)
 
@@ -412,23 +378,80 @@ func (s *Service) reapRoleBindingsForNodes(ctx context.Context, evt pkgcore.Even
 			"event_type", evt.Type, "error", err)
 		return
 	}
+	s.revokeReapedBindings(ctx, evt, bindings)
+}
+
+// revokeReapedBindings withdraws every live binding in bindings -- the rows
+// a removal or a deletion reap enumerated -- and is the per-binding revoke
+// step the two reaps share.
+//
+// For each binding it performs exactly the three effects an administrator's
+// manual revoke performs: the soft-delete mark (bindings.Delete, the
+// identical dbkit mark-delete the public path uses), the process-local
+// cache invalidation and the EventRoleBindingRevoked announcement that
+// converges the other replicas (both inside publishBindingChanged). What it
+// skips is the RE-READING RevokeRole performs on arguments it was handed:
+// that method takes a subject, a role KEY and a scope and re-resolves the
+// binding's row and the role's id from them, while a reap already holds
+// the very row it enumerated. Each binding is therefore deleted BY ID, and
+// the role it names is resolved once per DISTINCT role per pass rather
+// than once per binding. That is the cost shape this module's performance
+// contract needs: the two reaps run synchronously inside org's own request
+// (the in-memory bus delivers in-process), and a many-binding cascade must
+// not drag org's single HTTP DELETE through one full read-modify-delete
+// cycle per binding -- measured, not timed, by the reap statement-counting
+// regression in reap_test.go.
+//
+// A binding whose role cannot be resolved is left in place. Roles have no
+// delete path in this module, so an unresolvable role is an anomaly worth
+// a Warn rather than a crash -- reported once per binding that names it,
+// exactly as the per-binding resolution the reaps performed before
+// reported it.
+//
+// The pass never aborts on a failure, for the reason the reaps'
+// enumeration-side comments give: a delivery that reaped some bindings and
+// not others has done real work, and surfacing an error would make org's
+// committed removal or delete look failed. Each failure is logged at Warn
+// and the pass moves on; the residual bindings keep the tenant's own
+// subsequent revokes (or a re-delivery, which finds nothing left to do --
+// the reap is idempotent because both enumerations only return live rows)
+// as their backstop. The one classified case is the delete's
+// ErrRecordNotFound -- a concurrent administrator revoke already withdrew
+// the binding between the enumeration and this delete, exactly the
+// caller's goal, so it is not even worth a log line (the identical
+// classification RevokeRole gives its own delete's zero-rows outcome).
+func (s *Service) revokeReapedBindings(ctx context.Context, evt pkgcore.Event, bindings []RoleBinding) {
+	log := observability.FromContext(ctx)
+
+	resolvedRoles := make(map[string]*Role, len(bindings))
 	for _, binding := range bindings {
-		// The binding names the role by id; RevokeRole names it by key, so
-		// the id is resolved once here -- the identical pattern
-		// reapRoleBindings uses for the same reason.
-		role, err := s.roles.FindByID(ctx, binding.RoleID)
-		if err != nil {
-			log.Warn("rbac could not resolve a deleted node's binding role",
-				"event_type", evt.Type, "node_id", binding.NodeID, "role_id", binding.RoleID, "error", err)
+		role, ok := resolvedRoles[binding.RoleID]
+		if !ok {
+			var err error
+			role, err = s.roles.FindByID(ctx, binding.RoleID)
+			if err != nil {
+				log.Warn("rbac could not resolve a reaped binding's role",
+					"event_type", evt.Type, "user_id", binding.UserID, "node_id", binding.NodeID,
+					"role_id", binding.RoleID, "error", err)
+				continue
+			}
+			resolvedRoles[binding.RoleID] = role
+		}
+
+		if err := s.bindings.Delete(ctx, binding.ID); err != nil {
+			if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+				continue
+			}
+			log.Warn("rbac could not revoke a reaped role binding",
+				"event_type", evt.Type, "node_id", binding.NodeID, "user_id", binding.UserID,
+				"role", role.Key, "error", err)
 			continue
 		}
 		sub := Subject{TenantID: evt.TenantID, UserID: binding.UserID}
-		if err := s.RevokeRole(ctx, sub, role.Key, Scope{NodeID: binding.NodeID}); err != nil {
-			if isBindingNotFound(err) {
-				continue
-			}
-			log.Warn("rbac could not revoke a deleted node's role binding",
-				"event_type", evt.Type, "node_id", binding.NodeID, "user_id", binding.UserID, "role", role.Key, "error", err)
+		if err := s.publishBindingChanged(ctx, EventRoleBindingRevoked, sub, role, Scope{NodeID: binding.NodeID}); err != nil {
+			log.Warn("rbac could not announce a reaped binding's revoke",
+				"event_type", evt.Type, "node_id", binding.NodeID, "user_id", binding.UserID,
+				"role", role.Key, "error", err)
 		}
 	}
 }
@@ -517,9 +540,11 @@ func (s *Service) onMemberRestored(ctx context.Context, evt pkgcore.Event) error
 //
 // # The attribution limitation, and why this is the closest sound shape
 //
-// A soft-deleted row carries no marker saying WHICH RevokeRole wrote it:
-// an administrator's manual revocation and a reap's write leave the
-// identical two columns, both travelling through Service.RevokeRole.
+// A soft-deleted row carries no marker saying WHICH revoke wrote it: an
+// administrator's manual revocation and a reap's write leave the identical
+// two columns, both travelling through the same mark-delete path
+// (Service.RevokeRole for the manual one, revokeReapedBindings for the
+// reaps' -- the two share bindings.Delete and publishBindingChanged).
 // Re-instating every revoked tuple of the restored member therefore also
 // undoes revocations this member's removal did NOT reap -- a grant an
 // administrator deliberately withdrew while the person was still a member,

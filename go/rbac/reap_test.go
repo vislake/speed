@@ -2,7 +2,10 @@ package rbac
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/pkgcore"
 )
@@ -408,6 +411,120 @@ func publishNodeDeleted(t *testing.T, reg *pkgcore.Registry, tenant pkgcore.Tena
 		Payload:  payload,
 	}); err != nil {
 		t.Fatalf("publishing %s: %v", eventNodeDeleted, err)
+	}
+}
+
+// statementCounter tallies the SQL statements a code path performs against
+// rbac's two tables, by registering gorm callbacks on the shared database.
+// It exists to prove a performance property deterministically -- how many
+// reads and writes a cascade reap performs -- which a wall-clock assertion
+// could never do reliably on a machine under load. The reap runs
+// synchronously inside the publish, so the counters need no locking.
+type statementCounter struct {
+	bindingReads  int
+	roleReads     int
+	bindingWrites int
+}
+
+func newStatementCounter(t *testing.T, db *gorm.DB) *statementCounter {
+	t.Helper()
+	c := &statementCounter{}
+	if err := db.Callback().Query().After("gorm:query").Register("rbac_test:count_query", func(tx *gorm.DB) {
+		sql := tx.Statement.SQL.String()
+		if strings.Contains(sql, "role_bindings") {
+			c.bindingReads++
+		}
+		if strings.Contains(sql, "roles") {
+			c.roleReads++
+		}
+	}); err != nil {
+		t.Fatalf("registering the query counter: %v", err)
+	}
+	if err := db.Callback().Update().After("gorm:update").Register("rbac_test:count_update", func(tx *gorm.DB) {
+		if strings.Contains(tx.Statement.SQL.String(), "role_bindings") {
+			c.bindingWrites++
+		}
+	}); err != nil {
+		t.Fatalf("registering the update counter: %v", err)
+	}
+	return c
+}
+
+func (c *statementCounter) reset() { *c = statementCounter{} }
+
+// TestService_OnNodeDeleted_CascadeReap_NoPerBindingReReads pins the
+// review finding on the node-deleted reap's cost shape: the reap runs
+// synchronously inside org's own delete request (the in-memory bus
+// delivers in-process), so a large-subtree cascade would drag that one
+// HTTP DELETE through one full revoke round trip per binding -- each
+// RevokeRole call re-resolves the role by key and re-finds the binding by
+// tuple before its delete, on top of the role id resolution the reap
+// already performed. The reap holds the very rows it enumerated, so the
+// fix revokes them by id with the role resolved once per DISTINCT role
+// per pass. Pinned by counting the statements the reap performs, never by
+// timing it: a four-binding cascade over two distinct roles must cost one
+// binding enumeration, exactly two role lookups (not eight), four
+// mark-delete writes, and no per-binding Find or ByKey at all.
+func TestService_OnNodeDeleted_CascadeReap_NoPerBindingReReads(t *testing.T) {
+	db := newRBACTestDB(t)
+	counts := newStatementCounter(t, db)
+	svc, reg := attachTestService(t, db)
+
+	ctx := tenantCtx("tenant-a")
+	for _, roleKey := range []string{"reader", "writer"} {
+		if _, err := svc.DefineRole(ctx, RoleDefinition{Key: roleKey, Permissions: []string{"notes:read", "notes:write"}}); err != nil {
+			t.Fatalf("DefineRole(%s): %v", roleKey, err)
+		}
+	}
+	// Four live bindings across the two roles: two distinct roles and four
+	// rows is the shape where the per-binding re-reads the fix removes are
+	// distinguishable from the reads that must stay.
+	for _, grant := range []struct {
+		user   string
+		role   string
+		nodeID string
+	}{
+		{"user-1", "reader", "n-1"},
+		{"user-1", "reader", "n-2"},
+		{"user-1", "writer", "n-3"},
+		{"user-2", "writer", "n-4"},
+	} {
+		if err := svc.AssignRole(ctx, Subject{TenantID: "tenant-a", UserID: grant.user}, grant.role, Scope{NodeID: grant.nodeID}); err != nil {
+			t.Fatalf("AssignRole(%+v): %v", grant, err)
+		}
+	}
+
+	counts.reset()
+	rec := recordEvents(reg)
+	publishNodeDeleted(t, reg, "tenant-a", deletedNode{
+		DeletedNodeIds: []string{"n-1", "n-2", "n-3", "n-4"},
+	})
+
+	// The reap must still withdraw every binding -- the batching changes the
+	// cost shape, never the outcome.
+	revoked := rec.ofType(EventRoleBindingRevoked)
+	if len(revoked) != 4 {
+		t.Fatalf("got %d %s events, want 4 (one per reaped binding)", len(revoked), EventRoleBindingRevoked)
+	}
+
+	if got := counts.bindingReads; got != 1 {
+		t.Fatalf("the reap ran %d SELECTs against role_bindings, want 1 (the enumeration); every additional read is a per-binding re-read", got)
+	}
+	if got := counts.roleReads; got != 2 {
+		t.Fatalf("the reap ran %d SELECTs against roles, want 2 (one per distinct role, resolved once per pass)", got)
+	}
+	if got := counts.bindingWrites; got != 4 {
+		t.Fatalf("the reap ran %d UPDATEs against role_bindings, want 4 (one mark-delete per binding)", got)
+	}
+
+	// And the rows really are gone (soft-deleted), read after the counts
+	// were taken so the verification's own query is not counted.
+	rows, err := svc.bindings.ByNodes(ctx, []string{"n-1", "n-2", "n-3", "n-4"})
+	if err != nil {
+		t.Fatalf("listing remaining bindings: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("%d bindings survived the cascade reap", len(rows))
 	}
 }
 
