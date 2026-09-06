@@ -3,7 +3,6 @@ package metering
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 
@@ -180,26 +179,6 @@ func TestEnqueue_SharesTheCallerTransaction_RollbackDiscardsTheRow(t *testing.T)
 	}
 	if found {
 		t.Error("outbox row survived a rolled-back transaction")
-	}
-}
-
-func TestIsUniqueViolation(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{name: "nil", err: nil, want: false},
-		{name: "gorm.ErrDuplicatedKey directly", err: gorm.ErrDuplicatedKey, want: true},
-		{name: "gorm.ErrDuplicatedKey wrapped", err: fmt.Errorf("insert: %w", gorm.ErrDuplicatedKey), want: true},
-		{name: "unrelated error", err: errors.New("connection refused"), want: false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := isUniqueViolation(tc.err); got != tc.want {
-				t.Errorf("isUniqueViolation(%v) = %v, want %v", tc.err, got, tc.want)
-			}
-		})
 	}
 }
 

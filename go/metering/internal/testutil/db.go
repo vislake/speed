@@ -37,10 +37,11 @@ func NewSQLite(t *testing.T, moduleName string, fs embed.FS) *gorm.DB {
 // It is the integration tier's counterpart to NewSQLite and applies the
 // identical migration files from the postgres/ subdirectory, so a test
 // can run the same assertions against both dialects by swapping the
-// constructor alone. This round ships no integration_test/ package that
-// calls it yet -- see go/metering/AGENTS.md's Known limitations -- but the
-// helper is included now so a later round's PostgreSQL leg needs no db.go
-// of its own, mirroring go/pki/internal/testutil's identical choice.
+// constructor alone. It is what go/metering/integration_test/ calls from
+// every test of the module's PostgreSQL tier (added in the
+// PostgreSQL-defects round), so the tier needs no db.go of its own --
+// mirroring go/pki/internal/testutil's identical choice for its own
+// helper.
 func NewPostgres(t *testing.T, moduleName string, fs embed.FS) *gorm.DB {
 	t.Helper()
 	db := dbtest.NewPostgres(t)

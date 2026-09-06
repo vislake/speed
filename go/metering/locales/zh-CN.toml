@@ -16,6 +16,8 @@
 
 "metering.metadata_too_large" = "用量事件的元数据过大。"
 
+"metering.field_too_long" = "{{.field}} 过长,最多 {{.max_length}} 字节。"
+
 "metering.invalid_period_bucket" = "“{{.bucket}}”不是合法的周期粒度。"
 
 "metering.metadata_encode_failed" = "用量事件的元数据无法编码存储。"

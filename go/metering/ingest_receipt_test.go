@@ -2,8 +2,11 @@ package metering
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
+
+	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
@@ -24,12 +27,18 @@ func TestIngestReceiptRepository_AssertIsolated(t *testing.T) {
 	})
 }
 
-// TestIngestReceiptRepository_Create_DuplicateIsAUniqueViolation proves the
-// exact mechanism Aggregator.foldIntoSummaryOnce relies on: a second
-// Create for the same (tenant, id) fails with the portable
-// gorm.ErrDuplicatedKey isUniqueViolation checks for, not a generic error
-// -- see IngestReceipt's own doc comment for why that distinction is what
-// makes a redelivered event a safe no-op rather than a hard failure.
+// TestIngestReceiptRepository_Create_DuplicateIsAUniqueViolation proves
+// the raw repository path (a caller deliberately not using
+// IngestBillingGrade's idempotent fold) still surfaces a second Create
+// for the same (tenant, id) as the portable gorm.ErrDuplicatedKey -- the
+// classification dbkit's TranslateError produces from each driver's own
+// raw unique-violation error, re-proven against real PostgreSQL by the
+// integration tier's
+// TestPostgres_IngestReceiptRepository_DuplicateCreate_IsErrDuplicatedKey.
+// The idempotent fold path itself no longer depends on catching this
+// error: it avoids it entirely through an ON CONFLICT DO NOTHING insert
+// (see foldIntoSummaryOnce's doc comment for why catching it would abort
+// the transaction on PostgreSQL).
 func TestIngestReceiptRepository_Create_DuplicateIsAUniqueViolation(t *testing.T) {
 	repo := NewIngestReceiptRepository(newTestDB(t))
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
@@ -42,8 +51,8 @@ func TestIngestReceiptRepository_Create_DuplicateIsAUniqueViolation(t *testing.T
 	if err == nil {
 		t.Fatal("Create (duplicate) = nil error, want a unique-constraint violation")
 	}
-	if !isUniqueViolation(err) {
-		t.Errorf("Create (duplicate) error = %v, want isUniqueViolation(err) = true", err)
+	if !errors.Is(err, gorm.ErrDuplicatedKey) {
+		t.Errorf("Create (duplicate) error = %v, want errors.Is(err, gorm.ErrDuplicatedKey)", err)
 	}
 }
 

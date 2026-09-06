@@ -97,8 +97,9 @@ func TestInsertOutboxRecord_AndFindByIdempotencyKey(t *testing.T) {
 	ctx := context.Background()
 
 	rec := newTestOutboxRecord("rec-1", "tenant-a", "idem-1")
-	if err := insertOutboxRecord(ctx, db, rec); err != nil {
-		t.Fatalf("insertOutboxRecord: %v", err)
+	inserted, err := insertOutboxRecord(ctx, db, rec)
+	if err != nil || !inserted {
+		t.Fatalf("insertOutboxRecord = inserted:%v err:%v, want inserted:true err:nil", inserted, err)
 	}
 
 	got, found, err := findOutboxByIdempotencyKey(ctx, db, "tenant-a", "idem-1")
@@ -110,6 +111,42 @@ func TestInsertOutboxRecord_AndFindByIdempotencyKey(t *testing.T) {
 	}
 	if got.ID != "rec-1" {
 		t.Errorf("findOutboxByIdempotencyKey.ID = %q, want %q", got.ID, "rec-1")
+	}
+}
+
+// TestInsertOutboxRecord_DuplicateKey_IsANoOpNotAnError pins the
+// dialect-independent half of the outbox idempotent-retry fix: a second
+// insert for the same (tenant_id, idempotency_key) reports inserted ==
+// false with NO error -- the insert runs as ON CONFLICT DO NOTHING, so
+// the transaction is never left in the aborted state that would break
+// Enqueue's read-back recovery (and the caller's own transaction) on
+// PostgreSQL, where a statement error aborts the whole transaction. The
+// pre-fix function returned gorm.ErrDuplicatedKey here; the PostgreSQL
+// half of the regression, where the aborted transaction is actually
+// observable, lives in the integration tier
+// (TestPostgres_Enqueue_IdempotentRetry_InsideOneCallerTransaction).
+func TestInsertOutboxRecord_DuplicateKey_IsANoOpNotAnError(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	inserted, err := insertOutboxRecord(ctx, db, newTestOutboxRecord("rec-1", "tenant-a", "idem-dup"))
+	if err != nil || !inserted {
+		t.Fatalf("insertOutboxRecord (first) = inserted:%v err:%v, want inserted:true err:nil", inserted, err)
+	}
+	inserted, err = insertOutboxRecord(ctx, db, newTestOutboxRecord("rec-2", "tenant-a", "idem-dup"))
+	if err != nil {
+		t.Fatalf("insertOutboxRecord (duplicate) = %v, want inserted:false err:nil (no-op, not a unique-violation error)", err)
+	}
+	if inserted {
+		t.Error("insertOutboxRecord (duplicate) = inserted:true, want inserted:false")
+	}
+
+	rows, err := claimPendingOutboxRecords(ctx, db, 10)
+	if err != nil {
+		t.Fatalf("claimPendingOutboxRecords: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != "rec-1" {
+		t.Fatalf("outbox holds %d row(s) after the duplicate insert, want exactly the first row (no duplicate)", len(rows))
 	}
 }
 
@@ -132,10 +169,10 @@ func TestFindOutboxByIdempotencyKey_ScopedByTenant(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
 
-	if err := insertOutboxRecord(ctx, db, newTestOutboxRecord("rec-a", "tenant-a", "idem-shared")); err != nil {
+	if _, err := insertOutboxRecord(ctx, db, newTestOutboxRecord("rec-a", "tenant-a", "idem-shared")); err != nil {
 		t.Fatalf("insertOutboxRecord(tenant-a): %v", err)
 	}
-	if err := insertOutboxRecord(ctx, db, newTestOutboxRecord("rec-b", "tenant-b", "idem-shared")); err != nil {
+	if _, err := insertOutboxRecord(ctx, db, newTestOutboxRecord("rec-b", "tenant-b", "idem-shared")); err != nil {
 		t.Fatalf("insertOutboxRecord(tenant-b): %v", err)
 	}
 
@@ -162,13 +199,13 @@ func TestClaimPendingOutboxRecords(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		rec := newTestOutboxRecord(fmt.Sprintf("pending-%d", i), "tenant-a", fmt.Sprintf("idem-%d", i))
 		rec.CreatedAt = time.Now().Add(time.Duration(i) * time.Millisecond)
-		if err := insertOutboxRecord(ctx, db, rec); err != nil {
+		if _, err := insertOutboxRecord(ctx, db, rec); err != nil {
 			t.Fatalf("insertOutboxRecord(%d): %v", i, err)
 		}
 	}
 	delivered := newTestOutboxRecord("delivered-1", "tenant-a", "idem-delivered")
 	delivered.Status = outboxStatusDelivered
-	if err := insertOutboxRecord(ctx, db, delivered); err != nil {
+	if _, err := insertOutboxRecord(ctx, db, delivered); err != nil {
 		t.Fatalf("insertOutboxRecord(delivered): %v", err)
 	}
 
@@ -189,7 +226,7 @@ func TestMarkOutboxDelivered(t *testing.T) {
 	ctx := context.Background()
 
 	rec := newTestOutboxRecord("rec-1", "tenant-a", "idem-1")
-	if err := insertOutboxRecord(ctx, db, rec); err != nil {
+	if _, err := insertOutboxRecord(ctx, db, rec); err != nil {
 		t.Fatalf("insertOutboxRecord: %v", err)
 	}
 
@@ -219,7 +256,7 @@ func TestMarkOutboxAttemptFailed(t *testing.T) {
 	ctx := context.Background()
 
 	rec := newTestOutboxRecord("rec-1", "tenant-a", "idem-1")
-	if err := insertOutboxRecord(ctx, db, rec); err != nil {
+	if _, err := insertOutboxRecord(ctx, db, rec); err != nil {
 		t.Fatalf("insertOutboxRecord: %v", err)
 	}
 

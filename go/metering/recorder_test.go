@@ -29,6 +29,20 @@ func TestUsageEvent_Validate(t *testing.T) {
 		{name: "missing tenant", mutate: func(e *UsageEvent) { e.TenantID = "" }, wantCode: ErrMissingTenantID.Code},
 		{name: "missing feature", mutate: func(e *UsageEvent) { e.Feature = "" }, wantCode: ErrMissingFeature.Code},
 		{name: "missing idempotency key", mutate: func(e *UsageEvent) { e.IdempotencyKey = "" }, wantCode: ErrMissingIdempotencyKey.Code},
+		// The length bounds below mirror the VARCHAR widths of the columns
+		// each field lands in (tenant_id VARCHAR(64), feature VARCHAR(128),
+		// idempotency_key VARCHAR(200) on every table of this module, both
+		// dialects). SQLite never enforces a VARCHAR's declared length, so
+		// an over-long value only explodes on PostgreSQL (22001) -- inside
+		// the caller's own transaction when the write is Enqueue's. validate
+		// refuses at the exact bound + 1 byte so the two dialects cannot
+		// diverge.
+		{name: "tenant id at the exact bound is valid", mutate: func(e *UsageEvent) { e.TenantID = strings.Repeat("t", maxTenantIDLength) }, wantCode: ""},
+		{name: "tenant id too long", mutate: func(e *UsageEvent) { e.TenantID = strings.Repeat("t", maxTenantIDLength+1) }, wantCode: ErrFieldTooLong.Code},
+		{name: "feature at the exact bound is valid", mutate: func(e *UsageEvent) { e.Feature = strings.Repeat("f", maxFeatureLength) }, wantCode: ""},
+		{name: "feature too long", mutate: func(e *UsageEvent) { e.Feature = strings.Repeat("f", maxFeatureLength+1) }, wantCode: ErrFieldTooLong.Code},
+		{name: "idempotency key at the exact bound is valid", mutate: func(e *UsageEvent) { e.IdempotencyKey = strings.Repeat("k", maxIdempotencyKeyLength) }, wantCode: ""},
+		{name: "idempotency key too long", mutate: func(e *UsageEvent) { e.IdempotencyKey = strings.Repeat("k", maxIdempotencyKeyLength+1) }, wantCode: ErrFieldTooLong.Code},
 		{name: "zero quantity is valid", mutate: func(e *UsageEvent) { e.Quantity = 0 }, wantCode: ""},
 		{name: "negative quantity", mutate: func(e *UsageEvent) { e.Quantity = -1 }, wantCode: ErrInvalidQuantity.Code},
 		{name: "NaN quantity", mutate: func(e *UsageEvent) { e.Quantity = math.NaN() }, wantCode: ErrInvalidQuantity.Code},

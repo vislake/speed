@@ -46,6 +46,20 @@ var (
 	// bounded context, never a dumping ground for arbitrary payloads.
 	ErrMetadataTooLarge = apperr.Invalid("metering.metadata_too_large")
 
+	// ErrFieldTooLong reports that one of a UsageEvent's fixed-width
+	// identifier fields (TenantID, Feature or IdempotencyKey) exceeded the
+	// byte bound of the VARCHAR column it is stored in -- the same bound
+	// documented on each field of UsageEvent itself. The offending field
+	// and its limit travel as the "field" and "max_length" params.
+	//
+	// These bounds are not merely tidy: SQLite does not enforce a VARCHAR
+	// column's declared length, while PostgreSQL rejects an over-long
+	// value with SQLSTATE 22001 -- inside the caller's own transaction
+	// when the write is Enqueue's -- aborting it (see outbox.go's Enqueue
+	// doc comment for the poisoned-transaction class). Refusing before
+	// any write is what keeps the two dialects' behavior identical.
+	ErrFieldTooLong = apperr.Invalid("metering.field_too_long")
+
 	// ErrInvalidPeriodBucket reports that a period-bucket size string was
 	// neither PeriodBucketDaily nor PeriodBucketMonthly.
 	ErrInvalidPeriodBucket = apperr.Invalid("metering.invalid_period_bucket")

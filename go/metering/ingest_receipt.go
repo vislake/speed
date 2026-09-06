@@ -47,10 +47,14 @@ const tableIngestReceipts = "metering_ingest_receipts"
 // for why a second, nested dbkit.Repository[T] transaction is not how this
 // is done) -- so either both commit (the event was genuinely new) or
 // neither does (the whole attempt failed and left nothing behind to redo).
-// A second IngestBillingGrade call for the same event hits this row's own
-// primary key as a unique-constraint violation, recognizes the event as
-// already-ingested, and applies nothing: a safe no-op rather than a second
-// application.
+// A second IngestBillingGrade call for the same event finds this row's
+// primary key already taken: its insert ran as ON CONFLICT DO NOTHING and
+// reported RowsAffected == 0, so the call recognizes the event as
+// already-ingested and applies nothing -- a safe no-op whose transaction
+// commits cleanly, never a unique-constraint error. That is what keeps
+// the recovery working on PostgreSQL, where a statement error would abort
+// the whole transaction (see foldIntoSummaryOnce's own doc comment for
+// the full poisoned-transaction argument).
 //
 // # Data domain
 //

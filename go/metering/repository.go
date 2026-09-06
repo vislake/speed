@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/vislake/speed/go/dbkit"
 )
@@ -47,8 +48,21 @@ func NewSummaryRepository(db *gorm.DB) *SummaryRepository {
 // insertOutboxRecord inserts rec via tx -- ordinarily the caller's own
 // transaction, so committing it lands rec atomically with whatever
 // business write shares that transaction. See Enqueue's doc comment.
-func insertOutboxRecord(ctx context.Context, tx *gorm.DB, rec *OutboxRecord) error {
-	return tx.WithContext(ctx).Create(rec).Error
+//
+// The insert carries clause.OnConflict{DoNothing: true}, so a duplicate
+// (tenant_id, idempotency_key) -- caught by the table's own unique index
+// -- is reported back as inserted == false with no error, rather than as
+// a unique-constraint error. That distinction is the whole point: a
+// unique-violation error leaves the transaction ABORTED on PostgreSQL
+// (every later statement fails with SQLSTATE 25P02 until ROLLBACK), and
+// Enqueue's idempotent-retry recovery needs the transaction to stay
+// healthy so it can read the pre-existing row back and so the caller's
+// own transaction can go on committing its business write. An ON CONFLICT
+// DO NOTHING statement never aborts anything, on either dialect; see
+// Enqueue's doc comment for the full poisoned-transaction argument.
+func insertOutboxRecord(ctx context.Context, tx *gorm.DB, rec *OutboxRecord) (inserted bool, err error) {
+	res := tx.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(rec)
+	return res.RowsAffected > 0, res.Error
 }
 
 // findOutboxByIdempotencyKey returns the row for (tenantID,

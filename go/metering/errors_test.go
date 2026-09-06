@@ -19,6 +19,7 @@ func TestErrors_AreAllInvalid(t *testing.T) {
 		ErrMissingIdempotencyKey,
 		ErrInvalidQuantity,
 		ErrMetadataTooLarge,
+		ErrFieldTooLong,
 		ErrInvalidPeriodBucket,
 	}
 	seen := make(map[string]bool, len(errs))

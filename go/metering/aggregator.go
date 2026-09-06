@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/vislake/speed/go/dbkit"
 	obs "github.com/vislake/speed/go/observability"
@@ -366,6 +367,19 @@ func (a *Aggregator) IngestBillingGrade(ctx context.Context, event UsageEvent) e
 // doc comment for why -- routing either write back through
 // dbkit.Repository[T] here would nest a second WithTenantSession
 // transaction inside this one, which dbkit refuses outright).
+//
+// The receipt insert runs as ON CONFLICT DO NOTHING, never as a plain
+// insert whose unique-violation error would have to be caught: a
+// statement error inside a PostgreSQL transaction leaves the whole
+// transaction aborted, so a catch-then-commit recovery would commit a
+// poisoned transaction (the pgx driver reports the server's
+// COMMIT-became-ROLLBACK as an error), and an SQLite-only suite -- where
+// a failed statement is harmless -- could never see that. DO NOTHING
+// never aborts anything on either dialect: a redelivered event's insert
+// simply reports RowsAffected == 0 below, the healthy transaction commits
+// having changed nothing, and the receipt's own existence -- which by
+// construction implies an earlier, successful call already folded the
+// summary in the same transaction -- is the whole answer.
 // Reports (true, nil) when event.IdempotencyKey already has a receipt from
 // an earlier, successful call, in which case the transaction commits
 // having changed nothing.
@@ -378,12 +392,16 @@ func (a *Aggregator) IngestBillingGrade(ctx context.Context, event UsageEvent) e
 func (a *Aggregator) foldIntoSummaryOnce(tenantCtx context.Context, event UsageEvent, start, end time.Time) (alreadyIngested bool, err error) {
 	txErr := dbkit.WithTenantSession(tenantCtx, a.summaries.db, func(tx *gorm.DB) error {
 		receipt := &IngestReceipt{ID: event.IdempotencyKey, TenantID: event.TenantID}
-		if createErr := tx.Create(receipt).Error; createErr != nil {
-			if isUniqueViolation(createErr) {
-				alreadyIngested = true
-				return nil
-			}
-			return createErr
+		res := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(receipt)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			// The receipt already exists -- this event was folded in by an
+			// earlier, successful call. Nothing to do; the transaction
+			// commits having changed nothing.
+			alreadyIngested = true
+			return nil
 		}
 		return upsertSummaryTx(tx, event.Feature, start, end, event.Quantity)
 	})

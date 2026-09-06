@@ -21,10 +21,13 @@
 -- tenant_id), is the entire fact IngestReceiptRepository.Create needs to
 -- record -- "this event has already been folded into
 -- metering_usage_summaries" -- inserted in the SAME database transaction
--- as that UsageSummary write (via GORM's automatic SAVEPOINT nesting), so
+-- as that UsageSummary write (both composed as raw GORM calls against the
+-- one tx dbkit.WithTenantSession hands Aggregator.foldIntoSummaryOnce), so
 -- either both commit or neither does. A second IngestBillingGrade call for
--- the same event hits this row's own primary key as a unique-constraint
--- violation and applies nothing -- see ingest_receipt.go's IngestReceipt
+-- the same event finds this primary key already taken: its insert runs as
+-- ON CONFLICT DO NOTHING and reports RowsAffected == 0, and the call
+-- applies nothing -- never a unique-constraint error, which would abort
+-- the whole transaction on PostgreSQL. See ingest_receipt.go's IngestReceipt
 -- doc comment for the full crash-recovery argument.
 CREATE TABLE metering_ingest_receipts (
     id         VARCHAR(200) NOT NULL,
