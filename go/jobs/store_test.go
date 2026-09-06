@@ -191,9 +191,13 @@ func TestInsertRecord_IdempotencyKey_DifferentTenantsDoNotCollide(t *testing.T) 
 // createJobsIdempotencySQL's own doc comment names as the reason Enqueue
 // relies on a unique-index conflict rather than a check-then-insert
 // sequence. Concurrency is kept modest (a handful of goroutines) because
-// dbtest.NewSQLite carries no busy_timeout configuration of its own, so a
-// very high concurrent writer count against one SQLite file is a known
-// source of unrelated flakiness this test has no need to court.
+// SQLite serializes writers on one file even under the bounded 5000 ms
+// busy_timeout every dbkit SQLite connection carries (the driver's own
+// default, declared explicitly by dbkit's dialect factory — see
+// go/dbkit/AGENTS.md's "SQLite busy timeout" section): what this test pins
+// is the idempotency property under genuine contention, not SQLite's writer
+// scheduling, and a modest concurrency keeps the assertion about the
+// unique-index conflict rather than about lock-wait convergence.
 func TestInsertRecord_IdempotencyKey_ConcurrentEnqueue_ReturnsSameID(t *testing.T) {
 	db := newTestDB(t)
 	const concurrency = 6
@@ -332,8 +336,11 @@ func TestClaimOne_ClaimsAndIncrementsAttempts(t *testing.T) {
 // claimed = false with no error, rather than double-claiming or erroring.
 // This is deliberately exercised with two sequential calls against one
 // stale snapshot, rather than real goroutine concurrency, so the assertion
-// is exact and immune to dbtest.NewSQLite's lack of a configured SQLite
-// busy_timeout under genuine concurrent writers (see
+// is exact and immune to SQLite's writer serialization under genuine
+// concurrent writers — the bounded busy_timeout on every dbkit SQLite
+// connection (see go/dbkit/AGENTS.md's "SQLite busy timeout" section) makes
+// contended writes wait rather than fail, but lock-wait scheduling is not
+// what this test asserts (see
 // TestInsertRecord_IdempotencyKey_ConcurrentEnqueue_ReturnsSameID's own doc
 // comment for the same concern) — the two code paths exercise the exact
 // same WHERE-clause guard either way, since claimOne itself has no notion
