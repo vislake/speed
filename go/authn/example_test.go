@@ -473,9 +473,9 @@ func ExampleService_EnrollTOTP() {
 // wiring above.
 func ExampleNewHandler() {
 	ctx := context.Background()
-	module, _ := exampleModule(ctx)
+	module, registry := exampleModule(ctx)
 	svc := module.Service()
-	handler := authn.Middleware(svc.Verifier())(authn.NewHandler(svc))
+	handler := authn.Middleware(svc.Verifier())(authn.NewHandler(svc, registry.EventBus(), registry.AuditActions))
 
 	registerBody, _ := json.Marshal(map[string]string{
 		"email": "http-demo@example.com", "password": "a perfectly fine passphrase",

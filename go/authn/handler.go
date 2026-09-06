@@ -1,6 +1,7 @@
 package authn
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/vislake/speed/go/authn/api"
+	"github.com/vislake/speed/go/dbkit/audit"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
@@ -45,16 +47,29 @@ const preAuthCookieBytes = 32
 // Middleware already put in the request context -- see requirePrincipal --
 // rather than checking tenancy at all.
 type Handler struct {
-	svc *Service
-	mux *http.ServeMux
+	svc          *Service
+	bus          pkgcore.EventBus
+	auditActions pkgcore.AuditActionRegistrar
+	mux          *http.ServeMux
 }
 
 // NewHandler returns a Handler serving svc's operations. Its routing is
 // registered by the generated api.HandlerFromMux helper, deriving this
 // module's method+path patterns from api/openapi.yaml's own "paths:" keys --
 // see notes' identical NewHandler doc comment for the mechanism.
-func NewHandler(svc *Service) *Handler {
-	h := &Handler{svc: svc}
+//
+// bus and auditActions back this Handler's own audit.Emit calls (see
+// recordAudit) for the 9 audit actions module.go's Register declares --
+// notes.NewHandler's identical two parameters are the established
+// convention this mirrors. bus may be nil, in which case every operation
+// still succeeds but records no audit event, exactly as notes.Handler's
+// own nil-bus case behaves; auditActions must not be nil when bus is
+// non-nil, for the same reason notes.NewHandler's own doc comment gives
+// (Emit needs a real AuditActionRegistrar to validate each action
+// against). module.go's Register is the one real caller, sourcing both
+// from the same *pkgcore.Registry.
+func NewHandler(svc *Service, bus pkgcore.EventBus, auditActions pkgcore.AuditActionRegistrar) *Handler {
+	h := &Handler{svc: svc, bus: bus, auditActions: auditActions}
 	h.mux = http.NewServeMux()
 	api.HandlerFromMux(h, h.mux)
 	return h
@@ -91,6 +106,60 @@ func decodeJSON(r *http.Request, v any) error {
 		return ErrInvalidRequestBody.WithCause(err)
 	}
 	return nil
+}
+
+// recordAudit emits an AuditEvent for one of the 9 audit actions module.go's
+// Register declares, through audit.Emit -- the declarative collection
+// mechanism go/dbkit/audit documents, exactly as notes.Handler's own
+// recordNoteCreatedAudit uses it (see that method's doc comment for the
+// mechanism itself). h.bus nil is treated exactly like notes' handler
+// treats it: nothing is recorded, and the operation that already
+// succeeded (or failed, for a login-failure record) is unaffected either
+// way.
+//
+// Unlike notes' own call site, this sets the acting Actor explicitly on
+// ctx before calling Emit (see pkgcore.WithActor) rather than relying on
+// one already present: no middleware in this chain populates
+// pkgcore.Actor today, and for login/register in particular there could
+// be nothing upstream TO populate it from -- identity is only established
+// by the very call this method is recording the outcome of. actorID empty
+// means "no identity is known for this record" (an unmatched login
+// attempt, for instance), in which case ctx is left exactly as given and
+// Emit falls back to its own "no actor set" zero value.
+//
+// A failure is logged, not returned, for the identical reason
+// recordNoteCreatedAudit's own doc comment gives: the underlying
+// operation has already been committed and answered to the caller, so an
+// audit-write failure must not turn that answer into something else.
+func (h *Handler) recordAudit(ctx context.Context, actorID, action string, resource audit.Resource, result audit.Result) {
+	if h.bus == nil {
+		return
+	}
+	if actorID != "" {
+		ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: actorID})
+	}
+	if err := audit.Emit(ctx, h.bus, h.auditActions, audit.Input{
+		Action:   action,
+		Resource: resource,
+		Result:   result,
+	}); err != nil {
+		obs.FromContext(ctx).Error("authn audit event emit failed",
+			"action", action, "resource_type", resource.Type, "resource_id", resource.ID, "error", err)
+	}
+}
+
+// auditFailureReason extracts a short failure reason for an audit
+// Result.FailureReason from err -- its apperr.Error.Code, which every
+// error a Service method returns here already is. A non-*apperr.Error
+// (should not happen; writeAppError itself falls back the same way for
+// exactly this case) reports a generic fallback rather than leaving the
+// field empty or embedding err's own free-text message, which could carry
+// something this module must not put in an audit trail unredacted.
+func auditFailureReason(err error) string {
+	if appErr, ok := apperr.As(err); ok {
+		return appErr.Code
+	}
+	return "unknown"
 }
 
 // clientIP extracts the requesting client's address from r, for the rate
@@ -203,6 +272,9 @@ func (h *Handler) AuthnRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.recordAudit(ctx, user.ID, AuditActionUserRegister,
+		audit.Resource{Type: "user", ID: user.ID},
+		audit.Result{Success: true})
 	obs.FromContext(ctx).Info("account registered", "user_id", user.ID)
 	writeJSON(w, http.StatusCreated, toUserResponse(user))
 }
@@ -226,10 +298,16 @@ func (h *Handler) AuthnLoginWithPassword(w http.ResponseWriter, r *http.Request)
 		IP:         clientIP(r),
 	})
 	if err != nil {
+		h.recordAudit(ctx, "", AuditActionUserLogin,
+			audit.Resource{Type: "user"},
+			audit.Result{Success: false, FailureReason: auditFailureReason(err)})
 		writeAppError(w, err)
 		return
 	}
 
+	h.recordAudit(ctx, pair.Principal.UserID, AuditActionUserLogin,
+		audit.Resource{Type: "user", ID: pair.Principal.UserID},
+		audit.Result{Success: true})
 	obs.FromContext(ctx).Info("password sign-in succeeded", "user_id", pair.Principal.UserID, "session_id", pair.Principal.SessionID)
 	writeJSON(w, http.StatusOK, toTokenPairResponse(pair))
 }
@@ -268,10 +346,16 @@ func (h *Handler) AuthnLoginWithSMSCode(w http.ResponseWriter, r *http.Request) 
 		IP:        clientIP(r),
 	})
 	if err != nil {
+		h.recordAudit(ctx, "", AuditActionUserLogin,
+			audit.Resource{Type: "user"},
+			audit.Result{Success: false, FailureReason: auditFailureReason(err)})
 		writeAppError(w, err)
 		return
 	}
 
+	h.recordAudit(ctx, pair.Principal.UserID, AuditActionUserLogin,
+		audit.Resource{Type: "user", ID: pair.Principal.UserID},
+		audit.Result{Success: true})
 	obs.FromContext(ctx).Info("sms sign-in succeeded", "user_id", pair.Principal.UserID, "session_id", pair.Principal.SessionID)
 	writeJSON(w, http.StatusOK, toTokenPairResponse(pair))
 }
@@ -298,10 +382,14 @@ func (h *Handler) AuthnLogout(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.svc.Logout(r.Context(), principal.SessionID); err != nil {
+	ctx := r.Context()
+	if err := h.svc.Logout(ctx, principal.SessionID); err != nil {
 		writeAppError(w, err)
 		return
 	}
+	h.recordAudit(ctx, principal.UserID, AuditActionSessionRevoke,
+		audit.Resource{Type: "session", ID: principal.SessionID},
+		audit.Result{Success: true})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -379,6 +467,21 @@ func (h *Handler) AuthnSocialCallback(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 
+	// Bound and Tokens are mutually exclusive (SocialLoginResult's own doc
+	// comment): Bound means an already-signed-in caller attached a new
+	// identity, and audits as a bind; otherwise this call started a real
+	// session (whether onto an existing or a newly provisioned account)
+	// and audits as a login, matching AuthnLoginWithPassword/
+	// AuthnLoginWithSMSCode's identical action above.
+	if result.Bound {
+		h.recordAudit(ctx, result.User.ID, AuditActionIdentityBind,
+			audit.Resource{Type: "identity", ID: result.Identity.ID},
+			audit.Result{Success: true})
+	} else {
+		h.recordAudit(ctx, result.User.ID, AuditActionUserLogin,
+			audit.Resource{Type: "user", ID: result.User.ID},
+			audit.Result{Success: true})
+	}
 	obs.FromContext(ctx).Info("social callback completed", "provider", provider, "bound", result.Bound, "created", result.Created)
 	writeJSON(w, http.StatusOK, toSocialLoginResponse(result))
 }
@@ -407,10 +510,14 @@ func (h *Handler) AuthnUnbindIdentity(w http.ResponseWriter, r *http.Request, id
 	if !ok {
 		return
 	}
-	if err := h.svc.UnbindIdentity(r.Context(), principal.UserID, identityID); err != nil {
+	ctx := r.Context()
+	if err := h.svc.UnbindIdentity(ctx, principal.UserID, identityID); err != nil {
 		writeAppError(w, err)
 		return
 	}
+	h.recordAudit(ctx, principal.UserID, AuditActionIdentityUnbind,
+		audit.Resource{Type: "identity", ID: identityID},
+		audit.Result{Success: true})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -446,11 +553,15 @@ func (h *Handler) AuthnConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err)
 		return
 	}
-	codes, err := h.svc.ConfirmTOTP(r.Context(), principal.UserID, req.Code)
+	ctx := r.Context()
+	codes, err := h.svc.ConfirmTOTP(ctx, principal.UserID, req.Code)
 	if err != nil {
 		writeAppError(w, err)
 		return
 	}
+	h.recordAudit(ctx, principal.UserID, AuditActionMFAEnroll,
+		audit.Resource{Type: "mfa_factor", ID: principal.UserID},
+		audit.Result{Success: true})
 	writeJSON(w, http.StatusOK, api.AuthnRecoveryCodesResponse{RecoveryCodes: &codes})
 }
 
@@ -467,11 +578,15 @@ func (h *Handler) AuthnRegenerateRecoveryCodes(w http.ResponseWriter, r *http.Re
 		if !ok {
 			return
 		}
-		codes, err := h.svc.RegenerateRecoveryCodes(r.Context(), principal.UserID)
+		ctx := r.Context()
+		codes, err := h.svc.RegenerateRecoveryCodes(ctx, principal.UserID)
 		if err != nil {
 			writeAppError(w, err)
 			return
 		}
+		h.recordAudit(ctx, principal.UserID, AuditActionMFARecoveryCodesRegenerate,
+			audit.Resource{Type: "mfa_recovery_codes", ID: principal.UserID},
+			audit.Result{Success: true})
 		writeJSON(w, http.StatusOK, api.AuthnRecoveryCodesResponse{RecoveryCodes: &codes})
 	})).ServeHTTP(w, r)
 }
@@ -506,11 +621,15 @@ func (h *Handler) AuthnSwitchTenant(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err)
 		return
 	}
-	pair, err := h.svc.SwitchTenant(r.Context(), principal, pkgcore.TenantID(req.TenantID))
+	ctx := r.Context()
+	pair, err := h.svc.SwitchTenant(ctx, principal, pkgcore.TenantID(req.TenantID))
 	if err != nil {
 		writeAppError(w, err)
 		return
 	}
+	h.recordAudit(ctx, principal.UserID, AuditActionTenantSwitch,
+		audit.Resource{Type: "session", ID: principal.SessionID},
+		audit.Result{Success: true})
 	writeJSON(w, http.StatusOK, toTokenPairResponse(pair))
 }
 
@@ -538,10 +657,14 @@ func (h *Handler) AuthnRevokeSession(w http.ResponseWriter, r *http.Request, ses
 	if !ok {
 		return
 	}
-	if err := h.svc.RevokeSession(r.Context(), principal.UserID, sessionID); err != nil {
+	ctx := r.Context()
+	if err := h.svc.RevokeSession(ctx, principal.UserID, sessionID); err != nil {
 		writeAppError(w, err)
 		return
 	}
+	h.recordAudit(ctx, principal.UserID, AuditActionSessionRevoke,
+		audit.Resource{Type: "session", ID: sessionID},
+		audit.Result{Success: true})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -551,11 +674,20 @@ func (h *Handler) AuthnRevokeOtherSessions(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	revoked, err := h.svc.RevokeOtherSessions(r.Context(), principal.UserID, principal.SessionID)
+	ctx := r.Context()
+	revoked, err := h.svc.RevokeOtherSessions(ctx, principal.UserID, principal.SessionID)
 	if err != nil {
 		writeAppError(w, err)
 		return
 	}
+	// One aggregate audit record for the whole bulk revoke, rather than
+	// one per session: RevokeOtherSessions' own return value is already a
+	// count, not the individual session ids, and Changes.After is exactly
+	// where a value that does not fit Resource's {Type, ID, DisplayName}
+	// shape belongs.
+	h.recordAudit(ctx, principal.UserID, AuditActionSessionRevoke,
+		audit.Resource{Type: "session", ID: principal.SessionID, DisplayName: "other sessions"},
+		audit.Result{Success: true})
 	writeJSON(w, http.StatusOK, api.AuthnRevokeOtherSessionsResponse{RevokedCount: &revoked})
 }
 

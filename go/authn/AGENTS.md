@@ -625,6 +625,18 @@ wires (`authn.Middleware` then `tenancy.Middleware(NewPrincipalResolver())`,
 see "The middleware chain is authn, then tenancy" above) around a real
 `net/http` server.
 
+`Handler`'s own `recordAudit` (backing 8 of the 9 declared audit actions —
+see this file's own Known limitations row for the ninth) is proven at the
+`Handler` layer, not `Service`: `handler_test.go`'s `newAuditTestHandler`
+builds a real `*pkgcore.Registry` (`pkgcore.NewRegistry`, the same
+construction `module.go`'s `Register` runs in production) with the 9
+actions already added, wires it into the `Handler` under test, and
+subscribes a `testutil.EventRecorder` to `audit.EventRecorded` on the same
+bus — `TestHandler_LoginWithPassword_ValidCredentials_RecordsLoginAuditEvent`,
+its wrong-password sibling, and
+`TestHandler_Logout_ValidPrincipal_RecordsSessionRevokeAuditEvent` are the
+representative sample (login success, login failure, session revocation).
+
 Every new model gets `tenancytest.AssertNotTenantScoped` (identity data) or
 `AssertIsolated` (tenant data). Shared fakes live in `internal/testutil`, which
 deliberately does **not** import this package — a test file in `package authn`
@@ -709,3 +721,4 @@ rather than trying to synchronize on the exact step boundary.
 | MFA (TOTP) is not enforced at LOGIN time — only `RequireStepUp`-gated sensitive actions require it. A password or SMS sign-in for an account WITH an enrolled factor still succeeds on the first factor alone. | Full second-factor-at-login is a larger design question (an interactive "enter your code now" challenge mid-flow) this block's scope did not include; the round's plan scoped MFA to enrollment, recovery and step-up. |
 | Phone-login and TOTP/recovery-code lifetimes (`ConfigKeySMSCodeTTL`, `ConfigKeySMSCodeMaxAttempts`) are declared as dynamic-config schema but, like every other dynamic-config item in this module, are not yet read back at runtime — values are injected through options with matching defaults. | Same read-through gap `NewService`'s existing options already carry; the binding lands with whichever block wires this module to the live `config` module. |
 | The `otpauth://` provisioning URI is rendered as a plain string; no QR image is generated server-side. | Deliberate — see `internal/totp`'s own doc comment. QR rendering is display logic and belongs on the frontend, which already owns every other rendering decision in this codebase. A QR-generation dependency was weighed and rejected for the same reason `pquerna/otp` was: every dependency added here lands in every consumer's build. |
+| `AuditActionSSOConfigure` is declared on the registry (`module.go`'s `auditActions`) but nothing calls `audit.Emit` for it: its only real call site, `SSOService.SaveConfig`, has no HTTP handler mounted anywhere in this module's API surface (`api/openapi.yaml` declares no operation for it) — there is no `handler.go` site to add the call to without also shipping that surface. | The other 8 declared audit actions (registration, login success/failure, session revoke, tenant switch, identity bind/unbind, MFA enroll/recovery-regenerate) ARE wired, at the `Handler` layer (`handler.go`'s `recordAudit`, mirroring `notes.Handler`'s own `audit.Emit` convention) — see this file's own Testing section. Closing this one gap means shipping tenant SSO configuration's HTTP surface first, which is out of scope for the round that wired the other 8. |

@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/authn/api"
+	"github.com/vislake/speed/go/authn/internal/testutil"
 	"github.com/vislake/speed/go/authn/internal/totp"
+	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -22,8 +24,37 @@ import (
 // own Handler.
 func newTestHandler(t *testing.T, extra ...Option) (*Handler, *serviceFixture) {
 	t.Helper()
+	h, f, _ := newAuditTestHandler(t, extra...)
+	return h, f
+}
+
+// newAuditTestHandler is newTestHandler's own constructor, plus the
+// EventRecorder subscribed to audit.EventRecorded on the same bus the
+// returned Handler publishes audit events to -- for the handful of tests
+// that actually assert on those events (auditFailureReason and
+// recordAudit's real callers, handler.go), rather than every one of
+// newTestHandler's many callers that do not.
+//
+// The bus and pkgcore.Registry built here are deliberately separate from
+// serviceFixture's own internal one (newServiceFixtureWithKV's local
+// "bus" variable, which Service publishes its OWN business events on):
+// nothing about testing Handler.recordAudit requires sharing it, and a
+// real *pkgcore.Registry (pkgcore.NewRegistry) is the same construction
+// module.go's own Register runs against in production, giving a real
+// AuditActionRegistrar rather than a hand-rolled stand-in.
+func newAuditTestHandler(t *testing.T, extra ...Option) (*Handler, *serviceFixture, *testutil.EventRecorder) {
+	t.Helper()
 	f := newServiceFixture(t, extra...)
-	return NewHandler(f.svc), f
+
+	bus := pkgcore.NewMemoryEventBus()
+	recorder := testutil.NewEventRecorder()
+	recorder.Subscribe(bus, audit.EventRecorded)
+
+	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	if err := reg.AuditActions.Add(auditActions...); err != nil {
+		t.Fatalf("AuditActions.Add() error = %v", err)
+	}
+	return NewHandler(f.svc, bus, reg.AuditActions), f, recorder
 }
 
 // doHandlerJSON issues method against path on h, JSON-encoding body when it
@@ -204,6 +235,81 @@ func TestHandler_LoginWithPassword_WrongPassword_Returns401(t *testing.T) {
 	errBody := decodeAuthnError(t, rec)
 	if errBody.Code == nil || *errBody.Code != ErrInvalidCredentials.Code {
 		t.Errorf("error code = %v, want %s", errBody.Code, ErrInvalidCredentials.Code)
+	}
+}
+
+// findAuditEvent scans recorder for an audit.EventRecorded event whose
+// Action matches, failing the test when none is found -- the P2-5
+// regression tests' shared assertion helper.
+func findAuditEvent(t *testing.T, recorder *testutil.EventRecorder, action string) audit.RecordedEvent {
+	t.Helper()
+	for _, evt := range recorder.Events() {
+		if evt.Type != audit.EventRecorded {
+			continue
+		}
+		recorded, ok := evt.Payload.(audit.RecordedEvent)
+		if !ok {
+			t.Fatalf("audit.EventRecorded payload has type %T, want audit.RecordedEvent", evt.Payload)
+		}
+		if recorded.Action == action {
+			return recorded
+		}
+	}
+	t.Fatalf("no audit.EventRecorded event with Action %q was published; all events = %+v", action, recorder.Events())
+	return audit.RecordedEvent{}
+}
+
+// TestHandler_LoginWithPassword_ValidCredentials_RecordsLoginAuditEvent is
+// one of the P2-5 regression's representative sample (root round prompt's
+// own named example, "login success"): 9 audit actions were declared on
+// the registry but nothing anywhere ever called audit.Emit for any of
+// them, so a real password sign-in used to leave no AuditEvent at all.
+func TestHandler_LoginWithPassword_ValidCredentials_RecordsLoginAuditEvent(t *testing.T) {
+	t.Parallel()
+	h, f, recorder := newAuditTestHandler(t)
+	user := f.registerUser(t, "audit-login@example.com", testTenantA)
+
+	rec := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/login/password", api.AuthnLoginWithPasswordRequest{
+		Identifier: "audit-login@example.com", Password: testPassword,
+	}, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	evt := findAuditEvent(t, recorder, AuditActionUserLogin)
+	if !evt.Result.Success {
+		t.Errorf("Result.Success = false, want true")
+	}
+	if evt.Resource.Type != "user" || evt.Resource.ID != user.ID {
+		t.Errorf("Resource = %+v, want {Type: user, ID: %s}", evt.Resource, user.ID)
+	}
+	if evt.Actor.ID != user.ID {
+		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, user.ID)
+	}
+}
+
+// TestHandler_LoginWithPassword_WrongPassword_RecordsLoginFailureAuditEvent
+// is the P2-5 regression's other named representative ("login failure"):
+// a failed sign-in attempt is exactly as security-relevant as a
+// successful one, and used to leave the same nothing behind.
+func TestHandler_LoginWithPassword_WrongPassword_RecordsLoginFailureAuditEvent(t *testing.T) {
+	t.Parallel()
+	h, f, recorder := newAuditTestHandler(t)
+	f.registerUser(t, "audit-login-fail@example.com", testTenantA)
+
+	rec := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/login/password", api.AuthnLoginWithPasswordRequest{
+		Identifier: "audit-login-fail@example.com", Password: "the wrong password",
+	}, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+
+	evt := findAuditEvent(t, recorder, AuditActionUserLogin)
+	if evt.Result.Success {
+		t.Errorf("Result.Success = true, want false")
+	}
+	if evt.Result.FailureReason != ErrInvalidCredentials.Code {
+		t.Errorf("Result.FailureReason = %q, want %q", evt.Result.FailureReason, ErrInvalidCredentials.Code)
 	}
 }
 
@@ -394,6 +500,36 @@ func TestHandler_Logout_ValidPrincipal_RevokesSessionAndReturns204(t *testing.T)
 	}
 	if len(sessions) != 1 || sessions[0].Status != SessionStatusRevoked {
 		t.Errorf("sessions = %+v, want exactly one revoked session", sessions)
+	}
+}
+
+// TestHandler_Logout_ValidPrincipal_RecordsSessionRevokeAuditEvent is the
+// P2-5 regression's third named representative, "session revocation":
+// AuditActionSessionRevoke was declared but never emitted for any of
+// this module's three revoke paths (logout, revoke-one, revoke-others).
+func TestHandler_Logout_ValidPrincipal_RecordsSessionRevokeAuditEvent(t *testing.T) {
+	t.Parallel()
+	h, f, recorder := newAuditTestHandler(t)
+	user := f.registerUser(t, "audit-logout@example.com", testTenantA)
+	pair, err := f.svc.Login(t.Context(), LoginInput{Identifier: "audit-logout@example.com", Password: testPassword, IP: "203.0.113.10"})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	rec := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/logout", nil, principalFor(pair))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+
+	evt := findAuditEvent(t, recorder, AuditActionSessionRevoke)
+	if !evt.Result.Success {
+		t.Errorf("Result.Success = false, want true")
+	}
+	if evt.Resource.Type != "session" || evt.Resource.ID != pair.Principal.SessionID {
+		t.Errorf("Resource = %+v, want {Type: session, ID: %s}", evt.Resource, pair.Principal.SessionID)
+	}
+	if evt.Actor.ID != user.ID {
+		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, user.ID)
 	}
 }
 

@@ -562,13 +562,21 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		return err
 	}
 	m.svc = svc
-	m.handler = NewHandler(svc)
+
+	if err := reg.AuditActions.Add(auditActions...); err != nil {
+		return err
+	}
+	// reg.AuditActions is handed to NewHandler so its own audit.Emit calls
+	// (see handler.go's recordAudit) validate against the exact
+	// AuditActionRegistrar the 9 actions above were just declared on --
+	// Emit itself checks the action string against it before publishing
+	// (see audit.Emit's own doc comment), which is what requires the
+	// declaration above to run before this line, matching notes.Module's
+	// identical ordering for its own single audit action.
+	m.handler = NewHandler(svc, reg.EventBus(), reg.AuditActions)
 	reg.Routes.Mount(apiPath, m.handler)
 
 	if err := reg.Events.Publishes(eventDecls...); err != nil {
-		return err
-	}
-	if err := reg.AuditActions.Add(auditActions...); err != nil {
 		return err
 	}
 	if err := reg.Config.Add(configItems()...); err != nil {
