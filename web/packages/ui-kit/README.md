@@ -358,6 +358,19 @@ error with its own retry story). The icon is decorative by contract
 (`aria-hidden`) -- text carries the meaning, and a custom `icon` should
 stay decorative or come with its own label.
 
+The title renders as a real heading element, and `headingLevel`
+(`'h1'`-`'h6'`, default `'h6'`) picks WHICH one: `EmptyState` is
+routinely the sole content of a section whose own heading it stands in
+for (an empty list, a failed load), so it has no page-structure
+knowledge of its own -- only the host knows what heading, if any,
+precedes it on the real page. Pass the level that continues that page's
+own order without a skip; the `'h6'` default only preserves the
+behavior every caller had before this prop existed, it is not usually
+the right level. The visual size stays fixed regardless of
+`headingLevel` -- MUI's `component` override changes the semantic tag,
+never the `variant="h6"` look, the same style/semantics split
+`PageHeader`'s `h1` and every section's own `h2` already rely on.
+
 ### ConfirmDialog
 
 The controlled confirmation modal. `open` shows it, `onConfirm` /
