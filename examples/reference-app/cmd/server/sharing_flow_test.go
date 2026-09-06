@@ -274,10 +274,21 @@ func TestBuildServer_SharingFlow_UnknownToken_Answers404(t *testing.T) {
 // (TestBuildServer_StoragePermissionGate_EnforcesTheStoragePermissions):
 // the read-only demo user holds notes:read and nothing else -- deliberately
 // no sharing permission at all -- so sharing's owner-facing routes must
-// refuse it in both directions (sharing:create for POST, sharing:read for
-// GET), proving demoRouteGuards' entry for sharing.PathShares and
-// sharingPermissionFor's own POST/GET split are both wired for real, never
-// left ungated the way this same route was before this round.
+// refuse it in all three directions (sharing:create for POST
+// sharing.PathShares, sharing:read for GET sharing.PathShares, and
+// sharing:revoke for POST the revoke sub-route), proving demoRouteGuards'
+// entry for sharing.PathShares and sharingPermissionFor's own
+// GET/POST-create/POST-revoke split are all wired for real, never left
+// ungated the way this same route was before this round.
+//
+// The revoke case deliberately targets a share id nobody created
+// ("share-does-not-exist"): sharingPermissionFor selects the permission
+// from the request's method and path suffix alone, before the handler ever
+// looks up the share, so a denied response here proves the permission gate
+// itself refused the request rather than the handler's own not-found path
+// coincidentally answering the same way. Only a principal that clears the
+// gate (TestBuildServer_SharingFlow_CreateAccessRevoke_EndToEnd's
+// demo-owner) may reach far enough to observe a real 404 for an unknown id.
 func TestBuildServer_SharingPermissionGate_EnforcesTheSharingPermissions(t *testing.T) {
 	srv, cfg := buildTestServer(t)
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "sharing-gate")
@@ -289,4 +300,8 @@ func TestBuildServer_SharingPermissionGate_EnforcesTheSharingPermissions(t *test
 	resp = storageRequest(t, srv, http.MethodGet, sharing.PathShares,
 		acmeToken, demoReaderUserID, "", nil)
 	assertPermissionDenied(t, resp, "GET "+sharing.PathShares+" as the read-only demo user")
+
+	resp = storageRequest(t, srv, http.MethodPost, sharing.PathShares+"/share-does-not-exist/revoke",
+		acmeToken, demoReaderUserID, "", nil)
+	assertPermissionDenied(t, resp, "POST "+sharing.PathShares+"/{shareId}/revoke as the read-only demo user")
 }
