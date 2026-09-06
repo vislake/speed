@@ -3,6 +3,7 @@ package sharing
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -22,6 +23,14 @@ type ShareRepository struct {
 	*dbkit.Repository[Share]
 
 	db *gorm.DB
+
+	// writeMu orders this repository's own guarded writes (runGuardedWrite,
+	// concurrency.go) behind one in-process mutex, so the view-recording,
+	// revocation and sweep writers this module itself spawns never contend
+	// with each other for the SQLite file lock -- see concurrency.go's own
+	// doc comment for why that ordering exists alongside the bounded
+	// conflict retry, and why the zero value is ready to use.
+	writeMu sync.Mutex
 }
 
 // NewShareRepository returns a ShareRepository backed by db.
@@ -73,9 +82,22 @@ func (r *ShareRepository) byTokenHash(ctx context.Context, hash string) (*Share,
 // Service.Access retries on a lost race (this call returning won == false
 // while the row it re-reads is still live) rather than treating ordinary
 // concurrency as "not accessible" -- see its own doc comment.
+//
+// The statement itself runs through runGuardedWrite (concurrency.go):
+// this repository's guarded writes are ordered behind one in-process
+// mutex -- so a view-recording storm and a revoke racing it never contend
+// with each other for the SQLite file lock at all -- and each attempt's
+// transaction retries up to txRetryBudget times on a transient,
+// contention-only database failure (SQLITE_BUSY from a writer outside this
+// module, or PostgreSQL's deadlock/serialization failure) rather than
+// surfacing as a store error. A lost CAS race is NOT such a failure (it is
+// a legitimate won == false), and a retried attempt whose WHERE clause no
+// longer matches -- because the concurrent writer that caused the conflict
+// committed a view between the attempts -- affects zero rows and reports
+// won == false, never a double-count, so the retry changes nothing about
+// how Service.recordView interprets this method's answer.
 func (r *ShareRepository) tryRecordView(ctx context.Context, share *Share, now time.Time) (won bool, err error) {
-	var rowsAffected int64
-	dbErr := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+	err = r.runGuardedWrite(ctx, func(tx *gorm.DB) error {
 		res := tx.
 			Where("id = ?", share.ID).
 			Where("view_count = ?", share.ViewCount).
@@ -83,13 +105,13 @@ func (r *ShareRepository) tryRecordView(ctx context.Context, share *Share, now t
 			Where("expires_at > ?", now).
 			Where("max_views IS NULL OR view_count < max_views").
 			Updates(&Share{ViewCount: share.ViewCount + 1})
-		rowsAffected = res.RowsAffected
+		won = res.RowsAffected == 1
 		return res.Error
 	})
-	if dbErr != nil {
-		return false, ErrInternal.WithCause(dbErr)
+	if err != nil {
+		return false, ErrInternal.WithCause(err)
 	}
-	return rowsAffected == 1, nil
+	return won, nil
 }
 
 // tryIncrementView records one granted access against share's row with a
@@ -126,25 +148,34 @@ func (r *ShareRepository) tryRecordView(ctx context.Context, share *Share, now t
 // between Service's own isLive check and this statement refuses the
 // increment (RowsAffected 0), exactly as tryRecordView's own WHERE clauses
 // refuse a no-longer-live row.
+//
+// The statement itself runs through runGuardedWrite (concurrency.go),
+// the same ordered-and-retried path tryRecordView and markRevoked use: a
+// transient, contention-only database failure (SQLITE_BUSY from a writer
+// outside this module -- this repository's own writers are already ordered
+// behind writeMu -- or PostgreSQL's deadlock/serialization failure)
+// retries the whole guarded increment from a fresh transaction up to
+// txRetryBudget times rather than surfacing as a store error. Each
+// retried attempt is the same atomic server-side increment, so a retry can
+// never double-count.
 func (r *ShareRepository) tryIncrementView(ctx context.Context, share *Share, now time.Time) (won bool, err error) {
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
 		return false, err
 	}
-	var rowsAffected int64
-	dbErr := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+	err = r.runGuardedWrite(ctx, func(tx *gorm.DB) error {
 		res := tx.Exec(
 			`UPDATE `+tableShares+` `+
 				`SET view_count = view_count + 1, updated_at = ? `+
 				`WHERE id = ? AND tenant_id = ? AND revoked_at IS NULL AND expires_at > ?`,
 			now, share.ID, string(tenant), now)
-		rowsAffected = res.RowsAffected
+		won = res.RowsAffected == 1
 		return res.Error
 	})
-	if dbErr != nil {
-		return false, ErrInternal.WithCause(dbErr)
+	if err != nil {
+		return false, ErrInternal.WithCause(err)
 	}
-	return rowsAffected == 1, nil
+	return won, nil
 }
 
 // markRevoked sets share's RevokedAt to at, guarded so that only the first
@@ -159,20 +190,31 @@ func (r *ShareRepository) tryIncrementView(ctx context.Context, share *Share, no
 // engages exactly as it does for every other struct Updates call in this
 // module (only revoked_at and the auto-updated timestamps are written;
 // TenantModel.TenantID is zero and therefore omitted from the SET clause).
+//
+// The statement itself runs through runGuardedWrite (concurrency.go),
+// the same ordered-and-retried path tryRecordView and tryIncrementView
+// use: a revoke racing this module's own concurrent view recording never
+// contends with it for the SQLite file lock at all (writeMu orders the
+// two), and a transient, contention-only database failure from a writer
+// outside this module -- SQLite's SQLITE_BUSY, or PostgreSQL's deadlock/
+// serialization failure -- retries the whole guarded UPDATE from a fresh
+// transaction up to txRetryBudget times rather than surfacing as a store
+// error. Only the first attempt to actually land transitions the row (the
+// WHERE clause still guards that), so retries cannot double-announce a
+// revocation.
 func (r *ShareRepository) markRevoked(ctx context.Context, id string, at time.Time) (won bool, err error) {
-	var rowsAffected int64
-	dbErr := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+	err = r.runGuardedWrite(ctx, func(tx *gorm.DB) error {
 		res := tx.
 			Where("id = ?", id).
 			Where("revoked_at IS NULL").
 			Updates(&Share{RevokedAt: &at})
-		rowsAffected = res.RowsAffected
+		won = res.RowsAffected == 1
 		return res.Error
 	})
-	if dbErr != nil {
-		return false, ErrInternal.WithCause(dbErr)
+	if err != nil {
+		return false, ErrInternal.WithCause(err)
 	}
-	return rowsAffected == 1, nil
+	return won, nil
 }
 
 // createWithTokenIndex inserts share and its shareTokenIndex row in one
