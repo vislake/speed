@@ -44,7 +44,7 @@ vars:
   # Modules with a Docker-backed integration tier under integration_test/
   # (go test -tags=integration ./... from the module directory): PostgreSQL via
   # testcontainers for dbkit and tenancy (including tenancy's tenancytest
-  # subpackage), Redis via testcontainers for jobs, Redis plus MinIO/S3
+  # subpackage), Redis via testcontainers for jobs, Redis plus RustFS/S3
   # via testcontainers for pkgcore (its integration_test/ carries both
   # tiers), PostgreSQL plus Redis via testcontainers for config and for
   # rbac (each of their integration_test/ directories carries both legs),
@@ -116,7 +116,7 @@ tasks:
       - cd "{{.APP_DIR}}" && go test ./...
 
   test:full:
-    desc: Full matrix -- unit suite under -race with coverage, then the Docker-backed integration tiers (PostgreSQL, Redis, MinIO/S3). Requires Docker.
+    desc: Full matrix -- unit suite under -race with coverage, then the Docker-backed integration tiers (PostgreSQL, Redis, RustFS/S3). Requires Docker.
     # docs/internal/19-dev-workflow.md's full matrix will eventually mean dual
     # deployment mode x dual dialect across every module. Until the
     # distributed mode and a second dialect's integration tiers exist, the
