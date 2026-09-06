@@ -115,8 +115,9 @@ const NotificationTypeImpersonationStarted = "admin.impersonation_started"
 
 // notificationGroupSecurity is the preference-matrix group
 // NotificationTypeImpersonationStarted is filed under. It carries no
-// meaning beyond grouping related types together in a UI; it is
-// unsubscribable regardless of group.
+// meaning beyond grouping related types together in a UI; the group never
+// affects whether recipients may opt out -- that is the type's own
+// Unsubscribable field, false here (see Register's Add call).
 const notificationGroupSecurity = "security"
 
 // Module implements pkgcore.Module for go/admin: the operations-console
@@ -417,11 +418,22 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		Key:             NotificationTypeImpersonationStarted,
 		Group:           notificationGroupSecurity,
 		DefaultChannels: []string{notification.ChannelInApp, notification.ChannelEmail},
-		// Unsubscribable: true is the mechanism D5's "mandatory,
-		// non-unsubscribable security notification" requirement realizes -- verified against
-		// go/notification/integration_test/clinic/module.go's identical
-		// Add call, the pattern this registration mirrors exactly.
-		Unsubscribable: true,
+		// Unsubscribable: false is what makes D5's "mandatory,
+		// non-unsubscribable security notification" requirement REAL (P1-1's
+		// fix): pkgcore.NotificationType.Unsubscribable reports whether
+		// recipients may opt out (pkgcore/registry.go's own field doc), so a
+		// mandatory type must declare false -- the preference matrix then
+		// refuses an empty selection with notification.ErrPreferenceOptoutNotAllowed
+		// (the recipient may narrow channels but never switch the notification
+		// off entirely; go/notification/preference_service.go's Set, case 4).
+		// The earlier Unsubscribable: true read the field's plain-English
+		// sense instead of its actual semantics and silently let the target
+		// opt out of the one notification whose whole purpose is telling them
+		// an administrator is inside their account -- mirroring the wrong
+		// fixture (clinic's opt-out-able appointment reminder) rather than
+		// notification's own security-group types (preference_service_test.go's
+		// fixtureTypeSecurity, Unsubscribable: false).
+		Unsubscribable: false,
 	}); err != nil {
 		return err
 	}

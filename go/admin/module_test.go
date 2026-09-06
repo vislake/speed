@@ -313,8 +313,16 @@ func TestModule_Register_DeclaresPermissionsAuditActionsAndNotificationType(t *t
 	for _, nt := range reg.Notifications.Types() {
 		if nt.Key == NotificationTypeImpersonationStarted {
 			foundType = true
-			if !nt.Unsubscribable {
-				t.Error("NotificationTypeImpersonationStarted is not Unsubscribable")
+			// P1-1's fix: pkgcore.NotificationType.Unsubscribable reports
+			// whether recipients MAY OPT OUT (pkgcore/registry.go's own
+			// field doc), so D5's mandatory security notification must
+			// declare false -- the value that makes an empty preference
+			// selection refused (notification.ErrPreferenceOptoutNotAllowed)
+			// rather than stored as a full opt-out. The earlier assertion
+			// demanded Unsubscribable true, reading the field backwards
+			// and pinning the very defect it claimed to prevent.
+			if nt.Unsubscribable {
+				t.Error("NotificationTypeImpersonationStarted is Unsubscribable, want a mandatory type recipients cannot opt out of (Unsubscribable false)")
 			}
 		}
 	}
@@ -324,6 +332,28 @@ func TestModule_Register_DeclaresPermissionsAuditActionsAndNotificationType(t *t
 
 	if adminModule.Search() == nil {
 		t.Error("Search() is nil after Register, want a wired SearchService")
+	}
+}
+
+// TestModule_Register_ImpersonationNotification_CannotBeOptedOutOf is
+// P1-1's regression test at the semantic boundary that matters: the D5
+// impersonation-started notification must be UNDECLINABLE in the real
+// notification preference matrix. On unfixed main the type was declared
+// Unsubscribable: true (the field's plain-English sense, inverted from its
+// actual semantics -- pkgcore/registry.go: "reports whether recipients may
+// opt out"), so an empty channel selection was stored as a full opt-out and
+// the target could switch off the one notification whose whole purpose is
+// telling them an administrator is inside their account. With
+// Unsubscribable: false the same write is refused with
+// notification.ErrPreferenceOptoutNotAllowed.
+func TestModule_Register_ImpersonationNotification_CannotBeOptedOutOf(t *testing.T) {
+	env := buildTestAdminModule(t)
+
+	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-pref-mandatory"))
+	err := env.Notification.Preferences().Set(ctx, "user-mandatory-check", NotificationTypeImpersonationStarted, []string{})
+	if !isCode(err, notification.ErrPreferenceOptoutNotAllowed.Code) {
+		t.Fatalf("Set(empty selection) error = %v, want %s (the mandatory notification must refuse a full opt-out)",
+			err, notification.ErrPreferenceOptoutNotAllowed.Code)
 	}
 }
 
