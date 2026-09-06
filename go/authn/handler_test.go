@@ -533,6 +533,390 @@ func TestHandler_Logout_ValidPrincipal_RecordsSessionRevokeAuditEvent(t *testing
 	}
 }
 
+// The eight tests below close a code-review gap the P2-5 round's own
+// summary left as "a scope decision": only 3 of the 9 declared audit
+// actions (AuditActionUserLogin above, twice, plus
+// AuditActionSessionRevoke's logout path) were verified against a real
+// event landing on the bus. Each of these drives the real HTTP path that
+// calls recordAudit and asserts on the recorded event's Action, Resource,
+// Actor and Result -- exactly as the three above do -- so a wrong resource
+// id, actor or action string at any of these call sites now fails a test
+// rather than going unnoticed.
+
+// TestHandler_Register_ValidBody_RecordsUserRegisterAuditEvent covers
+// AuditActionUserRegister, wired at AuthnRegister but never previously
+// observed landing on the bus (TestHandler_Register_ValidBody_ReturnsCreatedUser
+// uses the plain newTestHandler, which discards its EventRecorder).
+func TestHandler_Register_ValidBody_RecordsUserRegisterAuditEvent(t *testing.T) {
+	t.Parallel()
+	h, _, recorder := newAuditTestHandler(t)
+
+	rec := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/register", api.AuthnRegisterRequest{
+		Email: strPtr("audit-register@example.com"), Password: testPassword, DisplayName: strPtr("Audit Register"),
+	}, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	resp := decodeBody[api.AuthnUser](t, rec)
+	if resp.ID == nil || *resp.ID == "" {
+		t.Fatal("response ID is missing")
+	}
+
+	evt := findAuditEvent(t, recorder, AuditActionUserRegister)
+	if !evt.Result.Success {
+		t.Errorf("Result.Success = false, want true")
+	}
+	if evt.Resource.Type != "user" || evt.Resource.ID != *resp.ID {
+		t.Errorf("Resource = %+v, want {Type: user, ID: %s}", evt.Resource, *resp.ID)
+	}
+	if evt.Actor.ID != *resp.ID {
+		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, *resp.ID)
+	}
+}
+
+// TestHandler_SwitchTenant_ActiveMember_RecordsTenantSwitchAuditEvent covers
+// AuditActionTenantSwitch, wired at AuthnSwitchTenant but never previously
+// observed landing on the bus
+// (TestHandler_SwitchTenant_ActiveMember_ReissuesAccessToken uses the plain
+// newTestHandler).
+func TestHandler_SwitchTenant_ActiveMember_RecordsTenantSwitchAuditEvent(t *testing.T) {
+	t.Parallel()
+	h, f, recorder := newAuditTestHandler(t)
+	user := f.registerUser(t, "audit-switch@example.com", testTenantA, testTenantB)
+	pair, err := f.svc.Login(t.Context(), LoginInput{Identifier: "audit-switch@example.com", Password: testPassword, TenantID: testTenantA, IP: "203.0.113.9"})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	rec := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/tenant/switch", api.AuthnSwitchTenantRequest{TenantID: string(testTenantB)}, principalFor(pair))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	evt := findAuditEvent(t, recorder, AuditActionTenantSwitch)
+	if !evt.Result.Success {
+		t.Errorf("Result.Success = false, want true")
+	}
+	if evt.Resource.Type != "session" || evt.Resource.ID != pair.Principal.SessionID {
+		t.Errorf("Resource = %+v, want {Type: session, ID: %s}", evt.Resource, pair.Principal.SessionID)
+	}
+	if evt.Actor.ID != user.ID {
+		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, user.ID)
+	}
+}
+
+// TestHandler_SocialCallback_BindToSignedInAccount_RecordsIdentityBindAuditEvent
+// covers AuditActionIdentityBind, wired at AuthnSocialCallback's Bound
+// branch -- the one branch TestHandler_SocialSignIn_FullRoundTrip never
+// exercises, since that test signs a fresh visitor in rather than binding a
+// new identity onto an already-authenticated caller. The authorize call
+// below carries the signed-in principal in its request context exactly the
+// way AuthnSocialAuthorize itself reads it (PrincipalFromContext), which is
+// what makes the subsequent callback take the LinkUserID/bind path
+// (identity.go's SocialCallback) instead of the ordinary sign-in path.
+func TestHandler_SocialCallback_BindToSignedInAccount_RecordsIdentityBindAuditEvent(t *testing.T) {
+	t.Parallel()
+	provider := &stubProvider{name: ProviderGoogle, identity: &ExternalIdentity{
+		ExternalID: "ext-audit-bind-1", Email: "external-bind@example.com", EmailVerified: true, Name: "External Person",
+	}}
+	allowlist, err := NewRedirectAllowlist(testRedirectURI)
+	if err != nil {
+		t.Fatalf("NewRedirectAllowlist() error = %v", err)
+	}
+	h, f, recorder := newAuditTestHandler(t, WithSocialProviders(provider), WithRedirectAllowlist(allowlist))
+	f.registerUser(t, "bindme@example.com", testTenantA)
+	pair, err := f.svc.Login(t.Context(), LoginInput{Identifier: "bindme@example.com", Password: testPassword, IP: "203.0.113.9"})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	authorizeReq := httptest.NewRequest(http.MethodGet, "/api/v1/authn/social/google/authorize?redirect_uri="+testRedirectURI, nil)
+	authorizeReq = authorizeReq.WithContext(WithPrincipal(authorizeReq.Context(), *principalFor(pair)))
+	authorizeRec := httptest.NewRecorder()
+	h.ServeHTTP(authorizeRec, authorizeReq)
+	if authorizeRec.Code != http.StatusOK {
+		t.Fatalf("authorize status = %d, want %d; body = %s", authorizeRec.Code, http.StatusOK, authorizeRec.Body.String())
+	}
+	authorizeResp := decodeBody[api.AuthnSocialAuthorizeResponse](t, authorizeRec)
+	if authorizeResp.AuthorizeURL == nil || *authorizeResp.AuthorizeURL == "" {
+		t.Fatal("authorize response carries no URL")
+	}
+	state := parseQuery(t, *authorizeResp.AuthorizeURL).Get("state")
+	if state == "" {
+		t.Fatal("authorize URL carries no state parameter")
+	}
+	cookies := authorizeRec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("authorize response set %d cookies, want exactly 1 (the pre-auth cookie)", len(cookies))
+	}
+
+	body, err := json.Marshal(api.AuthnSocialCallbackRequest{Code: "test-code", State: state, TenantID: strPtr(string(testTenantA))})
+	if err != nil {
+		t.Fatalf("marshal callback request: %v", err)
+	}
+	callbackReq := httptest.NewRequest(http.MethodPost, "/api/v1/authn/social/google/callback", bytes.NewReader(body))
+	callbackReq.AddCookie(cookies[0])
+	callbackRec := httptest.NewRecorder()
+	h.ServeHTTP(callbackRec, callbackReq)
+	if callbackRec.Code != http.StatusOK {
+		t.Fatalf("callback status = %d, want %d; body = %s", callbackRec.Code, http.StatusOK, callbackRec.Body.String())
+	}
+	callbackResp := decodeBody[api.AuthnSocialLoginResponse](t, callbackRec)
+	if callbackResp.Bound == nil || !*callbackResp.Bound {
+		t.Fatalf("Bound = %v, want true for an authenticated caller binding a new identity", callbackResp.Bound)
+	}
+
+	evt := findAuditEvent(t, recorder, AuditActionIdentityBind)
+	if !evt.Result.Success {
+		t.Errorf("Result.Success = false, want true")
+	}
+	if evt.Resource.Type != "identity" {
+		t.Errorf("Resource.Type = %q, want %q", evt.Resource.Type, "identity")
+	}
+	if evt.Actor.ID != pair.Principal.UserID {
+		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, pair.Principal.UserID)
+	}
+}
+
+// TestHandler_UnbindIdentity_OwnedBySelfWithPasswordRemaining_RecordsIdentityUnbindAuditEvent
+// covers AuditActionIdentityUnbind, wired at AuthnUnbindIdentity but never
+// previously observed landing on the bus
+// (TestHandler_UnbindIdentity_NotOwnedBySelf_Returns404 only exercises the
+// 404 path, on an identity id that never existed). The identity is bound
+// directly through the Service (SocialAuthorizeURL/SocialCallback), the
+// same shape identity_test.go's own Service-level unbind tests use, so this
+// test's own HTTP call is the one under review: DELETE
+// /api/v1/authn/identities/{id}.
+func TestHandler_UnbindIdentity_OwnedBySelfWithPasswordRemaining_RecordsIdentityUnbindAuditEvent(t *testing.T) {
+	t.Parallel()
+	provider := &stubProvider{name: ProviderGitHub, identity: &ExternalIdentity{
+		ExternalID: "gh-audit-unbind-1", Email: "audit-unbind@example.com",
+	}}
+	allowlist, err := NewRedirectAllowlist(testRedirectURI)
+	if err != nil {
+		t.Fatalf("NewRedirectAllowlist() error = %v", err)
+	}
+	h, f, recorder := newAuditTestHandler(t, WithSocialProviders(provider), WithRedirectAllowlist(allowlist))
+	user := f.registerUser(t, "audit-unbind@example.com", testTenantA)
+
+	authorizeURL, err := f.svc.SocialAuthorizeURL(t.Context(), SocialAuthorizeInput{
+		Provider: provider.Name(), RedirectURI: testRedirectURI, LinkUserID: user.ID,
+	})
+	if err != nil {
+		t.Fatalf("SocialAuthorizeURL() error = %v", err)
+	}
+	state := parseQuery(t, authorizeURL).Get("state")
+	bound, err := f.svc.SocialCallback(t.Context(), SocialCallbackInput{
+		Provider: provider.Name(), Code: "code", State: state,
+	})
+	if err != nil {
+		t.Fatalf("SocialCallback() (bind) error = %v", err)
+	}
+
+	pair, err := f.svc.Login(t.Context(), LoginInput{Identifier: "audit-unbind@example.com", Password: testPassword, IP: "203.0.113.9"})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	rec := doHandlerJSON(t, h, http.MethodDelete, "/api/v1/authn/identities/"+bound.Identity.ID, nil, principalFor(pair))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+
+	evt := findAuditEvent(t, recorder, AuditActionIdentityUnbind)
+	if !evt.Result.Success {
+		t.Errorf("Result.Success = false, want true")
+	}
+	if evt.Resource.Type != "identity" || evt.Resource.ID != bound.Identity.ID {
+		t.Errorf("Resource = %+v, want {Type: identity, ID: %s}", evt.Resource, bound.Identity.ID)
+	}
+	if evt.Actor.ID != user.ID {
+		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, user.ID)
+	}
+}
+
+// TestHandler_ConfirmTOTP_ValidCode_RecordsMFAEnrollAuditEvent covers
+// AuditActionMFAEnroll, wired at AuthnConfirmTOTP but never previously
+// observed landing on the bus (TestHandler_MFAEnrollConfirmStepUp_FullRoundTrip
+// uses the plain newTestHandler).
+func TestHandler_ConfirmTOTP_ValidCode_RecordsMFAEnrollAuditEvent(t *testing.T) {
+	t.Parallel()
+	h, f, recorder := newAuditTestHandler(t)
+	user := f.registerUser(t, "audit-mfa-enroll@example.com", testTenantA)
+	pair, err := f.svc.Login(t.Context(), LoginInput{Identifier: "audit-mfa-enroll@example.com", Password: testPassword, IP: "203.0.113.9"})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	principal := principalFor(pair)
+
+	enroll := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/mfa/totp/enroll", nil, principal)
+	if enroll.Code != http.StatusOK {
+		t.Fatalf("enroll status = %d, want %d; body = %s", enroll.Code, http.StatusOK, enroll.Body.String())
+	}
+	enrollResp := decodeBody[api.AuthnEnrollTOTPResponse](t, enroll)
+	code, err := totp.Code(*enrollResp.Secret, time.Now())
+	if err != nil {
+		t.Fatalf("compute a TOTP code: %v", err)
+	}
+
+	confirm := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/mfa/totp/confirm", api.AuthnConfirmTOTPRequest{Code: code}, principal)
+	if confirm.Code != http.StatusOK {
+		t.Fatalf("confirm status = %d, want %d; body = %s", confirm.Code, http.StatusOK, confirm.Body.String())
+	}
+
+	evt := findAuditEvent(t, recorder, AuditActionMFAEnroll)
+	if !evt.Result.Success {
+		t.Errorf("Result.Success = false, want true")
+	}
+	if evt.Resource.Type != "mfa_factor" || evt.Resource.ID != user.ID {
+		t.Errorf("Resource = %+v, want {Type: mfa_factor, ID: %s}", evt.Resource, user.ID)
+	}
+	if evt.Actor.ID != user.ID {
+		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, user.ID)
+	}
+}
+
+// TestHandler_RegenerateRecoveryCodes_SteppedUp_RecordsMFARecoveryCodesRegenerateAuditEvent
+// covers AuditActionMFARecoveryCodesRegenerate, wired at
+// AuthnRegenerateRecoveryCodes but never previously observed landing on the
+// bus.
+func TestHandler_RegenerateRecoveryCodes_SteppedUp_RecordsMFARecoveryCodesRegenerateAuditEvent(t *testing.T) {
+	t.Parallel()
+	h, f, recorder := newAuditTestHandler(t)
+	user := f.registerUser(t, "audit-mfa-regen@example.com", testTenantA)
+	pair, err := f.svc.Login(t.Context(), LoginInput{Identifier: "audit-mfa-regen@example.com", Password: testPassword, IP: "203.0.113.9"})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	principal := principalFor(pair)
+
+	enroll := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/mfa/totp/enroll", nil, principal)
+	if enroll.Code != http.StatusOK {
+		t.Fatalf("enroll status = %d, want %d; body = %s", enroll.Code, http.StatusOK, enroll.Body.String())
+	}
+	enrollResp := decodeBody[api.AuthnEnrollTOTPResponse](t, enroll)
+	code, err := totp.Code(*enrollResp.Secret, time.Now())
+	if err != nil {
+		t.Fatalf("compute a TOTP code: %v", err)
+	}
+	confirm := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/mfa/totp/confirm", api.AuthnConfirmTOTPRequest{Code: code}, principal)
+	if confirm.Code != http.StatusOK {
+		t.Fatalf("confirm status = %d, want %d; body = %s", confirm.Code, http.StatusOK, confirm.Body.String())
+	}
+
+	// A different time step than the one ConfirmTOTP just consumed, exactly
+	// like TestHandler_MFAEnrollConfirmStepUp_FullRoundTrip's own comment
+	// explains: verifyTOTPFactor refuses a step at or before
+	// factor.LastUsedStep.
+	stepUpCode, err := totp.Code(*enrollResp.Secret, time.Now().Add(totp.Period))
+	if err != nil {
+		t.Fatalf("compute a step-up TOTP code: %v", err)
+	}
+	stepUp := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/mfa/step-up", api.AuthnVerifyStepUpRequest{Code: stepUpCode}, principal)
+	if stepUp.Code != http.StatusOK {
+		t.Fatalf("step-up status = %d, want %d; body = %s", stepUp.Code, http.StatusOK, stepUp.Body.String())
+	}
+	stepUpResp := decodeBody[api.AuthnTokenPair](t, stepUp)
+	steppedUp := &Principal{
+		UserID:    deref(stepUpResp.Principal.UserID),
+		TenantID:  pkgcore.TenantID(deref(stepUpResp.Principal.TenantID)),
+		SessionID: deref(stepUpResp.Principal.SessionID),
+		AMR:       *stepUpResp.Principal.Amr,
+	}
+
+	regen := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/mfa/recovery-codes/regenerate", nil, steppedUp)
+	if regen.Code != http.StatusOK {
+		t.Fatalf("regenerate status = %d, want %d; body = %s", regen.Code, http.StatusOK, regen.Body.String())
+	}
+
+	evt := findAuditEvent(t, recorder, AuditActionMFARecoveryCodesRegenerate)
+	if !evt.Result.Success {
+		t.Errorf("Result.Success = false, want true")
+	}
+	if evt.Resource.Type != "mfa_recovery_codes" || evt.Resource.ID != user.ID {
+		t.Errorf("Resource = %+v, want {Type: mfa_recovery_codes, ID: %s}", evt.Resource, user.ID)
+	}
+	if evt.Actor.ID != user.ID {
+		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, user.ID)
+	}
+}
+
+// TestHandler_RevokeSession_OwnSession_RecordsSessionRevokeAuditEvent covers
+// AuditActionSessionRevoke's revoke-one path, wired at AuthnRevokeSession
+// but never previously observed landing on the bus
+// (TestHandler_RevokeSession_AnotherUsers_Returns404 only exercises the 404
+// path, never a successful revoke).
+func TestHandler_RevokeSession_OwnSession_RecordsSessionRevokeAuditEvent(t *testing.T) {
+	t.Parallel()
+	h, f, recorder := newAuditTestHandler(t)
+	user := f.registerUser(t, "audit-revoke-one@example.com", testTenantA)
+	current, err := f.svc.Login(t.Context(), LoginInput{Identifier: "audit-revoke-one@example.com", Password: testPassword, Device: "laptop", IP: "203.0.113.9"})
+	if err != nil {
+		t.Fatalf("Login(current) error = %v", err)
+	}
+	other, err := f.svc.Login(t.Context(), LoginInput{Identifier: "audit-revoke-one@example.com", Password: testPassword, Device: "phone", IP: "203.0.113.9"})
+	if err != nil {
+		t.Fatalf("Login(other) error = %v", err)
+	}
+
+	rec := doHandlerJSON(t, h, http.MethodDelete, "/api/v1/authn/sessions/"+other.Principal.SessionID, nil, principalFor(current))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+
+	evt := findAuditEvent(t, recorder, AuditActionSessionRevoke)
+	if !evt.Result.Success {
+		t.Errorf("Result.Success = false, want true")
+	}
+	if evt.Resource.Type != "session" || evt.Resource.ID != other.Principal.SessionID {
+		t.Errorf("Resource = %+v, want {Type: session, ID: %s}", evt.Resource, other.Principal.SessionID)
+	}
+	if evt.Actor.ID != user.ID {
+		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, user.ID)
+	}
+}
+
+// TestHandler_RevokeOtherSessions_RecordsSessionRevokeAuditEvent covers
+// AuditActionSessionRevoke's revoke-others path, wired at
+// AuthnRevokeOtherSessions but never previously observed landing on the bus
+// (TestHandler_RevokeOtherSessions_KeepsCurrent uses the plain
+// newTestHandler). This is also the one call site whose Resource carries a
+// DisplayName ("other sessions", handler.go's own comment on why: the
+// revoked count is already in the response, not the individual session
+// ids), which this test pins explicitly.
+func TestHandler_RevokeOtherSessions_RecordsSessionRevokeAuditEvent(t *testing.T) {
+	t.Parallel()
+	h, f, recorder := newAuditTestHandler(t)
+	user := f.registerUser(t, "audit-revoke-others@example.com", testTenantA)
+	current, err := f.svc.Login(t.Context(), LoginInput{Identifier: "audit-revoke-others@example.com", Password: testPassword, Device: "laptop", IP: "203.0.113.9"})
+	if err != nil {
+		t.Fatalf("Login(current) error = %v", err)
+	}
+	if _, err := f.svc.Login(t.Context(), LoginInput{Identifier: "audit-revoke-others@example.com", Password: testPassword, Device: "phone", IP: "203.0.113.9"}); err != nil {
+		t.Fatalf("Login(other) error = %v", err)
+	}
+
+	rec := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/sessions/revoke-others", nil, principalFor(current))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	resp := decodeBody[api.AuthnRevokeOtherSessionsResponse](t, rec)
+	if resp.RevokedCount == nil || *resp.RevokedCount != 1 {
+		t.Fatalf("RevokedCount = %v, want 1", resp.RevokedCount)
+	}
+
+	evt := findAuditEvent(t, recorder, AuditActionSessionRevoke)
+	if !evt.Result.Success {
+		t.Errorf("Result.Success = false, want true")
+	}
+	if evt.Resource.Type != "session" || evt.Resource.ID != current.Principal.SessionID || evt.Resource.DisplayName != "other sessions" {
+		t.Errorf("Resource = %+v, want {Type: session, ID: %s, DisplayName: %q}", evt.Resource, current.Principal.SessionID, "other sessions")
+	}
+	if evt.Actor.ID != user.ID {
+		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, user.ID)
+	}
+}
+
 func TestHandler_GetMe_NoPrincipal_Returns401(t *testing.T) {
 	t.Parallel()
 	h, _ := newTestHandler(t)
