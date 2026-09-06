@@ -215,7 +215,7 @@ func TestTenantConfigReader_Compliance_ConfiguredTenant_UsesConfiguredExpiry(t *
 	setTenantDurationConfig(t, h.config, tenant, compliance.ConfigExportDeliveryExpiry, 2*time.Hour)
 
 	before := time.Now()
-	result, err := h.compliance.Export().Export(context.Background(), tenant)
+	result, err := h.compliance.Export().Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
 	if err != nil {
 		t.Fatalf("Export: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestTenantConfigReader_Compliance_UnconfiguredTenant_FallsBackToDefault(t *
 	const tenant = pkgcore.TenantID("tenant-unconfigured")
 
 	before := time.Now()
-	result, err := h.compliance.Export().Export(context.Background(), tenant)
+	result, err := h.compliance.Export().Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
 	if err != nil {
 		t.Fatalf("Export: %v", err)
 	}

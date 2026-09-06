@@ -209,9 +209,12 @@ func TestComplianceExport_NotesParticipant_ExportsLiveNotesOnly(t *testing.T) {
 	db := openSecondDB(t, cfg)
 	softDeleteAndBackdate(t, db, "tenant-acme", deletedID, time.Now())
 
-	// Export re-scopes ctx to the tenant argument itself, so a bare context
-	// is fine; unlike Sweep and Erase it never enters a system context.
-	result, err := complianceModule.Export().Export(context.Background(), "tenant-acme")
+	// Export reads every participant's rows through the tenant ctx carries
+	// and refuses a ctx with no tenant at all (pkgcore.ErrNoTenant), so the
+	// caller must rebuild the tenant ctx itself -- exactly what a real
+	// job-handler-style caller does from its stored tenant id.
+	result, err := complianceModule.Export().Export(
+		pkgcore.WithTenant(context.Background(), "tenant-acme"), "tenant-acme")
 	if err != nil {
 		t.Fatalf("Export: %v", err)
 	}
