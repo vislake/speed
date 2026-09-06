@@ -1273,6 +1273,17 @@ describe('caller cancellation', () => {
     // Let the request reach the point where it is genuinely reading
     // the body (the stream's pull has been requested).
     await waitForReadStart(body)
+    // The first pull -- waitForReadStart's signal -- can fire while the
+    // request is still settling its fetch, and an abort at that moment
+    // is answered by the fetch path that both the fixed and the
+    // pre-fix code share. Flush the whole microtask chain so the
+    // request genuinely settles and suspends on the stalled body read:
+    // an abort then lands mid-read, where the fix's trigger is the
+    // only thing that answers it. (The pre-fix code waited on the
+    // never-settling stream with no abort wiring and hung.)
+    for (let i = 0; i < 2000; i += 1) {
+      await Promise.resolve()
+    }
     controller.abort()
     await rejection
     expect(standin.calls).toHaveLength(1)
@@ -1297,6 +1308,17 @@ describe('caller cancellation', () => {
     // Let the request reach the point where it is genuinely reading
     // the body (the stream's pull has been requested).
     await waitForReadStart(body)
+    // The first pull -- waitForReadStart's signal -- can fire while the
+    // request is still settling its fetch, and an abort at that moment
+    // is answered by the fetch path that both the fixed and the
+    // pre-fix code share. Flush the whole microtask chain so the
+    // request genuinely settles and suspends on the stalled body read:
+    // an abort then lands mid-read, where the fix's trigger is the
+    // only thing that answers it. (The pre-fix code waited on the
+    // never-settling stream with no abort wiring and hung.)
+    for (let i = 0; i < 2000; i += 1) {
+      await Promise.resolve()
+    }
     controller.abort()
     await rejection
     expect(standin.calls).toHaveLength(1)
