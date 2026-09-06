@@ -197,6 +197,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -419,11 +420,38 @@ func scrubbedEnviron() []string {
 	return out
 }
 
+// syncBuffer is a bytes.Buffer safe for concurrent use. cmd.Start wires it
+// up as the subprocess's Stdout/Stderr, so an internal exec goroutine
+// copies the child's output into it for as long as the child runs, while
+// replica.logs() reads it back from the test goroutine -- concurrently,
+// whenever a test polls logs() before the child exits (e.g. this
+// directory's warmUpChildSmileSimSubscription and its eventually-based SMS
+// wait). A plain bytes.Buffer is not safe for that concurrent read/write
+// (caught by the race detector against
+// TestServer_RealRedisEventBusComposition_SmileSimCompletionCrossesProcesses),
+// so every access goes through the mutex here instead.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // replica is one booted reference-app child process.
 type replica struct {
 	cmd     *exec.Cmd
-	stdout  *bytes.Buffer
-	stderr  *bytes.Buffer
+	stdout  *syncBuffer
+	stderr  *syncBuffer
 	baseURL string
 	exited  chan struct{}
 }
@@ -432,6 +460,45 @@ type replica struct {
 // message.
 func (r *replica) logs() string {
 	return "child stdout:\n" + r.stdout.String() + "\nchild stderr:\n" + r.stderr.String()
+}
+
+// TestReplicaLogs_ConcurrentWriteAndRead_NoRace reproduces, without Docker
+// or a real reference-app binary, the exact race warmUpChildSmileSimSubscription
+// (demo_notification_smilesim_redis_test.go) hits against a live child: a
+// subprocess still writing to its captured stdout on os/exec's own
+// background copy goroutine, while this test's own goroutine concurrently
+// calls replica.logs (String) in a polling loop before the child has
+// exited. Before syncBuffer replaced the plain *bytes.Buffer this type
+// used to wrap, `go test -race` failed this test with "DATA RACE" every
+// run; with syncBuffer in place it passes.
+func TestReplicaLogs_ConcurrentWriteAndRead_NoRace(t *testing.T) {
+	cmd := exec.Command("sh", "-c", "i=0; while [ $i -lt 200 ]; do echo \"line $i\"; i=$((i+1)); done")
+	r := &replica{
+		cmd:    cmd,
+		stdout: new(syncBuffer),
+		stderr: new(syncBuffer),
+		exited: make(chan struct{}),
+	}
+	cmd.Stdout, cmd.Stderr = r.stdout, r.stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start subprocess: %v", err)
+	}
+	go func() {
+		_ = cmd.Wait()
+		close(r.exited)
+	}()
+
+	// Read concurrently with the still-running child's write goroutine,
+	// exactly like warmUpChildSmileSimSubscription's polling loop does
+	// against a real replica.
+	for {
+		_ = r.logs()
+		select {
+		case <-r.exited:
+			return
+		default:
+		}
+	}
 }
 
 // bootReplica builds bin (already built by the caller) as a subprocess with
@@ -447,8 +514,8 @@ func bootReplica(t *testing.T, bin string, port int, env []string) *replica {
 	cmd.Env = env
 	r := &replica{
 		cmd:     cmd,
-		stdout:  new(bytes.Buffer),
-		stderr:  new(bytes.Buffer),
+		stdout:  new(syncBuffer),
+		stderr:  new(syncBuffer),
 		baseURL: "http://127.0.0.1:" + strconv.Itoa(port),
 		exited:  make(chan struct{}),
 	}
