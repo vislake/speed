@@ -28,25 +28,40 @@ package main
 // its Complete) and this round's ai-gateway.image.generate job for the
 // SAME request now run concurrently on buildServer's one shared
 // jobs.StandaloneQueue (WorkerCount 4 by default) against the app's one
-// file-backed SQLite database -- an ordinary single-writer contention
-// between two independent worker goroutines, not the AuditBus
-// same-goroutine self-deadlock go/dbkit/AGENTS.md's "Known limitation"
-// section describes (that one, per its own doc comment, is NOT fixed by a
-// busy timeout; this one would be, by ordinary SQLite `busy_timeout`
-// contention-retry semantics -- ordinary contention, unlike a
-// self-deadlock, resolves once the other writer's transaction commits).
-// go/jobs' own retry/backoff is the existing, working mitigation: the
-// losing attempt logs "job attempt failed, scheduling retry" with error
-// "storage.internal_error: database is locked (5) (SQLITE_BUSY)" and
-// succeeds on its very next attempt, which is why this test's own
-// assertions (including on Attempts via the job's final state) still pass
-// deterministically. Genuinely removing the WARN line would mean either a
-// dbkit-wide SQLite DSN change (a `busy_timeout` pragma) or a queue
-// concurrency change in this app's own wiring (examples/reference-app/
-// cmd/server/server.go's shared StandaloneQueue) -- both cross-cutting
-// changes outside go/ai-gateway's own round, so this is recorded here and
-// in go/ai-gateway/AGENTS.md's "Known limitations / deferred" section
-// rather than silently worked around inside this round's tests.
+// file-backed SQLite database. The root cause is now precisely known: the
+// derive job's gate (go/storage/repository.go's insertDerivativeIfAbsent)
+// is a read-then-write transaction, and SQLite answers such a
+// transaction's write -- upgrading the SHARED lock its earlier gate
+// SELECT holds -- with an immediate SQLITE_BUSY whenever another
+// connection holds the write lock, refusing the upgrade without
+// consulting the busy handler, so no busy_timeout setting changes the
+// outcome (the ~13 ms duration_ms on the WARN is that immediacy; the
+// boundary is spelled out in go/dbkit/AGENTS.md's "SQLite busy timeout"
+// section). It is neither the AuditBus same-goroutine self-deadlock
+// (go/dbkit/AGENTS.md's "Audit trail collection" limitation) nor ordinary
+// busy-timeout contention. go/jobs' own retry/backoff is the existing,
+// working convergence mechanism: the losing attempt logs "job attempt
+// failed, scheduling retry" with error "storage.internal_error: database
+// is locked (5) (SQLITE_BUSY)" and succeeds on its very next attempt,
+// which is why this test's own assertions (including on Attempts via the
+// job's final state) still pass deterministically. The dbkit-wide SQLite
+// DSN change once floated as a cure has since landed -- as of 2026-09-06
+// dbkit's dialect/sqlite factory declares _pragma=busy_timeout(5000)
+// explicitly on every connection -- and the WARN is not eliminated: the
+// immediate-`SQLITE_BUSY` failure is a deterministic property of the
+// gate's transaction shape, pinned in isolation by
+// go/dbkit/dialect/sqlite/busy_timeout_test.go's read-then-write-upgrade
+// test, while whether this test run actually hits the collision is
+// scheduling-dependent -- 140 consecutive runs in the 2026-09-06 dbkit
+// round's environment logged none, so neither "reproduces on every run"
+// nor "gone" is claimable from test runs alone, and a WARN-free run does
+// not mean the race is gone. Genuinely removing the WARN line now means
+// go/storage-module work on the gate's transaction shape (taking the
+// write lock first, e.g. BEGIN IMMEDIATE) or a queue-concurrency change
+// in this app's own wiring (cmd/server/server.go's shared
+// StandaloneQueue); recorded here and in go/ai-gateway/AGENTS.md's
+// "Known limitations / deferred" section rather than silently worked
+// around inside this round's tests.
 
 import (
 	"bytes"
