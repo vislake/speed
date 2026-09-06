@@ -10,6 +10,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	obs "github.com/vislake/speed/go/observability"
+	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/i18n"
 	"github.com/vislake/speed/go/ratelimit"
 )
@@ -283,13 +284,30 @@ func (s *InviteService) Invite(ctx context.Context, req InviteRequest) (*InviteR
 
 // Accept turns a token into a membership for userID.
 //
-// The invitation is resolved STRICTLY inside the tenant the context already
-// carries: the token is hashed, and the row is looked up tenant-scoped. The
-// tenant is never read out of the token, out of a parameter or out of a
-// header, so "never accept a caller-supplied tenant id" holds absolutely --
-// a token minted for another tenant reports ErrInvitationNotFound and
-// reveals nothing. This is why the invitation link has to point at the
-// tenant's own host.
+// The tenant the invitation lives in comes from the token itself, resolved
+// server-side, never from the caller's context, a parameter or a header:
+//
+//   - A caller whose context carries NO tenant -- a freshly invited person
+//     has no membership in the inviting tenant yet and typically no bearer
+//     token at all, which is exactly the caller acceptance must serve --
+//     resolves the tenant through invitationTokenIndex, the narrow
+//     non-tenant-scoped token_hash -> tenant_id table this module writes
+//     alongside every invitation (InvitationRepository.createPending), and
+//     then re-enters the ordinary tenant-scoped flow below with
+//     pkgcore.WithTenant. This is go/sharing's AccessPublic shape: the
+//     bearer token the invitee holds IS the credential (it was delivered to
+//     the addressed mailbox alone), so no pre-existing tenant claim is
+//     needed to use it -- and an invitation link may therefore point at any
+//     host that reaches this service, not only the inviting tenant's own.
+//   - A caller whose context DOES carry a tenant (a host that still runs
+//     accept downstream of tenant-resolving middleware, or an internal
+//     caller acting for a member of the inviting tenant) is served
+//     byte-for-byte as before: the token is hashed and the row is looked up
+//     tenant-scoped, so a token minted for another tenant reports
+//     ErrInvitationNotFound and reveals nothing about it.
+//
+// Either way the invitation row is never read out of the tenant it belongs
+// to, and "never accept a caller-supplied tenant id" holds absolutely.
 //
 // The membership creation is idempotent, so a user who somehow already has a
 // seat keeps the one they have rather than gaining a second. Accepting the
@@ -313,7 +331,22 @@ func (s *InviteService) Accept(ctx context.Context, token, userID string) (*Memb
 	if userID == "" {
 		return nil, ErrMembershipNotFound.WithParam("user_id", userID)
 	}
-	invitation, err := s.repo.byTokenHash(ctx, hashInvitationToken(token))
+	hash := hashInvitationToken(token)
+	if _, ok := pkgcore.TenantFromContext(ctx); !ok {
+		// A tenantless acceptor: resolve the invitation's own tenant from
+		// the token and enter it. The resolved tenant replaces whatever the
+		// context may otherwise carry -- pkgcore.WithTenant overwrites --
+		// so the tenant-scoped flow below runs strictly inside the
+		// invitation's tenant either way. See the method doc comment for
+		// why this resolution is the one deliberately narrow platform-data
+		// read org performs.
+		tenant, err := s.repo.tenantForTokenHash(ctx, hash)
+		if err != nil {
+			return nil, err
+		}
+		ctx = pkgcore.WithTenant(ctx, tenant)
+	}
+	invitation, err := s.repo.byTokenHash(ctx, hash)
 	if err != nil {
 		return nil, err
 	}

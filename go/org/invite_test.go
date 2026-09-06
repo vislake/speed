@@ -397,6 +397,128 @@ func TestInviteService_Accept_CreatesTheMembership(t *testing.T) {
 	}
 }
 
+// TestInviteService_Accept_NoTenantInContext_ResolvesTenantFromToken is the
+// service-level half of the tenantless-accept flow: a caller with NO tenant
+// context at all -- the freshly invited person, who has no membership in
+// and typically no bearer token for the inviting tenant -- presents the
+// token, and Accept resolves the invitation's own tenant from it through
+// the narrow org_invitation_token_index row createPending wrote alongside
+// the invitation, then creates the membership inside that tenant exactly as
+// the tenant-scoped path always has. Before this round such a caller could
+// not accept at all: every tenant-scoped read underneath failed closed on
+// the missing tenant (and a host's middleware refused the request before
+// org's handler was ever reached).
+func TestInviteService_Accept_NoTenantInContext_ResolvesTenantFromToken(t *testing.T) {
+	f := newInviteFixture(t)
+	result := f.invite(t, "ada@example.test")
+
+	tenantless := context.Background()
+	membership, err := f.m.Invitations().Accept(tenantless, result.Token, "u-ada")
+	if err != nil {
+		t.Fatalf("Accept with no tenant context: %v", err)
+	}
+	if membership.NodeID != f.left.ID || !membership.IsActive() {
+		t.Errorf("membership = %+v, want an active one at %q", membership, f.left.ID)
+	}
+	// The membership landed in the invitation's OWN tenant, not in whatever
+	// (nothing, here) the caller's context named.
+	if membership.TenantID != "tenant-a" {
+		t.Errorf("membership.TenantID = %q, want tenant-a", membership.TenantID)
+	}
+
+	// The invitation row flipped to accepted under that same tenant, and the
+	// joined event announced the tenant it actually happened in.
+	stored, err := f.m.Invitations().Repository().FindByID(tenantCtx("tenant-a"), result.Invitation.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if stored.Status != InvitationStatusAccepted || stored.AcceptedAt == nil {
+		t.Errorf("stored invitation = status %q, acceptedAt %v; want accepted with a timestamp",
+			stored.Status, stored.AcceptedAt)
+	}
+	joined := f.host.bus.events(EventMemberJoined)
+	if len(joined) != 1 {
+		t.Fatalf("published %d member-joined events, want 1", len(joined))
+	}
+	if joined[0].TenantID != "tenant-a" {
+		t.Errorf("joined event TenantID = %q, want tenant-a -- the re-entered tenant must reach the event",
+			joined[0].TenantID)
+	}
+}
+
+// TestInviteService_Accept_NoTenantInContext_ReplayStillReportsAlreadyAccepted
+// pins the single-use answer on the tenantless path: a token accepted once
+// through the tenantless entry point is terminal for a second tenantless
+// presentation too -- the status checks and the compare-and-swap run inside
+// the resolved tenant exactly as they do for a tenant-scoped caller, so the
+// replay is reported, not silently accepted, and creates no second
+// membership.
+func TestInviteService_Accept_NoTenantInContext_ReplayStillReportsAlreadyAccepted(t *testing.T) {
+	f := newInviteFixture(t)
+	result := f.invite(t, "ada@example.test")
+
+	tenantless := context.Background()
+	if _, err := f.m.Invitations().Accept(tenantless, result.Token, "u-ada"); err != nil {
+		t.Fatalf("first Accept: %v", err)
+	}
+	if _, err := f.m.Invitations().Accept(tenantless, result.Token, "u-ada"); !hasCode(err, ErrInvitationAlreadyAccepted.Code) {
+		t.Errorf("second tenantless Accept error = %v, want org.invitation_already_accepted", err)
+	}
+}
+
+// TestInviteService_Accept_NoTenantInContext_TerminalStatesStillReported pins
+// the revoked and expired answers on the tenantless path: the index row is
+// deliberately never updated (see invitationTokenIndex's own doc comment),
+// so a revoked or expired token still resolves its tenant and reaches the
+// ordinary status checks -- which answer org.invitation_revoked /
+// org.invitation_expired, never a misleading "no such invitation".
+func TestInviteService_Accept_NoTenantInContext_TerminalStatesStillReported(t *testing.T) {
+	t.Run("revoked", func(t *testing.T) {
+		f := newInviteFixture(t)
+		result := f.invite(t, "ada@example.test")
+		if err := f.m.Invitations().Revoke(f.ctx, result.Invitation.ID); err != nil {
+			t.Fatalf("Revoke: %v", err)
+		}
+		if _, err := f.m.Invitations().Accept(context.Background(), result.Token, "u-ada"); !hasCode(err, ErrInvitationRevoked.Code) {
+			t.Errorf("tenantless Accept(revoked) error = %v, want org.invitation_revoked", err)
+		}
+	})
+	t.Run("expired", func(t *testing.T) {
+		f := newInviteFixture(t)
+		result := f.invite(t, "ada@example.test")
+		f.m.invites.now = func() time.Time { return result.Invitation.ExpiresAt.Add(time.Second) }
+		if _, err := f.m.Invitations().Accept(context.Background(), result.Token, "u-ada"); !hasCode(err, ErrInvitationExpired.Code) {
+			t.Errorf("tenantless Accept(expired) error = %v, want org.invitation_expired", err)
+		}
+	})
+}
+
+// TestInviteService_Accept_NoTenantInContext_UnknownToken_IsNotFound pins the
+// unrecognized-token answer on the tenantless path: a hash the index has
+// never seen reports org.invitation_not_found, the same sentinel a
+// tenant-scoped caller sees for an unrecognized token under its own tenant.
+func TestInviteService_Accept_NoTenantInContext_UnknownToken_IsNotFound(t *testing.T) {
+	f := newInviteFixture(t)
+	f.invite(t, "ada@example.test")
+
+	if _, err := f.m.Invitations().Accept(context.Background(), "a-token-nobody-issued", "u-ada"); !hasCode(err, ErrInvitationNotFound.Code) {
+		t.Errorf("tenantless Accept(unknown token) error = %v, want org.invitation_not_found", err)
+	}
+}
+
+// TestInviteService_Accept_NoTenantInContext_EmptyUserIsRefused pins the
+// fail-closed order on the tenantless path: an unidentified acceptor is
+// refused before the token is even resolved, exactly as on the tenant-scoped
+// path.
+func TestInviteService_Accept_NoTenantInContext_EmptyUserIsRefused(t *testing.T) {
+	f := newInviteFixture(t)
+	result := f.invite(t, "ada@example.test")
+
+	if _, err := f.m.Invitations().Accept(context.Background(), result.Token, ""); !hasCode(err, ErrMembershipNotFound.Code) {
+		t.Errorf("tenantless Accept with no user error = %v, want org.membership_not_found", err)
+	}
+}
+
 // TestInviteService_Accept_CrossTenantToken_ReturnsInvitationNotFound is the
 // assertion behind "never accept a caller-supplied tenant id": the token is
 // resolved strictly inside the tenant the context already carries, so a token

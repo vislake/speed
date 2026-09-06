@@ -15,7 +15,11 @@ info:
     path, query, header or request/response body: the tenant is always the
     one tenancy.Middleware already resolved from the request
     (docs/internal/04-data-and-tenancy.md; root CLAUDE.md's multi-tenant
-    isolation rule).
+    isolation rule) -- with one operation-wide exception, org_acceptInvitation,
+    whose caller a freshly invited person has no membership in and typically
+    no token for the inviting tenant: that operation resolves the tenant
+    itself, server-side, from the invitation token (see the operation's own
+    description and go/org/AGENTS.md's "Acceptance is tenantless").
 
     Merging this fragment into an application-wide build/openapi/speed.yaml
     stays future work until the merge tooling lands (see
@@ -354,12 +358,24 @@ paths:
   /api/v1/org/invitations/accept:
     post:
       operationId: org_acceptInvitation
-      summary: Accept an invitation, becoming a member of the caller's tenant.
+      summary: Accept an invitation, joining the tenant that issued it.
       description: >-
-        The invitation is resolved strictly inside the tenant the caller's
-        access token already names; the tenant is never read out of the
-        token, so an invitation minted for another tenant reports 404 and
-        reveals nothing about it.
+        The tenant comes from the invitation token itself, resolved
+        server-side -- never from the caller's access token, a parameter, a
+        header or the body. The caller needs no membership in, and typically
+        holds no token for, the inviting tenant: that is the entire situation
+        a freshly invited person is in, which is also why an invitation link
+        may point at any host that reaches this endpoint rather than only at
+        the inviting tenant's own. The token is hashed and resolved through
+        the module's narrow non-tenant-scoped token index (see
+        invitation.go's invitationTokenIndex); every status check, the
+        single-use claim and the membership creation then run strictly
+        inside the tenant the index row names, exactly as they always have,
+        and a caller whose request already carries that tenant is served
+        unchanged. Who the membership binds is the caller identity the
+        host's SubjectResolver attests (401 when it cannot), never a value
+        the request body supplies -- the body carries the token only, and
+        an unrecognized token reports 404 and reveals nothing.
       requestBody:
         required: true
         content:
@@ -380,13 +396,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/OrgError'
         '404':
-          description: The token matches no pending invitation of this tenant.
+          description: The token matches no invitation org ever issued.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/OrgError'
         '409':
-          description: The invitation was already accepted or was revoked.
+          description: The invitation was already accepted, was revoked, or has expired.
           content:
             application/json:
               schema:

@@ -93,6 +93,91 @@ func TestInvitationRepository_AssertIsolated(t *testing.T) {
 	})
 }
 
+// TestInvitationTokenIndex_AssertNotTenantScoped proves org_invitation_token_index
+// is genuinely platform data, not tenant data: a row written with no tenant
+// in context is visible under an arbitrary one, and a row written under one
+// tenant is visible under another -- the exact opposite of AssertIsolated,
+// and the correct property for a table dbkit's tenant-scope GORM plugin must
+// never engage on (invitation.go's invitationTokenIndex doc comment explains
+// why, and go/sharing's shareTokenIndex suite is the identical precedent).
+func TestInvitationTokenIndex_AssertNotTenantScoped(t *testing.T) {
+	db := newInvitationTestDB(t)
+	i := 0
+	tenancytest.AssertNotTenantScoped(t, db, invitationTokenIndex{},
+		func(tx *gorm.DB) error {
+			i++
+			return tx.Create(&invitationTokenIndex{
+				TokenHash: hashInvitationToken(fmt.Sprintf("probe-token-%d", i)),
+				TenantID:  "irrelevant",
+			}).Error
+		},
+		func(tx *gorm.DB) (int64, error) {
+			var n int64
+			err := tx.Model(&invitationTokenIndex{}).Count(&n).Error
+			return n, err
+		},
+	)
+}
+
+// TestInvitationRepository_CreatePending_WritesTheTokenIndexRow is the
+// pairing assertion behind the tenantless Accept: every pending invitation
+// createPending commits carries its org_invitation_token_index row in the
+// same transaction, so tenantForTokenHash resolves the invitation's tenant
+// with NO tenant context at all -- exactly what InviteService.Accept needs
+// before it can re-enter the tenant-scoped flow. An unrecognized hash
+// reports org.invitation_not_found, the same sentinel the tenant-scoped
+// byTokenHash uses.
+func TestInvitationRepository_CreatePending_WritesTheTokenIndexRow(t *testing.T) {
+	db := newInvitationTestDB(t)
+	repo := NewInvitationRepository(db)
+	ctx := tenantCtx("tenant-a")
+	indexer := newTestEmailIndexer(t)
+
+	index, indexErr := indexer.Index("ada@example.test")
+	if indexErr != nil {
+		t.Fatalf("Index: %v", indexErr)
+	}
+	invitation := &Invitation{
+		ID:            "30000000-0000-4000-8000-0000000000aa",
+		NodeID:        "node-1",
+		Email:         "ada@example.test",
+		EmailIndex:    index,
+		InviterUserID: "u-inviter",
+		Locale:        "en-US",
+		TokenHash:     hashInvitationToken("issued-token"),
+		Status:        InvitationStatusPending,
+		ExpiresAt:     time.Now().Add(time.Hour),
+	}
+	if createErr := repo.createPending(ctx, indexer, "ada@example.test", invitation); createErr != nil {
+		t.Fatalf("createPending: %v", createErr)
+	}
+
+	tenant, tenantErr := repo.tenantForTokenHash(context.Background(), invitation.TokenHash)
+	if tenantErr != nil {
+		t.Fatalf("tenantForTokenHash: %v", tenantErr)
+	}
+	if tenant != "tenant-a" {
+		t.Errorf("tenant = %q, want tenant-a", tenant)
+	}
+
+	if _, lookupErr := repo.tenantForTokenHash(context.Background(), hashInvitationToken("never-issued")); !hasCode(lookupErr, ErrInvitationNotFound.Code) {
+		t.Errorf("tenantForTokenHash(unknown) error = %v, want org.invitation_not_found", lookupErr)
+	}
+
+	// The index row is narrow: it answers the tenant and nothing else, so a
+	// token lookup must never resolve a row whose invitation lives in
+	// another tenant than the one the index names -- and the tenant-scoped
+	// byTokenHash, re-entered under the resolved tenant, finds the very row
+	// createPending inserted.
+	inv, err := repo.byTokenHash(tenantCtx(tenant), invitation.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash under the resolved tenant: %v", err)
+	}
+	if inv.ID != invitation.ID {
+		t.Errorf("byTokenHash returned invitation %q, want %q", inv.ID, invitation.ID)
+	}
+}
+
 // TestInvitation_EmailIsStoredEncrypted is the security assertion behind the
 // serializer: the bytes on disk must not be the address. It reads the raw
 // column through a second, serializer-free model so the check cannot be

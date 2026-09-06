@@ -161,10 +161,12 @@ var (
 	// from inside the product.
 	ErrMemberNotRemovable = apperr.Conflict("org.member_not_removable")
 
-	// ErrInvitationNotFound reports a token that matches no pending
-	// invitation of the caller's tenant. A token minted for another tenant
-	// reports exactly this, because the lookup is tenant-scoped and the token
-	// itself is never trusted to name a tenant -- see InviteService.Accept.
+	// ErrInvitationNotFound reports a token that matches no invitation org
+	// ever issued. A token minted for another tenant reports exactly this to
+	// a tenant-scoped caller, because that lookup is tenant-scoped and the
+	// token itself is never trusted to name a tenant; a tenantless caller's
+	// hash misses the narrow token index the same way -- see
+	// InviteService.Accept.
 	ErrInvitationNotFound = apperr.NotFound("org.invitation_not_found")
 
 	// ErrInvitationExpired reports an invitation whose ExpiresAt has passed.

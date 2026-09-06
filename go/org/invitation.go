@@ -15,11 +15,17 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/pkgcore"
 )
 
 // tableInvitations is the org_invitations table name, shared by the model's
 // TableName and by the migrations' header comments.
 const tableInvitations = "org_invitations"
+
+// tableInvitationTokenIndex is the org_invitation_token_index table name,
+// shared by invitationTokenIndex's TableName and by the migrations' header
+// comments.
+const tableInvitationTokenIndex = "org_invitation_token_index"
 
 // EmailSerializerName is the GORM serializer name the Invitation.Email
 // column is encrypted under.
@@ -154,6 +160,87 @@ func (i Invitation) IsPending(now time.Time) bool {
 // compile-time check that Invitation satisfies dbkit.TenantScoped.
 var _ dbkit.TenantScoped = Invitation{}
 
+// invitationTokenIndex is the narrow, deliberately non-tenant-scoped row
+// that resolves an invitation token's owning tenant before any tenant is
+// known at all -- the mechanism InviteService.Accept uses when the accepting
+// caller holds no tenant context (a freshly invited person has no membership
+// in -- and typically no token for -- the inviting tenant yet, which is the
+// whole reason acceptance used to be impossible for the very caller
+// invitations exist for).
+//
+// It is go/sharing's shareTokenIndex pattern, adopted for org's invitation
+// token: the exact same shape, the same data-domain reasoning, and the same
+// "write alongside the row it indexes, read only by the tenantless entry
+// point, never updated" lifecycle. Compare that type's doc comment in
+// go/sharing/model.go for the full argument; this one records only what is
+// org-specific.
+//
+// # Data domain
+//
+// Platform data (docs/internal/04-data-and-tenancy.md's data-domain table),
+// NOT tenant data, and deliberately so: a tenantless acceptor holds no
+// tenant claim for dbkit's tenant-scope GORM plugin to filter by, and that
+// plugin fails every tenant-scoped query closed when the context carries
+// none (go/dbkit's tenant_scope.go) -- correctly, since it has no way to
+// tell "this caller is allowed to look this up with no tenant" apart from an
+// ordinary forgotten-tenant bug. The same repository-wide rule root
+// CLAUDE.md states for identity/platform data applies here without
+// exception: this table implements no dbkit.TenantScoped, is reached through
+// dbkit.Open()'s plain *gorm.DB (never dbkit.Repository[T], whose generic
+// constraint requires TenantScoped, which this type must NOT implement), and
+// its isolation suite is tenancytest.AssertNotTenantScoped, not
+// AssertIsolated -- the identical treatment go/authn's users table,
+// go/jobs's jobRecord, go/config's row, go/dbkit/audit's AuditEvent and
+// go/sharing's own token index already get for the same reason: something
+// that must be resolvable before a tenant is known cannot itself be
+// tenant-scoped.
+//
+// # Deliberately narrow
+//
+// This is NOT a general cross-tenant query capability, and carries nothing
+// that would make it one: two columns, a token hash and the tenant it
+// belongs to, nothing else -- no invitation id, no node, no status, no
+// expiry. A row here answers exactly one question ("which tenant does this
+// hash belong to") and nothing further; every other question about the
+// invitation it names -- is it pending, revoked, expired -- is still
+// answered exclusively by the ordinary tenant-scoped org_invitations row,
+// reached only after this lookup hands back a tenant to attach to ctx.
+//
+// # Written alongside its invitation, read only by the tenantless Accept
+//
+// InvitationRepository.createPending inserts this row in the same database
+// transaction as its org_invitations row, so an invitation is never left
+// reachable by its own tenant (via the tenant-scoped byTokenHash, when the
+// accepting caller already holds that tenant) while being permanently
+// unreachable by a tenantless caller holding the same token -- an
+// inconsistency a two-step, non-transactional write could otherwise leave
+// behind indefinitely, since nothing else in this module ever repairs a
+// missing index row. It is never updated afterward: Revoke and Accept leave
+// it in place, because the tenantless Accept needs it to resolve a tenant
+// and reach the ordinary tenant-scoped path even for a token whose
+// invitation has since been accepted or revoked -- exactly how that path is
+// meant to answer the case (org.invitation_already_accepted /
+// org.invitation_revoked, not a dead end before it is ever reached).
+type invitationTokenIndex struct {
+	// TokenHash is the hex-encoded SHA-256 of the invitation token -- the
+	// exact same value Invitation.TokenHash stores, and the primary key
+	// here: two tokens hashing to the same value is cryptographically
+	// negligible (see hashInvitationToken), so the constraint is cheap
+	// insurance, not a meaningfully defended invariant.
+	TokenHash string `gorm:"column:token_hash;primaryKey;size:64"`
+
+	// TenantID is the plain, unenforced tenant identifier this row exists
+	// to answer -- unenforced in the identical sense every other
+	// platform-data table's tenant_id column is (go/jobs's jobRecord,
+	// go/config's row, go/dbkit/audit's AuditEvent): a real column, never
+	// filtered or populated by dbkit's tenant-scope plugin, because this
+	// type implements no TenantScoped.
+	TenantID string `gorm:"column:tenant_id;size:64;not null"`
+}
+
+// TableName names the org_invitation_token_index table.
+func (invitationTokenIndex) TableName() string { return tableInvitationTokenIndex }
+
 // maxEmailLen is the longest address org accepts, the length limit RFC 5321
 // puts on a forward path. Bounded in Go for the same reason node names are:
 // SQLite does not enforce a column width under type affinity, and the column
@@ -248,8 +335,12 @@ func NewInvitationRepository(db *gorm.DB) *InvitationRepository {
 //
 // The tenant scoping is the security property that matters here: a token
 // minted for another tenant simply does not match, so nothing about it can
-// be learned, and the tenant is never taken from the token itself. See
-// InviteService.Accept for why that ordering is not negotiable.
+// be learned. The tenant is never taken from the token itself -- it comes
+// either from the request context (a caller tenancy.Middleware already
+// resolved) or, for a tenantless acceptor, from the deliberately narrow
+// invitationTokenIndex row tenantForTokenHash resolves first and attaches
+// with pkgcore.WithTenant. See InviteService.Accept for why that ordering is
+// not negotiable.
 func (r *InvitationRepository) byTokenHash(ctx context.Context, hash string) (*Invitation, error) {
 	var inv Invitation
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
@@ -296,10 +387,11 @@ func (r *InvitationRepository) acceptIfPending(ctx context.Context, id string, a
 }
 
 // createPending revokes every pending invitation already outstanding for
-// invitation's own address, then inserts invitation, both inside ONE
-// dbkit.WithTenantSession transaction -- the atomic replacement for the
-// separate revokePendingFor-then-Create shape InviteService.Invite used to
-// run as two independent transactions.
+// invitation's own address, then inserts invitation and its
+// invitationTokenIndex row, all inside ONE dbkit.WithTenantSession
+// transaction -- the atomic replacement for the separate
+// revokePendingFor-then-Create shape InviteService.Invite used to run as
+// two independent transactions.
 //
 // # The race this closes
 //
@@ -317,7 +409,7 @@ func (r *InvitationRepository) acceptIfPending(ctx context.Context, id string, a
 //
 // # The fix
 //
-// Two writes, in order, no read of anything in between -- so this
+// Three writes, in order, no read of anything in between -- so this
 // transaction's first statement is a write, the same reasoning
 // lockLiveNode's own doc comment in repository.go gives for why that keeps
 // SQLite out of the read-then-write lock-upgrade hazard:
@@ -337,14 +429,26 @@ func (r *InvitationRepository) acceptIfPending(ctx context.Context, id string, a
 //     database lets exactly one INSERT succeed; the other's INSERT fails
 //     with gorm.ErrDuplicatedKey, translated by the caller
 //     (InviteService.Invite) into the coded ErrInvitationAlreadyPending.
+//  3. The invitationTokenIndex row: the same transaction also writes the
+//     narrow token_hash -> tenant_id index row that lets a TENANTLESS
+//     acceptor resolve this invitation's tenant (see that type's own doc
+//     comment). The two writes share the tenant-scope GORM plugin's
+//     session exactly like go/sharing's createWithTokenIndex: the plugin
+//     forces invitation's tenant_id the way every tenant-scoped Create
+//     relies on, and does not touch invitationTokenIndex at all, since
+//     that type implements no dbkit.TenantScoped.
 //
-// createPending itself does not translate that error -- it returns
-// whatever the transaction returns, unwrapped, so its caller can compose it
-// with whatever else it needs to report.
+// createPending itself does not translate any error -- it returns whatever
+// the transaction returns, unwrapped, so its caller can compose it with
+// whatever else it needs to report.
 func (r *InvitationRepository) createPending(ctx context.Context, indexer *dbkit.BlindIndexer, email string, invitation *Invitation) error {
 	cond, err := indexer.Equal(email)
 	if err != nil {
 		return ErrInvalidEmail.WithCause(err)
+	}
+	tenant, err := pkgcore.MustTenantFromContext(ctx)
+	if err != nil {
+		return err
 	}
 	return dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
 		if err := tx.
@@ -354,8 +458,57 @@ func (r *InvitationRepository) createPending(ctx context.Context, indexer *dbkit
 			Updates(&Invitation{Status: InvitationStatusRevoked}).Error; err != nil {
 			return err
 		}
-		return tx.Create(invitation).Error
+		if err := tx.Create(invitation).Error; err != nil {
+			return err
+		}
+		idx := &invitationTokenIndex{TokenHash: invitation.TokenHash, TenantID: string(tenant)}
+		return tx.Create(idx).Error
 	})
+}
+
+// tenantForTokenHash resolves the tenant an invitation token hash belongs
+// to, with NO tenant predicate anywhere in the query -- the one deliberately
+// narrow exception to this module's "every query is tenant-scoped" rule, and
+// the mechanism invitationTokenIndex's own doc comment justifies in full: an
+// accepting invitee holds no tenant claim (a freshly invited person has no
+// membership in the inviting tenant yet, which is the whole point), so
+// nothing about their request can scope this lookup by tenant before it runs
+// -- that is precisely the property this method exists to establish, not
+// violate.
+//
+// This is not a second byTokenHash and not a general cross-tenant query
+// capability: it reads invitationTokenIndex, a table that was never
+// tenant-scoped to begin with (see that type's own doc comment for the full
+// data-domain reasoning), through an ordinary, unfiltered query -- dbkit's
+// tenant-scope GORM plugin never engages here at all, because the plugin
+// only ever acts on a model implementing dbkit.TenantScoped, and
+// invitationTokenIndex deliberately does not. Nothing here reaches for raw
+// SQL, pkgcore.WithSystemContext, or any other escape hatch around a
+// tenant-scoped query -- there is no tenant-scoped query to escape, because
+// this method touches a different, narrower table than byTokenHash does. It
+// returns a tenant id and nothing else: no invitation id, no node, no
+// status, so a caller cannot use this method to learn anything about an
+// invitation beyond which tenant a token's hash belongs to.
+//
+// InviteService.Accept is this method's only caller: a tenantless Accept
+// resolves the tenant here, attaches it to ctx with pkgcore.WithTenant, and
+// then runs the ordinary tenant-scoped flow unchanged -- byTokenHash's own
+// lookup, the status checks, the single-use compare-and-swap and the
+// membership creation all still happen exactly where they always have. An
+// unrecognized hash here returns ErrInvitationNotFound, the same sentinel
+// byTokenHash returns for an unrecognized hash under a known tenant, so a
+// caller cannot distinguish "no such token anywhere" from "no such token in
+// the tenant it otherwise resolved to".
+func (r *InvitationRepository) tenantForTokenHash(ctx context.Context, hash string) (pkgcore.TenantID, error) {
+	var idx invitationTokenIndex
+	err := r.db.WithContext(ctx).Where("token_hash = ?", hash).First(&idx).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return "", ErrInvitationNotFound
+	case err != nil:
+		return "", ErrInternal.WithCause(err)
+	}
+	return pkgcore.TenantID(idx.TenantID), nil
 }
 
 // byStatus returns the caller tenant's invitations in the given status,

@@ -161,7 +161,7 @@ type ServerInterface interface {
 	// OrgCreateInvitation Invite a person into the caller's tenant, at a node.
 	// (POST /api/v1/org/invitations)
 	OrgCreateInvitation(w http.ResponseWriter, r *http.Request)
-	// OrgAcceptInvitation Accept an invitation, becoming a member of the caller's tenant.
+	// OrgAcceptInvitation Accept an invitation, joining the tenant that issued it.
 	// (POST /api/v1/org/invitations/accept)
 	OrgAcceptInvitation(w http.ResponseWriter, r *http.Request)
 	// OrgListMembers List the members bound to a node's subtree.

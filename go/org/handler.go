@@ -21,11 +21,16 @@ const jsonContentType = "application/json; charset=utf-8"
 // compile failure instead of a runtime surprise).
 //
 // It must run downstream of tenancy.Middleware on a non-allowlisted path:
-// every method reads the tenant tenancy.Middleware already resolved into the
-// request context -- via pkgcore.MustTenantFromContext, both directly here
-// and, redundantly, again inside every dbkit.Repository[T] call underneath
-// -- and never from a request parameter, header or body, per root CLAUDE.md's
-// multi-tenant isolation rule.
+// every method except OrgAcceptInvitation reads the tenant tenancy.Middleware
+// already resolved into the request context -- via pkgcore.MustTenantFromContext,
+// both directly here and, redundantly, again inside every dbkit.Repository[T]
+// call underneath -- and never from a request parameter, header or body, per
+// root CLAUDE.md's multi-tenant isolation rule. Accept is the deliberate
+// exception, and the host must let its path through tenant resolution (the
+// same allowlist treatment go/sharing's public access path needs): its
+// caller is a freshly invited person who by definition holds no target-tenant
+// claim yet, and InviteService.Accept resolves the tenant from the invitation
+// token itself, server-side -- see that method's own doc comment.
 //
 // The three services (tree, members, invites) are the SAME instances
 // Module.Register attached to the host's registry; Handler holds no data
@@ -369,11 +374,19 @@ func (h *Handler) OrgListInvitations(w http.ResponseWriter, r *http.Request) {
 // /api/v1/org/invitations/accept. The accepting user is the authenticated
 // caller SubjectResolver identifies, never a value the request body
 // supplies.
+//
+// It is the one org operation that deliberately does NOT call mustTenant:
+// the caller an invitation exists for is a freshly invited person with no
+// membership in -- and typically no token for -- the inviting tenant, so
+// tenancy.Middleware (or a host's equivalent) must let this path through
+// unresolved, and InviteService.Accept resolves the tenant itself, from the
+// invitation token, server-side. A request that happens to arrive with a
+// tenant already resolved is served exactly as it always was (see
+// InviteService.Accept's own doc comment for the two shapes). The rest of
+// this handler's fail-closed posture is unchanged: an unidentifiable caller
+// is refused with ErrSubjectUnresolved before the token is ever touched.
 func (h *Handler) OrgAcceptInvitation(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if _, ok := mustTenant(w, r); !ok {
-		return
-	}
 	userID, ok := h.resolveSubject(w, r)
 	if !ok {
 		return

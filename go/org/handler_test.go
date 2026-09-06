@@ -475,6 +475,54 @@ func TestHandler_OrgAcceptInvitation_Success(t *testing.T) {
 	}
 }
 
+// TestHandler_OrgAcceptInvitation_NoTenantInContext_Succeeds pins the accept
+// handler's one deliberate exception to mustTenant: the accepting caller
+// needs no tenant in the request context at all, because InviteService.Accept
+// resolves the invitation's own tenant from the token (the whole point of
+// the tenantless-accept flow -- a freshly invited person holds no
+// target-tenant claim yet). Every other org operation still requires a
+// resolved tenant; see TestHandler_MustTenant_NoTenantInContext_ReturnsInternalError,
+// which pins that the exception is accept alone.
+func TestHandler_OrgAcceptInvitation_NoTenantInContext_Succeeds(t *testing.T) {
+	inviteH, m, host := newTestHandler(t, fixedSubject{userID: "u-inviter", ok: true})
+	ctx := tenantCtx("tenant-a")
+	root, left, _ := seedTree(t, m.tree, ctx)
+	if _, err := m.members.Add(ctx, "u-inviter", root.ID); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	createRec := doRequest(inviteH, ctx, http.MethodPost, "/api/v1/org/invitations", api.OrgCreateInvitationRequest{
+		Email: "invitee@example.test", NodeID: left.ID,
+	})
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create invitation: status = %d, body %q", createRec.Code, createRec.Body.String())
+	}
+	messages := host.mailer.messages()
+	if len(messages) != 1 {
+		t.Fatalf("mailer recorded %d message(s), want 1", len(messages))
+	}
+	idx := strings.Index(messages[0].Text, testLinkBase)
+	if idx < 0 {
+		t.Fatal("no accept link found in the invitation email")
+	}
+	token := strings.TrimSpace(messages[0].Text[idx+len(testLinkBase):])
+	token, _, _ = strings.Cut(token, "\n")
+
+	acceptH := NewHandler(m.tree, m.members, m.invites, fixedSubject{userID: "u-invitee", ok: true})
+	acceptRec := doRequest(acceptH, context.Background(), http.MethodPost, "/api/v1/org/invitations/accept", api.OrgAcceptInvitationRequest{Token: token})
+	if acceptRec.Code != http.StatusOK {
+		t.Fatalf("tenantless accept: status = %d, body %q", acceptRec.Code, acceptRec.Body.String())
+	}
+	var membership api.OrgMembership
+	decodeBody(t, acceptRec, &membership)
+	if membership.UserID == nil || *membership.UserID != "u-invitee" {
+		t.Errorf("UserID = %v, want %q", membership.UserID, "u-invitee")
+	}
+	if membership.NodeID == nil || *membership.NodeID != left.ID {
+		t.Errorf("NodeID = %v, want %q", membership.NodeID, left.ID)
+	}
+}
+
 func TestHandler_MustTenant_NoTenantInContext_ReturnsInternalError(t *testing.T) {
 	h, _, _ := newTestHandler(t, nil)
 
