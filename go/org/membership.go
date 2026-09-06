@@ -341,20 +341,40 @@ func (r *MembershipRepository) removeIfNotLastActive(ctx context.Context, member
 
 // anyInNodes reports whether any membership of the caller's tenant is bound
 // to one of nodeIDs. It reads at most one row: the question is "is anybody
-// there", not "how many".
-//
-// It is TreeService's nodeMemberGuard, which is why the signature is the
-// stdlib-typed one that interface declares.
+// there", not "how many". It opens its own transaction, which is exactly
+// what TreeService.Delete's own doc comment explains this package no longer
+// calls into directly -- see anyInNodesTx, TreeService's actual
+// nodeMemberGuard method, for why the check needs to run inside the SAME
+// transaction as the delete it guards rather than a separate one of its own.
 func (r *MembershipRepository) anyInNodes(ctx context.Context, nodeIDs []string) (bool, error) {
+	var found bool
+	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		var innerErr error
+		found, innerErr = r.anyInNodesTx(tx, nodeIDs)
+		return innerErr
+	})
+	if err != nil {
+		return false, ErrInternal.WithCause(err)
+	}
+	return found, nil
+}
+
+// anyInNodesTx is anyInNodes's transaction-bound twin, run against an
+// already-open transaction instead of opening its own. It is TreeService's
+// nodeMemberGuard: Delete locks the subtree first (touchLockByID, this
+// method's own transaction's first statement) and calls this INSIDE that
+// same transaction, right after the lock succeeds and before the bulk
+// mark-delete statement runs -- see tree.go's Delete doc comment for why a
+// separate, ctx-bound call (opening its own transaction, the shape
+// anyInNodes above still offers for its own direct callers) would leave the
+// exact TOCTOU window this round's fix closes.
+func (r *MembershipRepository) anyInNodesTx(tx *gorm.DB, nodeIDs []string) (bool, error) {
 	if len(nodeIDs) == 0 {
 		return false, nil
 	}
 	var found []Membership
-	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
-		return tx.Where("node_id IN ?", nodeIDs).Limit(1).Find(&found).Error
-	})
-	if err != nil {
-		return false, ErrInternal.WithCause(err)
+	if err := tx.Where("node_id IN ?", nodeIDs).Limit(1).Find(&found).Error; err != nil {
+		return false, err
 	}
 	return len(found) > 0, nil
 }
@@ -436,6 +456,32 @@ func (s *MemberService) Add(ctx context.Context, userID, nodeID string) (*Member
 //
 // It is the shared core of Add and of the authn.user.created subscriber,
 // whose whole resilience contract rests on being safely repeatable.
+//
+// # Locking nodeID before creating the membership
+//
+// The original shape here was a plain, unlocked s.tree.Get(nodeID) read
+// followed by a separate s.repo.Create -- two independent statements with
+// nothing between them contending for any lock at all. That left a real
+// TOCTOU window against TreeService.Delete: Delete's own subtree scan and
+// mark-delete run in ONE transaction, but a plain read of nodeID here could
+// observe the node as live in the gap before that transaction commits, and
+// this call's own Create -- writing to a completely different table
+// (memberships), with no lock relationship to org_nodes at all -- would
+// then land regardless of what Delete's transaction was doing, leaving a
+// membership bound to a row Delete's cascade was already committing as
+// mark-deleted. See tree.go's Delete doc comment for the other half of this
+// same fix.
+//
+// The fix takes the identical lockLiveNode lock Delete's own transaction
+// takes on nodeID, inside ONE transaction that also creates the membership:
+// either this call's lock wins first (forcing a concurrent Delete of the
+// same node to wait behind it, so the membership it creates is never
+// invisible by the time Delete's own guard re-checks), or Delete's lock won
+// first (so this call blocks behind it and, once it resumes, correctly
+// finds nodeID mark-deleted and reports ErrNodeNotFound instead of
+// completing the insert). withRetry covers the same SQLite-contention and
+// PostgreSQL-deadlock cases every other lockLiveNode caller in this module
+// already retries through.
 func (s *MemberService) ensure(ctx context.Context, userID, nodeID string) (*Membership, bool, error) {
 	if userID == "" {
 		return nil, false, ErrMembershipNotFound.WithParam("user_id", userID)
@@ -447,37 +493,57 @@ func (s *MemberService) ensure(ctx context.Context, userID, nodeID string) (*Mem
 		return nil, false, err
 	}
 
-	node, err := s.tree.Get(ctx, nodeID)
-	if err != nil {
-		return nil, false, err
-	}
-
 	id := s.newID()
 	if err := validateNodeID(id); err != nil {
 		return nil, false, ErrInternal.WithCause(err)
 	}
-	m := &Membership{
-		ID:     id,
-		UserID: userID,
-		NodeID: node.ID,
-		Status: MembershipStatusActive,
-	}
-	if err := s.repo.Create(ctx, m); err != nil {
-		if errors.Is(err, gorm.ErrDuplicatedKey) {
-			// Lost the race against a concurrent create of the same
-			// membership. The unique index is the backstop behind the
-			// byUser pre-check above; report the row that won rather than
-			// an error, so ensure stays idempotent under concurrency and
-			// not only under sequential redelivery.
-			winner, findErr := s.repo.byUser(ctx, userID)
-			if findErr != nil {
-				return nil, false, findErr
+
+	var created *Membership
+	var winner *Membership
+	err := withRetry(func() error {
+		created, winner = nil, nil
+		return dbkit.WithTenantSession(ctx, s.repo.db, func(tx *gorm.DB) error {
+			node, lockErr := lockLiveNode(tx, nodeID)
+			if lockErr != nil {
+				if errors.Is(lockErr, gorm.ErrRecordNotFound) {
+					return ErrNodeNotFound.WithParam("node_id", nodeID)
+				}
+				return ErrInternal.WithCause(lockErr)
 			}
-			return winner, false, nil
-		}
+
+			m := &Membership{
+				ID:     id,
+				UserID: userID,
+				NodeID: node.ID,
+				Status: MembershipStatusActive,
+			}
+			if createErr := tx.Create(m).Error; createErr != nil {
+				if errors.Is(createErr, gorm.ErrDuplicatedKey) {
+					// Lost the race against a concurrent create of the same
+					// membership. The unique index is the backstop behind
+					// the byUser pre-check above; report the row that won
+					// rather than an error, so ensure stays idempotent under
+					// concurrency and not only under sequential redelivery.
+					var existing Membership
+					if findErr := tx.Where("user_id = ?", userID).First(&existing).Error; findErr != nil {
+						return ErrInternal.WithCause(findErr)
+					}
+					winner = &existing
+					return nil
+				}
+				return ErrInternal.WithCause(createErr)
+			}
+			created = m
+			return nil
+		})
+	})
+	if err != nil {
 		return nil, false, err
 	}
-	return m, true, nil
+	if winner != nil {
+		return winner, false, nil
+	}
+	return created, true, nil
 }
 
 // List returns every membership bound to nodeID or to any node beneath it,

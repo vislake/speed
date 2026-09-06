@@ -231,6 +231,65 @@ func TestConcurrentMoveAndCreateChild_TreeInvariantHolds_Postgres(t *testing.T) 
 	}
 }
 
+// TestConcurrentMoveAndCreateChild_InteriorDescendant_TreeInvariantHolds_Postgres
+// is the peer-review finding that TestConcurrentMoveAndCreateChild_TreeInvariantHolds_Postgres
+// above never actually covered: that test's CreateChild targets the exact
+// node being Moved (a.ID), a row Move already locks via lockLiveNode -- never
+// an INTERIOR DESCENDANT of the moved subtree (a-child), a row Move's
+// rewrite used to touch only through its own plain, unlocked subtree scan.
+// This is the tier that actually caught the bug: a real PostgreSQL server's
+// READ COMMITTED semantics let CreateChild's insert land, and commit,
+// entirely within the gap between Move's scan and that scan's later
+// per-row rewrite of a-child -- SQLite's coarser whole-file locking masks
+// this window, which is why the unit tier's SQLite twin of this test
+// (tree_test.go) could not reproduce it within its own round budget. The
+// fix, lockSubtree (repository.go), locks every row of the subtree before
+// trusting the scanned set is complete, not merely the two endpoints Move
+// already locked.
+func TestConcurrentMoveAndCreateChild_InteriorDescendant_TreeInvariantHolds_Postgres(t *testing.T) {
+	db := newPostgres(t)
+
+	const rounds = 60
+	for round := 0; round < rounds; round++ {
+		ctx := tenantCtx(pkgcore.TenantID(fmt.Sprintf("tenant-%d", round)))
+		tree := org.NewTreeService(db)
+		root, err := tree.CreateRoot(ctx, fmt.Sprintf("root-%d", round), "group")
+		if err != nil {
+			t.Fatalf("round %d: CreateRoot: %v", round, err)
+		}
+		a, err := tree.CreateChild(ctx, root.ID, "a", "group")
+		if err != nil {
+			t.Fatalf("round %d: CreateChild(a): %v", round, err)
+		}
+		b, err := tree.CreateChild(ctx, root.ID, "b", "group")
+		if err != nil {
+			t.Fatalf("round %d: CreateChild(b): %v", round, err)
+		}
+		aChild, err := tree.CreateChild(ctx, a.ID, "a-child", "group")
+		if err != nil {
+			t.Fatalf("round %d: CreateChild(a-child): %v", round, err)
+		}
+
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _ = tree.Move(ctx, a.ID, b.ID)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _ = tree.CreateChild(ctx, aChild.ID, "late-grandchild", "store")
+		}()
+		close(start)
+		wg.Wait()
+
+		assertTreeInvariant(t, tree, ctx, fmt.Sprintf("round %d", round))
+	}
+}
+
 // TestConcurrentMoveAndDelete_TreeInvariantHolds_Postgres is D2's third
 // required pairing: Move racing a cascade Delete of the node it is moving.
 func TestConcurrentMoveAndDelete_TreeInvariantHolds_Postgres(t *testing.T) {

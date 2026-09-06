@@ -1604,3 +1604,130 @@ func TestTreeService_ConcurrentRestoreAndCascadeDelete_NeverLandsOnADeadParent(t
 		assertNoOrphans(t, db, ctx, fmt.Sprintf("round %d", round))
 	}
 }
+
+// TestTreeService_ConcurrentMoveAndCreateChild_InteriorDescendant_TreeInvariantHolds
+// is the peer-review finding that TestTreeService_ConcurrentMoveAndCreateChild_TreeInvariantHolds
+// above never actually covered: that test's CreateChild targets the exact
+// node being Moved (a.ID), a row Move already locks via lockLiveNode -- it
+// never exercises a CreateChild targeting an INTERIOR DESCENDANT of the
+// moved subtree, a row Move's rewrite touches only through its own subtree
+// scan, never through an up-front lockLiveNode call the way the moved node
+// and the new parent are.
+//
+// Before this round's fix, Move's subtree scan was one plain, unlocked Find:
+// a concurrent CreateChild(a-child, ...) could insert its new row -- bound to
+// a-child's OLD, pre-move Path -- entirely within the gap between that scan
+// and Move's own later per-row rewrite of a-child, so the new grandchild
+// simply never appeared in the row set Move rewrote and kept a stale Path
+// forever. lockSubtree (repository.go) closes it by locking every row of the
+// subtree, not merely the two endpoints, before trusting the set is
+// complete.
+//
+// # Honest limits, exactly like this file's other four concurrent stress
+// tests
+//
+// SQLite's coarse, whole-file locking does not give this test the same
+// reproduction odds it gave the review's own adversarial harness against a
+// real PostgreSQL server (round 24 of 60 there); this SQLite form is kept
+// for symmetry with this file's other TestTreeService_Concurrent* tests and
+// as a light smoke test of the fix, but
+// integration_test/postgres_concurrency_test.go's
+// TestConcurrentMoveAndCreateChild_InteriorDescendant_TreeInvariantHolds_Postgres
+// is the tier that actually forces the real READ COMMITTED window this
+// finding named and reliably reproduces the pre-fix corruption.
+func TestTreeService_ConcurrentMoveAndCreateChild_InteriorDescendant_TreeInvariantHolds(t *testing.T) {
+	const rounds = 150
+	for round := 0; round < rounds; round++ {
+		db := newTestDB(t)
+		tree := newTestTreeOn(t, db)
+		ctx := tenantCtx("tenant-a")
+		root := mustCreateRoot(t, tree, ctx, "root")
+		a := mustCreateChild(t, tree, ctx, root.ID, "a")
+		b := mustCreateChild(t, tree, ctx, root.ID, "b")
+		aChild := mustCreateChild(t, tree, ctx, a.ID, "a-child")
+
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _ = tree.Move(ctx, a.ID, b.ID)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _ = tree.CreateChild(ctx, aChild.ID, "late-grandchild", "store")
+		}()
+		close(start)
+		wg.Wait()
+
+		assertNoOrphans(t, db, ctx, fmt.Sprintf("round %d", round))
+	}
+}
+
+// TestTreeService_ConcurrentDeleteAndMemberAdd_NeverDanglesAMembership is the
+// peer-review finding that TreeService.Delete's members guard used to run as
+// its own separate, unlocked read entirely BEFORE deleteLeaf/deleteSubtree
+// ever opened their own transaction: a concurrent MemberService.Add binding
+// a fresh membership to the node about to be deleted could land in the gap
+// between that read and the cascade's own commit, leaving an active
+// membership whose NodeID names a row that is no longer visible.
+//
+// Unlike the interior-descendant Move finding above, this one is a wide-open
+// TOCTOU gap with no locking on either side of the original code, so it
+// reproduces reliably on plain SQLite -- the review's own adversarial
+// reproduction failed at round 1 of 200. The fix makes both sides serialize
+// on the identical lockLiveNode lock: tree.go's Delete now runs the members
+// check inside the same transaction that locks the node being deleted
+// (memberGuardFor), and membership.go's MemberService.ensure now takes that
+// same lock before creating the membership, so every interleaving resolves
+// to one of two consistent outcomes -- Add wins and the membership commits
+// against a node Delete's own re-check then correctly refuses to remove, or
+// Delete wins and Add's blocked lock attempt resumes to find the node
+// mark-deleted and refuses with ErrNodeNotFound -- never both succeeding.
+func TestTreeService_ConcurrentDeleteAndMemberAdd_NeverDanglesAMembership(t *testing.T) {
+	const rounds = 200
+	for round := 0; round < rounds; round++ {
+		m, _ := newTestModule(t)
+		ctx := tenantCtx("tenant-a")
+		root, err := m.Tree().CreateRoot(ctx, "root", "group")
+		if err != nil {
+			t.Fatalf("round %d: CreateRoot: %v", round, err)
+		}
+		branch, err := m.Tree().CreateChild(ctx, root.ID, "branch", "group")
+		if err != nil {
+			t.Fatalf("round %d: CreateChild(branch): %v", round, err)
+		}
+		userID := fmt.Sprintf("u-race-%d", round)
+
+		var wg sync.WaitGroup
+		var addErr error
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = m.Tree().Delete(ctx, branch.ID, false)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, addErr = m.Members().Add(ctx, userID, branch.ID)
+		}()
+		close(start)
+		wg.Wait()
+
+		if addErr != nil {
+			continue // Delete won; Add correctly refused. Nothing to check.
+		}
+		membership, err := m.Members().Get(ctx, userID)
+		if err != nil {
+			t.Fatalf("round %d: Add reported success but Get failed: %v", round, err)
+		}
+		if _, err := m.Tree().Get(ctx, membership.NodeID); err != nil {
+			t.Fatalf("round %d: membership %s is bound to node %s, which is no longer visible (%v) -- dangling membership",
+				round, membership.ID, membership.NodeID, err)
+		}
+	}
+}

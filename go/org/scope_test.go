@@ -282,7 +282,7 @@ func TestScopeService_MemberNodeIDs_DanglingMembership_FailsClosed(t *testing.T)
 // pins the SAME safe reading as
 // TestScopeService_MemberNodeIDs_DanglingMembership_FailsClosed, but reached
 // through a legitimate, in-band application sequence rather than a
-// hand-seeded row: remove a membership (soft-delete, so assertNoMembers no
+// hand-seeded row: remove a membership (soft-delete, so the members guard no
 // longer sees it), delete its node (now memberless, so the delete succeeds),
 // then restore the earlier membership. MemberService.Restore does not
 // re-validate the restored row against Add's own rules -- "the tenant's

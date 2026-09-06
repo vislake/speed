@@ -65,8 +65,13 @@ type TreeService struct {
 // tree half of this module stays testable without a roster, and so the
 // dependency reads in one direction only: the tree asks a question, the
 // roster answers it.
+//
+// The method is transaction-bound, not ctx-bound: Delete's own doc comment
+// explains why the check must run inside the SAME transaction that locks the
+// subtree being deleted, rather than as a separate call opening its own
+// transaction the way a ctx-bound signature would force.
 type nodeMemberGuard interface {
-	anyInNodes(ctx context.Context, nodeIDs []string) (bool, error)
+	anyInNodesTx(tx *gorm.DB, nodeIDs []string) (bool, error)
 }
 
 // NewTreeService returns a TreeService over db. db is expected to come from
@@ -308,27 +313,50 @@ func (s *TreeService) Rename(ctx context.Context, nodeID, name string) (*OrgNode
 // lockLiveNode's own doc comment for why every subsequent read and write in
 // the same transaction is then safe from the read-then-write lock-upgrade
 // hazard go/dbkit/AGENTS.md's "SQLite busy timeout" section documents).
-// Every row of the subtree -- read fresh inside this same transaction,
-// after the moved node's own lock is already held -- is then rewritten by
-// its own conditional UPDATE (id + deleted_at IS NULL), so a descendant
-// soft-deleted or otherwise altered between the scan and its own rewrite
-// reports ErrInternal rather than silently landing a stale row.
+// Every row of the subtree -- locked fresh inside this same transaction,
+// after the moved node's own lock is already held, through lockSubtree
+// (repository.go) rather than a single plain, unlocked Find -- is then
+// rewritten by its own conditional UPDATE (id + deleted_at IS NULL), so a
+// descendant soft-deleted or otherwise altered between the scan and its own
+// rewrite reports ErrInternal rather than silently landing a stale row.
+//
+// # Locking every descendant, not merely the two endpoints
+//
+// A plain, unlocked subtree scan leaves every row it returns other than the
+// two rows already locked above (the moved node, the new parent) completely
+// exposed for the whole rewrite that follows: a concurrent CreateChild
+// targeting an INTERIOR descendant of the moved subtree -- never the moved
+// node itself -- takes its own lockLiveNode on THAT row, which this method
+// never otherwise touches, so the two calls never serialize on anything.
+// Confirmed against a real PostgreSQL server: such a CreateChild's insert
+// can land, and commit, entirely within the gap between this method's own
+// subtree scan and that scan's later per-row rewrite -- the new child's row
+// is bound to the descendant's OLD, pre-move Path and simply never existed
+// when the one-shot scan ran, so nothing in the rewrite loop ever reaches
+// it, leaving a live node whose Path no longer matches its own ParentID's
+// current Path once this method commits. lockSubtree closes this the same
+// way lockLiveNode closes it for a single row: it locks every row a scan
+// returns, then re-scans, repeating until a scan turns up nothing this
+// transaction has not already locked -- see its own doc comment in
+// repository.go for why that loop is what actually rules out a new insert
+// slipping in under an already-discovered descendant.
 //
 // # Concurrent Move || Move, Move || CreateChild, Move || Delete
 //
 // Two overlapping Moves serialize on whichever row they both lock first
-// (the earlier one's moved-node lock, or its new-parent lock, blocking the
-// later one's attempt at the same row) and each observes the other's
-// committed result once unblocked -- outcome equal to some serial order of
-// the two, never a mix of both. A concurrent CreateChild targeting a node
-// this Move is relocating takes the identical row lock through the same
-// lockLiveNode primitive (tree.go's CreateChild), so the two calls
-// serialize on that row exactly the same way, and whichever runs second
-// re-reads the row's current Path after acquiring the lock -- never the
-// stale one read before it blocked. A concurrent Delete of the moved node
-// or an ancestor is likewise a writer of one of the same rows this call
-// locks, and is now inside this same locking discipline rather than racing
-// it as a wholly independent, unguarded statement.
+// (the earlier one's moved-node lock, or its new-parent lock, or now any
+// descendant lockSubtree takes, blocking the later one's attempt at the
+// same row) and each observes the other's committed result once unblocked
+// -- outcome equal to some serial order of the two, never a mix of both. A
+// concurrent CreateChild targeting any node of this Move's subtree, not
+// merely its two endpoints, takes the identical row lock through the same
+// lockLiveNode/touchLockByID primitive, so the two calls serialize on that
+// row exactly the same way, and whichever runs second re-reads the row's
+// current Path after acquiring the lock -- never the stale one read before
+// it blocked. A concurrent Delete of the moved node, an ancestor, or now any
+// descendant is likewise a writer of one of the same rows this call locks,
+// and is now inside this same locking discipline rather than racing it as a
+// wholly independent, unguarded statement.
 //
 // # Deadlock, honestly
 //
@@ -394,12 +422,9 @@ func (s *TreeService) Move(ctx context.Context, nodeID, newParentID string) (*Or
 			newPath := buildPath(newParent.Path, node.ID)
 			delta := depthOf(newPath) - depthOf(node.Path)
 
-			var subtree []OrgNode
-			if findErr := tx.
-				Where("path LIKE ?", subtreePrefix(node.Path)+"%").
-				Order("depth, id").
-				Find(&subtree).Error; findErr != nil {
-				return ErrInternal.WithCause(findErr)
+			subtree, lockSubErr := lockSubtree(tx, subtreePrefix(node.Path))
+			if lockSubErr != nil {
+				return ErrInternal.WithCause(lockSubErr)
 			}
 			for _, n := range subtree {
 				if depthOf(n.Path)+delta > s.maxDepth {
@@ -483,7 +508,7 @@ func (s *TreeService) publishCreated(ctx context.Context, node OrgNode) {
 //
 // A node with members bound to it, or to anything beneath it, is not
 // deletable either (ErrNodeHasMembers) once a host has wired the roster --
-// see assertNoMembers.
+// see memberGuardFor.
 //
 // Both paths are a single statement inside a single transaction, so a node
 // cannot be orphaned by a child arriving between a "does it have children?"
@@ -497,6 +522,31 @@ func (s *TreeService) publishCreated(ctx context.Context, node OrgNode) {
 // for the exact PostgreSQL mechanism this closes, and withRetry (below) for
 // why the whole call is retried rather than left to surface a transient
 // conflict as a raw failure.
+//
+// # The members check runs INSIDE the same locked transaction, not before it
+//
+// The original shape here ran the roster check (then named assertNoMembers)
+// as its own separate, unlocked read entirely BEFORE deleteLeaf/deleteSubtree
+// ever opened their own transaction -- a plain "check, then act" pair with a
+// real, unguarded window in between: a concurrent MemberService.Add binding a
+// fresh membership to any node of the subtree in that gap would sail through
+// (the check already ran and found nothing) while the cascade proceeded to
+// soft-delete the whole subtree regardless, leaving that just-created
+// membership bound to a now-invisible row -- confirmed reproducible against
+// a real, plain SQLite database (no PostgreSQL-specific timing needed: this
+// was a wide-open gap on both dialects, since the two reads/writes involved
+// share no lock at all). memberGuardFor below closes it by moving the check
+// inside deleteLeaf/deleteSubtree's own transaction, run right after nodeID's
+// lock succeeds and strictly before the bulk mark-delete statement -- so it
+// sees either a membership already committed before this transaction's own
+// lock was taken (and refuses), or nothing yet, in which case a concurrent
+// Add attempting to bind under one of these SAME rows is forced through the
+// other half of this fix: MemberService.ensure (membership.go) now takes the
+// identical lockLiveNode lock on its target node before creating the
+// membership, so it either already committed (and this transaction's own
+// read, above, sees it) or blocks behind this transaction and, once it
+// resumes, correctly discovers the node it wanted is now mark-deleted and
+// refuses with ErrNodeNotFound instead of completing a dangling insert.
 func (s *TreeService) Delete(ctx context.Context, nodeID string, cascade bool) error {
 	node, err := s.Get(ctx, nodeID)
 	if err != nil {
@@ -510,15 +560,13 @@ func (s *TreeService) Delete(ctx context.Context, nodeID string, cascade bool) e
 	}
 
 	prefix := subtreePrefix(node.Path)
-	if memberErr := s.assertNoMembers(ctx, prefix, nodeID); memberErr != nil {
-		return memberErr
-	}
+	guard := s.memberGuardFor(nodeID, prefix)
 
 	if cascade {
 		var removed int64
 		retryErr := withRetry(func() error {
 			var deleteErr error
-			removed, deleteErr = s.repo.deleteSubtree(ctx, nodeID, prefix)
+			removed, deleteErr = s.repo.deleteSubtree(ctx, nodeID, prefix, guard)
 			return deleteErr
 		})
 		if retryErr != nil {
@@ -531,7 +579,7 @@ func (s *TreeService) Delete(ctx context.Context, nodeID string, cascade bool) e
 	var matched int64
 	err = withRetry(func() error {
 		var deleteErr error
-		matched, deleteErr = s.repo.deleteLeaf(ctx, nodeID, prefix)
+		matched, deleteErr = s.repo.deleteLeaf(ctx, nodeID, prefix, guard)
 		return deleteErr
 	})
 	if err != nil {
@@ -549,8 +597,10 @@ func (s *TreeService) Delete(ctx context.Context, nodeID string, cascade bool) e
 	return nil
 }
 
-// assertNoMembers reports ErrNodeHasMembers when anybody is bound inside the
-// subtree about to be deleted.
+// memberGuardFor returns the transaction-bound closure deleteLeaf/deleteSubtree
+// run, right after nodeID's own lock succeeds and before either issues its
+// bulk mark-delete statement, to report ErrNodeHasMembers when anybody is
+// bound inside the subtree about to be deleted.
 //
 // Without it a cascading delete would leave memberships pointing at rows that
 // no longer exist, and a dangling membership is not a cosmetic problem: it is
@@ -560,24 +610,28 @@ func (s *TreeService) Delete(ctx context.Context, nodeID string, cascade bool) e
 // see, is not something a structural edit should do on its own. Move the
 // members first, then delete the node.
 //
-// The check is skipped when no roster is wired, which is the case for a
-// TreeService constructed on its own.
-func (s *TreeService) assertNoMembers(ctx context.Context, prefix, nodeID string) error {
-	if s.members == nil {
+// The returned closure is a no-op when no roster is wired, which is the case
+// for a TreeService constructed on its own -- deleteLeaf/deleteSubtree still
+// receive it and still call it, but it immediately reports no members every
+// time, exactly as the check being entirely absent used to behave.
+func (s *TreeService) memberGuardFor(nodeID, prefix string) func(tx *gorm.DB) error {
+	return func(tx *gorm.DB) error {
+		if s.members == nil {
+			return nil
+		}
+		var subtree []OrgNode
+		if err := tx.Where("path LIKE ?", prefix+"%").Find(&subtree).Error; err != nil {
+			return ErrInternal.WithCause(err)
+		}
+		occupied, err := s.members.anyInNodesTx(tx, nodeIDs(subtree))
+		if err != nil {
+			return err
+		}
+		if occupied {
+			return ErrNodeHasMembers.WithParam("node_id", nodeID)
+		}
 		return nil
 	}
-	subtree, err := s.repo.subtree(ctx, prefix)
-	if err != nil {
-		return err
-	}
-	occupied, err := s.members.anyInNodes(ctx, nodeIDs(subtree))
-	if err != nil {
-		return err
-	}
-	if occupied {
-		return ErrNodeHasMembers.WithParam("node_id", nodeID)
-	}
-	return nil
 }
 
 // publishDeleted announces one removed node (and, for a cascade, its whole
@@ -616,7 +670,7 @@ func (s *TreeService) publishDeleted(ctx context.Context, node OrgNode, cascade 
 // discipline this file already applies elsewhere -- Delete does not
 // re-parent orphans to the grandparent (that would silently widen a
 // member's data scope) and does not delete memberships along with a node
-// (assertNoMembers refuses instead) -- and a cascading Restore would carry
+// (the members guard refuses instead) -- and a cascading Restore would carry
 // the identical failure mode Delete's own doc comments warn against:
 // resurrecting a descendant that was independently, deliberately removed
 // for a reason of its own, just because some ancestor happened to be

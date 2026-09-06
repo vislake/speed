@@ -9,6 +9,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // Repository is org's tenant-scoped data-access type for OrgNode.
@@ -266,6 +267,77 @@ func lockLiveNode(tx *gorm.DB, id string) (*OrgNode, error) {
 	return &node, nil
 }
 
+// lockSubtree locks every currently-live node matching prefix (a
+// materialized-path subtree, per subtreePrefix) and returns them, ordered by
+// (depth, id) -- the moved node itself first when prefix names it. Every
+// caller other than Move's own helper (all of which start with the subtree's
+// top node already locked via lockLiveNode) is expected to have taken that
+// lock first; lockSubtree re-locks it too, harmlessly, since a transaction
+// re-touching a row it already holds does not block against itself.
+//
+// # Why a single "path LIKE prefix%" Find is not enough (the Move interior-
+// descendant finding)
+//
+// Move used to read the subtree with one plain, unlocked Find and then
+// rewrite each returned row's own Path via its own conditioned UPDATE. That
+// leaves every row the scan returns other than the two endpoints Move
+// already locks (the moved node, the new parent) completely exposed for the
+// whole rewrite: a concurrent CreateChild targeting an INTERIOR descendant
+// (never the moved node itself) calls lockLiveNode on THAT row, which Move
+// never touches, so the two calls never serialize on anything. Confirmed
+// against a real PostgreSQL server: CreateChild's insert can land, and
+// commit, entirely within the gap between Move's initial unlocked scan and
+// that scan's own row's eventual UPDATE -- the new child's own row is bound
+// to the descendant's OLD (pre-move) Path and simply never existed when
+// Move's one-shot scan ran, so no later per-row UPDATE in Move's rewrite loop
+// ever reaches it. The result is a live node whose stored Path no longer
+// matches its own ParentID's current Path -- the exact "Path/ParentID chain
+// disagree" corruption assertNoOrphans checks for -- despite every row Move
+// DID touch being rewritten correctly.
+//
+// The fix locks every row of the subtree, not merely its two endpoints,
+// before trusting the set is complete: scan for the prefix, lock every
+// newly-seen row (touchLockByID, the same primitive lockLiveNode wraps), and
+// repeat until a scan returns nothing this call has not already locked. Once
+// every row of some scan is already locked by THIS transaction, no further
+// insert can land uncontested underneath any of them: a concurrent
+// CreateChild's own lockLiveNode(descendantID) call for a row this
+// transaction already holds either has already fully committed (so this
+// scan's fresh read already reflects it and the loop locks the newly
+// discovered child) or blocks behind this transaction entirely (so it cannot
+// commit an insert until this transaction is done, at which point it correctly
+// re-reads the descendant's now-final, rebased Path rather than a stale one).
+// The loop terminates because each iteration either finds nothing new (and
+// returns) or locks at least one previously-unseen row, bounded by the
+// tenant's total node count.
+func lockSubtree(tx *gorm.DB, prefix string) ([]OrgNode, error) {
+	seen := map[string]bool{}
+	for {
+		var rows []OrgNode
+		if err := tx.
+			Where("path LIKE ?", prefix+"%").
+			Order("depth, id").
+			Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		var newRows []OrgNode
+		for _, n := range rows {
+			if !seen[n.ID] {
+				newRows = append(newRows, n)
+			}
+		}
+		if len(newRows) == 0 {
+			return rows, nil
+		}
+		for _, n := range newRows {
+			seen[n.ID] = true
+			if _, err := touchLockByID(tx, n.ID); err != nil {
+				return nil, err
+			}
+		}
+	}
+}
+
 // assertNameFreeTx is assertNameFree's transaction-bound twin: the same
 // sibling-name pre-check, issued against an already-open tx instead of
 // opening its own dbkit.WithTenantSession, for callers composing it into a
@@ -375,7 +447,23 @@ func softDeleteActor(ctx context.Context) string {
 //
 // It reports the number of rows the prefix matched, so the caller can turn
 // "more than one" into org.node_has_children with a real count.
-func (r *Repository) deleteLeaf(ctx context.Context, nodeID, prefix string) (matched int64, err error) {
+//
+// guard, when non-nil, runs against the SAME already-open transaction right
+// after nodeID's own lock succeeds -- BEFORE the bulk mark-delete statement
+// below ever runs -- and a non-nil return aborts the whole transaction
+// (nothing is written) with that error surfaced unwrapped. TreeService.Delete
+// is what passes one: the roster's "does anybody sit in this subtree" check,
+// which used to run as its own separate, unlocked read entirely BEFORE this
+// method's own transaction opened -- a real, closed TOCTOU window (a
+// concurrent MembershipRepository add landing in the gap between that read
+// and this method's own commit, leaving a membership bound to a row this
+// call is about to soft-delete) that running the check here, inside the
+// SAME lock this method already takes, closes: see tree.go's Delete doc
+// comment for the full mechanism, and membership.go's MemberService.ensure
+// for the other half this fix needed (a plain, unlocked read there could
+// otherwise commit its own insert into this exact gap regardless of what
+// this method does).
+func (r *Repository) deleteLeaf(ctx context.Context, nodeID, prefix string, guard func(tx *gorm.DB) error) (matched int64, err error) {
 	now := time.Now()
 	deletedBy := softDeleteActor(ctx)
 	err = dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
@@ -386,6 +474,11 @@ func (r *Repository) deleteLeaf(ctx context.Context, nodeID, prefix string) (mat
 		if !locked {
 			matched = 0
 			return nil
+		}
+		if guard != nil {
+			if guardErr := guard(tx); guardErr != nil {
+				return guardErr
+			}
 		}
 		m := OrgNode{DeletedAt: &now, DeletedBy: deletedBy}
 		res := tx.
@@ -405,10 +498,14 @@ func (r *Repository) deleteLeaf(ctx context.Context, nodeID, prefix string) (mat
 	switch {
 	case errors.Is(err, errSubtreeSizeUnexpected):
 		return matched, nil
-	case err != nil:
+	case err == nil:
+		return matched, nil
+	default:
+		if appErr, ok := apperr.As(err); ok {
+			return 0, appErr
+		}
 		return 0, ErrInternal.WithCause(err)
 	}
-	return matched, nil
 }
 
 // deleteSubtree mark-deletes the node identified by nodeID (whose path is
@@ -440,7 +537,12 @@ func (r *Repository) deleteLeaf(ctx context.Context, nodeID, prefix string) (mat
 // already-soft-deleted descendant (from some earlier, independent
 // mark-delete) untouched rather than re-stamping its deleted_at/deleted_by
 // with this call's own attribution.
-func (r *Repository) deleteSubtree(ctx context.Context, nodeID, prefix string) (int64, error) {
+//
+// guard behaves exactly as deleteLeaf's own doc comment describes: non-nil,
+// it runs against this same transaction right after nodeID's lock succeeds
+// and before the bulk mark-delete statement, and a non-nil return aborts the
+// whole transaction with that error surfaced unwrapped.
+func (r *Repository) deleteSubtree(ctx context.Context, nodeID, prefix string, guard func(tx *gorm.DB) error) (int64, error) {
 	now := time.Now()
 	deletedBy := softDeleteActor(ctx)
 	var affected int64
@@ -453,6 +555,11 @@ func (r *Repository) deleteSubtree(ctx context.Context, nodeID, prefix string) (
 			affected = 0
 			return nil
 		}
+		if guard != nil {
+			if guardErr := guard(tx); guardErr != nil {
+				return guardErr
+			}
+		}
 		m := OrgNode{DeletedAt: &now, DeletedBy: deletedBy}
 		res := tx.
 			Where("path LIKE ?", prefix+"%").
@@ -463,6 +570,9 @@ func (r *Repository) deleteSubtree(ctx context.Context, nodeID, prefix string) (
 		return res.Error
 	})
 	if err != nil {
+		if appErr, ok := apperr.As(err); ok {
+			return 0, appErr
+		}
 		return 0, ErrInternal.WithCause(err)
 	}
 	return affected, nil
