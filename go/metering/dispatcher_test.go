@@ -444,7 +444,13 @@ func TestDispatcher_RunOnce_FailedRowsAtTheHead_DoNotStarveNewerRows(t *testing.
 	for i := 0; i < poisonCount; i++ {
 		rec := newTestOutboxRecord(fmt.Sprintf("poison-%02d", i), "tenant-p", fmt.Sprintf("idem-poison-%02d", i))
 		rec.Feature = "" // validation poison: delivery can never succeed
-		rec.CreatedAt = poisonAt.Add(time.Duration(i) * time.Millisecond)
+		// Backdate the pile a full hour: the fresh row's created_at is the
+		// wall clock at Enqueue, so it must be strictly newer than every
+		// poison row at any execution speed -- a fast setup would otherwise
+		// land it inside the pile's created_at window and the pre-fix
+		// created_at-only claim (the bug this test pins) would deliver it by
+		// accident, a false green in plain mode.
+		rec.CreatedAt = poisonAt.Add(-time.Hour).Add(time.Duration(i) * time.Millisecond)
 		if _, err := insertOutboxRecord(ctx, db, rec); err != nil {
 			t.Fatalf("insertOutboxRecord(poison-%02d): %v", i, err)
 		}
