@@ -2622,7 +2622,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// (APP_DEMO_USERS_PASSWORD, see configFromEnv); an empty password
 	// leaves everything above exactly as it was.
 	if cfg.DemoUsersPassword != "" {
-		if seedErr := seedDemoUsers(ctx, handler, memberships, rbacService, cfg.HostTenants, cfg.DemoUsersPassword); seedErr != nil {
+		if seedErr := seedDemoUsers(ctx, handler, memberships, rbacService, orgModule, cfg.HostTenants, cfg.DemoUsersPassword); seedErr != nil {
 			_ = cleanup()
 			return nil, nil, nil, seedErr
 		}

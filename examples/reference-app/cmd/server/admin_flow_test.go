@@ -182,6 +182,33 @@ func platformStaffToken(t *testing.T, srv *httptest.Server) string {
 	return token
 }
 
+// existingOrgRoot returns the caller tenant's org root node, reusing one
+// that already exists (org_listNodes with no parentId, which answers the
+// root together with everything beneath it, or an empty list when the
+// tenant has no root yet) rather than assuming this call is the first
+// ever root-creation request for the tenant -- which it is NOT for
+// tenant-acme in this file's tests, since buildAdminTestServer's demo
+// seed (seedDemoUsers' addDemoOrgMembership, demo_users.go) already
+// created that tenant's root at boot, idempotently, the identical
+// Root-then-CreateRoot shape this helper mirrors. Only a tenant no demo
+// account reaches -- none, today -- would still need the create branch.
+func existingOrgRoot(t *testing.T, srv *httptest.Server, token string) orgNode {
+	t.Helper()
+	var listed struct {
+		Nodes []orgNode `json:"nodes"`
+	}
+	orgRequest(t, srv, http.MethodGet, "/api/v1/org/nodes", token, "", nil, &listed)
+	for _, n := range listed.Nodes {
+		if n.ParentID == "" {
+			return n
+		}
+	}
+	var root orgNode
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", token, "",
+		map[string]string{"name": "Admin Flow Co", "kind": "group"}, &root)
+	return root
+}
+
 // TestAdminFlow_SearchMembershipsAndAudit_EndToEnd is D6+D2+D7's
 // acceptance shape: an operator finds a real user by email, reads back
 // which tenant they actually belong to (a genuine org.memberships row,
@@ -204,12 +231,19 @@ func TestAdminFlow_SearchMembershipsAndAudit_EndToEnd(t *testing.T) {
 	inviterToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "admin-flow-owner")
 	targetToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "admin-flow-target")
 
-	var root orgNode
-	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", inviterToken, "",
-		map[string]string{"name": "Admin Flow Co", "kind": "group"}, &root)
+	// tenant-acme is demoSingleTenantID -- the one tenant demoHostTenants
+	// configures -- so buildAdminTestServer's own demo seed (seedDemoUsers'
+	// addDemoOrgMembership, demo_users.go) has already created its org
+	// root and bound the demo accounts to it before this test's first
+	// request. existingOrgRoot reuses that root instead of racing it with
+	// a second org_createNode call, which org's own one-root-per-tenant
+	// invariant would refuse with 409 org.root_already_exists.
+	root := existingOrgRoot(t, srv, inviterToken)
 
-	// D3: the ledger picks up tenant-acme the moment the root is created,
-	// with no operator action at all.
+	// D3: the ledger picks up tenant-acme the moment its root is created,
+	// with no operator action at all -- by the demo seed above in THIS
+	// test's case, rather than by a root-creation request this test makes
+	// itself.
 	var tenants adminTenant
 	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/tenants/tenant-acme", staffToken, nil, http.StatusOK, &tenants, nil)
 	if tenants.TenantID != "tenant-acme" || tenants.Status != "active" {

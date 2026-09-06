@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 
 	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/rbac"
 
@@ -122,7 +124,7 @@ var demoSeedAccounts = []demoSeedAccount{
 // fail-closed, and the operator who wants the demo accounts back starts
 // from a fresh database (APP_DB_PATH). That honest skip is preferred
 // over pretending a skip is a seed.
-func seedDemoUsers(ctx context.Context, handler http.Handler, memberships *demoMemberships, svc *rbac.Service, tenants map[string]pkgcore.TenantID, password string) error {
+func seedDemoUsers(ctx context.Context, handler http.Handler, memberships *demoMemberships, svc *rbac.Service, orgModule *org.Module, tenants map[string]pkgcore.TenantID, password string) error {
 	logger := obs.FromContext(ctx)
 	for _, account := range demoSeedAccounts {
 		userID, alreadyExists, err := registerDemoUser(ctx, handler, account.email, password)
@@ -139,7 +141,7 @@ func seedDemoUsers(ctx context.Context, handler http.Handler, memberships *demoM
 				"demo_user", account.actor)
 			continue
 		}
-		if err := grantDemoSeedAccount(ctx, account, userID, memberships, svc, tenants); err != nil {
+		if err := grantDemoSeedAccount(ctx, account, userID, memberships, svc, orgModule, tenants); err != nil {
 			return fmt.Errorf("reference-app: seed demo users: %w", err)
 		}
 		logger.Info("seeded demo user",
@@ -204,11 +206,12 @@ func registerDemoUser(ctx context.Context, handler http.Handler, email, password
 // grantDemoSeedAccount records the membership and role of one freshly
 // registered demo account, mirroring seedDemoGrants' per-tenant model: the
 // membership goes to the same seam authn asks about at sign-in
-// (demoMemberships), the role to rbac, each under the tenant's own
-// context. Which tenants an account reaches is the account's own decision
+// (demoMemberships) AND to org's own memberships table (addDemoOrgMembership,
+// below), the role to rbac, each under the tenant's own context. Which
+// tenants an account reaches is the account's own decision
 // (inEveryTenant), never "all tenants map iteration happens to visit" --
 // the same reason seedDemoGrants pins demoSingleTenantID as a literal.
-func grantDemoSeedAccount(ctx context.Context, account demoSeedAccount, userID string, memberships *demoMemberships, svc *rbac.Service, tenants map[string]pkgcore.TenantID) error {
+func grantDemoSeedAccount(ctx context.Context, account demoSeedAccount, userID string, memberships *demoMemberships, svc *rbac.Service, orgModule *org.Module, tenants map[string]pkgcore.TenantID) error {
 	seeded := make(map[pkgcore.TenantID]struct{}, len(tenants))
 	for _, tenantID := range tenants {
 		if !account.inEveryTenant && tenantID != demoSingleTenantID {
@@ -220,14 +223,53 @@ func grantDemoSeedAccount(ctx context.Context, account demoSeedAccount, userID s
 		}
 		seeded[tenantID] = struct{}{}
 
+		tenantCtx := pkgcore.WithTenant(ctx, tenantID)
+
 		memberships.Grant(userID, tenantID)
+
+		if err := addDemoOrgMembership(tenantCtx, orgModule, userID); err != nil {
+			return fmt.Errorf("reference-app: add demo account to org roster in %q: %w", tenantID, err)
+		}
 
 		sub := rbac.Subject{TenantID: tenantID, UserID: userID}
 		// A tenant-wide Scope, exactly as seedDemoGrants grants with:
-		// this example has no organization tree to scope to.
-		if err := svc.AssignRole(pkgcore.WithTenant(ctx, tenantID), sub, account.roleKey, rbac.Scope{}); err != nil {
+		// this example has no organization tree to scope roles to (only
+		// a bare root node, addDemoOrgMembership's own doc comment).
+		if err := svc.AssignRole(tenantCtx, sub, account.roleKey, rbac.Scope{}); err != nil {
 			return fmt.Errorf("reference-app: grant %q to demo account in %q: %w", account.roleKey, tenantID, err)
 		}
+	}
+	return nil
+}
+
+// addDemoOrgMembership gives userID a real org.Membership row in the
+// caller's tenant (ctx) -- the row go/admin's impersonation-target
+// membership check (validateTargetMembership) and any other
+// org.MemberService.Get caller actually consult. demoMemberships and the
+// rbac.AssignRole grant above are a separate, org-unrelated bookkeeping
+// surface (demo_subject.go's sign-in shortcut and rbac's own
+// authorization decision), and org itself knows nothing about either: a
+// demo account with no row here is, as far as org and anything built on
+// it are concerned, not a member of the tenant at all.
+//
+// It idempotently ensures the tenant's org root node exists (CreateRoot
+// on the first account seeded into a given tenant, Root thereafter, both
+// under the tenant context ctx already carries) and binds userID to it --
+// the reference app seeds no deeper organization tree, so the root is the
+// only node there is to place a demo account into.
+func addDemoOrgMembership(ctx context.Context, orgModule *org.Module, userID string) error {
+	root, err := orgModule.Tree().Root(ctx)
+	if err != nil {
+		if !errors.Is(err, org.ErrNodeNotFound) {
+			return fmt.Errorf("look up tenant's org root: %w", err)
+		}
+		root, err = orgModule.Tree().CreateRoot(ctx, "Demo Tenant", "group")
+		if err != nil {
+			return fmt.Errorf("create tenant's org root: %w", err)
+		}
+	}
+	if _, err := orgModule.Members().Add(ctx, userID, root.ID); err != nil {
+		return fmt.Errorf("add member to org roster: %w", err)
 	}
 	return nil
 }
