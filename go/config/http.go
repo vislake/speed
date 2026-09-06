@@ -84,6 +84,9 @@ func writeMethodNotAllowed(w http.ResponseWriter) {
 // durations render as their canonical "1m30s" text, booleans and ints as
 // their JSON natives, and no Sensitive key can appear at all (pkgcore's
 // declaration validation makes Sensitive and Public mutually exclusive).
+// A Public item with no value anywhere -- no row at any reachable scope
+// and no declared Default -- is omitted from the snapshot rather than
+// failing the response (see PublicSnapshot).
 //
 // Tenant resolution follows docs/internal/11-cross-cutting.md's
 // unauthenticated rule: custom domain first, platform subdomain second,

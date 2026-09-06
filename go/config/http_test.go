@@ -74,18 +74,18 @@ func mountRoutes(reg *pkgcore.Registry) *http.ServeMux {
 	return mux
 }
 
-// newHTTPHarness registers (with the shared item/flag schema) and attaches
-// a config module over an in-memory configs table, and returns the attached
-// service -- so tests can write rows the way the platform writes them -- and
-// the mounted mux the requests hit.
-func newHTTPHarness(t *testing.T, resolver tenancy.Resolver) (*Service, *http.ServeMux) {
+// newHTTPHarnessWithItems registers (with the given item/flag schema) and
+// attaches a config module over an in-memory configs table, and returns the
+// attached service -- so tests can write rows the way the platform writes
+// them -- and the mounted mux the requests hit.
+func newHTTPHarnessWithItems(t *testing.T, resolver tenancy.Resolver, items []pkgcore.ConfigItem, flags []pkgcore.FeatureFlag) (*Service, *http.ServeMux) {
 	t.Helper()
 	pkgcore.RegisterSystemPurpose(SystemPurposeSystemWrite)
 	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
-	if err := reg.Config.Add(serviceTestSchemaItems...); err != nil {
+	if err := reg.Config.Add(items...); err != nil {
 		t.Fatalf("reg.Config.Add: %v", err)
 	}
-	if err := reg.Features.Add(serviceTestSchemaFlags...); err != nil {
+	if err := reg.Features.Add(flags...); err != nil {
 		t.Fatalf("reg.Features.Add: %v", err)
 	}
 	opts := []Option{WithCipher(buildTestCipher(t)), WithPollInterval(0)}
@@ -101,6 +101,13 @@ func newHTTPHarness(t *testing.T, resolver tenancy.Resolver) (*Service, *http.Se
 		t.Fatalf("Attach: %v", err)
 	}
 	return svc, mountRoutes(reg)
+}
+
+// newHTTPHarness is newHTTPHarnessWithItems over the shared item/flag
+// schema, the common case for the endpoint tests.
+func newHTTPHarness(t *testing.T, resolver tenancy.Resolver) (*Service, *http.ServeMux) {
+	t.Helper()
+	return newHTTPHarnessWithItems(t, resolver, serviceTestSchemaItems, serviceTestSchemaFlags)
 }
 
 // httpResponse pairs a recorder with its body bytes for the assertions
@@ -194,6 +201,47 @@ func TestHTTP_Public_ServesPlatformDefaultsWithoutAResolver(t *testing.T) {
 	decodeBody(t, resp, &body)
 	if body.Config["brand.site_name"] != "Global Co" {
 		t.Fatalf("served brand.site_name = %#v, want the platform row", body.Config["brand.site_name"])
+	}
+}
+
+func TestHTTP_Public_OmitsAPublicItemWithNoValueAnywhere(t *testing.T) {
+	// A host declaring a Public item without a Default -- legal, the module
+	// serves no value until one is set -- must not take the endpoint down
+	// with a 404 for every tenant while ops has not written the row: the
+	// pre-auth display rule forbids an error here, and the login page must
+	// render regardless of which Public items still lack values. The item
+	// stays absent from the snapshot until its row exists.
+	items := []pkgcore.ConfigItem{
+		{Key: "brand.site_name", Type: "string", Default: "Smile Studio", Public: true, Description: "The tenant's display name", Group: "brand"},
+		{Key: "brand.support_phone", Type: "string", Public: true, Description: "The tenant's support phone", Group: "brand"},
+	}
+	svc, mux := newHTTPHarnessWithItems(t, staticHostResolver{"studio-a.example.com": "tenant-a"}, items, nil)
+
+	resp := doRequest(t, mux, http.MethodGet, PathPublic, "studio-a.example.com")
+	if resp.recorder.Code != http.StatusOK {
+		t.Fatalf("GET %s = %d, want 200 while an unset Public item is declared (body: %s)",
+			PathPublic, resp.recorder.Code, resp.body)
+	}
+	var body publicSnapshotBody
+	decodeBody(t, resp, &body)
+	if body.Config["brand.site_name"] != "Smile Studio" {
+		t.Fatalf("served brand.site_name = %#v, want the schema default", body.Config["brand.site_name"])
+	}
+	if _, present := body.Config["brand.support_phone"]; present {
+		t.Fatal("an item with no row and no default leaked into the public snapshot")
+	}
+
+	// Once ops writes the row, the item joins the snapshot.
+	if err := svc.Set(systemWriteCtx(t), ScopeSystem, "brand.support_phone", Value{Data: "+1-555-0100"}, "ops-1"); err != nil {
+		t.Fatalf("system Set: %v", err)
+	}
+	resp = doRequest(t, mux, http.MethodGet, PathPublic, "studio-a.example.com")
+	if resp.recorder.Code != http.StatusOK {
+		t.Fatalf("GET %s after the row landed = %d, want 200", PathPublic, resp.recorder.Code)
+	}
+	decodeBody(t, resp, &body)
+	if body.Config["brand.support_phone"] != "+1-555-0100" {
+		t.Fatalf("served brand.support_phone = %#v, want the written row", body.Config["brand.support_phone"])
 	}
 }
 

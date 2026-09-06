@@ -837,6 +837,50 @@ func TestService_PublicSnapshot_ServesPublicItemsOnly(t *testing.T) {
 	}
 }
 
+func TestService_PublicSnapshot_SkipsAnItemWithNoValueAnywhere(t *testing.T) {
+	// A Public item declared without a Default is a legal declaration
+	// (pkgcore's registration validation allows a nil Default for every
+	// type: "the module serves no value until one is set"), so until a row
+	// exists at some scope the item has no value to serve. The snapshot
+	// must omit that key, never fail the whole response: the endpoint's
+	// contract is platform-defaults fallback, never an error, and a future
+	// module declaring such an item must not take the pre-auth login
+	// surface down with a 404 for every tenant while ops has not written
+	// the row yet.
+	items := []pkgcore.ConfigItem{
+		{Key: "brand.site_name", Type: "string", Default: "Smile Studio", Public: true, Description: "The tenant's display name", Group: "brand"},
+		{Key: "brand.support_phone", Type: "string", Public: true, Description: "The tenant's support phone", Group: "brand"},
+		{Key: "support.reply_email", Type: "string", Sensitive: true, Description: "The address support replies come from", Group: "support"},
+	}
+	svc, _ := attachServiceForTest(t, openServiceTestDB(t), buildTestCipher(t), items, nil)
+
+	values, features, err := svc.PublicSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("PublicSnapshot with an unset Public item: %v", err)
+	}
+	if values["brand.site_name"] != "Smile Studio" {
+		t.Fatalf("snapshot brand.site_name = %#v, want the schema default", values["brand.site_name"])
+	}
+	if _, present := values["brand.support_phone"]; present {
+		t.Fatal("an item with no row and no default must be omitted from the snapshot, not present")
+	}
+	if len(features) != 0 {
+		t.Fatalf("snapshot features = %v, want none", features)
+	}
+
+	// Once a row exists, the item joins the snapshot like any other.
+	if err = svc.Set(systemWriteCtx(t), ScopeSystem, "brand.support_phone", Value{Data: "+1-555-0100"}, "ops-1"); err != nil {
+		t.Fatalf("system Set: %v", err)
+	}
+	values, _, err = svc.PublicSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("PublicSnapshot after the row landed: %v", err)
+	}
+	if values["brand.support_phone"] != "+1-555-0100" {
+		t.Fatalf("snapshot brand.support_phone = %#v, want the written row", values["brand.support_phone"])
+	}
+}
+
 func TestService_Refresh_InvalidatesRowsWrittenBehindItsBack(t *testing.T) {
 	svc := attachDefaultServiceForTest(t)
 	if err := svc.Set(tenantA(), ScopeTenant, "brand.site_name", Value{Data: "Studio A"}, "alice"); err != nil {

@@ -451,9 +451,12 @@ func (s *Service) EnabledFlags(ctx context.Context) ([]string, error) {
 // context's tenant, decoded and typed for JSON, plus the enabled feature
 // flag list. Sensitive items can never appear (pkgcore's declaration
 // validation makes Sensitive and Public mutually exclusive), so the
-// snapshot is safe to serve to anyone. The returned map is keyed by
-// configuration key; JSON output sorts map keys, keeping responses
-// deterministic.
+// snapshot is safe to serve to anyone. An item that currently has no value
+// anywhere -- no row at any reachable scope and no declared Default, a
+// legal declaration whose module serves no value until one is set -- is
+// omitted from the snapshot, never a reason to fail the response. The
+// returned map is keyed by configuration key; JSON output sorts map keys,
+// keeping responses deterministic.
 func (s *Service) PublicSnapshot(ctx context.Context) (map[string]any, []string, error) {
 	values := make(map[string]any)
 	keys := make([]string, 0, len(s.schema.items))
@@ -467,6 +470,19 @@ func (s *Service) PublicSnapshot(ctx context.Context) (map[string]any, []string,
 		item := s.schema.items[key]
 		canonical, _, err := s.resolve(ctx, item)
 		if err != nil {
+			// A Public item with no row at any reachable scope and no
+			// schema default has nothing to serve: skip it -- that key
+			// absent from the snapshot -- rather than failing the whole
+			// response. The endpoint's contract is the platform-defaults
+			// fallback, never an error: a future module declaring a Public
+			// item without a Default (legal: "the module serves no value
+			// until one is set") must not take the pre-auth login surface
+			// down with a 404 for every tenant while ops has not written
+			// the row yet. Any other resolve failure is genuine and still
+			// fails the response.
+			if isErrItemUnset(err) {
+				continue
+			}
 			return nil, nil, err
 		}
 		data, err := decodeValue(item.typ, canonical)
@@ -746,4 +762,12 @@ func decorateKey(err error, key string) error {
 		return err
 	}
 	return appErr.WithParam("key", key)
+}
+
+// isErrItemUnset reports whether err carries ErrItemUnset's code. Decorated
+// errors must be matched on their Code (see errors.go's header comment), so
+// the check goes through apperr.As, never errors.Is or identity.
+func isErrItemUnset(err error) bool {
+	appErr, ok := apperr.As(err)
+	return ok && appErr.Code == ErrItemUnset.Code
 }
