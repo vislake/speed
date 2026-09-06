@@ -29,9 +29,11 @@
  * host gives it (no auto-collapsing overflow menu is invented here,
  * consistent with this package's host-injected-everything design). The
  * mobile (temporary) Drawer's paper width is capped to
- * `min(sidebarWidth, 85vw)` so a very narrow viewport (~320px and
- * below) never gets a near-full-screen or overflowing drawer; the
- * desktop (permanent) Drawer's width is untouched.
+ * `min(sidebarWidth, 85vw)`, and the nav content rendered inside it
+ * fills that paper (`width: 100%`) rather than re-declaring
+ * `sidebarWidth` itself, so a very narrow viewport (~320px and below)
+ * never gets a near-full-screen or overflowing drawer; the desktop
+ * (permanent) Drawer's width, and its nav content, are untouched.
  */
 
 import { useId, useState } from 'react'
@@ -174,8 +176,15 @@ export function AppShell({
     onMobileOpenChange?.(next)
   }
 
+  // Fills whichever Drawer paper it is mounted into rather than
+  // re-declaring sidebarWidth itself -- the permanent (desktop) paper is
+  // exactly sidebarWidth, but the temporary (mobile) paper is capped to
+  // `min(sidebarWidth, 85vw)` below, and a second, independent
+  // sidebarWidth here would silently outgrow that cap and bleed past the
+  // paper's right edge (Drawer's paper is `position: fixed` with no
+  // overflow-x, so the overflow is not clipped, just visible).
   const navContent = (
-    <Box component="nav" aria-label={t('appShell.navLabel')} sx={{ width: sidebarWidth }}>
+    <Box component="nav" aria-label={t('appShell.navLabel')} sx={{ width: '100%', boxSizing: 'border-box' }}>
       <NavList navItems={navItems} />
     </Box>
   )

@@ -10,9 +10,10 @@
  * bundles, a zero-violation axe scan with `region` left enabled
  * (AppShell is page-level chrome, unlike ui-kit's per-widget components),
  * and this round's narrow-viewport CSS protections (the capped mobile
- * drawer width, the wrapping AppBar row) -- see the "responsive
- * protections" describe block for what each assertion does and does not
- * prove.
+ * drawer width, the nav content filling its paper rather than
+ * re-declaring the width itself, the wrapping AppBar row) -- see the
+ * "responsive protections" describe block for what each assertion does
+ * and does not prove.
  */
 
 import { act, waitFor } from '@testing-library/react'
@@ -248,6 +249,39 @@ describe('AppShell', () => {
       expect(emittedStyleText()).toMatch(
         /\.MuiDrawer-paper\{box-sizing:border-box;width:280px;\}/,
       )
+    })
+
+    it('fills its Drawer paper with the nav content instead of re-declaring sidebarWidth, so the content can never outgrow the mobile paper\'s capped width', () => {
+      // Regression test: the nav Box rendered inside both Drawer variants
+      // previously carried its own fixed `width: sidebarWidth`, independent
+      // of the paper's width. That was harmless for the desktop
+      // (permanent) Drawer, whose paper is the plain sidebarWidth too, but
+      // on the mobile (temporary) Drawer the paper is capped to
+      // `min(sidebarWidth, 85vw)` -- a second, independent sidebarWidth on
+      // the content silently outgrew that cap and bled past the paper's
+      // fixed-position edge (Drawer's paper sets no overflow-x). Asserting
+      // `width: 100%` on the nav element itself (fills whichever paper it
+      // is mounted into) is what makes that impossible by construction,
+      // in both the closed-mobile and desktop cases.
+      mockMatchMedia(false)
+      const { getByRole } = renderWithProviders(
+        <AppShell navItems={NAV_ITEMS} sidebarWidth={280}>
+          content
+        </AppShell>,
+      )
+      expect(getByRole('navigation', { hidden: true })).toHaveStyle({ width: '100%' })
+    })
+
+    it('fills the desktop Drawer paper with the nav content the same way', () => {
+      mockMatchMedia(true)
+      const { getByRole } = renderWithProviders(
+        <AppShell navItems={NAV_ITEMS} sidebarWidth={280}>
+          content
+        </AppShell>,
+      )
+      expect(
+        getByRole('navigation', { name: zhCN.appShell.navLabel }),
+      ).toHaveStyle({ width: '100%' })
     })
 
     it('wraps the AppBar Toolbar row instead of squeezing header/actions/userMenu', () => {
