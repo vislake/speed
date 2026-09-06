@@ -24,6 +24,7 @@ import { renderWithProviders } from '../../test-utils/render.js'
 import type { RenderWithProvidersResult } from '../../test-utils/render.js'
 import { expectNoAxeViolations } from '../../test-utils/axe.js'
 import { dropFiles, selectFiles } from '../../test-utils/file-input.js'
+import { emittedStyleText } from '../../test-utils/emitted-css.js'
 
 function makeFile(name: string): File {
   return new File(['x-ray bytes'], name, { type: 'application/octet-stream' })
@@ -463,6 +464,45 @@ describe('FileUploader', () => {
       view.setRows([])
       expect(view.queryAllByRole('listitem')).toHaveLength(0)
       expect(view.queryByRole('status')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('responsive layout', () => {
+    // Property assertions only (jsdom does no real layout, so nothing
+    // here proves a long file name plus several buttons actually looks
+    // right at a narrow viewport) -- these prove the flexWrap CSS this
+    // round adds is wired onto both row shapes' action groups, so a
+    // future refactor dropping it would be caught.
+    it('wraps the uploading row action group (progress bar + cancel) instead of overflowing', () => {
+      const view = renderHarness({
+        rows: [uploadingRow('r1', 'scan.jpg')],
+        onCancel: vi.fn(),
+      })
+      const actionRow = view.getByRole('progressbar').parentElement
+      expect(actionRow).toHaveStyle({ flexWrap: 'wrap' })
+    })
+
+    it('wraps the settled row action group (status caption + retry/remove) instead of overflowing', () => {
+      const view = renderHarness({
+        rows: [failedRow('r1', 'a-very-long-panoramic-x-ray-file-name.jpg', 'boom')],
+        onRetry: vi.fn(),
+        onRemove: vi.fn(),
+      })
+      const actionRow = view.getByText(statusFailed).parentElement
+      expect(actionRow).toHaveStyle({ flexWrap: 'wrap' })
+    })
+
+    it('emits the wrapping declaration for both row-action groups in the generated CSS', () => {
+      renderHarness({
+        rows: [uploadingRow('r1', 'a.jpg'), failedRow('r2', 'b.jpg', 'boom')],
+        onCancel: vi.fn(),
+        onRetry: vi.fn(),
+        onRemove: vi.fn(),
+      })
+      const wrapRuleCount = (emittedStyleText().match(/flex-wrap:wrap/g) ?? []).length
+      // At least the two row-action groups (uploading and settled) each
+      // contribute one flex-wrap:wrap declaration.
+      expect(wrapRuleCount).toBeGreaterThanOrEqual(2)
     })
   })
 

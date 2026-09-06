@@ -101,6 +101,34 @@ describe('DataTable', () => {
     expect(seen.length).toBe(MEMBERS.length)
   })
 
+  it('wraps the table in a horizontally scrollable container regardless of column count or width', () => {
+    // Renders deliberately wider than any reasonable host container
+    // (12 columns at 300px each = 3600px) to exercise the contract this
+    // round makes explicit in the component's own doc comment: more or
+    // wider columns than the host's container scroll inside the
+    // TableContainer wrapper rather than overflowing the page. jsdom
+    // does no real layout, so this cannot prove a scrollbar renders at
+    // any actual width -- it proves the wrapper MUI gives `overflow-x:
+    // auto` by default is genuinely present, so a future refactor that
+    // drops `TableContainer` (the thing that gives this for free today)
+    // would fail this test instead of silently regressing.
+    const manyWideColumns: DataTableColumn<Member>[] = Array.from(
+      { length: 12 },
+      (_, index) => ({
+        id: `extra-${index}`,
+        header: `Column ${index}`,
+        width: 300,
+        cell: () => 'value',
+      }),
+    )
+    const utils = renderTable({ columns: manyWideColumns })
+    const container = utils.container.querySelector('.MuiTableContainer-root')
+    expect(container).not.toBeNull()
+    expect(container?.tagName.toLowerCase()).toBe('div')
+    expect(container?.querySelector('table')).not.toBeNull()
+    expect(container).toHaveStyle({ overflowX: 'auto' })
+  })
+
   it('applies column alignment and width to cells', () => {
     const utils = renderTable()
     const creditCells = utils.container.querySelectorAll(

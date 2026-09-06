@@ -16,12 +16,32 @@
  * Pass no onSubmit to render a bare field flow (a form section inside a
  * larger form, a filters panel). The form element carries no styling
  * beyond the layout; hosts keep their own width constraints.
+ *
+ * Columns (opt-in, additive): `columns` defaults to 1, which is exactly
+ * today's unconditional single-column flex flow -- byte-for-byte
+ * unchanged for every existing consumer that does not pass it. Setting
+ * `columns={2}` switches the flow to a CSS Grid with two responsive
+ * column tracks (`sm` -- 600px -- and up; a single track below it) so
+ * each direct child (typically one FormField per cell) lays out two per
+ * row on wider viewports and collapses to one column on narrow ones.
+ * `sm` is chosen deliberately over `md`: a two-field row (e.g.
+ * name/email) still has legible field widths as soon as a viewport
+ * clears the phone/tablet-portrait boundary, and a form whose fields
+ * genuinely need the full row can still pass `columns={1}` regardless
+ * of viewport. The actions row spans every column track in grid mode so
+ * it always reads as one full-width row, matching its single-column
+ * appearance today.
  */
 
 import type { ReactNode } from 'react'
 import Box from '@mui/material/Box'
 import { FormProvider } from 'react-hook-form'
 import type { FieldValues, SubmitHandler, UseFormReturn } from 'react-hook-form'
+
+/** The field-flow column count. 2 is a responsive CSS Grid (1 column
+ * below the `sm` breakpoint, 2 at `sm` and up); 1 is today's single-
+ * column flex flow. */
+export type FormLayoutColumns = 1 | 2
 
 export interface FormLayoutProps<TFieldValues extends FieldValues = FieldValues> {
   /** The host's useForm instance (control, handleSubmit, reset all live with the host). */
@@ -40,6 +60,13 @@ export interface FormLayoutProps<TFieldValues extends FieldValues = FieldValues>
   readonly spacing?: number
   /** Content width in px. Defaults to 600; false widens to the parent. */
   readonly maxWidth?: number | false
+  /**
+   * Field-flow column count. Defaults to 1 (today's unconditional
+   * single-column flow, unchanged for every consumer that omits this
+   * prop). See the module doc comment for the responsive breakpoint
+   * this switches on and the reasoning behind it.
+   */
+  readonly columns?: FormLayoutColumns
 }
 
 /**
@@ -53,8 +80,10 @@ export function FormLayout<TFieldValues extends FieldValues>({
   actions,
   spacing = 2,
   maxWidth = 600,
+  columns = 1,
 }: FormLayoutProps<TFieldValues>) {
   const handleSubmit = onSubmit === undefined ? undefined : form.handleSubmit(onSubmit)
+  const isGrid = columns === 2
   const body = (
     <>
       {children}
@@ -65,6 +94,10 @@ export function FormLayout<TFieldValues extends FieldValues>({
             justifyContent: 'flex-end',
             alignItems: 'center',
             gap: 1,
+            // Span every grid track so the actions row always reads as
+            // one full-width row in the two-column layout, matching its
+            // single-column appearance; a no-op in the default flex flow.
+            ...(isGrid ? { gridColumn: '1 / -1' } : {}),
           }}
         >
           {actions}
@@ -72,13 +105,24 @@ export function FormLayout<TFieldValues extends FieldValues>({
       )}
     </>
   )
-  const flowSx = {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: spacing,
+  const widthSx = {
     width: '100%',
     maxWidth: maxWidth === false ? 'none' : maxWidth,
   } as const
+  const flowSx = isGrid
+    ? ({
+        display: 'grid',
+        gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)' },
+        columnGap: spacing,
+        rowGap: spacing,
+        ...widthSx,
+      } as const)
+    : ({
+        display: 'flex',
+        flexDirection: 'column',
+        gap: spacing,
+        ...widthSx,
+      } as const)
   if (handleSubmit !== undefined) {
     return (
       <FormProvider {...form}>

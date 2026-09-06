@@ -97,7 +97,12 @@ plumbing and deliberately not exported.
   only intentionally. A public change ships, in one commit: the code,
   its tests, this AGENTS.md, the README (contract prose and the
   resource table when keys change), and the compiled usage example when
-  the documented composition changes.
+  the documented composition changes. `FormLayout`'s `columns?: 1 | 2`
+  (responsive-design-hardening round) is the template for how an
+  additive prop stays additive: it defaults to `1`, exactly today's
+  unconditional single-column flow, so every existing consumer that
+  omits it is byte-for-byte unaffected; only passing `columns={2}`
+  opts into the new CSS Grid flow.
 
 ## Testing
 
@@ -124,6 +129,22 @@ composition — host-owned queue, host AbortControllers, host transport
 — over a scripted fetch answering genuine `Response` objects; scripted
 transports and their fixture URLs live in test files only, and the
 workspace's `no-direct-http` rule keeps every fetch out of `src`.
+
+**Responsive sx assertions (responsive-design-hardening round)**: a
+plain, non-breakpoint-gated sx value (`flexWrap: 'wrap'`, a fixed
+`width`) computes fine through jsdom's `getComputedStyle`, so those
+stay ordinary `toHaveStyle` assertions (`FileUploader`'s row action
+groups, `PageHeader`'s title/actions row). A breakpoint-keyed sx value
+(`FormLayout`'s `gridTemplateColumns` under `columns={2}`) compiles to
+a base rule plus an `@media` rule that jsdom cannot evaluate — there is
+no real viewport for either side to be "active" at — so those assert
+against `test-utils/emitted-css.ts`'s `emittedStyleText()` instead: the
+actual generated CSS text, read across every `<style>` tag in the
+document. Both forms are property/snapshot proofs that the intended
+declaration was wired into the render; neither proves a layout looks
+correct at a real viewport width, which this package's jsdom suite
+cannot render at all (see the package README's Deferrals: Storybook /
+browser-side visual verification is the same standing gap).
 
 ## Deferrals (recorded, do not re-open silently)
 

@@ -18,6 +18,7 @@ import zhCN from '../locales/zh-CN.json' with { type: 'json' }
 import enUS from '../locales/en-US.json' with { type: 'json' }
 import { renderWithProviders } from '../../test-utils/render.js'
 import { expectNoAxeViolations } from '../../test-utils/axe.js'
+import { emittedStyleText } from '../../test-utils/emitted-css.js'
 import { TextFieldSlot } from '../../test-utils/text-field-slot.js'
 import { FormLayout } from './FormLayout.js'
 import { FormField } from './FormField.js'
@@ -140,6 +141,104 @@ describe('FormLayout', () => {
     const actionsRow = getByRole('button', { name: 'Save member' }).closest('div')
     expect(actionsRow).not.toBeNull()
     expect(container.querySelector('form')).toContainElement(actionsRow!)
+  })
+
+  describe('columns', () => {
+    it('renders the default single-column flex flow when columns is omitted, byte-for-byte the pre-existing shape', () => {
+      const onSubmit = vi.fn<SubmitHandler<MemberFormValues>>()
+      const { container } = renderWithProviders(<FullForm onSubmit={onSubmit} />)
+      const form = container.querySelector('form')
+      expect(form).toHaveStyle({ display: 'flex', flexDirection: 'column' })
+    })
+
+    it('renders the default single-column flow the same way when columns={1} is passed explicitly', () => {
+      const onSubmit = vi.fn<SubmitHandler<MemberFormValues>>()
+      function OneColumnForm() {
+        const form = useForm<MemberFormValues>({ mode: 'onSubmit' })
+        return (
+          <FormLayout form={form} onSubmit={onSubmit} columns={1}>
+            <FormField name="name" render={(s) => <TextFieldSlot state={s} label="Name" />} />
+          </FormLayout>
+        )
+      }
+      const { container } = renderWithProviders(<OneColumnForm />)
+      const form = container.querySelector('form')
+      expect(form).toHaveStyle({ display: 'flex', flexDirection: 'column' })
+    })
+
+    it('switches to a CSS Grid flow when columns={2} is passed', () => {
+      const onSubmit = vi.fn<SubmitHandler<MemberFormValues>>()
+      function TwoColumnForm() {
+        const form = useForm<MemberFormValues>({ mode: 'onSubmit' })
+        return (
+          <FormLayout
+            form={form}
+            onSubmit={onSubmit}
+            columns={2}
+            actions={<button type="submit">Save member</button>}
+          >
+            <FormField name="name" render={(s) => <TextFieldSlot state={s} label="Name" />} />
+            <FormField name="email" render={(s) => <TextFieldSlot state={s} label="Email" />} />
+          </FormLayout>
+        )
+      }
+      const { container } = renderWithProviders(<TwoColumnForm />)
+      const form = container.querySelector('form')
+      expect(form).toHaveStyle({ display: 'grid' })
+      // The responsive gridTemplateColumns is a breakpoint-keyed sx
+      // value (1fr below sm, two equal tracks at sm/600px and up), so
+      // jsdom's getComputedStyle (real layout and @media evaluation,
+      // neither of which jsdom does) cannot resolve which side is
+      // "active" -- there is no real viewport for either side to be
+      // active at. Reading the generated CSS text instead proves both
+      // declarations were wired into the render: this is a property/
+      // snapshot assertion, not a proof that either layout renders
+      // correctly at a real viewport width.
+      const css = emittedStyleText()
+      expect(css).toMatch(/grid-template-columns:1fr/)
+      expect(css).toMatch(/@media \(min-width:600px\)/)
+      expect(css).toMatch(/grid-template-columns:repeat\(2,\s*1fr\)/)
+      // The actions row spans every column track in grid mode. jsdom's
+      // CSS engine does not resolve the `grid-column: 1 / -1` shorthand
+      // through getComputedStyle, so this too is a generated-CSS-text
+      // assertion rather than a toHaveStyle computed-style one.
+      expect(css).toMatch(/grid-column:1\/-1/)
+    })
+
+    it('still submits the collected values with columns={2}, unchanged behavior', async () => {
+      const onSubmit = vi.fn<SubmitHandler<MemberFormValues>>()
+      function TwoColumnForm() {
+        const form = useForm<MemberFormValues>({ mode: 'onSubmit' })
+        return (
+          <FormLayout
+            form={form}
+            onSubmit={onSubmit}
+            columns={2}
+            actions={<button type="submit">Save member</button>}
+          >
+            <FormField
+              name="name"
+              required
+              render={(s) => <TextFieldSlot state={s} label="Name" />}
+            />
+            <FormField
+              name="email"
+              required
+              render={(s) => <TextFieldSlot state={s} label="Email" />}
+            />
+          </FormLayout>
+        )
+      }
+      const utils = renderWithProviders(<TwoColumnForm />)
+      const user = userEvent.setup()
+      await user.type(utils.getByLabelText('Name'), 'Ada')
+      await user.type(utils.getByLabelText('Email'), 'ada@example.com')
+      await user.click(utils.getByRole('button', { name: 'Save member' }))
+      expect(onSubmit).toHaveBeenCalledWith(
+        { name: 'Ada', email: 'ada@example.com' },
+        expect.anything(),
+      )
+    })
   })
 
   it('passes axe over a labeled form', async () => {

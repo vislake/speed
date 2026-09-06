@@ -23,6 +23,15 @@
  * `emptyAction`), which hosts swap for a variant of their own when the
  * emptiness means more than "no data yet".
  *
+ * Horizontal overflow is a stated, tested contract, not an accident of
+ * implementation: the table is always wrapped in MUI's `TableContainer`,
+ * whose default styling gives the wrapper `overflow-x: auto` -- more or
+ * wider columns than the host's container scroll horizontally inside
+ * that wrapper rather than overflowing the page. This holds regardless
+ * of column count or width and needs no prop; see DataTable.test.tsx's
+ * "horizontal-scroll container" test for the regression proof (a future
+ * refactor that drops `TableContainer` would fail it).
+ *
  * Selection is enabled by passing `onSelectionChange`; `selectedRowKeys`
  * then holds the keys (from `rowKey`, index-keyed by default -- pass an
  * id-based `rowKey` once a table can reorder) and the header checkbox

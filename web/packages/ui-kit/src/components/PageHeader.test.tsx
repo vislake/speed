@@ -44,6 +44,22 @@ describe('PageHeader', () => {
     expect(getByRole('button', { name: 'Invite' })).toBeInTheDocument()
   })
 
+  it('wraps the title/actions row instead of squeezing them under a narrow container', () => {
+    // A property assertion, not a rendering proof: jsdom does no real
+    // layout, so this cannot show the row actually wrapping at a real
+    // narrow width -- it proves the flexWrap CSS is wired onto the row,
+    // guarding against a future refactor silently dropping it (this
+    // behavior was previously untested emergent behavior, per the
+    // round's audit).
+    const { getByRole } = renderWithProviders(
+      <PageHeader title="Members" actions={<button type="button">Invite</button>} />,
+    )
+    const actionsButton = getByRole('button', { name: 'Invite' })
+    const row = actionsButton.closest('div')?.parentElement
+    expect(row).not.toBeNull()
+    expect(row).toHaveStyle({ flexWrap: 'wrap' })
+  })
+
   it('stays a plain header without description or actions', () => {
     const { getByRole, queryByRole, queryByText } = renderWithProviders(
       <PageHeader title="Settings" />,

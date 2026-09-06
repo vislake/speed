@@ -21,7 +21,11 @@
  * repeat of an identical failure re-announces instead of sitting silent.
  *
  * Render shape: rows render as cards below the trigger once the queue has
- * content; an empty `rows` renders no queue at all. The picker affordance
+ * content; an empty `rows` renders no queue at all. Each row's action-
+ * button group (Cancel while uploading; Retry/Remove once settled) is a
+ * responsive `flexWrap: 'wrap'` flex row, purely additive CSS, so a long
+ * file name plus several action buttons cannot overflow a narrow queue
+ * card regardless of name length. The picker affordance
  * renders only when `onSelectFiles` is given (the label is the built-in
  * bilingual text unless `chooseFilesLabel` overrides it, with the file
  * input visually hidden but focusable inside the label, one tab stop for
@@ -348,7 +352,9 @@ export function FileUploader({
               </Typography>
               {row.status === 'uploading' ? (
                 <>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                  <Box
+                    sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mt: 0.5 }}
+                  >
                     <LinearProgress
                       aria-label={t('fileUploader.statusUploading')}
                       variant={row.progress === undefined ? 'indeterminate' : 'determinate'}
@@ -371,7 +377,9 @@ export function FileUploader({
                   </Typography>
                 </>
               ) : (
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                <Box
+                  sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mt: 0.5 }}
+                >
                   <Typography
                     variant="caption"
                     sx={{

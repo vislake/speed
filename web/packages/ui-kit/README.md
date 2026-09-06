@@ -23,7 +23,7 @@ string lives in the bilingual `ui-kit` namespace registered through
 | `components/ConfirmDialog.tsx` | `ConfirmDialog`, `ConfirmDialogProps`, `ConfirmDialogVariant` |
 | `components/FileUploader.tsx` | `FileUploader`, `FileUploaderProps`, `FileUploaderRow`, `FileUploaderRowStatus` |
 | `components/FormField.tsx` | `FormField`, `FormFieldProps`, `FormFieldRenderState`, `REQUIRED_ERROR_KEY` |
-| `components/FormLayout.tsx` | `FormLayout`, `FormLayoutProps` |
+| `components/FormLayout.tsx` | `FormLayout`, `FormLayoutProps`, `FormLayoutColumns` |
 | `components/DataTable.tsx` | `DataTable`, `DataTableColumn`, `DataTableSort`, `DataTableSortDirection`, `DataTableFilter`, `DataTablePagination`, `DataTableProps` |
 | `resources.ts` | `UI_KIT_NAMESPACE`, `uiKitResources` |
 
@@ -385,14 +385,43 @@ Deferrals); today rules are RHF's.
 `FormField` children need no `control` prop), renders the `<form>` with
 RHF's `handleSubmit` wired when `onSubmit` is given (native browser
 validation off -- `noValidate` -- required markers come from RHF rules,
-which speak the ui-kit error contract), the vertical field flow with
-uniform `spacing` (default 2 theme units) and the right-aligned
-`actions` row. `maxWidth` (px, default 600; `false` widens to the
-parent) constrains the flow; the form element itself carries no styling
-beyond layout. Pass no `onSubmit` to render a bare field flow (a
-section inside a larger form, a filters panel). Props: `form` (the
-host's `UseFormReturn`, required), `children`, `onSubmit?`, `actions?`,
-`spacing?`, `maxWidth?`.
+which speak the ui-kit error contract), the field flow with uniform
+`spacing` (default 2 theme units) and the right-aligned `actions` row.
+`maxWidth` (px, default 600; `false` widens to the parent) constrains
+the flow; the form element itself carries no styling beyond layout.
+Pass no `onSubmit` to render a bare field flow (a section inside a
+larger form, a filters panel). Props: `form` (the host's
+`UseFormReturn`, required), `children`, `onSubmit?`, `actions?`,
+`spacing?`, `maxWidth?`, `columns?`.
+
+`columns?: 1 | 2` (default `1`) is this round's opt-in responsive
+addition: omitting it (or passing `1` explicitly) renders the exact
+single-column flex flow FormLayout has always rendered -- zero behavior
+change for every existing consumer. Passing `columns={2}` switches the
+flow to a CSS Grid with two responsive column tracks: one track (a
+single column) below the `sm` breakpoint (600px), two equal tracks at
+`sm` and up. Each direct child (typically one `FormField` per cell)
+becomes one grid cell in source order; the `actions` row spans every
+column track in grid mode (`gridColumn: '1 / -1'`) so it always reads
+as one full-width row, matching its single-column appearance today.
+`sm` is the deliberate breakpoint, not `md`: a two-field row (name and
+email side by side, say) still has legible field widths as soon as a
+viewport clears the phone/tablet-portrait boundary, and a form whose
+fields genuinely need the full row width can still pass `columns={1}`
+regardless of viewport -- there is no per-field override to a wider
+span today (a possible future enhancement, not built).
+
+```tsx
+<FormLayout
+  form={form}
+  onSubmit={onSubmit}
+  columns={2}
+  actions={<Button type="submit">Save</Button>}
+>
+  <FormField name="firstName" render={(s) => <TextFieldSlot state={s} label="First name" />} />
+  <FormField name="lastName" render={(s) => <TextFieldSlot state={s} label="Last name" />} />
+</FormLayout>
+```
 
 **FormField** -- one field's RHF plumbing collapsed: a `Controller`
 bound to `name` under `control` (or the context FormLayout installs),
@@ -466,6 +495,21 @@ mid-read); an empty table renders the stock EmptyState placeholder,
 overridable via `emptyTitle`/`emptyDescription`/`emptyAction`. Extra
 props: `rowKey?`, `size?` ('small' | 'medium'), `sx?`.
 
+**Horizontal-scroll container is a stated, tested contract, not an
+accident of implementation**: the table always renders inside MUI's
+`TableContainer`, whose default styling gives the wrapper
+`overflow-x: auto`. More or wider columns than the host's container
+scroll horizontally inside that wrapper rather than overflowing the
+page or squeezing column widths -- true regardless of column count or
+width, and needs no prop. `DataTable.test.tsx`'s
+"horizontal-scroll container" test pins this by rendering a
+deliberately over-wide column set and asserting the wrapper is a real
+`TableContainer` with `overflow-x: auto`, so a future refactor that
+drops `TableContainer` would fail a test instead of silently
+regressing. Column-hiding or a priority-reflow layout for narrow
+viewports is a possible future enhancement, deliberately not built in
+this round.
+
 ### FileUploader
 
 The file picker and transfer-queue view, fully controlled like every
@@ -505,7 +549,11 @@ affordances inert and ignores picks and drops), `chooseFilesLabel`
 (picker label; the built-in bilingual text by default). The trigger is
 a button rendered as a label wrapping a visually hidden but focusable
 file input -- one tab stop for the whole control, focus shown through
-the label's `:focus-within` rule. Settles announce in a single polite
+the label's `:focus-within` rule. Each row's action-button group
+(Cancel while uploading; Retry/Remove once settled) is a responsive
+`flexWrap: 'wrap'` flex row, so a long file name plus several buttons
+wraps onto a second line instead of overflowing a narrow queue card --
+purely additive CSS, no prop or behavior change. Settles announce in a single polite
 live region (`role="status"`, rendered only while the queue has
 content), stored structurally and rendered in the language active at
 render time: only a row leaving `uploading` announces (a retry clears
@@ -595,6 +643,12 @@ same rationale documented here.
 
 ## Deferrals and recorded decisions
 
+- **DataTable column-hiding / priority-reflow for narrow viewports**:
+  out of scope for this round's responsive-design pass. The
+  horizontal-scroll container (see the DataTable section) is the
+  stated, tested contract for a narrow viewport today; a layout that
+  hides or reflows lower-priority columns instead of scrolling is a
+  possible future enhancement, deliberately not built.
 - **Validation from generated types**: zod-style validation derived from
   the API-generated types is the form milestone's follow-up (roadmap),
   deliberately not implemented here. The validation-error contract is
@@ -622,11 +676,17 @@ same rationale documented here.
 ## Development
 
 From `web/packages/ui-kit`: `pnpm lint`, `pnpm typecheck`, `pnpm test`
-(166 tests across 12 files), `pnpm build`. The test suite runs in jsdom
+(175 tests across 12 files), `pnpm build`. The test suite runs in jsdom
 (`vitest.config.ts`); shared helpers live in `test-utils/`
 (`renderWithProviders` builds the host tree -- fresh i18n instance per
-call, namespace registered -- and `expectNoAxeViolations` runs axe).
-Bilingual fixtures are the shipped locale files under `src/locales/`,
+call, namespace registered -- `expectNoAxeViolations` runs axe -- and
+`emitted-css.ts`'s `emittedStyleText()` reads the CSS text emotion has
+injected into the document, used by the breakpoint-keyed sx assertions
+this round's responsive tests need: jsdom evaluates neither real layout
+nor `@media` conditions, so those tests are property/snapshot proofs
+that the intended declaration was wired into the render, not proofs
+that either side of a breakpoint looks correct at a real viewport
+width). Bilingual fixtures are the shipped locale files under `src/locales/`,
 imported by sources and tests; `src/usage-example.test.tsx` compiles and
 executes the Quick start composition above, so the documented usage
 cannot drift from the API. The workspace `no-literal-text` rule and its
