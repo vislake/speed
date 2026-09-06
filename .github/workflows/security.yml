@@ -147,11 +147,23 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Set up pinned Node.js, pnpm and the pnpm store cache
+      - name: Set up pinned Node.js and pnpm (store cache skipped)
+        # pnpm audit reads the committed lockfile (the frozen-lockfile CI
+        # install resolves exactly what it pins), so no install step is
+        # needed -- and precisely because nothing here ever populates the
+        # pnpm store, the store cache is disabled (use-store-cache:
+        # false): an install-less job on a cold cache key would save an
+        # EMPTY store under the primary key at job end, which
+        # actions/cache never overwrites, freezing every later install
+        # job's cache save for that key's lifetime -- the identical
+        # hazard setup-go-env's own header records for its install-less
+        # golangci-lint callers (setup-node-env's CACHE section has the
+        # full argument).
         uses: ./.github/actions/setup-node-env
-      # pnpm audit reads the committed lockfile (the frozen-lockfile CI
-      # install resolves exactly what it pins), so no install step is
-      # needed; the audit consults the live npm advisory database.
+        with:
+          use-store-cache: "false"
+      # The audit itself reads the committed lockfile and consults the
+      # live npm advisory database.
       - name: Audit npm dependencies (pnpm audit)
         working-directory: web
         run: pnpm audit

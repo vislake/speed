@@ -1,7 +1,8 @@
 name: setup-node-env
 description: >-
   Install the pinned Node.js and pnpm toolchain for npm-package CI jobs,
-  and restore the pnpm store cache.
+  and restore the pnpm store cache (skip the cache with
+  use-store-cache: false when the job never installs).
 
 # Shared Node.js toolchain setup for every CI job that runs pnpm commands.
 # The consumers are the reusable workflows that check npm packages
@@ -35,8 +36,39 @@ description: >-
 # never write outside the store path (install dirs are per-job temp), so
 # the cached path stays coherent.
 #
+# USE-STORE-CACHE (the input below, default true): the cache steps are
+# gated on it, the same shape as setup-go-env's install-golangci gate --
+# a job that installs or fetches nothing keeps the default; a job that
+# runs a pnpm command against the lockfile without ever populating the
+# store (security.yml's deps-js pnpm audit is today's example) sets
+# false. Why it matters: actions/cache saves at job end unless the
+# restore hit the primary key exactly, so an install-less job on a cold
+# key would save an EMPTY store under the primary key, which
+# actions/cache never overwrites -- freezing every later install job's
+# save for that key's lifetime. That is the identical hazard setup-go-env
+# documents for its own golangci-lint analysis cache, whose install-less
+# callers it keeps out by the same gate; the empty-store hazard is the
+# pnpm store's version of it.
+#
 # Callers must run actions/checkout first: web/.nvmrc and web/package.json
 # are resolved from the checked-out tree.
+
+inputs:
+  use-store-cache:
+    description: >-
+      Restore (and re-save) the pnpm store cache. Leave at the default
+      true for jobs that install or fetch packages into the store; set
+      false for a job that runs a pnpm command without ever populating
+      the store (security.yml's deps-js pnpm audit) -- see the CACHE
+      section above for why an install-less job must not touch the
+      cache.
+    # No `type:` key: action.yml inputs have no type (that is a
+    # workflow_call/workflow_dispatch-only schema) -- composite inputs
+    # are always strings, which is why the step below compares
+    # == 'true' rather than testing the input directly (the string
+    # "false" would be truthy).
+    required: false
+    default: "true"
 
 runs:
   using: composite
@@ -71,7 +103,12 @@ runs:
         set -euo pipefail
         pnpm config set --location global store-dir "${HOME}/.cache/pnpm-store"
 
+    # Gated on use-store-cache (default true): skipping the whole step
+    # also skips its post-step save -- a job that never populates the
+    # store must neither restore nor save it (the CACHE section above has
+    # the empty-store hazard).
     - name: Restore pnpm store cache
+      if: ${{ inputs.use-store-cache == 'true' }}
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
       with:
         path: ~/.cache/pnpm-store
