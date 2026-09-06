@@ -94,6 +94,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
+
 	// Blank-imported for its init side effect: registers dbkit.DialectSQLite
 	// so this file's own dbkit.Open call (the second connection reading the
 	// audit row back) has a driver to build from -- this test binary is a
@@ -424,8 +425,8 @@ func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *
 	cmd.Env = env
 	var childOut, childErr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &childOut, &childErr
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start the reference-app subprocess: %v", err)
+	if startErr := cmd.Start(); startErr != nil {
+		t.Fatalf("start the reference-app subprocess: %v", startErr)
 	}
 	childExited := make(chan struct{})
 	go func() {
@@ -527,8 +528,8 @@ func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *
 			listResp.StatusCode, http.StatusOK, childLogs())
 	}
 	var listed testListNotesResponse
-	if err := json.NewDecoder(listResp.Body).Decode(&listed); err != nil {
-		t.Fatalf("decode list response: %v", err)
+	if decodeErr := json.NewDecoder(listResp.Body).Decode(&listed); decodeErr != nil {
+		t.Fatalf("decode list response: %v", decodeErr)
 	}
 	if len(listed.Notes) != 1 {
 		t.Fatalf("notes after create = %+v, want exactly 1", listed.Notes)
