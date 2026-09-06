@@ -106,11 +106,24 @@ func (q *StandaloneQueue) runDispatcher(dispatch chan<- jobRecord) {
 }
 
 // dispatchOnce runs one poll/claim/dispatch cycle: it reads a batch of
-// eligible candidates in priority order and, for each, either claims it
-// and hands it to a worker or skips it because its tenant is currently at
+// eligible candidates — interleaved round-robin across distinct tenants
+// before falling back to age order within any one tenant's own share, see
+// claimCandidates' own doc comment — and, for each, either claims it and
+// hands it to a worker or skips it because its tenant is currently at
 // q.tenantConcurrency — moving on to the next candidate (which may belong
-// to a different tenant) rather than stalling on the first one, which is
-// what makes one tenant's backlog unable to starve another's.
+// to a different tenant) rather than stalling on the first one. Together,
+// these two mechanisms are what make one tenant's backlog unable to starve
+// another's: claimCandidates' own interleaving keeps a different tenant's
+// eligible row from being excluded from the batch in the first place no
+// matter how deep the flooding tenant's own backlog runs, and this
+// skip-and-continue loop keeps a tenant already at its concurrency limit
+// from blocking a batch-mate that belongs to someone else. Neither one
+// alone is sufficient — see candidate_window_fairness_test.go's
+// TestDispatchOnce_CandidateWindowDoesNotStarveOtherTenants, which pins
+// exactly the gap that existed before claimCandidates' own interleaving
+// was added, and TestPerTenantConcurrencyLimiting, which pins the
+// complementary concurrency-admission property this file's skip-and-
+// continue loop provides.
 func (q *StandaloneQueue) dispatchOnce(dispatch chan<- jobRecord) {
 	ctx := context.Background()
 	candidates, err := claimCandidates(ctx, q.db, time.Now(), claimBatchSize)

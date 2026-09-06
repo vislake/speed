@@ -225,17 +225,64 @@ func findByID(ctx context.Context, db *gorm.DB, id JobID) (*jobRecord, error) {
 	}
 }
 
-// claimCandidates returns up to limit Jobs eligible to run (StatusPending
-// or StatusRetrying, ScheduledAt <= now), ordered by Priority descending
-// then ScheduledAt ascending — the order dispatchOnce offers them to
-// per-tenant concurrency gating and claimOne in.
+// claimCandidatesSQL selects up to limit Jobs eligible to run (StatusPending
+// or StatusRetrying, ScheduledAt <= now), interleaved round-robin across
+// distinct tenants before falling back to age ordering within any one
+// tenant's own share -- see claimCandidates' own doc comment for why this
+// shape exists at all. The inner query ranks each tenant's own eligible
+// rows independently (ROW_NUMBER() OVER (PARTITION BY tenant_id ORDER BY
+// priority DESC, scheduled_at ASC)); the outer query then orders by that
+// rank FIRST, so every distinct tenant present contributes its own
+// rank-1 (highest-priority, oldest) row before ANY tenant contributes a
+// second one, its rank-2 before any third, and so on -- exactly the
+// "round-robin, then age order within a tenant's own share" fairness
+// dispatchOnce's own comment already claimed for the whole dispatch tick,
+// now actually true at the SELECT itself rather than only at the
+// concurrency-admission step downstream of it. ROW_NUMBER() OVER (...) is
+// standard SQL, supported identically by both dbkit dialects (SQLite 3.25+
+// and PostgreSQL) — the "portable across both dialects" discipline
+// createJobsTableSQL's own doc comment already applies to this table's
+// schema applies here too, even though only SQLite is exercised in the
+// standalone deployment mode today.
+const claimCandidatesSQL = `
+	SELECT id, type, tenant_id, payload, idempotency_key, status, priority,
+	       progress_pct, progress_msg, result, error_message, attempts,
+	       max_retries, timeout_nanos, scheduled_at, created_at, updated_at,
+	       started_at, completed_at
+	FROM (
+		SELECT *,
+		       ROW_NUMBER() OVER (
+		           PARTITION BY tenant_id
+		           ORDER BY priority DESC, scheduled_at ASC
+		       ) AS tenant_rank
+		FROM ` + jobsTable + `
+		WHERE status IN (?, ?) AND scheduled_at <= ?
+	) ranked
+	ORDER BY tenant_rank ASC, priority DESC, scheduled_at ASC
+	LIMIT ?
+`
+
+// claimCandidates returns up to limit Jobs eligible to run, interleaved
+// round-robin across distinct tenants — see claimCandidatesSQL's own doc
+// comment for the exact ordering and why it exists: without it, a single
+// tenant with a backlog at or beyond limit truly-eligible rows, all older
+// than every other tenant's own eligible rows, would fill the ENTIRE
+// candidate window every tick, so a different tenant's eligible-and-older
+// row would never be selected at all — not merely delayed — for as long as
+// the flooding tenant's backlog stays at or above limit. This was a real,
+// reproduced gap (see candidate_window_fairness_test.go's
+// TestDispatchOnce_CandidateWindowDoesNotStarveOtherTenants, which fails
+// against the naive "ORDER BY priority DESC, scheduled_at ASC LIMIT limit"
+// query this replaced), distinct from — and previously masked by
+// proximity to — the per-tenant CONCURRENCY-admission fairness
+// TestPerTenantConcurrencyLimiting already proved: that test only ever
+// exercises backlogs far smaller than claimBatchSize, so it could never
+// have caught a candidate-SELECTION starvation gap this shallow.
 func claimCandidates(ctx context.Context, db *gorm.DB, now time.Time, limit int) ([]jobRecord, error) {
 	var recs []jobRecord
 	err := db.WithContext(ctx).
-		Where("status IN ? AND scheduled_at <= ?", []string{string(StatusPending), string(StatusRetrying)}, now).
-		Order("priority DESC, scheduled_at ASC").
-		Limit(limit).
-		Find(&recs).Error
+		Raw(claimCandidatesSQL, string(StatusPending), string(StatusRetrying), now, limit).
+		Scan(&recs).Error
 	if err != nil {
 		return nil, fmt.Errorf("jobs: query claim candidates: %w", err)
 	}
