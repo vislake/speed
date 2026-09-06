@@ -199,6 +199,90 @@ func TestGateway_VerifyWebhook_ValidSignature(t *testing.T) {
 	}
 }
 
+// TestGateway_VerifyWebhook_CompletedButUnpaid_AgreesWithQueryStatus is
+// P1-1's regression test: under delayed settlement (or a manually-unsettled
+// completed session), a checkout.session.completed webhook whose
+// payment_status is "unpaid" must NOT be recorded as
+// NormalizedEventChargeSucceeded/ChannelStatusSucceeded -- the exact
+// disagreement that let the webhook path report "money arrived" while
+// QueryStatus, re-querying the SAME session, reports it has not. This test
+// fails on the pre-fix code (which reported ChannelStatusSucceeded
+// unconditionally for checkout.session.completed) and asserts the fixed
+// webhook path's Status agrees with what QueryStatus.sessionStatus would
+// report for the identical session shape.
+func TestGateway_VerifyWebhook_CompletedButUnpaid_AgreesWithQueryStatus(t *testing.T) {
+	payload := checkoutSessionCompletedUnpaidPayload(t, "evt_unpaid_1", "cs_unpaid_1", "tenant-a", "sub-1", "inv-1", 2900, "usd")
+	signed := webhook.GenerateTestSignedPayload(&webhook.UnsignedPayload{
+		Payload:   payload,
+		Secret:    testWebhookSecret,
+		Timestamp: time.Now(),
+	})
+
+	gw := newGatewayWithBackend(&fakeBackend{}, testConfig())
+	event, err := gw.VerifyWebhook(context.Background(), map[string][]string{
+		"Stripe-Signature": {signed.Header},
+	}, signed.Payload)
+	if err != nil {
+		t.Fatalf("VerifyWebhook: %v", err)
+	}
+
+	// The invariant P1-1 pins: whichever channel reports it, one session in
+	// one state produces one module-side status. QueryStatus's own
+	// sessionStatus (gateway.go) maps Status=Complete/PaymentStatus=Unpaid
+	// to ChannelStatusPending -- the webhook path must land on the exact
+	// same answer, never ChannelStatusSucceeded.
+	wantStatus := sessionStatus(&stripego.CheckoutSession{
+		Status:        stripego.CheckoutSessionStatusComplete,
+		PaymentStatus: stripego.CheckoutSessionPaymentStatusUnpaid,
+	})
+	if wantStatus != billing.ChannelStatusPending {
+		t.Fatalf("sanity check failed: sessionStatus(complete/unpaid) = %q, want pending", wantStatus)
+	}
+	if event.Status != wantStatus {
+		t.Errorf("webhook Status = %q, want %q (QueryStatus's own answer for the identical session state)", event.Status, wantStatus)
+	}
+	if event.Status == billing.ChannelStatusSucceeded {
+		t.Error("webhook recorded ChannelStatusSucceeded for a completed-but-unpaid session -- money has not arrived")
+	}
+	if event.Type == billing.NormalizedEventChargeSucceeded {
+		t.Error("webhook recorded NormalizedEventChargeSucceeded for a completed-but-unpaid session")
+	}
+	if event.Amount.Cents != 0 {
+		t.Errorf("Amount = %+v, want zero-valued for a not-yet-settled event", event.Amount)
+	}
+}
+
+// TestGateway_VerifyWebhook_CompletedAndPaid_StillSucceeds is P1-1's second
+// leg: an ordinary completed-and-paid session must keep reporting success
+// exactly as before the fix -- the regression this leg guards against is
+// P1-1's own fix becoming overzealous and treating every completed session
+// as merely pending.
+func TestGateway_VerifyWebhook_CompletedAndPaid_StillSucceeds(t *testing.T) {
+	payload := checkoutSessionCompletedPayload(t, "evt_paid_1", "cs_paid_1", "tenant-a", "sub-1", "inv-1", 2900, "usd")
+	signed := webhook.GenerateTestSignedPayload(&webhook.UnsignedPayload{
+		Payload:   payload,
+		Secret:    testWebhookSecret,
+		Timestamp: time.Now(),
+	})
+
+	gw := newGatewayWithBackend(&fakeBackend{}, testConfig())
+	event, err := gw.VerifyWebhook(context.Background(), map[string][]string{
+		"Stripe-Signature": {signed.Header},
+	}, signed.Payload)
+	if err != nil {
+		t.Fatalf("VerifyWebhook: %v", err)
+	}
+	if event.Type != billing.NormalizedEventChargeSucceeded {
+		t.Errorf("Type = %q, want charge_succeeded", event.Type)
+	}
+	if event.Status != billing.ChannelStatusSucceeded {
+		t.Errorf("Status = %q, want succeeded", event.Status)
+	}
+	if event.Amount.Cents != 2900 || event.Amount.Currency != "usd" {
+		t.Errorf("Amount = %+v", event.Amount)
+	}
+}
+
 // TestGateway_VerifyWebhook_InvalidSignature proves a tampered body is
 // refused -- the real attack this verification exists to stop: anyone who
 // can reach the endpoint sending a forged event.
@@ -270,9 +354,26 @@ func TestNewGateway_RequiresConfig(t *testing.T) {
 }
 
 // checkoutSessionCompletedPayload builds a minimal, realistic
-// checkout.session.completed event body -- the shape event.go's
-// normalizeEvent parses.
+// checkout.session.completed event body with payment_status "paid" -- the
+// shape event.go's normalizeEvent parses. checkoutSessionCompletedUnpaidPayload
+// is the sibling fixture for the completed-but-unpaid case P1-1's own
+// regression test drives.
 func checkoutSessionCompletedPayload(t *testing.T, eventID, sessionID, tenantID, subID, invoiceID string, amountCents int64, currency string) []byte {
+	t.Helper()
+	return checkoutSessionPayload(t, eventID, sessionID, tenantID, subID, invoiceID, amountCents, currency, "paid")
+}
+
+// checkoutSessionCompletedUnpaidPayload builds a checkout.session.completed
+// event body whose payment_status is "unpaid" -- Stripe's own documented
+// possibility for a "complete" session using a deferred payment method, or
+// a genuinely delayed settlement, and the exact shape
+// TestGateway_VerifyWebhook_CompletedButUnpaid_AgreesWithQueryStatus drives.
+func checkoutSessionCompletedUnpaidPayload(t *testing.T, eventID, sessionID, tenantID, subID, invoiceID string, amountCents int64, currency string) []byte {
+	t.Helper()
+	return checkoutSessionPayload(t, eventID, sessionID, tenantID, subID, invoiceID, amountCents, currency, "unpaid")
+}
+
+func checkoutSessionPayload(t *testing.T, eventID, sessionID, tenantID, subID, invoiceID string, amountCents int64, currency, paymentStatus string) []byte {
 	t.Helper()
 	body, err := json.Marshal(map[string]any{
 		"id":      eventID,
@@ -282,7 +383,7 @@ func checkoutSessionCompletedPayload(t *testing.T, eventID, sessionID, tenantID,
 			"object": map[string]any{
 				"id":             sessionID,
 				"status":         "complete",
-				"payment_status": "paid",
+				"payment_status": paymentStatus,
 				"amount_total":   amountCents,
 				"currency":       currency,
 				"metadata": map[string]string{

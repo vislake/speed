@@ -102,6 +102,18 @@ const (
 	// was refunded, full or partial. ChannelStatus is
 	// ChannelStatusRefunded.
 	NormalizedEventRefunded NormalizedEventType = "refunded"
+	// NormalizedEventChargePending reports that a checkout/order completed
+	// on the payer's side but has not yet actually settled -- a Stripe
+	// Checkout Session that is CheckoutSessionStatusComplete yet still
+	// CheckoutSessionPaymentStatusUnpaid (a deferred payment method, or a
+	// genuinely delayed settlement) being the one case this round's own
+	// channels produce. ChannelStatus is ChannelStatusPending, mirroring
+	// exactly what PaymentGateway.QueryStatus would report for the same
+	// channel-side object at this moment -- the agreement point
+	// docs/internal/06-billing-and-metering.md's
+	// callbacks-cannot-be-trusted rule requires between a webhook delivery
+	// and the authoritative re-query for the SAME underlying state.
+	NormalizedEventChargePending NormalizedEventType = "charge_pending"
 )
 
 // NormalizedEvent is what every provider's VerifyWebhook normalizes an

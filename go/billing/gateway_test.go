@@ -91,6 +91,7 @@ func TestNormalizedEventType_ClosedVocabulary(t *testing.T) {
 	values := []NormalizedEventType{
 		NormalizedEventChargeSucceeded, NormalizedEventChargeFailed,
 		NormalizedEventSubscriptionCanceled, NormalizedEventRefunded,
+		NormalizedEventChargePending,
 	}
 	seen := make(map[NormalizedEventType]bool, len(values))
 	for _, v := range values {
