@@ -177,6 +177,22 @@ linters:
           deny:
             - pkg: github.com/minio/minio-go
               desc: "the S3 client -- go/pkgcore/objectstore/s3's ObjectStore implementation and its pkg/credentials subpackage -- belongs there alone; business code depends on the pkgcore ObjectStore interface"
+        nats-only-in-pkgcore:
+          # go/pkgcore/eventbus/nats is a second distributed-mode EventBus
+          # implementation (docs/internal/03-deployment-modes.md's seam
+          # table used to name NATS a candidate; this package makes it
+          # real), added the same way eventbus/redis and kv/redis were --
+          # a package of its own so the SDK never reaches a consumer that
+          # only wires the in-process or Redis-backed implementations.
+          # This rule is that split's depguard enforcement from day one,
+          # rather than a gap later rounds have to notice and close.
+          files:
+            - "**/go/**"
+            - "!**/go/pkgcore/eventbus/nats/**"
+          list-mode: lax
+          deny:
+            - pkg: github.com/nats-io/nats.go
+              desc: "the NATS client (and its jetstream subpackage) -- go/pkgcore/eventbus/nats's EventBus implementation -- belongs there alone; business code depends on the pkgcore EventBus interface"
         asynq-only-in-jobs:
           # Narrowed from the whole go/jobs module to its queue/asynq
           # subpackage by the jobs/asynq packaging-isolation round: asynq
