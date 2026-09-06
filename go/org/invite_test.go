@@ -1029,8 +1029,8 @@ func TestInviteService_Revoke_RacingAccept_NoRevokedStatusWithLiveMembership(t *
 	tree, invites, members := m.Tree(), m.Invitations(), m.Members()
 	root := mustCreateRoot(t, tree, ctx, "root")
 	node := mustCreateChild(t, tree, ctx, root.ID, "store")
-	if _, err := members.Add(ctx, "u-inviter", root.ID); err != nil {
-		t.Fatalf("Add(inviter): %v", err)
+	if _, addErr := members.Add(ctx, "u-inviter", root.ID); addErr != nil {
+		t.Fatalf("Add(inviter): %v", addErr)
 	}
 	result, err := invites.Invite(ctx, InviteRequest{
 		Email:         "race@example.test",
@@ -1067,8 +1067,8 @@ func TestInviteService_Revoke_RacingAccept_NoRevokedStatusWithLiveMembership(t *
 				NodeID: node.ID,
 				Status: MembershipStatusActive,
 			}
-			if err := tx.Create(membership).Error; err != nil {
-				return err
+			if createErr := tx.Create(membership).Error; createErr != nil {
+				return createErr
 			}
 			close(held)
 			<-release

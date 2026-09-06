@@ -769,8 +769,8 @@ func TestMemberService_Restore_SeatReused_AnswersMembershipExists(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Add(returning): %v", err)
 	}
-	if err := m.Members().Remove(ctx, "u-returning"); err != nil {
-		t.Fatalf("Remove: %v", err)
+	if removeErr := m.Members().Remove(ctx, "u-returning"); removeErr != nil {
+		t.Fatalf("Remove: %v", removeErr)
 	}
 	replacement, err := m.Members().Add(ctx, "u-returning", root.ID)
 	if err != nil {
@@ -779,8 +779,8 @@ func TestMemberService_Restore_SeatReused_AnswersMembershipExists(t *testing.T) 
 
 	// Restoring the original row would put two live memberships on one
 	// (tenant, user): the database refuses, and the service must translate.
-	if _, err := m.Members().Restore(ctx, original.ID); !hasCode(err, ErrMembershipExists.Code) {
-		t.Fatalf("Restore of a removed membership whose seat was re-taken = %v, want the coded org.membership_exists, not a bare database error", err)
+	if _, restoreErr := m.Members().Restore(ctx, original.ID); !hasCode(restoreErr, ErrMembershipExists.Code) {
+		t.Fatalf("Restore of a removed membership whose seat was re-taken = %v, want the coded org.membership_exists, not a bare database error", restoreErr)
 	}
 
 	// Nothing changed: the replacement is still the tenant's one live seat
@@ -828,8 +828,8 @@ func TestMemberService_Remove_DoesNotTouchOtherMembersUpdatedAt(t *testing.T) {
 		t.Fatalf("Get(staying) before: %v", err)
 	}
 
-	if err := m.Members().Remove(ctx, "u-leaving"); err != nil {
-		t.Fatalf("Remove(leaving): %v", err)
+	if removeErr := m.Members().Remove(ctx, "u-leaving"); removeErr != nil {
+		t.Fatalf("Remove(leaving): %v", removeErr)
 	}
 
 	afterOwner, err := m.Members().Get(ctx, "u-owner")

@@ -193,13 +193,13 @@ func TestTreeService_CreateRoot_ConcurrentRaces_ExactlyOneRootSurvives(t *testin
 	start := make(chan struct{})
 	go func() {
 		<-start
-		_, err := tree.CreateRoot(ctxA, "Race Root One", "group")
-		results <- err
+		_, createErr := tree.CreateRoot(ctxA, "Race Root One", "group")
+		results <- createErr
 	}()
 	go func() {
 		<-start
-		_, err := tree.CreateRoot(ctxA, "Race Root Two", "group")
-		results <- err
+		_, createErr := tree.CreateRoot(ctxA, "Race Root Two", "group")
+		results <- createErr
 	}()
 	close(start)
 	time.Sleep(200 * time.Millisecond) // both findRoot reads have certainly landed by now
