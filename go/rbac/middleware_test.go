@@ -474,6 +474,75 @@ func TestWithSubjectResolver_OverridesTheContextSubject(t *testing.T) {
 	}
 }
 
+// TestRequirePermission_ResolverOkWithInvalidSubject_IsForbiddenNotAServerError
+// pins the review finding on the resolver seam: WithSubjectResolver may
+// answer ok=true with a Subject that is not Valid (a host resolver that
+// vouches for identity it only half-read -- an empty user id, an empty
+// tenant). The default context path already folds that into ok=false
+// (SubjectFromContext), but a raw resolver return reaches the middleware
+// unchecked. An invalid subject is a refusal, not a server failure: the
+// gate must answer the same 403 rbac.permission_denied every other
+// unusable subject gets, and must never hand the subject to Can -- the
+// real Service's grantsFor answers ErrSubjectRequired for it, which this
+// middleware maps to a 500 rbac.storage_error, expressing an
+// authorization failure as a retryable server error.
+func TestRequirePermission_ResolverOkWithInvalidSubject_IsForbiddenNotAServerError(t *testing.T) {
+	svc := newTestService(t)
+	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
+	grant(t, svc, sub, "reader", Scope{}, "notes:read")
+
+	for _, tc := range []struct {
+		name    string
+		invalid Subject
+	}{
+		{name: "missing user id", invalid: Subject{TenantID: "tenant-a"}},
+		{name: "missing tenant", invalid: Subject{UserID: "user-1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mw := RequirePermission(svc, "notes:read", WithSubjectResolver(func(*http.Request) (Subject, bool) {
+				return tc.invalid, true // the resolver vouches for an invalid subject
+			}))
+
+			rec, next := serve(mw, httptest.NewRequest(http.MethodGet, "/api/v1/notes", nil))
+
+			if next.served {
+				t.Fatal("the handler ran for a resolver-claimed subject that is not valid")
+			}
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want %d (the refusal must not surface as a %d)", rec.Code, http.StatusForbidden, http.StatusInternalServerError)
+			}
+			if code := decodeErrorBody(t, rec).Code; code != ErrPermissionDenied.Code {
+				t.Fatalf("code = %q, want %q", code, ErrPermissionDenied.Code)
+			}
+		})
+	}
+}
+
+// TestRequirePermission_InvalidResolvedSubject_NeverConsultsTheAuthorizer
+// pins the same refusal one layer further in: a resolver-claimed subject
+// that fails Valid must be refused BEFORE the decision, so an engine that
+// does not validate subjects itself (stubAuthorizer here; any host
+// Authorizer is entitled to assume the middleware already checked) is
+// never asked to decide for an identity that cannot be one.
+func TestRequirePermission_InvalidResolvedSubject_NeverConsultsTheAuthorizer(t *testing.T) {
+	az := &stubAuthorizer{allow: true}
+	mw := RequirePermission(az, "notes:read", WithSubjectResolver(func(*http.Request) (Subject, bool) {
+		return Subject{TenantID: "tenant-a"}, true
+	}))
+
+	rec, next := serve(mw, httptest.NewRequest(http.MethodGet, "/api/v1/notes", nil))
+
+	if next.served {
+		t.Fatal("the handler ran for an invalid resolved subject")
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+	if len(az.calls) != 0 {
+		t.Fatalf("the Authorizer was consulted %d time(s) for an invalid subject; it must be refused before any decision", len(az.calls))
+	}
+}
+
 // TestWithSubjectResolver_Nil_KeepsTheDefault guards the accidental-nil
 // case: a middleware that denied everything because an option was built
 // from a nil function would be a silent outage.

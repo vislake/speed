@@ -81,13 +81,16 @@ func WithSubjectResolver(fn func(*http.Request) (Subject, bool)) MiddlewareOptio
 // point of Subject).
 //
 // A failure to reach a DECISION is different from a denial and is
-// reported differently: an Authorizer error means storage was unreachable
-// or the subject was incomplete, so the response is 500 with
-// rbac.storage_error. The request still does not proceed -- an
-// undecidable check is never allowed through -- but a client sees a
-// retryable server failure rather than a permanent "you may not", which
-// is the honest answer and the one that will not send a user chasing a
-// permission they already hold.
+// reported differently: an Authorizer error means the decision genuinely
+// could not be performed -- storage unreachable, an engine failure -- so
+// the response is 500 with rbac.storage_error. The request still does not
+// proceed -- an undecidable check is never allowed through -- but a client
+// sees a retryable server failure rather than a permanent "you may not",
+// which is the honest answer and the one that will not send a user chasing
+// a permission they already hold. An incomplete subject is NOT such a
+// failure: the middleware refuses it as a denial before any decision is
+// attempted (see the subject validation in RequirePermissionFunc), so an
+// invalid subject can never be misreported as a retryable server error.
 //
 // The gate is COARSE. It answers Can, which ignores organization-tree
 // scope, so passing it means the request may proceed, not that every row
@@ -140,7 +143,23 @@ func RequirePermissionFunc(az Authorizer, permissionFor func(*http.Request) stri
 			}
 
 			sub, ok := cfg.subjectFrom(r)
-			if !ok {
+			if !ok || !sub.Valid() {
+				// A subject that fails Valid is no subject, exactly like an
+				// absent one. The default subjectFrom already folds that
+				// into ok=false (SubjectFromContext rejects an incomplete
+				// subject), but a host's WithSubjectResolver hands the
+				// middleware a raw Subject nothing else has checked, so the
+				// gate re-checks Valid here. An invalid subject must never
+				// reach Can: the Service's grantsFor answers
+				// ErrSubjectRequired for it, which would surface here as a
+				// 500 rbac.storage_error -- an authorization failure
+				// expressed as a retryable server error, and a 403-shaped
+				// refusal misread by every client that treats 5xx as
+				// transient. Refusing it as the same denial an absent
+				// subject gets also keeps the response unable to
+				// distinguish "malformed identity" from "no identity",
+				// which is precisely how the fail-closed doc comment above
+				// wants every unusable-subject case to look.
 				writeAuthzError(w, ErrPermissionDenied.WithParam("permission", permission))
 				return
 			}
