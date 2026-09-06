@@ -28,15 +28,18 @@ import (
 //     replica enqueues into one in-flight sweep; under the asynq queue's
 //     bounded idempotency that intent holds. On this app's
 //     StandaloneQueue the same key is permanent (go/jobs: a resolved key
-//     is held forever, succeeded rows are never deleted), so the first
-//     tick's sweep is the only one that ever executes and every later
-//     tick's duplicate enqueue merges into that completed job: a
-//     standalone host sweeps each tenant exactly once, at its first tick,
-//     before any object exists. This is a known limitation this round
-//     records rather than fixes -- fixing it requires changing go/jobs'
-//     or go/storage's semantics, module code outside this round's scope.
-//     The pin and the dated record live in periodic_scheduler_flow_test.go
-//     and go/storage/AGENTS.md.
+//     is held forever, succeeded rows are never deleted), so each tenant
+//     gets exactly one sweep per database file -- the first-ever one,
+//     whenever the host's scheduler first enqueues it -- and every later
+//     tick's duplicate enqueue merges into that completed job. A
+//     standalone host therefore sweeps each tenant at most once per
+//     database file; an object whose retention deadline passes after that
+//     one sweep has run is never reaped on this queue, the residual
+//     limitation go/storage/AGENTS.md records. The sweep's one chance per
+//     file is exactly what periodic_scheduler_flow_test.go's two-boot
+//     test proves end to end: boot 1 lets a completed object expire with
+//     the scheduler disabled, boot 2's first-ever sweep must then remove
+//     that object's row and bytes through the real host wiring.
 //   - pki's signing-key expiry scan, one platform-level task per tick
 //     (Service.EnqueueExpiryScan: pki's keys are platform data, so the
 //     scan carries no tenant at all). This is what actually drives the
