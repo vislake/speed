@@ -26,8 +26,13 @@ var ErrTenantUnresolved = apperr.Forbidden("tenancy.tenant_unresolved")
 
 // ErrTenantSuspended is the structured error Middleware writes to the
 // response when a WithTenantStatusResolver-wired resolver reports a
-// resolved tenant as TenantStatusSuspended. It is never returned, and
-// never even checked for, on a host that has not wired one -- see
+// resolved tenant in any state other than TenantStatusActive:
+// TenantStatusSuspended and equally any status outside the two-value
+// vocabulary -- the empty status, a case variant, a future third state --
+// reported with a nil error. Middleware refuses all of them the same way:
+// only an active tenant is servable, so an out-of-vocabulary answer can
+// never read as "no news is good news". It is never returned, and never
+// even checked for, on a host that has not wired one -- see
 // WithTenantStatusResolver's own doc comment for the full "off by
 // default" contract this depends on.
 var ErrTenantSuspended = apperr.Forbidden("tenancy.tenant_suspended")
@@ -95,6 +100,16 @@ type middlewareConfig struct {
 // substitutes an empty tenant just to let a non-allowlisted request
 // through.
 //
+// The exemption covers the tenant-status gate (WithTenantStatusResolver)
+// the same way: when resolution succeeds but the resolved tenant's status
+// refuses the request -- suspended, or any status other than
+// TenantStatusActive -- or the Status call itself fails, an allowlisted
+// request proceeds with no tenant in its context instead of receiving
+// ErrTenantSuspended or ErrTenantStatusUnavailable. A route exempted
+// because it must work regardless of tenant state stays up when the
+// resolved tenant's state or the status source itself would take other
+// routes down.
+//
 // Matching is an exact string comparison against both Method and URL.Path;
 // there is no prefix, wildcard, case-folding or trailing-slash
 // normalization for either. In particular Middleware does not apply
@@ -132,12 +147,20 @@ func WithAllowlist(method string, paths ...string) MiddlewareOption {
 // cross-tenant data leak, not a style choice.
 //
 // When WithTenantStatusResolver was given, a successfully resolved tenant
-// is additionally checked against it: TenantStatusSuspended rejects the
-// request with ErrTenantSuspended, and a Status call that itself errors
-// rejects with ErrTenantStatusUnavailable -- both fail-closed, matching
-// Resolver's own discipline. With no TenantStatusResolver wired (the
-// default), this check never runs at all, so behavior is unchanged from
-// before this seam existed.
+// is additionally checked against it, and TenantStatusActive is the only
+// status that lets the request through: TenantStatusSuspended rejects it
+// with ErrTenantSuspended, and so does any other status reported with a
+// nil error -- the empty status, a case variant or a future state this
+// version does not define are refused, never read as "assume active", the
+// same default-refuse discipline errEmptyTenantResolved applies to a
+// Resolver's out-of-contract success. A Status call that itself errors
+// rejects with ErrTenantStatusUnavailable. Both refusal classes are
+// fail-closed, matching Resolver's own discipline, and both consult the
+// allowlist the way a resolution failure does: an allowlisted request
+// whose resolved tenant is refused proceeds with no tenant in its
+// context, never with the tenant the status gate just refused. With no
+// TenantStatusResolver wired (the default), this check never runs at
+// all, so behavior is unchanged from before this seam existed.
 func Middleware(resolver Resolver, opts ...MiddlewareOption) func(http.Handler) http.Handler {
 	cfg := &middlewareConfig{allowlist: make(map[allowlistKey]struct{})}
 	for _, opt := range opts {
@@ -162,12 +185,29 @@ func Middleware(resolver Resolver, opts ...MiddlewareOption) func(http.Handler) 
 			ctx := pkgcore.WithTenant(r.Context(), tenantID)
 			if cfg.statusResolver != nil {
 				status, statusErr := cfg.statusResolver.Status(ctx, tenantID)
-				if statusErr != nil {
-					writeError(w, ErrTenantStatusUnavailable)
-					return
-				}
-				if status == TenantStatusSuspended {
-					writeError(w, ErrTenantSuspended)
+				if statusErr != nil || status != TenantStatusActive {
+					if _, allowed := cfg.allowlist[allowlistKey{method: r.Method, path: r.URL.Path}]; allowed {
+						// The same escape the resolution-failure branch
+						// gives an allowlisted request: proceed with no
+						// tenant in the context -- never the tenant the
+						// status gate just refused. A route exempted
+						// because it must work regardless of tenant state
+						// stays up whatever this gate would otherwise do.
+						next.ServeHTTP(w, r)
+						return
+					}
+					if statusErr != nil {
+						writeError(w, ErrTenantStatusUnavailable)
+					} else {
+						// TenantStatusActive is the only status that lets a
+						// request through: TenantStatusSuspended and
+						// anything else reported with a nil error -- the
+						// empty status, a case variant, a future state this
+						// version does not define -- refuse the same way, an
+						// out-of-vocabulary answer never reading as "assume
+						// active".
+						writeError(w, ErrTenantSuspended)
+					}
 					return
 				}
 			}

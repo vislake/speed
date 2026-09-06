@@ -446,6 +446,213 @@ func TestMiddleware_TenantStatusResolver_AllowlistedNoTenant_NeverConsulted(t *t
 	}
 }
 
+// TestMiddleware_TenantStatusResolver_NonActiveStatus_FailsClosed pins the
+// status gate's default-refuse contract: TenantStatusActive is the ONLY
+// status that lets a request through, and everything else a resolver might
+// report with a nil error -- the empty status, a case variant of
+// "suspended", a future third state this version does not define -- is
+// refused with the same coded ErrTenantSuspended error the suspended
+// branch writes. Before the default-refuse fix, only the exact
+// TenantStatusSuspended value was refused: every one of these statuses
+// sailed through as a normal request, a fail-open a buggy or newer
+// resolver could trigger without ever returning an error -- the status
+// twin of the empty-tenant fail-open errEmptyTenantResolved already
+// closes on the resolution side.
+func TestMiddleware_TenantStatusResolver_NonActiveStatus_FailsClosed(t *testing.T) {
+	tests := []struct {
+		name   string
+		status TenantStatus
+	}{
+		{name: "in-vocabulary suspended", status: TenantStatusSuspended},
+		{name: "empty status", status: ""},
+		{name: "case variant of suspended", status: TenantStatus("Suspended")},
+		{name: "future third state", status: TenantStatus("pending_deletion")},
+		{name: "unrecognized value", status: TenantStatus("bogus")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := &recordingHandler{}
+			resolver := &stubStatusResolver{statuses: map[pkgcore.TenantID]TenantStatus{"acme": tt.status}}
+			mw := Middleware(stubResolver{tenant: "acme"}, WithTenantStatusResolver(resolver))
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/billing/plans", nil)
+			rec := httptest.NewRecorder()
+			mw(handler).ServeHTTP(rec, req)
+
+			if handler.called {
+				t.Fatalf("next handler was called despite the resolver reporting status %q with a nil error; only TenantStatusActive may pass", tt.status)
+			}
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
+			}
+			var body tenantErrorBody
+			if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+				t.Fatalf("decoding error body: %v", err)
+			}
+			if body.Code != ErrTenantSuspended.Code {
+				t.Errorf("error code = %q, want %q", body.Code, ErrTenantSuspended.Code)
+			}
+		})
+	}
+}
+
+// TestMiddleware_TenantStatusResolver_SuspendedTenant_AllowlistedPath_Proceeds
+// pins WithAllowlist's reach across the tenant-status gate: a request whose
+// (method, path) pair is allowlisted proceeds past a tenant-status refusal
+// exactly as it proceeds past a resolution failure -- the next handler
+// runs with no tenant in the request context instead of receiving the
+// coded refusal. Before this fix the allowlist was consulted only on the
+// resolution-failure branch, so a suspended tenant's request to an
+// allowlisted route -- the reference app wires WithAllowlist(GET,
+// config.PathPublic) and WithTenantStatusResolver together -- was refused
+// with 403 tenancy.tenant_suspended despite the route's whole purpose
+// being to keep working regardless of tenant state, breaking go/config's
+// own "never an error" promise for /api/config/public.
+func TestMiddleware_TenantStatusResolver_SuspendedTenant_AllowlistedPath_Proceeds(t *testing.T) {
+	tests := []struct {
+		name            string
+		method          string
+		path            string
+		wantHandlerCall bool
+		wantStatus      int
+		wantCode        string
+	}{
+		{
+			name:            "allowlisted GET proceeds with no tenant, not 403",
+			method:          http.MethodGet,
+			path:            "/api/config/public",
+			wantHandlerCall: true,
+			wantStatus:      http.StatusOK,
+		},
+		{
+			name:            "same path, unallowlisted method, still refused",
+			method:          http.MethodPost,
+			path:            "/api/config/public",
+			wantHandlerCall: false,
+			wantStatus:      http.StatusForbidden,
+			wantCode:        ErrTenantSuspended.Code,
+		},
+		{
+			name:            "unallowlisted path, still refused",
+			method:          http.MethodGet,
+			path:            "/api/v1/billing/plans",
+			wantHandlerCall: false,
+			wantStatus:      http.StatusForbidden,
+			wantCode:        ErrTenantSuspended.Code,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := &recordingHandler{}
+			resolver := &stubStatusResolver{statuses: map[pkgcore.TenantID]TenantStatus{"acme": TenantStatusSuspended}}
+			mw := Middleware(
+				stubResolver{tenant: "acme"},
+				WithAllowlist(http.MethodGet, "/api/config/public"),
+				WithTenantStatusResolver(resolver),
+			)
+
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			rec := httptest.NewRecorder()
+			mw(handler).ServeHTTP(rec, req)
+
+			if handler.called != tt.wantHandlerCall {
+				t.Errorf("handler called = %t, want %t", handler.called, tt.wantHandlerCall)
+			}
+			if rec.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if tt.wantHandlerCall {
+				// The allowlisted escape passes the request through WITHOUT
+				// the tenant Middleware just refused: never vouch for a
+				// refused tenant by injecting it into the context -- the
+				// same "no tenant in its context" outcome an allowlisted
+				// request gets when resolution fails.
+				if handler.sawTenantOK {
+					t.Errorf("downstream saw tenant %q, want none: an allowlisted request proceeding past a status refusal must not carry the refused tenant", handler.sawTenant)
+				}
+				return
+			}
+			var body tenantErrorBody
+			if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+				t.Fatalf("decoding error body: %v", err)
+			}
+			if body.Code != tt.wantCode {
+				t.Errorf("error code = %q, want %q", body.Code, tt.wantCode)
+			}
+		})
+	}
+}
+
+// TestMiddleware_TenantStatusResolver_StatusCallFails_AllowlistedPath_Proceeds
+// is the same allowlist escape for the status gate's other refusal class:
+// a Status call that itself errors refuses a non-allowlisted request with
+// 500 tenancy.tenant_status_unavailable (fail-closed, never "assume
+// active"), but an allowlisted request proceeds, since a route exempted
+// from tenant-state machinery cannot depend on that machinery being
+// healthy.
+func TestMiddleware_TenantStatusResolver_StatusCallFails_AllowlistedPath_Proceeds(t *testing.T) {
+	statusErr := errors.New("status store unreachable")
+
+	tests := []struct {
+		name            string
+		allowlisted     bool
+		wantHandlerCall bool
+		wantStatus      int
+	}{
+		{
+			name:            "allowlisted GET proceeds with no tenant despite the status failure",
+			allowlisted:     true,
+			wantHandlerCall: true,
+			wantStatus:      http.StatusOK,
+		},
+		{
+			name:            "non-allowlisted request still fails closed with 500",
+			allowlisted:     false,
+			wantHandlerCall: false,
+			wantStatus:      http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := &recordingHandler{}
+			opts := []MiddlewareOption{WithTenantStatusResolver(&stubStatusResolver{err: statusErr})}
+			path := "/api/v1/billing/plans"
+			if tt.allowlisted {
+				opts = append(opts, WithAllowlist(http.MethodGet, "/healthz"))
+				path = "/healthz"
+			}
+			mw := Middleware(stubResolver{tenant: "acme"}, opts...)
+
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			rec := httptest.NewRecorder()
+			mw(handler).ServeHTTP(rec, req)
+
+			if handler.called != tt.wantHandlerCall {
+				t.Errorf("handler called = %t, want %t", handler.called, tt.wantHandlerCall)
+			}
+			if rec.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if tt.allowlisted {
+				if handler.sawTenantOK {
+					t.Errorf("downstream saw tenant %q, want none on an allowlisted escape", handler.sawTenant)
+				}
+				return
+			}
+			var body tenantErrorBody
+			if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+				t.Fatalf("decoding error body: %v", err)
+			}
+			if body.Code != ErrTenantStatusUnavailable.Code {
+				t.Errorf("error code = %q, want %q", body.Code, ErrTenantStatusUnavailable.Code)
+			}
+		})
+	}
+}
+
 // This file exercises the literal end-to-end shape the tenancy module's
 // three pieces are meant to support together: an http.Handler wrapped in
 // Middleware that, within the same request, also calls WithSystemContext --

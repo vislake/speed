@@ -7,6 +7,12 @@ import (
 )
 
 // TenantStatus is the closed vocabulary a TenantStatusResolver reports.
+//
+// Only TenantStatusActive is servable: Middleware refuses any other
+// reported status -- including a value this version does not define --
+// with ErrTenantSuspended. A future status that should let requests
+// through must be added to Middleware's check explicitly; it can never
+// become servable by default.
 type TenantStatus string
 
 const (
@@ -42,7 +48,18 @@ const (
 // the request closed with ErrTenantStatusUnavailable: an unreachable
 // status source must never be treated as "assume active and let the
 // request through", the identical fail-closed discipline Resolver itself
-// already follows for tenant resolution.
+// already follows for tenant resolution. A Status call that returns a nil
+// error and any status other than TenantStatusActive fails the request
+// closed the same way, with ErrTenantSuspended: an out-of-vocabulary
+// answer is refused, never read as "assume active".
+//
+// Middleware consults Status synchronously on every successfully resolved
+// request and caches nothing, so a suspension takes effect on the very
+// next request by construction. Any future caching layer must therefore
+// answer how a stale "active" answer is invalidated when a tenant is
+// suspended -- a design decision (an invalidation contract for
+// tenant-status changes) this seam deliberately does not pre-empt, rather
+// than a TTL trade-off this package can make on its own.
 type TenantStatusResolver interface {
 	// Status returns tenant's current status. ctx carries the tenant
 	// Middleware already resolved (pkgcore.TenantFromContext reports it),
