@@ -256,8 +256,12 @@ type moduleCount struct {
 }
 
 // formatCounts renders module counts as the parenthetical of a report
-// line -- "authn 9, config 1, org 5, rbac 2" -- in the order collected
-// (the migration universe's alphabetical order).
+// line -- one "name count" pair per module in the order collected, the
+// migration universe's alphabetical order: "authn 10, config 1, org 5,
+// pki 9, rbac 2", the full universe's counts today. The counts are
+// whatever the run applied or found recorded, never a fixed total --
+// they follow each module's own migration set and move as modules add
+// migration files.
 func formatCounts(counts []moduleCount) string {
 	pairs := make([]string, len(counts))
 	for i, c := range counts {
