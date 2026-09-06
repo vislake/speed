@@ -505,8 +505,8 @@ func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 		t.Errorf("demo type directory row = %+v, want non-unsubscribable with default_channels [email sms]", demoType)
 	}
 	adminType, ok := byKey["admin.impersonation_started"]
-	if !ok || !adminType.Unsubscribable || !equalStrings(adminType.DefaultChannels, []string{"in_app", "email"}) {
-		t.Errorf("admin impersonation-started type directory row = %+v, want unsubscribable with default_channels [in_app email]", adminType)
+	if !ok || adminType.Unsubscribable || !equalStrings(adminType.DefaultChannels, []string{"in_app", "email"}) {
+		t.Errorf("admin impersonation-started type directory row = %+v, want non-unsubscribable with default_channels [in_app email]", adminType)
 	}
 	simulationReadyType, ok := byKey["demo.simulation_ready"]
 	if !ok || !simulationReadyType.Unsubscribable || !equalStrings(simulationReadyType.DefaultChannels, []string{"sms"}) {
