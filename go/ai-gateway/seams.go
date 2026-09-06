@@ -111,14 +111,28 @@ type UsageEvent struct {
 	// Quantity is how many units of Feature this event measures -- the
 	// call's Usage.TotalTokens for the "ai.chat_tokens" dimension.
 	Quantity float64
-	// IdempotencyKey is a value Gateway generates fresh per call, never
-	// derived from a caller-supplied business operation id (this package
-	// has no such id to derive one from -- a chat call carries no request
-	// id of its own). A UsageRecorder implementation that wants exactly-once
-	// billing-grade semantics must therefore treat this key as
-	// non-deterministic across a retried call, the same caveat
-	// go/metering's own AnalyticsRecorder documents for its fail-open,
-	// undeduped tier; this package makes no billing-grade guarantee.
+	// IdempotencyKey is fresh and random for a Chat/ChatStream call
+	// (gateway.go's newIdempotencyKey): neither carries a caller-supplied
+	// business operation id or any other stable identity to derive a key
+	// from, so a UsageRecorder implementation wanting exactly-once
+	// billing-grade semantics must treat this key as non-deterministic
+	// across a retried chat call, the same caveat go/metering's own
+	// AnalyticsRecorder documents for its fail-open, undeduped tier.
+	//
+	// The one caller of this same struct that is NOT in that position is
+	// image_gateway.go's recordImageUsage: an image-generation call is a
+	// queued jobs.Job, which DOES carry a stable identity across every
+	// retry (jobs.Job.ID), so its IdempotencyKey is derived deterministically
+	// from that job id and the Feature dimension
+	// (imageUsageIdempotencyKey) -- two recordings of the same job's same
+	// dimension converge on one key. That still is not the whole of this
+	// fix's exactly-once guarantee on its own (a UsageRecorder is free to
+	// ignore IdempotencyKey entirely): the guarantee's real enforcement
+	// point is that imageGenerateHandler.Handle only ever CALLS
+	// recordImageUsage once per job to begin with (image_job_store.go's
+	// markCompleted gate) -- the stable key is defense in depth for a
+	// UsageRecorder that does dedup on it, not the mechanism the invariant
+	// depends on.
 	IdempotencyKey string
 	// Metadata carries small, bounded context about the call -- currently
 	// just the logical model key under "model".

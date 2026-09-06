@@ -298,7 +298,14 @@ func (g *Gateway) writeImageObject(ctx context.Context, img ImageBytes) (string,
 // images, since Feature/Quantity/Metadata were already generic. It is a
 // no-op when no UsageRecorder is wired or ctx carries no tenant, exactly
 // like Gateway.recordUsage for chat.
-func (g *Gateway) recordImageUsage(ctx context.Context, logicalModel string, usage ImageUsage) {
+//
+// jobID is the owning Job's stable id (see imageUsageIdempotencyKey's own
+// doc comment for why this, unlike chat's recordUsage, can derive a stable
+// IdempotencyKey at all). imageGenerateHandler.Handle calls this at most
+// once per job -- see image_job_store.go's markCompleted -- so jobID's
+// only purpose here is the key's stability across a UsageRecorder's own
+// dedup, defense in depth rather than the enforcement point itself.
+func (g *Gateway) recordImageUsage(ctx context.Context, logicalModel, jobID string, usage ImageUsage) {
 	if g.usage == nil {
 		return
 	}
@@ -312,10 +319,10 @@ func (g *Gateway) recordImageUsage(ctx context.Context, logicalModel string, usa
 		metadata["resolution_tier"] = usage.ResolutionTier
 	}
 	if usage.ImageCount > 0 {
-		g.reportImageUsageEvent(ctx, tenant, usageFeatureImageCount, float64(usage.ImageCount), metadata)
+		g.reportImageUsageEvent(ctx, tenant, jobID, usageFeatureImageCount, float64(usage.ImageCount), metadata)
 	}
 	if usage.Steps > 0 {
-		g.reportImageUsageEvent(ctx, tenant, usageFeatureImageSteps, float64(usage.Steps), metadata)
+		g.reportImageUsageEvent(ctx, tenant, jobID, usageFeatureImageSteps, float64(usage.Steps), metadata)
 	}
 }
 
@@ -323,18 +330,35 @@ func (g *Gateway) recordImageUsage(ctx context.Context, logicalModel string, usa
 // dimension. A Record failure is logged and swallowed, never failing the
 // image job that already succeeded -- the identical rule
 // Gateway.recordUsage's own doc comment states for chat.
-func (g *Gateway) reportImageUsageEvent(ctx context.Context, tenant pkgcore.TenantID, feature string, quantity float64, metadata map[string]string) {
+func (g *Gateway) reportImageUsageEvent(ctx context.Context, tenant pkgcore.TenantID, jobID, feature string, quantity float64, metadata map[string]string) {
 	event := UsageEvent{
 		TenantID:       string(tenant),
 		Feature:        feature,
 		Quantity:       quantity,
-		IdempotencyKey: newIdempotencyKey(),
+		IdempotencyKey: imageUsageIdempotencyKey(jobID, feature),
 		Metadata:       metadata,
 	}
 	if err := g.usage.Record(ctx, event); err != nil {
 		obs.FromContext(ctx).Warn("aigateway: image usage recording failed",
 			"feature", feature, "error", err)
 	}
+}
+
+// imageUsageIdempotencyKey derives a stable UsageEvent.IdempotencyKey for
+// one image-generation Job's one billing dimension -- unlike chat's
+// newIdempotencyKey (gateway.go), an image job carries a stable identity
+// across every retry (jobs.Job.ID never changes between attempts of the
+// same Job -- see jobs.Job.ID's own doc comment), so this package CAN
+// derive a deterministic key here where it cannot for chat. Keyed on both
+// jobID and feature (never jobID alone): recordImageUsage reports up to two
+// dimensions (image_count, steps) per job, and a UsageRecorder that treats
+// IdempotencyKey as identifying one event must not see the two dimensions
+// of the same job collide under one key. This is the identical
+// derived-not-random-key convention go/storage's own
+// thumbnailDeriveIdempotencyKey and expirySweepIdempotencyKey already
+// follow for their own jobs.Task.IdempotencyKey.
+func imageUsageIdempotencyKey(jobID, feature string) string {
+	return "aigateway.image_usage:" + jobID + ":" + feature
 }
 
 // imageJobHandler returns the jobs.Handler Module.Register claims on
@@ -373,6 +397,16 @@ func (h *imageGenerateHandler) Type() string { return TaskTypeImageGenerate }
 // policy will eventually dead-letter it -- mirroring
 // go/storage/derive.go's deriveHandler.Handle's identical stance on a
 // malformed task payload.
+//
+// Handle's own idempotency invariant (this round's fix for a real, audited
+// bug -- see image_job_store.go's own doc comment for the full mechanism):
+// for one enqueued Job, at most one successful ImageProvider call and at
+// most one usage record ever reach the outside world, no matter how many
+// times go/jobs re-runs this method for it. The FIRST thing every attempt
+// does -- before decoding is even relevant to the invariant, but genuinely
+// before anything that could call the vendor -- is settle "has an earlier
+// attempt already gotten a successful answer for this exact job" by
+// consulting h.gateway.imageJobs, never the reverse.
 func (h *imageGenerateHandler) Handle(ctx context.Context, job *jobs.Job, _ jobs.ProgressFn) (jobs.Result, error) {
 	var payload imageGenerateTaskPayload
 	if err := json.Unmarshal(job.Payload, &payload); err != nil {
@@ -390,61 +424,126 @@ func (h *imageGenerateHandler) Handle(ctx context.Context, job *jobs.Job, _ jobs
 		return jobs.Result{}, err
 	}
 
-	provider, route, err := h.gateway.resolveImage(ctx, req.Model)
+	jobID := string(job.ID)
+
+	// Settle "already done" BEFORE anything that could call the vendor --
+	// see this method's own doc comment and image_job_store.go.
+	marker, err := h.gateway.imageJobs.get(ctx, jobID)
 	if err != nil {
 		return jobs.Result{}, err
 	}
-
-	var input, mask *ImageBytes
-	if req.InputObjectID != "" {
-		b, readErr := h.gateway.readImageObject(ctx, req.InputObjectID)
-		if readErr != nil {
-			return jobs.Result{}, readErr
+	if marker != nil && marker.Status == imageJobStatusCompleted {
+		// The whole job already finished on an earlier attempt (a retry
+		// after markCompleted committed, or an at-least-once redelivery of
+		// an already-succeeded Job): answer from the row alone. No vendor
+		// call, no storage write, no usage record -- reported once,
+		// already, when this row was first written.
+		resultData, marshalErr := json.Marshal(ImageJobResult{OutputObjectID: marker.OutputObjectID, Usage: marker.usage()})
+		if marshalErr != nil {
+			return jobs.Result{}, fmt.Errorf("aigateway: encode image generation job result: %w", marshalErr)
 		}
-		input = &b
+		return jobs.Result{Data: resultData}, nil
 	}
-	if req.MaskObjectID != "" {
-		b, readErr := h.gateway.readImageObject(ctx, req.MaskObjectID)
-		if readErr != nil {
-			return jobs.Result{}, readErr
+
+	var img ImageBytes
+	var usage ImageUsage
+	var providerName string
+
+	if marker != nil && marker.Status == imageJobStatusGenerated {
+		// An earlier attempt already got a successful vendor answer but
+		// did not finish writing it to storage (image_job_store.go's own
+		// doc comment on the SQLITE_BUSY scenario this closes). Reuse that
+		// answer verbatim -- never call the vendor again, and never
+		// re-read the input/mask objects, which this reused answer no
+		// longer needs.
+		img = marker.image()
+		usage = marker.usage()
+		providerName = marker.Provider
+	} else {
+		provider, route, resolveErr := h.gateway.resolveImage(ctx, req.Model)
+		if resolveErr != nil {
+			return jobs.Result{}, resolveErr
 		}
-		mask = &b
+		providerName = route.Provider
+
+		var input, mask *ImageBytes
+		if req.InputObjectID != "" {
+			b, readErr := h.gateway.readImageObject(ctx, req.InputObjectID)
+			if readErr != nil {
+				return jobs.Result{}, readErr
+			}
+			input = &b
+		}
+		if req.MaskObjectID != "" {
+			b, readErr := h.gateway.readImageObject(ctx, req.MaskObjectID)
+			if readErr != nil {
+				return jobs.Result{}, readErr
+			}
+			mask = &b
+		}
+
+		var result ImageResult
+		switch req.Operation {
+		case ImageOperationTextToImage:
+			result, err = provider.TextToImage(ctx, TextToImageRequest{Model: route.VendorModel, Prompt: req.Prompt, Params: req.Params})
+		case ImageOperationImageToImage:
+			result, err = provider.ImageToImage(ctx, ImageToImageRequest{Model: route.VendorModel, Prompt: req.Prompt, Input: *input, Params: req.Params})
+		case ImageOperationInpaint:
+			result, err = provider.Inpaint(ctx, InpaintRequest{Model: route.VendorModel, Prompt: req.Prompt, Input: *input, Mask: *mask, Params: req.Params})
+		default:
+			// Unreachable: req.validate() above already refused any
+			// operation not among the three ImageOperation constants.
+			return jobs.Result{}, ErrInvalidImageOperation.WithParam("operation", payload.Operation)
+		}
+		if err != nil {
+			// The vendor call itself failed (or was never reached): no
+			// side effect happened, so no marker is written -- a retry
+			// correctly calls the vendor again.
+			return jobs.Result{}, err
+		}
+
+		// The vendor call just succeeded. Persist that fact, verbatim,
+		// BEFORE attempting anything that could still fail -- this write,
+		// not the eventual storage write, is what closes the
+		// double-billing window (image_job_store.go's own doc comment).
+		if claimErr := h.gateway.imageJobs.claimGenerated(ctx, jobID, providerName, result.Image, result.Usage); claimErr != nil {
+			return jobs.Result{}, claimErr
+		}
+		img = result.Image
+		usage = result.Usage
 	}
 
-	var result ImageResult
-	switch req.Operation {
-	case ImageOperationTextToImage:
-		result, err = provider.TextToImage(ctx, TextToImageRequest{Model: route.VendorModel, Prompt: req.Prompt, Params: req.Params})
-	case ImageOperationImageToImage:
-		result, err = provider.ImageToImage(ctx, ImageToImageRequest{Model: route.VendorModel, Prompt: req.Prompt, Input: *input, Params: req.Params})
-	case ImageOperationInpaint:
-		result, err = provider.Inpaint(ctx, InpaintRequest{Model: route.VendorModel, Prompt: req.Prompt, Input: *input, Mask: *mask, Params: req.Params})
-	default:
-		// Unreachable: req.validate() above already refused any operation
-		// not among the three ImageOperation constants.
-		return jobs.Result{}, ErrInvalidImageOperation.WithParam("operation", payload.Operation)
-	}
+	outputObjectID, err := h.gateway.writeImageObject(ctx, img)
 	if err != nil {
+		// The marker (from either branch above) stays at
+		// imageJobStatusGenerated: the next attempt skips the vendor call
+		// and redoes only this write.
 		return jobs.Result{}, err
 	}
 
-	outputObjectID, err := h.gateway.writeImageObject(ctx, result.Image)
+	completed, err := h.gateway.imageJobs.markCompleted(ctx, jobID, outputObjectID)
 	if err != nil {
 		return jobs.Result{}, err
+	}
+	if completed {
+		// Gated on markCompleted's own guarded transition, not merely on
+		// having reached this line: this is what makes "at most one usage
+		// record ever" true even if this exact line somehow ran twice for
+		// one job (image_job_store.go's markCompleted doc comment).
+		h.gateway.recordImageUsage(ctx, req.Model, jobID, usage)
 	}
 
 	obs.FromContext(ctx).Info("aigateway: image generated",
 		"model", req.Model,
-		"provider", route.Provider,
+		"provider", providerName,
 		"operation", string(req.Operation),
 		"output_object_id", outputObjectID,
-		"image_count", result.Usage.ImageCount,
-		"steps", result.Usage.Steps,
-		"resolution_tier", result.Usage.ResolutionTier,
+		"image_count", usage.ImageCount,
+		"steps", usage.Steps,
+		"resolution_tier", usage.ResolutionTier,
 	)
-	h.gateway.recordImageUsage(ctx, req.Model, result.Usage)
 
-	resultData, err := json.Marshal(ImageJobResult{OutputObjectID: outputObjectID, Usage: result.Usage})
+	resultData, err := json.Marshal(ImageJobResult{OutputObjectID: outputObjectID, Usage: usage})
 	if err != nil {
 		return jobs.Result{}, fmt.Errorf("aigateway: encode image generation job result: %w", err)
 	}

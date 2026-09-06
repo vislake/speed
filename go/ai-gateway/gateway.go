@@ -55,6 +55,17 @@ type Gateway struct {
 	imageQueue    jobs.Queue
 	objectService *storage.ObjectService
 
+	// imageJobs is the per-job idempotency marker store
+	// imageGenerateHandler.Handle consults before ever calling an
+	// ImageProvider (image_job_store.go) -- built once, in NewGateway,
+	// from credentials' own database connection (never a second db
+	// parameter of its own: an ai-gateway Gateway already has exactly one
+	// database, the one backing credentials, and this table is this
+	// module's second use of it). nil only when NewGateway was given nil
+	// credentials, a combination image_gateway.go's own WithImageGeneration
+	// doc comment already treats as unsupported.
+	imageJobs *imageJobRepository
+
 	// host and limiter back checkRateLimit's per-tenant rate limiting
 	// (ratelimit.go): host is attached by Module.Register (mirroring
 	// go/sharing's identical hostSeams wiring), and limiter is the
@@ -104,6 +115,9 @@ func NewGateway(credentials *CredentialService, opts ...GatewayOption) *Gateway 
 		registry:      ChatProviderRegistry,
 		routes:        make(map[string]ModelRoute),
 		imageRegistry: ImageProviderRegistry,
+	}
+	if credentials != nil {
+		g.imageJobs = newImageJobRepository(credentials.store.db)
 	}
 	for _, opt := range opts {
 		opt(g)
