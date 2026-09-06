@@ -12,9 +12,21 @@
  * confirm button does not confirm anything -- the button re-labels with
  * the "click again" text (built-in, ui-kit namespace) and only a second
  * click fires onConfirm. The two-step guard is interaction state only
- * (like a tooltip's own open state), reset whenever the dialog closes;
- * hosts never observe it beyond onConfirm firing exactly on the second
- * click.
+ * (like a tooltip's own open state); hosts never observe it beyond
+ * onConfirm firing exactly on the second click.
+ *
+ * The armed flag is reset two ways, deliberately redundant: an effect
+ * clears it whenever `open` is observed false on a committed render (the
+ * ordinary close/reopen case), and -- because a host that reuses one
+ * mounted dialog instance across a *sequence* of confirmations (e.g. a
+ * batch-delete-next-item flow) may close the current one and open the
+ * next from inside the very onConfirm/onCancel call this component just
+ * made, all in one React state-update batch, so `open` never renders
+ * false in between and the effect never fires -- both exit handlers also
+ * clear it synchronously before invoking their callback. That reset rides
+ * the same batch as whatever the host does next, so the next confirmation
+ * always starts unarmed no matter how the host chains its own state
+ * updates.
  *
  * Texts: title/message defaults are generic namespace strings; hosts
  * should pass the real business content (specific object, what the
@@ -86,8 +98,10 @@ export function ConfirmDialog({
   const messageId = useId()
   const [armed, setArmed] = useState(false)
 
-  // The two-step guard is interaction state: closing the dialog (by any
-  // exit) resets it so the next open starts from an unarmed confirm.
+  // Ordinary-close backstop: if `open` is ever observed false on a
+  // committed render, make sure armed is false too. The exit handlers
+  // below cover the batched-reopen case this effect cannot (see the file
+  // header), so this is a redundant safety net, not the only guard.
   useEffect(() => {
     if (!open) {
       setArmed(false)
@@ -96,9 +110,14 @@ export function ConfirmDialog({
 
   const busy = confirmLoading
   const handleRequestClose = () => {
-    if (!busy) {
-      onCancel()
+    if (busy) {
+      return
     }
+    // Clear the guard before calling out: if this callback's own host
+    // handler closes this confirmation and opens the next one in the same
+    // batch, the next one must not inherit an armed state it never earned.
+    setArmed(false)
+    onCancel()
   }
   const handleConfirmClick = () => {
     if (busy) {
@@ -108,6 +127,9 @@ export function ConfirmDialog({
       setArmed(true)
       return
     }
+    // Same reasoning as handleRequestClose: reset synchronously, in the
+    // same tick as the call that is about to fire, not after it.
+    setArmed(false)
     onConfirm()
   }
 
