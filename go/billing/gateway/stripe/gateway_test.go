@@ -29,14 +29,31 @@ type fakeBackend struct {
 type fakeCall struct {
 	method, path   string
 	idempotencyKey string
+	expand         []string
 }
 
 func (f *fakeBackend) Call(method, path, _ string, params stripego.ParamsContainer, v stripego.LastResponseSetter) error {
 	var idem string
-	if params != nil && params.GetParams().IdempotencyKey != nil {
-		idem = *params.GetParams().IdempotencyKey
+	var expand []string
+	if params != nil {
+		if params.GetParams().IdempotencyKey != nil {
+			idem = *params.GetParams().IdempotencyKey
+		}
+		// CheckoutSessionParams declares its own top-level Expand field,
+		// shadowing (for form-encoding purposes) the generic one promoted
+		// from the embedded Params -- gateway.go's own QueryStatus doc
+		// comment on why has the detail. Read the field that actually gets
+		// serialized, via the concrete type, rather than the promoted
+		// params.GetParams().Expand, which stays empty regardless.
+		if sp, ok := params.(*stripego.CheckoutSessionParams); ok {
+			for _, e := range sp.Expand {
+				if e != nil {
+					expand = append(expand, *e)
+				}
+			}
+		}
 	}
-	f.calls = append(f.calls, fakeCall{method: method, path: path, idempotencyKey: idem})
+	f.calls = append(f.calls, fakeCall{method: method, path: path, idempotencyKey: idem, expand: expand})
 
 	body, err := f.respond(method, path)
 	if err != nil {
@@ -135,6 +152,119 @@ func TestGateway_QueryStatus_MapsSessionStatus(t *testing.T) {
 			}
 			if amount.Cents != 1000 || amount.Currency != "usd" {
 				t.Errorf("amount = %+v", amount)
+			}
+		})
+	}
+}
+
+// TestGateway_QueryStatus_RequestsSubscriptionExpand proves QueryStatus
+// actually asks Stripe to expand "subscription" on the Get call --
+// sessionStatus's Complete/Unpaid branch depends on Subscription.Status
+// being populated, which stripego.Subscription's own custom UnmarshalJSON
+// only does for an expanded reference (an unexpanded one arrives as an
+// ID-only stub with every other field, Status included, left zero-valued).
+// Losing this Expand silently defeats the whole fix below without failing
+// any status-mapping assertion on its own, since a scripted test body can
+// always hand-supply a populated Subscription object regardless of what was
+// actually requested -- this test is what would catch that regression.
+func TestGateway_QueryStatus_RequestsSubscriptionExpand(t *testing.T) {
+	backend := &fakeBackend{
+		respond: func(string, string) ([]byte, error) {
+			return []byte(`{"id":"cs_1","status":"complete","payment_status":"paid","amount_total":1000,"currency":"usd"}`), nil
+		},
+	}
+	gw := newGatewayWithBackend(backend, testConfig())
+
+	if _, _, err := gw.QueryStatus(context.Background(), "cs_1"); err != nil {
+		t.Fatalf("QueryStatus: %v", err)
+	}
+	if len(backend.calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(backend.calls))
+	}
+	found := false
+	for _, e := range backend.calls[0].expand {
+		if e == "subscription" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expand = %v, want it to include %q", backend.calls[0].expand, "subscription")
+	}
+}
+
+// TestGateway_QueryStatus_CompleteUnpaidTerminalSubscription_ReportsFailed is
+// the blocker regression test: a Stripe Checkout Session that completed via
+// redirect before its async payment method later, definitively failed can
+// never revert its own Status/PaymentStatus to anything expressing failure
+// (sessionStatus's own doc comment) -- so a bare Complete/Unpaid session,
+// re-queried at any later time, answered ChannelStatusPending FOREVER on
+// pre-fix code, permanently stranding the PaymentEvent row
+// PollingService.Poll is supposed to eventually resolve. Once the
+// underlying Subscription reaches its own terminal "incomplete_expired"
+// state -- Stripe's real outcome once the first invoice's 23-hour
+// collection window closes with no successful payment -- QueryStatus must
+// now report ChannelStatusFailed instead, finally converging with what a
+// checkout.session.async_payment_failed webhook already recorded for the
+// identical session.
+func TestGateway_QueryStatus_CompleteUnpaidTerminalSubscription_ReportsFailed(t *testing.T) {
+	tests := []struct {
+		name             string
+		subscriptionJSON string
+	}{
+		{"incomplete_expired", `{"id":"sub_1","status":"incomplete_expired"}`},
+		{"canceled", `{"id":"sub_1","status":"canceled"}`},
+		{"unpaid", `{"id":"sub_1","status":"unpaid"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backend := &fakeBackend{
+				respond: func(string, string) ([]byte, error) {
+					return []byte(`{"id":"cs_1","status":"complete","payment_status":"unpaid","amount_total":2900,"currency":"usd","subscription":` + tt.subscriptionJSON + `}`), nil
+				},
+			}
+			gw := newGatewayWithBackend(backend, testConfig())
+
+			status, _, err := gw.QueryStatus(context.Background(), "cs_1")
+			if err != nil {
+				t.Fatalf("QueryStatus: %v", err)
+			}
+			if status != billing.ChannelStatusFailed {
+				t.Errorf("status = %q, want failed -- a terminal Subscription status must resolve the row, not strand it at pending forever", status)
+			}
+		})
+	}
+}
+
+// TestGateway_QueryStatus_CompleteUnpaidRetryingSubscription_StillPending is
+// the overzealous-fix guard: while the underlying Subscription is still
+// "incomplete" (Stripe's smart payment retries still in play) or has no
+// Subscription expanded at all, the session may yet succeed on a later
+// attempt, so QueryStatus must keep answering ChannelStatusPending exactly
+// as it did before this fix -- never jump straight to Failed just because
+// the session is Complete/Unpaid.
+func TestGateway_QueryStatus_CompleteUnpaidRetryingSubscription_StillPending(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"subscription_incomplete", `{"id":"cs_1","status":"complete","payment_status":"unpaid","amount_total":2900,"currency":"usd","subscription":{"id":"sub_1","status":"incomplete"}}`},
+		{"no_subscription_expanded", `{"id":"cs_1","status":"complete","payment_status":"unpaid","amount_total":2900,"currency":"usd"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backend := &fakeBackend{
+				respond: func(string, string) ([]byte, error) {
+					return []byte(tt.body), nil
+				},
+			}
+			gw := newGatewayWithBackend(backend, testConfig())
+
+			status, _, err := gw.QueryStatus(context.Background(), "cs_1")
+			if err != nil {
+				t.Fatalf("QueryStatus: %v", err)
+			}
+			if status != billing.ChannelStatusPending {
+				t.Errorf("status = %q, want pending", status)
 			}
 		})
 	}

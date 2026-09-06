@@ -192,6 +192,25 @@ func firstHeader(headers map[string][]string, name string) string {
 func (g *Gateway) QueryStatus(ctx context.Context, ref billing.ChannelReference) (billing.ChannelStatus, billing.Money, error) {
 	params := &stripego.CheckoutSessionParams{}
 	params.Context = ctx
+	// Expand "subscription" so sessionStatus can distinguish a Complete/
+	// Unpaid session still awaiting an async payment method's settlement
+	// from one whose underlying Subscription has already reached a
+	// terminal failure state -- see sessionStatus's own doc comment for why
+	// the session's own Status/PaymentStatus pair alone can never make that
+	// distinction. Without this, Subscription arrives as an ID-only stub
+	// (stripego.Subscription's own custom UnmarshalJSON leaves every other
+	// field zero-valued for an unexpanded reference), and sessionStatus's
+	// switch below would never see a populated Status to match against.
+	//
+	// Set directly on CheckoutSessionParams's own Expand field, never
+	// through the embedded Params.AddExpand: stripe-go v82 declares its own
+	// top-level `Expand []*string` on CheckoutSessionParams (shadowing the
+	// embedded Params.Expand for form encoding), and AddExpand's own doc
+	// comment says as much -- "AddExpand on the Params embedded struct is
+	// deprecated ... use Expand in the surrounding struct instead". Calling
+	// AddExpand here would silently mutate a field the request never
+	// serializes.
+	params.Expand = []*string{stripego.String("subscription")}
 	//nolint:staticcheck // SA1019: see the identical justification on
 	// CreateCharge's own g.sessions.New call above.
 	sess, err := g.sessions.Get(string(ref), params)
@@ -207,16 +226,61 @@ func (g *Gateway) QueryStatus(ctx context.Context, ref billing.ChannelReference)
 
 // sessionStatus maps a stripe.CheckoutSession's Status/PaymentStatus pair
 // onto billing.ChannelStatus.
+//
+// # The Complete/Unpaid case cannot be resolved from Status/PaymentStatus alone
+//
+// A "complete" session using an asynchronous payment method (e.g. a bank
+// debit) can sit at PaymentStatusUnpaid for a while as the payment settles --
+// the ordinary in-flight case the branch below still answers Pending for.
+// But an async payment method's LATER, definitive failure (Stripe's own
+// checkout.session.async_payment_failed webhook -- event.go's
+// eventTypeCheckoutSessionAsyncFailed) never changes the session's own
+// Status or PaymentStatus: stripe-go v82's CheckoutSessionStatus is only
+// {open, complete, expired} and CheckoutSessionPaymentStatus is only {paid,
+// unpaid, no_payment_required} -- neither enum has a "failed" value, so a
+// session that completed via redirect before its async payment later failed
+// does not revert to "expired". Without a second signal, QueryStatus
+// re-queried at any later time would answer Pending forever for that
+// session -- exactly the permanently-unresolvable row
+// PollingService.Poll's active-polling fallback (job.go) must never produce,
+// since re-querying a stuck row and finding a resolution is that
+// mechanism's entire job.
+//
+// The underlying Subscription's own status -- expanded by QueryStatus above
+// -- is the second signal: this package's CreateCharge only ever creates
+// "subscription"-mode sessions with the default charge_automatically
+// collection method, under which a first-cycle payment failure moves the
+// Subscription to "incomplete" while Stripe's smart retries are still in
+// play, then to the terminal "incomplete_expired" once its 23-hour
+// collection window closes with no successful payment (Stripe voids the
+// still-unpaid invoice at that point) -- or, more directly, "canceled" if
+// the subscription is canceled outright before ever activating. Either
+// terminal state is a genuine, permanent failure this method can now
+// report, eventually converging with whatever async_payment_failed already
+// recorded on the webhook side; "unpaid" is included defensively for the
+// send_invoice collection method this package's CreateCharge never
+// requests, but which behaves identically for this purpose if it ever were.
+// Until the Subscription reaches one of these terminal states, the payment
+// may still succeed on a later retry, so Pending remains the honest answer
+// -- the identical discipline event.go's eventTypeSubscriptionUpdated
+// handling already applies to a live customer.subscription.updated webhook.
 func sessionStatus(sess *stripego.CheckoutSession) billing.ChannelStatus {
 	switch sess.Status {
 	case stripego.CheckoutSessionStatusExpired:
 		return billing.ChannelStatusFailed
 	case stripego.CheckoutSessionStatusComplete:
 		if sess.PaymentStatus == stripego.CheckoutSessionPaymentStatusUnpaid {
-			// A "complete" session in "setup" mode with a deferred payment
-			// method can be Complete with Unpaid still pending -- treat
-			// conservatively as still pending rather than reporting success
-			// for money that has not actually moved.
+			if sub := sess.Subscription; sub != nil {
+				switch sub.Status {
+				case stripego.SubscriptionStatusIncompleteExpired,
+					stripego.SubscriptionStatusCanceled,
+					stripego.SubscriptionStatusUnpaid:
+					return billing.ChannelStatusFailed
+				}
+			}
+			// Still settling (or the terminal states above do not apply
+			// yet): treat conservatively as still pending rather than
+			// reporting success for money that has not actually moved.
 			return billing.ChannelStatusPending
 		}
 		return billing.ChannelStatusSucceeded
