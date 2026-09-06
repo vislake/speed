@@ -564,15 +564,16 @@ func (s *TreeService) Delete(ctx context.Context, nodeID string, cascade bool) e
 
 	if cascade {
 		var removed int64
+		var deletedIDs []string
 		retryErr := withRetry(func() error {
 			var deleteErr error
-			removed, deleteErr = s.repo.deleteSubtree(ctx, nodeID, prefix, guard)
+			removed, deletedIDs, deleteErr = s.repo.deleteSubtree(ctx, nodeID, prefix, guard)
 			return deleteErr
 		})
 		if retryErr != nil {
 			return retryErr
 		}
-		s.publishDeleted(ctx, *node, true, removed)
+		s.publishDeleted(ctx, *node, true, removed, deletedIDs)
 		return nil
 	}
 
@@ -593,7 +594,10 @@ func (s *TreeService) Delete(ctx context.Context, nodeID string, cascade bool) e
 			WithParam("node_id", nodeID).
 			WithParam("descendant_count", matched-1)
 	}
-	s.publishDeleted(ctx, *node, false, matched)
+	// A non-cascading delete only ever matches one row -- itself -- or the
+	// switch above would already have refused it as ErrNodeHasChildren, so
+	// the deleted-id set is trivially [nodeID] with no extra query needed.
+	s.publishDeleted(ctx, *node, false, matched, []string{nodeID})
 	return nil
 }
 
@@ -635,13 +639,15 @@ func (s *TreeService) memberGuardFor(nodeID, prefix string) func(tx *gorm.DB) er
 }
 
 // publishDeleted announces one removed node (and, for a cascade, its whole
-// subtree).
-func (s *TreeService) publishDeleted(ctx context.Context, node OrgNode, cascade bool, removed int64) {
+// subtree). deletedIDs is the real row set the delete removed -- see
+// Repository.deleteSubtree's own doc comment for where it is captured.
+func (s *TreeService) publishDeleted(ctx context.Context, node OrgNode, cascade bool, removed int64, deletedIDs []string) {
 	publishEvent(ctx, s.host, EventNodeDeleted, NodeDeleted{
-		NodeID:       node.ID,
-		Path:         node.Path,
-		Cascade:      cascade,
-		RemovedCount: removed,
+		NodeID:         node.ID,
+		Path:           node.Path,
+		Cascade:        cascade,
+		RemovedCount:   removed,
+		DeletedNodeIds: deletedIDs,
 	})
 }
 

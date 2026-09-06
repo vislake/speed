@@ -516,6 +516,108 @@ func TestTreeService_PublishesNodeEvents(t *testing.T) {
 	if deletePayload.Cascade || deletePayload.RemovedCount != 1 {
 		t.Errorf("node-deleted payload = %+v, want cascade=false removed=1", deletePayload)
 	}
+	if len(deletePayload.DeletedNodeIds) != 1 || deletePayload.DeletedNodeIds[0] != moved.ID {
+		t.Errorf("node-deleted payload DeletedNodeIds = %v, want [%q]", deletePayload.DeletedNodeIds, moved.ID)
+	}
+}
+
+// TestTreeService_NodeDeletedPayload_CarriesTheRealRemovedIDSet is the
+// widened-payload regression org-rbac.md's P1-2 finding requires: before
+// this round, org.node.deleted carried only RemovedCount, a bare number
+// with no row identity behind it, so a subscriber that needed to act on
+// WHICH rows disappeared (rbac's dangling-binding reap, added alongside
+// this) had nothing to read. This proves DeletedNodeIds is now populated
+// correctly for both delete shapes -- exactly [nodeID] for a single,
+// non-cascading delete, and every row a cascade actually removed for one
+// that cascades.
+//
+// This is not a classic red/green flip on org's own side: before this
+// round the field did not exist at all, so the "pre-fix" state is "this
+// assertion does not compile" rather than "this assertion fails" -- the
+// structure the task's own test-policy note calls for.
+func TestTreeService_NodeDeletedPayload_CarriesTheRealRemovedIDSet(t *testing.T) {
+	t.Run("a single, non-cascading delete carries exactly its own id", func(t *testing.T) {
+		m, host := newTestModule(t)
+		ctx := tenantCtx("tenant-a")
+		root, err := m.Tree().CreateRoot(ctx, "root", "workspace")
+		if err != nil {
+			t.Fatalf("CreateRoot: %v", err)
+		}
+		leaf, err := m.Tree().CreateChild(ctx, root.ID, "leaf", "team")
+		if err != nil {
+			t.Fatalf("CreateChild: %v", err)
+		}
+
+		if err := m.Tree().Delete(ctx, leaf.ID, false); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+		deleted := host.bus.events(EventNodeDeleted)
+		if len(deleted) != 1 {
+			t.Fatalf("published %d node-deleted events, want 1", len(deleted))
+		}
+		payload, ok := deleted[0].Payload.(NodeDeleted)
+		if !ok {
+			t.Fatalf("node-deleted payload is %T, want org.NodeDeleted", deleted[0].Payload)
+		}
+		if payload.RemovedCount != 1 {
+			t.Errorf("RemovedCount = %d, want 1", payload.RemovedCount)
+		}
+		if len(payload.DeletedNodeIds) != 1 || payload.DeletedNodeIds[0] != leaf.ID {
+			t.Errorf("DeletedNodeIds = %v, want [%q]", payload.DeletedNodeIds, leaf.ID)
+		}
+	})
+
+	t.Run("a cascading delete carries every row the cascade actually removed", func(t *testing.T) {
+		m, host := newTestModule(t)
+		ctx := tenantCtx("tenant-a")
+		root, err := m.Tree().CreateRoot(ctx, "root", "workspace")
+		if err != nil {
+			t.Fatalf("CreateRoot: %v", err)
+		}
+		parent, err := m.Tree().CreateChild(ctx, root.ID, "parent", "team")
+		if err != nil {
+			t.Fatalf("CreateChild(parent): %v", err)
+		}
+		childA, err := m.Tree().CreateChild(ctx, parent.ID, "child-a", "team")
+		if err != nil {
+			t.Fatalf("CreateChild(child-a): %v", err)
+		}
+		childB, err := m.Tree().CreateChild(ctx, parent.ID, "child-b", "team")
+		if err != nil {
+			t.Fatalf("CreateChild(child-b): %v", err)
+		}
+		// A sibling subtree that must survive untouched, so the assertion
+		// below genuinely proves the id set is scoped to the deleted
+		// subtree rather than every node this test happens to create.
+		sibling, err := m.Tree().CreateChild(ctx, root.ID, "sibling", "team")
+		if err != nil {
+			t.Fatalf("CreateChild(sibling): %v", err)
+		}
+
+		if err := m.Tree().Delete(ctx, parent.ID, true); err != nil {
+			t.Fatalf("Delete(cascade): %v", err)
+		}
+		deleted := host.bus.events(EventNodeDeleted)
+		if len(deleted) != 1 {
+			t.Fatalf("published %d node-deleted events, want 1", len(deleted))
+		}
+		payload, ok := deleted[0].Payload.(NodeDeleted)
+		if !ok {
+			t.Fatalf("node-deleted payload is %T, want org.NodeDeleted", deleted[0].Payload)
+		}
+		if !payload.Cascade {
+			t.Error("payload.Cascade = false, want true")
+		}
+		if payload.RemovedCount != 3 {
+			t.Errorf("RemovedCount = %d, want 3 (parent, child-a, child-b)", payload.RemovedCount)
+		}
+		assertStringSet(t, payload.DeletedNodeIds, []string{parent.ID, childA.ID, childB.ID})
+		for _, id := range payload.DeletedNodeIds {
+			if id == sibling.ID {
+				t.Fatalf("DeletedNodeIds = %v wrongly includes the untouched sibling %q", payload.DeletedNodeIds, sibling.ID)
+			}
+		}
+	})
 }
 
 // TestTreeService_PublishesNodeRestoredEvent closes the loop for the fourth

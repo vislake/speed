@@ -278,13 +278,14 @@ func TestRepository_deleteSubtree(t *testing.T) {
 	seedNode(t, repo, ctxA, OrgNode{ID: "c", ParentID: "a", Path: "/r/a/c/", Depth: 2, Name: "c"})
 	seedNode(t, repo, ctxB, OrgNode{ID: "b-r", Path: "/r/", Depth: 0, Name: "root"})
 
-	affected, err := repo.deleteSubtree(ctxA, "a", "/r/a/", nil)
+	affected, deletedIDs, err := repo.deleteSubtree(ctxA, "a", "/r/a/", nil)
 	if err != nil {
 		t.Fatalf("deleteSubtree: %v", err)
 	}
 	if affected != 2 {
 		t.Errorf("deleteSubtree removed %d rows, want 2", affected)
 	}
+	assertStringSet(t, deletedIDs, []string{"a", "c"})
 
 	remaining, err := repo.subtree(ctxA, "/r/")
 	if err != nil {
@@ -417,6 +418,25 @@ func assertIDSet(t *testing.T, nodes []OrgNode, want []string) {
 	for _, id := range want {
 		if !got[id] {
 			t.Fatalf("node ids = %v, want %v", idsOf(nodes), want)
+		}
+	}
+}
+
+// assertStringSet fails t unless ids holds exactly want's values, ignoring
+// order -- assertIDSet's own comparison, over a plain []string rather than
+// []OrgNode, for asserting a NodeDeleted payload's DeletedNodeIds field.
+func assertStringSet(t *testing.T, ids []string, want []string) {
+	t.Helper()
+	got := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		got[id] = true
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ids = %v, want %v", ids, want)
+	}
+	for _, id := range want {
+		if !got[id] {
+			t.Fatalf("ids = %v, want %v", ids, want)
 		}
 	}
 }

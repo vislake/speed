@@ -94,8 +94,28 @@ type (
 		Path    string `json:"path"`
 		Cascade bool   `json:"cascade"`
 		// RemovedCount is how many rows the delete removed, the node itself
-		// included.
+		// included. Kept for backward compatibility with any existing
+		// consumer that reads only the count -- DeletedNodeIds below is
+		// additive, never a replacement.
 		RemovedCount int64 `json:"removed_count"`
+		// DeletedNodeIds is the real id set the delete removed, the node
+		// itself included -- [NodeID] alone for a non-cascading delete, and
+		// every row the cascade actually touched otherwise. A subscriber
+		// that must act on WHICH rows disappeared (rbac's dangling-binding
+		// reap, reap.go's onNodeDeleted, is the first) cannot do that from
+		// RemovedCount, a bare count with no identity behind it. Captured
+		// inside the same transaction the mark-delete UPDATE runs in --
+		// see Repository.deleteSubtree's own doc comment for exactly where
+		// -- so the set named here is always the set that UPDATE actually
+		// matched, never a racing snapshot taken before or after it.
+		//
+		// The field spelling is deliberate: DeletedNodeIds (not the more
+		// idiomatic DeletedNodeIDs) is what TestEventPayloads_CarryJSONTags'
+		// toSnakeCase helper renders as the clean "deleted_node_ids" this
+		// convention wants -- a trailing "IDs" (two capitals before the
+		// plural s) splits into "_i_ds" under that same helper instead. See
+		// events_test.go for the pinned proof.
+		DeletedNodeIds []string `json:"deleted_node_ids"`
 	}
 
 	// NodeRestored is the payload of org.node.restored. It carries only the

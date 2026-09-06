@@ -542,10 +542,25 @@ func (r *Repository) deleteLeaf(ctx context.Context, nodeID, prefix string, guar
 // it runs against this same transaction right after nodeID's lock succeeds
 // and before the bulk mark-delete statement, and a non-nil return aborts the
 // whole transaction with that error surfaced unwrapped.
-func (r *Repository) deleteSubtree(ctx context.Context, nodeID, prefix string, guard func(tx *gorm.DB) error) (int64, error) {
+//
+// It also returns the real id set the bulk mark-delete matched -- every row
+// the cascade actually touched, the node itself included -- which is what
+// TreeService.publishDeleted needs to widen org.node.deleted's
+// DeletedNodeIds beyond a bare count. That set is read INSIDE this same
+// transaction, right after guard runs and strictly BEFORE the mark-delete
+// UPDATE below: the UPDATE's own RowsAffected is a count with no row
+// identity behind it, and reading afterward would see nothing (the
+// auto-scope plugin hides a row the moment its deleted_at is set), so the
+// only place to capture the set is here, against the exact same WHERE
+// clause the UPDATE uses next, inside the one transaction that already
+// holds nodeID's lock and -- per this method's own atomicity fix above --
+// admits no concurrent insert into this subtree in the gap between the two
+// statements.
+func (r *Repository) deleteSubtree(ctx context.Context, nodeID, prefix string, guard func(tx *gorm.DB) error) (int64, []string, error) {
 	now := time.Now()
 	deletedBy := softDeleteActor(ctx)
 	var affected int64
+	var deletedIDs []string
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
 		locked, lockErr := touchLockByID(tx, nodeID)
 		if lockErr != nil {
@@ -560,6 +575,14 @@ func (r *Repository) deleteSubtree(ctx context.Context, nodeID, prefix string, g
 				return guardErr
 			}
 		}
+		var rows []OrgNode
+		if err := tx.
+			Where("path LIKE ?", prefix+"%").
+			Where("deleted_at IS NULL").
+			Find(&rows).Error; err != nil {
+			return ErrInternal.WithCause(err)
+		}
+		deletedIDs = nodeIDs(rows)
 		m := OrgNode{DeletedAt: &now, DeletedBy: deletedBy}
 		res := tx.
 			Where("path LIKE ?", prefix+"%").
@@ -571,9 +594,9 @@ func (r *Repository) deleteSubtree(ctx context.Context, nodeID, prefix string, g
 	})
 	if err != nil {
 		if appErr, ok := apperr.As(err); ok {
-			return 0, appErr
+			return 0, nil, appErr
 		}
-		return 0, ErrInternal.WithCause(err)
+		return 0, nil, ErrInternal.WithCause(err)
 	}
-	return affected, nil
+	return affected, deletedIDs, nil
 }
