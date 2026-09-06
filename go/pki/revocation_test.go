@@ -3,6 +3,7 @@ package pki
 import (
 	"context"
 	"crypto/x509/pkix"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -417,6 +418,117 @@ func TestCAService_RevokeCertificate_ConcurrentDoubleRevoke_ExactlyOneWinner(t *
 
 		if len(rec.events) != 1 {
 			t.Fatalf("trial %d: published %d EventCertificateRevoked, want exactly 1 (only the ledger insert winner publishes)", trial, len(rec.events))
+		}
+	}
+}
+
+// TestCAService_RevokeCertificate_ConcurrentDifferentReasons_CertificateAndLedgerNeverDisagree
+// proves that under concurrent RevokeCertificate calls carrying DIFFERENT
+// reasons for one still-active certificate, the certificate row and its
+// ledger row always end up agreeing about when and why the revocation
+// happened.
+//
+// The ledger-atomicity round's own concurrency test raced identical
+// reasons, which is exactly why it could not see this bug: a losing
+// caller's blind full-row certificate update overwrote the certificate row
+// with the LOSER's own RevocationReason/RevokedAt after the ledger winner's
+// insert had already recorded the WINNER's -- one ledger row, one event and
+// exactly one true answer all held, while the two tables silently disagreed
+// about the metadata. With every racer carrying a distinct reason, any such
+// loser-overwrite is visible as a certificate-row/ledger-row mismatch, and
+// the run fails.
+//
+// The barrier shape and trial repetition mirror
+// ConcurrentDoubleRevoke_ExactlyOneWinner's identical rig: 8 goroutines
+// race per trial so several FindByID reads routinely complete before the
+// first winner's certificate transition commits, and 25 trials make one
+// scheduling accident into a property. Each goroutine further asserts, per
+// trial: exactly one (true, nil) answer, one ledger row, one
+// EventCertificateRevoked, and -- the point of the distinct reasons --
+// certificate row, ledger row and event payload all carrying the same
+// RevocationReason and timestamp.
+func TestCAService_RevokeCertificate_ConcurrentDifferentReasons_CertificateAndLedgerNeverDisagree(t *testing.T) {
+	const (
+		goroutines = 8
+		trials     = 25
+	)
+	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-acme"))
+
+	for trial := 0; trial < trials; trial++ {
+		ca, rec := newTestCAServiceWithBus(t)
+		_, cert := issueTestCertificate(t, ca, ctx)
+
+		changed := make([]bool, goroutines)
+		errs := make([]error, goroutines)
+		reasons := make([]string, goroutines)
+		for i := 0; i < goroutines; i++ {
+			reasons[i] = fmt.Sprintf("reason-%d", i)
+		}
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i := 0; i < goroutines; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				changed[i], errs[i] = ca.RevokeCertificate(ctx, cert.ID, reasons[i])
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+
+		winners := 0
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("trial %d: RevokeCertificate goroutine %d (reason %q): %v", trial, i, reasons[i], err)
+			}
+			if changed[i] {
+				winners++
+			}
+		}
+		if winners != 1 {
+			t.Fatalf("trial %d: %d of %d concurrent RevokeCertificate calls reported changed = true, want exactly 1", trial, winners, goroutines)
+		}
+
+		got, err := ca.certificates.FindByID(ctx, cert.ID)
+		if err != nil {
+			t.Fatalf("trial %d: FindByID: %v", trial, err)
+		}
+		if got.Status != CertificateStatusRevoked {
+			t.Fatalf("trial %d: certificate Status = %q after the race, want %q", trial, got.Status, CertificateStatusRevoked)
+		}
+		if got.RevokedAt == nil {
+			t.Fatalf("trial %d: certificate RevokedAt is nil after the race", trial)
+		}
+
+		revocations, err := ca.revocations.ListByAuthority(ctx, cert.AuthorityID)
+		if err != nil {
+			t.Fatalf("trial %d: ListByAuthority: %v", trial, err)
+		}
+		if len(revocations) != 1 {
+			t.Fatalf("trial %d: revocation ledger has %d rows after %d concurrent revoke calls, want exactly 1", trial, len(revocations), goroutines)
+		}
+		rev := revocations[0]
+
+		if rev.RevocationReason != got.RevocationReason {
+			t.Fatalf("trial %d: certificate row and ledger row disagree about the reason: certificate = %q, ledger = %q -- a losing concurrent revoke overwrote the certificate row with its own reason after the ledger winner recorded another", trial, got.RevocationReason, rev.RevocationReason)
+		}
+		if !rev.RevokedAt.Equal(*got.RevokedAt) {
+			t.Fatalf("trial %d: certificate row and ledger row disagree about the time: certificate = %v, ledger = %v", trial, *got.RevokedAt, rev.RevokedAt)
+		}
+
+		if len(rec.events) != 1 {
+			t.Fatalf("trial %d: published %d EventCertificateRevoked, want exactly 1 (only the ledger insert winner publishes)", trial, len(rec.events))
+		}
+		evt, ok := rec.events[0].Payload.(CertificateRevokedEvent)
+		if !ok {
+			t.Fatalf("trial %d: event payload = %T, want CertificateRevokedEvent", trial, rec.events[0].Payload)
+		}
+		if evt.RevocationReason != got.RevocationReason {
+			t.Fatalf("trial %d: event payload and certificate row disagree about the reason: certificate = %q, event = %q", trial, got.RevocationReason, evt.RevocationReason)
+		}
+		if !evt.OccurredAt.Equal(*got.RevokedAt) {
+			t.Fatalf("trial %d: event payload and certificate row disagree about the time: certificate = %v, event = %v", trial, *got.RevokedAt, evt.OccurredAt)
 		}
 	}
 }
