@@ -562,7 +562,7 @@ func (s *TreeService) publishCreated(ctx context.Context, node OrgNode) {
 // cannot be orphaned by a child arriving between a "does it have children?"
 // check and the delete itself -- see Repository.deleteLeaf for why that check
 // lives inside the transaction rather than ahead of it. Both now ALSO take
-// touchLockByID's own lock on nodeID as their transaction's first statement,
+// lockLiveNode's own lock on nodeID as their transaction's first statement,
 // before the bulk LIKE-prefix scan runs, closing the cross-operation window
 // a concurrent CreateChild, Move or Restore locking this SAME node could
 // otherwise open even with deleteLeaf/deleteSubtree's own single-statement
@@ -570,6 +570,37 @@ func (s *TreeService) publishCreated(ctx context.Context, node OrgNode) {
 // for the exact PostgreSQL mechanism this closes, and withRetry (below) for
 // why the whole call is retried rather than left to surface a transient
 // conflict as a raw failure.
+//
+// # The sweep's path prefix is derived under the lock, never by this method
+//
+// This method's own outer Get above is an ordinary, unlocked read: a
+// concurrent Move of nodeID can commit between that read and the sweep's
+// transaction, so a prefix this method computed from the read node's Path
+// could name the node's old position -- and the cascade would then match
+// zero rows while this method reported success, publishing org.node.deleted
+// with an empty DeletedNodeIds (a silent 204 that deleted nothing).
+// deleteLeaf/deleteSubtree therefore re-read the node INSIDE their
+// transaction, right after their own lock on it succeeds, and derive the
+// sweep prefix from that locked row's current Path -- see deleteLeaf's doc
+// comment in repository.go. A delete that races a Move of the same node thus
+// always resolves to one of two consistent outcomes -- the cascade removes
+// the node at its current location, or the node is gone (below) -- never a
+// silent zero-match. The outer Get above is kept only for the cheap
+// not-found/root/validation errors this method reports before opening a
+// write transaction; what it observed is never trusted for the sweep itself.
+// One honest consequence: the org.node.deleted event's Path field may name
+// the node's position as of that outer read if a Move commits mid-call --
+// DeletedNodeIds is the authoritative statement of what was removed.
+//
+// # The cascade branch treats "nothing to remove" as node_not_found
+//
+// deleteSubtree reports removed == 0 when its lock finds nodeID already
+// gone (a concurrent delete of the same node won first -- the identical
+// situation the non-cascade branch's matched == 0 maps to ErrNodeNotFound).
+// The cascade branch must answer the same coded error rather than treating
+// zero as a success to announce: publishing org.node.deleted with
+// RemovedCount 0 and an empty DeletedNodeIds would tell every subscriber a
+// deletion happened when nothing was deleted.
 //
 // # The members check runs INSIDE the same locked transaction, not before it
 //
@@ -585,16 +616,21 @@ func (s *TreeService) publishCreated(ctx context.Context, node OrgNode) {
 // was a wide-open gap on both dialects, since the two reads/writes involved
 // share no lock at all). memberGuardFor below closes it by moving the check
 // inside deleteLeaf/deleteSubtree's own transaction, run right after nodeID's
-// lock succeeds and strictly before the bulk mark-delete statement -- so it
-// sees either a membership already committed before this transaction's own
-// lock was taken (and refuses), or nothing yet, in which case a concurrent
-// Add attempting to bind under one of these SAME rows is forced through the
-// other half of this fix: MemberService.ensure (membership.go) now takes the
-// identical lockLiveNode lock on its target node before creating the
-// membership, so it either already committed (and this transaction's own
-// read, above, sees it) or blocks behind this transaction and, once it
-// resumes, correctly discovers the node it wanted is now mark-deleted and
-// refuses with ErrNodeNotFound instead of completing a dangling insert.
+// lock succeeds and the current prefix is derived -- deleteLeaf runs it
+// strictly before its own mark-delete statement, deleteSubtree only AFTER
+// lockSubtree has locked every row of the subtree (see deleteSubtree's doc
+// comment for why a cascade's guard cannot run before that wider lock: an
+// Add to an INTERIOR descendant locks only that row, which a cascade has not
+// touched at guard time) -- so it sees either a membership already committed
+// before this transaction's own lock was taken (and refuses), or nothing yet,
+// in which case a concurrent Add attempting to bind under one of these SAME
+// rows is forced through the other half of this fix: MemberService.ensure
+// (membership.go) now takes the identical lockLiveNode lock on its target
+// node before creating the membership, so it either already committed (and
+// this transaction's own read, above, sees it) or blocks behind this
+// transaction and, once it resumes, correctly discovers the node it wanted
+// is now mark-deleted and refuses with ErrNodeNotFound instead of completing
+// a dangling insert.
 func (s *TreeService) Delete(ctx context.Context, nodeID string, cascade bool) error {
 	node, err := s.Get(ctx, nodeID)
 	if err != nil {
@@ -607,19 +643,21 @@ func (s *TreeService) Delete(ctx context.Context, nodeID string, cascade bool) e
 		return ErrInternal.WithCause(pathErr)
 	}
 
-	prefix := subtreePrefix(node.Path)
-	guard := s.memberGuardFor(nodeID, prefix)
+	guard := s.memberGuardFor(nodeID)
 
 	if cascade {
 		var removed int64
 		var deletedIDs []string
 		retryErr := withRetry(func() error {
 			var deleteErr error
-			removed, deletedIDs, deleteErr = s.repo.deleteSubtree(ctx, nodeID, prefix, guard)
+			removed, deletedIDs, deleteErr = s.repo.deleteSubtree(ctx, nodeID, guard)
 			return deleteErr
 		})
 		if retryErr != nil {
 			return retryErr
+		}
+		if removed == 0 {
+			return ErrNodeNotFound.WithParam("node_id", nodeID)
 		}
 		s.publishDeleted(ctx, *node, true, removed, deletedIDs)
 		return nil
@@ -628,7 +666,7 @@ func (s *TreeService) Delete(ctx context.Context, nodeID string, cascade bool) e
 	var matched int64
 	err = withRetry(func() error {
 		var deleteErr error
-		matched, deleteErr = s.repo.deleteLeaf(ctx, nodeID, prefix, guard)
+		matched, deleteErr = s.repo.deleteLeaf(ctx, nodeID, guard)
 		return deleteErr
 	})
 	if err != nil {
@@ -650,9 +688,13 @@ func (s *TreeService) Delete(ctx context.Context, nodeID string, cascade bool) e
 }
 
 // memberGuardFor returns the transaction-bound closure deleteLeaf/deleteSubtree
-// run, right after nodeID's own lock succeeds and before either issues its
-// bulk mark-delete statement, to report ErrNodeHasMembers when anybody is
-// bound inside the subtree about to be deleted.
+// run -- right after nodeID's own lock succeeds and the current prefix is
+// derived, in whichever position the caller's doc comment specifies relative
+// to its own sweep -- to report ErrNodeHasMembers when anybody is bound
+// inside the subtree about to be deleted. The prefix arrives as an argument
+// from the caller of the closure (the repository method running the sweep),
+// never captured here: it is only authoritative once derived under the lock,
+// which happens inside deleteLeaf/deleteSubtree, not in this method.
 //
 // Without it a cascading delete would leave memberships pointing at rows that
 // no longer exist, and a dangling membership is not a cosmetic problem: it is
@@ -666,8 +708,8 @@ func (s *TreeService) Delete(ctx context.Context, nodeID string, cascade bool) e
 // for a TreeService constructed on its own -- deleteLeaf/deleteSubtree still
 // receive it and still call it, but it immediately reports no members every
 // time, exactly as the check being entirely absent used to behave.
-func (s *TreeService) memberGuardFor(nodeID, prefix string) func(tx *gorm.DB) error {
-	return func(tx *gorm.DB) error {
+func (s *TreeService) memberGuardFor(nodeID string) func(tx *gorm.DB, prefix string) error {
+	return func(tx *gorm.DB, prefix string) error {
 		if s.members == nil {
 			return nil
 		}

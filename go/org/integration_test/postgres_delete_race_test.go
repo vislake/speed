@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -204,7 +205,7 @@ func (c *deleteEventCapture) nodeDeleted(tenant pkgcore.TenantID, nodeID string)
 // the tree to go through this module rather than org.NewTreeService(db)
 // directly: an unwired tree has no host, and publishEvent is a silent no-op
 // without one (events.go), which would make the event assertions vacuous.
-func wiredOrgTree(t *testing.T, db *gorm.DB) (*org.TreeService, *deleteEventCapture) {
+func wiredOrgTree(t *testing.T, db *gorm.DB) (*org.TreeService, *org.MemberService, *deleteEventCapture) {
 	t.Helper()
 	bus := pkgcore.NewMemoryEventBus()
 	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
@@ -214,7 +215,7 @@ func wiredOrgTree(t *testing.T, db *gorm.DB) (*org.TreeService, *deleteEventCapt
 	}
 	capture := &deleteEventCapture{}
 	bus.Subscribe(org.EventNodeDeleted, capture.handle)
-	return m.Tree(), capture
+	return m.Tree(), m.Members(), capture
 }
 
 // subtreeRowsUnscoped returns every org_nodes row whose path lies under
@@ -290,7 +291,7 @@ func assertCascadeDeleteConsistency(t *testing.T, db *gorm.DB, ctx context.Conte
 // it deletes.
 func TestDeleteSubtreeEventIDs_MoveOutDuringCascade_NoOvercount_Postgres(t *testing.T) {
 	db := newPostgres(t)
-	tree, events := wiredOrgTree(t, db)
+	tree, _, events := wiredOrgTree(t, db)
 
 	const rounds = 3
 	for round := 0; round < rounds; round++ {
@@ -382,7 +383,7 @@ func TestDeleteSubtreeEventIDs_MoveOutDuringCascade_NoOvercount_Postgres(t *test
 // set and the UPDATE.
 func TestDeleteSubtreeEventIDs_MoveInDuringCascade_NoUnderCount_Postgres(t *testing.T) {
 	db := newPostgres(t)
-	tree, events := wiredOrgTree(t, db)
+	tree, _, events := wiredOrgTree(t, db)
 
 	const rounds = 3
 	for round := 0; round < rounds; round++ {
@@ -456,5 +457,123 @@ func TestDeleteSubtreeEventIDs_MoveInDuringCascade_NoUnderCount_Postgres(t *test
 		// A's prefix. Pre-fix B and D2 survive live under the mark-deleted C
 		// and fail the assertion below.
 		assertCascadeDeleteConsistency(t, db, ctx, a.Path, evt, label)
+	}
+}
+
+// TestDeleteSubtree_MemberAddToInteriorDescendant_DuringCascade_NoDanglingMembership_Postgres
+// is the deterministic P1-4 proof: deleteSubtree's member guard used to run
+// right after nodeID's own lock but BEFORE lockSubtree ever locked the
+// interior descendants of the subtree. A concurrent MemberService.Add
+// targeting an INTERIOR descendant -- never the deleted node itself -- takes
+// only lockLiveNode on THAT row (membership.go's ensure), a row the cascade
+// had not touched yet at guard time, so Add could commit a membership into
+// the window between the guard's read and the cascade's eventual sweep of
+// the descendant: the membership survives bound to a row the cascade then
+// mark-deleted. This is the same TOCTOU family the member-guard round closed
+// for the deleted node itself, still open for its descendants -- and exactly
+// the window SQLite's whole-file locking papered over (a second writer parks
+// at the file lock before its guard-relevant statements run), which is why
+// this proof lives against a real PostgreSQL server, where the two writers
+// share no lock at all until the cascade reaches the descendant's row.
+//
+// # Orchestration
+//
+// Roles: T = this test, holding the row lock on the smaller-id interior
+// descendant (the first one the cascade's lockSubtree scan, ordered by
+// (depth, id), will try to touch); X = the cascading Delete(A), parked on
+// T's hold with the OTHER interior descendant still completely unlocked;
+// A2 = MemberService.Add to that other descendant, started only once X is
+// confirmed parked (waitForPgLockWaiters(1)), so its lockLiveNode succeeds,
+// its membership insert commits, and its transaction ends while X is still
+// mid-lockSubtree.
+//
+// On the pre-fix code X's guard already ran (before lockSubtree) and saw no
+// members, so once T commits and X sweeps the whole subtree, A2's just-
+// committed membership is left bound to a mark-deleted row -- the dangling
+// membership the assertions below catch. On the fixed code the guard runs
+// only after lockSubtree has locked every row of the subtree to a fixed
+// point, so A2's committed membership is visible to that later guard read
+// and X refuses with org.node_has_members, rolling back; the membership and
+// its node both stay live.
+func TestDeleteSubtree_MemberAddToInteriorDescendant_DuringCascade_NoDanglingMembership_Postgres(t *testing.T) {
+	db := newPostgres(t)
+	tree, members, _ := wiredOrgTree(t, db)
+
+	const rounds = 3
+	for round := 0; round < rounds; round++ {
+		label := fmt.Sprintf("round %d", round)
+		tenant := pkgcore.TenantID(fmt.Sprintf("tenant-add-race-%d", round))
+		ctx := tenantCtx(tenant)
+
+		root, err := tree.CreateRoot(ctx, fmt.Sprintf("root-%d", round), "group")
+		if err != nil {
+			t.Fatalf("%s: CreateRoot: %v", label, err)
+		}
+		a, err := tree.CreateChild(ctx, root.ID, "a", "group")
+		if err != nil {
+			t.Fatalf("%s: CreateChild(a): %v", label, err)
+		}
+		inner1, err := tree.CreateChild(ctx, a.ID, "inner-1", "store")
+		if err != nil {
+			t.Fatalf("%s: CreateChild(inner-1): %v", label, err)
+		}
+		inner2, err := tree.CreateChild(ctx, a.ID, "inner-2", "store")
+		if err != nil {
+			t.Fatalf("%s: CreateChild(inner-2): %v", label, err)
+		}
+		// lockSubtree touches the subtree's rows in (depth, id) order, so the
+		// first interior row X tries to lock is the one with the smaller id:
+		// T holds THAT one (parking X mid-lockSubtree) and A2 targets the
+		// other, which X has not touched yet.
+		ordered := []*org.OrgNode{inner1, inner2}
+		slices.SortFunc(ordered, func(x, y *org.OrgNode) int {
+			return strings.Compare(x.ID, y.ID)
+		})
+		held := holdNodeRowLockTx(t, db, ctx, ordered[0].ID)
+		addTarget := ordered[1].ID
+
+		var (
+			wg        sync.WaitGroup
+			deleteErr error
+		)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			deleteErr = tree.Delete(ctx, a.ID, true)
+		}()
+		waitForPgLockWaiters(t, db, 1, label+": Delete parked mid-lockSubtree on the held interior descendant")
+
+		userID := fmt.Sprintf("u-add-race-%d", round)
+		membership, addErr := members.Add(ctx, userID, addTarget)
+		if addErr != nil {
+			t.Fatalf("%s: Members().Add(%s, %s) = %v, want success (the interior descendant is still live while the cascade is parked)",
+				label, userID, addTarget, addErr)
+		}
+		if err := held.Commit().Error; err != nil {
+			t.Fatalf("%s: committing the held-descendant transaction: %v", label, err)
+		}
+		wg.Wait()
+
+		if deleteErr != nil {
+			if !hasCode(deleteErr, org.ErrNodeHasMembers.Code) {
+				t.Fatalf("%s: Delete = %v, want the coded org.node_has_members refusal once the guard sees the committed membership", label, deleteErr)
+			}
+			// The tree must still be intact: the refusal rolled everything back.
+			if _, err := tree.Get(ctx, a.ID); err != nil {
+				t.Fatalf("%s: Delete refused with %v but node A is not live afterward: %v", label, deleteErr, err)
+			}
+		}
+
+		// The invariant that matters either way: the membership Add created
+		// must not be bound to a row the cascade removed. If the cascade won
+		// (pre-fix shape) the Add committed into its sweep window and this
+		// Get fails -- the dangling membership.
+		if _, err := members.Get(ctx, userID); err != nil {
+			t.Fatalf("%s: the membership Add reported success but Get failed: %v", label, err)
+		}
+		if _, err := tree.Get(ctx, membership.NodeID); err != nil {
+			t.Fatalf("%s: membership %s is bound to node %s, which is no longer visible (%v) -- dangling membership created by Add racing the cascade",
+				label, membership.ID, membership.NodeID, err)
+		}
 	}
 }

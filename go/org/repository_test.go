@@ -278,7 +278,7 @@ func TestRepository_deleteSubtree(t *testing.T) {
 	seedNode(t, repo, ctxA, OrgNode{ID: "c", ParentID: "a", Path: "/r/a/c/", Depth: 2, Name: "c"})
 	seedNode(t, repo, ctxB, OrgNode{ID: "b-r", Path: "/r/", Depth: 0, Name: "root"})
 
-	affected, deletedIDs, err := repo.deleteSubtree(ctxA, "a", "/r/a/", nil)
+	affected, deletedIDs, err := repo.deleteSubtree(ctxA, "a", nil)
 	if err != nil {
 		t.Fatalf("deleteSubtree: %v", err)
 	}
@@ -302,9 +302,13 @@ func TestRepository_deleteSubtree(t *testing.T) {
 }
 
 // TestRepository_deleteLeaf covers the guard that makes a non-cascading
-// delete safe: the row count is checked inside the transaction, so a prefix
-// matching more than the one node rolls the mark-delete UPDATE back rather
-// than orphaning whatever it also matched.
+// delete safe: the row count is checked inside the transaction, so more than
+// one live row under the node's own prefix rolls the mark-delete UPDATE back
+// rather than orphaning whatever it also matched. The prefix is derived by
+// the method itself from the locked row's current path -- a caller cannot
+// even pass a stale one -- so the "prefix matching nothing" hazard of the
+// old signature is structurally gone, and the absent-node case below is what
+// matched == 0 means now.
 func TestRepository_deleteLeaf(t *testing.T) {
 	repo := NewRepository(newTestDB(t))
 	ctx := tenantCtx("tenant-a")
@@ -315,7 +319,7 @@ func TestRepository_deleteLeaf(t *testing.T) {
 	seedNode(t, repo, ctx, OrgNode{ID: "leaf", ParentID: "r", Path: "/r/leaf/", Depth: 1, Name: "leaf"})
 
 	t.Run("a genuine leaf is removed", func(t *testing.T) {
-		matched, err := repo.deleteLeaf(ctx, "leaf", "/r/leaf/", nil)
+		matched, err := repo.deleteLeaf(ctx, "leaf", nil)
 		if err != nil {
 			t.Fatalf("deleteLeaf: %v", err)
 		}
@@ -325,7 +329,7 @@ func TestRepository_deleteLeaf(t *testing.T) {
 	})
 
 	t.Run("a node with descendants is reported and rolled back", func(t *testing.T) {
-		matched, err := repo.deleteLeaf(ctx, "a", "/r/a/", nil)
+		matched, err := repo.deleteLeaf(ctx, "a", nil)
 		if err != nil {
 			t.Fatalf("deleteLeaf: %v", err)
 		}
@@ -340,8 +344,8 @@ func TestRepository_deleteLeaf(t *testing.T) {
 		assertIDSet(t, remaining, []string{"a", "b"})
 	})
 
-	t.Run("a prefix matching nothing removes nothing and reports zero", func(t *testing.T) {
-		matched, err := repo.deleteLeaf(ctx, "gone", "/r/gone/", nil)
+	t.Run("an absent node removes nothing and reports zero", func(t *testing.T) {
+		matched, err := repo.deleteLeaf(ctx, "gone", nil)
 		if err != nil {
 			t.Fatalf("deleteLeaf: %v", err)
 		}

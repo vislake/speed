@@ -382,9 +382,24 @@ func softDeleteActor(ctx context.Context) string {
 	return ""
 }
 
-// deleteLeaf mark-deletes the single node identified by nodeID (whose path
-// is exactly prefix), and refuses -- rolling the whole statement back -- if
-// that prefix turns out to match more than one currently-live row.
+// deleteLeaf mark-deletes the single node identified by nodeID, and refuses
+// -- rolling the whole statement back -- if more than one currently-live row
+// lies under the node's own subtree prefix.
+//
+// # The prefix is derived INSIDE the lock, never passed in
+//
+// The caller (TreeService.Delete) cannot hand this method a path prefix that
+// is safe to sweep by: the node's path is read by Delete's own outer Get
+// before any lock is taken, and a concurrent Move of the SAME node can
+// commit between that read and this method's transaction, leaving the
+// caller's prefix naming the node's old position -- the cascade would then
+// match zero rows while its caller reports success. The prefix therefore has
+// to come from the row's CURRENT path, read here right after this
+// transaction's own lock on the row succeeds (lockLiveNode's touch-then-read
+// -- the touch is still this transaction's first statement, so SQLite's
+// read-then-write lock-upgrade hazard stays closed). Once the row is locked
+// nothing can move it again before this transaction ends, so the prefix
+// derived here is authoritative for the whole statement that follows.
 //
 // It is a bulk write, not the single-row dbkit.Repository[OrgNode].Delete
 // promoted onto Repository: it follows the exact shape dbkit's own
@@ -426,17 +441,18 @@ func softDeleteActor(ctx context.Context) string {
 // not merely a theoretical concern; SQLite's coarser, whole-file locking
 // does not share this specific blind spot; the deleteLeaf-and-Postgres
 // combination is not the property either one alone appeared to be. The fix
-// is touchLockByID(tx, nodeID) as this function's OWN first statement,
-// BEFORE the bulk scan below ever runs: it contends for the identical row
-// lockLiveNode(nodeID) takes, so a concurrent CreateChild (or Restore, or
-// Move locking this same node) is now forced to either have already fully
-// committed, or to block behind THIS call -- either way, the bulk scan that
-// follows always starts from a state where no such concurrent writer of
-// nodeID itself can still be in flight, so any child it inserted is already
-// visible to (or does not yet exist for) this fresh scan. touchLockByID
-// reporting nodeID absent-or-dead maps directly to matched == 0 without
-// running the bulk scan at all, matching what that scan would have found
-// anyway.
+// is the row lock as this function's OWN first statement (the blind touch
+// lockLiveNode starts with, BEFORE the bulk scan below ever runs): it
+// contends for the identical row lock lockLiveNode(nodeID) takes, so a
+// concurrent CreateChild (or Restore, or Move locking this same node) is
+// now forced to either have already fully committed, or to block behind
+// THIS call -- either way, the
+// bulk scan that follows always starts from a state where no such concurrent
+// writer of nodeID itself can still be in flight, so any child it inserted
+// is already visible to (or does not yet exist for) this fresh scan.
+// lockLiveNode reporting nodeID absent-or-dead (its touch matching nothing)
+// maps directly to matched == 0 without running the bulk scan at all,
+// matching what that scan would have found anyway.
 //
 // The WHERE clause explicitly requires deleted_at IS NULL: only currently-
 // live rows count toward "does this node have children". A node whose only
@@ -445,38 +461,45 @@ func softDeleteActor(ctx context.Context) string {
 // descendant is not resurrected or re-touched by this call, and does not
 // block the delete the way a live one would.
 //
-// It reports the number of rows the prefix matched, so the caller can turn
-// "more than one" into org.node_has_children with a real count.
+// It reports the number of live rows the sweep matched, so the caller can
+// turn "more than one" into org.node_has_children with a real count.
 //
 // guard, when non-nil, runs against the SAME already-open transaction right
-// after nodeID's own lock succeeds -- BEFORE the bulk mark-delete statement
-// below ever runs -- and a non-nil return aborts the whole transaction
-// (nothing is written) with that error surfaced unwrapped. TreeService.Delete
-// is what passes one: the roster's "does anybody sit in this subtree" check,
-// which used to run as its own separate, unlocked read entirely BEFORE this
-// method's own transaction opened -- a real, closed TOCTOU window (a
-// concurrent MembershipRepository add landing in the gap between that read
-// and this method's own commit, leaving a membership bound to a row this
-// call is about to soft-delete) that running the check here, inside the
-// SAME lock this method already takes, closes: see tree.go's Delete doc
-// comment for the full mechanism, and membership.go's MemberService.ensure
-// for the other half this fix needed (a plain, unlocked read there could
-// otherwise commit its own insert into this exact gap regardless of what
-// this method does).
-func (r *Repository) deleteLeaf(ctx context.Context, nodeID, prefix string, guard func(tx *gorm.DB) error) (matched int64, err error) {
+// after nodeID's own lock succeeds and the current prefix is derived --
+// BEFORE the bulk mark-delete statement below ever runs -- and a non-nil
+// return aborts the whole transaction (nothing is written) with that error
+// surfaced unwrapped. TreeService.Delete is what passes one: the roster's
+// "does anybody sit in this subtree" check, which used to run as its own
+// separate, unlocked read entirely BEFORE this method's own transaction
+// opened -- a real, closed TOCTOU window (a concurrent MembershipRepository
+// add landing in the gap between that read and this method's own commit,
+// leaving a membership bound to a row this call is about to soft-delete)
+// that running the check here, inside the SAME lock this method already
+// takes, closes: see tree.go's Delete doc comment for the full mechanism,
+// and membership.go's MemberService.ensure for the other half this fix
+// needed (a plain, unlocked read there could otherwise commit its own insert
+// into this exact gap regardless of what this method does). guard receives
+// the locked row's current prefix as its second argument -- the guard's own
+// subtree scan must match the sweep's, and only this method knows the
+// prefix that is authoritative under the lock (see deleteSubtree's doc
+// comment for why ITS guard runs after lockSubtree instead: a leaf delete
+// locks the one row it may remove, so its guard needs no wider lock, while
+// a cascade removes every descendant, none of which a leaf delete touches).
+func (r *Repository) deleteLeaf(ctx context.Context, nodeID string, guard func(tx *gorm.DB, prefix string) error) (matched int64, err error) {
 	now := time.Now()
 	deletedBy := softDeleteActor(ctx)
 	err = dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
-		locked, lockErr := touchLockByID(tx, nodeID)
+		node, lockErr := lockLiveNode(tx, nodeID)
 		if lockErr != nil {
+			if errors.Is(lockErr, gorm.ErrRecordNotFound) {
+				matched = 0
+				return nil
+			}
 			return lockErr
 		}
-		if !locked {
-			matched = 0
-			return nil
-		}
+		prefix := subtreePrefix(node.Path)
 		if guard != nil {
-			if guardErr := guard(tx); guardErr != nil {
+			if guardErr := guard(tx, prefix); guardErr != nil {
 				return guardErr
 			}
 		}
@@ -508,28 +531,37 @@ func (r *Repository) deleteLeaf(ctx context.Context, nodeID, prefix string, guar
 	}
 }
 
-// deleteSubtree mark-deletes the node identified by nodeID (whose path is
-// exactly prefix) and every currently-live node beneath it, in one statement
-// inside one transaction, and reports how many rows it touched. Mark-
-// deleting a subtree row by row -- for instance by calling the promoted,
-// single-row dbkit.Repository[OrgNode].Delete once per descendant -- would
-// leave a partially soft-deleted tree behind on any mid-loop failure, and
-// would abandon the very atomicity go/org/AGENTS.md's "Known limitations"
-// already flags as missing for Move; one UPDATE cannot leave that window.
+// deleteSubtree mark-deletes the node identified by nodeID and every
+// currently-live node beneath it, in one statement inside one transaction,
+// and reports how many rows it touched. The prefix
+// is NOT a caller parameter: it is derived here from the node's CURRENT
+// path, read after this transaction's own lock on the row succeeds -- the
+// same derivation deleteLeaf's doc comment justifies, and the reason this
+// method takes nodeID alone (a caller-supplied prefix could name a position
+// a concurrent Move already carried the node away from, making the cascade
+// match zero rows while its caller reports success). Mark-deleting a subtree
+// row by row -- for instance by calling the promoted, single-row
+// dbkit.Repository[OrgNode].Delete once per descendant -- would leave a
+// partially soft-deleted tree behind on any mid-loop failure, and would
+// abandon the very atomicity go/org/AGENTS.md's "Known limitations" already
+// flags as missing for Move; one UPDATE cannot leave that window.
 //
 // It follows dbkit's own unexported softDelete shape exactly, the same way
 // deleteLeaf's doc comment describes: a real *OrgNode, Model == Dest == &m,
 // never a map payload.
 //
-// touchLockByID(nodeID) runs first for the identical reason deleteLeaf's own
-// doc comment gives at length: without it, a concurrent Restore locking
-// THIS exact node (as the parent it is about to un-delete something under,
+// The lock runs first for the identical reason deleteLeaf's own doc comment
+// gives at length: without it, a concurrent Restore locking THIS exact node
+// (as the parent it is about to un-delete something under,
 // TreeService.Restore's own case) via lockLiveNode could commit -- reviving
 // a descendant -- in the gap between this statement's snapshot and its own
 // unblocking, and this bulk scan would never notice that newly-revived row,
 // leaving it live under what this call just made a dead parent: the D5
 // corruption, confirmed the same way against a real PostgreSQL server
-// (integration_test/postgres_concurrency_test.go).
+// (integration_test/postgres_concurrency_test.go). lockLiveNode's touch is
+// still the transaction's first statement; only its read-back (for the
+// prefix) is new, and a read after one's own lock is safe -- see
+// lockLiveNode's own doc comment.
 //
 // The statement is a plain Updates against a TenantScoped model, so the
 // isolation plugin injects the tenant filter here exactly as it did for the
@@ -538,10 +570,27 @@ func (r *Repository) deleteLeaf(ctx context.Context, nodeID, prefix string, guar
 // mark-delete) untouched rather than re-stamping its deleted_at/deleted_by
 // with this call's own attribution.
 //
-// guard behaves exactly as deleteLeaf's own doc comment describes: non-nil,
-// it runs against this same transaction right after nodeID's lock succeeds
-// and before the bulk mark-delete statement, and a non-nil return aborts the
-// whole transaction with that error surfaced unwrapped.
+// # The guard runs AFTER lockSubtree, never before it
+//
+// guard, when non-nil, runs against this same transaction -- but only once
+// lockSubtree below has locked every row of the subtree to a fixed point --
+// and a non-nil return aborts the whole transaction with that error surfaced
+// unwrapped. deleteLeaf's guard can run right after nodeID's own lock,
+// because a leaf delete locks the only row it may remove; this method's
+// guard cannot, because a cascade removes every descendant and locking
+// nodeID alone does not serialize against a concurrent MemberService.Add
+// targeting an INTERIOR descendant -- Add takes lockLiveNode only on ITS
+// target row, which nothing here has touched at that point, so Add could
+// commit a membership in the gap between the guard's read and the cascade's
+// eventual sweep of that row, leaving the membership bound to a row the
+// cascade then mark-deleted (the identical dangling-membership TOCTOU the
+// member-guard round closed for the deleted node itself, still open for its
+// descendants). Once lockSubtree holds every subtree row, an Add to any of
+// them either already committed (its membership visible to the guard's
+// read, which runs afterward) or is blocked behind this transaction's own
+// lock on the target row and, once it resumes, finds the row mark-deleted
+// and refuses with ErrNodeNotFound. TreeService.Delete is what passes the
+// guard; see its doc comment for the full mechanism.
 //
 // It also returns the real id set the bulk mark-delete matched -- every row
 // the cascade actually touched, the node itself included -- which is what
@@ -606,28 +655,33 @@ func (r *Repository) deleteLeaf(ctx context.Context, nodeID, prefix string, guar
 // nothing, the auto-scope plugin hiding a row the moment its deleted_at is
 // set), but now under a lock that survives until this transaction ends
 // rather than a snapshot two statements could drift out from under.
-func (r *Repository) deleteSubtree(ctx context.Context, nodeID, prefix string, guard func(tx *gorm.DB) error) (int64, []string, error) {
+func (r *Repository) deleteSubtree(ctx context.Context, nodeID string, guard func(tx *gorm.DB, prefix string) error) (int64, []string, error) {
 	now := time.Now()
 	deletedBy := softDeleteActor(ctx)
 	var affected int64
 	var deletedIDs []string
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
-		locked, lockErr := touchLockByID(tx, nodeID)
+		node, lockErr := lockLiveNode(tx, nodeID)
 		if lockErr != nil {
+			if errors.Is(lockErr, gorm.ErrRecordNotFound) {
+				affected = 0
+				return nil
+			}
 			return lockErr
 		}
-		if !locked {
-			affected = 0
-			return nil
-		}
-		if guard != nil {
-			if guardErr := guard(tx); guardErr != nil {
-				return guardErr
-			}
-		}
+		prefix := subtreePrefix(node.Path)
 		rows, lockSubErr := lockSubtree(tx, prefix)
 		if lockSubErr != nil {
 			return ErrInternal.WithCause(lockSubErr)
+		}
+		// The guard runs here, AFTER lockSubtree has locked every row of the
+		// subtree -- see the doc comment above for why that ordering is what
+		// closes the interior-descendant Add window, and deleteLeaf for the
+		// contrast.
+		if guard != nil {
+			if guardErr := guard(tx, prefix); guardErr != nil {
+				return guardErr
+			}
 		}
 		deletedIDs = nodeIDs(rows)
 		m := OrgNode{DeletedAt: &now, DeletedBy: deletedBy}

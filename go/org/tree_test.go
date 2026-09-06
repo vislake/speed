@@ -1873,3 +1873,247 @@ func TestTreeService_ConcurrentRenameAndDelete_NeverResurrectsTheNode(t *testing
 		t.Errorf("soft-deleted row DeletedBy = %q, want %q", row.DeletedBy, "concurrent-deleter")
 	}
 }
+
+// TestTreeService_Delete_CascadeRacingAMove_NeverSilentlyDeletesNothing is
+// the P1-2 regression proof: TreeService.Delete used to derive the cascade's
+// path prefix from its own OUTER, unlocked s.Get read and pass that prefix
+// down into deleteSubtree, whose transaction then locked nodeID and swept
+// whatever the STALE prefix matched. A concurrent Move of the node that
+// commits between Delete's Get and deleteSubtree's lock leaves the node --
+// and its whole relocated subtree -- outside the stale prefix: the cascade's
+// mark-delete UPDATE matches zero rows, deleteSubtree reports a clean
+// (0, nil, nil), and Delete publishes org.node.deleted with an empty
+// DeletedNodeIds and returns success -- a silent 204 that deleted nothing.
+//
+// # Why this test is deterministic, exactly like the D6 rename test above
+//
+// A second connection holds an open transaction that has already performed
+// Move's own per-row conditional rewrites of the node and its subtree
+// (uncommitted). Delete's outer Get is a read, which SQLite lets through
+// while the holder's write transaction is open, so it observes the pre-move
+// state; Delete's first write -- deleteSubtree's own lock on the node --
+// then parks behind the holder's write lock until release. The holder is
+// released only after a fixed margin, so the Get has certainly landed when
+// the move commits and Delete's blocked write executes against the
+// committed, post-move state: on the pre-fix shape the stale prefix matches
+// nothing and the delete reports success while the node stays live (the
+// first assertion below fails); on the fixed shape the prefix is re-derived
+// from the locked row's CURRENT path, the cascade removes the node at its
+// new location, and the node is genuinely gone. The delete therefore always
+// reports one of the two legitimate outcomes this finding demands -- the
+// node deleted, or node_not_found -- never a silent zero-match.
+func TestTreeService_Delete_CascadeRacingAMove_NeverSilentlyDeletesNothing(t *testing.T) {
+	ctx := tenantCtx("tenant-a")
+
+	dsn := filepath.Join(t.TempDir(), "delete-move-race.sqlite")
+	db1, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: dsn})
+	if err != nil {
+		t.Fatalf("dbkit.Open: %v", err)
+	}
+	db2, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: dsn})
+	if err != nil {
+		t.Fatalf("dbkit.Open (mover connection): %v", err)
+	}
+	t.Cleanup(func() {
+		for _, db := range []*gorm.DB{db1, db2} {
+			if sqlDB, dbErr := db.DB(); dbErr == nil {
+				_ = sqlDB.Close()
+			}
+		}
+	})
+	testutil.Migrate(t, db1, dbkit.DialectSQLite, moduleName, migrations.FS)
+
+	tree := newTestTreeOn(t, db1)
+	root := mustCreateRoot(t, tree, ctx, "root")
+	b := mustCreateChild(t, tree, ctx, root.ID, "b")
+	a := mustCreateChild(t, tree, ctx, root.ID, "a")
+	aChild := mustCreateChild(t, tree, ctx, a.ID, "a-child")
+
+	// The concurrent mover: re-parent A (and A-child) under B with the exact
+	// per-row conditional UPDATEs Move performs -- Select(Path, Depth,
+	// ParentID), WHERE id AND deleted_at IS NULL, paths rebased the way
+	// rebasePath does -- and hold the transaction open until release. The
+	// statements' own completion closes `held`, never timing luck, exactly as
+	// in the D6 rename test above.
+	newAPath := buildPath(b.Path, a.ID)
+	held := make(chan struct{})
+	release := make(chan struct{})
+	holderErr := make(chan error, 1)
+	go func() {
+		holderErr <- dbkit.WithTenantSession(ctx, db2, func(tx *gorm.DB) error {
+			res := tx.
+				Where("id = ?", a.ID).
+				Where("deleted_at IS NULL").
+				Select("Path", "Depth", "ParentID").
+				Updates(&OrgNode{Path: newAPath, Depth: depthOf(newAPath), ParentID: b.ID})
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected != 1 {
+				return fmt.Errorf("move rewrite of %s matched %d rows, want 1", a.ID, res.RowsAffected)
+			}
+			resChild := tx.
+				Where("id = ?", aChild.ID).
+				Where("deleted_at IS NULL").
+				Select("Path", "Depth").
+				Updates(&OrgNode{Path: buildPath(newAPath, aChild.ID), Depth: depthOf(buildPath(newAPath, aChild.ID))})
+			if resChild.Error != nil {
+				return resChild.Error
+			}
+			if resChild.RowsAffected != 1 {
+				return fmt.Errorf("move rewrite of %s matched %d rows, want 1", aChild.ID, resChild.RowsAffected)
+			}
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+
+	select {
+	case <-held:
+	case err = <-holderErr:
+		t.Fatalf("mover failed before holding the move open: %v", err)
+	}
+
+	// The cascade races the held move: started only now that the move holds
+	// the file's write lock, Delete's outer Get still sees the pre-move
+	// state, and its first write cannot complete until the mover commits.
+	deleteDone := make(chan struct{})
+	var deleteErr error
+	go func() {
+		defer close(deleteDone)
+		deleteErr = tree.Delete(ctx, a.ID, true)
+	}()
+	time.Sleep(200 * time.Millisecond) // Delete's Get has certainly landed by now
+	close(release)
+	<-deleteDone
+	if err = <-holderErr; err != nil {
+		t.Fatalf("mover commit: %v", err)
+	}
+
+	if deleteErr != nil {
+		t.Fatalf("Delete(A, cascade) = %v, want success (the delete may legitimately win or lose the race, but it must not fail)", deleteErr)
+	}
+	if _, getErr := tree.Get(ctx, a.ID); getErr == nil {
+		t.Fatalf("node %q is still live after Delete(A, cascade=true) reported success -- the cascade matched zero rows under the pre-move prefix and silently deleted nothing", a.ID)
+	}
+	if _, getErr := tree.Get(ctx, aChild.ID); getErr == nil {
+		t.Fatalf("descendant %q is still live after Delete(A, cascade=true) reported success", aChild.ID)
+	}
+}
+
+// TestTreeService_Delete_CascadeOfAConcurrentlyDeletedNode_AnswersNodeNotFound
+// is the P1-3 regression proof: deleteSubtree reports a vanished node as a
+// clean (removed=0, nil error) and TreeService.Delete's cascade branch used
+// to treat that as success -- publishing org.node.deleted with an empty
+// DeletedNodeIds and returning nil -- where the non-cascade branch has
+// always translated the identical situation into ErrNodeNotFound. The
+// regression: deleting a node that a concurrent delete removed out from
+// under the call must answer org.node_not_found, never success, and must
+// never emit the empty-ids event.
+//
+// Deterministic for the same reason the P1-2 test above is: a second
+// connection holds the mark-delete of A open (the identical
+// Select(DeletedAt, DeletedBy) UPDATE deleteSubtree itself issues, held
+// uncommitted). Delete's outer Get reads the still-live pre-delete state;
+// its own first write parks behind the holder; release lets the concurrent
+// delete commit, and Delete's resumed lock attempt fails to match the
+// now-dead row. deleteSubtree reports removed=0 -- which the cascade branch
+// must answer with ErrNodeNotFound instead of the success plus empty-ids
+// event the pre-fix shape produced.
+func TestTreeService_Delete_CascadeOfAConcurrentlyDeletedNode_AnswersNodeNotFound(t *testing.T) {
+	ctx := tenantCtx("tenant-a")
+
+	dsn := filepath.Join(t.TempDir(), "delete-delete-race.sqlite")
+	db1, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: dsn})
+	if err != nil {
+		t.Fatalf("dbkit.Open: %v", err)
+	}
+	db2, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: dsn})
+	if err != nil {
+		t.Fatalf("dbkit.Open (deleter connection): %v", err)
+	}
+	t.Cleanup(func() {
+		for _, db := range []*gorm.DB{db1, db2} {
+			if sqlDB, dbErr := db.DB(); dbErr == nil {
+				_ = sqlDB.Close()
+			}
+		}
+	})
+	testutil.Migrate(t, db1, dbkit.DialectSQLite, moduleName, migrations.FS)
+
+	// The module wiring, so TreeService.Delete publishes onto the recording
+	// bus the assertions below read -- an unwired tree's publishEvent is a
+	// silent no-op (events.go), which would make the never-an-empty-ids-event
+	// half of this regression vacuous.
+	host := newTestHost(t)
+	m := NewModule(db1,
+		WithEmailIndexer(newTestEmailIndexer(t)),
+		WithMailFrom(testMailFrom),
+		WithInvitationLinkBuilder(testLinkBuilder),
+	)
+	m.attach(host)
+	tree := m.Tree()
+
+	root := mustCreateRoot(t, tree, ctx, "root")
+	a := mustCreateChild(t, tree, ctx, root.ID, "a")
+
+	// The concurrent deleter: mark-delete A's row on db2 and hold the
+	// transaction open until release -- the same holder rig the D6 rename
+	// test and the P1-2 test above use.
+	held := make(chan struct{})
+	release := make(chan struct{})
+	holderErr := make(chan error, 1)
+	go func() {
+		holderErr <- dbkit.WithTenantSession(ctx, db2, func(tx *gorm.DB) error {
+			now := time.Now()
+			res := tx.
+				Where("id = ?", a.ID).
+				Select("DeletedAt", "DeletedBy").
+				Updates(&OrgNode{DeletedAt: &now, DeletedBy: "concurrent-deleter"})
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected != 1 {
+				return fmt.Errorf("mark-delete matched %d rows, want 1", res.RowsAffected)
+			}
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+
+	select {
+	case <-held:
+	case err = <-holderErr:
+		t.Fatalf("deleter failed before holding the mark-delete open: %v", err)
+	}
+
+	// The cascade races the held delete: its outer Get sees A live, and its
+	// first write cannot complete until the deleter commits.
+	deleteDone := make(chan struct{})
+	var deleteErr error
+	go func() {
+		defer close(deleteDone)
+		deleteErr = tree.Delete(ctx, a.ID, true)
+	}()
+	time.Sleep(200 * time.Millisecond) // Delete's Get has certainly landed by now
+	close(release)
+	<-deleteDone
+	if err = <-holderErr; err != nil {
+		t.Fatalf("deleter commit: %v", err)
+	}
+
+	// The node was already gone by the time the cascade's lock succeeded: the
+	// delete must answer node_not_found -- the identical signal the
+	// non-cascade branch gives for matched == 0 -- never a silent success.
+	assertCode(t, deleteErr, ErrNodeNotFound.Code)
+
+	// And the success path was never taken, so no org.node.deleted event --
+	// in particular none with an empty DeletedNodeIds -- may have been
+	// published for this tenant.
+	if evts := host.bus.events(EventNodeDeleted); len(evts) != 0 {
+		t.Fatalf("Delete of a concurrently deleted node published %d org.node.deleted event(s); a delete that removed nothing must not announce one (pre-fix shape: success + empty-ids event)",
+			len(evts))
+	}
+}
