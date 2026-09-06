@@ -14,6 +14,25 @@ import (
 // creditReservationsTable is ReservationStore's persisted table name.
 const creditReservationsTable = "smilesim_credit_reservations"
 
+// orphanRefundJobIDPrefix is the prefix distinguishing a
+// creditReservation row that records an ORPHANED reservation from one
+// keyed by a real go/ai-gateway job id. Simulate writes such a row when
+// its immediate refund of a failed enqueue cannot run (see Simulate's own
+// doc comment in service.go): there is no job for the reservation --
+// GenerateImage never succeeded -- so no settleCredit call can ever act
+// on it, and without this durable record the Reserved credit would have
+// no path back to Available at all. The synthetic "job id" a row of this
+// kind carries is the prefix plus the reservation's own credit key --
+// unique per reservation (the key is minted fresh per Simulate call) and
+// structurally incapable of colliding with a real queue-minted job id
+// (go/jobs' own newJobID returns a bare uuid.NewString, see
+// go/jobs/store.go), so no real job's row can ever be mistaken for an
+// orphan or vice versa. ReconcileOutstandingCredits recognizes the prefix
+// and refunds the row directly on its sweep -- see that method's doc
+// comment -- deleting the row once the refund lands, exactly like a
+// settled real reservation.
+const orphanRefundJobIDPrefix = "smilesim-orphan:"
+
 // createCreditReservationsTableSQL is executed imperatively, with a plain
 // CREATE TABLE IF NOT EXISTS, the same bootstrapping pattern go/jobs' own
 // jobRecord uses for its jobsTable (see go/jobs/store.go's
@@ -57,7 +76,11 @@ const createCreditReservationsTableSQL = `CREATE TABLE IF NOT EXISTS ` + creditR
 // whichever of NotifyOnCompletion's poll-driven call or the reconciliation
 // sweep gets there first, since both funnel through the identical
 // settleCredit -> store.delete sequence (see settleCredit's own doc
-// comment in service.go).
+// comment in service.go). The one other writer is Simulate's refund-failure
+// path: a reservation whose immediate refund could not run is recorded
+// here under a synthetic job id (orphanRefundJobIDPrefix) so the sweep can
+// refund it without ever needing a job to poll -- see that constant's own
+// doc comment and ReconcileOutstandingCredits'.
 type creditReservation struct {
 	// JobID is the go/ai-gateway image-generation job's id -- the same
 	// value NotifyOnCompletion is later called with, and

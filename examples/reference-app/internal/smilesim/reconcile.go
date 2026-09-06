@@ -2,6 +2,7 @@ package smilesim
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/vislake/speed/go/jobs"
@@ -30,6 +31,20 @@ const DefaultReconcileInterval = 5 * time.Minute
 // NotifyOnCompletion's poll-driven path already runs, reused verbatim so
 // there is exactly one place that decides what "settle" means. It returns
 // the number of reservations it actually settled during this call.
+//
+// A row whose job id carries orphanRefundJobIDPrefix (see
+// reservation_store.go) is settled differently, by design: it records an
+// ORPHANED reservation -- Simulate's immediate refund of a failed enqueue
+// could not run -- whose job never existed, so there is nothing to poll
+// and settleCredit (which requires a *jobs.Job) can never act on it. The
+// sweep recognizes such a row and refunds it directly against the row's
+// own stored credit key, under CreditService's idempotent-refund
+// contract, then deletes the row -- Refund being the only settlement that
+// could ever be right for a job that was never enqueued (there is no
+// Confirm-shaped outcome to wait for). This is what makes an orphaned
+// reservation healable: however long the billing store stays down after
+// Simulate's refund failed, the sweep retries on its own long-lived
+// context, every pass, until the refund lands and the row goes away.
 //
 // This is what makes credit settlement reachable independent of any
 // client ever polling the job-status route: a reservation whose owning
@@ -67,6 +82,27 @@ func (s *Service) ReconcileOutstandingCredits(ctx context.Context) (int, error) 
 		// single ambient tenant of its own at all: it walks rows spanning
 		// every tenant in one pass, so each row supplies its own.
 		tenantCtx := pkgcore.WithTenant(ctx, tenant)
+
+		// An orphaned reservation -- see this method's own doc comment for
+		// what the prefix means and why Refund is the only settlement that
+		// could ever be right for it. There is no job to fetch: the sweep
+		// refunds the row's stored credit key directly and deletes the row,
+		// mirroring settleCredit's own idempotent-retry safety (a leftover
+		// row after a successful refund is merely re-refunded -- safely --
+		// on a later pass).
+		if strings.HasPrefix(row.JobID, orphanRefundJobIDPrefix) {
+			if _, refundErr := s.credits.Refund(tenantCtx, row.CreditKey); refundErr != nil {
+				obs.FromContext(ctx).Warn("smilesim: reconcile: refund an orphaned credit reservation failed, will retry on the next sweep",
+					"job_id", row.JobID, "error", refundErr)
+				continue
+			}
+			if delErr := s.store.delete(tenantCtx, jobID); delErr != nil {
+				obs.FromContext(ctx).Warn("smilesim: reconcile: orphaned credit reservation refunded but removing its reservation row failed -- it will be re-refunded (safely, idempotently) on the next sweep",
+					"job_id", row.JobID, "error", delErr)
+			}
+			settled++
+			continue
+		}
 
 		job, getErr := s.queue.Get(tenantCtx, jobID)
 		if getErr != nil {

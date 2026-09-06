@@ -89,6 +89,17 @@ var _ aigateway.ImageProvider = (*fakeImageProvider)(nil)
 // gateway_test.go/image_gateway_test.go), so this double exists only to let
 // GenerateImage's own enqueue succeed; nothing here runs the resulting job.
 //
+// enqueueErr, when non-nil, is what Enqueue answers instead of jobID --
+// standing in for a real queue's enqueue failure at a deterministic point
+// of Simulate's own flow. onEnqueue, when non-nil, runs at the top of
+// every Enqueue call, before enqueueErr is consulted: the canceled-request
+// regression tests use it to cancel the request context at exactly the
+// moment the real gateway's enqueue happens -- after PreDeduct has already
+// committed and before Simulate's own post-enqueue writes -- which is the
+// one interleaving a real client disconnect can produce that this package
+// could not otherwise drive deterministically from outside a single
+// synchronous Simulate call.
+//
 // jobs, when populated via setJob, is what ReconcileOutstandingCredits'
 // own Get calls observe -- standing in for a real jobs.Queue's persisted
 // job status the way a real StandaloneQueue would report it, without this
@@ -100,12 +111,20 @@ type recordingQueue struct {
 	lastTask     jobs.Task
 	jobID        jobs.JobID
 	enqueueCalls int
+	enqueueErr   error
+	onEnqueue    func()
 	jobs         map[jobs.JobID]*jobs.Job
 }
 
 func (q *recordingQueue) Enqueue(_ context.Context, task jobs.Task, _ ...jobs.EnqueueOption) (jobs.JobID, error) {
 	q.enqueueCalls++
 	q.lastTask = task
+	if q.onEnqueue != nil {
+		q.onEnqueue()
+	}
+	if q.enqueueErr != nil {
+		return "", q.enqueueErr
+	}
 	return q.jobID, nil
 }
 
@@ -126,15 +145,14 @@ func (q *recordingQueue) setJob(job *jobs.Job) {
 // compile-time check that *recordingQueue satisfies jobs.Queue.
 var _ jobs.Queue = (*recordingQueue)(nil)
 
-// newTestCreditService returns a billing.CreditService backed by a fresh,
-// per-test SQLite database carrying go/billing's real migrations --
-// mirroring newTestService's own "apply the real, versioned migration
-// files from zero" rule, applied here to go/billing's tables instead of
-// go/ai-gateway's.
-func newTestCreditService(t *testing.T) *billing.CreditService {
+// newTestCreditServiceWithDB is newTestCreditService's own implementation,
+// parametrized on db instead of always creating a fresh one -- letting a
+// test that must fail billing calls selectively (the refund-failure
+// regression test closes db's underlying sql.DB at a deterministic point
+// of Simulate's flow) build the service over a handle it controls.
+func newTestCreditServiceWithDB(t *testing.T, db *gorm.DB) *billing.CreditService {
 	t.Helper()
 
-	db := dbtest.NewSQLite(t)
 	billingModule := billing.NewModule(db, nil)
 
 	migrations := dbkit.NewMigrationRegistry()
@@ -145,6 +163,16 @@ func newTestCreditService(t *testing.T) *billing.CreditService {
 		t.Fatalf("apply billing migrations: %v", err)
 	}
 	return billingModule.Credits()
+}
+
+// newTestCreditService returns a billing.CreditService backed by a fresh,
+// per-test SQLite database carrying go/billing's real migrations --
+// mirroring newTestService's own "apply the real, versioned migration
+// files from zero" rule, applied here to go/billing's tables instead of
+// go/ai-gateway's.
+func newTestCreditService(t *testing.T) *billing.CreditService {
+	t.Helper()
+	return newTestCreditServiceWithDB(t, dbtest.NewSQLite(t))
 }
 
 // newTestService returns a Service backed by a fresh, per-test SQLite

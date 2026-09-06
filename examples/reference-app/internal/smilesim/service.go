@@ -431,13 +431,22 @@ func NewService(gateway *aigateway.Gateway, credits *billing.CreditService, bus 
 //
 // # Credit reservation
 //
-// When this Service was built with a non-nil CreditService (see the
-// package doc comment's "Credit accounting" section), Simulate reserves
+// When this Service was built with both a non-nil CreditService and a
+// non-nil store (see the package doc comment's "Credit accounting"
+// section for why the two are a pair), Simulate reserves
 // CreditsPerSimulation credits via CreditService.PreDeduct BEFORE calling
 // Gateway.GenerateImage at all: an insufficient balance returns
 // billing.ErrInsufficientCredits (a coded 409, never a silent fallback)
 // and Gateway.GenerateImage -- and therefore go/ai-gateway, and any real
-// vendor it might eventually reach -- is never called.
+// vendor it might eventually reach -- is never called. A Service built
+// with a CreditService but no store performs NO reservation either,
+// consistent with settleCredit and ReconcileOutstandingCredits, both of
+// which already require the store's durable row before they will settle
+// anything: a reservation opened without that row could never be settled
+// (neither NotifyOnCompletion's poll nor the sweep has anything to act
+// on) and would stay Reserved forever -- which is why the store's
+// absence suppresses PreDeduct outright rather than letting Simulate
+// charge a tenant for credits no mechanism can ever release.
 //
 // The reservation's idempotency key cannot be the eventual job id: PreDeduct
 // must run before GenerateImage even executes, and GenerateImage (via its
@@ -460,14 +469,22 @@ func NewService(gateway *aigateway.Gateway, credits *billing.CreditService, bus 
 // If GenerateImage itself fails AFTER the reservation succeeded (an
 // unrouted model, a missing credential, an enqueue failure), the
 // reservation is refunded immediately -- there will be no job, and
-// therefore no later NotifyOnCompletion call, to settle it otherwise. A
-// refund failure at that point is logged and swallowed rather than masking
-// GenerateImage's own, more actionable error: the reservation is left
-// Reserved rather than lost, a bookkeeping loose end root CLAUDE.md's
-// audit/reconciliation tooling -- not this method -- is the right place to
-// resolve, exactly the "log and swallow, never fail an otherwise-complete
-// operation over a secondary side effect" stance recordImageUsage already
-// takes in go/ai-gateway for its own usage-reporting side effect.
+// therefore no later NotifyOnCompletion call, to settle it otherwise. The
+// refund runs on a context.WithoutCancel of the request context, never on
+// the request context itself: by the time this refund exists the caller's
+// disconnect is already a live possibility (the request may be failing
+// precisely because the client went away mid-call), and a client
+// disconnect must not be able to kill the compensating refund and strand
+// a Reserved reservation that no settlement path can reach. If the refund
+// fails for a genuine reason anyway, the reservation is durably recorded
+// as an orphaned reservation for ReconcileOutstandingCredits' sweep to
+// refund on a later pass (see orphanRefundJobIDPrefix in
+// reservation_store.go) -- never left Reserved with the only record of it
+// a log line. Either way the failure is logged rather than masking
+// GenerateImage's own, more actionable error, exactly the "log and
+// swallow, never fail an otherwise-complete operation over a secondary
+// side effect" stance recordImageUsage already takes in go/ai-gateway for
+// its own usage-reporting side effect.
 func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID string, options ...SimulateOption) (jobs.JobID, error) {
 	effective := DefaultSimulationOptions()
 	for _, apply := range options {
@@ -478,7 +495,12 @@ func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID s
 	}
 
 	var creditKey string
-	if s.credits != nil {
+	// Reserved only when the CreditService and the store are BOTH wired --
+	// settlement (settleCredit, reached from NotifyOnCompletion's poll and
+	// the reconciliation sweep alike) acts only on the store's durable
+	// job-id-to-credit-key row, so a reservation opened without that row
+	// could never be settled. See Simulate's own doc comment on this pair.
+	if s.credits != nil && s.store != nil {
 		creditKey = "smilesim:" + uuid.NewString()
 		if _, err := s.credits.PreDeduct(ctx, billing.PreDeductInput{
 			Amount:         CreditsPerSimulation,
@@ -495,24 +517,62 @@ func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID s
 		Prompt:        renderSimulationPrompt(effective),
 		InputObjectID: photoObjectID,
 	})
+
+	// persistCtx is the request context stripped of its cancellation:
+	// context.WithoutCancel keeps every value (the tenant included) and
+	// drops only the Done channel. Everything this method still performs
+	// after GenerateImage has returned -- the refund compensating a failed
+	// enqueue, and the two durable records of the just-enqueued job below
+	// -- exists to keep credit and index bookkeeping convergent with a job
+	// that is already real (enqueued, or refused after a reservation), so
+	// none of it may be killable by an ordinary client disconnect. Running
+	// them on the raw request ctx would let a browser that closed, or a
+	// network that dropped, fail the refund and strand a Reserved
+	// reservation no settlement path could ever reach, or fail the
+	// reservation/index rows and leave the enqueued job settleable against
+	// no durable mapping.
+	persistCtx := context.WithoutCancel(ctx)
+
+	// tenant is always present whenever creditKey != "": PreDeduct above
+	// has already succeeded in that case, and it never returns without
+	// first resolving ctx's tenant itself (pkgcore.ErrNoTenant otherwise)
+	// -- so the ignored ok is safe, never silently defaulting to an empty
+	// tenant on a real path. GenerateImage's success path guarantees the
+	// same for the saves below (ErrImageRequiresTenant otherwise).
+	tenant, _ := pkgcore.TenantFromContext(persistCtx)
+
 	if err != nil {
 		if creditKey != "" {
-			if _, refundErr := s.credits.Refund(ctx, creditKey); refundErr != nil {
-				obs.FromContext(ctx).Warn("smilesim: refund credit reservation after a failed enqueue failed",
-					"credit_idempotency_key", creditKey, "error", refundErr)
+			if _, refundErr := s.credits.Refund(persistCtx, creditKey); refundErr != nil {
+				// The immediate refund could not run even on a cancel-free
+				// context -- a genuine failure of the billing store itself,
+				// not a client disconnect. The reservation must not be left
+				// with its only record in this log line: persist it as an
+				// orphaned reservation (a synthetic job id under
+				// orphanRefundJobIDPrefix; see reservation_store.go) so
+				// ReconcileOutstandingCredits' sweep refunds it, on its own
+				// long-lived context, at the next pass -- idempotently,
+				// since the sweep retries until the refund lands.
+				if orphanErr := s.store.save(persistCtx, jobs.JobID(orphanRefundJobIDPrefix+creditKey), tenant, creditKey); orphanErr != nil {
+					// Both the refund and the record that would let the
+					// sweep retry it failed: nothing further this method can
+					// do -- the billing store is down, and so is the store
+					// that records what to heal. The reservation stays
+					// Reserved until an operator reconciles it by hand from
+					// this log line.
+					obs.FromContext(ctx).Error("smilesim: refunding the credit reservation after a failed enqueue failed, and recording it for the reconciliation sweep failed too -- it must be reconciled by hand",
+						"credit_idempotency_key", creditKey, "refund_error", refundErr, "error", orphanErr)
+				} else {
+					obs.FromContext(ctx).Warn("smilesim: refunding the credit reservation after a failed enqueue failed -- recorded as an orphaned reservation for the reconciliation sweep to refund",
+						"credit_idempotency_key", creditKey, "error", refundErr)
+				}
 			}
 		}
 		return "", err
 	}
 
-	if creditKey != "" && s.store != nil {
-		// tenant is always present here: GenerateImage above has already
-		// succeeded, and it never returns a job id without first resolving
-		// ctx's tenant itself (ErrImageRequiresTenant otherwise) -- so the
-		// ignored ok is safe, never silently defaulting to an empty
-		// tenant on a real path.
-		tenant, _ := pkgcore.TenantFromContext(ctx)
-		if saveErr := s.store.save(ctx, jobID, tenant, creditKey); saveErr != nil {
+	if creditKey != "" {
+		if saveErr := s.store.save(persistCtx, jobID, tenant, creditKey); saveErr != nil {
 			// The job is already enqueued and genuinely running at this
 			// point -- refusing the call now would strand it with no way
 			// for the caller to ever retrieve it either, which is worse
@@ -520,11 +580,13 @@ func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID s
 			// be found by settleCredit later (neither NotifyOnCompletion's
 			// poll nor ReconcileOutstandingCredits' sweep has a row to act
 			// on), so it stays Reserved until an operator reconciles it
-			// by hand from this log line. This is a narrow, clearly
-			// logged failure mode of the durable store itself, not the
-			// silent, structural gap this mechanism exists to close (see
-			// this package's doc comment's "Settlement reachability"
-			// section).
+			// by hand from this log line. The write runs on persistCtx --
+			// see that context's own comment above -- so a client
+			// disconnect cannot be the failure behind this log line: it
+			// records a genuine failure of the durable store itself, the
+			// narrow, clearly logged failure mode this mechanism exists
+			// to surface (see this package's doc comment's "Settlement
+			// reachability" section).
 			obs.FromContext(ctx).Error("smilesim: persisting the credit reservation for a just-enqueued job failed -- it cannot be automatically settled and must be reconciled by hand",
 				"job_id", string(jobID), "credit_idempotency_key", creditKey, "error", saveErr)
 		}
@@ -536,8 +598,10 @@ func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID s
 		// comment) -- and the tenant is always present here for the
 		// identical reason the reservation save just above gives:
 		// GenerateImage has already succeeded and never returns a job id
-		// without first resolving ctx's tenant.
-		if saveErr := s.simulations.save(ctx, jobID, photoObjectID, effective); saveErr != nil {
+		// without first resolving ctx's tenant. The write runs on
+		// persistCtx, for the identical reason that context's own comment
+		// above gives.
+		if saveErr := s.simulations.save(persistCtx, jobID, photoObjectID, effective); saveErr != nil {
 			// The same shape as the reservation-save failure logged just
 			// above, and the same verdict: the job is already enqueued and
 			// running, so refusing the call now would strand it with no
@@ -546,9 +610,10 @@ func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID s
 			// generation is missing from the per-photo index
 			// (ListSimulationsByPhoto/OptionsForJob answer "no record" for
 			// it, so the P3 gallery would not show it) rather than stuck
-			// Reserved -- but the failure mode is the same narrow, clearly
-			// logged one of the durable store itself (see this package's
-			// doc comment's "Per-photo result index" section).
+			// Reserved -- and, as above, the cancel-free context rules a
+			// client disconnect out as the cause: the log line records a
+			// genuine failure of the durable store itself (see this
+			// package's doc comment's "Per-photo result index" section).
 			obs.FromContext(ctx).Error("smilesim: persisting the photo/options index row for a just-enqueued job failed -- this generation will be missing from per-photo listings",
 				"job_id", string(jobID), "photo_object_id", photoObjectID, "error", saveErr)
 		}
@@ -566,10 +631,25 @@ func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID s
 // once, the first time this is called after job has reached a terminal
 // status (StatusSucceeded, StatusDeadLetter or StatusCancelled) -- a no-op
 // for a job still pending/running/retrying, for a job Simulate was never
-// given a recipient for, and for a job already notified (the map lookups
-// below, both under one lock, make the "already notified" check and the
-// mark atomic, so two concurrent callers -- two overlapping poll requests
-// -- can never both publish for the same job).
+// given a recipient for, and for a job already notified.
+//
+// "Already notified" is recorded as the latch below, and the latch records
+// an ACCEPTED delivery, never an attempted one: it is set, under one
+// lock, immediately before the publish is attempted -- so two concurrent
+// callers (two overlapping poll requests) can never both publish for the
+// same job -- and rolled back when the publish is refused (bus.Publish
+// returns an error), so a refused delivery stays retryable by the next
+// poll of this job instead of being skipped forever as "already
+// notified". That retryability matters because this method's callers log
+// and swallow its error: cmd/server's job-status route (this app's one
+// caller) must not turn a status read into an error response over the
+// notification side channel, so a publish failure is invisible to the
+// caller -- and an attempt-only latch would make that invisible failure
+// permanent. With the rollback, the very next poll after a transient
+// publish failure re-attempts the delivery. (A concurrent caller that
+// observed a claim during a failing publish and returned nil loses
+// nothing: the claim is rolled back, so some later poll of this job still
+// retries.)
 //
 // Callers that poll job status -- cmd/server's job-status route is this
 // app's one caller -- call this after every read they make, terminal or
@@ -591,10 +671,22 @@ func (s *Service) NotifyOnCompletion(ctx context.Context, job *jobs.Job) error {
 		return err
 	}
 
+	if s.bus == nil {
+		// No deliverer is wired (see Service's own doc comment on the bus
+		// field): nothing is published and nothing is latched -- with no
+		// bus there is no delivery for the latch to record, and the bus is
+		// fixed at construction, so no later delivery could redeem a
+		// latch set now.
+		return nil
+	}
+
 	s.mu.Lock()
 	recipient, hasRecipient := s.recipients[job.ID]
 	alreadyNotified := s.notified[job.ID]
 	if hasRecipient && !alreadyNotified {
+		// Claim the delivery under the lock -- at most one concurrent
+		// caller sees !alreadyNotified, so at most one attempts the
+		// publish. A refused publish rolls the claim back below.
 		s.notified[job.ID] = true
 	}
 	s.mu.Unlock()
@@ -615,14 +707,20 @@ func (s *Service) NotifyOnCompletion(ctx context.Context, job *jobs.Job) error {
 		}
 	}
 
-	if s.bus == nil {
-		return nil
-	}
-	return s.bus.Publish(ctx, pkgcore.Event{
+	if err := s.bus.Publish(ctx, pkgcore.Event{
 		Type:     EventSimulationCompleted,
 		TenantID: job.TenantID,
 		Payload:  payload,
-	})
+	}); err != nil {
+		// The delivery was not accepted, so the claim must not stand as
+		// "already notified" -- see this method's own doc comment for why
+		// the notification must stay retryable by a later poll.
+		s.mu.Lock()
+		delete(s.notified, job.ID)
+		s.mu.Unlock()
+		return err
+	}
+	return nil
 }
 
 // settleCredit is the credit half both NotifyOnCompletion's poll-driven
