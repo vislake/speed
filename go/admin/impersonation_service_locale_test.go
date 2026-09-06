@@ -83,8 +83,8 @@ func TestImpersonationService_Start_NoLocale_ResolvesThroughAuthn_RealDispatch(t
 		t.Fatalf("CreateRoot() error = %v", err)
 	}
 	targetID := registerTestUser(t, env, "locale-fallback-target@example.com", "")
-	if _, err := env.Org.Members().Add(pkgcore.WithTenant(context.Background(), tenant), targetID, root.ID); err != nil {
-		t.Fatalf("Members().Add() error = %v", err)
+	if _, addErr := env.Org.Members().Add(pkgcore.WithTenant(context.Background(), tenant), targetID, root.ID); addErr != nil {
+		t.Fatalf("Members().Add() error = %v", addErr)
 	}
 
 	grant, err := env.Admin.Impersonation().Start(context.Background(), StartInput{
@@ -126,8 +126,8 @@ func TestImpersonationService_Start_ExplicitLocale_UsedVerbatim_RealDispatch(t *
 	// The target's OWN stored locale is en-US; the explicit request below
 	// asks for zh-CN, which must be what actually gets used.
 	targetID := registerTestUser(t, env, "locale-explicit-target@example.com", "en-US")
-	if _, err := env.Org.Members().Add(pkgcore.WithTenant(context.Background(), tenant), targetID, root.ID); err != nil {
-		t.Fatalf("Members().Add() error = %v", err)
+	if _, addErr := env.Org.Members().Add(pkgcore.WithTenant(context.Background(), tenant), targetID, root.ID); addErr != nil {
+		t.Fatalf("Members().Add() error = %v", addErr)
 	}
 
 	grant, err := env.Admin.Impersonation().Start(context.Background(), StartInput{
@@ -258,8 +258,8 @@ func TestImpersonationService_Start_AdminRoleRevoked_LiveGrantAutomaticallyEnded
 		t.Fatalf("CreateRoot() error = %v", err)
 	}
 	targetID := registerTestUser(t, env, "revoke-flow-target@example.com", "en-US")
-	if _, err := env.Org.Members().Add(pkgcore.WithTenant(context.Background(), tenant), targetID, root.ID); err != nil {
-		t.Fatalf("Members().Add() error = %v", err)
+	if _, addErr := env.Org.Members().Add(pkgcore.WithTenant(context.Background(), tenant), targetID, root.ID); addErr != nil {
+		t.Fatalf("Members().Add() error = %v", addErr)
 	}
 
 	role, err := roles.DefineRole(context.Background(), string(rbac.SystemDomain), rbac.RoleDefinition{
@@ -269,8 +269,8 @@ func TestImpersonationService_Start_AdminRoleRevoked_LiveGrantAutomaticallyEnded
 	if err != nil {
 		t.Fatalf("DefineRole() error = %v", err)
 	}
-	if err := roles.AssignRole(context.Background(), string(rbac.SystemDomain), adminUser, role.Key, ""); err != nil {
-		t.Fatalf("AssignRole() error = %v", err)
+	if assignErr := roles.AssignRole(context.Background(), string(rbac.SystemDomain), adminUser, role.Key, ""); assignErr != nil {
+		t.Fatalf("AssignRole() error = %v", assignErr)
 	}
 
 	grant, err := env.Admin.Impersonation().Start(context.Background(), StartInput{
@@ -287,8 +287,8 @@ func TestImpersonationService_Start_AdminRoleRevoked_LiveGrantAutomaticallyEnded
 		t.Fatal("Lookup() = false immediately after Start, want the fresh grant Active")
 	}
 
-	if err := roles.RevokeRole(context.Background(), string(rbac.SystemDomain), adminUser, role.Key, ""); err != nil {
-		t.Fatalf("RevokeRole() error = %v", err)
+	if revokeErr := roles.RevokeRole(context.Background(), string(rbac.SystemDomain), adminUser, role.Key, ""); revokeErr != nil {
+		t.Fatalf("RevokeRole() error = %v", revokeErr)
 	}
 
 	if _, ok := env.Admin.Impersonation().Lookup(context.Background(), grant.ID); ok {
@@ -327,8 +327,8 @@ func TestImpersonationService_Start_AdminKeepsPermissionViaOtherRole_GrantSurviv
 		t.Fatalf("CreateRoot() error = %v", err)
 	}
 	targetID := registerTestUser(t, env, "dual-role-target@example.com", "en-US")
-	if _, err := env.Org.Members().Add(pkgcore.WithTenant(context.Background(), tenant), targetID, root.ID); err != nil {
-		t.Fatalf("Members().Add() error = %v", err)
+	if _, addErr := env.Org.Members().Add(pkgcore.WithTenant(context.Background(), tenant), targetID, root.ID); addErr != nil {
+		t.Fatalf("Members().Add() error = %v", addErr)
 	}
 
 	roleA, err := roles.DefineRole(context.Background(), string(rbac.SystemDomain), rbac.RoleDefinition{
@@ -343,11 +343,11 @@ func TestImpersonationService_Start_AdminKeepsPermissionViaOtherRole_GrantSurviv
 	if err != nil {
 		t.Fatalf("DefineRole(b) error = %v", err)
 	}
-	if err := roles.AssignRole(context.Background(), string(rbac.SystemDomain), adminUser, roleA.Key, ""); err != nil {
-		t.Fatalf("AssignRole(a) error = %v", err)
+	if assignErrA := roles.AssignRole(context.Background(), string(rbac.SystemDomain), adminUser, roleA.Key, ""); assignErrA != nil {
+		t.Fatalf("AssignRole(a) error = %v", assignErrA)
 	}
-	if err := roles.AssignRole(context.Background(), string(rbac.SystemDomain), adminUser, roleB.Key, ""); err != nil {
-		t.Fatalf("AssignRole(b) error = %v", err)
+	if assignErrB := roles.AssignRole(context.Background(), string(rbac.SystemDomain), adminUser, roleB.Key, ""); assignErrB != nil {
+		t.Fatalf("AssignRole(b) error = %v", assignErrB)
 	}
 
 	grant, err := env.Admin.Impersonation().Start(context.Background(), StartInput{
