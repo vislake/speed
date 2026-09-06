@@ -1,12 +1,16 @@
 package dbkit_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -399,6 +403,44 @@ func (nonAuditableFlag) TableName() string               { return "non_auditable
 
 var _ dbkit.TenantScoped = nonAuditableFlag{}
 
+// errAuditCaptureFailingHookAlwaysFails is the sentinel
+// auditCaptureFailingHookWidget's AfterCreate hook always returns.
+var errAuditCaptureFailingHookAlwaysFails = errors.New("audit_capture_test: AfterCreate always fails")
+
+// auditCaptureFailingHookWidget is a throwaway Auditable model whose
+// AfterCreate hook always fails, used only by
+// TestAuditCapturePlugin_BareWrite_RollbackAfterCapture_PublishesNothing to
+// reproduce, for a bare (non-WithTenantSession) write, a real rollback of
+// the implicit per-statement transaction GORM opens for it — after this
+// plugin's own capture callback has already run (see that test's own doc
+// comment for exactly why AfterCreate is the right hook for this). It
+// deliberately does not implement dbkit.TenantScoped: nothing about this
+// fixture needs tenant scoping, and isTenantScopedValue (tenant_scope.go)
+// simply skips a model that does not implement it, exactly like
+// nonAuditableFlag above.
+type auditCaptureFailingHookWidget struct {
+	ID   string `gorm:"primaryKey;size:26"`
+	Name string `gorm:"size:255;not null"`
+}
+
+func (auditCaptureFailingHookWidget) TableName() string { return "audit_capture_failing_hook_widgets" }
+
+// AuditResourceType satisfies dbkit.Auditable.
+func (auditCaptureFailingHookWidget) AuditResourceType() string { return "failing_hook_widget" }
+
+// AfterCreate is a real GORM model hook (gorm.AfterCreateInterface),
+// invoked by GORM's own "gorm:after_create" callback — strictly after this
+// plugin's After("gorm:create") capture callback runs, in the same Create
+// Process chain. It always fails, which GORM's callbacks.AfterCreate folds
+// into db.Error via db.AddError, in turn making
+// callbacks.CommitOrRollbackTransaction roll back the real per-statement
+// transaction this bare Create opened.
+func (auditCaptureFailingHookWidget) AfterCreate(tx *gorm.DB) error {
+	return errAuditCaptureFailingHookAlwaysFails
+}
+
+var _ dbkit.Auditable = auditCaptureFailingHookWidget{}
+
 func TestAuditCapturePlugin_NonAuditableModel_PublishesNothing(t *testing.T) {
 	bus := &capturedBus{}
 	db := openAuditCaptureTestDB(t, bus)
@@ -422,23 +464,331 @@ func TestAuditCapturePlugin_NonAuditableModel_PublishesNothing(t *testing.T) {
 	}
 }
 
-func TestAuditCapturePlugin_PublishFailure_FailsTheWriteLoudly(t *testing.T) {
-	publishErr := errors.New("bus unavailable")
-	bus := &capturedBus{fail: publishErr}
+// captureSlogDefault swaps slog.Default() for a text handler writing into a
+// buffer this returns, restoring the previous default logger on test
+// cleanup. It is this file's twin of go/pkgcore/registry_test.go's own
+// TestBootstrap_WarnsOncePerNonSurvivingStatefulSeam swap — slog's default
+// logger is process-global, so a test using this must not run in parallel
+// with another that also touches it; none of this file's tests call
+// t.Parallel.
+func captureSlogDefault(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return &buf
+}
+
+// TestAuditCapturePlugin_BareWrite_RollbackAfterCapture_PublishesNothing
+// pins the same property TestAuditCapturePlugin_WithTenantSession_Rollback...
+// below reproduces as a real, fail-before/pass-after regression, but for
+// the bare-write shape: a Create/Update/Delete issued directly against
+// Open's plain *gorm.DB (no WithTenantSession), never going through
+// Repository[T] or any other speed module today — confirmed by grep
+// across the whole tree: the only types implementing dbkit.Auditable are
+// this package's own test fixtures (testutil.Widget,
+// testutil.SoftDeletableWidget, and auditCaptureFailingHookWidget below)
+// and examples/reference-app/internal/notes.Note, and Note is written
+// exclusively through dbkit.Repository[T] (every call in
+// notes/repository.go goes through WithTenantSession) — so this bare
+// shape has no real production caller today, but the mechanism must
+// still handle it correctly, since dbkit cannot assume every future
+// Auditable model will be Repository[T]-backed.
+//
+// This one is NOT a fail-before/pass-after regression, and its own doc
+// comment says so rather than overclaiming: investigating exactly where
+// GORM's callback sort (gorm.io/gorm@v1.31.2/callbacks.go's
+// sortCallbacks) places an After("gorm:create")-only registration showed
+// it appends to the very end of the already-fully-sorted default chain
+// whenever "gorm:create" itself was registered first (true here — Open's
+// db.Use(newAuditCapturePlugin(...)) always runs after gorm.Open's own
+// RegisterDefaultCallbacks) — confirmed empirically too, with a temporary
+// debug print, while designing this test: by the time the pre-fix
+// single capture callback ran for this model, db.Error already carried
+// AfterCreate's own failure. So capture's pre-existing
+// "if db.Error != nil { return }" guard already prevented a phantom
+// publish in this exact shape, by accident, before this round's fix —
+// this test pins that the split into capture (After "gorm:create") and
+// publishPending (After "gorm:commit_or_rollback_transaction") keeps that
+// property, explicitly and by design rather than by a GORM sort-order
+// coincidence a future GORM version could change. The real, reproducible
+// bug this shape does NOT protect against — a transaction opened outside
+// GORM's own per-statement chain entirely — is
+// TestAuditCapturePlugin_WithTenantSession_RollbackAfterCapture_PublishesNothing
+// below.
+func TestAuditCapturePlugin_BareWrite_RollbackAfterCapture_PublishesNothing(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	if err := db.Exec(`CREATE TABLE audit_capture_failing_hook_widgets (
+		id   VARCHAR(26)  NOT NULL PRIMARY KEY,
+		name VARCHAR(255) NOT NULL
+	)`).Error; err != nil {
+		t.Fatalf("create audit_capture_failing_hook_widgets table: %v", err)
+	}
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	w := &auditCaptureFailingHookWidget{ID: "w1", Name: "gadget"}
+	err := db.WithContext(ctx).Create(w).Error
+	if !errors.Is(err, errAuditCaptureFailingHookAlwaysFails) {
+		t.Fatalf("Create() error = %v, want it to wrap the AfterCreate hook's own error (errAuditCaptureFailingHookAlwaysFails)", err)
+	}
+
+	if events := bus.captured(); len(events) != 0 {
+		t.Errorf("captured %d events for a write whose real per-statement transaction rolled back after capture ran, want 0 (pre-fix: capture published synchronously before AfterCreate/commit even ran, so a rollback here left a phantom audit row)", len(events))
+	}
+
+	var count int64
+	if err := db.Raw(`SELECT count(*) FROM audit_capture_failing_hook_widgets WHERE id = ?`, "w1").Scan(&count).Error; err != nil {
+		t.Fatalf("count query: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("row count for id=w1 = %d, want 0 (the real transaction rolled back, so the row must not exist either)", count)
+	}
+}
+
+// TestAuditCapturePlugin_WithTenantSession_RollbackAfterCapture_PublishesNothing
+// is dbkit-tenancy P1-1's regression for the primary, real-production
+// shape: a write inside dbkit.WithTenantSession's transaction — the shape
+// examples/reference-app/internal/notes.Note (dbkit's one real Auditable
+// production consumer) always uses, and the shape every
+// dbkit.Repository[T] write uses underneath.
+//
+// The fn passed to WithTenantSession creates an Auditable widget (letting
+// capture run and, pre-fix, publish synchronously) and then deliberately
+// returns a non-nil error — reproducing, with a REAL gorm.DB.Transaction
+// rollback against a REAL in-process SQLite database (never a mocked
+// bus or a mocked transaction), a business transaction whose
+// audit-relevant write already happened but whose surrounding transaction
+// ultimately failed. Pre-fix, the event was already on the bus by the
+// time fn returned its error, since capture published inside the
+// "gorm:create" callback long before WithTenantSession's own
+// db.Transaction call could roll back — a phantom event for a row that
+// was never durably created.
+func TestAuditCapturePlugin_WithTenantSession_RollbackAfterCapture_PublishesNothing(t *testing.T) {
+	bus := &capturedBus{}
 	db := openAuditCaptureTestDB(t, bus)
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
 	w := &testutil.Widget{ID: "w1", Name: "gadget"}
-	err := db.WithContext(ctx).Create(w).Error
-	if err == nil {
-		t.Fatal("Create() error = nil, want a loud failure when the audit publish itself fails (docs/internal/10-compliance-and-audit.md: an audit-write failure must alert, never silently drop)")
+	forceRollback := errors.New("audit_capture_test: forced rollback after the audited write")
+
+	err := dbkit.WithTenantSession(ctx, db, func(tx *gorm.DB) error {
+		if err := tx.Create(w).Error; err != nil {
+			return err
+		}
+		return forceRollback
+	})
+	if !errors.Is(err, forceRollback) {
+		t.Fatalf("WithTenantSession() error = %v, want it to wrap forceRollback", err)
 	}
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Code != "dbkit.audit_capture_publish_failed" {
-		t.Errorf("Create() error = %v, want an *apperr.Error coded dbkit.audit_capture_publish_failed", err)
+
+	if events := bus.captured(); len(events) != 0 {
+		t.Errorf("captured %d events for a WithTenantSession transaction that rolled back after the audited write, want 0 (pre-fix: capture published synchronously inside the Create call, before fn's forced error ever reached db.Transaction)", len(events))
 	}
-	if !errors.Is(err, publishErr) {
-		t.Errorf("Create() error = %v, want it to wrap the bus's own publish error", err)
+
+	var count int64
+	if err := db.Raw(`SELECT count(*) FROM widgets WHERE id = ? AND tenant_id = ?`, "w1", "tenant-a").Scan(&count).Error; err != nil {
+		t.Fatalf("count query: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("row count for id=w1 = %d, want 0 (the transaction rolled back, so the row must not exist either)", count)
+	}
+}
+
+// TestAuditCapturePlugin_BareWrite_PublishFailure_CommitsAndAlerts is
+// dbkit-tenancy P1-2's regression for the bare-write shape (see the P1-1
+// test above for why this shape has no real production caller today, and
+// why the mechanism must still handle it). It replaces the pre-fix
+// TestAuditCapturePlugin_PublishFailure_FailsTheWriteLoudly, which
+// asserted the very bug this round fixes as intended behavior: a
+// transient audit-bus outage failing the business write itself.
+//
+// Post-fix, the write's own real per-statement transaction has already
+// committed by the time publishPending calls Publish (see
+// audit_capture.go's Initialize / publishPending doc comments), so a
+// Publish failure at that point can no longer roll back a write that has
+// already durably happened — it is reported as a structured alert
+// instead (auditPublishFailed), never surfaced as the triggering
+// Create/Update/Delete call's own error.
+func TestAuditCapturePlugin_BareWrite_PublishFailure_CommitsAndAlerts(t *testing.T) {
+	publishErr := errors.New("bus unavailable")
+	bus := &capturedBus{fail: publishErr}
+	db := openAuditCaptureTestDB(t, bus)
+	logs := captureSlogDefault(t)
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	w := &testutil.Widget{ID: "w1", Name: "gadget"}
+	if err := db.WithContext(ctx).Create(w).Error; err != nil {
+		t.Fatalf("Create() error = %v, want nil (docs/internal/10-compliance-and-audit.md: a publish failure after commit must alert, never fail a write that already durably happened)", err)
+	}
+
+	var count int64
+	if err := db.Raw(`SELECT count(*) FROM widgets WHERE id = ? AND tenant_id = ?`, "w1", "tenant-a").Scan(&count).Error; err != nil {
+		t.Fatalf("count query: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("row count for id=w1 = %d, want 1 (the write must durably commit even though its audit publish failed)", count)
+	}
+
+	out := logs.String()
+	for _, want := range []string{
+		"dbkit: audit event publish failed after commit",
+		"resource_type=widget",
+		"operation=create",
+		"tenant_id=tenant-a",
+		"bus unavailable",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("alert log = %q, want it to contain %q", out, want)
+		}
+	}
+}
+
+// TestAuditCapturePlugin_WithTenantSession_PublishFailure_CommitsAndAlerts
+// is dbkit-tenancy P1-2's regression for the primary, real-production
+// shape (WithTenantSession / Repository[T] — see the P1-1 WithTenantSession
+// test above). It drives a real Auditable write through WithTenantSession
+// with a bus whose Publish always fails, and asserts the business write
+// still durably commits — read back through a second, independent
+// connection to the same SQLite file, never the same *gorm.DB the write
+// went through, so this cannot pass merely because of an in-process cache
+// — a fresh session proves it landed for real — while the alert fires.
+func TestAuditCapturePlugin_WithTenantSession_PublishFailure_CommitsAndAlerts(t *testing.T) {
+	publishErr := errors.New("bus unavailable")
+	bus := &capturedBus{fail: publishErr}
+	dsn := fmt.Sprintf("file:audit_capture_wts_publish_failure_%d?mode=memory&cache=shared", auditCaptureTestDBSeq.Add(1))
+	db, err := dbkit.Open(context.Background(), dbkit.Options{
+		Dialect:  dbkit.DialectSQLite,
+		DSN:      dsn,
+		AuditBus: bus,
+	})
+	if err != nil {
+		t.Fatalf("dbkit.Open: %v", err)
+	}
+	createWidgetsTable(t, db)
+	logs := captureSlogDefault(t)
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	w := &testutil.Widget{ID: "w1", Name: "gadget"}
+	if wtsErr := dbkit.WithTenantSession(ctx, db, func(tx *gorm.DB) error {
+		return tx.Create(w).Error
+	}); wtsErr != nil {
+		t.Fatalf("WithTenantSession() error = %v, want nil (a publish failure after commit must alert, never fail a write that already durably committed)", wtsErr)
+	}
+
+	freshDB, err := dbkit.Open(context.Background(), dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     dsn,
+	})
+	if err != nil {
+		t.Fatalf("dbkit.Open (fresh session): %v", err)
+	}
+	var count int64
+	if err := freshDB.Raw(`SELECT count(*) FROM widgets WHERE id = ? AND tenant_id = ?`, "w1", "tenant-a").Scan(&count).Error; err != nil {
+		t.Fatalf("count query on fresh session: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("row count for id=w1 on a fresh session = %d, want 1 (the write must durably commit even though its audit publish failed)", count)
+	}
+
+	out := logs.String()
+	for _, want := range []string{
+		"dbkit: audit event publish failed after commit",
+		"resource_type=widget",
+		"operation=create",
+		"tenant_id=tenant-a",
+		"bus unavailable",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("alert log = %q, want it to contain %q", out, want)
+		}
+	}
+}
+
+// TestAuditCapturePlugin_WithTenantSession_SameFileSynchronousPersister_NoLongerDeadlocks
+// is not one of dbkit-tenancy's two mandated regressions — it exists to
+// verify, empirically, a consequential side claim before touching any
+// prose about it: go/dbkit/AGENTS.md's "Audit trail collection" Known
+// limitation section, and docs/internal/10-compliance-and-audit.md's own
+// stale implementation-status note on this exact mechanism, both describe
+// (and the doc 10 note explicitly predicts the fix for) a same-goroutine
+// SQLITE_BUSY self-deadlock: a synchronous persister subscriber writing to
+// the SAME SQLite file the audited write itself used, from the SAME
+// goroutine, while that audited write's own transaction was STILL OPEN.
+// Both docs name the fix as "defer the plugin's publish until after the
+// enclosing transaction actually commits" — precisely this round's
+// change for the WithTenantSession/Repository[T] shape.
+//
+// This drives that exact real scenario against two real *gorm.DB
+// connections to one real (temp-file, not in-memory) SQLite database: dbA
+// carries the AuditBus, whose subscriber synchronously writes to dbB — a
+// second connection to the same file — exactly mirroring the shape
+// go/dbkit/AGENTS.md's Known limitation describes for the automatic
+// mechanism paired with go/dbkit/audit's own persister. Pre-fix, the
+// subscriber's write races the still-open audited transaction on the same
+// file and either waits out busy_timeout or fails immediately (an upgrade
+// shape); post-fix, publishBuffered runs only after dbA's own transaction
+// has already committed and released its lock, so dbB's write meets no
+// contention at all.
+func TestAuditCapturePlugin_WithTenantSession_SameFileSynchronousPersister_NoLongerDeadlocks(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "audit_capture_samefile.db")
+
+	bus := pkgcore.NewMemoryEventBus()
+
+	dbA, err := dbkit.Open(context.Background(), dbkit.Options{
+		Dialect:  dbkit.DialectSQLite,
+		DSN:      dsn,
+		AuditBus: bus,
+	})
+	if err != nil {
+		t.Fatalf("dbkit.Open (dbA): %v", err)
+	}
+	createWidgetsTable(t, dbA)
+	if createErr := dbA.Exec(`CREATE TABLE persisted_marks (id VARCHAR(26) PRIMARY KEY)`).Error; createErr != nil {
+		t.Fatalf("create persisted_marks table: %v", createErr)
+	}
+
+	dbB, err := dbkit.Open(context.Background(), dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     dsn,
+	})
+	if err != nil {
+		t.Fatalf("dbkit.Open (dbB, same file, no AuditBus): %v", err)
+	}
+
+	var persisterCalled bool
+	var persistErr error
+	bus.Subscribe(dbkit.EventWriteCaptured, func(ctx context.Context, _ pkgcore.Event) error {
+		persisterCalled = true
+		// A synchronous, same-goroutine write to the SAME file dbA just
+		// wrote through, on a genuinely separate connection — exactly the
+		// go/dbkit/AGENTS.md-described persister shape.
+		persistErr = dbB.WithContext(ctx).Exec(`INSERT INTO persisted_marks (id) VALUES (?)`, "marked-w1").Error
+		return persistErr
+	})
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	w := &testutil.Widget{ID: "w1", Name: "gadget"}
+	if err := dbkit.WithTenantSession(ctx, dbA, func(tx *gorm.DB) error {
+		return tx.Create(w).Error
+	}); err != nil {
+		t.Fatalf("WithTenantSession() error = %v, want nil", err)
+	}
+
+	if !persisterCalled {
+		t.Fatal("the persister subscriber was never called")
+	}
+	if persistErr != nil {
+		t.Errorf("same-file persister write error = %v, want nil (post-fix, the audited transaction has already committed and released its lock by the time the persister's own write on a second connection runs)", persistErr)
+	}
+
+	var count int64
+	if err := dbA.Raw(`SELECT count(*) FROM persisted_marks WHERE id = ?`, "marked-w1").Scan(&count).Error; err != nil {
+		t.Fatalf("count query: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("persisted_marks row count = %d, want 1", count)
 	}
 }
 

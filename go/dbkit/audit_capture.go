@@ -1,15 +1,17 @@
 package dbkit
 
 import (
+	"context"
+	"log/slog"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // auditCapturePluginName identifies auditCapturePlugin to GORM (gorm.Plugin.Name
@@ -128,39 +130,225 @@ func newAuditCapturePlugin(bus pkgcore.EventBus) *auditCapturePlugin {
 // to Options is 100% backward compatible with every call site that existed
 // before this plugin did.
 //
-// Registered callbacks run AFTER the corresponding "gorm:*" callback, so
-// only a write that actually succeeded is captured — db.Error is checked
-// again defensively even so, since a later callback in the same chain
-// could still have failed the statement. Per
-// docs/internal/10-compliance-and-audit.md's rule that an audit-write
-// failure must alert and never be silently dropped, a publish failure is
-// reported back into the GORM callback chain with db.AddError, which
-// surfaces it as the error of the very Create/Update/Delete call that
-// triggered it — including, when the call runs inside
-// dbkit.WithTenantSession's transaction (every Repository[T] write does),
-// rolling that transaction back. A write whose audit trail could not be
-// recorded is treated as a write that did not happen.
+// Registered callbacks run After the corresponding "gorm:*" callback, so
+// db.RowsAffected and the model's own field values are available — but a
+// write inside dbkit.WithTenantSession's transaction (every Repository[T]
+// write, and the documented raw-SQL escape hatch) is not necessarily done
+// resolving at that point: the real commit or rollback does not happen
+// until the whole fn passed to WithTenantSession returns — arbitrarily many
+// statements later, entirely outside this Process's own callback chain, and
+// GORM's own BeginTransaction/CommitOrRollbackTransaction callbacks are
+// no-ops for a write already running inside an open transaction (confirmed
+// by reading gorm.io/gorm@v1.31.2/finisher_api.go's Begin and
+// callbacks/transaction.go while designing this fix), so nothing in this
+// Process's own chain — including its own "gorm:commit_or_rollback_
+// transaction" step — reflects whether that surrounding transaction ever
+// actually commits. Building the event to publish at capture time is
+// therefore safe (every field it needs is already resolved), but actually
+// publishing it here, synchronously, would be publishing before the write
+// is known to have durably happened at all — exactly the bug this
+// package's own history records (see docs 10's stale note on this file
+// predicting the fix, and go/dbkit/AGENTS.md's "Audit trail collection"
+// section).
+//
+// So capture (below) never publishes directly. It either appends the built
+// event to a per-transaction *auditBuffer carried on the write's own
+// context — installed by WithTenantSession, which drains and publishes the
+// buffer itself only after its own db.Transaction call has returned nil,
+// i.e. only once the surrounding transaction has genuinely committed — or,
+// when no such buffer is present (a bare Create/Update/Delete against
+// Open's plain *gorm.DB, relying on GORM's own implicit per-statement
+// transaction rather than WithTenantSession), stashes the event on the
+// current statement's GORM instance map for this plugin's own
+// After("gorm:commit_or_rollback_transaction") callback (publishPending) to
+// read back and publish. For this bare-write shape specifically, investigating
+// GORM's own callback sort (see Initialize's doc comment) while designing
+// this fix found that an After-only registration like either of this
+// plugin's two per-Process callbacks in fact resolves to running at the very
+// end of the compiled chain — after the real per-statement commit or
+// rollback already happened — so capture's own pre-existing
+// "if db.Error != nil { return }" guard already prevents building (let alone
+// publishing) an event for a bare write whose own chain later fails. The
+// two-callback split does not depend on that GORM-internal sort behavior to
+// be correct, though: it makes "publish only once this Process's real
+// transaction outcome is known" an explicit, named position
+// (publishPending, After the commit-or-rollback step) rather than an
+// accident of where an unqualified After("gorm:create") callback happens to
+// land, and it is what makes the WithTenantSession-buffered path correct at
+// all — GORM's own per-statement machinery has nothing to say about a
+// transaction it never opened.
+//
+// A publish failure can therefore never roll anything back — by the time
+// either path calls Publish, there is nothing left to roll back — so it is
+// reported as a structured alert instead of a db.AddError injection (see
+// auditPublishFailed), per docs/internal/10-compliance-and-audit.md's rule
+// that an audit-write failure must alert and never be silently dropped.
 type auditCapturePlugin struct {
 	bus pkgcore.EventBus
+}
+
+// auditBufferCtxKey is the unexported context key WithTenantSession installs
+// a *auditBuffer under. A dedicated unexported type, rather than a bare
+// string, keeps this key from colliding with a key set by another package,
+// mirroring go/pkgcore/tenant.go's own ctxKey pattern.
+type auditBufferCtxKey struct{}
+
+// auditBuffer accumulates the pkgcore.Event values captured during one
+// WithTenantSession transaction, so they can be published only once that
+// transaction has genuinely committed — never before, and never at all
+// when it rolls back. It is safe for concurrent use, though nothing in
+// this codebase drives one *gorm.DB transaction handle from more than one
+// goroutine at a time; the mutex is cheap insurance, not a load-bearing
+// requirement.
+type auditBuffer struct {
+	mu     sync.Mutex
+	events []pkgcore.Event
+}
+
+// withAuditBuffer returns a copy of ctx carrying a fresh *auditBuffer, and
+// that buffer itself, so a caller (WithTenantSession) can later drain
+// exactly the events captured against contexts derived from the returned
+// one — every statement issued against the *gorm.DB a db.Transaction
+// closure receives, since GORM propagates the same context.Context to every
+// such statement (confirmed by reading gorm.DB.Begin/WithContext/Session
+// while designing this).
+func withAuditBuffer(ctx context.Context) (context.Context, *auditBuffer) {
+	buf := &auditBuffer{}
+	return context.WithValue(ctx, auditBufferCtxKey{}, buf), buf
+}
+
+// auditBufferFromContext returns the *auditBuffer ctx carries, if any. The
+// second result is false for a context WithTenantSession never derived —
+// in particular, a bare write against Open's plain *gorm.DB.
+func auditBufferFromContext(ctx context.Context) (*auditBuffer, bool) {
+	buf, ok := ctx.Value(auditBufferCtxKey{}).(*auditBuffer)
+	return buf, ok
+}
+
+// add appends evt to the buffer. Safe for concurrent use.
+func (b *auditBuffer) add(evt pkgcore.Event) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.events = append(b.events, evt)
+}
+
+// drain returns every event the buffer holds and empties it, so a second
+// drain (there should never be one, but this makes it harmless rather than
+// a duplicate-publish hazard) returns nothing.
+func (b *auditBuffer) drain() []pkgcore.Event {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := b.events
+	b.events = nil
+	return out
+}
+
+// publishBuffered publishes every event buf holds, draining it in the
+// process. It is called by WithTenantSession, and only after its own
+// db.Transaction call has returned nil — i.e. only for a transaction that
+// genuinely committed. A Publish failure here can never roll anything
+// back (the transaction already committed), so it is reported through
+// auditPublishFailed instead of returned to the caller: WithTenantSession
+// itself must still report success for the business write, which did
+// durably commit.
+func (p *auditCapturePlugin) publishBuffered(ctx context.Context, buf *auditBuffer) {
+	for _, evt := range buf.drain() {
+		if err := p.bus.Publish(ctx, evt); err != nil {
+			auditPublishFailed(ctx, evt, err)
+		}
+	}
+}
+
+// pendingAuditEventInstanceKey is the db.InstanceSet/InstanceGet key capture
+// stashes a built event under, for this plugin's own
+// After("gorm:commit_or_rollback_transaction") callback (publishPending) to
+// read back within the same statement's callback chain — GORM's own
+// InstanceSet namespaces this by the current *gorm.Statement pointer, so
+// two unrelated top-level calls never collide even though they share this
+// literal key (see gorm.DB.InstanceSet's doc comment).
+const pendingAuditEventInstanceKey = "dbkit:audit_capture:pending_event"
+
+// auditPublishFailed reports evt as unpublishable, after the write it
+// describes has already durably committed — cause is the bus's own Publish
+// error. There is nothing left here to roll back or fail loudly through
+// the triggering Create/Update/Delete call (it has already returned, or is
+// past the point where its result can change), so this is a structured
+// alert rather than an error return, per
+// docs/internal/10-compliance-and-audit.md's rule that an audit-write
+// failure must alert and never be silently dropped: an operator reading
+// this line has every field needed to reconstruct and manually re-publish
+// or investigate.
+//
+// dbkit cannot depend on go/observability (the two sit at the same depth
+// in the module dependency graph — pkgcore -> dbkit / observability ->
+// ... — so an import would run against the bottom-up rule; see
+// go/dbkit/AGENTS.md's "One dependency, and why there is only one"), so
+// this reaches for log/slog directly rather than the context-aware
+// obs.FromContext wrapper every downstream module uses for its own
+// logging — the identical reasoning go/pkgcore/registry.go's
+// warnIfNotDurable documents for the same constraint one tier down. The
+// message is a constant string and every variable goes into key-value
+// attributes, snake_case and shared with the rest of the codebase's
+// logging convention (table, resource_type, operation, tenant_id, error),
+// mirroring go/jobs/worker.go's own dispatch-failure logging.
+func auditPublishFailed(ctx context.Context, evt pkgcore.Event, cause error) {
+	payload, _ := evt.Payload.(WriteCapturedEvent)
+	slog.Default().ErrorContext(ctx, "dbkit: audit event publish failed after commit",
+		"table", payload.Table,
+		"resource_type", payload.ResourceType,
+		"resource_id", payload.ResourceID,
+		"operation", payload.Operation,
+		"tenant_id", payload.TenantID,
+		"error", cause,
+	)
 }
 
 // Name returns the plugin's identifier, satisfying gorm.Plugin.
 func (p *auditCapturePlugin) Name() string { return auditCapturePluginName }
 
 // Initialize registers the write-capture callbacks on db, satisfying
-// gorm.Plugin. Each is registered After the matching "gorm:*" callback, so
-// it runs once the write itself has actually been executed.
+// gorm.Plugin. Each Process (Create, Update, Delete) gets two registrations,
+// in this order: one After the matching "gorm:*" callback (capture, so
+// db.RowsAffected and the model's own field values are available), then one
+// After "gorm:commit_or_rollback_transaction" (publishPending) — always
+// present in the compiled chain, since dbkit's Open never sets
+// gorm.Config.SkipDefaultTransaction. Registration order is what actually
+// guarantees capture runs before publishPending for the same write, not the
+// specific "gorm:*" names each names as its own anchor: GORM's callback sort
+// (sortCallbacks, callbacks.go) appends an After-only registration to the
+// end of whatever has already been sorted at the time it is processed, and
+// every one of GORM's own default callbacks for a Process (begin_transaction
+// through commit_or_rollback_transaction) carries no ordering constraint of
+// its own, so all of them are already sorted before this plugin's two
+// registrations — themselves added later, via db.Use, after gorm.Open's own
+// RegisterDefaultCallbacks — are processed at all. Confirmed by reading the
+// algorithm and empirically with a temporary debug print while designing
+// this fix (see audit_capture_test.go's
+// TestAuditCapturePlugin_BareWrite_RollbackAfterCapture_PublishesNothing,
+// whose own doc comment has the detail this comment summarizes).
 func (p *auditCapturePlugin) Initialize(db *gorm.DB) error {
 	if err := db.Callback().Create().After("gorm:create").
 		Register(auditCapturePluginName+":create", p.afterCreate); err != nil {
+		return err
+	}
+	if err := db.Callback().Create().After("gorm:commit_or_rollback_transaction").
+		Register(auditCapturePluginName+":create_commit", p.publishPending); err != nil {
 		return err
 	}
 	if err := db.Callback().Update().After("gorm:update").
 		Register(auditCapturePluginName+":update", p.afterUpdate); err != nil {
 		return err
 	}
+	if err := db.Callback().Update().After("gorm:commit_or_rollback_transaction").
+		Register(auditCapturePluginName+":update_commit", p.publishPending); err != nil {
+		return err
+	}
 	if err := db.Callback().Delete().After("gorm:delete").
 		Register(auditCapturePluginName+":delete", p.afterDelete); err != nil {
+		return err
+	}
+	if err := db.Callback().Delete().After("gorm:commit_or_rollback_transaction").
+		Register(auditCapturePluginName+":delete_commit", p.publishPending); err != nil {
 		return err
 	}
 	return nil
@@ -173,11 +361,45 @@ func (p *auditCapturePlugin) afterCreate(db *gorm.DB) { p.capture(db, "create") 
 func (p *auditCapturePlugin) afterUpdate(db *gorm.DB) { p.capture(db, "update") }
 func (p *auditCapturePlugin) afterDelete(db *gorm.DB) { p.capture(db, "delete") }
 
-// capture builds and publishes a WriteCapturedEvent for db.Statement,
-// unless the statement's model is not Auditable, the write already
-// failed, or the write matched no row at all — the RowsAffected guard
-// below. See the type's own doc comment for the failure-handling
-// contract.
+// publishPending is registered After("gorm:commit_or_rollback_transaction")
+// on every Process this plugin instruments. It reads back the event (if
+// any) capture stashed via db.InstanceSet for this exact statement — never
+// present at all for a WithTenantSession-buffered write, which
+// auditBufferFromContext already routed to the buffer in capture instead —
+// and, only when db.Error is still nil, publishes it: db.Error nil here
+// means every callback this Process's own chain ran, including the real
+// commit or rollback GORM's own commit-or-rollback step performs for a bare
+// top-level write, left no error behind. When db.Error is non-nil, this
+// Process's own write did not durably succeed (whether that surfaced before
+// capture ran at all — in which case capture's own guard already skipped
+// building an event, and InstanceGet above returns ok=false — or, in
+// principle, between capture and this callback), so nothing is published:
+// publishing here would be exactly the phantom-audit-row bug this mechanism
+// exists to close.
+func (p *auditCapturePlugin) publishPending(db *gorm.DB) {
+	val, ok := db.InstanceGet(pendingAuditEventInstanceKey)
+	if !ok {
+		return
+	}
+	evt, ok := val.(pkgcore.Event)
+	if !ok {
+		return
+	}
+	if db.Error != nil {
+		return
+	}
+	if err := p.bus.Publish(db.Statement.Context, evt); err != nil {
+		auditPublishFailed(db.Statement.Context, evt, err)
+	}
+}
+
+// capture builds a WriteCapturedEvent for db.Statement, unless the
+// statement's model is not Auditable, the write already failed, or the
+// write matched no row at all — the RowsAffected guard below. It never
+// publishes directly; see the type's own doc comment for why, and for
+// exactly where the built event goes instead (a per-transaction
+// *auditBuffer when db.Statement.Context carries one, or this statement's
+// own GORM instance map otherwise).
 func (p *auditCapturePlugin) capture(db *gorm.DB, operation string) {
 	if db.Error != nil {
 		return
@@ -233,17 +455,35 @@ func (p *auditCapturePlugin) capture(db *gorm.DB, operation string) {
 		evt.TenantID = string(tenant)
 	}
 
-	err := p.bus.Publish(db.Statement.Context, pkgcore.Event{
+	pkgEvt := pkgcore.Event{
 		Type:     EventWriteCaptured,
 		TenantID: pkgcore.TenantID(evt.TenantID),
 		Payload:  evt,
-	})
-	if err != nil {
-		_ = db.AddError(apperr.Internal("dbkit.audit_capture_publish_failed").
-			WithParam("resource_type", evt.ResourceType).
-			WithParam("operation", operation).
-			WithCause(err))
 	}
+
+	if buf, ok := auditBufferFromContext(db.Statement.Context); ok {
+		// This write is running inside a WithTenantSession transaction:
+		// buffer the event rather than publish it. WithTenantSession
+		// itself drains and publishes the buffer, but only once its own
+		// db.Transaction call has returned nil — i.e. only once this
+		// transaction has genuinely committed. A later statement in the
+		// same transaction failing, or the commit itself failing, must
+		// never publish this event; leaving it in the buffer (rather than
+		// publishing here) is what guarantees that.
+		buf.add(pkgEvt)
+		return
+	}
+
+	// No buffer: this write is a bare Create/Update/Delete against Open's
+	// plain *gorm.DB, relying on GORM's own implicit per-statement
+	// transaction rather than WithTenantSession. Stash the event instead
+	// of publishing it directly here: this callback is only guaranteed to
+	// run once db.Error already reflects the write's full outcome (see
+	// Initialize's own doc comment on exactly where GORM's callback sort
+	// places an After-only registration like this one), never in front of
+	// publishPending's own check of it, so publishPending — never this
+	// call site — is the single place that decides whether to publish.
+	db.InstanceSet(pendingAuditEventInstanceKey, pkgEvt)
 }
 
 // auditableOf reports whether stmt's model implements Auditable, checking

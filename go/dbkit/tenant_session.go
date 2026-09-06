@@ -66,6 +66,20 @@ const setTenantSessionGUCSQL = "SELECT set_config('" + tenantSessionGUCName + "'
 // (backend-coding-standards SKILL.md §3.2) can opt into the same protection
 // instead of reinventing it.
 //
+// When db carries the audit write-capture plugin (Options.AuditBus was set
+// on the Open call db came from), this is also the one place that plugin's
+// captured events for this transaction ever actually get published: fn runs
+// under a context carrying a fresh per-transaction *auditBuffer, every
+// Auditable write inside fn appends to that buffer instead of publishing
+// directly (audit_capture.go's capture), and once — only once — the
+// transaction below has returned nil (genuinely committed, never on a
+// rollback), every buffered event is published for real. This is why an
+// Auditable model written through Repository[T] (which always calls this
+// function) never has its audit trail published for a write that later
+// rolled back, and a publish failure at that point can only be reported as
+// an alert (auditPublishFailed), never fail this call — the transaction has
+// already committed, so there is nothing left here to roll back.
+//
 // WithTenantSession resolves the tenant from ctx itself, via
 // pkgcore.MustTenantFromContext, and fails closed — before db.Transaction
 // is ever called, so no transaction is opened at all for a call that is
@@ -99,12 +113,39 @@ func WithTenantSession(ctx context.Context, db *gorm.DB, fn func(tx *gorm.DB) er
 
 	isPostgres := db.Name() == string(DialectPostgres)
 
-	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	// Only a db carrying the audit write-capture plugin (Options.AuditBus
+	// was set) needs a buffer at all — this type-asserts db.Plugins, the
+	// map every db.Use registration lands in, rather than adding a new
+	// parameter to this function or to Repository[T]: the plugin is
+	// already reachable from the exact *gorm.DB every caller already
+	// passes here. A db with no such plugin (the common case before this
+	// mechanism existed, and every caller that never sets AuditBus) takes
+	// the pre-existing code path unchanged: ctx flows through untouched,
+	// with no buffer allocated and no extra work done.
+	plugin, auditEnabled := db.Plugins[auditCapturePluginName].(*auditCapturePlugin)
+
+	txCtx := ctx
+	var buf *auditBuffer
+	if auditEnabled {
+		txCtx, buf = withAuditBuffer(ctx)
+	}
+
+	if err := db.WithContext(txCtx).Transaction(func(tx *gorm.DB) error {
 		if isPostgres {
 			if err := tx.Exec(setTenantSessionGUCSQL, string(tid)).Error; err != nil {
 				return fmt.Errorf("dbkit: set %s session GUC: %w", tenantSessionGUCName, err)
 			}
 		}
 		return fn(tx)
-	})
+	}); err != nil {
+		return err
+	}
+
+	// The transaction above has now genuinely committed. Publish whatever
+	// this transaction's own writes buffered — never before this point,
+	// and never at all had the transaction returned a non-nil error above.
+	if auditEnabled {
+		plugin.publishBuffered(ctx, buf)
+	}
+	return nil
 }
