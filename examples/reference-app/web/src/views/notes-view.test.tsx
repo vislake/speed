@@ -268,6 +268,39 @@ describe('NotesView', () => {
     expect(view.queryByText(NOTE_ONE_TEXT)).not.toBeInTheDocument()
   })
 
+  it('a 5xx read failure renders the read-error state, never the no-permission gate (reference-app-web.md P2-2)', async () => {
+    // Only the rbac read gate's own refusal is an authorization fact.
+    // A read that fails for any other reason -- a 5xx here, a transport
+    // answer in general -- is not a permission problem, and wearing the
+    // no-permission empty state would tell a user whose server is down
+    // that they are forbidden from looking (and an administrator whose
+    // grant is misconfigured that the service is healthy).
+    const server = demoServer()
+    const rig = makeRealClientRig((call) => {
+      if (call.method === 'GET' && call.path === '/api/v1/notes') {
+        return errorResponse(500, 'notes.internal_error')
+      }
+      return server(call)
+    })
+    await signInWithPassword(rig)
+    const view = renderNotes(rig)
+
+    // The ui-kit error empty state stands in for the whole surface: its
+    // own icon and copy, distinct from the no-permission suit.
+    expect(
+      await view.findByText(uiKitZhCN.emptyState.error.title),
+    ).toBeInTheDocument()
+    expect(
+      view.getByText(uiKitZhCN.emptyState.error.description),
+    ).toBeInTheDocument()
+    expect(
+      view.queryByText(uiKitZhCN.emptyState.noPermission.title),
+    ).not.toBeInTheDocument()
+    expect(
+      view.queryByLabelText(zhCN.notes.create.textLabel),
+    ).not.toBeInTheDocument()
+  })
+
   it('a refused read denies the gate: the no-permission empty state, no form', async () => {
     // The read refusal is the permission answer: the gate falls closed
     // on the rbac 403, and the denied branch is layout-kit's default --

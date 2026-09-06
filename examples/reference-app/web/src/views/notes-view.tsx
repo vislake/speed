@@ -10,16 +10,21 @@
  * query is the real permission fetch -- the router-level RouteGuard
  * behind real fetches that the auth-ui census defers to this shell.
  * The three statuses map onto the query's own states, checked in an
- * order that fails closed: an error is 'denied' first, unconditionally
- * -- a refused read means no surface, whether or not an earlier read
- * on the very same query already left rows in the cache. tanstack
- * query v5 never clears a query's `data` on a failed refetch (the last
- * successful answer keeps rendering while the retry runs), so checking
- * `data` ahead of `isError` -- this view's original shape -- left a
- * permission revoked mid-session, or a different account signing into
- * a tenant an earlier read already cached, showing the earlier read's
- * stale rows instead of failing closed (reference-app-web.md P1-1). A
- * served list is 'allowed' next, and no answer at all yet is 'pending'.
+ * order that fails closed: a read error is classified first -- only
+ * the rbac read gate's own refusal is an authorization fact and maps
+ * to 'denied'; a read that failed for any other reason (a transport
+ * answer, a 5xx) is a load failure and renders the ui-kit error empty
+ * state in its own suit, never the no-permission one
+ * (reference-app-web.md P2-2). Whichever suit, a failed read means no
+ * surface, whether or not an earlier read on the very same query
+ * already left rows in the cache. tanstack query v5 never clears a
+ * query's `data` on a failed refetch (the last successful answer keeps
+ * rendering while the retry runs), so checking `data` ahead of
+ * `isError` -- this view's original shape -- left a permission revoked
+ * mid-session, or a different account signing into a tenant an earlier
+ * read already cached, showing the earlier read's stale rows instead
+ * of failing closed (reference-app-web.md P1-1). A served list is
+ * 'allowed' next, and no answer at all yet is 'pending'.
  * The create form lives inside the allowed branch, and a refused
  * create (a caller without notes:write answers the same 403) stays on
  * the page with its code text -- the write gate is probed by the
@@ -60,7 +65,7 @@ import { useTranslation } from '@speed/i18n'
 import { RouteGuard } from '@speed/layout-kit'
 import type { RouteGuardStatus } from '@speed/layout-kit'
 import type { DataTableColumn } from '@speed/ui-kit'
-import { DataTable, FormField, FormLayout } from '@speed/ui-kit'
+import { DataTable, EmptyState, FormField, FormLayout } from '@speed/ui-kit'
 import { useForm } from 'react-hook-form'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
 
@@ -79,6 +84,23 @@ interface NoteDraft {
  * client.http.*), so the resolver treats it as unknown. */
 const UNKNOWN_FAILURE_CODE = 'client.unknown'
 
+/** The read gate's own refusal code: the rbac layer's 403, the only
+ * list-read answer that is an authorization fact (never a transport
+ * answer, never a server 5xx). */
+const NOTES_READ_DENIED_CODE = 'rbac.permission_denied'
+
+/**
+ * The code of an ApiError-shaped failure, or null for a failure that
+ * carries none (a bug-shaped throw, an un-normalized answer).
+ */
+function apiErrorCodeOf(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null) {
+    return null
+  }
+  const code = (error as { code?: unknown }).code
+  return typeof code === 'string' && code.length > 0 ? code : null
+}
+
 /**
  * The submit path's failure classifier: an ApiError-shaped failure
  * keeps its code, anything else -- a bug-shaped throw, an un-normalized
@@ -87,13 +109,7 @@ const UNKNOWN_FAILURE_CODE = 'client.unknown'
  * all always has a code to show.
  */
 function submitErrorCodeOf(error: unknown): string {
-  if (typeof error !== 'object' || error === null) {
-    return UNKNOWN_FAILURE_CODE
-  }
-  const code = (error as { code?: unknown }).code
-  return typeof code === 'string' && code.length > 0
-    ? code
-    : UNKNOWN_FAILURE_CODE
+  return apiErrorCodeOf(error) ?? UNKNOWN_FAILURE_CODE
 }
 
 /** The reachable codes of a note-create attempt, each mapped to the
@@ -155,22 +171,35 @@ export function NotesView(): ReactElement {
   const createForm = useForm<NoteDraft>({ defaultValues: { text: '' } })
   const [submitErrorCode, setSubmitErrorCode] = useState<string | null>(null)
 
-  // The gate: an error is denied first and unconditionally -- fail
-  // closed even when the query still holds an earlier read's data,
-  // since tanstack query v5 never clears `data` on a failed refetch
-  // (see the file header). Checking `data` before `isError` (this
-  // view's original shape) was the fail-open bug reference-app-web.md
-  // P1-1 named: a permission revoked between two reads, or a different
+  // The read error, classified: only the rbac read gate's own 403 is an
+  // authorization fact. Every other failure a list read can answer
+  // with -- a transport answer (client.network / client.timeout /
+  // client.http.<status>), a 5xx the server answered under its own
+  // code -- is a load failure and renders the read-error state below,
+  // never the no-permission suit (reference-app-web.md P2-2: a down
+  // server is not a permission problem, and a user told they are
+  // forbidden while the server is failing reads like a
+  // misconfiguration to the operator who must fix it).
+  const listErrorCode = notesQuery.isError
+    ? apiErrorCodeOf(notesQuery.error)
+    : null
+  const gateDenied = listErrorCode === NOTES_READ_DENIED_CODE
+
+  // The gate: a read error fails it closed first and unconditionally --
+  // even when the query still holds an earlier read's data, since
+  // tanstack query v5 never clears `data` on a failed refetch (see the
+  // file header). Checking `data` before `isError` (this view's
+  // original shape) was the fail-open bug reference-app-web.md P1-1
+  // named: a permission revoked between two reads, or a different
   // account signing into a tenant an earlier account's read already
   // cached, refetches into a 403 whose stale `data` kept the gate
   // 'allowed' -- so a served list is checked only once no error
   // stands, and no answer at all yet is pending.
-  const gateStatus: RouteGuardStatus =
-    notesQuery.isError
-      ? 'denied'
-      : notesQuery.data !== undefined
-        ? 'allowed'
-        : 'pending'
+  const gateStatus: RouteGuardStatus = gateDenied
+    ? 'denied'
+    : notesQuery.data !== undefined
+      ? 'allowed'
+      : 'pending'
 
   /** Creates the note, then turns the form over and refetches the list
    * so the served answer is the source of the new row. A refused
@@ -241,58 +270,72 @@ export function NotesView(): ReactElement {
       >
         {t('notes.intro')}
       </Typography>
-      <RouteGuard status={gateStatus}>
-        <FormLayout
-          form={createForm}
-          onSubmit={handleCreate}
-          actions={
-            <Button
-              type="submit"
-              variant="contained"
-              disabled={createForm.formState.isSubmitting}
-            >
-              {t('notes.create.submit')}
-            </Button>
+      {listErrorCode !== null && !gateDenied ? (
+        // The read failed for a reason other than authorization: the
+        // error empty state in its own suit, not the no-permission one.
+        // Both placeholders sit at the same heading level (h2, below
+        // this view's h1) so the page's heading order does not change
+        // with the state.
+        <EmptyState variant="error" headingLevel="h2" />
+      ) : (
+        <RouteGuard
+          status={gateStatus}
+          deniedFallback={
+            <EmptyState variant="noPermission" headingLevel="h2" />
           }
         >
-          <FormField
-            name="text"
-            required
-            rules={{
-              maxLength: {
-                value: NOTE_TEXT_LIMIT,
-                message: t('notes.create.textTooLong'),
-              },
-            }}
-            render={({ field, invalid, errorText }) => (
-              <TextField
-                {...field}
-                label={t('notes.create.textLabel')}
-                fullWidth
-                multiline
-                minRows={3}
-                maxRows={10}
-                error={invalid}
-                helperText={errorText ?? undefined}
-              />
+          <FormLayout
+            form={createForm}
+            onSubmit={handleCreate}
+            actions={
+              <Button
+                type="submit"
+                variant="contained"
+                disabled={createForm.formState.isSubmitting}
+              >
+                {t('notes.create.submit')}
+              </Button>
+            }
+          >
+            <FormField
+              name="text"
+              required
+              rules={{
+                maxLength: {
+                  value: NOTE_TEXT_LIMIT,
+                  message: t('notes.create.textTooLong'),
+                },
+              }}
+              render={({ field, invalid, errorText }) => (
+                <TextField
+                  {...field}
+                  label={t('notes.create.textLabel')}
+                  fullWidth
+                  multiline
+                  minRows={3}
+                  maxRows={10}
+                  error={invalid}
+                  helperText={errorText ?? undefined}
+                />
+              )}
+            />
+            {submitErrorCode !== null && (
+              <Alert severity="error" role="alert" sx={{ width: '100%' }}>
+                {submitErrorText(submitErrorCode)}
+              </Alert>
             )}
+          </FormLayout>
+          <DataTable
+            rows={notesQuery.data?.notes ?? []}
+            columns={columns}
+            rowKey={(note) => note.id ?? ''}
+            loading={notesQuery.isFetching}
+            emptyTitle={t('notes.list.emptyTitle')}
+            emptyDescription={t('notes.list.emptyDescription')}
+            sx={{ marginTop: 3 }}
           />
-          {submitErrorCode !== null && (
-            <Alert severity="error" role="alert" sx={{ width: '100%' }}>
-              {submitErrorText(submitErrorCode)}
-            </Alert>
-          )}
-        </FormLayout>
-        <DataTable
-          rows={notesQuery.data?.notes ?? []}
-          columns={columns}
-          rowKey={(note) => note.id ?? ''}
-          loading={notesQuery.isFetching}
-          emptyTitle={t('notes.list.emptyTitle')}
-          emptyDescription={t('notes.list.emptyDescription')}
-          sx={{ marginTop: 3 }}
-        />
-      </RouteGuard>
+        </RouteGuard>
+      )}
     </Box>
   )
 }
