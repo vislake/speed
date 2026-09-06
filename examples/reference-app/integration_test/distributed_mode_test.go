@@ -15,7 +15,7 @@
 //
 // TWO real server processes, not one: both built from the SAME "go build
 // ./cmd/server" binary, both run with SPEED_DEPLOYMENT_MODE=distributed,
-// both pointed at the SAME real Redis, the SAME real MinIO bucket, the SAME
+// both pointed at the SAME real Redis, the SAME real RustFS bucket, the SAME
 // real SMTP catcher, and -- necessarily, see the deviation note below --
 // the SAME SQLite file.
 //
@@ -166,7 +166,7 @@
 // injected implementation, never its reachability
 // (objectstore/s3.NewObjectStore and pkgcore.NewSMTPMailer both dial
 // nothing at construction -- their own doc comments say so). This file
-// uses REAL MinIO and a REAL SMTP catcher anyway, deliberately: declaring
+// uses REAL RustFS and a REAL SMTP catcher anyway, deliberately: declaring
 // a capability this app never actually exercises would be a weaker proof
 // than this round's own brief asks for, and the note-created notification
 // type's DefaultChannels ("in_app", "email", "sms" --
@@ -204,16 +204,19 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/testcontainers/testcontainers-go"
-	tcminio "github.com/testcontainers/testcontainers-go/modules/minio"
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/vislake/speed/go/notification"
 )
 
-// minioImage pins the same MinIO release go/storage's and go/pkgcore's own
-// MinIO integration legs run against, so every tier in this repository
-// exercises the same server behavior.
-const minioImage = "minio/minio:RELEASE.2024-01-16T16-07-38Z"
+// rustfsImage pins the same RustFS release go/storage's and go/pkgcore's own
+// RustFS integration legs run against, so every tier in this repository
+// exercises the same server behavior. RustFS (https://github.com/rustfs/rustfs)
+// has no dedicated testcontainers-go module the way MinIO did (tcminio), so
+// the container is started through testcontainers' own generic
+// ContainerRequest instead -- the identical shape mailhogEndpoints below
+// already uses for an image with no dedicated module.
+const rustfsImage = "rustfs/rustfs:1.0.0-rc.5"
 
 // mailhogImage is a real SMTP catcher: Mailpit exposes a plaintext SMTP
 // listener (port 1025, no auth required) and an HTTP API (port 8025) that
@@ -225,8 +228,9 @@ const minioImage = "minio/minio:RELEASE.2024-01-16T16-07-38Z"
 // (multi-arch, including arm64, verified empirically while writing this
 // test on Apple Silicon) and CI's own ubuntu-latest amd64 runners pull the
 // identical image. No testcontainers-go module exists for either, unlike
-// Redis/Postgres/MinIO above -- this is an ordinary generic container the
-// same way any image without a dedicated module is run.
+// Redis/Postgres above and, since the RustFS swap, RustFS as well -- this
+// is an ordinary generic container the same way any image without a
+// dedicated module is run.
 const mailhogImage = "axllent/mailpit:v1.31"
 
 // distributedNoteCreatorUserID is demo_notification.go's
@@ -278,48 +282,67 @@ type notifMessages struct {
 	} `json:"items"`
 }
 
-// startMinioStore starts a disposable MinIO container and creates a fresh
+// startRustfsStore starts a disposable RustFS container and creates a fresh
 // bucket on it, returning the endpoint (host:port, no scheme -- what
 // objectstore/s3.Config.Endpoint and this file's SPEED_S3_ENDPOINT both
 // want), the bucket name and the credentials. Copied from
-// go/storage/integration_test/minio_leg_test.go's startMinioStore, adapted
+// go/storage/integration_test/rustfs_leg_test.go's startRustfsStore, adapted
 // to hand back raw configuration this file passes to two SUBPROCESSES as
 // environment variables, rather than constructing a pkgcore.ObjectStore
 // directly the way the module-level test does.
-func startMinioStore(t *testing.T, ctx context.Context) (endpoint, bucket, accessKey, secretKey string) {
+func startRustfsStore(t *testing.T, ctx context.Context) (endpoint, bucket, accessKey, secretKey string) {
 	t.Helper()
 
-	container, err := tcminio.Run(ctx, minioImage,
-		tcminio.WithUsername("minioadmin"),
-		tcminio.WithPassword("minioadmin"),
-	)
+	const rustfsAccessKey = "rustfsadmin"
+	const rustfsSecretKey = "rustfsadmin"
+	req := testcontainers.ContainerRequest{
+		Image:        rustfsImage,
+		ExposedPorts: []string{"9000/tcp"},
+		Env: map[string]string{
+			"RUSTFS_ACCESS_KEY":     rustfsAccessKey,
+			"RUSTFS_SECRET_KEY":     rustfsSecretKey,
+			"RUSTFS_ADDRESS":        ":9000",
+			"RUSTFS_CONSOLE_ENABLE": "false",
+		},
+		Cmd:        []string{"/data"},
+		WaitingFor: wait.ForHTTP("/health").WithPort("9000/tcp").WithStartupTimeout(60 * time.Second),
+	}
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
 	if err != nil {
-		t.Fatalf("start minio testcontainer: %v", err)
+		t.Fatalf("start rustfs testcontainer: %v", err)
 	}
 	t.Cleanup(func() {
 		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
-			t.Errorf("terminate minio testcontainer: %v", terminateErr)
+			t.Errorf("terminate rustfs testcontainer: %v", terminateErr)
 		}
 	})
 
-	endpoint, err = container.ConnectionString(ctx)
+	host, err := container.Host(ctx)
 	if err != nil {
-		t.Fatalf("minio testcontainer connection string: %v", err)
+		t.Fatalf("rustfs testcontainer host: %v", err)
 	}
+	mappedPort, err := container.MappedPort(ctx, "9000/tcp")
+	if err != nil {
+		t.Fatalf("rustfs testcontainer mapped port: %v", err)
+	}
+	endpoint = net.JoinHostPort(host, mappedPort.Port())
 
 	const bucketName = "reference-app-distributed"
 	client, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(container.Username, container.Password, ""),
+		Creds:  credentials.NewStaticV4(rustfsAccessKey, rustfsSecretKey, ""),
 		Secure: false,
 	})
 	if err != nil {
-		t.Fatalf("build a minio client for %q: %v", endpoint, err)
+		t.Fatalf("build a minio-go client for %q: %v", endpoint, err)
 	}
 	if err := client.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{}); err != nil {
-		t.Fatalf("create bucket %q on the minio testcontainer: %v", bucketName, err)
+		t.Fatalf("create bucket %q on the rustfs testcontainer: %v", bucketName, err)
 	}
 
-	return endpoint, bucketName, container.Username, container.Password
+	return endpoint, bucketName, rustfsAccessKey, rustfsSecretKey
 }
 
 // mailhogEndpoints starts a disposable MailHog container and returns the
@@ -627,7 +650,7 @@ func openInboxStream(t *testing.T, baseURL, accessToken, userIDHeader string) *s
 // TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructure
 // is this round's positive proof: two real reference-app server processes,
 // both booted under SPEED_DEPLOYMENT_MODE=distributed against the SAME
-// real Redis, the SAME real MinIO bucket and the SAME real SMTP catcher --
+// real Redis, the SAME real RustFS bucket and the SAME real SMTP catcher --
 // exactly the composition this round's server.go changes make possible,
 // declaring MultiReplicaSafe|SurvivesRestart on every one of the four
 // stateful seams Kernel.Bootstrap validates. Replica B additionally boots
@@ -642,7 +665,7 @@ func TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructur
 
 	redisClient := startRedisClient(t, ctx)
 	redisAddr := redisClient.Options().Addr
-	s3Endpoint, s3Bucket, s3AccessKey, s3SecretKey := startMinioStore(t, ctx)
+	s3Endpoint, s3Bucket, s3AccessKey, s3SecretKey := startRustfsStore(t, ctx)
 	smtpAddr, mailhogAPI := mailhogEndpoints(t, ctx)
 	smtpHost, smtpPort, err := net.SplitHostPort(smtpAddr)
 	if err != nil {

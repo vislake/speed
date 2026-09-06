@@ -12,7 +12,7 @@
 # needs) rather than `.`.
 #
 # docker-compose.distributed.yml is an OVERRIDE, not a separate demo: it
-# adds Redis, MinIO and a mailpit SMTP catcher alongside this same `app`
+# adds Redis, RustFS and a mailpit SMTP catcher alongside this same `app`
 # service and layers extra environment onto it, composing real
 # implementations for the EventBus/KVStore/ObjectStore/Mailer seams while
 # staying on the identical SQLite file this base file already wires (this
@@ -92,7 +92,7 @@ services:
       # Inherited from the image's own HEALTHCHECK (Dockerfile) -- restated
       # here only so `docker compose ps`'s STATUS column and
       # `depends_on: condition: service_healthy` (docker-compose.distributed.yml's
-      # minio-bucket-init step uses that condition against a DIFFERENT
+      # rustfs-init step uses that condition against a DIFFERENT
       # service) have an explicit, readable definition to point at without
       # requiring a reader to open the Dockerfile too.
       test: ["CMD", "/app/reference-app-server", "healthcheck"]

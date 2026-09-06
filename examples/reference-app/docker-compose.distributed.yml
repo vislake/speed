@@ -13,9 +13,13 @@
 #   - Redis (redis:7-alpine)   backs BOTH the "eventbus" seam (Redis
 #     Streams) AND the "kv" seam (one client, two seams -- server.go's own
 #     SPEED_REDIS_ADDR doc comment explains why one address suffices).
-#   - MinIO (minio/minio, the same release pin
-#     examples/reference-app/integration_test/distributed_mode_test.go
-#     already uses) backs the "objectstore" seam (S3-compatible).
+#   - RustFS (rustfs/rustfs, https://github.com/rustfs/rustfs, the same
+#     release pin examples/reference-app/integration_test/distributed_mode_test.go
+#     already uses) backs the "objectstore" seam (S3-compatible). RustFS
+#     replaced MinIO as this repository's S3-compatible test/demo server in
+#     a dedicated round: objectstore/s3.NewObjectStore and its minio-go
+#     client are unchanged -- they speak plain S3 API, never anything
+#     MinIO-specific -- only the container backing the seam changed.
 #   - mailpit (axllent/mailpit, the same image and version pin that same
 #     test file uses -- no arm64 image exists for mailhog, mailpit's
 #     closest alternative, which is why this repository standardized on
@@ -50,29 +54,35 @@ services:
       timeout: 3s
       retries: 5
 
-  minio:
-    image: minio/minio:RELEASE.2024-01-16T16-07-38Z
-    command: server /data --console-address ":9001"
+  rustfs:
+    image: rustfs/rustfs:1.0.0-rc.5
     environment:
-      # Local-demo-only credentials -- MinIO requires SOME root
-      # credentials to start; these are the well-known MinIO quick-start
-      # defaults, never a real secret, and this compose file runs no
-      # network-exposed MinIO instance beyond the operator's own machine
-      # unless the operator chooses to publish these ports further.
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      # Local-demo-only credentials -- RustFS requires SOME root
+      # credentials to start (or falls back, with a warning, to its own
+      # built-in default); these are RustFS's own well-known documented
+      # default value (docs.rustfs.com's Docker installation page), never a
+      # real secret, and this compose file runs no network-exposed RustFS
+      # instance beyond the operator's own machine unless the operator
+      # chooses to publish these ports further.
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+      # RUSTFS_VOLUMES defaults to /data when unset, matching the volume
+      # mount below -- no explicit data-path command argument needed.
     ports:
       - "9000:9000" # S3 API -- optional, for poking at the bucket by hand
       - "9001:9001" # Web console -- optional, same reason
     volumes:
-      - reference-app-minio:/data
+      - reference-app-rustfs:/data
     healthcheck:
-      # The minio/minio image bundles `mc` itself, and `mc ready local`
-      # resolves "local" against the container's OWN S3 API using its own
-      # MINIO_ROOT_USER/MINIO_ROOT_PASSWORD from the environment above --
-      # verified directly against this exact image pin before relying on
-      # it here (no curl or wget exist in this image to fall back to).
-      test: ["CMD", "mc", "ready", "local"]
+      # RustFS's own documented health check (docs.rustfs.com's Docker
+      # installation page): a plain HTTP GET against /health on the S3 API
+      # port. The image bundles a real curl binary (verified directly
+      # against this exact image pin, unlike the MinIO image this file used
+      # to run, which had no curl/wget and needed its bundled `mc` instead).
+      test: ["CMD", "curl", "--fail", "http://localhost:9000/health"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -81,11 +91,15 @@ services:
   # exits. minio-go (the client objectstore/s3.NewObjectStore builds on)
   # never creates its own bucket -- see go/pkgcore/objectstore/s3's own
   # Config doc comment -- so something must, exactly once, before `app`
-  # first calls Kernel.Bootstrap.
-  minio-init:
+  # first calls Kernel.Bootstrap. minio/mc is kept here deliberately: it is
+  # a generic S3-API client (built on minio-go internally, the same library
+  # objectstore/s3 uses), not tied to a MinIO server, so it works against
+  # RustFS unchanged -- only the alias target below moved from minio:9000
+  # to rustfs:9000.
+  rustfs-init:
     image: minio/mc:RELEASE.2025-04-16T18-13-26Z
     depends_on:
-      minio:
+      rustfs:
         condition: service_healthy
     # entrypoint AND a single-element command list, deliberately -- Compose
     # tokenizes a plain STRING command by whitespace into an exec-form
@@ -100,7 +114,7 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >-
-        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc alias set local http://rustfs:9000 rustfsadmin rustfsadmin &&
         mc mb --ignore-existing local/reference-app
     restart: "no"
 
@@ -121,17 +135,17 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      minio-init:
+      rustfs-init:
         condition: service_completed_successfully
       mailpit:
         condition: service_healthy
     environment:
       SPEED_DEPLOYMENT_MODE: distributed
       SPEED_REDIS_ADDR: redis:6379
-      SPEED_S3_ENDPOINT: minio:9000
+      SPEED_S3_ENDPOINT: rustfs:9000
       SPEED_S3_BUCKET: reference-app
-      SPEED_S3_ACCESS_KEY: minioadmin
-      SPEED_S3_SECRET_KEY: minioadmin
+      SPEED_S3_ACCESS_KEY: rustfsadmin
+      SPEED_S3_SECRET_KEY: rustfsadmin
       SPEED_S3_USE_SSL: "false"
       SPEED_SMTP_HOST: mailpit
       SPEED_SMTP_PORT: "1025"
@@ -146,4 +160,4 @@ services:
       SPEED_SMS_GATEWAY_URL: http://127.0.0.1:1/sms
 
 volumes:
-  reference-app-minio:
+  reference-app-rustfs:

@@ -164,7 +164,7 @@ const (
 	// s3UseSSLEnv refine the same composition: Region matters to AWS S3 and
 	// Aliyun OSS (MinIO ignores it, per objectstore/s3.Config's own doc
 	// comment), and s3UseSSLEnv, parsed as a Go bool, defaults to false --
-	// plain HTTP, the common case for a local MinIO -- when unset.
+	// plain HTTP, the common case for a local RustFS -- when unset.
 	s3EndpointEnv  = "SPEED_S3_ENDPOINT"
 	s3BucketEnv    = "SPEED_S3_BUCKET"
 	s3AccessKeyEnv = "SPEED_S3_ACCESS_KEY"
