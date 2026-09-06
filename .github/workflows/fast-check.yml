@@ -73,6 +73,17 @@ name: fast-check
 #         -- actions/setup-go and setup-node cannot parse it -- so this
 #         gate is what proves a local `mise install` (Taskfile setup)
 #         installs exactly the toolchain CI runs with.
+#       - tools/check_repo_isolation.py -- the tenant-isolation test
+#         coverage checker (the 18-cicd discipline-table row "every
+#         Repository must run the isolation test suite"): every
+#         tenant-data Repository type (a struct embedding
+#         dbkit.Repository[T]) must be covered by tenancytest.
+#         AssertIsolated in its own package's tests, or by the equivalent
+#         Test<TypeName>_AssertIsolated store-level suite a repository
+#         whose record cannot satisfy tenancytest's ID convention ships
+#         instead; internal/testutil fakes (the repo-mandated shared
+#         test-helpers home, root CLAUDE.md's Testing rule) are not
+#         candidates.
 #       - tools/semgrep_rules/ -- the architecture-discipline semgrep
 #         ruleset: six rules, each mapping to an 18-cicd discipline-table
 #         row (deployment-mode branching outside kernel wiring,
@@ -273,6 +284,14 @@ jobs:
         run: python3 tools/scan_cjk.py
       - name: Toolchain drift gate (.mise.toml mirrors)
         run: python3 tools/check_toolchain.py
+      # Repository-isolation coverage: every tenant-data Repository type
+      # (an embedding of dbkit.Repository[T]) must be covered by
+      # tenancytest.AssertIsolated in its own package's tests, or by the
+      # equivalent Test<TypeName>_AssertIsolated suite (see the script's
+      # module docstring). Pure-python, no Go toolchain needed -- a plain
+      # step like the CJK scan above it.
+      - name: Tenant-isolation coverage check (Repository isolation suites)
+        run: python3 tools/check_repo_isolation.py
       # Semgrep into a throwaway venv: the runner has no pinned semgrep
       # and this job's toolchain setup is the Go/Node actions only. The
       # pip install is the deliberately-unpinned piece -- see the COVERAGE
