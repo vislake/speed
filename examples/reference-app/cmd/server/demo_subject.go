@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	aigateway "github.com/vislake/speed/go/ai-gateway"
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/integration"
@@ -105,6 +106,24 @@ const (
 	// host holds nothing at all and is refused -- not because it is
 	// unknown, but because its grant lives in a different tenant.
 	demoSingleTenantUserID = "demo-acme-only"
+
+	// demoAIGatewayTenantWriterUserID holds demoAIGatewayTenantWriterRoleKey,
+	// a custom role carrying exactly aigateway.PermissionWrite (and
+	// aigateway.PermissionRead) and NOT aigateway.PermissionManagePlatform.
+	// It exists purely to prove this round's two-tier permission gate is
+	// real: demoOwnerUserID holds BuiltinRoleOwner, which -- per rbac's own
+	// builtin.go doc comment -- carries EVERY permission any module
+	// declared, platform-scope credential write included, so it cannot
+	// demonstrate the platform write being refused. This user can set its
+	// OWN tenant's BYOK credential but is refused the platform-wide write,
+	// which is the distinction the two permissions exist to enforce.
+	demoAIGatewayTenantWriterUserID = "demo-aigateway-tenant-writer"
+
+	// demoAIGatewayTenantWriterRoleKey is the tenant-scoped key of that
+	// role. It is defined per tenant, like every role: roles are tenant
+	// data, and there is deliberately no cross-tenant template to copy
+	// from.
+	demoAIGatewayTenantWriterRoleKey = "ai-gateway-tenant-writer"
 )
 
 // demoSingleTenantID is the one tenant demoSingleTenantUserID is granted
@@ -177,6 +196,11 @@ const integrationAPIKeyRoutePath = "/api/v1/integration"
 // tenant-scoped, permission-gated surface -- see module.go's own Register
 // doc comment in go/sharing for the full contrast.
 const sharingSharesRoutePath = sharing.PathShares
+
+// aiGatewayRoutePath is where go/ai-gateway's round-3 credential-write
+// admin surface mounts its routes -- the same unexported-path situation
+// notesRoutePath's own comment explains.
+const aiGatewayRoutePath = "/api/v1/ai-gateway"
 
 // demoRouteGuards declares, for every path a module mounts, the resource
 // whose permissions gate it -- or routePublic when the path is
@@ -343,6 +367,18 @@ var demoRouteGuards = map[string]string{
 	// stays exhaustive -- mountModuleRoutes still refuses to start for any
 	// mounted path this table does not name at all.
 	adminRoutePath: adminRouteSentinel,
+
+	// ai-gateway's path is gated for real, like storage's: the module's
+	// Handler performs no permission check of its own (see its own doc
+	// comment), leaving enforcement to the host's authorization layer. It
+	// needs its own action selector, not demoPermissionFor's generic
+	// read/write split, since a non-GET request here means either
+	// aigateway:write (the tenant's own BYOK write) or
+	// aigateway:manage_platform (the platform-wide write) -- see
+	// aiGatewayPermissionFor's own doc comment, the same pkiPermissionFor/
+	// sharingPermissionFor-style carve-out this table already makes for
+	// those two paths.
+	aiGatewayRoutePath: aiGatewayResource,
 }
 
 // adminRouteSentinel marks demoRouteGuards' one entry that guardModuleRoute
@@ -522,6 +558,37 @@ func sharingPermissionFor(r *http.Request) string {
 	return sharing.PermissionCreate
 }
 
+// aiGatewayResource is the resource half of ai-gateway's permission
+// strings, derived from its own exported constants the same way
+// notesResource and storageResource are -- so this example cannot drift
+// from the permissions ai-gateway actually declares. All three of its
+// permissions genuinely share one resource half ("ai-gateway"), unlike
+// integration's two-entity vocabulary.
+var aiGatewayResource = mustResourceOf(aigateway.PermissionRead, aigateway.PermissionWrite, aigateway.PermissionManagePlatform)
+
+// aiGatewayPermissionFor selects the permission an aiGatewayRoutePath
+// request must hold, mirroring pkiPermissionFor's and sharingPermissionFor's
+// own reasoning: ai-gateway's three-permission vocabulary (read/write/
+// manage_platform) is not the generic read/write pair demoPermissionFor
+// assumes. A GET is aigateway:read (aiGateway_getCredential); a PUT whose
+// path ends in "/platform" is aigateway:manage_platform
+// (aiGateway_setPlatformCredential), the materially more privileged
+// operation this round's own brief requires a DISTINCT permission for;
+// every other write (a PUT ending in "/tenant") is aigateway:write
+// (aiGateway_setTenantCredential). Checking the path suffix is safe for
+// the identical reason sharingPermissionFor's own doc comment gives: the
+// path is what routed the request to this selector in the first place,
+// never a value a caller supplies independently of it.
+func aiGatewayPermissionFor(r *http.Request) string {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		return aigateway.PermissionRead
+	}
+	if strings.HasSuffix(r.URL.Path, "/platform") {
+		return aigateway.PermissionManagePlatform
+	}
+	return aigateway.PermissionWrite
+}
+
 // mustResourceOf returns the shared resource half of the given permission
 // strings, and panics when they do not agree on one.
 //
@@ -661,15 +728,17 @@ func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler) (ht
 		// entirely. See integrationAPIKeySentinel's own doc comment for why.
 		return guardIntegrationAPIKeyRoute(az, handler), nil
 	}
-	// pki and sharing both need their own action selector, not
-	// demoPermissionFor's generic read/write split -- see pkiPermissionFor's
-	// and sharingPermissionFor's own doc comments.
+	// pki, sharing and ai-gateway all need their own action selector, not
+	// demoPermissionFor's generic read/write split -- see pkiPermissionFor's,
+	// sharingPermissionFor's and aiGatewayPermissionFor's own doc comments.
 	permissionFor := demoPermissionFor(resource)
 	switch path {
 	case pkiRoutePath:
 		permissionFor = pkiPermissionFor
 	case sharingSharesRoutePath:
 		permissionFor = sharingPermissionFor
+	case aiGatewayRoutePath:
+		permissionFor = aiGatewayPermissionFor
 	}
 	return rbac.RequirePermissionFunc(az, permissionFor,
 		rbac.WithSubjectResolver(demoSubjectResolver),
@@ -708,6 +777,9 @@ func seedDemoGrants(ctx context.Context, svc *rbac.Service, tenants map[string]p
 		if err := seedDemoReaderRole(tenantCtx, svc); err != nil {
 			return fmt.Errorf("reference-app: seed the demo reader role of %q: %w", tenantID, err)
 		}
+		if err := seedDemoAIGatewayTenantWriterRole(tenantCtx, svc); err != nil {
+			return fmt.Errorf("reference-app: seed the demo ai-gateway tenant-writer role of %q: %w", tenantID, err)
+		}
 
 		grants := []struct {
 			userID  string
@@ -715,6 +787,12 @@ func seedDemoGrants(ctx context.Context, svc *rbac.Service, tenants map[string]p
 		}{
 			{userID: demoOwnerUserID, roleKey: rbac.BuiltinRoleOwner},
 			{userID: demoReaderUserID, roleKey: demoReaderRoleKey},
+			// demoAIGatewayTenantWriterUserID is granted in EVERY tenant,
+			// like demoReaderUserID: the two-tier gate this actor
+			// demonstrates (tenant BYOK write allowed, platform write
+			// refused) is a property of its role's permission set, not of
+			// any one tenant.
+			{userID: demoAIGatewayTenantWriterUserID, roleKey: demoAIGatewayTenantWriterRoleKey},
 		}
 		if tenantID == demoSingleTenantID {
 			grants = append(grants, struct {
@@ -748,6 +826,32 @@ func seedDemoReaderRole(ctx context.Context, svc *rbac.Service) error {
 		// carry user-facing text in one language.
 		DescriptionKey: "rbac.role.member",
 		Permissions:    []string{notes.PermissionRead},
+	})
+	if err != nil && !isAlreadyDefined(err) {
+		return err
+	}
+	return nil
+}
+
+// seedDemoAIGatewayTenantWriterRole defines the role demoAIGatewayTenantWriterRoleKey
+// names, in the tenant ctx carries, tolerating the role already existing
+// from an earlier boot -- the identical caller-side idempotence
+// seedDemoReaderRole spells out.
+//
+// The role carries exactly aigateway.PermissionRead and
+// aigateway.PermissionWrite -- the tenant-scoped half of this round's
+// two-tier gate -- and DELIBERATELY NOT aigateway.PermissionManagePlatform.
+// demoOwnerUserID (BuiltinRoleOwner) holds every declared permission, so it
+// cannot demonstrate the platform write being refused; this role is the
+// tenant-writer that can set its own tenant's BYOK credential over HTTP and
+// is refused the platform-wide write, which is the distinction the two
+// permissions exist to enforce (see demoAIGatewayTenantWriterUserID's own
+// comment and go/ai-gateway/module.go's doc comment on the two constants).
+func seedDemoAIGatewayTenantWriterRole(ctx context.Context, svc *rbac.Service) error {
+	_, err := svc.DefineRole(ctx, rbac.RoleDefinition{
+		Key:            demoAIGatewayTenantWriterRoleKey,
+		DescriptionKey: "rbac.role.member",
+		Permissions:    []string{aigateway.PermissionRead, aigateway.PermissionWrite},
 	})
 	if err != nil && !isAlreadyDefined(err) {
 		return err
