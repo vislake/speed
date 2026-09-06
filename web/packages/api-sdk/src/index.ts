@@ -49,6 +49,231 @@ export interface NotesError {
   params?: NotesErrorParams;
 }
 
+/**
+ * The create route's request body.
+ */
+export interface CasesCreateCaseRequest {
+  /**
+     * The patient's display name as the clinic entered it at intake. Required, length-bounded in the application (SQLite does not enforce a VARCHAR length limit, so the check lives in the service).
+     * @minLength 1
+     * @maxLength 200
+     */
+  patient_name: string;
+  /**
+     * The optional clinic-given identifier for the patient (a chart number, an internal reference). An absent or empty value means the clinic gave none.
+     * @maxLength 64
+     */
+  patient_ref?: string;
+  /**
+     * The case's initial photos, in attachment order: references to already-uploaded go/storage objects of the caller's tenant. Optional -- an absent or empty list creates a case with no photos yet. Each entry must be a non-empty object id, unique within the list and not already attached to another case of the same tenant.
+     * @maxItems 50
+     * @items.minLength 1
+     */
+  photo_object_ids?: string[];
+}
+
+/**
+ * One photo of a case, as a case read answers it.
+ */
+export interface CasesPhoto {
+  /** The referenced go/storage photo object's id -- the value that feeds the smile-simulation surface's per-photo enumeration. */
+  object_id: string;
+}
+
+/**
+ * A case as the create answer, the list entries and the detail answer all render it -- one shape a P3 view renders with one component.
+ */
+export interface CasesCase {
+  /** The case's application-generated id. */
+  id: string;
+  /** The patient's display name as the clinic entered it. */
+  patient_name: string;
+  /** The clinic-given patient reference; empty means the clinic gave none. */
+  patient_ref: string;
+  /** The user id of the staff member who created the case -- the "my cases" list's key. */
+  creator_user_id: string;
+  /** When the case was created, whole seconds, UTC. */
+  created_at: string;
+  /** The case's photos in attachment order. Always present -- an empty list for a case whose photos arrive later. */
+  photos: CasesPhoto[];
+}
+
+/**
+ * The list route's 200 answer.
+ */
+export interface CasesListResponse {
+  /** The caller's own cases, newest first. */
+  cases: CasesCase[];
+}
+
+export type CasesErrorParams = { [key: string]: unknown };
+
+/**
+ * The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md) -- a client resolves code through its own i18n catalog.
+ */
+export interface CasesError {
+  code?: string;
+  params?: CasesErrorParams;
+}
+
+/**
+ * The character of the simulated smile. Defaults to natural when omitted.
+ */
+export type SmilesimSimulationOptionsSmileStyle = typeof SmilesimSimulationOptionsSmileStyle[keyof typeof SmilesimSimulationOptionsSmileStyle];
+
+
+export const SmilesimSimulationOptionsSmileStyle = {
+  subtle: 'subtle',
+  natural: 'natural',
+  bright: 'bright',
+} as const;
+
+/**
+ * The tooth color the simulated smile is asked to show. Defaults to natural when omitted.
+ */
+export type SmilesimSimulationOptionsToothShade = typeof SmilesimSimulationOptionsToothShade[keyof typeof SmilesimSimulationOptionsToothShade];
+
+
+export const SmilesimSimulationOptionsToothShade = {
+  natural: 'natural',
+  white: 'white',
+  'ultra-white': 'ultra-white',
+} as const;
+
+/**
+ * One simulation's parameterized option set, shared by the simulate route's request body and by every response that echoes the effective options a simulation was generated with.
+ */
+export interface SmilesimSimulationOptions {
+  /** The character of the simulated smile. Defaults to natural when omitted. */
+  smile_style?: SmilesimSimulationOptionsSmileStyle;
+  /** The tooth color the simulated smile is asked to show. Defaults to natural when omitted. */
+  tooth_shade?: SmilesimSimulationOptionsToothShade;
+  /**
+     * How strongly the transformation moves the photo toward the requested smile: the lower bound is exclusive (0 is a billed no-op and is refused) and 1 is the complete simulated smile. Defaults to full strength when omitted.
+     * @maximum 1
+     * @exclusiveMinimum 0
+     */
+  strength?: number;
+}
+
+/**
+ * The simulate route's request body. Every options field is a pointer-shaped optional: an omitted field inherits the service's documented default, while an explicitly present field -- including an out-of-range strength of 0 -- is passed through verbatim and refused by the service's own validation rather than silently replaced by a default.
+ */
+export interface SmilesimSimulateRequest {
+  /**
+     * The completed go/storage object id of the patient photo to simulate.
+     * @minLength 1
+     */
+  photo_object_id: string;
+  /** The user id of the recipient to notify once the job reaches a terminal status. Omitted (or empty) enqueues the job with no notification. */
+  recipient_user_id?: string;
+  options?: SmilesimSimulationOptions;
+}
+
+/**
+ * The simulate route's 202 answer: a reference to the async job, which has not run yet.
+ */
+export interface SmilesimJobRef {
+  /** The enqueued go/jobs job's id -- the value the job-status route's {jobID} path parameter takes. */
+  job_id: string;
+}
+
+/**
+ * The real vendor usage a succeeded job recorded.
+ */
+export interface SmilesimUsage {
+  /** How many images the vendor generated for the job. */
+  image_count: number;
+  /** The inference step count the vendor reported. */
+  steps: number;
+  /** The resolution tier the vendor generated at (its normalized size string). */
+  resolution_tier: string;
+}
+
+/**
+ * The job's live go/jobs status.
+ */
+export type SmilesimJobStatusStatus = typeof SmilesimJobStatusStatus[keyof typeof SmilesimJobStatusStatus];
+
+
+export const SmilesimJobStatusStatus = {
+  pending: 'pending',
+  running: 'running',
+  retrying: 'retrying',
+  succeeded: 'succeeded',
+  dead_letter: 'dead_letter',
+  cancelled: 'cancelled',
+} as const;
+
+/**
+ * The job-status route's 200 answer for one job.
+ */
+export interface SmilesimJobStatus {
+  /** The job's live go/jobs status. */
+  status: SmilesimJobStatusStatus;
+  /** The effective options the job was generated with, present when a durable per-photo record exists for it. */
+  options?: SmilesimSimulationOptions;
+  /** The generated image's go/storage object id, present once the job has succeeded. */
+  output_object_id?: string;
+  /** The real vendor usage the job recorded, present once it has succeeded. */
+  usage?: SmilesimUsage;
+  /** The job's recorded failure message, present when the job carries one (dead-lettered, cancelled after a failed attempt, or retrying). */
+  error?: string;
+}
+
+/**
+ * The job's live status, read from the queue at call time -- never a snapshot stored by the service, so an enumeration always reflects what a job-status poll would answer right now.
+ */
+export type SmilesimSimulationStatus = typeof SmilesimSimulationStatus[keyof typeof SmilesimSimulationStatus];
+
+
+export const SmilesimSimulationStatus = {
+  pending: 'pending',
+  running: 'running',
+  retrying: 'retrying',
+  succeeded: 'succeeded',
+  dead_letter: 'dead_letter',
+  cancelled: 'cancelled',
+} as const;
+
+/**
+ * One simulation in the per-photo enumeration.
+ */
+export interface SmilesimSimulation {
+  /** The generation job's id. */
+  job_id: string;
+  /** The go/storage object id of the photo the simulation was generated from -- the enumeration's grouping key, echoed per entry for a caller rendering a row on its own. */
+  photo_object_id: string;
+  /** The effective option set that produced this simulation. */
+  options: SmilesimSimulationOptions;
+  /** The job's live status, read from the queue at call time -- never a snapshot stored by the service, so an enumeration always reflects what a job-status poll would answer right now. */
+  status: SmilesimSimulationStatus;
+  /** When the generation was requested, whole seconds, UTC. */
+  created_at: string;
+  /** The generated image's go/storage object id, present only when the job has succeeded and its result names one. */
+  output_object_id?: string;
+  /** The job's recorded failure message, present only when the job carries one. */
+  error?: string;
+}
+
+/**
+ * The per-photo enumeration route's 200 answer.
+ */
+export interface SmilesimPhotoSimulations {
+  /** The photo's simulations, newest first. */
+  simulations: SmilesimSimulation[];
+}
+
+export type SmilesimErrorParams = { [key: string]: unknown };
+
+/**
+ * The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md) -- a client resolves code through its own i18n catalog.
+ */
+export interface SmilesimError {
+  code?: string;
+  params?: SmilesimErrorParams;
+}
+
 export interface AuthnRegisterRequest {
   email?: string;
   phone?: string;
@@ -554,6 +779,416 @@ export function useNotesListNotes<TData = Awaited<ReturnType<typeof notesListNot
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getNotesListNotesQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * The case groups one patient (the clinic-given name required, the optional clinic-given reference) with the photos of the case as already-uploaded go/storage object ids, in attachment order. Both the photo list and the reference may be absent or empty -- a case can be created for an intake whose photos arrive later. There is deliberately no tenant_id field and no creator field anywhere on the request: the tenant is the one tenancy.Middleware already resolved into the request context, and the creator comes from the host's SubjectResolver seam, never from the request (a request no resolver can attribute is refused with cases.subject_unresolved before the body is even read).
+ * @summary Create a case under the caller's tenant.
+ */
+export const casesCreateCase = (
+    casesCreateCaseRequest: CasesCreateCaseRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<CasesCase>(
+      {url: `/api/v1/cases`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: casesCreateCaseRequest, signal
+    },
+      );
+    }
+
+
+
+export const getCasesCreateCaseMutationOptions = <TError = CasesError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof casesCreateCase>>, TError,{data: CasesCreateCaseRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof casesCreateCase>>, TError,{data: CasesCreateCaseRequest}, TContext> => {
+
+const mutationKey = ['casesCreateCase'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof casesCreateCase>>, {data: CasesCreateCaseRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  casesCreateCase(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CasesCreateCaseMutationResult = NonNullable<Awaited<ReturnType<typeof casesCreateCase>>>
+    export type CasesCreateCaseMutationBody = CasesCreateCaseRequest
+    export type CasesCreateCaseMutationError = CasesError
+
+    /**
+ * @summary Create a case under the caller's tenant.
+ */
+export const useCasesCreateCase = <TError = CasesError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof casesCreateCase>>, TError,{data: CasesCreateCaseRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof casesCreateCase>>,
+        TError,
+        {data: CasesCreateCaseRequest},
+        TContext
+      > => {
+      return useMutation(getCasesCreateCaseMutationOptions(options));
+    }
+
+/**
+ * Lists every case the caller created, newest first, each entry carrying its photos in attachment order (an empty list for a case whose photos arrive later). The list is keyed on the creator the host's SubjectResolver seam attributes the request to; a request no resolver can attribute is refused with cases.subject_unresolved.
+ * @summary List the caller's own cases.
+ */
+export const casesListCases = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<CasesListResponse>(
+      {url: `/api/v1/cases`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getCasesListCasesQueryKey = () => {
+    return [
+    `/api/v1/cases`
+    ] as const;
+    }
+
+
+export const getCasesListCasesQueryOptions = <TData = Awaited<ReturnType<typeof casesListCases>>, TError = CasesError>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof casesListCases>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getCasesListCasesQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof casesListCases>>> = ({ signal }) => casesListCases(signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof casesListCases>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type CasesListCasesQueryResult = NonNullable<Awaited<ReturnType<typeof casesListCases>>>
+export type CasesListCasesQueryError = CasesError
+
+
+/**
+ * @summary List the caller's own cases.
+ */
+
+export function useCasesListCases<TData = Awaited<ReturnType<typeof casesListCases>>, TError = CasesError>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof casesListCases>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getCasesListCasesQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * Reads one case of the caller's tenant with its photos in attachment order. An unknown case id, and a case of another tenant, both answer cases.not_found -- never a cross-tenant confirmation of a case's existence.
+ * @summary Read one case of the caller's tenant.
+ */
+export const casesGetCase = (
+    caseId: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<CasesCase>(
+      {url: `/api/v1/cases/${caseId}`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getCasesGetCaseQueryKey = (caseId: string,) => {
+    return [
+    `/api/v1/cases/${caseId}`
+    ] as const;
+    }
+
+
+export const getCasesGetCaseQueryOptions = <TData = Awaited<ReturnType<typeof casesGetCase>>, TError = CasesError>(caseId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof casesGetCase>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getCasesGetCaseQueryKey(caseId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof casesGetCase>>> = ({ signal }) => casesGetCase(caseId, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: caseId !== null && caseId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof casesGetCase>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type CasesGetCaseQueryResult = NonNullable<Awaited<ReturnType<typeof casesGetCase>>>
+export type CasesGetCaseQueryError = CasesError
+
+
+/**
+ * @summary Read one case of the caller's tenant.
+ */
+
+export function useCasesGetCase<TData = Awaited<ReturnType<typeof casesGetCase>>, TError = CasesError>(
+ caseId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof casesGetCase>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getCasesGetCaseQueryOptions(caseId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * The photo must be an existing, completed go/storage object of the caller's own tenant; the job itself is async -- the 202 answer carries only its job id, and the job-status route below is how its outcome is observed. Options are optional: an absent options object (or an absent field inside it) inherits the service's documented default for that dimension, while an explicitly present out-of-vocabulary or out-of-range value is refused with its coded smilesim.* 400 before anything is reserved or enqueued. A recipient_user_id, when given, receives a completion notification once the job reaches a terminal status. There is deliberately no tenant_id field anywhere on this request: the tenant is the one tenancy.Middleware already resolved into the request context (root CLAUDE.md's multi-tenant isolation rule).
+ * @summary Enqueue one smile-simulation job for a completed photo.
+ */
+export const smilesimSimulate = (
+    smilesimSimulateRequest: SmilesimSimulateRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<SmilesimJobRef>(
+      {url: `/api/v1/smile-simulation/simulate`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: smilesimSimulateRequest, signal
+    },
+      );
+    }
+
+
+
+export const getSmilesimSimulateMutationOptions = <TError = SmilesimError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof smilesimSimulate>>, TError,{data: SmilesimSimulateRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof smilesimSimulate>>, TError,{data: SmilesimSimulateRequest}, TContext> => {
+
+const mutationKey = ['smilesimSimulate'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof smilesimSimulate>>, {data: SmilesimSimulateRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  smilesimSimulate(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SmilesimSimulateMutationResult = NonNullable<Awaited<ReturnType<typeof smilesimSimulate>>>
+    export type SmilesimSimulateMutationBody = SmilesimSimulateRequest
+    export type SmilesimSimulateMutationError = SmilesimError
+
+    /**
+ * @summary Enqueue one smile-simulation job for a completed photo.
+ */
+export const useSmilesimSimulate = <TError = SmilesimError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof smilesimSimulate>>, TError,{data: SmilesimSimulateRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof smilesimSimulate>>,
+        TError,
+        {data: SmilesimSimulateRequest},
+        TContext
+      > => {
+      return useMutation(getSmilesimSimulateMutationOptions(options));
+    }
+
+/**
+ * Answers the same jobs.Queue this app shares with go/ai-gateway: the status is the job's live status, an unknown or another tenant's job id answers 404 exactly like an unknown one. Once the job has succeeded, the answer carries the generated image's go/storage object id and the real vendor usage the job recorded; when a durable per-photo record exists for the job, it also echoes the effective options the simulation was generated with.
+ * @summary Poll one smile-simulation job's live status.
+ */
+export const smilesimGetJob = (
+    jobID: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<SmilesimJobStatus>(
+      {url: `/api/v1/smile-simulation/jobs/${jobID}`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getSmilesimGetJobQueryKey = (jobID: string,) => {
+    return [
+    `/api/v1/smile-simulation/jobs/${jobID}`
+    ] as const;
+    }
+
+
+export const getSmilesimGetJobQueryOptions = <TData = Awaited<ReturnType<typeof smilesimGetJob>>, TError = SmilesimError>(jobID: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof smilesimGetJob>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getSmilesimGetJobQueryKey(jobID);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof smilesimGetJob>>> = ({ signal }) => smilesimGetJob(jobID, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: jobID !== null && jobID !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof smilesimGetJob>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type SmilesimGetJobQueryResult = NonNullable<Awaited<ReturnType<typeof smilesimGetJob>>>
+export type SmilesimGetJobQueryError = SmilesimError
+
+
+/**
+ * @summary Poll one smile-simulation job's live status.
+ */
+
+export function useSmilesimGetJob<TData = Awaited<ReturnType<typeof smilesimGetJob>>, TError = SmilesimError>(
+ jobID: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof smilesimGetJob>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getSmilesimGetJobQueryOptions(jobID,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * Lists every simulation generated from the photo under the caller's tenant, newest first -- the P3 gallery's data source for one case photo. Each entry carries the effective options it was generated with, its live status and, once the job succeeded, its output object id. An unknown photo id is an empty list, not an error: this route reads the durable per-photo result index, which simply holds no rows for a photo nothing was generated from.
+ * @summary List every simulation generated from one photo.
+ */
+export const smilesimListPhotoSimulations = (
+    photoObjectID: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<SmilesimPhotoSimulations>(
+      {url: `/api/v1/smile-simulation/photos/${photoObjectID}/simulations`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getSmilesimListPhotoSimulationsQueryKey = (photoObjectID: string,) => {
+    return [
+    `/api/v1/smile-simulation/photos/${photoObjectID}/simulations`
+    ] as const;
+    }
+
+
+export const getSmilesimListPhotoSimulationsQueryOptions = <TData = Awaited<ReturnType<typeof smilesimListPhotoSimulations>>, TError = SmilesimError>(photoObjectID: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof smilesimListPhotoSimulations>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getSmilesimListPhotoSimulationsQueryKey(photoObjectID);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof smilesimListPhotoSimulations>>> = ({ signal }) => smilesimListPhotoSimulations(photoObjectID, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: photoObjectID !== null && photoObjectID !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof smilesimListPhotoSimulations>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type SmilesimListPhotoSimulationsQueryResult = NonNullable<Awaited<ReturnType<typeof smilesimListPhotoSimulations>>>
+export type SmilesimListPhotoSimulationsQueryError = SmilesimError
+
+
+/**
+ * @summary List every simulation generated from one photo.
+ */
+
+export function useSmilesimListPhotoSimulations<TData = Awaited<ReturnType<typeof smilesimListPhotoSimulations>>, TError = SmilesimError>(
+ photoObjectID: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof smilesimListPhotoSimulations>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getSmilesimListPhotoSimulationsQueryOptions(photoObjectID,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

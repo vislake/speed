@@ -53,7 +53,7 @@ rules:
   # AuthnSession, NotesNote) -- verified against redocly's synthetic
   # NamedSchemas subject, which walks components.schemas and exposes each
   # entry's OWN KEY (not a "name" property) to the assertion; every schema
-  # both fragments declare today passes this pattern.
+  # every merged fragment declares today passes this pattern.
   rule/speed-schema-name-format:
     subject:
       type: NamedSchemas

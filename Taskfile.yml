@@ -246,14 +246,20 @@ tasks:
     silent: true
 
   api:gen:
-    desc: Regenerate the generated API surface of every module that ships an OpenAPI fragment -- backend (oapi-codegen types + ServerInterface) for notes, org, storage, authn, notification, sharing, pki, integration and ai-gateway, plus the frontend SDK for every fragment in the merged document (orval -> @speed/api-sdk, notes + authn + notification).
+    desc: Regenerate the generated API surface of every module that ships an OpenAPI fragment -- backend (oapi-codegen types + ServerInterface) for notes, cases, smilesim, org, storage, authn, notification, sharing, pki, integration and ai-gateway, plus the frontend SDK for every fragment in the merged document (orval -> @speed/api-sdk, notes + cases + smilesim + authn + notification).
     # The backend half of the contract-change flow (docs/internal/
     # 21-api-contract.md's order: edit the spec, regenerate, compile
-    # failures reveal every handler to fix) is real for the nine modules
-    # that ship a fragment: this task runs oapi-codegen, pinned at
-    # v2.8.0, over each module's own api/openapi.yaml with that
+    # failures reveal every handler to fix) is real for the eleven
+    # surfaces that ship a fragment: this task runs oapi-codegen, pinned
+    # at v2.8.0, over each module's own api/openapi.yaml with that
     # directory's own oapi-codegen.yaml -- rewriting
     # examples/reference-app/internal/notes/api/notes-server.gen.go,
+    # examples/reference-app/internal/cases/api/cases-server.gen.go,
+    # examples/reference-app/internal/smilesim/api/smilesim-server.gen.go
+    # (the two latter added by the P3a fragment round: the app's own
+    # case-domain and smile-simulation surfaces, whose interfaces the
+    # cmd/server handlers implement -- see cmd/server/cases.go and
+    # cmd/server/smilesim.go's compile-time assertions),
     # go/org/api/org-server.gen.go, go/storage/api/storage-server.gen.go,
     # go/authn/api/authn-server.gen.go,
     # go/notification/api/notification-server.gen.go,
@@ -264,24 +270,29 @@ tasks:
     # stop compiling (the compile-time assertions live in
     # internal/notes/handler.go, go/org/handler.go, go/storage/handler.go,
     # go/authn/handler.go, go/notification/handler.go, go/sharing/handler.go,
-    # go/pki/handler.go, go/integration/handler.go and
-    # go/ai-gateway/handler.go).
+    # go/pki/handler.go, go/integration/handler.go,
+    # go/ai-gateway/handler.go -- and, for the app's own case-domain and
+    # smile-simulation fragments, cmd/server/cases.go and
+    # cmd/server/smilesim.go).
     #
     # The frontend half of the api:gen promise is live for every fragment
     # in the merged document: the api:merge dependency below joins the
-    # notes, authn and notification fragments into build/openapi/speed.yaml,
-    # and the orval leg below regenerates the @speed/api-sdk package from
-    # that merged document -- orval pinned at 8.17.0 and run from web/ via
-    # pnpm dlx (orval is never a workspace dependency), followed by
-    # web/scripts/orval-nodenext-fixup.mjs -- see that package's
-    # AGENTS.md for the seam and the fixup's why. notification joined the
-    # merged document when its recipient-facing HTTP surface shipped (the
-    # notification round): its fragment feeds the merge and orval like
-    # authn's, because its operations are self-service surfaces a
-    # consumer shell's SDK calls. org's and storage's fragments feed
-    # neither the merge nor orval: org's frontend leg defers to the M1
-    # org-web round that joins org into the merged document
-    # (go/org/AGENTS.md's deferrals table and
+    # notes, cases, smilesim, authn and notification fragments into
+    # build/openapi/speed.yaml, and the orval leg below regenerates the
+    # @speed/api-sdk package from that merged document -- orval pinned at
+    # 8.17.0 and run from web/ via pnpm dlx (orval is never a workspace
+    # dependency), followed by web/scripts/orval-nodenext-fixup.mjs --
+    # see that package's AGENTS.md for the seam and the fixup's why.
+    # notification joined the merged document when its recipient-facing
+    # HTTP surface shipped (the notification round): its fragment feeds
+    # the merge and orval like authn's, because its operations are
+    # self-service surfaces a consumer shell's SDK calls. The cases and
+    # smilesim fragments joined in the P3a round for the same reason:
+    # they are the reference app's own case-domain and smile-simulation
+    # surfaces, the operations the P3 web UI calls. org's and storage's
+    # fragments feed neither the merge nor orval: org's frontend leg
+    # defers to the M1 org-web round that joins org into the merged
+    # document (go/org/AGENTS.md's deferrals table and
     # docs/internal/21-api-contract.md's implementation-status note);
     # storage's frontend leg defers to that same future extension of the
     # merged document -- org's fragment is queued first, storage's would
@@ -319,7 +330,7 @@ tasks:
     #
     # Keep the commands in lockstep with
     # .github/workflows/api-contract.yml's regeneration steps: the same
-    # go run from the same nine backend directories, and the same pnpm
+    # go run from the same eleven backend directories, and the same pnpm
     # dlx orval + fixup pair from web/, then a git diff there fails any
     # PR whose spec change was not committed with its regenerated
     # artifact.
@@ -328,6 +339,14 @@ tasks:
     cmds:
       - |
         cd "{{.APP_DIR}}/internal/notes/api" && \
+        go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
+          -config oapi-codegen.yaml openapi.yaml
+      - |
+        cd "{{.APP_DIR}}/internal/cases/api" && \
+        go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
+          -config oapi-codegen.yaml openapi.yaml
+      - |
+        cd "{{.APP_DIR}}/internal/smilesim/api" && \
         go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
           -config oapi-codegen.yaml openapi.yaml
       - |
@@ -374,8 +393,11 @@ tasks:
     # artifacts independently, but the MERGED document is a real release
     # artifact (build/openapi/speed.yaml, committed -- see .gitignore's
     # carve-out) in its own right once two or more fragments exist (which
-    # happened when authn's fragment landed alongside notes', and grew a
-    # third member when notification's recipient-facing surface shipped),
+    # happened when authn's fragment landed alongside notes', grew a
+    # third member when notification's recipient-facing surface shipped,
+    # and grew to five when the P3a round joined the reference app's own
+    # cases and smilesim fragments, whose operations the P3 web UI
+    # calls),
     # and it is also the frontend leg's input: api:gen depends on this
     # task (see above), so a fragment edit regenerates through a fresh
     # merge rather than a stale committed speed.yaml. The merge itself
@@ -399,6 +421,8 @@ tasks:
       - >-
         pnpm --package=@redocly/cli@2.51.1 dlx redocly join
         examples/reference-app/internal/notes/api/openapi.yaml
+        examples/reference-app/internal/cases/api/openapi.yaml
+        examples/reference-app/internal/smilesim/api/openapi.yaml
         go/authn/api/openapi.yaml
         go/notification/api/openapi.yaml
         -o build/openapi/speed.yaml
