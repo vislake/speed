@@ -171,3 +171,71 @@ Every code above has a matching description entry in `locales/{zh-CN,en-US}.toml
 **`pki:rotate` is declared with no HTTP operation gating it yet, and that is deliberate, not an omission.** Round 1's AGENTS.md reserved both `pki:revoke` and `pki:rotate` "for whichever round implements revocation"; round 3 declares both, per the task that scoped this round, even though only `pki:revoke`-shaped operations exist on the HTTP surface (`PkiRevokeSigningKey`/`PkiRevokeCertificate`). The capability `pki:rotate` names is real and already running (the round-2 expiry scan, and round 3's own `Service.PromoteNow`), just not yet exposed as a permission-gated manual trigger -- see module.go's own doc comment on `PermissionRotate` for why declaring it now is not the same "prepare for later" round 1 refused for a genuinely nonexistent capability.
 
 **`ErrSignerUnavailable`'s real trigger is `GenerateCRL` wrapping ANY non-coded `Signer.Sign` failure, not specifically a KMS-backed provider's network fault.** This is recorded, not hidden, in errors.go's own doc comment and in "Known limitations" above -- a reviewer should not "fix" this by narrowing the wrap to a specific error type without first checking whether the narrower shape genuinely fits every `Signer` implementation's failure modes, `LocalSigner`'s included.
+
+## Ledger-arbitrated certificate revocation (round entry, 2026-09-06)
+
+An audit of `CAService.RevokeCertificate` against the round-3 implementation
+confirmed two defects this round fixes (findings P1-1 and P1-3 of the review
+that scoped the round):
+
+- **P1-1: a failed ledger write was logged and reported as success.** The
+  certificate row's transition to revoked committed, the ledger insert
+  failed, and the method returned success anyway; every later call then hit
+  the already-revoked early return before ever reaching the ledger write
+  again -- a revoked certificate permanently missing from CRLs.
+- **P1-3: concurrent revokes of one active certificate double-wrote the
+  ledger.** The method was a check-then-act over a table with no uniqueness
+  constraint on `certificate_id`, so two racing transitions could both pass
+  the check, both insert, and both publish `EventCertificateRevoked`.
+
+The fix ships in two commits: `d10960d` (the fail-before proof, three red
+tests) and `8510769` (the fix). Mechanism and rationale:
+
+- **The ledger insert arbitrates.** The certificate update is an unguarded
+  full-row save (`dbkit.Repository[T]` exposes no conditional update and is
+  not modified), so single-winner semantics come from the ledger write:
+  `CertificateRevocationRepository.InsertIfAbsent` (repository.go) is an
+  `INSERT ... ON CONFLICT (certificate_id) DO NOTHING` whose `RowsAffected`
+  verdict names exactly one winning call among any number of concurrent
+  revokes of the same certificate. Only the winner publishes
+  `EventCertificateRevoked` (row-then-event), and the returned bool of
+  `RevokeCertificate` reports whether THIS call won that arbitration --
+  exactly one concurrent call reports `true` under every interleaving.
+- **The constraint is real DDL.** Migration `0008` (both dialect
+  directories, same name and order; published migrations untouched) creates
+  `uq_pki_certificate_revocations_certificate` and drops the non-unique
+  `idx_pki_certificate_revocations_certificate_id`, which no query
+  references (CRL generation reads by `authority_id`).
+- **A failed ledger insert is an error, never log-and-forget.** The error
+  is returned wrapped with the facts a retrying caller needs: the
+  certificate is already revoked, its ledger row is missing, and retrying
+  `RevokeCertificate` reconstructs the row. The handler layer maps it to
+  `pki.internal_error` (500) like any other uncoded failure.
+- **Retry completes the revocation.** Revoking an already-revoked
+  certificate is not a bare early-return no-op: the reconciliation path
+  still attempts the idempotent insert, repairs a genuinely missing row,
+  publishes the one event the failed call could not, and reports `true`.
+  An existing row no-ops the insert and reports `(false, nil)`. The
+  reconstructed row and its event are built from the certificate row's own
+  committed `RevokedAt`/`RevocationReason`, never from the retry's reason
+  argument, so history is never rewritten. The one unrepaired window left
+  is a crash between the two statements: bounded staleness (a CRL omits one
+  serial until the next revoke repairs the row), never an incorrect
+  "not revoked".
+- **Docs corrected where the findings quoted them.** `revocation.go`'s
+  `RevokeCertificate` doc comment and `model.go`'s `CertificateRevocation`
+  sections described the two writes as silent-and-unsafe ("Not atomic") or
+  implied the log-and-forget behavior; both now describe the arbitrated
+  transition, the retry/reconciliation contract and the error contract.
+
+Tests (fails-before proofs recorded in commit `d10960d`'s message, now
+green under `-race`): a concurrent double-revoke test (goroutines released
+through a channel barrier, no sleeps) asserting exactly one ledger row, one
+event, one `true` winner and revoked status across 25 trials; a
+ledger-write-failure test (failure injected by a SQLite trigger on the
+test's own handle) asserting a returned error, zero events, and a retry
+that converges to exactly one row, one event and `(true, nil)`; a
+sequential idempotent re-revoke pin; and a repository-level proof that the
+unique constraint is database-enforced. `Create` is retained unchanged
+alongside `InsertIfAbsent` for callers that want a duplicate to fail;
+nothing in the revocation path calls it.
