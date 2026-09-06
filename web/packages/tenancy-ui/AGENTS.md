@@ -58,9 +58,12 @@ The failure banner resolves a switch answer to text only through the
 reachable-code whitelist in `src/internal/error-text.ts`: the
 membership and account-status codes the switch endpoint answers
 (`authn.tenant_membership_required`, `authn.tenant_membership_unavailable`,
-`authn.invalid_credentials`), the token-verification codes the authn
-middleware answers on the protected switch route
-(`authn.authentication_required`, `authn.token_invalid`), the five
+`authn.invalid_credentials`), the two token-verification codes of
+authn's per-operation and per-route guards (`authn.authentication_required`,
+`authn.token_invalid` -- the first written by `RequireAuthenticated` and
+the handler's `requirePrincipal` for a credential-less request, the
+second by the composed optional `authn.Middleware` for a presented
+token that fails verification), the five
 session-lifecycle codes (`authn.session_not_found`,
 `authn.session_revoked`, `authn.refresh_token_invalid`,
 `authn.refresh_token_reused`, `authn.token_expired`), and
@@ -75,10 +78,10 @@ packages cannot import one another's catalogs; two versions of one
 server code's text must not diverge). When auth-ui's texts change, copy
 the change here. Three codes are NOT copies: `authn.invalid_credentials`
 means the account is not active on the switch surface (never a wrong
-password), and the two middleware answers cannot be answered on the
-pre-auth sign-in surface at all, so auth-ui carries no text to copy --
-their texts are authored here, each recorded in the error-text suite's
-`SWITCH_AUTHORED_TEXTS` with the reason. The suite pins the pairing in
+password), and the two token-verification codes cannot be answered on
+the pre-auth sign-in surface at all, so auth-ui carries no text to
+copy -- their texts are authored here, each recorded in the error-text
+suite's `SWITCH_AUTHORED_TEXTS` with the reason. The suite pins the pairing in
 both directions inside this package -- a whitelist code without its two
 bundle leaves fails, a bundle leaf without its whitelist code fails --
 and pins the shared-answer copies to their source too: the error-text

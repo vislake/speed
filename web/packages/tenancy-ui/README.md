@@ -244,9 +244,10 @@ sixteen leaves per language under two sections:
   `switching`.
 - `errors` -- the code-to-text table of the tenant-switch surface,
   nested per source: `errors.authn.*` (the endpoint's membership and
-  account-status answers, the middleware's token-verification answers,
-  the session-lifecycle answers a switch can draw), `errors.client.*`
-  (transport failures) and the `errors.unknown` fallback.
+  account-status answers, the token-verification answers of authn's
+  per-operation and per-route guards, the session-lifecycle answers a
+  switch can draw), `errors.client.*` (transport failures) and the
+  `errors.unknown` fallback.
 
 `registerNamespace` enforces the standing discipline -- canonical
 language keys, full coverage, identical leaf key sets across languages
@@ -289,7 +290,7 @@ packages cannot import one another's catalogs, and two versions of one
 server code's text must not drift apart in the product. Three codes
 are not copies: `authn.invalid_credentials`, whose switch-surface
 meaning (account not active) is not the sign-in surface's (wrong
-password), and the two middleware token-verification answers
+password), and the two token-verification codes
 `authn.authentication_required` / `authn.token_invalid`, which the
 pre-auth sign-in surface cannot be answered with and auth-ui therefore
 carries no text for -- those three texts are authored here, each

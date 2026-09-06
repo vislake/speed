@@ -44,9 +44,12 @@ import { ERROR_TEXT_CODES } from './error-text.js'
 /**
  * Whitelisted codes whose tenancy-ui text is authored here rather than
  * copied from the auth-ui bundle, with the reason each is exempt from
- * the verbatim-copy pin: the switch surface is a protected operation,
- * so the authn middleware can answer it with the two token-verification
- * codes authn.authentication_required and authn.token_invalid -- a
+ * the verbatim-copy pin: the two token-verification codes
+ * authn.authentication_required and authn.token_invalid are the
+ * answers of authn's own guards -- the RequireAuthenticated middleware
+ * and the handler's requirePrincipal write the first for a
+ * credential-less request, the composed optional authn.Middleware the
+ * second for a presented token that fails verification -- and a
  * PRE-AUTH sign-in surface cannot be answered with either, which is why
  * auth-ui ships no leaf for them and no copy exists to pin against --
  * and authn.invalid_credentials means something different on the switch
@@ -59,9 +62,9 @@ import { ERROR_TEXT_CODES } from './error-text.js'
  */
 const SWITCH_AUTHORED_TEXTS: Readonly<Record<string, string>> = {
   'authn.authentication_required':
-    'the middleware answers a credential-less protected request with it',
+    'authn\'s per-operation and per-route guards (RequireAuthenticated, requirePrincipal) answer a credential-less protected request with it',
   'authn.token_invalid':
-    'the middleware answers an unverifiable access token with it',
+    'authn\'s optional middleware 401s a presented access token that fails verification with it',
   'authn.invalid_credentials':
     'on the switch surface it means the account is not active, never a wrong password',
 }
@@ -182,9 +185,10 @@ describe('tenancy-ui error-text whitelist', () => {
         'authn.tenant_membership_required',
         'authn.tenant_membership_unavailable',
         'authn.invalid_credentials',
-        // The middleware token-verification answers a protected switch
-        // request can draw: no credential presented, an unverifiable
-        // access token.
+        // The token-verification answers of authn's guards that a
+        // protected switch request can draw: no credential presented
+        // (authentication_required), an unverifiable access token
+        // (token_invalid).
         'authn.authentication_required',
         'authn.token_invalid',
         // Session lifecycle: a switch whose session dies surfaces as one

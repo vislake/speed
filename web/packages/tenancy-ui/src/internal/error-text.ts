@@ -11,10 +11,20 @@
  * (go/authn Service.SwitchTenant answers it for an account that is not
  * active; on the switch surface it never means a wrong password, which
  * is why its text here is authored rather than copied from the sign-in
- * surface's). The authn middleware answers the two token-verification
- * codes -- authn.authentication_required (no credential presented) and
+ * surface's). The two token-verification codes --
+ * authn.authentication_required (no credential presented) and
  * authn.token_invalid (the presented access token did not verify) --
- * on the protected switch route. The session-lifecycle codes (a refused
+ * are the answers of authn's per-operation and per-route guards, not of
+ * the composed authn.Middleware: the middleware is optional
+ * authentication, passing a credential-less request through anonymous
+ * (it never writes authentication_required -- RequireAuthenticated in
+ * go/authn/middleware.go and the handler's requirePrincipal do -- and
+ * 401s a presented token that fails verification with
+ * authn.token_invalid). A host whose guard mounts behind a tenant gate
+ * refuses the credential-less request with tenancy.tenant_unresolved
+ * before any authn guard runs (the reference app's switch route does);
+ * the whitelist keeps both codes so a host whose guard does answer
+ * renders text, never a raw key. The session-lifecycle codes (a refused
  * refresh or a dead session surfaces as one of these through the
  * silent-refresh leg, and TenantSwitcher must render the session's
  * answer rather than an invented one), plus the transport-level
@@ -56,10 +66,14 @@ export const ERROR_TEXT_CODES = [
   'authn.tenant_membership_required',
   'authn.tenant_membership_unavailable',
   'authn.invalid_credentials',
-  // authn: the middleware's token-verification answers on the protected
-  // switch route -- no credential presented, an access token that did
-  // not verify. The pre-auth sign-in surface cannot be answered with
-  // either, so these texts are authored, not copied.
+  // authn: the token-verification answers of authn's per-operation and
+  // per-route guards -- no credential presented (authentication_required,
+  // written by RequireAuthenticated and the handler's requirePrincipal;
+  // the composed optional authn.Middleware passes credential-less
+  // requests through anonymous), an access token that did not verify
+  // (token_invalid, which that middleware 401s for a presented-but-
+  // invalid token). The pre-auth sign-in surface cannot be answered
+  // with either, so these texts are authored, not copied.
   'authn.authentication_required',
   'authn.token_invalid',
   // authn: session lifecycle -- a switch whose session dies surfaces as
