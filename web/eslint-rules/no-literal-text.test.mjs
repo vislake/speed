@@ -54,11 +54,10 @@ describe('no-literal-text rule', () => {
         '<div>\n  \n</div>',
         // Attributes outside the text-bearing set are not content.
         '<input type="email" value={query} />',
-        // aria-hidden trees are presentational glyphs, exempt by design.
-        '<span aria-hidden="true">·</span>',
-        '<span aria-hidden>{`·`}</span>',
-        '<span aria-hidden={true}>{`·`}</span>',
-        '<div aria-hidden={"true"}><span>decorative</span></div>',
+        // Conditional branches through t() are the sanctioned shape;
+        // only their literal branches are the violation.
+        "<Button>{ok ? t('save.title') : t('wait.title')}</Button>",
+        '<Button aria-label={ok ? t(\'a.b\') : `row ${row.id}`} />',
         // Empty attribute literals carry no text.
         '<div title="" />',
         '<div placeholder="   " />',
@@ -97,6 +96,93 @@ describe('no-literal-text rule', () => {
         {
           code: '<Button>{`Save`}</Button>',
           errors: [{ messageId: 'literalText' }],
+        },
+      ],
+    )
+  })
+
+  it('flags text under aria-hidden: aria-hidden hides from assistive technology only, not from sight', () => {
+    // The former exemption treated any aria-hidden subtree as
+    // presentational. aria-hidden removes content from the accessibility
+    // tree; a sighted user still reads text that is merely aria-hidden
+    // (and a text that matters to sighted users should not be hidden
+    // from assistive technology in the first place), so no exemption is
+    // defensible on aria-hidden alone (reference-app-web.md P2-7).
+    // Decorative glyphs belong in icons or CSS, not as exempt text.
+    runRule(
+      [],
+      [
+        {
+          code: '<span aria-hidden="true">·</span>',
+          errors: [{ messageId: 'literalText' }],
+        },
+        {
+          code: '<span aria-hidden>{`·`}</span>',
+          errors: [{ messageId: 'literalText' }],
+        },
+        {
+          code: '<span aria-hidden={true}>{`·`}</span>',
+          errors: [{ messageId: 'literalText' }],
+        },
+        {
+          code: '<div aria-hidden={"true"}><span>decorative</span></div>',
+          errors: [{ messageId: 'literalText' }],
+        },
+        {
+          code: '<div aria-hidden={true}><span>Status text</span></div>',
+          errors: [{ messageId: 'literalText' }],
+        },
+      ],
+    )
+  })
+
+  it('flags plain-string branches of conditional expressions in children and attributes', () => {
+    // A ternary is a computed expression, but a plain-string branch is
+    // still a literal reaching the user (reference-app-web.md P2-7):
+    // {ok ? 'Save' : 'Wait'} renders user-facing text exactly as a bare
+    // <Button>Save</Button> does. Each offending branch reports its own
+    // literal; branches through t() or dynamic templates stay the
+    // sanctioned path.
+    runRule(
+      [],
+      [
+        {
+          code: "<Button>{ok ? 'Save' : 'Wait'}</Button>",
+          errors: [
+            { messageId: 'literalText' },
+            { messageId: 'literalText' },
+          ],
+        },
+        {
+          code: "<Button>{ok ? 'Save' : t('wait.title')}</Button>",
+          errors: [{ messageId: 'literalText' }],
+        },
+        {
+          code: "<Button>{ok ? t('save.title') : 'Wait'}</Button>",
+          errors: [{ messageId: 'literalText' }],
+        },
+        {
+          code: "<Button>{ok ? (nope ? 'X' : 'Y') : 'Z'}</Button>",
+          errors: [
+            { messageId: 'literalText' },
+            { messageId: 'literalText' },
+            { messageId: 'literalText' },
+          ],
+        },
+        {
+          code: "<Button>{ok ? `still plain` : t('wait.title')}</Button>",
+          errors: [{ messageId: 'literalText' }],
+        },
+        {
+          code: '<Button aria-label={ok ? \'Save\' : \'Wait\'} />',
+          errors: [
+            { messageId: 'literalAttribute' },
+            { messageId: 'literalAttribute' },
+          ],
+        },
+        {
+          code: "<img alt={ok ? 'logo' : t('a.placeholder')} />",
+          errors: [{ messageId: 'literalAttribute' }],
         },
       ],
     )
@@ -168,7 +254,9 @@ describe('no-literal-text rule', () => {
         },
         {
           code: '<Button title="Save" />',
-          errors: [{ messageId: 'literalAttribute', line: 1, column: 9 }],
+          // The report lands on the offending literal itself (the value
+          // node, quote included), not on the whole attribute.
+          errors: [{ messageId: 'literalAttribute', line: 1, column: 15 }],
         },
       ],
     )

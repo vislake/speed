@@ -16,11 +16,20 @@
  *
  * Scope is deliberately narrow and documented: JSX children that are
  * plain string/template literals are also flagged (the `{'Save'}` /
- * {`Save`} forms), while computed expressions (`{t('a.b')}`,
- * `{row.name}`) are the sanctioned path and untouched. Decorative
- * glyphs that are invisible to assistive technology (any text under an
- * aria-hidden element) are exempt -- a middot separator or a bullet is
- * presentational, not user-facing. Attribute names outside the
+ * {`Save`} forms), as are the plain-string branches of conditional
+ * expressions (`{ok ? 'Save' : 'Wait'}` renders user-facing text
+ * exactly as the bare form does; each offending branch reports its own
+ * literal, while branches through t() or a dynamic template stay the
+ * sanctioned path) (reference-app-web.md P2-7). Computed expressions
+ * (`{t('a.b')}`, `{row.name}`) are the sanctioned path and untouched.
+ *
+ * No aria-hidden exemption exists: aria-hidden removes content from
+ * the accessibility tree only -- a sighted user still reads text that
+ * is merely aria-hidden, so it is user-facing text like any other (and
+ * text that matters to sighted users should not be hidden from
+ * assistive technology in the first place). Decorative glyphs belong
+ * in icons or CSS content, not in exempt text nodes
+ * (reference-app-web.md P2-7). Attribute names outside the
  * text-bearing set are not inspected, so non-visible props like
  * `type="email"` stay legal.
  *
@@ -69,51 +78,28 @@ function literalText(node) {
 }
 
 /**
- * Whether the node sits inside a JSX element whose aria-hidden is
- * true. Content hidden from assistive technology is presentational --
- * decorative glyphs are exempt from the i18n rule. Recognized forms:
- * aria-hidden (no value), aria-hidden="true", aria-hidden={'true'},
- * aria-hidden={true}.
+ * Every plain-string literal an expression can render as text, with
+ * its text. A conditional expression contributes the plain literals of
+ * its branches (a ternary's branch is exactly what renders when the
+ * condition picks it; a nested ternary walks recursively), and a plain
+ * literal or template literal contributes itself. Anything else -- a
+ * t() call, an identifier, a dynamic template -- contributes nothing.
  */
-function isUnderAriaHidden(node) {
-  for (
-    let current = node.parent;
-    current !== undefined && current !== null;
-    current = current.parent
-  ) {
-    if (current.type !== 'JSXElement') {
-      continue
+function plainTextLiterals(node) {
+  const found = []
+  function walk(current) {
+    if (current.type === 'ConditionalExpression') {
+      walk(current.consequent)
+      walk(current.alternate)
+      return
     }
-    const hidden = current.openingElement.attributes.some((attribute) => {
-      if (
-        attribute.type !== 'JSXAttribute' ||
-        attribute.name.name !== 'aria-hidden'
-      ) {
-        return false
-      }
-      const value = attribute.value
-      if (value === null) {
-        // A value-less aria-hidden compiles to aria-hidden={true} in
-        // React's JSX transform.
-        return true
-      }
-      if (value.type === 'JSXExpressionContainer') {
-        const expression = value.expression
-        // `true` inside an expression parses as a boolean Literal in
-        // espree and in the typescript-eslint parser alike.
-        return (
-          (expression.type === 'Literal' && expression.value === true) ||
-          (expression.type === 'Identifier' && expression.name === 'true') ||
-          literalText(expression) === 'true'
-        )
-      }
-      return literalText(value) === 'true'
-    })
-    if (hidden) {
-      return true
+    const text = literalText(current)
+    if (text !== undefined) {
+      found.push({ node: current, text })
     }
   }
-  return false
+  walk(node)
+  return found
 }
 
 export const noLiteralTextRule = {
@@ -135,7 +121,7 @@ export const noLiteralTextRule = {
     return {
       JSXText(node) {
         const text = node.value.trim()
-        if (text !== '' && !isUnderAriaHidden(node)) {
+        if (text !== '') {
           context.report({
             node,
             messageId: 'literalText',
@@ -143,27 +129,18 @@ export const noLiteralTextRule = {
           })
         }
       },
-      'JSXExpressionContainer > Literal, JSXExpressionContainer > TemplateLiteral'(
-        node,
-      ) {
-        // Attribute values ride the same JSXExpressionContainer AST shape;
-        // those are reported by the JSXAttribute visitor below with a
-        // more specific message, so do not double-report here.
-        if (
-          node.parent !== null &&
-          node.parent.type === 'JSXExpressionContainer' &&
-          node.parent.parent !== null &&
-          node.parent.parent.type === 'JSXAttribute'
-        ) {
+      JSXExpressionContainer(node) {
+        // Attribute values ride the same JSXExpressionContainer AST
+        // shape; those are reported by the JSXAttribute visitor below
+        // with a more specific message, so do not double-report here.
+        if (node.parent !== null && node.parent.type === 'JSXAttribute') {
           return
         }
-        if (isUnderAriaHidden(node)) {
-          return
-        }
-        const text = literalText(node)
-        if (text !== undefined) {
+        for (const { node: literal, text } of plainTextLiterals(
+          node.expression,
+        )) {
           context.report({
-            node,
+            node: literal,
             messageId: 'literalText',
             data: { text: text.slice(0, 40) },
           })
@@ -179,10 +156,9 @@ export const noLiteralTextRule = {
         }
         const candidate =
           value.type === 'JSXExpressionContainer' ? value.expression : value
-        const text = literalText(candidate)
-        if (text !== undefined) {
+        for (const { node: literal, text } of plainTextLiterals(candidate)) {
           context.report({
-            node,
+            node: literal,
             messageId: 'literalAttribute',
             data: { name: node.name.name, text: text.slice(0, 40) },
           })
