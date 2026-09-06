@@ -16,19 +16,23 @@ import (
 // image the uploader sent -- only the metadata containers are gone.
 //
 // Scope, deliberately: the walkers below cover the metadata carriers that
-// precede the image's scan data (JPEG APP segments) or live in the file's
-// chunk stream (PNG eXIf). Metadata that a hostile encoder smuggles into the
-// entropy-coded data itself -- or after the first scan in a hierarchical
-// JPEG -- is out of scope for a structural strip; the module's own tests
-// construct the carriers this walker knows, and anything it cannot verify
-// structurally is refused rather than passed through. Every error returned
-// here is a plain error; the caller maps it onto ErrImageUnreadable so the
-// refusal carries the code index's shape and the cause keeps the detail.
+// ride in the file's marker stream -- JPEG APP segments wherever they appear,
+// before the first scan, between the scans of a progressive or hierarchical
+// JPEG, or appended after the image's EOI marker -- and the PNG chunk stream
+// (eXIf). Metadata that a hostile encoder smuggles into the entropy-coded
+// data itself is out of scope for a structural strip: the JPEG walker walks
+// the entropy data only to locate where the scan ends, never to parse it. A
+// file the walker cannot verify structurally is refused rather than passed
+// through. Every error returned here is a plain error; the caller maps it
+// onto ErrImageUnreadable so the refusal carries the code index's shape and
+// the cause keeps the detail.
 //
 // Both walkers are strict about structure (bounds, lengths, CRCs, required
 // terminators) and fail closed on anything they cannot account for: a file
 // whose metadata could be stripped but whose structure cannot be verified is
-// refused, never passed through on good faith.
+// refused, never passed through on good faith. Bytes that sit outside the
+// verified structure are the one thing they drop rather than refuse -- the
+// PNG walker ends its output at IEND, the JPEG walker at EOI.
 
 var (
 	// exifSignature prefixes the payload of the APP1 segment that carries
@@ -70,16 +74,29 @@ const (
 // duplicate SOI before any scan data, and -- after a complete walk -- the
 // absence of an SOS at all.
 //
-// At SOS the scan data takes over and parsing stops: from that byte on the
-// input is entropy-coded and byte-stuffed, so it cannot be walked safely and
-// is carried over verbatim. This is what confines the strip to metadata that
-// precedes the scan, the scope this file's header records.
+// A SOS is dispatched as the length-carrying marker it is, and the walk
+// continues past the scan it starts: the entropy-coded data in between is
+// walked only to find where the scan ends -- byte-stuffed 0xFF 0x00 pairs,
+// restart markers (0xFFD0-0xFFD7) and 0xFF fill are all scan content -- and
+// carried over verbatim. Whatever marker terminates the scan is then
+// dispatched like any other: in a progressive or hierarchical JPEG that
+// marker may begin another segment or scan, so only the file's final EOI
+// ends the walk. An EOI is the required terminator of the last scan: a file
+// whose entropy data runs off the end without one, or whose tail after the
+// last segment never reaches one, is refused -- a file the walker cannot
+// verify structurally is never passed through. Bytes after the EOI sit
+// outside the image's structure: pure 0xFF fill is conventionally legal
+// padding and is carried over so a padded clean file stays byte-identical,
+// while a tail containing any other byte is appended data and is dropped at
+// the EOI boundary, mirroring the PNG walker's treatment of chunks after
+// IEND.
 func sanitizeJPEG(raw []byte) ([]byte, error) {
 	if len(raw) < 2 || raw[0] != jpegMarkerPrefix || raw[1] != jpegSOI {
 		return nil, errors.New("jpeg: missing SOI marker")
 	}
 	clean := make([]byte, 0, len(raw))
 	clean = append(clean, jpegMarkerPrefix, jpegSOI)
+	scanSeen := false
 	for i := 2; i < len(raw); {
 		// A marker boundary: the code is preceded by its 0xFF and any fill
 		// bytes (repeated 0xFF) a producer may have padded between markers.
@@ -102,12 +119,53 @@ func sanitizeJPEG(raw []byte) ([]byte, error) {
 		case code == jpegSOI:
 			return nil, errors.New("jpeg: duplicate SOI marker")
 		case code == jpegEOI:
-			return nil, errors.New("jpeg: end-of-image marker before scan data")
-		case code == jpegSOS:
-			// Scan data is byte-stuffed and must not be parsed: carry the
-			// SOS marker and everything after it over verbatim.
-			clean = append(clean, raw[markerStart:]...)
+			if !scanSeen {
+				return nil, errors.New("jpeg: end-of-image marker before scan data")
+			}
+			clean = append(clean, jpegMarkerPrefix, jpegEOI)
+			// The EOI ends the image; what follows is outside its
+			// structure. A tail of pure 0xFF fill is conventionally legal
+			// padding and is kept, so a padded clean file passes through
+			// byte-identical; any other tail byte marks appended data, and
+			// the whole tail is dropped rather than carried over.
+			fill := true
+			for _, b := range raw[i:] {
+				if b != jpegMarkerPrefix {
+					fill = false
+					break
+				}
+			}
+			if fill {
+				clean = append(clean, raw[i:]...)
+			}
 			return clean, nil
+		case code == jpegSOS:
+			// SOS is a length-carrying marker whose payload lists the scan's
+			// components; the entropy-coded data follows it.
+			if i+1 >= len(raw) {
+				return nil, errors.New("jpeg: truncated segment length")
+			}
+			segLen := int(raw[i])<<8 | int(raw[i+1])
+			if segLen < 2 {
+				return nil, errors.New("jpeg: segment length below 2")
+			}
+			segEnd := i + segLen
+			if segEnd > len(raw) {
+				return nil, errors.New("jpeg: segment extends past end of data")
+			}
+			clean = append(clean, raw[markerStart:segEnd]...)
+			scanSeen = true
+			scanEnd, err := jpegScanDataEnd(raw, segEnd)
+			if err != nil {
+				return nil, err
+			}
+			// The entropy data itself is carried over untouched; only its
+			// extent was walked. scanEnd points at the 0xFF of the marker
+			// that terminates the scan, which the loop's next iteration
+			// dispatches -- EOI for a finished image, or another segment or
+			// scan marker when this file carries more scans.
+			clean = append(clean, raw[segEnd:scanEnd]...)
+			i = scanEnd
 		case code < 0xC0:
 			return nil, fmt.Errorf("jpeg: reserved marker 0x%02x at offset %d", code, markerStart)
 		default:
@@ -134,7 +192,43 @@ func sanitizeJPEG(raw []byte) ([]byte, error) {
 			i = segEnd
 		}
 	}
+	if scanSeen {
+		return nil, errors.New("jpeg: scan data without end-of-image marker")
+	}
 	return nil, errors.New("jpeg: no scan data (missing SOS marker)")
+}
+
+// jpegScanDataEnd walks the entropy-coded data a SOS header left at raw[start:]
+// and returns the offset of the marker that terminates the scan -- the first
+// byte of its 0xFF. The walk is deliberately shallow: everything it steps
+// over is scan content whose bytes pass through verbatim, so the walk only
+// needs to tell scan content from a marker boundary. 0xFF followed by 0x00
+// is a byte-stuffed 0xFF data byte, 0xFFD0-0xFFD7 are restart markers that
+// may legally interrupt the scan between MCUs, and a run of 0xFF before a
+// marker is fill; any other 0xFF marks the scan's end. An entropy run that
+// reaches the end of the data without a terminating marker is a truncated
+// scan and is refused.
+func jpegScanDataEnd(raw []byte, start int) (int, error) {
+	for i := start; i < len(raw); {
+		if raw[i] != jpegMarkerPrefix {
+			i++
+			continue
+		}
+		if i+1 >= len(raw) {
+			return 0, errors.New("jpeg: scan data without end-of-image marker")
+		}
+		switch nxt := raw[i+1]; {
+		case nxt == 0x00:
+			i += 2 // a byte-stuffed 0xFF data byte
+		case nxt >= 0xD0 && nxt <= 0xD7:
+			i += 2 // a restart marker between MCUs
+		case nxt == jpegMarkerPrefix:
+			i++ // 0xFF fill before the terminating marker
+		default:
+			return i, nil // the terminating marker begins at raw[i]
+		}
+	}
+	return 0, errors.New("jpeg: scan data without end-of-image marker")
 }
 
 // pngSignature is the eight-byte file signature every PNG starts with.
