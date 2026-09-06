@@ -83,9 +83,11 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   // go/authn/errors.go -- the authn module's error sentinels, in current
   // file order (re-measured this round: a Go edit inserted a block above
   // ErrPasswordTooWeak since the last audit, shifting every sentinel
-  // from there to ErrSessionNotFound by +10 to +17 lines; the two
-  // middleware token-verification answers below entered the enumeration
-  // with this re-measurement).
+  // from there to ErrSessionNotFound by +10 to +17 lines; the
+  // token-verification answers entered the enumeration with this
+  // re-measurement, and composed-stack verification then kept
+  // authn.token_invalid -- authn.authentication_required's citation
+  // moved to WHITELISTED_BEYOND_THIS_APP below, see its entry).
   'authn.invalid_credentials': 'go/authn/errors.go:37 (ErrInvalidCredentials)',
   'authn.identifier_required': 'go/authn/errors.go:41 (ErrIdentifierRequired)',
   'authn.invalid_email': 'go/authn/errors.go:45 (ErrInvalidEmail)',
@@ -96,16 +98,23 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   'authn.password_too_long': 'go/authn/errors.go:72 (ErrPasswordTooLong)',
   'authn.display_name_too_long': 'go/authn/errors.go:82 (ErrDisplayNameTooLong)',
   'authn.password_too_weak': 'go/authn/errors.go:86 (ErrPasswordTooWeak)',
-  // The token-verification answers of the authn middleware, cited for
-  // the tenancy-ui switch surface's protected route: the middleware
-  // writes authn.authentication_required for a request that presented
-  // no credential (go/authn/middleware.go, ErrAuthenticationRequired --
-  // also written by requirePrincipal when no Principal reached the
-  // switch handler) and authn.token_invalid for one whose access token
-  // did not verify, both on every protected route of this app, the
-  // tenant-switch one included. The pre-auth sign-in surfaces cannot be
-  // answered with either; the switch surface can.
-  'authn.authentication_required': 'go/authn/errors.go:93 (ErrAuthenticationRequired)',
+  // authn.token_invalid -- the composed authn.Middleware's answer for a
+  // request that presented an access token the verifier refused (a
+  // tampered or otherwise invalid token; an expired one is answered
+  // authn.token_expired below). The middleware is optional
+  // authentication (go/authn/middleware.go): a request with no
+  // credential passes through anonymous -- which is why it never writes
+  // authn.authentication_required -- but a token the verifier refuses
+  // is 401'd immediately, on every protected route of this app, the
+  // tenant-switch one included. The no-credential code
+  // (authn.authentication_required) is written only by per-operation
+  // and per-route guards -- RequireAuthenticated (go/authn/middleware.go)
+  // and the handler's requirePrincipal (go/authn/handler.go) -- which
+  // cannot answer the switch route in this app: the route is not in the
+  // pre-auth allowlist, so tenancy.Middleware's fail-closed gate refuses
+  // the anonymous request first with tenancy.tenant_unresolved, verified
+  // on the composed stack; that code therefore lives in
+  // WHITELISTED_BEYOND_THIS_APP below, not here.
   'authn.token_invalid': 'go/authn/errors.go:98 (ErrTokenInvalid)',
   'authn.token_expired': 'go/authn/errors.go:105 (ErrTokenExpired)',
   'authn.session_revoked': 'go/authn/errors.go:109 (ErrSessionRevoked)',
@@ -158,6 +167,24 @@ const WHITELISTED_BEYOND_THIS_APP: Readonly<Record<string, string>> = {
     'stays OFF -- an exchange attempt here refuses at the channel gate (go/authn/' +
     'identity.go, SocialCallback\'s gate, which runs before any identity analysis) ' +
     'with authn.channel_disabled. The code therefore has no in-app answer.',
+  // go/authn/errors.go:93 (ErrAuthenticationRequired) -- the sentinel
+  // citation moved here with the code when composed-stack verification
+  // overturned its in-app reachability (see the token_invalid citation
+  // above for who writes each and why the switch route cannot draw the
+  // no-credential answer).
+  'authn.authentication_required':
+    'tenancy-ui whitelists the token-verification answers of authn\'s per-operation ' +
+    'and per-route guards, and any host whose guard mounts without a preceding ' +
+    'tenant gate can be answered with this code: RequireAuthenticated (go/authn/' +
+    'middleware.go) and the handler\'s requirePrincipal (go/authn/handler.go) both ' +
+    'write it for a request that presented no credential. This app cannot be ' +
+    'answered with it: authn.Middleware is optional authentication (a request with ' +
+    'no credential passes through anonymous, never writing this code), and the ' +
+    'switch route is not in the pre-auth allowlist, so tenancy.Middleware\'s ' +
+    'fail-closed gate refuses the anonymous switch request first with 403 ' +
+    'tenancy.tenant_unresolved -- verified on the composed stack (anonymous POST ' +
+    '/api/v1/authn/tenant/switch answers tenancy.tenant_unresolved, not this ' +
+    'code). The code therefore has no in-app answer.',
 }
 
 /** The transport codes of the @speed/api-client contract: reserved to
@@ -237,14 +264,16 @@ describe('reachable-error whitelists vs the server code set', () => {
   })
 
   it('keeps the hand-maintained enumeration at its audited size', () => {
-    // 35 authn sentinels (the 33 of the previous audit plus this
-    // round's two middleware token-verification answers --
-    // authn.authentication_required and authn.token_invalid, each
-    // cited above for the switch surface's protected route) +
+    // 34 authn sentinels (the 33 of the previous audit plus this
+    // round's authn.token_invalid -- the second middleware-era
+    // addition, authn.authentication_required, has already left
+    // GO_PINNED again: composed-stack verification overturned its
+    // in-app reachability, and its citation now lives in
+    // WHITELISTED_BEYOND_THIS_APP with the reasoning) +
     // rbac.permission_denied + the three notes sentinels. The size
     // guard makes a GO_PINNED edit (in either direction) fail loudly
     // here rather than silently through the subset assertions below.
-    expect(Object.keys(GO_PINNED)).toHaveLength(39)
+    expect(Object.keys(GO_PINNED)).toHaveLength(38)
   })
 
   it('whitelists every code the server can answer with (GO_PINNED is covered)', () => {
@@ -303,16 +332,21 @@ describe('reachable-error whitelists vs the server code set', () => {
     }
   })
 
-  it('keeps the tenancy-ui-only codes exactly the switch surface\'s token-verification answers', () => {
-    // Every tenancy-ui code except the two middleware token-verification
-    // answers sits inside the auth-ui family whose shared texts it
-    // copies verbatim. The two exceptions are real: the switch surface
-    // is a protected operation, so the authn middleware can answer it
-    // with authn.authentication_required and authn.token_invalid -- a
-    // pre-auth sign-in surface cannot be answered with either, which is
-    // why auth-ui whitelists neither and tenancy-ui authors their texts
-    // instead of copying. Both carry GO_PINNED citations above, so the
-    // no-dead-entries direction holds for them server-side too.
+  it('keeps the tenancy-ui-only codes exactly the two token-verification answers', () => {
+    // Every tenancy-ui code except the two token-verification answers
+    // sits inside the auth-ui family whose shared texts it copies
+    // verbatim. The two exceptions are real: authn.authentication_required
+    // and authn.token_invalid are the answers of authn's per-operation
+    // and per-route guards -- a pre-auth sign-in surface cannot be
+    // answered with either, which is why auth-ui whitelists neither and
+    // tenancy-ui authors their texts instead of copying. authn.token_invalid
+    // carries a GO_PINNED citation above (the composed authn.Middleware
+    // 401s a presented token that fails verification on the protected
+    // switch route); authn.authentication_required's reachability is
+    // host-dependent, so its coverage is the recorded
+    // WHITELISTED_BEYOND_THIS_APP exemption rather than an in-app
+    // citation -- the no-dead-entries direction holds for both either
+    // way.
     const authUi = new Set(nonClientCodes(AUTH_UI_ERROR_TEXT_CODES))
     const tenancyOnly = nonClientCodes(TENANCY_UI_ERROR_TEXT_CODES).filter(
       (code) => !authUi.has(code),
@@ -323,9 +357,10 @@ describe('reachable-error whitelists vs the server code set', () => {
     ])
     for (const code of tenancyOnly) {
       expect(
-        GO_PINNED[code],
-        `${code} is reachable on tenancy-ui but carries no GO_PINNED citation`,
-      ).toBeDefined()
+        GO_PINNED[code] !== undefined ||
+          WHITELISTED_BEYOND_THIS_APP[code] !== undefined,
+        `${code} is reachable on tenancy-ui but carries neither a GO_PINNED citation nor a recorded exemption`,
+      ).toBe(true)
     }
   })
 })
