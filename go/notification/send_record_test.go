@@ -686,3 +686,87 @@ func TestSendRecordRepository_ListByFilter_NewestFirstWithLimitAndOffset(t *test
 		t.Fatalf("ListByFilter(limit=1, offset=1) = %+v, want exactly sr-2", page)
 	}
 }
+
+// TestSendRecordRepository_SaveGuarded_PreservesCreatedAt pins created_at's
+// survival of an in-place guarded rewrite -- the retry-overwrite shape
+// delivery.go's settle runs on a key that already has a record. The first
+// write for a key inserts through Save, where gorm's autoCreateTime stamps
+// created_at; a later attempt builds a FRESH record (sendRecordFor leaves
+// CreatedAt at the zero value) and settles it by adopting only the existing
+// row's id, so the guarded UPDATE's rec.CreatedAt is still the zero value.
+// Select("*") would then write that zero into the row's created_at column --
+// collapsing the delivery's creation instant to year 1 -- and the record
+// would silently vanish from the time-bounded operator search ListByFilter's
+// From/To ranges implement (its doc names D10's "did this delivery actually
+// go out" query). The guarded write must never touch the create-only
+// created_at column.
+func TestSendRecordRepository_SaveGuarded_PreservesCreatedAt(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewSendRecordRepository(db)
+	ctx := tenantCtx("tenant-acme")
+
+	first := testSendRecord(t, "sr-0001", "tenant-acme", "delivery-key-1")
+	first.Status = SendRecordStatusFailed
+	first.Error = "smtp: connection refused"
+	if err := repo.Save(ctx, first); err != nil {
+		t.Fatalf("first Save: %v", err)
+	}
+	seeded, err := repo.ByTenantAndKey(ctx, "tenant-acme", "delivery-key-1")
+	if err != nil {
+		t.Fatalf("ByTenantAndKey after the first Save: %v", err)
+	}
+	if seeded == nil {
+		t.Fatal("the first Save left no row, want the failed record")
+	}
+	createdAt := seeded.CreatedAt
+	if createdAt.IsZero() {
+		t.Fatal("the first write left created_at at the zero value, test premise broken")
+	}
+
+	// The retried attempt's record is built fresh (CreatedAt still the zero
+	// value) and carries the existing row's id -- settle's adopt copies only
+	// the id, nothing else.
+	retry := testSendRecord(t, "sr-0001", "tenant-acme", "delivery-key-1")
+	retry.Status = SendRecordStatusSucceeded
+	landed, err := repo.SaveGuarded(ctx, retry)
+	if err != nil {
+		t.Fatalf("SaveGuarded: %v", err)
+	}
+	if !landed {
+		t.Fatal("SaveGuarded over the failed row returned not-landed, want the upgrade to land")
+	}
+
+	got, err := repo.ByTenantAndKey(ctx, "tenant-acme", "delivery-key-1")
+	if err != nil {
+		t.Fatalf("ByTenantAndKey after SaveGuarded: %v", err)
+	}
+	if got == nil {
+		t.Fatal("ByTenantAndKey after SaveGuarded = nil, want the row")
+	}
+	if got.Status != SendRecordStatusSucceeded {
+		t.Errorf("after SaveGuarded = %+v, want the retry's succeeded status", got)
+	}
+	if !got.UpdatedAt.After(createdAt) {
+		t.Errorf("updated_at %v did not move past the first attempt's created_at %v", got.UpdatedAt, createdAt)
+	}
+	if !got.CreatedAt.Equal(createdAt) {
+		t.Errorf("created_at after the guarded re-settle = %v (zero = %v), want the first attempt's %v unchanged", got.CreatedAt, got.CreatedAt.IsZero(), createdAt)
+	}
+
+	// The audit-visibility consequence: the same record must still answer the
+	// time-bounded query around its first attempt's instant. A row whose
+	// created_at collapsed to year 1 falls out of any From/To range and the
+	// operator's search would report the delivery never went out.
+	page, err := repo.ListByFilter(ctx, SendRecordFilter{
+		TenantID: "tenant-acme",
+		From:     createdAt.Add(-time.Second),
+		To:       createdAt.Add(time.Second),
+		Limit:    50,
+	})
+	if err != nil {
+		t.Fatalf("ListByFilter(time-bounded): %v", err)
+	}
+	if len(page) != 1 || page[0].ID != "sr-0001" {
+		t.Errorf("ListByFilter around the first attempt's instant = %+v, want the retried delivery's one record (a zeroed created_at is invisible to From/To)", page)
+	}
+}

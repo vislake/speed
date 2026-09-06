@@ -211,19 +211,29 @@ func (r *SendRecordRepository) Create(ctx context.Context, rec *SendRecord) erro
 
 // Save upserts one record by its primary key: gorm's Save updates every
 // column of the row whose id matches, and inserts when none does. The
-// delivery job's settle uses it so a retry's attempt overwrites the
-// previous attempt's row in place -- the record keeps one id per (tenant,
-// idempotency key) for the life of the delivery. Save is unconditional:
-// settle's never-downgrade-succeeded writes go through SaveGuarded instead
-// (see there), so Save here is the raw upsert -- an unconditional update
-// that would overwrite a succeeded row, which is exactly why the guarded
-// path exists.
+// every-column update writes created_at from the struct's own value too, so
+// an update over an existing row must carry the row's CreatedAt (a
+// read-then-Save) or the write erases it; settle never does this -- its
+// update over an existing row is the guarded one, which omits created_at
+// (see SaveGuarded). Save is unconditional: settle's
+// never-downgrade-succeeded writes go through SaveGuarded instead (see
+// there), so Save here is the raw upsert -- an unconditional update that
+// would overwrite a succeeded row, which is exactly why the guarded path
+// exists.
 func (r *SendRecordRepository) Save(ctx context.Context, rec *SendRecord) error {
 	return r.db.WithContext(ctx).Save(rec).Error
 }
 
 // SaveGuarded writes rec onto the row whose id rec carries -- the same
-// in-place, every-column retry overwrite Save performs -- under settle's
+// in-place, every-column retry overwrite Save performs, with one deliberate
+// exception: the write never touches the created_at column. created_at is a
+// create-only field by gorm tag (autoCreateTime), stamped when the row is
+// inserted and never meaningful to an update -- and a guarded write must not
+// write it from rec anyway, since settle adopts only the existing row's id
+// onto a record built fresh (sendRecordFor), whose CreatedAt is still the
+// zero value; Select("*") would otherwise collapse a re-settled delivery's
+// created_at to year 1 and drop it out of ListByFilter's time-bounded
+// operator search. The update happens under settle's
 // never-downgrade-succeeded guard (delivery.go's settle doc): the UPDATE
 // that writes also carries the guard in its WHERE, refusing a row that
 // already says succeeded when this write's status says anything else. The
@@ -237,7 +247,7 @@ func (r *SendRecordRepository) Save(ctx context.Context, rec *SendRecord) error 
 //   - (true, nil): the write landed. The guard passed, or the row already
 //     said succeeded and this write says succeeded too -- the guard allows
 //     a re-settle of the same winner -- in which case the row is rewritten
-//     in place exactly as Save would.
+//     in place exactly as Save would, created_at preserved.
 //   - (false, nil): the guard refused the write (0 rows affected): the row
 //     under rec.ID says succeeded and rec.Status is skipped or failed. The
 //     caller drops its write -- nothing is rewritten, updated_at stays
@@ -256,6 +266,7 @@ func (r *SendRecordRepository) SaveGuarded(ctx context.Context, rec *SendRecord)
 	res := r.db.WithContext(ctx).
 		Where("id = ? AND NOT (status = ? AND ? <> ?)", rec.ID, SendRecordStatusSucceeded, rec.Status, SendRecordStatusSucceeded).
 		Select("*").
+		Omit("created_at").
 		Updates(rec)
 	if res.Error != nil {
 		return false, res.Error

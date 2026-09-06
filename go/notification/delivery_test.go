@@ -34,6 +34,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -1632,5 +1633,67 @@ func TestRegisterDeliveryMetrics_Smoke(t *testing.T) {
 	count, duration := registerDeliveryMetrics()
 	if count == nil || duration == nil {
 		t.Fatalf("registerDeliveryMetrics() = (%v, %v), want two non-nil instruments", count, duration)
+	}
+}
+
+// TestDelivery_RetriedAttemptKeepsCreatedAtAndTimeBoundedAuditVisibility pins
+// the audit-side consequence of a re-settled delivery at full settle depth:
+// a real failed-then-retried email delivery under one idempotency key -- the
+// exact shape the queue's retry runs when a transport recovers. The retry's
+// guarded upgrade writes the record in place, and that rewrite must leave
+// created_at at the FIRST attempt's instant (delivery.go's settle adopts
+// only the existing row's id onto a freshly built, zero-CreatedAt record, so
+// the guarded UPDATE would otherwise write year 1 into created_at -- see the
+// SendRecordRepository.SaveGuarded regression test). The instant matters to
+// the operator: the record must still answer ListByFilter's time-bounded
+// From/To search around when the delivery was first attempted.
+func TestDelivery_RetriedAttemptKeepsCreatedAtAndTimeBoundedAuditVisibility(t *testing.T) {
+	env := newDeliveryEnv(t)
+	env.resolver.byUser[deliveryUser] = deliveryAddresses
+	ctx := tenantCtx(deliveryTenant)
+	d := deliveryDispatch()
+	payload := env.enqueue(t, d)
+
+	env.host.mailer.failWith = errors.New("smtp: connection refused")
+	if err := env.attempt(t, payload); err == nil {
+		t.Fatal("attempt with a failing transport succeeded, want the retryable error back")
+	}
+
+	first := env.sendRecordByChannel(t, ctx, d, ChannelEmail)
+	if first == nil || first.Status != SendRecordStatusFailed {
+		t.Fatalf("email record after the failed attempt = %+v, want failed", first)
+	}
+	createdAt := first.CreatedAt
+	if createdAt.IsZero() {
+		t.Fatal("the failed attempt's settle left created_at at the zero value, test premise broken")
+	}
+
+	// The transport recovers; the queue retries the same job under the same
+	// derived key.
+	env.host.mailer.failWith = nil
+	if err := env.attempt(t, payload); err != nil {
+		t.Fatalf("retried attempt: %v", err)
+	}
+
+	got := env.sendRecordByChannel(t, ctx, d, ChannelEmail)
+	if got == nil || got.Status != SendRecordStatusSucceeded {
+		t.Fatalf("email record after the retry = %+v, want succeeded", got)
+	}
+	if !got.CreatedAt.Equal(createdAt) {
+		t.Errorf("created_at after the retried settle = %v (zero = %v), want the first attempt's %v unchanged", got.CreatedAt, got.CreatedAt.IsZero(), createdAt)
+	}
+
+	page, err := env.svc.sendRecs.ListByFilter(ctx, SendRecordFilter{
+		TenantID: deliveryTenant,
+		Channel:  ChannelEmail,
+		From:     createdAt.Add(-time.Second),
+		To:       createdAt.Add(time.Second),
+		Limit:    50,
+	})
+	if err != nil {
+		t.Fatalf("ListByFilter(time-bounded): %v", err)
+	}
+	if len(page) != 1 || page[0].ID != got.ID {
+		t.Errorf("time-bounded ListByFilter after the retry = %+v, want the retried delivery's one record (a zeroed created_at is invisible to From/To)", page)
 	}
 }
