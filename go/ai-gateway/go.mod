@@ -17,6 +17,7 @@ replace github.com/vislake/speed/go/storage => ../storage
 replace github.com/vislake/speed/go/ratelimit => ../ratelimit
 
 require (
+	github.com/oapi-codegen/runtime v1.7.0
 	github.com/vislake/speed/go/dbkit v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/jobs v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000
@@ -42,7 +43,6 @@ require (
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/nicksnyder/go-i18n/v2 v2.6.1 // indirect
-	github.com/oapi-codegen/runtime v1.7.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
