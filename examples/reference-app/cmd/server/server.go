@@ -1261,25 +1261,34 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// Deliberately NOT setting dbkit.Options.AuditBus here, even though
 	// notes.Note implements dbkit.Auditable (see model.go): every note
 	// write in this app goes through dbkit.Repository[Note], which wraps
-	// Create in a WithTenantSession transaction, and
-	// dbkit.auditCapturePlugin's After("gorm:create") callback runs
-	// *inside* that still-open transaction. Wiring AuditBus to a bus whose
-	// subscriber (audit.Module, below) writes into this SAME SQLite file
-	// makes that subscriber try to open a second write session against a
-	// database that already holds an uncommitted write transaction on the
-	// very same OS thread -- SQLite allows only one writer at a time, so
-	// this deadlocks into "database is locked" (SQLITE_BUSY) on every
-	// single note creation, confirmed empirically while wiring this app.
-	// See go/dbkit/AGENTS.md's "Audit trail collection" section for the
-	// full write-up and the options for a future round to actually fix
-	// the automatic-capture mechanism (deferring the plugin's publish
-	// until after the enclosing transaction commits, most likely).
+	// Create in a WithTenantSession transaction. This USED TO deadlock a
+	// same-SQLite-file persister into "database is locked" (SQLITE_BUSY)
+	// on every single note creation, confirmed empirically while wiring
+	// this app, because dbkit.auditCapturePlugin's write-capture callback
+	// published synchronously, *inside* that still-open transaction, so a
+	// persister (audit.Module, below) writing into this SAME SQLite file
+	// tried to open a second write session against a database that
+	// already held an uncommitted write transaction on the very same OS
+	// thread. A later round removed that hazard for exactly this shape:
+	// the plugin now buffers its captured events on the write's own
+	// context and WithTenantSession publishes them only once its own
+	// transaction has genuinely committed, reproduced and proven closed
+	// against two real connections to one real SQLite file in
+	// go/dbkit/audit_capture_test.go's
+	// TestAuditCapturePlugin_WithTenantSession_SameFileSynchronousPersister_NoLongerDeadlocks.
+	// See go/dbkit/AGENTS.md's "Audit trail collection" section (Known
+	// limitation, now marked resolved for this shape) for the full
+	// write-up.
 	//
-	// This app instead persists its audit trail through the declarative
-	// audit.Emit call notes/handler.go's NotesCreateNote makes explicitly
-	// -- after h.repo.Create has already returned, i.e. after that
-	// transaction has committed, which is exactly why Emit's call site
-	// never hits the same hazard.
+	// This app still does not wire AuditBus here, though, since a
+	// genuinely separate persister connection remains the simpler,
+	// clearer choice even with the deadlock gone -- not because the
+	// automatic mechanism would still fail. It instead persists its audit
+	// trail through the declarative audit.Emit call notes/handler.go's
+	// NotesCreateNote makes explicitly -- after h.repo.Create has already
+	// returned, i.e. after that transaction has committed, which is why
+	// Emit's call site never depended on the fix above in the first
+	// place.
 	//
 	// authn's own PII columns (email, phone, TOTP secrets) must have their
 	// serializer registered BEFORE dbkit.Open: GORM resolves a model's
