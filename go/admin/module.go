@@ -296,7 +296,18 @@ func (m *Module) Export() *ExportService { return m.exportSvc }
 // reasoning. Calling this before Bootstrap, or not at all, leaves every
 // RoleService method failing closed with ErrRBACServiceRequired rather
 // than panicking on a nil service.
-func (m *Module) AttachRBAC(svc *rbac.Service) { m.roles.attach(svc) }
+//
+// It also gives the impersonation pipeline (D5) the same *rbac.Service,
+// P2-3's fix: ImpersonationService.attachRBAC lets Start's live grants be
+// automatically ended when the administrator's own admin:impersonate
+// permission is later revoked (see impersonation_service.go's
+// endIfNoLongerPermitted for the mechanism) -- the identical
+// post-Bootstrap-only timing constraint applies, since the check calls
+// rbac.Service.Can.
+func (m *Module) AttachRBAC(svc *rbac.Service) {
+	m.roles.attach(svc)
+	m.impersonation.attachRBAC(svc)
+}
 
 // Name implements pkgcore.Module.
 func (m *Module) Name() string { return moduleName }
@@ -419,7 +430,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 
 	bus := reg.EventBus()
 	m.tenants.attachAudit(bus, reg.AuditActions)
-	m.impersonation.attach(bus, reg.AuditActions, m.notificationModule.Deliveries(), authnSvc)
+	m.impersonation.attach(bus, reg.AuditActions, m.notificationModule.Deliveries(), authnSvc, m.orgModule.Members())
 
 	m.search = NewSearchService(authnSvc, m.orgModule.Members(), m.tenants)
 	m.search.attach(bus)
@@ -440,6 +451,13 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	sendRecords.attach(bus)
 
 	reg.Events.Subscribe(org.EventNodeCreated, m.tenants.handleOrgNodeCreated)
+	// P2-3's fix: a live impersonation grant must not outlive its
+	// administrator's own admin:impersonate permission -- see
+	// impersonation_service.go's onRoleBindingRevoked/onRoleChanged for the
+	// mechanism, which only takes effect once Module.AttachRBAC has given
+	// it a real *rbac.Service to re-check against.
+	reg.Events.Subscribe(rbac.EventRoleBindingRevoked, m.impersonation.onRoleBindingRevoked)
+	reg.Events.Subscribe(rbac.EventRoleChanged, m.impersonation.onRoleChanged)
 
 	m.handler = NewHandler(m.tenants, m.impersonation, m.search, m.auditSvc, m.exportSvc, m.roles, m.usage, sendRecords)
 	reg.Routes.Mount(apiPath, m.handler)

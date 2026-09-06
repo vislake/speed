@@ -8,6 +8,7 @@ import (
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/notification"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/rbac"
 )
 
 // registerTestUser registers a real authn account through env's own
@@ -77,10 +78,14 @@ func TestImpersonationService_Start_NoLocale_ResolvesThroughAuthn_RealDispatch(t
 	}
 
 	const tenant = pkgcore.TenantID("tenant-locale-fallback")
-	if _, err := env.Org.Tree().CreateRoot(pkgcore.WithTenant(context.Background(), tenant), "Locale Fallback Co", "workspace"); err != nil {
+	root, err := env.Org.Tree().CreateRoot(pkgcore.WithTenant(context.Background(), tenant), "Locale Fallback Co", "workspace")
+	if err != nil {
 		t.Fatalf("CreateRoot() error = %v", err)
 	}
 	targetID := registerTestUser(t, env, "locale-fallback-target@example.com", "")
+	if _, err := env.Org.Members().Add(pkgcore.WithTenant(context.Background(), tenant), targetID, root.ID); err != nil {
+		t.Fatalf("Members().Add() error = %v", err)
+	}
 
 	grant, err := env.Admin.Impersonation().Start(context.Background(), StartInput{
 		AdminUserID:    "admin-locale-1",
@@ -114,12 +119,16 @@ func TestImpersonationService_Start_ExplicitLocale_UsedVerbatim_RealDispatch(t *
 	}
 
 	const tenant = pkgcore.TenantID("tenant-locale-explicit")
-	if _, err := env.Org.Tree().CreateRoot(pkgcore.WithTenant(context.Background(), tenant), "Locale Explicit Co", "workspace"); err != nil {
+	root, err := env.Org.Tree().CreateRoot(pkgcore.WithTenant(context.Background(), tenant), "Locale Explicit Co", "workspace")
+	if err != nil {
 		t.Fatalf("CreateRoot() error = %v", err)
 	}
 	// The target's OWN stored locale is en-US; the explicit request below
 	// asks for zh-CN, which must be what actually gets used.
 	targetID := registerTestUser(t, env, "locale-explicit-target@example.com", "en-US")
+	if _, err := env.Org.Members().Add(pkgcore.WithTenant(context.Background(), tenant), targetID, root.ID); err != nil {
+		t.Fatalf("Members().Add() error = %v", err)
+	}
 
 	grant, err := env.Admin.Impersonation().Start(context.Background(), StartInput{
 		AdminUserID:    "admin-locale-2",
@@ -174,5 +183,189 @@ func TestImpersonationService_Start_UnknownTarget_RefusedWithNoGrant(t *testing.
 	}
 	if len(active) != 0 {
 		t.Fatalf("ListActive() = %+v, want no grant ever written for an unresolvable target", active)
+	}
+}
+
+// TestImpersonationService_Start_TargetNotAMember_RefusedWithNoGrant is
+// Finding P3-4's own regression test: a real, genuinely existing authn
+// account that simply never joined the target tenant must be refused with
+// ErrImpersonationTargetNotMember, not a 201 for a grant nobody could
+// legitimately use against that tenant in the first place -- the exact gap
+// the audit named ("幽灵用户 grant 照样 201", a grant for an account with no
+// real standing in the tenant still succeeding).
+func TestImpersonationService_Start_TargetNotAMember_RefusedWithNoGrant(t *testing.T) {
+	env := buildTestAdminModule(t)
+	if err := env.Queue.RegisterHandler(env.Notification.Deliveries()); err != nil {
+		t.Fatalf("RegisterHandler() error = %v", err)
+	}
+
+	const tenant = pkgcore.TenantID("tenant-locale-non-member")
+	if _, err := env.Org.Tree().CreateRoot(pkgcore.WithTenant(context.Background(), tenant), "Locale Non-Member Co", "workspace"); err != nil {
+		t.Fatalf("CreateRoot() error = %v", err)
+	}
+	// A real account, registered successfully -- but never added as a
+	// member of tenant via env.Org.Members().Add.
+	targetID := registerTestUser(t, env, "locale-non-member-target@example.com", "en-US")
+
+	_, err := env.Admin.Impersonation().Start(context.Background(), StartInput{
+		AdminUserID:    "admin-locale-4",
+		TargetUserID:   targetID,
+		TargetTenantID: tenant,
+		Reason:         "prove a real but non-member target is refused, not silently 201'd",
+	})
+	if !isCode(err, ErrImpersonationTargetNotMember.Code) {
+		t.Fatalf("Start() error = %v, want %s", err, ErrImpersonationTargetNotMember.Code)
+	}
+
+	active, listErr := env.Admin.Impersonation().ListActive(context.Background())
+	if listErr != nil {
+		t.Fatalf("ListActive() error = %v", listErr)
+	}
+	if len(active) != 0 {
+		t.Fatalf("ListActive() = %+v, want no grant ever written for a non-member target", active)
+	}
+}
+
+// TestImpersonationService_Start_AdminRoleRevoked_LiveGrantAutomaticallyEnded
+// is Finding P2-3's regression test: the exact scenario the audit named --
+// an administrator's admin:impersonate permission is revoked while a grant
+// they started is still Active, and the audit's own claim was that
+// Lookup's only checks (grant validity + AdminUserID match) never react to
+// that at all, so a revoked administrator could keep impersonating for the
+// rest of the grant's 30-minute TTL.
+//
+// Driven entirely against real, Attach()-ed rbac.Service and Bootstrap-
+// wired admin modules (buildTestAdminModule, mirroring role_test.go's own
+// pattern): a real DefineRole/AssignRole grants admin-impersonate-flow the
+// admin:impersonate permission under rbac.SystemDomain, Start opens a real
+// grant, RevokeRole withdraws it through rbac's own real revoke path (never
+// a bypass), and rbac's own EventRoleBindingRevoked -- published
+// synchronously on the in-process bus this test's Bootstrap wires
+// everything onto -- reaches admin's subscriber before RevokeRole even
+// returns, with no polling needed.
+func TestImpersonationService_Start_AdminRoleRevoked_LiveGrantAutomaticallyEnded(t *testing.T) {
+	env := buildTestAdminModule(t)
+	env.Admin.AttachRBAC(env.RBAC)
+	roles := env.Admin.Roles()
+	if err := env.Queue.RegisterHandler(env.Notification.Deliveries()); err != nil {
+		t.Fatalf("RegisterHandler() error = %v", err)
+	}
+
+	const adminUser = "admin-revoke-flow"
+	const tenant = pkgcore.TenantID("tenant-revoke-flow")
+	root, err := env.Org.Tree().CreateRoot(pkgcore.WithTenant(context.Background(), tenant), "Revoke Flow Co", "workspace")
+	if err != nil {
+		t.Fatalf("CreateRoot() error = %v", err)
+	}
+	targetID := registerTestUser(t, env, "revoke-flow-target@example.com", "en-US")
+	if _, err := env.Org.Members().Add(pkgcore.WithTenant(context.Background(), tenant), targetID, root.ID); err != nil {
+		t.Fatalf("Members().Add() error = %v", err)
+	}
+
+	role, err := roles.DefineRole(context.Background(), string(rbac.SystemDomain), rbac.RoleDefinition{
+		Key:         "impersonator-flow",
+		Permissions: []string{PermissionImpersonate},
+	})
+	if err != nil {
+		t.Fatalf("DefineRole() error = %v", err)
+	}
+	if err := roles.AssignRole(context.Background(), string(rbac.SystemDomain), adminUser, role.Key, ""); err != nil {
+		t.Fatalf("AssignRole() error = %v", err)
+	}
+
+	grant, err := env.Admin.Impersonation().Start(context.Background(), StartInput{
+		AdminUserID:    adminUser,
+		TargetUserID:   targetID,
+		TargetTenantID: tenant,
+		Reason:         "prove a revoked admin's live grant is ended automatically",
+		Locale:         "en-US",
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if _, ok := env.Admin.Impersonation().Lookup(context.Background(), grant.ID); !ok {
+		t.Fatal("Lookup() = false immediately after Start, want the fresh grant Active")
+	}
+
+	if err := roles.RevokeRole(context.Background(), string(rbac.SystemDomain), adminUser, role.Key, ""); err != nil {
+		t.Fatalf("RevokeRole() error = %v", err)
+	}
+
+	if _, ok := env.Admin.Impersonation().Lookup(context.Background(), grant.ID); ok {
+		t.Fatal("Lookup() = true after the administrator's admin:impersonate permission was revoked, want the grant ended automatically")
+	}
+
+	active, err := env.Admin.Impersonation().ListActive(context.Background())
+	if err != nil {
+		t.Fatalf("ListActive() error = %v", err)
+	}
+	for _, g := range active {
+		if g.ID == grant.ID {
+			t.Fatalf("ListActive() still includes %q after the administrator's permission was revoked", grant.ID)
+		}
+	}
+}
+
+// TestImpersonationService_Start_AdminKeepsPermissionViaOtherRole_GrantSurvives
+// is the negative-case counterpart: revoking one of TWO roles that each
+// independently grant admin:impersonate must NOT end the grant, since the
+// administrator genuinely still holds the permission through the other
+// role -- proving endIfNoLongerPermitted re-checks rbac.Service.Can rather
+// than assuming the answer from the revoke event alone.
+func TestImpersonationService_Start_AdminKeepsPermissionViaOtherRole_GrantSurvives(t *testing.T) {
+	env := buildTestAdminModule(t)
+	env.Admin.AttachRBAC(env.RBAC)
+	roles := env.Admin.Roles()
+	if err := env.Queue.RegisterHandler(env.Notification.Deliveries()); err != nil {
+		t.Fatalf("RegisterHandler() error = %v", err)
+	}
+
+	const adminUser = "admin-dual-role-flow"
+	const tenant = pkgcore.TenantID("tenant-dual-role-flow")
+	root, err := env.Org.Tree().CreateRoot(pkgcore.WithTenant(context.Background(), tenant), "Dual Role Co", "workspace")
+	if err != nil {
+		t.Fatalf("CreateRoot() error = %v", err)
+	}
+	targetID := registerTestUser(t, env, "dual-role-target@example.com", "en-US")
+	if _, err := env.Org.Members().Add(pkgcore.WithTenant(context.Background(), tenant), targetID, root.ID); err != nil {
+		t.Fatalf("Members().Add() error = %v", err)
+	}
+
+	roleA, err := roles.DefineRole(context.Background(), string(rbac.SystemDomain), rbac.RoleDefinition{
+		Key: "impersonator-a", Permissions: []string{PermissionImpersonate},
+	})
+	if err != nil {
+		t.Fatalf("DefineRole(a) error = %v", err)
+	}
+	roleB, err := roles.DefineRole(context.Background(), string(rbac.SystemDomain), rbac.RoleDefinition{
+		Key: "impersonator-b", Permissions: []string{PermissionImpersonate},
+	})
+	if err != nil {
+		t.Fatalf("DefineRole(b) error = %v", err)
+	}
+	if err := roles.AssignRole(context.Background(), string(rbac.SystemDomain), adminUser, roleA.Key, ""); err != nil {
+		t.Fatalf("AssignRole(a) error = %v", err)
+	}
+	if err := roles.AssignRole(context.Background(), string(rbac.SystemDomain), adminUser, roleB.Key, ""); err != nil {
+		t.Fatalf("AssignRole(b) error = %v", err)
+	}
+
+	grant, err := env.Admin.Impersonation().Start(context.Background(), StartInput{
+		AdminUserID:    adminUser,
+		TargetUserID:   targetID,
+		TargetTenantID: tenant,
+		Reason:         "prove a grant survives a revoke that leaves another granting role intact",
+		Locale:         "en-US",
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	if err := roles.RevokeRole(context.Background(), string(rbac.SystemDomain), adminUser, roleA.Key, ""); err != nil {
+		t.Fatalf("RevokeRole(a) error = %v", err)
+	}
+
+	if _, ok := env.Admin.Impersonation().Lookup(context.Background(), grant.ID); !ok {
+		t.Fatal("Lookup() = false after revoking only ONE of two granting roles, want the grant to survive (roleB still grants admin:impersonate)")
 	}
 }

@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -46,16 +47,18 @@ func newTestImpersonationService(t *testing.T, notifier Notifier) (*Impersonatio
 	if err := reg.AuditActions.Add(AuditActionImpersonationStarted, AuditActionImpersonationEnded); err != nil {
 		t.Fatalf("register audit actions: %v", err)
 	}
-	// authnSvc is deliberately nil here: every test in this file that
-	// exercises the real notification path (a non-nil notifier) supplies
-	// an explicit StartInput.Locale (startTestGrant does), which
-	// resolveNotificationLocale honours before ever touching authnSvc --
-	// see that method's own doc comment. Resolving a real target locale
-	// through a genuine *authn.Service is pinned separately, against real
-	// authn and notification modules together, by the
+	// authnSvc and members are both deliberately nil here: every test in
+	// this file supplies an explicit StartInput.Locale (startTestGrant
+	// does), which resolveNotificationLocale's own nil-authnSvc branch
+	// trusts verbatim without ever touching authnSvc -- see that method's
+	// own doc comment -- and a nil members skips validateTargetMembership
+	// entirely (its own doc comment). Resolving a real target's existence,
+	// locale and tenant membership through genuine *authn.Service and
+	// *org.MemberService instances is pinned separately, against real
+	// authn/org/notification modules together, by the
 	// TestImpersonationService_Start_* tests in
 	// impersonation_service_locale_test.go.
-	svc.attach(reg.EventBus(), reg.AuditActions, notifier, nil)
+	svc.attach(reg.EventBus(), reg.AuditActions, notifier, nil, nil)
 	return svc, reg
 }
 
@@ -341,6 +344,70 @@ func TestImpersonationService_End_UnknownID_ReportsNotFound(t *testing.T) {
 	_, err := svc.End(context.Background(), "does-not-exist", "admin-1")
 	if !isCode(err, ErrGrantNotFound.Code) {
 		t.Fatalf("End() error = %v, want ErrGrantNotFound", err)
+	}
+}
+
+// TestImpersonationService_End_ConcurrentEnd_OnlyOneSucceeds is Finding
+// P3-3's regression test (half 2): two concurrent End calls on the SAME
+// grant id -- an operator's own DELETE racing another operator's DELETE,
+// or racing the automatic permission-revocation end below -- must not both
+// silently succeed and both emit an admin.impersonation.ended audit event
+// for one logical end.
+//
+// The race is forced deterministically: both goroutines are handed their
+// own copy of the SAME grant, read once via Start's own return value
+// before either write happens (exactly what two callers who both read the
+// row moments apart would each observe), and call the unexported endGrant
+// directly so the database's own SaveGuarded conditional UPDATE -- not
+// incidental goroutine scheduling -- is what decides which one lands.
+func TestImpersonationService_End_ConcurrentEnd_OnlyOneSucceeds(t *testing.T) {
+	svc, reg := newTestImpersonationService(t, &fakeNotifier{})
+	grant := startTestGrant(t, svc)
+
+	var recorded []audit.RecordedEvent
+	reg.EventBus().Subscribe(audit.EventRecorded, func(_ context.Context, evt pkgcore.Event) error {
+		if rec, ok := evt.Payload.(audit.RecordedEvent); ok {
+			recorded = append(recorded, rec)
+		}
+		return nil
+	})
+
+	copy1 := *grant
+	copy2 := *grant
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		_, errs[0] = svc.endGrant(context.Background(), &copy1, "admin-1", pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: "admin-1"})
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		_, errs[1] = svc.endGrant(context.Background(), &copy2, "admin-2", pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: "admin-2"})
+	}()
+	close(start)
+	wg.Wait()
+
+	succeeded, refused := 0, 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			succeeded++
+		case isCode(err, ErrImpersonationGrantEnded.Code):
+			refused++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if succeeded != 1 || refused != 1 {
+		t.Fatalf("got succeeded=%d refused=%d (errs=%v), want exactly one success and one ErrImpersonationGrantEnded refusal", succeeded, refused, errs)
+	}
+	if len(recorded) != 1 {
+		t.Fatalf("got %d recorded admin.impersonation.ended audit events, want exactly 1 (no duplicate for the losing concurrent End)", len(recorded))
 	}
 }
 

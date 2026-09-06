@@ -52,8 +52,46 @@ func (r *ImpersonationRepository) Get(ctx context.Context, id string) (*Imperson
 }
 
 // Save persists every field of grant, including EndedAt/EndedBy.
+//
+// This is an unconditional upsert -- Create uses it too, when Create's own
+// caller has already generated an ID (none of this module's callers do).
+// A caller ending a grant must use SaveGuarded instead; see its own doc
+// comment for why an unconditional Save is the wrong tool there.
 func (r *ImpersonationRepository) Save(ctx context.Context, grant *ImpersonationGrant) error {
 	return r.db.WithContext(ctx).Save(grant).Error
+}
+
+// SaveGuarded persists grant's EndedAt/EndedBy under a conditional UPDATE
+// that also requires the row's CURRENT ended_at still be NULL --
+// P3-3's CAS fix (half 2): two concurrent End calls on the same grant id
+// (an operator's own DELETE racing this module's own automatic
+// permission-revocation end, say) both start from an in-memory read
+// showing EndedAt == nil, so an unconditional Save would let BOTH land,
+// producing a double admin.impersonation.ended audit trail for one
+// logical end. The guard makes only the FIRST write actually change the
+// row; the second's WHERE no longer matches (RowsAffected == 0), and the
+// caller reports the grant as already ended instead of silently
+// succeeding a second time. Mirrors
+// go/notification/send_record.go's SaveGuarded conditional-UPDATE idiom
+// exactly, narrowed to the two columns an end ever changes.
+//
+// It reports whether the write landed:
+//   - (true, nil): the guard passed and EndedAt/EndedBy are now persisted.
+//   - (false, nil): the guard refused the write (0 rows affected) -- the
+//     row already carries a non-NULL ended_at. The caller's own write is
+//     dropped; nothing is rewritten.
+//   - (false, err): the database call itself failed; nothing was written.
+func (r *ImpersonationRepository) SaveGuarded(ctx context.Context, grant *ImpersonationGrant) (landed bool, err error) {
+	res := r.db.WithContext(ctx).Model(&ImpersonationGrant{}).
+		Where("id = ? AND ended_at IS NULL", grant.ID).
+		Updates(map[string]any{
+			"ended_at": grant.EndedAt,
+			"ended_by": grant.EndedBy,
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
 }
 
 // ListActive returns every grant that is Active at instant now -- the
