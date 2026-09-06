@@ -27,7 +27,9 @@
 - CI 定时任务：`saasctl new tmpapp` + `create-saas-app tmpapp-web` → `go build` / `pnpm build` → 先 `docker compose -f docker-compose.standalone.yml up`（应在数十秒内就绪）再 `docker compose up` → 两次都跑冒烟脚本打健康检查与登录接口
 - 这条流水线一旦红，说明模板与模块版本已脱节，必须立即修复
 
-> **实现状态注记（2026-09-03，saasctl 轮）：** 本条流水线的"生成 → 构建 → 冒烟"工具侧已在 saasctl 轮真实落地并跑通——`saasctl new`（含 `--with` 选择）materialize 出项目后，经真实 `go mod tidy`（网络）与 `go build` 编译，boot 起来冒烟真实组成的 HTTP 链（healthz、config/public、register、错密码 401、坏 token 401、匿名 403 等逐项断言），外加 `db migrate` 与 `upgrade` 对真实文件的操作；程序与逐项答案记录在 `go/saasctl/AGENTS.md` Testing 章节，是模板与模块版本"此刻未脱节"的证据。但本节的 CI 化形态仍未落地：`scaffold-verify.yml` 仍是 gated stub（其文件头已由本轮更新，记录"生成侧已存在且有离线证明；双部署模式 boot 门仍未接线"），CI 定时触发与上面"CI 定时任务"一行描述的两次 `docker compose`（standalone 与 distributed 各 boot 一次）属 M4 该流水线转正时的范围——届时每轮 PR 不跑它（它按设计是每日 + 发布后），模板腐化的日常防线靠 saasctl 轮之后的仓库内测试（golden 钉死 + materialize 证明）。
+> **实现状态注记（2026-09-03，saasctl 轮）：** 本条流水线的"生成 → 构建 → 冒烟"工具侧已在 saasctl 轮真实落地并跑通——`saasctl new`（含 `--with` 选择）materialize 出项目后，经真实 `go mod tidy`（网络）与 `go build` 编译，boot 起来冒烟真实组成的 HTTP 链（healthz、config/public、register、错密码 401、坏 token 401、匿名 403 等逐项断言），外加 `db migrate` 与 `upgrade` 对真实文件的操作；程序与逐项答案记录在 `go/saasctl/AGENTS.md` Testing 章节，是模板与模块版本"此刻未脱节"的证据。
+
+> **实现状态注记（saasctl-distributed-mode 轮次）：** 上一条注记记录的"CI 化形态仍未落地"缺口部分收窄——`scaffold-verify.yml` 已从 gated stub 转为真实运行（`workflow_dispatch` + 每日 03:00 UTC 定时），跑 `go/saasctl/integration_test/scaffold_dual_mode_test.go` 对 `authn+org+rbac` 选集做真实 generate → tidy → build → migrate → boot（standalone）→ migrate → boot（distributed，真实 Redis / RustFS / Mailpit 容器）的完整两遍循环，五个合法选集里只有这一个进了这条流水线，其余四个仍只有离线 golden 校验与本轮人工跑过一次的构建证明——细节与理由见 `.github/workflows/scaffold-verify.yml` 文件头与 `docs/internal/18-cicd.md` 同名注记。发布后触发仍未接线（没有发布凭据，M4 之前没有真实的"发布后"事件），上面"CI 定时任务"一行描述的 `create-saas-app`/`docker compose` 两件事仍是 M4 范围内未落地的部分。
 
 **6. 国际化**
 - CI lint：UI 包 JSX 中不得出现裸文本节点；Go 代码中面向用户的错误不得使用字面量文案
