@@ -475,3 +475,25 @@ invocation full-check.yml's integration-tiers job runs for this module:
   shapes. Direct-to-store client uploads with presigned credentials, and
   short-lived read URLs, are a later distributed-mode round and are deliberately
   not half-built here.
+
+## Round note — JPEG EOI strictness (2026-09-06)
+
+`sanitizeJPEG`'s SOS case previously carried the marker and everything after
+it over verbatim, so a JPEG whose entropy-coded data never terminated in EOI
+was accepted, and anything appended after a real EOI (a second EXIF/XMP APP1,
+arbitrary bytes) was copied into the sanitized output. The walker now walks
+every scan to its terminating marker — byte-stuffed 0xFF 0x00 pairs, restart
+markers 0xFFD0-0xFFD7 and 0xFF fill are scan content, walked past, never
+parsed — and dispatches that marker like any other, so the scans of a
+progressive or hierarchical JPEG are each walked and only the file's final
+EOI ends the walk (which also means an EXIF/XMP APP1 sitting between scans is
+now stripped, a behavior the earlier "first scan only" scope never covered).
+Pinned decisions, with tests: a file cut inside the SOS header or whose scan
+data runs off the end without EOI is refused as a structure error (the PNG
+path's required-IEND doctrine, mirrored); bytes after the EOI are dropped at
+the boundary, mirroring the PNG walker's post-IEND rule, except a tail of
+pure 0xFF fill, which is conventionally legal padding and is carried over so
+a padded clean file passes through byte-identical with nothing written back.
+What remains invisible to a structural strip is unchanged and still recorded
+in "Known limitations": metadata smuggled into the entropy-coded data
+itself.
