@@ -242,10 +242,16 @@ type SSOService struct {
 	httpClient *http.Client
 	guard      *safehttp.Guard
 
-	// mu guards the memoized discovery results, keyed by issuer URL.
-	// Discovery is a round trip to a third party whose answer changes
-	// almost never; repeating it per sign-in would put that third party on
-	// the latency path of every login.
+	// mu guards the memoized discovery results, keyed by issuer URL, and
+	// nothing else. Discovery itself is a round trip to a third party whose
+	// answer changes almost never; repeating it per sign-in would put that
+	// third party on the latency path of every login. But memoizing it must
+	// never mean holding mu across the round trip: the only bound on that
+	// fetch is the HTTP client's own timeout, so a lock held across it
+	// would queue every other tenant's discovery -- and with it every other
+	// tenant's SSO sign-in -- behind one issuer that stopped answering.
+	// discover() therefore fetches OUTSIDE the lock and re-checks the map
+	// afterwards (double-checked memoization); see its own doc comment.
 	mu         sync.Mutex
 	discovered map[string]*oidc.Provider
 }
@@ -680,15 +686,44 @@ func (s *SSOService) enabledConfig(ctx context.Context) (*TenantSSOConfig, error
 }
 
 // discover memoizes an issuer's OpenID Connect discovery document.
+//
+// The fetch happens OUTSIDE s.mu, and the map is only ever touched under
+// the lock for the brief reads and the single map store below -- see the
+// mu field's doc comment for why holding the lock across the round trip
+// would let one tenant's black-holed issuer queue every other tenant's
+// sign-in behind its timeout. Callers see a double-checked lookup: read the
+// memo, fetch when it misses, then re-check before storing.
+//
+// Two concurrent first-time discoveries of the SAME issuer can each fetch,
+// since the miss is checked without a per-issuer in-flight registry; that
+// duplicate is bounded by concurrent first-time sign-ins for one issuer and
+// harmless next to the cost of the fetch itself. The re-check under the
+// lock makes the map converge on one stored result either way: whichever
+// discover stores first wins, and the other keeps its own equally valid
+// document for its caller without overwriting the stored one.
 func (s *SSOService) discover(ctx context.Context, issuer string) (*oidc.Provider, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if provider, ok := s.discovered[issuer]; ok {
+	provider, ok := s.discovered[issuer]
+	s.mu.Unlock()
+	if ok {
 		return provider, nil
 	}
+
 	provider, err := oidc.NewProvider(oidc.ClientContext(ctx, s.httpClient), issuer)
 	if err != nil {
 		return nil, ErrSSOIssuerNotAllowed.WithCause(fmt.Errorf("sso discovery: %w", err))
+	}
+
+	// Re-check rather than storing unconditionally: a concurrent discover
+	// may have stored its own result for this issuer while this one was
+	// fetching, and a concurrent SaveConfig may have called forget() on
+	// the same issuer -- which must win over a store this fetch only
+	// learned about afterwards. Both outcomes leave the memo with a valid
+	// document for the caller that just fetched one.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing, ok := s.discovered[issuer]; ok {
+		return existing, nil
 	}
 	s.discovered[issuer] = provider
 	return provider, nil

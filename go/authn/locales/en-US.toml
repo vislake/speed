@@ -21,6 +21,7 @@
 "authn.phone_already_registered" = "An account already uses that phone number."
 "authn.password_too_short" = "The password must be at least {{.min_length}} characters long."
 "authn.password_too_long" = "The password must be at most {{.max_length}} characters long."
+"authn.display_name_too_long" = "The display name must be at most {{.max_length}} characters long."
 "authn.password_too_weak" = "That password is too easy to guess. Choose a different one."
 "authn.authentication_required" = "Sign in to continue."
 "authn.token_invalid" = "The session credential is not valid. Sign in again."

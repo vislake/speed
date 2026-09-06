@@ -287,6 +287,13 @@ func NewSessionRepository(db *gorm.DB) (*SessionRepository, error) {
 }
 
 // Create inserts s, filling in its ID when empty.
+//
+// Device and UserAgent are truncated to their columns' declared VARCHAR
+// widths before the insert (see model.go's column-width constants and
+// truncateClientField doc comments): both are client-supplied, and
+// PostgreSQL enforces the migration's width where SQLite would silently
+// store an over-width value -- this boundary is where the two dialects are
+// made to agree.
 func (r *SessionRepository) Create(ctx context.Context, s *Session) error {
 	if s.ID == "" {
 		s.ID = newID()
@@ -294,6 +301,8 @@ func (r *SessionRepository) Create(ctx context.Context, s *Session) error {
 	if s.Status == "" {
 		s.Status = SessionStatusActive
 	}
+	s.Device = truncateClientField(s.Device, deviceColumnWidth)
+	s.UserAgent = truncateClientField(s.UserAgent, userAgentColumnWidth)
 	return r.db.WithContext(ctx).Create(s).Error
 }
 
@@ -432,10 +441,15 @@ func NewLoginAttemptRepository(db *gorm.DB) (*LoginAttemptRepository, error) {
 }
 
 // Create inserts a, filling in its ID when empty.
+//
+// UserAgent is client-supplied free text and is truncated to its column's
+// declared VARCHAR width before the insert, for the same dual-dialect reason
+// SessionRepository.Create gives for its own truncations.
 func (r *LoginAttemptRepository) Create(ctx context.Context, a *LoginAttempt) error {
 	if a.ID == "" {
 		a.ID = newID()
 	}
+	a.UserAgent = truncateClientField(a.UserAgent, userAgentColumnWidth)
 	return r.db.WithContext(ctx).Create(a).Error
 }
 

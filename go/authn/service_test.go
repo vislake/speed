@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -136,6 +138,96 @@ func TestService_RegisterAndLogin(t *testing.T) {
 	}
 	if len(attempts) != 1 || attempts[0].Result != LoginResultSuccess {
 		t.Errorf("login history = %+v, want one successful attempt", attempts)
+	}
+}
+
+// TestService_Login_TruncatesOverWidthClientStringsToTheColumnWidths is the
+// P3-13 regression: sessions.device (VARCHAR(255)) and sessions.user_agent /
+// login_attempts.user_agent (VARCHAR(512)) are the widths the migrations
+// declare, and the two dialects disagree about enforcement -- PostgreSQL
+// refuses an over-width write (SQLSTATE 22001) where SQLite stores it, so
+// the SAME login with an over-width device or user agent succeeds on one
+// dialect and fails on the other. The repository write boundary truncates
+// the client-supplied strings to the columns' widths, so both dialects store
+// the identical value. The exact truncated prefix is asserted, not merely a
+// length: truncation must keep the value's HEAD (the part that identifies
+// the device), cut at a rune boundary, and never touch a within-width value.
+func TestService_Login_TruncatesOverWidthClientStringsToTheColumnWidths(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	user := f.registerUser(t, "trunc@example.com", testTenantA)
+	// A separate account for the failed-attempt leg: a wrong password puts
+	// its account into the module's progressive lockout (30s after one
+	// failure), which must not stand between this test and the correct
+	// logins below.
+	failureUser := f.registerUser(t, "truncfail@example.com")
+
+	overWidthDevice := strings.Repeat("d", deviceColumnWidth+50)
+	overWidthUA := strings.Repeat("u", userAgentColumnWidth+50)
+
+	// A FAILED attempt carries the user agent too (recordFailure), through
+	// the same repository boundary as the successful one below.
+	if _, err := f.svc.Login(t.Context(), LoginInput{
+		Identifier: "truncfail@example.com", Password: "definitely not the password",
+		UserAgent: overWidthUA, IP: "203.0.113.61",
+	}); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("Login(wrong password) error = %v, want ErrInvalidCredentials", err)
+	}
+
+	pair, err := f.svc.Login(t.Context(), LoginInput{
+		Identifier: "trunc@example.com", Password: testPassword,
+		Device: overWidthDevice, UserAgent: overWidthUA, IP: "203.0.113.62",
+	})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	session, err := f.svc.sessionRepo.FindByID(t.Context(), pair.Principal.SessionID)
+	if err != nil {
+		t.Fatalf("FindByID(session) error = %v", err)
+	}
+	if want := strings.Repeat("d", deviceColumnWidth); session.Device != want {
+		t.Errorf("session.Device = %d runes, want %d (truncated to sessions.device's VARCHAR width)", utf8.RuneCountInString(session.Device), deviceColumnWidth)
+	}
+	if want := strings.Repeat("u", userAgentColumnWidth); session.UserAgent != want {
+		t.Errorf("session.UserAgent = %d runes, want %d (truncated to sessions.user_agent's VARCHAR width)", utf8.RuneCountInString(session.UserAgent), userAgentColumnWidth)
+	}
+
+	assertAttempts := func(userID string, wantCount int) {
+		t.Helper()
+		attempts, listErr := f.svc.LoginHistory().ListByUser(t.Context(), userID, 0)
+		if listErr != nil {
+			t.Fatalf("ListByUser() error = %v", listErr)
+		}
+		if len(attempts) != wantCount {
+			t.Fatalf("login history has %d rows, want %d", len(attempts), wantCount)
+		}
+		for i, attempt := range attempts {
+			if want := strings.Repeat("u", userAgentColumnWidth); attempt.UserAgent != want {
+				t.Errorf("attempt[%d].UserAgent = %d runes, want %d (truncated to login_attempts.user_agent's VARCHAR width)", i, utf8.RuneCountInString(attempt.UserAgent), userAgentColumnWidth)
+			}
+		}
+	}
+	assertAttempts(user.ID, 1)
+	assertAttempts(failureUser.ID, 1)
+
+	// The truncated boundary values themselves must still round-trip: a
+	// value exactly AT the width is never cut.
+	exact, err := f.svc.Login(t.Context(), LoginInput{
+		Identifier: "trunc@example.com", Password: testPassword,
+		Device: strings.Repeat("d", deviceColumnWidth), UserAgent: strings.Repeat("u", userAgentColumnWidth),
+		IP: "203.0.113.63",
+	})
+	if err != nil {
+		t.Fatalf("Login(at-width values) error = %v", err)
+	}
+	exactSession, err := f.svc.sessionRepo.FindByID(t.Context(), exact.Principal.SessionID)
+	if err != nil {
+		t.Fatalf("FindByID(at-width session) error = %v", err)
+	}
+	if exactSession.Device != strings.Repeat("d", deviceColumnWidth) || exactSession.UserAgent != strings.Repeat("u", userAgentColumnWidth) {
+		t.Error("at-width values were altered by the write boundary; only OVER-width values may be truncated")
 	}
 }
 

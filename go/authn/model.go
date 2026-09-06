@@ -3,6 +3,7 @@ package authn
 import (
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -37,6 +38,49 @@ const (
 	// detection.
 	SessionStatusRevoked = "revoked"
 )
+
+// The migrations' VARCHAR widths are the schema authority for how long the
+// client-supplied strings this file's models carry may be: PostgreSQL
+// enforces a declared width (SQLSTATE 22001 on an over-width write) while
+// SQLite ignores it, so a value that fits on one dialect and overflows on
+// the other is a real dual-dialect divergence, not a theoretical one. The
+// constants below are this module's single statement of each bound, kept in
+// step with the migrations by the dual-dialect migration tests.
+//
+// PostgreSQL counts CHARACTERS against a VARCHAR(n) width, so every bound is
+// applied in runes, never bytes: cutting a multi-byte rune in half would
+// produce invalid UTF-8 that PostgreSQL refuses for a different reason.
+//
+// The two diagnostic strings -- a session's device and user agent -- are
+// truncated at the repository write boundary by truncateClientField below,
+// so both dialects store identical values. A display name is different: it
+// is the user's own chosen identity text, not diagnostic noise, so an
+// over-long one is REFUSED at registration (Service.Register,
+// ErrDisplayNameTooLong) rather than silently shortened.
+const (
+	// deviceColumnWidth is the VARCHAR width of sessions.device.
+	deviceColumnWidth = 255
+	// userAgentColumnWidth is the VARCHAR width of sessions.user_agent
+	// and login_attempts.user_agent.
+	userAgentColumnWidth = 512
+	// displayNameWidth is the VARCHAR width of users.display_name.
+	displayNameWidth = 128
+)
+
+// truncateClientField bounds a client-supplied free-text value to width
+// runes before it is written into the VARCHAR(width) column it is destined
+// for -- see the column-width constants above for why the column, not the
+// request, is the authority. Values within the width (every ordinary login)
+// pass through untouched.
+func truncateClientField(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(s) <= width {
+		return s
+	}
+	return string([]rune(s)[:width])
+}
 
 // Refresh-token status values for [RefreshToken.Status].
 const (
@@ -225,7 +269,10 @@ type Session struct {
 	AMR string `gorm:"column:amr;size:255;not null"`
 
 	// Device, UserAgent and IP describe the client, for the owner's device
-	// list. They are recorded as received.
+	// list. Device and UserAgent are client-supplied free text, truncated
+	// to their columns' widths at the repository write boundary (see the
+	// column-width constants above); IP is the socket peer's address and
+	// cannot exceed its column.
 	Device    string `gorm:"size:255;not null"`
 	UserAgent string `gorm:"column:user_agent;size:512;not null"`
 	IP        string `gorm:"column:ip;size:45;not null"`

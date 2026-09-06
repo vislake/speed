@@ -52,6 +52,27 @@ type OIDCServer struct {
 	failTokenExchange bool
 	// omitIDToken makes the token endpoint answer without one.
 	omitIDToken bool
+
+	// discoveryEntered and discoveryReleased, when non-nil (set with
+	// GateDiscovery), make each discovery request signal discoveryEntered
+	// and then park until discoveryReleased is closed. Discovery is the one
+	// endpoint a test must be able to pause ON THE WIRE: the production
+	// hazard it reproduces is a discovery round trip parked for the whole
+	// HTTP client timeout, and a test of the caller's locking must be able
+	// to hold that state deterministically rather than race a real network
+	// timeout.
+	discoveryEntered  chan struct{}
+	discoveryReleased chan struct{}
+}
+
+// GateDiscovery makes discovery requests signal entered (once per request)
+// and then block until released is closed. A nil/zero gate leaves discovery
+// unblocked; the gate is not cleared by firing, so it applies to every
+// discovery request while it is set.
+func (s *OIDCServer) GateDiscovery(entered, released chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.discoveryEntered, s.discoveryReleased = entered, released
 }
 
 // NewOIDCServer starts an identity provider whose ID tokens are minted for
@@ -189,6 +210,13 @@ func (s *OIDCServer) SignIDToken(t *testing.T, in IDTokenClaims) string {
 
 // handleDiscovery serves the OpenID Connect discovery document.
 func (s *OIDCServer) handleDiscovery(w http.ResponseWriter, _ *http.Request) {
+	s.mu.Lock()
+	entered, released := s.discoveryEntered, s.discoveryReleased
+	s.mu.Unlock()
+	if entered != nil {
+		entered <- struct{}{}
+		<-released
+	}
 	writeJSON(w, map[string]any{
 		"issuer":                                s.URL(),
 		"authorization_endpoint":                s.URL() + "/authorize",

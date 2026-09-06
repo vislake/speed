@@ -183,6 +183,20 @@ func (r *VerificationCodeRepository) MarkAttempt(ctx context.Context, id string,
 	return res.RowsAffected == 1, nil
 }
 
+// FindByID returns the record with the given id in WHATEVER state it is in
+// -- active, locked or consumed -- or ErrNotFound. MarkAttempt's retry loop
+// (Service.markPhoneLoginAttempt) re-reads by id after losing a
+// compare-and-swap, and must be able to observe that the record it lost to
+// has left the active state rather than having FindLatestActive silently
+// substitute a different, newer record for the same target.
+func (r *VerificationCodeRepository) FindByID(ctx context.Context, id string) (*VerificationCode, error) {
+	var c VerificationCode
+	if err := r.db.WithContext(ctx).Where("id = ?", id).First(&c).Error; err != nil {
+		return nil, translate(err)
+	}
+	return &c, nil
+}
+
 // Consume atomically moves an ACTIVE code to consumed and reports whether it
 // won the race, mirroring RefreshTokenRepository.Consume: single use is a
 // database-arbitrated compare-and-swap, not a read followed by a write.
@@ -468,7 +482,7 @@ func (s *Service) verifyPhoneLoginCode(ctx context.Context, targetIndex, code st
 	}
 
 	if hashVerificationCode(code) != record.CodeHash {
-		s.markPhoneLoginAttempt(ctx, targetIndex, record)
+		s.markPhoneLoginAttempt(ctx, record)
 		return ErrVerificationCodeInvalid
 	}
 
@@ -492,7 +506,7 @@ func (s *Service) verifyPhoneLoginCode(ctx context.Context, targetIndex, code st
 // logged and swallowed: verifyPhoneLoginCode's own caller already gets
 // ErrVerificationCodeInvalid regardless, and this is best-effort accounting
 // on top of that authoritative answer, not a second gate.
-func (s *Service) markPhoneLoginAttempt(ctx context.Context, targetIndex string, record *VerificationCode) {
+func (s *Service) markPhoneLoginAttempt(ctx context.Context, record *VerificationCode) {
 	for range maxMarkAttemptRetries {
 		locked := record.Attempts+1 >= record.MaxAttempts
 		won, err := s.verificationCodes.MarkAttempt(ctx, record.ID, record.Attempts, locked)
@@ -505,13 +519,21 @@ func (s *Service) markPhoneLoginAttempt(ctx context.Context, targetIndex string,
 		}
 
 		// Lost the race to a concurrent wrong guess against the same
-		// code: re-read its current state and retry against the fresh
-		// attempt count.
-		fresh, findErr := s.verificationCodes.FindLatestActive(ctx, VerificationPurposePhoneLogin, targetIndex, s.now())
+		// code: re-read THAT record's current state and retry against the
+		// fresh attempt count. The re-read is BY ID, never "the latest
+		// active code for this target": the target's latest may be a
+		// NEWER code the user re-requested while this retry was losing
+		// (or a newer code a concurrent successful verification left as
+		// the latest), and counting this guess against the new code would
+		// burn the fresh code's attempt budget with a guess that was
+		// never aimed at it.
+		fresh, findErr := s.verificationCodes.FindByID(ctx, record.ID)
 		if findErr != nil {
-			// Locked (excluded by FindLatestActive's own "status =
-			// active" filter) or consumed by a concurrent successful
-			// verification: either way there is nothing left to retry.
+			return
+		}
+		if fresh.Status != VerificationCodeStatusActive {
+			// Locked or consumed by the concurrent guess that won the
+			// race: either way there is nothing left to retry.
 			return
 		}
 		record = fresh

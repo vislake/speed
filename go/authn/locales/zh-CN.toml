@@ -19,6 +19,7 @@
 "authn.phone_already_registered" = "该手机号已被注册。"
 "authn.password_too_short" = "密码长度不能少于 {{.min_length}} 个字符。"
 "authn.password_too_long" = "密码长度不能超过 {{.max_length}} 个字符。"
+"authn.display_name_too_long" = "昵称长度不能超过 {{.max_length}} 个字符。"
 "authn.password_too_weak" = "该密码过于常见，请更换一个。"
 "authn.authentication_required" = "请先登录。"
 "authn.token_invalid" = "登录凭证无效，请重新登录。"

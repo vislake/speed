@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -426,6 +427,14 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (*User, error)
 	}
 	if err := s.policy.Validate(in.Password); err != nil {
 		return nil, err
+	}
+	// The display name is refused, not truncated, when it exceeds
+	// users.display_name's declared column width -- it is the user's own
+	// chosen identity text, where a silent shortening would corrupt what
+	// they typed (see model.go's column-width constants and
+	// ErrDisplayNameTooLong's doc comment).
+	if length := utf8.RuneCountInString(in.DisplayName); length > displayNameWidth {
+		return nil, ErrDisplayNameTooLong.WithParam("max_length", displayNameWidth)
 	}
 
 	user := &User{

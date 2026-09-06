@@ -71,6 +71,16 @@ var (
 	// ErrPasswordTooLong carries a "max_length" parameter.
 	ErrPasswordTooLong = apperr.Invalid("authn.password_too_long")
 
+	// ErrDisplayNameTooLong is returned by Register for a display name
+	// longer than users.display_name's declared VARCHAR(128) column (the
+	// module's displayNameWidth constant) -- see model.go's column-width
+	// doc comment for why the migrations' widths are the authority. It
+	// carries a "max_length" parameter. The display name is REFUSED rather
+	// than truncated, unlike the device/user-agent diagnostic strings: it
+	// is the user's own chosen identity text, where a silent shortening
+	// would corrupt what the user typed instead of only trimming noise.
+	ErrDisplayNameTooLong = apperr.Invalid("authn.display_name_too_long")
+
 	// ErrPasswordTooWeak is returned for a password on the policy
 	// denylist, whatever its length.
 	ErrPasswordTooWeak = apperr.Invalid("authn.password_too_weak")
@@ -320,6 +330,7 @@ var errorCodes = []string{
 	ErrPhoneAlreadyRegistered.Code,
 	ErrPasswordTooShort.Code,
 	ErrPasswordTooLong.Code,
+	ErrDisplayNameTooLong.Code,
 	ErrPasswordTooWeak.Code,
 	ErrAuthenticationRequired.Code,
 	ErrTokenInvalid.Code,

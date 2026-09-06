@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/vislake/speed/go/authn/api"
 	"github.com/vislake/speed/go/dbkit/audit"
@@ -102,12 +103,30 @@ func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (Prin
 	return principal, true
 }
 
+// maxRequestBodyBytes caps how many bytes decodeJSON will read from a
+// request body. Every operation's legitimate body is a handful of short
+// fields whose longest single value this module's own rules bound at 128
+// runes (a password or a display name; the worst-case JSON escaping of one
+// rune is six bytes), so 64 KiB leaves an order of magnitude of headroom
+// while making sure an unauthenticated register or login endpoint never
+// buffers an attacker's arbitrarily large body -- and feeds an unbounded
+// json.Decoder -- before any validation has had a chance to refuse it.
+const maxRequestBodyBytes = 1 << 16
+
 // decodeJSON decodes r's body into v, translating a decode failure into
 // ErrInvalidRequestBody (errors.go) -- the structured invalid-request-body
 // error every operation below reports it as, now catalogued and
 // bilingually rendered like every other error this module returns (see
 // ErrInvalidRequestBody's own doc comment).
-func decodeJSON(r *http.Request, v any) error {
+//
+// The body is bounded by maxRequestBodyBytes BEFORE decoding: a body that
+// exceeds the bound fails with ErrInvalidRequestBody exactly like malformed
+// JSON, as soon as the read passes the limit rather than after the whole
+// body has been buffered. Passing w lets the net/http machinery ask the
+// server to close the connection after the oversized request, so the socket
+// is not kept for a client that already misbehaved.
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
 		return ErrInvalidRequestBody.WithCause(err)
 	}
@@ -283,10 +302,19 @@ func (h *Handler) ensurePreAuthCookie(w http.ResponseWriter, r *http.Request) (s
 	}
 	value := hex.EncodeToString(raw)
 	http.SetCookie(w, &http.Cookie{
-		Name:     preAuthCookieName,
-		Value:    value,
-		Path:     "/api/v1/authn/social",
-		MaxAge:   int(DefaultOAuthStateTTL.Seconds()),
+		Name:  preAuthCookieName,
+		Value: value,
+		Path:  "/api/v1/authn/social",
+		// MaxAge tracks the state store's TTL -- the lifetime the state
+		// record minted in this very request was issued with (Service's
+		// configured cfg.oauthStateTTL, DefaultOAuthStateTTL when no
+		// option overrode it) -- never the package default in a vacuum: a
+		// host that configured a longer TTL for slow identity providers
+		// must not get a cookie that dies before its state, stranding the
+		// callback without its binding. Rounded UP to a whole second --
+		// the finest a Max-Age can express -- so the cookie is never
+		// shorter-lived than the state it accompanies.
+		MaxAge:   int((h.svc.states.ttl + time.Second - 1) / time.Second),
 		HttpOnly: true,
 		Secure:   h.svc.secureCookies || r.TLS != nil,
 		SameSite: http.SameSiteLaxMode,
@@ -313,7 +341,7 @@ func (h *Handler) AuthnRegister(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	var req api.AuthnRegisterRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeAppError(w, err)
 		return
 	}
@@ -347,7 +375,7 @@ func (h *Handler) AuthnLoginWithPassword(w http.ResponseWriter, r *http.Request)
 	ctx := r.Context()
 
 	var req api.AuthnLoginWithPasswordRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeAppError(w, err)
 		return
 	}
@@ -381,7 +409,7 @@ func (h *Handler) AuthnLoginWithPassword(w http.ResponseWriter, r *http.Request)
 // AuthnRequestSMSCode implements api.ServerInterface.
 func (h *Handler) AuthnRequestSMSCode(w http.ResponseWriter, r *http.Request) {
 	var req api.AuthnRequestSMSCodeRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeAppError(w, err)
 		return
 	}
@@ -398,7 +426,7 @@ func (h *Handler) AuthnLoginWithSMSCode(w http.ResponseWriter, r *http.Request) 
 	ctx := r.Context()
 
 	var req api.AuthnLoginWithSMSCodeRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeAppError(w, err)
 		return
 	}
@@ -431,7 +459,7 @@ func (h *Handler) AuthnLoginWithSMSCode(w http.ResponseWriter, r *http.Request) 
 // AuthnRefreshToken implements api.ServerInterface.
 func (h *Handler) AuthnRefreshToken(w http.ResponseWriter, r *http.Request) {
 	var req api.AuthnRefreshTokenRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeAppError(w, err)
 		return
 	}
@@ -506,7 +534,7 @@ func (h *Handler) AuthnSocialCallback(w http.ResponseWriter, r *http.Request, pr
 	ctx := r.Context()
 
 	var req api.AuthnSocialCallbackRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeAppError(w, err)
 		return
 	}
@@ -635,7 +663,7 @@ func (h *Handler) AuthnConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req api.AuthnConfirmTOTPRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeAppError(w, err)
 		return
 	}
@@ -686,7 +714,7 @@ func (h *Handler) AuthnVerifyStepUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req api.AuthnVerifyStepUpRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeAppError(w, err)
 		return
 	}
@@ -705,7 +733,7 @@ func (h *Handler) AuthnSwitchTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req api.AuthnSwitchTenantRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeAppError(w, err)
 		return
 	}

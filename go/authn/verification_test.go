@@ -485,7 +485,7 @@ func TestMarkPhoneLoginAttempt_RetriesOnLostRace(t *testing.T) {
 	// before the concurrent write landed -- must still get counted, not
 	// silently dropped by a single unretried MarkAttempt(id, 0, ...) call
 	// that loses this exact race.
-	f.svc.markPhoneLoginAttempt(t.Context(), index, stale)
+	f.svc.markPhoneLoginAttempt(t.Context(), stale)
 
 	after, err := f.svc.verificationCodes.FindLatestActive(t.Context(), VerificationPurposePhoneLogin, index, f.svc.now())
 	if err != nil {
@@ -493,6 +493,91 @@ func TestMarkPhoneLoginAttempt_RetriesOnLostRace(t *testing.T) {
 	}
 	if after.Attempts != 2 {
 		t.Errorf("Attempts = %d after a concurrent guess plus this goroutine's own (via a stale record), want 2 (both counted)", after.Attempts)
+	}
+}
+
+// TestMarkPhoneLoginAttempt_LosingAttemptOnOldCode_NeverCountsAgainstTheNewCode
+// is the P3-15 regression: markPhoneLoginAttempt's retry after losing
+// MarkAttempt's compare-and-swap used to re-read "the latest active code for
+// the target" instead of re-reading THE RECORD (by id) whose compare-and-swap
+// just lost. When the user re-requested a code while the losing guess's retry
+// was still running, the retry would pick up the NEW code and count the old
+// guess -- aimed at a code the user had already abandoned -- against the new
+// code's attempt budget, up to pushing the just-issued code to its
+// MaxAttempts before the user ever typed it.
+//
+// Like TestMarkPhoneLoginAttempt_RetriesOnLostRace, the race is reproduced
+// deterministically rather than with real goroutines: code A's row is
+// advanced out from under the stale snapshot this goroutine holds, code B is
+// issued for the same target (exactly what a re-request mid-race does), and
+// only then does the losing guess retry. maxAttempts is 1 so that one stray
+// count LOCKS the fresh code outright -- the strongest form of the harm --
+// and a correct login with code B is asserted afterwards.
+func TestMarkPhoneLoginAttempt_LosingAttemptOnOldCode_NeverCountsAgainstTheNewCode(t *testing.T) {
+	t.Parallel()
+
+	const maxAttempts = 1
+	var buf bytes.Buffer
+	f := newSMSServiceFixture(t, &buf, WithSMSCodeMaxAttempts(maxAttempts))
+	registerPhoneUser(t, f, testPhone, testTenantA)
+
+	if err := f.svc.RequestSMSCode(t.Context(), RequestSMSCodeInput{Phone: testPhone, IP: "203.0.113.51"}); err != nil {
+		t.Fatalf("RequestSMSCode() error = %v", err)
+	}
+
+	index, err := f.svc.users.PhoneIndexOf(testPhone)
+	if err != nil {
+		t.Fatalf("PhoneIndexOf() error = %v", err)
+	}
+	recordA, err := f.svc.verificationCodes.FindLatestActive(t.Context(), VerificationPurposePhoneLogin, index, f.svc.now())
+	if err != nil {
+		t.Fatalf("FindLatestActive() error = %v", err)
+	}
+	if recordA.Attempts != 0 {
+		t.Fatalf("Attempts = %d for a freshly issued code, want 0", recordA.Attempts)
+	}
+
+	// A concurrent wrong guess wins the compare-and-swap on A first -- and,
+	// with maxAttempts 1, locks A in the same move. This goroutine still
+	// holds the stale snapshot taken before that write.
+	won, err := f.svc.verificationCodes.MarkAttempt(t.Context(), recordA.ID, recordA.Attempts, true)
+	if err != nil || !won {
+		t.Fatalf("simulated concurrent MarkAttempt() = (%v, %v), want (true, nil)", won, err)
+	}
+
+	// The user re-requests while the losing guess's retry is still pending:
+	// code B is issued for the same target and becomes the latest active
+	// code. The clock advances so B's created_at is strictly newer than A's
+	// (both codes would otherwise share the fixture clock's instant, making
+	// "latest" fall to a random id tie-break).
+	f.clock.Advance(time.Second)
+	buf.Reset()
+	if reqErr := f.svc.RequestSMSCode(t.Context(), RequestSMSCodeInput{Phone: testPhone, IP: "203.0.113.52"}); reqErr != nil {
+		t.Fatalf("RequestSMSCode() (code B) error = %v", reqErr)
+	}
+	codeB := extractSentCode(t, &buf)
+
+	// The losing guess for code A retries now. It must land on A -- which is
+	// locked and therefore a no-op -- and never touch B.
+	f.svc.markPhoneLoginAttempt(t.Context(), recordA)
+
+	latest, err := f.svc.verificationCodes.FindLatestActive(t.Context(), VerificationPurposePhoneLogin, index, f.svc.now())
+	if err != nil {
+		t.Fatalf("FindLatestActive() (after) error = %v", err)
+	}
+	if latest.Attempts != 0 {
+		t.Errorf("code B Attempts = %d after code A's losing attempt retried, want 0 (A's retry must re-read A by id, never the target's latest active code)", latest.Attempts)
+	}
+	if latest.Status != VerificationCodeStatusActive {
+		t.Errorf("code B Status = %q after code A's losing attempt retried, want %q (A's retry must never lock the just-issued code)", latest.Status, VerificationCodeStatusActive)
+	}
+
+	// The decisive harm assertion: code B still signs the user in with its
+	// full budget intact.
+	if _, err := f.svc.LoginWithSMSCode(t.Context(), SMSLoginInput{
+		Phone: testPhone, Code: codeB, IP: "203.0.113.53",
+	}); err != nil {
+		t.Errorf("LoginWithSMSCode(real code B) error = %v, want a session (the new code's budget was burned by code A's losing attempt)", err)
 	}
 }
 

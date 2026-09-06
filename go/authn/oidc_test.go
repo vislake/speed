@@ -2,7 +2,9 @@ package authn
 
 import (
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/vislake/speed/go/authn/internal/testutil"
 	"github.com/vislake/speed/go/dbkit"
@@ -678,6 +680,87 @@ func TestSSOService_Callback_JITMintDoesNotCaptureTheAddressOwnersLaterTrustedSi
 	}
 	if googleIdentity.UserID != victimsAccount.ID {
 		t.Errorf("the owner's google identity is bound to %q, want their own account %q", googleIdentity.UserID, victimsAccount.ID)
+	}
+}
+
+// TestSSOService_Discover_DoesNotHoldTheMutexAcrossTheNetworkCall is the
+// P3-11 regression: discover() used to hold the service-wide s.mu across the
+// whole discovery round trip to the tenant-supplied issuer -- a fetch whose
+// only bound is the HTTP client's own timeout. One tenant's black-holed
+// issuer therefore queued every other tenant's discovery behind it (both
+// AuthorizeURL and Callback call discover), so every other tenant's SSO
+// sign-in stalled for as long as the slow issuer took to time out.
+//
+// The test reproduces the hazard deterministically: the slow issuer's
+// discovery handler parks on the wire (testutil.OIDCServer's GateDiscovery)
+// while a first discovery for it is in flight -- under the old code s.mu is
+// held for that whole park -- and a second tenant's discovery of a healthy
+// issuer must still complete while the slow one is parked. The blocking is a
+// lock-ordering guarantee under the old code, not a timing race: discover of
+// the healthy issuer simply cannot pass s.mu until the slow fetch releases
+// it, which the test only does after the assertion.
+func TestSSOService_Discover_DoesNotHoldTheMutexAcrossTheNetworkCall(t *testing.T) {
+	slow := testutil.NewOIDCServer(t, "slow-client")
+	fast := testutil.NewOIDCServer(t, "fast-client")
+
+	entered := make(chan struct{})
+	released := make(chan struct{})
+	slow.GateDiscovery(entered, released)
+
+	f := newSSOFixture(t, slow)
+	svc := f.svc.SSO()
+
+	// A first-time discovery of the slow issuer starts and parks on the
+	// network round trip. The entered signal means the fetch is genuinely on
+	// the wire -- and, under the old code, that s.mu is held.
+	first := make(chan error, 1)
+	go func() {
+		_, err := svc.discover(t.Context(), slow.URL())
+		first <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the slow issuer's discovery request never reached the server")
+	}
+	// The blocked request must ALWAYS be released, whatever the assertions
+	// below say, or the parked handler keeps the server from shutting down
+	// at the end of the test. The Once makes the release idempotent across
+	// the early-return paths (t.Fatal above and in the select below) and
+	// the explicit release before the final joins.
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(released) }) }
+	defer release()
+
+	// Another tenant's discovery of a healthy issuer must complete while the
+	// slow one is still parked.
+	second := make(chan error, 1)
+	go func() {
+		_, err := svc.discover(t.Context(), fast.URL())
+		second <- err
+	}()
+
+	secondDone := false
+	select {
+	case err := <-second:
+		secondDone = true
+		if err != nil {
+			t.Fatalf("discover(healthy issuer) error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("discover(healthy issuer) did not complete while the slow issuer's discovery was in flight: the discovery fetch must not hold the service-wide mutex (P3-11)")
+	}
+
+	// Now the slow fetch may finish; join both discoveries so no goroutine
+	// outlives the test.
+	release()
+	if err := <-first; err != nil {
+		t.Errorf("discover(slow issuer) error = %v", err)
+	}
+	if !secondDone {
+		if err := <-second; err != nil {
+			t.Errorf("discover(healthy issuer, after release) error = %v", err)
+		}
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -179,6 +180,121 @@ func TestHandler_Register_MalformedBody_ReturnsCatalogedInvalidRequestBodyCode(t
 		if _, ok := loadLocale(t, language)[*errBody.Code]; !ok {
 			t.Errorf("%s locale carries no message for %q", language, *errBody.Code)
 		}
+	}
+}
+
+// TestHandler_Register_OversizedBody_RefusedWithInvalidRequestBody is the
+// P3-12 regression for the MaxBytesReader bound: an unauthenticated register
+// (or login) endpoint must not read an arbitrarily large body in full --
+// unbounded buffering of an attacker's payload before any validation has
+// run -- nor let an over-width display name reach the database. The body
+// below is valid JSON whose display_name field alone exceeds the byte bound;
+// every other field is within policy, so the ONLY thing that can refuse it
+// is the body bound, and the refusal must surface as the catalogued
+// ErrInvalidRequestBody rather than a successful account creation (which is
+// what an unbounded decoder did before the fix, on the unit tier's SQLite).
+func TestHandler_Register_OversizedBody_RefusedWithInvalidRequestBody(t *testing.T) {
+	t.Parallel()
+	h, _ := newTestHandler(t)
+
+	var body strings.Builder
+	body.WriteString(`{"email":"oversized@example.com","password":"aaaaaaaaaaaa","display_name":"`)
+	body.WriteString(strings.Repeat("x", maxRequestBodyBytes+1))
+	body.WriteString(`"}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/register", strings.NewReader(body.String()))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (an over-bound body must be refused); body = %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	errBody := decodeAuthnError(t, rec)
+	if errBody.Code == nil || *errBody.Code != ErrInvalidRequestBody.Code {
+		t.Errorf("error code = %v, want %s", errBody.Code, ErrInvalidRequestBody.Code)
+	}
+
+	// Nothing was created: the same email still registers afterwards.
+	rec = doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/register", api.AuthnRegisterRequest{
+		Email: strPtr("oversized@example.com"), Password: testPassword,
+	}, nil)
+	if rec.Code != http.StatusCreated {
+		t.Errorf("register after the refused oversized body = %d, want %d (the oversized request must not have created an account)", rec.Code, http.StatusCreated)
+	}
+}
+
+// TestHandler_Register_DisplayNameLengthIsValidated is the P3-12 display-name
+// half: the schema declares no maxLength for display_name, but the
+// users.display_name column the value lands in is VARCHAR(128) -- the
+// module's displayNameWidth constant, enforced by PostgreSQL and ignored by
+// SQLite -- so an over-width name must be refused here with the catalogued
+// ErrDisplayNameTooLong, and a name exactly at the width must still be
+// accepted.
+func TestHandler_Register_DisplayNameLengthIsValidated(t *testing.T) {
+	t.Parallel()
+
+	t.Run("one rune over the column width is refused", func(t *testing.T) {
+		t.Parallel()
+		h, _ := newTestHandler(t)
+		rec := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/register", api.AuthnRegisterRequest{
+			Email:       strPtr("longname@example.com"),
+			Password:    testPassword,
+			DisplayName: strPtr(strings.Repeat("n", displayNameWidth+1)),
+		}, nil)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+		}
+		errBody := decodeAuthnError(t, rec)
+		if errBody.Code == nil || *errBody.Code != ErrDisplayNameTooLong.Code {
+			t.Errorf("error code = %v, want %s", errBody.Code, ErrDisplayNameTooLong.Code)
+		}
+	})
+
+	t.Run("exactly the column width is accepted", func(t *testing.T) {
+		t.Parallel()
+		h, _ := newTestHandler(t)
+		rec := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/register", api.AuthnRegisterRequest{
+			Email:       strPtr("boundary@example.com"),
+			Password:    testPassword,
+			DisplayName: strPtr(strings.Repeat("n", displayNameWidth)),
+		}, nil)
+		if rec.Code != http.StatusCreated {
+			t.Errorf("status = %d, want %d (a display name exactly at users.display_name's width must be accepted); body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+		}
+	})
+}
+
+// TestHandler_EnsurePreAuthCookie_MaxAgeTracksConfiguredStateTTL is the
+// P3-14 regression: the pre-auth cookie's Max-Age used to hardcode
+// DefaultOAuthStateTTL (10 minutes) while the state record it accompanies is
+// issued with the CONFIGURED cfg.oauthStateTTL -- a host that raised the TTL
+// for slow identity providers got a cookie that died before its state,
+// stranding the callback without its binding. With the state TTL configured
+// above the default, the minted cookie must carry that longer Max-Age.
+func TestHandler_EnsurePreAuthCookie_MaxAgeTracksConfiguredStateTTL(t *testing.T) {
+	t.Parallel()
+
+	const configuredTTL = 25 * time.Minute
+	h, _ := newTestHandler(t, WithOAuthStateTTL(configuredTTL))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/authn/social/google/authorize", nil)
+	rec := httptest.NewRecorder()
+	if _, err := h.ensurePreAuthCookie(rec, req); err != nil {
+		t.Fatalf("ensurePreAuthCookie() error = %v", err)
+	}
+
+	var cookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == preAuthCookieName {
+			cookie = c
+			break
+		}
+	}
+	if cookie == nil {
+		t.Fatal("no pre-auth cookie was set")
+	}
+	if want := int(configuredTTL / time.Second); cookie.MaxAge != want {
+		t.Errorf("pre-auth cookie Max-Age = %d, want %d (the configured state TTL, not DefaultOAuthStateTTL's 600)", cookie.MaxAge, want)
 	}
 }
 
