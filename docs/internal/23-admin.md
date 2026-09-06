@@ -176,6 +176,7 @@ sequenceDiagram
 - **权限不放大**：`rbac.RequirePermission` 判定时用的 `Subject` 是目标用户，不是管理员——管理员不会因为发起了模拟登录就获得比该用户更多的权限，只是"以这个人的视角看系统"，这与真实客服场景里"复现用户看到的问题"的需求吻合，也避免了"模拟登录变成一条绕过权限的后门"的风险。
 - **可随时吊销、时效绑定**：grant 是 admin 自己一张表里的一行，有 `expires_at`，管理员或另一个更高权限的运营人员可以随时 `DELETE` 结束它；一旦管理员自己的 access token 失效（登出、被吊销），装饰器查证的仍然是管理员的真实身份先通过验证，所以模拟状态天然跟着管理员自己的会话生死,不会变成一个孤儿凭据。
 - **开始/结束都是审计事件 + 强制通知**：`impersonation.started`/`impersonation.ended` 用显式 `audit.Emit`（不是自动写捕获——因为需要同时写双 Actor，自动捕获拿不到 `OnBehalfOf`），且开始时必须给被模拟用户发一条不可退订的安全类通知（[07 平台服务](07-platform-services.md) 的"不可关闭的安全类通知"分类,`notification` 的类型注册表里声明为不可退订）。
+- **第四种撤销途径：管理员自己的 `admin:impersonate` 权限被 `rbac` 撤销**（一个真实缺口的修复，2026-09）：以上三种途径（`DELETE`、`expires_at` 到期、管理员自己的 access token 失效）都不覆盖"管理员的 access token 仍然有效，但 `rbac` 已经撤销了他持有的 `admin:impersonate` 权限"这一种情况——`ImpersonationMiddleware` 每次请求只查 grant 本身是否 `Active` 以及 `AdminUserID` 是否匹配当前 `Principal`，从不重新咨询 `rbac`，所以被撤权的管理员在 grant 剩余的 30 分钟时效内仍能继续冒充。修复没有改成"每次被模拟请求都重新查一次 `rbac.Can`"（虽然更彻底，但会给 `ImpersonationMiddleware` 的构造签名引入一个新的强制参数，牵动参考应用自己的请求管道装配代码），而是事件驱动：`ImpersonationService` 订阅 `rbac.EventRoleBindingRevoked`/`rbac.EventRoleChanged`（两者都在同一个 `EventBus` 上同步发布——`rbac` 自己的跨副本缓存失效正是靠这条路径的可靠性撑住的），命中 `rbac.SystemDomain` 时对该管理员当前持有的每一张有效 grant 重新调用一次 `rbac.Service.Can`（而不是从事件本身推断结论——同一个权限可能还有另一个角色在授予），把不再满足条件的 grant 立即结束（`OnBehalfOf` 记为 `pkgcore.ActorTypeSystem`，区别于管理员自己发起的正常结束）。见 `go/admin/impersonation_service.go` 的 `onRoleBindingRevoked`/`onRoleChanged`/`endIfNoLongerPermitted`。
 
 ### 4.2 中间件链的插入点，不改变既有顺序
 
