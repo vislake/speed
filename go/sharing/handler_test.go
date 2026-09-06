@@ -115,8 +115,13 @@ func TestHandler_SharingAccessShare_EveryRefusalReasonAnswersIdentically(t *test
 		t.Fatalf("Revoke: %v", err)
 	}
 
-	past := now.Add(-time.Hour)
-	expiredToken := mint(t, CreateParams{ResourceRef: "ref-expired", ExpiresAt: &past})
+	// Rule 2's validation refuses a share born already expired (service.go's
+	// resolveExpiry), so the expired case is a share minted with a near
+	// expiry that the clock moves past just before the refusal requests run;
+	// every other share's default expiry is 30 days from mint time and is
+	// still live at that later clock.
+	expiring := now.Add(time.Hour)
+	expiredToken := mint(t, CreateParams{ResourceRef: "ref-expired", ExpiresAt: &expiring})
 
 	one := 1
 	exhaustedToken := mint(t, CreateParams{ResourceRef: "ref-exhausted", MaxViews: &one})
@@ -125,6 +130,10 @@ func TestHandler_SharingAccessShare_EveryRefusalReasonAnswersIdentically(t *test
 	}
 
 	protectedToken := mint(t, CreateParams{ResourceRef: "ref-protected", Password: strPtr("correct horse")})
+
+	// Move the service clock past the expiring share's expiry -- it is now
+	// the "expired share" case, and only it.
+	h.svc.now = fixedClock(now.Add(2 * time.Hour))
 
 	cases := []struct {
 		name     string

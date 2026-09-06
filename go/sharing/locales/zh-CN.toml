@@ -10,6 +10,8 @@
 
 "sharing.expiry_required" = "分享链接必须设置过期时间;不允许创建永不过期的链接。"
 
+"sharing.expiry_out_of_range" = "请求的过期时间必须晚于当前时间,且不超过平台允许的最大分享有效期。"
+
 "sharing.invalid_max_views" = "访问次数上限 {{.max_views}} 无效,必须是正数。"
 
 "sharing.invalid_request" = "无法识别该请求,请检查分享链接后重试。"

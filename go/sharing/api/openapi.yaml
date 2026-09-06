@@ -195,11 +195,16 @@ paths:
         never be able to bypass that refusal), maxViews, when given, must
         be positive (sharing.invalid_max_views), and expiresAt, when
         omitted, resolves through the tenant's configured default (falling
-        back to a fixed default when none is configured). token is
-        returned inside the response body exactly once and is never
-        retrievable again by any other operation on this surface -- not
-        even sharing_getShare, whose response carries no token field at
-        all.
+        back to a fixed default when none is configured). An expiresAt
+        that IS given must lie strictly in the future and no more than 30
+        days from now -- the platform's maximum share lifetime, the same
+        ceiling rule 2 applies to the default -- or it is refused with
+        sharing.expiry_out_of_range, so a far-future timestamp can never
+        smuggle in the effectively-never-expiring link rule 2 forbids.
+        token is returned inside the response body exactly once and is
+        never retrievable again by any other operation on this surface --
+        not even sharing_getShare, whose response carries no token field
+        at all.
       requestBody:
         required: true
         content:
@@ -218,7 +223,9 @@ paths:
         '400':
           description: >-
             resourceRef was empty, forever was true, maxViews was
-            non-positive, or expiresAt could not be resolved.
+            non-positive, expiresAt could not be resolved, or expiresAt
+            was outside rule 2's bounds (not strictly in the future, or
+            more than 30 days out).
           content:
             application/json:
               schema:
@@ -406,9 +413,12 @@ components:
           type: string
           format: date-time
           description: >-
-            An explicit expiry. Omit to use the tenant's configured
-            default (falling back to a fixed default when none is
-            configured).
+            An explicit expiry, which must lie strictly in the future and
+            no more than 30 days from now -- the platform's maximum share
+            lifetime (rule 2's ceiling); anything else is refused with
+            sharing.expiry_out_of_range. Omit to use the tenant's
+            configured default (falling back to a fixed default when none
+            is configured).
         forever:
           type: boolean
           description: >-

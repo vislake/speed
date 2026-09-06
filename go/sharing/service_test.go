@@ -3,6 +3,7 @@ package sharing
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -131,7 +132,9 @@ func TestService_Create_TenantConfigReaderReportingUnconfigured_FallsBackToDefau
 
 func TestService_Create_ExplicitExpiryHonored(t *testing.T) {
 	svc, _ := newTestService(t, nil)
-	explicit := time.Date(2030, 6, 1, 0, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc.now = fixedClock(now)
+	explicit := now.Add(7 * 24 * time.Hour)
 	result, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-1", ExpiresAt: &explicit})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -311,13 +314,17 @@ func TestService_Access_RevokedShare_ImmediatelyDenied(t *testing.T) {
 
 func TestService_Access_ExpiredShare_Denied(t *testing.T) {
 	svc, _ := newTestService(t, nil)
-	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	svc.now = fixedClock(now)
-	past := now.Add(-time.Hour)
-	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-1", ExpiresAt: &past})
+	// Rule 2's validation refuses a share born already expired, so the
+	// share is created live and the service clock moves past its expiry
+	// before the access attempt.
+	createAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc.now = fixedClock(createAt)
+	expiring := createAt.Add(time.Hour)
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-1", ExpiresAt: &expiring})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	svc.now = fixedClock(createAt.Add(2 * time.Hour))
 	_, err = svc.Access(testCtx(), created.Token, AccessParams{})
 	assertCode(t, err, ErrNotAccessible.Code)
 }
@@ -489,15 +496,20 @@ func TestService_Access_Password(t *testing.T) {
 // which reason applied.
 func TestService_Access_EveryRefusalReasonIsOutwardlyIdentical(t *testing.T) {
 	svc, _ := newTestService(t, nil)
-	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	svc.now = fixedClock(now)
+	// Every share below is minted at clock T0 (an already-expired share
+	// cannot be created -- resolveExpiry refuses one -- so the "expired"
+	// case is a share minted with a near expiry that the clock then moves
+	// past before the refusal cases run; every other share's default
+	// expiry is 30 days from T0, so all of them are still live at T0+2h).
+	createAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc.now = fixedClock(createAt)
 
 	unknown := "no-such-token-ever"
 
-	past := now.Add(-time.Hour)
-	expiredResult, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r", ExpiresAt: &past})
+	expiring := createAt.Add(time.Hour)
+	expiredResult, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r", ExpiresAt: &expiring})
 	if err != nil {
-		t.Fatalf("Create(expired): %v", err)
+		t.Fatalf("Create(expiring): %v", err)
 	}
 
 	revokedResult, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r"})
@@ -523,6 +535,10 @@ func TestService_Access_EveryRefusalReasonIsOutwardlyIdentical(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create(password): %v", err)
 	}
+
+	// Move the clock past the expiring share's expiry: it is now the
+	// "expired" refusal case, and only it.
+	svc.now = fixedClock(createAt.Add(2 * time.Hour))
 
 	cases := map[string]func() error{
 		"unknown token": func() error {
@@ -749,6 +765,192 @@ func TestService_Access_ConcurrentAccessesRespectMaxViews(t *testing.T) {
 	}
 }
 
+// TestService_Access_ConcurrentUnlimitedViews_AllSucceedAndAllCount races
+// many concurrent Access calls against one UNLIMITED share (MaxViews nil --
+// the common public-link shape) and proves every one of them is granted
+// and every granted view is counted. This is the regression for the
+// unlimited-view arm of recordView: under the old code an unlimited share
+// still went through the bounded compare-and-swap retry loop, whose 8
+// retries are an arbitration budget for something an unlimited share has
+// nothing to arbitrate -- so under genuine concurrency a viewer could lose
+// every race and be refused (a false 404) once it had lost 8 times in a
+// row, and the CAS's lost races also made the exact count assertion below
+// fail. An unlimited share's view recording is now one atomic increment
+// that cannot lose to concurrency at all. Run with -race.
+func TestService_Access_ConcurrentUnlimitedViews_AllSucceedAndAllCount(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	const attempts = 40
+	var granted int32
+	var wg sync.WaitGroup
+	wg.Add(attempts)
+	for i := 0; i < attempts; i++ {
+		go func() {
+			defer wg.Done()
+			if _, accessErr := svc.Access(testCtx(), created.Token, AccessParams{}); accessErr == nil {
+				atomic.AddInt32(&granted, 1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := atomic.LoadInt32(&granted); got != attempts {
+		t.Errorf("granted %d accesses, want all %d -- a legit viewer of an unlimited share must never be refused by concurrency", got, attempts)
+	}
+
+	got, err := svc.Get(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.ViewCount != attempts {
+		t.Errorf("ViewCount = %d, want %d -- each granted view must be counted exactly once under concurrency", got.ViewCount, attempts)
+	}
+
+	// Second leg: the same guarantee at recordView level, without the
+	// password burn that staggers the goroutines above -- a genuine
+	// tournament of many goroutines hammering the view-recording guard on
+	// one unlimited share. Every call must be granted (a viewer of an
+	// unlimited share is refused only by revocation or expiry, never by
+	// losing too many races) and every grant must land in the count. Under
+	// the old bounded-CAS code this is where the false 404s appeared: a
+	// goroutine that lost 8 consecutive races in a row was refused.
+	second, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-2"})
+	if err != nil {
+		t.Fatalf("Create (second leg): %v", err)
+	}
+	share, err := svc.Shares().FindByID(testCtx(), second.Share.ID)
+	if err != nil {
+		t.Fatalf("FindByID (second leg): %v", err)
+	}
+
+	const callsPerWorker = 100
+	const workers = 30
+	var won, refused, viewErrs int32
+	var wg2 sync.WaitGroup
+	wg2.Add(workers)
+	for w := 0; w < workers; w++ {
+		go func() {
+			defer wg2.Done()
+			for c := 0; c < callsPerWorker; c++ {
+				_, granted, viewErr := svc.recordView(testCtx(), share, svc.now())
+				switch {
+				case viewErr != nil:
+					atomic.AddInt32(&viewErrs, 1)
+				case granted:
+					atomic.AddInt32(&won, 1)
+				default:
+					atomic.AddInt32(&refused, 1)
+				}
+			}
+		}()
+	}
+	wg2.Wait()
+
+	wantWon := int32(workers * callsPerWorker)
+	if refused != 0 {
+		t.Errorf("recordView refused %d of %d concurrent calls on a live unlimited share -- a viewer of an unlimited share must never be refused by concurrency", refused, wantWon)
+	}
+	if viewErrs != 0 {
+		t.Errorf("recordView failed with %d store errors", viewErrs)
+	}
+	if won != wantWon {
+		t.Errorf("recordView granted %d of %d concurrent calls", won, wantWon)
+	}
+	final, err := svc.Get(testCtx(), second.Share.ID)
+	if err != nil {
+		t.Fatalf("Get (second leg): %v", err)
+	}
+	if final.ViewCount != int(wantWon) {
+		t.Errorf("ViewCount = %d after %d granted views -- each granted view must be counted exactly once under concurrency", final.ViewCount, wantWon)
+	}
+}
+
+// TestService_Access_ConcurrentViewsSurviveRevoke proves Service.Revoke
+// never rolls back a view recorded concurrently with it: the guarded
+// revoked_at-only update (ShareRepository.markRevoked) preserves every
+// view-count increment that committed before the revocation, so the count
+// the owner reads back afterwards equals the number of accesses actually
+// granted. Under the old code Revoke wrote the whole row back from its own
+// pre-revoke read, so an increment landing between that read and the write
+// was silently erased. Each iteration uses a fresh share so the race is
+// replayed many times rather than once. Run with -race.
+func TestService_Access_ConcurrentViewsSurviveRevoke(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc.now = fixedClock(now)
+
+	const iterations = 10
+	for iter := 0; iter < iterations; iter++ {
+		created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-1"})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		share, err := svc.Shares().FindByID(testCtx(), created.Share.ID)
+		if err != nil {
+			t.Fatalf("FindByID: %v", err)
+		}
+
+		var granted, workerErrors int32
+		var workers sync.WaitGroup
+		stop := make(chan struct{})
+		defer close(stop)
+		for w := 0; w < 4; w++ {
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				for {
+					select {
+					case <-stop:
+						return
+					default:
+					}
+					_, won, viewErr := svc.recordView(testCtx(), share, now)
+					if viewErr != nil {
+						atomic.AddInt32(&workerErrors, 1)
+						return
+					}
+					if !won {
+						return // the share was revoked -- this worker is done
+					}
+					atomic.AddInt32(&granted, 1)
+				}
+			}()
+		}
+
+		// Wait until at least one view has been recorded, then revoke while
+		// the workers are still recording -- the race window the old
+		// read-modify-write Revoke lost increments in. Bounded: a worker
+		// population that never records anything is a broken test, not a
+		// hang.
+		deadline := time.Now().Add(5 * time.Second)
+		for atomic.LoadInt32(&granted) == 0 && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		if atomic.LoadInt32(&granted) == 0 {
+			t.Fatalf("iteration %d: no view was recorded before the revoke deadline", iter)
+		}
+		if revokeErr := svc.Revoke(testCtx(), created.Share.ID); revokeErr != nil {
+			t.Fatalf("Revoke: %v", revokeErr)
+		}
+		workers.Wait()
+
+		if errs := atomic.LoadInt32(&workerErrors); errs != 0 {
+			t.Fatalf("iteration %d: %d recordView store errors -- the view-recording path must not fail under this concurrency", iter, errs)
+		}
+		got, err := svc.Get(testCtx(), created.Share.ID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.ViewCount != int(atomic.LoadInt32(&granted)) {
+			t.Fatalf("iteration %d: ViewCount = %d but %d views were granted -- the revoke rolled back a concurrently recorded view", iter, got.ViewCount, atomic.LoadInt32(&granted))
+		}
+	}
+}
+
 // --- Revoke / Get / ListAccessLog ------------------------------------------
 
 func TestService_Revoke_IsIdempotent(t *testing.T) {
@@ -877,5 +1079,315 @@ func TestService_Create_NoTenantInContext(t *testing.T) {
 	_, err := svc.Create(context.Background(), CreateParams{ResourceRef: "storage:obj-1"})
 	if !errors.Is(err, pkgcore.ErrNoTenant) {
 		t.Errorf("error = %v, want to wrap pkgcore.ErrNoTenant", err)
+	}
+}
+
+// --- Rules-reinforcement round regression tests ---------------------------
+
+// TestService_Create_ExpiryInThePast_Refused pins resolveExpiry's future
+// requirement: an explicit ExpiresAt that is not strictly in the future is
+// refused with sharing.expiry_out_of_range, never persisted as a share
+// that is dead on arrival.
+func TestService_Create_ExpiryInThePast_Refused(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc.now = fixedClock(now)
+
+	exactlyNow := now
+	_, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r", ExpiresAt: &exactlyNow})
+	assertCode(t, err, ErrExpiryOutOfRange.Code)
+
+	past := now.Add(-time.Hour)
+	_, err = svc.Create(testCtx(), CreateParams{ResourceRef: "r", ExpiresAt: &past})
+	assertCode(t, err, ErrExpiryOutOfRange.Code)
+}
+
+// TestService_Create_ExpiryBeyondMaximum_Refused pins the never-expiring-
+// in-disguise arm of rule 2: an explicit ExpiresAt beyond the module's
+// maximum requested lifetime -- the same 30-day ceiling rule 2 names for
+// the default (defaultShareExpiry) -- is refused with
+// sharing.expiry_out_of_range, so expiresAt 9999-12-31 can never create
+// the effectively-never-expiring link CreateParams.Forever's refusal
+// exists to forbid. The exact ceiling (now + 30 days) is still honored.
+func TestService_Create_ExpiryBeyondMaximum_Refused(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc.now = fixedClock(now)
+
+	forever := time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
+	_, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r", ExpiresAt: &forever})
+	assertCode(t, err, ErrExpiryOutOfRange.Code)
+
+	beyond := now.Add(defaultShareExpiry + time.Hour)
+	_, err = svc.Create(testCtx(), CreateParams{ResourceRef: "r", ExpiresAt: &beyond})
+	assertCode(t, err, ErrExpiryOutOfRange.Code)
+
+	atCeiling := now.Add(defaultShareExpiry)
+	result, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r", ExpiresAt: &atCeiling})
+	if err != nil {
+		t.Fatalf("Create(at the 30-day ceiling): %v", err)
+	}
+	if !result.Share.ExpiresAt.Equal(atCeiling) {
+		t.Errorf("ExpiresAt = %v, want the ceiling request %v honored exactly", result.Share.ExpiresAt, atCeiling)
+	}
+}
+
+// TestService_Create_TenantConfiguredDefaultBeyondCeiling_StillHonored pins
+// the deliberate boundary of the requested-expiry ceiling: a tenant's
+// CONFIGURED default (through the TenantConfigReader seam) is the host's
+// own policy, not a caller's end-run, so a configured default longer than
+// the 30-day ceiling of explicit requests is honored unchanged --
+// defaultShareExpiry's doc comment states this boundary.
+func TestService_Create_TenantConfiguredDefaultBeyondCeiling_StillHonored(t *testing.T) {
+	cfg := fakeTenantConfigReader{d: 60 * 24 * time.Hour, ok: true}
+	svc, _ := newTestService(t, cfg)
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc.now = fixedClock(now)
+
+	result, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	want := now.Add(60 * 24 * time.Hour)
+	if !result.Share.ExpiresAt.Equal(want) {
+		t.Errorf("ExpiresAt = %v, want the tenant-configured %v -- the configured default is host policy, not a caller request", result.Share.ExpiresAt, want)
+	}
+}
+
+// TestService_Access_TruncatesOverlongLogMetadata pins the write-boundary
+// cut of rule 4's trail: a caller-supplied User-Agent or Referer longer
+// than the sharing_access_log column the migrations declare (VARCHAR(512),
+// VARCHAR(64) for the IP) must be truncated to the column bound before the
+// INSERT -- under PostgreSQL an over-long value would fail the write with
+// error 22001 and the access would leave no trail at all. SQLite does not
+// enforce VARCHAR lengths, so this test pins the Go-side cut directly:
+// the stored row never carries more than the column's rune bound, the cut
+// is rune-safe (a 600-rune multibyte value is cut at 512 runes, not 512
+// bytes), a value at the exact bound survives verbatim, and invalid UTF-8
+// bytes -- which a UTF-8-encoded PostgreSQL database refuses with error
+// 22021 -- are sanitized to the replacement character instead of stored
+// raw.
+func TestService_Access_TruncatesOverlongLogMetadata(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	multibyteUA := strings.Repeat("€", 600) // 600 three-byte runes
+	asciiReferrer := strings.Repeat("r", 900)
+	overlongIP := strings.Repeat("1", 100)
+	if _, accessErr := svc.Access(testCtx(), created.Token, AccessParams{
+		IP: overlongIP, UserAgent: multibyteUA, Referrer: asciiReferrer,
+	}); accessErr != nil {
+		t.Fatalf("Access(overlong metadata): %v", err)
+	}
+
+	boundaryUA := strings.Repeat("b", accessLogUserAgentLen) // exactly at the bound
+	if _, accessErr := svc.Access(testCtx(), created.Token, AccessParams{
+		IP: "203.0.113.1", UserAgent: boundaryUA, Referrer: "",
+	}); accessErr != nil {
+		t.Fatalf("Access(boundary metadata): %v", err)
+	}
+
+	// "\xff\xfe" is one consecutive run of invalid bytes: the sanitizer
+	// renders each run with a single replacement character (U+FFFD).
+	replacement := string(rune(0xFFFD))
+	invalidUA := "ok" + "\xff\xfe" + strings.Repeat("a", accessLogUserAgentLen)
+	if _, accessErr := svc.Access(testCtx(), created.Token, AccessParams{
+		IP: "203.0.113.1", UserAgent: invalidUA, Referrer: "",
+	}); accessErr != nil {
+		t.Fatalf("Access(invalid-UTF-8 metadata): %v", err)
+	}
+
+	entries, err := svc.ListAccessLog(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("ListAccessLog: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("ListAccessLog returned %d entries, want 3", len(entries))
+	}
+	storedUA := map[string]bool{}
+	for _, e := range entries {
+		storedUA[e.UserAgent] = true
+		if len([]rune(e.IP)) > accessLogIPLen {
+			t.Errorf("stored IP has %d runes, want at most %d", len([]rune(e.IP)), accessLogIPLen)
+		}
+		if len([]rune(e.UserAgent)) > accessLogUserAgentLen {
+			t.Errorf("stored UserAgent has %d runes, want at most %d", len([]rune(e.UserAgent)), accessLogUserAgentLen)
+		}
+		if len([]rune(e.Referrer)) > accessLogReferrerLen {
+			t.Errorf("stored Referrer has %d runes, want at most %d", len([]rune(e.Referrer)), accessLogReferrerLen)
+		}
+	}
+
+	wantMultibyte := strings.Repeat("€", accessLogUserAgentLen)
+	if !storedUA[wantMultibyte] {
+		t.Errorf("stored UserAgent set is missing the 512-rune cut of the multibyte value -- the cut must be rune-safe, not byte-safe")
+	}
+	if !storedUA[boundaryUA] {
+		t.Errorf("stored UserAgent set is missing the exactly-at-bound value -- a value at the bound must survive verbatim")
+	}
+	// The invalid-UTF-8 value: "ok" plus one replacement character (the
+	// whole "\xff\xfe" run), then as many trailing runes as fit the
+	// 512-rune cut (2 + 1 + 509).
+	sanitized := "ok" + replacement + strings.Repeat("a", accessLogUserAgentLen-3)
+	if !storedUA[sanitized] {
+		t.Errorf("stored UserAgent set is missing the sanitized invalid-UTF-8 value -- invalid bytes must become the replacement character, never stored raw")
+	}
+}
+
+// TestService_Access_LogWriteFailure_FailsTheAccessInsteadOfLeavingNoTrail
+// pins rule 4's enforcement half: when the access-log row cannot be
+// written, Access must NOT answer as if the access had been processed -- a
+// granted access whose trail silently failed to commit is exactly the hole
+// rule 4 exists to forbid. The failure surfaces as sharing.internal_error
+// (the same shape recordView's own store failures surface as). The log
+// table is dropped to force the write failure.
+func TestService_Access_LogWriteFailure_FailsTheAccessInsteadOfLeavingNoTrail(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if dropErr := svc.shares.db.Exec("DROP TABLE " + tableAccessLog).Error; dropErr != nil {
+		t.Fatalf("DROP TABLE sharing_access_log: %v", err)
+	}
+
+	_, err = svc.Access(testCtx(), created.Token, AccessParams{})
+	assertCode(t, err, ErrInternal.Code)
+}
+
+// TestService_Access_UnknownTokenStoreFailure_AnswersInternalNotNotFound
+// pins the store-failure classification on Access's token lookup: a
+// database failure is not a refusal reason an outside caller produced, so
+// it must surface as sharing.internal_error with an Error log -- never be
+// flattened into the outward 404 a genuine refusal answers with, which
+// would erase the operational signal. The shares table is dropped to force
+// the lookup failure.
+func TestService_Access_UnknownTokenStoreFailure_AnswersInternalNotNotFound(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	if err := svc.shares.db.Exec("DROP TABLE " + tableShares).Error; err != nil {
+		t.Fatalf("DROP TABLE sharing_shares: %v", err)
+	}
+
+	_, err := svc.Access(testCtx(), "any-token", AccessParams{})
+	assertCode(t, err, ErrInternal.Code)
+}
+
+// TestService_AccessPublic_StoreFailure_AnswersInternalNotNotFound is the
+// AccessPublic twin of the test above: tenantForTokenHash's own store
+// failure (the token-index table dropped) must surface as
+// sharing.internal_error, never be collapsed into ErrNotAccessible.
+func TestService_AccessPublic_StoreFailure_AnswersInternalNotNotFound(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	if err := svc.shares.db.Exec("DROP TABLE " + tableTokenIndex).Error; err != nil {
+		t.Fatalf("DROP TABLE sharing_token_index: %v", err)
+	}
+
+	_, err := svc.AccessPublic(context.Background(), "any-token", AccessParams{})
+	assertCode(t, err, ErrInternal.Code)
+}
+
+// TestService_Access_RecordViewStoreFailure_StillLeavesLogAndEvent pins
+// Access's "exactly one log row and one event per call" contract on the
+// store-failure path: when the view recording itself fails (a SQL trigger
+// forces every view_count update to fail), Access still records the
+// attempt as a denied log entry and publishes one EventShareAccessed with
+// Granted false, and THEN surfaces the internal error -- never returning
+// the error with no trail at all.
+func TestService_Access_RecordViewStoreFailure_StillLeavesLogAndEvent(t *testing.T) {
+	svc, bus := newTestService(t, nil)
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	var got pkgcore.Event
+	bus.Subscribe(EventShareAccessed, func(_ context.Context, evt pkgcore.Event) error {
+		got = evt
+		return nil
+	})
+
+	trigger := "CREATE TRIGGER sharing_test_fail_view_update BEFORE UPDATE OF view_count ON " + tableShares +
+		" BEGIN SELECT RAISE(FAIL, 'injected view-count update failure'); END"
+	if triggerErr := svc.shares.db.Exec(trigger).Error; triggerErr != nil {
+		t.Fatalf("CREATE TRIGGER: %v", err)
+	}
+
+	_, err = svc.Access(testCtx(), created.Token, AccessParams{})
+	assertCode(t, err, ErrInternal.Code)
+
+	entries, listErr := svc.ListAccessLog(testCtx(), created.Share.ID)
+	if listErr != nil {
+		t.Fatalf("ListAccessLog: %v", listErr)
+	}
+	if len(entries) != 1 || entries[0].Outcome != AccessOutcomeDenied {
+		t.Fatalf("ListAccessLog = %+v, want exactly one denied entry -- the store-failure attempt must still leave its trail", entries)
+	}
+
+	payload, ok := got.Payload.(ShareAccessedPayload)
+	if !ok {
+		t.Fatalf("event payload is %T, want ShareAccessedPayload", got.Payload)
+	}
+	if payload.ShareID != created.Share.ID || payload.Granted {
+		t.Errorf("event payload = %+v, want share %q announced with Granted false", payload, created.Share.ID)
+	}
+}
+
+// TestService_AccessPublic_UnknownTokenRefusalIsCheap pins the
+// unauthenticated surface's anti-amplification property: refusing a token
+// that names no share at all must cost a rate-limit check plus one
+// token-index lookup, NOT a full ~19 MiB argon2id verification. Under the
+// old code every unknown token burned that check, giving a scanner that
+// sprays random tokens (each hashing differently, so per-token rate limits
+// cannot bind it) a memory- and CPU-amplification primitive capped only by
+// the per-IP budget. The unknown refusal must therefore take a small
+// fraction of the time a real verification against a known
+// password-protected share takes. Timing test: skipped under -short,
+// min-of-samples like its sibling
+// TestService_Access_RefusalPathsPayEqualPasswordCheckCost.
+func TestService_AccessPublic_UnknownTokenRefusalIsCheap(t *testing.T) {
+	if testing.Short() {
+		t.Skip("timing measurement is slow under -short")
+	}
+
+	svc, _ := newTestService(t, nil)
+	password := "correct horse"
+	wrong := "wrong guess"
+	protected, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r", Password: &password})
+	if err != nil {
+		t.Fatalf("Create(password-protected): %v", err)
+	}
+	if _, err := svc.AccessPublic(context.Background(), "no-such-token", AccessParams{}); !hasCode(err, ErrNotAccessible.Code) {
+		t.Fatalf("AccessPublic(unknown token) error = %v, want ErrNotAccessible", err)
+	}
+
+	const samples = 5
+	minDuration := func(run func()) time.Duration {
+		t.Helper()
+		best := time.Duration(1<<63 - 1)
+		for i := 0; i < samples; i++ {
+			start := time.Now()
+			run()
+			if d := time.Since(start); d < best {
+				best = d
+			}
+		}
+		return best
+	}
+
+	// The real cost an unknown-token refusal used to pay: one argon2id
+	// verification against a known password-protected share.
+	realCheck := minDuration(func() {
+		_, _ = svc.AccessPublic(context.Background(), protected.Token, AccessParams{Password: &wrong})
+	})
+	unknownRefusal := minDuration(func() {
+		_, _ = svc.AccessPublic(context.Background(), "no-such-token", AccessParams{})
+	})
+
+	if float64(unknownRefusal) > float64(realCheck)*0.5 {
+		t.Errorf("unknown-token refusal took %v, want well under half the real check's %v -- the unauthenticated surface must not burn an argon2id verification on tokens that cannot exist", unknownRefusal, realCheck)
 	}
 }

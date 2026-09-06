@@ -404,3 +404,146 @@ func TestAccessLogRepository_ListByShare_ScopedToTenantAndShare(t *testing.T) {
 		t.Errorf("listByShare order = [%s, %s], want newest first [log-2, log-1]", got[0].ID, got[1].ID)
 	}
 }
+
+// TestShareRepository_TryIncrementView_IncrementsAndGuardsLiveness pins
+// the unlimited-share view-recording guard (Service.recordView's arm for a
+// MaxViews-nil share): one call records one view, a second call on a fresh
+// row records another, and once the row is revoked or expired the
+// increment refuses (won == false) instead of recording a view against a
+// no-longer-live share.
+func TestShareRepository_TryIncrementView_IncrementsAndGuardsLiveness(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	now := time.Now().UTC()
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	share := newTestShare("share-1", now)
+	if err := repo.Create(ctx, share); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	won, err := repo.tryIncrementView(ctx, share, now)
+	if err != nil {
+		t.Fatalf("tryIncrementView (first): %v", err)
+	}
+	if !won {
+		t.Fatalf("tryIncrementView (first) = false, want true")
+	}
+
+	fresh, err := repo.byTokenHash(ctx, share.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash: %v", err)
+	}
+	if fresh.ViewCount != 1 {
+		t.Fatalf("fresh.ViewCount = %d, want 1", fresh.ViewCount)
+	}
+
+	won, err = repo.tryIncrementView(ctx, fresh, now)
+	if err != nil {
+		t.Fatalf("tryIncrementView (second): %v", err)
+	}
+	if !won {
+		t.Fatalf("tryIncrementView (second) = false, want true")
+	}
+
+	revokedAt := now
+	revokeWon, err := repo.markRevoked(ctx, share.ID, revokedAt)
+	if err != nil {
+		t.Fatalf("markRevoked: %v", err)
+	}
+	if !revokeWon {
+		t.Fatalf("markRevoked = false, want true")
+	}
+
+	// A revoked row refuses the increment: the WHERE clause's liveness
+	// guard is what makes the atomic increment refuse, not a read-then-
+	// decide race.
+	won, err = repo.tryIncrementView(ctx, share, now)
+	if err != nil {
+		t.Fatalf("tryIncrementView (revoked): %v", err)
+	}
+	if won {
+		t.Errorf("tryIncrementView (revoked share) = true, want false")
+	}
+}
+
+// TestShareRepository_TryIncrementView_ScopedToOneTenant is the isolation
+// proof tryIncrementView's raw-Exec shape requires (repository.go's own
+// doc comment names it): the hand-written tenant_id predicate -- present
+// because .Exec bypasses the tenant-scope plugin's callback chain -- must
+// scope the increment to the caller's tenant exactly as the plugin would.
+// Another tenant's call against the same share id affects zero rows.
+func TestShareRepository_TryIncrementView_ScopedToOneTenant(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	now := time.Now().UTC()
+	ctxA := pkgcore.WithTenant(context.Background(), "tenant-a")
+	ctxB := pkgcore.WithTenant(context.Background(), "tenant-b")
+
+	share := newTestShare("share-1", now)
+	if err := repo.Create(ctxA, share); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	won, err := repo.tryIncrementView(ctxB, share, now)
+	if err != nil {
+		t.Fatalf("tryIncrementView(other tenant): %v", err)
+	}
+	if won {
+		t.Fatalf("tryIncrementView(other tenant) = true, want false -- the increment must not cross tenants")
+	}
+
+	fresh, err := repo.byTokenHash(ctxA, share.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash: %v", err)
+	}
+	if fresh.ViewCount != 0 {
+		t.Errorf("ViewCount = %d after a foreign-tenant increment attempt, want 0", fresh.ViewCount)
+	}
+}
+
+// TestShareRepository_MarkRevoked_WinsOnceThenIdempotent pins the guarded
+// revocation's transition semantics: the first markRevoked wins (won ==
+// true), a second call -- the sequential double-revoke shape Service.Revoke
+// answers idempotently -- affects zero rows (won == false), and the mark
+// touches nothing but revoked_at: a view recorded before the mark survives
+// it.
+func TestShareRepository_MarkRevoked_WinsOnceThenIdempotent(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	now := time.Now().UTC()
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	share := newTestShare("share-1", now)
+	if err := repo.Create(ctx, share); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if won, err := repo.tryIncrementView(ctx, share, now); err != nil || !won {
+		t.Fatalf("tryIncrementView: won=%v err=%v", won, err)
+	}
+
+	revokedAt := now
+	won, err := repo.markRevoked(ctx, share.ID, revokedAt)
+	if err != nil {
+		t.Fatalf("markRevoked (first): %v", err)
+	}
+	if !won {
+		t.Fatalf("markRevoked (first) = false, want true")
+	}
+
+	won, err = repo.markRevoked(ctx, share.ID, revokedAt.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("markRevoked (second): %v", err)
+	}
+	if won {
+		t.Errorf("markRevoked (second) = true, want false -- the second revoke must not re-transition the row")
+	}
+
+	fresh, err := repo.byTokenHash(ctx, share.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash: %v", err)
+	}
+	if fresh.ViewCount != 1 {
+		t.Errorf("ViewCount = %d after markRevoked, want 1 -- the guarded revoke must not roll back a recorded view", fresh.ViewCount)
+	}
+	if fresh.RevokedAt == nil {
+		t.Errorf("RevokedAt is nil after markRevoked, want set")
+	}
+}

@@ -13,6 +13,8 @@
 
 "sharing.expiry_required" = "A share link must have an expiry; links that never expire are not allowed."
 
+"sharing.expiry_out_of_range" = "The requested expiry must be in the future and within the platform's maximum share lifetime."
+
 "sharing.invalid_max_views" = "The view limit {{.max_views}} is not valid; it must be a positive number."
 
 "sharing.invalid_request" = "The request could not be understood; check the share link and try again."

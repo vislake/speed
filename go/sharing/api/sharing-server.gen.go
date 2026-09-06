@@ -35,7 +35,7 @@ type SharingAccessLogEntry struct {
 
 // SharingCreateShareRequest defines model for SharingCreateShareRequest.
 type SharingCreateShareRequest struct {
-	// ExpiresAt An explicit expiry. Omit to use the tenant's configured default (falling back to a fixed default when none is configured).
+	// ExpiresAt An explicit expiry, which must lie strictly in the future and no more than 30 days from now -- the platform's maximum share lifetime (rule 2's ceiling); anything else is refused with sharing.expiry_out_of_range. Omit to use the tenant's configured default (falling back to a fixed default when none is configured).
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 
 	// Forever Requests a share that never expires. Always refused with sharing.expiry_required -- there is no way to make this surface create a never-expiring share; the field exists so a deliberate attempt to do so fails loudly and specifically.

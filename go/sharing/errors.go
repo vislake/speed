@@ -29,6 +29,17 @@ var (
 	// -- see CreateParams.Forever's own doc comment.
 	ErrExpiryRequired = apperr.Invalid("sharing.expiry_required")
 
+	// ErrExpiryOutOfRange reports that Service.Create's caller supplied an
+	// ExpiresAt outside the bounds rule 2 allows an explicit expiry to
+	// occupy: not strictly in the future (a share born already expired is
+	// refused rather than created dead), or further out than the module's
+	// maximum requested lifetime -- the same 30-day ceiling rule 2 names
+	// for the default (defaultShareExpiry's own doc comment). The second
+	// half is the "never-expiring in disguise" arm of rule 2: an
+	// expiresAt of 9999-12-31 must not be accepted just because it is
+	// technically not Forever.
+	ErrExpiryOutOfRange = apperr.Invalid("sharing.expiry_out_of_range")
+
 	// ErrInvalidMaxViews reports that Service.Create was called with a
 	// non-positive CreateParams.MaxViews. A caller that wants "unlimited
 	// views" leaves MaxViews nil; zero or negative is not a meaningful

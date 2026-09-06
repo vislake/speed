@@ -59,6 +59,16 @@ func expirySweepIdempotencyKey(tenant pkgcore.TenantID) string {
 // comparing RevokedAt against ExpiresAt/MaxViews rather than by a second
 // status column.
 //
+// The mark goes through ShareRepository's guarded markRevoked -- the same
+// narrow revoked_at-only UPDATE Service.Revoke uses, never a full-row
+// write-back -- and EventShareRevoked is published for every share THIS
+// pass actually transitioned (the module.go constant's "owner-initiated or
+// sweep-initiated alike" contract), with a failure to publish logged, never
+// returned, exactly as on Revoke's own publish path. A share a concurrent
+// Revoke already transitioned between this pass's listing and its mark
+// affects zero rows, publishes nothing (that revoke already announced
+// itself), and is simply skipped.
+//
 // Each row is updated independently; a failure on one row stops the pass
 // (mirroring go/storage's Sweep, "failing the pass rather than plowing
 // through the rest of the rows on a broken seam is what keeps each row's
@@ -71,12 +81,22 @@ func (s *Service) Sweep(ctx context.Context) error {
 		return err
 	}
 	for _, row := range rows {
-		revokedAt := now
-		row.RevokedAt = &revokedAt
-		if err := s.shares.Update(ctx, &row); err != nil {
+		won, err := s.shares.markRevoked(ctx, row.ID, now)
+		if err != nil {
 			return err
 		}
+		if !won {
+			// A concurrent Revoke got there first -- it published.
+			continue
+		}
 		observability.FromContext(ctx).Info("share expired by sweep", "share_id", row.ID)
+		if pubErr := s.publish(ctx, pkgcore.Event{
+			Type:     EventShareRevoked,
+			TenantID: pkgcore.TenantID(row.TenantID),
+			Payload:  ShareRevokedPayload{ShareID: row.ID},
+		}); pubErr != nil {
+			observability.FromContext(ctx).Warn("share-revoked event publish failed", "share_id", row.ID, "error", pubErr)
+		}
 	}
 	return nil
 }

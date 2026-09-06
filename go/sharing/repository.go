@@ -92,6 +92,89 @@ func (r *ShareRepository) tryRecordView(ctx context.Context, share *Share, now t
 	return rowsAffected == 1, nil
 }
 
+// tryIncrementView records one granted access against share's row with a
+// single atomic server-side increment, reporting whether the update was the
+// one that landed. Service.recordView uses this for an UNLIMITED share
+// (MaxViews nil) -- see recordView's own doc comment for why the
+// compare-and-swap guard of tryRecordView is the wrong tool there.
+//
+// # Why this is a raw Exec, not a struct-based Updates call
+//
+// The increment needs genuine server-side arithmetic ("view_count =
+// view_count + 1"): GORM's struct-based partial update can only SET a
+// column to a fixed value, and a fixed value derived from this caller's
+// own read of ViewCount loses increments when two viewers race -- each
+// writes its own read-plus-one and one granted view silently vanishes from
+// the count. The three GORM entry points this codebase's raw-gorm-bypass
+// semgrep rule flags as Repository workarounds are .Table/.Model/.Raw; a
+// plain .Exec(sql, args...) is a different, narrower surface that rule does
+// not (and, per its own "Residual gaps" note, deliberately cannot) catch
+// -- the exact "raw SQL escape hatch" backend-coding-standards SKILL.md
+// §3.2 sanctions for a genuine need like this one, PROVIDED the tenant is
+// passed explicitly and the call carries an isolation test. The precedent
+// is go/billing's applyBalanceDelta (credit_service.go), the identical
+// shape: server-side arithmetic .Exec with the tenant bound into the WHERE
+// clause by hand, because .Exec bypasses the ORM callback chain entirely
+// and the tenant-scope plugin therefore does NOT auto-filter it -- the
+// hand-written tenant_id predicate below is the isolation mechanism, not a
+// bypass of an injected guard, and every call site runs inside
+// dbkit.WithTenantSession, so on PostgreSQL the row-level-security GUC is
+// engaged as a second, database-level backstop underneath it. The
+// view-count isolation proof is TestShareRepository_TryIncrementView_ScopedToOneTenant.
+//
+// The WHERE clause doubles as the liveness guard: revocation or expiry
+// between Service's own isLive check and this statement refuses the
+// increment (RowsAffected 0), exactly as tryRecordView's own WHERE clauses
+// refuse a no-longer-live row.
+func (r *ShareRepository) tryIncrementView(ctx context.Context, share *Share, now time.Time) (won bool, err error) {
+	tenant, err := pkgcore.MustTenantFromContext(ctx)
+	if err != nil {
+		return false, err
+	}
+	var rowsAffected int64
+	dbErr := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		res := tx.Exec(
+			`UPDATE `+tableShares+` `+
+				`SET view_count = view_count + 1, updated_at = ? `+
+				`WHERE id = ? AND tenant_id = ? AND revoked_at IS NULL AND expires_at > ?`,
+			now, share.ID, string(tenant), now)
+		rowsAffected = res.RowsAffected
+		return res.Error
+	})
+	if dbErr != nil {
+		return false, ErrInternal.WithCause(dbErr)
+	}
+	return rowsAffected == 1, nil
+}
+
+// markRevoked sets share's RevokedAt to at, guarded so that only the first
+// caller to reach the row transitions it: the WHERE revoked_at IS NULL
+// predicate makes a second, concurrent revoke affect zero rows rather than
+// writing over the first one. Service.Revoke and Service.Sweep both call
+// this instead of the embedded Repository[Share].Update, whose full-row
+// Save of a freshly-read Share would write every column back -- including a
+// stale ViewCount that rolls back a view-count increment a concurrent
+// granted access committed between the read and the write (see Service.Revoke's
+// own doc comment). The struct payload means the tenant-scope plugin
+// engages exactly as it does for every other struct Updates call in this
+// module (only revoked_at and the auto-updated timestamps are written;
+// TenantModel.TenantID is zero and therefore omitted from the SET clause).
+func (r *ShareRepository) markRevoked(ctx context.Context, id string, at time.Time) (won bool, err error) {
+	var rowsAffected int64
+	dbErr := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		res := tx.
+			Where("id = ?", id).
+			Where("revoked_at IS NULL").
+			Updates(&Share{RevokedAt: &at})
+		rowsAffected = res.RowsAffected
+		return res.Error
+	})
+	if dbErr != nil {
+		return false, ErrInternal.WithCause(dbErr)
+	}
+	return rowsAffected == 1, nil
+}
+
 // createWithTokenIndex inserts share and its shareTokenIndex row in one
 // database transaction, so a share is never left reachable by its owner
 // (an authenticated tenant caller) while being permanently unreachable by
@@ -153,15 +236,17 @@ func (r *ShareRepository) createWithTokenIndex(ctx context.Context, share *Share
 // unrecognized hash here returns ErrNotAccessible, the same sentinel
 // byTokenHash returns for an unrecognized hash under a known tenant, so a
 // caller cannot distinguish "no such token anywhere" from "no such token
-// in the tenant it otherwise resolved to" -- though AccessPublic's own doc
-// comment records the one property this method does NOT hide: a genuinely
-// unrecognized token costs one repository read here plus one burned
-// password check, while a recognized-but-refused token costs one extra
-// repository read (Access's own byTokenHash) on top of that -- a timing
-// difference AGENTS.md's "The five mandatory rules" section's rule 5 was
-// never written to cover, since it protects "which of these refusal
-// reasons applied", not "does this token exist at all", which a valid
-// token's own successful use already discloses to whoever holds it.
+// in the tenant it otherwise resolved to". The one timing property this
+// method does NOT hide is documented at AccessPublic's own doc comment:
+// an unrecognized token is answered after this single read, deliberately
+// without the argon2id burn Access's recognized-token refusal paths pay
+// (that burn on every unknown token was the scanner amplification the
+// rules-reinforcement round removed), while a recognized-but-refused
+// token pays one extra repository read (Access's own byTokenHash) plus
+// its argon2id check on top -- a timing difference rule 5 was never
+// written to cover, since it protects "which of these refusal reasons
+// applied", not "does this token exist at all", which a valid token's own
+// successful use already discloses to whoever holds it.
 func (r *ShareRepository) tenantForTokenHash(ctx context.Context, hash string) (pkgcore.TenantID, error) {
 	var idx shareTokenIndex
 	err := r.db.WithContext(ctx).Where("token_hash = ?", hash).First(&idx).Error

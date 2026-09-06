@@ -171,6 +171,31 @@ func (s Share) isLive(now time.Time) bool {
 // compile-time check that Share satisfies dbkit.TenantScoped.
 var _ dbkit.TenantScoped = Share{}
 
+// The column bounds of sharing_access_log's caller-supplied VARCHAR
+// columns, declared by the migrations that create the table
+// (migrations/{sqlite,postgres}/0002_create_sharing_access_log.sql) --
+// THE MIGRATIONS ARE THE AUTHORITY: these constants exist so the write
+// boundary (service.go's truncateAccessLogValue, called from logAccess)
+// can cut caller-controlled values to the column's width in Go, and they
+// must track the migration files' VARCHAR(n) declarations and the gorm
+// size tags on AccessLogEntry below (both dialects, both files) -- a
+// mismatch means a value this module believes it truncated is still
+// rejected by one dialect. PostgreSQL enforces VARCHAR(n) at the database
+// and refuses an over-long value with error 22001, failing the INSERT; the
+// access would then leave no trail at all (rule 4), which is why the cut
+// happens here rather than being left to the database. SQLite ignores the
+// bound entirely, which is why the SQLite-only unit tier cannot see an
+// over-long value fail -- the truncation tests in service_test.go pin the
+// Go-side cut instead.
+const (
+	// accessLogIPLen bounds AccessLogEntry.IP.
+	accessLogIPLen = 64
+	// accessLogUserAgentLen bounds AccessLogEntry.UserAgent.
+	accessLogUserAgentLen = 512
+	// accessLogReferrerLen bounds AccessLogEntry.Referrer.
+	accessLogReferrerLen = 512
+)
+
 // AccessLogEntry is one recorded access attempt against a Share -- granted
 // or denied alike, per rule 4 (docs/internal/07-platform-services.md's
 // "access needs no login, but must leave a trail" rule): a resource owner

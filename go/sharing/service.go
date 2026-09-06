@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -23,6 +24,17 @@ import (
 // item's own declared default (module.go), so a host that never touches
 // the config item and never wires a TenantConfigReader still gets the
 // documented 30-day behavior.
+//
+// The same constant doubles as this module's MAXIMUM requested lifetime:
+// resolveExpiry refuses an explicit ExpiresAt more than 30 days out with
+// ErrExpiryOutOfRange, so "expiresAt 9999-12-31" cannot smuggle a
+// never-expiring link past CreateParams.Forever's refusal (rule 2's
+// "never-expiring links are the most common source of data leaks" concern
+// applies to an effectively-forever link exactly as it does to a literal
+// one). A tenant's configured default (TenantConfigReader / the
+// ConfigDefaultExpiry item) is deliberately NOT re-capped against this
+// ceiling: that value is the host's own policy through a documented seam,
+// not a caller's end-run around the ceiling.
 const defaultShareExpiry = 30 * 24 * time.Hour
 
 // maxRecordViewAttempts bounds Service.Access's retry loop around a lost
@@ -193,7 +205,10 @@ func (s *Service) AccessLogs() *AccessLogRepository { return s.accessLogs }
 // never-expiring request is refused outright (ErrExpiryRequired,
 // CreateParams.Forever's own doc comment) before an expiry is ever
 // resolved; a nil ExpiresAt resolves through TenantConfigReader, falling
-// back to defaultShareExpiry; MaxViews, if given, must be positive
+// back to defaultShareExpiry, while an explicit ExpiresAt outside rule
+// 2's bounds -- not strictly in the future, or more than 30 days out -- is
+// refused with ErrExpiryOutOfRange (resolveExpiry's own doc comment);
+// MaxViews, if given, must be positive
 // (ErrInvalidMaxViews); an optional Password is hashed, never stored
 // plaintext (password.go); the token is drawn fresh from crypto/rand
 // (token.go) and only its hash is persisted, alongside the narrow
@@ -287,8 +302,22 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*CreateResult, er
 // resolveExpiry turns a caller's own request (possibly nil) into a concrete
 // expiry time, never returning a zero time.Time: nil resolves through cfg
 // (when wired) and finally defaultShareExpiry.
+//
+// A non-nil request is validated before it is accepted, never stored
+// unexamined: it must lie strictly in the future (a share born already
+// expired is refused with ErrExpiryOutOfRange rather than created dead --
+// and "exactly now" is a share whose first Access at the same instant
+// could already refuse it, so the future requirement is strict), and no
+// further out than defaultShareExpiry from now -- the same 30-day ceiling
+// rule 2 names for the default, applied to explicit requests so that an
+// expiresAt of 9999-12-31 cannot bypass CreateParams.Forever's refusal and
+// create the effectively-never-expiring link rule 2 exists to forbid.
 func (s *Service) resolveExpiry(ctx context.Context, tenant pkgcore.TenantID, requested *time.Time) (time.Time, error) {
 	if requested != nil {
+		now := s.now()
+		if !requested.After(now) || requested.After(now.Add(defaultShareExpiry)) {
+			return time.Time{}, ErrExpiryOutOfRange
+		}
 		return *requested, nil
 	}
 	if s.cfg != nil {
@@ -345,7 +374,24 @@ func (s *Service) emitSensitiveAudit(ctx context.Context, share *Share) error {
 // round that adds the HTTP surface must.
 //
 // Access records exactly one AccessLogEntry and publishes exactly one
-// EventShareAccessed regardless of outcome.
+// EventShareAccessed on every path below that reaches a recognized token
+// -- granted or refused alike, and including the store-failure path, whose
+// outcome the log records as denied because that is the only vocabulary
+// the log has for "could not be determined" (model.go's AccessOutcome
+// comment). An unrecognized token is the one path with no log row: there
+// is no ShareID to attribute an entry to (see below).
+//
+// A failure to WRITE that log row is never swallowed into a Warn. Rule 4
+// (docs/internal/07-platform-services.md's "access needs no login, but
+// must leave a trail" rule) makes the trail the point of the whole
+// exercise, so an Access whose log row did not commit -- granted or
+// refused -- returns ErrInternal rather than answering as if the access
+// had been processed normally: the recordView store failures below already
+// surface as internal errors, and a log-write failure is the same class of
+// operational fault, one an operator must see in the error rate rather
+// than discover later by auditing a trail with holes in it. The event
+// publish stays best-effort (a Warn), as it always was: the event bus is
+// not the durable trail.
 //
 // Every refusal reason -- an unrecognized token hash, a revoked share, an
 // expired one, a view-exhausted one, a missing password, or a wrong one --
@@ -358,9 +404,22 @@ func (s *Service) emitSensitiveAudit(ctx context.Context, share *Share) error {
 // (see burnSharePasswordCheck), so a caller cannot use response latency to
 // learn that a token names a password-protected share either.
 //
-// A granted access is recorded through recordView's compare-and-swap retry
-// loop before this method returns success, so the row Access hands back
-// always reflects the view that was actually counted.
+// Genuine store failures are the one deliberate exception to the
+// outward-identical answer: when byTokenHash or recordView cannot reach
+// the database at all, that is not a refusal reason an outside caller
+// produced -- it is this module's own infrastructure failing, and hiding
+// it behind a 404-shaped ErrNotAccessible would erase the operational
+// signal (and, until this round, did so without even a log line). Those
+// paths log an Error and return the internal error, exactly as the
+// pre-existing recordView error path always did; rule 5 protects the
+// reasons an ACCESS can be refused, never an operator's ability to see
+// that the module itself is broken.
+//
+// A granted access is recorded -- through recordView's compare-and-swap
+// retry loop for a limited share, or its single atomic increment for an
+// unlimited one (recordView's own doc comment) -- before this method
+// returns success, so the row Access hands back always reflects the view
+// that was actually counted.
 func (s *Service) Access(ctx context.Context, token string, p AccessParams) (*Share, error) {
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
@@ -370,6 +429,13 @@ func (s *Service) Access(ctx context.Context, token string, p AccessParams) (*Sh
 
 	share, err := s.shares.byTokenHash(ctx, hashShareToken(token))
 	if err != nil {
+		// A store failure is not a refusal reason: log it and surface
+		// the internal error, never the outward 404 a genuine refusal
+		// answers with (see the doc comment above).
+		if !hasCode(err, ErrNotAccessible.Code) {
+			observability.FromContext(ctx).Error("sharing access token lookup failed", "error", err)
+			return nil, err
+		}
 		// No row to log against -- nothing in this tenant matches the
 		// token at all, so there is no ShareID to attribute a log entry
 		// to. Still pay the argon2id cost a real password check would
@@ -398,17 +464,20 @@ func (s *Service) Access(ctx context.Context, token string, p AccessParams) (*Sh
 	}
 
 	var (
-		granted bool
-		result  = share
+		granted   bool
+		result    = share
+		recordErr error
 	)
 	if passwordOK {
-		result, granted, err = s.recordView(ctx, share, now)
-		if err != nil {
-			return nil, err
-		}
+		result, granted, recordErr = s.recordView(ctx, share, now)
 	}
 
-	s.logAccess(ctx, tenant, share.ID, granted, p)
+	// Exactly one log row and one event per call, on every path below --
+	// a recordView store failure included: its attempt is recorded as
+	// denied (the only outcome vocabulary the log has for an access whose
+	// decision could not be determined) and announced on the bus, and the
+	// failure itself is what Access returns afterwards.
+	logErr := s.logAccess(ctx, tenant, share.ID, granted, p)
 	if pubErr := s.publish(ctx, pkgcore.Event{
 		Type:     EventShareAccessed,
 		TenantID: tenant,
@@ -417,6 +486,12 @@ func (s *Service) Access(ctx context.Context, token string, p AccessParams) (*Sh
 		observability.FromContext(ctx).Warn("share-accessed event publish failed", "share_id", share.ID, "error", pubErr)
 	}
 
+	if recordErr != nil {
+		return nil, recordErr
+	}
+	if logErr != nil {
+		return nil, logErr
+	}
 	if !granted {
 		return nil, ErrNotAccessible
 	}
@@ -444,13 +519,33 @@ func (s *Service) Access(ctx context.Context, token string, p AccessParams) (*Sh
 // Before Access is ever reached, this method checks the caller's rate-limit
 // budget (ratelimit.go's checkAccessRateLimit, keyed on p.IP and the
 // hashed token, ErrRateLimited on denial) and resolves the tenant. An
-// unrecognized token hash at this stage burns one password check
-// (burnSharePasswordCheck) and answers ErrNotAccessible immediately,
-// without ever calling Access -- there is no tenant to attach and nothing
-// downstream could do with one anyway. See tenantForTokenHash's own doc
-// comment for the one timing property this collapsing does NOT hide (an
-// unrecognized token is cheaper to refuse than a recognized-but-refused
-// one), and why that is not a rule-5 violation.
+// unrecognized token hash at this stage answers ErrNotAccessible
+// immediately, without ever calling Access -- there is no tenant to attach
+// and nothing downstream could do with one anyway.
+//
+// The unrecognized-token refusal is deliberately CHEAP: it pays only the
+// rate-limit check and the token-index lookup, never the argon2id burn the
+// recognized-token refusal paths inside Access pay. Rule 5's
+// constant-time equalization protects the reasons a REFUSAL of a
+// recognized share can be produced (so a prober cannot learn, by latency,
+// which refusal reason applied, or whether a recognized token names a
+// password-protected share); a scanner spraying random tokens never
+// reaches any of those paths -- its guesses fail the token-index lookup
+// first -- so burning a full ~19 MiB argon2id check on every one of them
+// (burnSharePasswordCheck against the dummy hash) bought nothing rule 5
+// needs and handed the scanner a memory- and CPU-amplification primitive
+// instead: per-token rate limits cannot bind a scanner, since every
+// guessed token hashes differently, leaving the per-IP budget as the only
+// cap on an attack that cost the platform 19 MiB per request. The cost of
+// that decision is that an unrecognized token is now faster to refuse than
+// a recognized-but-refused one -- but that timing delta was already
+// documented as outside rule 5's scope (tenantForTokenHash's own doc
+// comment), because it discloses only "does this token exist at all", a
+// fact any valid token's own successful use already reveals to whoever
+// holds it, never which of the hidden refusal reasons applied. A token
+// that DOES resolve here re-enters the ordinary, unchanged Access path,
+// where every recognized-token refusal still pays its argon2id check
+// exactly as before.
 func (s *Service) AccessPublic(ctx context.Context, token string, p AccessParams) (*Share, error) {
 	if err := s.checkAccessRateLimit(ctx, p.IP, hashShareToken(token)); err != nil {
 		return nil, err
@@ -458,26 +553,76 @@ func (s *Service) AccessPublic(ctx context.Context, token string, p AccessParams
 
 	tenant, err := s.shares.tenantForTokenHash(ctx, hashShareToken(token))
 	if err != nil {
-		burnSharePasswordCheck(p.Password)
+		// A store failure is not "no such token": log it and surface
+		// the internal error, never the outward 404 a genuine refusal
+		// answers with -- the same classification Access's own
+		// byTokenHash error path applies.
+		if !hasCode(err, ErrNotAccessible.Code) {
+			observability.FromContext(ctx).Error("sharing tenant-for-token lookup failed", "error", err)
+			return nil, err
+		}
 		return nil, ErrNotAccessible
 	}
 	return s.Access(pkgcore.WithTenant(ctx, tenant), token, p)
 }
 
-// recordView drives ShareRepository.tryRecordView's compare-and-swap guard
-// to a definitive outcome: granted (the view was counted, and the returned
-// Share reflects it) or refused (the share was not live at the moment this
-// call observed it).
+// recordView drives the share's view-recording guard to a definitive
+// outcome: granted (the view was counted, and the returned Share reflects
+// it) or refused (the share was not live at the moment this call observed
+// it).
 //
-// A single CAS attempt can lose to ordinary concurrency -- two viewers
-// racing the same share both read the same ViewCount and only one UPDATE
-// can win -- which is NOT the same thing as the share genuinely being
-// exhausted. This loop re-reads the row on a lost race and retries against
-// its latest state, up to maxRecordViewAttempts times, so a benign
-// concurrency loss is never misreported as "not accessible"; only a share
-// that is genuinely no longer live (isLive returns false on the freshly
-// re-read row) short-circuits the loop early as a real refusal.
+// The two shapes of share take two different paths:
+//
+//   - A LIMITED share (MaxViews set) goes through
+//     ShareRepository.tryRecordView's compare-and-swap guard. A single CAS
+//     attempt can lose to ordinary concurrency -- two viewers racing the
+//     same share both read the same ViewCount and only one UPDATE can win
+//     -- which is NOT the same thing as the share genuinely being
+//     exhausted. The loop re-reads the row on a lost race and retries
+//     against its latest state, up to maxRecordViewAttempts times, so a
+//     benign concurrency loss is never misreported as "not accessible";
+//     only a share that is genuinely no longer live (isLive returns false
+//     on the freshly re-read row) short-circuits the loop early as a real
+//     refusal. A retry bound is the right shape here because the CAS is
+//     arbitrating something real -- the last slots of a ceiling -- and
+//     sustained contention that exhausts the bound is a genuine refusal.
+//
+//   - An UNLIMITED share (MaxViews nil -- the common public-link shape)
+//     skips the CAS path entirely: there is no ceiling for a
+//     compare-and-swap to arbitrate, so a CAS loss would carry no
+//     information -- and a viewer of an unlimited share must never be
+//     refused just because it lost too many races against other viewers
+//     who each happened to commit between its read and its write (the
+//     bounded retry loop above would otherwise starve some legitimate
+//     viewer into a false 404 once it lost maxRecordViewAttempts times in
+//     a row under concurrency). Instead the view is recorded by one atomic
+//     server-side increment (ShareRepository.tryIncrementView) whose own
+//     WHERE clause evaluates liveness at write time: every viewer that
+//     observed a live row wins exactly once, and a lost update can only
+//     mean a concurrent revocation or expiry, which is a genuine refusal.
 func (s *Service) recordView(ctx context.Context, share *Share, now time.Time) (*Share, bool, error) {
+	if share.MaxViews == nil {
+		if !share.isLive(now) {
+			return share, false, nil
+		}
+		won, err := s.shares.tryIncrementView(ctx, share, now)
+		if err != nil {
+			return nil, false, err
+		}
+		if won {
+			updated := *share
+			updated.ViewCount++
+			return &updated, true, nil
+		}
+		// Lost the increment to a concurrent revocation or expiry -- re-read
+		// and refuse against the row's honest current state.
+		latest, err := s.shares.byTokenHash(ctx, share.TokenHash)
+		if err != nil {
+			return nil, false, err
+		}
+		return latest, false, nil
+	}
+
 	current := share
 	for attempt := 0; attempt < maxRecordViewAttempts; attempt++ {
 		if !current.isLive(now) {
@@ -500,16 +645,23 @@ func (s *Service) recordView(ctx context.Context, share *Share, now time.Time) (
 	}
 	// Exhausted every retry against genuine, sustained contention -- treat
 	// as a refusal rather than looping forever; a real deployment racing
-	// this many concurrent viewers on one share within one CAS window is
-	// not a case this round optimizes for.
+	// this many concurrent viewers on one limited share within one CAS
+	// window is not a case this round optimizes for.
 	return current, false, nil
 }
 
-// logAccess best-effort records one AccessLogEntry. A write failure is
-// logged and swallowed, never returned: it must not turn an otherwise
-// correctly resolved Access call (granted or refused) into a different
-// answer for the caller.
-func (s *Service) logAccess(ctx context.Context, tenant pkgcore.TenantID, shareID string, granted bool, p AccessParams) {
+// logAccess records one AccessLogEntry for shareID with outcome granted or
+// denied and returns an internal error when the row could not be written --
+// never swallowed: Access treats a log-write failure as a failed call (see
+// Access's own doc comment for the rule-4 reasoning), since an access that
+// leaves no trail is exactly the failure mode rule 4 exists to forbid.
+//
+// The caller-supplied metadata fields (AccessParams.IP/UserAgent/Referrer)
+// are cut to their column bounds HERE, at the write boundary, before the
+// row is built -- see model.go's column-bound constants and
+// truncateAccessLogValue for why the cut happens in Go rather than being
+// left to the database.
+func (s *Service) logAccess(ctx context.Context, tenant pkgcore.TenantID, shareID string, granted bool, p AccessParams) error {
 	outcome := AccessOutcomeDenied
 	if granted {
 		outcome = AccessOutcomeGranted
@@ -519,14 +671,41 @@ func (s *Service) logAccess(ctx context.Context, tenant pkgcore.TenantID, shareI
 		TenantModel: dbkit.TenantModel{TenantID: string(tenant)},
 		ShareID:     shareID,
 		OccurredAt:  s.now(),
-		IP:          p.IP,
-		UserAgent:   p.UserAgent,
-		Referrer:    p.Referrer,
+		IP:          truncateAccessLogValue(p.IP, accessLogIPLen),
+		UserAgent:   truncateAccessLogValue(p.UserAgent, accessLogUserAgentLen),
+		Referrer:    truncateAccessLogValue(p.Referrer, accessLogReferrerLen),
 		Outcome:     outcome,
 	}
 	if err := s.accessLogs.Create(ctx, entry); err != nil {
-		observability.FromContext(ctx).Warn("sharing access log write failed", "share_id", shareID, "error", err)
+		observability.FromContext(ctx).Error("sharing access log write failed", "share_id", shareID, "error", err)
+		return ErrInternal.WithCause(err)
 	}
+	return nil
+}
+
+// truncateAccessLogValue cuts a caller-supplied access-log field value to
+// maxRunes runes and guarantees valid UTF-8, the two properties the column
+// it is about to be stored in requires on PostgreSQL: VARCHAR(n) counts
+// CHARACTERS, so a cut by rune (not byte) is what actually fits, and a
+// UTF-8-encoded database refuses a value carrying invalid byte sequences
+// outright (SQL error 22021). A caller-controlled User-Agent or Referer
+// can carry either hazard -- HTTP headers are free-form bytes -- and either
+// one failing the INSERT would make the whole access leave no trail (the
+// exact failure rule 4 exists to forbid), which is why the value is made
+// safe HERE, at the write boundary, rather than relying on the database to
+// reject it after the fact. Invalid bytes are rendered as the Unicode
+// replacement character, never silently dropped (dropping them could
+// concatenate two arbitrary byte runs into a different valid value); the
+// cut happens after that sanitization, on the resulting runes.
+func truncateAccessLogValue(v string, maxRunes int) string {
+	if len(v) <= maxRunes && utf8.ValidString(v) {
+		return v
+	}
+	runes := []rune(strings.ToValidUTF8(v, "\uFFFD"))
+	if len(runes) > maxRunes {
+		runes = runes[:maxRunes]
+	}
+	return string(runes)
 }
 
 // Revoke withdraws share immediately: the very next Access call against it
@@ -536,6 +715,20 @@ func (s *Service) logAccess(ctx context.Context, tenant pkgcore.TenantID, shareI
 // cache anywhere on this module's own side to invalidate, so this method
 // need do nothing beyond persisting RevokedAt. Revoking an already-revoked
 // share is idempotent and reports success.
+//
+// The RevokedAt write is a narrow, guarded UPDATE (ShareRepository's
+// markRevoked), never a whole-row write-back of the Share read above:
+// between that read and the write, a concurrent granted access can commit
+// its view-count increment through recordView's compare-and-swap, and a
+// full-row Save of the stale read would silently roll that increment back
+// -- a granted view vanishing from the owner's count. The guarded update
+// touches only revoked_at (and the auto timestamps), so a concurrent view
+// count survives a revoke. EventShareRevoked is published exactly once per
+// actual transition -- only by the caller whose guarded update was the one
+// that set RevokedAt -- so two racing Revoke calls never announce one
+// revocation twice; a loser (or a sequential second revoke, caught by the
+// pre-read below) publishes nothing, exactly as the pre-existing
+// already-revoked early return always did.
 func (s *Service) Revoke(ctx context.Context, shareID string) error {
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
@@ -552,9 +745,14 @@ func (s *Service) Revoke(ctx context.Context, shareID string) error {
 		return nil
 	}
 	now := s.now()
-	share.RevokedAt = &now
-	if err := s.shares.Update(ctx, share); err != nil {
+	won, err := s.shares.markRevoked(ctx, shareID, now)
+	if err != nil {
 		return err
+	}
+	if !won {
+		// Lost the guarded update to a concurrent revoke -- that caller
+		// published; idempotent success here, no second event.
+		return nil
 	}
 	if pubErr := s.publish(ctx, pkgcore.Event{
 		Type:     EventShareRevoked,

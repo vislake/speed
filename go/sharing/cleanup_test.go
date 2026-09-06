@@ -7,17 +7,23 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/jobs"
+	"github.com/vislake/speed/go/pkgcore"
 )
 
 func TestService_Sweep_MarksExpiredAndExhaustedShares(t *testing.T) {
 	svc, _ := newTestService(t, nil)
-	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	svc.now = fixedClock(now)
+	// Rule 2's validation (service.go's resolveExpiry) refuses a share
+	// whose expiry is already past at creation, so the expired share is
+	// created with an expiry in the future of the CREATE clock and the
+	// clock then moves past it before the sweep runs.
+	createAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	sweepAt := createAt.Add(2 * time.Hour)
+	svc.now = fixedClock(createAt)
 
-	past := now.Add(-time.Hour)
-	expired, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r", ExpiresAt: &past})
+	expiring := createAt.Add(time.Hour)
+	expired, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r", ExpiresAt: &expiring})
 	if err != nil {
-		t.Fatalf("Create(expired): %v", err)
+		t.Fatalf("Create(expiring): %v", err)
 	}
 
 	one := 1
@@ -34,6 +40,7 @@ func TestService_Sweep_MarksExpiredAndExhaustedShares(t *testing.T) {
 		t.Fatalf("Create(live): %v", err)
 	}
 
+	svc.now = fixedClock(sweepAt)
 	if sweepErr := svc.Sweep(testCtx()); sweepErr != nil {
 		t.Fatalf("Sweep: %v", sweepErr)
 	}
@@ -65,17 +72,73 @@ func TestService_Sweep_MarksExpiredAndExhaustedShares(t *testing.T) {
 
 func TestService_Sweep_IsIdempotent(t *testing.T) {
 	svc, _ := newTestService(t, nil)
-	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	svc.now = fixedClock(now)
-	past := now.Add(-time.Hour)
-	if _, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r", ExpiresAt: &past}); err != nil {
+	createAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	sweepAt := createAt.Add(2 * time.Hour)
+	svc.now = fixedClock(createAt)
+	expiring := createAt.Add(time.Hour)
+	if _, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r", ExpiresAt: &expiring}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	svc.now = fixedClock(sweepAt)
 	if err := svc.Sweep(testCtx()); err != nil {
 		t.Fatalf("Sweep (first): %v", err)
 	}
 	if err := svc.Sweep(testCtx()); err != nil {
 		t.Fatalf("Sweep (second, nothing left to reap): %v", err)
+	}
+}
+
+// TestService_Sweep_PublishesShareRevokedPerReapedShare pins the EventShareRevoked
+// contract module.go's constant declares -- "owner-initiated or
+// sweep-initiated alike": a sweep that marks a share must announce that
+// revocation on the bus exactly as Service.Revoke does, one event per
+// share this pass actually transitioned. A second sweep of the same rows
+// (idempotence) publishes nothing more.
+func TestService_Sweep_PublishesShareRevokedPerReapedShare(t *testing.T) {
+	svc, bus := newTestService(t, nil)
+	createAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	sweepAt := createAt.Add(2 * time.Hour)
+	svc.now = fixedClock(createAt)
+
+	expiring := createAt.Add(time.Hour)
+	first, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r", ExpiresAt: &expiring})
+	if err != nil {
+		t.Fatalf("Create(first expiring): %v", err)
+	}
+	second, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r", ExpiresAt: &expiring})
+	if err != nil {
+		t.Fatalf("Create(second expiring): %v", err)
+	}
+	live, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r"})
+	if err != nil {
+		t.Fatalf("Create(live): %v", err)
+	}
+
+	revoked := map[string]int{}
+	bus.Subscribe(EventShareRevoked, func(_ context.Context, evt pkgcore.Event) error {
+		if p, ok := evt.Payload.(ShareRevokedPayload); ok {
+			revoked[p.ShareID]++
+		}
+		return nil
+	})
+
+	svc.now = fixedClock(sweepAt)
+	if err := svc.Sweep(testCtx()); err != nil {
+		t.Fatalf("Sweep (first): %v", err)
+	}
+	if revoked[first.Share.ID] != 1 || revoked[second.Share.ID] != 1 {
+		t.Errorf("EventShareRevoked count after first sweep = %v, want exactly one per reaped share (%q and %q)", revoked, first.Share.ID, second.Share.ID)
+	}
+	if revoked[live.Share.ID] != 0 {
+		t.Errorf("EventShareRevoked fired for the still-live share -- the sweep must not announce a revocation it did not perform")
+	}
+
+	// Idempotence: the second sweep reaps nothing, so it publishes nothing.
+	if err := svc.Sweep(testCtx()); err != nil {
+		t.Fatalf("Sweep (second): %v", err)
+	}
+	if len(revoked) != 2 || revoked[first.Share.ID] != 1 || revoked[second.Share.ID] != 1 {
+		t.Errorf("EventShareRevoked count after second sweep = %v, want unchanged (one each for the two reaped shares, none for the live one)", revoked)
 	}
 }
 
@@ -88,15 +151,17 @@ func TestExpirySweepHandler_Type(t *testing.T) {
 
 func TestExpirySweepHandler_Handle_RunsSweep(t *testing.T) {
 	svc, _ := newTestService(t, nil)
-	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	svc.now = fixedClock(now)
-	past := now.Add(-time.Hour)
-	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r", ExpiresAt: &past})
+	createAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	sweepAt := createAt.Add(2 * time.Hour)
+	svc.now = fixedClock(createAt)
+	expiring := createAt.Add(time.Hour)
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r", ExpiresAt: &expiring})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
 	h := expirySweepHandler{svc: svc}
+	svc.now = fixedClock(sweepAt)
 	job := &jobs.Job{TenantID: testTenant}
 	if _, handleErr := h.Handle(testCtx(), job, nil); handleErr != nil {
 		t.Fatalf("Handle: %v", handleErr)

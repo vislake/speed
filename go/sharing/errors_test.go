@@ -25,7 +25,8 @@ func TestHasCode(t *testing.T) {
 // cheap, mechanical guard against a copy-paste mistake in errors.go.
 func TestErrorIndex_EveryCodeIsWellFormed(t *testing.T) {
 	all := []*apperr.Error{
-		ErrResourceRefRequired, ErrExpiryRequired, ErrInvalidMaxViews,
+		ErrResourceRefRequired, ErrExpiryRequired, ErrExpiryOutOfRange,
+		ErrInvalidMaxViews, ErrInvalidRequest,
 		ErrNotAccessible, ErrShareNotFound, ErrInternal,
 		ErrRateLimited, ErrResourceUnavailable,
 	}
