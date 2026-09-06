@@ -217,6 +217,17 @@ type SocialLoginResult struct {
 // SocialAuthorizeURL validates the request, issues a single-use state value
 // and returns the URL to send the browser to.
 func (s *Service) SocialAuthorizeURL(ctx context.Context, in SocialAuthorizeInput) (string, error) {
+	// The channel gate runs before anything is resolved or spent: an
+	// unknown provider is not a gated channel (and keeps answering
+	// ErrProviderUnknown below), but a KNOWN channel the deployment
+	// turned off must not even mint a state value or send the browser to
+	// the provider -- whether the request is a sign-in or a bind by an
+	// already-signed-in user.
+	if flag := socialChannelFlag(in.Provider); flag != "" {
+		if err := s.channelEnabled(ctx, flag); err != nil {
+			return "", err
+		}
+	}
 	provider, err := s.socialProvider(in.Provider)
 	if err != nil {
 		return "", err
@@ -245,6 +256,16 @@ func (s *Service) SocialAuthorizeURL(ctx context.Context, in SocialAuthorizeInpu
 // used at the token endpoint comes from the server-side state record rather
 // than from the request, so a caller cannot substitute one.
 func (s *Service) SocialCallback(ctx context.Context, in SocialCallbackInput) (*SocialLoginResult, error) {
+	// The channel gate applies to the callback as well as the authorize
+	// step: a flow that started while the channel was on must not complete
+	// as a sign-in after an operator turned the channel off mid-flight.
+	// An unknown provider names no flag and keeps answering
+	// ErrProviderUnknown below.
+	if flag := socialChannelFlag(in.Provider); flag != "" {
+		if err := s.channelEnabled(ctx, flag); err != nil {
+			return nil, err
+		}
+	}
 	provider, err := s.socialProvider(in.Provider)
 	if err != nil {
 		return nil, err
@@ -594,6 +615,30 @@ func (s *Service) socialProvider(name string) (SocialProvider, error) {
 		return nil, ErrProviderUnknown.WithParam("provider", name)
 	}
 	return provider, nil
+}
+
+// socialChannelFlag maps a wired social channel's name to the feature flag
+// that gates it. The five flags this module declares (FeatureFlagSocial*)
+// correspond one-to-one with the five providers it ships constructors for;
+// a host-registered channel with any other name has no declared flag, and
+// the empty string says so -- such a channel is not part of the declared
+// flag universe and is not gated (it cannot be: there is no flag for an
+// operator to have turned off).
+func socialChannelFlag(provider string) string {
+	switch provider {
+	case ProviderGoogle:
+		return FeatureFlagSocialGoogle
+	case ProviderGitHub:
+		return FeatureFlagSocialGitHub
+	case ProviderWeChat:
+		return FeatureFlagSocialWeChat
+	case ProviderDingTalk:
+		return FeatureFlagSocialDingTalk
+	case ProviderFeishu:
+		return FeatureFlagSocialFeishu
+	default:
+		return ""
+	}
 }
 
 // providerIsTrusted reports whether the platform has put name on the list of

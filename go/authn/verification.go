@@ -265,6 +265,14 @@ var smsCodeRequestLatencyFloor = 150 * time.Millisecond
 // blind-index-keyed check before either branch is reached), so padding it
 // too would only slow every caller for no timing-parity benefit.
 func (s *Service) RequestSMSCode(ctx context.Context, in RequestSMSCodeInput) error {
+	// The channel gate, for the same reasons login() checks its own first:
+	// a deployment that turned the SMS channel off must not keep issuing
+	// codes -- each one is a real SMS delivery and a verification-code row
+	// -- just because the requester found the endpoint.
+	if err := s.channelEnabled(ctx, FeatureFlagSMSLogin); err != nil {
+		return err
+	}
+
 	index, err := s.users.PhoneIndexOf(in.Phone)
 	if err != nil {
 		return err
@@ -362,6 +370,12 @@ func (s *Service) burnSMSCodeRequestWork() error {
 // The IP dimension (guard.CheckSMSVerifyIP) is unaffected and still checked
 // up front, since it does not create that property.
 func (s *Service) LoginWithSMSCode(ctx context.Context, in SMSLoginInput) (*TokenPair, error) {
+	// The channel gate, mirroring login()'s own: with the flag off, a code
+	// -- even a genuinely correct one -- must not start a session.
+	if err := s.channelEnabled(ctx, FeatureFlagSMSLogin); err != nil {
+		return nil, err
+	}
+
 	index, err := s.users.PhoneIndexOf(in.Phone)
 	if err != nil {
 		return nil, err

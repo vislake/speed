@@ -2,6 +2,7 @@ package authn
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/vislake/speed/go/authn/internal/testutil"
@@ -309,4 +310,118 @@ func TestService_Register_RateLimited_ReturnsErrRateLimited(t *testing.T) {
 // index, so a loop can vary "the other dimension" without colliding.
 func ipForIndex(i int) string {
 	return fmt.Sprintf("198.51.100.%d", i%254+1)
+}
+
+// TestLoginLockoutDelay_DoublesPerFailureThenSaturates pins the pure delay
+// arithmetic the recorded lockout state derives from: the base delay for the
+// first failure, doubled per failure after it, capped at loginLockoutMax.
+func TestLoginLockoutDelay_DoublesPerFailureThenSaturates(t *testing.T) {
+	t.Parallel()
+
+	if got := loginLockoutDelay(1); got != loginLockoutBase {
+		t.Errorf("loginLockoutDelay(1) = %v, want the base delay %v", got, loginLockoutBase)
+	}
+	if got := loginLockoutDelay(2); got != 2*loginLockoutBase {
+		t.Errorf("loginLockoutDelay(2) = %v, want %v (doubled)", got, 2*loginLockoutBase)
+	}
+	if got := loginLockoutDelay(3); got != 4*loginLockoutBase {
+		t.Errorf("loginLockoutDelay(3) = %v, want %v", got, 4*loginLockoutBase)
+	}
+	// loginLockoutMax is reached after roughly five consecutive failures
+	// with the shipped constants; every failure past that point must keep
+	// the ceiling, never exceed it.
+	var sawCeiling bool
+	for failures := 1; failures < 20; failures++ {
+		if got := loginLockoutDelay(failures); got > loginLockoutMax {
+			t.Fatalf("loginLockoutDelay(%d) = %v, exceeds the ceiling %v", failures, got, loginLockoutMax)
+		} else if got == loginLockoutMax {
+			sawCeiling = true
+		}
+	}
+	if !sawCeiling {
+		t.Errorf("loginLockoutDelay never reached the ceiling %v within 20 failures", loginLockoutMax)
+	}
+}
+
+// TestRateGuard_RecordLoginFailure_ConcurrentFailures_NoneLost is the
+// regression for the audit finding that RecordLoginFailure was a
+// non-atomic read-modify-write over one JSON state value: five concurrent
+// failures measured landing as two, and since the progressive delay doubles
+// per recorded failure, the lost ones are exactly what keeps the lockout
+// from escalating under a burst. The recording must be built from the
+// KVStore's atomic primitives, so N concurrent failures against one account
+// end with a failure count of exactly N and a lockout deadline that has
+// converged on the burst.
+func TestRateGuard_RecordLoginFailure_ConcurrentFailures_NoneLost(t *testing.T) {
+	t.Parallel()
+
+	guard := newRateGuard(pkgcore.NewMemoryKVStore())
+	ctx := t.Context()
+	account := "account-concurrent-burst"
+
+	const recorders = 25
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range recorders {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			guard.RecordLoginFailure(ctx, account)
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	state, err := guard.readLoginLockoutState(ctx, account)
+	if err != nil {
+		t.Fatalf("readLoginLockoutState() error = %v", err)
+	}
+	if state.Failures != recorders {
+		t.Errorf("Failures = %d after %d concurrent recorded failures, want exactly %d -- concurrent failures must not be lost",
+			state.Failures, recorders, recorders)
+	}
+
+	locked, remaining, err := guard.loginLocked(ctx, account)
+	if err != nil {
+		t.Fatalf("loginLocked() error = %v", err)
+	}
+	if !locked {
+		t.Error("loginLocked() = false after the burst, want true -- the deadline must have converged on the burst's lockout")
+	}
+	if remaining > loginLockoutMax {
+		t.Errorf("remaining lockout = %v, want it capped at loginLockoutMax = %v", remaining, loginLockoutMax)
+	}
+}
+
+// TestRateGuard_RecordLoginSuccess_ClearsBothStateKeys proves a successful
+// login removes every piece of the split lockout state: if it left the
+// deadline key behind, a stale deadline from a cleared run could keep
+// locking an account whose failures were forgiven.
+func TestRateGuard_RecordLoginSuccess_ClearsBothStateKeys(t *testing.T) {
+	t.Parallel()
+
+	guard := newRateGuard(pkgcore.NewMemoryKVStore())
+	ctx := t.Context()
+	account := "account-clears-both-keys"
+
+	for range 5 {
+		guard.RecordLoginFailure(ctx, account)
+	}
+	guard.RecordLoginSuccess(ctx, account)
+
+	state, err := guard.readLoginLockoutState(ctx, account)
+	if err != nil {
+		t.Fatalf("readLoginLockoutState() error = %v", err)
+	}
+	if state.Failures != 0 || !state.LockedUntil.IsZero() {
+		t.Errorf("state after RecordLoginSuccess = %+v, want a clean slate", state)
+	}
+	locked, _, err := guard.loginLocked(ctx, account)
+	if err != nil {
+		t.Fatalf("loginLocked() error = %v", err)
+	}
+	if locked {
+		t.Error("loginLocked() after RecordLoginSuccess = true, want false")
+	}
 }

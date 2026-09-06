@@ -331,6 +331,15 @@ func (s *SSOService) SaveConfig(ctx context.Context, in SSOConfigInput) (*Tenant
 // commonly serves many tenants and many relying parties, so an ID token
 // captured from one flow is a plausible thing for an attacker to have.
 func (s *SSOService) AuthorizeURL(ctx context.Context, redirectURI, sessionBinding string) (string, error) {
+	// The channel gate, before the tenant's SSO configuration is even
+	// read: a deployment that turned enterprise SSO off must not send
+	// anyone to an identity provider. The ctx's tenant (when the host's
+	// route resolved one) selects the flag's per-tenant tier; a tenant-
+	// less ctx reads the platform-wide value, exactly as the pre-auth
+	// features endpoint answers the login page.
+	if err := s.svc.channelEnabled(ctx, FeatureFlagEnterpriseSSO); err != nil {
+		return "", err
+	}
 	config, err := s.enabledConfig(ctx)
 	if err != nil {
 		return "", err
@@ -412,10 +421,17 @@ func (s *SSOService) Callback(ctx context.Context, in SSOCallbackInput) (*Social
 	if in.TenantID == "" {
 		return nil, ErrSSONotConfigured
 	}
+	// The channel gate on the same tenant-bearing context enabledConfig
+	// resolves with below, so a flow started while the flag was on cannot
+	// complete as a sign-in after it was turned off.
+	tenantCtx := pkgcore.WithTenant(ctx, in.TenantID)
+	if err := s.svc.channelEnabled(tenantCtx, FeatureFlagEnterpriseSSO); err != nil {
+		return nil, err
+	}
 	if in.Code == "" {
 		return nil, ErrOAuthStateInvalid
 	}
-	config, err := s.enabledConfig(pkgcore.WithTenant(ctx, in.TenantID))
+	config, err := s.enabledConfig(tenantCtx)
 	if err != nil {
 		return nil, err
 	}

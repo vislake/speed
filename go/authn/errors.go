@@ -239,6 +239,16 @@ var (
 	// wherever" versus "this specific account is temporarily locked".
 	ErrAccountLocked = &apperr.Error{Code: "authn.account_locked", Status: http.StatusTooManyRequests}
 
+	// ErrChannelDisabled is returned when a sign-in channel whose feature
+	// flag is turned off is nevertheless invoked -- a POST to the password
+	// login endpoint of a deployment that disabled password sign-in, for
+	// instance. The flag values are public (the pre-authentication features
+	// endpoint serves them to the login page), so answering a disabled
+	// channel with a distinct code discloses nothing an anonymous caller
+	// could not already read. It carries a "channel" parameter naming the
+	// flag key.
+	ErrChannelDisabled = apperr.Forbidden("authn.channel_disabled")
+
 	// ErrVerificationCodeInvalid is the single answer to every failed
 	// phone-login code verification: no code was ever issued, it expired,
 	// it is locked from too many wrong guesses, or the code itself was
@@ -329,6 +339,7 @@ var errorCodes = []string{
 	ErrInternal.Code,
 	ErrRateLimited.Code,
 	ErrAccountLocked.Code,
+	ErrChannelDisabled.Code,
 	ErrVerificationCodeInvalid.Code,
 	ErrSMSDeliveryFailed.Code,
 	ErrMFANotEnrolled.Code,

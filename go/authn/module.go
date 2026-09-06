@@ -1,6 +1,7 @@
 package authn
 
 import (
+	"context"
 	"embed"
 	"errors"
 	"fmt"
@@ -185,6 +186,37 @@ const (
 	ConfigKeySMSCodeMaxAttempts = "authn.sms_code_max_attempts"
 )
 
+// FeatureGate reports whether a feature flag is enabled for the tenant the
+// context carries (or platform-wide when it carries none).
+//
+// It is the same no-import technique the org module uses for its own flags
+// (go/org/module.go's FeatureGate, identical shape): the signature is built
+// from stdlib types only, so *config.Service satisfies it structurally
+// through its own IsEnabled method. authn never imports config, and config
+// never learns that authn exists; the host passes one to the other, and the
+// host is the only place both names appear.
+//
+// This seam is what makes this module's declared feature flags REAL at
+// request time -- see FeatureFlagPasswordLogin's own doc comment for what a
+// flag turning out to be a declaration with no enforcement used to mean for
+// a deployment that disabled a channel. Every sign-in channel consults the
+// gate before it lets a request through, and the login page's own channel
+// visibility comes from the same flag values served by the config module's
+// pre-authentication features endpoint, so the page and the API agree on
+// which channels exist.
+//
+// A nil gate means this deployment has no feature-flag module at all -- a
+// host running authn without the config module -- and every channel behaves
+// as enabled, which is what this module did before the seam existed and
+// what such a host's login page (which has no features endpoint to read)
+// already shows: the channels the host configured. The flags' effect is
+// expressed in config, so only a host with config can turn a channel off,
+// and the wiring contract is: if the config module is in the deployment,
+// pass its Service here.
+type FeatureGate interface {
+	IsEnabled(ctx context.Context, key string) (bool, error)
+}
+
 // options accumulates everything NewService and NewModule can be configured
 // with.
 type options struct {
@@ -217,6 +249,10 @@ type options struct {
 	// secureCookies forces the Secure attribute on the pre-authentication
 	// OAuth cookie regardless of what r.TLS says. See WithSecureCookies.
 	secureCookies bool
+
+	// featureGate makes the module's declared feature flags effective at
+	// request time; nil keeps every channel enabled. See FeatureGate.
+	featureGate FeatureGate
 }
 
 // Option configures the authn module and the service inside it.
@@ -453,6 +489,16 @@ func WithSMSCodeMaxAttempts(n int) Option {
 			o.smsCodeMaxAttempts = n
 		}
 	}
+}
+
+// WithFeatureGate wires the reader this module's declared feature flags are
+// enforced through. *config.Service satisfies FeatureGate structurally; pass
+// the config module's service here when one is in the deployment. Without
+// it, every sign-in channel behaves as enabled -- see FeatureGate's own doc
+// comment for why that is the no-config-module shape rather than a silent
+// hole.
+func WithFeatureGate(gate FeatureGate) Option {
+	return func(o *options) { o.featureGate = gate }
 }
 
 // newOptions applies opts over the defaults and rejects a configuration the

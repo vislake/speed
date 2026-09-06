@@ -539,6 +539,104 @@ func TestService_SwitchTenant_StillValidSessionSucceeds(t *testing.T) {
 	}
 }
 
+// wedgeMembershipReader is a MembershipReader that parks the caller inside
+// its ActiveMembership answer for a chosen tenant until the test releases it.
+// It is the deterministic wedge TestService_SwitchTenant_ConcurrentRevoke_
+// IsRefused needs: SwitchTenant reads the session, then asks membership, then
+// writes the new tenant -- so parking the membership answer puts the switch
+// exactly between its read and its compare-and-swap while the test revokes
+// the session in that window.
+type wedgeMembershipReader struct {
+	inner    MembershipReader
+	blockOn  pkgcore.TenantID
+	entered  chan struct{}
+	release  chan struct{}
+	released bool
+}
+
+// ActiveMembership implements MembershipReader.
+func (w *wedgeMembershipReader) ActiveMembership(ctx context.Context, userID string, tenantID pkgcore.TenantID) (bool, error) {
+	if tenantID == w.blockOn && !w.released {
+		select {
+		case w.entered <- struct{}{}:
+		default:
+		}
+		select {
+		case <-w.release:
+		case <-time.After(15 * time.Second):
+			// A safety bound so a botched test cannot hang the suite; the
+			// test itself always releases well before this.
+		}
+		w.released = true
+	}
+	return w.inner.ActiveMembership(ctx, userID, tenantID)
+}
+
+// TenantsOf implements MembershipReader.
+func (w *wedgeMembershipReader) TenantsOf(ctx context.Context, userID string) ([]pkgcore.TenantID, error) {
+	return w.inner.TenantsOf(ctx, userID)
+}
+
+// TestService_SwitchTenant_ConcurrentRevoke_IsRefused is the regression for
+// the audit finding that SessionRepository.SetCurrentTenant dropped its own
+// compare-and-swap result: a revoke landing between SwitchTenant's read of
+// the session and its tenant update made the UPDATE match zero rows while
+// still returning nil, so the caller minted a full-lifetime token pair for a
+// session a concurrent sign-out had just killed -- a revoked session kept
+// issuing tokens. The wedge parks the switch between its read and its write
+// (both sides of the race run for real against the same database) and proves
+// the revoke wins: the switch must answer ErrSessionRevoked and mint nothing.
+func TestService_SwitchTenant_ConcurrentRevoke_IsRefused(t *testing.T) {
+	t.Parallel()
+
+	wedge := &wedgeMembershipReader{
+		blockOn: testTenantB,
+		entered: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	f := newServiceFixture(t, WithMembershipReader(wedge))
+	wedge.inner = f.members
+
+	f.registerUser(t, "concurrent-revoke@example.com", testTenantA, testTenantB)
+	pair, err := f.svc.Login(t.Context(), LoginInput{Identifier: "concurrent-revoke@example.com", Password: testPassword})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	switched := make(chan error, 1)
+	go func() {
+		_, switchErr := f.svc.SwitchTenant(t.Context(), pair.Principal, testTenantB)
+		switched <- switchErr
+	}()
+
+	select {
+	case <-wedge.entered:
+	case <-time.After(15 * time.Second):
+		t.Fatal("SwitchTenant() never reached the membership check; the wedge did not engage")
+	}
+
+	if revokeErr := f.svc.Sessions().Revoke(t.Context(), pair.Principal.SessionID, RevokeReasonLogout); revokeErr != nil {
+		t.Fatalf("Revoke() error = %v", revokeErr)
+	}
+	close(wedge.release)
+
+	raceErr := <-switched
+	if !hasCode(raceErr, ErrSessionRevoked.Code) {
+		t.Fatalf("SwitchTenant() racing a revoke error = %v, want code %q (a revoked session must not mint tokens)", raceErr, ErrSessionRevoked.Code)
+	}
+	if n := f.events.Count(EventTenantSwitched); n != 0 {
+		t.Errorf("recorded %d %s events for a refused switch, want 0", n, EventTenantSwitched)
+	}
+
+	stored, err := f.svc.sessionRepo.FindByID(t.Context(), pair.Principal.SessionID)
+	if err != nil {
+		t.Fatalf("FindByID() error = %v", err)
+	}
+	if stored.Status != SessionStatusRevoked {
+		t.Errorf("stored status = %q, want %q (the revoke must have won)", stored.Status, SessionStatusRevoked)
+	}
+}
+
 // TestService_Refresh_ReverifiesMembership is what makes removing someone from
 // a tenant actually end their access to it, instead of leaving them signed in
 // until the session expires weeks later.

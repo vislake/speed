@@ -2,7 +2,7 @@ package authn
 
 import (
 	"context"
-	"encoding/json"
+	"strconv"
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -50,17 +50,82 @@ const (
 	// waits this long out returns to a clean slate; remembering forever
 	// would turn a transient lockout into a de facto permanent one for an
 	// account nobody is actively attacking any more.
+	//
+	// The window is measured from the FIRST failure of the run, not
+	// refreshed by every failure after it: KVStore's atomic primitives
+	// attach an expiry only on the call that creates the key and never
+	// extend a live one (see pkgcore.KVStore.IncrByFloatWithTTL's own doc
+	// comment and go/ratelimit's "The TTL-attachment race, closed" for the
+	// doctrine), and this module's own earlier sliding refresh was exactly
+	// the caller-side Get-then-Set race that doctrine exists to close.
+	// RecordLoginFailure's own doc comment states what that costs at the
+	// edge of a long run.
 	loginLockoutStateTTL = time.Hour
 
 	loginLockoutKeyPrefix = "authn:lockout:login:"
 )
 
-// loginLockoutState is what rateGuard keeps in the shared pkgcore.KVStore
-// per account, encoded as JSON: KVStore's contract is opaque bytes, and this
-// module has no reason to invent a binary encoding for two fields.
+// loginLockoutState is what the readers of one account's lockout state see,
+// assembled from the two KVStore keys RecordLoginFailure maintains. It is a
+// plain in-memory value, never itself stored -- loginLockoutKeys' own doc
+// comment explains the split storage layout and why it exists.
 type loginLockoutState struct {
-	Failures    int       `json:"failures"`
-	LockedUntil time.Time `json:"locked_until"`
+	Failures    int
+	LockedUntil time.Time
+}
+
+// loginLockoutKeys names the two KVStore keys one account's lockout state
+// lives under. The split exists because KVStore offers no atomic primitive
+// for a two-field value: a shared read-modify-write cycle over a single
+// JSON blob -- read it, mutate it, write it back -- loses concurrent
+// updates, and the whole point of this layout is that concurrent failures
+// are all counted (an attacker bursting the per-minute quota must not keep
+// the escalating delay from rising, which is what a lost count does).
+//
+//   - failuresKey holds the run's failure count as KVStore's own numeric
+//     encoding, maintained with IncrByFloatWithTTL: the increment and the
+//     attach-expiry-on-creation collapse into one atomic call, so no
+//     concurrent recorder can lose its own failure, on a fresh key or a
+//     live one alike.
+//
+//   - deadlineKey holds the run's lockout deadline: the Unix-microsecond
+//     instant the account becomes usable again. The deadline only ever
+//     moves forward -- every recorded failure proposes now+delay(failures),
+//     a later instant than any deadline already on the key -- so concurrent
+//     recorders converge on the LATEST proposal with a compare-and-swap
+//     (retried on contention) instead of a read-modify-write; no completion
+//     order can ever leave the key holding an earlier deadline than the one
+//     the run has earned. Its expiry is attached the same atomic way, with
+//     a zero-delta increment on the call that creates it. Values are
+//     written as plain decimal microseconds and read with
+//     strconv.ParseFloat, per the numeric stores' own contract.
+//
+// Both keys carry loginLockoutStateTTL, attached when the run that creates
+// them starts; RecordLoginSuccess deletes both, which is what makes a
+// successful sign-in reset the run. The single JSON key an earlier version
+// of this module stored the whole state under is never written and never
+// read: any value a pre-split deployment left there simply expires within
+// its own TTL, and the account it belonged to starts from a clean slate.
+func loginLockoutKeys(account string) (failuresKey, deadlineKey string) {
+	return loginLockoutKeyPrefix + account + ":failures",
+		loginLockoutKeyPrefix + account + ":locked_until"
+}
+
+// loginLockoutDelay returns the progressive delay a run of failures has
+// earned: loginLockoutBase for the first failure, doubling per failure
+// after it and saturating at loginLockoutMax, which is what turns "growing
+// delay" into an effective lockout. It is the pure arithmetic the recorded
+// state derives from, split out so the saturation curve is testable
+// directly.
+func loginLockoutDelay(failures int) time.Duration {
+	delay := loginLockoutBase
+	for range failures - 1 {
+		delay *= 2
+		if delay >= loginLockoutMax {
+			return loginLockoutMax
+		}
+	}
+	return delay
 }
 
 // rateGuard is where go/ratelimit's sliding-window counters (raw request
@@ -111,43 +176,135 @@ func (g *rateGuard) CheckLogin(ctx context.Context, account, ip string) error {
 // returned: the login attempt itself has already been refused or accepted
 // by the caller, and failing to RECORD that fact must not additionally
 // fail the response the caller already committed to.
+//
+// The recording is built from KVStore's atomic primitives rather than from
+// a read-modify-write cycle over a whole state value, because the two are
+// not the same thing under concurrency: a burst of login attempts that all
+// fail at once -- the exact shape an attacker produces while bursting the
+// per-minute quota -- used to lose most of its own failures (five
+// concurrent failures were measured landing as two), and since the delay
+// doubles per recorded failure, the lost ones are precisely what keeps the
+// progressive lockout from rising. See loginLockoutKeys' own doc comment
+// for the layout that closes that, and loginLockoutStateTTL's for the one
+// boundary it moves: the failure run's memory window now runs from the
+// run's first failure rather than being refreshed by each failure, so a
+// run that keeps failing for more than an hour ends at the window's edge
+// -- cutting short at most loginLockoutMax of whatever lockout it had
+// earned -- and the next failure starts a fresh run. Within a run,
+// escalation is unchanged, and no concurrent failure can be lost.
 func (g *rateGuard) RecordLoginFailure(ctx context.Context, account string) {
 	if account == "" {
 		return
 	}
-	state, err := g.readLoginLockoutState(ctx, account)
-	if err != nil {
-		obs.FromContext(ctx).Warn("login lockout state could not be read while recording a failure", "error", err)
-		state = loginLockoutState{}
-	}
-	state.Failures++
-	delay := loginLockoutBase
-	for range state.Failures - 1 {
-		delay *= 2
-		if delay >= loginLockoutMax {
-			delay = loginLockoutMax
-			break
-		}
-	}
-	state.LockedUntil = time.Now().Add(delay)
+	failuresKey, deadlineKey := loginLockoutKeys(account)
 
-	encoded, err := json.Marshal(state)
+	// The failure count: one atomic increment, with the run-memory expiry
+	// attached on the same call when this is the run's first failure.
+	// Every backend implements this as a single atomic operation, so N
+	// concurrent recorders end with a count of exactly N.
+	count, err := g.kv.IncrByFloatWithTTL(ctx, failuresKey, 1, loginLockoutStateTTL)
 	if err != nil {
-		obs.FromContext(ctx).Warn("login lockout state could not be encoded", "error", err)
+		obs.FromContext(ctx).Warn("login lockout count could not be recorded", "error", err)
 		return
 	}
-	if err := g.kv.Set(ctx, loginLockoutKeyPrefix+account, encoded, loginLockoutStateTTL); err != nil {
-		obs.FromContext(ctx).Warn("login lockout state could not be recorded", "error", err)
+	failures := int(count)
+
+	// The deadline this failure proposes: now plus the delay the count it
+	// just produced has earned. Stored as Unix microseconds in decimal
+	// text, an integer well inside float64's exact range.
+	proposal := time.Now().Add(loginLockoutDelay(failures)).UnixMicro()
+
+	// The deadline itself: a compare-and-swap that only ever moves the key
+	// FORWARD, retried when a concurrent recorder won the race in between.
+	// The swap condition -- propose only when the standing deadline is
+	// earlier, stop when an equal-or-later one already stands -- keeps the
+	// key monotone non-decreasing under any completion order, so a burst's
+	// final value is the latest deadline any of its recorders proposed:
+	// exactly what the same failures recorded one after another would have
+	// left. A recorder whose proposal loses to a later standing deadline
+	// has nothing to add -- the account is locked at least as long as its
+	// own failure alone would have locked it -- and a stale reader can
+	// never move the key backward.
+	for range loginLockoutCASAttempts {
+		deadlineBytes, found, err := g.kv.Get(ctx, deadlineKey)
+		if err != nil {
+			obs.FromContext(ctx).Warn("login lockout deadline could not be read", "error", err)
+			return
+		}
+		if !found {
+			// The key is absent -- a run is just starting, or a
+			// concurrent RecordLoginSuccess deleted it between our
+			// count increment and this read. Attach its expiry with a
+			// zero-delta increment rather than letting the
+			// compare-and-swap below create it with no expiry at all:
+			// without this, a sprayed account whose failures race its
+			// owner's successes could leave a deadline key behind that
+			// never ages out.
+			if _, initErr := g.kv.IncrByFloatWithTTL(ctx, deadlineKey, 0, loginLockoutStateTTL); initErr != nil {
+				obs.FromContext(ctx).Warn("login lockout deadline could not be initialized", "error", initErr)
+				return
+			}
+			continue
+		}
+		// The stored encoding is the store's own shortest-decimal float
+		// text, which can be exponent-shaped for values this large
+		// (pkgcore's contract: parse with strconv.ParseFloat, never as
+		// text). Unix microseconds stay exact through float64 well past
+		// any real timestamp.
+		stored, parseErr := strconv.ParseFloat(string(deadlineBytes), 64)
+		if parseErr != nil {
+			obs.FromContext(ctx).Warn("login lockout deadline is unreadable", "error", parseErr)
+			return
+		}
+		current := int64(stored)
+		if current >= proposal {
+			// A deadline at least as late as this failure's already
+			// stands; nothing to add.
+			return
+		}
+		// The old value is the exact bytes just read: a compare-and-swap
+		// compares bytes, so re-encoding the parsed value could never
+		// match a store whose canonical float text differs from ours.
+		// The new value is our own plain decimal, which the numeric
+		// stores parse and re-encode freely.
+		swapped, err := g.kv.CompareAndSwap(ctx, deadlineKey,
+			deadlineBytes, []byte(strconv.FormatInt(proposal, 10)))
+		if err != nil {
+			obs.FromContext(ctx).Warn("login lockout deadline could not be extended", "error", err)
+			return
+		}
+		if swapped {
+			return
+		}
+		// Lost the race to a concurrent recorder: retry against the value
+		// it left behind.
 	}
+	obs.FromContext(ctx).Warn("login lockout deadline could not be extended after repeated contention")
 }
 
-// RecordLoginSuccess clears account's progressive delay.
+// loginLockoutCASAttempts bounds the compare-and-swap retries one recorded
+// failure may make against the deadline key. Exhausting it is not a path
+// that is expected to be taken: contention means other recorders of the
+// SAME account are completing, each of which is itself extending the
+// deadline, so even a recorder that gives up here has not cost the account
+// its lockout -- only this one failure's own increment toward the next
+// escalation remains unrepresented in the deadline (the failure count it
+// produced is already on the failures key, so the delay the NEXT failure
+// computes still sees it).
+const loginLockoutCASAttempts = 8
+
+// RecordLoginSuccess clears account's progressive delay. Deleting a key
+// that is not there is not an error, so clearing half-written state (a
+// count without a deadline, say) is just as safe as clearing the full run.
 func (g *rateGuard) RecordLoginSuccess(ctx context.Context, account string) {
 	if account == "" {
 		return
 	}
-	if err := g.kv.Delete(ctx, loginLockoutKeyPrefix+account); err != nil {
-		obs.FromContext(ctx).Warn("login lockout state could not be cleared", "error", err)
+	failuresKey, deadlineKey := loginLockoutKeys(account)
+	for _, key := range []string{failuresKey, deadlineKey} {
+		if err := g.kv.Delete(ctx, key); err != nil {
+			obs.FromContext(ctx).Warn("login lockout state could not be cleared", "error", err)
+		}
 	}
 }
 
@@ -255,16 +412,31 @@ func (g *rateGuard) loginLocked(ctx context.Context, account string) (bool, time
 // readLoginLockoutState reads account's lockout state, returning the zero
 // value (never locked, zero failures) when none is stored yet.
 func (g *rateGuard) readLoginLockoutState(ctx context.Context, account string) (loginLockoutState, error) {
-	raw, found, err := g.kv.Get(ctx, loginLockoutKeyPrefix+account)
+	state := loginLockoutState{}
+	failuresKey, deadlineKey := loginLockoutKeys(account)
+
+	countRaw, found, err := g.kv.Get(ctx, failuresKey)
 	if err != nil {
 		return loginLockoutState{}, err
 	}
-	if !found {
-		return loginLockoutState{}, nil
+	if found {
+		count, parseErr := strconv.ParseFloat(string(countRaw), 64)
+		if parseErr != nil {
+			return loginLockoutState{}, parseErr
+		}
+		state.Failures = int(count)
 	}
-	var state loginLockoutState
-	if err := json.Unmarshal(raw, &state); err != nil {
+
+	deadlineRaw, found, err := g.kv.Get(ctx, deadlineKey)
+	if err != nil {
 		return loginLockoutState{}, err
+	}
+	if found {
+		micro, parseErr := strconv.ParseFloat(string(deadlineRaw), 64)
+		if parseErr != nil {
+			return loginLockoutState{}, parseErr
+		}
+		state.LockedUntil = time.UnixMicro(int64(micro))
 	}
 	return state, nil
 }

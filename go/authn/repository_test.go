@@ -333,8 +333,12 @@ func TestSessionRepository_SetCurrentTenantAndListByUser(t *testing.T) {
 		t.Errorf("ListByUser()[0] = %s, want the newest session %s", listed[0].ID, ids[2])
 	}
 
-	if setErr := repo.SetCurrentTenant(ctx, ids[0], pkgcore.TenantID("tenant-b")); setErr != nil {
+	switched, setErr := repo.SetCurrentTenant(ctx, ids[0], pkgcore.TenantID("tenant-b"))
+	if setErr != nil {
 		t.Fatalf("SetCurrentTenant() error = %v", setErr)
+	}
+	if !switched {
+		t.Fatal("SetCurrentTenant() reported no change for an ACTIVE session")
 	}
 	stored, err := repo.FindByID(ctx, ids[0])
 	if err != nil {
@@ -342,6 +346,54 @@ func TestSessionRepository_SetCurrentTenantAndListByUser(t *testing.T) {
 	}
 	if stored.CurrentTenantID != "tenant-b" {
 		t.Errorf("CurrentTenantID = %q, want %q", stored.CurrentTenantID, "tenant-b")
+	}
+}
+
+// TestSessionRepository_SetCurrentTenant_OnRevokedSessionReportsNoChange is
+// the regression for the audit finding that SetCurrentTenant dropped its own
+// CAS result: the status in the WHERE clause is a compare-and-swap, and a
+// caller that ignores whether it swapped proceeds as if the switch landed.
+// A revoked session must report false -- the exact signal the concurrent
+// revoke-versus-switch race needs -- never a nil error meaning "done".
+func TestSessionRepository_SetCurrentTenant_OnRevokedSessionReportsNoChange(t *testing.T) {
+	t.Parallel()
+
+	db := testutil.NewDB(t)
+	repo := newTestSessionRepository(t, db)
+	ctx := t.Context()
+	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+
+	s := &Session{
+		UserID: "user-revoked", CurrentTenantID: "tenant-a",
+		CreatedAt: base, LastSeenAt: base, ExpiresAt: base.Add(time.Hour),
+	}
+	if err := repo.Create(ctx, s); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	revoked, err := repo.Revoke(ctx, s.ID, RevokeReasonLogout, base.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Revoke() error = %v", err)
+	}
+	if !revoked {
+		t.Fatal("Revoke() reported no change for an ACTIVE session")
+	}
+
+	switched, err := repo.SetCurrentTenant(ctx, s.ID, pkgcore.TenantID("tenant-b"))
+	if err != nil {
+		t.Fatalf("SetCurrentTenant() error = %v", err)
+	}
+	if switched {
+		t.Fatal("SetCurrentTenant() reported a change for a REVOKED session; the status clause must make it a no-op")
+	}
+	stored, err := repo.FindByID(ctx, s.ID)
+	if err != nil {
+		t.Fatalf("FindByID() error = %v", err)
+	}
+	if stored.CurrentTenantID != "tenant-a" {
+		t.Errorf("CurrentTenantID = %q, want the pre-switch tenant %q (the CAS must not have landed)", stored.CurrentTenantID, "tenant-a")
+	}
+	if stored.Status != SessionStatusRevoked {
+		t.Errorf("stored status = %q, want %q", stored.Status, SessionStatusRevoked)
 	}
 }
 

@@ -57,8 +57,34 @@ import in the other direction is a merge blocker rather than a style note.
 | `RegisterPIISerializer(cipher) error` | Registers the field-encryption serializer under `SerializerName`. **Call before opening the `*gorm.DB`.** |
 | `WithKeySource`, `WithBlindIndexKey` | **Required.** No safe default exists for either. `WithKeySource` replaced `WithSigningKeys` in the pki-integration round (breaking, no back-compat path) -- see "Tokens and passwords" below. |
 | `WithMembershipReader` | The seam through which membership is asked. Absent means "refuse", not "allow". |
+| `WithFeatureGate` | Makes this module's declared feature flags (`authn.password_login`, `authn.sms_login`, the five `authn.social.*` channels, `authn.sso.oidc`) effective at request time. `*config.Service` satisfies the `FeatureGate` interface structurally. See "Feature flags are enforced through a host-supplied gate" below. |
 | `WithClock`, `WithIssuer`, `WithAccessTokenTTL`, `WithRefreshTokenTTL`, `WithSessionTTL`, `WithRevocationMode`, `WithPasswordParams`, `WithPasswordPolicy` | Everything else. A nil or non-positive value leaves the default in place. |
 | `WithSMSSender`, `WithDeploymentMode`, `WithSMSCodeTTL`, `WithSMSCodeMaxAttempts` | The phone-login transport and its lifetime/attempt budget. See "A distributed deployment must wire an `SMSSender`" below for what `WithDeploymentMode` is for. |
+
+### Feature flags are enforced through a host-supplied gate
+
+This module declares eight feature flags in `Register` (`authn.password_login`,
+`authn.sms_login`, one per social channel, `authn.sso.oidc`) and enforces them
+at request time through the `FeatureGate` seam (`WithFeatureGate`): with a gate
+wired and a channel's flag off, every entry point of that channel refuses with
+`authn.channel_disabled` -- the password endpoint stops issuing tokens, the
+SMS endpoints stop sending and redeeming codes, the social authorize/callback
+pair stops starting or completing flows, and the enterprise relying party's
+`AuthorizeURL`/`Callback` refuse. The refusal makes the API agree with the
+login page, whose channel visibility comes from the same flag values served by
+the config module's pre-authentication features endpoint.
+
+The gate is structurally satisfied by `*config.Service` -- authn never imports
+config. **A host that has the config module in its deployment should wire its
+service here** (read lazily at call time, the `orgFeatureGate` trick in the
+reference app's `cmd/server/server.go` is the canonical shape, since
+`configModule.Attach` produces the service only after `Bootstrap` returns). A
+nil gate -- the no-config-module deployment -- leaves every channel enabled,
+the module's pre-seam behavior: there is no feature store for an operator to
+have disabled anything in, so there is no intent for the module to enforce.
+This is the one known wiring gap left by the round that landed the seam: the
+reference app itself does not pass `WithFeatureGate` yet, so its flags remain
+unenforced there until that one-line wiring lands with its config service.
 
 ### Platform search: `SearchUsers` does no authorization of its own
 

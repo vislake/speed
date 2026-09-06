@@ -203,6 +203,7 @@ type Service struct {
 	verifier    *Verifier
 	bus         pkgcore.EventBus
 	membership  MembershipReader
+	features    FeatureGate
 	now         func() time.Time
 	params      PasswordParams
 	policy      PasswordPolicy
@@ -347,6 +348,7 @@ func NewService(db *gorm.DB, bus pkgcore.EventBus, kv pkgcore.KVStore, opts ...O
 		verifier:         verifier,
 		bus:              bus,
 		membership:       cfg.membership,
+		features:         cfg.featureGate,
 		now:              cfg.now,
 		params:           cfg.passwordParams,
 		policy:           cfg.passwordPolicy,
@@ -492,6 +494,36 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*TokenPair, error) 
 	return pair, err
 }
 
+// channelEnabled is the enforcement point this module's declared feature
+// flags run through (see module.go's FeatureGate and the FeatureFlag*
+// constants for the contract). It refuses a request that tries to use a
+// sign-in channel the deployment turned off.
+//
+// A nil gate allows every channel: this deployment has no feature-flag
+// module, so there is nowhere an operator could have disabled anything, and
+// the channels the host wired are the channels that exist -- the behavior
+// this module had before the seam existed. With a gate wired, a channel
+// whose flag is off refuses with ErrChannelDisabled, and a gate that cannot
+// be read refuses too: failing CLOSED on "cannot answer whether the channel
+// is on" is the same policy CheckLogin and the revocation check apply to
+// their own unanswerable questions, and the alternative -- letting a config
+// outage quietly re-enable every channel an operator disabled -- is exactly
+// the bypass this seam exists to close.
+func (s *Service) channelEnabled(ctx context.Context, key string) error {
+	if s.features == nil {
+		return nil
+	}
+	enabled, err := s.features.IsEnabled(ctx, key)
+	if err != nil {
+		obs.FromContext(ctx).Error("sign-in channel flag could not be read", "channel", key, "error", err)
+		return ErrInternal.WithCause(err)
+	}
+	if !enabled {
+		return ErrChannelDisabled.WithParam("channel", key)
+	}
+	return nil
+}
+
 // login is Login's actual implementation, split out into its own unexported
 // method purely so Login's own body can wrap it in the two lines that
 // record authOpLogin's count/duration without introducing a NAMED return
@@ -501,6 +533,16 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*TokenPair, error) 
 // enable-all setting), which is why Refresh and VerifyStepUp use the
 // identical split rather than a named return of their own.
 func (s *Service) login(ctx context.Context, in LoginInput) (*TokenPair, error) {
+	// The channel gate runs before anything else -- before the identifier
+	// is even normalized -- so a disabled channel costs an attacker
+	// nothing to probe and buys the account nothing in lockout state: the
+	// flag's value is public (the login page reads it pre-auth), so there
+	// is no information to protect and no reason to burn rate-limit or
+	// argon2id budget on a channel the deployment turned off.
+	if err := s.channelEnabled(ctx, FeatureFlagPasswordLogin); err != nil {
+		return nil, err
+	}
+
 	identifier := strings.TrimSpace(in.Identifier)
 	// account is the blind index the progressive lockout and the
 	// per-account sliding window key on. It is computed even for an
@@ -740,8 +782,21 @@ func (s *Service) SwitchTenant(ctx context.Context, principal Principal, target 
 	}
 
 	previous := session.CurrentTenantID
-	if setErr := s.sessionRepo.SetCurrentTenant(ctx, session.ID, target); setErr != nil {
+	switched, setErr := s.sessionRepo.SetCurrentTenant(ctx, session.ID, target)
+	if setErr != nil {
 		return nil, setErr
+	}
+	if !switched {
+		// The update's WHERE status = active clause matched no row, which
+		// means the session was revoked between the read above and this
+		// write. Refusing to mint is what closes the race: without this
+		// check the caller would receive a full-lifetime token pair for a
+		// session a concurrent sign-out just killed -- and under the
+		// natural revocation mode nothing downstream consults the
+		// revocation list, so that token would stay valid for its whole
+		// TTL. The database has already decided, and the answer is the
+		// same one a read that noticed the revoked status would give.
+		return nil, ErrSessionRevoked
 	}
 	session.CurrentTenantID = string(target)
 

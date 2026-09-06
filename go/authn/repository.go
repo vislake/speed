@@ -475,11 +475,22 @@ func RegisterPIISerializer(cipher *dbkit.Cipher) error {
 }
 
 // SetCurrentTenant records which tenant a session's access tokens are now
-// being issued for. It is what a tenant switch persists; the caller has
-// already verified membership in tenantID, because this method does not and
-// cannot.
-func (r *SessionRepository) SetCurrentTenant(ctx context.Context, id string, tenantID pkgcore.TenantID) error {
-	return r.db.WithContext(ctx).
+// being issued for, and reports whether it did so. It is what a tenant switch
+// persists; the caller has already verified membership in tenantID, because
+// this method does not and cannot.
+//
+// The status is part of the WHERE clause rather than checked beforehand, for
+// the same reason Revoke's own doc comment gives: a tenant switch racing a
+// revocation is decided by the database, not by a read the caller performed
+// a moment earlier. A false result means the session was no longer ACTIVE
+// when the update ran -- already revoked, or never existed -- and the caller
+// must treat it as such rather than proceeding as if the switch had landed.
+func (r *SessionRepository) SetCurrentTenant(ctx context.Context, id string, tenantID pkgcore.TenantID) (bool, error) {
+	res := r.db.WithContext(ctx).
 		Where("id = ? AND status = ?", id, SessionStatusActive).
-		Updates(&Session{CurrentTenantID: string(tenantID)}).Error
+		Updates(&Session{CurrentTenantID: string(tenantID)})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
 }

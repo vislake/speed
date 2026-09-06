@@ -47,6 +47,7 @@
 "authn.sso_token_invalid" = "The single sign-on credential could not be verified. Sign in again."
 "authn.rate_limited" = "Too many attempts. Try again shortly."
 "authn.account_locked" = "This account was temporarily locked after several failed sign-in attempts. Try again shortly."
+"authn.channel_disabled" = "This sign-in method has been turned off. Use another one, or contact your administrator."
 "authn.verification_code_invalid" = "That verification code is wrong or no longer valid."
 "authn.sms_delivery_failed" = "The text message could not be sent. Try again shortly."
 "authn.mfa_not_enrolled" = "Two-factor authentication is not enabled."

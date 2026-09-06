@@ -45,6 +45,7 @@
 "authn.sso_token_invalid" = "企业单点登录凭证校验失败，请重新登录。"
 "authn.rate_limited" = "操作过于频繁，请稍后重试。"
 "authn.account_locked" = "由于连续多次登录失败，该账号已被临时锁定，请稍后重试。"
+"authn.channel_disabled" = "该登录方式已停用，请使用其他方式登录，或联系管理员。"
 "authn.verification_code_invalid" = "验证码错误或已失效。"
 "authn.sms_delivery_failed" = "短信发送失败，请稍后重试。"
 "authn.mfa_not_enrolled" = "尚未启用两步验证。"
