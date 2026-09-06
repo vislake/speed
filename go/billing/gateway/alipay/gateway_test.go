@@ -232,6 +232,80 @@ func TestGateway_QueryStatus_ResponseSignedByWrongKey(t *testing.T) {
 	}
 }
 
+// TestGateway_CreateCharge_RefusesNonCNYCurrency is P1-3's regression test:
+// CreateCharge used to ignore req.Amount.Currency entirely (formatAmount's
+// own doc comment admitted a non-CNY request was "a caller error this
+// package does not detect"), silently collecting a caller-supplied non-CNY
+// amount as if it were the same number of CNY cents. This test fails on
+// pre-fix code (which reaches the network instead of refusing) by
+// asserting the call never reaches doer.Do at all.
+func TestGateway_CreateCharge_RefusesNonCNYCurrency(t *testing.T) {
+	_, alipayPubPEM, _ := generateTestKeyPair(t)
+	cfg := testGatewayConfig(t, alipayPubPEM)
+
+	doer := &fakeDoer{
+		respond: func(url.Values) (int, []byte) {
+			t.Fatal("CreateCharge reached the network for a non-CNY currency; requireCNY should have refused it first")
+			return 0, nil
+		},
+	}
+	gw, err := newGatewayWithClient(doer, cfg)
+	if err != nil {
+		t.Fatalf("newGatewayWithClient: %v", err)
+	}
+
+	_, err = gw.CreateCharge(context.Background(), billing.ChargeRequest{
+		TenantID:       "tenant-a",
+		SubscriptionID: "sub-1",
+		InvoiceID:      "inv-1",
+		Amount:         billing.Money{Cents: 2900, Currency: "USD"},
+		Description:    "Pro plan",
+		IdempotencyKey: "idem-1",
+	})
+	if !hasCode(err, billing.ErrUnsupportedCurrency.Code) {
+		t.Errorf("err = %v, want billing.ErrUnsupportedCurrency", err)
+	}
+}
+
+// TestGateway_CreateCharge_AcceptsLowercaseCNY proves requireCNY's
+// case-insensitive comparison: a caller spelling the currency "cny"
+// (lowercase, e.g. matching Stripe's own lowercase currency convention
+// elsewhere in this codebase) must not be refused.
+func TestGateway_CreateCharge_AcceptsLowercaseCNY(t *testing.T) {
+	_, alipayPubPEM, alipayPriv := generateTestKeyPair(t)
+	cfg := testGatewayConfig(t, alipayPubPEM)
+
+	doer := &fakeDoer{
+		respond: func(form url.Values) (int, []byte) {
+			var biz map[string]string
+			if err := json.Unmarshal([]byte(form.Get("biz_content")), &biz); err != nil {
+				t.Fatalf("decode biz_content: %v", err)
+			}
+			body := signAlipayResponse(t, "alipay_trade_precreate_response", map[string]any{
+				"code": "10000", "msg": "Success",
+				"out_trade_no": biz["out_trade_no"], "qr_code": "https://qr.alipay.com/fake",
+			}, alipayPriv)
+			return 200, body
+		},
+	}
+	gw, err := newGatewayWithClient(doer, cfg)
+	if err != nil {
+		t.Fatalf("newGatewayWithClient: %v", err)
+	}
+
+	_, err = gw.CreateCharge(context.Background(), billing.ChargeRequest{
+		TenantID:       "tenant-a",
+		SubscriptionID: "sub-1",
+		InvoiceID:      "inv-1",
+		Amount:         billing.Money{Cents: 2900, Currency: "cny"},
+		Description:    "Pro plan",
+		IdempotencyKey: "idem-1",
+	})
+	if err != nil {
+		t.Errorf("CreateCharge: %v, want lowercase \"cny\" accepted", err)
+	}
+}
+
 func TestNewGateway_RequiresConfig(t *testing.T) {
 	if _, err := NewGateway(Config{}); err == nil {
 		t.Error("NewGateway(Config{}) = nil error, want an error")

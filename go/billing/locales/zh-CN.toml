@@ -37,3 +37,5 @@
 "billing.channel_reference_not_found" = "支付渠道未找到该渠道引用 \"{{.channel_reference}}\" 对应的记录。"
 
 "billing.payment_event_not_found" = "未找到 id 为 \"{{.id}}\" 的支付事件。"
+
+"billing.unsupported_currency" = "支付渠道 \"{{.channel}}\" 不支持币种 \"{{.currency}}\"，仅支持 {{.supported_currency}} 结算。"

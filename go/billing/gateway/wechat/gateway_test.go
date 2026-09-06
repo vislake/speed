@@ -266,6 +266,74 @@ func TestGateway_QueryStatus_ResponseSignedByWrongKey(t *testing.T) {
 	}
 }
 
+// TestGateway_CreateCharge_RefusesNonCNYCurrency is P1-3's regression test:
+// CreateCharge used to hardcode "currency":"CNY" into its outgoing request
+// body regardless of req.Amount.Currency, silently collecting a
+// caller-supplied non-CNY amount as if it were the same number of CNY
+// cents. This test fails on pre-fix code (which reaches the network and
+// returns a fabricated success instead of refusing) by asserting the call
+// never reaches doer.Do at all.
+func TestGateway_CreateCharge_RefusesNonCNYCurrency(t *testing.T) {
+	_, platformPubPEM, _ := generateTestKeyPair(t)
+	cfg := testGatewayConfig(t, platformPubPEM)
+
+	doer := &fakeDoer{
+		respond: func(*http.Request, []byte) (int, []byte) {
+			t.Fatal("CreateCharge reached the network for a non-CNY currency; requireCNY should have refused it first")
+			return 0, nil
+		},
+	}
+	gw, err := newGatewayWithClient(doer, cfg)
+	if err != nil {
+		t.Fatalf("newGatewayWithClient: %v", err)
+	}
+
+	_, err = gw.CreateCharge(context.Background(), billing.ChargeRequest{
+		TenantID:       "tenant-a",
+		SubscriptionID: "sub-1",
+		InvoiceID:      "inv-1",
+		Amount:         billing.Money{Cents: 2900, Currency: "USD"},
+		Description:    "Pro plan",
+		IdempotencyKey: "idem-1",
+	})
+	if !hasCode(err, billing.ErrUnsupportedCurrency.Code) {
+		t.Errorf("err = %v, want billing.ErrUnsupportedCurrency", err)
+	}
+}
+
+// TestGateway_CreateCharge_AcceptsLowercaseCNY proves requireCNY's
+// case-insensitive comparison: a caller spelling the currency "cny"
+// (lowercase, e.g. matching Stripe's own lowercase currency convention
+// elsewhere in this codebase) must not be refused.
+func TestGateway_CreateCharge_AcceptsLowercaseCNY(t *testing.T) {
+	_, platformPubPEM, platformPriv := generateTestKeyPair(t)
+	cfg := testGatewayConfig(t, platformPubPEM)
+
+	doer := &fakeDoer{
+		platform: platformPriv,
+		respond: func(*http.Request, []byte) (int, []byte) {
+			respBody, _ := json.Marshal(map[string]string{"code_url": "weixin://wxpay/bizpayurl?pr=fake"})
+			return 200, respBody
+		},
+	}
+	gw, err := newGatewayWithClient(doer, cfg)
+	if err != nil {
+		t.Fatalf("newGatewayWithClient: %v", err)
+	}
+
+	_, err = gw.CreateCharge(context.Background(), billing.ChargeRequest{
+		TenantID:       "tenant-a",
+		SubscriptionID: "sub-1",
+		InvoiceID:      "inv-1",
+		Amount:         billing.Money{Cents: 2900, Currency: "cny"},
+		Description:    "Pro plan",
+		IdempotencyKey: "idem-1",
+	})
+	if err != nil {
+		t.Errorf("CreateCharge: %v, want lowercase \"cny\" accepted", err)
+	}
+}
+
 func TestNewGateway_RequiresConfig(t *testing.T) {
 	if _, err := NewGateway(Config{}); err == nil {
 		t.Error("NewGateway(Config{}) = nil error, want an error")

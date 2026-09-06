@@ -82,6 +82,10 @@ func newGatewayWithClient(client httpDoer, cfg Config) (*Gateway, error) {
 // verbatim on the matching notification -- normalizeNotify decodes it back
 // out.
 func (g *Gateway) CreateCharge(ctx context.Context, req billing.ChargeRequest) (billing.ChargeHandle, error) {
+	if err := requireCNY(req.Amount.Currency); err != nil {
+		return billing.ChargeHandle{}, err
+	}
+
 	outTradeNo := outTradeNoFor(req)
 	passback, err := encodePassback(req)
 	if err != nil {
@@ -159,11 +163,31 @@ func outTradeNoFor(req billing.ChargeRequest) string {
 
 // formatAmount renders cents as Alipay's own decimal yuan string
 // ("total_amount"), e.g. 2900 -> "29.00". Alipay only ever settles in CNY
-// for this product, so no currency conversion is performed or checked here
-// -- a caller passing a non-CNY Money is a caller error this package does
-// not detect (see go/billing/gateway/AGENTS.md's Known limitations).
+// for this product, so no currency conversion is performed here -- CreateCharge's
+// own requireCNY call already refused any non-CNY req.Amount before this is
+// reached.
 func formatAmount(cents int64) string {
 	return strconv.FormatInt(cents/100, 10) + "." + fmt.Sprintf("%02d", cents%100)
+}
+
+// requireCNY refuses currency at the CreateCharge boundary unless it names
+// CNY (case-insensitively) -- Alipay's Native (QR-code) product only ever
+// settles in CNY (docs/internal/06-billing-and-metering.md's
+// domestic-plus-international dual payment mode; go/billing/gateway/AGENTS.md's
+// own domestic-leg trade-off section), so a request naming any other
+// currency must be refused here rather than silently collected as CNY --
+// formatAmount's own cents-to-yuan conversion has no unit conversion of its
+// own, so a caller-supplied USD/EUR/etc amount would otherwise be sent to
+// Alipay, and collected from the payer, as if it were the same number of
+// CNY cents.
+func requireCNY(currency string) error {
+	if !strings.EqualFold(currency, "CNY") {
+		return billing.ErrUnsupportedCurrency.
+			WithParam("currency", currency).
+			WithParam("channel", "alipay").
+			WithParam("supported_currency", "CNY")
+	}
+	return nil
 }
 
 // passbackPayload is what CreateCharge JSON-encodes into passback_params
@@ -223,6 +247,13 @@ func (g *Gateway) QueryStatus(ctx context.Context, ref billing.ChannelReference)
 	if err != nil {
 		return "", billing.Money{}, err
 	}
+	// Alipay's alipay.trade.query response carries no currency field of its
+	// own (total_amount is a bare decimal yuan string) -- reporting "CNY"
+	// here is honest, not a fabrication, precisely BECAUSE CreateCharge's own
+	// requireCNY call refuses every non-CNY ChargeRequest before an order can
+	// ever be created: every ref this method can be asked about genuinely is
+	// a CNY order, by construction, never an assumption papering over a
+	// silently-accepted foreign currency.
 	return tradeStatusToChannelStatus(resp.Response.TradeStatus), billing.Money{Cents: amount, Currency: "CNY"}, nil
 }
 

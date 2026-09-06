@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/vislake/speed/go/billing"
 )
@@ -83,6 +84,10 @@ type attachPayload struct {
 // never a native recurring subscription (WeChat Pay has none at this
 // repository's target tier).
 func (g *Gateway) CreateCharge(ctx context.Context, req billing.ChargeRequest) (billing.ChargeHandle, error) {
+	if err := requireCNY(req.Amount.Currency); err != nil {
+		return billing.ChargeHandle{}, err
+	}
+
 	outTradeNo := outTradeNoFor(req)
 	attach, err := json.Marshal(attachPayload{TenantID: req.TenantID, SubscriptionID: req.SubscriptionID, InvoiceID: req.InvoiceID})
 	if err != nil {
@@ -97,7 +102,13 @@ func (g *Gateway) CreateCharge(ctx context.Context, req billing.ChargeRequest) (
 		"notify_url":   g.cfg.NotifyURL,
 		"attach":       string(attach),
 		"amount": map[string]any{
-			"total":    req.Amount.Cents,
+			"total": req.Amount.Cents,
+			// "CNY" verbatim, not req.Amount.Currency: requireCNY above
+			// already refused any request whose currency was not CNY
+			// (case-insensitively), so this is the normalized, canonical
+			// ISO 4217 form WeChat Pay's own API expects, never a second,
+			// independent currency claim that could drift from the check
+			// just performed.
 			"currency": "CNY",
 		},
 	})
@@ -141,13 +152,38 @@ func outTradeNoFor(req billing.ChargeRequest) string {
 	return req.InvoiceID
 }
 
+// requireCNY refuses currency at the CreateCharge boundary unless it names
+// CNY (case-insensitively) -- WeChat Pay's Native (QR-code) product only
+// ever settles in CNY (docs/internal/06-billing-and-metering.md's
+// domestic-plus-international dual payment mode; go/billing/gateway/AGENTS.md's
+// own domestic-leg trade-off section), so a request naming any other
+// currency must be refused here rather than silently collected as CNY --
+// CreateCharge's own request body used to hardcode "currency":"CNY" with no
+// check at all, so a caller-supplied USD/EUR/etc amount would have been
+// sent to WeChat Pay, and collected from the payer, as if it were the same
+// number of CNY cents.
+func requireCNY(currency string) error {
+	if !strings.EqualFold(currency, "CNY") {
+		return billing.ErrUnsupportedCurrency.
+			WithParam("currency", currency).
+			WithParam("channel", "wechat").
+			WithParam("supported_currency", "CNY")
+	}
+	return nil
+}
+
 // QueryStatus implements billing.PaymentGateway: calls
 // `GET /v3/pay/transactions/out-trade-no/{out_trade_no}` for ref and maps
 // its trade_state to a billing.ChannelStatus -- the authoritative re-query
 // docs/internal/06-billing-and-metering.md's callbacks-cannot-be-trusted
 // rule requires. The response's own Wechatpay-Signature header is verified
 // against the configured platform public key before anything in the body
-// is trusted, exactly like an inbound notification.
+// is trusted, exactly like an inbound notification. Unlike alipay's own
+// QueryStatus, the reported Currency below already comes straight from
+// WeChat Pay's own response body (resp.Amount.Currency), never hardcoded --
+// WeChat Pay's API genuinely echoes back the currency it holds for the
+// order, so no CreateCharge-side enforcement is needed to make this
+// honest.
 func (g *Gateway) QueryStatus(ctx context.Context, ref billing.ChannelReference) (billing.ChannelStatus, billing.Money, error) {
 	path := fmt.Sprintf("/v3/pay/transactions/out-trade-no/%s?mchid=%s", string(ref), g.cfg.MchID)
 

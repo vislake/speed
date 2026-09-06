@@ -105,6 +105,14 @@ var (
 	// ErrPaymentEventNotFound reports that no PaymentEvent row exists for
 	// the requested id, for the requesting tenant.
 	ErrPaymentEventNotFound = apperr.NotFound("billing.payment_event_not_found")
+
+	// ErrUnsupportedCurrency reports that a ChargeRequest named a currency
+	// the target payment channel cannot actually collect -- Alipay and
+	// WeChat Pay's Native (QR-code) product only ever settle in CNY
+	// (go/billing/gateway/AGENTS.md's own domestic-leg trade-off), so a
+	// request naming any other currency is refused at the CreateCharge
+	// boundary rather than silently collected as if it were CNY.
+	ErrUnsupportedCurrency = apperr.Invalid("billing.unsupported_currency")
 )
 
 // hasCode reports whether err is (or wraps, via apperr.As's Unwrap chain
