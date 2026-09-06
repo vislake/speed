@@ -437,3 +437,27 @@ called again.
   wiring (`cmd/server/server.go`'s shared `StandaloneQueue`); tracked as a
   follow-up for whichever round next touches `go/storage`'s derive gate or
   `go/jobs`' `StandaloneQueue` defaults.
+  **Correction, 2026-09-06:** this entry's own framing above --
+  "`go/jobs`' own retry/backoff is the existing, working convergence
+  mechanism" -- was true of the *job's own eventual outcome*
+  (`cmd/server/smilesim_flow_test.go` does converge) but glossed over a
+  real, separately audited bug in what that convergence actually cost: if
+  the attempt that loses the `SQLITE_BUSY` race is `imageGenerateHandler
+  .Handle` itself, mid-`writeImageObject` (its own `Create`/`Complete`
+  calls are ordinary write transactions, exactly the kind this section
+  says can lose the lock race), the failure lands AFTER the vendor call
+  earlier in that same attempt already succeeded -- and prior to this
+  date, a retry re-ran the ENTIRE handler unconditionally, calling the
+  vendor a second time (re-billing the tenant) and reporting a second
+  usage event under a fresh random `IdempotencyKey` no `UsageRecorder`
+  could dedup. This is now closed: `image_job_store.go`'s
+  `ai_gateway_image_jobs` marker records "the vendor already answered"
+  the instant it happens, before `writeImageObject` is even attempted, so
+  a retry landing here -- from this WARN's own contention or any other
+  cause -- reuses the vendor's prior answer and never calls it again, and
+  `recordImageUsage` is gated on the marker's own guarded completion so
+  usage is reported at most once regardless. The invariant now holds for
+  every path into a retry of this job, this WARN's scenario included, not
+  only the specific one this fix's own test reproduces
+  (`image_gateway_test.go`'s
+  `TestImageGenerateHandler_RetryAfterVendorSuccess_DoesNotRecallVendorOrDoubleRecordUsage`).
