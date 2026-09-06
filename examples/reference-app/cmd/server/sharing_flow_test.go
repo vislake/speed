@@ -1,28 +1,24 @@
 package main
 
-// sharing_flow_test.go is go/sharing's round-2 mandatory-first-consumer
-// proof: it drives the module's one public HTTP route through the real
-// composed stack buildTestServer wires (server.go's tenancy allowlist,
-// demo_subject.go's routePublic gate, sharing.Handler, a real SQLite
-// database), the same two-layer standard every other module's own flow
-// test in this file's package already meets.
+// sharing_flow_test.go is go/sharing's mandatory-first-consumer proof,
+// covering both HTTP surfaces the module ships: the round-2 public,
+// unauthenticated access route and the round-3 owner-facing create/list/
+// get/revoke/access-log routes. Every operation drives the real composed
+// stack buildTestServer wires (server.go's tenancy allowlist,
+// demo_subject.go's routePublic gate for the access route and its
+// sharingPermissionFor gate for the owner-facing ones, sharing.Handler, a
+// real SQLite database), the same two-layer standard every other module's
+// own flow test in this file's package already meets.
 //
-// Create and Revoke stay Service-level this round (go/sharing/AGENTS.md
-// records why: no owner-facing HTTP surface exists yet, only the public
-// access route does), so this file mints and revokes the share through a
-// second sharing.Module built over a second connection to the exact same
-// SQLite file the running server itself opened -- the identical
-// "buildServer hands out neither its *gorm.DB nor a module's own service,
-// so a second connection is the only reach a test has into storage"
-// pattern server_test.go's TestBuildServer_NoteCreate_PersistsAuditEvent
-// and public_config_test.go's buildSeededTestServer already use for their
-// own tables. The share row this second module writes lands in the same
-// file the running server's own sharingModule (server.go) reads from, so
-// a real HTTP GET against the running server sees it.
+// Create, list, get, revoke and the access log all go through the real
+// owner-facing HTTP routes now (sharing.PathShares) -- round 2's
+// "secondSharingService" workaround (a second connection to the running
+// server's own SQLite file, standing in for the HTTP surface this round
+// adds) is retired along with it; go/sharing/AGENTS.md records exactly why
+// that workaround existed and what retired it.
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"image"
 	"image/color"
@@ -32,8 +28,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/vislake/speed/go/dbkit"
-	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/sharing"
 )
 
@@ -41,7 +35,7 @@ import (
 // media-type allowlist (defaultAllowedTypes, go/storage/module.go) accepts
 // only image/jpeg and image/png, so this module's own flow test needs a
 // genuine image, not an arbitrary byte string, to get past storage's own
-// declare/complete gate before sharing.Service.Create ever runs.
+// declare/complete gate before sharing_createShare ever runs.
 func sharingTestJPEG(t *testing.T) []byte {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, 16, 12))
@@ -55,37 +49,6 @@ func sharingTestJPEG(t *testing.T) []byte {
 		t.Fatalf("encode test jpeg: %v", err)
 	}
 	return buf.Bytes()
-}
-
-// secondSharingService opens a second connection to the same SQLite file
-// the running test server itself opened (cfg.SQLitePath) and returns a
-// sharing.Service backed by it, bootstrapped through a throwaway registry
-// of its own -- distinct from the running server's real registry, but
-// writing into the exact same tables, since dbkit.MigrationRegistry.Apply
-// already ran the migrations once, through the running server's own boot.
-func secondSharingService(t *testing.T, cfg serverConfig) *sharing.Service {
-	t.Helper()
-
-	db, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: cfg.SQLitePath})
-	if err != nil {
-		t.Fatalf("open second connection to %q: %v", cfg.SQLitePath, err)
-	}
-	t.Cleanup(func() {
-		sqlDB, dbErr := db.DB()
-		if dbErr != nil {
-			t.Errorf("second connection handle: %v", dbErr)
-			return
-		}
-		if closeErr := sqlDB.Close(); closeErr != nil {
-			t.Errorf("close second connection: %v", closeErr)
-		}
-	})
-
-	module := sharing.NewModule(db)
-	if _, bootErr := pkgcore.NewKernel().Bootstrap(context.Background(), module); bootErr != nil {
-		t.Fatalf("bootstrap second sharing module: %v", bootErr)
-	}
-	return module.Service()
 }
 
 // sharingAccessRequest issues an unauthenticated GET against srv's public
@@ -107,13 +70,66 @@ func sharingAccessRequest(t *testing.T, srv *httptest.Server, token, password st
 	return resp
 }
 
-// TestBuildServer_SharingFlow_CreateAccessRevoke_EndToEnd is this round's
-// full create/access/revoke life cycle through the real composed HTTP
-// stack: create a share for a real go/storage object, access it as an
-// unauthenticated visitor would (no token, no session, no demo header),
-// revoke it, and observe the very next access refused -- the identical
-// shape go/sharing's own example_test.go proves at the Service level,
-// proven here end to end through real HTTP for the first time.
+// The wire shapes this file decodes, by field name rather than by importing
+// go/sharing/api's generated types -- the same "assert on the wire shape,
+// not the generator's Go types" posture server_test.go's testNote and
+// org_flow_test.go's orgNode already take for their own modules.
+type testSharingShare struct {
+	ID                string `json:"id"`
+	ResourceRef       string `json:"resourceRef"`
+	MaxViews          *int   `json:"maxViews"`
+	ViewCount         int    `json:"viewCount"`
+	PasswordProtected bool   `json:"passwordProtected"`
+	Sensitive         bool   `json:"sensitive"`
+	RevokedAt         string `json:"revokedAt"`
+	CreatedAt         string `json:"createdAt"`
+}
+
+type testCreateShareResponse struct {
+	Share testSharingShare `json:"share"`
+	Token string           `json:"token"`
+}
+
+type testListSharesResponse struct {
+	Shares []testSharingShare `json:"shares"`
+}
+
+type testAccessLogEntry struct {
+	Outcome string `json:"outcome"`
+}
+
+type testListAccessLogResponse struct {
+	Entries []testAccessLogEntry `json:"entries"`
+}
+
+// decodeSharingBody reads resp, requires its status to be wantStatus, and
+// decodes its body as out -- the shared decode step every wire-shape helper
+// below runs, mirroring storage_flow_test.go's own decodeStorageObject.
+func decodeSharingBody(t *testing.T, resp *http.Response, wantStatus int, what string, out any) {
+	t.Helper()
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("%s: read body: %v", what, err)
+	}
+	if resp.StatusCode != wantStatus {
+		t.Fatalf("%s: status = %d, want %d; body = %s", what, resp.StatusCode, wantStatus, body)
+	}
+	if err := json.Unmarshal(body, out); err != nil {
+		t.Fatalf("%s: decoding %s: %v", what, body, err)
+	}
+}
+
+// TestBuildServer_SharingFlow_CreateAccessRevoke_EndToEnd is this module's
+// full owner-facing create/list/get/access/access-log/revoke life cycle
+// through the real composed HTTP stack: create a share for a real
+// go/storage object through sharing_createShare, confirm it through
+// sharing_listShares and sharing_getShare, access it as an unauthenticated
+// visitor would (no token, no session, no demo header), read the resulting
+// entry back through sharing_listShareAccessLog, revoke it through
+// sharing_revokeShare, and observe the very next access refused -- the
+// identical shape go/sharing's own example_test.go proves at the Service
+// level, proven here end to end through real HTTP.
 func TestBuildServer_SharingFlow_CreateAccessRevoke_EndToEnd(t *testing.T) {
 	srv, cfg := buildTestServer(t)
 	const tenantID = "tenant-acme"
@@ -122,11 +138,44 @@ func TestBuildServer_SharingFlow_CreateAccessRevoke_EndToEnd(t *testing.T) {
 	content := sharingTestJPEG(t)
 	completed := uploadAndComplete(t, srv, acmeToken, content, sha256Hex(content))
 
-	svc := secondSharingService(t, cfg)
-	tenantCtx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID(tenantID))
-	created, err := svc.Create(tenantCtx, sharing.CreateParams{ResourceRef: completed.ID})
+	// Create, through the real owner-facing route -- gated on
+	// sharing:create (demo_subject.go's sharingPermissionFor), held by
+	// demo-owner.
+	createBody, err := json.Marshal(map[string]any{"resourceRef": completed.ID})
 	if err != nil {
-		t.Fatalf("sharing Create: %v", err)
+		t.Fatalf("marshal create body: %v", err)
+	}
+	createResp := storageRequest(t, srv, http.MethodPost, sharing.PathShares,
+		acmeToken, demoOwnerUserID, "application/json", bytes.NewReader(createBody))
+	var created testCreateShareResponse
+	decodeSharingBody(t, createResp, http.StatusCreated, "create share", &created)
+	if created.Token == "" {
+		t.Fatalf("create response carries no token")
+	}
+	if created.Share.ID == "" {
+		t.Fatalf("create response carries no share id")
+	}
+
+	// List: the created share appears, and the response never leaks the
+	// bearer token (SharingShare carries no token field at all).
+	listResp := storageRequest(t, srv, http.MethodGet, sharing.PathShares,
+		acmeToken, demoOwnerUserID, "", nil)
+	var list testListSharesResponse
+	decodeSharingBody(t, listResp, http.StatusOK, "list shares", &list)
+	if len(list.Shares) != 1 || list.Shares[0].ID != created.Share.ID {
+		t.Fatalf("list shares = %+v, want exactly the one created share (id %q)", list.Shares, created.Share.ID)
+	}
+
+	// Get: the owner reads back the same share by id.
+	getResp := storageRequest(t, srv, http.MethodGet, sharing.PathShares+"/"+created.Share.ID,
+		acmeToken, demoOwnerUserID, "", nil)
+	var got testSharingShare
+	decodeSharingBody(t, getResp, http.StatusOK, "get share", &got)
+	if got.ID != created.Share.ID {
+		t.Fatalf("get share id = %q, want %q", got.ID, created.Share.ID)
+	}
+	if got.RevokedAt != "" {
+		t.Fatalf("a freshly created share already carries revokedAt = %q", got.RevokedAt)
 	}
 
 	// An unauthenticated visitor reads the shared object's bytes back
@@ -153,12 +202,38 @@ func TestBuildServer_SharingFlow_CreateAccessRevoke_EndToEnd(t *testing.T) {
 		t.Errorf("Cache-Control = %q, want %q", got, "no-store")
 	}
 
-	// Revoke, then the very next access is refused -- rule 3
-	// (docs/internal/07-platform-services.md's "revocation takes effect
-	// immediately" rule).
-	if revokeErr := svc.Revoke(tenantCtx, created.Share.ID); revokeErr != nil {
-		t.Fatalf("sharing Revoke: %v", revokeErr)
+	// The owner reads back the access log: one granted attempt, rule 4
+	// (docs/internal/07-platform-services.md's "access needs no login, but
+	// must leave a trail" rule).
+	logResp := storageRequest(t, srv, http.MethodGet, sharing.PathShares+"/"+created.Share.ID+"/access-log",
+		acmeToken, demoOwnerUserID, "", nil)
+	var accessLog testListAccessLogResponse
+	decodeSharingBody(t, logResp, http.StatusOK, "list access log", &accessLog)
+	if len(accessLog.Entries) != 1 {
+		t.Fatalf("access log = %+v, want exactly 1 entry", accessLog.Entries)
 	}
+	if accessLog.Entries[0].Outcome != sharing.AccessOutcomeGranted {
+		t.Errorf("access log entry outcome = %q, want %q", accessLog.Entries[0].Outcome, sharing.AccessOutcomeGranted)
+	}
+
+	// Revoke, through the real owner-facing route -- then the very next
+	// access is refused -- rule 3 (docs/internal/07-platform-services.md's
+	// "revocation takes effect immediately" rule).
+	revokeResp := storageRequest(t, srv, http.MethodPost, sharing.PathShares+"/"+created.Share.ID+"/revoke",
+		acmeToken, demoOwnerUserID, "", nil)
+	var revoked testSharingShare
+	decodeSharingBody(t, revokeResp, http.StatusOK, "revoke share", &revoked)
+	if revoked.RevokedAt == "" {
+		t.Fatalf("revoked share carries no revokedAt")
+	}
+
+	// Revoking again is idempotent -- Service.Revoke's own contract,
+	// unchanged by this HTTP translation.
+	revokeAgainResp := storageRequest(t, srv, http.MethodPost, sharing.PathShares+"/"+created.Share.ID+"/revoke",
+		acmeToken, demoOwnerUserID, "", nil)
+	var revokedAgain testSharingShare
+	decodeSharingBody(t, revokeAgainResp, http.StatusOK, "revoke share again", &revokedAgain)
+
 	refused := sharingAccessRequest(t, srv, created.Token, "")
 	refusedBody, err := io.ReadAll(refused.Body)
 	refused.Body.Close()
@@ -192,4 +267,26 @@ func TestBuildServer_SharingFlow_UnknownToken_Answers404(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d, body = %s, want 404 -- an unrecognized token must never surface tenancy.tenant_unresolved", resp.StatusCode, body)
 	}
+}
+
+// TestBuildServer_SharingPermissionGate_EnforcesTheSharingPermissions is the
+// sharing mirror of storage's own gate test
+// (TestBuildServer_StoragePermissionGate_EnforcesTheStoragePermissions):
+// the read-only demo user holds notes:read and nothing else -- deliberately
+// no sharing permission at all -- so sharing's owner-facing routes must
+// refuse it in both directions (sharing:create for POST, sharing:read for
+// GET), proving demoRouteGuards' entry for sharing.PathShares and
+// sharingPermissionFor's own POST/GET split are both wired for real, never
+// left ungated the way this same route was before this round.
+func TestBuildServer_SharingPermissionGate_EnforcesTheSharingPermissions(t *testing.T) {
+	srv, cfg := buildTestServer(t)
+	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "sharing-gate")
+
+	resp := storageRequest(t, srv, http.MethodPost, sharing.PathShares,
+		acmeToken, demoReaderUserID, "application/json", bytes.NewReader([]byte(`{"resourceRef":"ref-1"}`)))
+	assertPermissionDenied(t, resp, "POST "+sharing.PathShares+" as the read-only demo user")
+
+	resp = storageRequest(t, srv, http.MethodGet, sharing.PathShares,
+		acmeToken, demoReaderUserID, "", nil)
+	assertPermissionDenied(t, resp, "GET "+sharing.PathShares+" as the read-only demo user")
 }

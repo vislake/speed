@@ -167,6 +167,17 @@ const pkiRoutePath = "/api/v1/pki"
 // except.
 const integrationAPIKeyRoutePath = "/api/v1/integration"
 
+// sharingSharesRoutePath is where sharing's round-3 owner-facing operations
+// (create, list, get, revoke, list access log) are mounted -- named through
+// the module's own exported sharing.PathShares constant, mirroring every
+// other *RoutePath constant's use of an exported module constant where one
+// exists. Deliberately a DIFFERENT table entry from sharing.PathAccess
+// (below, routePublic): sharing mounts the same *Handler at both paths, but
+// PathAccess is genuinely unauthenticated and PathShares is an ordinary
+// tenant-scoped, permission-gated surface -- see module.go's own Register
+// doc comment in go/sharing for the full contrast.
+const sharingSharesRoutePath = sharing.PathShares
+
 // demoRouteGuards declares, for every path a module mounts, the resource
 // whose permissions gate it -- or routePublic when the path is
 // deliberately reachable without one.
@@ -261,7 +272,7 @@ var demoRouteGuards = map[string]string{
 	// path here.
 	config.PathPublic:         routePublic,
 	config.PathSystemFeatures: routePublic,
-	// sharing's one route is routePublic for the same structural reason
+	// sharing.PathAccess is routePublic for the same structural reason
 	// config's two are: it is a genuinely unauthenticated surface by
 	// design (go/sharing's Handler doc comment), gated on nothing an rbac
 	// permission check could evaluate -- an anonymous visitor holding a
@@ -271,6 +282,16 @@ var demoRouteGuards = map[string]string{
 	// own per-operation checks are where their routePublic entries' real
 	// gates live.
 	sharing.PathAccess: routePublic,
+	// sharingSharesRoutePath (sharing.PathShares) is gated like notes' and
+	// storage's: sharing's Handler performs no authorization of its own for
+	// these five owner-facing operations, leaving their enforcement to the
+	// host's authorization layer, exactly as go/sharing's own module.go
+	// Register doc comment states. It needs its own action selector rather
+	// than demoPermissionFor's generic read/write split, since a POST here
+	// means either sharing:create (create) or sharing:revoke (revoke) --
+	// see sharingPermissionFor's own doc comment, the same pkiPermissionFor-
+	// style carve-out guardModuleRoute already makes for pki's path.
+	sharingSharesRoutePath: sharingResource,
 	// pki's path was a KNOWN, PRE-EXISTING GAP (routePublic) when this
 	// table first grew an entry for it: pki mounts a real, fine-grained
 	// permission vocabulary (pki.PermissionRead/Issue/Revoke/Rotate) and
@@ -471,6 +492,36 @@ func guardIntegrationAPIKeyRoute(az rbac.Authorizer, handler http.Handler) http.
 	})
 }
 
+// sharingResource is the resource half of sharing's owner-facing permission
+// strings, derived from its own exported constants the same way
+// notesResource and storageResource are -- so this example cannot drift
+// from the permissions sharing actually declares. Unlike pkiResource,
+// sharing's own three permissions (read/create/revoke) all genuinely share
+// one resource half, so all three feed mustResourceOf here.
+var sharingResource = mustResourceOf(sharing.PermissionRead, sharing.PermissionCreate, sharing.PermissionRevoke)
+
+// sharingPermissionFor selects the permission a sharingSharesRoutePath
+// request must hold, mirroring pkiPermissionFor's own reasoning: sharing's
+// three-permission vocabulary (read/create/revoke) is not the generic
+// read/write pair demoPermissionFor assumes, and unlike pki's own two
+// HTTP-reachable permissions, sharing's create and revoke operations are
+// BOTH POST requests that a method-only split cannot tell apart --
+// sharing_createShare (POST /api/v1/sharing/shares) and sharing_revokeShare
+// (POST /api/v1/sharing/shares/{shareId}/revoke). This selector also checks
+// the request's own path suffix, which is safe to gate on for the identical
+// reason demoRouteGuards' own table lookup is: the path is what routed the
+// request to this selector in the first place, never a value a caller
+// supplies independently of it.
+func sharingPermissionFor(r *http.Request) string {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		return sharing.PermissionRead
+	}
+	if strings.HasSuffix(r.URL.Path, "/revoke") {
+		return sharing.PermissionRevoke
+	}
+	return sharing.PermissionCreate
+}
+
 // mustResourceOf returns the shared resource half of the given permission
 // strings, and panics when they do not agree on one.
 //
@@ -610,11 +661,15 @@ func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler) (ht
 		// entirely. See integrationAPIKeySentinel's own doc comment for why.
 		return guardIntegrationAPIKeyRoute(az, handler), nil
 	}
-	// pki needs its own action selector, not demoPermissionFor's generic
-	// read/write split -- see pkiPermissionFor's own doc comment.
+	// pki and sharing both need their own action selector, not
+	// demoPermissionFor's generic read/write split -- see pkiPermissionFor's
+	// and sharingPermissionFor's own doc comments.
 	permissionFor := demoPermissionFor(resource)
-	if path == pkiRoutePath {
+	switch path {
+	case pkiRoutePath:
 		permissionFor = pkiPermissionFor
+	case sharingSharesRoutePath:
+		permissionFor = sharingPermissionFor
 	}
 	return rbac.RequirePermissionFunc(az, permissionFor,
 		rbac.WithSubjectResolver(demoSubjectResolver),
