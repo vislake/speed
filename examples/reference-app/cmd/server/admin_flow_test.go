@@ -620,11 +620,20 @@ func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 
 	ownerToken := registerAndAuthenticate(t, srv, cfg, tenant, "suspend-flow-owner")
 
-	// Creating the tenant's root node is both this test's ordinary,
-	// tenant-scoped request AND what lazily registers "tenant-suspend-flow"
+	// The tenant's root node is what lazily registers "tenant-suspend-flow"
 	// in admin's own D3 ledger (org.node.created -> TenantService.
 	// handleOrgNodeCreated), so no separate manual ledger-registration call
-	// is needed before D4's PATCH below. orgRequest itself sends the demo
+	// is needed before D4's PATCH below -- whichever caller's request
+	// happens to create it. That creator is NOT reliably this test's own
+	// explicit call: reusing existingOrgRoot (like
+	// TestAdminFlow_SearchMembershipsAndAudit_EndToEnd above) rather than
+	// assuming a bare org_createNode is this tenant's first-ever root
+	// request avoids racing addDemoOrgMembership's own idempotent
+	// Root-then-CreateRoot boot-time seeding (demo_users.go), which reaches
+	// this same tenant the moment this test's HostTenants override above
+	// makes it one of the inEveryTenant demo owner's configured tenants --
+	// whichever of the two runs first wins the create and the other reuses
+	// it, and the ledger lands either way. orgRequest itself sends the demo
 	// rbac header naming demoOwnerUserID (org-route-guards round: org's
 	// route is gated per operation like every other module's, so ownerToken's
 	// freshly-registered account -- which holds no rbac grant of its own --
@@ -632,12 +641,7 @@ func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 	// test's whole point is D4's tenant-suspension gate, not org's
 	// permission gate, so borrowing the seeded identity here is a setup
 	// choice, not a weakening of what either gate enforces).
-	var root orgNode
-	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", ownerToken, "",
-		map[string]string{"name": "Suspend Flow Co", "kind": "group"}, &root)
-	if root.ID == "" {
-		t.Fatal("org_createNode returned no node id")
-	}
+	root := existingOrgRoot(t, srv, ownerToken)
 	nodePath := "/api/v1/org/nodes/" + root.ID
 
 	// Before suspension: the tenant is active (either its own explicit
