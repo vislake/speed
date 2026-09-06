@@ -24,7 +24,7 @@ the generated code's doc comments as the owner's first tasks.
 
 ## Prerequisites
 
-- Go 1.25.0 or newer.
+- Go 1.26.0 or newer.
 - A checkout of the speed repository. This project's go.mod carries
   `replace` directives pointing at that checkout's speed modules: speed
   modules are never fetched remotely (the transition-state shape every
@@ -40,10 +40,21 @@ go run ./cmd/server
 
 The server boots in standalone deployment mode on SQLite at
 `__APP_NAME__.db` and listens on `:8080`; `GET /healthz` answers 200 once
-the kernel is up. Set `APP_DEPLOYMENT_MODE=distributed` to see the
-kernel's capability validation refuse the assembled composition at startup
--- naming the seam, the implementation and the missing capability -- never
-at runtime.
+the kernel is up.
+
+Setting `APP_DEPLOYMENT_MODE=distributed` with no other variable set does
+**not** boot a working distributed server: `Kernel.Bootstrap` resolves all
+four infrastructure seams (eventbus, kv, mailer, objectstore) regardless of
+which modules this selection wires, and every resolved seam must satisfy
+the distributed mode's capability requirement (`MultiReplicaSafe`). With
+the infrastructure variables below left unset, every seam stays on the
+Preset's in-process default, so the kernel's capability validation refuses
+the assembled composition at startup -- naming the seam, the implementation
+and the missing capability -- never at runtime. Set `APP_REDIS_ADDR`
+(composing both the eventbus and kv seams), the full `APP_S3_*` group
+(composing the objectstore seam) and the `APP_SMTP_*` pair (composing the
+mailer seam) to real infrastructure, and the same binary boots a genuine
+distributed replica against it.
 
 ## Bootstrap environment
 
@@ -61,17 +72,33 @@ environment instead.
 | `APP_DEPLOYMENT_MODE` | `standalone` (default) or `distributed` |
 | `APP_CONFIG_KEY` | 64 hex characters: the master key the config module's cipher is built from |
 | `APP_ORG_INDEX_KEY` | 64 hex characters: the blind-index HMAC key; consumed only by compositions that wire the org module, parsed unconditionally so the bootstrap contract never changes with the selection |
+| `APP_REDIS_ADDR` | Redis `host:port`; when set, composes a real Redis-backed implementation of both the "eventbus" and "kv" seams (unset leaves both on the Preset's in-process default) |
+| `APP_S3_ENDPOINT` | S3-compatible endpoint; together with the three variables below, composes a real ObjectStore for the "objectstore" seam -- all four are required together, a partial set is refused rather than silently ignored |
+| `APP_S3_BUCKET` | S3 bucket name |
+| `APP_S3_ACCESS_KEY` | S3 access key |
+| `APP_S3_SECRET_KEY` | S3 secret key |
+| `APP_S3_REGION` | S3 region (optional; matters to AWS S3, ignored by MinIO/RustFS-compatible servers) |
+| `APP_S3_USE_SSL` | whether the S3 endpoint speaks TLS (optional bool, default `false`) |
+| `APP_SMTP_HOST` | SMTP host; together with `APP_SMTP_PORT`, composes a real SMTP Mailer for the "mailer" seam -- both are required together, a partial pair is refused rather than silently ignored |
+| `APP_SMTP_PORT` | SMTP port |
+| `APP_SMTP_USERNAME` | SMTP AUTH username (optional; AUTH activates only when set) |
+| `APP_SMTP_PASSWORD` | SMTP AUTH password (optional) |
+| `APP_SMS_GATEWAY_URL` | authn's real HTTP SMS transport endpoint; consumed only by compositions that wire the authn module, parsed unconditionally for the same reason `APP_ORG_INDEX_KEY` is |
+
+`saasctl config print` renders this whole surface with each value's
+provenance, refusing exactly when the generated app's own bootstrap would
+refuse -- see "Editing and regenerating" below.
 
 The committed dev keys are recognizable placeholders for zero-setup
 development, never secrets: `config.go` holds `devConfigKey` and
 `devOrgIndexKey`, and authn-wiring compositions carry three more
-(`devSigningKeySeed`, `devBlindIndexKey`, `devPIICipherKey`) in
+(`devBlindIndexKey`, `devPIICipherKey`, `devPKILocalKeyCipherKey`) in
 `server.go`. A real deployment must replace every one of them with
-secret-manager material, and each key must stay stable across restarts --
-rotating one loses what it protects (the configs table's Sensitive values,
-org's encrypted invitation emails and blind indexes, authn's PII columns
-and blind indexes, and every outstanding session when the signing key
-turns over).
+secret-manager material, and each key must stay stable across restarts:
+the blind-index key must stay identical across restarts or every
+already-stored email/phone blind index becomes unfindable; `devPIICipherKey`
+seals authn's encrypted PII columns (email, phone, TOTP secrets); and
+`devPKILocalKeyCipherKey` seals go/pki's own persisted signing-key column.
 
 ## What is wired -- and what is not
 
@@ -110,7 +137,8 @@ lockstep release, `saasctl db migrate` applies the required modules' SQL
 migrations to the project's SQLite database from the command line (the
 operator-driven twin of this app's own startup Apply), and `saasctl config
 print` shows how this project's bootstrap environment resolves -- each
-`APP_*` variable's value and provenance, the two key variables rendered
+`APP_*` variable's value and provenance, with every secret-shaped value
+(the two key variables, the S3 secret key and the SMTP password) rendered
 `[redacted]`. Dynamic-configuration value print and editing (the `configs`
 table's values with their tenant scopes and schema-driven redaction) and
 the web-side scaffolds are later `saasctl` rounds. Speed modules are
