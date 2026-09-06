@@ -359,11 +359,16 @@ func migrate(modPath string) (string, error) {
 	// tied to anything this command actually does.
 	//
 	// The genuine, still-real concern investigated here is a different one:
-	// concurrent writers against the SAME SQLite file. dbkit.Open sets no
-	// SQLite busy_timeout and pools up to 25 connections
-	// (go/dbkit/open.go's defaultMaxOpenConns), so two processes racing a
-	// write transaction against one file can hit SQLITE_BUSY -- a real risk
-	// this command shares with the generated app's OWN startup Apply, which
+	// concurrent writers against the SAME SQLite file. dbkit.Open carries a
+	// bounded busy_timeout -- the dialect factory this command opens through
+	// appends _pragma=busy_timeout(5000) to every DSN it sees (the fixed
+	// default go/dbkit/AGENTS.md's "SQLite busy timeout" section records) --
+	// but still pools up to 25 connections (go/dbkit/open.go's
+	// defaultMaxOpenConns), so a write that still meets an uncommitted holder
+	// once that bounded wait is spent, or upgrades a read-then-write
+	// transaction (which SQLite's deadlock avoidance refuses immediately; no
+	// timeout waits it out), fails with SQLITE_BUSY -- a real risk this
+	// command shares with the generated app's OWN startup Apply, which
 	// runs unconditionally on every boot regardless of deployment mode (see
 	// each selection's server.go). That risk is not specific to running
 	// migrate under the distributed mode, though: an operator invoking
