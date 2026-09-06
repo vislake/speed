@@ -116,6 +116,129 @@ func TestEnrollTOTP_ReplacingActiveFactor_RequiresStepUp(t *testing.T) {
 	}
 }
 
+// TestEnrollTOTP_AbandonedReplacement_OldFactorStaysFunctional is the
+// regression for the go/authn audit's CONFIRMED P1-1 finding
+// (account-ui.md): EnrollTOTP used to delete the existing ACTIVE factor
+// immediately, at enroll time -- BEFORE the replacement was ever confirmed
+// -- so a step-up-gated replacement wizard that was started and then
+// cancelled or abandoned (account-ui's MfaSection.tsx closeWizard, a pure
+// local reset with no server call at all) left the account with NO working
+// second factor and NO working recovery codes, with nothing about the
+// cancel path telling the user that had happened, even though the wizard's
+// own replacingNotice copy says the replacement only takes effect on
+// confirm.
+//
+// PRE-FIX this test failed: VerifyStepUp(original secret) answered
+// ErrMFANotEnrolled, VerifyStepUp(original recovery code) answered
+// ErrMFAInvalidCode, and RegenerateRecoveryCodes answered ErrMFANotEnrolled
+// -- the exact dead-end the audit names, with no path back to a working
+// account short of a fresh, real enroll+confirm cycle. POST-FIX, the
+// abandoned replacement leaves the original factor and its recovery codes
+// exactly as they were, and RegenerateRecoveryCodes keeps working against
+// them.
+func TestEnrollTOTP_AbandonedReplacement_OldFactorStaysFunctional(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	user := f.registerUser(t, "mfa-abandon@example.com", testTenantA)
+	originalSecret, originalCodes := enrollAndConfirmTOTP(t, f, user.ID)
+
+	// Start a replacement enrollment with a completed step-up -- exactly
+	// the state MfaSection.tsx's startEnroll(true) reaches after its own
+	// 403-then-step-up sequence -- then abandon it: no ConfirmTOTP call
+	// ever happens, mirroring the wizard simply being closed or navigated
+	// away from.
+	elevated := Principal{UserID: user.ID, AMR: []string{MethodPassword, MethodMFATOTP}}
+	if _, err := f.svc.EnrollTOTP(t.Context(), elevated); err != nil {
+		t.Fatalf("EnrollTOTP(replacement) error = %v", err)
+	}
+
+	principal := loginPrincipal(t, f, user, testTenantA)
+
+	// The ORIGINAL factor must still satisfy a step-up.
+	code, err := totp.Code(originalSecret, time.Now().Add(totp.Period))
+	if err != nil {
+		t.Fatalf("totp.Code() error = %v", err)
+	}
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, code, "203.0.113.20"); err != nil {
+		t.Fatalf("VerifyStepUp(original secret after abandoned replacement) error = %v, want success", err)
+	}
+
+	// An ORIGINAL recovery code must still work.
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, originalCodes[1], "203.0.113.20"); err != nil {
+		t.Fatalf("VerifyStepUp(original recovery code after abandoned replacement) error = %v, want success", err)
+	}
+
+	// The specific dead-end the audit names: regenerating recovery codes
+	// must keep working against the still-active original factor, not
+	// answer ErrMFANotEnrolled.
+	if _, err := f.svc.RegenerateRecoveryCodes(t.Context(), user.ID); err != nil {
+		t.Fatalf("RegenerateRecoveryCodes(after abandoned replacement) error = %v, want success", err)
+	}
+}
+
+// TestConfirmTOTP_Replacement_RetiresOldFactorAndCodes proves the OTHER
+// half of the two-phase fix above: a replacement enrollment that IS
+// actually confirmed still retires the old factor and its recovery codes,
+// exactly as the account-ui replacingNotice copy promises -- the
+// replacement takes effect, just deferred from enroll time to confirm time.
+func TestConfirmTOTP_Replacement_RetiresOldFactorAndCodes(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	user := f.registerUser(t, "mfa-replace-confirm@example.com", testTenantA)
+	originalSecret, originalCodes := enrollAndConfirmTOTP(t, f, user.ID)
+
+	elevated := Principal{UserID: user.ID, AMR: []string{MethodPassword, MethodMFATOTP}}
+	result, err := f.svc.EnrollTOTP(t.Context(), elevated)
+	if err != nil {
+		t.Fatalf("EnrollTOTP(replacement) error = %v", err)
+	}
+
+	code, err := totp.Code(result.Secret, time.Now())
+	if err != nil {
+		t.Fatalf("totp.Code() error = %v", err)
+	}
+	newCodes, err := f.svc.ConfirmTOTP(t.Context(), user.ID, code)
+	if err != nil {
+		t.Fatalf("ConfirmTOTP(replacement) error = %v", err)
+	}
+	if len(newCodes) != recoveryCodeCount {
+		t.Fatalf("ConfirmTOTP(replacement) returned %d recovery codes, want %d", len(newCodes), recoveryCodeCount)
+	}
+
+	principal := loginPrincipal(t, f, user, testTenantA)
+
+	// The OLD secret must no longer satisfy a step-up: it was retired the
+	// moment the NEW factor was confirmed.
+	oldCode, err := totp.Code(originalSecret, time.Now().Add(totp.Period))
+	if err != nil {
+		t.Fatalf("totp.Code() error = %v", err)
+	}
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, oldCode, "203.0.113.21"); !hasCode(err, ErrMFAInvalidCode.Code) {
+		t.Errorf("VerifyStepUp(old secret after confirmed replacement) error = %v, want ErrMFAInvalidCode", err)
+	}
+
+	// The OLD recovery codes must no longer work either -- the confirmed
+	// replacement's own regenerateRecoveryCodesLocked call discarded them.
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, originalCodes[0], "203.0.113.21"); !hasCode(err, ErrMFAInvalidCode.Code) {
+		t.Errorf("VerifyStepUp(old recovery code after confirmed replacement) error = %v, want ErrMFAInvalidCode", err)
+	}
+
+	// Exactly one active row for this user+type must remain -- the
+	// partial unique index's own invariant, proven directly rather than
+	// only through behaviour.
+	var count int64
+	if err := f.db.Model(&UserMFAFactor{}).
+		Where("user_id = ? AND type = ? AND status = ?", user.ID, MFATypeTOTP, MFAFactorStatusActive).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count active factors: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("active user_mfa_factors rows for %s = %d, want 1", user.ID, count)
+	}
+}
+
 // TestConfirmTOTP_WrongCode_Refused proves confirmation requires a real
 // code from the enrolled secret, not any six digits.
 func TestConfirmTOTP_WrongCode_Refused(t *testing.T) {

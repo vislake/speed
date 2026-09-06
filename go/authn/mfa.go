@@ -64,13 +64,20 @@ type UserMFAFactor struct {
 	// ID is an application-generated UUID.
 	ID string `gorm:"primaryKey;size:36"`
 
-	// UserID is the owning user. Unique together with Type: enrolling
-	// again replaces rather than accumulates a second row of the same
-	// type -- see Service.EnrollTOTP.
-	UserID string `gorm:"column:user_id;size:36;not null;uniqueIndex:idx_user_mfa_factors_user_type,priority:1"`
+	// UserID is the owning user. Unique together with Type AMONG ACTIVE
+	// ROWS ONLY -- see idx_user_mfa_factors_user_type (migration 0010,
+	// narrowed from the full-table unique index migration 0008 originally
+	// shipped) -- which is what lets a fresh PENDING replacement factor
+	// coexist with the still-ACTIVE factor it will eventually replace.
+	// GORM's uniqueIndex struct tag cannot express a WHERE-qualified
+	// index, so, like go/pki's identically-shaped SigningKey.Purpose and
+	// go/rbac's RoleBinding, the constraint lives in the migration SQL
+	// only, not here. See Service.EnrollTOTP and
+	// MFAFactorRepository.Confirm.
+	UserID string `gorm:"column:user_id;size:36;not null"`
 
 	// Type is one of the MFAType* constants.
-	Type string `gorm:"size:32;not null;uniqueIndex:idx_user_mfa_factors_user_type,priority:2"`
+	Type string `gorm:"size:32;not null"`
 
 	// Secret is the factor's shared secret (base32 for TOTP), encrypted
 	// at rest. It is returned by an API exactly once, at enrollment.
@@ -119,12 +126,18 @@ func (r *MFAFactorRepository) Create(ctx context.Context, f *UserMFAFactor) erro
 	return r.db.WithContext(ctx).Create(f).Error
 }
 
-// FindByUserAndType returns userID's factor of the given type, or
-// ErrNotFound.
-func (r *MFAFactorRepository) FindByUserAndType(ctx context.Context, userID, factorType string) (*UserMFAFactor, error) {
+// FindActiveByUserAndType returns userID's ACTIVE factor of the given type,
+// or ErrNotFound. Now that a PENDING replacement factor can coexist with
+// the still-ACTIVE factor it will eventually replace (see EnrollTOTP and
+// Confirm), a status-less "find the one row" lookup would be ambiguous
+// exactly while a replacement is in progress -- every caller that means
+// "the factor that actually works today" (step-up verification, gating
+// recovery-code regeneration, deciding whether EnrollTOTP needs a step-up)
+// wants this one.
+func (r *MFAFactorRepository) FindActiveByUserAndType(ctx context.Context, userID, factorType string) (*UserMFAFactor, error) {
 	var f UserMFAFactor
 	err := r.db.WithContext(ctx).
-		Where("user_id = ? AND type = ?", userID, factorType).
+		Where("user_id = ? AND type = ? AND status = ?", userID, factorType, MFAFactorStatusActive).
 		First(&f).Error
 	if err != nil {
 		return nil, translate(err)
@@ -132,22 +145,70 @@ func (r *MFAFactorRepository) FindByUserAndType(ctx context.Context, userID, fac
 	return &f, nil
 }
 
-// DeleteByUserAndType removes userID's factor of the given type, if any. It
-// is not an error for none to exist: EnrollTOTP calls this unconditionally
-// before creating a fresh row.
-func (r *MFAFactorRepository) DeleteByUserAndType(ctx context.Context, userID, factorType string) error {
+// FindPendingByUserAndType returns userID's PENDING factor of the given
+// type, or ErrNotFound -- the in-progress enrollment ConfirmTOTP needs to
+// complete, never an already-active one.
+func (r *MFAFactorRepository) FindPendingByUserAndType(ctx context.Context, userID, factorType string) (*UserMFAFactor, error) {
+	var f UserMFAFactor
+	err := r.db.WithContext(ctx).
+		Where("user_id = ? AND type = ? AND status = ?", userID, factorType, MFAFactorStatusPending).
+		First(&f).Error
+	if err != nil {
+		return nil, translate(err)
+	}
+	return &f, nil
+}
+
+// DeletePendingByUserAndType removes userID's PENDING factor of the given
+// type, if any, WITHOUT touching an existing ACTIVE one. It is not an error
+// for none to exist: EnrollTOTP calls this unconditionally before creating a
+// fresh pending row, so repeatedly starting enrollment without ever
+// confirming replaces the abandoned pending attempt rather than
+// accumulating one row per attempt.
+//
+// This deliberately no longer touches an ACTIVE factor -- see EnrollTOTP's
+// own doc comment for why an active factor now survives an enroll call all
+// the way to a genuinely successful Confirm, never merely a started one.
+func (r *MFAFactorRepository) DeletePendingByUserAndType(ctx context.Context, userID, factorType string) error {
 	return r.db.WithContext(ctx).
-		Where("user_id = ? AND type = ?", userID, factorType).
+		Where("user_id = ? AND type = ? AND status = ?", userID, factorType, MFAFactorStatusPending).
 		Delete(&UserMFAFactor{}).Error
 }
 
-// Confirm moves a PENDING factor to active, recording step as its
-// LastUsedStep so the confirmation code itself cannot be replayed at the
-// next step-up verification.
-func (r *MFAFactorRepository) Confirm(ctx context.Context, id string, at time.Time, step int64) error {
-	return r.db.WithContext(ctx).
-		Where("id = ? AND status = ?", id, MFAFactorStatusPending).
-		Updates(&UserMFAFactor{Status: MFAFactorStatusActive, ConfirmedAt: &at, LastUsedStep: step}).Error
+// Confirm atomically promotes the pending factor id to active, recording
+// step as its LastUsedStep so the confirmation code itself cannot be
+// replayed at the next step-up verification, AND -- in the same
+// transaction -- removes userID's other (still-active) factor of the same
+// type, if any.
+//
+// The demotion-shaped delete runs FIRST, deliberately, mirroring
+// go/pki/repository.go's PromoteToActive: idx_user_mfa_factors_user_type
+// (migration 0010) is a partial unique index scoped to status='active',
+// checked at each statement rather than deferred to commit, so activating
+// id before the old active row is gone would momentarily leave two active
+// rows for the same (user_id, type) inside this very transaction and be
+// refused by the database it is trying to write to. Deleting first briefly
+// leaves the type with NO active row instead, which the index has nothing
+// to say about.
+//
+// This is the fix for the audit finding that gives this method its second
+// parameter: EnrollTOTP used to delete the old active factor immediately, so
+// a wizard that enrolled but was then cancelled or abandoned before
+// confirming left the account with no working second factor and no working
+// recovery codes at all, with nothing about the cancel path telling the
+// user that had happened. Keeping the old factor active until THIS call
+// succeeds means an abandoned enrollment leaves the account exactly as it
+// was.
+func (r *MFAFactorRepository) Confirm(ctx context.Context, userID, factorType, id string, at time.Time, step int64) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("user_id = ? AND type = ? AND status = ? AND id != ?",
+			userID, factorType, MFAFactorStatusActive, id).
+			Delete(&UserMFAFactor{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("id = ? AND status = ?", id, MFAFactorStatusPending).
+			Updates(&UserMFAFactor{Status: MFAFactorStatusActive, ConfirmedAt: &at, LastUsedStep: step}).Error
+	})
 }
 
 // UpdateLastUsedStep atomically advances f's replay guard from prevStep to
@@ -256,20 +317,32 @@ type EnrollTOTPResult struct {
 }
 
 // EnrollTOTP starts TOTP enrollment for the user principal identifies,
-// replacing any existing TOTP factor (pending or active) with a fresh
-// pending one.
+// creating a fresh PENDING factor without disturbing an existing ACTIVE one
+// of the same type -- see ConfirmTOTP for the moment a pending factor
+// actually takes over.
 //
-// Replacing an ALREADY ACTIVE factor requires principal.AMR to carry a
-// completed second-factor step-up (docs/internal/05 line 127: changing MFA
-// settings needs re-proof, not merely an existing session) -- without this,
-// a bare access token could silently seize an established factor by
-// deleting it and enrolling an attacker-known secret in its place. The
-// check is enforced HERE rather than by wrapping the route in RequireStepUp
-// because whether step-up is even required depends on whether an ACTIVE
-// factor already exists to protect, information only this method has: a
-// brand-new enrollment (turning MFA on for the first time, docs/internal/05
-// line 125) has nothing to step up FROM, so it proceeds exactly as before
-// regardless of AMR.
+// This is a two-phase replacement, deliberately: an earlier version of this
+// method deleted the existing ACTIVE factor right here, at enroll time,
+// which meant a wizard that started replacement but was then cancelled or
+// abandoned before confirming left the account with no working second
+// factor and no working recovery codes at all -- a silent security-posture
+// downgrade nothing about the cancel path warned the user of. Now the old
+// factor stays fully functional for VerifyStepUp and
+// RegenerateRecoveryCodes all the way through this call succeeding; only a
+// genuinely successful ConfirmTOTP retires it (see that method and
+// MFAFactorRepository.Confirm for the atomic swap).
+//
+// Replacing an ALREADY ACTIVE factor still requires principal.AMR to carry
+// a completed second-factor step-up (docs/internal/05 line 127: changing
+// MFA settings needs re-proof, not merely an existing session) -- without
+// this, a bare access token could silently seize an established factor by
+// starting a replacement enrollment an attacker-known secret would later
+// confirm. The check is enforced HERE rather than by wrapping the route in
+// RequireStepUp because whether step-up is even required depends on
+// whether an ACTIVE factor already exists to protect, information only
+// this method has: a brand-new enrollment (turning MFA on for the first
+// time, docs/internal/05 line 125) has nothing to step up FROM, so it
+// proceeds exactly as before regardless of AMR.
 //
 // The returned secret must be confirmed with ConfirmTOTP before it can
 // verify anything: a pending factor cannot satisfy VerifyStepUp.
@@ -283,19 +356,22 @@ func (s *Service) EnrollTOTP(ctx context.Context, principal Principal) (*EnrollT
 		return nil, err
 	}
 
-	switch existing, findErr := s.mfaFactors.FindByUserAndType(ctx, userID, MFATypeTOTP); {
+	switch _, findErr := s.mfaFactors.FindActiveByUserAndType(ctx, userID, MFATypeTOTP); {
 	case findErr == nil:
-		if existing.Status == MFAFactorStatusActive && !hasSecondFactor(principal.AMR) {
+		if !hasSecondFactor(principal.AMR) {
 			return nil, ErrStepUpRequired
 		}
 	case errors.Is(findErr, ErrNotFound):
-		// Nothing enrolled yet: first-time setup has no existing factor
-		// to step up from.
+		// Nothing active yet: first-time setup has no existing factor to
+		// step up from.
 	default:
 		return nil, findErr
 	}
 
-	if delErr := s.mfaFactors.DeleteByUserAndType(ctx, userID, MFATypeTOTP); delErr != nil {
+	// Only a PENDING row from an earlier, abandoned attempt is cleared
+	// here -- an ACTIVE factor (if any) is deliberately left in place. See
+	// this method's own doc comment.
+	if delErr := s.mfaFactors.DeletePendingByUserAndType(ctx, userID, MFATypeTOTP); delErr != nil {
 		return nil, delErr
 	}
 
@@ -321,30 +397,41 @@ func (s *Service) EnrollTOTP(ctx context.Context, principal Principal) (*EnrollT
 }
 
 // ConfirmTOTP validates code against userID's pending TOTP factor,
-// activates it, and returns a fresh batch of recoveryCodeCount recovery
-// codes in PLAINTEXT -- the only moment they are ever available in that
-// form. The caller must show them to the user immediately; they are never
-// retrievable again.
+// activates it -- atomically retiring the factor it replaces, if any (see
+// MFAFactorRepository.Confirm) -- and returns a fresh batch of
+// recoveryCodeCount recovery codes in PLAINTEXT -- the only moment they are
+// ever available in that form. The caller must show them to the user
+// immediately; they are never retrievable again.
+//
+// This is the ONE moment a replacement enrollment actually takes effect:
+// EnrollTOTP deliberately leaves an existing active factor and its recovery
+// codes untouched, precisely so that reaching this call is what the
+// replacement's replacingNotice copy warns the user about, not the wizard
+// merely opening.
 func (s *Service) ConfirmTOTP(ctx context.Context, userID, code string) ([]string, error) {
 	if userID == "" {
 		return nil, ErrAuthenticationRequired
 	}
-	factor, err := s.mfaFactors.FindByUserAndType(ctx, userID, MFATypeTOTP)
+	factor, err := s.mfaFactors.FindPendingByUserAndType(ctx, userID, MFATypeTOTP)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, ErrMFANotEnrolled
+		if !errors.Is(err, ErrNotFound) {
+			return nil, err
 		}
-		return nil, err
-	}
-	if factor.Status != MFAFactorStatusPending {
-		return nil, ErrMFAAlreadyEnrolled
+		// No pending factor. Tell "never enrolled" apart from "already
+		// active, nothing pending" the same way EnrollTOTP does, so
+		// confirming a second time still answers ErrMFAAlreadyEnrolled
+		// rather than the misleading ErrMFANotEnrolled.
+		if _, activeErr := s.mfaFactors.FindActiveByUserAndType(ctx, userID, MFATypeTOTP); activeErr == nil {
+			return nil, ErrMFAAlreadyEnrolled
+		}
+		return nil, ErrMFANotEnrolled
 	}
 
 	ok, step := totp.Validate(factor.Secret, code, totpSkewSteps)
 	if !ok {
 		return nil, ErrMFAInvalidCode
 	}
-	if confirmErr := s.mfaFactors.Confirm(ctx, factor.ID, s.now(), step); confirmErr != nil {
+	if confirmErr := s.mfaFactors.Confirm(ctx, userID, MFATypeTOTP, factor.ID, s.now(), step); confirmErr != nil {
 		return nil, confirmErr
 	}
 
@@ -368,15 +455,11 @@ func (s *Service) RegenerateRecoveryCodes(ctx context.Context, userID string) ([
 	if userID == "" {
 		return nil, ErrAuthenticationRequired
 	}
-	factor, err := s.mfaFactors.FindByUserAndType(ctx, userID, MFATypeTOTP)
-	if err != nil {
+	if _, err := s.mfaFactors.FindActiveByUserAndType(ctx, userID, MFATypeTOTP); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil, ErrMFANotEnrolled
 		}
 		return nil, err
-	}
-	if factor.Status != MFAFactorStatusActive {
-		return nil, ErrMFANotEnrolled
 	}
 
 	codes, err := s.regenerateRecoveryCodesLocked(ctx, userID)
@@ -497,15 +580,12 @@ func (s *Service) verifyStepUp(ctx context.Context, principal Principal, code, i
 // phone.
 func (s *Service) verifySecondFactor(ctx context.Context, userID, code string) (string, error) {
 	if isTOTPShaped(code) {
-		factor, err := s.mfaFactors.FindByUserAndType(ctx, userID, MFATypeTOTP)
+		factor, err := s.mfaFactors.FindActiveByUserAndType(ctx, userID, MFATypeTOTP)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
 				return "", ErrMFANotEnrolled
 			}
 			return "", err
-		}
-		if factor.Status != MFAFactorStatusActive {
-			return "", ErrMFANotEnrolled
 		}
 		if err := s.verifyTOTPFactor(ctx, factor, code); err != nil {
 			return "", err
