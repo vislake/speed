@@ -872,6 +872,123 @@ func TestService_Refresh_InvalidatesRowsWrittenBehindItsBack(t *testing.T) {
 	}
 }
 
+// skewedWriteFixture seeds svc's cache with "Studio A" for
+// brand.site_name/tenant-a, advances the watermark past that write via a
+// real Refresh, then lands a second write behind the resulting watermark
+// through a direct store.put -- standing in for a replica whose
+// config.item.changed publish never arrived here (lost) and whose own
+// clock sits behind the watermark this process already advanced to (a
+// genuine cross-replica clock-skew scenario, since UpdatedAt is an
+// application-supplied now() in service.go, never a database-generated
+// value). It returns the watermark at the moment the skewed row landed, so
+// a caller can reason about how many further Refresh cycles are needed.
+func skewedWriteFixture(t *testing.T, svc *Service) {
+	t.Helper()
+	if err := svc.Set(tenantA(), ScopeTenant, "brand.site_name", Value{Data: "Studio A"}, "alice"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if v, _ := svc.Get(tenantA(), "brand.site_name"); v.Data != "Studio A" {
+		t.Fatalf("warm-up Get = %#v, want the cached value seeded", v.Data)
+	}
+	if err := svc.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh (warm-up): %v", err)
+	}
+	watermarkAfterWarmup := svc.watermark
+	// The warm-up Refresh's own changedSince(zero-value watermark) call
+	// selects the row Set just wrote (every row is ">= the zero time"),
+	// which invalidates -- not populates -- the cache entry: Refresh
+	// invalidates unconditionally, whatever produced the watermark. Read
+	// it back once so the cache is holding "Studio A" again, the value
+	// that must stay stuck once the skewed write lands.
+	if v, _ := svc.Get(tenantA(), "brand.site_name"); v.Data != "Studio A" {
+		t.Fatalf("re-warm Get after the warm-up Refresh = %#v, want the cache repopulated with the old value", v.Data)
+	}
+
+	tSkewed := watermarkAfterWarmup.Add(-1 * time.Hour)
+	if err := svc.st.put(context.Background(), row{
+		Key: "brand.site_name", Scope: "tenant", TenantID: "tenant-a",
+		Value: "Stuck Forever", UpdatedBy: "skewed-instance", UpdatedAt: tSkewed,
+	}); err != nil {
+		t.Fatalf("direct store.put (skewed): %v", err)
+	}
+}
+
+// TestService_Refresh_IncrementalSweepAloneNeverRecoversASkewedWrite
+// reproduces the peer audit's P2-4 at the mechanism level: changedSince's
+// ">= watermark" predicate (store.go) can never select a row whose
+// UpdatedAt lands behind an already-advanced watermark, on any future
+// Refresh call, however many -- the watermark only ever grows forward, so
+// the incremental sweep by itself would leave that row invisible forever,
+// not just until the next tick. This is true independent of Refresh's own
+// periodic full-reconciliation fallback (fullReconcileEvery), which this
+// test deliberately stays under (fullReconcileEvery-1 cycles) so it
+// isolates the incremental sweep's own limit rather than the fallback that
+// now bounds it.
+func TestService_Refresh_IncrementalSweepAloneNeverRecoversASkewedWrite(t *testing.T) {
+	svc := attachDefaultServiceForTest(t)
+	skewedWriteFixture(t, svc)
+
+	// Repeated Refresh calls -- standing in for many poller ticks, but
+	// deliberately fewer than fullReconcileEvery -- must never converge
+	// through the incremental sweep alone: proving this once (the very
+	// next Refresh) would leave open the possibility of an eventual,
+	// merely delayed recovery from that same mechanism; proving it across
+	// several iterations is what isolates "the incremental sweep itself
+	// cannot do this" from "the fallback hasn't fired yet". skewedWriteFixture
+	// already spent one Refresh cycle (the warm-up), so this loop stops two
+	// short of fullReconcileEvery rather than one, to stay strictly under
+	// the threshold where the periodic full reconciliation would fire.
+	for i := 0; i < fullReconcileEvery-2; i++ {
+		if err := svc.Refresh(context.Background()); err != nil {
+			t.Fatalf("Refresh iteration %d: %v", i, err)
+		}
+		v, err := svc.Get(tenantA(), "brand.site_name")
+		if err != nil {
+			t.Fatalf("Get after Refresh iteration %d: %v", i, err)
+		}
+		if v.Data == "Stuck Forever" {
+			t.Fatalf("iteration %d: the skewed-clock write converged through the incremental sweep alone -- re-evaluate P2-4's verdict", i)
+		}
+	}
+
+	// The write genuinely landed in storage; only the incremental sweep
+	// can never observe it, which is exactly the gap the periodic full
+	// reconciliation (tested separately) exists to bound.
+	stored, err := svc.st.get(context.Background(), ScopeTenant, "tenant-a", "brand.site_name")
+	if err != nil {
+		t.Fatalf("store.get: %v", err)
+	}
+	if stored == nil || stored.Value != "Stuck Forever" {
+		t.Fatalf("stored row = %#v, want the skewed write to have actually landed in storage", stored)
+	}
+}
+
+// TestService_Refresh_PeriodicFullReconciliation_RecoversASkewedWrite
+// proves the fix for P2-4: Refresh's every-fullReconcileEvery-th full
+// cache eviction (valueCache.invalidateAll) bounds how long the row
+// TestService_Refresh_IncrementalSweepAloneNeverRecoversASkewedWrite
+// proves the incremental sweep alone can never recover -- by the
+// fullReconcileEvery-th Refresh call, the cache has been flushed at least
+// once and the next read observes the row's true, current value.
+func TestService_Refresh_PeriodicFullReconciliation_RecoversASkewedWrite(t *testing.T) {
+	svc := attachDefaultServiceForTest(t)
+	skewedWriteFixture(t, svc)
+
+	for i := 0; i < fullReconcileEvery; i++ {
+		if err := svc.Refresh(context.Background()); err != nil {
+			t.Fatalf("Refresh iteration %d: %v", i, err)
+		}
+	}
+
+	v, err := svc.Get(tenantA(), "brand.site_name")
+	if err != nil {
+		t.Fatalf("Get after %d Refresh cycles: %v", fullReconcileEvery, err)
+	}
+	if v.Data != "Stuck Forever" {
+		t.Fatalf("Get after %d Refresh cycles = %#v, want the periodic full reconciliation to have recovered the skewed write", fullReconcileEvery, v.Data)
+	}
+}
+
 func TestService_Poller_ConvergesAStaleCache(t *testing.T) {
 	svc := attachDefaultServiceForTest(t, WithPollInterval(2*time.Millisecond))
 	defer func() {

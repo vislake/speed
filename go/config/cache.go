@@ -81,6 +81,20 @@ func (c *valueCache) invalidate(key string, scope Scope, tenant pkgcore.TenantID
 	delete(c.entries, cacheKey{key: key, scope: scope, tenant: tenant})
 }
 
+// invalidateAll drops every cached entry at once. It is Refresh's periodic
+// full-reconciliation primitive (see fullReconcileEvery in service.go): a
+// row whose UpdatedAt landed behind an already-advanced watermark can
+// never be selected by the incremental changedSince sweep again, however
+// many cycles run, so the only way to bound how long its cache entry can
+// stay stale is to evict it -- along with everything else -- on a fixed
+// schedule that does not depend on the watermark at all. The next read of
+// any key falls through to the store and observes its true current value.
+func (c *valueCache) invalidateAll() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries = make(map[cacheKey]cacheEntry)
+}
+
 // watch is one registered Watch callback. Watches are keyed by
 // configuration key and fire on every config.item.changed event for that
 // key, whatever scope or tenant the change happened at (see

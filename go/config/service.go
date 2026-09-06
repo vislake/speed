@@ -23,6 +23,36 @@ import (
 // common case where no event was ever lost.
 const DefaultPollInterval = 30 * time.Second
 
+// fullReconcileEvery is how many Refresh cycles pass between one full
+// cache reconciliation, layered on top of the ordinary incremental
+// changedSince(watermark) sweep every cycle already performs.
+//
+// The incremental sweep alone has a permanent blind spot: watermark only
+// ever advances forward, so a row whose UpdatedAt lands behind it --
+// because the config.item.changed event for that write was lost (the
+// event bus's own best-effort delivery) and the writer's own clock
+// (service.go's now(), an application-supplied timestamp, never a
+// database-generated one) was behind the clock that produced the
+// watermark's current value -- can never be selected by
+// "WHERE updated_at >= watermark" again, on any future cycle, however many.
+// A cross-replica clock skew, or a single writer's clock stepping
+// backward under an NTP correction, both genuinely produce exactly this.
+//
+// Rather than a real full-table diff (which would need to track every
+// currently-cached key against a fresh store scan), Refresh's periodic
+// reconciliation takes the simpler, equally effective route: it evicts
+// every cache entry outright (valueCache.invalidateAll), so the very next
+// read of any key -- stuck row included -- falls through to the store and
+// observes its true current value, independent of where the watermark
+// sits. The cost is a burst of cache misses every fullReconcileEvery
+// cycles rather than none; at the default 30s poll interval that is one
+// burst roughly every 10 minutes, far less frequent than the normal
+// incremental poll, which is the tradeoff the design accepts for closing
+// a rare but genuine permanent-staleness gap. See AGENTS.md's Known
+// limitations for the accepted residual (a stuck row still serves its
+// stale cached value for up to fullReconcileEvery cycles, never longer).
+const fullReconcileEvery = 20
+
 // Service is the runtime face of the config module: the schema-driven,
 // scope-resolved, cached, event-invalidated configuration store a host
 // (and, later, other modules) reads and writes through. A Service is
@@ -85,6 +115,12 @@ type Service struct {
 	// it are re-read next time; only the poller touches it, so it lives
 	// behind pollMu.
 	watermark time.Time
+
+	// refreshCycles counts every completed Refresh call (poller-triggered
+	// or manual alike); Refresh uses it, modulo fullReconcileEvery, to
+	// decide when a cycle also performs a full cache reconciliation. Lives
+	// behind pollMu exactly like watermark.
+	refreshCycles uint64
 
 	// afterRefreshLock, when non-nil, is called synchronously by Refresh
 	// immediately after it acquires pollMu and before it does any work. It
@@ -533,6 +569,13 @@ func (s *Service) decrypt(stored string) (string, error) {
 // it directly. It never fires watches -- event loss converges readers, not
 // watchers (see Watch's doc comment). Rows are not decrypted here: the
 // poller needs only each row's cache address, never its content.
+//
+// Every fullReconcileEvery-th call also evicts the entire cache (see that
+// constant's own doc comment): the incremental sweep above can never
+// recover a row whose UpdatedAt landed behind an already-advanced
+// watermark, and the periodic full reconciliation is what bounds how long
+// that rare case can leave a cache entry stale, independent of the
+// watermark's own position.
 func (s *Service) Refresh(ctx context.Context) error {
 	s.pollMu.Lock()
 	defer s.pollMu.Unlock()
@@ -548,6 +591,10 @@ func (s *Service) Refresh(ctx context.Context) error {
 		if r.UpdatedAt.After(s.watermark) {
 			s.watermark = r.UpdatedAt
 		}
+	}
+	s.refreshCycles++
+	if s.refreshCycles%fullReconcileEvery == 0 {
+		s.cache.invalidateAll()
 	}
 	return nil
 }
