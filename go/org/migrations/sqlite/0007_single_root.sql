@@ -1,0 +1,38 @@
+-- Makes the "exactly one root per tenant" invariant database-arbitrated,
+-- closing the P1-5 finding that CreateRoot's single-root check used to be a
+-- Go-level pre-check alone (findRoot, then the insert) with no database
+-- constraint behind it: two concurrent CreateRoot calls for one tenant --
+-- both with DIFFERENT names, which the UNIQUE(tenant_id, parent_id, name)
+-- sibling-name index does not catch, since that index is scoped per name --
+-- could each read "no root yet" and both insert, landing a tenant with two
+-- roots and silently breaking every invariant that reasons from "every node
+-- descends from the single root" (Move's cycle check above all: a second
+-- root is not a descendant of the first, so moving the one root under the
+-- other used to sail straight through it).
+--
+-- A partial unique index on ROOT-NESS, scoped WHERE parent_id = '' exactly
+-- like 0004_add_soft_delete.sql's own uq_org_nodes_sibling_name /
+-- uq_memberships_tenant_user and 0005_unique_pending_invitation.sql's
+-- uq_org_invitations_pending_email: parent_id is the empty-string sentinel
+-- on the tenant root and nothing else (model.go), so at most one such row
+-- may exist per tenant_id -- one root per tenant, however it is created.
+-- The index makes the invariant hold for EVERY write path, not only
+-- CreateRoot: a host writing a root row directly through the exported
+-- Repository surface is refused just the same. TreeService.CreateRoot
+-- translates a lost race against it (its findRoot pre-check saw no root,
+-- but a concurrent CreateRoot's insert won) into the identical coded
+-- org.root_already_exists its own pre-check reports, the same way
+-- InviteService.Invite translates uq_org_invitations_pending_email losses
+-- into ErrInvitationAlreadyPending.
+--
+-- A database that already carries two live root rows for one tenant (the
+-- pre-fix race's own output) fails this CREATE INDEX loudly rather than
+-- being silently repaired; such a tenant predates the constraint and needs
+-- a human to pick one root before the migration can land.
+--
+-- This is the sqlite/ copy; the postgres/ sibling carries the full
+-- rationale. The two are byte-identical -- partial unique indexes are
+-- standard SQL both dialects support with the same syntax.
+CREATE UNIQUE INDEX uq_org_nodes_single_root
+    ON org_nodes (tenant_id)
+    WHERE parent_id = '';

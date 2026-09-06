@@ -42,13 +42,32 @@ func seedNode(t *testing.T, repo *Repository, ctx context.Context, node OrgNode)
 // tenancy.md), so AssertIsolated -- not AssertNotTenantScoped -- is the
 // correct half of the pair: a node is meaningless outside its tenant and
 // must never be readable, updatable or deletable from another one.
+//
+// The fixture seeds each tenant ONE root row (the first record requested for
+// that tenant) and every further record beneath it: uq_org_nodes_single_root
+// (migrations/0007_single_root.sql) admits exactly one root row per tenant,
+// and the suite's records must be rows the schema admits -- the old
+// all-roots shape stopped being one the day the single-root invariant
+// became database-arbitrated.
 func TestRepository_AssertIsolated(t *testing.T) {
 	repo := NewRepository(newTestDB(t))
 
 	n := 0
+	roots := map[pkgcore.TenantID]string{}
 	tenancytest.AssertIsolated(t, repo.Repository, func(tenant pkgcore.TenantID) *OrgNode {
 		n++
 		id := fmt.Sprintf("00000000-0000-4000-8000-%012d", n)
+		if rootID, hasRoot := roots[tenant]; hasRoot {
+			return &OrgNode{
+				ID:       id,
+				ParentID: rootID,
+				Path:     buildPath(buildPath("", rootID), id),
+				Depth:    1,
+				Name:     fmt.Sprintf("node-%d", n),
+				Kind:     "group",
+			}
+		}
+		roots[tenant] = id
 		return &OrgNode{
 			ID:       id,
 			ParentID: "",

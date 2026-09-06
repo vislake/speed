@@ -120,6 +120,26 @@ func (s *TreeService) Children(ctx context.Context, nodeID string) ([]OrgNode, e
 // node in a tenant descending from the root, which is what makes moving the
 // root itself always report ErrCycleNotAllowed instead of needing a rule of
 // its own.
+//
+// # The single-root rule is database-arbitrated, not a pre-check's promise
+//
+// findRoot above is the fast, coded-error path; it is deliberately NOT the
+// enforcement. The backstop is the partial unique index
+// uq_org_nodes_single_root (migrations/{sqlite,postgres}/0007_single_root.sql)
+// -- UNIQUE (tenant_id) over exactly the rows whose parent_id holds the
+// empty-string root sentinel, so at most one live root row per tenant,
+// however it is created -- because the pre-check alone leaves a real race
+// against a second, concurrent CreateRoot of the SAME tenant with a
+// DIFFERENT name: both calls can read "no root yet" before either has
+// written, and the sibling-name index does not catch two differently-named
+// roots. The insert below is where the race is actually arbitrated: exactly
+// one of the two concurrent inserts lands, and the loser's gorm
+// ErrDuplicatedKey is translated into the identical ErrRootAlreadyExists
+// the pre-check reports, so a caller sees one error for one condition
+// however the collision was detected. (This is the same shape as the
+// sibling-name index behind CreateChild and the pending-invitation index
+// behind Invite, and the same translation discipline mapWriteError applies
+// to those races.)
 func (s *TreeService) CreateRoot(ctx context.Context, name, kind string) (*OrgNode, error) {
 	cleanName, err := validateName(name)
 	if err != nil {
@@ -146,7 +166,13 @@ func (s *TreeService) CreateRoot(ctx context.Context, name, kind string) (*OrgNo
 		Name:     cleanName,
 		Kind:     kind,
 	}
-	if err := s.create(ctx, &node); err != nil {
+	if err := s.repo.Create(ctx, &node); err != nil {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			// Lost the race against a concurrent CreateRoot of this tenant:
+			// uq_org_nodes_single_root admitted the other call's root row and
+			// refused this one.
+			return nil, ErrRootAlreadyExists.WithCause(err)
+		}
 		return nil, err
 	}
 	s.publishCreated(ctx, node)
@@ -941,16 +967,6 @@ func (s *TreeService) Subtree(ctx context.Context, nodeID string) ([]OrgNode, er
 		return nil, ErrInternal.WithCause(pathErr)
 	}
 	return s.repo.subtree(ctx, subtreePrefix(node.Path))
-}
-
-// create inserts node, translating a lost race on the sibling-name unique
-// index into the same ErrDuplicateSiblingName the pre-check reports, so the
-// caller sees one error for one condition however the collision was detected.
-func (s *TreeService) create(ctx context.Context, node *OrgNode) error {
-	if err := s.repo.Create(ctx, node); err != nil {
-		return mapWriteError(err)
-	}
-	return nil
 }
 
 // mapFindError translates dbkit's tenant-scoped not-found into the org-level

@@ -78,13 +78,31 @@ func tenantCtx(tenant pkgcore.TenantID) context.Context {
 // TestRepository_AssertIsolated against a real PostgreSQL server. org_nodes
 // is tenant data (docs/internal/04-data-and-tenancy.md); AssertIsolated is
 // the mandatory suite for it.
+//
+// The fixture seeds each tenant ONE root row (the first record requested for
+// that tenant) and every further record beneath it, mirroring the unit-tier
+// fixture's shape: uq_org_nodes_single_root (migrations/0007_single_root.sql)
+// admits exactly one root row per tenant, and the suite's records must be
+// rows the schema admits.
 func TestOrgNodeRepository_AssertIsolated_Postgres(t *testing.T) {
 	repo := org.NewRepository(newPostgres(t))
 
 	n := 0
+	roots := map[pkgcore.TenantID]string{}
 	tenancytest.AssertIsolated(t, repo.Repository, func(tenant pkgcore.TenantID) *org.OrgNode {
 		n++
 		id := fmt.Sprintf("00000000-0000-4000-8000-%012d", n)
+		if rootID, hasRoot := roots[tenant]; hasRoot {
+			return &org.OrgNode{
+				ID:       id,
+				ParentID: rootID,
+				Path:     "/" + rootID + "/" + id + "/",
+				Depth:    1,
+				Name:     fmt.Sprintf("node-%d", n),
+				Kind:     "group",
+			}
+		}
+		roots[tenant] = id
 		return &org.OrgNode{
 			ID:       id,
 			ParentID: "",
@@ -110,12 +128,22 @@ func TestMembershipRepository_AssertIsolated_Postgres(t *testing.T) {
 	repo := org.NewMembershipRepository(db)
 
 	n := 0
+	roots := map[pkgcore.TenantID]string{}
 	tenancytest.AssertIsolated(t, repo.Repository, func(tenant pkgcore.TenantID) *org.Membership {
 		n++
 		nodeID := fmt.Sprintf("10000000-0000-4000-8000-%012d", n)
-		node := &org.OrgNode{
-			ID: nodeID, ParentID: "", Path: "/" + nodeID + "/", Depth: 0,
-			Name: fmt.Sprintf("root-%d", n), Kind: "group",
+		var node *org.OrgNode
+		if rootID, hasRoot := roots[tenant]; hasRoot {
+			node = &org.OrgNode{
+				ID: nodeID, ParentID: rootID, Path: "/" + rootID + "/" + nodeID + "/", Depth: 1,
+				Name: fmt.Sprintf("node-%d", n), Kind: "group",
+			}
+		} else {
+			roots[tenant] = nodeID
+			node = &org.OrgNode{
+				ID: nodeID, ParentID: "", Path: "/" + nodeID + "/", Depth: 0,
+				Name: fmt.Sprintf("node-%d", n), Kind: "group",
+			}
 		}
 		if err := nodes.Create(tenantCtx(tenant), node); err != nil {
 			t.Fatalf("seed node for membership fixture %d: %v", n, err)

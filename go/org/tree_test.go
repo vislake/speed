@@ -2,6 +2,7 @@ package org
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -97,6 +98,197 @@ func TestTreeService_CreateRoot_Twice_ReturnsRootAlreadyExists(t *testing.T) {
 		t.Fatal("a second CreateRoot succeeded, want ErrRootAlreadyExists")
 	}
 	assertCode(t, err, ErrRootAlreadyExists.Code)
+}
+
+// TestTreeService_CreateRoot_ConcurrentRaces_ExactlyOneRootSurvives is the
+// P1-5 regression proof for the "two differently-named roots" half of the
+// finding: CreateRoot's single-root check used to be a Go-level pre-check
+// alone (findRoot, then the insert) with no database constraint behind it,
+// so two concurrent CreateRoot calls for one tenant -- both with DIFFERENT
+// names, which the sibling-name unique index does not catch -- could each
+// read "no root yet" and both insert, landing a tenant with two roots and
+// silently breaking every invariant that reasons from "every node descends
+// from the single root" (Move's cycle check above all). The fix makes the
+// invariant database-arbitrated: a partial unique index on root-ness
+// (migrations/{sqlite,postgres}/0007_single_root.sql) admits at most one
+// row per tenant with the empty-string parent sentinel, and CreateRoot
+// translates a lost race against it into the identical ErrRootAlreadyExists
+// its own pre-check reports.
+//
+// # Deterministic, exactly like the P1-2/P1-3 delete tests above
+//
+// A second connection holds an open write transaction on the org_nodes file
+// (a touch of another tenant's root row -- on SQLite any writer holds the
+// whole file). Each racing CreateRoot's findRoot is a read, which proceeds
+// while the holder's write transaction is open, so both observe "no root"
+// before either has written; each call's insert then parks behind the
+// holder. The holder is released only after a fixed margin, so both inserts
+// execute strictly after both reads, against the committed state -- the
+// exact interleaving the pre-fix pre-check could not arbitrate. Pre-fix both
+// inserts land and both calls succeed (two roots -- the assertions fail);
+// post-fix the partial unique index admits the first insert and refuses the
+// second with the coded org.root_already_exists.
+func TestTreeService_CreateRoot_ConcurrentRaces_ExactlyOneRootSurvives(t *testing.T) {
+	ctxA := tenantCtx("tenant-a")
+	ctxB := tenantCtx("tenant-b")
+
+	dsn := filepath.Join(t.TempDir(), "createroot-race.sqlite")
+	db1, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: dsn})
+	if err != nil {
+		t.Fatalf("dbkit.Open: %v", err)
+	}
+	db2, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: dsn})
+	if err != nil {
+		t.Fatalf("dbkit.Open (holder connection): %v", err)
+	}
+	t.Cleanup(func() {
+		for _, db := range []*gorm.DB{db1, db2} {
+			if sqlDB, dbErr := db.DB(); dbErr == nil {
+				_ = sqlDB.Close()
+			}
+		}
+	})
+	testutil.Migrate(t, db1, dbkit.DialectSQLite, moduleName, migrations.FS)
+
+	tree := newTestTreeOn(t, db1)
+	// A root for tenant-b, so the holder connection has a live row to touch
+	// (any org_nodes write takes the file's write lock on SQLite, but the
+	// touch must match a row to be a genuine lock acquisition).
+	bRoot := mustCreateRoot(t, tree, ctxB, "other tenant root")
+
+	// The holder: touch tenant-b's root row on db2 and hold the transaction
+	// open until release -- the same holder rig the delete-race tests use.
+	held := make(chan struct{})
+	release := make(chan struct{})
+	holderErr := make(chan error, 1)
+	go func() {
+		holderErr <- dbkit.WithTenantSession(ctxB, db2, func(tx *gorm.DB) error {
+			res := tx.
+				Where("id = ?", bRoot.ID).
+				Where("deleted_at IS NULL").
+				Select("DeletedBy").
+				Updates(&OrgNode{DeletedBy: ""})
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected != 1 {
+				return fmt.Errorf("holder touch matched %d rows, want 1", res.RowsAffected)
+			}
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+
+	select {
+	case <-held:
+	case err = <-holderErr:
+		t.Fatalf("holder failed before holding its write open: %v", err)
+	}
+
+	// Both racers start only now that the file's write lock is held: each
+	// findRoot read sees no tenant-a root, and each insert parks behind the
+	// holder, so both inserts run after both reads once it commits.
+	results := make(chan error, 2)
+	start := make(chan struct{})
+	go func() {
+		<-start
+		_, err := tree.CreateRoot(ctxA, "Race Root One", "group")
+		results <- err
+	}()
+	go func() {
+		<-start
+		_, err := tree.CreateRoot(ctxA, "Race Root Two", "group")
+		results <- err
+	}()
+	close(start)
+	time.Sleep(200 * time.Millisecond) // both findRoot reads have certainly landed by now
+	close(release)
+	if err = <-holderErr; err != nil {
+		t.Fatalf("holder commit: %v", err)
+	}
+	var successes, alreadyExists int
+	for i := 0; i < 2; i++ {
+		switch err := <-results; {
+		case err == nil:
+			successes++
+		case hasCode(err, ErrRootAlreadyExists.Code):
+			alreadyExists++
+		default:
+			t.Fatalf("racing CreateRoot failed with %v, want success or org.root_already_exists", err)
+		}
+	}
+	if successes != 1 || alreadyExists != 1 {
+		t.Fatalf("two racing CreateRoot calls gave %d successes and %d root-already-exists, want exactly 1 and 1 -- a tenant must never end up with two roots",
+			successes, alreadyExists)
+	}
+
+	// The database-level proof, independent of which racer won: exactly one
+	// root row exists for tenant-a.
+	var roots []OrgNode
+	if err := dbkit.WithTenantSession(ctxA, db1, func(tx *gorm.DB) error {
+		return tx.Where("parent_id = ?", "").Find(&roots).Error
+	}); err != nil {
+		t.Fatalf("counting tenant-a root rows: %v", err)
+	}
+	if len(roots) != 1 {
+		t.Fatalf("tenant-a has %d root rows after two racing CreateRoot calls, want exactly 1", len(roots))
+	}
+}
+
+// TestTreeService_CreateRoot_SecondRootAndRootUnderRoot_AreRefused is the
+// P1-5 regression proof for the "root under another root" half: with two
+// roots on one tenant -- a state only a bypass of CreateRoot can construct,
+// which is exactly how this test plants it, through the raw repository --
+// Move of one root under the other used to SUCCEED (the second root is not
+// a descendant of the first, so the cycle check never fires, and the
+// sibling-name pre-check looks at the target's children, which are none).
+// The fix refuses the state at the schema: the same partial unique index on
+// root-ness makes the direct second-root insert itself fail with a
+// duplicated key, so no code path -- TreeService or a host's direct
+// repository write -- can ever put a second root in a position to be moved
+// under. The assertion holds on both shapes: either the database refused
+// the second root outright (post-fix), or the tree layer had to refuse the
+// root-under-root move (pre-fix, where the plant succeeded).
+func TestTreeService_CreateRoot_SecondRootAndRootUnderRoot_AreRefused(t *testing.T) {
+	tree := newTestTree(t)
+	ctx := tenantCtx("tenant-a")
+
+	root := mustCreateRoot(t, tree, ctx, "root")
+
+	// Plant a second, differently-named root row DIRECTLY through the
+	// repository, bypassing CreateRoot's pre-check -- the only way a second
+	// root can come into existence at all, and the exact state the DB index
+	// must refuse. The planted id stays inside the hex-hyphen alphabet so the
+	// refusal under test is the tree invariant, never validatePath's id
+	// grammar.
+	planted := OrgNode{ID: "beef0001", ParentID: "", Path: "/beef0001/", Depth: 0, Name: "other root", Kind: "group"}
+	plantErr := tree.repo.Create(ctx, &planted)
+
+	switch {
+	case plantErr == nil:
+		// The schema admitted a second root (pre-fix shape): the tree layer
+		// must at least refuse to move the real root under it.
+		if _, err := tree.Move(ctx, root.ID, planted.ID); err == nil {
+			t.Fatal("moving the tenant root under a second root was not refused -- root-under-root is a corrupt tree, and the move must answer a coded error")
+		}
+	case errors.Is(plantErr, gorm.ErrDuplicatedKey):
+		// The database itself arbitrates the single-root invariant (post-fix
+		// shape): the second root never existed, so root-under-root is
+		// structurally impossible.
+	default:
+		t.Fatalf("planting a second root row = %v, want success (pre-fix) or a duplicated-key refusal (post-fix)", plantErr)
+	}
+
+	// Whichever shape held, the tenant still has exactly its one original
+	// root, still the tenant root.
+	got, err := tree.Root(ctx)
+	if err != nil {
+		t.Fatalf("Root: %v", err)
+	}
+	if got.ID != root.ID || !got.IsRoot() {
+		t.Fatalf("tenant root = %q (IsRoot %v), want the original root %q", got.ID, got.IsRoot(), root.ID)
+	}
 }
 
 // TestTreeService_CreateRoot_PerTenant_EachTenantGetsItsOwn proves the
