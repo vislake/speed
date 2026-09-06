@@ -191,6 +191,21 @@ func TestSessionManager_Rotate_ReplayRevokesTheFamilyAndTheSession(t *testing.T)
 // consequence that has to be stated rather than discovered: two simultaneous
 // refreshes with the same token are indistinguishable from a theft, exactly
 // one wins, and the session ends.
+//
+// A loser's error is deliberately allowed to be EITHER ErrRefreshTokenReused
+// OR ErrSessionRevoked. resolveRotation reads the token row and the session
+// row in two separate queries (session.go): a loser whose token-row read
+// raced ahead of the winner's consume but whose session-row read landed
+// after the replay response revoked the session legitimately answers
+// ErrSessionRevoked, while a loser that observes the consumed token answers
+// the replay sentinel. Both are the same fact -- the presented token is
+// dead and the session is over -- and which one a given loser sees depends
+// on where the winner's commit landed between those two reads. Pinning the
+// replay sentinel alone made the test itself flaky: under load, a loser
+// answering ErrSessionRevoked used to fail the run even though the security
+// property held. What is pinned instead is everything that matters: exactly
+// one winner, every loser refused with one of the two dead-token answers,
+// and the session revoked at the end.
 func TestSessionManager_Rotate_ConcurrentUseOfOneTokenIsTreatedAsAReplay(t *testing.T) {
 	t.Parallel()
 
@@ -199,10 +214,11 @@ func TestSessionManager_Rotate_ConcurrentUseOfOneTokenIsTreatedAsAReplay(t *test
 
 	const racers = 8
 	var (
-		wg      sync.WaitGroup
-		mu      sync.Mutex
-		winners int
-		replays int
+		wg         sync.WaitGroup
+		mu         sync.Mutex
+		winners    int
+		refused    int
+		unexpected []error
 	)
 	wg.Add(racers)
 	for range racers {
@@ -214,8 +230,10 @@ func TestSessionManager_Rotate_ConcurrentUseOfOneTokenIsTreatedAsAReplay(t *test
 			switch {
 			case err == nil:
 				winners++
-			case hasCode(err, ErrRefreshTokenReused.Code):
-				replays++
+			case hasCode(err, ErrRefreshTokenReused.Code), hasCode(err, ErrSessionRevoked.Code):
+				refused++
+			default:
+				unexpected = append(unexpected, err)
 			}
 		}()
 	}
@@ -224,8 +242,8 @@ func TestSessionManager_Rotate_ConcurrentUseOfOneTokenIsTreatedAsAReplay(t *test
 	if winners != 1 {
 		t.Fatalf("%d concurrent rotations of one token succeeded, want exactly 1", winners)
 	}
-	if replays != racers-1 {
-		t.Fatalf("%d losers reported a replay, want %d", replays, racers-1)
+	if refused != racers-1 {
+		t.Fatalf("%d losers were refused, want %d; unexpected errors: %v", refused, racers-1, unexpected)
 	}
 
 	stored, err := f.sessions.FindByID(t.Context(), session.ID)
