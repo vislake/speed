@@ -610,7 +610,8 @@ func (demoNotesSubjectResolver) Subject(r *http.Request) (string, bool) {
 var _ notes.SubjectResolver = demoNotesSubjectResolver{}
 
 // orgFeatureGate adapts a *config.Service that is filled in AFTER this
-// app's org.Module is constructed into org.FeatureGate, read lazily -- the
+// app's org.Module -- and its authn.Module -- are constructed into the
+// modules' FeatureGate seams, read lazily -- the
 // same "read a host seam at call time, never capture it at construction"
 // idiom go/org's own hostSeams applies throughout the module (see
 // go/org/events.go's doc comment on hostSeams for the identical reasoning).
@@ -629,7 +630,14 @@ var _ notes.SubjectResolver = demoNotesSubjectResolver{}
 // ordering problem entirely.
 type orgFeatureGate struct{ service **config.Service }
 
-// IsEnabled implements org.FeatureGate.
+// IsEnabled implements org.FeatureGate -- and, identically,
+// authn.FeatureGate, which is the same declaration under a different
+// module: go/authn's copy of the seam (go/authn/module.go) was written to
+// org's shape exactly, and the two modules never import each other. One
+// adapter therefore serves both gates, and buildServer passes the same
+// orgFeatureGate value to org.WithFeatureGate and, since the authn
+// channel-flag wiring round, to authn.WithFeatureGate (see the authn
+// wiring below).
 func (g orgFeatureGate) IsEnabled(ctx context.Context, key string) (bool, error) {
 	svc := *g.service
 	if svc == nil {
@@ -638,8 +646,96 @@ func (g orgFeatureGate) IsEnabled(ctx context.Context, key string) (bool, error)
 	return svc.IsEnabled(ctx, key)
 }
 
-// compile-time check that orgFeatureGate satisfies org.FeatureGate.
-var _ org.FeatureGate = orgFeatureGate{}
+// compile-time checks that orgFeatureGate satisfies org.FeatureGate and
+// authn.FeatureGate, the two identical no-import declarations it serves.
+var (
+	_ org.FeatureGate   = orgFeatureGate{}
+	_ authn.FeatureGate = orgFeatureGate{}
+)
+
+// socialChannelFlagKey maps a configured social provider's Name() to the
+// feature-flag key go/authn gates that channel under -- the host-side
+// mirror of go/authn/identity.go's own unexported socialChannelFlag
+// mapping, which this app cannot call. It returns "" for a provider authn
+// does not gate: such a provider has no flag for an operator to have
+// turned off, so there is nothing for this host to open, and
+// openConfiguredAuthnChannels must skip it (writing an unknown key would
+// be a config ErrUnknownKey, since the schema knows only declared flags).
+func socialChannelFlagKey(name string) string {
+	switch name {
+	case authn.ProviderGoogle:
+		return authn.FeatureFlagSocialGoogle
+	case authn.ProviderGitHub:
+		return authn.FeatureFlagSocialGitHub
+	case authn.ProviderWeChat:
+		return authn.FeatureFlagSocialWeChat
+	case authn.ProviderDingTalk:
+		return authn.FeatureFlagSocialDingTalk
+	case authn.ProviderFeishu:
+		return authn.FeatureFlagSocialFeishu
+	default:
+		return ""
+	}
+}
+
+// openConfiguredAuthnChannels opens, at the config system tier, every
+// social sign-in channel this host assembled through cfg.SocialProviders.
+//
+// It exists because of a deliberate asymmetry in go/authn's declared flag
+// defaults: authn.password_login and authn.sms_login default ON, while the
+// five social flags default OFF -- go/authn/module.go: a channel with no
+// credentials configured must not appear on the login page, so a flag that
+// defaulted on would advertise a channel whose unconfigured deployment
+// would fail it at the provider. A deployment that configures credentials
+// (here: that assembles the provider through serverConfig, its own
+// out-of-band composition channel) is therefore expected to turn that
+// channel's own flag on, and this step is how THIS host does that, for
+// exactly the channels it actually wired. A system-tier row is the right
+// tier: pre-auth reads -- authn's own channel gates and the login page's
+// /api/system/features answer -- carry no tenant and resolve from the
+// system row down, so every request sees the same answer, while a
+// tenant-tier row can still narrow a channel for one tenant.
+//
+// The step must run after Bootstrap: a system-tier write needs the audited
+// system context under config.SystemPurposeSystemWrite, a purpose config's
+// own Register declares during Bootstrap, and the schema the write
+// validates against is frozen by configModule.Attach. Running here, before
+// any route can serve, makes the page/API agreement hold from the very
+// first request -- the mirror image of the wiring gap this round closes
+// (go/authn/AGENTS.md's "one known wiring gap"): without the gate wired,
+// config rows could hide a channel on the page while its endpoint kept
+// issuing tokens; without this step, the wired gate would refuse a channel
+// this host genuinely configured.
+//
+// No providers assembled means no rows are written at all, and the schema
+// defaults alone keep password and SMS sign-in open. The writes are
+// unconditional per boot (each Set upserts its row to true), matching the
+// ai-gateway boot credential write and the seedDemo* steps below: this
+// app's composition declares its channels, and a restart re-affirms that
+// declaration. Tenant-tier rows are never touched, so a tenant's own
+// narrower choice survives every restart.
+func openConfiguredAuthnChannels(ctx context.Context, cfgService *config.Service, providers []authn.SocialProvider) error {
+	if len(providers) == 0 {
+		return nil
+	}
+	sysCtx, err := pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
+		Actor:   "reference-app-boot",
+		Purpose: config.SystemPurposeSystemWrite,
+	})
+	if err != nil {
+		return fmt.Errorf("reference-app: build the authn channel system context: %w", err)
+	}
+	for _, provider := range providers {
+		flag := socialChannelFlagKey(provider.Name())
+		if flag == "" {
+			continue
+		}
+		if setErr := cfgService.Set(sysCtx, config.ScopeSystem, flag, config.Value{Data: true}, "reference-app-boot"); setErr != nil {
+			return fmt.Errorf("reference-app: open authn channel %q: %w", flag, setErr)
+		}
+	}
+	return nil
+}
 
 // orgSubtreeResolver adapts org.Scope's Path method onto rbac.SubtreeResolver's
 // NodePath -- the two no-import seams differ just enough (three return
@@ -999,6 +1095,21 @@ type serverConfig struct {
 	// WebhookURLValidator's identical "test-only override of what buildServer
 	// already wires, never a production weakening" shape above.
 	OnRBACReady func(*rbac.Service)
+
+	// OnConfigReady, when non-nil, receives the live *config.Service
+	// buildServer attaches, immediately after openConfiguredAuthnChannels
+	// opens the assembled social channels' system-tier flag rows. It exists
+	// purely for a test that must write a configuration row through the
+	// module's real Set path -- the authn channel-flag wiring regression
+	// (authn_e2e_test.go's TestAuthnE2E_PasswordChannelDisabled...), which
+	// disables authn.password_login through the same system-tier write an
+	// operator's admin-console write would land (under
+	// config.SystemPurposeSystemWrite) and proves the composed stack then
+	// refuses the password endpoint while SMS and social stay open. Nil in
+	// every production boot and every other test is a complete no-op,
+	// mirroring OnRBACReady's identical "test-only override of what
+	// buildServer already wires, never a production weakening" shape above.
+	OnConfigReady func(*config.Service)
 }
 
 // parseHexKeyEnv decodes encoded -- envName's raw value -- as a hex-encoded
@@ -1620,6 +1731,21 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		authn.WithSocialProviders(cfg.SocialProviders...),
 		authn.WithRedirectAllowlist(cfg.RedirectAllowlist),
 		authn.WithTrustedProviders(cfg.TrustedProviders...),
+		// The feature gate that makes authn's eight declared feature flags
+		// (authn.password_login, authn.sms_login, the five authn.social.*
+		// channels, authn.sso.oidc) effective at request time: the same
+		// lazy *config.Service adapter org's own gate uses above --
+		// authn.FeatureGate is org.FeatureGate's identical declaration, and
+		// the config service is only produced by configModule.Attach, which
+		// runs after Bootstrap returns (orgFeatureGate's doc comment).
+		// Without it this app's flags would be declarations with no
+		// enforcement: a row disabling authn.password_login would hide the
+		// login form while the password endpoint kept issuing tokens -- the
+		// wiring gap the authn channel-flag round recorded
+		// (go/authn/AGENTS.md). The channels this host assembles through
+		// cfg.SocialProviders are opened at the system tier after Attach by
+		// openConfiguredAuthnChannels, since their flags default OFF.
+		authn.WithFeatureGate(orgFeatureGate{service: &configService}),
 	}
 	// The "SMS sender" seam, following the same conditional-injection shape
 	// as every other seam this file wires: a configured gateway URL always
@@ -2230,6 +2356,27 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, nil, fmt.Errorf("reference-app: attach the config module: %w", err)
+	}
+	// With the config service live, open the sign-in channels this host
+	// actually assembled: authn's social flags default OFF (a channel with
+	// no configured credentials must not appear on the login page), so a
+	// provider this app wired through cfg.SocialProviders would otherwise
+	// refuse with authn.channel_disabled the moment the gate wired into
+	// authn above became real -- and the login page, which reads the same
+	// system-tier rows through /api/system/features, would agree that the
+	// channel does not exist. See openConfiguredAuthnChannels' own doc
+	// comment for the full reasoning. When cfg.SocialProviders is empty the
+	// step writes nothing at all.
+	if flagErr := openConfiguredAuthnChannels(ctx, configService, cfg.SocialProviders); flagErr != nil {
+		_ = cleanup()
+		return nil, nil, nil, flagErr
+	}
+	// OnConfigReady, when non-nil, receives the live *config.Service now
+	// that the channel-flag rows above are in place -- the post-Attach
+	// seam a test needs to write further rows through the real Set path
+	// (serverConfig's field doc).
+	if cfg.OnConfigReady != nil {
+		cfg.OnConfigReady(configService)
 	}
 	// rbac's Attach must also come after Bootstrap, and for a sharper
 	// reason than config's: what it freezes is the snapshot of every

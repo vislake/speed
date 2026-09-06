@@ -12,6 +12,15 @@ package main
 // one device, and prove that device's refresh token now fails while
 // another device's still works.
 //
+// A second test below is the regression proof that closes the reference-app
+// wiring gap the authn channel-flag round recorded (go/authn/AGENTS.md's
+// "one known wiring gap"): buildServer passes authn.WithFeatureGate the
+// same lazy *config.Service adapter org's gate uses, so the module's eight
+// declared flags are enforced in THIS app, not just inside go/authn. The
+// test disables authn.password_login through the real config surface and
+// proves the composed HTTP stack refuses the password endpoint with
+// authn.channel_disabled while SMS and social stay open.
+//
 // Every one of the three channels authenticates the SAME demo account
 // (registered once, with both an email and a phone number), which is what
 // lets the social step exercise the auto-link rule
@@ -39,6 +48,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -126,8 +136,10 @@ func (s *githubStub) provider() authn.SocialProvider {
 // go/authn/identity.go's resolveSocialAccount), and a captured SMS output
 // buffer -- everything server.go's default production wiring leaves empty
 // (serverConfig.SocialProviders/RedirectAllowlist/TrustedProviders' own doc
-// comments explain why).
-func buildAuthnE2EServer(t *testing.T) (*httptest.Server, serverConfig, *bytes.Buffer, *githubStub) {
+// comments explain why). The optional mutate funcs, when any are passed,
+// run against the cfg immediately before buildServer is called, so a test
+// can reach a post-Attach seam such as cfg.OnConfigReady.
+func buildAuthnE2EServer(t *testing.T, mutate ...func(*serverConfig)) (*httptest.Server, serverConfig, *bytes.Buffer, *githubStub) {
 	t.Helper()
 
 	cfg := testConfig(t)
@@ -154,6 +166,10 @@ func buildAuthnE2EServer(t *testing.T) (*httptest.Server, serverConfig, *bytes.B
 		t.Fatalf("build redirect allowlist: %v", err)
 	}
 	cfg.RedirectAllowlist = allowlist
+
+	for _, m := range mutate {
+		m(&cfg)
+	}
 
 	handler, cleanup, _, err := buildServer(context.Background(), cfg)
 	if err != nil {
@@ -436,5 +452,186 @@ func TestAuthnE2E_ThreeLoginEntryPoints_AndSessionManagement(t *testing.T) {
 	finalNotes := listNotesAs(t, srv, stillWorks.AccessToken)
 	if len(finalNotes) != 4 {
 		t.Fatalf("notes visible after the surviving session's refresh = %d, want 4 (%+v)", len(finalNotes), finalNotes)
+	}
+}
+
+// TestAuthnE2E_PasswordChannelDisabled_RefusedWhileOtherChannelsStayOpen
+// is the regression proof for the wiring gap this round closes
+// (go/authn/AGENTS.md's "one known wiring gap"): buildServer passes
+// authn.WithFeatureGate the same lazy *config.Service adapter org's gate
+// uses, so authn's eight declared feature flags are enforced at request
+// time in THIS app -- a deployment that disables authn.password_login must
+// refuse the password endpoint, not merely hide the login form (the
+// frontend reads /api/system/features) while POST /api/v1/authn/login/
+// password keeps issuing tokens.
+//
+// The test disables the channel through the real config surface: a
+// system-tier row written through config.Service.Set under the audited
+// system purpose config's own Register declared
+// (config.SystemPurposeSystemWrite) -- the write an operator's
+// admin-console action ultimately lands -- then proves, over the composed
+// HTTP stack, that (1) the password endpoint refuses with 403
+// authn.channel_disabled naming the channel, (2) the login page's feature
+// endpoint agrees (password_login gone, sms_login and the assembled
+// GitHub channel still listed), and (3) the SMS and GitHub social channels
+// stay open end to end, each yielding a working token pair. Before the
+// wiring, this test fails at leg (1): the row is written and honored by
+// /api/system/features, but the password endpoint answers 200, because no
+// gate enforced the flag in the app.
+func TestAuthnE2E_PasswordChannelDisabled_RefusedWhileOtherChannelsStayOpen(t *testing.T) {
+	var configSvc *config.Service
+	srv, cfg, smsOut, github := buildAuthnE2EServer(t, func(cfg *serverConfig) {
+		cfg.OnConfigReady = func(svc *config.Service) { configSvc = svc }
+	})
+	if configSvc == nil {
+		t.Fatal("cfg.OnConfigReady was never called by buildServer")
+	}
+	client := srv.Client()
+
+	// Disable the password channel the way an operator's write would: a
+	// system-tier row through the module's real Set path, under the audited
+	// system purpose config's own Register declared. The row is the value
+	// both /api/system/features and authn's channel gate resolve.
+	sysCtx, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{
+		Actor:   "authn-channel-flag-test",
+		Purpose: config.SystemPurposeSystemWrite,
+	})
+	if err != nil {
+		t.Fatalf("build system context: %v", err)
+	}
+	if setErr := configSvc.Set(sysCtx, config.ScopeSystem, authn.FeatureFlagPasswordLogin, config.Value{Data: false}, "authn-channel-flag-test"); setErr != nil {
+		t.Fatalf("disable %s: %v", authn.FeatureFlagPasswordLogin, setErr)
+	}
+
+	// The one account the remaining channels sign into: registered with
+	// both an email and a phone, and granted membership in tenant-e2e,
+	// exactly as the three-entry-point test above does (the github email is
+	// set so its callback auto-links onto this same account).
+	var registered struct {
+		ID string `json:"id"`
+	}
+	registerResp := authnJSON(t, client, http.MethodPost, srv.URL+"/api/v1/authn/register", "",
+		map[string]string{"email": e2eEmail, "phone": e2ePhone, "password": testPassword},
+		&registered)
+	if registerResp.StatusCode != http.StatusCreated {
+		t.Fatalf("register status = %d, want %d", registerResp.StatusCode, http.StatusCreated)
+	}
+	cfg.Memberships.Grant(registered.ID, "tenant-e2e")
+	github.mu.Lock()
+	github.email = e2eEmail
+	github.mu.Unlock()
+
+	// ---- (1) The password endpoint refuses, with the flag's coded
+	// answer: 403 authn.channel_disabled naming the channel. The gate runs
+	// before any password work (go/authn/service.go's channelEnabled), so
+	// the correct credentials below are exactly what must NOT be honored.
+	passwordResp := authnJSON(t, client, http.MethodPost, srv.URL+"/api/v1/authn/login/password", "",
+		map[string]string{"identifier": e2eEmail, "password": testPassword, "tenant_id": "tenant-e2e", "device": "e2e-password"},
+		nil)
+	defer passwordResp.Body.Close()
+	if passwordResp.StatusCode != http.StatusForbidden {
+		body, _ := io.ReadAll(passwordResp.Body)
+		t.Fatalf("password login with %s disabled: status = %d, want %d (Forbidden); body = %s",
+			authn.FeatureFlagPasswordLogin, passwordResp.StatusCode, http.StatusForbidden, body)
+	}
+	code, params := decodeErrorEnvelope(t, passwordResp)
+	if code != "authn.channel_disabled" {
+		t.Errorf("password refusal code = %q, want %q", code, "authn.channel_disabled")
+	}
+	if got, _ := params["channel"].(string); got != authn.FeatureFlagPasswordLogin {
+		t.Errorf("password refusal param channel = %q, want %q", got, authn.FeatureFlagPasswordLogin)
+	}
+
+	// ---- (2) The login page agrees with the API: the features endpoint
+	// no longer lists the password channel, and still lists SMS and the
+	// assembled GitHub channel (the latter opened at boot by
+	// openConfiguredAuthnChannels, since its flag defaults off).
+	var features struct {
+		Features []string `json:"features"`
+	}
+	featuresResp := authnJSON(t, client, http.MethodGet, srv.URL+"/api/system/features", "", nil, &features)
+	if featuresResp.StatusCode != http.StatusOK {
+		t.Fatalf("features endpoint status = %d, want %d", featuresResp.StatusCode, http.StatusOK)
+	}
+	listed := make(map[string]bool, len(features.Features))
+	for _, key := range features.Features {
+		listed[key] = true
+	}
+	if listed[authn.FeatureFlagPasswordLogin] {
+		t.Errorf("features endpoint still lists %s after it was disabled: %v", authn.FeatureFlagPasswordLogin, features.Features)
+	}
+	for _, key := range []string{authn.FeatureFlagSMSLogin, authn.FeatureFlagSocialGitHub} {
+		if !listed[key] {
+			t.Errorf("features endpoint no longer lists %s: %v", key, features.Features)
+		}
+	}
+
+	// ---- (3) The SMS channel stays open end to end: request a code,
+	// read it from the captured console output, and sign in with it.
+	smsRequestResp := authnJSON(t, client, http.MethodPost, srv.URL+"/api/v1/authn/login/sms/request", "",
+		map[string]string{"phone": e2ePhone}, nil)
+	if smsRequestResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("request SMS code status = %d, want %d", smsRequestResp.StatusCode, http.StatusAccepted)
+	}
+	match := smsCodePattern.FindStringSubmatch(smsOut.String())
+	if match == nil {
+		t.Fatalf("no 6-digit code found in captured SMS output: %q", smsOut.String())
+	}
+	var smsPair tokenPairResponse
+	smsLoginResp := authnJSON(t, client, http.MethodPost, srv.URL+"/api/v1/authn/login/sms", "",
+		map[string]string{"phone": e2ePhone, "code": match[1], "tenant_id": "tenant-e2e", "device": "e2e-sms"},
+		&smsPair)
+	if smsLoginResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(smsLoginResp.Body)
+		t.Fatalf("sms login status = %d, want %d; body = %s", smsLoginResp.StatusCode, http.StatusOK, body)
+	}
+	if smsPair.AccessToken == "" || smsPair.RefreshToken == "" {
+		t.Fatalf("sms login response incomplete: %+v", smsPair)
+	}
+
+	// ---- (4) The GitHub social channel stays open end to end: the
+	// authorize step answers (a disabled channel would refuse before
+	// minting a state), and the callback exchanges the code for tokens,
+	// auto-linking onto the registered account by its verified email.
+	// Both requests go through one cookie jar, exactly as the
+	// three-entry-point test above does: the authorize step's session
+	// cookie is what binds the callback to the same state record.
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("build cookie jar: %v", err)
+	}
+	socialClient := &http.Client{Jar: jar}
+	authorizeURL := srv.URL + "/api/v1/authn/social/github/authorize?redirect_uri=" + url.QueryEscape(e2eRedirectURI)
+	var authorize struct {
+		AuthorizeURL string `json:"authorize_url"`
+	}
+	authorizeResp := authnJSON(t, socialClient, http.MethodGet, authorizeURL, "", nil, &authorize)
+	if authorizeResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(authorizeResp.Body)
+		t.Fatalf("social authorize status = %d, want %d; body = %s", authorizeResp.StatusCode, http.StatusOK, body)
+	}
+	authorizeParsed, err := url.Parse(authorize.AuthorizeURL)
+	if err != nil {
+		t.Fatalf("parse authorize_url %q: %v", authorize.AuthorizeURL, err)
+	}
+	state := authorizeParsed.Query().Get("state")
+	if state == "" {
+		t.Fatalf("authorize_url %q carried no state", authorize.AuthorizeURL)
+	}
+	var social struct {
+		Tokens     tokenPairResponse `json:"tokens"`
+		AutoLinked bool              `json:"auto_linked"`
+	}
+	callbackResp := authnJSON(t, socialClient, http.MethodPost, srv.URL+"/api/v1/authn/social/github/callback", "",
+		map[string]string{"code": "e2e-github-code", "state": state, "tenant_id": "tenant-e2e"}, &social)
+	if callbackResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(callbackResp.Body)
+		t.Fatalf("social callback status = %d, want %d; body = %s", callbackResp.StatusCode, http.StatusOK, body)
+	}
+	if !social.AutoLinked {
+		t.Error("social callback auto_linked = false, want true (github is trusted and the email is verified)")
+	}
+	if social.Tokens.AccessToken == "" || social.Tokens.RefreshToken == "" || social.Tokens.Principal.SessionID == "" {
+		t.Fatalf("social callback response carried no tokens: %+v", social)
 	}
 }
