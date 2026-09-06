@@ -76,12 +76,18 @@ import (
 // failed (see UserAddresses' own doc comment). Every other demo user
 // resolves to no addresses -- an ordinary state, not an error.
 //
-// demoSmileSimRecipientUserID is smilesim_flow_test.go's own fixture: a
-// phone-only entry (the smilesim completion notification's DefaultChannels
-// is sms-only -- see internal/demo/module.go's TypeKeySimulationReady --
-// so a phone is the one address that matters here), named directly as a
-// POST /simulate request's recipient_user_id, independent of whichever
-// account actually authenticated the request.
+// demoSmileSimRecipientUserID is the smile-simulation completion
+// notification's demo recipient fixture: a phone-only entry (the smilesim
+// completion notification's DefaultChannels is sms-only -- see
+// internal/demo/module.go's TypeKeySimulationReady -- so a phone is the
+// one address that matters here), named as a POST /simulate request's
+// recipient_user_id by the flow test that drives the delivery. That test
+// also grants the fixture an ACTIVE MEMBERSHIP in the tenant its caller
+// operates in -- the demo shape of a real patient account in the clinic's
+// own tenant -- because the simulate surface refuses any recipient that is
+// not an active member of the caller's tenant (cmd/server/smilesim.go's
+// validateSimulateRecipient): a recipient id that belongs to another
+// tenant must never receive this tenant's notification.
 const demoSmileSimRecipientUserID = "user-smilesim-recipient-1"
 
 var demoUserAddresses = map[string]notification.UserAddresses{

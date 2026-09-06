@@ -40,6 +40,15 @@ import (
 // the policy refused would fail the boot the same way it fails a browser.
 const demoSeedPassword = "demo users seed passphrase"
 
+// demoPlatformStaffSeedPassword is the test passphrase the suites that seed
+// the demo platform-staff account (demo_admin.go's seedDemoPlatformStaff)
+// set its OWN config field to -- deliberately a DIFFERENT value from
+// demoSeedPassword, mirroring the runtime split between
+// APP_DEMO_USERS_PASSWORD and APP_DEMO_PLATFORM_STAFF_PASSWORD
+// (demo_admin.go). It must satisfy go/authn's password policy for the same
+// registration-through-the-real-route reason demoSeedPassword documents.
+const demoPlatformStaffSeedPassword = "platform staff seed passphrase"
+
 // buildSeededUsersTestServer composes buildServer's real output the way
 // buildTestServer does, with the demo-user seed switched on: the boot runs
 // seedDemoUsers, which the plain testConfig's empty password never does.
@@ -201,10 +210,15 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T)
 	// cleanup: the caller closes and cleans up each boot explicitly, in
 	// order. Each boot carries its own fresh membership store -- the honest
 	// image of a restart, where nothing boot one held in memory exists.
+	// Both demo seed variables are set, each to its OWN passphrase, exactly
+	// as an operator enabling the full demo would (the platform-staff
+	// account is seeded from APP_DEMO_PLATFORM_STAFF_PASSWORD alone, never
+	// from the demo users' variable -- demo_admin.go).
 	boot := func() (*httptest.Server, func() error) {
 		cfg := testConfig(t)
 		cfg.SQLitePath = dbPath
 		cfg.DemoUsersPassword = demoSeedPassword
+		cfg.DemoPlatformStaffPassword = demoPlatformStaffSeedPassword
 		handler, cleanup, _, err := buildServer(context.Background(), cfg)
 		if err != nil {
 			t.Fatalf("buildServer: %v", err)
@@ -267,7 +281,7 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T)
 		t.Fatalf("boot-two login as the seeded reader: status = %d, code = %q, want %d", status, code, http.StatusOK)
 	}
 
-	status, code, _ = demoLogin(t, srv2, demoPlatformStaffEmail, demoSeedPassword, rbac.SystemDomain)
+	status, code, _ = demoLogin(t, srv2, demoPlatformStaffEmail, demoPlatformStaffSeedPassword, rbac.SystemDomain)
 	if status != http.StatusOK {
 		t.Fatalf("boot-two login as the platform-staff account: status = %d, code = %q, want %d "+
 			"(the staff account's SystemDomain membership must survive a restart)",

@@ -302,26 +302,41 @@ const (
 	disableQueueWorkerEnv = "APP_DISABLE_QUEUE_WORKER"
 
 	// disableDemoUserHeaderEnv names the environment variable that, when set
-	// to any non-empty value, makes buildServer's rbac wiring stop reading
-	// demoUserHeader (demo_subject.go's "X-Demo-User") at all: every gated
-	// route resolves its acting Subject from the verified authn Principal
-	// alone, through demoSubjectResolverFor(true) -- see that function's own
-	// doc comment. This is the kill switch demoUserHeader's own doc comment
-	// describes for the header's remaining privilege-escalation hole: an
+	// to any non-empty value, makes buildServer stop reading EVERY demo
+	// identity header this app ships -- demoUserHeader (demo_subject.go's
+	// "X-Demo-User") AND demoOrgUserHeader ("X-Demo-User-Id", the
+	// attribution header demoOrgSubjectResolver and demoNotesSubjectResolver
+	// read) -- uniformly:
+	//
+	//   - every permission-gated route resolves its acting Subject from the
+	//     verified authn Principal alone, through demoSubjectResolverFor(true)
+	//     (see that function's own doc comment);
+	//   - every attribution seam demoOrgSubjectResolver serves (org's
+	//     caller-scoped invitation endpoints, the notification module's whole
+	//     surface, integration's creator reads) and demoNotesSubjectResolver
+	//     serves (notes' create handler, the cases surface) resolves its
+	//     acting user from the verified authn Principal alone.
+	//
+	// This is the kill switch demoUserHeader's own doc comment describes for
+	// the rbac header's remaining privilege-escalation hole -- an
 	// unauthenticated header that still outranks a proven identity when both
 	// are present, so a caller holding nothing more than a low-privilege
 	// session could set the header to a higher-privileged demo actor's id
 	// and have rbac decide against that actor's grants instead of the
-	// caller's own. Left unset (the default), this variable changes nothing
-	// -- every existing demo journey and every test built around the header
-	// winning keeps behaving exactly as it did before this variable existed,
-	// which is deliberate: flipping the default would break every one of
-	// them at once (demo_subject_test.go, notesRequestAs and friends in
+	// caller's own -- extended, since the original switch only ever reached
+	// demoUserHeader, to the attribution header too: X-Demo-User-Id let the
+	// same class of caller act as (or read the data of) any user id on the
+	// org/notification/cases/notes surfaces even with the original switch
+	// set. Left unset (the default), this variable changes nothing -- every
+	// existing demo journey and every test built around the headers winning
+	// keeps behaving exactly as it did before this variable existed, which
+	// is deliberate: flipping the default would break every one of them at
+	// once (demo_subject_test.go, notesRequestAs and friends in
 	// server_test.go, and the flow tests across this package that drive a
-	// demo actor through the header). An operator deploying this reference
+	// demo actor through a header). An operator deploying this reference
 	// app somewhere a real, non-demo user might reach it is the one case
 	// this variable exists for: setting it closes the hole with no code
-	// change. See DEPLOY.md's own section on this header for the operator-
+	// change. See DEPLOY.md's own section on these headers for the operator-
 	// facing version of this same warning.
 	disableDemoUserHeaderEnv = "APP_DISABLE_DEMO_USER_HEADER"
 
@@ -517,20 +532,25 @@ const demoOrgUserHeader = "X-Demo-User-Id"
 // through it. It exists only so this reference app has *some* way to
 // demonstrate those endpoints end to end before authn exists.
 //
-// Who a caller is is the X-Demo-User-Id header value, and nothing else:
-// this resolver deliberately never falls back to the verified Principal
-// authn.Middleware leaves in the request context. The org-web round's own
-// rule governs -- an endpoint that resolves its caller from an
-// unauthenticated, client-supplied header is scaffold, and a browser
-// whose requests carry no demo header is refused until the resolver reads
-// a real token -- and this app's flows pinned that refusal as the
-// notification surface's identity gate (notification_flow_test.go's
-// subject-less leg; demoRouteGuards names the path routePublic for the
-// same reason): an authenticated caller with no demo header gets the
-// module's own per-operation 401 (notification.subject_unresolved and
-// org's sibling), never a fabricated user id. Notes' create handler is
-// the one seam that additionally accepts principals -- it resolves
-// through demoNotesSubjectResolver below, not through this type.
+// In its default, header-enabled wiring, who a caller is is the
+// X-Demo-User-Id header value, and nothing else: the resolver never falls
+// back to the verified Principal authn.Middleware leaves in the request
+// context. The org-web round's own rule governs -- an endpoint that
+// resolves its caller from an unauthenticated, client-supplied header is
+// scaffold, and a browser whose requests carry no demo header is refused
+// until the resolver reads a real token -- and this app's flows pinned
+// that refusal as the notification surface's identity gate
+// (notification_flow_test.go's subject-less leg; demoRouteGuards names the
+// path routePublic for the same reason): an authenticated caller with no
+// demo header gets the module's own per-operation 401
+// (notification.subject_unresolved and org's sibling), never a fabricated
+// user id. Notes' create handler is the one seam that additionally accepts
+// principals -- it resolves through demoNotesSubjectResolver below, not
+// through this type. The headerDisabled field below is the deliberate
+// exception to the "never falls back to the Principal" rule: an operator
+// who sets APP_DISABLE_DEMO_USER_HEADER has declared this deployment reads
+// no demo header at all, so the only identity left to resolve a caller
+// from is the verified Principal.
 //
 // This is a placeholder, not a pattern to copy into a real deployment: a
 // real SubjectResolver must derive the caller from a source the server
@@ -538,20 +558,43 @@ const demoOrgUserHeader = "X-Demo-User-Id"
 // unauthenticated, client-supplied header like this one -- see
 // org.SubjectResolver's own doc comment for the same rule stated as a hard
 // requirement.
-type demoOrgSubjectResolver struct{}
+//
+// headerDisabled carries the value of cfg.DisableDemoUserHeader
+// (APP_DISABLE_DEMO_USER_HEADER) buildServer wired this resolver with. The
+// zero value reproduces the original header-only resolver exactly; the
+// disabled wiring is what an operator setting the kill switch gets, and it
+// is the point of this field: before it existed the kill switch only ever
+// reached demoUserHeader in the rbac gate, leaving this resolver (and the
+// org, notification and integration surfaces it serves) honoring
+// X-Demo-User-Id unconditionally. With headerDisabled set, Subject reads
+// no header at all and resolves the caller from the verified authn
+// Principal alone -- the identity authn.Middleware proved -- failing
+// closed exactly like the header-only shape when no Principal exists. See
+// disableDemoUserHeaderEnv's own doc comment for the full contract.
+type demoOrgSubjectResolver struct {
+	headerDisabled bool
+}
 
 // Subject implements org.SubjectResolver, notification.SubjectResolver and
 // integration.SubjectResolver -- the third round-4 wired this same type
 // onto, since all three seams share the identical
 // (r *http.Request) (string, bool) shape with the identical fail-closed
 // contract, and this app already has one instance to hand each of them. It
-// fails closed: no header reports ("", false), and the module's own
-// per-operation refusal (notification.subject_unresolved,
+// fails closed: no header (and, in the headerDisabled wiring, no verified
+// Principal) reports ("", false), and the module's own per-operation
+// refusal (notification.subject_unresolved,
 // integration.subject_unresolved, org's sibling) is what a caller then
 // sees.
-func (demoOrgSubjectResolver) Subject(r *http.Request) (string, bool) {
-	userID := r.Header.Get(demoOrgUserHeader)
-	return userID, userID != ""
+func (r demoOrgSubjectResolver) Subject(req *http.Request) (string, bool) {
+	if !r.headerDisabled {
+		userID := req.Header.Get(demoOrgUserHeader)
+		return userID, userID != ""
+	}
+	principal, ok := authn.PrincipalFromContext(req.Context())
+	if !ok || principal.UserID == "" {
+		return "", false
+	}
+	return principal.UserID, true
 }
 
 // compile-time checks that demoOrgSubjectResolver satisfies the identical
@@ -589,15 +632,34 @@ var (
 // the header is exactly as unverifiable here as in demoOrgSubjectResolver,
 // and a real deployment's resolver reads the creating user from the
 // verified token the notes create handler already stands behind.
-type demoNotesSubjectResolver struct{}
+//
+// headerDisabled carries the value of cfg.DisableDemoUserHeader
+// (APP_DISABLE_DEMO_USER_HEADER) buildServer wired this resolver with --
+// the sibling of demoOrgSubjectResolver's own field of the same name, and
+// the same finding in this app: the original kill switch never reached
+// this resolver either, so with the switch ON a caller could still name
+// any creator through X-Demo-User-Id on notes' and cases' surfaces. The
+// zero value reproduces the original header-then-Principal resolver
+// exactly; with headerDisabled set, Subject skips the header read entirely
+// and resolves the caller from the verified authn Principal alone, failing
+// closed exactly like the default shape when no Principal exists.
+type demoNotesSubjectResolver struct {
+	headerDisabled bool
+}
 
-// Subject implements notes.SubjectResolver. It fails closed: no header
-// and no Principal reports ("", false), and the module's own per-operation
-// refusal (notes.subject_unresolved) is what a caller then sees.
-func (demoNotesSubjectResolver) Subject(r *http.Request) (string, bool) {
-	userID := r.Header.Get(demoOrgUserHeader)
+// Subject implements notes.SubjectResolver (and the cases package's
+// identical copy of the seam -- see the compile-time check at the bottom
+// of cmd/server/cases.go). It fails closed: no header (and, in the
+// headerDisabled wiring, no verified Principal) reports ("", false), and
+// the module's own per-operation refusal (notes.subject_unresolved,
+// cases.subject_unresolved) is what a caller then sees.
+func (r demoNotesSubjectResolver) Subject(req *http.Request) (string, bool) {
+	userID := ""
+	if !r.headerDisabled {
+		userID = req.Header.Get(demoOrgUserHeader)
+	}
 	if userID == "" {
-		principal, ok := authn.PrincipalFromContext(r.Context())
+		principal, ok := authn.PrincipalFromContext(req.Context())
 		if !ok || principal.UserID == "" {
 			return "", false
 		}
@@ -937,11 +999,13 @@ type serverConfig struct {
 	// to this field never having existed.
 	DisableQueueWorker bool
 
-	// DisableDemoUserHeader, when true, makes buildServer wire every
-	// permission-gated route's SubjectResolver through
-	// demoSubjectResolverFor(true) instead of the header-first default --
-	// see disableDemoUserHeaderEnv's own doc comment above for why this
-	// exists and exactly what it changes. configFromEnv sets it from
+	// DisableDemoUserHeader, when true, makes buildServer wire every demo
+	// identity source away from the demo headers: every permission-gated
+	// route's SubjectResolver through demoSubjectResolverFor(true), and
+	// every attribution seam through headerDisabled
+	// demoOrgSubjectResolver/demoNotesSubjectResolver instances -- see
+	// disableDemoUserHeaderEnv's own doc comment above for why this exists
+	// and exactly what it changes. configFromEnv sets it from
 	// APP_DISABLE_DEMO_USER_HEADER; false (the default) is byte-identical to
 	// this field never having existed, matching DisableQueueWorker's own
 	// contract just above.
@@ -1013,6 +1077,18 @@ type serverConfig struct {
 	// default (the zero-external-dependency `go run ./cmd/server`
 	// experience) skips the seed entirely.
 	DemoUsersPassword string
+
+	// DemoPlatformStaffPassword, when non-empty, makes buildServer seed
+	// the demo platform-staff account of demo_admin.go (seedDemoPlatformStaff)
+	// at the end of its composition, INDEPENDENTLY of DemoUsersPassword: a
+	// boot seeds each demo account set from its own variable, never one
+	// from the other's. The platform administrator (BuiltinRoleOwner under
+	// rbac.SystemDomain, every admin:* permission included) must never be
+	// seeded from the ordinary demo users' password, so the two credential
+	// sources stay apart by construction -- see demoPlatformStaffPasswordEnv's
+	// own doc comment (demo_admin.go) for why. configFromEnv fills it from
+	// APP_DEMO_PLATFORM_STAFF_PASSWORD; the empty default skips the seed.
+	DemoPlatformStaffPassword string
 
 	// SMSOutput is where authn's console SMS sender (the standalone
 	// deployment mode's transport, go/authn/sms.go) writes delivered
@@ -1341,8 +1417,13 @@ func configFromEnv() (serverConfig, error) {
 		DisableDemoUserHeader: os.Getenv(disableDemoUserHeaderEnv) != "",
 		HostTenants:           demoHostTenants,
 		// Empty when unset: the demo-user seed is opt-in (its own doc
-		// comment in demo_users.go says why the default skips it).
-		DemoUsersPassword: os.Getenv(demoUsersPasswordEnv),
+		// comment in demo_users.go says why the default skips it). The
+		// platform-staff seed is read from its OWN variable, never this one
+		// -- see demoPlatformStaffPasswordEnv's own doc comment
+		// (demo_admin.go) for why the platform administrator must not share
+		// the ordinary demo users' credential source.
+		DemoUsersPassword:         os.Getenv(demoUsersPasswordEnv),
+		DemoPlatformStaffPassword: os.Getenv(demoPlatformStaffPasswordEnv),
 	}
 	if smtpHost != "" {
 		// A real SMTP composition: declare the capabilities the
@@ -1632,7 +1713,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	orgModule := org.NewModule(db,
 		org.WithEmailIndexer(orgIndexer),
 		org.WithFeatureGate(orgFeatureGate{service: &configService}),
-		org.WithSubjectResolver(demoOrgSubjectResolver{}),
+		org.WithSubjectResolver(demoOrgSubjectResolver{headerDisabled: cfg.DisableDemoUserHeader}),
 		org.WithMailFrom("invitations@reference-app.example"),
 		org.WithInvitationLinkBuilder(func(ctx context.Context, token string) (string, error) {
 			tenant, tenantErr := pkgcore.MustTenantFromContext(ctx)
@@ -1783,7 +1864,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// seeded accounts of demo_users.go create notes through their access
 	// tokens alone (see its own doc comment, and demo_subject.go's
 	// demoNotesCreatorUserID).
-	notesModule := notes.NewModule(db, notes.WithSubjectResolver(demoNotesSubjectResolver{}))
+	notesModule := notes.NewModule(db, notes.WithSubjectResolver(demoNotesSubjectResolver{headerDisabled: cfg.DisableDemoUserHeader}))
 
 	// auditModule is go/dbkit/audit's persister. It shares notesModule's
 	// own database connection -- no new infra dependency is needed for
@@ -1895,7 +1976,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	integrationOpts := []integration.Option{
 		integration.WithEventMapping(orgMemberJoinedWebhookMapping),
 		integration.WithWebhookQueue(standaloneQueue),
-		integration.WithSubjectResolver(demoOrgSubjectResolver{}),
+		integration.WithSubjectResolver(demoOrgSubjectResolver{headerDisabled: cfg.DisableDemoUserHeader}),
 	}
 	if cfg.WebhookURLValidator != nil {
 		integrationOpts = append(integrationOpts, integration.WithWebhookURLValidator(cfg.WebhookURLValidator))
@@ -1934,7 +2015,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		notification.WithContactPhoneIndexer(contactPhoneIndexer),
 		notification.WithDeliveryQueue(standaloneQueue),
 		notification.WithUserAddressResolver(demoUserAddressResolver{}),
-		notification.WithSubjectResolver(demoOrgSubjectResolver{}),
+		notification.WithSubjectResolver(demoOrgSubjectResolver{headerDisabled: cfg.DisableDemoUserHeader}),
 	)
 
 	// demoModule is the carrier of the app's demo notification type
@@ -2640,7 +2721,11 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// smileSimReconcilerStop call, not be cut short by whatever cancels
 	// buildServer's own ctx.
 	smileSimReconcilerStop = smileSimService.StartReconciler(context.Background(), 0)
-	wireSmileSim(mux, smileSimService, standaloneQueue)
+	// memberships rides along as the recipient gate's membership answer --
+	// the SAME store authn's MembershipReader reads, attached to org above
+	// (see wireSmileSim's own doc comment and cmd/server/smilesim.go's
+	// validateSimulateRecipient).
+	wireSmileSim(mux, smileSimService, standaloneQueue, memberships)
 
 	// wireCasesRoutes mounts product round P2b's case domain
 	// (internal/cases, mounted in cmd/server/cases.go): the tenant-scoped
@@ -2667,7 +2752,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		_ = cleanup()
 		return nil, nil, nil, fmt.Errorf("reference-app: ensure cases schema: %w", err)
 	}
-	wireCasesRoutes(mux, cases.NewService(caseRepository), demoNotesSubjectResolver{})
+	wireCasesRoutes(mux, cases.NewService(caseRepository), demoNotesSubjectResolver{headerDisabled: cfg.DisableDemoUserHeader})
 
 	// wireIntegrationAuthenticated mounts go/integration round 6's
 	// mandatory-first-consumer route (cmd/server/integration_authenticate.go):
@@ -2828,22 +2913,30 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	topMux.Handle("/", restOfAppChain)
 
 	handler := authn.Middleware(authnModule.Service().Verifier())(topMux)
-	// The demo-user seed runs last, once the composed handler exists: it
-	// registers the demo accounts through the same register route a browser
-	// would use, which needs the whole chain above it. It is opt-in
-	// (APP_DEMO_USERS_PASSWORD, see configFromEnv); an empty password
-	// leaves everything above exactly as it was.
+	// The demo-user seeds run last, once the composed handler exists: they
+	// register the demo accounts through the same register route a browser
+	// would use, which needs the whole chain above it. Each seed is opt-in
+	// under its OWN variable (APP_DEMO_USERS_PASSWORD for the three
+	// customer-tenant demo accounts of demo_users.go,
+	// APP_DEMO_PLATFORM_STAFF_PASSWORD for the rbac.SystemDomain platform
+	// administrator of demo_admin.go) and runs independently of the other:
+	// the platform administrator must never be seeded from the ordinary
+	// demo users' password variable -- see
+	// demoPlatformStaffPasswordEnv's own doc comment for why. An empty
+	// variable leaves everything above exactly as it was.
 	if cfg.DemoUsersPassword != "" {
 		if seedErr := seedDemoUsers(ctx, handler, authnModule.Service(), rbacService, orgModule, cfg.HostTenants, cfg.DemoUsersPassword); seedErr != nil {
 			_ = cleanup()
 			return nil, nil, nil, seedErr
 		}
-		// seedDemoPlatformStaff is admin's own first-consumer demo account
-		// (demo_admin.go): a real registered user whose ONLY membership is
-		// rbac.SystemDomain, holding BuiltinRoleOwner there -- every
-		// admin:* permission included, since owner carries every
-		// permission any module declared.
-		if _, seedErr := seedDemoPlatformStaff(ctx, handler, memberships, rbacService, authnModule.Service(), cfg.DemoUsersPassword); seedErr != nil {
+	}
+	// seedDemoPlatformStaff is admin's own first-consumer demo account
+	// (demo_admin.go): a real registered user whose ONLY membership is
+	// rbac.SystemDomain, holding BuiltinRoleOwner there -- every
+	// admin:* permission included, since owner carries every
+	// permission any module declared.
+	if cfg.DemoPlatformStaffPassword != "" {
+		if _, seedErr := seedDemoPlatformStaff(ctx, handler, memberships, rbacService, authnModule.Service(), cfg.DemoPlatformStaffPassword); seedErr != nil {
 			_ = cleanup()
 			return nil, nil, nil, seedErr
 		}

@@ -27,6 +27,36 @@ import (
 // way to reach them at all.
 const demoPlatformStaffEmail = "demo-platform-staff@example.com"
 
+// demoPlatformStaffPasswordEnv gates the boot-time demo platform-staff
+// account seed (seedDemoPlatformStaff below). Unset -- the default `go run
+// ./cmd/server` ships with -- means no platform-staff account is
+// registered at all. Setting it to a passphrase registers
+// demoPlatformStaffEmail on every boot (and re-asserts its SystemDomain
+// membership and owner role on boots that find it already registered), so
+// an operator can sign admin's own demo account in with a real account and
+// a real grant -- no header involved.
+//
+// It is deliberately its OWN variable, never APP_DEMO_USERS_PASSWORD
+// (demo_users.go): the platform-staff account holds BuiltinRoleOwner under
+// rbac.SystemDomain -- every permission any module declared, admin's
+// admin:* permissions included -- so seeding it from the ordinary demo
+// users' password variable would let one APP_DEMO_USERS_PASSWORD value
+// unlock the platform administrator and every demo user at once. Setting
+// both variables to the same value is an operator's own choice; this app's
+// code never makes one seed read the other's variable.
+//
+// Like demoUsersPasswordEnv, the passphrase is not secret in the same
+// sense as the config keys are, but it is also not a hardcoded default: it
+// exists to gate a DEMO affordance behind an operator's deliberate choice
+// -- see that constant's own doc comment for the full argument.
+//
+// #nosec G101 -- this is an ENVIRONMENT VARIABLE NAME, not a credential
+// value: gosec's hardcoded-credential heuristic matches on the substring
+// "Password" in the identifier alone, the same false positive
+// demoUsersPasswordEnv's own #nosec comment (demo_users.go) already
+// excepts.
+const demoPlatformStaffPasswordEnv = "APP_DEMO_PLATFORM_STAFF_PASSWORD"
+
 // adminRoutePath mirrors notesRoutePath's own situation: admin keeps its
 // mount-point constant unexported, so this app names it again here to
 // keep demoRouteGuards and guardModuleRoute in step with it.
@@ -192,6 +222,14 @@ func guardAdminRoute(az rbac.Authorizer, handler http.Handler) http.Handler {
 // so re-asserting on an already-seeded account changes nothing an
 // operator may have revoked; the membership half cannot be revoked from
 // anywhere but this seed.
+//
+// buildServer calls it only when the operator set
+// demoPlatformStaffPasswordEnv (APP_DEMO_PLATFORM_STAFF_PASSWORD) -- NEVER
+// with cfg.DemoUsersPassword, the three demo accounts' own variable: the
+// platform administrator must have its own credential source, per that
+// constant's own doc comment. It runs independently of seedDemoUsers: a
+// boot seeding only the platform-staff account seeds exactly that account,
+// and one seeding only the demo users seeds exactly those three.
 func seedDemoPlatformStaff(ctx context.Context, handler http.Handler, memberships *signInMemberships, svc *rbac.Service, authnService *authn.Service, password string) (string, error) {
 	logger := obs.FromContext(ctx)
 

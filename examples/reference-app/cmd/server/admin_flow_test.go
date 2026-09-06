@@ -148,6 +148,11 @@ func buildAdminTestServer(t *testing.T, opts ...func(*serverConfig)) (*httptest.
 
 	cfg := testConfig(t)
 	cfg.DemoUsersPassword = demoSeedPassword
+	// The platform-staff account is seeded from its OWN variable, never the
+	// demo users' one (demo_admin.go's demoPlatformStaffPasswordEnv), so a
+	// suite that signs it in sets its own field -- and signs it in with its
+	// own passphrase below.
+	cfg.DemoPlatformStaffPassword = demoPlatformStaffSeedPassword
 	mailer := &capturingMailer{}
 	cfg.Mailer = mailer
 	for _, opt := range opts {
@@ -169,13 +174,17 @@ func buildAdminTestServer(t *testing.T, opts ...func(*serverConfig)) (*httptest.
 	return srv, cfg, mailer
 }
 
-// platformStaffToken signs the seeded demo platform-staff account in. Its
-// only membership is rbac.SystemDomain (seedDemoPlatformStaff's own
-// contract), so no tenant_id request is even needed for it to resolve
-// there -- but naming it explicitly keeps this test readable regardless.
+// platformStaffToken signs the seeded demo platform-staff account in, with
+// the account's OWN passphrase (demoPlatformStaffSeedPassword -- the
+// platform-staff seed reads its own variable, never the demo users' one,
+// per demo_admin.go; signing it in with the demo users' passphrase must
+// never work). Its only membership is rbac.SystemDomain
+// (seedDemoPlatformStaff's own contract), so no tenant_id request is even
+// needed for it to resolve there -- but naming it explicitly keeps this
+// test readable regardless.
 func platformStaffToken(t *testing.T, srv *httptest.Server) string {
 	t.Helper()
-	status, code, token := demoLogin(t, srv, demoPlatformStaffEmail, demoSeedPassword, rbac.SystemDomain)
+	status, code, token := demoLogin(t, srv, demoPlatformStaffEmail, demoPlatformStaffSeedPassword, rbac.SystemDomain)
 	if status != http.StatusOK || token == "" {
 		t.Fatalf("platform-staff login status = %d code = %q, want 200 with a token", status, code)
 	}

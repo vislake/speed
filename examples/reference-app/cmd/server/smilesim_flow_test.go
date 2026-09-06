@@ -501,6 +501,13 @@ func TestSmileSimulation_CompletionNotifiesTheNamedRecipient(t *testing.T) {
 	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-notify-key"
 	sms := &lockedBuffer{}
 	cfg.SMSOutput = sms
+	// The named recipient is a legitimate in-tenant recipient only when it
+	// is an active member of the caller's tenant -- the simulate surface's
+	// own gate (cmd/server/smilesim.go's validateSimulateRecipient). The
+	// fixture is granted membership in tenant-acme, the tenant this test's
+	// caller signs into: the demo shape of a patient account in the same
+	// clinic, without which the request would (correctly) be refused.
+	cfg.Memberships.Grant(demoSmileSimRecipientUserID, "tenant-acme")
 
 	handler, cleanup, _, err := buildServer(t.Context(), cfg)
 	if err != nil {
@@ -780,4 +787,105 @@ func TestSmileSimulation_InvalidOptions_RefusedWithCodedErrors(t *testing.T) {
 	if sims := enumerateSimulations(t, srv, token, "photo-does-not-matter"); len(sims) != 0 {
 		t.Errorf("enumeration after refused simulations returned %d entries, want 0", len(sims))
 	}
+}
+
+// TestSmileSimulation_CrossTenantRecipient_RefusedBeforeAnyEnqueue is the
+// mandatory regression the reviewer finding P2-3 requires: a POST
+// /simulate naming a recipient who does NOT belong to the caller's tenant
+// must be refused with the app's coded error before Simulate enqueues
+// anything -- no job, no per-photo record, no vendor call, and above all no
+// delivery to the cross-tenant member's phone. The bug it pins: any
+// recipient_user_id was accepted, so a member of one tenant could name a
+// member of another and that member's phone received the simulation-ready
+// SMS under the caller's tenant.
+//
+// demoSmileSimRecipientUserID (the demo address table's phone-carrying
+// fixture, demo_notification.go) is granted membership in tenant-globex
+// ALONE here -- the tenant-B user whose phone the tenant-acme caller must
+// not be able to reach. The bug-state leg below polls the accepted job to
+// completion and records the SMS landing on that phone, so the failing run
+// shows the actual harm rather than only the missing refusal.
+func TestSmileSimulation_CrossTenantRecipient_RefusedBeforeAnyEnqueue(t *testing.T) {
+	imgServer := newFakeOpenAIImageServer(t)
+
+	cfg := testConfig(t)
+	cfg.AIGatewayImageBaseURL = imgServer.URL
+	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-xtenant-key"
+	sms := &lockedBuffer{}
+	cfg.SMSOutput = sms
+	cfg.Memberships.Grant(demoSmileSimRecipientUserID, "tenant-globex")
+
+	handler, cleanup, _, err := buildServer(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("buildServer: %v", err)
+	}
+	t.Cleanup(func() {
+		if cleanupErr := cleanup(); cleanupErr != nil {
+			t.Errorf("cleanup: %v", cleanupErr)
+		}
+	})
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	// The caller: an ordinary member of tenant-acme.
+	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "smilesim-xtenant-owner")
+
+	// A real, completed photo, so that in the bug state (the request being
+	// accepted) the enqueued job genuinely succeeds and the completion
+	// notification reaches the named recipient -- the exact harm this round
+	// refuses, reproduced rather than assumed.
+	photo := jpegWithExif(t)
+	completedPhoto := uploadAndComplete(t, srv, token, photo, "")
+	if completedPhoto.State != "completed" {
+		t.Fatalf("photo state = %q, want completed", completedPhoto.State)
+	}
+
+	simulateBody, err := json.Marshal(map[string]string{
+		"photo_object_id":   completedPhoto.ID,
+		"recipient_user_id": demoSmileSimRecipientUserID,
+	})
+	if err != nil {
+		t.Fatalf("marshal simulate request: %v", err)
+	}
+	resp := smileSimRequest(t, srv, http.MethodPost, smileSimulatePath, token, simulateBody)
+	var out struct {
+		JobID string `json:"job_id"`
+		Code  string `json:"code"`
+	}
+	if decErr := json.NewDecoder(resp.Body).Decode(&out); decErr != nil {
+		resp.Body.Close()
+		t.Fatalf("decode simulate response: %v", decErr)
+	}
+	resp.Body.Close()
+
+	recipientPhone := demoUserAddresses[demoSmileSimRecipientUserID].Phone
+	if recipientPhone == "" {
+		t.Fatal("the demo recipient fixture carries no phone address -- the scenario needs one to demonstrate the harm")
+	}
+
+	// Bug-state evidence: an accepted request (202) runs the job to
+	// completion and puts the simulation-ready SMS on the CROSS-TENANT
+	// member's phone -- the delivery this round must refuse. On the fixed
+	// tree this branch is unreachable (the refusal comes first).
+	if resp.StatusCode == http.StatusAccepted && out.JobID != "" {
+		waitForSmileSimSucceeded(t, srv, token, out.JobID, time.Now().Add(5*time.Second))
+		eventually(t, 4*time.Second, "the simulation-ready SMS to the cross-tenant member's phone (bug state)", func() bool {
+			return len(smsLinesTo(sms, recipientPhone)) == 1
+		})
+		t.Fatalf("the simulate request naming a TENANT-B recipient was accepted with 202 -- the cross-tenant " +
+			"delivery this round must refuse before any enqueue (its SMS reached the foreign member's phone)")
+	}
+
+	// The fixed state: the cross-tenant recipient is refused with the app's
+	// coded error, before Simulate enqueues anything.
+	if resp.StatusCode != http.StatusBadRequest || out.Code != "smilesim.recipient_not_in_tenant" {
+		t.Fatalf("POST /simulate naming a tenant-B recipient: status = %d, code = %q, want 400 %q",
+			resp.StatusCode, out.Code, "smilesim.recipient_not_in_tenant")
+	}
+	if imgServer.requests != 0 {
+		t.Errorf("fake vendor received %d requests, want 0 -- a refused recipient must never reach the provider", imgServer.requests)
+	}
+	never(t, 3*time.Second, "an SMS to the cross-tenant member's phone after the refusal", func() bool {
+		return len(smsLinesTo(sms, recipientPhone)) > 0
+	})
 }

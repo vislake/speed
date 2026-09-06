@@ -69,11 +69,19 @@ import (
 // actor's Subject instead of the caller's own, no token forgery required.
 // disableDemoUserHeaderEnv (server.go) is the escape hatch -- an operator
 // who deploys this reference app somewhere a real user might reach sets
-// APP_DISABLE_DEMO_USER_HEADER and demoSubjectResolverFor makes every
-// gated route resolve from the verified Principal alone, the header no
-// longer consulted at all. Left unset (the default), nothing about this
-// header's behavior changes, which is what keeps every demo journey and
-// test built around it working exactly as before.
+// APP_DISABLE_DEMO_USER_HEADER and every demo identity source is disabled
+// at once: demoSubjectResolverFor makes every gated route resolve from the
+// verified Principal alone, this header no longer consulted at all, and
+// the SAME switch reaches the attribution header this app's other
+// resolver family reads (demoOrgUserHeader, "X-Demo-User-Id", server.go)
+// -- demoOrgSubjectResolver and demoNotesSubjectResolver are wired with
+// headerDisabled then, so notes' create handler, the cases surface, org's
+// caller-scoped endpoints and the notification surface resolve from the
+// verified Principal too. Before the switch covered that second header,
+// setting it disabled X-Demo-User while X-Demo-User-Id still let any
+// caller act as any user id on those surfaces. Left unset (the default),
+// nothing about either header's behavior changes, which is what keeps
+// every demo journey and test built around them working exactly as before.
 const demoUserHeader = "X-Demo-User"
 
 // The demo users seeded into every configured tenant. Two of them, because

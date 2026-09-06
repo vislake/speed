@@ -30,12 +30,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/observability"
+	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 
 	aigateway "github.com/vislake/speed/go/ai-gateway"
@@ -67,9 +69,27 @@ var smileSimErrInternal = apperr.Internal("smilesim.internal_error")
 // an unknown one -- and another tenant's simulation rows --
 // svc.ListSimulationsByPhoto/OptionsForJob, both tenant-scoped the same
 // way -- are what actually gate access.
+//
+// The one exception is the optional recipient_user_id of the simulate
+// operation (SmilesimSimulate): a caller may name only a recipient that is
+// an active member of the caller's OWN tenant, checked through
+// memberships -- the app's membership answer (sign_in_memberships.go,
+// the same store authn's MembershipReader reads) -- before Simulate
+// enqueues anything. That check exists because the completion
+// notification a named recipient triggers (internal/smilesim's
+// EventSimulationCompleted, dispatched by demo_notification.go's
+// subscription as a RecipientClassUser delivery under the caller's tenant)
+// would otherwise let a member of one tenant put an SMS on the phone of a
+// member of any other: go/notification resolves a user recipient's
+// addresses by user id alone, never checking the tenant a user belongs to
+// (that question is the host's, and this is the host's answer).
 type smilesimHandler struct {
 	svc   *smilesim.Service
 	queue jobs.Queue
+	// memberships is the membership store buildServer wires authn's
+	// MembershipReader to. Always non-nil in this app's wiring; nil would
+	// make every named-recipient request fail closed rather than pass.
+	memberships *signInMemberships
 }
 
 // compile-time check that smilesimHandler implements every operation the
@@ -80,9 +100,10 @@ var _ smilesimapi.ServerInterface = (*smilesimHandler)(nil)
 // wireSmileSim mounts this surface's three routes on mux, backed by svc
 // and queue, through the generated api.HandlerFromMux helper: the mount
 // patterns come from internal/smilesim/api/openapi.yaml itself, never a
-// second hand-written copy.
-func wireSmileSim(mux *http.ServeMux, svc *smilesim.Service, queue jobs.Queue) {
-	smilesimapi.HandlerFromMux(&smilesimHandler{svc: svc, queue: queue}, mux)
+// second hand-written copy. memberships is the store SmilesimSimulate's
+// recipient gate asks (see the handler type's own doc comment).
+func wireSmileSim(mux *http.ServeMux, svc *smilesim.Service, queue jobs.Queue, memberships *signInMemberships) {
+	smilesimapi.HandlerFromMux(&smilesimHandler{svc: svc, queue: queue, memberships: memberships}, mux)
 }
 
 // SmilesimSimulate implements smilesimapi.ServerInterface: it handles
@@ -129,9 +150,22 @@ func (h *smilesimHandler) SmilesimSimulate(w http.ResponseWriter, r *http.Reques
 	// (svc.NotifyOnCompletion, called from SmilesimGetJob below); a
 	// caller that omits it just polls for the result, same as before
 	// this field existed.
+	//
+	// A named recipient must be an active member of the caller's own
+	// tenant -- the completion delivery would otherwise go out under this
+	// tenant to a user of any other (see the handler type's own doc
+	// comment). The check runs BEFORE Simulate is called, so a refused
+	// recipient enqueues nothing: no job, no credit reservation, no
+	// per-photo record, no eventual SMS.
 	recipientUserID := ""
 	if body.RecipientUserID != nil {
 		recipientUserID = *body.RecipientUserID
+	}
+	if recipientUserID != "" {
+		if err := validateSimulateRecipient(r.Context(), h.memberships, recipientUserID); err != nil {
+			writeSmileSimError(w, err)
+			return
+		}
 	}
 	jobID, err := h.svc.Simulate(r.Context(), body.PhotoObjectID, recipientUserID, simOptions...)
 	if err != nil {
@@ -265,6 +299,48 @@ func toSmilesimOptions(o smilesim.SimulationOptions) *smilesimapi.SmilesimSimula
 		ToothShade: &toothShade,
 		Strength:   &o.Strength,
 	}
+}
+
+// smilesimErrRecipientNotInTenant is the coded refusal SmilesimSimulate
+// answers when a request names a simulation recipient who is not an active
+// member of the caller's tenant -- the app's model of who a tenant may
+// notify (validateSimulateRecipient's own doc comment, below). A 400, in
+// the same family as the surface's other request-shape refusals
+// (smilesim.invalid_request_body, smilesim.photo_object_id_required, the
+// option-validation codes): the recipient_user_id value is simply not
+// acceptable for this caller.
+var smilesimErrRecipientNotInTenant = apperr.Invalid("smilesim.recipient_not_in_tenant")
+
+// validateSimulateRecipient is the recipient gate SmilesimSimulate runs
+// before it calls Simulate: recipientUserID must be an active member of
+// the tenant ctx carries, answered through memberships -- the app's own
+// membership store (sign_in_memberships.go), the same org-rows-first,
+// roster-second answer authn's MembershipReader gives. "Active member of
+// the caller's tenant" is this app's model of a user its tenant may
+// legitimately notify: the completion delivery demo_notification.go's
+// subscription dispatches goes out as a RecipientClassUser delivery under
+// the SIMULATE caller's tenant, and go/notification itself never checks
+// which tenant a user recipient belongs to -- that membership question is
+// the host's, and this is the host's answer (the handler type's own doc
+// comment has the full argument). An empty tenant or an unanswerable
+// membership question fails closed with the internal error rather than
+// guessing; an honest non-member answer is the coded 400 refusal.
+func validateSimulateRecipient(ctx context.Context, memberships *signInMemberships, recipientUserID string) error {
+	if memberships == nil {
+		return smileSimErrInternal
+	}
+	tenant, ok := pkgcore.TenantFromContext(ctx)
+	if !ok {
+		return smileSimErrInternal
+	}
+	isMember, err := memberships.ActiveMembership(ctx, recipientUserID, tenant)
+	if err != nil {
+		return smileSimErrInternal.WithCause(err)
+	}
+	if !isMember {
+		return smilesimErrRecipientNotInTenant
+	}
+	return nil
 }
 
 // writeSmileSimError writes err to w as a JSON {code, params} body, the

@@ -31,6 +31,13 @@ import (
 // reads for the same reason -- an env var is visible, auditable and
 // per-deployment in a way a compiled-in default is not.
 //
+// This variable seeds EXACTLY the three accounts below, and nothing else:
+// the demo platform-staff account (demo_admin.go's
+// demoPlatformStaffEmail, the rbac.SystemDomain platform administrator)
+// deliberately has its own APP_DEMO_PLATFORM_STAFF_PASSWORD variable and
+// is never seeded from this one -- see that constant's own doc comment for
+// why the two credential sources must stay apart.
+//
 // #nosec G101 -- this is an ENVIRONMENT VARIABLE NAME, not a credential
 // value: gosec's hardcoded-credential heuristic matches on the substring
 // "Password" in the identifier alone, the same false positive go/authn's

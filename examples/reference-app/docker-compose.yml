@@ -71,6 +71,13 @@ services:
       # Set to empty (or delete this line) to skip seeding and use the
       # X-Demo-User header path instead.
       APP_DEMO_USERS_PASSWORD: local-demo-password
+      # Gates the boot-time demo platform-staff seed (demo_admin.go) under
+      # its OWN variable, exactly as .env.example documents: the
+      # rbac.SystemDomain platform administrator (which holds every
+      # admin:* permission) must never share the demo users' passphrase
+      # above, so this compose demo gives it its own local-demo one. Set
+      # to empty (or delete this line) to skip that seed.
+      APP_DEMO_PLATFORM_STAFF_PASSWORD: local-admin-demo-password
       #
       # APP_CONFIG_KEY / APP_ORG_INDEX_KEY / APP_NOTIFICATION_INDEX_KEY
       # are DELIBERATELY UNSET here: cmd/server/server.go's own configFromEnv
