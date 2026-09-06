@@ -62,6 +62,20 @@
 #     materializes into consumer projects outside this tree, where
 #     repo-checks does not scan it; the in-tree copy is the template, not
 #     library code.
+#   * go/saasctl/internal/template/project/selection/{authn,authn+org,
+#     authn+rbac,authn+org+rbac}/server.go -- the saasctl-distributed-mode
+#     round's port of the reference-app server.go's own authn "SMS sender"
+#     seam three-way conditional injection (an unreachable-under-
+#     distributed-mode console fallback would leave a distributed replica
+#     pool silently unwarned) into each authn-containing selection's own
+#     command-entry wiring. Byte-for-byte the same wiring-time decision the
+#     reference-app server.go exemption and go/authn/module.go's own
+#     ErrMissingDistributedSMSSender check already cover, and the identical
+#     "template, not library code, materializes outside this tree" argument
+#     config.go's own entry above makes -- these four files just carry the
+#     comparison in server.go instead of config.go because the SMS-sender
+#     seam is authn-specific, and the `none` selection (no authn module) has
+#     no such comparison to make at all.
 # The other former entries are deliberately NOT exempted: registry.go,
 # observability's init.go and the reference-app main.go no longer carry a
 # mode decision since the retrofit removed their switches, and a comparison
@@ -100,7 +114,8 @@ rules:
       the RequiredCapabilities() dispatch (go/pkgcore/deployment_mode.go)
       and consumer command entries reading SPEED_DEPLOYMENT_MODE (the
       reference-app cmd/server/server.go, the saasctl CLI's db migrate and
-      its embedded generated-app config.go) are the only allowlisted
+      its embedded generated-app config.go and authn-containing server.go
+      files) are the only allowlisted
       sites; business code receives already-resolved,
       capability-checked infrastructure and must never branch on the
       mode. See the rule header for the exact allowlist.
@@ -160,3 +175,7 @@ rules:
         # Consumer-command-entry sites (see header).
         - "**/go/saasctl/internal/db/migrate.go"
         - "**/go/saasctl/internal/template/project/cmd/server/config.go"
+        - "**/go/saasctl/internal/template/project/selection/authn/server.go"
+        - "**/go/saasctl/internal/template/project/selection/authn+org/server.go"
+        - "**/go/saasctl/internal/template/project/selection/authn+rbac/server.go"
+        - "**/go/saasctl/internal/template/project/selection/authn+org+rbac/server.go"

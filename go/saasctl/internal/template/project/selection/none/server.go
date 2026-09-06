@@ -8,14 +8,21 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
 	// Blank-imported for its init side effect: registers dbkit.DialectSQLite
-	// so dbkit.Open below has a driver to build from -- this skeleton runs
-	// only in standalone deployment mode.
+	// so dbkit.Open below has a driver to build from -- this skeleton's own
+	// database always speaks SQLite, regardless of which deployment mode
+	// its other infrastructure seams compose under (see buildServer's own
+	// kernel-wiring comment below for the full reasoning).
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
+	kvredis "github.com/vislake/speed/go/pkgcore/kv/redis"
+	objectstores3 "github.com/vislake/speed/go/pkgcore/objectstore/s3"
 	"github.com/vislake/speed/go/tenancy"
 )
 
@@ -78,10 +85,16 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	}
 
 	// configService is filled by configModule.Attach below (nil until
-	// then). cleanup closes the attached service first, then the database,
-	// last; every close is attempted even when an earlier one failed, and
-	// the first error wins.
-	var configService *config.Service
+	// then); redisBus and redisClient are filled by the conditional Redis
+	// wiring further down (nil unless cfg.RedisAddr is set). cleanup closes
+	// the attached service and the injected Redis client first, then the
+	// database, last; every close is attempted even when an earlier one
+	// failed, and the first error wins.
+	var (
+		configService *config.Service
+		redisBus      *eventbusredis.EventBus
+		redisClient   *redis.Client
+	)
 
 	cleanup := func() error {
 		var firstErr error
@@ -92,6 +105,12 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		}
 		if configService != nil {
 			keepErr(configService.Close())
+		}
+		if redisBus != nil {
+			redisBus.Close()
+		}
+		if redisClient != nil {
+			keepErr(redisClient.Close())
 		}
 		sqlDB, dbErr := db.DB()
 		keepErr(dbErr)
@@ -144,7 +163,53 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// docs/internal/03-deployment-modes.md), and the validation refuses a
 	// composition the declared mode cannot run, naming the seam, the
 	// implementation and the missing capability.
+	//
+	// Kernel.Bootstrap always resolves and validates all four registered
+	// seams (eventbus, kv, mailer, objectstore) regardless of which modules
+	// this selection wires -- this composition uses none of them directly,
+	// but a distributed boot still fails closed on whichever seam the
+	// Preset would otherwise resolve to an in-process default, since every
+	// resolved seam must satisfy DeploymentModeDistributed's
+	// RequiredCapabilities (MultiReplicaSafe). The four conditional
+	// injections below follow the exact shape
+	// examples/reference-app/cmd/server/server.go's own kernel-wiring
+	// comment documents at length: an unset env var leaves that seam on the
+	// Preset's in-process default, so `go run ./cmd/server` stays
+	// byte-for-byte unaffected, and a configured one injects a real
+	// implementation declaring the capability bits that implementation
+	// genuinely carries. One Redis client backs both "eventbus" and "kv" --
+	// see redisAddrEnv's own doc comment in config.go for why wiring only
+	// one of the two can never let a distributed composition pass
+	// Bootstrap.
 	kernelOptions := []pkgcore.KernelOption{pkgcore.WithDeploymentMode(cfg.DeploymentMode)}
+	if cfg.RedisAddr != "" {
+		redisClient = redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
+		redisBus = eventbusredis.NewEventBus(redisClient)
+		kernelOptions = append(kernelOptions,
+			pkgcore.WithEventBus(redisBus, pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
+		kernelOptions = append(kernelOptions,
+			pkgcore.WithKVStore(kvredis.NewKVStore(redisClient), pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
+	}
+	if cfg.S3Endpoint != "" {
+		kernelOptions = append(kernelOptions,
+			pkgcore.WithObjectStore(objectstores3.NewObjectStore(objectstores3.Config{
+				Endpoint:  cfg.S3Endpoint,
+				Bucket:    cfg.S3Bucket,
+				AccessKey: cfg.S3AccessKey,
+				SecretKey: cfg.S3SecretKey,
+				Region:    cfg.S3Region,
+				UseSSL:    cfg.S3UseSSL,
+			}), pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
+	}
+	if cfg.SMTPHost != "" {
+		kernelOptions = append(kernelOptions,
+			pkgcore.WithMailer(pkgcore.NewSMTPMailer(pkgcore.SMTPConfig{
+				Host:     cfg.SMTPHost,
+				Port:     cfg.SMTPPort,
+				Username: cfg.SMTPUsername,
+				Password: cfg.SMTPPassword,
+			}), pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
+	}
 	reg, err := pkgcore.NewKernel(kernelOptions...).Bootstrap(ctx, configModule)
 	if err != nil {
 		_ = cleanup()
