@@ -3,13 +3,17 @@ package org
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/org/internal/testutil"
+	"github.com/vislake/speed/go/org/migrations"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
@@ -1729,5 +1733,143 @@ func TestTreeService_ConcurrentDeleteAndMemberAdd_NeverDanglesAMembership(t *tes
 			t.Fatalf("round %d: membership %s is bound to node %s, which is no longer visible (%v) -- dangling membership",
 				round, membership.ID, membership.NodeID, err)
 		}
+	}
+}
+
+// TestTreeService_ConcurrentRenameAndDelete_NeverResurrectsTheNode is the D6
+// (P1-org-1) regression proof: Rename used to be a SEPARATED read (s.Get)
+// followed by a standalone full-field dbkit.Repository[OrgNode].Update -- the
+// one tree write the concurrency-hardening round did not wrap in a
+// lockLiveNode transaction -- so a concurrent soft-delete of the very node
+// being renamed, landing between those two calls, was silently UNDONE. The
+// Update is a full-field Save that writes whatever the caller's in-memory
+// model holds back over the whole row, and the rename's model is a stale
+// pre-delete snapshot: its DeletedAt is nil, so the Save wrote the delete's
+// committed mark (deleted_at/deleted_by) back to NULL, resurrecting a node
+// the caller had just deleted.
+//
+// # Why this test is deterministic, unlike this file's other concurrent tests
+//
+// The window this closes sits between two statements of the SAME call --
+// Rename's own read and its own write -- with no seam in shipped code a test
+// could pause between, the same reason the D1-D5 proofs above are stress
+// tests. But the resurrection does not need timing luck: it needs only the
+// rename's READ to precede the delete's COMMIT, and the rename's WRITE to
+// follow it. SQLite's own locking supplies that deterministically. A second
+// connection executes the mark-delete and holds its transaction OPEN before
+// the rename even starts: every reader (the rename's read, which sees the
+// still-live committed state) is unaffected, while any writer of the file
+// waits out busy_timeout behind the hold. The hold is released only after a
+// fixed 200ms margin -- the same holder-then-release shape go/dbkit's own
+// busy-timeout contention tests use -- so the rename's microsecond read has
+// long since landed when the mark-delete commits, and the rename's blocked
+// write then executes against the committed delete. On the pre-fix shape
+// that write resurrects the row and every assertion below fails; on the
+// fixed shape the rename's own lockLiveNode is the write that blocked, and
+// once the delete commits it re-evaluates against the now-dead row, matches
+// nothing and refuses with ErrNodeNotFound -- the row stays deleted, unnamed,
+// untouched. (Had the rename started before the hold was established it
+// could legitimately win the row lock first and complete before the delete --
+// a valid serial order, rename then delete -- which is why this test starts
+// it only after `held`.)
+func TestTreeService_ConcurrentRenameAndDelete_NeverResurrectsTheNode(t *testing.T) {
+	ctx := tenantCtx("tenant-a")
+
+	// One file, two connections: db1 carries the tree; db2 plays the
+	// concurrent deleter. dbkit.Open applies the busy_timeout pragma to every
+	// connection of both, which is what lets the rename's write wait out the
+	// hold below instead of failing immediately.
+	dsn := filepath.Join(t.TempDir(), "rename-delete-race.sqlite")
+	db1, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: dsn})
+	if err != nil {
+		t.Fatalf("dbkit.Open: %v", err)
+	}
+	db2, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: dsn})
+	if err != nil {
+		t.Fatalf("dbkit.Open (deleter connection): %v", err)
+	}
+	t.Cleanup(func() {
+		for _, db := range []*gorm.DB{db1, db2} {
+			if sqlDB, dbErr := db.DB(); dbErr == nil {
+				_ = sqlDB.Close()
+			}
+		}
+	})
+	testutil.Migrate(t, db1, dbkit.DialectSQLite, moduleName, migrations.FS)
+
+	tree := newTestTreeOn(t, db1)
+	root := mustCreateRoot(t, tree, ctx, "root")
+	target := mustCreateChild(t, tree, ctx, root.ID, "original")
+
+	// The concurrent deleter: mark-delete target's row on db2 and hold the
+	// transaction open until release. The statement's own return establishes
+	// the hold -- never timing luck -- exactly as in go/dbkit/dialect/sqlite's
+	// busy_timeout_test.go rig.
+	held := make(chan struct{})
+	release := make(chan struct{})
+	holderErr := make(chan error, 1)
+	go func() {
+		holderErr <- dbkit.WithTenantSession(ctx, db2, func(tx *gorm.DB) error {
+			now := time.Now()
+			res := tx.
+				Where("id = ?", target.ID).
+				Select("DeletedAt", "DeletedBy").
+				Updates(&OrgNode{DeletedAt: &now, DeletedBy: "concurrent-deleter"})
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected != 1 {
+				return fmt.Errorf("mark-delete matched %d rows, want 1", res.RowsAffected)
+			}
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+
+	select {
+	case <-held:
+	case err = <-holderErr:
+		t.Fatalf("deleter failed before holding the mark-delete open: %v", err)
+	}
+
+	// The rename races the held delete: started only now that the delete
+	// holds the file's write lock, its read of target still sees the live
+	// pre-delete state, and its write cannot complete until the deleter
+	// commits.
+	renameDone := make(chan struct{})
+	var renameErr error
+	go func() {
+		defer close(renameDone)
+		_, renameErr = tree.Rename(ctx, target.ID, "renamed")
+	}()
+	time.Sleep(200 * time.Millisecond) // the rename's read has certainly landed by now
+	close(release)
+	<-renameDone
+	if err = <-holderErr; err != nil {
+		t.Fatalf("deleter commit: %v", err)
+	}
+
+	// The delete happened while the rename was in flight, so the rename must
+	// have been refused and the node must still be gone. On the pre-fix shape
+	// the rename's stale full-field Save has just run over the committed
+	// delete: the node is live again (first assertion fails) and renamed
+	// (third) with its delete mark cleared (fourth and fifth).
+	if _, getErr := tree.Get(ctx, target.ID); getErr == nil {
+		t.Fatalf("node %q is visible again after a concurrent soft-delete of it -- the rename resurrected the deleted row", target.ID)
+	}
+	assertCode(t, renameErr, ErrNodeNotFound.Code)
+	row, err := tree.repo.findByIDIncludingDeleted(ctx, target.ID)
+	if err != nil {
+		t.Fatalf("read back the soft-deleted row: %v", err)
+	}
+	if row.Name != "original" {
+		t.Errorf("soft-deleted row Name = %q, want %q -- the rename wrote over a deleted row", row.Name, "original")
+	}
+	if row.DeletedAt == nil {
+		t.Error("soft-deleted row DeletedAt = nil -- the rename cleared the delete mark")
+	}
+	if row.DeletedBy != "concurrent-deleter" {
+		t.Errorf("soft-deleted row DeletedBy = %q, want %q", row.DeletedBy, "concurrent-deleter")
 	}
 }

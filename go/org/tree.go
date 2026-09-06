@@ -249,27 +249,75 @@ func (s *TreeService) CreateChild(ctx context.Context, parentID, name, kind stri
 //
 // A rename never touches Path: the path is built from ids, so a node's
 // identity in every subtree query survives any number of renames.
+//
+// # Atomicity against a concurrent delete of the node being renamed
+//
+// The node read, the sibling-name check and the name update all run inside
+// ONE dbkit.WithTenantSession transaction, with the node's own row locked
+// first through lockLiveNode -- never a plain read followed by a separate
+// write, which is exactly the shape this method used before. The old shape
+// was s.Get, then a standalone dbkit.Repository[OrgNode].Update, and that
+// Update is a full-field Save that writes the caller's in-memory model back
+// over the whole row: a concurrent Delete soft-deleting this same node
+// between the two calls had its committed mark (deleted_at/deleted_by,
+// written by the delete's own UPDATE) silently overwritten by the rename's
+// stale, pre-delete snapshot -- deleted_at written back to NULL -- silently
+// resurrecting a node the caller had just deleted. lockLiveNode closes that
+// the same way it closes it for CreateChild and Move: its blind, no-prior-
+// read touch-update either blocks until a concurrent delete of this row
+// resolves (and then correctly fails to match the now-dead row), or takes
+// the lock itself, in which case a delete starting afterward blocks behind
+// this transaction instead of racing it -- so the name UPDATE that follows
+// can never land on a row deleted after this call's own read, and the
+// update's own conditional WHERE (id + deleted_at IS NULL) re-checks the
+// row's liveness at write time regardless. The whole transaction is wrapped
+// in withRetry for the same contention reasons Move's own doc comment gives.
 func (s *TreeService) Rename(ctx context.Context, nodeID, name string) (*OrgNode, error) {
 	cleanName, err := validateName(name)
 	if err != nil {
 		return nil, err
 	}
-	node, err := s.Get(ctx, nodeID)
+
+	var renamed *OrgNode
+	err = withRetry(func() error {
+		renamed = nil
+		return dbkit.WithTenantSession(ctx, s.repo.db, func(tx *gorm.DB) error {
+			node, lockErr := lockLiveNode(tx, nodeID)
+			if lockErr != nil {
+				if errors.Is(lockErr, gorm.ErrRecordNotFound) {
+					return ErrNodeNotFound.WithParam("node_id", nodeID)
+				}
+				return ErrInternal.WithCause(lockErr)
+			}
+			if node.Name == cleanName {
+				renamed = node
+				return nil
+			}
+			if nameErr := assertNameFreeTx(tx, node.ParentID, cleanName); nameErr != nil {
+				return nameErr
+			}
+
+			res := tx.
+				Where("id = ?", node.ID).
+				Where("deleted_at IS NULL").
+				Select("Name").
+				Updates(&OrgNode{Name: cleanName})
+			if res.Error != nil {
+				return mapWriteError(res.Error)
+			}
+			if res.RowsAffected == 0 {
+				return ErrInternal.WithCause(fmt.Errorf(
+					"org: node %s vanished between rename lock and update", nodeID))
+			}
+			node.Name = cleanName
+			renamed = node
+			return nil
+		})
+	})
 	if err != nil {
 		return nil, err
 	}
-	if node.Name == cleanName {
-		return node, nil
-	}
-	if err := s.assertNameFree(ctx, node.ParentID, cleanName); err != nil {
-		return nil, err
-	}
-
-	node.Name = cleanName
-	if err := s.repo.Update(ctx, node); err != nil {
-		return nil, mapWriteError(err)
-	}
-	return node, nil
+	return renamed, nil
 }
 
 // Move re-parents a node, carrying its whole subtree with it.
@@ -861,19 +909,6 @@ func (s *TreeService) create(ctx context.Context, node *OrgNode) error {
 		return mapWriteError(err)
 	}
 	return nil
-}
-
-// assertNameFree reports ErrDuplicateSiblingName when parentID already has a
-// child named name.
-func (s *TreeService) assertNameFree(ctx context.Context, parentID, name string) error {
-	switch _, err := s.repo.bySiblingName(ctx, parentID, name); {
-	case err == nil:
-		return ErrDuplicateSiblingName.WithParam("name", name)
-	case hasCode(err, ErrNodeNotFound.Code):
-		return nil
-	default:
-		return err
-	}
 }
 
 // mapFindError translates dbkit's tenant-scoped not-found into the org-level
