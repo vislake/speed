@@ -223,16 +223,47 @@ type SMSLoginInput struct {
 	IP        string
 }
 
+// smsCodeRequestLatencyFloor is the minimum wall-clock duration
+// RequestSMSCode's per-number work (deliverSMSCode below) takes to answer,
+// regardless of which branch it took -- see RequestSMSCode's own doc
+// comment (the P2-4 fix) for why. A package-level var, not a const, purely
+// so a test can shrink it (and restore it via t.Cleanup) without paying
+// this floor's real cost on every other test in the suite.
+//
+// The value is a rough, deliberately conservative estimate of a real
+// SMSSender.Send call's typical wall-clock cost (a network round trip to
+// an SMS gateway) plus the persisted VerificationCode row -- both of which
+// only the KNOWN-number branch pays and neither of which this floor can
+// know precisely for an arbitrary deployment's own gateway. It closes the
+// SYSTEMATIC gap that made rotate-IP enumeration practical (an unknown
+// number used to answer in microseconds against a known number's
+// milliseconds), not every possible timing correlation: a real gateway's
+// own tail latency, still visible above this floor, is a residual this
+// constant does not and cannot erase.
+var smsCodeRequestLatencyFloor = 150 * time.Millisecond
+
 // RequestSMSCode issues and delivers a one-time sign-in code for an
 // EXISTING account's phone number.
 //
-// It never discloses whether phone is registered: a request for an unknown
+// It never discloses whether phone is registered, on two axes at once.
+// The RESPONSE BODY never distinguishes them: a request for an unknown
 // number returns nil exactly like a request for a known one, and neither a
-// code nor an SMS is generated for the former. This is the same
-// enumeration defence Login's generic ErrInvalidCredentials answer is,
-// applied to a request endpoint that has no password to be generic ABOUT --
-// there is nothing here to compare, so there is nothing to make constant
-// time; silence is the whole defence.
+// code nor an SMS is generated for the former -- the same enumeration
+// defence Login's generic ErrInvalidCredentials answer is, applied to a
+// request endpoint that has no password to be generic ABOUT. The WALL-
+// CLOCK TIME to answer must not distinguish them either: a known number's
+// real work (a persisted VerificationCode row plus one real SMSSender.Send
+// call) costs measurably more than an unknown number's silent no-op, and an
+// attacker rotating IPs to dodge limitSMSSendByIP can otherwise probe that
+// timing difference directly -- silence is only the whole defence at the
+// response-BODY layer, per this method's own P2-4 fix. deliverSMSCode does
+// the real per-number work; this method pads its total duration up to
+// smsCodeRequestLatencyFloor afterward, regardless of which branch ran, so
+// neither branch can finish faster than that floor. The rate-limit gate
+// above is deliberately excluded from the padded span: it behaves
+// identically for a known and an unknown number (both pay the same
+// blind-index-keyed check before either branch is reached), so padding it
+// too would only slow every caller for no timing-parity benefit.
 func (s *Service) RequestSMSCode(ctx context.Context, in RequestSMSCodeInput) error {
 	index, err := s.users.PhoneIndexOf(in.Phone)
 	if err != nil {
@@ -243,10 +274,22 @@ func (s *Service) RequestSMSCode(ctx context.Context, in RequestSMSCodeInput) er
 		return guardErr
 	}
 
+	start := time.Now()
+	err = s.deliverSMSCode(ctx, in, index)
+	if remaining := smsCodeRequestLatencyFloor - time.Since(start); remaining > 0 {
+		time.Sleep(remaining)
+	}
+	return err
+}
+
+// deliverSMSCode is RequestSMSCode's actual known/unknown-number branch,
+// split out purely so RequestSMSCode's own body can pad its total duration
+// -- see RequestSMSCode's own doc comment.
+func (s *Service) deliverSMSCode(ctx context.Context, in RequestSMSCodeInput, index string) error {
 	user, err := s.users.FindByPhone(ctx, in.Phone)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			return nil
+			return s.burnSMSCodeRequestWork()
 		}
 		return err
 	}
@@ -277,6 +320,29 @@ func (s *Service) RequestSMSCode(ctx context.Context, in RequestSMSCodeInput) er
 		obs.FromContext(ctx).Error("sms verification code delivery failed", "error", err)
 		return ErrSMSDeliveryFailed.WithCause(err)
 	}
+	return nil
+}
+
+// burnSMSCodeRequestWork performs the same KIND of work the known-number
+// branch of deliverSMSCode does (generate a code, hash it) for a phone
+// number with no account behind it, then discards the result. Doing so is
+// cheap either way and does not meaningfully close the timing gap on its
+// own (RequestSMSCode's own floor does that): it exists so this branch's
+// own CPU cost shape matches the real one, the same "burn the same kind of
+// work" spirit as Service.burnPasswordWork's identical role for Login.
+//
+// It deliberately does NOT persist a VerificationCode row and does NOT call
+// s.sms.Send: this number has no account, so there is nothing to verify a
+// code against and nowhere real to deliver one -- doing either would risk
+// sending to an address that happens to be a real subscriber elsewhere and
+// would leave a stray row with no owner, exactly what this method's own
+// caller's doc comment says the fix must not do.
+func (s *Service) burnSMSCodeRequestWork() error {
+	code, err := generateNumericCode(smsCodeDigits)
+	if err != nil {
+		return ErrInternal.WithCause(err)
+	}
+	_ = hashVerificationCode(code)
 	return nil
 }
 

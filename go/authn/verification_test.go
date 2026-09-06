@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -78,8 +79,12 @@ func extractSentCode(t *testing.T, buf *bytes.Buffer) string {
 }
 
 // TestRequestSMSCode_UnknownPhone_SendsNothingButSucceeds proves the
-// enumeration defence: a request for a phone with no account behind it
-// succeeds with no error and delivers no message.
+// enumeration defence at the RESPONSE-BODY layer: a request for a phone
+// with no account behind it succeeds with no error and delivers no
+// message. This is only half the P2-4 defence -- see
+// TestRequestSMSCode_TimingParity_KnownAndUnknownPhoneAnswerInComparableTime
+// below for the WALL-CLOCK half: an identical response body sent back
+// measurably faster is still a working enumeration oracle.
 func TestRequestSMSCode_UnknownPhone_SendsNothingButSucceeds(t *testing.T) {
 	t.Parallel()
 
@@ -92,6 +97,74 @@ func TestRequestSMSCode_UnknownPhone_SendsNothingButSucceeds(t *testing.T) {
 	if buf.Len() != 0 {
 		t.Errorf("RequestSMSCode(unknown phone) sent %q, want nothing sent", buf.String())
 	}
+}
+
+// TestRequestSMSCode_TimingParity_KnownAndUnknownPhoneAnswerInComparableTime
+// is the regression for P2-4's other half: the WALL-CLOCK time to answer
+// must not tell a known number apart from an unknown one, even though the
+// response BODY already does not (proven separately just above). Before
+// the fix, an unknown number returned in microseconds (no DB write, no SMS
+// send) while a known number paid for both -- a gap an attacker rotating
+// IPs (to dodge limitSMSSendByIP) could probe directly. After the fix,
+// RequestSMSCode pads both branches up to a shared smsCodeRequestLatencyFloor.
+//
+// Deliberately NOT t.Parallel(): it temporarily overrides the
+// package-level smsCodeRequestLatencyFloor var, which is safe only while
+// no other test's body is concurrently executing -- true for a serial
+// (non-parallel) test, since every other top-level test in this package
+// either has already finished or is paused at its own t.Parallel() call
+// (not yet running) for as long as this one is still running. See
+// smsCodeRequestLatencyFloor's own doc comment for why a var rather than a
+// const, and t.Cleanup below for the restore.
+func TestRequestSMSCode_TimingParity_KnownAndUnknownPhoneAnswerInComparableTime(t *testing.T) {
+	orig := smsCodeRequestLatencyFloor
+	smsCodeRequestLatencyFloor = 30 * time.Millisecond
+	t.Cleanup(func() { smsCodeRequestLatencyFloor = orig })
+
+	var buf bytes.Buffer
+	f := newSMSServiceFixture(t, &buf)
+	registerPhoneUser(t, f, testPhone, testTenantA)
+
+	knownStart := time.Now()
+	if err := f.svc.RequestSMSCode(t.Context(), RequestSMSCodeInput{Phone: testPhone, IP: "203.0.113.210"}); err != nil {
+		t.Fatalf("RequestSMSCode(known) error = %v", err)
+	}
+	knownDuration := time.Since(knownStart)
+
+	unknownStart := time.Now()
+	if err := f.svc.RequestSMSCode(t.Context(), RequestSMSCodeInput{Phone: "+8613800099999", IP: "203.0.113.211"}); err != nil {
+		t.Fatalf("RequestSMSCode(unknown) error = %v", err)
+	}
+	unknownDuration := time.Since(unknownStart)
+
+	// A generous 3x tolerance absorbs scheduler/GC jitter on a loaded CI
+	// runner (both durations are dominated by the SAME floor sleep, so
+	// genuine timing noise between them is only ever a few milliseconds)
+	// while still catching the pre-fix shape: an unfixed unknown-phone
+	// path returns in low microseconds against a known-phone path's
+	// multiple milliseconds (a real DB write plus a console SMS send) --
+	// many orders of magnitude apart, not a mere 3x.
+	const toleranceFactor = 3
+	if ratio := durationRatio(knownDuration, unknownDuration); ratio > toleranceFactor {
+		t.Errorf("timing ratio between known (%v) and unknown (%v) phone requests = %.2f, want <= %d (the timing side channel is not closed)",
+			knownDuration, unknownDuration, ratio, toleranceFactor)
+	}
+}
+
+// durationRatio returns how many times longer the larger of a and b is
+// than the smaller, always >= 1. Either duration being non-positive
+// (should not happen for a real measured elapsed time, but a defensive
+// floor all the same) reports +Inf, so a caller comparing against a finite
+// tolerance always fails loudly rather than dividing by (or comparing
+// against) zero.
+func durationRatio(a, b time.Duration) float64 {
+	if a <= 0 || b <= 0 {
+		return math.Inf(1)
+	}
+	if a > b {
+		return float64(a) / float64(b)
+	}
+	return float64(b) / float64(a)
 }
 
 // TestRequestSMSCode_KnownPhone_SendsCode proves the happy path delivers a
