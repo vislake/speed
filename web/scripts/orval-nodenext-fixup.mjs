@@ -19,11 +19,17 @@
  *
  *   node web/scripts/orval-nodenext-fixup.mjs
  *
- * Exits non-zero when no './runtime' mutator import is found (orval
- * drift -- a future version that changes the emission shape, or a
- * mutator configuration change that leaves the generated file without
- * one), or when the seam file the rewritten specifier points at does
- * not exist.
+ * The script is idempotent: an already-fixed file (every mutator
+ * import already carrying the '.js' extension) exits 0 with the
+ * already-carry message, so the post-regeneration step can be re-run
+ * freely and CI's reproduce-and-diff steps never blame drift for a
+ * file the fixup itself already wrote. Exits non-zero only when the
+ * generated file carries NO mutator import in either form -- bare
+ * './runtime' or explicit './runtime.js' -- which is orval drift (a
+ * future version that changes the emission shape, or a mutator
+ * configuration change that leaves the generated file without one),
+ * or when the seam file the rewritten specifier points at does not
+ * exist.
  */
 import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -39,27 +45,30 @@ const seamPath = fileURLToPath(
 // line per mutator name, all from './runtime'. The specifier -- not the
 // imported names -- is what nodenext rejects, so the rewrite replaces
 // only the specifier and never needs to know which mutators exist.
-const importPattern = /^import \{[^}]*\} from '\.\/runtime';$/
+// The two forms are disjoint (the '.js' specifier cannot match the
+// bare pattern and vice versa), so the needs-fix and already-fixed
+// counts below partition the file's mutator imports cleanly.
+const barePattern = /^import \{[^}]*\} from '\.\/runtime';$/
+const fixedPattern = /^import \{[^}]*\} from '\.\/runtime\.js';$/
 const specifier = "from './runtime';"
 const explicitSpecifier = "from './runtime.js';"
 
 const lines = readFileSync(indexPath, 'utf8').split('\n')
-const matches = lines.filter((line) => importPattern.test(line))
+const needsFix = lines.filter((line) => barePattern.test(line))
+const alreadyFixed = lines.filter((line) => fixedPattern.test(line))
 
-if (matches.length === 0) {
+// No mutator import in EITHER form is the drift condition: a
+// regeneration that ships no './runtime' import at all cannot be a
+// file this script already fixed (that state always carries the
+// explicit '.js' form), so there is nothing to rewrite and nothing to
+// confirm -- fail loudly. An already-fixed file is NOT drift.
+if (needsFix.length === 0 && alreadyFixed.length === 0) {
   console.error(
-    `[orval-nodenext-fixup] expected at least one './runtime' mutator import in ${indexPath}, found none. ` +
+    `[orval-nodenext-fixup] expected at least one './runtime' or './runtime.js' mutator import in ${indexPath}, found none. ` +
       'orval emission changed (version drift?) -- regenerate with the pinned orval and re-run, then commit the artifact.',
   )
   process.exit(1)
 }
-
-const rewritten = lines.map((line) =>
-  importPattern.test(line)
-    ? line.replace(specifier, explicitSpecifier)
-    : line,
-)
-const result = rewritten.join('\n')
 
 let seamOk = true
 try {
@@ -74,10 +83,18 @@ if (!seamOk) {
   process.exit(1)
 }
 
-if (result !== lines.join('\n')) {
-  writeFileSync(indexPath, result)
+if (needsFix.length > 0) {
+  const rewritten = lines.map((line) =>
+    barePattern.test(line)
+      ? line.replace(specifier, explicitSpecifier)
+      : line,
+  )
+  const result = rewritten.join('\n')
+  if (result !== lines.join('\n')) {
+    writeFileSync(indexPath, result)
+  }
   console.log(
-    `[orval-nodenext-fixup] rewrote ${matches.length} mutator import(s) to './runtime.js' in ${indexPath}`,
+    `[orval-nodenext-fixup] rewrote ${needsFix.length} mutator import(s) to './runtime.js' in ${indexPath}`,
   )
 } else {
   console.log(

@@ -27,10 +27,13 @@ and `src/` must keep passing it on every regeneration.
   problem is solved by `web/scripts/orval-nodenext-fixup.mjs`, a
   deterministic post-generation rewrite of every `'./runtime'` mutator
   import (one per mutator -- plain `speedRequest` plus one line per
-  per-operation override such as `speedRequestCredentialless`) that
-  exits non-zero when orval changes its emission or drops the imports,
-  and by the tsconfig pair (`bundler` resolution for typecheck,
-  `nodenext` for build), not by shipped source.
+  per-operation override such as `speedRequestCredentialless`) that is
+  idempotent -- an already-fixed file (the imports already carrying
+  `'.js'`) exits 0, so the fixup can be re-run freely -- and exits
+  non-zero only when a regeneration ships no mutator import in either
+  the bare or the explicit form, and by the tsconfig pair (`bundler`
+  resolution for typecheck, `nodenext` for build), not by shipped
+  source.
 - **The mutator seam is a binding, not an import.** `speedRequest`
   adapts orval's axios-shaped call to the request function a host bound
   with `bindRequestFn(createClient(...))`, attaching the bearer token
