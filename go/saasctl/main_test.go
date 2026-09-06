@@ -11,16 +11,28 @@ import (
 	"github.com/vislake/speed/go/saasctl/internal/appconfig"
 )
 
-// bootstrapEnvKeys lists the five bootstrap variables a generated
-// project's configuration reads; the dispatch tests clear them all so a
-// run starts from the same defaults a fresh shell would be in. The list
-// mirrors the ones internal/db and internal/config carry.
+// bootstrapEnvKeys lists the full seventeen bootstrap variables a
+// generated project's configuration reads; the dispatch tests clear them
+// all so a run starts from the same defaults a fresh shell would be in.
+// The list mirrors the ones internal/db and internal/config carry.
 var bootstrapEnvKeys = []string{
 	appconfig.DeploymentModeEnv,
 	appconfig.PortEnv,
 	appconfig.DBPathEnv,
 	appconfig.ConfigKeyEnv,
 	appconfig.OrgIndexKeyEnv,
+	appconfig.RedisAddrEnv,
+	appconfig.S3EndpointEnv,
+	appconfig.S3BucketEnv,
+	appconfig.S3AccessKeyEnv,
+	appconfig.S3SecretKeyEnv,
+	appconfig.S3RegionEnv,
+	appconfig.S3UseSSLEnv,
+	appconfig.SMTPHostEnv,
+	appconfig.SMTPPortEnv,
+	appconfig.SMTPUsernameEnv,
+	appconfig.SMTPPasswordEnv,
+	appconfig.SMSGatewayURLEnv,
 }
 
 // runCLI invokes run with captured output.
@@ -119,10 +131,11 @@ func TestRunDBDispatchesThroughCLI(t *testing.T) {
 
 // TestRunConfigDispatchesThroughCLI drives `saasctl config print` through
 // the root dispatch -- the one place main.go and the config command group
-// meet -- against a go.mod in a temp directory: exit 0 and the five
-// provenance lines on stdout, resolved from the module path and the
-// cleared environment. The print command's own behavior matrix lives in
-// internal/config's suite; this test only proves the dispatch reaches it.
+// meet -- against a go.mod in a temp directory: exit 0 and the full
+// seventeen-row provenance render on stdout, resolved from the module path
+// and the cleared environment. The print command's own behavior matrix
+// lives in internal/config's suite; this test only proves the dispatch
+// reaches it.
 func TestRunConfigDispatchesThroughCLI(t *testing.T) {
 	for _, key := range bootstrapEnvKeys {
 		t.Setenv(key, "")
@@ -143,7 +156,19 @@ func TestRunConfigDispatchesThroughCLI(t *testing.T) {
 		"port             8080         unset or empty (default 8080)\n" +
 		"sqlite path      cli-app.db   unset or empty (default cli-app.db)\n" +
 		"config key       [redacted]   unset or empty (development default)\n" +
-		"org index key    [redacted]   unset or empty (development default)\n"
+		"org index key    [redacted]   unset or empty (development default)\n" +
+		"redis addr                    unset or empty (eventbus/kv stay on the in-process default)\n" +
+		"s3 endpoint                   unset or empty (objectstore stays on the local-directory default)\n" +
+		"s3 bucket                     unset or empty (objectstore stays on the local-directory default)\n" +
+		"s3 access key                 unset or empty (objectstore stays on the local-directory default)\n" +
+		"s3 secret key    [redacted]   unset or empty (objectstore stays on the local-directory default)\n" +
+		"s3 region                     unset or empty (optional S3 refinement; used only when the group above is set)\n" +
+		"s3 use ssl       false        unset or empty (default false)\n" +
+		"smtp host                     unset or empty (mailer stays on the console default)\n" +
+		"smtp port                     unset or empty (mailer stays on the console default)\n" +
+		"smtp username                 unset or empty (optional SMTP refinement; used only when the group above is set)\n" +
+		"smtp password    [redacted]   unset or empty (optional SMTP refinement; used only when the group above is set)\n" +
+		"sms gateway url               unset or empty (SMS sender seam left unwired: console default under standalone, refused under distributed)\n"
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
