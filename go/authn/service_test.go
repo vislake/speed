@@ -547,6 +547,95 @@ func TestService_Refresh_RefusesASuspendedAccount(t *testing.T) {
 	}
 }
 
+// TestService_Refresh_TransientMembershipFailureDoesNotConsumeTheToken is the
+// regression for the go/authn audit's sequencing finding: refresh used to
+// rotate (consume) the presented refresh token BEFORE re-verifying
+// membership, so a transient MembershipReader failure left the presented
+// token permanently spent even though the caller never received its
+// replacement. The client's own, entirely legitimate retry with that same
+// token then hit Rotate's replay detector -- which is exactly correct
+// behaviour for an actually-replayed token, but wrong here -- and revoked
+// the whole refresh-token family, the session, and fired
+// EventSessionReplayDetected, all over what was really a backend hiccup. A
+// two-second MembershipReader outage does not get to look identical to a
+// stolen refresh token.
+func TestService_Refresh_TransientMembershipFailureDoesNotConsumeTheToken(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	f.registerUser(t, "flaky-membership@example.com", testTenantA)
+
+	pair, err := f.svc.Login(t.Context(), LoginInput{Identifier: "flaky-membership@example.com", Password: testPassword})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	f.members.FailWith(errors.New("membership store timeout"))
+	f.clock.Advance(time.Minute)
+
+	if _, err := f.svc.Refresh(t.Context(), pair.RefreshToken); !hasCode(err, ErrTenantMembershipUnavailable.Code) {
+		t.Fatalf("Refresh() during a membership outage error = %v, want code %q", err, ErrTenantMembershipUnavailable.Code)
+	}
+
+	// There was only ever one presentation of this token. Nothing about a
+	// slow membership store makes it a stolen credential, so neither the
+	// replay event nor a session revocation may have fired.
+	if n := f.events.Count(EventSessionReplayDetected); n != 0 {
+		t.Fatalf("EventSessionReplayDetected fired %d times after a transient membership failure, want 0", n)
+	}
+	if n := f.events.Count(EventSessionRevoked); n != 0 {
+		t.Fatalf("EventSessionRevoked fired %d times after a transient membership failure, want 0", n)
+	}
+
+	// The store recovers, and the client retries with the SAME token it was
+	// never issued a replacement for (it never received one, because the
+	// refresh that would have carried it failed). That retry must still
+	// work -- the failed attempt above must not have spent the token.
+	f.members.FailWith(nil)
+	f.clock.Advance(time.Minute)
+
+	if _, err := f.svc.Refresh(t.Context(), pair.RefreshToken); err != nil {
+		t.Fatalf("Refresh() with the same token after the outage cleared, error = %v, want success", err)
+	}
+}
+
+// TestService_Refresh_ActualReplayStillRevokesTheFamily is the companion
+// guard for the fix above: an actually-replayed refresh token -- one already
+// rotated by a prior, successful call -- must still be caught, still revoke
+// the whole family and session, and still announce
+// EventSessionReplayDetected. Reordering refresh's re-verification ahead of
+// rotation must not weaken this real security property.
+func TestService_Refresh_ActualReplayStillRevokesTheFamily(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	f.registerUser(t, "replay-victim@example.com", testTenantA)
+
+	pair, err := f.svc.Login(t.Context(), LoginInput{Identifier: "replay-victim@example.com", Password: testPassword})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	f.clock.Advance(time.Minute)
+	if _, err := f.svc.Refresh(t.Context(), pair.RefreshToken); err != nil {
+		t.Fatalf("first Refresh() error = %v", err)
+	}
+
+	// Present the SAME, now-already-rotated token again: a genuine replay,
+	// not a retry after a server-side failure.
+	f.clock.Advance(time.Minute)
+	if _, err := f.svc.Refresh(t.Context(), pair.RefreshToken); !hasCode(err, ErrRefreshTokenReused.Code) {
+		t.Fatalf("replayed Refresh() error = %v, want code %q", err, ErrRefreshTokenReused.Code)
+	}
+
+	if n := f.events.Count(EventSessionReplayDetected); n != 1 {
+		t.Fatalf("EventSessionReplayDetected fired %d times for an actual replay, want 1", n)
+	}
+	if n := f.events.Count(EventSessionRevoked); n != 1 {
+		t.Fatalf("EventSessionRevoked fired %d times for an actual replay, want 1", n)
+	}
+}
+
 func TestService_Logout_EndsTheSession(t *testing.T) {
 	t.Parallel()
 

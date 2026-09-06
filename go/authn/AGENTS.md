@@ -253,6 +253,40 @@ The consequence to state to consumers: **two concurrent refreshes with the same
 token are indistinguishable from a theft and are treated as one.** A client that
 races itself loses its session. Clients must serialise their own refreshes.
 
+### Refresh re-verifies membership and user status BEFORE consuming the token, not after
+
+`SessionManager.Rotate` is `resolveRotation` (read-only: locate the presented
+token, catch an already-consumed one as a replay, load its session) followed
+by `commitRotation` (the atomic consume-and-mint). `Service.refresh` calls
+them as two separate steps with its own membership and user-status
+re-verification run in between, rather than calling `Rotate` as one call and
+checking membership afterward.
+
+This ordering is load-bearing, not cosmetic. It used to be the other way
+round: `Rotate` consumed the token and minted its replacement, and only then
+did `refresh` re-verify membership and user status — so a re-verification
+failure (a `MembershipReader` timeout, a status flag flapping) left the
+presented token permanently spent with the caller never having received its
+replacement. The client's own, entirely legitimate retry with that same token
+then hit `Rotate`'s replay detector, which cannot distinguish that retry from
+an actual stolen token, and paid the real-theft price for it: the whole
+refresh-token family and the session revoked, `EventSessionReplayDetected`
+fired. A two-second membership-store outage should never look identical to a
+stolen refresh token.
+
+Do not re-merge `resolveRotation` and `commitRotation` back into one call
+inside `refresh` "for simplicity" — that reopens this exact bug. Any future
+re-verification `refresh` grows must go between the resolve and the commit,
+never after the commit.
+
+### `Rotate` still exists and still behaves like one atomic call
+
+Callers other than `Service.refresh` (and `SessionManager`'s own tests) use
+`Rotate` exactly as before — its signature, behavior and its own replay
+detection are unchanged. `resolveRotation`/`commitRotation` are unexported
+internals `Rotate` composes itself from; they exist so `refresh` can slot
+its own checks between them, not as a new public two-step contract.
+
 ### Tokens carry no email and no permissions
 
 No email claim is minted. A `Principal` recovered from a token has an empty

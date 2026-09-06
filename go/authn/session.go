@@ -212,7 +212,11 @@ func (m *SessionManager) issueRefreshToken(ctx context.Context, session *Session
 }
 
 // Rotate consumes the presented refresh token and issues its replacement,
-// returning the session the token belongs to.
+// returning the session the token belongs to. It is the composition of
+// resolveRotation followed by commitRotation below -- unchanged from the
+// caller's perspective, still one atomic-looking call -- kept as two
+// internal steps so Service.refresh can run its own re-verification between
+// them.
 //
 // It is where replay detection lives. Every refresh invalidates the token it
 // was given and mints a new one in the same family, so a token is usable
@@ -228,49 +232,84 @@ func (m *SessionManager) issueRefreshToken(ctx context.Context, session *Session
 // its session, an attacker racing the victim loses theirs -- and it is why a
 // client must serialise its own refreshes.
 func (m *SessionManager) Rotate(ctx context.Context, presented string) (*Session, IssuedRefreshToken, error) {
+	record, session, err := m.resolveRotation(ctx, presented)
+	if err != nil {
+		return nil, IssuedRefreshToken{}, err
+	}
+	return m.commitRotation(ctx, record, session)
+}
+
+// resolveRotation is Rotate's read-only half: it locates the presented
+// token, treats an already-consumed one as a replay (revoking the family
+// and session exactly as Rotate has always done for that case), and loads
+// the session the token belongs to -- all without spending anything.
+//
+// It exists as its own step so a caller with its own business-rule
+// re-verification to run in between -- Service.refresh's membership and
+// user-status re-check chief among them -- can run that re-verification
+// against the token's session BEFORE the token is actually consumed,
+// rather than after. Consuming first and re-verifying second meant a
+// re-verification failure left the presented token permanently spent with
+// nothing to show the caller for it: the client's own, entirely
+// legitimate retry with that same token then looked identical to an
+// actual replay and paid the same price -- the whole family and session
+// revoked, a "suspected theft" event fired -- over what was really a
+// transient membership-lookup failure or a passing status flap. See
+// Service.refresh's doc comment for the full account.
+func (m *SessionManager) resolveRotation(ctx context.Context, presented string) (*RefreshToken, *Session, error) {
 	if presented == "" {
-		return nil, IssuedRefreshToken{}, ErrRefreshTokenInvalid
+		return nil, nil, ErrRefreshTokenInvalid
 	}
 
 	record, err := m.tokens.FindByHash(ctx, hashRefreshSecret(presented))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			return nil, IssuedRefreshToken{}, ErrRefreshTokenInvalid
+			return nil, nil, ErrRefreshTokenInvalid
 		}
-		return nil, IssuedRefreshToken{}, err
+		return nil, nil, err
 	}
 
 	if record.Status == RefreshTokenStatusRotated {
-		return nil, IssuedRefreshToken{}, m.handleReplay(ctx, record)
+		return nil, nil, m.handleReplay(ctx, record)
 	}
 	if record.Status != RefreshTokenStatusActive {
-		return nil, IssuedRefreshToken{}, ErrRefreshTokenInvalid
+		return nil, nil, ErrRefreshTokenInvalid
 	}
 	if !m.now().Before(record.ExpiresAt) {
-		return nil, IssuedRefreshToken{}, ErrRefreshTokenInvalid
+		return nil, nil, ErrRefreshTokenInvalid
 	}
 
 	session, err := m.sessions.FindByID(ctx, record.SessionID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			return nil, IssuedRefreshToken{}, ErrRefreshTokenInvalid
+			return nil, nil, ErrRefreshTokenInvalid
 		}
-		return nil, IssuedRefreshToken{}, err
+		return nil, nil, err
 	}
 	if session.Status != SessionStatusActive || !m.now().Before(session.ExpiresAt) {
-		return nil, IssuedRefreshToken{}, ErrSessionRevoked
+		return nil, nil, ErrSessionRevoked
 	}
 
+	return record, session, nil
+}
+
+// commitRotation is Rotate's mutating half: the atomic single-use
+// consumption of record plus minting its replacement in the same family.
+// A caller reordering its own checks around resolveRotation must have
+// already run every one of them against session by the time it calls
+// this -- once commitRotation returns, the presented token is spent for
+// good, replay detection included, and there is no undoing that.
+func (m *SessionManager) commitRotation(ctx context.Context, record *RefreshToken, session *Session) (*Session, IssuedRefreshToken, error) {
 	won, err := m.tokens.Consume(ctx, record.ID, m.now())
 	if err != nil {
 		return nil, IssuedRefreshToken{}, err
 	}
 	if !won {
-		// Someone else consumed this exact token between the read
-		// above and this update. From here the two cases -- a client
-		// racing itself and a thief racing the victim -- are the same
-		// observation, and the safe reading of that observation is
-		// the second one.
+		// Someone else consumed this exact token between
+		// resolveRotation's read and this update. From here the two
+		// cases -- a client racing itself and a thief racing the
+		// victim -- are the same observation, and the safe reading of
+		// that observation is the second one.
 		return nil, IssuedRefreshToken{}, m.handleReplay(ctx, record)
 	}
 

@@ -634,6 +634,25 @@ func (s *Service) login(ctx context.Context, in LoginInput) (*TokenPair, error) 
 // That is what makes removing someone from a tenant actually end their access
 // to it: without the re-check they would keep refreshing into a tenant they
 // no longer belong to until the session itself expired, which is weeks.
+//
+// That re-verification deliberately runs BEFORE the presented token is
+// rotated (consumed), not after. It used to run after: Rotate would consume
+// the token and mint its replacement, and only then would refresh check
+// membership and user status -- so a failure there left the presented token
+// permanently spent with the caller never having received its replacement.
+// The client's own, entirely legitimate retry with that same token then hit
+// Rotate's replay detector, which cannot tell that retry apart from an actual
+// stolen token, and paid the actual-theft price for it: the whole
+// refresh-token family and the session revoked, a "suspected theft" event
+// fired -- over what was really a transient MembershipReader outage or a
+// passing user-status flap. Resolving the token and its session first,
+// running every re-verification a caller needs, and only then committing the
+// rotation keeps a re-verification failure from ever touching the token at
+// all: the client's retry, once whatever failed clears, presents the exact
+// same still-active token and succeeds normally. An ACTUALLY replayed token
+// -- one really already rotated by a prior, successful call -- is untouched
+// by this reordering: resolveRotation still catches it at the same first
+// step Rotate always checked it at, before any re-verification runs.
 func (s *Service) Refresh(ctx context.Context, presented string) (*TokenPair, error) {
 	start := time.Now()
 	pair, err := s.refresh(ctx, presented)
@@ -644,7 +663,7 @@ func (s *Service) Refresh(ctx context.Context, presented string) (*TokenPair, er
 // refresh is Refresh's actual implementation, split out for the identical
 // shadow-avoidance reason Login's own doc comment explains.
 func (s *Service) refresh(ctx context.Context, presented string) (*TokenPair, error) {
-	session, issued, err := s.sessions.Rotate(ctx, presented)
+	record, session, err := s.sessions.resolveRotation(ctx, presented)
 	if err != nil {
 		return nil, err
 	}
@@ -660,6 +679,11 @@ func (s *Service) refresh(ctx context.Context, presented string) (*TokenPair, er
 	}
 	if user.Status != UserStatusActive {
 		return nil, ErrInvalidCredentials
+	}
+
+	session, issued, err := s.sessions.commitRotation(ctx, record, session)
+	if err != nil {
+		return nil, err
 	}
 
 	return s.mintPair(ctx, user, session, tenantID, issued)
