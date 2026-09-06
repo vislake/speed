@@ -191,8 +191,8 @@ func TestImpersonationService_Start_UnknownTarget_RefusedWithNoGrant(t *testing.
 // account that simply never joined the target tenant must be refused with
 // ErrImpersonationTargetNotMember, not a 201 for a grant nobody could
 // legitimately use against that tenant in the first place -- the exact gap
-// the audit named ("幽灵用户 grant 照样 201", a grant for an account with no
-// real standing in the tenant still succeeding).
+// the audit named: a "ghost user" grant still succeeding with 201, a grant
+// for an account with no real standing in the tenant.
 func TestImpersonationService_Start_TargetNotAMember_RefusedWithNoGrant(t *testing.T) {
 	env := buildTestAdminModule(t)
 	if err := env.Queue.RegisterHandler(env.Notification.Deliveries()); err != nil {
