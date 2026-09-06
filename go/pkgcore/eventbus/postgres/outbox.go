@@ -60,7 +60,7 @@ type outboxRow struct {
 func advisoryLockKey(eventType string) int64 {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(eventType))
-	return int64(h.Sum64())
+	return int64(h.Sum64()) //nolint:gosec // deliberate bit reinterpretation, not a narrowing conversion
 }
 
 // insertOutboxAndNotify writes one outbox row and issues NOTIFY for it
