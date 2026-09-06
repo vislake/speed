@@ -347,15 +347,22 @@ func TestInvitationRepository_byStatus(t *testing.T) {
 	repo := NewInvitationRepository(newInvitationTestDB(t))
 	ctx := tenantCtx("tenant-a")
 	indexer := newTestEmailIndexer(t)
-	index, err := indexer.Index("ada@example.test")
-	if err != nil {
-		t.Fatalf("Index: %v", err)
-	}
 
+	// Three different addresses, not one: migrations/{postgres,sqlite}/
+	// 0005_unique_pending_invitation.sql's partial unique index now refuses
+	// a SECOND pending row for the same address in the same tenant (the D4
+	// concurrency fix's backstop -- see InvitationRepository.createPending),
+	// and this test's own purpose is byStatus's status filter, not that
+	// invariant, so the two Pending rows must not share an address.
+	emails := []string{"ada@example.test", "grace@example.test", "linus@example.test"}
 	for i, status := range []string{InvitationStatusPending, InvitationStatusAccepted, InvitationStatusPending} {
+		index, err := indexer.Index(emails[i])
+		if err != nil {
+			t.Fatalf("Index: %v", err)
+		}
 		seedInvitation(t, repo, ctx, Invitation{
 			ID: fmt.Sprintf("30000000-0000-4000-8000-%012d", i+1), NodeID: "n-1",
-			Email: "ada@example.test", EmailIndex: index, InviterUserID: "u-1", Locale: "en-US",
+			Email: emails[i], EmailIndex: index, InviterUserID: "u-1", Locale: "en-US",
 			TokenHash: hashInvitationToken(fmt.Sprintf("t%d", i)), Status: status,
 			ExpiresAt: time.Now().Add(time.Hour),
 		})

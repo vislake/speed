@@ -719,6 +719,113 @@ func TestInviteService_NoKVStore_DeniesRatherThanAllows(t *testing.T) {
 	}
 }
 
+// livePendingCount returns how many currently-pending invitations exist for
+// email in the fixture's tenant, read straight through the repository's own
+// blind-index lookup -- the same query InviteService.Invite's atomic
+// createPending step revokes against, so it is the authoritative answer to
+// "how many live tokens does this address have right now".
+func (f inviteFixture) livePendingCount(t *testing.T, email string) int {
+	t.Helper()
+	pending, err := f.m.Invitations().Repository().pendingByEmail(f.ctx, newTestEmailIndexer(t), email)
+	if err != nil {
+		t.Fatalf("pendingByEmail(%s): %v", email, err)
+	}
+	return len(pending)
+}
+
+// TestInviteService_Invite_ConcurrentSameAddress_ExactlyOneLiveToken is the
+// D4 (org-rbac P3) regression test: two goroutines both call Invite for the
+// SAME address at the same time, over the real repository against a real,
+// file-backed SQLite database.
+//
+// # Two legitimate outcomes, and one that is never legitimate
+//
+// Two calls racing for the same address can genuinely resolve two different
+// ways even on correct code, depending on how much they actually overlap:
+//
+//   - Little or no overlap (the first call's whole transaction, including
+//     its own revoke-then-insert, commits before the second one reaches the
+//     database at all): both calls succeed with no error, because the
+//     second call's own revoke step correctly finds and revokes the
+//     first's now-committed row before inserting its own. This is not a
+//     bug -- it is what Invite is supposed to do when asked to invite an
+//     address that already has a pending invitation, concurrently or not.
+//   - Genuine overlap (both calls' revoke steps run before either has
+//     committed its insert): each observes nothing pending to revoke, and
+//     whichever call's INSERT reaches the database second is refused by
+//     the partial unique index (migrations/{postgres,sqlite}/
+//     0005_unique_pending_invitation.sql), surfaced as the coded
+//     ErrInvitationAlreadyPending rather than a raw gorm.ErrDuplicatedKey.
+//
+// Both are correct; this test accepts either distribution of
+// successes/coded-refusals (any error OTHER than the coded one is still a
+// failure). The one outcome that must NEVER happen, on the fixed code, is
+// what the D4 finding names: BOTH calls succeeding AND leaving two
+// simultaneously live tokens. That is exactly what the pre-fix code's
+// revokePendingFor (a read via pendingByEmail, then a per-row Update loop,
+// itself a separate transaction from the row's own later, separate Create)
+// allows, since neither of its two transactions ever overlapped with the
+// other's -- there was no atomicity to race against in the first place, so
+// "genuine overlap" above always looked exactly like the always-safe first
+// bullet from the caller's point of view, yet still doubled the live token
+// count. The one invariant this test actually enforces, every single trial
+// regardless of which legitimate distribution occurred, is therefore the
+// live-token COUNT rather than the win/loss split: exactly one live
+// (Pending) row for the address once both goroutines have returned.
+func TestInviteService_Invite_ConcurrentSameAddress_ExactlyOneLiveToken(t *testing.T) {
+	const trials = 25
+	for trial := 0; trial < trials; trial++ {
+		f := newInviteFixture(t)
+		email := fmt.Sprintf("race-invite-%d@example.test", trial)
+
+		var (
+			wg        sync.WaitGroup
+			start     = make(chan struct{})
+			mu        sync.Mutex
+			successes int
+			coded     int
+			other     []error
+		)
+		wg.Add(2)
+		for i := 0; i < 2; i++ {
+			go func() {
+				defer wg.Done()
+				<-start
+				_, err := f.m.Invitations().Invite(f.ctx, InviteRequest{
+					Email:         email,
+					NodeID:        f.left.ID,
+					InviterUserID: "u-inviter",
+					Locale:        "en-US",
+				})
+				mu.Lock()
+				defer mu.Unlock()
+				switch {
+				case err == nil:
+					successes++
+				case hasCode(err, ErrInvitationAlreadyPending.Code):
+					coded++
+				default:
+					other = append(other, err)
+				}
+			}()
+		}
+		close(start)
+		wg.Wait()
+
+		if len(other) != 0 {
+			t.Fatalf("trial %d: unexpected error(s) racing Invite: %v", trial, other)
+		}
+		if successes+coded != 2 {
+			t.Fatalf("trial %d: got %d successes and %d org.invitation_already_pending errors, want exactly 2 total",
+				trial, successes, coded)
+		}
+		if live := f.livePendingCount(t, email); live != 1 {
+			t.Fatalf("trial %d: %d live (pending) tokens exist for %s after the race (successes=%d coded=%d), want exactly 1",
+				trial, live, email, successes, coded)
+		}
+	}
+}
+
 // errParam reads one structured parameter off an apperr-carrying error.
 func errParam(t *testing.T, err error, key string) any {
 	t.Helper()

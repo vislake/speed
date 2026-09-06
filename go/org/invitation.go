@@ -295,6 +295,69 @@ func (r *InvitationRepository) acceptIfPending(ctx context.Context, id string, a
 	return rowsAffected == 1, nil
 }
 
+// createPending revokes every pending invitation already outstanding for
+// invitation's own address, then inserts invitation, both inside ONE
+// dbkit.WithTenantSession transaction -- the atomic replacement for the
+// separate revokePendingFor-then-Create shape InviteService.Invite used to
+// run as two independent transactions.
+//
+// # The race this closes
+//
+// revokePendingFor's original shape was a read (pendingByEmail) followed by
+// a per-row Update loop, itself followed -- as a wholly separate
+// transaction -- by the new row's Create. Two concurrent Invite calls for
+// the SAME address could each run their own read-then-revoke-loop before
+// either had inserted anything, see no pending invitation to revoke (there
+// was genuinely none yet), and both go on to Create: two simultaneously
+// live tokens for one address, violating this module's own "at most one
+// live token at a time" claim (invite.go's Invite doc comment) --
+// acceptIfPending's per-id compare-and-swap does not help here, since the
+// two tokens are two DIFFERENT rows, and two different accepters could each
+// win one.
+//
+// # The fix
+//
+// Two writes, in order, no read of anything in between -- so this
+// transaction's first statement is a write, the same reasoning
+// lockLiveNode's own doc comment in repository.go gives for why that keeps
+// SQLite out of the read-then-write lock-upgrade hazard:
+//
+//  1. A blind BULK revoke: every row of the caller's tenant whose blind
+//     index matches email's and whose status is still Pending is flipped
+//     to Revoked in one UPDATE, with no prior SELECT enumerating which
+//     rows those are. This alone does not yet close the race (a second,
+//     concurrent Invite's own revoke could run either before or after
+//     this one commits, and if it runs after, it revokes nothing new --
+//     there being nothing pending left for it to find).
+//  2. The insert. This is where the race is actually arbitrated: the
+//     partial unique index on (tenant_id, email_index) WHERE status =
+//     'pending' (migrations/{postgres,sqlite}/0005_unique_pending_invitation.sql)
+//     admits at most one row per address in this state, so of two
+//     concurrent Invite transactions racing to reach this step, the
+//     database lets exactly one INSERT succeed; the other's INSERT fails
+//     with gorm.ErrDuplicatedKey, translated by the caller
+//     (InviteService.Invite) into the coded ErrInvitationAlreadyPending.
+//
+// createPending itself does not translate that error -- it returns
+// whatever the transaction returns, unwrapped, so its caller can compose it
+// with whatever else it needs to report.
+func (r *InvitationRepository) createPending(ctx context.Context, indexer *dbkit.BlindIndexer, email string, invitation *Invitation) error {
+	cond, err := indexer.Equal(email)
+	if err != nil {
+		return ErrInvalidEmail.WithCause(err)
+	}
+	return dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		if err := tx.
+			Where(cond).
+			Where("status = ?", InvitationStatusPending).
+			Select("Status").
+			Updates(&Invitation{Status: InvitationStatusRevoked}).Error; err != nil {
+			return err
+		}
+		return tx.Create(invitation).Error
+	})
+}
+
 // byStatus returns the caller tenant's invitations in the given status,
 // newest first and then by id so the order is total and stable.
 func (r *InvitationRepository) byStatus(ctx context.Context, status string) ([]Invitation, error) {

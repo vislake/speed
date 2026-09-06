@@ -2,6 +2,7 @@ package org
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -190,10 +191,16 @@ func (s *InviteService) Repository() *InvitationRepository { return s.repo }
 //  3. the address, normalized and indexed, so an address org could not find
 //     again is refused before anything is written;
 //  4. both rate-limit dimensions;
-//  5. any earlier pending invitation for the same address is revoked, so one
-//     address has at most one live token at a time and an older link stops
-//     working the moment a new one is issued;
-//  6. the row, then the event, then the message.
+//  5. any earlier pending invitation for the same address is revoked and the
+//     new row inserted, atomically -- see InvitationRepository.createPending
+//     -- so one address has at most one live token at a time and an older
+//     link stops working the moment a new one is issued. A concurrent
+//     Invite racing for the SAME address loses this step outright
+//     (ErrInvitationAlreadyPending) rather than silently creating a second
+//     live token: see createPending's own doc comment for the race this
+//     closes and why it can only be caught here, at the insert, never by a
+//     pre-check.
+//  6. the event, then the message.
 //
 // A delivery failure revokes the invitation it just created. The invitee
 // never received the link, so leaving a pending row behind would only mean a
@@ -232,9 +239,6 @@ func (s *InviteService) Invite(ctx context.Context, req InviteRequest) (*InviteR
 	if limitErr := s.checkRateLimits(ctx, emailIndex); limitErr != nil {
 		return nil, limitErr
 	}
-	if revokeErr := s.revokePendingFor(ctx, address); revokeErr != nil {
-		return nil, revokeErr
-	}
 
 	token, tokenHash, err := s.newToken()
 	if err != nil {
@@ -256,8 +260,11 @@ func (s *InviteService) Invite(ctx context.Context, req InviteRequest) (*InviteR
 		Status:        InvitationStatusPending,
 		ExpiresAt:     s.now().Add(s.ttl),
 	}
-	if err := s.repo.Create(ctx, invitation); err != nil {
-		return nil, err
+	if err := s.repo.createPending(ctx, s.indexer, address, invitation); err != nil {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			return nil, ErrInvitationAlreadyPending
+		}
+		return nil, ErrInternal.WithCause(err)
 	}
 
 	publishEvent(ctx, s.host, EventMemberInvited, MemberInvited{
@@ -490,24 +497,6 @@ func (s *InviteService) rateLimiter() (ratelimit.Limiter, error) {
 		return nil, ErrInternal.WithCause(errNoKVStore)
 	}
 	return ratelimit.New(kv), nil
-}
-
-// revokePendingFor withdraws every pending invitation already outstanding
-// for one address, so a freshly issued invitation is the only live one. The
-// lookup goes through the blind index; the address never reaches the SQL.
-func (s *InviteService) revokePendingFor(ctx context.Context, email string) error {
-	pending, err := s.repo.pendingByEmail(ctx, s.indexer, email)
-	if err != nil {
-		return err
-	}
-	for i := range pending {
-		inv := pending[i]
-		inv.Status = InvitationStatusRevoked
-		if err := s.repo.Update(ctx, &inv); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // deliver renders and sends the invitation, unless the invitation email is
