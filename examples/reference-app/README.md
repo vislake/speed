@@ -71,6 +71,10 @@ open http://localhost:8025         # mailpit's web UI
 
 The database stays SQLite on the same volume either way — this app never attempts a second dialect (see "hard-codes the SQLite dialect" above).
 
+### Deploying to Fly.io
+
+`fly.toml`, at the **repository root** (not this directory — the identical build-context reason `Dockerfile`'s own header and "Running it in Docker" above give), is a real, validated Fly.io deployment config for this app: standalone deployment mode, SQLite on a 1GB persistent volume, one `shared-cpu-1x` (1 shared vCPU, 256MB memory) machine that scales to zero when idle. Full prerequisites, the exact command sequence, which secrets to set first, and the free-tier facts this sizing was checked against (as of this writing — Fly's terms change) live in `DEPLOY.md` next to this file.
+
 ### Tenants: an access token, not a `Host` header
 
 Every one of this app's own routes (the notes API included) resolves its tenant from the caller's **access token**, never from `Host`: `cmd/server/server.go` wires `authn.Middleware(verifier)` ahead of `tenancy.Middleware(authn.NewPrincipalResolver())`, so a request needs a valid, signed-in Principal before it can reach anything but authn's own pre-auth operations (register, sign in, refresh, social authorize/callback) and the two allowlisted routes below. See `server.go`'s own doc comment on the middleware chain, and `go/authn/AGENTS.md`'s "The middleware chain is authn, then tenancy" section, for the full reasoning (in short: `tenancy.Resolver`'s signature has nowhere to carry a verified JWT's claims, so verifying the token has to happen first).
