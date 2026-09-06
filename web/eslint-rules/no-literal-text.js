@@ -18,10 +18,16 @@
  * plain string/template literals are also flagged (the `{'Save'}` /
  * {`Save`} forms), as are the plain-string branches of conditional
  * expressions (`{ok ? 'Save' : 'Wait'}` renders user-facing text
- * exactly as the bare form does; each offending branch reports its own
- * literal, while branches through t() or a dynamic template stay the
- * sanctioned path) (reference-app-web.md P2-7). Computed expressions
- * (`{t('a.b')}`, `{row.name}`) are the sanctioned path and untouched.
+ * exactly as the bare form does) and the plain-string operands of
+ * logical expressions (`{ok && 'Save'}`, `{name ?? 'Wait'}` show
+ * their literal side exactly as the ternary arms do); each offending
+ * branch reports its own literal, while branches through t() or a
+ * dynamic template stay the sanctioned path (reference-app-web.md
+ * P2-7). The children attribute is the JSXText spelling's own twin:
+ * <Button children="Save" /> renders exactly what <Button>Save</Button>
+ * renders, so its literal value reports with the same message. Computed
+ * expressions (`{t('a.b')}`, `{row.name}`) are the sanctioned path and
+ * untouched.
  *
  * No aria-hidden exemption exists: aria-hidden removes content from
  * the accessibility tree only -- a sighted user still reads text that
@@ -81,9 +87,14 @@ function literalText(node) {
  * Every plain-string literal an expression can render as text, with
  * its text. A conditional expression contributes the plain literals of
  * its branches (a ternary's branch is exactly what renders when the
- * condition picks it; a nested ternary walks recursively), and a plain
- * literal or template literal contributes itself. Anything else -- a
- * t() call, an identifier, a dynamic template -- contributes nothing.
+ * condition picks it; a nested ternary walks recursively). A logical
+ * expression contributes the plain literals of both operands the same
+ * way -- the && / || / ?? operators render one operand as the
+ * expression's value, whichever side the runtime value of the other
+ * leaves standing ({ok && 'Save'} shows the literal whenever ok
+ * holds). A plain literal or template literal contributes itself.
+ * Anything else -- a t() call, an identifier, a dynamic template --
+ * contributes nothing.
  */
 function plainTextLiterals(node) {
   const found = []
@@ -91,6 +102,11 @@ function plainTextLiterals(node) {
     if (current.type === 'ConditionalExpression') {
       walk(current.consequent)
       walk(current.alternate)
+      return
+    }
+    if (current.type === 'LogicalExpression') {
+      walk(current.left)
+      walk(current.right)
       return
     }
     const text = literalText(current)
@@ -147,7 +163,17 @@ export const noLiteralTextRule = {
         }
       },
       JSXAttribute(node) {
-        if (!TEXT_BEARING_ATTRIBUTES.has(node.name.name)) {
+        // The children prop carries the same text the JSXText children
+        // form carries: <Button children="Save" /> renders exactly what
+        // <Button>Save</Button> renders, so a literal value reports like
+        // that form -- same walk, same literalText message.
+        const isChildren =
+          node.name.type === 'JSXIdentifier' && node.name.name === 'children'
+        if (
+          !isChildren &&
+          (node.name.type !== 'JSXIdentifier' ||
+            !TEXT_BEARING_ATTRIBUTES.has(node.name.name))
+        ) {
           return
         }
         const value = node.value
@@ -159,8 +185,10 @@ export const noLiteralTextRule = {
         for (const { node: literal, text } of plainTextLiterals(candidate)) {
           context.report({
             node: literal,
-            messageId: 'literalAttribute',
-            data: { name: node.name.name, text: text.slice(0, 40) },
+            messageId: isChildren ? 'literalText' : 'literalAttribute',
+            data: isChildren
+              ? { text: text.slice(0, 40) }
+              : { name: node.name.name, text: text.slice(0, 40) },
           })
         }
       },

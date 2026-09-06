@@ -14,16 +14,24 @@
  *     `globalThis.fetch(...)`, `self.fetch(...)`, computed member
  *     access included), and
  *   - a constructed XMLHttpRequest (`new XMLHttpRequest()`),
- *   - an import, dynamic import or require of the axios or node-fetch
- *     module -- deliberately path-free: any import of axios is this
- *     pattern, whatever its subpath or binding.
+ *   - an import, re-export (export ... from), dynamic import or
+ *     require of the axios or node-fetch module -- deliberately
+ *     path-free: any source naming the package is this pattern,
+ *     however deep its subpath (axios/dist/... is still axios) and
+ *     whatever its binding, with template-literal sources
+ *     (import(`axios`)) judged like literal ones.
  *
- * The bare identifier forms carry a shadowing check: an identifier
- * that resolves to a local or imported binding (a parameter named
+ * All the guarded forms carry one shadowing check: an identifier that
+ * resolves to a genuine local or imported binding (a parameter named
  * fetch, a wrapper module, node-fetch itself) is not the environment
- * global, so only an identifier with no binding in scope is reported.
- * Member-object forms report unconditionally -- a local binding cannot
- * shadow the environment object.
+ * global, so only an identifier with no real declaration in scope is
+ * reported. Member-object forms take the same check on the object
+ * name: window.fetch called where a local binds window reads that
+ * local's member, not the environment fetch, while an unbound
+ * window/globalThis/self member keeps reporting. Only a real binding
+ * counts -- declaring the name as an environment global (config
+ * globals, a comment-declared global) creates a scope variable with no
+ * declaration behind it and never silences the guard.
  *
  * The environment fetch is also flagged when it is captured rather
  * than called: taking `window.fetch` out of a call (an alias
@@ -46,14 +54,73 @@
 
 const BANNED_MODULES = new Set(['axios', 'node-fetch'])
 
-/** Whether any scope from the node upward binds `name`: shadowed. */
+/** The string an import-source node carries, or undefined. A source is
+ * a plain string literal, except for dynamic import and require
+ * arguments, which may also be a substitution-free template literal --
+ * import(`axios`) names the same module as import('axios'). */
+function importSourceValue(source) {
+  if (source.type === 'Literal' && typeof source.value === 'string') {
+    return source.value
+  }
+  if (
+    source.type === 'TemplateLiteral' &&
+    source.expressions.length === 0 &&
+    source.quasis.length === 1
+  ) {
+    const cooked = source.quasis[0].value.cooked
+    return typeof cooked === 'string' ? cooked : undefined
+  }
+  return undefined
+}
+
+/** The package name an import source names: its first path segment.
+ * An unscoped package is the whole source when the import has no
+ * subpath, so axios/dist/node/axios.cjs still names the axios package
+ * and node-fetch/lib/index.js still names node-fetch. A relative
+ * import or another package can never match: './axios' resolves to
+ * '.' and 'axios-mock-adapter' is its own first segment. */
+function packageName(source) {
+  const slash = source.indexOf('/')
+  return slash === -1 ? source : source.slice(0, slash)
+}
+
+/** Whether a module source string is an import of a banned package. */
+function isBannedModuleSource(module) {
+  return BANNED_MODULES.has(packageName(module))
+}
+
+/** Report an import/require/export source node that carries a banned
+ * module, naming the whole source string as imported. */
+function checkBannedSource(context, sourceNode) {
+  const module = importSourceValue(sourceNode)
+  if (module !== undefined && isBannedModuleSource(module)) {
+    context.report({
+      node: sourceNode,
+      messageId: 'bannedModule',
+      data: { module },
+    })
+  }
+}
+
+/** Whether any scope from the node upward binds `name`: shadowed.
+ * "Binds" means a variable with a real declaration behind it -- a
+ * local variable, parameter, function/class name or import binding.
+ * Environment names the host merely *declares* (config globals, a
+ * comment-declared global) become scope variables with no defs at all,
+ * and declaring one must never silence the guard: the rule exists
+ * because the environment fetch is dangerous in package src, not
+ * because the host has not declared it. */
 function isBound(name, node, sourceCode) {
   for (
     let scope = sourceCode.getScope(node);
     scope !== null && scope !== undefined;
     scope = scope.upper
   ) {
-    if (scope.variables.some((variable) => variable.name === name)) {
+    if (
+      scope.variables.some(
+        (variable) => variable.name === name && variable.defs.length > 0,
+      )
+    ) {
       return true
     }
   }
@@ -67,12 +134,17 @@ const ENVIRONMENT_OBJECTS = new Set(['window', 'globalThis', 'self'])
  * from, or undefined when the expression is not one of the environment
  * objects' fetch members. Computed access counts when its key is the
  * literal 'fetch' -- window['fetch'] is the same member, not a
- * different call shape. */
-function environmentFetchSource(node) {
+ * different call shape. A local that genuinely binds the environment
+ * object's name (a self parameter, a declared window) makes the member
+ * access read that local's own member, so only an unbound object name
+ * is the environment -- the same shadowing rule the bare identifier
+ * path applies. */
+function environmentFetchSource(node, sourceCode) {
   if (
     node.type !== 'MemberExpression' ||
     node.object.type !== 'Identifier' ||
-    !ENVIRONMENT_OBJECTS.has(node.object.name)
+    !ENVIRONMENT_OBJECTS.has(node.object.name) ||
+    isBound(node.object.name, node, sourceCode)
   ) {
     return undefined
   }
@@ -145,20 +217,13 @@ export const noDirectHttpRule = {
         if (
           callee.type === 'Identifier' &&
           callee.name === 'require' &&
-          node.arguments.length === 1
+          node.arguments.length === 1 &&
+          node.arguments[0] !== undefined
         ) {
-          const argument = node.arguments[0]
-          if (
-            argument !== undefined &&
-            argument.type === 'Literal' &&
-            typeof argument.value === 'string' &&
-            BANNED_MODULES.has(argument.value)
-          ) {
-            report(argument, 'bannedModule', { module: argument.value })
-          }
+          checkBannedSource(context, node.arguments[0])
           return
         }
-        const object = environmentFetchSource(callee)
+        const object = environmentFetchSource(callee, sourceCode)
         if (object !== undefined) {
           report(callee, 'memberFetch', { object })
         }
@@ -176,7 +241,7 @@ export const noDirectHttpRule = {
         ) {
           return
         }
-        const object = environmentFetchSource(node)
+        const object = environmentFetchSource(node, sourceCode)
         if (object !== undefined) {
           report(node, 'capturedFetch', { object })
         }
@@ -187,7 +252,8 @@ export const noDirectHttpRule = {
         }
         if (
           node.init.type === 'Identifier' &&
-          ENVIRONMENT_OBJECTS.has(node.init.name)
+          ENVIRONMENT_OBJECTS.has(node.init.name) &&
+          !isBound(node.init.name, node.init, sourceCode)
         ) {
           const key = environmentFetchPattern(node.id)
           if (key !== undefined) {
@@ -199,7 +265,10 @@ export const noDirectHttpRule = {
         if (node.right.type !== 'Identifier') {
           return
         }
-        if (!ENVIRONMENT_OBJECTS.has(node.right.name)) {
+        if (
+          !ENVIRONMENT_OBJECTS.has(node.right.name) ||
+          isBound(node.right.name, node.right, sourceCode)
+        ) {
           return
         }
         const key = environmentFetchPattern(node.left)
@@ -218,20 +287,23 @@ export const noDirectHttpRule = {
         }
       },
       ImportDeclaration(node) {
-        const module = node.source.value
-        if (typeof module === 'string' && BANNED_MODULES.has(module)) {
-          report(node.source, 'bannedModule', { module })
+        checkBannedSource(context, node.source)
+      },
+      // Re-exports carry the same source: export * from 'node-fetch'
+      // and export { default as axios } from 'axios' hand the banned
+      // module's HTTP surface onward, so the importing package still
+      // reaches the network through it. Local exports (export { x })
+      // have no source and are untouched.
+      ExportNamedDeclaration(node) {
+        if (node.source !== null && node.source !== undefined) {
+          checkBannedSource(context, node.source)
         }
       },
+      ExportAllDeclaration(node) {
+        checkBannedSource(context, node.source)
+      },
       ImportExpression(node) {
-        const source = node.source
-        if (
-          source.type === 'Literal' &&
-          typeof source.value === 'string' &&
-          BANNED_MODULES.has(source.value)
-        ) {
-          report(source, 'bannedModule', { module: source.value })
-        }
+        checkBannedSource(context, node.source)
       },
     }
   },

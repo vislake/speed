@@ -101,6 +101,52 @@ describe('no-direct-http rule', () => {
     )
   })
 
+  it('flags the environment fetch even when the host merely declares it a global', () => {
+    // A scope variable declared by a comment directive or by config
+    // globals has no defs: it is the host announcing an environment
+    // name, not code binding it. Declaring fetch/XMLHttpRequest as a
+    // global must never silence the guard -- the rule is armed precisely
+    // because the environment fetch is reachable in package src.
+    runRule(
+      [],
+      [
+        {
+          code: '/* global fetch */\nfetch("/api/notes");',
+          errors: [{ messageId: 'globalFetch' }],
+        },
+        {
+          code: '/* global fetch, XMLHttpRequest */\nnew XMLHttpRequest();',
+          errors: [{ messageId: 'xmlHttpRequest' }],
+        },
+      ],
+    )
+    // Config globals take the same def-less shape as directive globals.
+    const configuredTester = new RuleTester({
+      languageOptions: {
+        parserOptions: { ecmaVersion: 2022, sourceType: 'module' },
+        globals: { fetch: 'readonly', XMLHttpRequest: 'readonly' },
+      },
+    })
+    try {
+      configuredTester.run('no-direct-http', noDirectHttpRule, {
+        valid: [],
+        invalid: [
+          { code: 'fetch("/api");', errors: [{ messageId: 'globalFetch' }] },
+          {
+            code: 'window.fetch("/api");',
+            errors: [{ messageId: 'memberFetch' }],
+          },
+          {
+            code: 'new XMLHttpRequest();',
+            errors: [{ messageId: 'xmlHttpRequest' }],
+          },
+        ],
+      })
+    } catch (error) {
+      expect.fail(`rule tests failed: ${error.message}`)
+    }
+  })
+
   it('flags fetch through the environment object', () => {
     runRule(
       [],
@@ -136,6 +182,42 @@ describe('no-direct-http rule', () => {
             { messageId: 'memberFetch' },
             { messageId: 'memberFetch' },
           ],
+        },
+      ],
+    )
+  })
+
+  it('honours shadowing of the environment object name in member forms', () => {
+    // A local that binds the environment name calls that local's own
+    // member -- self.fetch inside a self parameter, a locally declared
+    // window -- not the environment fetch. The member object identifier
+    // is checked the same way the bare identifier is (only a real
+    // binding counts; declaring the name an environment global does
+    // not).
+    runRule(
+      [
+        'function f(self) { return self.fetch("/api"); }',
+        'const window = { fetch: (url) => url }; window.fetch("/api");',
+        'function g(globalThis) { return globalThis.fetch("/api"); }',
+        'function m(window) { const f = window.fetch.bind(window); return f; }',
+        // Destructuring fetch out of a locally bound object of the same
+        // name is a local member read, not the environment capture.
+        'function h(window) { const { fetch } = window; }',
+        'function k(self) { ({ fetch } = self); }',
+      ],
+      // The genuine environment member calls keep reporting.
+      [
+        {
+          code: 'window.fetch("/api/notes");',
+          errors: [{ messageId: 'memberFetch' }],
+        },
+        {
+          code: 'self.fetch("/api/notes");',
+          errors: [{ messageId: 'memberFetch' }],
+        },
+        {
+          code: 'const f = window.fetch;',
+          errors: [{ messageId: 'capturedFetch' }],
         },
       ],
     )
@@ -226,6 +308,65 @@ describe('no-direct-http rule', () => {
         },
         {
           code: "const mod = await import('axios');",
+          errors: [{ messageId: 'bannedModule' }],
+        },
+      ],
+    )
+  })
+
+  it('flags banned modules through re-exports, subpaths and template sources', () => {
+    runRule(
+      [
+        // Local re-exports and other packages are untouched.
+        "export { format } from './format.js';",
+        "export * from './local-http.js';",
+        "export * as fetch from './local-http.js';",
+        // A differently named package is not the banned module.
+        "import adapter from 'axios-mock-adapter';",
+        "import fromAxios from './axios.js';",
+        "const mod = await import('./feature.js');",
+        "const { readFile } = require('fs');",
+      ],
+      [
+        // Re-exports ship the banned module's HTTP surface onward -- the
+        // importing package still reaches the network through it.
+        {
+          code: "export * from 'node-fetch';",
+          errors: [{ messageId: 'bannedModule' }],
+        },
+        {
+          code: "export * as fetch from 'node-fetch';",
+          errors: [{ messageId: 'bannedModule' }],
+        },
+        {
+          code: "export { default as axios } from 'axios';",
+          errors: [{ messageId: 'bannedModule' }],
+        },
+        {
+          code: "export { fetch } from 'node-fetch';",
+          errors: [{ messageId: 'bannedModule' }],
+        },
+        // Path-free: however deep the subpath, the source names the
+        // banned package, so it is still an import of that package.
+        {
+          code: "import axios from 'axios/dist/node/axios.cjs';",
+          errors: [{ messageId: 'bannedModule' }],
+        },
+        {
+          code: "const fetch = require('node-fetch/lib/index.js');",
+          errors: [{ messageId: 'bannedModule' }],
+        },
+        // Template-literal sources are judged like literal ones.
+        {
+          code: 'const mod = await import(`axios`);',
+          errors: [{ messageId: 'bannedModule' }],
+        },
+        {
+          code: 'const axios = require(`axios`);',
+          errors: [{ messageId: 'bannedModule' }],
+        },
+        {
+          code: "export { default as axios } from 'axios/dist/axios.cjs';",
           errors: [{ messageId: 'bannedModule' }],
         },
       ],

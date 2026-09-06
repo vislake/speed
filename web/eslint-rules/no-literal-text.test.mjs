@@ -188,6 +188,58 @@ describe('no-literal-text rule', () => {
     )
   })
 
+  it('flags plain-string operands of logical expressions in children and attributes', () => {
+    // The && / || / ?? operators render one of their operands as the
+    // expression's value, exactly like the ternary arms the walk
+    // already covers: {ok && 'Saving...'} shows the literal whenever ok
+    // holds. Which operand renders depends on the runtime value of the
+    // other, so both are walked; the non-rendered side is normally a
+    // condition and contributes nothing.
+    runRule(
+      [
+        // Sanctioned: the plain side through t(), or computed values on
+        // both sides.
+        "<Button>{ok && t('save.title')}</Button>",
+        "<Button>{name ?? t('fallback.title')}</Button>",
+        '<Button>{ok && row.name}</Button>',
+        "<Button aria-label={ok && t('a.b')} />",
+      ],
+      [
+        {
+          code: "<Button>{ok && 'Saving...'}</Button>",
+          errors: [{ messageId: 'literalText' }],
+        },
+        {
+          code: "<Button>{name ?? 'Saving...'}</Button>",
+          errors: [{ messageId: 'literalText' }],
+        },
+        {
+          code: "<Button>{ok || 'Saving...'}</Button>",
+          errors: [{ messageId: 'literalText' }],
+        },
+        {
+          code: "<Button>{ok && ready && 'Saving...'}</Button>",
+          errors: [{ messageId: 'literalText' }],
+        },
+        {
+          code: "<Button>{ok ? 'Save' : pending && 'Wait'}</Button>",
+          errors: [
+            { messageId: 'literalText' },
+            { messageId: 'literalText' },
+          ],
+        },
+        {
+          code: "<Button aria-label={ok && 'Save'} />",
+          errors: [{ messageId: 'literalAttribute' }],
+        },
+        {
+          code: "<img alt={name ?? 'logo'} />",
+          errors: [{ messageId: 'literalAttribute' }],
+        },
+      ],
+    )
+  })
+
   it('flags literal text-bearing attribute values', () => {
     runRule(
       [],
@@ -211,6 +263,55 @@ describe('no-literal-text rule', () => {
         {
           code: '<span aria-roledescription="slide" />',
           errors: [{ messageId: 'literalAttribute' }],
+        },
+      ],
+    )
+  })
+
+  it('flags the children attribute carrying literal text like the JSXText form', () => {
+    // <Button children="Save" /> renders exactly what
+    // <Button>Save</Button> renders -- the attribute spelling of the
+    // same text, reported with the same literalText message. Template,
+    // expression-container and conditional/logical values ride the same
+    // plain-literal walk as JSXText children.
+    runRule(
+      [
+        "<Button children={t('empty.title')} />",
+        '<Button children={row.name} />',
+        '<Button children="   " />',
+        '<div children="" />',
+        "<Button children={`row ${row.id}`} />",
+      ],
+      [
+        {
+          code: '<Button children="Save" />',
+          errors: [{ messageId: 'literalText' }],
+        },
+        {
+          code: '<Button children={`Save`} />',
+          errors: [{ messageId: 'literalText' }],
+        },
+        {
+          code: "<Button children={'Save'} />",
+          errors: [{ messageId: 'literalText' }],
+        },
+        {
+          code: "<Button children={ok ? 'Save' : 'Wait'} />",
+          errors: [
+            { messageId: 'literalText' },
+            { messageId: 'literalText' },
+          ],
+        },
+        {
+          code: "<Button children={ok && 'Save'} />",
+          errors: [{ messageId: 'literalText' }],
+        },
+        {
+          code: '<span children="Save" aria-label="Save" />',
+          errors: [
+            { messageId: 'literalText' },
+            { messageId: 'literalAttribute' },
+          ],
         },
       ],
     )
