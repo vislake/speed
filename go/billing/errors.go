@@ -17,8 +17,12 @@ import "github.com/vislake/speed/go/pkgcore/apperr"
 // catalog weight, not forward compatibility -- the same discipline go/pki's
 // and go/metering's error indexes document for their own round boundaries.
 var (
-	// ErrPlanNotFound reports that neither a tenant-custom nor a
-	// platform-wide Plan exists for the requested key.
+	// ErrPlanNotFound reports that no Plan exists for whatever was looked
+	// up: a plan id (PlanStore.Get/Update, SubscriptionService.Create) or a
+	// plan key (PlanStore.Resolve). Every call site decorates the error
+	// with the looked-up value under the shared "id" parameter name -- the
+	// same name the locale template interpolates -- never with a
+	// site-specific name the template would render as an empty slot.
 	ErrPlanNotFound = apperr.NotFound("billing.plan_not_found")
 
 	// ErrPlanKeyRequired reports that a Plan was saved with an empty Key.
@@ -120,6 +124,18 @@ var (
 	// request naming any other currency is refused at the CreateCharge
 	// boundary rather than silently collected as if it were CNY.
 	ErrUnsupportedCurrency = apperr.Invalid("billing.unsupported_currency")
+
+	// ErrUsageReaderUnconfigured reports that EntitlementsService.Check was
+	// asked to make a FeatureKindQuota decision while the service had been
+	// built without a UsageReader (NewEntitlementsService's usage was nil)
+	// -- a wiring gap, never a quota answer. Quota decisions read the
+	// real-time counter (UsageReader's own doc comment), and with no
+	// counter to read the honest answer is this loud configuration error,
+	// never a nil-interface-call panic and never a guessed allowance (a
+	// zero-usage guess would fail OPEN for an over-quota tenant). Boolean
+	// and Unlimited features never consult the UsageReader and are
+	// unaffected; the error is reachable only for FeatureKindQuota grants.
+	ErrUsageReaderUnconfigured = apperr.Internal("billing.usage_reader_unconfigured")
 )
 
 // hasCode reports whether err is (or wraps, via apperr.As's Unwrap chain

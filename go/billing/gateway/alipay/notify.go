@@ -4,10 +4,35 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/vislake/speed/go/billing"
 )
+
+// notifyTimeTolerance is how far a delivery's notify_time parameter may sit
+// from the current time, in either direction, and still be accepted -- the
+// same 300-second window stripe-go's own webhook handling applies to Stripe
+// deliveries (webhook.DefaultTolerance, enforced by this module's stripe
+// leg through ConstructEventWithOptions) and go/billing/gateway/wechat
+// applies to its own Wechatpay-Timestamp header
+// (notifyTimestampTolerance), each bounding the delivery's age so a
+// captured notification -- whose signature stays valid forever -- cannot be
+// replayed at arbitrary leisure.
+//
+// Alipay async notifications carry no signature-bearing HTTP header: the
+// RSA2 signature covers the form parameters themselves (notify_time
+// included, sign.go's VerifySignature), so the freshness ceiling reads the
+// signed notify_time parameter. notify_time is the time Alipay generated
+// THIS delivery attempt -- each attempt carries its own notify_id, and the
+// trade's own event times ride in the gmt_* parameters -- so bounding it
+// cannot age out legitimate redeliveries the way bounding gmt_payment
+// would. A delivery refused here is refused with the same
+// authentication-class error a stale Stripe or WeChat delivery gets in
+// this module's other legs: the signature itself verified, but the
+// delivery is not accepted as live. The symmetric window also absorbs
+// ordinary clock skew between this host and Alipay's notify servers.
+const notifyTimeTolerance = 300 * time.Second
 
 // VerifyWebhook implements billing.PaymentGateway. Alipay's async
 // notification is a plain application/x-www-form-urlencoded POST body, not
@@ -17,6 +42,10 @@ import (
 // implementing https://opendocs.alipay.com/common/02kdnc's documented RSA2
 // scheme exactly). headers is accepted only for interface-shape parity
 // with billing.PaymentGateway; this implementation reads nothing from it.
+// After the signature verifies, the delivery's own signed notify_time
+// parameter is bounded to notifyTimeTolerance of now before the payload is
+// normalized -- the same delivery-freshness ceiling the stripe and wechat
+// legs enforce (see notifyTimeTolerance's own doc comment).
 func (g *Gateway) VerifyWebhook(_ context.Context, _ map[string][]string, body []byte) (billing.NormalizedEvent, error) {
 	params, err := decodeFormValues(body)
 	if err != nil {
@@ -25,6 +54,31 @@ func (g *Gateway) VerifyWebhook(_ context.Context, _ map[string][]string, body [
 
 	if err := VerifySignature(params, g.keys.pub); err != nil {
 		return billing.NormalizedEvent{}, billing.ErrWebhookSignatureInvalid.WithCause(err)
+	}
+
+	// Freshness: the delivery's own notify_time must sit within
+	// notifyTimeTolerance of now, in either direction (see that constant's
+	// doc comment for why notify_time -- signed above, unlike any HTTP
+	// header Alipay carries -- is the field to bound, and why the check
+	// runs only after the signature itself verified). An absent or
+	// unparseable notify_time is refused the same way a stale one is:
+	// there is nothing to bound.
+	notifyTimeStr := params["notify_time"]
+	if notifyTimeStr == "" {
+		return billing.NormalizedEvent{}, billing.ErrWebhookSignatureInvalid.
+			WithParam("reason", "notify_time missing: nothing to bound the delivery's age")
+	}
+	notifiedAt, parseErr := time.ParseInLocation(alipayTimeFormat, notifyTimeStr, alipayLocation())
+	if parseErr != nil {
+		return billing.NormalizedEvent{}, billing.ErrWebhookSignatureInvalid.
+			WithParam("reason", "notify_time is not a valid Alipay timestamp").
+			WithCause(parseErr)
+	}
+	skew := time.Since(notifiedAt)
+	if skew > notifyTimeTolerance || skew < -notifyTimeTolerance {
+		return billing.NormalizedEvent{}, billing.ErrWebhookSignatureInvalid.
+			WithParam("reason", "notify_time is outside the accepted freshness window").
+			WithParam("skew_seconds", strconv.FormatInt(int64(skew/time.Second), 10))
 	}
 
 	return normalizeNotify(params, body)

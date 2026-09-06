@@ -2,12 +2,15 @@ package billing
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/i18n"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
@@ -195,4 +198,124 @@ func TestPlanService_Create_PublishesEventPlanChanged(t *testing.T) {
 // (tenant_id, key) unique index.
 func uniqueKey() string {
 	return "probe-key-" + uuid.NewString()
+}
+
+// TestPlanStore_Update_EmptyID_RefusedNotSilentlyInserted is P2-16's
+// regression: an Update whose plan.ID is empty must answer the coded
+// not-found and change nothing. No stored Plan can carry an empty ID (Create
+// generates a UUID whenever plan.ID is blank), but GORM's Save performs a
+// CREATE whenever the primary key is blank -- the Where clause
+// notwithstanding -- so on pre-fix code this call silently INSERTED a new
+// row (with id "") and returned nil, and a subsequent Get("") found the
+// ghost row the caller never meant to create.
+func TestPlanStore_Update_EmptyID_RefusedNotSilentlyInserted(t *testing.T) {
+	store := NewPlanStore(newTestDB(t))
+	ctx := context.Background()
+
+	ghost := &Plan{Key: "ghost", Name: "Ghost"}
+	if err := ghost.SetGrants([]Grant{{FeatureKey: "seats", Value: int64(5)}}); err != nil {
+		t.Fatalf("SetGrants: %v", err)
+	}
+
+	err := store.Update(ctx, ghost) // ghost.ID is empty: names no row
+	if !hasCode(err, ErrPlanNotFound.Code) {
+		t.Fatalf("Update with empty ID: err = %v, want %s (never a silent insert)", err, ErrPlanNotFound.Code)
+	}
+	if _, err := store.Get(ctx, ""); !hasCode(err, ErrPlanNotFound.Code) {
+		t.Errorf("Get(\"\") after the empty-ID Update: err = %v, want %s (the update must not have created a row with id \"\")", err, ErrPlanNotFound.Code)
+	}
+}
+
+// TestErrPlanNotFound_Message_RendersTheLookedUpValue is P2-20's regression:
+// billing.plan_not_found's locale template must interpolate the value every
+// lookup site actually decorates the error with. All four sites carry the
+// looked-up value under the same "id" parameter name (PlanStore.Get/Update
+// and SubscriptionService.Create by plan id, PlanStore.Resolve by plan key)
+// and the template interpolates {{.id}} -- on pre-fix code three sites
+// passed "id" while the template read {{.key}}, so the common lookup path
+// (Get, and with it Entitlements.Check's deleted-plan handling) rendered
+// the value as an empty slot ("<no value>") instead of the id.
+func TestErrPlanNotFound_Message_RendersTheLookedUpValue(t *testing.T) {
+	db := newTestDB(t)
+	plans := NewPlanStore(db)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	build := i18n.NewBuilder()
+	if err := build.AddModule("billing", NewModule(nil, stubUsage{}).Locales()); err != nil {
+		t.Fatalf("AddModule: %v", err)
+	}
+	catalog := build.Build()
+
+	// Exercise the four real call sites and render each one's error the way
+	// the API envelope does: the code's own locale template over the
+	// error's own structured params.
+	sites := []struct {
+		name  string
+		err   error
+		value string
+	}{
+		{
+			name:  "PlanStore.Get by unknown id",
+			err:   func() error { _, err := plans.Get(ctx, "plan-abc-123"); return err }(),
+			value: "plan-abc-123",
+		},
+		{
+			name: "PlanStore.Update by unknown id",
+			err: func() error {
+				return plans.Update(ctx, &Plan{ID: "plan-abc-123", Key: "pro", Name: "Pro"})
+			}(),
+			value: "plan-abc-123",
+		},
+		{
+			name: "PlanStore.Resolve by unknown key",
+			err: func() error {
+				_, err := plans.Resolve(ctx, pkgcore.TenantID("tenant-a"), "no-such-key")
+				return err
+			}(),
+			value: "no-such-key",
+		},
+		{
+			name: "SubscriptionService.Create by unknown plan id",
+			err: func() error {
+				_, err := NewSubscriptionService(NewSubscriptionRepository(db), plans, nil).
+					Create(ctx, CreateInput{PlanID: "plan-abc-123"})
+				return err
+			}(),
+			value: "plan-abc-123",
+		},
+	}
+	for _, tc := range sites {
+		t.Run(tc.name, func(t *testing.T) {
+			appErr, ok := apperr.As(tc.err)
+			if !ok {
+				t.Fatalf("err = %v, want an *apperr.Error", tc.err)
+			}
+			if !hasCode(tc.err, ErrPlanNotFound.Code) {
+				t.Fatalf("err = %v, want %s", tc.err, ErrPlanNotFound.Code)
+			}
+			rendered, err := catalog.Lookup("en-US", appErr.Code, appErr.Params)
+			if err != nil {
+				t.Fatalf("Lookup(en-US, %q): %v", appErr.Code, err)
+			}
+			if !strings.Contains(rendered, tc.value) {
+				t.Errorf("rendered = %q, want it to contain the looked-up value %q (a param-name mismatch renders an empty slot instead)", rendered, tc.value)
+			}
+			if strings.Contains(rendered, "<no value>") {
+				t.Errorf("rendered = %q, want no empty slot", rendered)
+			}
+		})
+	}
+
+	// The zh-CN template must interpolate the same parameter name.
+	appErr, ok := apperr.As(ErrPlanNotFound.WithParam("id", "plan-abc-123"))
+	if !ok {
+		t.Fatal("WithParam result is not an *apperr.Error")
+	}
+	rendered, err := catalog.Lookup("zh-CN", appErr.Code, appErr.Params)
+	if err != nil {
+		t.Fatalf("Lookup(zh-CN, %q): %v", appErr.Code, err)
+	}
+	if !strings.Contains(rendered, "plan-abc-123") {
+		t.Errorf("zh-CN rendered = %q, want it to contain the looked-up value", rendered)
+	}
 }

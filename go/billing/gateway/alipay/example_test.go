@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
 
@@ -163,9 +164,16 @@ func ExampleGateway_VerifyWebhook() {
 
 	// passback_params carries {"t":tenant,"s":subscription,"i":invoice} --
 	// this package's own gateway.go passbackPayload JSON tags -- exactly
-	// what CreateCharge attached when it created the order.
+	// what CreateCharge attached when it created the order. notify_time is
+	// stamped fresh in Alipay's own format (yyyy-MM-dd HH:mm:ss, GMT+8 --
+	// this package's alipayTimeFormat/alipayLocation, spelled out here
+	// because an external test package cannot see them): VerifyWebhook
+	// refuses any delivery whose signed notify_time sits outside its
+	// freshness window (notify.go's notifyTimeTolerance), exactly like the
+	// stripe and wechat legs.
 	params := map[string]string{
 		"notify_id":       "notify_example_1",
+		"notify_time":     time.Now().In(time.FixedZone("GMT+8", 8*60*60)).Format("2006-01-02 15:04:05"),
 		"out_trade_no":    "ORD_EXAMPLE_1",
 		"trade_no":        "2026090422001",
 		"trade_status":    "TRADE_SUCCESS",

@@ -9,7 +9,7 @@
 # the API returned, so a mismatch between the two would render an empty
 # slot rather than a value.
 
-"billing.plan_not_found" = "No plan was found for key \"{{.key}}\"."
+"billing.plan_not_found" = "No plan was found for \"{{.id}}\"."
 
 "billing.plan_key_required" = "A plan must have a key."
 
@@ -44,3 +44,5 @@
 "billing.payment_event_not_found" = "No payment event was found with id \"{{.id}}\"."
 
 "billing.unsupported_currency" = "Currency \"{{.currency}}\" is not supported by the \"{{.channel}}\" payment channel; it only settles in {{.supported_currency}}."
+
+"billing.usage_reader_unconfigured" = "The entitlements service was built without a usage reader; quota decisions are unavailable."

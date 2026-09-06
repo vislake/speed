@@ -74,8 +74,8 @@ func TestEntitlementsService_Check_Boolean(t *testing.T) {
 	if !allowed.Allowed || allowed.Reason != DecisionReasonOK {
 		t.Errorf("priority_support decision = %+v, want Allowed=true Reason=ok", allowed)
 	}
-	if allowed.Remaining != DecisionRemainingUnbounded {
-		t.Errorf("priority_support Remaining = %d, want %d (unbounded)", allowed.Remaining, DecisionRemainingUnbounded)
+	if allowed.Remaining != nil {
+		t.Errorf("priority_support Remaining = %v, want nil (the unbounded marker -- Boolean features have no remaining count)", allowed.Remaining)
 	}
 
 	denied, err := svc.Check(ctx, "beta_features", 1)
@@ -96,8 +96,8 @@ func TestEntitlementsService_Check_Unlimited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
-	if !decision.Allowed || decision.Remaining != DecisionRemainingUnbounded {
-		t.Errorf("decision = %+v, want Allowed=true Remaining=%d", decision, DecisionRemainingUnbounded)
+	if !decision.Allowed || decision.Remaining != nil {
+		t.Errorf("decision = %+v, want Allowed=true Remaining=nil (the unbounded marker)", decision)
 	}
 }
 
@@ -121,8 +121,8 @@ func TestEntitlementsService_Check_NonSentinelStringGrantValue_FailsClosed(t *te
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
-	if decision.Allowed || decision.Remaining != DecisionRemainingUnbounded || decision.Reason != DecisionReasonFeatureDisabled {
-		t.Errorf("decision = %+v, want Allowed=false Remaining=%d Reason=feature_disabled (a string grant value must fail closed, never grant unlimited)", decision, DecisionRemainingUnbounded)
+	if decision.Allowed || decision.Remaining != nil || decision.Reason != DecisionReasonFeatureDisabled {
+		t.Errorf("decision = %+v, want Allowed=false Remaining=nil Reason=feature_disabled (a string grant value must fail closed, never grant unlimited)", decision)
 	}
 }
 
@@ -150,8 +150,8 @@ func TestEntitlementsService_Check_Quota_WithinLimit(t *testing.T) {
 	if !decision.Allowed || decision.Reason != DecisionReasonOK {
 		t.Errorf("decision = %+v, want Allowed=true Reason=ok", decision)
 	}
-	if decision.Remaining != 3 { // limit 10 - used 4 - requested 3 = 3
-		t.Errorf("Remaining = %d, want 3", decision.Remaining)
+	if decision.Remaining == nil || *decision.Remaining != 3 { // limit 10 - used 4 - requested 3 = 3
+		t.Errorf("Remaining = %v, want 3", decision.Remaining)
 	}
 }
 
@@ -181,8 +181,8 @@ func TestEntitlementsService_Check_Quota_ExceedsLimit_AllowAndBill(t *testing.T)
 	if !decision.Allowed || decision.Reason != DecisionReasonOK {
 		t.Errorf("decision = %+v, want Allowed=true Reason=ok (overage billed separately)", decision)
 	}
-	if decision.Remaining >= 0 {
-		t.Errorf("Remaining = %d, want negative (the magnitude of the overage)", decision.Remaining)
+	if decision.Remaining == nil || *decision.Remaining >= 0 {
+		t.Errorf("Remaining = %v, want negative (the magnitude of the overage)", decision.Remaining)
 	}
 }
 
@@ -203,5 +203,91 @@ func TestEntitlementsService_Check_Quota_UsesRealTimeCounter_NeverASummaryTable(
 	}
 	if decision.Allowed {
 		t.Errorf("decision = %+v, want Allowed=false once usage already equals the limit", decision)
+	}
+}
+
+// TestEntitlementsService_Check_NilUsageReader_FailsClosed is P2-17's
+// regression: a Quota Check on a service built without a UsageReader (nil)
+// must fail closed with the coded configuration error on the very first
+// call -- never a panic on the nil interface call, and never a guessed
+// allowance (a zero-usage guess would fail OPEN for an over-quota tenant).
+func TestEntitlementsService_Check_NilUsageReader_FailsClosed(t *testing.T) {
+	svc, ctx := newEntitlementsFixture(t, []Grant{
+		{FeatureKey: "api_calls", Value: int64(10), Period: ResetPeriodMonthly, OverageMode: OverageModeBlock},
+	}, 0)
+	svc.usage = nil // the wiring gap: NewEntitlementsService was handed no UsageReader
+
+	_, err := svc.Check(ctx, "api_calls", 1)
+	if !hasCode(err, ErrUsageReaderUnconfigured.Code) {
+		t.Fatalf("Check with nil UsageReader: err = %v, want %s (fail closed, never a panic, never an allowance)", err, ErrUsageReaderUnconfigured.Code)
+	}
+}
+
+// TestEntitlementsService_Check_Quota_FractionalUsage_RoundsUpNotDown is
+// P2-18's regression: usage counters are float64, and truncating the used
+// count toward zero at the decision point lets 99.9 used + 1 requested
+// pass a limit of 100 -- 99.9 + 1 is already over. The decision must round
+// in the tenant-hostile direction (up), refusing this request.
+func TestEntitlementsService_Check_Quota_FractionalUsage_RoundsUpNotDown(t *testing.T) {
+	svc, ctx := newEntitlementsFixture(t, []Grant{
+		{FeatureKey: "api_calls", Value: int64(100), Period: ResetPeriodMonthly, OverageMode: OverageModeBlock},
+	}, 99.9) // the counter reports 99.9 units already used
+
+	decision, err := svc.Check(ctx, "api_calls", 1)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if decision.Allowed {
+		t.Errorf("decision = %+v, want Allowed=false (99.9 used + 1 requested already exceeds the 100 limit; usage must never be truncated toward zero at the decision point)", decision)
+	}
+	if decision.Reason != DecisionReasonQuotaExceeded {
+		t.Errorf("Reason = %q, want quota_exceeded", decision.Reason)
+	}
+}
+
+// TestEntitlementsService_Check_UnboundedDecision_SurfacesTheMarkerNotMinusOne
+// is P2-19's regression: an unbounded decision -- Unlimited or Boolean
+// features, and the feature_disabled / no_subscription answers -- must
+// surface the unbounded state as Decision.Remaining's nil marker, never as
+// a -1 the answer's numeric slot would leak to a UI-shaped consumer as a
+// real remaining count (indistinguishable from the genuine -1 raw headroom
+// a bounded overage decision legitimately reports -- the collision the
+// pre-fix sentinel had: both "unlimited" and "one unit over" read as -1).
+func TestEntitlementsService_Check_UnboundedDecision_SurfacesTheMarkerNotMinusOne(t *testing.T) {
+	svc, ctx := newEntitlementsFixture(t, []Grant{
+		{FeatureKey: "storage", Value: GrantValueUnlimited},
+		{FeatureKey: "priority_support", Value: true},
+		{FeatureKey: "api_calls", Value: int64(100), Period: ResetPeriodMonthly, OverageMode: OverageModeAllowAndBill},
+	}, 100)
+
+	for _, featureKey := range []string{"storage", "priority_support"} {
+		decision, err := svc.Check(ctx, featureKey, 1)
+		if err != nil {
+			t.Fatalf("Check(%s): %v", featureKey, err)
+		}
+		if !decision.Allowed || decision.Remaining != nil {
+			t.Errorf("Check(%s) = %+v, want Allowed=true Remaining=nil (the distinct unbounded marker, never -1)", featureKey, decision)
+		}
+	}
+
+	denied, err := svc.Check(ctx, "not_a_real_feature", 1)
+	if err != nil {
+		t.Fatalf("Check(disabled): %v", err)
+	}
+	if denied.Allowed || denied.Remaining != nil {
+		t.Errorf("feature_disabled decision = %+v, want Allowed=false Remaining=nil", denied)
+	}
+
+	// The genuine negative raw headroom a bounded overage decision reports
+	// still sits in the numeric slot -- nil is reserved for "no numeric
+	// ceiling", so a consumer can never confuse the two: a -1 with
+	// Allowed=true on a quota feature is real headroom, never the unbounded
+	// marker.
+	over, err := svc.Check(ctx, "api_calls", 1)
+	if err != nil {
+		t.Fatalf("Check(api_calls): %v", err)
+	}
+	if !over.Allowed || over.Remaining == nil || *over.Remaining != -1 {
+		t.Errorf("overage decision = %+v, want Allowed=true Remaining=-1 (genuine raw headroom, distinct from the nil unbounded marker)", over)
 	}
 }

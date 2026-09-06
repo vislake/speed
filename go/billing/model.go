@@ -119,13 +119,26 @@ type Money struct {
 
 // Decision is Entitlements.Check's answer: whether the request is allowed,
 // how much of the feature's quota remains, and why.
+//
+// Decision.Remaining's shape was corrected from a bare int64 with a -1
+// sentinel (DecisionRemainingUnbounded) to a *int64 whose nil IS the
+// unbounded marker -- see Remaining's own doc comment for why. The change
+// is recorded as an implementation correction in AGENTS.md's Rescan round
+// entry; it predates any released consumer (no billing HTTP surface and no
+// reference-app consumer yet), so the loud compile-time break it would
+// give an external consumer that compared against the -1 sentinel is the
+// intended migration: check Remaining != nil instead.
 type Decision struct {
 	// Allowed reports whether the request may proceed.
 	Allowed bool
-	// Remaining is the quota units left in the current period, for a
-	// FeatureKindQuota feature. It is DecisionRemainingUnbounded for
-	// Boolean and Unlimited features, since "remaining" has no meaning
-	// for either. It may be negative -- for an OverageModeAllowAndBill /
+	// Remaining reports the quota units left in the current period, for a
+	// FeatureKindQuota feature. It is nil when the answered feature has no
+	// numeric ceiling to be "remaining" of -- Boolean and Unlimited
+	// features always, and the feature_disabled / no_subscription answers
+	// -- so the unbounded state reaches consumers as a distinguishable
+	// absence, never as a -1 masquerading as a real (negative) remaining
+	// count a UI-shaped consumer would render as a number. When non-nil
+	// it may point at a negative value -- for an OverageModeAllowAndBill /
 	// OverageModeNotify grant whose usage has gone past its limit, the
 	// magnitude of the overage; and, identically, for an OverageModeBlock
 	// (or unrecognized-mode, fail-closed) grant refused with
@@ -133,16 +146,11 @@ type Decision struct {
 	// before this request -- Allowed is false in that case, but Remaining
 	// still reports the raw (negative) headroom rather than being clamped
 	// to zero.
-	Remaining int64
+	Remaining *int64
 	// Reason names why Allowed has its value: "ok", "feature_disabled",
 	// "quota_exceeded" or "no_subscription".
 	Reason string
 }
-
-// DecisionRemainingUnbounded is Decision.Remaining's sentinel value for a
-// feature with no numeric ceiling to be "remaining" of (Boolean and
-// Unlimited kinds).
-const DecisionRemainingUnbounded int64 = -1
 
 // Decision.Reason's closed vocabulary, matching
 // docs/internal/06-billing-and-metering.md's Decision sketch exactly.

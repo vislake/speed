@@ -29,6 +29,7 @@ func TestErrors_HaveDistinctCodes(t *testing.T) {
 		ErrWebhookPayloadUnrecognized,
 		ErrChannelReferenceNotFound,
 		ErrPaymentEventNotFound,
+		ErrUsageReaderUnconfigured,
 	}
 	seen := make(map[string]bool, len(errs))
 	for _, e := range errs {

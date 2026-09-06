@@ -6,7 +6,7 @@
 # 插值名称直接来自该错误自身的 apperr 参数键，原样使用 snake_case：消息
 # 渲染自 API 返回的结构化参数，因此两者不一致会渲染出空位而非实际值。
 
-"billing.plan_not_found" = "未找到 key 为 \"{{.key}}\" 的套餐。"
+"billing.plan_not_found" = "未找到 \"{{.id}}\" 对应的套餐。"
 
 "billing.plan_key_required" = "套餐必须包含 key。"
 
@@ -41,3 +41,5 @@
 "billing.payment_event_not_found" = "未找到 id 为 \"{{.id}}\" 的支付事件。"
 
 "billing.unsupported_currency" = "支付渠道 \"{{.channel}}\" 不支持币种 \"{{.currency}}\"，仅支持 {{.supported_currency}} 结算。"
+
+"billing.usage_reader_unconfigured" = "权益服务未配置用量读取器，无法作出额度判定。"

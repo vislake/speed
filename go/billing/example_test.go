@@ -115,7 +115,7 @@ func Example() {
 		fmt.Println("check api_calls:", err)
 		return
 	}
-	fmt.Println("api_calls allowed:", quotaDecision.Allowed, "remaining:", quotaDecision.Remaining)
+	fmt.Println("api_calls allowed:", quotaDecision.Allowed, "remaining:", *quotaDecision.Remaining)
 
 	// Credits are a separate path: Check above never touched the ledger,
 	// and the ledger below never touches the Plan.

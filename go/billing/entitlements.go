@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -35,6 +36,13 @@ type UsageReader interface {
 // feature. See the Entitlements interface's own doc comment for the full
 // contract, in particular that Check never decides anything about
 // credits (CreditService is the separate, synchronous path for that).
+//
+// usage may be nil only for a service that will never be asked about a
+// FeatureKindQuota feature: Boolean and Unlimited features never consult
+// the UsageReader, but a Quota decision cannot be made without it, and a
+// nil reader answers ErrUsageReaderUnconfigured on the first such Check
+// (checkQuota) rather than panicking on a nil interface call or guessing
+// an allowance -- fail closed, never fail open.
 type EntitlementsService struct {
 	subscriptions *SubscriptionService
 	plans         *PlanStore
@@ -44,7 +52,9 @@ type EntitlementsService struct {
 
 // NewEntitlementsService returns an EntitlementsService reading
 // subscriptions through subscriptions, plans through plans, and real-time
-// quota counters through usage.
+// quota counters through usage. Pass a non-nil usage when any caller may
+// Check a Quota feature -- see the type's own doc comment for what a nil
+// usage answers then.
 func NewEntitlementsService(subscriptions *SubscriptionService, plans *PlanStore, usage UsageReader) *EntitlementsService {
 	return &EntitlementsService{
 		subscriptions: subscriptions,
@@ -69,7 +79,7 @@ func (s *EntitlementsService) Check(ctx context.Context, featureKey string, requ
 		return Decision{}, err
 	}
 	if sub == nil {
-		return Decision{Allowed: false, Remaining: DecisionRemainingUnbounded, Reason: DecisionReasonNoSubscription}, nil
+		return Decision{Allowed: false, Reason: DecisionReasonNoSubscription}, nil
 	}
 
 	plan, err := s.plans.Get(ctx, sub.PlanID)
@@ -78,14 +88,14 @@ func (s *EntitlementsService) Check(ctx context.Context, featureKey string, requ
 			// The subscription's own Plan was deleted out from under it --
 			// treat exactly like "no subscription", since there is nothing
 			// left to grant against.
-			return Decision{Allowed: false, Remaining: DecisionRemainingUnbounded, Reason: DecisionReasonNoSubscription}, nil
+			return Decision{Allowed: false, Reason: DecisionReasonNoSubscription}, nil
 		}
 		return Decision{}, err
 	}
 
 	grant, ok := plan.Grant(featureKey)
 	if !ok {
-		return Decision{Allowed: false, Remaining: DecisionRemainingUnbounded, Reason: DecisionReasonFeatureDisabled}, nil
+		return Decision{Allowed: false, Reason: DecisionReasonFeatureDisabled}, nil
 	}
 
 	kind, ok := grantKind(grant)
@@ -96,14 +106,14 @@ func (s *EntitlementsService) Check(ctx context.Context, featureKey string, requ
 		// the same feature_disabled answer checkQuota's own malformed-value
 		// branch gives, never granted unlimited: a malformed grant must
 		// deny, exactly like a feature that is not granted at all.
-		return Decision{Allowed: false, Remaining: DecisionRemainingUnbounded, Reason: DecisionReasonFeatureDisabled}, nil
+		return Decision{Allowed: false, Reason: DecisionReasonFeatureDisabled}, nil
 	}
 
 	switch kind {
 	case FeatureKindBoolean:
 		return s.checkBoolean(grant)
 	case FeatureKindUnlimited:
-		return Decision{Allowed: true, Remaining: DecisionRemainingUnbounded, Reason: DecisionReasonOK}, nil
+		return Decision{Allowed: true, Reason: DecisionReasonOK}, nil
 	default: // FeatureKindQuota
 		return s.checkQuota(ctx, string(tenant), featureKey, requested, grant)
 	}
@@ -138,9 +148,9 @@ func grantKind(g Grant) (kind FeatureKind, ok bool) {
 func (s *EntitlementsService) checkBoolean(g Grant) (Decision, error) {
 	allowed, _ := g.Value.(bool)
 	if !allowed {
-		return Decision{Allowed: false, Remaining: DecisionRemainingUnbounded, Reason: DecisionReasonFeatureDisabled}, nil
+		return Decision{Allowed: false, Reason: DecisionReasonFeatureDisabled}, nil
 	}
-	return Decision{Allowed: true, Remaining: DecisionRemainingUnbounded, Reason: DecisionReasonOK}, nil
+	return Decision{Allowed: true, Reason: DecisionReasonOK}, nil
 }
 
 func (s *EntitlementsService) checkQuota(ctx context.Context, tenantID, featureKey string, requested int64, g Grant) (Decision, error) {
@@ -149,17 +159,33 @@ func (s *EntitlementsService) checkQuota(ctx context.Context, tenantID, featureK
 		// A Quota grant whose Value is not a usable integer is treated as
 		// disabled rather than panicking or silently allowing unlimited
 		// use -- a malformed Grant must never fail open.
-		return Decision{Allowed: false, Remaining: DecisionRemainingUnbounded, Reason: DecisionReasonFeatureDisabled}, nil
+		return Decision{Allowed: false, Reason: DecisionReasonFeatureDisabled}, nil
 	}
 
+	if s.usage == nil {
+		// The service was built without a UsageReader and a Quota decision
+		// needs one -- the honest answer is the coded configuration error,
+		// never a panic on the nil interface call and never a guessed
+		// allowance (zero usage would fail OPEN for an over-quota tenant).
+		// See the EntitlementsService type's own doc comment.
+		return Decision{}, ErrUsageReaderUnconfigured
+	}
 	used, err := s.usage.RealtimeCount(tenantID, featureKey, s.now())
 	if err != nil {
 		return Decision{}, err
 	}
 
-	remaining := limit - int64(used)
+	// Usage counts are float64 (go/metering's real-time counters are) while
+	// the quota limit is an integer. Truncating the used count toward zero
+	// at the decision point -- int64(used) -- would round 99.9 down to 99
+	// and let a request of 1 past a limit of 100 even though 99.9 + 1 is
+	// already over. The decision rounds the used count UP to the next whole
+	// unit instead -- the tenant-hostile direction, the one that can only
+	// refuse a request that was within quota by a hair of a unit, never
+	// admit one that is genuinely over.
+	remaining := limit - int64(math.Ceil(used))
 	if requested <= remaining {
-		return Decision{Allowed: true, Remaining: remaining - requested, Reason: DecisionReasonOK}, nil
+		return Decision{Allowed: true, Remaining: quotaRemaining(remaining - requested), Reason: DecisionReasonOK}, nil
 	}
 
 	switch g.OverageMode {
@@ -168,11 +194,16 @@ func (s *EntitlementsService) checkQuota(ctx context.Context, tenantID, featureK
 		// EventOverageThresholdCrossed independently of this call (see
 		// UsageReader's own doc comment) -- Check does not publish
 		// anything itself.
-		return Decision{Allowed: true, Remaining: remaining - requested, Reason: DecisionReasonOK}, nil
+		return Decision{Allowed: true, Remaining: quotaRemaining(remaining - requested), Reason: DecisionReasonOK}, nil
 	default: // OverageModeBlock, or an unrecognized mode -- fail closed.
-		return Decision{Allowed: false, Remaining: remaining, Reason: DecisionReasonQuotaExceeded}, nil
+		return Decision{Allowed: false, Remaining: quotaRemaining(remaining), Reason: DecisionReasonQuotaExceeded}, nil
 	}
 }
+
+// quotaRemaining returns a pointer to n for a bounded Decision.Remaining:
+// nil is the unbounded marker (see Decision's own doc comment), so only
+// genuinely bounded quota answers ever carry a non-nil pointer.
+func quotaRemaining(n int64) *int64 { return &n }
 
 // grantQuotaLimit extracts a Quota grant's int64 limit from its Value,
 // accepting every concrete numeric type json.Unmarshal or a caller's own Go

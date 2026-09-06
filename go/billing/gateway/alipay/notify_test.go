@@ -6,16 +6,31 @@ import (
 	"encoding/json"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/vislake/speed/go/billing"
 )
 
+// notifyNowString renders the current time in Alipay's own notify_time
+// format ("yyyy-MM-dd HH:mm:ss", GMT+8 -- alipayTimeFormat/alipayLocation),
+// for fixtures that must sit inside VerifyWebhook's freshness window.
+func notifyNowString() string {
+	return time.Now().In(alipayLocation()).Format(alipayTimeFormat)
+}
+
 // signedNotifyBody builds a realistic Alipay async-notification body
 // (application/x-www-form-urlencoded), signed with priv exactly the way a
 // real Alipay server signs one -- this package's own locally-constructed
-// fixture (doc.go's own testing-strategy section).
+// fixture (doc.go's own testing-strategy section). A fixture that does not
+// set notify_time itself gets one stamped fresh into its own params map,
+// since VerifyWebhook bounds every delivery's age to
+// notifyTimeTolerance of now; a test exercising the stale or missing
+// notify_time legs sets the parameter explicitly instead.
 func signedNotifyBody(t *testing.T, priv *rsa.PrivateKey, params map[string]string) []byte {
 	t.Helper()
+	if _, ok := params["notify_time"]; !ok {
+		params["notify_time"] = notifyNowString()
+	}
 	sig, err := signParams(params, priv)
 	if err != nil {
 		t.Fatalf("signParams: %v", err)
@@ -311,5 +326,67 @@ func TestGateway_VerifyWebhook_UnrecognizedTradeStatus(t *testing.T) {
 	_, err = gw.VerifyWebhook(context.Background(), nil, body)
 	if !hasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
 		t.Errorf("err = %v, want billing.ErrWebhookPayloadUnrecognized", err)
+	}
+}
+
+// TestGateway_VerifyWebhook_StaleNotification_Refused is P2-21's
+// regression: VerifyWebhook must bound the delivery's age the way the
+// stripe and wechat legs do. Alipay's signature covers the form parameters
+// (notify_time included) and stays valid forever, so on pre-fix code a
+// captured notification could be replayed at arbitrary leisure and
+// normalized as live. The fix refuses a delivery whose signed notify_time
+// sits more than notifyTimeTolerance from now with the same
+// authentication-class error a stale Stripe or WeChat delivery gets.
+func TestGateway_VerifyWebhook_StaleNotification_Refused(t *testing.T) {
+	_, alipayPubPEM, alipayPriv := generateTestKeyPair(t)
+	cfg := testGatewayConfig(t, alipayPubPEM)
+	gw, err := newGatewayWithClient(&fakeDoer{}, cfg)
+	if err != nil {
+		t.Fatalf("newGatewayWithClient: %v", err)
+	}
+
+	stale := time.Now().Add(-10 * time.Minute).In(alipayLocation()).Format(alipayTimeFormat)
+	body := signedNotifyBody(t, alipayPriv, map[string]string{
+		"notify_id":       "notify_stale_1",
+		"notify_time":     stale,
+		"out_trade_no":    "ORD1",
+		"trade_no":        "2026090422001",
+		"trade_status":    "TRADE_SUCCESS",
+		"total_amount":    "29.00",
+		"passback_params": passbackFixture(t),
+	})
+
+	_, err = gw.VerifyWebhook(context.Background(), nil, body)
+	if !hasCode(err, billing.ErrWebhookSignatureInvalid.Code) {
+		t.Errorf("err = %v, want billing.ErrWebhookSignatureInvalid (a signature that verified must not let a stale delivery be replayed as live)", err)
+	}
+}
+
+// TestGateway_VerifyWebhook_MissingNotifyTime_Refused pins the
+// nothing-to-bound leg of the same freshness ceiling: a delivery whose
+// signed params carry no notify_time at all is refused the same way a
+// stale one is, since there is no delivery timestamp the check could bound
+// (real Alipay async notifications always carry notify_time).
+func TestGateway_VerifyWebhook_MissingNotifyTime_Refused(t *testing.T) {
+	_, alipayPubPEM, alipayPriv := generateTestKeyPair(t)
+	cfg := testGatewayConfig(t, alipayPubPEM)
+	gw, err := newGatewayWithClient(&fakeDoer{}, cfg)
+	if err != nil {
+		t.Fatalf("newGatewayWithClient: %v", err)
+	}
+
+	body := signedNotifyBody(t, alipayPriv, map[string]string{
+		"notify_id":       "notify_no_time_1",
+		"notify_time":     "",
+		"out_trade_no":    "ORD1",
+		"trade_no":        "2026090422001",
+		"trade_status":    "TRADE_SUCCESS",
+		"total_amount":    "29.00",
+		"passback_params": passbackFixture(t),
+	})
+
+	_, err = gw.VerifyWebhook(context.Background(), nil, body)
+	if !hasCode(err, billing.ErrWebhookSignatureInvalid.Code) {
+		t.Errorf("err = %v, want billing.ErrWebhookSignatureInvalid (a delivery without notify_time has nothing to bound)", err)
 	}
 }

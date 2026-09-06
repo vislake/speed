@@ -194,8 +194,18 @@ func (s *PlanStore) Create(ctx context.Context, plan *Plan) error {
 }
 
 // Update saves every field of plan, matched by ID. It returns
-// ErrPlanNotFound if no row with that ID exists.
+// ErrPlanNotFound if no row with that ID exists -- including an empty ID,
+// which can never name a row: no stored Plan carries one (Create generates
+// a UUID whenever plan.ID is blank), so an empty-ID Update answers the same
+// coded not-found instead of reaching GORM's Save at all. That guard is
+// load-bearing, not defensive: Save performs a CREATE whenever the primary
+// key is blank (insert semantics keyed on the struct's own ID field, the
+// Where clause notwithstanding), so without it an Update whose plan.ID was
+// accidentally left empty would silently INSERT a new row and return nil.
 func (s *PlanStore) Update(ctx context.Context, plan *Plan) error {
+	if plan.ID == "" {
+		return ErrPlanNotFound.WithParam("id", plan.ID)
+	}
 	if len(plan.GrantsJSON) == 0 {
 		// See Create's identical guard: the grants column is NOT NULL.
 		plan.GrantsJSON = datatypes.JSON("[]")
@@ -254,7 +264,11 @@ func (s *PlanStore) Resolve(ctx context.Context, tenantID pkgcore.TenantID, key 
 		return nil, err
 	}
 	if platform == nil {
-		return nil, ErrPlanNotFound.WithParam("key", key)
+		// The looked-up value travels under the shared "id" parameter name
+		// every ErrPlanNotFound call site uses (see errors.go's own doc
+		// comment) -- here it is the plan KEY that was looked up and not
+		// found, so the rendered message quotes the key itself.
+		return nil, ErrPlanNotFound.WithParam("id", key)
 	}
 	return platform, nil
 }
