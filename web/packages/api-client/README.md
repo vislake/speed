@@ -83,6 +83,13 @@ value memoized for the app's lifetime) and pass that same reference
 everywhere: the hooks below share one cache keyed by `api`'s identity,
 so calling both in the same tree costs one fetch, not two.
 
+Both endpoints always write a JSON document, so `fetchPublicConfig` /
+`fetchSystemFeatures` refuse an **empty** 2xx body (the RequestFn's
+own legitimate 204-style empty-success shape) as a coded
+`client.protocol` error instead of resolving `undefined` -- an empty
+answer stays distinguishable from real data, and a hook consumer never
+reads fields off a value that is not there.
+
 ```ts
 import { createClient } from '@speed/api-client'
 import type { ApiError, RequestFn } from '@speed/api-client'
@@ -144,6 +151,10 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
   `/api/system/features` -- `false` while loading and on error, never
   throwing, so a consumer such as a `NavItem`'s `requiredFeature` field
   stays hidden until the flag is confirmed on rather than flashing.
+  The `features` access is null-guarded defensively: the response
+  shape is a hand-maintained seam with no spec fragment behind it, so
+  a payload whose `features` is absent or `null` reads as "nothing
+  enabled" rather than throwing during render.
   `fetchSystemFeatures` (above) remains the direct route to that
   endpoint for a caller that genuinely wants it standalone.
 - Neither hook accepts or infers a tenant -- both endpoints resolve
@@ -163,7 +174,9 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
   that is not JSON with a `code`, a timeout, a dead network) get a
   synthesized code in the reserved `client.` namespace:
   `client.network`, `client.timeout`, `client.protocol` (a 2xx whose
-  body is not JSON), `client.http.<status>`. `error.attempts` reports
+  body is not JSON -- or a request body that cannot be
+  JSON-serialized, such as a circular structure, which rejects before
+  anything is sent), `client.http.<status>`. `error.attempts` reports
   how many HTTP attempts were made.
 - **Bearer auth without a storage API.** The token store is a plain
   two-method interface (`get(): string | null`, `set(token: string |
@@ -201,9 +214,22 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
   capped at `maxDelayMs`), 502/503/504, network failures and timeouts.
   Delays are exponential full jitter (`retryDelayMs`), and the budget
   defaults to `DEFAULT_RETRY_POLICY` = 3 attempts / 200ms initial /
-  4s ceiling. Caller cancellation is never retried and never wrapped:
-  aborting your `signal` rejects the raw `AbortError`, so query layers
-  (TanStack Query) keep standard cancellation semantics.
+  4s ceiling. The budget bounds transient retries; the silent-401
+  refresh round performs no transient retry and never consumes one
+  (the "retry ... outside the transient-retry budget" wording in the
+  refresh bullet above is literal). A response being discarded for a
+  retry -- a retryable status, or a refused 401 whose refresh
+  succeeded -- has its body cancelled first, so the connection is
+  released instead of staying held by an unread response until
+  garbage collection. Caller cancellation is never retried and never
+  wrapped: aborting your `signal` rejects the raw `AbortError`, so
+  query layers (TanStack Query) keep standard cancellation semantics.
+  Cancellation and the timeout cover the whole attempt, the response
+  body included: the per-attempt timer keeps running and your signal
+  keeps aborting until the body has settled, so a server that answers
+  headers and then stalls its body rejects with `client.timeout` (or
+  the raw `AbortError`) instead of hanging the request on a half-open
+  response.
 - **Structured reporting.** The reporter sink receives a constant
   English message plus snake_case attributes. The default sink writes
   to `console.error`/`console.warn` -- a stopgap until the M1 round

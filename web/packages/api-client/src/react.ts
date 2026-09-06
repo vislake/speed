@@ -195,9 +195,13 @@ export function usePublicConfig(api: RequestFn): UsePublicConfigResult {
  *
  * Returns `false` while loading and on error -- never throws -- so a
  * consumer such as a NavItem's `requiredFeature` stays hidden until
- * the flag is known to be on, rather than flashing or crashing.
+ * the flag is known to be on, rather than flashing or crashing. The
+ * `features` access is null-guarded defensively: the response shape is
+ * a hand-maintained seam (config-fetcher.ts), and a payload whose
+ * `features` is absent or null must read as "nothing enabled", never
+ * throw during render.
  */
 export function useFeature(api: RequestFn, key: string): boolean {
   const { data } = usePublicConfig(api)
-  return data?.features.includes(key) ?? false
+  return data?.features?.includes(key) ?? false
 }

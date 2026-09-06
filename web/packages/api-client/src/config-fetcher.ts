@@ -16,6 +16,7 @@
  */
 
 import type { RequestFn, RequestOptions } from './client.js'
+import { ApiError, ERROR_CODE_PROTOCOL } from './errors.js'
 
 /**
  * Mirrors go/config.PathPublic. GET/HEAD, pre-auth; tenant resolved
@@ -55,6 +56,38 @@ export interface SystemFeaturesResponse {
 export type ConfigFetchOptions = Pick<RequestOptions, 'signal'>
 
 /**
+ * Runs one config-endpoint GET and refuses an empty answer. Both
+ * endpoints always write a JSON document, so a 2xx that resolves to no
+ * body at all (an empty 204-style response -- the RequestFn's own
+ * legitimate empty-success shape, which is exactly what a proxy or a
+ * broken server can hand back here) is not an empty config: it is a
+ * document-shaped failure. Refusing it keeps the empty case
+ * distinguishable from real data -- callers see a coded
+ * client.protocol ApiError instead of an `undefined` value that passes
+ * for `PublicConfigResponse`/`SystemFeaturesResponse` until a consumer
+ * reads a field off it.
+ */
+async function requireConfigDocument<T>(
+  api: RequestFn,
+  path: string,
+  options: ConfigFetchOptions | undefined,
+): Promise<T> {
+  const data: T | undefined = await api<T>(path, {
+    signal: options?.signal,
+  })
+  if (data === undefined) {
+    throw new ApiError({
+      status: 0,
+      code: ERROR_CODE_PROTOCOL,
+      attempts: 1,
+      message:
+        'The config endpoint answered an empty 2xx body; expected a JSON config document.',
+    })
+  }
+  return data
+}
+
+/**
  * Fetches the effective Public config values and enabled feature flags
  * for the tenant the request's host resolves to. `api` is the
  * `RequestFn` from `createClient` -- pass one built with no
@@ -62,16 +95,20 @@ export type ConfigFetchOptions = Pick<RequestOptions, 'signal'>
  * endpoint is pre-auth and ignores Authorization either way.
  *
  * Rejects the same `ApiError` (or raw `AbortError` on cancellation)
- * `api` itself would reject with; this function adds no error handling
- * of its own.
+ * `api` itself would reject with, plus one refusal of its own: an
+ * empty 2xx body (where a config document was required) rejects as
+ * client.protocol rather than resolving `undefined` (see
+ * {@link requireConfigDocument}).
  */
 export async function fetchPublicConfig(
   api: RequestFn,
   options?: ConfigFetchOptions,
 ): Promise<PublicConfigResponse> {
-  return api<PublicConfigResponse>(CONFIG_PUBLIC_PATH, {
-    signal: options?.signal,
-  })
+  return requireConfigDocument<PublicConfigResponse>(
+    api,
+    CONFIG_PUBLIC_PATH,
+    options,
+  )
 }
 
 /**
@@ -82,14 +119,18 @@ export async function fetchPublicConfig(
  * by {@link fetchPublicConfig}, which returns `features` too.
  *
  * Rejects the same `ApiError` (or raw `AbortError` on cancellation)
- * `api` itself would reject with; this function adds no error handling
- * of its own.
+ * `api` itself would reject with, plus one refusal of its own: an
+ * empty 2xx body (where a features document was required) rejects as
+ * client.protocol rather than resolving `undefined` (see
+ * {@link requireConfigDocument}).
  */
 export async function fetchSystemFeatures(
   api: RequestFn,
   options?: ConfigFetchOptions,
 ): Promise<SystemFeaturesResponse> {
-  return api<SystemFeaturesResponse>(SYSTEM_FEATURES_PATH, {
-    signal: options?.signal,
-  })
+  return requireConfigDocument<SystemFeaturesResponse>(
+    api,
+    SYSTEM_FEATURES_PATH,
+    options,
+  )
 }

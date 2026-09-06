@@ -89,14 +89,25 @@ async function expectRawAbort(promise: Promise<unknown>): Promise<void> {
 }
 
 /** A body stream the test gates by hand: the response's text() stays
- * pending until release (success) or fail (error) is called. */
+ * pending until release (success) or fail (error) is called. A
+ * cancellation of the stream -- the client's connection-release path
+ * when it discards an unread response body -- is recorded in
+ * `cancelled`, and `pulling` records that a read has genuinely started
+ * (the stream's pull has been requested), giving tests a deterministic
+ * mid-read point. Both are getters, not value fields: the hooks mutate
+ * the closure variables, and the caller must observe the live state
+ * after the request ran. */
 function gatedBody(): {
   stream: ReadableStream<Uint8Array>
   release: (text: string) => void
   fail: (cause: unknown) => void
+  readonly cancelled: boolean
+  readonly pulling: boolean
 } {
   let release: (text: string) => void = () => {}
   let fail: (cause: unknown) => void = () => {}
+  let cancelled = false
+  let pulling = false
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       release = (text: string) => {
@@ -107,8 +118,35 @@ function gatedBody(): {
         controller.error(cause)
       }
     },
+    pull() {
+      pulling = true
+    },
+    cancel() {
+      cancelled = true
+    },
   })
-  return { stream, release, fail }
+  return {
+    stream,
+    release,
+    fail,
+    get cancelled() {
+      return cancelled
+    },
+    get pulling() {
+      return pulling
+    },
+  }
+}
+
+/** Flushes microtasks until the body read has genuinely started (its
+ * pull has been requested) or the hop budget runs out. */
+async function waitForReadStart(body: {
+  readonly pulling: boolean
+}): Promise<void> {
+  for (let i = 0; i < 200 && !body.pulling; i += 1) {
+    await Promise.resolve()
+  }
+  expect(body.pulling).toBe(true)
 }
 
 const SESSION_EXPIRED = {
@@ -255,15 +293,25 @@ describe('request shape', () => {
     )
   })
 
-  it('keeps caller headers but overrides accept with application/json', async () => {
-    const standin = scriptedStandin(jsonResponse(200, { ok: true }))
+  it('honours a caller-supplied accept: application/json is only the default when absent', async () => {
+    // accept and content-type are defaults, not overrides: each is set
+    // only when the caller did not already supply the header (mirroring
+    // the content-type guard), so a caller that knows the endpoint
+    // answers something other than JSON keeps its own Accept.
+    const standin = scriptedStandin(
+      jsonResponse(200, { ok: true }),
+      jsonResponse(200, { ok: true }),
+    )
     const api = createClient({ baseUrl: BASE_URL, fetch: standin.fetch })
     await api<{ ok: boolean }>('/notes', {
       headers: { 'x-request-id': 'req-1', accept: 'text/plain' },
     })
     const call = recorded(standin)
     expect(call.headers.get('x-request-id')).toBe('req-1')
-    expect(call.headers.get('accept')).toBe('application/json')
+    expect(call.headers.get('accept')).toBe('text/plain')
+    // The default still applies to a request that sends no accept.
+    await api<{ ok: boolean }>('/other')
+    expect(recorded(standin, 1).headers.get('accept')).toBe('application/json')
   })
 
   it('strips trailing slashes from baseUrl and appends the path verbatim', async () => {
@@ -306,6 +354,25 @@ describe('request shape', () => {
     expect(call.method).toBe('POST')
     expect(call.headers.get('content-type')).toBe('application/json')
     expect(call.bodyJson).toEqual({ title: 'T', n: 1 })
+  })
+
+  it('rejects a body that cannot be JSON-serialized as a coded client.protocol ApiError', async () => {
+    // A circular body can never be sent: it must reject through the
+    // package's one error type with the reserved client.* vocabulary,
+    // not as a bare TypeError out of JSON.stringify. Nothing was ever
+    // put on the wire, so attempts is 0.
+    const circular: Record<string, unknown> = {}
+    circular.self = circular
+    const standin = scriptedStandin(jsonResponse(201, { id: 'n-1' }))
+    const api = createClient({ baseUrl: BASE_URL, fetch: standin.fetch })
+    const error = await expectApiError(
+      api<{ id: string }>('/notes', { method: 'POST', body: circular }),
+    )
+    expect(error.code).toBe(ERROR_CODE_PROTOCOL)
+    expect(error.status).toBe(0)
+    expect(error.attempts).toBe(0)
+    expect(error.cause).toBeInstanceOf(TypeError)
+    expect(standin.calls).toHaveLength(0)
   })
 })
 
@@ -745,6 +812,64 @@ describe('401 and the refresh hook', () => {
       'Bearer fresh-token',
     )
   })
+
+  it('does not let the refresh round consume the transient-retry budget', async () => {
+    // maxAttempts 2 leaves a fresh request exactly one transient
+    // retry. A 401-refresh round in the middle performs no transient
+    // retry, so it must not eat that budget: the 503 that follows the
+    // refresh still gets its retry. (Before the fix the refresh round
+    // consumed the second attempt, so the retryable 503 was delivered
+    // without ever being retried.)
+    const store = createMemoryAccessTokenStore()
+    store.set('stale-token')
+    let refreshCalls = 0
+    const standin = scriptedStandin(
+      jsonResponse(401, { ...SESSION_EXPIRED }),
+      textResponse(503, 'Service Unavailable'),
+      jsonResponse(200, { ok: true }),
+    )
+    const api = createClient({
+      baseUrl: BASE_URL,
+      fetch: standin.fetch,
+      accessTokenStore: store,
+      refreshAccessToken: async () => {
+        refreshCalls += 1
+        store.set('fresh-token')
+        return true
+      },
+      retryPolicy: zeroDelay(2),
+    })
+    await expect(api<{ ok: boolean }>('/notes')).resolves.toEqual({ ok: true })
+    expect(refreshCalls).toBe(1)
+    expect(standin.calls).toHaveLength(3)
+  })
+
+  it('releases the refused 401 body when the refresh succeeds and the request retries', async () => {
+    // The refresh-success path discards the 401 response: its body is
+    // cancelled so the connection is released deterministically
+    // instead of staying held by an unread response -- and a stalled
+    // error body must not delay or hang the refresh round, which never
+    // needs to read it.
+    const store = createMemoryAccessTokenStore()
+    store.set('stale-token')
+    const body = gatedBody()
+    const standin = scriptedStandin(
+      new Response(body.stream, { status: 401 }),
+      jsonResponse(200, { ok: true }),
+    )
+    const api = createClient({
+      baseUrl: BASE_URL,
+      fetch: standin.fetch,
+      accessTokenStore: store,
+      refreshAccessToken: async () => {
+        store.set('fresh-token')
+        return true
+      },
+    })
+    await expect(api<{ ok: boolean }>('/notes')).resolves.toEqual({ ok: true })
+    expect(standin.calls).toHaveLength(2)
+    expect(body.cancelled).toBe(true)
+  })
 })
 
 describe('transient retries (idempotent methods only)', () => {
@@ -878,6 +1003,26 @@ describe('transient retries (idempotent methods only)', () => {
       vi.useRealTimers()
     }
   })
+
+  it('releases the discarded response body before retrying a retryable status', async () => {
+    // A 429 (or any retryable status) whose body is not wanted is
+    // retried from the headers alone -- but the unread response must
+    // not keep holding its connection: the body is cancelled before
+    // the retry instead of being left for garbage collection.
+    const body = gatedBody()
+    const standin = scriptedStandin(
+      new Response(body.stream, { status: 429 }),
+      jsonResponse(200, { ok: true }),
+    )
+    const api = createClient({
+      baseUrl: BASE_URL,
+      fetch: standin.fetch,
+      retryPolicy: zeroDelay(2),
+    })
+    await expect(api<{ ok: boolean }>('/limited')).resolves.toEqual({ ok: true })
+    expect(standin.calls).toHaveLength(2)
+    expect(body.cancelled).toBe(true)
+  })
 })
 
 describe('timeouts', () => {
@@ -922,6 +1067,74 @@ describe('timeouts', () => {
     expect(error.status).toBe(0)
     expect(error.attempts).toBe(1)
     expect(error.cause).toBeInstanceOf(DOMException)
+  })
+
+  it('times out a 2xx whose body stalls after the headers arrived', { timeout: 1000 }, async () => {
+    // Real un-released-stream shape: the server answered headers and
+    // then never finishes the body. The per-attempt timeout keeps
+    // running through the body read, so the stall rejects as
+    // client.timeout instead of hanging forever on a half-open
+    // response. (Before the fix the timer stopped at header arrival
+    // and the read waited on the stalled stream indefinitely.) The
+    // release is the controller abort (real fetch ties the response
+    // body to the fetch signal): the recorded request signal shows the
+    // attempt aborted mid-read.
+    const body = gatedBody()
+    const standin = scriptedStandin(new Response(body.stream, { status: 200 }))
+    const api = createClient({
+      baseUrl: BASE_URL,
+      fetch: standin.fetch,
+      timeoutMs: 50,
+      retryPolicy: zeroDelay(1),
+    })
+    const pending = api<{ ok: boolean }>('/slow-body')
+    // Attach the rejection handler before the fake timers fire, so the
+    // rejection inside advanceTimersByTimeAsync is never unhandled.
+    const rejection = expectApiError(pending)
+    // Let the headers arrive and the body read genuinely start.
+    await vi.advanceTimersByTimeAsync(0)
+    await waitForReadStart(body)
+    await vi.advanceTimersByTimeAsync(50)
+    const error = await rejection
+    expect(error.code).toBe(ERROR_CODE_TIMEOUT)
+    expect(error.status).toBe(0)
+    expect(error.attempts).toBe(1)
+    expect(error.cause).toBeInstanceOf(DOMException)
+    expect(standin.calls).toHaveLength(1)
+    expect(recorded(standin).signal?.aborted).toBe(true)
+  })
+
+  it('retries a 2xx whose body stalls mid-read, exactly like any other timeout', { timeout: 1000 }, async () => {
+    // The stalled-body timeout is a transport-class failure of the
+    // attempt: an idempotent request with budget left retries it, and
+    // the retried attempt answers in full.
+    const body = gatedBody()
+    let first = true
+    const standin = createStandinFetch(() => {
+      if (first) {
+        first = false
+        return new Response(body.stream, { status: 200 })
+      }
+      return jsonResponse(200, { ok: true })
+    })
+    const api = createClient({
+      baseUrl: BASE_URL,
+      fetch: standin.fetch,
+      timeoutMs: 50,
+      retryPolicy: zeroDelay(2),
+    })
+    const pending = api<{ ok: boolean }>('/slow-body')
+    await vi.advanceTimersByTimeAsync(0)
+    await waitForReadStart(body)
+    await vi.advanceTimersByTimeAsync(50)
+    // The retry's 0ms backoff timer is armed while that advancement is
+    // in progress (due at its target time); a further 1ms advancement
+    // carries the clock past it and lets attempt 2 proceed.
+    await vi.advanceTimersByTimeAsync(1)
+    await expect(pending).resolves.toEqual({ ok: true })
+    expect(standin.calls).toHaveLength(2)
+    expect(recorded(standin, 0).signal?.aborted).toBe(true)
+    expect(recorded(standin, 1).signal?.aborted).toBe(false)
   })
 })
 
@@ -1041,32 +1254,37 @@ describe('caller cancellation', () => {
     expect(standin.calls).toHaveLength(1)
   })
 
-  it('never delivers a 2xx whose body finished reading after an abort', async () => {
+  it('never delivers a 2xx for a caller that aborts mid-read -- even when the body never settles', { timeout: 1000 }, async () => {
+    // Real un-released-stream shape: the body stream is never released
+    // and never fails. The rejection must arrive anyway -- the client
+    // refuses to wait on a body whose caller is gone -- so the
+    // cancelled caller gets the raw AbortError, never the 2xx result.
+    // The release is the controller abort itself (real fetch ties the
+    // response body to the fetch signal): the recorded request signal
+    // must show the attempt aborted even though the fetch itself had
+    // already resolved with its headers.
     const body = gatedBody()
-    const standin = scriptedStandin(
-      new Response(body.stream, { status: 200 }),
-    )
+    const standin = scriptedStandin(new Response(body.stream, { status: 200 }))
     const api = createClient({ baseUrl: BASE_URL, fetch: standin.fetch })
     const controller = new AbortController()
     const rejection = expectRawAbort(
       api<{ ok: boolean }>('/notes', { signal: controller.signal }),
     )
-    // Let the request reach the point where it is reading the body.
-    await Promise.resolve()
-    await Promise.resolve()
+    // Let the request reach the point where it is genuinely reading
+    // the body (the stream's pull has been requested).
+    await waitForReadStart(body)
     controller.abort()
-    // The body arrives in full -- the cancelled caller still gets the
-    // raw AbortError, never the 2xx result.
-    body.release('{"ok":true}')
     await rejection
     expect(standin.calls).toHaveLength(1)
+    expect(recorded(standin).signal?.aborted).toBe(true)
   })
 
-  it('surfaces the raw abort, not a network retry, when the body read fails after cancellation', async () => {
+  it('surfaces the raw abort, never a transient retry, when a cancelled caller abandons the body read', { timeout: 1000 }, async () => {
+    // The same real un-released-stream shape under a retry policy with
+    // budget to spare: an abandoned body read is the cancellation, not
+    // a retryable network-class failure, so no retry may follow it.
     const body = gatedBody()
-    const standin = scriptedStandin(
-      new Response(body.stream, { status: 200 }),
-    )
+    const standin = scriptedStandin(new Response(body.stream, { status: 200 }))
     const api = createClient({
       baseUrl: BASE_URL,
       fetch: standin.fetch,
@@ -1076,15 +1294,13 @@ describe('caller cancellation', () => {
     const rejection = expectRawAbort(
       api<{ ok: boolean }>('/notes', { signal: controller.signal }),
     )
-    // Let the request reach the point where it is reading the body.
-    await Promise.resolve()
-    await Promise.resolve()
+    // Let the request reach the point where it is genuinely reading
+    // the body (the stream's pull has been requested).
+    await waitForReadStart(body)
     controller.abort()
-    // The body dies mid-read: cancellation wins over the retryable
-    // network-class failure the client would otherwise see.
-    body.fail(new TypeError('connection lost mid-body'))
     await rejection
     expect(standin.calls).toHaveLength(1)
+    expect(recorded(standin).signal?.aborted).toBe(true)
   })
 })
 

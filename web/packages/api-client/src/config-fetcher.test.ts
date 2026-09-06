@@ -26,7 +26,7 @@ import {
   fetchPublicConfig,
   fetchSystemFeatures,
 } from './config-fetcher.js'
-import { isApiError } from './errors.js'
+import { ERROR_CODE_PROTOCOL, isApiError } from './errors.js'
 
 describe('fetchPublicConfig', () => {
   afterEach(() => {
@@ -57,6 +57,27 @@ describe('fetchPublicConfig', () => {
     // tenant-resolves server-side from the request host.
     expect(call?.headers.has('x-tenant-id')).toBe(false)
     expect(call?.headers.has('authorization')).toBe(false)
+  })
+
+  it('refuses an empty 2xx body as a coded client.protocol error, not a silent undefined', async () => {
+    // The same empty-document refusal as fetchPublicConfig's: an empty
+    // 2xx where a features document was required is distinguishable
+    // from real data by its coded error.
+    const standin = createStandinFetch(() => new Response(null, { status: 200 }))
+    const api = createClient({ baseUrl: '/api/v1', fetch: standin.fetch })
+
+    let caught: unknown
+    try {
+      await fetchSystemFeatures(api)
+    } catch (error) {
+      caught = error
+    }
+
+    expect(isApiError(caught)).toBe(true)
+    if (isApiError(caught)) {
+      expect(caught.code).toBe(ERROR_CODE_PROTOCOL)
+    }
+    expect(standin.calls).toHaveLength(1)
   })
 
   it('round-trips an empty features array as an array, not null or undefined', async () => {
@@ -159,6 +180,28 @@ describe('fetchSystemFeatures', () => {
     const call = standin.calls[0]
     expect(call?.url).toBe(`/api/v1${SYSTEM_FEATURES_PATH}`)
     expect(call?.method).toBe('GET')
+  })
+
+  it('refuses an empty 2xx body as a coded client.protocol error, not a silent undefined', async () => {
+    // The same empty-document refusal as fetchPublicConfig's: go/config
+    // always writes a features document here, so an empty 2xx (the
+    // RequestFn's own 204-style empty-success shape) is refused with a
+    // distinguishable coded error instead of resolving undefined.
+    const standin = createStandinFetch(() => new Response(null, { status: 200 }))
+    const api = createClient({ baseUrl: '/api/v1', fetch: standin.fetch })
+
+    let caught: unknown
+    try {
+      await fetchSystemFeatures(api)
+    } catch (error) {
+      caught = error
+    }
+
+    expect(isApiError(caught)).toBe(true)
+    if (isApiError(caught)) {
+      expect(caught.code).toBe(ERROR_CODE_PROTOCOL)
+    }
+    expect(standin.calls).toHaveLength(1)
   })
 
   it('surfaces a non-2xx envelope as an ApiError with its code', async () => {

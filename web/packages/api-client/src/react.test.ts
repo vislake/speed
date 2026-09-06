@@ -10,7 +10,8 @@
  * no mocking of react.ts's own internals.
  */
 
-import { act, renderHook, waitFor } from '@testing-library/react'
+import { act, render, renderHook, waitFor } from '@testing-library/react'
+import { Component, createElement, type ReactNode } from 'react'
 import { describe, expect, it } from 'vitest'
 import { createStandinFetch, jsonResponse } from '../test-utils/fetch-standin'
 import { createClient } from './client'
@@ -207,5 +208,50 @@ describe('useFeature', () => {
     await waitFor(() => expect(config.current.isLoading).toBe(false))
     expect(config.current.error).toBeDefined()
     expect(feature.current).toBe(false)
+  })
+
+  it('renders without throwing when the hand-maintained seam answers features: null', async () => {
+    // Defensive null-guard: the response shape is a hand-maintained
+    // seam (config-fetcher.ts), so a payload whose `features` is null
+    // must read as "nothing enabled" -- never throw during render. The
+    // probe renders under an error boundary so a render error is
+    // observable (and fails the test) instead of escaping as an
+    // uncaught error.
+    const standin = createStandinFetch(() =>
+      jsonResponse(200, { config: {}, features: null }),
+    )
+    const api: RequestFn = createClient({ baseUrl: '/api/v1', fetch: standin.fetch })
+
+    const renderErrors: unknown[] = []
+    class ProbeBoundary extends Component<
+      { children: ReactNode },
+      { failed: boolean }
+    > {
+      state = { failed: false }
+      static getDerivedStateFromError(error: unknown): { failed: boolean } {
+        renderErrors.push(error)
+        return { failed: true }
+      }
+      render(): ReactNode {
+        return this.state.failed ? null : this.props.children
+      }
+    }
+    function FeatureProbe(): ReactNode {
+      const enabled = useFeature(api, 'flag_a')
+      return createElement('span', null, enabled ? 'enabled' : 'disabled')
+    }
+    const { container } = render(
+      createElement(ProbeBoundary, null, createElement(FeatureProbe)),
+    )
+
+    await waitFor(() => expect(standin.calls).toHaveLength(1))
+    // The publish that settled the store re-renders the probe: flush
+    // the continuation and the render inside act before asserting.
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(renderErrors).toHaveLength(0)
+    expect(container.textContent).toBe('disabled')
   })
 })

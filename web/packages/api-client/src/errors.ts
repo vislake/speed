@@ -32,7 +32,12 @@
  *   client.http.<n>  -- a non-2xx response without a parseable envelope
  *                       (non-JSON body, or JSON without a `code`
  *                       string).
- *   client.protocol  -- a 2xx whose body is not a JSON object/array.
+ *   client.protocol  -- the API JSON contract was violated on either
+ *                       side of the wire: a 2xx whose body is not a
+ *                       JSON object/array, or a request body that
+ *                       cannot be JSON-serialized (a circular
+ *                       structure) -- the latter rejects before
+ *                       anything is sent.
  *
  * Codes from a valid envelope always win over the client.* vocabulary:
  * a 401 carrying `authn.session_expired` surfaces as that code, with

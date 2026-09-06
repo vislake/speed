@@ -112,7 +112,16 @@ republishes a forced refetch to all of them. `useFeature` composes on
 itself, and returns `false` (never throws) while loading or on error.
 Neither hook does fallback-to-defaults detection, tenant-switch
 revalidation, or auto-polling -- see `src/react.ts`'s header comment
-for why each is a deliberate non-feature, not a gap.
+for why each is a deliberate non-feature, not a gap. Two defensive
+details recorded here so no future round "simplifies" them away: both
+config fetchers refuse an **empty** 2xx body (the RequestFn's own
+204-style empty-success shape) as a coded `client.protocol` error --
+go/config always writes a JSON document, so an empty answer is a
+broken one, and resolving `undefined` would pass for the typed
+document until a consumer reads a field off it -- and `useFeature`
+null-guards `data.features` (absent/null reads as "nothing enabled",
+never a render-time throw), because the response shape is this
+hand-maintained seam and a payload violating it must fail softly.
 
 Deferred with reasons:
 

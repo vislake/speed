@@ -10,27 +10,41 @@
  *      out credential-less and the store is never read;
  *   2. send; a caller-supplied signal cancels the request raw (the
  *      AbortError reaches the caller, standard query-cancellation
- *      semantics -- nothing is wrapped or retried);
+ *      semantics -- nothing is wrapped or retried). Cancellation
+ *      covers the whole attempt, the response body included: the
+ *      per-attempt timeout keeps running and the caller's signal
+ *      keeps aborting the request until the body has settled (read in
+ *      full, failed, or released), so a server that answers headers
+ *      and then stalls its body cannot outlive either the timeout or
+ *      an abort;
  *   3. on HTTP 401 from a request that presented a bearer token, with
  *      a refreshAccessToken hook configured: run one refresh,
  *      coalescing concurrent 401s onto a single in-flight refresh, and
  *      retry the original request exactly once (any method, outside
- *      the retry budget). A 401 on a credential-less request means
- *      authentication is required -- refreshing cannot provide it --
- *      so it surfaces untouched, which also keeps a session's own
- *      refresh request (sent credential-less) from re-entering the
- *      refresh path. Refresh failure surfaces the original 401 as a
- *      distinguishable auth ApiError and is reported through the
- *      Reporter;
+ *      the retry budget -- the refresh round performs no transient
+ *      retry and never consumes one). A 401 on a credential-less
+ *      request means authentication is required -- refreshing cannot
+ *      provide it -- so it surfaces untouched, which also keeps a
+ *      session's own refresh request (sent credential-less) from
+ *      re-entering the refresh path. Refresh failure surfaces the
+ *      original 401 as a distinguishable auth ApiError and is
+ *      reported through the Reporter;
  *   4. on 429/502/503/504, network failures and timeouts: retry only
  *      idempotent methods (GET/HEAD/OPTIONS), exponential full-jitter
- *      backoff per RetryPolicy, Retry-After honoured on 429 and 503;
+ *      backoff per RetryPolicy, Retry-After honoured on 429 and 503.
+ *      The retry budget bounds transient retries, never the refresh
+ *      round; a response being discarded for a retry (a retryable
+ *      status, a refused 401 whose refresh succeeded) has its body
+ *      cancelled first, so the connection is released instead of left
+ *      held by an unread response;
  *   5. normalize the outcome: 2xx bodies parse as JSON (empty bodies
  *      resolve undefined), and every failure rejects an ApiError --
  *      envelope errors keep the envelope's code (plus its traceId,
  *      params, message and details when the backend sent them --
  *      code is the only required wire field), everything else gets
- *      the reserved client.* vocabulary from errors.ts.
+ *      the reserved client.* vocabulary from errors.ts. A request
+ *      body that cannot be JSON-serialized (a circular structure)
+ *      rejects as client.protocol before anything is sent.
  *
  * The tenant never appears here: no tenant header exists anywhere in
  * the package (docs/internal/12-frontend.md) -- tenant context travels
@@ -73,12 +87,14 @@ export interface RequestOptions {
   /** HTTP method; GET when omitted. */
   method?: HttpMethod
   /**
-   * Extra request headers. `accept` defaults to application/json;
-   * `content-type` defaults to application/json when a body is sent;
-   * and `authorization` is reserved -- when the store holds a token it
-   * overwrites a caller-supplied value, because the store is the
-   * session's single source of truth. Declare `omitAccessToken` below
-   * to send the request credential-less instead.
+   * Extra request headers. `accept` defaults to application/json and
+   * `content-type` to application/json when a body is sent -- each
+   * only when the caller did not already set one, so a caller-supplied
+   * value is honoured. `authorization` is reserved: when the store
+   * holds a token it overwrites a caller-supplied value, because the
+   * store is the session's single source of truth. Declare
+   * `omitAccessToken` below to send the request credential-less
+   * instead.
    */
   headers?: Readonly<Record<string, string>>
   /**
@@ -190,13 +206,44 @@ function isIdempotent(method: HttpMethod): boolean {
 /** A response that arrived, with its status, before any body is read.
  * `attachedToken` records whether the attempt carried a bearer token:
  * the silent-401 refresh only applies to a refused attempt that
- * presented one. */
+ * presented one. The body stays inside the attempt's abort scope --
+ * the per-attempt timeout and the caller-abort forwarding keep
+ * running until the body settles (see the header) -- so an http
+ * outcome carries the three scope operations below. Callers must let
+ * the body settle (a completed `readBody`, or `cancelBody` for a
+ * response being discarded) and then call `dispose()` exactly once;
+ * the request loop guarantees this with a finally. */
 interface HttpOutcome {
   kind: 'http'
   status: number
   response: Response
   attachedToken: boolean
+  /** Reads the body to the end, or settles early when this attempt is
+   * aborted mid-read: the attempt's own timeout yields `timeout`, the
+   * caller's signal `aborted`, any other read failure `failed`. The
+   * release of an abandoned read is the controller abort itself --
+   * real fetch ties the response body to the fetch signal -- so the
+   * caller observes an early `timeout`/`aborted` result while the
+   * platform tears the connection down. */
+  readBody(): Promise<BodyReadResult>
+  /** Cancels the response body of a response the caller decided not
+   * to consume (a retryable status being retried, a discarded 401):
+   * the connection is released deterministically instead of staying
+   * held by an unread response until garbage collection. Resolves
+   * when the body is gone; a body already errored or absent is a
+   * no-op. */
+  cancelBody(): Promise<void>
+  /** Ends the attempt's timeout/abort wiring. Idempotent; safe to
+   * call after the body settled by any path. */
+  dispose(): void
 }
+
+/** How a body read inside an attempt's abort scope settled. */
+type BodyReadResult =
+  | { kind: 'text'; text: string }
+  | { kind: 'timeout'; cause: unknown }
+  | { kind: 'aborted' }
+  | { kind: 'failed'; cause: unknown }
 
 /** The request never reached a usable response. */
 interface FailureOutcome {
@@ -370,20 +417,25 @@ function retryDelayFor(
 }
 
 /** Reads and structurally checks the error envelope from an HTTP
- * failure's body; undefined when the body is empty, unreadable or
- * carries no valid envelope. A response body is single-read, so callers
- * that need the envelope twice (a report and the ApiError) read once
- * and reuse it. */
+ * failure's body, within the attempt's abort scope; undefined when the
+ * body is empty, unreadable, or stalled past the attempt's own
+ * timeout. A caller abort during the read rejects the raw AbortError
+ * -- cancellation wins over an envelope read. A response body is
+ * single-read, so callers that need the envelope twice (a report and
+ * the ApiError) read once and reuse it. */
 async function readEnvelope(
   outcome: HttpOutcome,
 ): Promise<Envelope | undefined> {
-  let text: string | null
-  try {
-    text = await outcome.response.text()
-  } catch {
-    text = null
+  const read = await outcome.readBody()
+  if (read.kind === 'text') {
+    return parseEnvelope(read.text)
   }
-  return parseEnvelope(text)
+  if (read.kind === 'aborted') {
+    throw new DOMException('The operation was aborted.', 'AbortError')
+  }
+  // 'timeout' and 'failed': an unreadable error body has always meant
+  // an envelope-less error -- the failure status still dominates.
+  return undefined
 }
 
 /** The final ApiError for an HTTP failure from an envelope that was
@@ -410,14 +462,6 @@ function envelopeError(
     code: httpErrorCode(outcome.status),
     attempts,
   })
-}
-
-/** The final ApiError for an HTTP failure (reads the body once). */
-async function httpError(
-  outcome: HttpOutcome,
-  attempts: number,
-): Promise<ApiError> {
-  return envelopeError(outcome, await readEnvelope(outcome), attempts)
 }
 
 /** The final ApiError for a transport-class failure. */
@@ -504,17 +548,26 @@ export function createClient(options: ClientOptions): RequestFn {
   const reporter = options.reporter ?? createConsoleReporter()
 
   /** One HTTP attempt: token attach, timeout abort, caller-abort
-   * passthrough. Rejects raw only for caller cancellation. */
+   * passthrough. Rejects raw only for caller cancellation. The
+   * response body is part of the attempt, so for an http outcome the
+   * timeout timer and the caller-abort forwarding stay armed past this
+   * function -- the returned outcome's `readBody`/`cancelBody` run
+   * inside that scope, and `dispose()` (idempotent) ends it. */
   const attemptOnce = async (
     method: HttpMethod,
     url: string,
     requestOptions: RequestOptions,
+    bodyText: string | undefined,
     signal: AbortSignal | undefined,
   ): Promise<AttemptOutcome> => {
     const headers = new Headers(requestOptions.headers ?? {})
-    headers.set('accept', 'application/json')
-    const body = serializeBody(requestOptions.body)
-    if (body !== undefined && !headers.has('content-type')) {
+    // Both content defaults mirror the content-type guard below: set
+    // only when the caller did not already supply the header, so a
+    // caller-supplied accept is honoured rather than overwritten.
+    if (!headers.has('accept')) {
+      headers.set('accept', 'application/json')
+    }
+    if (bodyText !== undefined && !headers.has('content-type')) {
       headers.set('content-type', 'application/json')
     }
     // The token is read per attempt: a retry after a successful refresh
@@ -535,34 +588,117 @@ export function createClient(options: ClientOptions): RequestFn {
 
     const controller = new AbortController()
     let timedOut = false
+    let disposed = false
     let timer: ReturnType<typeof setTimeout> | undefined
+    let notifyAborted: (() => void) | undefined
+    // Settles the moment this attempt is aborted while its body is
+    // still being read -- by its own timeout or the caller's signal.
+    // Real fetch ties the body to the controller's signal and kills
+    // the read itself; this trigger covers environments that do not,
+    // so a stalled body never outlives the abort either way.
+    const abortTrigger = new Promise<void>((resolve) => {
+      notifyAborted = resolve
+    })
     if (timeoutMs !== undefined) {
       timer = setTimeout(() => {
         timedOut = true
         controller.abort()
+        notifyAborted?.()
       }, timeoutMs)
     }
     const forwardAbort = (): void => {
       controller.abort()
+      notifyAborted?.()
     }
     if (signal !== undefined) {
       signal.addEventListener('abort', forwardAbort, { once: true })
+    }
+    const dispose = (): void => {
+      if (disposed) {
+        return
+      }
+      disposed = true
+      if (timer !== undefined) {
+        clearTimeout(timer)
+      }
+      if (signal !== undefined) {
+        signal.removeEventListener('abort', forwardAbort)
+      }
+    }
+    const cancelBody = async (response: Response): Promise<void> => {
+      try {
+        await response.body?.cancel()
+      } catch {
+        // The body may already be gone (errored by an abort, a
+        // null-body response): nothing left to release.
+      }
     }
 
     try {
       const response = await fetchFn(url, {
         method,
         headers,
-        body,
+        body: bodyText,
         signal: controller.signal,
       })
-      return {
+      const outcome: HttpOutcome = {
         kind: 'http',
         status: response.status,
         response,
         attachedToken,
+        readBody: async (): Promise<BodyReadResult> => {
+          const reading = response.text()
+          const result = await Promise.race<BodyReadResult>([
+            reading.then(
+              (text): BodyReadResult => ({ kind: 'text', text }),
+              (cause: unknown): BodyReadResult => {
+                // The read itself rejected. Real fetch rejects a body
+                // read when the controller's signal aborts, so
+                // classify by what aborted -- a platform-killed read
+                // carries the same meaning as the trigger below.
+                if (timedOut) {
+                  return {
+                    kind: 'timeout',
+                    cause: new DOMException(
+                      'The operation was aborted.',
+                      'AbortError',
+                    ),
+                  }
+                }
+                if (signal?.aborted === true) {
+                  return { kind: 'aborted' }
+                }
+                return { kind: 'failed', cause }
+              },
+            ),
+            abortTrigger.then((): BodyReadResult =>
+              timedOut
+                ? {
+                    kind: 'timeout',
+                    cause: new DOMException(
+                      'The operation was aborted.',
+                      'AbortError',
+                    ),
+                  }
+                : { kind: 'aborted' },
+            ),
+          ])
+          // A read abandoned mid-stream ('timeout'/'aborted') releases
+          // nothing further here by hand: response.text() holds the
+          // body's lock, so a direct cancel would fail -- the release
+          // is the controller abort itself, which conforming platforms
+          // (real fetch) tie to the response body. The pending read is
+          // simply dropped.
+          return result
+        },
+        cancelBody: () => cancelBody(response),
+        dispose,
       }
+      return outcome
     } catch (error) {
+      // The fetch itself failed: no body exists, so the wiring ends
+      // here.
+      dispose()
       if (timedOut) {
         return { kind: 'timeout', cause: error }
       }
@@ -572,13 +708,6 @@ export function createClient(options: ClientOptions): RequestFn {
         throw error
       }
       return { kind: 'network', cause: error }
-    } finally {
-      if (timer !== undefined) {
-        clearTimeout(timer)
-      }
-      if (signal !== undefined) {
-        signal.removeEventListener('abort', forwardAbort)
-      }
     }
   }
 
@@ -625,129 +754,206 @@ export function createClient(options: ClientOptions): RequestFn {
     // tests may not, so normalize before sending.
     throwIfAborted(signal)
 
+    // The body does not change between attempts: serialize once, up
+    // front, so a body that cannot be JSON-serialized (a circular
+    // structure) fails as a coded client.protocol ApiError -- a
+    // request the client can never send -- instead of surfacing a
+    // bare TypeError out of the retry machinery.
+    let bodyText: string | undefined
+    if (requestOptions.body !== undefined) {
+      try {
+        bodyText = serializeBody(requestOptions.body)
+      } catch (cause) {
+        throw new ApiError({
+          status: 0,
+          code: ERROR_CODE_PROTOCOL,
+          attempts: 0,
+          message: 'The request body could not be serialized as JSON.',
+          cause,
+        })
+      }
+    }
+
     let attempts = 0
+    // Transient retries performed so far: retryPolicy.maxAttempts
+    // bounds these (maxAttempts - 1 retries from a fresh request). The
+    // silent-401-refresh round -- a refused send plus its one
+    // post-refresh retry -- is not a transient retry and never counts
+    // toward the budget: it is bounded by its own exactly-once rule.
+    let transientRetries = 0
     let refreshed = false
     for (;;) {
       attempts += 1
-      const outcome = await attemptOnce(method, url, requestOptions, signal)
-      // The caller may have aborted while the request was in flight:
-      // cancellation wins over any outcome, so nothing below may retry
-      // or deliver on behalf of a caller that gave up.
-      throwIfAborted(signal)
-
-      if (outcome.kind === 'http' && isSuccessStatus(outcome.status)) {
-        let body: string
+      const outcome = await attemptOnce(
+        method,
+        url,
+        requestOptions,
+        bodyText,
+        signal,
+      )
+      if (outcome.kind === 'http') {
         try {
-          body = await outcome.response.text()
-        } catch (error) {
-          // The headers said 2xx but the body never arrived: a
-          // network-class failure, retryable like any other -- except
-          // when the caller aborted during the read, in which case the
-          // failure IS the cancellation and surfaces raw.
-          throwIfAborted(signal)
-          if (idempotent && attempts < retryPolicy.maxAttempts) {
-            await sleep(retryDelayMs(attempts - 1, retryPolicy))
+          // The caller may have aborted while the request was in
+          // flight: cancellation wins over any outcome -- release the
+          // response the caller no longer wants, then nothing below
+          // may retry or deliver on behalf of a caller that gave up.
+          if (signal?.aborted === true) {
+            await outcome.cancelBody()
+            throwIfAborted(signal)
+          }
+
+          if (isSuccessStatus(outcome.status)) {
+            const read = await outcome.readBody()
+            if (read.kind === 'aborted') {
+              // The abort trigger only fires from the caller's signal;
+              // cancellation surfaces raw, never as a delivery.
+              throwIfAborted(signal)
+              throw new DOMException('The operation was aborted.', 'AbortError')
+            }
+            if (read.kind !== 'text') {
+              // The headers said 2xx but the body never settled: a
+              // timeout or a dead read is a transport-class failure of
+              // this attempt, retried like any other.
+              const kind = read.kind === 'timeout' ? 'timeout' : 'network'
+              if (idempotent && transientRetries < retryPolicy.maxAttempts - 1) {
+                transientRetries += 1
+                await sleep(retryDelayMs(transientRetries - 1, retryPolicy))
+                // An abort during the backoff cancels the retry: the
+                // next attempt must not fire after the caller
+                // cancelled.
+                throwIfAborted(signal)
+                continue
+              }
+              throw failureError({ kind, cause: read.cause }, attempts)
+            }
+            const body = read.text
+            // The body arrived; an abort during the read cancels the
+            // delivery instead of resolving a 2xx for a cancelled
+            // caller.
+            throwIfAborted(signal)
+            if (body.trim() === '') {
+              // 204-style: no content is a valid, empty success. Blank
+              // counts as empty (some servers pad the bodyless response
+              // with whitespace), symmetric with parseEnvelope treating
+              // a whitespace-only error body as envelope-less.
+              return undefined as T
+            }
+            let data: unknown
+            try {
+              data = JSON.parse(body)
+            } catch {
+              throw new ApiError({
+                status: outcome.status,
+                code: ERROR_CODE_PROTOCOL,
+                attempts,
+                cause: new SyntaxError('2xx body is not valid JSON'),
+              })
+            }
+            if (typeof data !== 'object' || data === null) {
+              throw new ApiError({
+                status: outcome.status,
+                code: ERROR_CODE_PROTOCOL,
+                attempts,
+                cause: new SyntaxError('2xx body is not a JSON value'),
+              })
+            }
+            return data as T
+          }
+
+          if (outcome.status === 401) {
+            // Bearer-only: a credential-less 401 means authentication
+            // is required, which refreshing cannot provide -- and a
+            // session's own refresh request (sent credential-less)
+            // must never re-enter the refresh path or it awaits
+            // itself.
+            if (
+              !refreshed &&
+              refreshOnce !== undefined &&
+              outcome.attachedToken
+            ) {
+              refreshed = true
+              const refreshedOk = await refreshOnce()
+              // The caller may have aborted while the refresh was in
+              // flight: cancellation wins -- never send the
+              // post-refresh retry, never deliver an auth error
+              // either.
+              throwIfAborted(signal)
+              if (refreshedOk) {
+                // Retry once with whatever token the store holds now
+                // (the token is re-read at send time). Orthogonal to
+                // the retry budget and to method idempotency. The
+                // refused 401's body is not wanted: release it
+                // deterministically instead of leaving the connection
+                // held by an unread response.
+                await outcome.cancelBody()
+                continue
+              }
+              // Refresh failed: read the 401 body once and reuse it
+              // for the report and the error, so the warning carries
+              // the envelope's code (and traceId, when the backend
+              // sent one) -- correlating it to server logs -- instead
+              // of firing blind. The read stays inside the attempt's
+              // abort scope: a stalled body cannot outlive the
+              // attempt's own timeout (the error degrades to an
+              // envelope-less one), and a caller abort mid-read
+              // surfaces raw.
+              const envelope = await readEnvelope(outcome)
+              reporter.warn('access token refresh failed', {
+                status: outcome.status,
+                ...(envelope === undefined
+                  ? {}
+                  : envelope.traceId === undefined
+                    ? { code: envelope.code }
+                    : { code: envelope.code, traceId: envelope.traceId }),
+              })
+              throw envelopeError(outcome, envelope, attempts)
+            }
+            // No hook, no bearer token, or the retried request was
+            // refused again: the session is over, surface the auth
+            // error.
+            throw envelopeError(outcome, await readEnvelope(outcome), attempts)
+          }
+
+          if (
+            idempotent &&
+            transientRetries < retryPolicy.maxAttempts - 1 &&
+            retryableOutcome(outcome)
+          ) {
+            // A retryable status (429/502/503/504) whose body is not
+            // wanted: release the response body deterministically
+            // before the backoff, instead of leaving the connection
+            // held by an unread response.
+            await outcome.cancelBody()
+            const delay = retryDelayFor(outcome, transientRetries, retryPolicy)
+            transientRetries += 1
+            await sleep(delay)
             // An abort during the backoff cancels the retry: the next
             // attempt must not fire after the caller cancelled.
             throwIfAborted(signal)
             continue
           }
-          throw failureError({ kind: 'network', cause: error }, attempts)
+
+          throw envelopeError(outcome, await readEnvelope(outcome), attempts)
+        } finally {
+          // The body settled (read, released, or abandoned): end this
+          // attempt's timeout and abort wiring. Idempotent, so a
+          // branch that already ended it early stays safe.
+          outcome.dispose()
         }
-        // The body arrived; an abort during the read cancels the
-        // delivery instead of resolving a 2xx for a cancelled caller.
-        throwIfAborted(signal)
-        if (body.trim() === '') {
-          // 204-style: no content is a valid, empty success. Blank
-          // counts as empty (some servers pad the bodyless response
-          // with whitespace), symmetric with parseEnvelope treating a
-          // whitespace-only error body as envelope-less.
-          return undefined as T
-        }
-        let data: unknown
-        try {
-          data = JSON.parse(body)
-        } catch {
-          throw new ApiError({
-            status: outcome.status,
-            code: ERROR_CODE_PROTOCOL,
-            attempts,
-            cause: new SyntaxError('2xx body is not valid JSON'),
-          })
-        }
-        if (typeof data !== 'object' || data === null) {
-          throw new ApiError({
-            status: outcome.status,
-            code: ERROR_CODE_PROTOCOL,
-            attempts,
-            cause: new SyntaxError('2xx body is not a JSON value'),
-          })
-        }
-        return data as T
       }
 
-      if (outcome.kind === 'http' && outcome.status === 401) {
-        // Bearer-only: a credential-less 401 means authentication is
-        // required, which refreshing cannot provide -- and a session's
-        // own refresh request (sent credential-less) must never
-        // re-enter the refresh path or it awaits itself.
-        if (
-          !refreshed &&
-          refreshOnce !== undefined &&
-          outcome.attachedToken
-        ) {
-          refreshed = true
-          const refreshedOk = await refreshOnce()
-          // The caller may have aborted while the refresh was in
-          // flight: cancellation wins -- never send the post-refresh
-          // retry, never deliver an auth error either.
-          throwIfAborted(signal)
-          if (refreshedOk) {
-            // Retry once with whatever token the store holds now (the
-            // token is re-read at send time). Orthogonal to the retry
-            // budget and to method idempotency.
-            continue
-          }
-          // Refresh failed: read the 401 body once and reuse it for
-          // the report and the error, so the warning carries the
-          // envelope's code (and traceId, when the backend sent one) --
-          // correlating it to server logs -- instead of firing blind.
-          const envelope = await readEnvelope(outcome)
-          // An abort during that read wins over the auth error.
-          throwIfAborted(signal)
-          reporter.warn('access token refresh failed', {
-            status: outcome.status,
-            ...(envelope === undefined
-              ? {}
-              : envelope.traceId === undefined
-                ? { code: envelope.code }
-                : { code: envelope.code, traceId: envelope.traceId }),
-          })
-          throw envelopeError(outcome, envelope, attempts)
-        }
-        // No hook, no bearer token, or the retried request was refused
-        // again: the session is over, surface the auth error.
-        throw await httpError(outcome, attempts)
-      }
-
-      if (
-        idempotent &&
-        attempts < retryPolicy.maxAttempts &&
-        retryableOutcome(outcome)
-      ) {
-        const delay =
-          outcome.kind === 'http'
-            ? retryDelayFor(outcome, attempts - 1, retryPolicy)
-            : retryDelayMs(attempts - 1, retryPolicy)
+      // Transport-class failure (network or timeout): no response
+      // body exists, so there is nothing to release. The caller may
+      // have aborted after the fetch rejected: cancellation wins.
+      throwIfAborted(signal)
+      if (idempotent && transientRetries < retryPolicy.maxAttempts - 1) {
+        const delay = retryDelayMs(transientRetries, retryPolicy)
+        transientRetries += 1
         await sleep(delay)
         // An abort during the backoff cancels the retry: the next
         // attempt must not fire after the caller cancelled.
         throwIfAborted(signal)
         continue
-      }
-
-      if (outcome.kind === 'http') {
-        throw await httpError(outcome, attempts)
       }
       throw failureError(outcome, attempts)
     }
