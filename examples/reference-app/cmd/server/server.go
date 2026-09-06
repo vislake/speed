@@ -1591,12 +1591,16 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// (see their own doc comments on serverConfig above): nil in every
 	// production boot, which leaves go/integration's SSRF protection
 	// exactly as strict as it has always been. WithSubjectResolver is
-	// round 4's own addition, over the identical demoOrgSubjectResolver
+	// round 5's own addition, over the identical demoOrgSubjectResolver
 	// instance org's and notification's own wiring already share -- it is
-	// what lets integration_createAPIKey (the module's own spec-generated
-	// HTTP surface, mounted below through the generic mountModuleRoutes
-	// loop) resolve a creator at all; round 1's Service-level API
-	// (exercised directly by this module's own tests) never needed one.
+	// what lets the module's spec-generated HTTP surface (mounted below
+	// through the generic mountModuleRoutes loop) resolve a creator at
+	// all: round 5's integration_createAPIKey and round 7's
+	// integration_createWebhookSubscription both read it for their
+	// request's CreatedBy, the input those two create operations need and
+	// every other operation this surface mounts does not (round 1's and
+	// round 2's Service-level APIs, exercised directly by this module's
+	// own tests, never needed one).
 	integrationOpts := []integration.Option{
 		integration.WithEventMapping(orgMemberJoinedWebhookMapping),
 		integration.WithWebhookQueue(standaloneQueue),
@@ -2032,11 +2036,13 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// wiring once every module's Register call has returned (module.go's
 	// own Attach doc comment). Unlike config's and rbac's Attach calls, its
 	// ordering relative to them is not load-bearing -- nothing here reads a
-	// permission or configuration snapshot -- so it runs first simply
-	// because webhooks.go's wireIntegrationWebhooks needs the resulting
-	// *integration.Service below.
-	integrationService, err := integrationModule.Attach(reg)
-	if err != nil {
+	// permission or configuration snapshot. Its return value was once the
+	// *integration.Service webhooks.go's wireIntegrationWebhooks mounted its
+	// demo route from; round 7 retired that hand-mounted route (every
+	// spec-generated surface the module mounts reads the Service at call
+	// time through Handler's own Register-time forwarding wrapper instead),
+	// so the value is discarded here.
+	if _, err := integrationModule.Attach(reg); err != nil {
 		_ = cleanup()
 		return nil, nil, nil, fmt.Errorf("reference-app: attach the integration module: %w", err)
 	}
@@ -2273,19 +2279,6 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// buildServer's own ctx.
 	smileSimReconcilerStop = smileSimService.StartReconciler(context.Background(), 0)
 	wireSmileSim(mux, smileSimService, standaloneQueue)
-
-	// wireIntegrationWebhooks mounts go/integration round 2's
-	// mandatory-first-consumer route (cmd/server/webhooks.go): a demo
-	// tenant creates a webhook subscription against
-	// orgMemberJoinedWebhookMapping's public event type, gated on the
-	// module's own integration.PermissionWebhookManage permission -- the
-	// same rbacService every other permission-gated route in this app
-	// checks against. go/integration mounts no HTTP surface of its own for
-	// subscription CRUD (go/integration/AGENTS.md's "Deliberately not in
-	// scope" table), so this route is hand-mounted, outside the OpenAPI
-	// machinery, exactly like wireConsult's and wireSmileSim's own routes
-	// above. The call cannot fail: nothing it does returns an error.
-	wireIntegrationWebhooks(mux, rbacService, integrationService)
 
 	// wireIntegrationAuthenticated mounts go/integration round 6's
 	// mandatory-first-consumer route (cmd/server/integration_authenticate.go):

@@ -77,13 +77,16 @@ type integrationWhoamiResponse struct {
 // (reg.KVStore()), the identical store every other rate-limited surface in
 // this codebase would use.
 //
-// This route is deliberately NOT gated by rbac: unlike wireIntegrationWebhooks'
-// or the spec-generated API-key CRUD surface's own session-authenticated,
-// permission-checked management actions, this route IS the authentication
-// layer for a DIFFERENT kind of caller entirely -- a script or third-party
-// system holding nothing but the API key itself, never an authn session --
-// so it carries no rbac.Authorizer dependency and needs none: Authenticate's
-// own refusal is the whole of this route's access control.
+// This route is deliberately NOT gated by rbac: unlike the module's
+// spec-generated CRUD surfaces' own session-authenticated,
+// permission-checked management actions -- round 5's API-key fragment and
+// round 7's webhook-subscription fragment, the latter mounted through the
+// same gate after round 7 retired round 4's hand-mounted wireIntegrationWebhooks
+// demo route (webhooks.go) -- this route IS the authentication layer for a
+// DIFFERENT kind of caller entirely -- a script or third-party system
+// holding nothing but the API key itself, never an authn session -- so it
+// carries no rbac.Authorizer dependency and needs none: Authenticate's own
+// refusal is the whole of this route's access control.
 func wireIntegrationAuthenticated(mux *http.ServeMux, m *integration.Module, kv pkgcore.KVStore) {
 	limiter := integration.NewLayeredLimiter(ratelimit.New(kv), integrationWhoamiLimits)
 	guard := integration.NewHTTPGuard(limiter, "integration-demo-whoami", func(r *http.Request) (tenantKey, apiKeyID string) {

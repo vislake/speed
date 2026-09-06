@@ -1,15 +1,30 @@
 package main
 
-// webhook_flow_test.go is go/integration's round-2 outbound-webhook surface
-// mandatory-first-consumer proof (go/integration/AGENTS.md's "No
+// webhook_flow_test.go is go/integration's round-2 outbound-webhook DELIVERY
+// surface mandatory-first-consumer proof (go/integration/AGENTS.md's "No
 // reference-app consumer yet" section named this the compensating
 // obligation the round carried until a real host wired it end to end). It
 // drives a real webhook subscription through the composed HTTP stack --
-// server.go's wireIntegrationWebhooks route, the REAL org.member.joined
-// domain event org's own invite/accept flow publishes (the identical
-// flow org_flow_test.go itself drives), go/integration's real HMAC signing,
-// and its real jobs.StandaloneQueue-backed delivery pipeline -- against two
-// real, non-fake receiver processes this test controls.
+// the REAL org.member.joined domain event org's own invite/accept flow
+// publishes (the identical flow org_flow_test.go itself drives),
+// go/integration's real HMAC signing, and its real
+// jobs.StandaloneQueue-backed delivery pipeline -- against two real,
+// non-fake receiver processes this test controls.
+//
+// How a subscription is created here changed in round 7, when the module's
+// spec-generated webhook-subscription-CRUD surface
+// (go/integration/api/openapi.yaml, mounted under /api/v1/integration)
+// retired the round-4 hand-mounted wireIntegrationWebhooks demo route this
+// file's createWebhookSubscription helper used to drive (webhooks.go's own
+// package doc records that retirement): each test below now subscribes
+// through the spec surface's integration_createWebhookSubscription
+// operation instead -- the POST createWebhookSubscription issues, mounted
+// through the same generic mountModuleRoutes loop every other module's
+// fragment uses, gated by demo_subject.go's guardIntegrationRoute. Round
+// 7's own consumer proof -- the whole CRUD + recent-deliveries surface
+// driven end to end -- lives in webhook_crud_flow_test.go; this file's
+// remaining job is the DELIVERY side round 2 shipped, which no CRUD
+// surface exercises.
 //
 // # Why this needs cfg.WebhookURLValidator/cfg.WebhookHTTPClient at all
 //
@@ -150,19 +165,27 @@ func verifyWebhookSignature(t *testing.T, req recordedWebhookDelivery, secret st
 	}
 }
 
-// webhookSubscriptionResponse decodes wireIntegrationWebhooks' JSON
-// response (webhooks.go), which encodes integration.CreatedWebhookSubscription
-// with its unexported-by-convention field names as-is (no json tags on that
-// type) -- matched here by field name the same case-insensitive way
-// encoding/json always resolves untagged struct fields.
+// webhookSubscriptionResponse mirrors the wire shape of the spec surface's
+// create response (api.IntegrationCreatedWebhookSubscription, from
+// api/openapi.yaml's IntegrationCreatedWebhookSubscription schema): every
+// field of Service.CreateWebhookSubscription's result, camelCase on the
+// wire exactly as the fragment declares it, decoded through json tags that
+// bind this file's assertions to the actual response contract -- the same
+// wire-shape discipline apikey_flow_test.go's own test structs follow, and
+// like that file this one never imports go/integration/api either.
 type webhookSubscriptionResponse struct {
-	ID         string
-	URL        string
-	EventTypes []string
-	Secret     string
-	Active     bool
-	CreatedBy  string
+	ID         string   `json:"id"`
+	URL        string   `json:"url"`
+	EventTypes []string `json:"eventTypes"`
+	Secret     string   `json:"secret"`
+	Active     bool     `json:"active"`
+	CreatedBy  string   `json:"createdBy"`
+	CreatedAt  string   `json:"createdAt"`
 }
+
+// webhookBasePath is the spec surface's webhook-subscription mount, the
+// path createWebhookSubscription POSTs to.
+const webhookBasePath = "/api/v1/integration/webhooks"
 
 // buildWebhookFlowTestServer wires buildServer's real output exactly like
 // buildOrgTestServer (org_flow_test.go) -- a capturingMailer stands in for
@@ -195,32 +218,43 @@ func buildWebhookFlowTestServer(t *testing.T, client *http.Client) (*httptest.Se
 	return srv, cfg, mailer
 }
 
-// createWebhookSubscription drives wireIntegrationWebhooks' one route
-// (webhooks.go) as demoOwnerUserID -- whose built-in owner role carries
-// integration.PermissionWebhookManage, the permission that route gates on
-// (demo_subject.go's own doc comment: the owner role "carries every
-// permission any module declared"). token selects the tenant the
+// createWebhookSubscription drives the spec surface's create operation
+// (POST /api/v1/integration/webhooks, webhookBasePath) as demoOwnerUserID
+// -- whose built-in owner role carries integration.PermissionWebhookManage,
+// the permission demo_subject.go's guardIntegrationRoute dispatches a
+// non-GET request under /webhooks to (the router-level gate round 7
+// extended from method-only dispatch to sub-path dispatch precisely so the
+// API-key and webhook permission pairs each gate their own half of the
+// shared /api/v1/integration mount). The X-Demo-User-Id header names
+// demoNotesCreatorUserID, this app's one shared creator-attribution
+// identity: integration_createWebhookSubscription attributes the new
+// subscription's CreatedBy through integration.SubjectResolver
+// (demoOrgSubjectResolver in server.go -- the identical seam instance
+// round 5's integration_createAPIKey already reads), which reads that same
+// header; a create without it is refused 401 integration.subject_unresolved,
+// never attributed to a default user. token selects the tenant the
 // subscription is created in, exactly like every other permission-gated
 // route in this app (storage_flow_test.go's identical token+X-Demo-User
 // pairing).
 func createWebhookSubscription(t *testing.T, srv *httptest.Server, token, url string, eventTypes []string) webhookSubscriptionResponse {
 	t.Helper()
 
-	body, err := json.Marshal(map[string]any{"url": url, "event_types": eventTypes})
+	body, err := json.Marshal(map[string]any{"url": url, "eventTypes": eventTypes})
 	if err != nil {
 		t.Fatalf("marshal request body: %v", err)
 	}
-	req, err := http.NewRequest(http.MethodPost, srv.URL+webhookSubscriptionsPath, bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+webhookBasePath, bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set(demoUserHeader, demoOwnerUserID)
+	req.Header.Set(demoOrgUserHeader, demoNotesCreatorUserID)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {
-		t.Fatalf("POST %s: %v", webhookSubscriptionsPath, err)
+		t.Fatalf("POST %s: %v", webhookBasePath, err)
 	}
 	defer resp.Body.Close()
 	respBody, readErr := io.ReadAll(resp.Body)
@@ -228,7 +262,7 @@ func createWebhookSubscription(t *testing.T, srv *httptest.Server, token, url st
 		t.Fatalf("read response body: %v", readErr)
 	}
 	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("POST %s status = %d, want %d; body = %s", webhookSubscriptionsPath, resp.StatusCode, http.StatusCreated, respBody)
+		t.Fatalf("POST %s status = %d, want %d; body = %s", webhookBasePath, resp.StatusCode, http.StatusCreated, respBody)
 	}
 	var out webhookSubscriptionResponse
 	if err := json.Unmarshal(respBody, &out); err != nil {
@@ -236,6 +270,9 @@ func createWebhookSubscription(t *testing.T, srv *httptest.Server, token, url st
 	}
 	if out.Secret == "" {
 		t.Fatal("created subscription carries no secret")
+	}
+	if out.CreatedBy != demoNotesCreatorUserID {
+		t.Fatalf("created.createdBy = %q, want %q (from integration.SubjectResolver, never a request field)", out.CreatedBy, demoNotesCreatorUserID)
 	}
 	return out
 }
