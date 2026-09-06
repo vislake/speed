@@ -237,6 +237,108 @@ func (r *MembershipRepository) activeSample(ctx context.Context, limit int) ([]M
 	return out, nil
 }
 
+// errLastActiveMember and errMembershipAlreadyGone are removeIfNotLastActive's
+// internal signals, translated by its caller. Neither escapes this file.
+var (
+	errLastActiveMember      = errors.New("org: removing this membership would leave the tenant with no active member")
+	errMembershipAlreadyGone = errors.New("org: membership already removed")
+)
+
+// removeIfNotLastActive mark-deletes membershipID -- the caller's own
+// byUser read already confirmed it is currently active -- unless doing so
+// would leave the tenant with no active member at all, in which case it
+// refuses (errLastActiveMember) and changes nothing.
+//
+// # The race this closes
+//
+// The original shape here was activeSample(ctx, 2) (its own transaction, a
+// plain read) followed by a separate Delete call (another transaction): with
+// a tenant at exactly two active members, two goroutines each removing one
+// of them could both read "2 active" before either committed its own
+// delete, both pass the "at least 2" check, and both proceed -- leaving
+// zero active members, which is permanently unrecoverable (invitations
+// require an authenticated member; getting a token requires active
+// membership). ErrMemberNotRemovable's guarantee held only against a
+// single, serial caller.
+//
+// # The fix: one arbitrated lock, then the write, both in one transaction
+//
+// Two writes, and deliberately NO read of anything in between them, so
+// this whole transaction's first database statement is a write -- the
+// shape that keeps it out of SQLite's read-then-write lock-upgrade hazard
+// (go/dbkit/AGENTS.md's "SQLite busy timeout" section; lockLiveNode's own
+// doc comment in repository.go explains the identical reasoning for the
+// tree side of this round).
+//
+//  1. A blind, no-op bulk touch-update of EVERY currently-active
+//     membership row in the tenant (status = 'active' AND deleted_at IS
+//     NULL, rewriting DeletedBy to the empty string it already holds for
+//     any live row -- the same no-op-write-as-lock trick lockLiveNode
+//     uses). Its RowsAffected is the tenant's current active-member count,
+//     read for free from the very statement that also LOCKS every one of
+//     those rows: on PostgreSQL each matched row's write lock is held
+//     until this transaction ends, so a concurrent Remove of any OTHER
+//     active member -- which touches this SAME statement's row set,
+//     since it too is bulk-touching every active row -- blocks behind
+//     this transaction rather than reading a stale, pre-commit count; on
+//     SQLite, being the transaction's first statement, it is an ordinary
+//     contending writer that waits out busy_timeout rather than one that
+//     can be refused immediately. Two concurrent Removes at a
+//     two-active-member tenant are therefore genuinely serialized by this
+//     one bulk statement, not merely by accident of timing.
+//  2. If the count from step 1 is less than 2, the removal is refused
+//     (errLastActiveMember) and the whole transaction rolls back, changing
+//     nothing -- exactly as if step 1 had never run. Otherwise, the
+//     second write: the actual, targeted soft-delete of membershipID,
+//     conditioned on it still being a live row (deleted_at IS NULL) --
+//     RowsAffected == 0 here means a concurrent caller already removed
+//     this SAME membership (errMembershipAlreadyGone), which is a
+//     different, narrower race than the one this method exists to close.
+//
+// This does mean every Remove of an active member briefly write-locks
+// every OTHER active membership row of the tenant too, not just its own
+// target -- a real, deliberately accepted cost of getting a correct
+// database-arbitrated answer without a version column or a second module.
+// See go/org/AGENTS.md's concurrency note for the scale this is and is not
+// meant to cover.
+func (r *MembershipRepository) removeIfNotLastActive(ctx context.Context, membershipID string) error {
+	now := time.Now()
+	deletedBy := softDeleteActor(ctx)
+	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		lockRes := tx.
+			Where("status = ?", MembershipStatusActive).
+			Where("deleted_at IS NULL").
+			Select("DeletedBy").
+			Updates(&Membership{DeletedBy: ""})
+		if lockRes.Error != nil {
+			return lockRes.Error
+		}
+		if lockRes.RowsAffected < 2 {
+			return errLastActiveMember
+		}
+
+		delRes := tx.
+			Where("id = ?", membershipID).
+			Where("deleted_at IS NULL").
+			Select("DeletedAt", "DeletedBy").
+			Updates(&Membership{DeletedAt: &now, DeletedBy: deletedBy})
+		if delRes.Error != nil {
+			return delRes.Error
+		}
+		if delRes.RowsAffected == 0 {
+			return errMembershipAlreadyGone
+		}
+		return nil
+	})
+	switch {
+	case errors.Is(err, errLastActiveMember), errors.Is(err, errMembershipAlreadyGone):
+		return err
+	case err != nil:
+		return ErrInternal.WithCause(err)
+	}
+	return nil
+}
+
 // anyInNodes reports whether any membership of the caller's tenant is bound
 // to one of nodeIDs. It reads at most one row: the question is "is anybody
 // there", not "how many".
@@ -402,7 +504,12 @@ func (s *MemberService) List(ctx context.Context, nodeID string) ([]Membership, 
 //
 // It refuses (ErrMemberNotRemovable) to remove the tenant's last active
 // member: inviting somebody requires an authenticated member, so a tenant
-// emptied this way could never be re-entered through the product.
+// emptied this way could never be re-entered through the product. That
+// refusal is enforced by removeIfNotLastActive as one database-arbitrated
+// transaction -- see its own doc comment in repository.go for why the
+// original shape here (a separate read-then-check followed by a separate
+// delete) let two concurrent removals of a tenant's last two active members
+// both succeed.
 //
 // org does NOT invalidate the removed user's sessions -- it publishes the
 // event and authn, which owns session state, subscribes. Reaching into
@@ -412,17 +519,24 @@ func (s *MemberService) Remove(ctx context.Context, userID string) error {
 	if err != nil {
 		return err
 	}
-	if m.IsActive() {
-		// Two rows are enough to answer "is anybody else still active?".
-		active, sampleErr := s.repo.activeSample(ctx, 2)
-		if sampleErr != nil {
-			return sampleErr
+	if !m.IsActive() {
+		if err := s.repo.Delete(ctx, m.ID); err != nil {
+			return err
 		}
-		if len(active) < 2 {
-			return ErrMemberNotRemovable.WithParam("user_id", userID)
-		}
+		s.publish(ctx, EventMemberRemoved, MemberRemoved{
+			MembershipID: m.ID,
+			UserID:       m.UserID,
+			NodeID:       m.NodeID,
+		})
+		return nil
 	}
-	if err := s.repo.Delete(ctx, m.ID); err != nil {
+
+	switch err := s.repo.removeIfNotLastActive(ctx, m.ID); {
+	case errors.Is(err, errLastActiveMember):
+		return ErrMemberNotRemovable.WithParam("user_id", userID)
+	case errors.Is(err, errMembershipAlreadyGone):
+		return ErrMembershipNotFound.WithParam("user_id", userID)
+	case err != nil:
 		return err
 	}
 	s.publish(ctx, EventMemberRemoved, MemberRemoved{

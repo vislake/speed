@@ -3,6 +3,7 @@ package org
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -610,5 +611,138 @@ func TestMemberService_Restore_Twice_SecondCallReturnsMembershipNotFound(t *test
 	}
 	if _, err := m.Members().Restore(ctx, original.ID); !hasCode(err, ErrMembershipNotFound.Code) {
 		t.Errorf("second Restore error = %v, want org.membership_not_found", err)
+	}
+}
+
+// TestMemberService_Remove_ConcurrentLastTwoActiveMembers is the D3 (org-rbac
+// P1-5) regression test: a tenant with EXACTLY two active members, both
+// removed by two goroutines started as close together as sync.WaitGroup can
+// arrange, over the real repository against a real, file-backed SQLite
+// database (newTestModule -- two goroutines genuinely get two separate
+// pooled connections to the same file, so this is real concurrency, not a
+// simulated interleaving).
+//
+// On the pre-fix code (activeSample(ctx, 2) read, then a separate Delete
+// call, two independent transactions) this reproduces the bug this finding
+// names -- both Removes observe "2 active members" before either commits its
+// own delete, both proceed, and the tenant ends with ZERO active members,
+// permanently unrecoverable, since inviting requires an authenticated member
+// and signing in requires active membership -- roughly one trial in five
+// (measured empirically against the pre-fix shape while writing this test:
+// 64 of 300 single-pair trials), not on every single attempt: the window is
+// real but narrow at the timescale of two goroutines racing a fast local
+// SQLite file. A single pair of goroutines is therefore not a reliable RED
+// signal on its own, so this test repeats the pair trialAttempts times --
+// chosen so the pre-fix code's measured per-trial reproduction rate makes
+// the chance of a false-negative run (every single attempt missing the
+// window) astronomically small (roughly (1-0.2)^50) -- and fails the whole
+// test the moment ANY attempt shows the forbidden outcome (both succeeding,
+// or the tenant ever dropping to zero active members). On the fixed code
+// (MembershipRepository.removeIfNotLastActive, one database-arbitrated
+// transaction per Remove) that forbidden outcome must never occur, in any
+// of the trialAttempts attempts: exactly one goroutine succeeds and the
+// other is refused with ErrMemberNotRemovable every single time.
+func TestMemberService_Remove_ConcurrentLastTwoActiveMembers(t *testing.T) {
+	const trialAttempts = 50
+	for attempt := 0; attempt < trialAttempts; attempt++ {
+		m, _ := newTestModule(t)
+		ctx := tenantCtx("tenant-a")
+		root, _, _ := seedTree(t, m.Tree(), ctx)
+
+		if _, err := m.Members().Add(ctx, "u-a", root.ID); err != nil {
+			t.Fatalf("attempt %d: Add(u-a): %v", attempt, err)
+		}
+		if _, err := m.Members().Add(ctx, "u-b", root.ID); err != nil {
+			t.Fatalf("attempt %d: Add(u-b): %v", attempt, err)
+		}
+
+		var start sync.WaitGroup
+		start.Add(1)
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		users := []string{"u-a", "u-b"}
+		for i := range users {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				start.Wait()
+				errs[i] = m.Members().Remove(ctx, users[i])
+			}(i)
+		}
+		start.Done()
+		wg.Wait()
+
+		succeeded, refused := 0, 0
+		for i, err := range errs {
+			switch {
+			case err == nil:
+				succeeded++
+			case hasCode(err, ErrMemberNotRemovable.Code):
+				refused++
+			default:
+				t.Fatalf("attempt %d: Remove(%s) error = %v, want nil or org.member_not_removable",
+					attempt, users[i], err)
+			}
+		}
+		if succeeded != 1 || refused != 1 {
+			t.Fatalf("attempt %d: outcomes = %d succeeded / %d refused (errs=%v), want exactly one of each -- "+
+				"a tenant must never lose its last active member to two concurrent removals",
+				attempt, succeeded, refused, errs)
+		}
+
+		remainingActive := 0
+		for _, u := range users {
+			mem, err := m.Members().Get(ctx, u)
+			if err != nil {
+				continue // this one was removed
+			}
+			if mem.IsActive() {
+				remainingActive++
+			}
+		}
+		if remainingActive != 1 {
+			t.Fatalf("attempt %d: tenant has %d active members after the race, want exactly 1",
+				attempt, remainingActive)
+		}
+	}
+}
+
+// TestMemberService_Remove_ConcurrentDistinctUsers_BothSucceed proves the
+// fix's cost is contention, not correctness lost the other way: with THREE
+// active members, two concurrent Removes of two different users (leaving
+// one behind) must both succeed -- removeIfNotLastActive's bulk lock-and-
+// count step must never refuse a removal that a real, safe margin of active
+// members remains after.
+func TestMemberService_Remove_ConcurrentDistinctUsers_BothSucceed(t *testing.T) {
+	m, _ := newTestModule(t)
+	ctx := tenantCtx("tenant-a")
+	root, _, _ := seedTree(t, m.Tree(), ctx)
+
+	for _, u := range []string{"u-a", "u-b", "u-c"} {
+		if _, err := m.Members().Add(ctx, u, root.ID); err != nil {
+			t.Fatalf("Add(%s): %v", u, err)
+		}
+	}
+
+	var start sync.WaitGroup
+	start.Add(1)
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	users := []string{"u-a", "u-b"}
+	for i := range users {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			start.Wait()
+			errs[i] = m.Members().Remove(ctx, users[i])
+		}(i)
+	}
+	start.Done()
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("Remove(%s) = %v, want success (3 active members, removing 2 leaves 1)", users[i], err)
+		}
 	}
 }
