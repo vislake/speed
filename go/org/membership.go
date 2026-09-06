@@ -309,6 +309,13 @@ func (r *MembershipRepository) removeIfNotLastActive(ctx context.Context, member
 			Where("status = ?", MembershipStatusActive).
 			Where("deleted_at IS NULL").
 			Select("DeletedBy").
+			// Omit UpdatedAt, for the identical reason touchLockByID's own
+			// lock does (repository.go): this is a no-op WRITE whose only
+			// purpose is the row lock and the free RowsAffected count, and
+			// without the exclusion GORM's autoUpdateTime machinery stamps
+			// updated_at = now() onto every active member's row on every
+			// Remove of any one of them.
+			Omit("UpdatedAt").
 			Updates(&Membership{DeletedBy: ""})
 		if lockRes.Error != nil {
 			return lockRes.Error

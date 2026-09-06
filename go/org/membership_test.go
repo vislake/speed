@@ -793,3 +793,59 @@ func TestMemberService_Restore_SeatReused_AnswersMembershipExists(t *testing.T) 
 		t.Fatalf("live membership = %q, want the replacement %q", current.ID, replacement.ID)
 	}
 }
+
+// TestMemberService_Remove_DoesNotTouchOtherMembersUpdatedAt is the P3-9
+// regression proof on the roster side: removeIfNotLastActive's first write
+// is a blind bulk touch-lock of every currently-active membership row of the
+// tenant (the no-op UPDATE whose RowsAffected doubles as the active count) --
+// a lock, not a data change -- but GORM's autoUpdateTime machinery appended
+// updated_at = now() to that UPDATE, so every Remove of an active member
+// used to rewrite the updated_at of every OTHER active member of the tenant
+// too, exactly the "membership removal dirties every row" the finding names.
+// The regression: removing one member leaves the untouched members' rows
+// byte-identical, updated_at included.
+func TestMemberService_Remove_DoesNotTouchOtherMembersUpdatedAt(t *testing.T) {
+	m, _ := newTestModule(t)
+	ctx := tenantCtx("tenant-a")
+	root, left, right := seedTree(t, m.Tree(), ctx)
+
+	if _, err := m.Members().Add(ctx, "u-owner", root.ID); err != nil {
+		t.Fatalf("Add(owner): %v", err)
+	}
+	if _, err := m.Members().Add(ctx, "u-leaving", left.ID); err != nil {
+		t.Fatalf("Add(leaving): %v", err)
+	}
+	if _, err := m.Members().Add(ctx, "u-staying", right.ID); err != nil {
+		t.Fatalf("Add(staying): %v", err)
+	}
+
+	beforeOwner, err := m.Members().Get(ctx, "u-owner")
+	if err != nil {
+		t.Fatalf("Get(owner) before: %v", err)
+	}
+	beforeStaying, err := m.Members().Get(ctx, "u-staying")
+	if err != nil {
+		t.Fatalf("Get(staying) before: %v", err)
+	}
+
+	if err := m.Members().Remove(ctx, "u-leaving"); err != nil {
+		t.Fatalf("Remove(leaving): %v", err)
+	}
+
+	afterOwner, err := m.Members().Get(ctx, "u-owner")
+	if err != nil {
+		t.Fatalf("Get(owner) after: %v", err)
+	}
+	afterStaying, err := m.Members().Get(ctx, "u-staying")
+	if err != nil {
+		t.Fatalf("Get(staying) after: %v", err)
+	}
+	if !afterOwner.UpdatedAt.Equal(beforeOwner.UpdatedAt) {
+		t.Fatalf("Remove of another member rewrote the untouched member %q's updated_at from %v to %v -- the bulk touch-lock must not dirty the rows it only locks",
+			"u-owner", beforeOwner.UpdatedAt, afterOwner.UpdatedAt)
+	}
+	if !afterStaying.UpdatedAt.Equal(beforeStaying.UpdatedAt) {
+		t.Fatalf("Remove of another member rewrote the untouched member %q's updated_at from %v to %v -- the bulk touch-lock must not dirty the rows it only locks",
+			"u-staying", beforeStaying.UpdatedAt, afterStaying.UpdatedAt)
+	}
+}

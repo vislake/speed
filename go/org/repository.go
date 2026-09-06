@@ -196,7 +196,9 @@ func (r *Repository) findByIDIncludingDeleted(ctx context.Context, id string) (*
 // only ever set DeletedBy together with DeletedAt, in the same statement, so
 // there is no path that leaves a live row (deleted_at IS NULL) with a
 // non-empty DeletedBy. Writing "" back is therefore a genuine no-op for the
-// data on any row this call is allowed to succeed against, but a genuine
+// data on any row this call is allowed to succeed against -- UpdatedAt is
+// Omit()ted from the statement so that even GORM's autoUpdateTime stamp
+// stays untouched, keeping the whole UPDATE data-free -- but a genuine
 // WRITE for the database engine:
 //
 //   - On PostgreSQL it takes the row's write lock, held until this
@@ -227,6 +229,13 @@ func touchLockByID(tx *gorm.DB, id string) (bool, error) {
 		Where("id = ?", id).
 		Where("deleted_at IS NULL").
 		Select("DeletedBy").
+		// Omit UpdatedAt: the touch is a no-op WRITE whose only purpose is the
+		// row lock, and GORM's autoUpdateTime machinery appends updated_at =
+		// now() to every struct UPDATE unless the timestamp column is
+		// explicitly excluded -- a "lock" that dirtied the row it locked
+		// would rewrite updated_at on every lock, and with it every cached
+		// "when did this node last change" answer a consumer holds.
+		Omit("UpdatedAt").
 		Updates(&OrgNode{DeletedBy: ""})
 	if res.Error != nil {
 		return false, res.Error

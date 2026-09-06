@@ -7,6 +7,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 
@@ -461,5 +462,49 @@ func assertStringSet(t *testing.T, ids []string, want []string) {
 		if !got[id] {
 			t.Fatalf("ids = %v, want %v", ids, want)
 		}
+	}
+}
+
+// TestRepository_touchLockByID_DoesNotRewriteUpdatedAt is the P3-9
+// regression proof: touchLockByID is a no-op WRITE -- its whole purpose is
+// the row lock a write takes, with no data intended to change -- but GORM's
+// autoUpdateTime machinery appends updated_at = now() to every struct UPDATE
+// unless the timestamp column is explicitly excluded, so the "no-op" touch
+// used to dirty the locked row's updated_at. The regression: taking the lock
+// must leave the row's updated_at exactly as it was.
+func TestRepository_touchLockByID_DoesNotRewriteUpdatedAt(t *testing.T) {
+	repo := NewRepository(newTestDB(t))
+	ctx := tenantCtx("tenant-a")
+
+	seedNode(t, repo, ctx, OrgNode{ID: "r", Path: "/r/", Depth: 0, Name: "root"})
+	seedNode(t, repo, ctx, OrgNode{ID: "a", ParentID: "r", Path: "/r/a/", Depth: 1, Name: "a"})
+
+	before, err := repo.FindByID(ctx, "a")
+	if err != nil {
+		t.Fatalf("FindByID before the lock: %v", err)
+	}
+
+	var locked bool
+	err = withRetry(func() error {
+		return dbkit.WithTenantSession(ctx, repo.db, func(tx *gorm.DB) error {
+			var touchErr error
+			locked, touchErr = touchLockByID(tx, "a")
+			return touchErr
+		})
+	})
+	if err != nil {
+		t.Fatalf("touchLockByID: %v", err)
+	}
+	if !locked {
+		t.Fatal("touchLockByID did not lock the live row")
+	}
+
+	after, err := repo.FindByID(ctx, "a")
+	if err != nil {
+		t.Fatalf("FindByID after the lock: %v", err)
+	}
+	if !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Fatalf("the no-op lock rewrote updated_at from %v to %v -- a lock must not dirty the row it locks",
+			before.UpdatedAt, after.UpdatedAt)
 	}
 }
