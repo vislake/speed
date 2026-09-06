@@ -187,6 +187,7 @@ This is a deliberate "keep the column, skip the transition" choice, not a half-b
 | `pki.no_active_key` | `NotFound` | `SigningKeyRepository.FindActiveByPurpose`, and transitively `Service.ActiveSigner` |
 | `pki.algorithm_unsupported_by_signer` | `Invalid` | `LocalSigner.GenerateKey` for any algorithm other than `AlgorithmEd25519` |
 | `pki.certificate_revoked` | `Conflict` | `CAService.VerifyCertificate`, for a revoked certificate OR a revoked authority anywhere in its chain (round 3) |
+| `pki.authority_revoked` | `Conflict` | `CAService.CreateIntermediateCA` / `IssueCertificate`, when the signing authority's `Status` is `AuthorityStatusRevoked` (the issuance-gap round) |
 | `pki.signer_unavailable` | `Internal` | `CAService.GenerateCRL`, wrapping a non-`*apperr.Error` `Signer.Sign` failure during CRL signing (round 3) |
 | `pki.propagation_window_not_elapsed` | `Conflict` | `Service.PromoteNow`, for a pending key staged less than `propagationWindow` ago (round 3) |
 | `pki.crl_not_generated` | `NotFound` | `Handler.PkiGetAuthorityCrl`, when the authority's `CRLPEM` is still empty (round 3) |
@@ -334,3 +335,94 @@ double-revoke test raced identical reasons and could not see this.
   contract (RowsAffected == 0 does not distinguish missing from
   already-revoked -- `FindByID` answers the former; the tenant filter is
   the dbkit isolation plugin's injection, never hand-written).
+
+## Issuance-gap and CRL-arbitration round (round entry, 2026-09-06)
+
+An audit of the round-3 X.509 layer against its own verification path
+found two defects this round fixes and two findings this round assesses and
+deliberately defers:
+
+- **P2-1 (confirmed): issuance never checked the signing authority's own
+  revocation state.** `VerifyCertificate` refused a certificate whose chain
+  contains an `AuthorityStatusRevoked` authority, but
+  `CreateIntermediateCA`/`IssueCertificate` checked only that the authority
+  existed -- a revoked issuer (a compromised key) could keep minting
+  certificates every downstream verifier rejects. Both issuance paths now
+  refuse with the new coded error `ErrAuthorityRevoked`
+  (`pki.authority_revoked`, `Conflict`, localized in both bundles), read
+  from the same `Authority`-row `Status` column the verification path
+  trusts as its source of truth, checked after the `FindByID` load and
+  before any key is generated. Fail-before proof: with the checks reverted,
+  both new tests reported `error = <nil>, want ErrAuthorityRevoked`;
+  they pass after.
+- **P2-3 (suspected, reproduced): concurrent CRL generation lost updates.**
+  `GenerateCRL` persisted through a blind full-row save of a
+  read-modify-write cycle -- two overlapping calls could both read
+  `CRLNumber` N, both sign a document numbered N+1, and the loser's save
+  silently overwrote the winner's committed row. The fail-before proof
+  (eight goroutines racing one authority's CRL, released through a channel
+  barrier) lost six of eight updates on its very first trial:
+  `CRLNumber = 2 ... want 8`. The persist step is now
+  `AuthorityRepository.UpdateCRLIfCurrent`, ONE guarded conditional UPDATE
+  matching only a row whose `CRLNumber` still equals the number the call
+  read and writing only the four CRL columns -- the same
+  database-arbitrated idiom the ledger round established for the
+  certificate-row transition -- and a call that loses the CAS re-reads and
+  regenerates at the winner's number (loop bounded by
+  `maxGenerateCRLAttempts`, 16, headroom far beyond any plausible
+  overlapping-generator count). Every successful call now advances the
+  register by exactly one however many calls overlap, and the guarded
+  write can never resurrect stale non-CRL columns (a future Status
+  transition) over a concurrent writer's committed row. Stale comments
+  that claimed the unguarded shape was safe were corrected in the same
+  commit. Regression tests: the concurrent eight-goroutine proof across 25
+  trials (final `CRLNumber` exactly initial+8, no errors, stored
+  document's embedded `Number` agreeing with the column) and a
+  repository-level pin of the guard (`TestAuthorityRepository_UpdateCRLIfCurrent_GuardedTransition`:
+  a stale expected number lands nothing and leaves the winner's row
+  untouched).
+- **P1-2 (suspected, assessed, deferred -- schema widening is a migration
+  plus a design decision).** In `go/pki/signer/kmsaws`'s envelope mode the
+  `keyRef` is the base64 of the whole KMS `CiphertextBlob`. The arithmetic
+  is deterministic: base64 of any blob of 192 bytes or more exceeds 255
+  characters, the `size:255` every `key_ref` column in this module's schema
+  declares (`pki_signing_keys`, `pki_authorities`, `pki_certificates`), and
+  a real KMS symmetric ciphertext blob for an ~80-byte PKCS8 ed25519 key
+  is empirically 0.5-2KB raw -- PostgreSQL, which enforces `VARCHAR(255)`
+  where SQLite does not, would refuse the write. No unit-level proof can
+  pin the REAL blob size without a live AWS account (the module records
+  that no KMS integration leg exists, by design), and the genuine fix is
+  not in scope for an audit round: either a dual-dialect migration (0009)
+  widening `key_ref` to `TEXT` on all three tables (SQLite cannot ALTER a
+  column type, so its half of the migration rebuilds each table), or a
+  design change making the envelope `keyRef` a short name resolved through
+  host-owned storage -- which reverses round 4's deliberate "the
+  ciphertext itself IS the keyRef, the package keeps no storage" posture.
+  Recommendation: ship migration 0009 and widen to `TEXT`; the round-4
+  envelope mode is the headline capability of both cloud providers, and a
+  Postgres-hosted deployment choosing it currently fails at insert time.
+  Until then the safe combination is `ModeDirectSign` on PostgreSQL, or
+  envelope mode on SQLite, where the length is unenforced.
+- **P2-2 (confirmed, assessed, deferred -- no clean wiring point).**
+  `Signer.Destroy` has zero production callers across the repository: the
+  key-lifecycle layer's expiry scan stops at `retired` and never destroys
+  the underlying key material (`LocalSigner`'s encrypted
+  `pki_local_keys` rows in particular accumulate forever), and
+  `docs/internal/22-pki.md` names no post-retirement reclamation sweep.
+  Wiring `Destroy` into the `retiring -> retired` transition would be a
+  lifecycle-policy decision, not a wiring detail: for the `vault`/`kmsaws`
+  direct-sign providers it triggers REAL provider-side deletion (KMS's
+  seven-day minimum pending window among them), and the module's lifecycle
+  vocabulary has no post-retired state an auto-destroy could consult
+  before acting across every `Signer` implementation, future ones
+  included. Follow-up (not scoped anywhere yet): a retirement-sweep round
+  that defines the post-retired reclamation policy -- which signer
+  implementations may auto-destroy on retirement, and what retention a
+  host can declare -- then wires `Destroy` and `LocalKeyRepository.Delete`
+  to it. Nothing in this module leaks private key material meanwhile: the
+  rows stay encrypted at rest, and `Destroy` remains available to a host
+  that wants explicit reclamation today.
+
+Tests for both fixes fail on the unmodified code and pass after (recorded
+above with the reproduced output), green under plain `go test` and under
+`-race`.
