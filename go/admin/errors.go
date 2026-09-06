@@ -145,6 +145,16 @@ var (
 	// is wired, Summary instead answers with that one dimension present
 	// and the other absent from every row, never refusing outright.
 	ErrUsageModulesNotWired = apperr.Internal("admin.usage_modules_not_wired")
+
+	// ErrExportOperatorRequired is returned by ExportService.Enqueue (D7's
+	// export leg) when called with no operator user id -- P1-2's fix:
+	// every admin write path attributes the calling operator, and an
+	// export enqueued with nothing to attribute it to would leave "who
+	// exported this tenant's audit trail" permanently unanswerable. The
+	// HTTP handler always supplies one (callerUserID, exactly like every
+	// other admin write path); this is reachable only through a direct,
+	// non-HTTP caller of Enqueue.
+	ErrExportOperatorRequired = apperr.Invalid("admin.export_operator_required")
 )
 
 // errorCodes lists every code this module can return, in catalog order. It
@@ -171,5 +181,6 @@ var errorCodes = []string{
 	ErrQueueRequired.Code,
 	ErrRBACServiceRequired.Code,
 	ErrUsageModulesNotWired.Code,
+	ErrExportOperatorRequired.Code,
 	errInternal.Code,
 }

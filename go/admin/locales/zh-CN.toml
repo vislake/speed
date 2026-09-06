@@ -24,6 +24,7 @@
 "admin.queue_required" = "本次部署缺少任务队列，审计导出无法异步执行。"
 "admin.rbac_service_required" = "rbac 服务尚未接入，角色管理功能不可用。"
 "admin.usage_modules_not_wired" = "本次部署未接入 metering 或 billing 模块，用量看板不可用。"
+"admin.export_operator_required" = "发起审计导出必须提供操作员用户 ID。"
 "admin.principal_required" = "该请求未携带已验证的身份。"
 "admin.internal" = "发生意外的内部错误。"
 

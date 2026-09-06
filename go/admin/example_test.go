@@ -196,7 +196,7 @@ func ExampleModule_AttachRBAC() {
 func ExampleNewExportService() {
 	exportSvc := admin.NewExportService(nil, nil)
 
-	_, err := exportSvc.Enqueue(context.Background(), "")
+	_, err := exportSvc.Enqueue(context.Background(), "", "operator-1")
 	fmt.Println(err)
 
 	// Output:

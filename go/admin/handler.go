@@ -436,13 +436,24 @@ func toAdminAuditEvent(e audit.AuditEvent) api.AdminAuditEvent {
 // --- D7: audit export -------------------------------------------------------
 
 // AdminExportAuditEvents implements api.ServerInterface.
+//
+// callerUserID is resolved first, exactly like every other admin write
+// path (AdminCreateTenant, AdminUpdateTenant, AdminStartImpersonation,
+// AdminEndImpersonation) -- this was the one admin HTTP write path that
+// never did (P1-2's finding), leaving an export of a tenant's complete
+// audit history with no attributable operator anywhere in the flow.
 func (h *Handler) AdminExportAuditEvents(w http.ResponseWriter, r *http.Request) {
+	callerID, err := callerUserID(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	var req api.AdminExportAuditEventsRequest
 	if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
 		writeError(w, ErrTenantIDRequired.WithCause(decodeErr))
 		return
 	}
-	jobID, err := h.exportSvc.Enqueue(r.Context(), req.TenantID)
+	jobID, err := h.exportSvc.Enqueue(r.Context(), req.TenantID, callerID)
 	if err != nil {
 		writeError(w, err)
 		return

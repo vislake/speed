@@ -85,6 +85,13 @@ const (
 	AuditActionTenantStatusChanged  = "admin.tenant.status_changed"
 	AuditActionImpersonationStarted = "admin.impersonation.started"
 	AuditActionImpersonationEnded   = "admin.impersonation.ended"
+
+	// AuditActionAuditExport is emitted by ExportService once a tenant's
+	// audit-event export actually completes (P1-2's fix): exporting a
+	// tenant's full audit history is itself a security-relevant action,
+	// and without this the export left no trace of "who exported which
+	// tenant, when" anywhere in the audit trail.
+	AuditActionAuditExport = "admin.audit_export"
 )
 
 // SystemPurposeAdminCrossTenant is the pkgcore.SystemPurpose admin
@@ -383,6 +390,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		AuditActionTenantStatusChanged,
 		AuditActionImpersonationStarted,
 		AuditActionImpersonationEnded,
+		AuditActionAuditExport,
 	); err != nil {
 		return err
 	}
@@ -412,6 +420,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	m.auditSvc.attach(bus)
 
 	m.exportSvc = NewExportService(m.complianceModule.Export(), m.queue)
+	m.exportSvc.attachAudit(bus, reg.AuditActions)
 	if err := reg.Jobs.Handle(jobTypeAuditExport, m.exportSvc); err != nil {
 		return err
 	}
