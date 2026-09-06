@@ -323,6 +323,72 @@ func TestAuthorityRepository_Update_PersistsCRLFields(t *testing.T) {
 	}
 }
 
+// TestAuthorityRepository_UpdateCRLIfCurrent_GuardedTransition pins the
+// CRL-write guard's semantics at the repository level, mirroring
+// TestCertificateRepository_RevokeIfActive_GuardedTransition's shape for
+// the certificate-row transition: a conditional UPDATE matching only a row
+// whose CRLNumber still equals the caller's expected value. The first write
+// at a fresh expected number lands; a stale expected number -- the shape a
+// call whose snapshot lost a concurrent generation race carries -- lands
+// nothing and leaves the row byte-for-byte as the winner's write left it;
+// the fresh number then lands the next write.
+func TestAuthorityRepository_UpdateCRLIfCurrent_GuardedTransition(t *testing.T) {
+	repo := NewAuthorityRepository(newTestDB(t))
+	ctx := context.Background()
+
+	authority := newTestAuthority("auth-crl-guard", AuthorityTypeRoot, nil)
+	if err := repo.Create(ctx, authority); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	issuedAt := time.Now().UTC()
+	nextUpdate := issuedAt.Add(24 * time.Hour)
+	winnerPEM := "-----BEGIN X509 CRL-----\nwinner\n-----END X509 CRL-----\n"
+	stalePEM := "-----BEGIN X509 CRL-----\nstale-loser\n-----END X509 CRL-----\n"
+
+	moved, err := repo.UpdateCRLIfCurrent(ctx, authority.ID, 0, 1, winnerPEM, issuedAt, nextUpdate)
+	if err != nil {
+		t.Fatalf("UpdateCRLIfCurrent(fresh): %v", err)
+	}
+	if !moved {
+		t.Fatal("UpdateCRLIfCurrent(fresh expected number) moved = false, want true")
+	}
+
+	// A concurrent generator already advanced the register to 1 by the time
+	// this stale call writes: its expected number 0 matches nothing, and its
+	// document must not overwrite the winner's committed one.
+	moved, err = repo.UpdateCRLIfCurrent(ctx, authority.ID, 0, 1, stalePEM, issuedAt, nextUpdate)
+	if err != nil {
+		t.Fatalf("UpdateCRLIfCurrent(stale): %v", err)
+	}
+	if moved {
+		t.Fatal("UpdateCRLIfCurrent(stale expected number) moved = true, want false")
+	}
+	got, err := repo.FindByID(ctx, authority.ID)
+	if err != nil {
+		t.Fatalf("FindByID(after stale write): %v", err)
+	}
+	if got.CRLNumber != 1 || got.CRLPEM != winnerPEM {
+		t.Errorf("FindByID(after stale write) = CRLNumber %d / CRLPEM %q, want the winner's 1 / %q -- the stale call overwrote the committed row", got.CRLNumber, got.CRLPEM, winnerPEM)
+	}
+
+	// The next generator reads the fresh number 1 and its write lands.
+	moved, err = repo.UpdateCRLIfCurrent(ctx, authority.ID, 1, 2, stalePEM, issuedAt, nextUpdate)
+	if err != nil {
+		t.Fatalf("UpdateCRLIfCurrent(fresh after stale): %v", err)
+	}
+	if !moved {
+		t.Fatal("UpdateCRLIfCurrent(fresh number after the stale write) moved = false, want true")
+	}
+	got, err = repo.FindByID(ctx, authority.ID)
+	if err != nil {
+		t.Fatalf("FindByID(after second write): %v", err)
+	}
+	if got.CRLNumber != 2 {
+		t.Errorf("FindByID(after second write) CRLNumber = %d, want 2", got.CRLNumber)
+	}
+}
+
 // TestAuthorityRepository_ListAll_ReturnsEveryAuthority proves round 3's
 // RegenerateAllCRLs query: every authority, regardless of type.
 func TestAuthorityRepository_ListAll_ReturnsEveryAuthority(t *testing.T) {

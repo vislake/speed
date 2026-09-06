@@ -29,6 +29,17 @@ import (
 // trusting a month-stale revocation list.
 const DefaultCRLValidity = 7 * 24 * time.Hour
 
+// maxGenerateCRLAttempts is how many read-sign-persist rounds GenerateCRL
+// may make before giving up on an authority whose CRLNumber keeps moving
+// under it. Sixteen is generous headroom over any plausible number of
+// concurrently overlapping generators of one authority's CRL: each
+// committed conditional write advances the register by exactly one, so k
+// contenders need k winning rounds and the k-th winner makes at most k
+// attempts -- a call can only exhaust this bound under >16-way contention,
+// and exhaustion surfaces as a returned error rather than a silently
+// dropped tick, which the periodic regeneration job's next run retries.
+const maxGenerateCRLAttempts = 16
+
 // encodeCRLPEM PEM-encodes a DER CRL under the standard "X509 CRL" block
 // type (RFC 7468), the same way encodeCertificatePEM encodes a certificate.
 func encodeCRLPEM(der []byte) string {
@@ -44,17 +55,34 @@ func encodeCRLPEM(der []byte) string {
 //
 // validity controls NextUpdate - ThisUpdate; a value <=0 falls back to
 // DefaultCRLValidity. CRLNumber (RFC 5280 §5.2.3) increases by exactly one
-// on every call, including a call that finds zero revocations -- an empty
-// CRL is still a valid, meaningfully-refreshed document (its NextUpdate
-// tells a verifier when to check again), never skipped just because
-// nothing new happened.
+// on every SUCCESSFUL call, including a call that finds zero revocations --
+// an empty CRL is still a valid, meaningfully-refreshed document (its
+// NextUpdate tells a verifier when to check again), never skipped just
+// because nothing new happened.
+//
+// # Concurrent calls are arbitrated on the CRL-number register
+//
+// The document is signed from a snapshot (the authority row's CRLNumber and
+// the revocation ledger read below), then persisted through
+// AuthorityRepository.UpdateCRLIfCurrent (repository.go) -- ONE guarded
+// UPDATE matching only a row whose CRLNumber is still the number this call
+// read, never a blind full-row save. Two overlapping GenerateCRL calls for
+// one authority can both read CRLNumber N, but only the first call's
+// conditional write lands; the loser re-reads and regenerates at the
+// winner's number (N+1 -> N+2), so however many calls overlap, every
+// successful call advances the register by exactly one and a losing call's
+// revocation snapshot is folded into its retry's document rather than
+// dropped. The retry loop is bounded by maxGenerateCRLAttempts: a call that
+// keeps losing the arbitration that many times returns an error rather than
+// overwriting, and the periodic regeneration job's next run retries.
 //
 // GenerateCRL runs regardless of authority.CRLDistributionPoint: that field
 // only controls whether OTHER certificates this authority signs carry a
 // CRLDistributionPoints extension pointing back at it (ca.go's
 // CreateIntermediateCA/IssueCertificate); it is not a gate on whether a CRL
 // document itself may exist. The HTTP surface that SERVES the generated
-// document (crat's own fetch operation, handler.go) is a separate concern.
+// document (the handler's own CRL fetch operation, handler.go) is a
+// separate concern.
 //
 // ErrAuthorityNotFound if authorityID does not exist. A Signer.Sign failure
 // that is not already a coded *apperr.Error is wrapped as
@@ -65,64 +93,82 @@ func (s *CAService) GenerateCRL(ctx context.Context, authorityID string, validit
 		validity = DefaultCRLValidity
 	}
 
-	authority, err := s.authorities.FindByID(ctx, authorityID)
-	if err != nil {
-		return nil, err
-	}
-	issuerCert, err := parseCertificatePEM(authority.CertificatePEM)
-	if err != nil {
-		return nil, fmt.Errorf("pki: parse authority %q certificate: %w", authorityID, err)
-	}
-
-	revocations, err := s.revocations.ListByAuthority(ctx, authorityID)
-	if err != nil {
-		return nil, err
-	}
-	entries := make([]x509.RevocationListEntry, 0, len(revocations))
-	for _, rev := range revocations {
-		serial, ok := new(big.Int).SetString(rev.Serial, 16)
-		if !ok {
-			return nil, fmt.Errorf("pki: revocation ledger entry %q has an unparseable serial %q", rev.ID, rev.Serial)
-		}
-		entries = append(entries, x509.RevocationListEntry{
-			SerialNumber:   serial,
-			RevocationTime: rev.RevokedAt,
-		})
-	}
-
-	now := time.Now().UTC()
-	nextNumber := authority.CRLNumber + 1
-	template := &x509.RevocationList{
-		Number:                    big.NewInt(nextNumber),
-		ThisUpdate:                now,
-		NextUpdate:                now.Add(validity),
-		RevokedCertificateEntries: entries,
-	}
-
-	signer := signerAdapter{ctx: ctx, signer: s.signer, keyRef: authority.KeyRef, public: issuerCert.PublicKey}
-	der, err := x509.CreateRevocationList(rand.Reader, template, issuerCert, signer)
-	if err != nil {
-		if _, ok := apperr.As(err); ok {
+	// The read-sign-persist cycle runs inside this loop because the persist
+	// step is a guarded CAS: a call that loses it must not overwrite the
+	// concurrent winner's committed document, it must re-read the fresh
+	// register and regenerate at the number the winner left free.
+	for attempt := 1; ; attempt++ {
+		authority, err := s.authorities.FindByID(ctx, authorityID)
+		if err != nil {
 			return nil, err
 		}
-		return nil, ErrSignerUnavailable.WithCause(err)
-	}
+		issuerCert, err := parseCertificatePEM(authority.CertificatePEM)
+		if err != nil {
+			return nil, fmt.Errorf("pki: parse authority %q certificate: %w", authorityID, err)
+		}
 
-	authority.CRLNumber = nextNumber
-	authority.CRLPEM = encodeCRLPEM(der)
-	authority.CRLIssuedAt = &now
-	nextUpdate := template.NextUpdate
-	authority.CRLNextUpdate = &nextUpdate
-	if err := s.authorities.Update(ctx, authority); err != nil {
-		return nil, fmt.Errorf("pki: store CRL for authority %q: %w", authorityID, err)
-	}
+		revocations, err := s.revocations.ListByAuthority(ctx, authorityID)
+		if err != nil {
+			return nil, err
+		}
+		entries := make([]x509.RevocationListEntry, 0, len(revocations))
+		for _, rev := range revocations {
+			serial, ok := new(big.Int).SetString(rev.Serial, 16)
+			if !ok {
+				return nil, fmt.Errorf("pki: revocation ledger entry %q has an unparseable serial %q", rev.ID, rev.Serial)
+			}
+			entries = append(entries, x509.RevocationListEntry{
+				SerialNumber:   serial,
+				RevocationTime: rev.RevokedAt,
+			})
+		}
 
-	observability.FromContext(ctx).Info("pki CRL generated",
-		"authority_id", authorityID,
-		"crl_number", nextNumber,
-		"revoked_count", len(entries),
-	)
-	return authority, nil
+		now := time.Now().UTC()
+		nextNumber := authority.CRLNumber + 1
+		template := &x509.RevocationList{
+			Number:                    big.NewInt(nextNumber),
+			ThisUpdate:                now,
+			NextUpdate:                now.Add(validity),
+			RevokedCertificateEntries: entries,
+		}
+
+		signer := signerAdapter{ctx: ctx, signer: s.signer, keyRef: authority.KeyRef, public: issuerCert.PublicKey}
+		der, err := x509.CreateRevocationList(rand.Reader, template, issuerCert, signer)
+		if err != nil {
+			if _, ok := apperr.As(err); ok {
+				return nil, err
+			}
+			return nil, ErrSignerUnavailable.WithCause(err)
+		}
+		crlPEM := encodeCRLPEM(der)
+
+		moved, err := s.authorities.UpdateCRLIfCurrent(ctx, authority.ID, authority.CRLNumber, nextNumber, crlPEM, now, template.NextUpdate)
+		if err != nil {
+			return nil, fmt.Errorf("pki: store CRL for authority %q: %w", authorityID, err)
+		}
+		if moved {
+			// This call's conditional write landed: its own document and
+			// register values are what the row now holds committed.
+			authority.CRLNumber = nextNumber
+			authority.CRLPEM = crlPEM
+			authority.CRLIssuedAt = &now
+			nextUpdate := template.NextUpdate
+			authority.CRLNextUpdate = &nextUpdate
+
+			observability.FromContext(ctx).Info("pki CRL generated",
+				"authority_id", authorityID,
+				"crl_number", nextNumber,
+				"revoked_count", len(entries),
+			)
+			return authority, nil
+		}
+		// Lost the CAS: a concurrent GenerateCRL committed a higher-numbered
+		// CRL between this call's read and its write. Regenerate at the
+		// fresh number -- never write this stale snapshot over the winner.
+		if attempt >= maxGenerateCRLAttempts {
+			return nil, fmt.Errorf("pki: generate CRL for authority %q: concurrent generation kept advancing crl_number across %d attempts", authorityID, maxGenerateCRLAttempts)
+		}
+	}
 }
 
 // RegenerateAllCRLs runs GenerateCRL, with DefaultCRLValidity, for every
@@ -180,10 +226,13 @@ const platformCRLRegenerateTenantID = pkgcore.TenantID("_pki_platform_crl")
 // GenerateCRL last wrote; it never generates on the read path itself).
 // Carries no payload, mirroring Service.EnqueueExpiryScan's identical "read
 // everything at run time" shape. No idempotency key: like the expiry scan,
-// each regeneration tick is its own independent occurrence, and
-// GenerateCRL's per-authority read-then-write is safe to run concurrently
-// with itself (a second overlapping tick simply produces a higher-numbered
-// CRL, never a corrupt one).
+// each regeneration tick is its own independent occurrence. GenerateCRL is
+// safe to run concurrently with itself -- its persist step is a guarded CAS
+// on the authority's crl_number register (repository.go's
+// UpdateCRLIfCurrent), so overlapping ticks converge on sequential numbers,
+// each landing its own document, instead of collapsing into a
+// last-writer-wins overwrite of one number (the pre-arbitration bug this
+// comment once claimed was impossible).
 //
 // A nil queue (Module constructed without WithQueue) reports a plain error,
 // the identical "no queue wired" answer Service.EnqueueExpiryScan gives.

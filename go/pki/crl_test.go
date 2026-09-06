@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 
@@ -126,6 +127,84 @@ func TestCAService_GenerateCRL_IncrementsCRLNumber(t *testing.T) {
 	}
 	if first.CRLNumber != 1 || second.CRLNumber != 2 {
 		t.Errorf("CRLNumber sequence = %d, %d, want 1, 2", first.CRLNumber, second.CRLNumber)
+	}
+}
+
+// TestCAService_GenerateCRL_ConcurrentCalls_EveryCallLandsItsOwnNumber is
+// the P2-3 regression proof: concurrent GenerateCRL calls for one authority
+// must each land its own CRL at its own number -- the register advances by
+// exactly one per successful call, however many calls overlap. Before the
+// fix the persist step was a blind full-row save of a read-modify-write
+// cycle, so racing calls that read the same CRLNumber both wrote the same
+// nextNumber: the loser's document silently overwrote the winner's, the
+// register advanced once where N calls had run, and a loser whose
+// revocation snapshot was older than the winner's dropped that revocation
+// from the persisted CRL until a later tick. The fix arbitrates the write
+// on the crl_number register (repository.go's UpdateCRLIfCurrent), so
+// exactly one racing call's conditional UPDATE lands per number and every
+// loser retries at the fresh number.
+//
+// The barrier shape and trial repetition mirror
+// TestCAService_RevokeCertificate_ConcurrentDoubleRevoke_ExactlyOneWinner's
+// identical rig (revocation_test.go): 8 goroutines released through a
+// closed channel, no sleeps, 25 trials. Each trial asserts every call
+// returned successfully and the final CRLNumber is exactly initial+8 --
+// under the unguarded code most trials lost at least one update -- plus
+// the stored document's own Number field agreeing with the column, the
+// invariant a verifier actually relies on.
+func TestCAService_GenerateCRL_ConcurrentCalls_EveryCallLandsItsOwnNumber(t *testing.T) {
+	const (
+		goroutines = 8
+		trials     = 25
+	)
+	ctx := context.Background()
+
+	for trial := 0; trial < trials; trial++ {
+		ca := newTestCAService(t)
+		root, err := ca.CreateRootCA(ctx, RootCAParams{
+			Subject:  pkix.Name{CommonName: "speed Root CA"},
+			NotAfter: time.Now().Add(24 * time.Hour),
+		})
+		if err != nil {
+			t.Fatalf("trial %d: CreateRootCA: %v", trial, err)
+		}
+
+		errs := make([]error, goroutines)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i := 0; i < goroutines; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				_, errs[i] = ca.GenerateCRL(ctx, root.ID, 0)
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("trial %d: GenerateCRL goroutine %d: %v", trial, i, err)
+			}
+		}
+
+		got, err := ca.authorities.FindByID(ctx, root.ID)
+		if err != nil {
+			t.Fatalf("trial %d: FindByID: %v", trial, err)
+		}
+		if want := root.CRLNumber + goroutines; got.CRLNumber != want {
+			t.Fatalf("trial %d: CRLNumber = %d after %d concurrent GenerateCRL calls (was %d), want %d -- at least one call's update was lost, two calls persisted the same number", trial, got.CRLNumber, goroutines, root.CRLNumber, want)
+		}
+
+		// The persisted document's own Number must agree with the register
+		// column: a verifier keys its caching on the document's embedded
+		// number, and the row claims a number the document does not carry
+		// whenever a blind save races the guard.
+		rl := parseCRLPEM(t, got.CRLPEM)
+		if rl.Number == nil || rl.Number.Int64() != got.CRLNumber {
+			t.Errorf("trial %d: stored CRL document Number = %v, want %d (the authority row's CRLNumber)", trial, rl.Number, got.CRLNumber)
+		}
 	}
 }
 

@@ -233,9 +233,11 @@ type Authority struct {
 	CRLDistributionPoint string `gorm:"column:crl_distribution_point;size:500;not null;default:''"`
 
 	// CRLNumber is the CRL sequence number (RFC 5280 §5.2.3) of the most
-	// recently generated CRL, monotonically increasing across every call to
-	// CAService.GenerateCRL for this authority. 0 means no CRL has been
-	// generated yet.
+	// recently generated CRL, monotonically increasing by exactly one across
+	// every successful call to CAService.GenerateCRL for this authority --
+	// the register that method's guarded conditional write (repository.go's
+	// UpdateCRLIfCurrent) arbitrates concurrent generation on. 0 means no
+	// CRL has been generated yet.
 	CRLNumber int64 `gorm:"column:crl_number;not null;default:0"`
 
 	// CRLPEM is the most recently generated CRL, PEM encoded ("X509 CRL"

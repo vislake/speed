@@ -293,11 +293,68 @@ func (r *AuthorityRepository) FindByID(ctx context.Context, id string) (*Authori
 }
 
 // Update persists every field of authority -- the same full-Save shape
-// SigningKeyRepository.Update documents. Round 3's addition: GenerateCRL
-// (crl.go) loads an Authority via FindByID, mutates only its CRL* fields,
-// and calls this to write the refreshed CRL back.
+// SigningKeyRepository.Update documents. Round 3's addition; GenerateCRL
+// wrote refreshed CRLs through it until the CRL-arbitration round replaced
+// that write with UpdateCRLIfCurrent's guarded form below -- a full-row
+// Save from a stale snapshot could clobber a concurrent writer's committed
+// row (a second generator's CRL, or a future round's Status transition).
+// What remains: callers that own the row exclusively. The module's own
+// tests seed revoked-authority rows through it (revocation_test.go,
+// ca_test.go), the one precedent that exists today.
 func (r *AuthorityRepository) Update(ctx context.Context, authority *Authority) error {
 	return r.db.WithContext(ctx).Save(authority).Error
+}
+
+// UpdateCRLIfCurrent persists one freshly generated CRL -- the PEM document
+// crlPEM numbered crlNumber, issued at issuedAt and current until nextUpdate
+// -- onto the authority id in ONE guarded statement matching only a row
+// whose CRLNumber is still expectedNumber, reporting (true, nil) when THIS
+// call's write landed and (false, nil) when the row exists but its
+// CRLNumber has advanced past expectedNumber (a concurrent
+// CAService.GenerateCRL committed a higher-numbered CRL between this
+// caller's read and its write).
+//
+// The crl_number guard is what makes concurrent CRL generation converge
+// instead of last-writer-wins -- the same database-arbitrated idiom
+// RevokeIfActive uses for the certificate-row transition. Two overlapping
+// GenerateCRL calls can both read CRLNumber N, but only the first
+// UPDATE ... WHERE crl_number = N matches and commits, so a loser can never
+// persist its own snapshot -- and its own nextNumber N+1 -- over the
+// winner's committed document and register. GenerateCRL (crl.go) re-reads
+// and regenerates on a (false, nil) answer, so the loser's revocation
+// snapshot is folded into a fresh, higher-numbered document rather than
+// silently dropped: every successful GenerateCRL call advances the register
+// by exactly one, however many calls overlap.
+//
+// The statement writes ONLY the four CRL columns (plus the updated_at
+// auto-update timestamp), never a full-row Save: a caller whose snapshot is
+// stale must not resurrect its old Status/RevokedAt/RevocationReason values
+// over a concurrent writer's committed row -- the exact blind-save
+// disagreement RevokeIfActive's own guard exists to prevent on
+// pki_certificates, which a CRL write racing a revocation would otherwise
+// reintroduce on pki_authorities.
+//
+// RowsAffected == 0 deliberately does not distinguish "id does not exist"
+// from "CRLNumber moved": callers are expected to have loaded the row
+// through FindByID first, which answers the former with ErrAuthorityNotFound.
+func (r *AuthorityRepository) UpdateCRLIfCurrent(ctx context.Context, id string, expectedNumber, crlNumber int64, crlPEM string, issuedAt, nextUpdate time.Time) (bool, error) {
+	// A struct (not a map) as the Updates argument, with no .Model() call:
+	// GORM infers the table from the struct type and writes only the four
+	// non-zero CRL fields -- the same partial-update shape PromoteToActive
+	// documents, clear of the raw-GORM-bypass entry point
+	// (tools/semgrep_rules/raw-gorm-bypass.yml).
+	res := r.db.WithContext(ctx).
+		Where("id = ? AND crl_number = ?", id, expectedNumber).
+		Updates(&Authority{
+			CRLNumber:     crlNumber,
+			CRLPEM:        crlPEM,
+			CRLIssuedAt:   &issuedAt,
+			CRLNextUpdate: &nextUpdate,
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
 
 // ListAll returns every authority, in no particular order. Round 3's
