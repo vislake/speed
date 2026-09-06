@@ -539,10 +539,21 @@ func (s *Service) resolve(ctx context.Context, item *schemaItem) (string, Scope,
 // when present; a miss reads the store and populates the cache (Sensitive
 // rows are decrypted on this read -- the cache holds the plaintext
 // canonical form, see valueCache's doc comment).
+//
+// The read-through backfill is generation-guarded: the cache's mutation
+// generation is captured before the store read, and the backfill (through
+// valueCache.putIfUnchanged) is dropped when any cache mutation landed
+// while the read was in flight -- a concurrent Set's own put or its
+// invalidate, a poller sweep, a remote config.item.changed. Without the
+// guard, a backfill whose store read completed before a concurrent write
+// could land after that write's invalidate, planting the pre-write value
+// in the cache until the next invalidation of the key or the periodic full
+// reconciliation evicted it.
 func (s *Service) resolveRow(ctx context.Context, item *schemaItem, scope Scope, tenant pkgcore.TenantID) (string, bool, error) {
 	if entry, ok := s.cache.get(item.key, scope, tenant); ok {
 		return entry.canonical, true, nil
 	}
+	generation := s.cache.generation()
 	r, err := s.st.get(ctx, scope, string(tenant), item.key)
 	if err != nil {
 		return "", false, ErrStorage.WithCause(err)
@@ -558,7 +569,7 @@ func (s *Service) resolveRow(ctx context.Context, item *schemaItem, scope Scope,
 		}
 		canonical = plain
 	}
-	s.cache.put(item.key, scope, tenant, canonical, r.UpdatedAt)
+	s.cache.putIfUnchanged(item.key, scope, tenant, canonical, r.UpdatedAt, generation)
 	return canonical, true, nil
 }
 

@@ -1328,3 +1328,63 @@ func TestService_RemoteDelivery_InvalidatesFromTheWireMap(t *testing.T) {
 		t.Fatal("no watch delivery from the remote-shaped event")
 	}
 }
+
+func TestService_ConcurrentReadBackfill_NeverOutlivesTheWritersInvalidate(t *testing.T) {
+	// The read-through backfill (resolveRow) must not plant a value a
+	// concurrent Set already superseded: a reader whose store read completed
+	// before a write could otherwise land its pre-write backfill after the
+	// Set's own cache put and its invalidate, leaving the older value
+	// cached -- and served -- until the next event for that key or the
+	// periodic full reconciliation evicted it. There is no poller here
+	// (WithPollInterval(0)), so nothing but the write path could heal such a
+	// cache.
+	//
+	// After the writer's last Set has returned, the final value is served
+	// deterministically: a reader backfill that began before that write
+	// either read the final row or was dropped by the generation guard
+	// (valueCache.putIfUnchanged -- see its doc comment for the exact
+	// invariant), so no pre-write value can be cached past the write's own
+	// invalidate. The precise interleaving is exercised deterministically
+	// by the valueCache-level tests in cache_test.go; this test drives the
+	// same invariant through the composed service under real concurrency.
+	svc := attachDefaultServiceForTest(t)
+	const key = "brand.site_name"
+	if err := svc.Set(systemWriteCtx(t), ScopeSystem, key, Value{Data: "v0"}, "ops-1"); err != nil {
+		t.Fatalf("seed Set: %v", err)
+	}
+
+	stop := make(chan struct{})
+	var readers sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_, _ = svc.Get(context.Background(), key)
+				}
+			}
+		}()
+	}
+
+	const writes = 200
+	for i := 1; i <= writes; i++ {
+		if err := svc.Set(systemWriteCtx(t), ScopeSystem, key, Value{Data: fmt.Sprintf("v%d", i)}, "ops-1"); err != nil {
+			t.Fatalf("Set v%d: %v", i, err)
+		}
+	}
+	close(stop)
+	readers.Wait()
+
+	v, err := svc.Get(context.Background(), key)
+	if err != nil {
+		t.Fatalf("Get after the writer finished: %v", err)
+	}
+	if v.Data != fmt.Sprintf("v%d", writes) {
+		t.Fatalf("Get after the writer finished = %#v, want v%d (a read-through backfill outlived the last write's invalidate)",
+			v.Data, writes)
+	}
+}

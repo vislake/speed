@@ -45,6 +45,18 @@ type cacheEntry struct {
 type valueCache struct {
 	mu      sync.RWMutex
 	entries map[cacheKey]cacheEntry
+
+	// gen counts every mutation of entries -- put, a successful
+	// putIfUnchanged, invalidate and invalidateAll alike. A read-through
+	// backfill captures it (via the generation method) before its store
+	// read and refuses to land (putIfUnchanged) once it has moved: a
+	// mutation in between means the row may have changed since the read
+	// began, so the backfill could plant a value the writer already
+	// superseded. See putIfUnchanged and (*Service).resolveRow. A wrap at
+	// 2^64 mutations is not guarded against: reaching it would take longer
+	// than the cache's lifetime on any real schedule of config writes, and
+	// a wrap would only drop a backfill, never serve a stale one.
+	gen uint64
 }
 
 // newValueCache returns an empty cache.
@@ -63,22 +75,63 @@ func (c *valueCache) get(key string, scope Scope, tenant pkgcore.TenantID) (cach
 	return entry, ok
 }
 
-// put caches the canonical value of one row.
+// generation returns the cache's mutation generation (see the valueCache
+// struct's field comment). A caller about to read the store -- a
+// read-through backfill -- captures it first, then passes the captured
+// value to putIfUnchanged, which lands the backfill only if no mutation
+// happened while the read was in flight.
+func (c *valueCache) generation() uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.gen
+}
+
+// put caches the canonical value of one row. put is the writer's own path:
+// (*Service).Set stores the value it just wrote, so it always lands. Like
+// every mutation it advances generation, which is what makes a concurrent
+// read-through backfill that captured the older generation drop instead of
+// overwriting this fresh value (see putIfUnchanged).
 func (c *valueCache) put(key string, scope Scope, tenant pkgcore.TenantID, canonical string, updatedAt time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries[cacheKey{key: key, scope: scope, tenant: tenant}] = cacheEntry{canonical: canonical, updatedAt: updatedAt}
+	c.gen++
+}
+
+// putIfUnchanged is the read-through backfill path: it caches the row only
+// when no cache mutation happened since the caller captured gen (via
+// generation, before its store read). A mutation in that window means the
+// row may have changed since the read began -- a concurrent Set's own put
+// and its invalidate, a poller sweep, a remote config.item.changed -- so
+// the backfill is dropped: landing it could overwrite the newer value, or
+// refill a slot the writer just invalidated, with a value the writer
+// already superseded, leaving the cache stale until the next invalidation
+// of that key or the periodic full reconciliation. Dropping costs one
+// store read on the next access, never a stale serve. On success it
+// advances generation exactly like put, so a later backfill from an older
+// capture drops too.
+func (c *valueCache) putIfUnchanged(key string, scope Scope, tenant pkgcore.TenantID, canonical string, updatedAt time.Time, captured uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.gen != captured {
+		return
+	}
+	c.entries[cacheKey{key: key, scope: scope, tenant: tenant}] = cacheEntry{canonical: canonical, updatedAt: updatedAt}
+	c.gen++
 }
 
 // invalidate drops the cached row for one exact (key, scope, tenant). It is
 // the invalidation half of every "value changed" path: the local Set, the
 // config.item.changed subscriber and the poller all converge on it, so a
 // stale entry cannot survive whichever of the three noticed the change
-// first.
+// first. Generation advances whether or not an entry was present to drop:
+// the call itself reports a change to the row, and an in-flight
+// read-through backfill of the pre-change value must not land after it.
 func (c *valueCache) invalidate(key string, scope Scope, tenant pkgcore.TenantID) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.entries, cacheKey{key: key, scope: scope, tenant: tenant})
+	c.gen++
 }
 
 // invalidateAll drops every cached entry at once. It is Refresh's periodic
@@ -89,10 +142,14 @@ func (c *valueCache) invalidate(key string, scope Scope, tenant pkgcore.TenantID
 // stay stale is to evict it -- along with everything else -- on a fixed
 // schedule that does not depend on the watermark at all. The next read of
 // any key falls through to the store and observes its true current value.
+// The one generation advance covers the whole wipe, so an in-flight
+// backfill from before the reconciliation is dropped rather than
+// repopulating the fresh cache with a row the wipe just retired.
 func (c *valueCache) invalidateAll() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries = make(map[cacheKey]cacheEntry)
+	c.gen++
 }
 
 // watch is one registered Watch callback. Watches are keyed by
