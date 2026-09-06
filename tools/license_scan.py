@@ -107,8 +107,35 @@ TESTDATA_REL = os.path.join("tools", "license_scan_testdata")
 
 # Workspace module path prefixes: not external dependencies.
 WORKSPACE_PREFIXES = ("github.com/vislake/speed/", "@speed/")
-# npm dependency specs that point at workspace packages or local files.
-NPM_SKIP_SPEC = ("workspace:", "file:", "link:", "npm:")
+# npm dependency specs that point at workspace packages or local files --
+# never registry packages, so they are not part of the delivery list.
+# An npm: spec is deliberately NOT skipped: pnpm aliases a real registry
+# package under a local name ("copy": "npm:lodash-es@^4.17.21" installs
+# lodash-es's package), and the license that ships is lodash-es's -- the
+# alias must be adjudicated as the registry package it is, resolved by
+# _alias_registry_name below.
+NPM_SKIP_SPEC = ("workspace:", "file:", "link:")
+
+
+def _alias_registry_name(spec):
+    """Registry package name an npm: alias spec points at, or None.
+
+    A plain spec (no npm: prefix) has no alias; its declared name IS the
+    registry name. An alias spec names the registry package after the
+    prefix, optionally with a version range: "npm:lodash-es@^4.17.21"
+    aliases lodash-es, "npm:@scope/pkg@^1.0.0" aliases the scoped
+    @scope/pkg (the leading '@' belongs to the scope; only a second one
+    starts the version), and "npm:lodash-es" aliases lodash-es at its
+    default tag.
+    """
+    if not spec.startswith("npm:"):
+        return None
+    rest = spec[len("npm:"):]
+    if rest.startswith("@"):
+        second_at = rest.find("@", 1)
+        return rest if second_at == -1 else rest[:second_at]
+    at = rest.rfind("@")
+    return rest if at == -1 else rest[:at]
 
 
 def repo_root():
@@ -176,7 +203,16 @@ def go_expected(go_root):
 
 def manifest_declared(package_json_path):
     """dependencies + peerDependencies of one package.json, minus workspace
-    and local specs: {name: range}."""
+    and local specs: {declared_name: registry_name}.
+
+    For a plain dependency the declared name IS the registry name. For an
+    npm: alias -- "copy": "npm:lodash-es@^4.17.21" -- the declared name
+    is the local alias while the registry name (lodash-es) is what the
+    manifest must adjudicate: the license that ships is lodash-es's. The
+    manifest entry is therefore keyed by registry name in both cases,
+    and the lockfile lookup below keys on the declared (alias) name,
+    which is what the importer block's key is.
+    """
     declared = {}
     with open(package_json_path) as fh:
         data = json.load(fh)
@@ -184,17 +220,29 @@ def manifest_declared(package_json_path):
         for name, spec in (data.get(section) or {}).items():
             if any(spec.startswith(p) for p in NPM_SKIP_SPEC):
                 continue
-            declared[name] = spec
+            declared[name] = _alias_registry_name(spec) or name
     return declared
 
 
-def lockfile_resolve(lock_path, importer, names):
-    """Resolve {name: version} for names from the pnpm-lock.yaml importer
-    block of one workspace package (lockfile v9 layout). The exact version
-    is what a frozen-lockfile install yields.
+def _declared_label(declared_name, registry_name):
+    """How an error message names one dependency: the declared key, and
+    the aliased registry package when the two differ."""
+    if declared_name == registry_name:
+        return declared_name
+    return f"{declared_name} (an npm: alias of {registry_name})"
 
-    Returns (resolved, errors): versions found; error lines for names that
-    cannot be resolved or resolve to more than one distinct version."""
+
+def lockfile_resolve(lock_path, importer, declared):
+    """Resolve {registry_name: version} for a package.json's declared
+    dependencies from the pnpm-lock.yaml importer block of one workspace
+    package (lockfile v9 layout). declared maps the package.json key --
+    the importer block's key, which for an npm: alias is the local alias
+    name -- to the registry name the manifest must adjudicate. The exact
+    version is what a frozen-lockfile install yields.
+
+    Returns (resolved, errors): versions found, keyed by registry name;
+    error lines for declared keys that cannot be resolved or resolve to
+    more than one distinct version."""
     with open(lock_path) as fh:
         text = fh.read()
     # The importers section ends where the top-level "packages:" section
@@ -209,10 +257,13 @@ def lockfile_resolve(lock_path, importer, names):
     if importer not in sections:
         return {}, [f"pnpm-lock.yaml has no importer block for packages/{importer}"]
     section = sections[importer]
-    resolved, errors = {}, []
-    for name in sorted(names):
-        quoted = re.escape(name)
-        # Name key at six-space indent (inside dependencies /
+    resolved: dict[str, set[str]] = {}
+    errors: dict[str, list[str]] = {}
+    for declared_name in sorted(declared):
+        registry_name = declared[declared_name]
+        label = _declared_label(declared_name, registry_name)
+        quoted = re.escape(declared_name)
+        # Declared-name key at six-space indent (inside dependencies /
         # devDependencies / peerDependencies), optional quotes for scoped
         # names; version line directly after the specifier line. The
         # version may carry a peer-resolution suffix in parentheses
@@ -224,26 +275,41 @@ def lockfile_resolve(lock_path, importer, names):
             re.M)
         versions = pattern.findall(section)
         if not versions:
-            errors.append(
-                f"npm dependency {name} is declared by packages/{importer} "
+            errors.setdefault(registry_name, []).append(
+                f"npm dependency {label} is declared by packages/{importer} "
                 f"but pnpm-lock.yaml resolves no version for it -- the "
                 f"frozen-lockfile install is broken or the lockfile is stale")
             continue
+        # For an aliased dependency pnpm spells the resolved version with
+        # the registry name prefixed ("version: lodash-es@4.17.21" under
+        # the local alias key -- verified against pnpm v11's own lockfile
+        # output), since the importer key is the alias, not the package.
+        # Strip that prefix so the manifest version is the plain one; a
+        # plain dependency's version never carries a name prefix.
+        versions = [
+            v[len(registry_name) + 1:] if v.startswith(registry_name + "@")
+            else v
+            for v in versions
+        ]
         distinct = sorted(set(versions))
         if len(distinct) > 1:
-            errors.append(
-                f"npm dependency {name} resolves to {distinct} in "
+            errors.setdefault(registry_name, []).append(
+                f"npm dependency {label} resolves to {distinct} in "
                 f"pnpm-lock.yaml packages/{importer} -- cannot pin one "
                 f"manifest version")
             continue
-        resolved[name] = distinct[0]
-    return resolved, errors
+        resolved.setdefault(registry_name, set()).add(distinct[0])
+    problems: list[str] = []
+    for registry_name in sorted(errors):
+        problems.extend(errors[registry_name])
+    return resolved, problems
 
 
 def npm_expected(web_root, lock_path):
     """Scan every web/packages/*/package.json with dependencies or peers:
-    {(name, version): [package dirs...]}, versions resolved from the
-    lockfile. Returns (expected, errors)."""
+    {(registry_name, version): [package dirs...]}, versions resolved from
+    the lockfile; an aliased npm: spec is adjudicated under the registry
+    package it really is. Returns (expected, errors)."""
     expected = {}
     errors = []
     packages_dir = os.path.join(web_root, "packages")
@@ -257,11 +323,14 @@ def npm_expected(web_root, lock_path):
         if not declared:
             continue
         resolved, resolve_errors = lockfile_resolve(
-            lock_path, package, set(declared))
+            lock_path, package, declared)
         errors.extend(resolve_errors)
         package_dir = os.path.join("web", "packages", package)
-        for name, version in resolved.items():
-            expected.setdefault((name, version), []).append(package_dir)
+        for registry_name, versions in resolved.items():
+            for version in sorted(versions):
+                expected.setdefault(
+                    ("npm", registry_name, version), []
+                ).append(package_dir)
     for uses in expected.values():
         uses.sort()
     return expected, errors
@@ -277,8 +346,8 @@ def expected_set(root):
     lock_path = os.path.join(root, "web", "pnpm-lock.yaml")
     npm, npm_errors = npm_expected(os.path.join(root, "web"), lock_path)
     errors.extend(npm_errors)
-    for (name, version), uses in npm.items():
-        expected[("npm", name, version)] = uses
+    for (ecosystem, name, version), uses in npm.items():
+        expected[(ecosystem, name, version)] = uses
     return expected, errors
 
 

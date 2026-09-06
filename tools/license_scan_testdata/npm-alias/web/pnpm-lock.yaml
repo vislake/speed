@@ -1,0 +1,9 @@
+lockfileVersion: '9.0'
+
+importers:
+
+  packages/p1:
+    dependencies:
+      lodash-copy:
+        specifier: npm:lodash-es@^4.17.21
+        version: lodash-es@4.17.21

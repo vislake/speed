@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "dependencies": [
+    {"ecosystem": "npm", "name": "lodash-es", "version": "4.17.21", "license": "MIT", "used_by": ["web/packages/p1"], "evidence": "fixture"}
+  ]
+}
