@@ -82,7 +82,44 @@ const external = process.env.E2E_BASE_URL !== undefined
  * next one arguing with a half-written file, and outside the repository
  * so no run can dirty a working tree.
  */
-const databasePath = join(tmpdir(), `reference-app-e2e-${Date.now()}-${process.pid}.db`)
+// Through the environment, not a module constant: this file is imported
+// by the runner AND by every worker process, so a value computed at
+// import time would differ per process -- the server would write one
+// database and a spec would look for another. The runner evaluates this
+// first and workers inherit the variable it set, so all of them name the
+// same file.
+process.env.E2E_DB_PATH ??= join(
+  tmpdir(),
+  `reference-app-e2e-${Date.now()}-${process.pid}.db`,
+)
+const databasePath = process.env.E2E_DB_PATH
+
+/**
+ * Where the server's own output is captured for the one journey that
+ * needs to read it: the invitation flow.
+ *
+ * An invitation token never appears in an API response -- it is a bearer
+ * credential handed to the invitee alone, through the message the server
+ * sends (go/org's own fragment says so), and this app has no
+ * team-management UI to click through instead. In standalone mode the
+ * Mailer seam resolves to the console mailer, whose entire purpose is to
+ * print the mail a developer would otherwise have to intercept, so the
+ * suite reads it the same way that developer would: from the server's
+ * output. It is the cross-process form of what the app's own Go flow test
+ * does with a capturing mailer.
+ *
+ * Nothing else reads this file, and no product code knows it exists.
+ *
+ * Through the environment for the same reason the database path is: the
+ * writer is the server the runner started, the reader is a spec in a
+ * worker process, and a per-import value would leave them looking at two
+ * different files.
+ */
+process.env.E2E_SERVER_LOG_PATH ??= join(
+  tmpdir(),
+  `reference-app-e2e-${Date.now()}-${process.pid}.log`,
+)
+export const SERVER_LOG_PATH = process.env.E2E_SERVER_LOG_PATH
 
 /**
  * The passphrase that gates demo-account seeding
@@ -124,8 +161,13 @@ export default defineConfig({
         {
           // `go run` rather than a prebuilt binary: the Go build cache
           // makes the second run cheap, and one command keeps the
-          // toolchain's own module resolution (go.work) intact.
-          command: 'go run ./cmd/server',
+          // toolchain's own module resolution (go.work) intact. The
+          // redirection is what makes the console mailer's output
+          // readable to the invitation journey (SERVER_LOG_PATH above);
+          // stdout stays out of the test report either way.
+          // Only stdout is redirected: stderr stays on the process, so a
+          // server that fails to boot still says so in the test report.
+          command: `sh -c 'go run ./cmd/server > "${SERVER_LOG_PATH}"'`,
           cwd: serverDir,
           url: `http://localhost:${apiPort}/healthz`,
           // A cold build of this app compiles every go/* module it
