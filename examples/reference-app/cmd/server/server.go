@@ -59,6 +59,7 @@ import (
 	"github.com/vislake/speed/go/storage"
 	"github.com/vislake/speed/go/tenancy"
 
+	"github.com/vislake/speed/examples/reference-app/internal/cases"
 	"github.com/vislake/speed/examples/reference-app/internal/consult"
 	"github.com/vislake/speed/examples/reference-app/internal/demo"
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
@@ -2640,6 +2641,33 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// buildServer's own ctx.
 	smileSimReconcilerStop = smileSimService.StartReconciler(context.Background(), 0)
 	wireSmileSim(mux, smileSimService, standaloneQueue)
+
+	// wireCasesRoutes mounts product round P2b's case domain
+	// (internal/cases, mounted in cmd/server/cases.go): the tenant-scoped
+	// Case records the P3 web UI will sit on, each grouping a patient
+	// (the clinic-given name/reference, embedded in the row) with the
+	// photos of the case. caseRepository shares this app's own db
+	// connection (like every store above) and gets its two tiny tables
+	// created imperatively via EnsureSchema -- the same CREATE TABLE IF
+	// NOT EXISTS pattern smileSimulationStore's own EnsureSchema call
+	// right above uses (internal/cases's package doc comment's "House
+	// discipline" section gives the same reasons for not joining
+	// migrationRegistry). The service it backs is deliberately free of
+	// the simulation layer: a case detail's per-photo simulations stay on
+	// the P2a enumeration route wireSmileSim just mounted (GET
+	// /api/v1/smile-simulation/photos/{photoObjectID}/simulations), which
+	// the P3 view fetches per photo rather than the case endpoint joining
+	// them (see that package doc comment's "Shape decision" section). The
+	// creator-attribution seam is demoNotesSubjectResolver, the same host
+	// type notes' module uses -- it satisfies the cases package's
+	// identical copy of the SubjectResolver declaration,
+	// compile-time-checked at the bottom of cmd/server/cases.go.
+	caseRepository := cases.NewRepository(db)
+	if err := caseRepository.EnsureSchema(ctx); err != nil {
+		_ = cleanup()
+		return nil, nil, nil, fmt.Errorf("reference-app: ensure cases schema: %w", err)
+	}
+	wireCasesRoutes(mux, cases.NewService(caseRepository), demoNotesSubjectResolver{})
 
 	// wireIntegrationAuthenticated mounts go/integration round 6's
 	// mandatory-first-consumer route (cmd/server/integration_authenticate.go):

@@ -188,22 +188,23 @@
 // that should be made on the acceptance run's evidence, not before it;
 // this round records the question rather than guessing.
 //
-// # Patient and case entities (a clean P2b, not this round)
+// # Patient and case entities (P2b, landed in internal/cases)
 //
-// The product vision's eventual domain -- a Patient record owning its
-// photos, and a Case (a treatment scenario) owning that patient's
-// simulations of one photo -- does NOT belong in this round, and was
-// deliberately not smuggled in: the per-photo index above is keyed by
-// go/storage photo object id only, which is the natural key at this
-// milestone because photos are already first-class objects with no
-// patient/case table anywhere in this app to attach to. Building a
-// patient/case dimension now would mean inventing the domain model before
-// the P3 gallery UI exists to validate its shape, on a record whose
-// photo-object-id key remains correct under either future model (a
-// patient/case layer would sit ABOVE the photo, adding its own tables and
-// referencing these records or their photos). Recommendation: P2b, done
-// as its own round alongside the gallery, when the gallery's queries make
-// the needed shape concrete.
+// This round deliberately built NO patient/case dimension: the per-photo
+// index above is keyed by go/storage photo object id only, which is the
+// natural key at this milestone because photos are already first-class
+// objects with no patient/case table anywhere in this app to attach to --
+// and its photo-object-id key was chosen to stay correct under either
+// future model, exactly as a case layer would sit ABOVE the photo.
+// Product round P2b executed that recommendation (see internal/cases's
+// package doc comment): a Case record now groups a clinic-given patient
+// (embedded in the case row) with the case's photos, and a case detail's
+// per-photo simulations come from THIS package's enumeration, fetched per
+// photo -- the index above is unmodified and stays the single per-photo
+// data source, now with a case layer referencing its photos' object ids
+// rather than any simulation record directly. What remains P3 work is the
+// gallery UI itself, whose queries this index and internal/cases now both
+// serve.
 package smilesim
 
 import (
