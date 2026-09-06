@@ -300,6 +300,78 @@ func TestClaimCandidates_OrdersByPriorityThenScheduledAt(t *testing.T) {
 	}
 }
 
+// TestClaimCandidates_FairShareRotationAcrossTenants_PriorityWithinTenantShare
+// pins the cross-tenant ordering contract Priority's own doc comment (job.go)
+// now states explicitly: tenant fair-share rotation takes precedence over
+// Priority ACROSS tenants, while Priority orders the Jobs WITHIN one tenant's
+// own share (and, at the same wave position, which tenant's head-of-line Job
+// leads the wave).
+//
+// The single-tenant TestClaimCandidates_OrdersByPriorityThenScheduledAt above
+// cannot see this distinction: every row shares one tenant_id, so the
+// round-robin interleaving is a no-op there. This test's four rows are
+// arranged so that every plausible naive ordering differs from the pinned
+// one:
+//
+//	tenant-a: aHighOlder (High, t-2m -- its rank 1), aHighNewer (High, t-1m --
+//	          its rank 2), aLowNewest (Low, t0 -- its rank 3)
+//	tenant-b: bLowOldest  (Low, t-3m -- its rank 1, the oldest eligible row)
+//
+// Expected window: [aHighOlder, bLowOldest, aHighNewer, aLowNewest].
+//
+//   - tenant-b's head-of-line Job is claimed before tenant-a's SECOND Job --
+//     and even before tenant-a's lowest-Priority Job that is the newest row
+//     of all -- so rotation beats a flat "priority DESC across everything"
+//     (which would yield [aHighOlder, aHighNewer, bLowOldest, aLowNewest])
+//     and beats raw age (bLowOldest is oldest, yet trails aHighOlder).
+//   - aHighOlder leads the wave over bLowOldest even though bLowOldest is
+//     older: at the same wave position (tenant_rank), Priority breaks the
+//     tie between different tenants' head-of-line rows.
+//   - Within tenant-a's own share, Priority still orders its Jobs: both
+//     High rows claim their turns before the Low row, equal-Priority rows in
+//     ScheduledAt order (aHighOlder before aHighNewer).
+func TestClaimCandidates_FairShareRotationAcrossTenants_PriorityWithinTenantShare(t *testing.T) {
+	db := newTestDB(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	aHighOlder := fixtureRecord("tenant-a", "t")
+	aHighOlder.Priority = int(PriorityHigh)
+	aHighOlder.ScheduledAt = now.Add(-2 * time.Minute)
+
+	aHighNewer := fixtureRecord("tenant-a", "t")
+	aHighNewer.Priority = int(PriorityHigh)
+	aHighNewer.ScheduledAt = now.Add(-time.Minute)
+
+	aLowNewest := fixtureRecord("tenant-a", "t")
+	aLowNewest.Priority = int(PriorityLow)
+	aLowNewest.ScheduledAt = now
+
+	bLowOldest := fixtureRecord("tenant-b", "t")
+	bLowOldest.Priority = int(PriorityLow)
+	bLowOldest.ScheduledAt = now.Add(-3 * time.Minute)
+
+	for _, r := range []*jobRecord{aHighOlder, aHighNewer, aLowNewest, bLowOldest} {
+		if _, err := insertRecord(context.Background(), db, r); err != nil {
+			t.Fatalf("insertRecord() error = %v", err)
+		}
+	}
+
+	got, err := claimCandidates(context.Background(), db, now, claimBatchSize)
+	if err != nil {
+		t.Fatalf("claimCandidates() error = %v", err)
+	}
+
+	wantIDs := []string{aHighOlder.ID, bLowOldest.ID, aHighNewer.ID, aLowNewest.ID}
+	if len(got) != len(wantIDs) {
+		t.Fatalf("claimCandidates() returned %d rows, want %d: %v", len(got), len(wantIDs), got)
+	}
+	for i, w := range wantIDs {
+		if got[i].ID != w {
+			t.Errorf("claimCandidates()[%d].ID = %q, want %q (tenant fair-share rotation first, then priority within a tenant's own share)", i, got[i].ID, w)
+		}
+	}
+}
+
 func TestClaimOne_ClaimsAndIncrementsAttempts(t *testing.T) {
 	db := newTestDB(t)
 	rec := fixtureRecord("tenant-a", "t")

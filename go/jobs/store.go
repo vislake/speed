@@ -227,18 +227,25 @@ func findByID(ctx context.Context, db *gorm.DB, id JobID) (*jobRecord, error) {
 
 // claimCandidatesSQL selects up to limit Jobs eligible to run (StatusPending
 // or StatusRetrying, ScheduledAt <= now), interleaved round-robin across
-// distinct tenants before falling back to age ordering within any one
-// tenant's own share -- see claimCandidates' own doc comment for why this
-// shape exists at all. The inner query ranks each tenant's own eligible
+// distinct tenants, with Priority ordering the rows within any one tenant's
+// own share -- see claimCandidates' own doc comment for why this shape
+// exists at all. The inner query ranks each tenant's own eligible
 // rows independently (ROW_NUMBER() OVER (PARTITION BY tenant_id ORDER BY
 // priority DESC, scheduled_at ASC)); the outer query then orders by that
 // rank FIRST, so every distinct tenant present contributes its own
 // rank-1 (highest-priority, oldest) row before ANY tenant contributes a
 // second one, its rank-2 before any third, and so on -- exactly the
-// "round-robin, then age order within a tenant's own share" fairness
+// "round-robin, then Priority within a tenant's own share" fairness
 // dispatchOnce's own comment already claimed for the whole dispatch tick,
 // now actually true at the SELECT itself rather than only at the
-// concurrency-admission step downstream of it. ROW_NUMBER() OVER (...) is
+// concurrency-admission step downstream of it. Priority does not order
+// across tenants: within one wave position (equal tenant_rank), the outer
+// query's two remaining keys -- priority DESC, then scheduled_at ASC --
+// decide which tenant's head-of-line row leads, but a tenant's rank-2 row
+// never overtakes another tenant's rank-1 one whatever the two priorities
+// (pinned by store_test.go's
+// TestClaimCandidates_FairShareRotationAcrossTenants_PriorityWithinTenantShare).
+// ROW_NUMBER() OVER (...) is
 // standard SQL, supported identically by both dbkit dialects (SQLite 3.25+
 // and PostgreSQL) — the "portable across both dialects" discipline
 // createJobsTableSQL's own doc comment already applies to this table's

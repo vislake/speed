@@ -106,9 +106,9 @@ func (q *StandaloneQueue) runDispatcher(dispatch chan<- jobRecord) {
 }
 
 // dispatchOnce runs one poll/claim/dispatch cycle: it reads a batch of
-// eligible candidates — interleaved round-robin across distinct tenants
-// before falling back to age order within any one tenant's own share, see
-// claimCandidates' own doc comment — and, for each, either claims it and
+// eligible candidates — interleaved round-robin across distinct tenants,
+// with Priority ordering the rows within any one tenant's own share (see
+// claimCandidates' own doc comment) — and, for each, either claims it and
 // hands it to a worker or skips it because its tenant is currently at
 // q.tenantConcurrency — moving on to the next candidate (which may belong
 // to a different tenant) rather than stalling on the first one. Together,

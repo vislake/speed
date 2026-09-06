@@ -62,9 +62,19 @@ func (s Status) Terminal() bool {
 	}
 }
 
-// Priority orders which of several eligible Jobs a worker claims next.
-// Higher values run first; two Jobs of equal Priority are claimed in
-// ScheduledAt order (earliest first).
+// Priority orders which of several eligible Jobs a worker claims next,
+// within the fair-share rotation the Queue implementation enforces
+// between tenants — never across it. StandaloneQueue's dispatcher
+// interleaves its candidate windows round-robin across tenants (every
+// tenant's head-of-line eligible Job before any tenant's second, its
+// second before any third), so a lower-Priority Job of one tenant is
+// claimed ahead of a higher-Priority Job of a tenant whose fair share
+// already ran: Priority never preempts another tenant's turn. Within one
+// tenant's own share, and between different tenants' head-of-line Jobs
+// at the same position in their shares, higher values run first, and two
+// Jobs of equal Priority are claimed in ScheduledAt order (earliest
+// first). asynq.Queue is coarser still: Priority selects one of three
+// weighted queues (see AGENTS.md's "Priority → queue mapping").
 type Priority int
 
 const (
