@@ -9,9 +9,59 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/oapi-codegen/runtime"
 )
+
+// SharingAccessLogEntry One recorded access attempt against a share, granted or denied alike.
+type SharingAccessLogEntry struct {
+	// ID Application-generated UUID.
+	ID *string `json:"id,omitempty"`
+
+	// IP The viewer's address as the access request observed it.
+	IP         *string    `json:"ip,omitempty"`
+	OccurredAt *time.Time `json:"occurredAt,omitempty"`
+
+	// Outcome "granted" or "denied" -- deliberately never which of Access's five refusal reasons applied; see this operation's own description.
+	Outcome *string `json:"outcome,omitempty"`
+
+	// Referrer The viewer's Referer header value, as given.
+	Referrer *string `json:"referrer,omitempty"`
+
+	// UserAgent The viewer's User-Agent header value, as given.
+	UserAgent *string `json:"userAgent,omitempty"`
+}
+
+// SharingCreateShareRequest defines model for SharingCreateShareRequest.
+type SharingCreateShareRequest struct {
+	// ExpiresAt An explicit expiry. Omit to use the tenant's configured default (falling back to a fixed default when none is configured).
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+
+	// Forever Requests a share that never expires. Always refused with sharing.expiry_required -- there is no way to make this surface create a never-expiring share; the field exists so a deliberate attempt to do so fails loudly and specifically.
+	Forever *bool `json:"forever,omitempty"`
+
+	// MaxViews Caps the number of granted accesses. Must be positive when given; omit for unlimited views.
+	MaxViews *int `json:"maxViews,omitempty"`
+
+	// Password An optional additional access password. Never stored or returned as given; see SharingShare's own passwordProtected field.
+	Password *string `json:"password,omitempty"`
+
+	// ResourceRef The opaque reference to the resource being shared, typically another module's own key scheme (e.g. a go/storage object id). Never interpreted by this module.
+	ResourceRef string `json:"resourceRef"`
+
+	// Sensitive Marks the shared resource as carrying sensitive personal information (rule 4). A true value fires this module's one audit action.
+	Sensitive *bool `json:"sensitive,omitempty"`
+}
+
+// SharingCreateShareResponse defines model for SharingCreateShareResponse.
+type SharingCreateShareResponse struct {
+	// Share One share's own metadata, as its owner sees it. Deliberately carries no token (see sharing_createShare's own description for why) and no password (Share.PasswordHash is never serialized anywhere on this surface -- only whether one is set).
+	Share SharingShare `json:"share"`
+
+	// Token The share's bearer token, in the exact form /api/v1/sharing/access's token query parameter expects. Returned here exactly once -- see this operation's own description.
+	Token string `json:"token"`
+}
 
 // SharingError defines model for SharingError.
 type SharingError struct {
@@ -22,6 +72,50 @@ type SharingError struct {
 	Params *map[string]interface{} `json:"params,omitempty"`
 }
 
+// SharingListAccessLogResponse defines model for SharingListAccessLogResponse.
+type SharingListAccessLogResponse struct {
+	// Entries The share's access log, newest first.
+	Entries *[]SharingAccessLogEntry `json:"entries,omitempty"`
+}
+
+// SharingListSharesResponse defines model for SharingListSharesResponse.
+type SharingListSharesResponse struct {
+	// Shares Every share of the caller's tenant, newest first.
+	Shares *[]SharingShare `json:"shares,omitempty"`
+}
+
+// SharingShare One share's own metadata, as its owner sees it. Deliberately carries no token (see sharing_createShare's own description for why) and no password (Share.PasswordHash is never serialized anywhere on this surface -- only whether one is set).
+type SharingShare struct {
+	CreatedAt *time.Time `json:"createdAt,omitempty"`
+
+	// ExpiresAt When this share stops being accessible. Never absent -- rule 2 forbids a share with no expiry.
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+
+	// ID Application-generated UUID.
+	ID *string `json:"id,omitempty"`
+
+	// MaxViews The view ceiling this share was created with; absent when unlimited.
+	MaxViews *int `json:"maxViews,omitempty"`
+
+	// PasswordProtected Whether an access password is required. Never the password or its hash.
+	PasswordProtected *bool `json:"passwordProtected,omitempty"`
+
+	// ResourceRef The opaque reference to the resource this share exposes.
+	ResourceRef *string `json:"resourceRef,omitempty"`
+
+	// RevokedAt When this share was revoked; absent for a live share.
+	RevokedAt *time.Time `json:"revokedAt,omitempty"`
+
+	// Sensitive Whether this share was created against a resource carrying sensitive personal information (rule 4's sensitive-resource confirmation).
+	Sensitive *bool `json:"sensitive,omitempty"`
+
+	// ViewCount How many accesses have been granted so far.
+	ViewCount *int `json:"viewCount,omitempty"`
+}
+
+// ShareID defines model for ShareID.
+type ShareID = string
+
 // SharingAccessShareParams defines parameters for SharingAccessShare.
 type SharingAccessShareParams struct {
 	// Token The share's bearer token, exactly as returned once by the owner-facing Service.Create call. Never the share's own id, and never accepted from anywhere but this query parameter (root CLAUDE.md's multi-tenant isolation rule's spirit extended to this module's own bearer credential: there is exactly one legitimate source for it).
@@ -31,11 +125,29 @@ type SharingAccessShareParams struct {
 	XSharingPassword *string `json:"X-Sharing-Password,omitempty"`
 }
 
+// SharingCreateShareJSONRequestBody defines body for SharingCreateShare for application/json ContentType.
+type SharingCreateShareJSONRequestBody = SharingCreateShareRequest
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// SharingAccessShare Access a share's content by bearer token.
 	// (GET /api/v1/sharing/access)
 	SharingAccessShare(w http.ResponseWriter, r *http.Request, params SharingAccessShareParams)
+	// SharingListShares List every share of the caller's tenant, newest first.
+	// (GET /api/v1/sharing/shares)
+	SharingListShares(w http.ResponseWriter, r *http.Request)
+	// SharingCreateShare Create a new share link in the caller's tenant.
+	// (POST /api/v1/sharing/shares)
+	SharingCreateShare(w http.ResponseWriter, r *http.Request)
+	// SharingGetShare Get one share's own metadata.
+	// (GET /api/v1/sharing/shares/{shareId})
+	SharingGetShare(w http.ResponseWriter, r *http.Request, shareID ShareID)
+	// SharingListShareAccessLog List every recorded access attempt against a share, newest first.
+	// (GET /api/v1/sharing/shares/{shareId}/access-log)
+	SharingListShareAccessLog(w http.ResponseWriter, r *http.Request, shareID ShareID)
+	// SharingRevokeShare Revoke a share, with immediate effect.
+	// (POST /api/v1/sharing/shares/{shareId}/revoke)
+	SharingRevokeShare(w http.ResponseWriter, r *http.Request, shareID ShareID)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -92,6 +204,112 @@ func (siw *ServerInterfaceWrapper) SharingAccessShare(w http.ResponseWriter, r *
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.SharingAccessShare(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SharingListShares operation middleware
+func (siw *ServerInterfaceWrapper) SharingListShares(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SharingListShares(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SharingCreateShare operation middleware
+func (siw *ServerInterfaceWrapper) SharingCreateShare(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SharingCreateShare(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SharingGetShare operation middleware
+func (siw *ServerInterfaceWrapper) SharingGetShare(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "shareId" -------------
+	var shareID ShareID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "shareId", r.PathValue("shareId"), &shareID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "shareId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SharingGetShare(w, r, shareID)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SharingListShareAccessLog operation middleware
+func (siw *ServerInterfaceWrapper) SharingListShareAccessLog(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "shareId" -------------
+	var shareID ShareID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "shareId", r.PathValue("shareId"), &shareID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "shareId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SharingListShareAccessLog(w, r, shareID)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SharingRevokeShare operation middleware
+func (siw *ServerInterfaceWrapper) SharingRevokeShare(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "shareId" -------------
+	var shareID ShareID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "shareId", r.PathValue("shareId"), &shareID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "shareId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SharingRevokeShare(w, r, shareID)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -222,6 +440,11 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	}
 
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/sharing/access", wrapper.SharingAccessShare)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/sharing/shares", wrapper.SharingListShares)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/sharing/shares", wrapper.SharingCreateShare)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/sharing/shares/{shareId}", wrapper.SharingGetShare)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/sharing/shares/{shareId}/revoke", wrapper.SharingRevokeShare)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/sharing/shares/{shareId}/access-log", wrapper.SharingListShareAccessLog)
 
 	return m
 }

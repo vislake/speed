@@ -54,18 +54,22 @@ var (
 	// external viewer holding a bearer token.
 	ErrShareNotFound = apperr.NotFound("sharing.share_not_found")
 
-	// ErrInvalidRequest reports that Handler's public access route
-	// (handler.go) received a request the spec-generated parameter binder
-	// itself rejected -- a missing or malformed token query parameter, a
-	// duplicated X-Sharing-Password header, and so on
-	// (api/sharing-server.gen.go's ServerInterfaceWrapper). NewHandler's
-	// custom ErrorHandlerFunc wraps the binder's error with this code so a
-	// binding failure still answers the module's own SharingError JSON
-	// envelope -- and, more importantly, still carries
-	// Cache-Control: no-store -- rather than falling through to
-	// oapi-codegen's default http.Error handling, which does neither. See
-	// AGENTS.md's "Revocation and caching" section for why every response
-	// this route can produce must carry that header.
+	// ErrInvalidRequest reports that a request this module's HTTP layer
+	// could not even parse into a valid call failed before reaching
+	// Service at all. Two distinct sources feed this same code: the public
+	// access route's spec-generated parameter binder rejecting a request
+	// (a missing or malformed token query parameter, a duplicated
+	// X-Sharing-Password header -- api/sharing-server.gen.go's
+	// ServerInterfaceWrapper), via NewHandler's custom ErrorHandlerFunc
+	// (bindingErrorHandler, which also guarantees Cache-Control: no-store
+	// on the response -- see AGENTS.md's "Revocation and caching" section
+	// for why every response the access route can produce must carry that
+	// header); and, as of the owner-facing round, a malformed JSON body on
+	// sharing_createShare (handler.go's decodeJSON), which never reaches
+	// the spec-generated binder at all since a request body is not a
+	// bound parameter. Both sources report the same code because both mean
+	// the identical thing to a caller: "the request could not be
+	// understood", never a validation Service itself performed.
 	ErrInvalidRequest = apperr.Invalid("sharing.invalid_request")
 
 	// ErrInternal reports a failure this module cannot classify -- a

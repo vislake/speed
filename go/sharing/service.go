@@ -580,6 +580,22 @@ func (s *Service) Get(ctx context.Context, shareID string) (*Share, error) {
 	return share, nil
 }
 
+// List returns every share of the caller's tenant (read from ctx), newest
+// first -- the round-3 owner-facing HTTP surface's sharing_listShares
+// operation is a thin translation of this method and nothing more.
+//
+// This is a deliberately minimal addition: it is not a new business rule,
+// only a tenant-scoped read over the repository surface Create, Revoke, Get
+// and ListAccessLog already use (repository.go's listByTenant), added
+// because no existing Service method served "every share of this tenant" --
+// Get and ListAccessLog both require a caller-known shareID. Unlike
+// Service.Get, an entry here is never filtered by liveness: a revoked or
+// expired share still belongs to its tenant, and RevokedAt on the returned
+// row is exactly how a caller learns it is gone.
+func (s *Service) List(ctx context.Context) ([]Share, error) {
+	return s.shares.listByTenant(ctx)
+}
+
 // ListAccessLog returns every recorded access attempt against the caller
 // tenant's share shareID, newest first -- the owner-facing "who viewed
 // this and how many times" answer rule 4

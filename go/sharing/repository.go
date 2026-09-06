@@ -174,6 +174,24 @@ func (r *ShareRepository) tenantForTokenHash(ctx context.Context, hash string) (
 	return pkgcore.TenantID(idx.TenantID), nil
 }
 
+// listByTenant returns every share of the caller tenant, newest first and
+// then by id so the order is total and stable -- the listing
+// Service.List (the round-3 owner-facing HTTP surface's sharing_listShares
+// operation) serves to a resource owner. Unlike listExpiredOrExhausted this
+// is not filtered by liveness: a revoked or expired share still belongs to
+// its tenant and an owner-facing listing must still be able to show it (its
+// RevokedAt is exactly how the owner learns it is gone).
+func (r *ShareRepository) listByTenant(ctx context.Context) ([]Share, error) {
+	var out []Share
+	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Order("created_at DESC, id").Find(&out).Error
+	})
+	if err != nil {
+		return nil, ErrInternal.WithCause(err)
+	}
+	return out, nil
+}
+
 // listExpiredOrExhausted returns every live (not yet revoked) row of the
 // caller tenant whose ExpiresAt has passed as of now, or whose MaxViews has
 // been reached -- the expiry sweep's own listing (cleanup.go).

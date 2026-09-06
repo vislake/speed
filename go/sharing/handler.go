@@ -35,38 +35,55 @@ const octetStreamContentType = "application/octet-stream"
 // constants are already excepted from elsewhere in this codebase.
 const HeaderSharePassword = "X-Sharing-Password"
 
-// Handler serves sharing's one HTTP operation by implementing the
-// spec-generated api.ServerInterface (api/sharing-server.gen.go,
-// regenerated from this module's api/openapi.yaml by task api:gen -- the
-// compile-time assertion at the bottom of this file is what makes "spec
-// changed, handler not" a compile failure instead of a runtime surprise).
+// Handler serves every one of sharing's HTTP operations -- the one public
+// access route (round 2) and the five owner-facing operations (round 3, PathShares)
+// -- by implementing the spec-generated api.ServerInterface
+// (api/sharing-server.gen.go, regenerated from this module's
+// api/openapi.yaml by task api:gen -- the compile-time assertion at the
+// bottom of this file is what makes "spec changed, handler not" a compile
+// failure instead of a runtime surprise). module.go's Register mounts this
+// SAME Handler instance at both PathAccess and PathShares: the two families
+// are gated in opposite ways by the host (see PathShares' own doc comment),
+// but they are one Go type because oapi-codegen generates one
+// ServerInterface per spec file, and a request's own literal path -- never
+// which host-level mount matched it there first -- is what the internal mux
+// (below) actually dispatches on.
 //
-// Unlike every other module's Handler in this codebase, this one is NOT
-// meant to run downstream of tenancy.Middleware's ordinary tenant
-// resolution: the request it serves carries no tenant claim at all, by
-// design (a genuinely unauthenticated visitor holds no access token), and
-// Service.AccessPublic (service.go) is what resolves the tenant instead,
-// from the token alone. A host MUST allowlist this route's exact
+// SharingAccessShare is NOT meant to run downstream of tenancy.Middleware's
+// ordinary tenant resolution: the request it serves carries no tenant claim
+// at all, by design (a genuinely unauthenticated visitor holds no access
+// token), and Service.AccessPublic (service.go) is what resolves the tenant
+// instead, from the token alone. A host MUST allowlist this route's exact
 // (GET, PathAccess) pair with tenancy.WithAllowlist -- module.go's own
 // Register doc comment repeats this obligation at the point a host would
-// actually wire it.
+// actually wire it. The five PathShares operations are the opposite shape:
+// ordinary tenant-scoped reads and writes, expected to run downstream of
+// tenancy.Middleware like every other module's fragment, with the tenant
+// read from request context by the Service methods they call -- Handler
+// performs no authorization decision for any of them, and no tenant
+// resolution of its own either.
 //
-// Handler performs no data access of its own beyond the two calls its
-// contract requires: Service.AccessPublic (svc) for the share-access
-// decision, and ResourceResolver.OpenResource (resolver, optionally nil)
-// for the resource's bytes once access is granted.
+// Handler performs no data access of its own beyond the calls each
+// operation's own contract requires -- Service.AccessPublic (svc) for the
+// share-access decision plus ResourceResolver.OpenResource (resolver,
+// optionally nil) for the resource's bytes once access is granted, and,
+// for the five PathShares operations, a direct one-to-one call into
+// Service.Create/Revoke/Get/ListAccessLog/List -- never a new business
+// rule of its own.
 type Handler struct {
 	svc      *Service
 	resolver ResourceResolver
 	mux      *http.ServeMux
 }
 
-// NewHandler returns a Handler serving the module's public access route
-// through svc, resolving a granted share's ResourceRef through resolver.
-// resolver may be nil: a share whose access is granted then answers
-// ErrResourceUnavailable rather than serving bytes it has no way to reach
-// -- a host that mounts this route without wiring a resolver gets a route
-// that always fails past the access-decision stage, never one that panics.
+// NewHandler returns a Handler serving every operation this module's
+// api/openapi.yaml declares through svc, resolving a granted share's
+// ResourceRef through resolver. resolver may be nil: a share whose access
+// is granted then answers ErrResourceUnavailable rather than serving bytes
+// it has no way to reach -- a host that mounts the access route without
+// wiring a resolver gets a route that always fails past the access-decision
+// stage, never one that panics. The five PathShares operations never touch
+// resolver at all.
 //
 // Unlike every other module's handler in this codebase, this one cannot
 // wire the mux with the bare api.HandlerFromMux: that helper installs
@@ -75,10 +92,14 @@ type Handler struct {
 // malformed token query parameter, a duplicated X-Sharing-Password header
 // -- and that path returns before SharingAccessShare, the method that sets
 // Cache-Control: no-store, ever runs. AGENTS.md's "Revocation and caching"
-// section is explicit that EVERY response this route can produce must
+// section is explicit that EVERY response the access route can produce must
 // carry that header, so NewHandler instead calls api.HandlerWithOptions
 // with a custom ErrorHandlerFunc (bindingErrorHandler below) that sets the
-// header and writes the module's own SharingError envelope itself.
+// header and writes the module's own SharingError envelope itself. This
+// same ErrorHandlerFunc also runs for a PathShares binding failure (a
+// malformed shareId path segment, say) -- a harmless, if unnecessary,
+// no-store header on an ordinary tenant-scoped response, not a correctness
+// concern for that family.
 func NewHandler(svc *Service, resolver ResourceResolver) *Handler {
 	h := &Handler{svc: svc, resolver: resolver}
 	h.mux = http.NewServeMux()
@@ -173,6 +194,159 @@ func (h *Handler) SharingAccessShare(w http.ResponseWriter, r *http.Request, par
 	if _, copyErr := io.Copy(w, content.Body); copyErr != nil {
 		observability.FromContext(ctx).Warn("share resource stream failed",
 			"share_id", share.ID, "error", copyErr)
+	}
+}
+
+// decodeJSON decodes r's body into dst, writing ErrInvalidRequest and
+// reporting false on any decode failure. Only sharing_createShare
+// (SharingCreateShare, the one owner-facing operation with a request body)
+// calls it -- matching go/storage's identical decodeJSON helper.
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		writeError(w, ErrInvalidRequest.WithCause(err))
+		return false
+	}
+	return true
+}
+
+// SharingListShares implements api.ServerInterface: GET
+// /api/v1/sharing/shares. A thin translation of Service.List: every share
+// of the tenant tenancy.Middleware already resolved into the request
+// context, newest first. See PathShares' own doc comment for this route's
+// gating contract -- Handler performs no authorization decision here at
+// all; a host's own permission gate is what gets a request this far.
+func (h *Handler) SharingListShares(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	shares, err := h.svc.List(ctx)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	// An explicit make, so an empty tenant's list marshals as [] -- never
+	// null -- matching go/storage's identical StorageListObjects discipline.
+	items := make([]api.SharingShare, 0, len(shares))
+	for i := range shares {
+		items = append(items, toShareResponse(&shares[i]))
+	}
+	writeJSON(w, http.StatusOK, api.SharingListSharesResponse{Shares: &items})
+}
+
+// SharingCreateShare implements api.ServerInterface: POST
+// /api/v1/sharing/shares. A thin translation of Service.Create -- every
+// validation rule (resourceRef required, forever always refused, maxViews
+// positive, the rate limit) is Service's own, never reimplemented here. The
+// response carries the bearer token exactly once, per CreateResult's own
+// doc comment; no other operation on this surface ever returns it again.
+func (h *Handler) SharingCreateShare(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var req api.SharingCreateShareRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	forever := req.Forever != nil && *req.Forever
+	sensitive := req.Sensitive != nil && *req.Sensitive
+	created, err := h.svc.Create(ctx, CreateParams{
+		ResourceRef: req.ResourceRef,
+		ExpiresAt:   req.ExpiresAt,
+		Forever:     forever,
+		MaxViews:    req.MaxViews,
+		Password:    req.Password,
+		Sensitive:   sensitive,
+	})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, api.SharingCreateShareResponse{
+		Share: toShareResponse(created.Share),
+		Token: created.Token,
+	})
+}
+
+// SharingGetShare implements api.ServerInterface: GET
+// /api/v1/sharing/shares/{shareId}. A thin translation of Service.Get.
+func (h *Handler) SharingGetShare(w http.ResponseWriter, r *http.Request, shareID api.ShareID) {
+	share, err := h.svc.Get(r.Context(), shareID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toShareResponse(share))
+}
+
+// SharingRevokeShare implements api.ServerInterface: POST
+// /api/v1/sharing/shares/{shareId}/revoke. A thin translation of
+// Service.Revoke, followed by a Service.Get of the same row: Revoke itself
+// returns no value, and the spec promises the caller the share's own
+// now-revoked state back (mirroring go/pki's pki_revokeSigningKey/
+// pki_revokeCertificate response shape) -- composing two existing Service
+// methods at the HTTP layer, never a new business rule. Idempotent exactly
+// as Service.Revoke itself is: revoking an already-revoked share still
+// answers 200 with its current, unchanged state.
+func (h *Handler) SharingRevokeShare(w http.ResponseWriter, r *http.Request, shareID api.ShareID) {
+	ctx := r.Context()
+	if err := h.svc.Revoke(ctx, shareID); err != nil {
+		writeError(w, err)
+		return
+	}
+	share, err := h.svc.Get(ctx, shareID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toShareResponse(share))
+}
+
+// SharingListShareAccessLog implements api.ServerInterface: GET
+// /api/v1/sharing/shares/{shareId}/access-log. A thin translation of
+// Service.ListAccessLog -- which itself confirms the share exists in the
+// caller's tenant before listing, so an unknown or foreign shareId answers
+// sharing.share_not_found here exactly as it does for SharingGetShare, never
+// an empty list.
+func (h *Handler) SharingListShareAccessLog(w http.ResponseWriter, r *http.Request, shareID api.ShareID) {
+	entries, err := h.svc.ListAccessLog(r.Context(), shareID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	items := make([]api.SharingAccessLogEntry, 0, len(entries))
+	for i := range entries {
+		items = append(items, toAccessLogEntryResponse(&entries[i]))
+	}
+	writeJSON(w, http.StatusOK, api.SharingListAccessLogResponse{Entries: &items})
+}
+
+// toShareResponse converts s to its spec-generated JSON response type.
+// Deliberately never carries TokenHash or PasswordHash -- only whether a
+// password is set (PasswordProtected) -- since neither is meant to leave
+// this module in any form; see SharingShare's own spec description.
+func toShareResponse(s *Share) api.SharingShare {
+	passwordProtected := s.PasswordHash != nil
+	viewCount := s.ViewCount
+	return api.SharingShare{
+		ID:                &s.ID,
+		ResourceRef:       &s.ResourceRef,
+		ExpiresAt:         s.ExpiresAt,
+		MaxViews:          s.MaxViews,
+		ViewCount:         &viewCount,
+		PasswordProtected: &passwordProtected,
+		Sensitive:         &s.Sensitive,
+		RevokedAt:         s.RevokedAt,
+		CreatedAt:         &s.CreatedAt,
+	}
+}
+
+// toAccessLogEntryResponse converts e to its spec-generated JSON response
+// type.
+func toAccessLogEntryResponse(e *AccessLogEntry) api.SharingAccessLogEntry {
+	return api.SharingAccessLogEntry{
+		ID:         &e.ID,
+		OccurredAt: &e.OccurredAt,
+		IP:         &e.IP,
+		UserAgent:  &e.UserAgent,
+		Referrer:   &e.Referrer,
+		Outcome:    &e.Outcome,
 	}
 }
 

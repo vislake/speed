@@ -124,17 +124,19 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 		}
 	})
 
-	t.Run("the public access route is mounted", func(t *testing.T) {
+	t.Run("both HTTP routes are mounted", func(t *testing.T) {
 		routes := reg.Routes.Routes()
-		if len(routes) != 1 {
-			t.Fatalf("Register mounted %d route(s), want exactly 1 (PathAccess)", len(routes))
+		if len(routes) != 2 {
+			t.Fatalf("Register mounted %d route(s), want exactly 2 (PathAccess, PathShares)", len(routes))
 		}
-		if routes[0].Path != PathAccess {
-			t.Errorf("mounted route path = %q, want %q", routes[0].Path, PathAccess)
+		var paths []string
+		for _, route := range routes {
+			paths = append(paths, route.Path)
+			if route.Handler == nil {
+				t.Errorf("mounted route %q carries a nil Handler", route.Path)
+			}
 		}
-		if routes[0].Handler == nil {
-			t.Errorf("mounted route carries a nil Handler")
-		}
+		assertContainsAll(t, paths, []string{PathAccess, PathShares})
 	})
 }
 

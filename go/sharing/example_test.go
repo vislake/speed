@@ -16,6 +16,7 @@ package sharing_test
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
@@ -106,4 +107,74 @@ func Example() {
 	// access granted
 	// share revoked
 	// access after revoke: sharing.not_accessible
+}
+
+// ExampleService_List demonstrates the round-3 owner-facing addition this
+// example's own Example above predates: listing every share of a tenant, a
+// revoked one included -- the backing method behind the owner-facing HTTP
+// surface's sharing_listShares operation (api/openapi.yaml, handler.go).
+func ExampleService_List() {
+	ctx := context.Background()
+
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:sharing_example_list?mode=memory&cache=shared",
+	})
+	if err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+
+	module := sharing.NewModule(db)
+	registry := dbkit.NewMigrationRegistry()
+	if regErr := registry.Register(module); regErr != nil {
+		fmt.Println("register migrations:", regErr)
+		return
+	}
+	if applyErr := registry.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
+		fmt.Println("apply migrations:", applyErr)
+		return
+	}
+	if _, bootErr := pkgcore.NewKernel().Bootstrap(ctx, module); bootErr != nil {
+		fmt.Println("bootstrap:", bootErr)
+		return
+	}
+
+	tenantCtx := pkgcore.WithTenant(ctx, pkgcore.TenantID("acme-dental"))
+
+	first, err := module.Service().Create(tenantCtx, sharing.CreateParams{ResourceRef: "storage:report-1"})
+	if err != nil {
+		fmt.Println("create first:", err)
+		return
+	}
+	// A short sleep guarantees the second share's CreatedAt is strictly
+	// later than the first's, so List's newest-first order below is
+	// deterministic for this example's fixed Output rather than resting on
+	// however two same-instant rows happen to tie-break.
+	time.Sleep(10 * time.Millisecond)
+	if _, createErr := module.Service().Create(tenantCtx, sharing.CreateParams{ResourceRef: "storage:report-2"}); createErr != nil {
+		fmt.Println("create second:", createErr)
+		return
+	}
+	if revokeErr := module.Service().Revoke(tenantCtx, first.Share.ID); revokeErr != nil {
+		fmt.Println("revoke:", revokeErr)
+		return
+	}
+
+	// List returns every share of the tenant, newest first -- a revoked one
+	// included, since RevokedAt is exactly how an owner learns it is gone.
+	shares, err := module.Service().List(tenantCtx)
+	if err != nil {
+		fmt.Println("list:", err)
+		return
+	}
+	fmt.Println("share count:", len(shares))
+	for _, s := range shares {
+		fmt.Println(s.ResourceRef, "revoked:", s.RevokedAt != nil)
+	}
+
+	// Output:
+	// share count: 2
+	// storage:report-2 revoked: false
+	// storage:report-1 revoked: true
 }

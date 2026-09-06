@@ -24,6 +24,23 @@ import (
 // allowlisting obligation this constant exists to keep honest.
 const PathAccess = "/api/v1/sharing/access"
 
+// PathShares is where this module's five owner-facing operations (create,
+// list, get, revoke, list access log -- api/openapi.yaml's
+// sharing_createShare/sharing_listShares/sharing_getShare/
+// sharing_revokeShare/sharing_listShareAccessLog) are mounted. Exported for
+// the identical reason PathAccess is: a host names this path in its own
+// permission-gate table (e.g. examples/reference-app's demoRouteGuards)
+// without stringly duplicating the literal.
+//
+// Unlike PathAccess, this path is an ORDINARY tenant-scoped surface: a host
+// must run it downstream of tenancy.Middleware (never allowlisted) and gate
+// it on this module's own PermissionRead/PermissionCreate/PermissionRevoke
+// permissions through its authorization layer -- Handler performs no
+// authorization of its own, exactly like every other module's HTTP surface
+// in this codebase. See Register's own doc comment for the full contrast
+// with PathAccess's allowlisting obligation.
+const PathShares = "/api/v1/sharing/shares"
+
 // moduleName is sharing's pkgcore.Module.Name(), and the key
 // dbkit.MigrationRegistry.Register builds its dependency graph on.
 const moduleName = "sharing"
@@ -137,8 +154,10 @@ var ErrQueueRequiredForSweep = errors.New("sharing: no queue wired; construct th
 // OpenAPISpec returns this module's real fragment (api/openapi.yaml): one
 // genuinely public, unauthenticated route (handler.go's Handler,
 // PathAccess) that resolves a bearer token into the share it names and
-// streams the resource behind it. See Register's own doc comment for the
-// allowlisting obligation this route places on a host, and
+// streams the resource behind it, plus, as of this round, five owner-facing
+// operations (PathShares) a resource's own owner uses to create, list, get,
+// revoke and audit their own shares. See Register's own doc comment for the
+// contrasting gating obligation each of the two paths places on a host, and
 // WithResourceResolver for the seam that turns a Share's ResourceRef into
 // actual bytes.
 type Module struct {
@@ -279,21 +298,39 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // ratelimit.go's rateLimiter reads for Create's and AccessPublic's rate
 // limits).
 //
-// It also builds and mounts this module's one HTTP route at PathAccess.
-// Routes.Mount is a plain registration, no I/O, so Register's no-I/O
-// contract stands -- but the route it mounts is NOT an ordinary
-// tenant-scoped one: a host MUST allowlist the exact pair
-// (http.MethodGet, sharing.PathAccess) with tenancy.WithAllowlist, the
-// same mechanism go/config's own two pre-auth endpoints already use,
-// before this route can ever serve a genuinely anonymous visitor --
-// without that allowlist entry, tenancy.Middleware's own fail-closed
-// default (root CLAUDE.md's multi-tenant isolation rule) refuses every
-// request here with 403 before Handler is ever reached, since the request
-// carries no tenant claim by design. Whichever gate table a host layers on
-// top of Routes.Routes() (examples/reference-app's demoRouteGuards, for
-// instance) must mark this same path as needing no permission, for the
-// identical reason: an unauthenticated visitor holds no Subject an
-// authorization layer could evaluate a permission against either.
+// It also builds and mounts this module's HTTP routes: PathAccess (one
+// operation) and, as of this round, PathShares (five owner-facing
+// operations), both served by the SAME *Handler instance -- Handler
+// implements the whole generated api.ServerInterface, and mounting it twice
+// under two different registrar paths works correctly because oapi-codegen's
+// generated router dispatches on the request's own literal path regardless
+// of which host-level mount pattern matched it there first (a request for
+// PathAccess never matches a PathShares-rooted pattern, and vice versa, so
+// each mount's own host-applied gating -- allowlisted or permission-checked
+// -- only ever wraps the requests it is actually meant to). Routes.Mount is
+// a plain registration, no I/O, so Register's no-I/O contract stands.
+//
+// PathAccess is NOT an ordinary tenant-scoped route: a host MUST allowlist
+// the exact pair (http.MethodGet, sharing.PathAccess) with
+// tenancy.WithAllowlist, the same mechanism go/config's own two pre-auth
+// endpoints already use, before this route can ever serve a genuinely
+// anonymous visitor -- without that allowlist entry, tenancy.Middleware's
+// own fail-closed default (root CLAUDE.md's multi-tenant isolation rule)
+// refuses every request here with 403 before Handler is ever reached, since
+// the request carries no tenant claim by design. Whichever gate table a host
+// layers on top of Routes.Routes() (examples/reference-app's
+// demoRouteGuards, for instance) must mark this same path as needing no
+// permission, for the identical reason: an unauthenticated visitor holds no
+// Subject an authorization layer could evaluate a permission against either.
+//
+// PathShares is the OPPOSITE shape: an ordinary tenant-scoped surface, never
+// allowlisted, that a host runs downstream of tenancy.Middleware exactly
+// like every other module's fragment and gates on
+// PermissionRead/PermissionCreate/PermissionRevoke through its own
+// authorization layer (rbac.RequirePermissionFunc, in the reference app) --
+// Handler performs no authorization decision of its own for these five
+// operations, reading only the tenant tenancy.Middleware already resolved
+// into the request context.
 func (m *Module) Register(reg *pkgcore.Registry) error {
 	if err := reg.Permissions.Add(PermissionRead, PermissionCreate, PermissionRevoke); err != nil {
 		return err
@@ -319,6 +356,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// identical Register-time Handler construction documents.
 	m.handler = NewHandler(m.svc, m.resolver)
 	reg.Routes.Mount(PathAccess, m.handler)
+	reg.Routes.Mount(PathShares, m.handler)
 	return nil
 }
 

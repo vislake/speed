@@ -333,6 +333,280 @@ func TestHandler_SharingAccessShare_DuplicatePasswordHeader_Answers400(t *testin
 	}
 }
 
+// --- PathShares: the round-3 owner-facing operations --------------------
+
+// sharesRequest builds a request for one of the five owner-facing
+// PathShares operations, with tenant attached to its context exactly as
+// tenancy.Middleware would have -- these Handler methods read the tenant
+// only from request context (through the Service methods they call),
+// never from a header or path segment, so tests build it in directly.
+func sharesRequest(method, path string, tenant pkgcore.TenantID, body io.Reader) *http.Request {
+	req := httptest.NewRequest(method, path, body)
+	return req.WithContext(pkgcore.WithTenant(req.Context(), tenant))
+}
+
+// createShare is a small test helper driving SharingCreateShare over h and
+// decoding its response, failing the test on anything but 201.
+func createShare(t *testing.T, h *Handler, tenant pkgcore.TenantID, body string) api.SharingCreateShareResponse {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, sharesRequest(http.MethodPost, PathShares, tenant, strings.NewReader(body)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: status = %d, body = %s, want 201", rec.Code, rec.Body.String())
+	}
+	var resp api.SharingCreateShareResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode create response %s: %v", rec.Body.String(), err)
+	}
+	return resp
+}
+
+// TestHandler_SharingCreateShare_CreatesAndReturnsTokenOnce is
+// sharing_createShare's own proof: a thin translation of Service.Create
+// that surfaces its CreateResult{Share, Token} pair on the wire.
+func TestHandler_SharingCreateShare_CreatesAndReturnsTokenOnce(t *testing.T) {
+	h := newTestHandler(t, nil)
+	resp := createShare(t, h, "tenant-a", `{"resourceRef":"ref-1"}`)
+	if resp.Token == "" {
+		t.Errorf("response carries no token")
+	}
+	if resp.Share.ID == nil || *resp.Share.ID == "" {
+		t.Errorf("response share carries no id")
+	}
+	if resp.Share.PasswordProtected == nil || *resp.Share.PasswordProtected {
+		t.Errorf("PasswordProtected = %v, want false (no password given)", resp.Share.PasswordProtected)
+	}
+}
+
+// TestHandler_SharingCreateShare_ForeverRefused proves this surface cannot
+// be used to bypass rule 2's never-expiring-link refusal: Service.Create's
+// own ErrExpiryRequired reaches the wire as an ordinary 400, not silently
+// dropped by the HTTP translation layer.
+func TestHandler_SharingCreateShare_ForeverRefused(t *testing.T) {
+	h := newTestHandler(t, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, sharesRequest(http.MethodPost, PathShares, "tenant-a",
+		strings.NewReader(`{"resourceRef":"ref-1","forever":true}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s, want 400", rec.Code, rec.Body.String())
+	}
+	var envelope api.SharingError
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if envelope.Code != ErrExpiryRequired.Code {
+		t.Errorf("code = %q, want %q", envelope.Code, ErrExpiryRequired.Code)
+	}
+}
+
+// TestHandler_SharingCreateShare_InvalidJSON_AnswersInvalidRequest proves a
+// malformed body fails through decodeJSON before Service.Create is ever
+// called -- the sharing.invalid_request code this module's HTTP layer
+// answers for a request it cannot even parse (errors.go's own doc comment
+// on the code's two sources).
+func TestHandler_SharingCreateShare_InvalidJSON_AnswersInvalidRequest(t *testing.T) {
+	h := newTestHandler(t, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, sharesRequest(http.MethodPost, PathShares, "tenant-a", strings.NewReader(`{not json`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s, want 400", rec.Code, rec.Body.String())
+	}
+	var envelope api.SharingError
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if envelope.Code != ErrInvalidRequest.Code {
+		t.Errorf("code = %q, want %q", envelope.Code, ErrInvalidRequest.Code)
+	}
+}
+
+// TestHandler_SharingGetShare_UnknownShare_AnswersShareNotFound proves
+// sharing_getShare's 404 is the owner-facing, safe-to-disclose
+// sharing.share_not_found -- deliberately distinct from the public access
+// route's outward-identical sharing.not_accessible.
+func TestHandler_SharingGetShare_UnknownShare_AnswersShareNotFound(t *testing.T) {
+	h := newTestHandler(t, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, sharesRequest(http.MethodGet, PathShares+"/does-not-exist", "tenant-a", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s, want 404", rec.Code, rec.Body.String())
+	}
+	var envelope api.SharingError
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if envelope.Code != ErrShareNotFound.Code {
+		t.Errorf("code = %q, want %q", envelope.Code, ErrShareNotFound.Code)
+	}
+}
+
+// TestHandler_SharingGetShare_CrossTenant_AnswersShareNotFound proves a
+// share created under one tenant is invisible to sharing_getShare under
+// another -- Service.Get's own tenant scoping, reached unchanged through
+// this thin HTTP translation.
+func TestHandler_SharingGetShare_CrossTenant_AnswersShareNotFound(t *testing.T) {
+	h := newTestHandler(t, nil)
+	created := createShare(t, h, "tenant-a", `{"resourceRef":"ref-1"}`)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, sharesRequest(http.MethodGet, PathShares+"/"+*created.Share.ID, "tenant-b", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s, want 404 (another tenant's share)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandler_SharingListShares_ReturnsTenantShares is sharing_listShares'
+// own proof: a thin translation of Service.List.
+func TestHandler_SharingListShares_ReturnsTenantShares(t *testing.T) {
+	h := newTestHandler(t, nil)
+	createShare(t, h, "tenant-a", `{"resourceRef":"ref-1"}`)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, sharesRequest(http.MethodGet, PathShares, "tenant-a", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s, want 200", rec.Code, rec.Body.String())
+	}
+	var resp api.SharingListSharesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Shares == nil || len(*resp.Shares) != 1 {
+		t.Fatalf("list returned %v, want exactly 1 share", resp.Shares)
+	}
+}
+
+// TestHandler_SharingListShares_EmptyTenant_AnswersEmptyArrayNeverNull
+// pins the same "never null" discipline go/storage's StorageListObjects
+// documents for its own empty page.
+func TestHandler_SharingListShares_EmptyTenant_AnswersEmptyArrayNeverNull(t *testing.T) {
+	h := newTestHandler(t, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, sharesRequest(http.MethodGet, PathShares, "tenant-empty", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s, want 200", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"shares":null`) {
+		t.Errorf("body = %s, want an empty array, never null", rec.Body.String())
+	}
+}
+
+// TestHandler_SharingRevokeShare_RevokesAndReturnsUpdatedShareIdempotently
+// proves sharing_revokeShare composes Service.Revoke and Service.Get
+// correctly (Revoke itself returns no value) and stays idempotent exactly
+// as Service.Revoke's own contract requires: a second revoke still answers
+// 200 with the same, already-revoked state.
+func TestHandler_SharingRevokeShare_RevokesAndReturnsUpdatedShareIdempotently(t *testing.T) {
+	h := newTestHandler(t, nil)
+	created := createShare(t, h, "tenant-a", `{"resourceRef":"ref-1"}`)
+
+	revoke := func() api.SharingShare {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, sharesRequest(http.MethodPost, PathShares+"/"+*created.Share.ID+"/revoke", "tenant-a", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s, want 200", rec.Code, rec.Body.String())
+		}
+		var revoked api.SharingShare
+		if err := json.Unmarshal(rec.Body.Bytes(), &revoked); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return revoked
+	}
+
+	first := revoke()
+	if first.RevokedAt == nil {
+		t.Fatalf("revoked share carries no RevokedAt")
+	}
+	second := revoke()
+	if second.RevokedAt == nil || !second.RevokedAt.Equal(*first.RevokedAt) {
+		t.Errorf("second revoke's RevokedAt = %v, want the same %v (idempotent)", second.RevokedAt, first.RevokedAt)
+	}
+}
+
+// TestHandler_SharingRevokeShare_UnknownShare_AnswersShareNotFound proves
+// Service.Revoke's own ErrShareNotFound reaches the wire unmodified.
+func TestHandler_SharingRevokeShare_UnknownShare_AnswersShareNotFound(t *testing.T) {
+	h := newTestHandler(t, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, sharesRequest(http.MethodPost, PathShares+"/does-not-exist/revoke", "tenant-a", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s, want 404", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandler_SharingListShareAccessLog_ReturnsRecordedAttempts drives one
+// real access through the public route (AccessPublic resolves its own
+// tenant from the token, exactly as an anonymous visitor's request would
+// carry none) and proves the owner-facing access-log operation reports it.
+func TestHandler_SharingListShareAccessLog_ReturnsRecordedAttempts(t *testing.T) {
+	h := newTestHandler(t, fakeResourceResolver{mime: "text/plain", body: "hello"})
+	created := createShare(t, h, "tenant-a", `{"resourceRef":"ref-1"}`)
+
+	accessRec := httptest.NewRecorder()
+	h.ServeHTTP(accessRec, accessRequest(created.Token, nil))
+	if accessRec.Code != http.StatusOK {
+		t.Fatalf("access: status = %d, body = %s, want 200", accessRec.Code, accessRec.Body.String())
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, sharesRequest(http.MethodGet, PathShares+"/"+*created.Share.ID+"/access-log", "tenant-a", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s, want 200", rec.Code, rec.Body.String())
+	}
+	var resp api.SharingListAccessLogResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Entries == nil || len(*resp.Entries) != 1 {
+		t.Fatalf("access log = %v, want exactly 1 entry", resp.Entries)
+	}
+	if got := (*resp.Entries)[0].Outcome; got == nil || *got != AccessOutcomeGranted {
+		t.Errorf("entry outcome = %v, want %q", got, AccessOutcomeGranted)
+	}
+}
+
+// TestHandler_SharingListShareAccessLog_UnknownShare_AnswersShareNotFound
+// proves Service.ListAccessLog's own confirmation-before-listing behavior
+// (it calls Service.Get first) reaches the wire as 404, never an empty
+// array for an id naming no share of the caller's tenant at all.
+func TestHandler_SharingListShareAccessLog_UnknownShare_AnswersShareNotFound(t *testing.T) {
+	h := newTestHandler(t, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, sharesRequest(http.MethodGet, PathShares+"/does-not-exist/access-log", "tenant-a", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s, want 404", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandler_SharingGetShare_NeverExposesTokenOrPasswordHash proves this
+// surface's own most important negative property: neither the bearer token
+// (returned exactly once, by sharing_createShare) nor the plaintext
+// password ever appear in a sharing_getShare response, no matter how a
+// share was created.
+func TestHandler_SharingGetShare_NeverExposesTokenOrPasswordHash(t *testing.T) {
+	h := newTestHandler(t, nil)
+	created := createShare(t, h, "tenant-a", `{"resourceRef":"ref-1","password":"s3cret-phrase"}`)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, sharesRequest(http.MethodGet, PathShares+"/"+*created.Share.ID, "tenant-a", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s, want 200", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, created.Token) {
+		t.Errorf("GET response leaks the bearer token: %s", body)
+	}
+	if strings.Contains(body, "s3cret-phrase") {
+		t.Errorf("GET response leaks the plaintext password: %s", body)
+	}
+	var share api.SharingShare
+	if err := json.Unmarshal(rec.Body.Bytes(), &share); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if share.PasswordProtected == nil || !*share.PasswordProtected {
+		t.Errorf("PasswordProtected = %v, want true", share.PasswordProtected)
+	}
+}
+
 // compile-time check that Handler still satisfies api.ServerInterface --
 // duplicated from handler.go's own assertion so a reader of this test file
 // sees the contract without following an import.

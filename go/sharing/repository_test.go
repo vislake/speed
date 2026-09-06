@@ -199,6 +199,66 @@ func TestShareRepository_ListExpiredOrExhausted(t *testing.T) {
 	}
 }
 
+// TestShareRepository_ListByTenant_NewestFirstAndTenantScoped is
+// listByTenant's own proof (Service.List's backing method, the round-3
+// owner-facing HTTP surface's sharing_listShares operation): it returns
+// every share of the caller tenant, newest first, revoked and live alike --
+// unlike listExpiredOrExhausted above, an owner-facing listing must still
+// show a share that is gone, since RevokedAt on the returned row is exactly
+// how the owner learns that.
+func TestShareRepository_ListByTenant_NewestFirstAndTenantScoped(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	now := time.Now().UTC()
+	ctxA := pkgcore.WithTenant(context.Background(), "tenant-a")
+	ctxB := pkgcore.WithTenant(context.Background(), "tenant-b")
+
+	// Explicit, distinct CreatedAt values (autoCreateTime only fills a zero
+	// value) so ordering is asserted against a real difference, never
+	// against however fast two inserts land on the test's own clock.
+	oldest := newTestShare("oldest", now)
+	oldest.CreatedAt = now.Add(-2 * time.Hour)
+	if err := repo.Create(ctxA, oldest); err != nil {
+		t.Fatalf("Create(oldest): %v", err)
+	}
+
+	revoked := newTestShare("revoked", now)
+	revoked.CreatedAt = now.Add(-time.Hour)
+	revokedAt := now
+	revoked.RevokedAt = &revokedAt
+	if err := repo.Create(ctxA, revoked); err != nil {
+		t.Fatalf("Create(revoked): %v", err)
+	}
+
+	newest := newTestShare("newest", now)
+	newest.CreatedAt = now
+	if err := repo.Create(ctxA, newest); err != nil {
+		t.Fatalf("Create(newest): %v", err)
+	}
+
+	otherTenant := newTestShare("other-tenant", now)
+	if err := repo.Create(ctxB, otherTenant); err != nil {
+		t.Fatalf("Create(otherTenant): %v", err)
+	}
+
+	got, err := repo.listByTenant(ctxA)
+	if err != nil {
+		t.Fatalf("listByTenant: %v", err)
+	}
+	var ids []string
+	for _, s := range got {
+		ids = append(ids, s.ID)
+	}
+	want := []string{"newest", "revoked", "oldest"}
+	if len(ids) != len(want) {
+		t.Fatalf("listByTenant returned %v, want %v (other-tenant's share must never appear)", ids, want)
+	}
+	for i, id := range want {
+		if ids[i] != id {
+			t.Errorf("listByTenant[%d] = %q, want %q -- ordering must be newest first", i, ids[i], id)
+		}
+	}
+}
+
 // --- shareTokenIndex / createWithTokenIndex / tenantForTokenHash --------
 
 // TestShareTokenIndex_AssertNotTenantScoped proves shareTokenIndex is

@@ -806,6 +806,57 @@ func TestService_ListAccessLog_UnknownShare(t *testing.T) {
 	assertCode(t, err, ErrShareNotFound.Code)
 }
 
+// TestService_List_ReturnsTenantSharesIncludingRevoked is Service.List's own
+// proof: the round-3 owner-facing sharing_listShares operation's backing
+// method. A revoked share is not filtered out -- an owner-facing listing
+// must still be able to show what happened to it.
+func TestService_List_ReturnsTenantSharesIncludingRevoked(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "ref-1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if revokeErr := svc.Revoke(testCtx(), created.Share.ID); revokeErr != nil {
+		t.Fatalf("Revoke: %v", revokeErr)
+	}
+
+	got, err := svc.List(testCtx())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("List returned %d shares, want 1", len(got))
+	}
+	if got[0].ID != created.Share.ID {
+		t.Errorf("List()[0].ID = %q, want %q", got[0].ID, created.Share.ID)
+	}
+	if got[0].RevokedAt == nil {
+		t.Errorf("List()[0].RevokedAt is nil, want the revoked share's RevokedAt to still be visible")
+	}
+}
+
+// TestService_List_NeverCrossesTenants proves List reads only the caller
+// tenant's own shares, mirroring every other tenant-scoped Service method's
+// own isolation proof.
+func TestService_List_NeverCrossesTenants(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	ctxA := pkgcore.WithTenant(context.Background(), "tenant-a")
+	ctxB := pkgcore.WithTenant(context.Background(), "tenant-b")
+
+	if _, err := svc.Create(ctxA, CreateParams{ResourceRef: "ref-a"}); err != nil {
+		t.Fatalf("Create(tenant-a): %v", err)
+	}
+
+	got, err := svc.List(ctxB)
+	if err != nil {
+		t.Fatalf("List(tenant-b): %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("List(tenant-b) = %v, want none -- tenant-a's share must never appear", got)
+	}
+}
+
 // assertCode fails the test unless err decodes as an *apperr.Error with
 // code want.
 func assertCode(t *testing.T, err error, want string) {

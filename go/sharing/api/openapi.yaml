@@ -2,44 +2,65 @@ openapi: 3.0.3
 info:
   title: sharing
   description: >-
-    The one genuinely public, unauthenticated route this module mounts: an
-    external visitor's entry point onto the resource a Share exposes (see
-    the module's own AGENTS.md and docs/internal/07-platform-services.md's
-    sharing section). This fragment follows the operationId
-    (sharing_<verb><Resource>) and schema-name (Sharing<Type>) conventions
-    from .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
+    Two families of operations, deliberately gated in two different ways.
+    /api/v1/sharing/access is the genuinely public, unauthenticated route an
+    external visitor's entry point onto the resource a Share exposes; the
+    five operations under /api/v1/sharing/shares are this round's addition,
+    the owner-facing surface a resource's owner uses to create, inspect and
+    revoke their own shares (see the module's own AGENTS.md and
+    docs/internal/07-platform-services.md's sharing section). This fragment
+    follows the operationId (sharing_<verb><Resource>) and schema-name
+    (Sharing<Type>) conventions from
+    .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
     regenerates sharing-server.gen.go (in this directory) from this file,
     with oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
     .github/workflows/api-contract.yml.
 
-    This is deliberately NOT downstream of tenancy.Middleware's ordinary
-    tenant resolution: the request that reaches this route carries no
-    tenant claim at all, by design -- a genuinely anonymous visitor holds no
-    access token to resolve one from. Handler resolves the tenant itself,
-    from the token alone, before calling into Service.AccessPublic
-    (service.go) -- see that method's own doc comment, and
-    repository.go's tenantForTokenHash for the narrow lookup this depends
-    on. A host MUST allowlist this exact (GET, path) pair with
-    tenancy.WithAllowlist, the same mechanism go/config's two pre-auth
-    display endpoints already use (config.PathPublic,
+    /api/v1/sharing/access is deliberately NOT downstream of
+    tenancy.Middleware's ordinary tenant resolution: the request that
+    reaches this route carries no tenant claim at all, by design -- a
+    genuinely anonymous visitor holds no access token to resolve one from.
+    Handler resolves the tenant itself, from the token alone, before
+    calling into Service.AccessPublic (service.go) -- see that method's own
+    doc comment, and repository.go's tenantForTokenHash for the narrow
+    lookup this depends on. A host MUST allowlist this exact (GET, path)
+    pair with tenancy.WithAllowlist, the same mechanism go/config's two
+    pre-auth display endpoints already use (config.PathPublic,
     config.PathSystemFeatures) -- module.go's exported PathAccess constant
     is what a host's allowlist call names, so a path change here cannot
     silently drift out of sync with it.
 
-    Every response this route writes -- success or refusal alike -- carries
-    Cache-Control: no-store. docs/internal/07-platform-services.md's
+    Every response the access route writes -- success or refusal alike --
+    carries Cache-Control: no-store. docs/internal/07-platform-services.md's
     revocation rule names CDN or shared-cache caching as the single most
     common way revocation silently fails to take effect, and this route is
     the first place this module has an actual HTTP response to set that
     header on.
 
+    /api/v1/sharing/shares is the OPPOSITE shape: an ordinary tenant-scoped
+    surface, ungated by this fragment itself -- Handler performs no
+    authorization of its own, reading the tenant from request context
+    (tenancy.Middleware) exactly like every other module's fragment in this
+    codebase (root CLAUDE.md's multi-tenant isolation rule). A host is
+    expected to run these five operations downstream of tenancy.Middleware
+    (never allowlisted) and to gate them on this module's own
+    sharing:read/sharing:create/sharing:revoke permissions through its
+    authorization layer -- module.go's exported PathShares constant is what
+    a host's permission-gate table names, exactly as PathAccess names the
+    allowlist entry. Every operation here is a thin HTTP translation of an
+    existing Service method (Create, Revoke, Get, ListAccessLog, plus the
+    tenant-listing Service.List this round adds) -- no business rule lives
+    in this fragment or its handler that Service does not already enforce.
+
     Merging this fragment into the application-wide build/openapi/speed.yaml
     stays future work, following the same precedent org's and storage's
     fragments already set (docs/internal/21-api-contract.md's
-    implementation-status note): this route serves raw bytes, not a typed
-    JSON operation a frontend SDK would meaningfully wrap, so there is no
-    pressure to join the merge in the way notes', authn's and
-    notification's JSON-shaped fragments have.
+    implementation-status note): the access route serves raw bytes, and
+    while the new /shares operations ARE typed JSON, this module still has
+    no in-workspace frontend consumer, so there is no pressure yet to join
+    the merge the way notes', authn's and notification's fragments have --
+    see AGENTS.md's own note on this round's scope for why that reasoning
+    was re-examined and left unchanged rather than silently carried over.
   version: 0.0.0
 paths:
   /api/v1/sharing/access:
@@ -162,8 +183,307 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SharingError'
+  /api/v1/sharing/shares:
+    post:
+      operationId: sharing_createShare
+      summary: Create a new share link in the caller's tenant.
+      description: >-
+        A thin translation of Service.Create: resourceRef is required and
+        must be non-empty (sharing.resource_ref_required), forever, when
+        true, is always refused (sharing.expiry_required -- rule 2 names
+        this the most common source of data leaks, and this surface must
+        never be able to bypass that refusal), maxViews, when given, must
+        be positive (sharing.invalid_max_views), and expiresAt, when
+        omitted, resolves through the tenant's configured default (falling
+        back to a fixed default when none is configured). token is
+        returned inside the response body exactly once and is never
+        retrievable again by any other operation on this surface -- not
+        even sharing_getShare, whose response carries no token field at
+        all.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SharingCreateShareRequest'
+      responses:
+        '201':
+          description: >-
+            The share was created. token is present in this response only
+            -- see this operation's own description.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharingCreateShareResponse'
+        '400':
+          description: >-
+            resourceRef was empty, forever was true, maxViews was
+            non-positive, or expiresAt could not be resolved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharingError'
+        '429':
+          description: >-
+            The caller's tenant has exceeded this module's share-creation
+            rate-limit budget (ratelimit.go). code is always
+            sharing.rate_limited.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharingError'
+    get:
+      operationId: sharing_listShares
+      summary: List every share of the caller's tenant, newest first.
+      description: >-
+        Metadata only, exactly like storage_listObjects' own listing
+        promise: no access log, no token (a share's token is returned
+        exactly once, by sharing_createShare, and is never derivable from
+        any stored value this surface could serve). Unlike
+        storage_listObjects this operation is not keyset-paginated -- a
+        tenant's own share count is expected to stay small relative to its
+        business data, and this round's Service.List (service.go) is a
+        deliberately minimal addition backing exactly this operation, per
+        this module's own "no new business logic beyond a thin HTTP
+        translation" scope for this round.
+      responses:
+        '200':
+          description: The caller tenant's shares, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharingListSharesResponse'
+  /api/v1/sharing/shares/{shareId}:
+    get:
+      operationId: sharing_getShare
+      summary: Get one share's own metadata.
+      description: >-
+        A thin translation of Service.Get. Carries no token (see
+        sharing_createShare's own description) and no access log (see
+        sharing_listShareAccessLog).
+      parameters:
+        - $ref: '#/components/parameters/ShareID'
+      responses:
+        '200':
+          description: The share's metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharingShare'
+        '404':
+          description: >-
+            shareId does not name a share of the caller's tenant. code is
+            always sharing.share_not_found -- unlike the access route's
+            sharing.not_accessible, this code is safe to disclose: the
+            caller here is the tenant that owns (or claims to own) the
+            share, addressing it by its own internal id, never an external
+            viewer holding a bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharingError'
+  /api/v1/sharing/shares/{shareId}/revoke:
+    post:
+      operationId: sharing_revokeShare
+      summary: Revoke a share, with immediate effect.
+      description: >-
+        A thin translation of Service.Revoke, followed by a Service.Get of
+        the same row to return its now-revoked state -- Revoke itself
+        returns no value. Idempotent, matching Service.Revoke's own
+        contract: revoking an already-revoked share still answers 200 with
+        its current (unchanged) state, never a 404 or a 409. Revocation
+        takes effect on the very next check against
+        /api/v1/sharing/access -- there is no cache anywhere in this
+        module to invalidate (AGENTS.md's "Revocation and caching"
+        section).
+      parameters:
+        - $ref: '#/components/parameters/ShareID'
+      responses:
+        '200':
+          description: The share's current state, now revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharingShare'
+        '404':
+          description: shareId does not name a share of the caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharingError'
+  /api/v1/sharing/shares/{shareId}/access-log:
+    get:
+      operationId: sharing_listShareAccessLog
+      summary: List every recorded access attempt against a share, newest first.
+      description: >-
+        A thin translation of Service.ListAccessLog: every access attempt
+        recorded against the share, granted or denied alike, per rule 4
+        (docs/internal/07-platform-services.md's "access needs no login,
+        but must leave a trail" rule) -- an owner-facing "who viewed this
+        and how many times" answer. Denied attempts are recorded too, and
+        deliberately without distinguishing which of Access's five
+        refusal reasons applied (outcome is only ever "granted" or
+        "denied"), so this owner-facing report cannot itself be scraped to
+        learn what rule 5 requires an outside prober never learn.
+      parameters:
+        - $ref: '#/components/parameters/ShareID'
+      responses:
+        '200':
+          description: The share's access log, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharingListAccessLogResponse'
+        '404':
+          description: shareId does not name a share of the caller's tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharingError'
 components:
+  parameters:
+    ShareID:
+      name: shareId
+      in: path
+      required: true
+      description: An application-generated UUID naming a share of the caller's tenant.
+      schema:
+        type: string
   schemas:
+    SharingShare:
+      type: object
+      description: >-
+        One share's own metadata, as its owner sees it. Deliberately
+        carries no token (see sharing_createShare's own description for
+        why) and no password (Share.PasswordHash is never serialized
+        anywhere on this surface -- only whether one is set).
+      properties:
+        id:
+          type: string
+          description: Application-generated UUID.
+        resourceRef:
+          type: string
+          description: The opaque reference to the resource this share exposes.
+        expiresAt:
+          type: string
+          format: date-time
+          description: When this share stops being accessible. Never absent -- rule 2 forbids a share with no expiry.
+        maxViews:
+          type: integer
+          description: The view ceiling this share was created with; absent when unlimited.
+        viewCount:
+          type: integer
+          description: How many accesses have been granted so far.
+        passwordProtected:
+          type: boolean
+          description: Whether an access password is required. Never the password or its hash.
+        sensitive:
+          type: boolean
+          description: >-
+            Whether this share was created against a resource carrying
+            sensitive personal information (rule 4's sensitive-resource
+            confirmation).
+        revokedAt:
+          type: string
+          format: date-time
+          description: When this share was revoked; absent for a live share.
+        createdAt:
+          type: string
+          format: date-time
+    SharingCreateShareRequest:
+      type: object
+      required:
+        - resourceRef
+      properties:
+        resourceRef:
+          type: string
+          minLength: 1
+          description: >-
+            The opaque reference to the resource being shared, typically
+            another module's own key scheme (e.g. a go/storage object id).
+            Never interpreted by this module.
+        expiresAt:
+          type: string
+          format: date-time
+          description: >-
+            An explicit expiry. Omit to use the tenant's configured
+            default (falling back to a fixed default when none is
+            configured).
+        forever:
+          type: boolean
+          description: >-
+            Requests a share that never expires. Always refused with
+            sharing.expiry_required -- there is no way to make this
+            surface create a never-expiring share; the field exists so a
+            deliberate attempt to do so fails loudly and specifically.
+        maxViews:
+          type: integer
+          description: Caps the number of granted accesses. Must be positive when given; omit for unlimited views.
+        password:
+          type: string
+          description: An optional additional access password. Never stored or returned as given; see SharingShare's own passwordProtected field.
+        sensitive:
+          type: boolean
+          description: >-
+            Marks the shared resource as carrying sensitive personal
+            information (rule 4). A true value fires this module's one
+            audit action.
+    SharingCreateShareResponse:
+      type: object
+      required:
+        - share
+        - token
+      properties:
+        share:
+          $ref: '#/components/schemas/SharingShare'
+        token:
+          type: string
+          description: >-
+            The share's bearer token, in the exact form
+            /api/v1/sharing/access's token query parameter expects.
+            Returned here exactly once -- see this operation's own
+            description.
+    SharingListSharesResponse:
+      type: object
+      properties:
+        shares:
+          type: array
+          description: Every share of the caller's tenant, newest first.
+          items:
+            $ref: '#/components/schemas/SharingShare'
+    SharingAccessLogEntry:
+      type: object
+      description: One recorded access attempt against a share, granted or denied alike.
+      properties:
+        id:
+          type: string
+          description: Application-generated UUID.
+        occurredAt:
+          type: string
+          format: date-time
+        ip:
+          type: string
+          description: The viewer's address as the access request observed it.
+        userAgent:
+          type: string
+          description: The viewer's User-Agent header value, as given.
+        referrer:
+          type: string
+          description: The viewer's Referer header value, as given.
+        outcome:
+          type: string
+          description: >-
+            "granted" or "denied" -- deliberately never which of Access's
+            five refusal reasons applied; see this operation's own
+            description.
+    SharingListAccessLogResponse:
+      type: object
+      properties:
+        entries:
+          type: array
+          description: The share's access log, newest first.
+          items:
+            $ref: '#/components/schemas/SharingAccessLogEntry'
     SharingError:
       type: object
       required:
