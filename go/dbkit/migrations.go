@@ -195,13 +195,21 @@ func (r *MigrationRegistry) Register(m pkgcore.Module) error {
 // transaction, so it adds coordination without changing step 4's
 // all-or-nothing-per-module guarantee in any way.
 //
-// SQLite gets no such lock. Every SQLite caller in this codebase -- the
-// reference app's own startup Apply and saasctl's "db migrate" command --
-// opens the database file from exactly one OS process at a time (SQLite has
-// no distributed deployment mode in this codebase's actual topology; see
-// docs/internal/03-deployment-modes.md), so there is no second process to
-// race against and adding lock overhead to the SQLite path would protect
-// against a hazard that cannot occur here.
+// SQLite gets no such lock: no supported composition ever runs two Apply
+// calls concurrently against one SQLite database. The ordinary SQLite
+// callers in this codebase -- the reference app's own startup Apply and
+// saasctl's "db migrate" command -- are one process per file. The one
+// composition that does run two processes against one shared SQLite file,
+// the reference app's distributed-mode integration tier (its server
+// hard-codes the SQLite dialect, so
+// examples/reference-app/integration_test/distributed_mode_test.go shares a
+// single APP_DB_PATH file across its two test replicas), staggers the two
+// replicas' boots by design -- replica A boots fully, its startup Apply
+// included, before replica B even starts, so B's own Apply always runs
+// against an already-migrated schema and no-ops. Shared-file SQLite is not
+// the database of any real multi-replica deployment shape here (see
+// docs/internal/03-deployment-modes.md), so a lock on this path would
+// protect against a hazard no supported composition can reach.
 func (r *MigrationRegistry) Apply(ctx context.Context, db *gorm.DB, dialect Dialect) error {
 	dir, err := dialectDir(dialect)
 	if err != nil {
