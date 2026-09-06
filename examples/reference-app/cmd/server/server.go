@@ -1000,11 +1000,12 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// last. Every close is attempted even when an earlier one failed; the
 	// first error wins.
 	var (
-		configService   *config.Service
-		rbacService     *rbac.Service
-		standaloneQueue *jobs.StandaloneQueue
-		redisBus        *eventbusredis.EventBus
-		redisClient     *redis.Client
+		configService          *config.Service
+		rbacService            *rbac.Service
+		standaloneQueue        *jobs.StandaloneQueue
+		redisBus               *eventbusredis.EventBus
+		redisClient            *redis.Client
+		smileSimReconcilerStop func()
 	)
 
 	cleanup := func() error {
@@ -1019,6 +1020,14 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			if err != nil && firstErr == nil {
 				firstErr = err
 			}
+		}
+		if smileSimReconcilerStop != nil {
+			// Stopped first, before standaloneQueue.Close and the database
+			// close below: the reconciler sweep calls both
+			// standaloneQueue.Get and the database (through its own
+			// smilesim.ReservationStore), so it must not still be ticking
+			// against either while they are being torn down.
+			smileSimReconcilerStop()
 		}
 		if configService != nil {
 			keepErr(configService.Close())
@@ -1822,9 +1831,33 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// before ever calling Gateway.GenerateImage, and settles that
 	// reservation (Confirm/Refund) once the async job reaches a terminal
 	// status -- see internal/smilesim/service.go's own "Credit accounting"
-	// package doc section. The call cannot fail: nothing it does returns
-	// an error.
-	smileSimService := smilesim.NewService(aiGatewayModule.Gateway(), billingModule.Credits(), reg.EventBus())
+	// and "Settlement reachability" package doc sections.
+	//
+	// smileSimReservationStore shares this app's own db connection (like
+	// every other module above) and gets its own tiny table created
+	// imperatively via EnsureSchema, mirroring go/jobs.StandaloneQueue's
+	// own "create the persistence schema if it does not already exist"
+	// pattern rather than joining migrationRegistry -- see
+	// reservation_store.go's own doc comment for why. standaloneQueue is
+	// passed to NewService too, alongside the store: it is what
+	// ReconcileOutstandingCredits polls for each outstanding reservation's
+	// job status, and StartReconciler below wraps that sweep in a ticker
+	// loop this app starts once at boot (smileSimReconcilerStop, stopped
+	// first thing in cleanup above), so a reservation nobody ever polls
+	// to completion -- or one whose settlement was in flight when this
+	// process last restarted -- still gets settled rather than staying
+	// Reserved forever.
+	smileSimReservationStore := smilesim.NewReservationStore(db)
+	if err := smileSimReservationStore.EnsureSchema(ctx); err != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("reference-app: ensure smilesim credit reservation schema: %w", err)
+	}
+	smileSimService := smilesim.NewService(aiGatewayModule.Gateway(), billingModule.Credits(), reg.EventBus(), standaloneQueue, smileSimReservationStore)
+	// context.Background(), never ctx, per StartReconciler's own doc
+	// comment: the sweep must keep running until cleanup's own
+	// smileSimReconcilerStop call, not be cut short by whatever cancels
+	// buildServer's own ctx.
+	smileSimReconcilerStop = smileSimService.StartReconciler(context.Background(), 0)
 	wireSmileSim(mux, smileSimService, standaloneQueue)
 
 	// The middleware chain: authn.Middleware(verifier) FIRST, then

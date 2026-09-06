@@ -55,7 +55,7 @@
 // Simulate reserves (PreDeduct) CreditsPerSimulation credits BEFORE ever
 // calling Gateway.GenerateImage -- an insufficient balance refuses the
 // request with billing.ErrInsufficientCredits and never reaches
-// go/ai-gateway at all -- and NotifyOnCompletion settles that reservation
+// go/ai-gateway at all -- and settleCredit later settles that reservation
 // once the job reaches a terminal status: Confirm on StatusSucceeded,
 // Refund on StatusDeadLetter/StatusCancelled. Every credit-pack-purchase
 // leg (a real Stripe/Alipay/WeChat sandbox charge) is deliberately out of
@@ -64,14 +64,38 @@
 // go/billing/gateway/AGENTS.md for why no live payment credentials exist
 // in this environment.
 //
-// creditKeys (below) is the same "in-memory, keyed by job id" shape
-// recipients/notified already establish, storing the CreditTransaction
-// idempotency key Simulate's PreDeduct used so NotifyOnCompletion's later
-// Confirm/Refund settles the SAME reservation rather than minting a new
-// one. A Service built with a nil CreditService (NewService's credits
-// parameter) performs no credit accounting at all -- the same nil-is-legal
-// default every other optional host seam in this codebase takes when
-// unwired (mirroring bus's own nil-is-legal contract just above).
+// # Settlement reachability
+//
+// A reservation's settlement must not depend on a client happening to
+// poll the job-status route to a terminal status: a caller may close its
+// tab, lose its network, or simply stop polling once it has the answer it
+// wanted, and the process itself may restart while a job is still
+// running. Both are real paths to a reservation stuck Reserved forever if
+// the only record of "which CreditTransaction belongs to which job" lived
+// in an ordinary in-memory map, which is why this Service's credit
+// bookkeeping -- unlike recipients/notified just below, an accepted
+// in-memory-only limitation for this app's own demo notification glue --
+// is NOT in-memory: store (reservation_store.go) durably persists the
+// job-id-to-CreditTransaction-idempotency-key mapping the moment Simulate
+// opens a reservation, and deletes it the moment settleCredit settles it,
+// so the mapping survives a process restart exactly like the jobs.Queue
+// row for the job it belongs to already does. On top of that,
+// ReconcileOutstandingCredits (reconcile.go) periodically sweeps every
+// still-present row, across every tenant, checking each job's current
+// status through the same jobs.Queue a real client would poll and
+// settling any that have already reached a terminal one --
+// StartReconciler wraps that sweep in a ticker loop cmd/server starts once
+// at boot, mirroring go/config's own anti-loss poller. NotifyOnCompletion's
+// poll-driven call stays the fast path (a client that IS still polling
+// observes settlement the instant the job finishes, with no
+// sweep-interval delay); the sweep is the net underneath it, not a
+// replacement for it.
+//
+// A Service built with a nil CreditService, a nil store or a nil
+// jobs.Queue performs no credit accounting/reconciliation at all -- the
+// same nil-is-legal default every other optional host seam in this
+// codebase takes when unwired (mirroring bus's own nil-is-legal contract
+// just above).
 package smilesim
 
 import (
@@ -178,13 +202,27 @@ type Service struct {
 	gateway *aigateway.Gateway
 
 	// credits is the billing.CreditService Simulate reserves against and
-	// NotifyOnCompletion settles -- see the package doc comment's "Credit
+	// settleCredit settles -- see the package doc comment's "Credit
 	// accounting" section. Nil is legal: Simulate then performs no credit
 	// accounting at all (no PreDeduct call, never a refusal on balance),
-	// and NotifyOnCompletion never calls Confirm/Refund -- mirroring how a
+	// and settleCredit never calls Confirm/Refund -- mirroring how a
 	// Gateway with no wired Entitlements enforces no quota rather than
 	// panicking.
 	credits *billing.CreditService
+
+	// store durably persists the job-id-to-CreditTransaction-idempotency-key
+	// mapping Simulate opens and settleCredit later settles -- see the
+	// package doc comment's "Settlement reachability" section. Nil is
+	// legal, with the same "no credit accounting at all" consequence as a
+	// nil credits.
+	store *ReservationStore
+
+	// queue is the jobs.Queue ReconcileOutstandingCredits polls for each
+	// outstanding reservation's current job status -- the SAME queue
+	// go/ai-gateway's own job handler runs on, never a second queue of
+	// this Service's own. Nil is legal: ReconcileOutstandingCredits and
+	// StartReconciler are then no-ops, mirroring credits and store.
+	queue jobs.Queue
 
 	// bus is where NotifyOnCompletion publishes EventSimulationCompleted.
 	// Nil is legal: NotifyOnCompletion is then simply a no-op, mirroring
@@ -192,39 +230,37 @@ type Service struct {
 	// than panicking.
 	bus pkgcore.EventBus
 
-	// mu guards recipients, notified and creditKeys, all keyed by the
-	// image job's id -- Simulate writes to recipients and creditKeys,
-	// NotifyOnCompletion reads all three, and both methods may be called
-	// concurrently (a real client polls the job-status route from its own
-	// goroutine independent of any other request this process is
-	// serving).
+	// mu guards recipients and notified, both keyed by the image job's id
+	// -- Simulate writes to recipients, NotifyOnCompletion reads both, and
+	// both methods may be called concurrently (a real client polls the
+	// job-status route from its own goroutine independent of any other
+	// request this process is serving). The credit-settlement mapping
+	// that used to share this lock (creditKeys) now lives durably in
+	// store instead -- see the package doc comment's "Settlement
+	// reachability" section for why.
 	mu         sync.Mutex
 	recipients map[jobs.JobID]string
 	notified   map[jobs.JobID]bool
-
-	// creditKeys remembers, for each job Simulate reserved credits for,
-	// the CreditTransaction idempotency key PreDeduct used -- so
-	// NotifyOnCompletion's later Confirm/Refund settles the SAME
-	// reservation Simulate opened rather than minting a new one. A job
-	// Simulate ran with credits == nil (or a Service with no CreditService
-	// wired at all) has no entry here, which is exactly what makes
-	// NotifyOnCompletion's credit-settlement step a no-op for it.
-	creditKeys map[jobs.JobID]string
 }
 
 // NewService returns a Service asking gateway for simulations, reserving
 // and settling credits against credits (nil is legal -- see Service's own
-// doc comment on the credits field), and publishing simulation-completed
+// doc comment on the credits field), persisting the reservation-settlement
+// mapping in store and checking job status for ReconcileOutstandingCredits
+// through queue (nil is legal for either -- see Service's own doc comments
+// on the store and queue fields), and publishing simulation-completed
 // events on bus (nil is legal -- see Service's own doc comment on the bus
-// field). Constructing one performs no I/O.
-func NewService(gateway *aigateway.Gateway, credits *billing.CreditService, bus pkgcore.EventBus) *Service {
+// field). Constructing one performs no I/O; call store's own EnsureSchema
+// once, separately, before first use (cmd/server's wiring does this).
+func NewService(gateway *aigateway.Gateway, credits *billing.CreditService, bus pkgcore.EventBus, queue jobs.Queue, store *ReservationStore) *Service {
 	return &Service{
 		gateway:    gateway,
 		credits:    credits,
+		store:      store,
+		queue:      queue,
 		bus:        bus,
 		recipients: make(map[jobs.JobID]string),
 		notified:   make(map[jobs.JobID]bool),
-		creditKeys: make(map[jobs.JobID]string),
 	}
 }
 
@@ -268,13 +304,15 @@ func NewService(gateway *aigateway.Gateway, credits *billing.CreditService, bus 
 // (uuid.NewString(), prefixed for readability) and reuses that SAME id for
 // every subsequent operation tied to this one generation request: it is
 // PreDeduct's IdempotencyKey now, and -- once GenerateImage has returned a
-// real job id -- creditKeys[jobID] remembers it so NotifyOnCompletion's
-// later Confirm/Refund settles this exact reservation, never a fresh one.
-// This is "stable, tied to the specific generation request" in the sense
-// CreditService's own idempotency contract requires (PreDeduct.go's doc
-// comment): minted once and reused verbatim by every settlement call for
-// this request, never regenerated per call the way that would defeat
-// Confirm/Refund's own idempotent-retry contract.
+// real job id -- store.save durably remembers it (see this package's doc
+// comment's "Settlement reachability" section) so a later settleCredit
+// call, from either NotifyOnCompletion's poll-driven path or
+// ReconcileOutstandingCredits' sweep, settles this exact reservation,
+// never a fresh one. This is "stable, tied to the specific generation
+// request" in the sense CreditService's own idempotency contract requires
+// (PreDeduct.go's doc comment): minted once and reused verbatim by every
+// settlement call for this request, never regenerated per call the way
+// that would defeat Confirm/Refund's own idempotent-retry contract.
 //
 // If GenerateImage itself fails AFTER the reservation succeeded (an
 // unrouted model, a missing credential, an enqueue failure), the
@@ -316,10 +354,32 @@ func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID s
 		return "", err
 	}
 
-	s.mu.Lock()
-	if creditKey != "" {
-		s.creditKeys[jobID] = creditKey
+	if creditKey != "" && s.store != nil {
+		// tenant is always present here: GenerateImage above has already
+		// succeeded, and it never returns a job id without first resolving
+		// ctx's tenant itself (ErrImageRequiresTenant otherwise) -- so the
+		// ignored ok is safe, never silently defaulting to an empty
+		// tenant on a real path.
+		tenant, _ := pkgcore.TenantFromContext(ctx)
+		if saveErr := s.store.save(ctx, jobID, tenant, creditKey); saveErr != nil {
+			// The job is already enqueued and genuinely running at this
+			// point -- refusing the call now would strand it with no way
+			// for the caller to ever retrieve it either, which is worse
+			// than the alternative logged here: this reservation cannot
+			// be found by settleCredit later (neither NotifyOnCompletion's
+			// poll nor ReconcileOutstandingCredits' sweep has a row to act
+			// on), so it stays Reserved until an operator reconciles it
+			// by hand from this log line. This is a narrow, clearly
+			// logged failure mode of the durable store itself, not the
+			// silent, structural gap this mechanism exists to close (see
+			// this package's doc comment's "Settlement reachability"
+			// section).
+			obs.FromContext(ctx).Error("smilesim: persisting the credit reservation for a just-enqueued job failed -- it cannot be automatically settled and must be reconciled by hand",
+				"job_id", string(jobID), "credit_idempotency_key", creditKey, "error", saveErr)
+		}
 	}
+
+	s.mu.Lock()
 	if recipientUserID != "" {
 		s.recipients[jobID] = recipientUserID
 	}
@@ -390,29 +450,36 @@ func (s *Service) NotifyOnCompletion(ctx context.Context, job *jobs.Job) error {
 	})
 }
 
-// settleCredit is NotifyOnCompletion's credit half: Confirm on a succeeded
+// settleCredit is the credit half both NotifyOnCompletion's poll-driven
+// path and ReconcileOutstandingCredits' sweep call: Confirm on a succeeded
 // job, Refund on a dead-lettered or cancelled one, against the SAME
 // reservation Simulate opened for job -- see the package doc comment's
-// "Credit accounting" section and Simulate's own doc comment on its
-// idempotency-key shape. A no-op when this Service has no CreditService
-// wired, or when Simulate never reserved credits for job (job.ID has no
-// entry in creditKeys -- e.g. a Service built with credits == nil, or a
-// job that predates this round's own credit wiring).
+// "Credit accounting" and "Settlement reachability" sections and
+// Simulate's own doc comment on its idempotency-key shape. A no-op when
+// this Service has no CreditService or store wired, or when store has no
+// outstanding reservation on file for job (e.g. a Service built with
+// credits == nil, a job that predates this round's own credit wiring, or
+// a job whose reservation some earlier settleCredit call already settled
+// and deleted).
 //
 // Confirm/Refund are themselves idempotent under retry (CreditService's
 // own compare-and-swap contract -- credit_service.go's Confirm doc
-// comment), so calling this again for an already-settled job on a later
-// poll is safe: it resolves to the existing, already-settled
+// comment), so calling this again for an already-settled job -- a later
+// poll, or the reconciliation sweep racing a poll that got there first --
+// is safe even in the narrow window between Confirm/Refund succeeding and
+// this method's own store.delete call actually removing the row: the
+// second caller resolves to the existing, already-settled
 // CreditTransaction row rather than erroring or double-applying, exactly
 // the "provably safe" property Simulate's stable, per-request idempotency
 // key exists to guarantee.
 func (s *Service) settleCredit(ctx context.Context, job *jobs.Job) error {
-	if s.credits == nil {
+	if s.credits == nil || s.store == nil {
 		return nil
 	}
-	s.mu.Lock()
-	creditKey, hasCredit := s.creditKeys[job.ID]
-	s.mu.Unlock()
+	row, hasCredit, err := s.store.get(ctx, job.ID)
+	if err != nil {
+		return fmt.Errorf("smilesim: look up credit reservation for job %q: %w", job.ID, err)
+	}
 	if !hasCredit {
 		return nil
 	}
@@ -425,14 +492,25 @@ func (s *Service) settleCredit(ctx context.Context, job *jobs.Job) error {
 	// status at all under a different tenant to begin with).
 	settleCtx := pkgcore.WithTenant(ctx, job.TenantID)
 
-	var err error
 	if job.Status == jobs.StatusSucceeded {
-		_, err = s.credits.Confirm(settleCtx, creditKey)
+		_, err = s.credits.Confirm(settleCtx, row.CreditKey)
 	} else {
-		_, err = s.credits.Refund(settleCtx, creditKey)
+		_, err = s.credits.Refund(settleCtx, row.CreditKey)
 	}
 	if err != nil {
 		return fmt.Errorf("smilesim: settle credit reservation for job %q: %w", job.ID, err)
+	}
+
+	// The reservation is settled at this point regardless of whether the
+	// row can actually be removed below -- Confirm/Refund already
+	// committed. A delete failure is logged and swallowed rather than
+	// turned into an error this call would report as a settlement
+	// failure: Confirm/Refund's own idempotent-retry contract (this
+	// method's own doc comment) makes a leftover row harmless, merely
+	// re-settled (safely) the next time it is observed.
+	if delErr := s.store.delete(ctx, job.ID); delErr != nil {
+		obs.FromContext(ctx).Warn("smilesim: credit reservation settled but removing its reservation row failed -- it will be re-settled (safely, idempotently) the next time it is observed",
+			"job_id", string(job.ID), "error", delErr)
 	}
 	return nil
 }

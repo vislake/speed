@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"sync"
 	"testing"
+	"time"
+
+	"gorm.io/gorm"
 
 	aigateway "github.com/vislake/speed/go/ai-gateway"
 	"github.com/vislake/speed/go/billing"
@@ -83,10 +86,19 @@ var _ aigateway.ImageProvider = (*fakeImageProvider)(nil)
 // Gateway.GenerateImage's own job, already proven by go/ai-gateway's own
 // gateway_test.go/image_gateway_test.go), so this double exists only to let
 // GenerateImage's own enqueue succeed; nothing here runs the resulting job.
+//
+// jobs, when populated via setJob, is what ReconcileOutstandingCredits'
+// own Get calls observe -- standing in for a real jobs.Queue's persisted
+// job status the way a real StandaloneQueue would report it, without this
+// test double actually running any job. A jobID never given to setJob
+// answers (nil, nil) from Get, exactly as the zero-value map lookup
+// already did before setJob existed, so every pre-existing test that never
+// calls setJob is unaffected.
 type recordingQueue struct {
 	lastTask     jobs.Task
 	jobID        jobs.JobID
 	enqueueCalls int
+	jobs         map[jobs.JobID]*jobs.Job
 }
 
 func (q *recordingQueue) Enqueue(_ context.Context, task jobs.Task, _ ...jobs.EnqueueOption) (jobs.JobID, error) {
@@ -94,8 +106,20 @@ func (q *recordingQueue) Enqueue(_ context.Context, task jobs.Task, _ ...jobs.En
 	q.lastTask = task
 	return q.jobID, nil
 }
-func (q *recordingQueue) Get(context.Context, jobs.JobID) (*jobs.Job, error) { return nil, nil }
-func (q *recordingQueue) Cancel(context.Context, jobs.JobID) error           { return nil }
+
+func (q *recordingQueue) Get(_ context.Context, id jobs.JobID) (*jobs.Job, error) {
+	return q.jobs[id], nil
+}
+func (q *recordingQueue) Cancel(context.Context, jobs.JobID) error { return nil }
+
+// setJob records job as what a later Get(job.ID) answers -- see this
+// type's own doc comment.
+func (q *recordingQueue) setJob(job *jobs.Job) {
+	if q.jobs == nil {
+		q.jobs = make(map[jobs.JobID]*jobs.Job)
+	}
+	q.jobs[job.ID] = job
+}
 
 // compile-time check that *recordingQueue satisfies jobs.Queue.
 var _ jobs.Queue = (*recordingQueue)(nil)
@@ -127,18 +151,32 @@ func newTestCreditService(t *testing.T) *billing.CreditService {
 // records what Service.Simulate causes Gateway.GenerateImage to enqueue,
 // and credits (nil is legal -- see Service's own doc comment on its
 // credits field) is the CreditService Simulate reserves against and
-// NotifyOnCompletion settles.
+// settleCredit settles. This is the ordinary case, one fresh database per
+// Service; see newTestServiceWithDB for the "same database, two Service
+// instances" shape a process-restart proof needs.
+func newTestService(t *testing.T, provider aigateway.ImageProvider, queue *recordingQueue, credits *billing.CreditService) *Service {
+	t.Helper()
+	return newTestServiceWithDB(t, dbtest.NewSQLite(t), provider, queue, credits)
+}
+
+// newTestServiceWithDB is newTestService's own implementation, parametrized
+// on db instead of always creating a fresh one -- letting a test build TWO
+// Service instances that share the same underlying database (and, by
+// passing the same queue too, the same "queue survived" state) to prove a
+// property that only holds across two separate Service values: that
+// creditReservation's persisted row survives whatever in-memory state the
+// first Service instance held, exactly as it would across a real process
+// restart (see TestService_ReconcileOutstandingCredits and
+// TestService_CreditReservation_SurvivesRestart below).
 //
 // The storage.ObjectService handed to WithImageGeneration is real but never
 // actually reads or writes bytes in this file's tests: Service.Simulate
 // only reaches Gateway.GenerateImage's enqueue path, never the job handler
 // that would call it -- go/ai-gateway's own image_gateway_test.go is where
 // that handler's storage I/O is proven.
-func newTestService(t *testing.T, provider aigateway.ImageProvider, queue *recordingQueue, credits *billing.CreditService) *Service {
+func newTestServiceWithDB(t *testing.T, db *gorm.DB, provider aigateway.ImageProvider, queue *recordingQueue, credits *billing.CreditService) *Service {
 	t.Helper()
 	registerCredentialSerializer()
-
-	db := dbtest.NewSQLite(t)
 
 	migrations := dbkit.NewMigrationRegistry()
 	if err := migrations.Register(aigateway.NewModule(db)); err != nil {
@@ -181,7 +219,12 @@ func newTestService(t *testing.T, provider aigateway.ImageProvider, queue *recor
 		aigateway.WithImageGeneration(queue, storageModule.ObjectService()),
 	)
 
-	return NewService(gateway, credits, pkgcore.NewMemoryEventBus())
+	store := NewReservationStore(db)
+	if err := store.EnsureSchema(context.Background()); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+
+	return NewService(gateway, credits, pkgcore.NewMemoryEventBus(), queue, store)
 }
 
 func TestService_Simulate_EnqueuesImageToImageUnderTheLogicalModel(t *testing.T) {
@@ -248,7 +291,7 @@ func subscribeSimulationCompleted(bus pkgcore.EventBus) func() []SimulationCompl
 
 func TestService_NotifyOnCompletion_PublishesOnceForASucceededJobWithARecipient(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	svc := NewService(nil, nil, bus)
+	svc := NewService(nil, nil, bus, nil, nil)
 	events := subscribeSimulationCompleted(bus)
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
@@ -292,7 +335,7 @@ func TestService_NotifyOnCompletion_PublishesOnceForASucceededJobWithARecipient(
 
 func TestService_NotifyOnCompletion_DeadLetterReportsFailureWithNoOutputObject(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	svc := NewService(nil, nil, bus)
+	svc := NewService(nil, nil, bus, nil, nil)
 	events := subscribeSimulationCompleted(bus)
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
@@ -318,7 +361,7 @@ func TestService_NotifyOnCompletion_DeadLetterReportsFailureWithNoOutputObject(t
 
 func TestService_NotifyOnCompletion_NoRecipientOnFile_NeverPublishes(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	svc := NewService(nil, nil, bus)
+	svc := NewService(nil, nil, bus, nil, nil)
 	events := subscribeSimulationCompleted(bus)
 
 	job := &jobs.Job{ID: "job-no-recipient", TenantID: "tenant-acme", Status: jobs.StatusSucceeded}
@@ -332,7 +375,7 @@ func TestService_NotifyOnCompletion_NoRecipientOnFile_NeverPublishes(t *testing.
 
 func TestService_NotifyOnCompletion_NonTerminalStatus_NeverPublishes(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	svc := NewService(nil, nil, bus)
+	svc := NewService(nil, nil, bus, nil, nil)
 	events := subscribeSimulationCompleted(bus)
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
@@ -541,7 +584,7 @@ func TestService_NotifyOnCompletion_DeadLetter_RefundsReservation(t *testing.T) 
 }
 
 func TestService_NotifyOnCompletion_NilBus_IsANoOp(t *testing.T) {
-	svc := NewService(nil, nil, nil)
+	svc := NewService(nil, nil, nil, nil, nil)
 	job := &jobs.Job{ID: "job-x", TenantID: "tenant-acme", Status: jobs.StatusSucceeded}
 	// Never given a recipient, so this would be a no-op regardless, but the
 	// point is that a nil bus must not panic even when it IS reached.
@@ -549,4 +592,241 @@ func TestService_NotifyOnCompletion_NilBus_IsANoOp(t *testing.T) {
 	if err := svc.NotifyOnCompletion(context.Background(), job); err != nil {
 		t.Fatalf("NotifyOnCompletion with a nil bus error = %v, want nil", err)
 	}
+}
+
+// TestService_ReconcileOutstandingCredits_SettlesAJobNeverPolled is this
+// round's own regression proof for the bug this round fixes: before it,
+// settleCredit was reachable ONLY through NotifyOnCompletion, itself
+// reachable only by a client polling the job-status route -- a reservation
+// whose job finished while nobody was watching (a closed tab, a dropped
+// connection, a caller that simply never checked back) stayed Reserved
+// forever, with no other path to settle it. This test drives Simulate to
+// open a real reservation, records the resulting job as StatusSucceeded
+// directly on queue (standing in for "the job finished"), and calls ONLY
+// ReconcileOutstandingCredits -- NotifyOnCompletion is never called at
+// all -- proving the reservation still settles.
+func TestService_ReconcileOutstandingCredits_SettlesAJobNeverPolled(t *testing.T) {
+	credits := newTestCreditService(t)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	if _, err := credits.Grant(ctx, billing.GrantInput{Amount: 100, Reason: "test:seed"}); err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+
+	queue := &recordingQueue{jobID: "job-recon-1"}
+	svc := newTestService(t, &fakeImageProvider{}, queue, credits)
+
+	jobID, err := svc.Simulate(ctx, "photo-1", "")
+	if err != nil {
+		t.Fatalf("Simulate: %v", err)
+	}
+	bal, err := credits.Balance(ctx)
+	if err != nil {
+		t.Fatalf("Balance (after Simulate): %v", err)
+	}
+	if bal.Reserved != CreditsPerSimulation {
+		t.Fatalf("Reserved after Simulate = %d, want %d", bal.Reserved, CreditsPerSimulation)
+	}
+
+	// The job finished -- recorded directly on the queue double, never
+	// observed through NotifyOnCompletion (no poll ever happens in this
+	// test).
+	queue.setJob(&jobs.Job{ID: jobID, TenantID: "tenant-acme", Status: jobs.StatusSucceeded})
+
+	settled, err := svc.ReconcileOutstandingCredits(context.Background())
+	if err != nil {
+		t.Fatalf("ReconcileOutstandingCredits: %v", err)
+	}
+	if settled != 1 {
+		t.Fatalf("settled = %d, want 1", settled)
+	}
+
+	bal, err = credits.Balance(ctx)
+	if err != nil {
+		t.Fatalf("Balance (after reconcile): %v", err)
+	}
+	if bal.Available != 100-CreditsPerSimulation {
+		t.Errorf("Available after reconcile = %d, want %d", bal.Available, 100-CreditsPerSimulation)
+	}
+	if bal.Reserved != 0 {
+		t.Errorf("Reserved after reconcile = %d, want 0 -- the never-polled reservation must still be confirmed, not left stuck Reserved forever", bal.Reserved)
+	}
+
+	// The reservation row is gone now, so sweeping again finds nothing
+	// left to settle.
+	settledAgain, err := svc.ReconcileOutstandingCredits(context.Background())
+	if err != nil {
+		t.Fatalf("ReconcileOutstandingCredits (second sweep): %v", err)
+	}
+	if settledAgain != 0 {
+		t.Errorf("settled on second sweep = %d, want 0", settledAgain)
+	}
+}
+
+// TestService_ReconcileOutstandingCredits_NonTerminalJob_LeavesReservationInPlace
+// proves the sweep does not touch a job still in flight: settling a
+// reservation before its job actually finishes would be a correctness bug
+// of its own (an early Confirm on a job that later dead-letters, or an
+// early Refund on one that later succeeds).
+func TestService_ReconcileOutstandingCredits_NonTerminalJob_LeavesReservationInPlace(t *testing.T) {
+	credits := newTestCreditService(t)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	if _, err := credits.Grant(ctx, billing.GrantInput{Amount: 100, Reason: "test:seed"}); err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+
+	queue := &recordingQueue{jobID: "job-recon-2"}
+	svc := newTestService(t, &fakeImageProvider{}, queue, credits)
+
+	jobID, err := svc.Simulate(ctx, "photo-1", "")
+	if err != nil {
+		t.Fatalf("Simulate: %v", err)
+	}
+	queue.setJob(&jobs.Job{ID: jobID, TenantID: "tenant-acme", Status: jobs.StatusRunning})
+
+	settled, err := svc.ReconcileOutstandingCredits(context.Background())
+	if err != nil {
+		t.Fatalf("ReconcileOutstandingCredits: %v", err)
+	}
+	if settled != 0 {
+		t.Fatalf("settled = %d, want 0 for a still-running job", settled)
+	}
+
+	bal, err := credits.Balance(ctx)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.Reserved != CreditsPerSimulation {
+		t.Errorf("Reserved after sweeping a non-terminal job = %d, want unchanged %d", bal.Reserved, CreditsPerSimulation)
+	}
+}
+
+// TestService_ReconcileOutstandingCredits_NilWiring_IsANoOp mirrors every
+// other optional-seam nil-safety test in this file: a Service missing
+// credits, store or queue must not panic, and must settle nothing.
+func TestService_ReconcileOutstandingCredits_NilWiring_IsANoOp(t *testing.T) {
+	svc := NewService(nil, nil, nil, nil, nil)
+	settled, err := svc.ReconcileOutstandingCredits(context.Background())
+	if err != nil {
+		t.Fatalf("ReconcileOutstandingCredits: %v", err)
+	}
+	if settled != 0 {
+		t.Errorf("settled = %d, want 0", settled)
+	}
+}
+
+// TestService_CreditReservation_SurvivesRestart is this round's other own
+// regression proof: before it, the job-id-to-CreditTransaction-key mapping
+// lived in a plain Go map (creditKeys), which a process restart wipes --
+// so even a client that kept polling faithfully after a restart would find
+// settleCredit's lookup come up empty and silently do nothing, leaking the
+// reservation forever with no error and no distinguishing log line. This
+// test builds a Service (serviceA), reserves credits through it, then
+// builds a brand new, second Service instance (serviceB) sharing nothing
+// in memory with serviceA -- no recipients, no notified, no in-process
+// state of any kind -- but the SAME underlying database, exactly modeling
+// a process restart in which only durable state (the database, and the
+// jobs queue's own persisted rows, modeled here by reusing the same queue
+// double) survives. serviceB alone is used to reconcile the reservation
+// serviceA opened, proving the mapping itself -- not just the process that
+// happened to create it -- is what makes settlement possible.
+func TestService_CreditReservation_SurvivesRestart(t *testing.T) {
+	credits := newTestCreditService(t)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	if _, err := credits.Grant(ctx, billing.GrantInput{Amount: 100, Reason: "test:seed"}); err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+
+	db := dbtest.NewSQLite(t)
+	queue := &recordingQueue{jobID: "job-restart-1"}
+	serviceA := newTestServiceWithDB(t, db, &fakeImageProvider{}, queue, credits)
+
+	jobID, err := serviceA.Simulate(ctx, "photo-1", "")
+	if err != nil {
+		t.Fatalf("Simulate: %v", err)
+	}
+
+	// The "restart": a second Service, its own fresh in-memory state, over
+	// the same database and the same (queue-double-modeled) persisted
+	// queue -- gateway is nil because nothing here calls Simulate on
+	// serviceB, only settlement.
+	store := NewReservationStore(db)
+	if schemaErr := store.EnsureSchema(context.Background()); schemaErr != nil {
+		t.Fatalf("EnsureSchema: %v", schemaErr)
+	}
+	serviceB := NewService(nil, credits, pkgcore.NewMemoryEventBus(), queue, store)
+
+	queue.setJob(&jobs.Job{ID: jobID, TenantID: "tenant-acme", Status: jobs.StatusSucceeded})
+
+	settled, err := serviceB.ReconcileOutstandingCredits(context.Background())
+	if err != nil {
+		t.Fatalf("ReconcileOutstandingCredits: %v", err)
+	}
+	if settled != 1 {
+		t.Fatalf("settled = %d, want 1 -- the reservation serviceA opened must still be visible to serviceB after the simulated restart", settled)
+	}
+
+	bal, err := credits.Balance(ctx)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.Available != 100-CreditsPerSimulation {
+		t.Errorf("Available after restart-survived settlement = %d, want %d", bal.Available, 100-CreditsPerSimulation)
+	}
+	if bal.Reserved != 0 {
+		t.Errorf("Reserved after restart-survived settlement = %d, want 0", bal.Reserved)
+	}
+}
+
+// TestService_StartReconciler_AutomaticallySettlesWithoutAnyPoll proves
+// StartReconciler's background ticker loop actually runs
+// ReconcileOutstandingCredits on its own, with no test code ever calling
+// NotifyOnCompletion or ReconcileOutstandingCredits directly -- the full,
+// end-to-end shape of "settlement is reachable independent of any client
+// polling" this round's fix provides.
+func TestService_StartReconciler_AutomaticallySettlesWithoutAnyPoll(t *testing.T) {
+	credits := newTestCreditService(t)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	if _, err := credits.Grant(ctx, billing.GrantInput{Amount: 100, Reason: "test:seed"}); err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+
+	queue := &recordingQueue{jobID: "job-ticker-1"}
+	svc := newTestService(t, &fakeImageProvider{}, queue, credits)
+
+	jobID, err := svc.Simulate(ctx, "photo-1", "")
+	if err != nil {
+		t.Fatalf("Simulate: %v", err)
+	}
+	queue.setJob(&jobs.Job{ID: jobID, TenantID: "tenant-acme", Status: jobs.StatusSucceeded})
+
+	stop := svc.StartReconciler(context.Background(), 10*time.Millisecond)
+	defer stop()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		bal, balErr := credits.Balance(ctx)
+		if balErr != nil {
+			t.Fatalf("Balance: %v", balErr)
+		}
+		if bal.Reserved == 0 {
+			if bal.Available != 100-CreditsPerSimulation {
+				t.Fatalf("Available once settled = %d, want %d", bal.Available, 100-CreditsPerSimulation)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("reservation still Reserved after waiting for the background reconciler to tick -- balance = %+v", bal)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestService_StartReconciler_NilWiring_ReturnsAHarmlessStop mirrors every
+// other optional-seam nil-safety test in this file: calling
+// StartReconciler on a Service with nothing wired must not panic, and its
+// returned stop func must be safe to call.
+func TestService_StartReconciler_NilWiring_ReturnsAHarmlessStop(t *testing.T) {
+	svc := NewService(nil, nil, nil, nil, nil)
+	stop := svc.StartReconciler(context.Background(), time.Millisecond)
+	stop()
 }
