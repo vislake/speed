@@ -621,6 +621,267 @@ func TestMemoryKVStore_IncrByFloatExpiry(t *testing.T) {
 	})
 }
 
+func TestMemoryKVStore_IncrByFloatWithTTL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		seed        string
+		seeded      bool
+		deltas      []float64
+		want        float64
+		wantEncoded string
+	}{
+		{
+			name:        "a missing key starts from zero",
+			deltas:      []float64{1},
+			want:        1,
+			wantEncoded: "1",
+		},
+		{
+			name:        "increments accumulate across calls",
+			deltas:      []float64{1, 2, 3},
+			want:        6,
+			wantEncoded: "6",
+		},
+		{
+			name:        "picks up a value written with Set",
+			seed:        "41.5",
+			seeded:      true,
+			deltas:      []float64{0.5},
+			want:        42,
+			wantEncoded: "42",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			store := NewMemoryKVStore()
+			if tc.seeded {
+				kvSet(t, store, kvCounterKey, tc.seed)
+			}
+
+			var got float64
+			for i, delta := range tc.deltas {
+				var err error
+				got, err = store.IncrByFloatWithTTL(ctx, kvCounterKey, delta, kvLongTTL)
+				if err != nil {
+					t.Fatalf("IncrByFloatWithTTL call %d (delta %v): unexpected error: %v", i+1, delta, err)
+				}
+			}
+
+			if got != tc.want {
+				t.Errorf("IncrByFloatWithTTL = %v, want %v", got, tc.want)
+			}
+
+			encoded, found := kvGet(t, store, kvCounterKey)
+			if !found {
+				t.Fatal("Get after IncrByFloatWithTTL: key is absent, want present")
+			}
+			if encoded != tc.wantEncoded {
+				t.Errorf("stored encoding = %q, want %q", encoded, tc.wantEncoded)
+			}
+		})
+	}
+}
+
+func TestMemoryKVStore_IncrByFloatWithTTLRejectsNonNumericValue(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := NewMemoryKVStore()
+	want := []byte("not a number")
+	kvSet(t, store, kvCounterKey, string(want))
+
+	got, err := store.IncrByFloatWithTTL(ctx, kvCounterKey, kvIncrementStep, kvLongTTL)
+	if !errors.Is(err, ErrNotNumeric) {
+		t.Fatalf("IncrByFloatWithTTL: error = %v, want ErrNotNumeric", err)
+	}
+	if got != 0 {
+		t.Errorf("IncrByFloatWithTTL returned %v alongside an error, want 0", got)
+	}
+
+	value, found := kvGet(t, store, kvCounterKey)
+	if !found {
+		t.Fatal("the failed increment deleted the key")
+	}
+	if value != string(want) {
+		t.Errorf("the failed increment rewrote the value: got %q, want %q", value, want)
+	}
+}
+
+func TestMemoryKVStore_IncrByFloatWithTTLExpiry(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a counter created by the increment expires after ttl", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		store := NewMemoryKVStore()
+		if _, err := store.IncrByFloatWithTTL(ctx, kvCounterKey, kvIncrementStep, kvShortTTL); err != nil {
+			t.Fatalf("IncrByFloatWithTTL: unexpected error: %v", err)
+		}
+
+		if _, found, err := store.Get(ctx, kvCounterKey); err != nil || !found {
+			t.Fatalf("Get() immediately after IncrByFloatWithTTL = (found=%v, err=%v), want (true, nil)", found, err)
+		}
+
+		time.Sleep(kvExpiryWait)
+
+		if _, found, err := store.Get(ctx, kvCounterKey); err != nil || found {
+			t.Errorf("Get() after the ttl elapsed = (found=%v, err=%v), want (false, nil)", found, err)
+		}
+	})
+
+	t.Run("a ttl of zero or less on a missing key means no expiry, exactly like IncrByFloat", func(t *testing.T) {
+		t.Parallel()
+
+		for _, ttl := range []time.Duration{0, -time.Second} {
+			ctx := context.Background()
+			store := NewMemoryKVStore()
+			if _, err := store.IncrByFloatWithTTL(ctx, kvCounterKey, kvIncrementStep, ttl); err != nil {
+				t.Fatalf("IncrByFloatWithTTL(ttl=%v): unexpected error: %v", ttl, err)
+			}
+
+			entry, found := kvStoredEntry(t, store, kvCounterKey)
+			if !found {
+				t.Fatal("the counter was not stored")
+			}
+			if !entry.expiresAt.IsZero() {
+				t.Errorf("ttl=%v: the counter expires at %v, want no expiry", ttl, entry.expiresAt)
+			}
+		}
+	})
+
+	t.Run("an existing expiry is preserved, not extended by a later call's ttl", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		store := NewMemoryKVStore()
+		if err := store.Set(ctx, kvCounterKey, []byte("1"), kvLongTTL); err != nil {
+			t.Fatalf("Set: unexpected error: %v", err)
+		}
+		before, found := kvStoredEntry(t, store, kvCounterKey)
+		if !found {
+			t.Fatal("the counter was not stored")
+		}
+
+		// A short ttl passed here must never shorten (or otherwise touch) an
+		// expiry the key already has -- this is the exact bug a refresh-on-
+		// every-call implementation would exhibit, and the reason this
+		// subtest passes a ttl deliberately different from kvLongTTL.
+		if _, err := store.IncrByFloatWithTTL(ctx, kvCounterKey, kvIncrementStep, kvShortTTL); err != nil {
+			t.Fatalf("IncrByFloatWithTTL: unexpected error: %v", err)
+		}
+
+		after, found := kvStoredEntry(t, store, kvCounterKey)
+		if !found {
+			t.Fatal("the counter disappeared after the increment")
+		}
+		if !after.expiresAt.Equal(before.expiresAt) {
+			t.Errorf("IncrByFloatWithTTL moved the expiry from %v to %v, want it unchanged", before.expiresAt, after.expiresAt)
+		}
+
+		// Confirm the short ttl passed alongside the increment truly had no
+		// effect: waiting past it must not expire the key, since the
+		// long-lived expiry set by Set is what actually governs it.
+		time.Sleep(kvExpiryWait)
+		if _, found, err := store.Get(ctx, kvCounterKey); err != nil || !found {
+			t.Errorf("Get() after waiting past the ignored short ttl = (found=%v, err=%v), want (true, nil)", found, err)
+		}
+	})
+
+	t.Run("an expired counter restarts from zero with the new ttl", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		store := NewMemoryKVStore()
+		if err := store.Set(ctx, kvCounterKey, []byte("100"), kvShortTTL); err != nil {
+			t.Fatalf("Set: unexpected error: %v", err)
+		}
+
+		time.Sleep(kvExpiryWait)
+
+		got, err := store.IncrByFloatWithTTL(ctx, kvCounterKey, kvIncrementStep, kvLongTTL)
+		if err != nil {
+			t.Fatalf("IncrByFloatWithTTL: unexpected error: %v", err)
+		}
+		if got != kvIncrementStep {
+			t.Errorf("IncrByFloatWithTTL after expiry = %v, want %v: the expired value must not survive", got, float64(kvIncrementStep))
+		}
+
+		entry, found := kvStoredEntry(t, store, kvCounterKey)
+		if !found {
+			t.Fatal("the counter was not stored")
+		}
+		if entry.expiresAt.IsZero() {
+			t.Error("the restarted counter has no expiry, want the new ttl attached")
+		}
+	})
+}
+
+// TestMemoryKVStore_ConcurrentIncrByFloatWithTTLLosesNoIncrementAndAttachesTTL
+// races hundreds of goroutines to create the same fresh window key at once --
+// exactly the shape go/ratelimit's Allow does on a window boundary -- and
+// proves both halves of IncrByFloatWithTTL's atomicity contract survive: no
+// increment is lost (the final count equals the goroutine count, unlike the
+// pre-fix Get-then-Set sequence this primitive replaces, which could lose
+// double-digit percentages under this exact load) AND the key ends up with a
+// ttl attached (observable here as a non-zero expiresAt; a broken
+// implementation that silently dropped the ttl on some races would leave the
+// key permanently live instead of aging out with its window).
+func TestMemoryKVStore_ConcurrentIncrByFloatWithTTLLosesNoIncrementAndAttachesTTL(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := NewMemoryKVStore()
+
+	const goroutines = 300
+
+	var wg sync.WaitGroup
+	errs := make(chan error, goroutines)
+
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			_, err := store.IncrByFloatWithTTL(ctx, kvCounterKey, kvIncrementStep, kvLongTTL)
+			if err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Fatalf("IncrByFloatWithTTL: unexpected error: %v", err)
+	}
+
+	encoded, found := kvGet(t, store, kvCounterKey)
+	if !found {
+		t.Fatal("the counter is absent after the increments")
+	}
+	total, err := strconv.ParseFloat(encoded, kvFloatBitSize)
+	if err != nil {
+		t.Fatalf("the counter %q does not parse: %v", encoded, err)
+	}
+	if want := float64(goroutines * kvIncrementStep); total != want {
+		t.Errorf("counter = %v, want %v: an increment was lost under concurrent key creation", total, want)
+	}
+
+	entry, found := kvStoredEntry(t, store, kvCounterKey)
+	if !found {
+		t.Fatal("the counter entry disappeared")
+	}
+	if entry.expiresAt.IsZero() {
+		t.Error("the counter has no expiry after concurrent creation, want the ttl attached exactly once")
+	}
+}
+
 func TestMemoryKVStore_CompareAndSwap(t *testing.T) {
 	t.Parallel()
 
@@ -1140,6 +1401,13 @@ func TestMemoryKVStore_CancelledContext(t *testing.T) {
 			name: "IncrByFloat",
 			call: func(ctx context.Context, store KVStore) error {
 				_, err := store.IncrByFloat(ctx, kvTestKey, kvIncrementStep)
+				return err
+			},
+		},
+		{
+			name: "IncrByFloatWithTTL",
+			call: func(ctx context.Context, store KVStore) error {
+				_, err := store.IncrByFloatWithTTL(ctx, kvTestKey, kvIncrementStep, kvLongTTL)
 				return err
 			},
 		},

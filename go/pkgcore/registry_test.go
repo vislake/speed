@@ -118,6 +118,10 @@ func (s *regTestKVStore) IncrByFloat(context.Context, string, float64) (float64,
 	return 0, nil
 }
 
+func (s *regTestKVStore) IncrByFloatWithTTL(context.Context, string, float64, time.Duration) (float64, error) {
+	return 0, nil
+}
+
 func (s *regTestKVStore) CompareAndSwap(context.Context, string, []byte, []byte) (bool, error) {
 	return false, nil
 }

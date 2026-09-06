@@ -40,10 +40,10 @@ const (
 //
 // The interface is deliberately designed against the weakest backend it must
 // support, so it exposes no server-side scripting, pipelines, pub/sub or data
-// types beyond opaque byte values. Atomicity is expressed through IncrByFloat
-// and CompareAndSwap, which every backend can honour; callers that need a
-// read-modify-write cycle must build it from those two rather than from a Get
-// followed by a Set.
+// types beyond opaque byte values. Atomicity is expressed through IncrByFloat,
+// IncrByFloatWithTTL and CompareAndSwap, which every backend can honour;
+// callers that need a read-modify-write cycle must build it from those rather
+// than from a Get followed by a Set.
 //
 // Keys are opaque strings and values are opaque byte slices; the store never
 // interprets either, except for the numeric encoding IncrByFloat reads and
@@ -85,6 +85,36 @@ type KVStore interface {
 	// integer-valued deltas (exactly representable in float64), the shape
 	// every real caller in this codebase already uses.
 	IncrByFloat(ctx context.Context, key string, delta float64) (float64, error)
+
+	// IncrByFloatWithTTL adds delta to the number stored under key and
+	// returns the result, exactly like IncrByFloat, but atomically attaches
+	// ttl as the key's expiry on the same call that creates it: a missing or
+	// expired key starts from zero and is stored with ttl as its expiry (a
+	// ttl of zero or less stores it without one, matching Set's own
+	// zero-or-less convention); a key that already exists is incremented and
+	// keeps the expiry it already has -- ttl is ignored for a live key, never
+	// extending it, so a rolling-window counter under sustained traffic still
+	// ages out on schedule (the identical non-extension rule IncrByFloat
+	// itself documents). The value is stored and parsed exactly as
+	// IncrByFloat's own doc comment describes, and a key holding a
+	// non-numeric value fails with ErrNotNumeric and is left unchanged, same
+	// as IncrByFloat.
+	//
+	// This exists to close a real concurrency gap IncrByFloat alone cannot:
+	// attaching a TTL to a freshly created key otherwise needs a caller-side
+	// Get-then-Set after IncrByFloat, and any concurrent increment landing in
+	// that Get-to-Set gap is silently overwritten by the Set, undercounting
+	// the key. IncrByFloatWithTTL collapses "increment" and "attach the
+	// expiry, but only on creation" into one atomic step, so no caller-side
+	// sequence, retried or not, can lose an increment that way. Every backend
+	// implements this as a single atomic operation -- extending whatever
+	// mechanism its own IncrByFloat already uses to be atomic -- never as two
+	// separate calls a caller could still race between.
+	//
+	// The same cross-implementation caveats IncrByFloat's own doc comment
+	// states about arithmetic on a binary-inexact delta apply here
+	// identically, since the arithmetic itself is unchanged.
+	IncrByFloatWithTTL(ctx context.Context, key string, delta float64, ttl time.Duration) (float64, error)
 
 	// CompareAndSwap replaces the value under key with newVal only if the
 	// current value equals old, and reports whether the swap happened. A
@@ -201,6 +231,51 @@ func (s *memoryKVStore) IncrByFloat(ctx context.Context, key string, delta float
 		}
 		current = parsed
 		expiresAt = entry.expiresAt
+	}
+
+	result := current + delta
+	s.entries[key] = kvEntry{
+		value:     strconv.AppendFloat(nil, result, kvFloatFormat, kvFloatPrecisionShortest, kvFloatBitSize),
+		expiresAt: expiresAt,
+	}
+	return result, nil
+}
+
+// IncrByFloatWithTTL implements KVStore.IncrByFloatWithTTL. It runs inside
+// the same mutex critical section as IncrByFloat, so the whole
+// read-current-value-then-decide-the-expiry-then-write sequence is one
+// atomic step from any concurrent caller's point of view -- there is no
+// Get-then-Set gap for another goroutine's increment to land in and be
+// overwritten, which is the exact gap a caller-side IncrByFloat-then-Set
+// sequence cannot close (see go/ratelimit's own doc comment on the race this
+// primitive exists to close).
+func (s *memoryKVStore) IncrByFloatWithTTL(ctx context.Context, key string, delta float64, ttl time.Duration) (float64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// A missing or expired key starts from zero; a live one contributes both
+	// its number and its expiry, exactly like IncrByFloat.
+	var (
+		current   float64
+		expiresAt time.Time
+	)
+	entry, found := s.entries[key]
+	live := found && !entry.expired(time.Now())
+	if live {
+		parsed, err := strconv.ParseFloat(string(entry.value), kvFloatBitSize)
+		if err != nil {
+			return 0, ErrNotNumeric
+		}
+		current = parsed
+		expiresAt = entry.expiresAt
+	} else if ttl > kvNoExpiry {
+		// Only a fresh (missing or expired) key ever gets ttl attached; a
+		// live key's own expiry above is carried over untouched.
+		expiresAt = time.Now().Add(ttl)
 	}
 
 	result := current + delta
