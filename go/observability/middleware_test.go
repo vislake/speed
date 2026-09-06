@@ -272,7 +272,7 @@ func TestMiddleware_DifferentRouteOrStatus_ProducesSeparateSeries(t *testing.T) 
 
 // TestMiddleware_UnboundedRoutePaths_CardinalityIsBounded is the negative
 // control for the live, unauthenticated exploit described in Middleware's
-// "Route label caveat" doc comment: neither a mux 404 nor
+// "Metric label cardinality caveats" doc comment: neither a mux 404 nor
 // tenancy.Middleware's pre-mux 403 requires a valid route or credential, so
 // without a bound an attacker can create one new, permanent metric series
 // per distinct URL path they send. This drives the handler well past
@@ -335,6 +335,176 @@ func TestMiddleware_UnboundedRoutePaths_CardinalityIsBounded(t *testing.T) {
 	}
 	if totalRecorded != int64(attackerRequests) {
 		t.Errorf("sum of all recorded requests = %v, want %v (total attacker requests actually sent): a request was lost or double-counted", totalRecorded, attackerRequests)
+	}
+}
+
+// standardHTTPMethods is the known set the http.request.method METRIC label
+// is bounded to: the nine net/http method constants Middleware records
+// verbatim. It is enumerated here from the same net/http constants
+// middleware.go's own known-set switch references, never as literals, so the
+// test's expectation cannot drift from the production known set. HTTP method
+// tokens are case-sensitive, so "get" is deliberately absent from (and folds
+// out of) this list.
+var standardHTTPMethods = []string{
+	http.MethodGet,
+	http.MethodHead,
+	http.MethodPost,
+	http.MethodPut,
+	http.MethodPatch,
+	http.MethodDelete,
+	http.MethodConnect,
+	http.MethodOptions,
+	http.MethodTrace,
+}
+
+// isStandardMethod reports whether method is one of the nine standard tokens
+// standardHTTPMethods enumerates -- the membership check the test below
+// applies to every emitted http.request.method metric value.
+func isStandardMethod(method string) bool {
+	for _, m := range standardHTTPMethods {
+		if method == m {
+			return true
+		}
+	}
+	return false
+}
+
+// TestMiddleware_UnboundedMethodTokens_CardinalityIsBounded is the negative
+// control for the method-dimension half of the live, unauthenticated
+// exploit described in Middleware's own "Metric label cardinality caveats"
+// doc comment: the route label was already bounded, but the
+// http.request.method METRIC label is fed by
+// (*http.Request).Method -- the raw request-line method token, which
+// net/http accepts from any unauthenticated caller with no set constraint,
+// no normalization and no truncation. Middleware sits OUTSIDE
+// tenancy.Middleware in the fixed chain (its own doc comment), so pre-auth
+// 404s and 403s are counted exactly like the route exploit's traffic, and
+// without a bound an attacker sending one distinct method token per request
+// creates one new, permanent metric series per token -- the identical
+// cardinality-explosion failure mode the route limiter already closes, one
+// dimension over.
+//
+// This drives one Middleware instance with (a) every one of the nine
+// standard methods once each, (b) far more distinct attacker-chosen method
+// tokens than the known set could ever cover, one per request, plus (c) a
+// lower-case near-miss ("get") and two non-standard tokens real clients
+// legitimately use ("PROPFIND", WebDAV; "PRI", HTTP/2's connection
+// preface) -- and asserts, from observable, black-box behavior, that the
+// set of distinct http.request.method METRIC values ever emitted stays
+// exactly the known set plus the single fixed overflow value: never one
+// series per attacker token. On the unfixed code every distinct token
+// becomes its own series and the distinct-value set grows without bound --
+// this test fails there (verified by hand before the fix landed) and passes
+// after.
+func TestMiddleware_UnboundedMethodTokens_CardinalityIsBounded(t *testing.T) {
+	reader := setupMeterProvider(t)
+	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// The exact status is irrelevant to what this test checks
+		// (method-label cardinality), so a fixed 200 stands in for it,
+		// exactly like the route-cardinality test's fixed 404.
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Leg (b): far more distinct attacker tokens than the known set could
+	// ever cover -- an order of magnitude past the nine standard methods.
+	const attackerMethodCount = 100
+	// Leg (c): the near-miss and the non-standard-but-legitimate tokens.
+	nonStandard := []string{"get", "PROPFIND", "PRI"}
+	totalRequests := len(standardHTTPMethods) + attackerMethodCount + len(nonStandard)
+
+	// All requests share one fixed path and one fixed status, so the only
+	// label that varies across the series below is http.request.method --
+	// the distinct-series count IS the distinct-method-label count, which is
+	// what makes the boundedness assertion below unambiguous.
+	const path = "/api/v1/notes"
+	send := func(method string) {
+		t.Helper()
+		handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(method, path, ""))
+	}
+	for _, m := range standardHTTPMethods {
+		send(m)
+	}
+	for i := 0; i < attackerMethodCount; i++ {
+		send(fmt.Sprintf("ATTACKER-METHOD-%03d", i))
+	}
+	for _, m := range nonStandard {
+		send(m)
+	}
+
+	rm := collect(t, reader)
+	assertNoTenantLabelAnywhere(t, rm)
+
+	counter := findSum(t, findMetric(t, rm, requestCountMetricName))
+	dataPoints := counter.DataPoints
+
+	// The boundedness assertion proper: every emitted method label must be
+	// one of the nine standard tokens or the single fixed overflow value --
+	// pre-fix, the 100 attacker tokens plus "get"/"PROPFIND"/"PRI" each emit
+	// their own label and this fails.
+	seen := make(map[string]int64, len(dataPoints))
+	var overflowFound bool
+	var totalRecorded int64
+	for _, dp := range dataPoints {
+		labels := labelMap(dp.Attributes)
+		method := labels["http.request.method"]
+		seen[method] += dp.Value
+		totalRecorded += dp.Value
+		if method == obs.MethodLabelOverflowValue {
+			overflowFound = true
+			continue
+		}
+		if !isStandardMethod(method) {
+			t.Fatalf("emitted http.request.method metric label %q is neither one of the %d standard methods nor %q: method-label cardinality is not bounded",
+				method, len(standardHTTPMethods), obs.MethodLabelOverflowValue)
+		}
+	}
+
+	// The overflow bucket must exist and must have absorbed every
+	// non-standard token sent, exactly: on the unfixed code there is no
+	// overflow bucket at all.
+	if !overflowFound {
+		t.Fatalf("expected one series labeled http.request.method=%q (the overflow bucket) among the %d gathered series, found none",
+			obs.MethodLabelOverflowValue, len(dataPoints))
+	}
+	wantOverflow := int64(attackerMethodCount + len(nonStandard))
+	if got := seen[obs.MethodLabelOverflowValue]; got != wantOverflow {
+		t.Errorf("overflow bucket (http.request.method=%q) recorded %v requests, want %v (%d attacker tokens + %d near-miss/non-standard tokens)",
+			obs.MethodLabelOverflowValue, got, wantOverflow, attackerMethodCount, len(nonStandard))
+	}
+
+	// No collateral damage: each of the nine standard methods must still
+	// record its exact, case-sensitive token -- including GET (the token
+	// every real dashboard's method dimension is built on) -- never the
+	// overflow value.
+	for _, m := range standardHTTPMethods {
+		got, ok := seen[m]
+		if !ok {
+			t.Errorf("standard method %q recorded no series of its own: known-method tokens must still be recorded verbatim, not collapsed", m)
+			continue
+		}
+		if got != 1 {
+			t.Errorf("standard method %q recorded %v requests, want exactly 1 (each standard method in this test was requested once)", m, got)
+		}
+	}
+
+	// The near-miss and non-standard tokens must NOT have their own series:
+	// "get" is a different, case-sensitive token from GET and folds; so do
+	// PROPFIND and PRI. (On the unfixed code each of these three is its own
+	// series and this check fails at the boundedness assertion above first.)
+	for _, m := range nonStandard {
+		if _, ok := seen[m]; ok {
+			t.Errorf("non-standard method token %q got its own http.request.method series: everything outside the known set must fold to %q",
+				m, obs.MethodLabelOverflowValue)
+		}
+	}
+
+	if totalRecorded != int64(totalRequests) {
+		t.Errorf("sum of all recorded requests = %v, want %v (total requests actually sent): a request was lost or double-counted",
+			totalRecorded, totalRequests)
+	}
+	if want := len(dataPoints); want != len(standardHTTPMethods)+1 {
+		t.Fatalf("got %d distinct http.request.method series for %d distinct method tokens sent, want exactly %d (%d standard + 1 overflow bucket): method-label cardinality is not bounded",
+			want, totalRequests, len(standardHTTPMethods)+1, len(standardHTTPMethods))
 	}
 }
 
