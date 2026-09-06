@@ -48,8 +48,17 @@ type WriteCapturedEvent struct {
 	// captured from pkgcore.OnBehalfOfFromContext. Nil when the write's
 	// context carried none — the ordinary, non-impersonated case.
 	OnBehalfOf *pkgcore.Actor
-	// TenantID is the write's tenant, or empty for a platform-level write
-	// (a context with no tenant at all).
+	// TenantID is the tenant of the row the write actually affected. For a
+	// model implementing TenantScoped it is the write's ctx tenant, which the
+	// co-installed tenantScopePlugin has already enforced -- forced tenant_id
+	// column on Create, WHERE clause on Update/Delete -- as the row's real
+	// tenant by the time capture runs. For a model that does not implement
+	// TenantScoped at all (a platform- or identity-domain Auditable model) it
+	// is always empty, whatever the ctx carries: such a row belongs to no
+	// tenant, so a ctx tenant that happens to be present for reasons entirely
+	// unrelated to the row must never be stamped onto it. See stampTenantID
+	// for the full reasoning, including the no-ctx-tenant fallback for a
+	// TenantScoped model.
 	TenantID string
 	// Table is the SQL table the write targeted.
 	Table string
