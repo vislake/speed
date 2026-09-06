@@ -147,7 +147,7 @@ type RoleBindingChangedEvent struct {
 	// persistence layer exists yet to demand it. When impersonation lands,
 	// this single field is not enough -- an impersonated action must record
 	// both the impersonated user and the real administrator -- which is
-	// tracked as this module's deferral D10 rather than papered over with a
+	// tracked as this module's deferral D9 rather than papered over with a
 	// field that would be silently wrong.
 	ActorUserID string
 
