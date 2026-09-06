@@ -7,9 +7,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -142,13 +144,22 @@ func TestService_handleDomainEvent_CreatesDeliveryRowAndEnqueuesJob(t *testing.T
 	}
 }
 
-// TestService_handleDomainEvent_Redelivery_IsIdempotent proves the fan-out
-// dedupe: an at-least-once redelivered domain event (the same Type, tenant
-// and payload) creates exactly one WebhookDelivery row, never two.
-func TestService_handleDomainEvent_Redelivery_IsIdempotent(t *testing.T) {
+// TestService_handleDomainEvent_Redelivery_SameOccurrence_IsIdempotent
+// proves the fan-out dedupe still merges what it can recognize as ONE
+// occurrence: an at-least-once redelivered domain event observed at the
+// SAME occurrence instant (the same Type, tenant, payload and
+// subscription-boundary clock reading) creates exactly one WebhookDelivery
+// row, never two. The clock is pinned deliberately: under a live clock two
+// arrivals always read different instants, and a redelivery observed at a
+// LATER instant is treated as a distinct occurrence -- see
+// deriveWebhookDeliveryKey's doc comment for why the module can only merge
+// what it can recognize, and TestService_handleDomainEvent_DistinctOccurrences_SameBody_TwoDeliveries
+// for the other half of that contract.
+func TestService_handleDomainEvent_Redelivery_SameOccurrence_IsIdempotent(t *testing.T) {
 	fq := &fakeQueue{}
 	_, svc := newWebhookTestService(t, WithWebhookQueue(fq))
 	subID, _ := createTestSubscription(t, svc, "https://example.com/hook")
+	svc.now = func() time.Time { return fixedNow }
 
 	evt := pkgcore.Event{Type: testMapping.InternalType, TenantID: testTenant}
 	if err := svc.handleDomainEvent(ctxFor(testTenant), evt); err != nil {
@@ -163,7 +174,49 @@ func TestService_handleDomainEvent_Redelivery_IsIdempotent(t *testing.T) {
 		t.Fatalf("ListRecentWebhookDeliveries: %v", err)
 	}
 	if len(deliveries) != 1 {
-		t.Fatalf("len(deliveries) = %d after two identical events, want 1", len(deliveries))
+		t.Fatalf("len(deliveries) = %d after two same-instant identical events, want 1", len(deliveries))
+	}
+}
+
+// TestService_handleDomainEvent_DistinctOccurrences_SameBody_TwoDeliveries
+// is the regression test for the delivery-key occurrence marker: two
+// genuinely distinct occurrences of one event type whose public bodies are
+// byte-identical -- the same member removed and later re-added, when the
+// mapping's payload names only the member; testMapping's own transform
+// renders the same {"seen":true} body for every event -- must produce two
+// deliveries. Before the fix the key was derived from the body alone, so
+// the second occurrence probed the first's settled delivery row and was
+// silently dropped: a delivery the receiver never got and this module
+// never retried. Each call's subscription-boundary clock reading differs
+// (the clock is advanced deterministically between the two calls), so each
+// occurrence derives its own key and fans out on its own.
+func TestService_handleDomainEvent_DistinctOccurrences_SameBody_TwoDeliveries(t *testing.T) {
+	fq := &fakeQueue{}
+	_, svc := newWebhookTestService(t, WithWebhookQueue(fq))
+	subID, _ := createTestSubscription(t, svc, "https://example.com/hook")
+
+	at := fixedNow
+	svc.now = func() time.Time { return at }
+	defer func() { svc.now = nil }()
+
+	evt := pkgcore.Event{Type: testMapping.InternalType, TenantID: testTenant}
+	if err := svc.handleDomainEvent(ctxFor(testTenant), evt); err != nil {
+		t.Fatalf("handleDomainEvent (occurrence 1): %v", err)
+	}
+	at = at.Add(time.Minute) // a genuinely later occurrence of the same event
+	if err := svc.handleDomainEvent(ctxFor(testTenant), evt); err != nil {
+		t.Fatalf("handleDomainEvent (occurrence 2): %v", err)
+	}
+
+	if len(fq.tasks) != 2 {
+		t.Errorf("len(fq.tasks) = %d after two distinct occurrences, want 2 (one delivery job per occurrence)", len(fq.tasks))
+	}
+	deliveries, err := svc.ListRecentWebhookDeliveries(ctxFor(testTenant), subID, 10)
+	if err != nil {
+		t.Fatalf("ListRecentWebhookDeliveries: %v", err)
+	}
+	if len(deliveries) != 2 {
+		t.Fatalf("len(deliveries) = %d after two distinct occurrences of one body-identical event, want 2", len(deliveries))
 	}
 }
 
@@ -272,6 +325,59 @@ func TestService_handleDeliveryJob_SubscriptionDeleted_TerminatesWithoutRetry(t 
 	}
 	if len(deliveries) != 1 || deliveries[0].Status != DeliveryStatusDeadLetter {
 		t.Fatalf("deliveries = %+v, want exactly one DeadLetter row", deliveries)
+	}
+}
+
+// TestService_handleDeliveryJob_SubscriptionLoadFailure_RetriesNotDeadLetters
+// is the regression test for the delivery error-classification split in
+// handleDeliveryJob's subscription lookup: ONLY a genuine record-not-found
+// (the subscription was deleted after this delivery was enqueued) settles
+// the delivery terminal with the "was deleted" diagnostic; every OTHER
+// FindByID failure -- a transient store error, a secret whose ciphertext no
+// longer decrypts -- must be returned so jobs retries it, and must leave
+// the delivery row pending rather than dead-lettered with a diagnostic
+// text blaming the subscription. Before the fix, any FindByID error at all
+// dead-lettered the delivery as "webhook subscription no longer exists",
+// which both lost a recoverable delivery and misdiagnosed it. The
+// non-not-found failure is injected by pointing the subscription repository
+// at a database whose connection pool is closed: every query fails with a
+// driver error, deterministically, while the delivery row lives on the
+// service's own healthy database.
+func TestService_handleDeliveryJob_SubscriptionLoadFailure_RetriesNotDeadLetters(t *testing.T) {
+	_, svc := newWebhookTestService(t)
+	subID, _ := createTestSubscription(t, svc, "https://example.com/hook")
+	delivery := createPendingDelivery(t, svc, subID)
+
+	closedDB, err := dbkit.Open(context.Background(), dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     filepath.Join(t.TempDir(), "closed.sqlite"),
+	})
+	if err != nil {
+		t.Fatalf("open a closed-database stand-in: %v", err)
+	}
+	rawDB, dbErr := closedDB.DB()
+	if dbErr != nil {
+		t.Fatalf("underlying *sql.DB: %v", dbErr)
+	}
+	if closeErr := rawDB.Close(); closeErr != nil {
+		t.Fatalf("close the underlying *sql.DB: %v", closeErr)
+	}
+
+	broken := &Service{
+		deliveryRepo: svc.deliveryRepo,
+		webhookRepo:  NewWebhookSubscriptionRepository(closedDB),
+	}
+
+	if _, jobErr := broken.handleDeliveryJob(ctxFor(testTenant), deliveryJob(delivery.ID, subID)); jobErr == nil {
+		t.Fatal("handleDeliveryJob = nil error, want a retryable error: a non-not-found subscription load failure must be retried, never settled terminal")
+	}
+
+	deliveries, err := svc.ListRecentWebhookDeliveries(ctxFor(testTenant), subID, 10)
+	if err != nil {
+		t.Fatalf("ListRecentWebhookDeliveries: %v", err)
+	}
+	if len(deliveries) != 1 || deliveries[0].Status != DeliveryStatusPending {
+		t.Fatalf("deliveries = %+v, want exactly one untouched Pending row (the delivery must not have been dead-lettered)", deliveries)
 	}
 }
 
@@ -418,16 +524,52 @@ func TestService_onWebhookDeliveryDeadLetter_MarksDeadLetter(t *testing.T) {
 
 func TestDeriveWebhookDeliveryKey_DeterministicAndDistinct(t *testing.T) {
 	body := []byte(`{"a":1}`)
-	k1 := deriveWebhookDeliveryKey("sub-1", "type.a", "v1", body)
-	k2 := deriveWebhookDeliveryKey("sub-1", "type.a", "v1", body)
+	occ := fixedNow
+	k1 := deriveWebhookDeliveryKey("sub-1", "type.a", "v1", body, occ)
+	k2 := deriveWebhookDeliveryKey("sub-1", "type.a", "v1", body, occ)
 	if k1 != k2 {
 		t.Error("deriveWebhookDeliveryKey is not deterministic for identical inputs")
 	}
-	if k3 := deriveWebhookDeliveryKey("sub-2", "type.a", "v1", body); k3 == k1 {
+	if k3 := deriveWebhookDeliveryKey("sub-2", "type.a", "v1", body, occ); k3 == k1 {
 		t.Error("a different subscription id produced the same key")
 	}
-	if k4 := deriveWebhookDeliveryKey("sub-1", "type.b", "v1", body); k4 == k1 {
+	if k4 := deriveWebhookDeliveryKey("sub-1", "type.b", "v1", body, occ); k4 == k1 {
 		t.Error("a different public type produced the same key")
+	}
+	if k5 := deriveWebhookDeliveryKey("sub-1", "type.a", "v1", body, occ.Add(time.Second)); k5 == k1 {
+		t.Error("a different occurrence marker produced the same key (two distinct occurrences of a body-identical event must not collide)")
+	}
+}
+
+// TestDefaultWebhookHTTPClient_SharedOnceBuiltWithSaneIdleTimeout pins the
+// module-level delivery transport's shape: a Service built with no
+// WithWebhookHTTPClient override delivers through a NON-nil client whose
+// transport is the shared, once-built default (two separately Attach-ed
+// Services hold the same client instance) carrying a sane, finite
+// IdleConnTimeout -- so consecutive deliveries to one receiver reuse a
+// connection instead of every attempt dialing its own fresh transport.
+func TestDefaultWebhookHTTPClient_SharedOnceBuiltWithSaneIdleTimeout(t *testing.T) {
+	_, svc1 := newWebhookTestService(t)
+	if svc1.httpClient == nil {
+		t.Fatal("a Service with no WithWebhookHTTPClient override has a nil httpClient -- delivery would build a fresh transport per attempt")
+	}
+	_, svc2 := newWebhookTestService(t)
+	if svc2.httpClient != svc1.httpClient {
+		t.Error("two Services do not share the same default delivery client (the transport is rebuilt per Service, not once)")
+	}
+
+	transport, ok := svc1.httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("default client transport = %T, want *http.Transport", svc1.httpClient.Transport)
+	}
+	if transport.IdleConnTimeout <= 0 {
+		t.Errorf("IdleConnTimeout = %v, want a sane positive value (0 keeps idle connections open forever)", transport.IdleConnTimeout)
+	}
+	if transport.IdleConnTimeout > time.Hour {
+		t.Errorf("IdleConnTimeout = %v, want a sane finite value", transport.IdleConnTimeout)
+	}
+	if transport.MaxIdleConnsPerHost <= 0 {
+		t.Errorf("MaxIdleConnsPerHost = %d, want a positive value", transport.MaxIdleConnsPerHost)
 	}
 }
 

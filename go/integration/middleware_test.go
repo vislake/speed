@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/ratelimit"
 )
 
 // assertErrorEnvelope decodes rec's body as this module's own errorBody
@@ -128,6 +129,73 @@ func TestAuthMiddleware_ValidKey_AttachesTenantAndAuthenticatedAPIKey_CallsNext(
 	}
 	if next.gotKey.KeyID != created.ID {
 		t.Errorf("KeyID seen by next = %q, want %q", next.gotKey.KeyID, created.ID)
+	}
+}
+
+// TestAuthMiddleware_WithAuthenticationGuard_ForgedRequestsPayTheLimit is
+// the regression test for the pre-auth rate-limit gate: a request bearing a
+// forged X-API-Key must consume the configured rate-limit budget and, once
+// the budget is spent, answer 429 WITHOUT any Authenticate call running.
+// Before WithAuthenticationGuard existed, every forged request reached
+// Service.Authenticate's lookups with no bound at all -- unlimited 401s,
+// each costing two database queries -- because the module's HTTPGuard is
+// composed behind authentication in the classic chain and never sees a
+// request that fails to authenticate (middleware.go's own doc comment
+// documents the corrected layering). With the guard wired at a budget of
+// one global hit, the first forged request passes the guard and is refused
+// by Authenticate (401); the second is refused BY THE GUARD (429) before
+// authentication runs.
+func TestAuthMiddleware_WithAuthenticationGuard_ForgedRequestsPayTheLimit(t *testing.T) {
+	guard := NewHTTPGuard(newTestLayeredLimiter(LayeredLimits{
+		Global: ratelimit.Limit{Rate: 1, Per: minute},
+	}), "integration-test-auth-guard", func(_ *http.Request) (string, string) {
+		// No authentication has run when the guard evaluates, so no
+		// tenant/key identifiers exist to derive -- the empty-identifier
+		// pre-auth answer WithAuthenticationGuard's own doc comment
+		// describes.
+		return "", ""
+	})
+
+	m := NewModule(newTestDB(t), WithAuthenticationGuard(guard))
+	reg := newTestRegistry(t)
+	if err := m.Register(reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if _, err := m.Attach(reg); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+
+	next := &nextCalledHandler{}
+	h := NewAuthMiddleware(m).Middleware(next)
+
+	forged := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/whoami", nil)
+		req.Header.Set(HeaderAPIKey, "sk_this-was-never-issued")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Request 1 passes the guard's single-hit budget and is refused by
+	// authentication itself.
+	first := forged()
+	if next.called {
+		t.Fatal("next was called for a forged request")
+	}
+	assertErrorEnvelope(t, first, http.StatusUnauthorized, "integration.authentication_failed")
+
+	// Request 2 is refused by the GUARD (budget exhausted) before
+	// Authenticate ever runs: 429, never 401.
+	second := forged()
+	if next.called {
+		t.Fatal("next was called for a forged request")
+	}
+	assertErrorEnvelope(t, second, http.StatusTooManyRequests, "integration.rate_limited")
+	if got := second.Header().Get(headerRateLimitLayer); got != LayerGlobal {
+		t.Errorf("X-RateLimit-Layer = %q, want %q", got, LayerGlobal)
+	}
+	if second.Header().Get("Retry-After") == "" {
+		t.Error("Retry-After header is empty on the guard's 429")
 	}
 }
 

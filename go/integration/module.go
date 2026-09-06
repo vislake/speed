@@ -86,10 +86,6 @@ const (
 	// new key.
 	AuditActionAPIKeyCreate = "integration.apikey.create"
 
-	// AuditActionAPIKeyRotate is emitted after Service.Rotate persists the
-	// replacement key and revokes its predecessor.
-	AuditActionAPIKeyRotate = "integration.apikey.rotate"
-
 	// AuditActionAPIKeyRevoke is emitted after Service.Revoke persists a
 	// revocation.
 	AuditActionAPIKeyRevoke = "integration.apikey.revoke"
@@ -118,9 +114,16 @@ const (
 // auditActionDecls is every audit action this module declares through
 // Register, kept as one slice so Register and any test enumerating "every
 // action this module contributes" read from a single place.
+//
+// No AuditActionAPIKeyRotate appears here -- deliberately: Service.Rotate
+// records a rotation as its two ordinary create/revoke audit events (see
+// that method's own doc comment for why a bespoke rotate event would be
+// worse), so a rotate action registered here would be a vocabulary entry
+// nothing ever emits -- a dead registration (the same "declaring a code
+// for a feature that does not exist is a lying vocabulary" rule errors.go's
+// own doc comment applies to error codes).
 var auditActionDecls = []string{
 	AuditActionAPIKeyCreate,
-	AuditActionAPIKeyRotate,
 	AuditActionAPIKeyRevoke,
 	AuditActionWebhookSubscriptionCreate,
 	AuditActionWebhookSubscriptionUpdate,
@@ -188,6 +191,15 @@ type Module struct {
 	// creation-time SSRF validation each need one.
 	httpClient   *http.Client
 	urlValidator func(ctx context.Context, url string) error
+
+	// authGuard is the optional rate-limit guard WithAuthenticationGuard
+	// wired, applied by AuthMiddleware to authentication attempts BEFORE
+	// any Authenticate call (see that option's own doc comment for the
+	// layering argument). Nil when unset -- every Module built without the
+	// option -- and read at call time by middleware.go's AuthMiddleware,
+	// the identical read-at-call-time shape this Module already uses for
+	// every other field its middleware and handlers consume.
+	authGuard *HTTPGuard
 
 	// service is the Service Attach produced, nil until then. It is what
 	// makes a second Attach detectable, and it is what Module's own
@@ -257,6 +269,37 @@ func withClock(now func() time.Time) Option {
 // ErrInvalidEventMapping respectively -- see buildEventMappingIndex.
 func WithEventMapping(mappings ...EventMapping) Option {
 	return func(m *Module) { m.eventMappings = append(m.eventMappings, mappings...) }
+}
+
+// WithAuthenticationGuard wires the rate-limit guard AuthMiddleware applies
+// to authentication attempts BEFORE it authenticates anything -- the
+// "rate-limit before auth" ordering (middleware.go's own doc comment): a
+// request presenting a forged or unrecognized X-API-Key header otherwise
+// reaches Service.Authenticate's lookups with no bound at all, because the
+// module's HTTPGuard is mounted behind authentication in the classic
+// composition and never sees a request that failed to authenticate. A guard
+// wired here sits OUTSIDE the authenticate step: it sees every request the
+// middleware does, and its three layers are charged before -- and decide
+// whether there even is -- an Authenticate call.
+//
+// The guard's own Extractor runs before any authentication has happened, so
+// it cannot read tenant/key identifiers out of request context the way the
+// post-auth composition's extractor can (middleware.go's own doc comment
+// describes that shape). The module takes no position on what identifiers a
+// host derives pre-auth -- LayeredLimiter.Allow treats the empty string as
+// an ordinary key, so an extractor returning empty identifiers for a
+// not-yet-authenticated request charges the global layer and the shared
+// anonymous counters of the tenant/key layers, which is the usual answer
+// for anonymous floods; a host may also derive an identifier from the
+// request itself (for example the presented key's hash, or a client IP --
+// authn's login-limit precedent dimensions its own attempt limits per
+// identifier and per IP). Whatever the extractor returns, a request the
+// guard denies answers 429 and never reaches Authenticate.
+//
+// Wired or not, AuthMiddleware's own behavior is unchanged for a Module
+// built without this option.
+func WithAuthenticationGuard(guard *HTTPGuard) Option {
+	return func(m *Module) { m.authGuard = guard }
 }
 
 // WithWebhookQueue injects the jobs.Queue webhook deliveries are enqueued
@@ -501,6 +544,16 @@ func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
 		clock = time.Now
 	}
 
+	// A Module with no WithWebhookHTTPClient override delivers through the
+	// module-level default client, built once at package init
+	// (ssrf.go's defaultWebhookHTTPClient) rather than per delivery attempt
+	// -- see that var's doc comment for why every delivery sharing one
+	// transport matters.
+	httpClient := m.httpClient
+	if httpClient == nil {
+		httpClient = defaultWebhookHTTPClient
+	}
+
 	svc := &Service{
 		repo:         NewAPIKeyRepository(m.db),
 		permissions:  m.permissions,
@@ -513,7 +566,7 @@ func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
 		deliveryRepo: NewWebhookDeliveryRepository(m.db),
 		queue:        m.queue,
 		mappings:     m.mappingIndex,
-		httpClient:   m.httpClient,
+		httpClient:   httpClient,
 		urlValidator: m.urlValidator,
 	}
 

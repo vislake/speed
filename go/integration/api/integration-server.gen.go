@@ -173,7 +173,7 @@ type SubscriptionID = string
 
 // IntegrationListWebhookDeliveriesParams defines parameters for IntegrationListWebhookDeliveries.
 type IntegrationListWebhookDeliveriesParams struct {
-	// Limit Maximum rows to return. Absent or non-positive falls back to the module's default of 50.
+	// Limit Maximum rows to return. Absent or non-positive falls back to the module's default of 50; a value above 100 is clamped to 100.
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
 }
 

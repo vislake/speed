@@ -5,6 +5,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
@@ -19,10 +20,13 @@ const errorContentType = "application/json"
 // of the standard Retry-After. docs/internal/07-platform-services.md asks
 // for quota response headers without naming them, so this module picks the
 // conventional X-RateLimit-* trio -- Remaining and Reset mirroring GitHub's
-// and Stripe's own widely-copied header names, Layer an addition specific
-// to this module's three-layer composition so a caller debugging a 429 can
-// tell at a glance which of the three counters actually tripped without
-// parsing the JSON body.
+// own widely-copied semantics for both names (X-RateLimit-Remaining counts
+// down, X-RateLimit-Reset names the instant the window resets as a Unix
+// epoch timestamp in seconds, NOT a seconds-until-reset countdown -- the
+// countdown has its own standard home in Retry-After), Layer an addition
+// specific to this module's three-layer composition so a caller debugging a
+// 429 can tell at a glance which of the three counters actually tripped
+// without parsing the JSON body.
 const (
 	headerRateLimitRemaining = "X-RateLimit-Remaining"
 	headerRateLimitReset     = "X-RateLimit-Reset"
@@ -68,14 +72,14 @@ func NewHTTPGuard(limiter *LayeredLimiter, globalKey string, extract Extractor) 
 }
 
 // Middleware wraps next with the three-layer rate-limit check: a denied
-// LayeredDecision short-circuits to a 429 response (via writeAppError, this
-// module's ErrRateLimited decorated with WithRateLimitParams) and next is
-// never called; an underlying error from the limiter itself (a KVStore
-// failure) short-circuits to a 500 (ErrInternal) for the identical reason --
-// a rate limiter that cannot answer must never be treated as "allow", per
-// go/ratelimit.Limiter's own doc comment that it decides no fail-open/
-// fail-closed policy on the caller's behalf. Only a genuine Allowed
-// decision reaches next.
+// LayeredDecision short-circuits to a 429 response (via writeRateLimitDenied,
+// this module's ErrRateLimited decorated with WithRateLimitParams plus the
+// window-reset instant) and next is never called; an underlying error from
+// the limiter itself (a KVStore failure) short-circuits to a 500
+// (ErrInternal) for the identical reason -- a rate limiter that cannot
+// answer must never be treated as "allow", per go/ratelimit.Limiter's own
+// doc comment that it decides no fail-open/fail-closed policy on the
+// caller's behalf. Only a genuine Allowed decision reaches next.
 func (g *HTTPGuard) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tenantKey, apiKeyID := g.extract(r)
@@ -86,11 +90,25 @@ func (g *HTTPGuard) Middleware(next http.Handler) http.Handler {
 			return
 		}
 		if !decision.Allowed {
-			writeAppError(w, WithRateLimitParams(decision))
+			writeRateLimitDenied(w, decision)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// writeRateLimitDenied writes the standard 429 answer for a denied
+// decision: WithRateLimitParams' error decorated with the window-reset
+// instant (reset_at_epoch, now + the decision's own ResetAfter, as Unix
+// seconds) -- the value writeAppError serves as X-RateLimit-Reset, whose
+// documented semantics are an epoch timestamp, not a countdown (see
+// headerRateLimitReset's own comment; Retry-After carries the countdown).
+// HTTPGuard.Middleware and AuthMiddleware's pre-auth attempt gate
+// (middleware.go) both answer denials through this one writer so every 429
+// this module produces carries the identical envelope and headers.
+func writeRateLimitDenied(w http.ResponseWriter, decision LayeredDecision) {
+	resetAt := int(time.Now().Add(decision.Decision.ResetAfter).Unix())
+	writeAppError(w, WithRateLimitParams(decision).WithParam("reset_at_epoch", resetAt))
 }
 
 // WithRateLimitParams decorates ErrRateLimited with the two parameters
@@ -135,10 +153,14 @@ type errorBody struct {
 
 // writeAppError writes err as its structured envelope with its suggested
 // HTTP status, setting Retry-After from a "retry_after_seconds" parameter
-// when present (ErrRateLimited, via WithRateLimitParams) and the
-// X-RateLimit-* quota headers from "layer"/"remaining" when present. Only
-// the code and its parameters are written to the body -- an *apperr.Error's
-// cause is never serialized, matching go/authn's identical rule.
+// when present (ErrRateLimited, via WithRateLimitParams), X-RateLimit-Reset
+// from the "reset_at_epoch" parameter writeRateLimitDenied attaches (the
+// window's reset instant as Unix seconds -- see that function's, and
+// headerRateLimitReset's own, doc comments for why the header is NOT
+// Retry-After's countdown), and the remaining X-RateLimit-* quota headers
+// from "layer"/"remaining" when present. Only the code and its parameters
+// are written to the body -- an *apperr.Error's cause is never serialized,
+// matching go/authn's identical rule.
 func writeAppError(w http.ResponseWriter, err error) {
 	appErr, ok := apperr.As(err)
 	if !ok {
@@ -147,7 +169,9 @@ func writeAppError(w http.ResponseWriter, err error) {
 
 	if seconds, ok := intParam(appErr, "retry_after_seconds"); ok {
 		w.Header().Set("Retry-After", strconv.Itoa(seconds))
-		w.Header().Set(headerRateLimitReset, strconv.Itoa(seconds))
+	}
+	if resetAt, ok := intParam(appErr, "reset_at_epoch"); ok {
+		w.Header().Set(headerRateLimitReset, strconv.Itoa(resetAt))
 	}
 	if layer, ok := stringParam(appErr, "layer"); ok {
 		w.Header().Set(headerRateLimitLayer, layer)

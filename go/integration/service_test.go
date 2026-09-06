@@ -2,11 +2,26 @@ package integration
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
 )
+
+// errBus is a pkgcore.EventBus whose Publish always fails, standing in for
+// an audit-record delivery failure (the bus is down, or the persister
+// errors) -- the deterministic injection the partial-failure tests below
+// use to make a Service's post-commit audit leg fail.
+type errBus struct{}
+
+func (errBus) Publish(context.Context, pkgcore.Event) error {
+	return errors.New("integration-test: audit bus is down")
+}
+func (errBus) Subscribe(string, pkgcore.EventHandler) {}
+
+var _ pkgcore.EventBus = errBus{}
 
 // testService builds a *Service directly (bypassing Module.Attach, which
 // needs a full *pkgcore.Registry from a real Bootstrap) over a fresh
@@ -392,5 +407,152 @@ func TestService_List_MultipleKeys_TenantIsolated(t *testing.T) {
 	}
 	if got[0].CreatedBy != "user-1" {
 		t.Errorf("List(tenant-1) returned a row created by %q, want user-1", got[0].CreatedBy)
+	}
+}
+
+// TestService_Create_AuditFailureAfterCommit_ReturnsKeyWithError is the
+// regression test for the shown-once material being lost to a post-commit
+// audit failure: the key row has committed, but recording its audit event
+// failed (the bus is down). Service.Create must return the created key
+// ALONGSIDE the error -- key material is shown exactly once and never
+// reproduced, so returning nil would orphan a live, working key whose
+// credential nobody ever received. Before the fix Create returned
+// (nil, err) on this path and the raw key was lost forever.
+func TestService_Create_AuditFailureAfterCommit_ReturnsKeyWithError(t *testing.T) {
+	svc := testService(t, nil, nil, fixedNow)
+	svc.bus = errBus{}
+
+	created, err := svc.Create(ctxFor(testTenant), CreateInput{CreatedBy: "user-1"})
+	if err == nil {
+		t.Fatal("Create = nil error, want the audit failure reported")
+	}
+	if created == nil {
+		t.Fatal("Create returned nil on its post-commit audit failure: the key material was lost")
+	}
+	if created.Key == "" {
+		t.Fatal("Create returned a created key with empty Key material")
+	}
+
+	// The row committed and the returned key genuinely authenticates -- the
+	// caller holding the returned material holds the working credential.
+	row, err := svc.repo.FindByID(ctxFor(testTenant), created.ID)
+	if err != nil {
+		t.Fatalf("FindByID after the partial create: %v", err)
+	}
+	if row.Hash != hashAPIKeyToken(created.Key) {
+		t.Error("the committed row's hash does not match the returned key")
+	}
+	if _, authErr := svc.Authenticate(context.Background(), created.Key); authErr != nil {
+		t.Errorf("Authenticate with the returned key = %v, want success (the key exists and works)", authErr)
+	}
+}
+
+// TestService_Rotate_RevokeFails_ReportsErrorWithNewKeyStillCreated is the
+// test Service.Rotate's own doc comment names: when the predecessor's
+// revocation leg fails after the replacement key was already created and
+// committed, Rotate must report the failure AND return the replacement key
+// -- a caller must never be left holding neither the new key nor the
+// knowledge that the old one is still live.
+//
+// The interleaving that makes the revoke leg fail is forced deterministically
+// rather than raced: Rotate's own flow is FindByID(predecessor) -> scope
+// validation -> Create(replacement) -> Revoke(predecessor), and the
+// PermissionLister seam is invoked between the first two of those steps. The
+// lister pauses Rotate there and lets a concurrent Revoke commit first, so
+// Rotate's own internal Revoke then finds the predecessor already revoked
+// and fails with ErrKeyAlreadyRevoked -- the partial outcome, on every run,
+// no wall-clock race involved.
+func TestService_Rotate_RevokeFails_ReportsErrorWithNewKeyStillCreated(t *testing.T) {
+	rotatedReadOld := make(chan struct{})
+	revokeDone := make(chan struct{})
+	calls := 0
+	permissions := PermissionListerFunc(func(ctx context.Context, tenantID, userID string) ([]string, error) {
+		calls++
+		if calls == 2 {
+			// The SECOND scope-validation call is Rotate's own (the setup
+			// Create below made the first): Rotate has read the predecessor
+			// (still live) and is paused here, before creating the
+			// replacement -- the window the concurrent revoke needs. Signal
+			// and wait for the revoke to commit.
+			close(rotatedReadOld)
+			<-revokeDone
+		}
+		return []string{"notes:read"}, nil
+	})
+	svc := testService(t, permissions, nil, fixedNow)
+
+	created, err := svc.Create(ctxFor(testTenant), CreateInput{CreatedBy: "user-1", Scopes: []string{"notes:read"}})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	var (
+		rotated *CreatedAPIKey
+		rotErr  error
+	)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		rotated, rotErr = svc.Rotate(ctxFor(testTenant), created.ID)
+	}()
+	go func() {
+		defer wg.Done()
+		<-rotatedReadOld
+		_ = svc.Revoke(ctxFor(testTenant), created.ID)
+		close(revokeDone)
+	}()
+	wg.Wait()
+
+	if rotErr == nil {
+		t.Fatal("Rotate = nil error, want the revocation-leg failure reported")
+	}
+	if rotated == nil {
+		t.Fatal("Rotate returned no replacement key alongside its revocation-leg failure")
+	}
+	if rotated.Key == "" {
+		t.Fatal("partial Rotate returned a created key with empty Key material")
+	}
+	if rotated.ID == created.ID {
+		t.Error("the partial Rotate's replacement has the predecessor's id")
+	}
+
+	// The replacement is real and live, and the predecessor is revoked: the
+	// caller can recover from the failure with the material in hand.
+	oldRow, findErr := svc.repo.FindByID(ctxFor(testTenant), created.ID)
+	if findErr != nil {
+		t.Fatalf("FindByID(old): %v", findErr)
+	}
+	if !oldRow.IsRevoked() {
+		t.Error("predecessor not revoked after a partial Rotate")
+	}
+	newRow, findErr := svc.repo.FindByID(ctxFor(testTenant), rotated.ID)
+	if findErr != nil {
+		t.Fatalf("FindByID(new): %v", findErr)
+	}
+	if newRow.IsRevoked() {
+		t.Error("the replacement key was revoked, want it live")
+	}
+}
+
+// TestService_Rotate_AuditFailureAfterCommit_ReturnsReplacementWithError
+// exercises Rotate's OTHER partial leg deterministically: the replacement
+// key's own Create commits but its audit record fails (bus down), which
+// makes Create -- and therefore Rotate -- return the replacement alongside
+// the error rather than dropping it.
+func TestService_Rotate_AuditFailureAfterCommit_ReturnsReplacementWithError(t *testing.T) {
+	svc := testService(t, nil, nil, fixedNow)
+	original, err := svc.Create(ctxFor(testTenant), CreateInput{CreatedBy: "user-1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	svc.bus = errBus{}
+	rotated, err := svc.Rotate(ctxFor(testTenant), original.ID)
+	if err == nil {
+		t.Fatal("Rotate = nil error, want the audit failure reported")
+	}
+	if rotated == nil || rotated.Key == "" {
+		t.Fatal("Rotate lost the replacement key material on its partial failure")
 	}
 }

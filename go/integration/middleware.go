@@ -75,19 +75,31 @@ func AuthenticatedAPIKeyFromContext(ctx context.Context) (*AuthenticatedAPIKey, 
 // forwarding-wrapper technique Handler, handleDomainEvent and
 // webhookDeliveryHandler already use.
 //
-// # Deliberately separate from HTTPGuard
+// # Deliberately separate from HTTPGuard -- and rate-limited BEFORE it
+// # authenticates
 //
 // AuthMiddleware answers "who is this request, and may it proceed at all";
-// HTTPGuard (httpguard.go) answers "has this already-identified caller
-// exceeded its quota". They compose in that order -- AuthMiddleware first,
-// so HTTPGuard's own Extractor can read the resolved tenant/key out of
-// context that AuthMiddleware just attached, never re-deriving them itself
-// (HTTPGuard "takes no position on how a host authenticates a request",
-// per its own doc comment, and this module now supplies exactly one answer
-// to that question without HTTPGuard needing to know it did). See
-// examples/reference-app/cmd/server/server.go's wireIntegrationAuthenticated
-// for the real, composed chain: AuthMiddleware -> HTTPGuard.Middleware ->
-// the gated handler.
+// HTTPGuard (httpguard.go) answers "has this caller exceeded its quota".
+// The two compose around authentication, and the guard belongs OUTSIDE it:
+// a request that presents a forged or unrecognized X-API-Key header would
+// otherwise reach Authenticate's lookups with no bound at all -- it is
+// refused by this middleware, but refused AFTER paying for two database
+// lookups, and never charged against any rate-limit budget, since a guard
+// mounted behind authentication never even sees it. A host wiring a guard
+// manually therefore mounts it FIRST (guard.Middleware -> this middleware
+// -> the gated handler), and a host that wires WithAuthenticationGuard on
+// the Module gets exactly that ordering without composing it: the guard
+// evaluates before any Authenticate call and its denial answers 429 with
+// the request never reaching authentication. When the guard runs before
+// authentication its Extractor cannot read a resolved tenant/key out of
+// context (nothing has resolved one yet); HTTPGuard's Extractor contract
+// treats empty identifiers as ordinary keys, so an extractor that returns
+// them for a not-yet-authenticated request charges the global layer and
+// the shared anonymous counters -- see WithAuthenticationGuard's own doc
+// comment for the full pre-auth identifier discussion, which follows
+// authn's login-limit precedent of limiting attempts before verifying
+// credentials. See examples/reference-app/cmd/server/server.go's
+// wireIntegrationAuthenticated for the composed chain a host mounts.
 type AuthMiddleware struct {
 	module *Module
 }
@@ -99,17 +111,24 @@ func NewAuthMiddleware(m *Module) *AuthMiddleware {
 	return &AuthMiddleware{module: m}
 }
 
-// Middleware wraps next: a missing or empty HeaderAPIKey answers
-// ErrAuthenticationFailed (401), matching Authenticate's own empty-string
-// refusal so a request presenting NO credential is refused identically to
-// one presenting a wrong one -- no observable "did you even try" signal.
-// A Middleware whose Module has not yet been Attach'd (m.service == nil, the
-// same race Handler's own doc comment describes) answers a coded internal
-// error rather than panicking on a nil Service; see middleware_test.go's
+// Middleware wraps next with the authenticate-or-refuse gate: a missing or
+// empty HeaderAPIKey answers ErrAuthenticationFailed (401), matching
+// Authenticate's own empty-string refusal so a request presenting NO
+// credential is refused identically to one presenting a wrong one -- no
+// observable "did you even try" signal. A Middleware whose Module has not
+// yet been Attach'd (m.service == nil, the same race Handler's own doc
+// comment describes) answers a coded internal error rather than panicking
+// on a nil Service; see middleware_test.go's
 // TestAuthMiddleware_ServedBeforeAttach_WritesInternalError.
+//
+// When the Module carries a WithAuthenticationGuard guard, the guard runs
+// FIRST, wrapping the authenticate gate itself -- so the request pays the
+// rate-limit budget before any Authenticate call, and a denied request
+// answers 429 without authentication ever running (see the type's own
+// "Deliberately separate from HTTPGuard" doc section).
 func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.module.service == nil {
+	authenticate := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.module == nil || a.module.service == nil {
 			writeAppError(w, ErrInternal)
 			return
 		}
@@ -125,4 +144,9 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 		ctx = context.WithValue(ctx, authenticatedAPIKeyContextKey{}, authenticated)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+
+	if a.module != nil && a.module.authGuard != nil {
+		return a.module.authGuard.Middleware(authenticate)
+	}
+	return authenticate
 }

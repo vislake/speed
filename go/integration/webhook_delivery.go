@@ -127,8 +127,18 @@ func (s *Service) handleDomainEvent(ctx context.Context, evt pkgcore.Event) erro
 		return nil
 	}
 
+	// occurrenceAt is this fan-out's occurrence marker: one reading of the
+	// service clock taken at the subscription boundary for THIS arrival of
+	// the event, shared by every subscription the event fans out to. It is
+	// what keeps two genuinely distinct occurrences of one event type -- a
+	// member removed and later re-added, say, whose public bodies are
+	// byte-identical -- from collapsing into one delivery; see
+	// deriveWebhookDeliveryKey's own doc comment for the full argument and
+	// for what the marker cannot distinguish.
+	occurrenceAt := s.clock()
+
 	for _, sub := range subs {
-		if err := s.enqueueDelivery(ctx, sub, mapping, body); err != nil {
+		if err := s.enqueueDelivery(ctx, sub, mapping, body, occurrenceAt); err != nil {
 			log.Warn("integration could not enqueue a webhook delivery",
 				"subscription_id", sub.ID, "event_type", evt.Type, "error", err)
 		}
@@ -163,28 +173,44 @@ func (s *Service) matchingSubscriptions(ctx context.Context, publicType string) 
 }
 
 // enqueueDelivery creates (or, on a redelivered domain event, finds) the
-// WebhookDelivery row for (sub, the event body's own idempotency key), and
-// enqueues its delivery job.
+// WebhookDelivery row for (sub, the event's own delivery key), and enqueues
+// its delivery job.
 //
-// # Idempotent fan-out
+// # Idempotent fan-out -- within one observed occurrence
 //
 // deriveWebhookDeliveryKey is recomputed from the SAME inputs on every call
-// -- subscription, public type/version, and the rendered body -- so an
-// at-least-once redelivery of the underlying domain event (which any real
-// EventBus implementation, including a distributed one, may produce)
-// derives the identical key and finds the row ByIdempotencyKey already
-// created, rather than creating a second one and sending the receiver two
-// copies. The uq_integration_webhook_deliveries_tenant_subscription_key
-// index is the backstop for the race two concurrent handlers of a
-// redelivery could otherwise hit: Create's own unique-constraint failure is
-// treated exactly like "found by the probe", never surfaced as an error.
-func (s *Service) enqueueDelivery(ctx context.Context, sub WebhookSubscription, mapping EventMapping, body []byte) error {
+// -- subscription, public type/version, the rendered body, and the
+// occurrence marker occurrenceAt that handleDomainEvent stamped at the
+// subscription boundary for this arrival of the event. Two calls that
+// present the identical combination therefore derive the identical key and
+// find the row ByIdempotencyKey already created, rather than creating a
+// second one and sending the receiver two copies; the
+// uq_integration_webhook_deliveries_tenant_subscription_key index is the
+// backstop for the race two concurrent handlers of one redelivery could
+// otherwise hit: Create's own unique-constraint failure is treated exactly
+// like "found by the probe", never surfaced as an error.
+//
+// The marker is what bounds how much of an at-least-once redelivery this
+// dedupe can merge: pkgcore.Event carries no occurrence identity of its own
+// (no id, no timestamp -- see pkgcore's Event type), so the subscription
+// boundary's own reading of the clock is the only signal this module has
+// for "same event, again". A redelivery observed at the same clock reading
+// as the original arrival merges into it; one observed later does not.
+// Bounding the merge that way is a deliberate trade: an unbounded
+// content-hash dedupe would silently drop a genuinely NEW occurrence whose
+// public body is byte-identical to an older one's (a member removed and
+// later re-added, when the mapping's payload names only the member), which
+// is a lost delivery a receiver can never recover -- whereas a duplicate
+// delivery of one occurrence is at-least-once behavior receivers already
+// dedupe against through HeaderWebhookID (see webhook_signature.go's
+// header docs).
+func (s *Service) enqueueDelivery(ctx context.Context, sub WebhookSubscription, mapping EventMapping, body []byte, occurrenceAt time.Time) error {
 	tenantID, ok := pkgcore.TenantFromContext(ctx)
 	if !ok {
 		return pkgcore.ErrNoTenant
 	}
 
-	key := deriveWebhookDeliveryKey(sub.ID, mapping.PublicType, mapping.PublicVersion, body)
+	key := deriveWebhookDeliveryKey(sub.ID, mapping.PublicType, mapping.PublicVersion, body, occurrenceAt)
 
 	existing, err := s.deliveryRepo.ByIdempotencyKey(ctx, sub.ID, key)
 	if err != nil {
@@ -242,13 +268,32 @@ func (s *Service) enqueueDelivery(ctx context.Context, sub WebhookSubscription, 
 	return err
 }
 
-// deriveWebhookDeliveryKey derives the key that makes one (subscription,
-// event) fan-out idempotent, mirroring notification's
-// deriveDeliveryKey in spirit (canonical inputs, hashed) though simpler in
-// shape: the rendered body already IS the canonical form of "what this
-// event means", since buildEnvelope produced it deterministically from the
-// event and the mapping.
-func deriveWebhookDeliveryKey(subscriptionID, publicType, publicVersion string, body []byte) string {
+// deriveWebhookDeliveryKey derives the key that makes one
+// (subscription, observed occurrence) fan-out idempotent, mirroring
+// notification's deriveDeliveryKey in spirit (canonical inputs, hashed)
+// though simpler in shape: the rendered body already IS the canonical form
+// of "what this event means", since buildEnvelope produced it
+// deterministically from the event and the mapping.
+//
+// # The occurrence marker -- why the body alone is not the key
+//
+// The final input, occurrenceAt (the subscription-boundary clock reading
+// handleDomainEvent stamped for this arrival of the event), is what stops
+// the key from conflating two genuinely distinct occurrences of one event
+// type whose public bodies are byte-identical -- the same member removed
+// and later re-added, when the mapping's payload names only the member.
+// Keyed on body alone, the second occurrence would probe the first's
+// already-settled delivery row and be silently dropped: a webhook delivery
+// the receiver never receives and this module never retries. Keyed with
+// the marker, each occurrence derives its own key and fans out on its own
+// -- and, because buildEnvelope is deterministic, an at-least-once
+// redelivery of the SAME occurrence observed at the SAME clock reading
+// still derives the identical key and merges (see enqueueDelivery's own
+// doc comment for what the marker cannot merge, and why that is the right
+// trade). pkgcore.Event itself carries no id or timestamp the envelope
+// could carry instead -- see that type's fields -- so the subscription
+// boundary's own clock is the only occurrence signal this module has.
+func deriveWebhookDeliveryKey(subscriptionID, publicType, publicVersion string, body []byte, occurrenceAt time.Time) string {
 	h := sha256.New()
 	h.Write([]byte(subscriptionID))
 	h.Write([]byte{0})
@@ -257,6 +302,8 @@ func deriveWebhookDeliveryKey(subscriptionID, publicType, publicVersion string, 
 	h.Write([]byte(publicVersion))
 	h.Write([]byte{0})
 	h.Write(body)
+	h.Write([]byte{0})
+	h.Write([]byte(strconv.FormatInt(occurrenceAt.UTC().UnixNano(), 10)))
 	return hex.EncodeToString(h.Sum(nil))
 }
 
@@ -291,20 +338,32 @@ func (s *Service) handleDeliveryJob(ctx context.Context, job *jobs.Job) (jobs.Re
 
 	sub, err := s.webhookRepo.FindByID(ctx, delivery.SubscriptionID)
 	if err != nil {
-		// The subscription was mark-deleted after this delivery was
-		// enqueued (webhook_service.go's DeleteWebhookSubscription
-		// deliberately leaves past delivery rows in place, and dbkit's
-		// soft-delete auto-scope plugin hides the mark-deleted row from
-		// this very FindByID call exactly as a physical DELETE always did
-		// before this module adopted dbkit.SoftDeletable). There is no URL
-		// and no secret to deliver with any more, and none will reappear
-		// within this job's own bounded retry horizon (webhookMaxRetries)
-		// by retrying, so this is terminal -- a caller wanting delivery to
-		// resume calls RestoreWebhookSubscription (plus, per its own doc
-		// comment, an explicit UpdateWebhookSubscription to reactivate it),
-		// which produces a FRESH delivery off the next matching domain
-		// event rather than reviving this already-settled row.
-		return jobs.Result{}, s.settleTerminal(ctx, delivery, "webhook subscription no longer exists")
+		// Only a genuine record-not-found is the subscription-gone refusal
+		// that is terminal: the subscription was mark-deleted after this
+		// delivery was enqueued (webhook_service.go's
+		// DeleteWebhookSubscription deliberately leaves past delivery rows
+		// in place, and dbkit's soft-delete auto-scope plugin hides the
+		// mark-deleted row from this very FindByID call exactly as a
+		// physical DELETE always did before this module adopted
+		// dbkit.SoftDeletable). There is no URL and no secret to deliver
+		// with any more, and none will reappear within this job's own
+		// bounded retry horizon (webhookMaxRetries) by retrying, so this is
+		// terminal -- a caller wanting delivery to resume calls
+		// RestoreWebhookSubscription (plus, per its own doc comment, an
+		// explicit UpdateWebhookSubscription to reactivate it), which
+		// produces a FRESH delivery off the next matching domain event
+		// rather than reviving this already-settled row.
+		//
+		// Any OTHER FindByID failure -- a transient store error, a secret
+		// whose stored ciphertext no longer decrypts -- is not that
+		// refusal, and settling it terminal here would both dead-letter a
+		// delivery whose only problem was a moment of bad luck and record a
+		// LastError that blames the subscription for it. Those errors are
+		// returned so jobs retries them, exactly like a failed HTTP attempt.
+		if !isWebhookRecordNotFound(err) {
+			return jobs.Result{}, fmt.Errorf("integration: load webhook subscription %s: %w", delivery.SubscriptionID, err)
+		}
+		return jobs.Result{}, s.settleTerminal(ctx, delivery, "webhook subscription was deleted")
 	}
 	if !sub.Active {
 		// Paused after this delivery was enqueued. Round 2 does not
@@ -382,10 +441,13 @@ func (s *Service) attemptDelivery(ctx context.Context, sub *WebhookSubscription,
 
 	client := s.httpClient
 	if client == nil {
-		// See ssrf.go's own file comment for why this transport re-validates
-		// the destination at dial time on every attempt, not only once at
-		// subscription-creation time.
-		client = newSafeHTTPClient(webhookDeliveryTimeout)
+		// The module-level default, built once at package init -- see
+		// ssrf.go's defaultWebhookHTTPClient doc comment for why every
+		// delivery attempt shares one transport instead of each building
+		// its own. Its own file comment also explains why this transport
+		// re-validates the destination at dial time on every attempt, not
+		// only once at subscription-creation time.
+		client = defaultWebhookHTTPClient
 	}
 
 	resp, err := client.Do(req)

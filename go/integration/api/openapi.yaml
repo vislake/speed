@@ -61,6 +61,15 @@ paths:
         -- the one and only time this API ever returns it; nothing else
         this fragment exposes, including integration_listAPIKeys, ever
         reproduces it.
+
+        A failure recording the operation's audit event AFTER the key row
+        committed is answered as this operation's error with the full
+        created-key response carried in the error envelope's
+        created_api_key parameter: the key exists and works either way, and
+        key material is never shown twice, so the caller is expected to
+        persist it from whichever response arrives (the identical
+        partial-failure contract Service.Create's own doc comment
+        documents).
       requestBody:
         required: false
         content:
@@ -153,8 +162,11 @@ paths:
         transaction; a failure revoking the predecessor after the
         replacement was already created is reported as this operation's own
         error, but the replacement key still exists (a safe-direction
-        surplus, never a lockout) -- see Service.Rotate's own doc comment
-        for the full argument.
+        surplus, never a lockout) and is carried in the error envelope's
+        created_api_key parameter, exactly once: key material is never
+        shown twice, so whichever response arrives, the caller persists the
+        new key from it -- see Service.Rotate's own doc comment for the
+        full argument.
       parameters:
         - $ref: '#/components/parameters/KeyID'
       responses:
@@ -205,6 +217,15 @@ paths:
         verifies signatures with -- shown here exactly once, the identical
         contract integration_createAPIKey's own key field follows; nothing
         else this fragment exposes ever reproduces it.
+
+        A failure recording the operation's audit event AFTER the
+        subscription row committed is answered as this operation's error
+        with the full created-subscription response carried in the error
+        envelope's created_webhook_subscription parameter: the subscription
+        exists and is already delivering either way, and its secret is never
+        shown twice, so the caller is expected to persist it from whichever
+        response arrives (the identical partial-failure contract
+        Service.CreateWebhookSubscription's own doc comment documents).
       requestBody:
         required: true
         content:
@@ -349,15 +370,16 @@ paths:
         Newest first, at most limit rows; an absent or non-positive limit
         falls back to the module's own default
         (defaultRecentDeliveriesLimit, 50 -- see
-        Service.ListRecentWebhookDeliveries). subscriptionId is NOT verified
-        to exist: an id that names nothing, or a subscription of another
-        tenant, returns an empty list exactly as a genuine subscription with
-        zero deliveries would -- there is no observable difference, and
-        telling the cases apart would let a caller enumerate another
-        tenant's subscription ids (the same no-enumeration answer the 404s
-        above give). Rows carry no payload: the raw event body is an
-        implementation detail of the send pipeline, never exposed to
-        subscription-management callers.
+        Service.ListRecentWebhookDeliveries), and a limit above the
+        declared maximum (100) is clamped to it. subscriptionId is NOT
+        verified to exist: an id that names nothing, or a subscription of
+        another tenant, returns an empty list exactly as a genuine
+        subscription with zero deliveries would -- there is no observable
+        difference, and telling the cases apart would let a caller
+        enumerate another tenant's subscription ids (the same
+        no-enumeration answer the 404s above give). Rows carry no payload:
+        the raw event body is an implementation detail of the send pipeline,
+        never exposed to subscription-management callers.
       parameters:
         - $ref: '#/components/parameters/SubscriptionID'
         - name: limit
@@ -365,9 +387,10 @@ paths:
           required: false
           schema:
             type: integer
+            maximum: 100
           description: >-
             Maximum rows to return. Absent or non-positive falls back to the
-            module's default of 50.
+            module's default of 50; a value above 100 is clamped to 100.
       responses:
         '200':
           description: The subscription's recent delivery attempts, newest first.

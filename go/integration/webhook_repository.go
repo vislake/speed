@@ -45,6 +45,46 @@ func NewWebhookSubscriptionRepository(db *gorm.DB) *WebhookSubscriptionRepositor
 	}
 }
 
+// updateFields applies a partial column update -- exactly the columns in
+// fields and nothing else -- to the LIVE subscription named by id, in the
+// tenant of ctx, and reports whether any row matched. It is the write
+// Service.UpdateWebhookSubscription performs after its read-modify
+// validation (webhook_service.go), and two of its properties are load-
+// bearing there:
+//
+//  1. It never carries deleted_at/deleted_by (or any other column outside
+//     the caller's own change set) in its SET clause. A full-row
+//     Repository[WebhookSubscription].Update of an already-read row would
+//     race a concurrent DeleteWebhookSubscription exactly the way
+//     recordLastUsed's full-row save raced Revoke (see repository.go's
+//     touchLastUsed doc comment): the updating side read the row while it
+//     was still live, and re-saving that stale copy would write its nil
+//     DeletedAt back over the mark-delete the other call just committed --
+//     resurrecting a subscription the tenant already deleted, Active value
+//     included.
+//  2. Its WHERE clause requires deleted_at IS NULL, mirroring the
+//     live-rows-only view FindByID's own query scope already applies: a row
+//     deleted between the Service's read and this write matches nothing, so
+//     the update reports false and the Service answers
+//     ErrWebhookSubscriptionNotFound -- the deletion wins, exactly as if it
+//     had landed before the read.
+//
+// The tenant filter comes from dbkit's tenant-scope plugin (the statement
+// runs inside WithTenantSession against the TenantScoped
+// WebhookSubscription model), so this can never touch another tenant's row.
+func (r *WebhookSubscriptionRepository) updateFields(ctx context.Context, id string, fields map[string]any) (bool, error) {
+	var matched bool
+	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		res := tx.Model(&WebhookSubscription{}).
+			Where("id = ?", id).
+			Where("deleted_at IS NULL").
+			Updates(fields)
+		matched = res.RowsAffected > 0
+		return res.Error
+	})
+	return matched, err
+}
+
 // ListActiveByTenant returns every WebhookSubscription of the tenant in ctx
 // whose Active is true, in no particular order -- handleDomainEvent filters
 // the result by EventTypes membership itself (webhook_delivery.go's
@@ -90,9 +130,10 @@ func NewWebhookDeliveryRepository(db *gorm.DB) *WebhookDeliveryRepository {
 // under this key" is this method's ordinary answer, not a failure.
 //
 // handleDomainEvent (webhook_delivery.go) probes this before creating a new
-// WebhookDelivery row, which is what makes fanning an at-least-once
-// redelivered domain event out to the same subscription idempotent: see
-// uq_integration_webhook_deliveries_tenant_subscription_key in the
+// WebhookDelivery row, which is what makes fanning the same OBSERVED
+// occurrence of a domain event out to the same subscription idempotent
+// (the key carries the occurrence marker -- see deriveWebhookDeliveryKey):
+// see uq_integration_webhook_deliveries_tenant_subscription_key in the
 // migration.
 func (r *WebhookDeliveryRepository) ByIdempotencyKey(ctx context.Context, subscriptionID, key string) (*WebhookDelivery, error) {
 	var row WebhookDelivery
@@ -132,3 +173,12 @@ func (r *WebhookDeliveryRepository) ListRecentBySubscription(ctx context.Context
 // defaultRecentDeliveriesLimit bounds ListRecentBySubscription when the
 // caller asks for no explicit limit.
 const defaultRecentDeliveriesLimit = 50
+
+// maxRecentDeliveriesLimit is the upper bound Service.
+// ListRecentWebhookDeliveries clamps any larger requested limit to -- the
+// fragment's own limit query parameter declares the identical ceiling (see
+// api/openapi.yaml's integration_listWebhookDeliveries), and this constant
+// is its enforcement: the generated parameter binding validates only that
+// limit parses as an integer, never that it is within range, so an
+// unbounded caller request would otherwise become an unbounded query.
+const maxRecentDeliveriesLimit = 100

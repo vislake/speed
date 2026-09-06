@@ -106,11 +106,7 @@ func (s *Service) CreateWebhookSubscription(ctx context.Context, in CreateWebhoo
 		return nil, ErrInternal.WithCause(err)
 	}
 
-	if err := s.emitWebhookAudit(ctx, AuditActionWebhookSubscriptionCreate, row); err != nil {
-		return nil, err
-	}
-
-	return &CreatedWebhookSubscription{
+	result := &CreatedWebhookSubscription{
 		ID:         row.ID,
 		URL:        row.URL,
 		EventTypes: in.EventTypes,
@@ -118,7 +114,23 @@ func (s *Service) CreateWebhookSubscription(ctx context.Context, in CreateWebhoo
 		Active:     true,
 		CreatedBy:  in.CreatedBy,
 		CreatedAt:  row.CreatedAt,
-	}, nil
+	}
+
+	// An audit-recording failure AFTER the row committed must not lose the
+	// signing secret: Secret is shown exactly once and nothing this module
+	// returns after this call ever reproduces it (see that field's own doc
+	// comment) -- a caller sent away empty-handed could never learn the
+	// secret of a subscription that genuinely exists and is already
+	// delivering events signed with it. The result is therefore returned
+	// alongside the error, the identical (value, err) partial-failure
+	// contract Service.Create's own doc comment documents for the API-key
+	// create surface (service.go). See handler.go's
+	// integration_createWebhookSubscription for the HTTP translation.
+	if err := s.emitWebhookAudit(ctx, AuditActionWebhookSubscriptionCreate, row); err != nil {
+		return result, err
+	}
+
+	return result, nil
 }
 
 // ListWebhookSubscriptions returns every webhook subscription of the
@@ -164,12 +176,29 @@ type UpdateWebhookSubscriptionInput struct {
 
 // UpdateWebhookSubscription applies a partial update to one subscription of
 // the caller's tenant.
+//
+// # The write is a targeted column update, and the deletion always wins
+//
+// The changed columns -- and only the changed columns -- are written through
+// WebhookSubscriptionRepository.updateFields, never a full-row save of the
+// row read above: an Update that raced a concurrent
+// DeleteWebhookSubscription with a stale full-row save would write that
+// stale copy's nil DeletedAt back over the mark-delete, resurrecting a
+// subscription the tenant already deleted -- Active value included (see
+// updateFields' own doc comment for the full argument). A subscription
+// deleted between this method's FindByID read and its write matches
+// updateFields' live-rows-only WHERE clause with nothing, and this method
+// then answers ErrWebhookSubscriptionNotFound, exactly as if the deletion
+// had landed before the read. An input with no field set at all (every
+// field nil) writes nothing and still records the update audit event,
+// matching the call's pre-existing "an update was requested" accounting.
 func (s *Service) UpdateWebhookSubscription(ctx context.Context, in UpdateWebhookSubscriptionInput) (*WebhookSubscriptionSummary, error) {
 	row, err := s.webhookRepo.FindByID(ctx, in.ID)
 	if err != nil {
 		return nil, translateWebhookRepoErr(err)
 	}
 
+	fields := make(map[string]any, 3)
 	if in.URL != nil {
 		if *in.URL == "" {
 			return nil, ErrWebhookURLRequired
@@ -178,6 +207,7 @@ func (s *Service) UpdateWebhookSubscription(ctx context.Context, in UpdateWebhoo
 			return nil, urlErr
 		}
 		row.URL = *in.URL
+		fields["url"] = *in.URL
 	}
 	if in.EventTypes != nil {
 		if len(in.EventTypes) == 0 {
@@ -187,14 +217,25 @@ func (s *Service) UpdateWebhookSubscription(ctx context.Context, in UpdateWebhoo
 			return nil, typesErr
 		}
 		row.EventTypes = eventTypesJSON(in.EventTypes)
+		fields["event_types"] = row.EventTypes
 	}
 	if in.Active != nil {
 		row.Active = *in.Active
+		fields["active"] = *in.Active
 	}
 
-	if updateErr := s.webhookRepo.Update(ctx, row); updateErr != nil {
-		return nil, ErrInternal.WithCause(updateErr)
+	if len(fields) > 0 {
+		matched, updateErr := s.webhookRepo.updateFields(ctx, in.ID, fields)
+		if updateErr != nil {
+			return nil, ErrInternal.WithCause(updateErr)
+		}
+		if !matched {
+			// Deleted between the FindByID read above and this write --
+			// deletion wins, indistinguishable from "already gone".
+			return nil, ErrWebhookSubscriptionNotFound
+		}
 	}
+
 	if auditErr := s.emitWebhookAudit(ctx, AuditActionWebhookSubscriptionUpdate, row); auditErr != nil {
 		return nil, auditErr
 	}
@@ -220,15 +261,19 @@ func (s *Service) UpdateWebhookSubscription(ctx context.Context, in UpdateWebhoo
 // mark-deleted row by dbkit's soft-delete auto-scope plugin exactly as it
 // was made impossible by a physical DELETE before this round, so an
 // in-flight delivery still resolves ErrRecordNotFound and settles terminal
-// with "webhook subscription no longer exists" (webhook_delivery.go's
-// handleDeliveryJob), unchanged.
+// with "webhook subscription was deleted" (webhook_delivery.go's
+// handleDeliveryJob) -- and ONLY genuine not-found settles that way: any
+// other FindByID failure (a transient store error, a secret that no longer
+// decrypts) is returned so the job retries, never dead-lettered as if the
+// subscription were the problem (see handleDeliveryJob's own doc comment).
 //
 // See RestoreWebhookSubscription for undoing this, and
 // go/integration/AGENTS.md's "Soft deletion" section for the round's full
-// design record, including why "webhook subscription no longer exists" no
-// longer means the row can never reappear the way it did before a Restore
-// existed -- see handleDeliveryJob's own doc comment for the current
-// wording.
+// design record, including why a terminal delivery marked "webhook
+// subscription was deleted" does not mean the row can never reappear the
+// way it could not before a Restore existed -- a restored subscription gets
+// FRESH deliveries off the next matching domain event, never a replay of
+// the already-settled one (see handleDeliveryJob's own doc comment).
 func (s *Service) DeleteWebhookSubscription(ctx context.Context, id string) error {
 	row, err := s.webhookRepo.FindByID(ctx, id)
 	if err != nil {
@@ -335,8 +380,12 @@ type WebhookDeliverySummary struct {
 // ListRecentWebhookDeliveries returns up to limit of subscriptionID's most
 // recent deliveries, newest first -- the delivery log read path
 // docs/internal/07-platform-services.md asks for. A non-positive limit
-// falls back to defaultRecentDeliveriesLimit (see
-// WebhookDeliveryRepository.ListRecentBySubscription).
+// falls back to defaultRecentDeliveriesLimit, and a limit above
+// maxRecentDeliveriesLimit is clamped to it (the fragment's own limit
+// parameter declares the identical 100 ceiling -- this clamp is its
+// enforcement, since the generated parameter binding performs no range
+// validation of its own). See
+// WebhookDeliveryRepository.ListRecentBySubscription.
 //
 // subscriptionID is not itself verified to exist (unlike Update/Delete):
 // an id belonging to another tenant, or no subscription at all, simply
@@ -345,6 +394,9 @@ type WebhookDeliverySummary struct {
 // which is deliberate for the identical cross-tenant-enumeration reason
 // ErrKeyNotFound's own doc comment gives.
 func (s *Service) ListRecentWebhookDeliveries(ctx context.Context, subscriptionID string, limit int) ([]WebhookDeliverySummary, error) {
+	if limit > maxRecentDeliveriesLimit {
+		limit = maxRecentDeliveriesLimit
+	}
 	rows, err := s.deliveryRepo.ListRecentBySubscription(ctx, subscriptionID, limit)
 	if err != nil {
 		return nil, ErrInternal.WithCause(err)
@@ -425,13 +477,26 @@ func (s *Service) emitWebhookAudit(ctx context.Context, action string, row *Webh
 	return nil
 }
 
+// isWebhookRecordNotFound reports whether err is dbkit's not-found error
+// (by Code, never by identity -- see translateRepoErr's own doc comment for
+// why). It is the classifier webhook_delivery.go's handleDeliveryJob uses to
+// tell the one FindByID failure that means "the subscription is gone" from
+// every other FindByID failure a delivery attempt can hit (a transient store
+// error, a secret that no longer decrypts) -- only the former settles the
+// delivery terminal; the latter must retry (see handleDeliveryJob's own doc
+// comment).
+func isWebhookRecordNotFound(err error) bool {
+	found, ok := apperr.As(err)
+	return ok && found.Code == dbkit.ErrRecordNotFound.Code
+}
+
 // translateWebhookRepoErr is webhook_service.go's counterpart of
 // service.go's translateRepoErr, mapping a dbkit not-found onto
 // ErrWebhookSubscriptionNotFound instead of ErrKeyNotFound. See
 // translateRepoErr's own doc comment for why matching is by Code, never by
 // identity.
 func translateWebhookRepoErr(err error) error {
-	if found, ok := apperr.As(err); ok && found.Code == dbkit.ErrRecordNotFound.Code {
+	if isWebhookRecordNotFound(err) {
 		return ErrWebhookSubscriptionNotFound
 	}
 	return ErrInternal.WithCause(err)

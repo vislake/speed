@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"errors"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -98,6 +99,28 @@ func (r *APIKeyRepository) tenantForHash(ctx context.Context, hash string) (pkgc
 		return "", ErrInternal.WithCause(err)
 	}
 	return pkgcore.TenantID(idx.TenantID), nil
+}
+
+// touchLastUsed updates exactly one column -- last_used_at -- of the key
+// named by keyID, in the tenant of ctx, leaving every other column
+// untouched. It is the write Service.Authenticate's recordLastUsed performs
+// after a successful authentication (authenticate.go), and the
+// single-column scope is the whole point: the alternative, a full-row
+// Update of the already-read row, races a concurrent Service.Revoke -- the
+// authenticating side read the row while it was still live, and a full-row
+// save of that stale copy would write its nil RevokedAt back over the
+// revocation the other call just committed. An UPDATE whose SET clause
+// names only last_used_at cannot undo a revocation, whichever way the race
+// resolves (see recordLastUsed's own doc comment for the full argument).
+//
+// The tenant filter comes from dbkit's tenant-scope plugin (the statement
+// runs inside WithTenantSession against the TenantScoped APIKey model), so
+// this can never touch another tenant's row -- the identical construction
+// byHash and createWithHashIndex already use.
+func (r *APIKeyRepository) touchLastUsed(ctx context.Context, keyID string, at time.Time) error {
+	return dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Model(&APIKey{}).Where("id = ?", keyID).Update("last_used_at", at).Error
+	})
 }
 
 // byHash returns the caller tenant's key whose stored hash is hash, or

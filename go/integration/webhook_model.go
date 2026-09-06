@@ -243,16 +243,19 @@ const (
 // webhook_delivery.go's handleDomainEvent) is visible across a tenant
 // boundary through this table either.
 //
-// # One row per (subscription, event), not one row per HTTP attempt
+// # One row per (subscription, observed occurrence), not one row per HTTP
+// # attempt
 //
 // A delivery that fails and retries updates the SAME row (Attempts,
 // LastStatusCode, LastError, Status) rather than appending a new one: the
-// row's identity is the (subscription, event) pair, not the individual HTTP
-// call, so "list recent deliveries for this subscription" (the query
-// idxWebhookDeliveriesSubscriptionCreatedAt exists for) shows one line per
-// logical delivery with its current outcome, not a flood of retry rows for
-// what is, from the tenant's point of view, one thing that did or did not
-// eventually arrive.
+// row's identity is the (subscription, occurrence) pair -- the occurrence
+// being one observed arrival of the event at the subscription boundary,
+// see deriveWebhookDeliveryKey's occurrence-marker discussion -- not the
+// individual HTTP call, so "list recent deliveries for this subscription"
+// (the query idxWebhookDeliveriesSubscriptionCreatedAt exists for) shows
+// one line per logical delivery with its current outcome, not a flood of
+// retry rows for what is, from the tenant's point of view, one thing that
+// did or did not eventually arrive.
 type WebhookDelivery struct {
 	// ID is an application-generated UUID.
 	ID string `gorm:"column:id;primaryKey;size:36"`
@@ -280,13 +283,16 @@ type WebhookDelivery struct {
 
 	// IdempotencyKey is the derived delivery key (deriveWebhookDeliveryKey
 	// in webhook_delivery.go) that makes event-to-subscription fan-out
-	// idempotent under the at-least-once delivery an EventBus subscriber
-	// must tolerate: a redelivered domain event derives the identical key
-	// for the identical subscription, and handleDomainEvent probes it
-	// before creating a new row (see that function's doc comment) --
-	// exactly the role notification.SendRecord.IdempotencyKey plays for its
-	// own replay convergence, scoped by subscription here instead of by
-	// recipient and channel.
+	// idempotent over what the module can recognize as one occurrence: the
+	// key carries the subscription, the public type/version, the rendered
+	// body and the subscription-boundary occurrence marker (one clock
+	// reading per observed arrival of the event), so an identical fan-out
+	// of the same observed occurrence -- a same-instant redelivery, a
+	// concurrent double-handling of one bus message -- derives the
+	// identical key and handleDomainEvent probes it before creating a new
+	// row, while a genuinely distinct occurrence with a byte-identical
+	// body derives its own key and delivers on its own (see
+	// deriveWebhookDeliveryKey's own doc comment for the full argument).
 	IdempotencyKey string `gorm:"column:idempotency_key;size:64;not null"`
 
 	// Payload is the exact JSON body a delivery attempt sends (or will

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/ratelimit"
@@ -71,14 +73,31 @@ func TestHTTPGuard_Middleware_Denied_Returns429WithHeaders(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusTooManyRequests)
 	}
-	if rec.Header().Get("Retry-After") == "" {
+	retryAfter := rec.Header().Get("Retry-After")
+	if retryAfter == "" {
 		t.Error("Retry-After header is empty, want a positive value")
 	}
 	if rec.Header().Get(headerRateLimitLayer) != LayerKey {
 		t.Errorf("%s = %q, want %q", headerRateLimitLayer, rec.Header().Get(headerRateLimitLayer), LayerKey)
 	}
-	if rec.Header().Get(headerRateLimitReset) == "" {
-		t.Error("X-RateLimit-Reset header is empty")
+	// X-RateLimit-Reset names the instant the window resets as a Unix epoch
+	// timestamp in seconds (GitHub's semantics for the header name), NOT
+	// Retry-After's seconds-until-reset countdown -- so it must parse as an
+	// epoch roughly equal to now plus Retry-After.
+	reset, err := strconv.ParseInt(rec.Header().Get(headerRateLimitReset), 10, 64)
+	if err != nil {
+		t.Errorf("X-RateLimit-Reset = %q, want a Unix epoch timestamp in seconds (parse error: %v)", rec.Header().Get(headerRateLimitReset), err)
+	}
+	retryAfterSecs, err := strconv.ParseInt(retryAfter, 10, 64)
+	if err != nil {
+		t.Fatalf("Retry-After = %q, want a whole number of seconds (parse error: %v)", retryAfter, err)
+	}
+	now := time.Now().Unix()
+	if reset < now {
+		t.Errorf("X-RateLimit-Reset = %d, want an epoch timestamp at or after now (%d) -- a countdown value was sent under an epoch header name", reset, now)
+	}
+	if reset > now+retryAfterSecs+2 {
+		t.Errorf("X-RateLimit-Reset = %d, want about now + Retry-After (%d + %d)", reset, now, retryAfterSecs)
 	}
 	if rec.Header().Get("Content-Type") != errorContentType {
 		t.Errorf("Content-Type = %q, want %q", rec.Header().Get("Content-Type"), errorContentType)

@@ -18,12 +18,90 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"time"
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/ratelimit"
 
 	"github.com/vislake/speed/go/integration"
 )
+
+// ExampleModule_WithAuthenticationGuard demonstrates the pre-auth rate-limit
+// gate: WithAuthenticationGuard wires an HTTPGuard that AuthMiddleware
+// applies BEFORE it authenticates anything, so a request bearing a forged
+// X-API-Key -- which would otherwise reach Service.Authenticate's lookups
+// with no bound at all -- pays the guard's budget and, once it is spent, is
+// refused with 429 without any authentication running (the layering
+// argument lives in middleware.go's own doc comment).
+func ExampleWithAuthenticationGuard() {
+	ctx := context.Background()
+
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:integration_authguard_example?mode=memory&cache=shared",
+	})
+	if err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+
+	// A guard over the module's own three-layer limiter, budgeted at one
+	// global hit per minute for the demo. Its Extractor runs BEFORE any
+	// authentication, so it cannot read resolved tenant/key identifiers
+	// from the request context; the empty-identifier answer it returns here
+	// charges the global layer (and, were they enabled, the shared
+	// anonymous counters of the tenant/key layers) -- see
+	// WithAuthenticationGuard's own doc comment.
+	guard := integration.NewHTTPGuard(
+		integration.NewLayeredLimiter(ratelimit.New(pkgcore.NewMemoryKVStore()), integration.LayeredLimits{
+			Global: ratelimit.Limit{Rate: 1, Per: time.Minute},
+		}),
+		"example-auth-guard",
+		func(*http.Request) (tenantKey, apiKeyID string) { return "", "" },
+	)
+	m := integration.NewModule(db, integration.WithAuthenticationGuard(guard))
+
+	registry := dbkit.NewMigrationRegistry()
+	if regErr := registry.Register(m); regErr != nil {
+		fmt.Println("register migrations:", regErr)
+		return
+	}
+	if applyErr := registry.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
+		fmt.Println("apply migrations:", applyErr)
+		return
+	}
+	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	if regErr := m.Register(reg); regErr != nil {
+		fmt.Println("register module:", regErr)
+		return
+	}
+	if _, attachErr := m.Attach(reg); attachErr != nil {
+		fmt.Println("attach:", attachErr)
+		return
+	}
+
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	handler := integration.NewAuthMiddleware(m).Middleware(ok)
+
+	forge := func() int {
+		req := httptest.NewRequest(http.MethodGet, "/whoami", http.NoBody)
+		req.Header.Set(integration.HeaderAPIKey, "sk_this-was-never-issued")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// The first forged request passes the guard's single-hit budget and is
+	// refused by authentication itself; the second is refused BY THE GUARD
+	// -- 429 -- before any Authenticate call runs.
+	fmt.Println("forged request 1:", forge())
+	fmt.Println("forged request 2:", forge())
+
+	// Output:
+	// forged request 1: 401
+	// forged request 2: 429
+}
 
 // ExampleAuthMiddleware demonstrates the full inbound-authentication path:
 // a demo "whoami" handler, mounted behind AuthMiddleware, answers the

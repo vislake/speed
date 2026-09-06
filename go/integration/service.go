@@ -168,18 +168,30 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreatedAPIKey, e
 		return nil, ErrInternal.WithCause(err)
 	}
 
-	if err := s.emit(ctx, AuditActionAPIKeyCreate, row, audit.Result{Success: true}); err != nil {
-		return nil, err
-	}
-
-	return &CreatedAPIKey{
+	result := &CreatedAPIKey{
 		ID:        row.ID,
 		Key:       raw,
 		Prefix:    prefix,
 		Scopes:    in.Scopes,
 		CreatedBy: in.CreatedBy,
 		ExpiresAt: expiresAt,
-	}, nil
+	}
+
+	// An audit-recording failure AFTER the row committed must not lose the
+	// key material: Key is shown exactly once, this module holds no copy of
+	// it past this return, and List never reproduces it -- a caller sent
+	// away empty-handed could never learn the credential of a key that
+	// genuinely exists and works. The result is therefore returned alongside
+	// the error, the identical (value, err) partial-failure contract
+	// Rotate's own doc comment documents for its revoke leg: the caller
+	// decides whether to retry the audit or proceed, but never has to lose
+	// the material. See handler.go's integration_createAPIKey for the HTTP
+	// translation of this shape.
+	if err := s.emit(ctx, AuditActionAPIKeyCreate, row, audit.Result{Success: true}); err != nil {
+		return result, err
+	}
+
+	return result, nil
 }
 
 // List returns every API key of the caller's tenant as a
@@ -308,7 +320,12 @@ func (s *Service) Rotate(ctx context.Context, id string) (*CreatedAPIKey, error)
 		Scopes:    oldScopes,
 	})
 	if err != nil {
-		return nil, err
+		// Create can itself fail PARTIALLY -- its post-commit audit leg
+		// failed, in which case it returns the replacement key alongside the
+		// error (see Create's own doc comment). Dropping created here would
+		// lose the key material exactly as the caller of this method would
+		// lose it: Rotate forwards both halves unchanged.
+		return created, err
 	}
 
 	if err := s.Revoke(ctx, old.ID); err != nil {

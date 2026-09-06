@@ -50,6 +50,33 @@ func TestModule_Register_DeclaresPermissionsAndAuditActions(t *testing.T) {
 	}
 }
 
+// TestModule_AuditActionVocabulary_HasNoDeadEntries pins the registered
+// audit-action vocabulary to exactly the actions some Service call emits:
+// Service.Rotate records a rotation as its two ordinary create/revoke
+// events (see that method's own doc comment), so a registered
+// integration.apikey.rotate action would be a dead vocabulary entry --
+// declared, validated-against, but never emitted -- and is deliberately
+// absent. The exact-list shape makes a reintroduced-but-unemitted action
+// fail here.
+func TestModule_AuditActionVocabulary_HasNoDeadEntries(t *testing.T) {
+	want := []string{
+		AuditActionAPIKeyCreate,
+		AuditActionAPIKeyRevoke,
+		AuditActionWebhookSubscriptionCreate,
+		AuditActionWebhookSubscriptionUpdate,
+		AuditActionWebhookSubscriptionDelete,
+		AuditActionWebhookSubscriptionRestore,
+	}
+	if len(auditActionDecls) != len(want) {
+		t.Fatalf("auditActionDecls = %v, want exactly %v (no action may be registered that nothing emits)", auditActionDecls, want)
+	}
+	for i, w := range want {
+		if auditActionDecls[i] != w {
+			t.Fatalf("auditActionDecls = %v, want exactly %v (no action may be registered that nothing emits)", auditActionDecls, want)
+		}
+	}
+}
+
 // TestModule_Register_RegistersWebhookDeliveryJobHandler proves round 2's
 // job-handler wiring: exactly one handler is registered, under
 // jobTypeWebhookDeliver, matching storage's and notification's identical

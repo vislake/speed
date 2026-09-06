@@ -3,7 +3,9 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -187,6 +189,61 @@ func TestService_UpdateWebhookSubscription_EmptyEventTypesSlice_Refused(t *testi
 	}
 }
 
+// TestService_UpdateWebhookSubscription_ConcurrentDelete_DeletionWins is the
+// regression test for the resurrection race between
+// UpdateWebhookSubscription and DeleteWebhookSubscription: an update whose
+// FindByID read landed while the subscription was still live can find its
+// own write landing after a concurrent delete's mark-delete committed, and
+// that write must not resurrect the subscription. The two calls are raced
+// against fresh subscriptions in a loop; whichever way each race resolves,
+// the invariant is the same -- after both calls settle, the subscription is
+// no longer readable as a live row. Before the fix (a full-row
+// Repository[WebhookSubscription].Update of the updating side's stale
+// read, whose nil DeletedAt overwrote the mark-delete) an interleaving
+// where the delete's write committed first resurrected the row, Active
+// value included; after it (updateFields' targeted, deleted_at IS NULL
+// guarded write) no interleaving can.
+func TestService_UpdateWebhookSubscription_ConcurrentDelete_DeletionWins(t *testing.T) {
+	_, svc := newWebhookTestService(t)
+
+	for i := 0; i < 40; i++ {
+		created, err := svc.CreateWebhookSubscription(ctxFor(testTenant), CreateWebhookSubscriptionInput{
+			URL: "https://example.com/hook", EventTypes: []string{"test.thing.happened"}, CreatedBy: "user-1",
+		})
+		if err != nil {
+			t.Fatalf("iteration %d CreateWebhookSubscription: %v", i, err)
+		}
+
+		active := true
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = svc.UpdateWebhookSubscription(ctxFor(testTenant), UpdateWebhookSubscriptionInput{ID: created.ID, Active: &active})
+		}()
+		go func() {
+			defer wg.Done()
+			// A delete that loses the race (already-revoked-style no-op is
+			// impossible here -- nothing deletes twice) may transiently hit
+			// SQLite's writer lock; the update's write holds it only
+			// momentarily, so a bounded retry settles the delete either way.
+			for attempt := 0; ; attempt++ {
+				if err := svc.DeleteWebhookSubscription(ctxFor(testTenant), created.ID); err == nil {
+					return
+				} else if attempt == 50 {
+					t.Errorf("iteration %d DeleteWebhookSubscription never succeeded: %v", i, err)
+					return
+				}
+			}
+		}()
+		wg.Wait()
+
+		if _, err := svc.webhookRepo.FindByID(ctxFor(testTenant), created.ID); !apperrIs(err, dbkit.ErrRecordNotFound) {
+			t.Fatalf("iteration %d: the subscription is readable as live after a concurrent update+delete (err = %v) -- the delete did not win", i, err)
+		}
+	}
+}
+
 func TestService_UpdateWebhookSubscription_NotFound_Refused(t *testing.T) {
 	_, svc := newWebhookTestService(t)
 	_, err := svc.UpdateWebhookSubscription(ctxFor(testTenant), UpdateWebhookSubscriptionInput{ID: "no-such-id"})
@@ -206,6 +263,88 @@ func TestService_UpdateWebhookSubscription_CrossTenant_NotFound(t *testing.T) {
 	_, err = svc.UpdateWebhookSubscription(ctxFor("tenant-other"), UpdateWebhookSubscriptionInput{ID: created.ID})
 	if !apperrIs(err, ErrWebhookSubscriptionNotFound) {
 		t.Errorf("error = %v, want ErrWebhookSubscriptionNotFound (cross-tenant indistinguishable from absent)", err)
+	}
+}
+
+// TestService_CreateWebhookSubscription_AuditFailureAfterCommit_ReturnsSecretWithError
+// is the webhook twin of the API-key material-retention regression
+// (service_test.go's TestService_Create_AuditFailureAfterCommit_ReturnsKeyWithError):
+// the subscription row has committed, but recording its audit event failed
+// (the bus is down). Service.CreateWebhookSubscription must return the
+// created subscription ALONGSIDE the error -- its signing secret is shown
+// exactly once and never reproduced, so returning nil would orphan a live,
+// already-delivering subscription whose secret nobody ever received.
+// Before the fix the method returned (nil, err) on this path and the raw
+// secret was lost forever.
+func TestService_CreateWebhookSubscription_AuditFailureAfterCommit_ReturnsSecretWithError(t *testing.T) {
+	_, svc := newWebhookTestService(t)
+	svc.bus = errBus{}
+
+	created, err := svc.CreateWebhookSubscription(ctxFor(testTenant), CreateWebhookSubscriptionInput{
+		URL: "https://example.com/hook", EventTypes: []string{"test.thing.happened"}, CreatedBy: "user-1",
+	})
+	if err == nil {
+		t.Fatal("CreateWebhookSubscription = nil error, want the audit failure reported")
+	}
+	if created == nil {
+		t.Fatal("CreateWebhookSubscription returned nil on its post-commit audit failure: the secret was lost")
+	}
+	if created.Secret == "" {
+		t.Fatal("CreateWebhookSubscription returned a created subscription with an empty Secret")
+	}
+
+	// The row committed and is live, and the secret this module stored is
+	// exactly the one returned (read back through the encrypting
+	// serializer).
+	row, findErr := svc.webhookRepo.FindByID(ctxFor(testTenant), created.ID)
+	if findErr != nil {
+		t.Fatalf("FindByID after the partial create: %v", findErr)
+	}
+	if row.Secret != created.Secret {
+		t.Error("the committed row's secret does not match the returned secret")
+	}
+	if !row.Active {
+		t.Error("the committed subscription is inactive, want active")
+	}
+}
+
+// TestService_ListRecentWebhookDeliveries_LimitClampedToMaximum pins the
+// deliveries-listing bound: a caller-requested limit above
+// maxRecentDeliveriesLimit must be clamped, never passed through to the
+// repository as an unbounded query -- the fragment's own limit parameter
+// declares the same 100 ceiling, and this Service-level clamp is its
+// enforcement (the generated parameter binding performs no range
+// validation). The clamp is observed by asking for a huge limit and
+// checking that only as many rows as exist -- more than the default 50 but
+// fewer than the huge request -- come back: a non-clamped (or default-
+// falling) implementation would answer 50 or fewer.
+func TestService_ListRecentWebhookDeliveries_LimitClampedToMaximum(t *testing.T) {
+	_, svc := newWebhookTestService(t)
+	subID, _ := createTestSubscription(t, svc, "https://example.com/hook")
+
+	// 120 pending deliveries: above both the 50 default and the 100
+	// maximum. Each handleDomainEvent must create a DISTINCT delivery (the
+	// fan-out key now carries an occurrence marker -- see
+	// webhook_delivery_test.go), so the clock is pinned to advance one
+	// nanosecond per call.
+	at := fixedNow
+	svc.now = func() time.Time { return at }
+	prevQueue := svc.queue
+	svc.queue = &fakeQueue{}
+	defer func() { svc.queue = prevQueue }()
+	for i := 0; i < 120; i++ {
+		at = at.Add(time.Nanosecond)
+		if err := svc.handleDomainEvent(ctxFor(testTenant), pkgcore.Event{Type: testMapping.InternalType, TenantID: testTenant}); err != nil {
+			t.Fatalf("handleDomainEvent %d: %v", i, err)
+		}
+	}
+
+	deliveries, err := svc.ListRecentWebhookDeliveries(ctxFor(testTenant), subID, 1<<30)
+	if err != nil {
+		t.Fatalf("ListRecentWebhookDeliveries: %v", err)
+	}
+	if len(deliveries) != maxRecentDeliveriesLimit {
+		t.Fatalf("len(deliveries) = %d with 120 rows and a huge requested limit, want exactly %d (clamped to the maximum, not passed through unbounded)", len(deliveries), maxRecentDeliveriesLimit)
 	}
 }
 

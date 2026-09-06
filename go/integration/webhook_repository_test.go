@@ -107,6 +107,78 @@ func TestWebhookSubscriptionRepository_ListActiveByTenant(t *testing.T) {
 	}
 }
 
+// TestWebhookSubscriptionRepository_updateFields_PartialAndLiveOnly pins the
+// two load-bearing properties of the partial update
+// Service.UpdateWebhookSubscription writes through (webhook_service.go):
+// only the columns in the payload change (a full-row save would also rewrite
+// every untouched column, which is exactly the resurrection hazard the
+// method exists to avoid), and a mark-deleted row matches nothing -- an
+// update arriving after a delete can never bring the row back.
+func TestWebhookSubscriptionRepository_updateFields_PartialAndLiveOnly(t *testing.T) {
+	db := newWebhookTestDB(t)
+	repo := NewWebhookSubscriptionRepository(db)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-1")
+
+	row := &WebhookSubscription{
+		ID: "sub-1", URL: "https://example.com/a", EventTypes: eventTypesJSON([]string{"e"}),
+		Secret: "s", Active: true, CreatedBy: "u",
+	}
+	if err := repo.Create(ctx, row); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Update exactly one column; the others must survive untouched.
+	matched, err := repo.updateFields(ctx, "sub-1", map[string]any{"active": false})
+	if err != nil {
+		t.Fatalf("updateFields: %v", err)
+	}
+	if !matched {
+		t.Fatal("updateFields reported no match for a live row")
+	}
+	got, err := repo.FindByID(ctx, "sub-1")
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if got.Active {
+		t.Error("Active = true, want false after the targeted update")
+	}
+	if got.URL != "https://example.com/a" {
+		t.Errorf("URL = %q, want unchanged (the targeted update rewrote an untouched column)", got.URL)
+	}
+
+	// A mark-deleted row must not match: the update cannot resurrect it.
+	if delErr := repo.Delete(ctx, "sub-1"); delErr != nil {
+		t.Fatalf("delete: %v", delErr)
+	}
+	matched, err = repo.updateFields(ctx, "sub-1", map[string]any{"active": true})
+	if err != nil {
+		t.Fatalf("updateFields after delete: %v", err)
+	}
+	if matched {
+		t.Fatal("updateFields matched a mark-deleted row")
+	}
+	if _, findErr := repo.FindByID(ctx, "sub-1"); !apperrIs(findErr, dbkit.ErrRecordNotFound) {
+		t.Errorf("FindByID after delete+updateFields = %v, want not found (the row must stay deleted)", findErr)
+	}
+
+	// Another tenant's row (even a live one) must not match either.
+	other := pkgcore.WithTenant(context.Background(), "tenant-2")
+	otherRow := &WebhookSubscription{
+		ID: "sub-other", URL: "https://example.com/b", EventTypes: eventTypesJSON([]string{"e"}),
+		Secret: "s", Active: true, CreatedBy: "u",
+	}
+	if createErr := repo.Create(other, otherRow); createErr != nil {
+		t.Fatalf("create other-tenant: %v", createErr)
+	}
+	matched, err = repo.updateFields(ctx, "sub-other", map[string]any{"active": false})
+	if err != nil {
+		t.Fatalf("updateFields cross-tenant: %v", err)
+	}
+	if matched {
+		t.Fatal("updateFields matched another tenant's row")
+	}
+}
+
 func TestWebhookDeliveryRepository_ByIdempotencyKey(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewWebhookDeliveryRepository(db)

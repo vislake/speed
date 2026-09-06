@@ -170,11 +170,34 @@ const webhookDialTimeout = 5 * time.Second
 // failure if it ever needs to.
 var errBlockedDialAddress = errors.New("integration: webhook delivery refused: destination resolves to a blocked address")
 
-// newSafeHTTPClient returns the http.Client every webhook delivery attempt
-// sends through (webhook_delivery.go). Its Transport re-validates the
-// destination at DIAL time -- see this file's own header comment for why
-// that is what actually defeats DNS rebinding, which a creation-time-only
-// check cannot.
+// webhookTransportIdleTimeout is the IdleConnTimeout of the shared
+// transport newSafeHTTPClient builds: how long an idle keep-alive
+// connection to a receiver is kept for reuse before it is closed. Sane and
+// finite on purpose -- a zero IdleConnTimeout would keep an idle
+// connection to a dead or changed receiver around forever (Go's own
+// default), while the shared transport this module lives on means one
+// receiver's abandoned connection is not this module's problem to keep
+// warm indefinitely.
+const webhookTransportIdleTimeout = 90 * time.Second
+
+// defaultWebhookHTTPClient is the module-level http.Client every webhook
+// delivery attempt sends through when the Service has no
+// WithWebhookHTTPClient override -- built ONCE at package init, never per
+// delivery. See newSafeHTTPClient for what its transport does; the
+// built-once shape is what lets consecutive deliveries to the same
+// receiver reuse one TCP connection (and its TLS session) instead of
+// dialing afresh for every attempt -- http.Transport is safe for
+// concurrent use by design, and each delivery attempt's own per-request
+// timeout (http.Client.Timeout) still bounds that attempt individually.
+// webhookTransportIdleTimeout above keeps the shared pool from holding
+// idle connections open indefinitely.
+var defaultWebhookHTTPClient = newSafeHTTPClient(webhookDeliveryTimeout)
+
+// newSafeHTTPClient returns the http.Client webhook delivery attempts send
+// through (webhook_delivery.go, via defaultWebhookHTTPClient). Its
+// Transport re-validates the destination at DIAL time -- see this file's
+// own header comment for why that is what actually defeats DNS rebinding,
+// which a creation-time-only check cannot.
 //
 // CheckRedirect caps the redirect chain at maxWebhookRedirects: an
 // unbounded chain from an untrusted receiver is both a resource-exhaustion
@@ -183,6 +206,15 @@ var errBlockedDialAddress = errors.New("integration: webhook delivery refused: d
 func newSafeHTTPClient(timeout time.Duration) *http.Client {
 	dialer := &net.Dialer{Timeout: webhookDialTimeout}
 	transport := &http.Transport{
+		// Sane idle-connection hygiene for the module-level shared
+		// transport (defaultWebhookHTTPClient): IdleConnTimeout bounds how
+		// long a receiver's idle keep-alive connection is kept, and
+		// MaxIdleConnsPerHost caps how many concurrent deliveries to one
+		// receiver may keep open. Both stay above the concurrency a single
+		// tenant's fan-out realistically produces; see
+		// webhookTransportIdleTimeout's own comment.
+		IdleConnTimeout:     webhookTransportIdleTimeout,
+		MaxIdleConnsPerHost: 8,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(addr)
 			if err != nil {

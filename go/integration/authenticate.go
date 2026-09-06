@@ -134,12 +134,19 @@ func (s *Service) Authenticate(ctx context.Context, rawKey string) (*Authenticat
 	}, nil
 }
 
-// recordLastUsed sets row.LastUsedAt to now and persists it through the
-// embedded Repository[APIKey].Update -- ctx must already carry row's own
-// tenant (Authenticate's tenantCtx). Failure is reported to the caller,
-// which treats it as non-fatal to the surrounding Authenticate call; see
-// that method's own "LastUsedAt" doc comment section for why.
+// recordLastUsed persists row's LastUsedAt as now through a TARGETED
+// single-column update (APIKeyRepository.touchLastUsed) -- ctx must already
+// carry row's own tenant (Authenticate's tenantCtx). Failure is reported to
+// the caller, which treats it as non-fatal to the surrounding Authenticate
+// call; see that method's own "LastUsedAt" doc comment section for why.
+//
+// The targeted shape is load-bearing, not a style preference: this write
+// races a concurrent Service.Revoke, and a full-row Update of an
+// already-read (and therefore possibly stale) row would carry that stale
+// copy's nil RevokedAt back into the database, silently undoing the
+// revocation -- reviving a key the tenant already revoked. A write that
+// touches nothing but last_used_at cannot revive anything, whichever way
+// the race resolves.
 func (s *Service) recordLastUsed(ctx context.Context, row *APIKey, now time.Time) error {
-	row.LastUsedAt = &now
-	return s.repo.Update(ctx, row)
+	return s.repo.touchLastUsed(ctx, row.ID, now)
 }

@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/vislake/speed/go/dbkit"
+
 	"github.com/vislake/speed/go/integration/api"
 )
 
@@ -86,6 +88,126 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, wantStatus in
 	}
 	if *got.Code != code {
 		t.Fatalf("error code = %q, want %q", *got.Code, code)
+	}
+}
+
+// assertErrorCarriesCreated decodes rec's error envelope in ONE pass and
+// requires it to answer wantStatus with wantCode and carry paramKey (the
+// created-object parameter of the partial-failure surface -- the handler
+// answers these when a post-commit leg failed after the object itself
+// committed; see handler.go's integration_createAPIKey doc comment) holding
+// a non-empty created-object response whose "key"/"secret" material it
+// returns to the caller.
+func assertErrorCarriesCreated(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, wantCode, paramKey string) map[string]any {
+	t.Helper()
+	if rec.Code != wantStatus {
+		t.Fatalf("status = %d, want %d (body %q)", rec.Code, wantStatus, rec.Body.String())
+	}
+	var got api.IntegrationError
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response body %q: %v", rec.Body.String(), err)
+	}
+	if got.Code == nil || *got.Code != wantCode {
+		t.Fatalf("error code = %v, want %q", got.Code, wantCode)
+	}
+	if got.Params == nil {
+		t.Fatalf("error envelope params = <nil>, want %s carried (body %q)", paramKey, rec.Body.String())
+	}
+	created, ok := (*got.Params)[paramKey].(map[string]any)
+	if !ok {
+		t.Fatalf("params[%q] = %v, want the created-object response", paramKey, (*got.Params)[paramKey])
+	}
+	return created
+}
+
+// TestHandler_IntegrationCreateAPIKey_AuditFailure_CarriesCreatedKeyInParams
+// is the HTTP half of the audit-failure material-retention fix (Service
+// level pinned in service_test.go's
+// TestService_Create_AuditFailureAfterCommit_ReturnsKeyWithError): when the
+// key row committed but its audit record failed, the handler must answer
+// the error AND carry the created key in the envelope's params, so the
+// caller is never left without the one-time key material. Before the fix
+// the handler dropped the created half (Service returned nil) and the raw
+// key was lost to everyone.
+func TestHandler_IntegrationCreateAPIKey_AuditFailure_CarriesCreatedKeyInParams(t *testing.T) {
+	h, m := newTestHandler(t, fixedSubject{userID: "user-1", ok: true})
+	m.service.bus = errBus{}
+
+	rec := doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/apikeys", map[string]any{})
+	created := assertErrorCarriesCreated(t, rec, http.StatusInternalServerError, "integration.internal_error", "created_api_key")
+	if rawKey, _ := created["key"].(string); rawKey == "" {
+		t.Fatalf("the carried created key has no key material: %v", created)
+	}
+}
+
+// TestHandler_IntegrationRotateAPIKey_PartialFailure_CarriesCreatedKeyInParams
+// is the HTTP half of Rotate's partial-failure contract: when a leg after
+// the replacement key's creation fails -- the predecessor's revocation
+// failing, or (deterministically here) the replacement's own audit record
+// failing -- the handler must answer the error AND carry the created
+// replacement key in the envelope's params: the key material is shown
+// exactly once, and a caller that does not receive it can never learn the
+// credential of a live key this very call created. Before the fix the
+// handler wrote only the error and the replacement's one-time material was
+// dropped. (The revoke-leg partial itself is raced at the Service level in
+// TestService_Rotate_RevokeFails_ReportsErrorWithNewKeyStillCreated; both
+// partial legs reach this identical handler branch.)
+func TestHandler_IntegrationRotateAPIKey_PartialFailure_CarriesCreatedKeyInParams(t *testing.T) {
+	h, m := newTestHandler(t, fixedSubject{userID: "user-1", ok: true})
+
+	// A real key to rotate, created while the audit bus is healthy.
+	createRec := doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/apikeys", map[string]any{})
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body %q", createRec.Code, createRec.Body.String())
+	}
+	var created api.IntegrationCreatedAPIKey
+	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	// Now the post-creation audit leg fails deterministically: Rotate's
+	// internal Create commits the replacement and then fails its audit
+	// record, so Rotate returns (replacement, error) -- exactly the shape
+	// the revoke-leg partial also produces.
+	m.service.bus = errBus{}
+	rec := doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/apikeys/"+*created.ID+"/rotate", nil)
+	if rec.Code == http.StatusOK {
+		t.Fatalf("rotate status = 200, want the partial failure reported as an error (body %q)", rec.Body.String())
+	}
+	createdKey := assertErrorCarriesCreated(t, rec, http.StatusInternalServerError, "integration.internal_error", "created_api_key")
+	if rawKey, _ := createdKey["key"].(string); rawKey == "" {
+		t.Fatalf("the carried replacement key has no key material: %v", createdKey)
+	}
+}
+
+// TestHandler_IntegrationCreateWebhookSubscription_AuditFailure_CarriesCreatedSubscriptionInParams
+// is the webhook twin of the create-key partial-failure surface: when the
+// subscription row committed but its audit record failed, the handler must
+// answer the error AND carry the created subscription (raw signing secret
+// included) in the envelope's params -- the secret is shown exactly once
+// and never reproduced, so a caller that does not receive it can never
+// verify this live subscription's deliveries.
+func TestHandler_IntegrationCreateWebhookSubscription_AuditFailure_CarriesCreatedSubscriptionInParams(t *testing.T) {
+	// The webhook secret column needs its encrypting serializer registered
+	// before any WebhookSubscription row is written (the plain newTestDB
+	// that newTestHandler opens does not register it -- newWebhookTestDB
+	// does, and this test reuses newTestHandler for its composed handler).
+	cipher, err := dbkit.NewCipher(testWebhookCipherKey)
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	dbkit.RegisterEncryptedSerializer(WebhookSecretSerializerName, cipher)
+
+	h, m := newTestHandler(t, fixedSubject{userID: "user-1", ok: true},
+		WithEventMapping(testMapping), WithWebhookURLValidator(alwaysAllowURL))
+	m.service.bus = errBus{}
+
+	rec := doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/webhooks", map[string]any{
+		"url": "https://example.com/hook", "eventTypes": []string{"test.thing.happened"},
+	})
+	created := assertErrorCarriesCreated(t, rec, http.StatusInternalServerError, "integration.internal_error", "created_webhook_subscription")
+	if secret, _ := created["secret"].(string); secret == "" {
+		t.Fatalf("the carried created subscription has no secret material: %v", created)
 	}
 }
 

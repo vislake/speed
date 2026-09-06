@@ -105,8 +105,8 @@ func TestService_Authenticate_RevokedKey_ReportsAuthenticationFailed(t *testing.
 		t.Fatalf("Revoke: %v", err)
 	}
 
-	if _, err := svc.Authenticate(context.Background(), created.Key); !errors.Is(err, ErrAuthenticationFailed) {
-		t.Errorf("Authenticate(revoked key) error = %v, want ErrAuthenticationFailed", err)
+	if _, authErr := svc.Authenticate(context.Background(), created.Key); !errors.Is(authErr, ErrAuthenticationFailed) {
+		t.Errorf("Authenticate(revoked key) error = %v, want ErrAuthenticationFailed", authErr)
 	}
 }
 
@@ -193,5 +193,61 @@ func TestService_Authenticate_RecordsLastUsedAt(t *testing.T) {
 	}
 	if row.LastUsedAt == nil {
 		t.Error("LastUsedAt is still nil after a successful Authenticate")
+	}
+}
+
+// TestService_Authenticate_RevokedKey_StaleLastUsedWrite_DoesNotRevive is
+// the regression test for the revival race in LastUsedAt bookkeeping: a
+// concurrent revoke and a successful Authenticate can interleave so that
+// Authenticate's recordLastUsed write lands AFTER the revocation committed,
+// against a row copy Authenticate read while the key was still live. That
+// write must never undo the revocation. The interleaving's losing half is
+// exercised deterministically: read the live row exactly as Authenticate
+// would, revoke, then perform the recordLastUsed write Authenticate
+// performs against its now-stale copy -- the row must still be revoked and
+// the key must still refuse to authenticate. Before the fix (a full-row
+// Repository[APIKey].Update carrying the stale copy's nil RevokedAt) this
+// write revived the key; after it (a targeted last_used_at-only UPDATE) it
+// cannot.
+func TestService_Authenticate_RevokedKey_StaleLastUsedWrite_DoesNotRevive(t *testing.T) {
+	svc := testService(t, nil, nil, fixedNow)
+
+	created, err := svc.Create(ctxFor(testTenant), CreateInput{CreatedBy: "user-1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// The row Authenticate would have read had it started before the revoke:
+	// live, RevokedAt nil, LastUsedAt nil.
+	stale, err := svc.repo.FindByID(ctxFor(testTenant), created.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if stale.IsRevoked() {
+		t.Fatal("precondition: key must be live before the revoke")
+	}
+
+	if revokeErr := svc.Revoke(ctxFor(testTenant), created.ID); revokeErr != nil {
+		t.Fatalf("Revoke: %v", revokeErr)
+	}
+
+	// Now the write Authenticate's recordLastUsed performs after its own
+	// checks pass -- run against the stale, pre-revocation row copy the
+	// concurrent Authenticate would still be holding.
+	after := fixedNow.Add(time.Minute)
+	if writeErr := svc.recordLastUsed(ctxFor(testTenant), stale, after); writeErr != nil {
+		t.Fatalf("recordLastUsed: %v", writeErr)
+	}
+
+	row, err := svc.repo.FindByID(ctxFor(testTenant), created.ID)
+	if err != nil {
+		t.Fatalf("FindByID after the stale write: %v", err)
+	}
+	if !row.IsRevoked() {
+		t.Fatal("the stale last-used write revived the revoked key: RevokedAt is nil again")
+	}
+
+	if _, authErr := svc.Authenticate(context.Background(), created.Key); !errors.Is(authErr, ErrAuthenticationFailed) {
+		t.Errorf("Authenticate(revoked key) error = %v, want ErrAuthenticationFailed", authErr)
 	}
 }
