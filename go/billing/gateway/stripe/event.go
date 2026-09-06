@@ -20,17 +20,48 @@ const (
 	eventTypeCheckoutSessionCompleted   = "checkout.session.completed"
 	eventTypeCheckoutSessionExpired     = "checkout.session.expired"
 	eventTypeCheckoutSessionAsyncFailed = "checkout.session.async_payment_failed"
+
+	// eventTypeInvoicePaid and eventTypeInvoicePaymentFailed are the two
+	// events that actually announce a Stripe-native subscription's LATER
+	// billing cycles: once CreateCharge's one Checkout Session establishes
+	// the recurring subscription (gateway.go's own CreateCharge doc
+	// comment), every subsequent cycle's own invoice is generated and
+	// collected entirely on Stripe's side -- never a second
+	// checkout.session.completed, which fires exactly once, for the first
+	// cycle's own Checkout Session. A renewal that fails at Stripe without
+	// this package recognizing invoice.payment_failed is exactly the
+	// "renewal fails silently" gap this package's own earlier revision left
+	// open.
+	eventTypeInvoicePaid          = "invoice.paid"
+	eventTypeInvoicePaymentFailed = "invoice.payment_failed"
+
+	// eventTypeSubscriptionUpdated is customer.subscription.updated, fired
+	// whenever the underlying Stripe Subscription's own Status field
+	// changes. Only recognized for a transition INTO
+	// stripego.SubscriptionStatusCanceled -- see
+	// normalizeSubscriptionUpdated's own doc comment for why every other
+	// Stripe subscription status is refused rather than forced onto a
+	// billing.SubscriptionStatus this module's own model was never designed
+	// to represent.
+	eventTypeSubscriptionUpdated = "customer.subscription.updated"
 )
 
-// normalizeEvent maps a verified stripe.Event onto a billing.NormalizedEvent.
-// rawBody is the exact bytes VerifyWebhook was given -- kept as
-// NormalizedEvent.RawPayload for PaymentEvent's own audit trail, never
-// re-derived from event (which is already a decoded, in-memory
-// representation of the same bytes).
+// normalizeEvent maps a verified stripe.Event onto a billing.NormalizedEvent,
+// dispatching by event.Type to the object shape each recognized event
+// actually carries: a stripe.CheckoutSession for the three checkout events,
+// a stripe.Invoice for the two invoice events, a stripe.Subscription for
+// customer.subscription.updated. rawBody is the exact bytes VerifyWebhook
+// was given -- kept as NormalizedEvent.RawPayload for PaymentEvent's own
+// audit trail, never re-derived from event (which is already a decoded,
+// in-memory representation of the same bytes).
 func normalizeEvent(event stripego.Event, rawBody []byte) (billing.NormalizedEvent, error) {
 	switch string(event.Type) {
 	case eventTypeCheckoutSessionCompleted, eventTypeCheckoutSessionExpired, eventTypeCheckoutSessionAsyncFailed:
 		return normalizeCheckoutSession(event, rawBody)
+	case eventTypeInvoicePaid, eventTypeInvoicePaymentFailed:
+		return normalizeInvoice(event, rawBody)
+	case eventTypeSubscriptionUpdated:
+		return normalizeSubscriptionUpdated(event, rawBody)
 	default:
 		return billing.NormalizedEvent{}, billing.ErrWebhookPayloadUnrecognized.WithParam("event_type", string(event.Type))
 	}
@@ -39,7 +70,10 @@ func normalizeEvent(event stripego.Event, rawBody []byte) (billing.NormalizedEve
 // metadataIdentifiers extracts and validates the tenant/subscription/invoice
 // identifiers CreateCharge attaches (gateway.go's metadataTenantID/
 // metadataSubscriptionID/metadataInvoiceID constants), from whichever
-// channel-side object's own Metadata map carried them.
+// channel-side object's own Metadata map carried them. Shared by every event
+// type this package recognizes so the "missing required identifiers"
+// refusal is byte-identical no matter which Stripe object this round's
+// events concern.
 func metadataIdentifiers(metadata map[string]string) (tenantID, subscriptionID, invoiceID string, err error) {
 	tenantID = metadata[metadataTenantID]
 	subscriptionID = metadata[metadataSubscriptionID]
@@ -112,5 +146,122 @@ func normalizeCheckoutSession(event stripego.Event, rawBody []byte) (billing.Nor
 		Amount:           amount,
 		OccurredAt:       time.Unix(event.Created, 0).UTC(),
 		RawPayload:       rawBody,
+	}, nil
+}
+
+// normalizeInvoice handles invoice.paid and invoice.payment_failed --
+// Stripe's own announcement of a subscription's later billing cycles (see
+// eventTypeInvoicePaid's own doc comment above). Stripe copies a
+// subscription's own Metadata onto every invoice it generates for that
+// subscription at the invoice's own creation time, which is itself
+// populated from the originating Checkout Session's Metadata when the
+// subscription was first created (an unbroken Session -> Subscription ->
+// Invoice metadata chain, all keyed under the same
+// metadataTenantID/metadataSubscriptionID/metadataInvoiceID this package's
+// CreateCharge attaches once) -- so this event's own Invoice.Metadata is
+// read exactly like the checkout session's, never a second lookup table.
+//
+// NormalizedEvent.InvoiceID here is a KNOWN LIMITATION worth stating
+// plainly rather than leaving implicit: Stripe's own metadata cascade
+// carries forward the id CreateCharge attached to the FIRST cycle's own
+// billing.Invoice, verbatim, on every later cycle's Stripe-generated
+// invoice -- this package has no way to mint a fresh billing.Invoice id for
+// a cycle it was never asked to create one for (CreateCharge is called
+// exactly once, at Subscription activation; docs/internal/06's own
+// domestic-plus-international dual payment mode write-up and this package's
+// own doc.go explain why). A later round's live webhook processing loop
+// (go/billing/AGENTS.md's own Known limitations records that no such loop
+// exists yet) is where a genuine per-cycle billing.Invoice would need to be
+// created before this identifier round-trips meaningfully past cycle one.
+func normalizeInvoice(event stripego.Event, rawBody []byte) (billing.NormalizedEvent, error) {
+	var inv stripego.Invoice
+	if err := json.Unmarshal(event.Data.Raw, &inv); err != nil {
+		return billing.NormalizedEvent{}, billing.ErrWebhookPayloadUnrecognized.WithCause(err)
+	}
+
+	tenantID, subscriptionID, invoiceID, err := metadataIdentifiers(inv.Metadata)
+	if err != nil {
+		return billing.NormalizedEvent{}, err
+	}
+
+	var eventType billing.NormalizedEventType
+	var status billing.ChannelStatus
+	var amountCents int64
+	switch string(event.Type) {
+	case eventTypeInvoicePaid:
+		eventType = billing.NormalizedEventChargeSucceeded
+		status = billing.ChannelStatusSucceeded
+		amountCents = inv.AmountPaid
+	case eventTypeInvoicePaymentFailed:
+		eventType = billing.NormalizedEventChargeFailed
+		status = billing.ChannelStatusFailed
+		// AmountDue, not AmountPaid: a failed attempt collected nothing, but
+		// the amount the attempt was FOR is still meaningful, mirroring
+		// normalizeCheckoutSession's own eventTypeCheckoutSessionExpired/
+		// eventTypeCheckoutSessionAsyncFailed branch, which reports
+		// sess.AmountTotal (the amount that would have been charged) rather
+		// than a zero-valued Money.
+		amountCents = inv.AmountDue
+	}
+
+	return billing.NormalizedEvent{
+		EventID:          event.ID,
+		Channel:          "stripe",
+		ChannelReference: billing.ChannelReference(inv.ID),
+		TenantID:         tenantID,
+		SubscriptionID:   subscriptionID,
+		InvoiceID:        invoiceID,
+		Type:             eventType,
+		Status:           status,
+		Amount:           billing.Money{Cents: amountCents, Currency: string(inv.Currency)},
+		OccurredAt:       time.Unix(event.Created, 0).UTC(),
+		RawPayload:       rawBody,
+	}, nil
+}
+
+// normalizeSubscriptionUpdated handles customer.subscription.updated,
+// recognized ONLY for a transition into stripego.SubscriptionStatusCanceled
+// -- mapping onto the one entry in billing's own vocabulary built
+// specifically for this (NormalizedEventSubscriptionCanceled/
+// ChannelStatusCanceled). Every other Stripe subscription status
+// (Active, PastDue, Trialing, Incomplete, IncompleteExpired, Paused,
+// Unpaid) is refused as ErrWebhookPayloadUnrecognized rather than forced
+// onto billing.SubscriptionStatus's own four-value vocabulary
+// (Created/Active/PastDue/Canceled): the Active/PastDue-shaped transitions
+// this event ALSO fires for are already announced, with a real settled
+// amount attached, by invoice.paid/invoice.payment_failed above -- mapping
+// them a second time here, with no amount to attach at all (a
+// stripe.Subscription carries no Money of its own), would be inventing a
+// second, amount-less signal for the same underlying fact rather than
+// honestly representing something new.
+func normalizeSubscriptionUpdated(event stripego.Event, rawBody []byte) (billing.NormalizedEvent, error) {
+	var sub stripego.Subscription
+	if err := json.Unmarshal(event.Data.Raw, &sub); err != nil {
+		return billing.NormalizedEvent{}, billing.ErrWebhookPayloadUnrecognized.WithCause(err)
+	}
+
+	if sub.Status != stripego.SubscriptionStatusCanceled {
+		return billing.NormalizedEvent{}, billing.ErrWebhookPayloadUnrecognized.WithParam("reason", "customer.subscription.updated status not recognized").WithParam("status", string(sub.Status))
+	}
+
+	tenantID, subscriptionID, invoiceID, err := metadataIdentifiers(sub.Metadata)
+	if err != nil {
+		return billing.NormalizedEvent{}, err
+	}
+
+	return billing.NormalizedEvent{
+		EventID:          event.ID,
+		Channel:          "stripe",
+		ChannelReference: billing.ChannelReference(sub.ID),
+		TenantID:         tenantID,
+		SubscriptionID:   subscriptionID,
+		InvoiceID:        invoiceID,
+		Type:             billing.NormalizedEventSubscriptionCanceled,
+		Status:           billing.ChannelStatusCanceled,
+		// No Amount: a subscription-status transition carries no Money of
+		// its own, exactly like NormalizedEventSubscriptionCanceled's own
+		// doc comment (gateway.go) already states.
+		OccurredAt: time.Unix(event.Created, 0).UTC(),
+		RawPayload: rawBody,
 	}, nil
 }

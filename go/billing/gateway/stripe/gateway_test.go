@@ -407,3 +407,178 @@ func hasCode(err error, code string) bool {
 	appErr, ok := apperr.As(err)
 	return ok && appErr.Code == code
 }
+
+// invoiceEventPayload builds a minimal, realistic invoice.paid or
+// invoice.payment_failed event body -- the shape event.go's normalizeInvoice
+// parses. Mirrors the metadata cascade normalizeInvoice's own doc comment
+// describes: Stripe copies a subscription's Metadata onto every invoice it
+// generates for that subscription, so this fixture's Invoice object carries
+// the identical tenant/subscription/invoice keys checkoutSessionPayload's
+// Session object carries.
+func invoiceEventPayload(t *testing.T, eventType, eventID, invoiceID, tenantID, subID, origInvoiceID string, amountCents int64, currency string) []byte {
+	t.Helper()
+	var amountField string
+	switch eventType {
+	case "invoice.paid":
+		amountField = "amount_paid"
+	case "invoice.payment_failed":
+		amountField = "amount_due"
+	default:
+		t.Fatalf("invoiceEventPayload: unsupported eventType %q", eventType)
+	}
+	body, err := json.Marshal(map[string]any{
+		"id":      eventID,
+		"type":    eventType,
+		"created": time.Now().Unix(),
+		"data": map[string]any{
+			"object": map[string]any{
+				"id":        invoiceID,
+				amountField: amountCents,
+				"currency":  currency,
+				"metadata": map[string]string{
+					metadataTenantID:       tenantID,
+					metadataSubscriptionID: subID,
+					metadataInvoiceID:      origInvoiceID,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal fixture: %v", err)
+	}
+	return body
+}
+
+// subscriptionUpdatedPayload builds a customer.subscription.updated event
+// body whose Subscription object's status is status -- the shape event.go's
+// normalizeSubscriptionUpdated parses.
+func subscriptionUpdatedPayload(t *testing.T, eventID, subscriptionID, tenantID, subID, invoiceID, status string) []byte {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"id":      eventID,
+		"type":    "customer.subscription.updated",
+		"created": time.Now().Unix(),
+		"data": map[string]any{
+			"object": map[string]any{
+				"id":     subscriptionID,
+				"status": status,
+				"metadata": map[string]string{
+					metadataTenantID:       tenantID,
+					metadataSubscriptionID: subID,
+					metadataInvoiceID:      invoiceID,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal fixture: %v", err)
+	}
+	return body
+}
+
+// signAndVerify signs payload with the test webhook secret and drives it
+// through a real Gateway.VerifyWebhook -- the identical real, offline
+// signature-verification path every other webhook test in this file uses.
+func signAndVerify(t *testing.T, payload []byte) (billing.NormalizedEvent, error) {
+	t.Helper()
+	signed := webhook.GenerateTestSignedPayload(&webhook.UnsignedPayload{
+		Payload:   payload,
+		Secret:    testWebhookSecret,
+		Timestamp: time.Now(),
+	})
+	gw := newGatewayWithBackend(&fakeBackend{}, testConfig())
+	return gw.VerifyWebhook(context.Background(), map[string][]string{
+		"Stripe-Signature": {signed.Header},
+	}, signed.Payload)
+}
+
+// TestGateway_VerifyWebhook_InvoicePaid_RecognizedAsChargeSucceeded is
+// P1-2's regression test for the renewal-succeeded leg: invoice.paid is the
+// event that actually announces a Stripe-native subscription's later
+// billing cycles (gateway.go's CreateCharge is called exactly once, at
+// first activation) -- on pre-fix code this event fell to normalizeEvent's
+// default case and was refused as ErrWebhookPayloadUnrecognized, silently
+// dropping a real renewal.
+func TestGateway_VerifyWebhook_InvoicePaid_RecognizedAsChargeSucceeded(t *testing.T) {
+	payload := invoiceEventPayload(t, "invoice.paid", "evt_inv_paid_1", "in_1", "tenant-a", "sub-1", "inv-1", 2900, "usd")
+	event, err := signAndVerify(t, payload)
+	if err != nil {
+		t.Fatalf("VerifyWebhook: %v (want it recognized, not %v)", err, billing.ErrWebhookPayloadUnrecognized.Code)
+	}
+	if event.Type != billing.NormalizedEventChargeSucceeded {
+		t.Errorf("Type = %q, want charge_succeeded", event.Type)
+	}
+	if event.Status != billing.ChannelStatusSucceeded {
+		t.Errorf("Status = %q, want succeeded", event.Status)
+	}
+	if event.TenantID != "tenant-a" || event.SubscriptionID != "sub-1" || event.InvoiceID != "inv-1" {
+		t.Errorf("identifiers = %+v", event)
+	}
+	if event.Amount.Cents != 2900 || event.Amount.Currency != "usd" {
+		t.Errorf("Amount = %+v", event.Amount)
+	}
+	if event.ChannelReference != "in_1" {
+		t.Errorf("ChannelReference = %q, want in_1", event.ChannelReference)
+	}
+}
+
+// TestGateway_VerifyWebhook_InvoicePaymentFailed_RecognizedAsChargeFailed is
+// P1-2's regression test for the renewal-failed leg: invoice.payment_failed
+// is what should turn a subscription past_due -- on pre-fix code this event
+// was likewise refused as ErrWebhookPayloadUnrecognized, the exact "renewal
+// payment failure is completely silent to the platform" gap the audit
+// named.
+func TestGateway_VerifyWebhook_InvoicePaymentFailed_RecognizedAsChargeFailed(t *testing.T) {
+	payload := invoiceEventPayload(t, "invoice.payment_failed", "evt_inv_failed_1", "in_2", "tenant-a", "sub-1", "inv-1", 2900, "usd")
+	event, err := signAndVerify(t, payload)
+	if err != nil {
+		t.Fatalf("VerifyWebhook: %v (want it recognized)", err)
+	}
+	if event.Type != billing.NormalizedEventChargeFailed {
+		t.Errorf("Type = %q, want charge_failed", event.Type)
+	}
+	if event.Status != billing.ChannelStatusFailed {
+		t.Errorf("Status = %q, want failed", event.Status)
+	}
+	if event.Amount.Cents != 2900 || event.Amount.Currency != "usd" {
+		t.Errorf("Amount = %+v", event.Amount)
+	}
+}
+
+// TestGateway_VerifyWebhook_SubscriptionUpdatedCanceled_RecognizedAsSubscriptionCanceled
+// is P1-2's regression test for the "even cancelled" leg the audit named:
+// customer.subscription.updated with status "canceled" -- on pre-fix code
+// refused as ErrWebhookPayloadUnrecognized -- must now recognize and map
+// onto NormalizedEventSubscriptionCanceled/ChannelStatusCanceled.
+func TestGateway_VerifyWebhook_SubscriptionUpdatedCanceled_RecognizedAsSubscriptionCanceled(t *testing.T) {
+	payload := subscriptionUpdatedPayload(t, "evt_sub_canceled_1", "sub_stripe_1", "tenant-a", "sub-1", "inv-1", "canceled")
+	event, err := signAndVerify(t, payload)
+	if err != nil {
+		t.Fatalf("VerifyWebhook: %v (want it recognized)", err)
+	}
+	if event.Type != billing.NormalizedEventSubscriptionCanceled {
+		t.Errorf("Type = %q, want subscription_canceled", event.Type)
+	}
+	if event.Status != billing.ChannelStatusCanceled {
+		t.Errorf("Status = %q, want canceled", event.Status)
+	}
+	if event.TenantID != "tenant-a" || event.SubscriptionID != "sub-1" || event.InvoiceID != "inv-1" {
+		t.Errorf("identifiers = %+v", event)
+	}
+}
+
+// TestGateway_VerifyWebhook_SubscriptionUpdatedActive_StillUnrecognized
+// keeps the pre-existing unrecognized-event discipline alive for a
+// genuinely unrelated status this module's own vocabulary was never
+// designed to represent as a second, amount-less signal (normalizeSubscriptionUpdated's
+// own doc comment) -- customer.subscription.updated moving to "active" (or
+// any status other than "canceled") stays ErrWebhookPayloadUnrecognized,
+// exactly like TestGateway_VerifyWebhook_UnrecognizedEventType already pins
+// for a wholly different event type.
+func TestGateway_VerifyWebhook_SubscriptionUpdatedActive_StillUnrecognized(t *testing.T) {
+	payload := subscriptionUpdatedPayload(t, "evt_sub_active_1", "sub_stripe_2", "tenant-a", "sub-1", "inv-1", "active")
+	_, err := signAndVerify(t, payload)
+	if !hasCode(err, billing.ErrWebhookPayloadUnrecognized.Code) {
+		t.Errorf("err = %v, want billing.ErrWebhookPayloadUnrecognized", err)
+	}
+}
