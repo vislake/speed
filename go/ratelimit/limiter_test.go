@@ -645,34 +645,118 @@ func TestAllow_ConcurrentIncrementInTTLAttachGap_NeverLost(t *testing.T) {
 	}
 }
 
+// barrierAroundFirstHitKVStore wraps a real KVStore and forces the exact
+// interleaving TestAllow_ConcurrentFirstHits_SameFreshKey_NoIncrementLostAndTTLAttached
+// needs to prove deterministically, rather than leaving it to
+// goroutine-scheduling luck to decide whether any of the "other" concurrent
+// callers' increments happen to land inside the one goroutine's
+// Get-to-Set gap that becomes "the first hit in this window" (see that
+// test's own doc comment for why a plain, unsynchronized goroutine race
+// cannot make this guarantee: on a fast machine the first-hit goroutine's
+// Get-then-Set can complete before any sibling goroutine has even reached
+// its own increment call, so the race the pre-fix code is vulnerable to
+// simply may not occur in a given run).
+//
+// It does this with two gates, both keyed on watchKey (the fresh window's
+// own storage key) and both satisfied on either code path under test:
+//
+//  1. firstHit closes the instant the very first increment against
+//     watchKey commits -- on pre-fix code that is IncrByFloat's return
+//     inside attachWindowTTL's caller, observed here from the Get call
+//     attachWindowTTL immediately issues to read the value back; on
+//     post-fix code, which never calls Get on this path at all, it is
+//     IncrByFloatWithTTL's own return instead. Either way, every "other"
+//     concurrent caller blocks on firstHit before calling Allow at all, so
+//     none of them can race to create watchKey themselves -- exactly one
+//     goroutine (the test's own, calling Allow directly, never launched
+//     behind this gate) is guaranteed to be the one that creates it.
+//  2. Set -- attachWindowTTL's write-back, reachable only on pre-fix code
+//     -- blocks on othersDone, closed only once every "other" caller's own
+//     Allow call has returned. This guarantees that if attachWindowTTL's
+//     Set ever runs at all, every other increment has already committed to
+//     the real store by the time it does, so a stale value written back
+//     provably discards them rather than merely risking it.
+//
+// On post-fix code neither gate does anything beyond releasing the
+// "other" callers promptly: IncrByFloatWithTTL's own atomicity needs no
+// help from either gate to stay race-free, and this path never calls Set
+// on watchKey at all, so othersDone is simply never waited on.
+type barrierAroundFirstHitKVStore struct {
+	pkgcore.KVStore
+	watchKey string
+
+	firstHitOnce sync.Once
+	firstHit     chan struct{}
+	othersDone   chan struct{}
+}
+
+func (s *barrierAroundFirstHitKVStore) releaseFirstHit() {
+	s.firstHitOnce.Do(func() { close(s.firstHit) })
+}
+
+func (s *barrierAroundFirstHitKVStore) Get(ctx context.Context, key string) ([]byte, bool, error) {
+	value, found, err := s.KVStore.Get(ctx, key)
+	if key == s.watchKey {
+		// Reached only on pre-fix code, from inside attachWindowTTL: by the
+		// time this call returns, the key's creating IncrByFloat has
+		// already committed, so it is always safe to release here.
+		s.releaseFirstHit()
+	}
+	return value, found, err
+}
+
+func (s *barrierAroundFirstHitKVStore) IncrByFloatWithTTL(ctx context.Context, key string, delta float64, ttl time.Duration) (float64, error) {
+	result, err := s.KVStore.IncrByFloatWithTTL(ctx, key, delta, ttl)
+	if key == s.watchKey && err == nil && result == 1 {
+		// Reached only on post-fix code, which attaches the key's ttl
+		// atomically in this same call -- there is no gap left to protect,
+		// so releasing immediately is exactly as safe as waiting.
+		s.releaseFirstHit()
+	}
+	return result, err
+}
+
+func (s *barrierAroundFirstHitKVStore) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
+	if key == s.watchKey {
+		<-s.othersDone
+	}
+	return s.KVStore.Set(ctx, key, value, ttl)
+}
+
 // TestAllow_ConcurrentFirstHits_SameFreshKey_NoIncrementLostAndTTLAttached
-// races hundreds of goroutines against one never-before-used key --
-// deliberately with NO warm-up call, unlike
+// proves many callers racing to be "the first hit in this window" against
+// the same brand-new key -- deliberately with NO warm-up call, unlike
 // TestAllow_ConcurrentCallers_SameKey_NeverExceedsLimit above, which warms
 // the key up first specifically so its own burst never has to create the
-// key concurrently (see that test's own doc comment). This test exercises
-// exactly the case that one dodges: many callers racing to be "the first
-// hit in this window" against the same brand-new key, the scenario the
-// pre-fix Get-then-Set TTL attachment could not make fully race-free (see
-// slidingWindowLimiter's former "The TTL-attachment race" doc comment).
+// key concurrently (see that test's own doc comment) -- cannot lose an
+// increment, the scenario the pre-fix Get-then-Set TTL attachment could not
+// make fully race-free (see slidingWindowLimiter's former "The
+// TTL-attachment race" doc comment). barrierAroundFirstHitKVStore's two
+// gates force every one of the otherCallers concurrent Allow calls below to
+// commit its own increment strictly after the lone first-hit call's stale
+// read and strictly before that call's write-back is allowed to proceed --
+// on pre-fix code this makes the loss unconditional, not merely probable,
+// and on post-fix code it verifies the identical scenario resolves without
+// any coordination at all beyond the atomic primitive itself.
 //
 // On the fixed code, pkgcore.KVStore.IncrByFloatWithTTL's atomicity
 // guarantees both halves of the contract survive the race: the final stored
-// count equals exactly the number of goroutines (no increment lost, unlike
-// the pre-fix sequence this primitive replaces), and the key ends up with a
-// ttl attached despite the concurrent creation -- checked here the same way
+// count equals exactly the number of callers (no increment lost, unlike the
+// pre-fix sequence this primitive replaces), and the key ends up with a ttl
+// attached despite the concurrent creation -- checked here the same way
 // TestAllow_WindowExpiry_OldWindowKeyExpires checks it, by waiting past the
 // attached ttl and confirming the key is then gone.
 //
-// Per is a full second, generous enough that all 300 goroutines -- trivial,
-// in-memory, mutex-protected operations with no I/O -- reliably complete
+// Per is a full second, generous enough that every caller -- a trivial,
+// in-memory, mutex-protected operation with no I/O -- reliably completes
 // inside the one window this test needs, without the flakiness a much
-// shorter Per would risk (some goroutines landing in the next window
-// instead, which would undercount this test's own target key for a reason
-// having nothing to do with the property under test).
+// shorter Per would risk (a caller landing in the next window instead,
+// which would undercount this test's own target key for a reason having
+// nothing to do with the property under test).
 func TestAllow_ConcurrentFirstHits_SameFreshKey_NoIncrementLostAndTTLAttached(t *testing.T) {
 	const per = time.Second
-	const goroutines = 300
+	const otherCallers = 299
+	const totalCallers = otherCallers + 1     // + the one first-hit call this test issues directly
 	limit := Limit{Rate: 1_000_000, Per: per} // high rate: this test is about counting, not admission
 	ctx := context.Background()
 	key := "concurrent-fresh-key"
@@ -684,27 +768,42 @@ func TestAllow_ConcurrentFirstHits_SameFreshKey_NoIncrementLostAndTTLAttached(t 
 	windowIndex := windowStart.UnixNano() / int64(per)
 	storeKey := windowKey(key, windowIndex)
 
-	store := pkgcore.NewMemoryKVStore()
-	lim := New(store)
+	real := pkgcore.NewMemoryKVStore()
+	fake := &barrierAroundFirstHitKVStore{
+		KVStore:    real,
+		watchKey:   storeKey,
+		firstHit:   make(chan struct{}),
+		othersDone: make(chan struct{}),
+	}
+	lim := New(fake)
 
 	var wg sync.WaitGroup
-	errs := make(chan error, goroutines)
-	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	errs := make(chan error, otherCallers)
+	wg.Add(otherCallers)
+	for i := 0; i < otherCallers; i++ {
 		go func() {
 			defer wg.Done()
+			<-fake.firstHit // never race to create the key ourselves
 			if _, err := lim.Allow(ctx, key, limit); err != nil {
 				errs <- err
 			}
 		}()
 	}
+	go func() {
+		wg.Wait()
+		close(fake.othersDone)
+	}()
+
+	if _, err := lim.Allow(ctx, key, limit); err != nil {
+		t.Fatalf("Allow (the first hit): %v", err)
+	}
 	wg.Wait()
 	close(errs)
 	for err := range errs {
-		t.Fatalf("Allow: %v", err)
+		t.Fatalf("Allow (a concurrent caller): %v", err)
 	}
 
-	encoded, found, err := store.Get(ctx, storeKey)
+	encoded, found, err := real.Get(ctx, storeKey)
 	if err != nil || !found {
 		t.Fatalf("Get(%q) after the burst: found=%t err=%v, want found=true", storeKey, found, err)
 	}
@@ -712,9 +811,9 @@ func TestAllow_ConcurrentFirstHits_SameFreshKey_NoIncrementLostAndTTLAttached(t 
 	if err != nil {
 		t.Fatalf("stored value %q does not parse as a float: %v", encoded, err)
 	}
-	if want := float64(goroutines); got != want {
-		t.Fatalf("stored count = %v, want %v: an increment was lost among %d goroutines racing to create the same fresh window key",
-			got, want, goroutines)
+	if want := float64(totalCallers); got != want {
+		t.Fatalf("stored count = %v, want %v: an increment was lost among %d callers racing to create the same fresh window key",
+			got, want, totalCallers)
 	}
 
 	// windowTTLFactor * per is the ttl the fix attaches unconditionally;
@@ -722,7 +821,7 @@ func TestAllow_ConcurrentFirstHits_SameFreshKey_NoIncrementLostAndTTLAttached(t 
 	// if, and only if, a ttl actually got attached during the concurrent
 	// race to create it.
 	time.Sleep(time.Duration(windowTTLFactor)*per + 100*time.Millisecond)
-	if _, found, err := store.Get(ctx, storeKey); err != nil || found {
+	if _, found, err := real.Get(ctx, storeKey); err != nil || found {
 		t.Fatalf("Get(%q) once the ttl should have elapsed: found=%t err=%v, want found=false -- "+
 			"the key never got a ttl attached despite the concurrent race to create it", storeKey, found, err)
 	}
