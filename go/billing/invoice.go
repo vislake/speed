@@ -27,6 +27,24 @@ const (
 	InvoiceStatusVoid InvoiceStatus = "void"
 )
 
+// invoiceTransitions is the legal-transition table for InvoiceStatus,
+// mirroring subscriptionTransitions' exact shape (subscription.go): for
+// each current status, the set of statuses a transition may move to. A
+// transition not listed here -- including any move out of Paid or Void,
+// both terminal statuses with empty entries -- is
+// ErrInvalidInvoiceTransition. Open -> Paid and Open -> Void are the two
+// legal moves, and neither terminal status may ever be rewritten: an
+// invoice that recorded a settled payment (Paid) or a deliberate
+// cancellation (Void) is the record of that fact.
+var invoiceTransitions = map[InvoiceStatus]map[InvoiceStatus]bool{
+	InvoiceStatusOpen: {
+		InvoiceStatusPaid: true,
+		InvoiceStatusVoid: true,
+	},
+	InvoiceStatusPaid: {},
+	InvoiceStatusVoid: {},
+}
+
 // Invoice is one billing document for a Subscription's billing cycle.
 // Exactly like Subscription, it is channel-agnostic: it knows nothing
 // about which payment channel, if any, collected it -- no gateway
@@ -135,6 +153,19 @@ func (r *InvoiceRepository) setStatus(ctx context.Context, id string, status Inv
 			return nil, ErrInvoiceNotFound.WithParam("id", id)
 		}
 		return nil, err
+	}
+	// Validate the move against the legal-transition table before the
+	// invoice's Status is touched -- the identical validation
+	// SubscriptionService.transition performs for subscriptions. A Void on
+	// a Paid invoice (or any other move out of a terminal status) is
+	// refused with ErrInvalidInvoiceTransition, never applied to the row:
+	// an invoice that recorded a settled payment is the record of that
+	// settlement and must not be rewritten into a voided one.
+	from := InvoiceStatus(inv.Status)
+	if !invoiceTransitions[from][status] {
+		return nil, ErrInvalidInvoiceTransition.
+			WithParam("from", string(from)).
+			WithParam("to", string(status))
 	}
 	inv.Status = string(status)
 	if err := r.Update(ctx, inv); err != nil {

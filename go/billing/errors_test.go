@@ -18,6 +18,7 @@ func TestErrors_HaveDistinctCodes(t *testing.T) {
 		ErrSubscriptionNotFound,
 		ErrInvalidSubscriptionTransition,
 		ErrInvoiceNotFound,
+		ErrInvalidInvoiceTransition,
 		ErrInvalidAmount,
 		ErrIdempotencyKeyRequired,
 		ErrInsufficientCredits,

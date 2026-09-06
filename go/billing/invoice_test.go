@@ -73,6 +73,56 @@ func TestInvoiceRepository_MarkPaid_NotFound(t *testing.T) {
 	}
 }
 
+// TestInvoiceRepository_VoidOnPaidInvoice_Refused is P3-15's regression
+// test: setStatus used to validate nothing, so any caller could overwrite
+// a settled invoice's Status -- Void on a Paid invoice silently rewrote
+// the record of a collected payment to "void", as if the money had never
+// arrived. The fix validates every transition against the same legal-table
+// shape Subscription transitions use: Open may move to Paid or Void, and
+// both Paid and Void are terminal -- any other move (including Void on a
+// Paid invoice) is ErrInvalidInvoiceTransition. This fails on the pre-fix
+// setStatus (which rewrote the row and reported success).
+func TestInvoiceRepository_VoidOnPaidInvoice_Refused(t *testing.T) {
+	repo := NewInvoiceRepository(newTestDB(t))
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	inv, err := repo.CreateInvoice(ctx, CreateInvoiceInput{SubscriptionID: "sub-1", Amount: Money{Cents: 100, Currency: "USD"}})
+	if err != nil {
+		t.Fatalf("CreateInvoice: %v", err)
+	}
+	if _, markErr := repo.MarkPaid(ctx, inv.ID); markErr != nil {
+		t.Fatalf("MarkPaid: %v", markErr)
+	}
+
+	_, err = repo.Void(ctx, inv.ID)
+	if !hasCode(err, "billing.invalid_invoice_transition") {
+		t.Errorf("Void on a Paid invoice: err = %v, want %s", err, "billing.invalid_invoice_transition")
+	}
+
+	// The row must be untouched by the refused transition.
+	got, err := repo.FindByID(ctx, inv.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if got.Status != string(InvoiceStatusPaid) {
+		t.Errorf("Status after refused Void = %q, want %q -- a settled invoice's record must stand", got.Status, InvoiceStatusPaid)
+	}
+
+	// The other terminal direction mirrors: MarkPaid on a Voided invoice is
+	// equally refused.
+	inv2, err := repo.CreateInvoice(ctx, CreateInvoiceInput{SubscriptionID: "sub-1", Amount: Money{Cents: 100, Currency: "USD"}})
+	if err != nil {
+		t.Fatalf("CreateInvoice: %v", err)
+	}
+	if _, voidErr := repo.Void(ctx, inv2.ID); voidErr != nil {
+		t.Fatalf("Void: %v", voidErr)
+	}
+	_, err = repo.MarkPaid(ctx, inv2.ID)
+	if !hasCode(err, "billing.invalid_invoice_transition") {
+		t.Errorf("MarkPaid on a Voided invoice: err = %v, want %s", err, "billing.invalid_invoice_transition")
+	}
+}
+
 func TestInvoiceRepository_AssertIsolated(t *testing.T) {
 	repo := NewInvoiceRepository(newTestDB(t))
 	tenancytest.AssertIsolated(t, repo.Repository, func(tenant pkgcore.TenantID) *Invoice {

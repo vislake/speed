@@ -18,6 +18,8 @@
 
 "billing.invoice_not_found" = "未找到 id 为 \"{{.id}}\" 的账单。"
 
+"billing.invalid_invoice_transition" = "账单无法从 \"{{.from}}\" 迁移到 \"{{.to}}\"。"
+
 "billing.invalid_amount" = "金额 {{.amount}} 非法，必须是正数。"
 
 "billing.idempotency_key_required" = "必须提供幂等键。"

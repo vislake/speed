@@ -109,12 +109,51 @@ func (Subscription) TableName() string { return billingSubscriptionsTable }
 // codebase.
 type SubscriptionRepository struct {
 	*dbkit.Repository[Subscription]
+
+	// db is the same connection the embedded Repository[Subscription] was
+	// built on, kept only so compareAndSetStatus below can compose its own
+	// guarded UPDATE on it -- the identical shape
+	// PaymentEventRepository's own db field serves for listPending/
+	// markStatus. Every use routes through dbkit.WithTenantSession and a
+	// dbkit.TenantScoped destination; nothing in this file issues an
+	// unprotected statement.
+	db *gorm.DB
 }
 
 // NewSubscriptionRepository returns a SubscriptionRepository over db. db is
 // expected to come from dbkit.Open with this module's migrations applied.
 func NewSubscriptionRepository(db *gorm.DB) *SubscriptionRepository {
-	return &SubscriptionRepository{Repository: dbkit.NewRepository[Subscription](db)}
+	return &SubscriptionRepository{Repository: dbkit.NewRepository[Subscription](db), db: db}
+}
+
+// compareAndSetStatus attempts ONE guarded status transition: an UPDATE
+// whose WHERE carries both the row id and the status the move was
+// validated from, with RowsAffected as the arbiter -- the same
+// compare-and-swap shape CreditService's own resolve uses for its ledger
+// rows. It reports true only when the UPDATE affected exactly one row,
+// i.e. this call is the one that genuinely performed the transition; a
+// false result means the row no longer carried `from` by the time this
+// UPDATE ran (a concurrent transition won the race), never an error.
+//
+// The tenant filter is never hand-written here (backend-coding-standards
+// §3.2): Subscription implements dbkit.TenantScoped, so the isolation
+// plugin injects "WHERE tenant_id = ?" from ctx automatically, exactly
+// like the identical shape PaymentEventRepository.markStatus relies on.
+func (r *SubscriptionRepository) compareAndSetStatus(ctx context.Context, id string, from, to SubscriptionStatus) (bool, error) {
+	update := &Subscription{Status: string(to), UpdatedAt: time.Now()}
+	applied := false
+	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		res := tx.Where("id = ? AND status = ?", id, string(from)).Updates(update)
+		if res.Error != nil {
+			return fmt.Errorf("billing: transition subscription %q: %w", id, res.Error)
+		}
+		applied = res.RowsAffected == 1
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return applied, nil
 }
 
 // SubscriptionService drives Subscription's lifecycle and answers "what is
@@ -231,27 +270,68 @@ func (s *SubscriptionService) Cancel(ctx context.Context, id string) (*Subscript
 	return s.transition(ctx, id, SubscriptionStatusCanceled)
 }
 
+// maxTransitionAttempts bounds how many read-validate-write rounds one
+// transition() call may spend before giving up. Each round is one read
+// plus one guarded UPDATE; a round loses only when a concurrent transition
+// commits between the two, and burning the whole budget therefore requires
+// five consecutive, precisely-timed losses to other writers -- a livelock
+// guard against a pathological adversary, not a bound any realistic
+// two-caller race can hit (the losing side of an ordinary race reapplies
+// on its next round). Exhaustion returns a plain error rather than a
+// fabricated lifecycle answer.
+const maxTransitionAttempts = 5
+
 // transition validates and applies one lifecycle move, then publishes
 // EventSubscriptionStatusChanged best-effort -- the status change itself
 // has already committed by that point, matching the identical best-effort
 // convention go/metering's own Aggregator.publishOverageCrossed documents.
+//
+// The move is DATABASE-ARBITRATED, never a read-then-unconditional-write:
+// every round reads the row, validates the move against the status it just
+// read, and applies it with a guarded UPDATE whose WHERE carries that same
+// status (compareAndSetStatus), RowsAffected deciding the winner. This is
+// what makes Canceled genuinely terminal under concurrency: two racing
+// transitions that both validated from Active cannot both commit -- the
+// loser's guard misses (its RowsAffected is 0) because the row no longer
+// carries the status it validated from. A lost round re-reads and
+// re-attempts from the fresh status while the move stays legal, so an
+// ordinary race (e.g. Cancel losing a round to MarkPastDue) converges
+// instead of failing; the move is refused with
+// ErrInvalidSubscriptionTransition only when the fresh status genuinely
+// makes it illegal -- including any move out of Canceled, whose empty
+// entry in subscriptionTransitions no guard can ever match. Each call that
+// wins a round publishes the event exactly once, never on a re-read.
 func (s *SubscriptionService) transition(ctx context.Context, id string, to SubscriptionStatus) (*Subscription, error) {
-	sub, err := s.Get(ctx, id)
-	if err != nil {
-		return nil, err
+	for attempt := 1; attempt <= maxTransitionAttempts; attempt++ {
+		sub, err := s.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		from := SubscriptionStatus(sub.Status)
+		if !subscriptionTransitions[from][to] {
+			return nil, ErrInvalidSubscriptionTransition.
+				WithParam("from", string(from)).
+				WithParam("to", string(to))
+		}
+		applied, err := s.repo.compareAndSetStatus(ctx, id, from, to)
+		if err != nil {
+			return nil, err
+		}
+		if applied {
+			// This call's own guarded UPDATE is the one that moved the row.
+			sub.Status = string(to)
+			s.publishStatusChanged(ctx, sub, from, to)
+			return sub, nil
+		}
+		// RowsAffected == 0: the row no longer carried `from` when our
+		// UPDATE ran -- a concurrent transition won this round. Loop back
+		// and re-attempt from the fresh status (attempt's re-read above
+		// happens on the next iteration), or refuse once the fresh status
+		// makes the move illegal.
 	}
-	from := SubscriptionStatus(sub.Status)
-	if !subscriptionTransitions[from][to] {
-		return nil, ErrInvalidSubscriptionTransition.
-			WithParam("from", string(from)).
-			WithParam("to", string(to))
-	}
-	sub.Status = string(to)
-	if err := s.repo.Update(ctx, sub); err != nil {
-		return nil, fmt.Errorf("billing: update subscription %q: %w", id, err)
-	}
-	s.publishStatusChanged(ctx, sub, from, to)
-	return sub, nil
+	return nil, fmt.Errorf(
+		"billing: subscription %q transition to %q did not settle after %d attempts (concurrent transitions kept winning)",
+		id, to, maxTransitionAttempts)
 }
 
 func (s *SubscriptionService) publishStatusChanged(ctx context.Context, sub *Subscription, from, to SubscriptionStatus) {

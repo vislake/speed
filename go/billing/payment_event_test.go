@@ -210,6 +210,59 @@ func TestPaymentEventRepository_MarkStatus_OverwritesZeroAmount(t *testing.T) {
 	}
 }
 
+// TestPaymentEventRepository_MarkStatus_CannotRegressResolvedRow is P3-14's
+// regression test: markStatus used to be an unguarded update keyed on the
+// row id alone, so any caller could overwrite a row's resolved Status with
+// an older one -- e.g. two overlapping poll passes for one stuck row (or a
+// poll racing the webhook that resolved the row) could have the later,
+// stale mark clobber the earlier resolution the record had already
+// committed. The payment_events row is the ledger of record: once a row
+// has been marked out of Pending, no later mark may change it. The fix
+// keys the UPDATE's WHERE on the row's own current Status (Pending) too,
+// so an attempt against an already-resolved row affects nothing and
+// returns nil -- the record stands, nothing regresses. This fails on the
+// pre-fix markStatus (whose unguarded second mark overwrites the row back
+// to Failed).
+func TestPaymentEventRepository_MarkStatus_CannotRegressResolvedRow(t *testing.T) {
+	repo := NewPaymentEventRepository(newTestDB(t))
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	evt := newTestPaymentEvent("stripe", "evt_no_regress", ChannelStatusPending, time.Now())
+	if _, err := repo.InsertIfNew(ctx, evt); err != nil {
+		t.Fatalf("InsertIfNew: %v", err)
+	}
+
+	// The authoritative poll re-query resolves the stuck row to Succeeded.
+	resolved := Money{Cents: 2900, Currency: "usd"}
+	if err := repo.markStatus(ctx, evt.ID, ChannelStatusSucceeded, resolved); err != nil {
+		t.Fatalf("markStatus (first): %v", err)
+	}
+
+	// A second, older mark (a stale overlapping pass answering Failed, or a
+	// racing duplicate) must not regress the row.
+	stale := Money{Cents: 2900, Currency: "usd"}
+	if err := repo.markStatus(ctx, evt.ID, ChannelStatusFailed, stale); err != nil {
+		t.Fatalf("markStatus (second): %v", err)
+	}
+
+	got, err := repo.Get(ctx, evt.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != string(ChannelStatusSucceeded) {
+		t.Errorf("Status after a second, older mark = %q, want %q -- the row's first resolution is the record and must not regress", got.Status, ChannelStatusSucceeded)
+	}
+	if got.Amount() != resolved {
+		t.Errorf("Amount = %+v, want %+v", got.Amount(), resolved)
+	}
+
+	// A mark naming a row that does not exist is refused, classified by the
+	// disambiguating re-read rather than silently swallowed as success.
+	if err := repo.markStatus(ctx, "does-not-exist", ChannelStatusSucceeded, resolved); !hasCode(err, ErrPaymentEventNotFound.Code) {
+		t.Errorf("markStatus(missing id): err = %v, want %s", err, ErrPaymentEventNotFound.Code)
+	}
+}
+
 // TestPaymentEventRepository_AssertIsolated proves PaymentEvent is
 // genuinely tenant-scoped -- unlike Plan's dual-domain shape (plan_test.go's
 // AssertNotTenantScoped), every payment_events row belongs to exactly one

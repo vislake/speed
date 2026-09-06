@@ -21,6 +21,8 @@
 
 "billing.invoice_not_found" = "No invoice was found with id \"{{.id}}\"."
 
+"billing.invalid_invoice_transition" = "An invoice cannot move from \"{{.from}}\" to \"{{.to}}\"."
+
 "billing.invalid_amount" = "Amount {{.amount}} is invalid; it must be a positive number."
 
 "billing.idempotency_key_required" = "An idempotency key is required."

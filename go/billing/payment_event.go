@@ -195,6 +195,20 @@ func (r *PaymentEventRepository) listPending(ctx context.Context, before time.Ti
 // exists yet that would drive those transitions from a PaymentEvent row --
 // see AGENTS.md's Known limitations).
 //
+// The UPDATE is GUARDED, never keyed on the row id alone: its WHERE carries
+// the row's own current Status (ChannelStatusPending) as well, so a mark
+// can only ever be the transition out of Pending -- the row's first
+// resolution -- never a second, later mark that could regress a status the
+// record already committed (e.g. a stale overlapping poll pass answering
+// Failed overwriting an earlier poll's Succeeded, or a poll racing the
+// webhook that already resolved the row). The payment_events row is the
+// ledger of record: whoever marks a row out of Pending first is the single
+// writer of that resolution. A guarded update that affects no row is
+// therefore never a silent no-op: the disambiguating re-read below answers
+// either "no such row" (ErrPaymentEventNotFound, via Get) or "already
+// resolved by someone else" (nil -- the record stands, nothing regresses,
+// nothing to do).
+//
 // amount is always written, never left as whatever the row already held:
 // event.go's normalizeCheckoutSession deliberately zeroes Amount on the
 // ChannelStatusPending row a checkout.session.completed-but-unpaid webhook
@@ -216,6 +230,7 @@ func (r *PaymentEventRepository) markStatus(ctx context.Context, id string, stat
 	// CreditService's own CAS transitions use (credit_service.go).
 	update := PaymentEvent{Status: string(status)}
 	update.SetAmount(amount)
+	var affected int64
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
 		// Select forces status/amount_cents/currency into the SET clause
 		// even when amount is itself zero-valued (a struct-based Updates
@@ -223,12 +238,39 @@ func (r *PaymentEventRepository) markStatus(ctx context.Context, id string, stat
 		// go/storage's repository.go reaches for Select("*") on its own
 		// full-row saves) -- this call must always overwrite whatever
 		// AmountCents/Currency the row already held, never merge with it.
-		return tx.Select("status", "amount_cents", "currency").Where("id = ?", id).Updates(&update).Error
+		// The extra "AND status = ?" term is the guard: this mark may only
+		// win the row's transition out of Pending.
+		res := tx.Select("status", "amount_cents", "currency").
+			Where("id = ? AND status = ?", id, string(ChannelStatusPending)).
+			Updates(&update)
+		if res.Error != nil {
+			return fmt.Errorf("billing: mark payment event %q status: %w", id, res.Error)
+		}
+		affected = res.RowsAffected
+		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("billing: mark payment event %q status: %w", id, err)
 	}
-	return nil
+	if affected == 1 {
+		return nil
+	}
+
+	// affected == 0: either no such row, or it no longer carries Pending.
+	// Disambiguate instead of swallowing the outcome.
+	fresh, err := r.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if fresh.Status != string(ChannelStatusPending) {
+		// Already resolved -- an earlier mark or webhook won the row's
+		// transition out of Pending. The record stands; a later mark must
+		// never regress it.
+		return nil
+	}
+	// Defensive: the guarded UPDATE affected nothing while the row is
+	// still Pending -- a database behavior surprise, not a caller error.
+	return fmt.Errorf("billing: mark payment event %q status: guarded update affected no row while status is still %q", id, ChannelStatusPending)
 }
 
 // InsertIfNew inserts evt and reports (true, nil), unless a row already

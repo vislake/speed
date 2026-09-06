@@ -42,6 +42,13 @@ var (
 	// requested id, for the requesting tenant.
 	ErrInvoiceNotFound = apperr.NotFound("billing.invoice_not_found")
 
+	// ErrInvalidInvoiceTransition reports a lifecycle transition that is
+	// not legal from the Invoice's current Status -- e.g. voiding an
+	// already-paid invoice, or any other move out of the terminal Paid or
+	// Void statuses. Mirrors ErrInvalidSubscriptionTransition for
+	// subscriptions.
+	ErrInvalidInvoiceTransition = apperr.Invalid("billing.invalid_invoice_transition")
+
 	// ErrInvalidAmount reports a credit amount that is zero or negative,
 	// where CreditService requires a strictly positive one.
 	ErrInvalidAmount = apperr.Invalid("billing.invalid_amount")
