@@ -12,6 +12,7 @@ package dbkit_test
 // dbkit.Open, and drives a Create followed by a FindByID through it.
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"fmt"
@@ -258,6 +259,65 @@ func ExampleBlindIndexer() {
 	// Output:
 	// found: User@Example.COM
 	// rejected: dbkit: blind index column "email_index": dbkit: email normalization: input is empty
+}
+
+// ExampleDeriveKey demonstrates deriving several purpose-specific 32-byte
+// secrets from one high-entropy root secret, instead of managing a
+// separate independent key for each of NewCipher's encryption key and
+// NewBlindIndexer's HMAC key. The two purpose strings are distinct and
+// versioned (see DeriveKey's own doc comment for why that matters), so the
+// two derived keys below are independent secrets even though they share
+// one root -- exactly the two keys ExampleBlindIndexer above generates
+// with crypto/rand instead, wired together the same way once derived.
+func ExampleDeriveKey() {
+	// A real deployment reads this from a secret manager (or generates it
+	// once with `openssl rand -hex 32`, as examples/reference-app's
+	// DEPLOY.md documents for SPEED_ROOT_KEY); a fixed value keeps this
+	// example's output reproducible.
+	rootKey, err := exampleRandomKey()
+	if err != nil {
+		fmt.Println("root key:", err)
+		return
+	}
+
+	cipherKey, err := dbkit.DeriveKey(rootKey, "speed.dbkit.example.cipher.v1")
+	if err != nil {
+		fmt.Println("derive cipher key:", err)
+		return
+	}
+	indexKey, err := dbkit.DeriveKey(rootKey, "speed.dbkit.example.blind_index.v1")
+	if err != nil {
+		fmt.Println("derive index key:", err)
+		return
+	}
+
+	// The two derived keys never collide with each other, and re-deriving
+	// with the same root and purpose always reproduces the same key --
+	// DeriveKey is deterministic, not a fresh-random generator.
+	cipherKeyAgain, err := dbkit.DeriveKey(rootKey, "speed.dbkit.example.cipher.v1")
+	if err != nil {
+		fmt.Println("re-derive cipher key:", err)
+		return
+	}
+
+	fmt.Println("distinct:", !bytes.Equal(cipherKey, indexKey))
+	fmt.Println("deterministic:", bytes.Equal(cipherKey, cipherKeyAgain))
+
+	// From here on, cipherKey and indexKey are ordinary 32-byte keys --
+	// pass them to dbkit.NewCipher and dbkit.NewBlindIndexer exactly as
+	// ExampleBlindIndexer above does with independently-generated keys.
+	if _, err = dbkit.NewCipher(cipherKey); err != nil {
+		fmt.Println("cipher:", err)
+		return
+	}
+	if _, err = dbkit.NewBlindIndexer("email_index", indexKey, dbkit.NormalizeEmail); err != nil {
+		fmt.Println("indexer:", err)
+		return
+	}
+
+	// Output:
+	// distinct: true
+	// deterministic: true
 }
 
 // exampleTask is a tenant-scoped model that also opts into dbkit's
