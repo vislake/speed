@@ -26,9 +26,10 @@
  * sign-in surface's register turn, and the created account's own
  * sign-in answers the membership refusal of a registered-but-unseeded
  * account -- the honest display of the server's 403 code text, not a
- * fabricated state (demo_users_test.go:297 pins the refusal for the
- * browser's no-tenant sign-in shape; :162/:233 are its named-tenant
- * siblings);
+ * fabricated state (demo_users_test.go:336-338 pins the refusal for the
+ * browser's no-tenant sign-in shape; its named-tenant sibling -- the
+ * acme-only account asking for a tenant it holds no membership in --
+ * is asserted at demo_users_test.go:170-172);
  * the owner signs in (access-1) and the day runs: notes read and
  * written under the token's tenant, the tenant switch away and back
  * proving per-tenant lists and the eviction discipline, the account
@@ -45,7 +46,7 @@
  * other account shapes: the reader day (the rig's reader option --
  * its list served like any member's, its create refused with the
  * rbac write gate's 403 and the draft kept, the answer the Go suite
- * pins at demo_users_test.go:135-153 and server_test.go:335) and the
+ * pins at demo_users_test.go:143-153 and server_test.go:443-445) and the
  * read-denied day (a list read answering the read gate's 403 -- the
  * gate fails closed to the no-permission empty state, no form and no
  * list surface below the heading).
@@ -185,8 +186,11 @@ describe('the app journey', () => {
   // demo server's write gate were re-audited over this: both are plain,
   // deterministic, synchronous code with no path for a reader's create
   // to succeed, and every scripted rbac refusal here is a real 403 the
-  // real notes handler's rbac gate produces (server_test.go:335) --
-  // there is no application-level bug for this failure to be hiding.
+  // real notes handler's rbac gate produces (server_test.go:414,
+  // TestBuildServer_PermissionGate_EnforcesTheNotesPermissions, whose
+  // reader-create and ungranted-list assertions sit at :443-445 and
+  // :448-450) -- there is no application-level bug for this failure to
+  // be hiding.
   //
   // The first fix attempted here raised the budget from inside a
   // `beforeAll(() => { vi.setConfig({ testTimeout: 30_000 }) })` call.

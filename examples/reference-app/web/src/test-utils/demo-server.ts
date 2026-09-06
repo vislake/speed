@@ -29,18 +29,20 @@
  * (DEMO_READER_IDENTIFIER, the web mirror of the demo-reader@example.com
  * seed): its sign-in answers a principal of its own user and session,
  * the notes list serves it like any member's (the Go suite pins a
- * reader's list as served, demo_users_test.go:135-153), and a note
+ * reader's list as served, demo_users_test.go:143-153), and a note
  * create from that principal answers the 403 the write gate gives a
  * caller without notes:write (rbac.permission_denied, asserted at
- * server_test.go:335). An account registration answers 201 and records
+ * server_test.go:443-445). An account registration answers 201 and records
  * the identifier, and a later sign-in of a recorded identifier answers
  * the membership refusal of a registered-but-unseeded account -- 403
  * authn.tenant_membership_required, in the browser's own shape: the
  * sign-in body names no tenant_id (the login form has no tenant
- * field), the shape the composed stack pins at demo_users_test.go:297
+ * field), the shape the composed stack pins at demo_users_test.go:336-338
  * -- an account the register route created, granted nowhere, drawing
- * the no-membership-anywhere form of the code; :162 and :233 are its
- * named-tenant siblings. Registering twice
+ * the no-membership-anywhere form of the code; its named-tenant
+ * sibling -- the acme-only account asking for a tenant it holds no
+ * membership in -- is asserted at demo_users_test.go:170-172.
+ * Registering twice
  * answers the same 409 authn.email_already_registered a real handler
  * answers (go/authn/errors.go's ErrEmailAlreadyRegistered).
  *
@@ -102,8 +104,8 @@
  * stays on notes, the exact surface where the seed's grant asymmetry
  * lives: the list served like any member's, a create refused with
  * the rbac write gate's 403 -- the answers the Go suite pins for the
- * read-only member (its list served, demo_users_test.go:135-153, its
- * create refused, server_test.go:335). The read-denied refusal of a
+ * read-only member (its list served, demo_users_test.go:143-153, its
+ * create refused, server_test.go:443-445). The read-denied refusal of a
  * caller without notes:read is the denyNotesRead switch's answer, a
  * shape no seeded account carries.
  *
@@ -147,8 +149,9 @@ export const DEMO_READER_SESSION_ID = 'session-4'
 /** The code a sign-in of a registered-but-unseeded account answers with
  * (go/authn/errors.go's ErrTenantMembershipRequired; the browser-shaped
  * refusal -- a sign-in body with no tenant_id -- the composed stack
- * pins at demo_users_test.go:297, whose named-tenant siblings sit at
- * :162 and :233). */
+ * pins at demo_users_test.go:336-338, whose named-tenant sibling -- the
+ * acme-only account asking for a tenant it holds no membership in --
+ * is asserted at demo_users_test.go:170-172). */
 export const MEMBERSHIP_REQUIRED_CODE = 'authn.tenant_membership_required'
 
 /** The TOTP secret every enroll answer serves -- scripted once so the
@@ -477,9 +480,10 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
           typeof body.identifier === 'string' ? body.identifier : undefined
         // A registered account has no seeded membership: its sign-in
         // answers the refusal the Go suite pins in the browser's own
-        // shape -- no tenant_id in the body -- at demo_users_test.go:297
+        // shape -- no tenant_id in the body -- at demo_users_test.go:336-338
         // (an account the register route created, granted nowhere); the
-        // named-tenant form of the same refusal sits at :162 and :233.
+        // named-tenant form of the same refusal is asserted at
+        // demo_users_test.go:170-172.
         if (identifier !== undefined && registeredEmails.has(identifier)) {
           return errorResponse(403, MEMBERSHIP_REQUIRED_CODE)
         }
@@ -541,10 +545,19 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
       case 'POST /api/v1/authn/logout':
         return new Response(null, { status: 204 })
       case 'GET /api/v1/notes': {
+        const principal = principalOf(call)
+        // The read gate: the deny switch scripts the rbac read gate's
+        // 403 (the answer a caller without notes:read gets). The bearer
+        // is resolved BEFORE the gate answers, mirroring the write gate
+        // below: a read-denial is still an authorization decision about
+        // a caller, so an anonymous request must fail loudly as the
+        // harness bug it is, never be answered 403 -- answering it would
+        // mask an app regression into fetching protected data without a
+        // token.
         if (denyNotesRead) {
           return errorResponse(403, NOTES_DENIED_CODE)
         }
-        return jsonResponse(200, { notes: notesOf(principalOf(call).tenant_id) })
+        return jsonResponse(200, { notes: notesOf(principal.tenant_id) })
       }
       case 'POST /api/v1/notes': {
         const principal = principalOf(call)

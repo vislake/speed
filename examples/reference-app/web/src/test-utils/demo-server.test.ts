@@ -72,4 +72,41 @@ describe('demo-server bearer principal', () => {
     )
     await expect(answering).rejects.toThrow(/unknown bearer token/)
   })
+
+  it('fails loudly on a read-denied notes list reached with no bearer token (the read gate never answers an anonymous request)', async () => {
+    // The denyNotesRead switch scripts the rbac read gate's 403 -- but a
+    // gate answer is still an authorization decision about a caller, so
+    // it must never short-circuit the bearer check: an anonymous request
+    // to a protected endpoint is a harness bug whether the gate would
+    // have denied or served the caller, and answering it 403 would mask
+    // an app regression into fetching protected data without a token
+    // (the shape this test pins regressed once: the read-denial branch
+    // returned before principalOf, silently answering anonymous reads).
+    const respond = demoServer({ denyNotesRead: true })
+    const answering = Promise.resolve().then(() =>
+      respond({ ...NOTE_LIST_CALL, authorization: null }),
+    )
+    await expect(answering).rejects.toThrow(/no bearer token/)
+  })
+
+  it('answers the read-denied refusal to a bearer its own login issued', async () => {
+    const respond = demoServer({ denyNotesRead: true })
+    const login = await respond({
+      method: 'POST',
+      path: '/api/v1/authn/login/password',
+      query: '',
+      authorization: null,
+      body: JSON.stringify({ identifier: 'owner@example.test' }),
+    })
+    const pair = (await login.json()) as {
+      readonly access_token: string
+    }
+    const list = await respond({
+      ...NOTE_LIST_CALL,
+      authorization: `Bearer ${pair.access_token}`,
+    })
+    expect(list.status).toBe(403)
+    const body = (await list.json()) as { readonly code: string }
+    expect(body.code).toBe('rbac.permission_denied')
+  })
 })
