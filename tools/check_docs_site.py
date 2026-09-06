@@ -90,6 +90,20 @@ _EXTERNAL_PREFIXES = ("http://", "https://", "mailto:", "tel:", "data:")
 _PROTOCOL_RELATIVE = "//"
 
 
+def _infra(message: str) -> None:
+    """Report an infrastructure failure and exit 2.
+
+    The exit-code contract (module docstring): 2 = infrastructure error
+    (docs/site/ missing, hugo not on PATH, the build itself failing to
+    run, a built page unreadable as text, or the HTTP server could not
+    be started); content violations stay 1. SystemExit alone cannot
+    carry the distinction -- sys.exit("message") exits 1 -- so the
+    message is printed to stderr first and the bare code raised.
+    """
+    print(f"docs-site: infra     {message}", file=sys.stderr)
+    raise SystemExit(2)
+
+
 def _collect_html_pages(public_dir: Path) -> list[Path]:
     return sorted(public_dir.rglob("*.html"))
 
@@ -101,26 +115,30 @@ def _read_base_path(site_dir: Path) -> str:
     An empty return means the site is configured to serve from a
     domain root, so a leading-'/' link is already root-relative to the
     built tree with nothing to strip.
+
+    hugo.toml is an input file of this check; a missing or unreadable
+    one, or one without a baseURL, is an infrastructure error (exit 2).
     """
     config_path = site_dir / "hugo.toml"
     try:
         text = config_path.read_text(encoding="utf-8")
     except OSError as exc:
-        raise SystemExit(f"error: could not read {config_path}: {exc}")
+        _infra(f"could not read {config_path}: {exc}")
     m = re.search(r"^\s*baseURL\s*=\s*['\"]([^'\"]+)['\"]", text, re.MULTILINE)
     if not m:
-        raise SystemExit(f"error: no baseURL found in {config_path}")
+        _infra(f"no baseURL found in {config_path}")
     parsed = urllib.parse.urlparse(m.group(1))
     return parsed.path.rstrip("/")
 
 
 def _run_hugo_build(site_dir: Path) -> list[str]:
-    """Run `hugo --minify --gc` from site_dir. Returns violations (build
-    failures), or raises SystemExit(2) if hugo itself cannot be found."""
+    """Run `hugo --minify --gc` from site_dir. Returns content
+    violations (build warnings); a missing hugo binary or a failing
+    build is an infrastructure error and exits 2."""
     hugo_bin = shutil.which("hugo")
     if hugo_bin is None:
-        raise SystemExit(
-            "error: 'hugo' is not on PATH -- install the pinned version "
+        _infra(
+            "'hugo' is not on PATH -- install the pinned version "
             "(.mise.toml's `hugo` entry / .github/actions/setup-hugo-env) "
             "before running this check, or pass --skip-build to reuse an "
             "existing docs/site/public/"
@@ -132,14 +150,15 @@ def _run_hugo_build(site_dir: Path) -> list[str]:
         text=True,
     )
     if proc.returncode != 0:
-        return [
-            "hugo build failed (exit "
-            f"{proc.returncode}):\n{proc.stdout}{proc.stderr}".rstrip()
-        ]
+        _infra(
+            f"hugo build failed (exit {proc.returncode}): "
+            f"\n{proc.stdout}{proc.stderr}".rstrip()
+        )
     # Hugo prints build warnings to stdout, not a failing exit code --
     # the docs/site round's own warnings policy (root CLAUDE.md's global
     # instructions) treats a build warning as a first-class issue, so a
-    # WARN line is a violation here even though hugo itself exits 0.
+    # WARN line is a content violation here even though hugo itself
+    # exits 0.
     warnings = [
         line.strip()
         for line in proc.stdout.splitlines()
@@ -198,8 +217,10 @@ def _check_links(public_dir: Path, pages: list[Path], root: Path, base_path: str
             text = page.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             rel = os.path.relpath(page, root)
-            violations.append(f"{rel}: page unreadable as UTF-8 text ({exc})")
-            continue
+            # A built page that cannot be read as text is an
+            # infrastructure error (module docstring's exit-code
+            # contract), not a link violation.
+            _infra(f"{rel}: page unreadable as UTF-8 text ({exc})")
         for match in link_re.finditer(text):
             if match.group(1) is not None:
                 target = match.group(1)
@@ -276,7 +297,11 @@ def _check_offline_preview(public_dir: Path) -> list[str]:
         elif status != 200:
             violations.append(f"offline preview: GET {url} returned {status}")
     except OSError as exc:
-        violations.append(f"offline preview: could not start the HTTP server ({exc})")
+        # The HTTP server itself failing to start is an infrastructure
+        # error (module docstring's exit-code contract); a server that
+        # came up but never served, or answered non-200, is a content
+        # violation ("offline preview not serving").
+        _infra(f"offline preview: could not start the HTTP server ({exc})")
     finally:
         if proc is not None:
             proc.terminate()

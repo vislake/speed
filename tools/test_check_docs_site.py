@@ -27,6 +27,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
@@ -109,6 +110,78 @@ class CheckLinksTests(unittest.TestCase):
         )
         self.assertEqual(len(violations), 1)
         self.assertIn("nonexistent-page", violations[0])
+
+
+class ExitCodeTests(unittest.TestCase):
+    """The exit-code contract of main(): infra errors exit 2, content 1.
+
+    Regression coverage for the contract fix: a missing input file
+    (docs/site/hugo.toml), an unavailable tool ('hugo' not on PATH) and a
+    failing build are infrastructure errors per the module docstring and
+    must exit 2, while missing required pages / unresolvable links stay
+    content violations exiting 1. The infra paths used to raise
+    sys.exit("error: ..."), which exits 1 like a content violation.
+    """
+
+    def _tmp(self) -> pathlib.Path:
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        return pathlib.Path(td.name)
+
+    def _write_site(self, root: pathlib.Path, pages: dict[str, str]) -> None:
+        site = root / "docs" / "site"
+        public = site / "public"
+        public.mkdir(parents=True)
+        (site / "hugo.toml").write_text(
+            "baseURL = 'https://vislake.github.io/speed/'\n", encoding="utf-8"
+        )
+        for rel, content in pages.items():
+            path = public / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+
+    def _run_main(self, root: pathlib.Path, flags: list[str]) -> int:
+        import contextlib
+        import io
+        out = io.StringIO()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = m.main(["--root", str(root)] + flags)
+        return code
+
+    def test_missing_docs_site_dir_exits_2(self):
+        code = self._run_main(self._tmp(), ["--skip-build"])
+        self.assertEqual(code, 2)
+
+    def test_missing_hugo_config_input_file_exits_2(self):
+        # hugo.toml is an input file of the check: its absence is an
+        # infrastructure error (exit 2). Fails before the fix -- the
+        # reader raised sys.exit("error: ..."), exiting 1.
+        root = self._tmp()
+        self._write_site(root, {"index.html": "<html></html>"})
+        (root / "docs" / "site" / "hugo.toml").unlink()
+        with self.assertRaises(SystemExit) as cm:
+            self._run_main(root, ["--skip-build"])
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_hugo_missing_from_path_exits_2(self):
+        # 'hugo' not on PATH is an infrastructure error (exit 2); the
+        # module docstring names it explicitly. Runs without
+        # --skip-build so the build step (and its tool lookup) executes.
+        root = self._tmp()
+        self._write_site(root, {"index.html": "<html></html>"})
+        with mock.patch.object(m.shutil, "which", return_value=None):
+            with self.assertRaises(SystemExit) as cm:
+                self._run_main(root, [])
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_missing_required_page_stays_a_content_error_exit_1(self):
+        # A built output missing a required page is a structural
+        # violation: exit 1, never 2.
+        root = self._tmp()
+        self._write_site(root, {"index.html": "<html></html>"})
+        code = self._run_main(root, ["--skip-build"])
+        self.assertEqual(code, 1)
 
 
 if __name__ == "__main__":
