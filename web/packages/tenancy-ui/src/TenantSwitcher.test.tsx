@@ -450,4 +450,122 @@ describe('TenantSwitcher', () => {
     await openMenu(user)
     await expectNoAxeViolations()
   })
+
+  describe('two instances racing a switch on one shared session', () => {
+    // Regression for web-auth-api.md P2-1: this component's own
+    // switching-ref guard only refuses a second concurrent call
+    // THROUGH ITSELF -- it says nothing about a second TenantSwitcher
+    // instance mounted elsewhere (host chrome plus a mobile drawer copy,
+    // a transient double-mount during a route transition) calling
+    // switchTenant on the same shared session. Before the fix,
+    // auth-core's settleIssued silently resolved a superseded switch
+    // with the winner's snapshot, so BOTH instances' onSwitched fired --
+    // once for the tenant that actually won the race, and once more,
+    // wrongly, for the one that lost it. The fix makes the loser's
+    // switchTenant call reject with OperationSupersededError instead,
+    // which this component must treat as a lost race, not a failure:
+    // no alert, and onSwitched must not fire for it.
+    const TENANTS_3 = [
+      { id: 'tenant-1', name: 'Sunshine Dental' },
+      { id: 'tenant-2', name: 'Bright Smile Clinic' },
+      { id: 'tenant-3', name: 'Third Practice' },
+    ] as const
+
+    it('fires onSwitched only for the tenant that actually won the race', async () => {
+      let releaseTenant2!: (value: unknown) => void
+      let releaseTenant3!: (value: unknown) => void
+      const tenant2Gate = new Promise((resolve) => {
+        releaseTenant2 = resolve
+      })
+      const tenant3Gate = new Promise((resolve) => {
+        releaseTenant3 = resolve
+      })
+      const harness = makeHarness({
+        [LOGIN_PASSWORD]: () => makePair(),
+        [SWITCH_TENANT]: (call) => {
+          const body = call.options?.body as { tenant_id?: string }
+          return body?.tenant_id === 'tenant-2' ? tenant2Gate : tenant3Gate
+        },
+      })
+      await signIn(harness)
+      const onSwitchedA = vi.fn()
+      const onSwitchedB = vi.fn()
+      renderWithProviders(
+        <>
+          <TenantSwitcher
+            session={harness.session}
+            tenants={TENANTS_3}
+            currentTenantId="tenant-1"
+            onSwitched={onSwitchedA}
+          />
+          <TenantSwitcher
+            session={harness.session}
+            tenants={TENANTS_3}
+            currentTenantId="tenant-1"
+            onSwitched={onSwitchedB}
+          />
+        </>,
+      )
+      const user = userEvent.setup()
+      const triggers = screen.getAllByRole('button', { name: 'Sunshine Dental' })
+      expect(triggers).toHaveLength(2)
+      const [triggerA, triggerB] = triggers as [HTMLElement, HTMLElement]
+
+      // Instance A picks tenant-2; its request is still in flight (the
+      // gate is unreleased) when instance B, on the same session, picks
+      // tenant-3.
+      await user.click(triggerA)
+      await user.click(
+        await screen.findByRole('menuitem', { name: 'Bright Smile Clinic' }),
+      )
+      await user.click(triggerB)
+      await user.click(
+        await screen.findByRole('menuitem', { name: 'Third Practice' }),
+      )
+      expect(harness.calls).toHaveLength(3) // login + two switch calls
+
+      // tenant-2's response arrives first and commits: A's onSwitched
+      // fires for it, exactly once.
+      releaseTenant2(
+        makePair({
+          access_token: 'access-tenant-2',
+          principal: {
+            user_id: 'user-1',
+            tenant_id: 'tenant-2',
+            session_id: 'session-1',
+          },
+        }),
+      )
+      await waitFor(() => expect(onSwitchedA).toHaveBeenCalledTimes(1))
+      expect(onSwitchedA).toHaveBeenCalledWith('tenant-2')
+      expect(harness.store.get()).toBe('access-tenant-2')
+
+      // tenant-3's response answers successfully too, but only after
+      // tenant-2 already committed: B lost the generation race. Its
+      // onSwitched must never fire, and nothing renders an error --
+      // this is a lost race, not a switch failure.
+      releaseTenant3(
+        makePair({
+          access_token: 'access-tenant-3',
+          principal: {
+            user_id: 'user-1',
+            tenant_id: 'tenant-3',
+            session_id: 'session-1',
+          },
+        }),
+      )
+      await waitFor(() => {
+        const rows = screen.getAllByRole('button', {
+          name: 'Sunshine Dental',
+        }) as [HTMLElement, HTMLElement]
+        expect(rows[1]).toBeEnabled()
+      })
+      expect(onSwitchedB).not.toHaveBeenCalled()
+      expect(screen.queryAllByRole('alert')).toHaveLength(0)
+      expect(screen.queryAllByRole('status')).toHaveLength(0)
+      // The loser's tokens were never applied: the session still runs
+      // on tenant-2's access token.
+      expect(harness.store.get()).toBe('access-tenant-2')
+    })
+  })
 })

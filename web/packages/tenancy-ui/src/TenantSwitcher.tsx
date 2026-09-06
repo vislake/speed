@@ -19,7 +19,22 @@
  * to run then. A throwing host callback is contained: it is not a switch
  * failure (the onSwitched contract) and never surfaces as one -- no
  * error banner, and no unhandled rejection from the fire-and-forget row
- * handler. A failed switch leaves the state exactly as it was (the
+ * handler. When this instance's own switch request answers successfully
+ * but a concurrent sibling operation on the same session -- another
+ * TenantSwitcher instance's switch, most plausibly, since this
+ * component's own entry guard already rules out a second concurrent
+ * call through itself -- committed first, auth-core's switchTenant
+ * rejects with OperationSupersededError rather than resolving: this
+ * request did go through server-side, but the session it would have
+ * described is not the one now current, so treating the answer as a
+ * commit would fire onSwitched for a tenant the session is not actually
+ * running under. That case is handled like a lost race rather than a
+ * failure: no alert renders, onSwitched does not fire, and the trigger
+ * simply re-enables showing whichever tenant the session now holds (the
+ * host's currentTenantId prop, updated through its own auth-core hooks
+ * once the winner's onSwitched ran) -- the exactly-once contract holds
+ * for the winning call, and this superseded one contributes nothing. A
+ * failed switch leaves the state exactly as it was (the
  * auth-core contract: a raw ApiError rejection with zero state change)
  * and renders the answer's code text in one InlineError under the
  * control -- the whitelist of reachable codes (authn.tenant_membership_required,
@@ -57,6 +72,7 @@ import Menu from '@mui/material/Menu'
 import MenuItem from '@mui/material/MenuItem'
 import Typography from '@mui/material/Typography'
 import type { AuthSession } from '@speed/auth-core'
+import { isOperationSuperseded } from '@speed/auth-core'
 import { errorCodeOf, InlineError } from './internal/inline-error.js'
 import { useTenancyUiTranslation } from './internal/translation.js'
 
@@ -129,6 +145,17 @@ export function TenantSwitcher({
       // in-flight state cleared, so the commit never surfaces as an
       // error through this component.
     } catch (error) {
+      if (isOperationSuperseded(error)) {
+        // This request's own switch went through server-side, but a
+        // concurrent sibling operation committed to the session first
+        // (see the file header). Treat it as a lost race, not a
+        // failure: no error renders, and onSwitched must not fire for
+        // a tenant the session is not actually running under -- the
+        // winning call already fired it for its own tenant.
+        setPending(false)
+        switching.current = false
+        return
+      }
       setErrorCode(errorCodeOf(error))
       setPending(false)
       switching.current = false
