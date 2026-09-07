@@ -465,7 +465,8 @@ func (q *Queue) handler(jobType string) jobs.Handler {
 // false, so the whole sequence genuinely re-runs (asynqlib.Server.Start
 // itself only ever errors when already running, never after a failure).
 // A Start after a successful one is a no-op returning nil, matching
-// StandaloneQueue.Start's own contract.
+// StandaloneQueue.Start's own contract -- a Start after Close included:
+// this Queue is one-shot, and Close (above) has ended it for good.
 func (q *Queue) Start(ctx context.Context) error {
 	q.startMu.Lock()
 	defer q.startMu.Unlock()
@@ -497,6 +498,15 @@ func (q *Queue) Start(ctx context.Context) error {
 // repeatedly and before any Start (server.go's own state-machine check),
 // and this package's own addition -- closing the shared redis client -- is
 // guarded separately so a second call cannot double-close it.
+//
+// A Close whose done path has run also ends this Queue object for good --
+// it is one-shot, exactly like StandaloneQueue.Close: started stays true,
+// so a later Start is that documented no-op returning nil with nothing
+// relaunched (asynqlib.Server cannot be started again after Shutdown), and
+// Enqueue fails against the now-closed shared redis client. A host whose
+// queue must run again builds a new Queue. On the ctx.Done path none of
+// this applies -- Close timed out, the server is still processing and the
+// client is still open, so the Queue keeps working exactly as before.
 //
 // The done path also stops the queue-depth gauge, under the same lock that
 // orders it against the client close: stopCh is closed and the shared
@@ -589,7 +599,14 @@ func (q *Queue) enqueueNew(ctx context.Context, task jobs.Task, resolved jobs.Re
 			// by returning the colliding task's id, so keep that answer.
 			existing, ferr := q.findTaskInfo(taskID)
 			if ferr != nil {
-				return "", fmt.Errorf("jobs: look up existing job for idempotency key after conflict: %w", ferr)
+				// This Enqueue carries NO idempotency key -- taskID is this
+				// call's own fresh random uuid -- so the conflict is exactly
+				// what the comment above says it is: a uuid collision with an
+				// existing task's id. The message names the mechanism (never
+				// an idempotency-key dedupe, which does not exist on this
+				// path) and what to look for: the colliding task's own
+				// record, reachable under the id the message names.
+				return "", fmt.Errorf("jobs: new task's id %s collided with an existing job's id (uuid collision); look up that existing job's record to reconcile: %w", taskID, ferr)
 			}
 			return jobs.JobID(existing.ID), nil
 		}

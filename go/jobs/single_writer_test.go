@@ -1,7 +1,10 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -110,5 +113,44 @@ func TestStandaloneQueue_SecondLiveWriterOnSameDatabase_IsRefused_NoDoubleHandle
 	}
 	if got := handles.Load(); got != 1 {
 		t.Errorf("Handle ran %d times across two queues on one database, want exactly 1 (the second writer must never reset and re-claim a mid-Handle row)", got)
+	}
+}
+
+// TestStandaloneQueue_Close_WithoutStart_SkipsTheWriterRelease is the
+// regression for Close's release path firing on a queue whose Start never
+// ran: Close without a prior Start used to issue the release DELETE anyway
+// -- against a queue_writers table Start (the schema creator) never
+// created -- so the DELETE errored and a "jobs: releasing writer
+// registration failed" warning was printed on a correct, documented
+// usage (Close's own contract: "safe to call ... without a prior Start").
+// A warning that is guaranteed on a correct path is a false warning, so
+// the release is now skipped entirely when no Start ever ran: there is no
+// registration to release and no heartbeat keeper to stop, and the
+// warning keeps its meaning (whenever it fires, a registration this queue
+// held may genuinely be stuck). Fails on the pre-fix code, where the
+// warning is printed.
+func TestStandaloneQueue_Close_WithoutStart_SkipsTheWriterRelease(t *testing.T) {
+	// Deliberately NO ensureJobsSchema: the fresh database is exactly the
+	// never-started state -- the queue_writers table does not exist.
+	db := dbtest.NewSQLite(t)
+	q := NewStandaloneQueue(db)
+
+	prevDefault := slog.Default()
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prevDefault) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := q.Close(ctx); err != nil {
+		t.Fatalf("Close() error = %v, want nil (documented: safe without a prior Start)", err)
+	}
+	// A second Close must behave identically (idempotent, still silent).
+	if err := q.Close(ctx); err != nil {
+		t.Fatalf("second Close() error = %v, want nil (idempotent)", err)
+	}
+
+	if out := buf.String(); strings.Contains(out, "jobs: releasing writer registration failed") {
+		t.Errorf("Close without a prior Start printed the release warning:\n%s\n(no Start ever acquired a registration, so the release path must be skipped -- nothing failed to release)", out)
 	}
 }

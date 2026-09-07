@@ -657,11 +657,21 @@ func fitDescriptiveText(ctx context.Context, jobID, column string, v string, max
 	return fitted
 }
 
-// updateProgress persists one progress report.
+// updateProgress persists one progress report. The WHERE ... status =
+// 'running' guard is the same one every sibling terminal write in this file
+// carries (completeSucceeded/completeRetrying/completeDeadLetter): a
+// progress report only ever legitimately comes from a running attempt
+// (worker.go's execute passes its progress closure), so a write that lands
+// after a concurrent Cancel (or any other transition) already moved the row
+// out of StatusRunning must no-op rather than overwrite the terminal row's
+// progress fields and push its updated_at -- a stale "I am working" stamp
+// on a Job that is visibly cancelled or finished. updateProgress reports no
+// RowsAffected to its caller, exactly as before: the no-op is the write's
+// answer, not an error.
 func updateProgress(ctx context.Context, db *gorm.DB, id string, pct int, msg string) error {
 	msg = fitDescriptiveText(ctx, id, "progress_msg", msg, progressMsgColumnRunes)
 	return db.WithContext(ctx).Model(&jobRecord{}).
-		Where("id = ?", id).
+		Where("id = ? AND status = ?", id, string(StatusRunning)).
 		Updates(map[string]any{
 			"progress_pct": pct,
 			"progress_msg": msg,

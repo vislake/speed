@@ -598,6 +598,13 @@ func TestUpdateProgress(t *testing.T) {
 	if _, err := insertRecord(context.Background(), db, rec); err != nil {
 		t.Fatalf("insertRecord() error = %v", err)
 	}
+	// A progress report only ever comes from a running attempt, so the row
+	// must be claimed first -- updateProgress's status = 'running' guard
+	// no-ops a report aimed anywhere else, exactly like its terminal-write
+	// siblings.
+	if _, err := claimOne(context.Background(), db, *rec, time.Now(), testWriterOwner); err != nil {
+		t.Fatalf("claimOne() error = %v", err)
+	}
 
 	if err := updateProgress(context.Background(), db, rec.ID, 42, "working"); err != nil {
 		t.Fatalf("updateProgress() error = %v", err)
@@ -609,6 +616,53 @@ func TestUpdateProgress(t *testing.T) {
 	}
 	if got.ProgressPct != 42 || got.ProgressMsg != "working" {
 		t.Errorf("progress = (%d, %q), want (42, %q)", got.ProgressPct, got.ProgressMsg, "working")
+	}
+}
+
+// TestUpdateProgress_AfterTerminalState_DoesNotTouchRow is the regression
+// for the missing status guard: a progress report arriving after the row
+// left StatusRunning (here: a concurrent Cancel settled it) must no-op --
+// never land on the terminal-state row, overwrite its progress fields and
+// push its updated_at with a stale "I am working" stamp. Fails on the
+// unguarded write, which updates the cancelled row regardless.
+func TestUpdateProgress_AfterTerminalState_DoesNotTouchRow(t *testing.T) {
+	db := newTestDB(t)
+	rec := fixtureRecord("tenant-a", "t")
+	if _, err := insertRecord(context.Background(), db, rec); err != nil {
+		t.Fatalf("insertRecord() error = %v", err)
+	}
+	if _, err := claimOne(context.Background(), db, *rec, time.Now(), testWriterOwner); err != nil {
+		t.Fatalf("claimOne() error = %v", err)
+	}
+	cancelAt := time.Now()
+	if err := markCancelled(context.Background(), db, rec.ID, cancelAt); err != nil {
+		t.Fatalf("markCancelled() error = %v", err)
+	}
+	before, err := findByID(context.Background(), db, JobID(rec.ID))
+	if err != nil {
+		t.Fatalf("findByID() error = %v", err)
+	}
+	if before.Status != string(StatusCancelled) {
+		t.Fatalf("Status = %q, want %q (setup: the row must be terminal before the late report)", before.Status, StatusCancelled)
+	}
+
+	// The late progress report from an attempt that raced the Cancel.
+	if perr := updateProgress(context.Background(), db, rec.ID, 42, "still working"); perr != nil {
+		t.Fatalf("updateProgress() error = %v (a no-op write is success, not an error)", perr)
+	}
+
+	after, err := findByID(context.Background(), db, JobID(rec.ID))
+	if err != nil {
+		t.Fatalf("findByID() error = %v", err)
+	}
+	if after.Status != string(StatusCancelled) {
+		t.Errorf("Status = %q, want %q (the report must not resurrect or retransition the row)", after.Status, StatusCancelled)
+	}
+	if after.ProgressPct != 0 || after.ProgressMsg != "" {
+		t.Errorf("progress = (%d, %q), want (0, %q) (a report landing after a terminal state must not overwrite the row's progress fields)", after.ProgressPct, after.ProgressMsg, "")
+	}
+	if !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("UpdatedAt moved from %v to %v (a report landing after a terminal state must not push updated_at)", before.UpdatedAt, after.UpdatedAt)
 	}
 }
 
@@ -1245,6 +1299,11 @@ func TestUpdateProgress_OverlongMessage_TruncatedToColumnWidth(t *testing.T) {
 	rec := fixtureRecord("tenant-a", "t")
 	if _, err := insertRecord(context.Background(), db, rec); err != nil {
 		t.Fatalf("insertRecord() error = %v", err)
+	}
+	// Same running-row setup TestUpdateProgress requires: the write only
+	// lands on a StatusRunning row.
+	if _, err := claimOne(context.Background(), db, *rec, time.Now(), testWriterOwner); err != nil {
+		t.Fatalf("claimOne() error = %v", err)
 	}
 
 	prevDefault := slog.Default()

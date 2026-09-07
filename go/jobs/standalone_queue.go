@@ -373,7 +373,9 @@ func (q *StandaloneQueue) handler(jobType string) Handler {
 // A Start that FAILED — a schema error, a writer-registration conflict, an
 // interrupted-row recovery failure — may be retried by calling Start again:
 // the whole sequence genuinely re-runs once the cause is fixed. A Start
-// after a successful one is a no-op returning nil, as it always was.
+// after a successful one is a no-op returning nil, as it always was — a
+// Start after Close included: this queue is one-shot, and Close (below)
+// has ended it for good.
 func (q *StandaloneQueue) Start(ctx context.Context) error {
 	q.startMu.Lock()
 	defer q.startMu.Unlock()
@@ -435,8 +437,20 @@ func (q *StandaloneQueue) Start(ctx context.Context) error {
 // (worker.go's runWriterHeartbeat) keeps beating through the whole drain --
 // a drain longer than writerStaleAfter must not let a concurrent Start
 // treat this still-executing queue as crashed -- and is stopped, and the
-// registration released, only once every worker has finished. Close is
+// registration released, only once every worker has finished. A Close that
+// never had a Start to follow skips that handover entirely: Start is what
+// creates the schema and acquires the registration, so with no prior Start
+// there is nothing to release (and no queue_writers table for a release
+// DELETE to hit) -- the release path is skipped, never failed. Close is
 // idempotent and safe to call more than once, or without a prior Start.
+//
+// A Close ends this queue object for good -- it is one-shot, like Start's
+// own no-op-after-success contract: started stays true, so a later Start
+// is that documented no-op returning nil with nothing relaunched, while
+// Enqueue keeps succeeding and persisting Jobs no worker of this queue
+// will ever run. A host whose queue must run again builds a new
+// StandaloneQueue on the same database; the new queue's own Start picks
+// the rows up.
 func (q *StandaloneQueue) Close(ctx context.Context) error {
 	q.depthGaugeMu.Lock()
 	q.closeOnce.Do(func() { close(q.stopCh) })
@@ -460,10 +474,26 @@ func (q *StandaloneQueue) Close(ctx context.Context) error {
 		// release runs on a ctx stripped of the caller's cancellation --
 		// Close may return ctx.Err while this goroutine still finishes the
 		// handover, and the release must not be abandoned mid-way.
-		q.heartbeatStopOnce.Do(func() { close(q.heartbeatStopCh) })
-		q.heartbeatWG.Wait()
-		if relErr := releaseWriterRegistration(context.WithoutCancel(ctx), q.db, q.owner); relErr != nil {
-			obs.FromContext(ctx).Warn("jobs: releasing writer registration failed", "error", relErr)
+		//
+		// The whole handover is conditional on a Start having actually run
+		// (started, read under startMu): only a successful Start acquires
+		// the registration and launches the keeper, so only then is there
+		// anything to stop or release. With no prior Start the release would
+		// be a DELETE against a queue_writers table Start never created --
+		// an error that used to surface as the "releasing writer
+		// registration failed" warning on a correct, documented Close --
+		// so it is skipped instead, which also keeps that warning
+		// meaningful: whenever it does fire, a registration this queue held
+		// may genuinely be stuck.
+		q.startMu.Lock()
+		started := q.started
+		q.startMu.Unlock()
+		if started {
+			q.heartbeatStopOnce.Do(func() { close(q.heartbeatStopCh) })
+			q.heartbeatWG.Wait()
+			if relErr := releaseWriterRegistration(context.WithoutCancel(ctx), q.db, q.owner); relErr != nil {
+				obs.FromContext(ctx).Warn("jobs: releasing writer registration failed", "error", relErr)
+			}
 		}
 		close(done)
 	}()
