@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/vislake/speed/go/authn"
@@ -12,6 +14,7 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // jobTypeAuditExport is the jobs.Task.Type this module registers its
@@ -19,7 +22,9 @@ import (
 const jobTypeAuditExport = "admin.audit_export"
 
 // exportJobResult is what ExportService.Handle marshals into
-// jobs.Result.Data on a successful export: the object key the manifest
+// jobs.Result.Data once an export's work completes -- fully, or partially
+// with the failing participants recorded in the audit event rather than
+// the queue (see Handle's own doc comment): the object key the manifest
 // was stored under, and the go/sharing delivery minted for it (share id
 // and expiry) -- the fields compliance.ExportResult/ExportDelivery
 // already carry minus the one field that must never be stored, re-shaped
@@ -88,7 +93,8 @@ type ExportService struct {
 	queue  jobs.Queue
 
 	// bus and auditActions back the explicit admin.audit_export audit.Emit
-	// call Handle makes once an export actually completes (P1-2's fix) --
+	// call Handle makes once an export's work actually completes -- fully
+	// or partially (P1-2's fix, widened by P2-4 to the partial outcome) --
 	// the same "explicit Emit over automatic write capture" shape
 	// ImpersonationService.recordAudit uses, for the identical reason:
 	// this module owns no row of its own to auto-capture a write against.
@@ -173,14 +179,26 @@ func (s *ExportService) Type() string { return jobTypeAuditExport }
 // be persisted with the job record; see exportJobResult's own doc
 // comment for why it dies in this frame instead).
 //
-// Export's own ErrExportPartialFailure (some participant's data could not
-// be gathered, but the rest was still delivered) is returned as this
-// call's error too -- the job still ends StatusDeadLetter or
-// StatusRetrying for it exactly as any other Handle failure would,
-// consistent with jobs' own retry semantics, while
-// ExportService.Export's already-completed, already-delivered manifest is
-// not undone by that -- a caller inspecting the export result (once a
-// later round adds a way to retrieve it) still finds what was gathered.
+// Export's own ErrExportPartialFailure (some participant's data could
+// not be gathered, but the rest was gathered, stored and delivered) is
+// deliberately NOT returned as this call's error: partial failure is
+// terminal handling for this job type (P2-4). Export returns that error
+// only AFTER its work is done -- the manifest is stored, the single-view
+// share is minted, compliance's own audit event is out -- so surfacing it
+// as a Handle error would hand the queue a side-effectful, non-idempotent
+// operation to retry: every retried attempt mints a fresh object key and
+// a fresh share, piling up delivered dumps while admin's own audit
+// record stays silent. Handle instead completes the job (StatusSucceeded,
+// with the partial result -- object key, share id, expiry -- recorded in
+// jobs.Result.Data exactly like a full export's) and records the partial
+// outcome in its own admin.audit_export event: Success false, the failing
+// participants named, the delivered result in Changes (recordAudit's own
+// doc comment). An error Export returns BEFORE its work completed -- a
+// refused or mis-scoped request, a storage or delivery failure whose
+// manifest Export itself deleted, an audit-write failure Export's own
+// contract says to surface for operator attention -- still fails the
+// attempt and rides the queue's retry budget like any other Handle
+// failure, since none of those left delivered work behind to duplicate.
 // A payload that fails to decode is itself a Handle failure -- the queue
 // retries and then dead-letters it, the honest outcome for a payload that
 // slipped past Enqueue's own validation.
@@ -211,10 +229,22 @@ func (s *ExportService) Handle(ctx context.Context, job *jobs.Job, _ jobs.Progre
 	}
 
 	result, err := s.export.Export(ctx, job.TenantID)
-	if err != nil {
+	if err != nil && !isExportPartialFailure(err) {
 		return jobs.Result{}, err
 	}
-	s.recordAudit(ctx, job.TenantID)
+
+	// Full success and partial failure converge here: both mean the
+	// export's work actually completed and was delivered, so both record
+	// admin.audit_export and marshal the delivered result into the job's
+	// Result -- the partial failure never reaches the queue as an error
+	// (see Handle's own doc comment for why that would amplify delivered
+	// dumps instead of alerting anyone). failureReason is empty on a full
+	// success and names the failing participants on a partial one.
+	failureReason := ""
+	if err != nil {
+		failureReason = auditExportFailureReason(result.Manifest)
+	}
+	s.recordAudit(ctx, job.TenantID, result, failureReason)
 
 	encoded, marshalErr := json.Marshal(exportJobResult{
 		ObjectKey: result.ObjectKey,
@@ -227,14 +257,52 @@ func (s *ExportService) Handle(ctx context.Context, job *jobs.Job, _ jobs.Progre
 	return jobs.Result{Data: encoded}, nil
 }
 
+// isExportPartialFailure reports whether err is compliance's
+// ErrExportPartialFailure -- the one error Export returns only after the
+// export's work itself completed (the manifest gathered minus the failing
+// participants, stored and delivered through go/sharing). Every other
+// error Export can return precedes or aborts that work.
+func isExportPartialFailure(err error) bool {
+	appErr, ok := apperr.As(err)
+	return ok && appErr.Code == compliance.ErrExportPartialFailure.Code
+}
+
+// auditExportFailureReason renders the failure-reason text admin's own
+// admin.audit_export event carries for a partial export, naming the
+// participants whose Export callback failed -- the same vocabulary
+// compliance's own export event uses for its FailureReason
+// (compliance.exportFailureReason), so the two events an operator reads
+// for one export agree. Empty when the manifest carries no errors.
+func auditExportFailureReason(manifest compliance.ExportManifest) string {
+	if len(manifest.Errors) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(manifest.Errors))
+	for name := range manifest.Errors {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return "participants failed: " + strings.Join(names, ", ")
+}
+
 // recordAudit emits admin.audit_export once a tenant's audit-event export
-// has actually completed, with the operator who asked for it (Enqueue's
-// operatorUserID, carried through the job's own payload, and already
-// attached to ctx as Actor by Handle before Export ran) as Actor -- an
-// ordinary, single-identity attribution, never OnBehalfOf: admin's own
-// routes deliberately never sit behind ImpersonationMiddleware
-// (AGENTS.md's "The impersonation request pipeline" section), so
-// callerUserID always names the REAL calling operator here, exactly like
+// has actually completed -- result is the export's delivered outcome
+// Export returned, which this event records (Changes carries the object
+// key and, when a share was minted, its id and expiry) rather than
+// discarding on the way out, and failureReason is empty on a full
+// success or names the failing participants on a partial one, mirrored
+// into the event's Result (Success false with that reason). P2-4: on the
+// unfixed code the event only ever reported Success true and carried no
+// result at all -- and on a partial export it never fired, because the
+// error return sat before the recordAudit call.
+//
+// The operator who asked for the export (Enqueue's operatorUserID,
+// carried through the job's own payload, and already attached to ctx as
+// Actor by Handle before Export ran) is the Actor -- an ordinary,
+// single-identity attribution, never OnBehalfOf: admin's own routes
+// deliberately never sit behind ImpersonationMiddleware (AGENTS.md's
+// "The impersonation request pipeline" section), so callerUserID always
+// names the REAL calling operator here, exactly like
 // TenantService.SetStatus's own audit event, never a substituted
 // impersonation target.
 //
@@ -245,14 +313,22 @@ func (s *ExportService) Handle(ctx context.Context, job *jobs.Job, _ jobs.Progre
 // surfacing an audit failure as this call's own error would report a
 // failure that did not happen -- matching
 // ImpersonationService.recordAudit's identical reasoning.
-func (s *ExportService) recordAudit(ctx context.Context, tenantID pkgcore.TenantID) {
+func (s *ExportService) recordAudit(ctx context.Context, tenantID pkgcore.TenantID, result *compliance.ExportResult, failureReason string) {
 	if s.bus == nil {
 		return
+	}
+	after := map[string]any{
+		"object_key": result.ObjectKey,
+	}
+	if result.Delivery.ShareID != "" {
+		after["share_id"] = result.Delivery.ShareID
+		after["share_expires_at"] = result.Delivery.ExpiresAt
 	}
 	err := audit.Emit(ctx, s.bus, s.auditActions, audit.Input{
 		Action:   AuditActionAuditExport,
 		Resource: audit.Resource{Type: "admin.tenant", ID: string(tenantID)},
-		Result:   audit.Result{Success: true},
+		Result:   audit.Result{Success: failureReason == "", FailureReason: failureReason},
+		Changes:  &audit.Diff{After: after},
 	})
 	if err != nil {
 		obs.FromContext(ctx).Warn("admin failed to record an audit-export audit event",

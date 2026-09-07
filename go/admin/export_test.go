@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -301,5 +302,160 @@ func TestExportService_Handle_ComplianceExportRequestAuditEvent_AttributesOperat
 	}
 	if !found {
 		t.Fatalf("no %q audit event recorded (recorded=%+v)", compliance.AuditActionExportRequest, recorded)
+	}
+}
+
+// TestExportService_Handle_PartialFailure_CompletesTerminallyAndIsAudited
+// is P2-4's admin-half regression: when one registered export participant
+// fails while another contributes, compliance.Export still gathers, stores
+// and delivers the manifest -- it returns ErrExportPartialFailure only
+// AFTER that work is done, together with a fully usable result. Admin's
+// Handle used to treat that returned error exactly like a failure that
+// happened before any work: it discarded the non-empty result
+// (returning jobs.Result{} alongside the error), skipped its own
+// admin.audit_export event entirely (the recordAudit call sat after the
+// error return), and handed the error back to the queue, which retried
+// the side-effectful, non-idempotent export -- a fresh object key and a
+// fresh single-view share minted per attempt, several delivered dumps
+// piling up, and admin's own audit trail carrying no record of any of it.
+//
+// On the fixed code the partial failure is terminal: Handle records the
+// outcome in its own audit event -- Success false naming the failing
+// participant, Changes carrying the very object key and minted share id
+// the export result reports -- and completes the job with the partial
+// result recorded in jobs.Result.Data, never riding the queue's retry
+// budget.
+func TestExportService_Handle_PartialFailure_CompletesTerminallyAndIsAudited(t *testing.T) {
+	env := buildTestAdminModule(t)
+	if err := env.Queue.RegisterHandler(env.Admin.Export()); err != nil {
+		t.Fatalf("RegisterHandler() error = %v", err)
+	}
+
+	const (
+		tenant      = pkgcore.TenantID("tenant-export-partial")
+		operatorID  = "operator-partial-9"
+		failingName = "admin.test.failing_export"
+	)
+	// One registered participant contributes data, one fails -- the
+	// partial-failure shape built from the module registrar's own
+	// RetentionParticipant vocabulary, the same vocabulary compliance's
+	// export harness uses for the identical construction.
+	noopSweep := func(context.Context, pkgcore.TenantID, time.Time) (int, error) { return 0, nil }
+	noopErase := func(context.Context, pkgcore.SubjectRef) (int, error) { return 0, nil }
+	if err := env.Registry.Retention.Add(pkgcore.RetentionParticipant{
+		Name:  "admin.test.fake_notes",
+		Sweep: noopSweep,
+		Erase: noopErase,
+		Export: func(context.Context, pkgcore.TenantID) (any, error) {
+			return map[string]int{"rows": 3}, nil
+		},
+	}); err != nil {
+		t.Fatalf("register healthy export participant: %v", err)
+	}
+	if err := env.Registry.Retention.Add(pkgcore.RetentionParticipant{
+		Name:  failingName,
+		Sweep: noopSweep,
+		Erase: noopErase,
+		Export: func(context.Context, pkgcore.TenantID) (any, error) {
+			return nil, errors.New("participant gather failed")
+		},
+	}); err != nil {
+		t.Fatalf("register failing export participant: %v", err)
+	}
+
+	var recorded []audit.RecordedEvent
+	env.Registry.EventBus().Subscribe(audit.EventRecorded, func(_ context.Context, evt pkgcore.Event) error {
+		if rec, ok := evt.Payload.(audit.RecordedEvent); ok {
+			recorded = append(recorded, rec)
+		}
+		return nil
+	})
+
+	jobID, err := env.Admin.Export().Enqueue(context.Background(), string(tenant), operatorID)
+	if err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+
+	systemCtx, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{
+		Actor: "test", Purpose: SystemPurposeAdminCrossTenant,
+	})
+	if err != nil {
+		t.Fatalf("WithSystemContext() error = %v", err)
+	}
+	var job *jobs.Job
+	// The 30s budget exists for the fail-before run alone: on the unfixed
+	// code the returned error sends the job through the queue's retry
+	// budget (1s+2s+4s of backoff before the dead letter lands); the fixed
+	// code completes terminally in well under a second.
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		job, err = env.Queue.Get(systemCtx, jobID)
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		if job.Status == jobs.StatusSucceeded || job.Status == jobs.StatusDeadLetter {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if job.Status != jobs.StatusSucceeded {
+		t.Fatalf("job status = %s (error=%q), want %s -- a partial export has already done and delivered its work, so it must complete terminally, never ride the queue's retry budget (each retried attempt mints a fresh object and a fresh share)", job.Status, job.Error, jobs.StatusSucceeded)
+	}
+	if job.Attempts != 1 {
+		t.Errorf("job.Attempts = %d, want 1 -- a partial export must not be retried", job.Attempts)
+	}
+	if job.Result == nil {
+		t.Fatal("job.Result is nil after the partial export job completed")
+	}
+	var result exportJobResult
+	if err := json.Unmarshal(job.Result.Data, &result); err != nil {
+		t.Fatalf("decode job.Result.Data: %v", err)
+	}
+	if result.ObjectKey == "" || result.ShareID == "" {
+		t.Fatalf("export job result = %+v, want the recorded object key and share id of the partial export's delivered manifest", result)
+	}
+
+	// The result Handle used to throw away must land in admin's own audit
+	// record: exactly one admin.audit_export event, attributed to the
+	// requesting operator, reporting the partial outcome (Success false,
+	// the failing participant named) and carrying the very object key and
+	// share id the job result records.
+	adminEvents, complianceEvents := 0, 0
+	for _, evt := range recorded {
+		switch evt.Action {
+		case AuditActionAuditExport:
+			adminEvents++
+			if evt.Actor.ID != operatorID {
+				t.Errorf("admin.audit_export Actor.ID = %q, want the requesting operator %q", evt.Actor.ID, operatorID)
+			}
+			if evt.Resource.ID != string(tenant) {
+				t.Errorf("admin.audit_export Resource.ID = %q, want the exported tenant %q", evt.Resource.ID, tenant)
+			}
+			if evt.Result.Success {
+				t.Error("admin.audit_export Result.Success = true, want false for a partial export")
+			}
+			if !strings.Contains(evt.Result.FailureReason, failingName) {
+				t.Errorf("admin.audit_export FailureReason = %q, want it to name the failing participant %q", evt.Result.FailureReason, failingName)
+			}
+			if evt.Changes == nil {
+				t.Fatal("admin.audit_export carries no Changes -- the export result must be recorded")
+			}
+			if after := evt.Changes.After; after["object_key"] != result.ObjectKey {
+				t.Errorf("admin.audit_export Changes.After object_key = %v, want the result's %q", after["object_key"], result.ObjectKey)
+			} else if after["share_id"] != result.ShareID {
+				t.Errorf("admin.audit_export Changes.After share_id = %v, want the result's %q", after["share_id"], result.ShareID)
+			}
+		case compliance.AuditActionExportRequest:
+			complianceEvents++
+			if evt.Result.Success {
+				t.Error("compliance.export.request Result.Success = true, want false when a participant failed")
+			}
+		}
+	}
+	if adminEvents != 1 {
+		t.Errorf("admin.audit_export events = %d, want exactly 1 -- on the unfixed code the error return skipped admin's own audit event entirely", adminEvents)
+	}
+	if complianceEvents != 1 {
+		t.Errorf("compliance.export.request events = %d, want exactly 1 -- every queue retry re-runs the export and fires another", complianceEvents)
 	}
 }
