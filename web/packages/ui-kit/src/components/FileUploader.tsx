@@ -24,7 +24,12 @@
  * first, and a settle whose announcement text equals the standing one (a
  * second same-name row reaching the same outcome) empties the region and
  * re-announces a tick later -- identical text is not a change, and a
- * live region only speaks about changes.
+ * live region only speaks about changes. The announced row is never a
+ * ghost: when `rows` stops carrying it (the Remove button's host
+ * response dropping a settled row while the queue continues), the
+ * announcement retires with the commit that dropped it, and the rendered
+ * text additionally derives only from rows the current `rows` prop still
+ * carries, so the region never points at a file the queue has let go.
  *
  * Render shape: rows render as one real list (a `ul` with the explicit
  * `role="list"` -- WebKit strips list semantics from a list-style-none
@@ -266,6 +271,17 @@ export function FileUploader({
       }
     }
     if (change === null) {
+      // The queue can lose a row with no settle in the same commit — the
+      // ordinary Remove path, the host dropping a settled row while the
+      // queue continues. If the standing announcement belongs to that
+      // departed row, it must retire with it: the region may only speak
+      // of rows the current `rows` prop still carries (the same rule the
+      // rendered text below also enforces), or a sighted user is left
+      // reading a status that points at a file the queue has let go.
+      const standing = announcementRef.current
+      if (standing !== null && !rows.some((row) => row.id === standing.rowId)) {
+        setAnnouncement(null)
+      }
       return
     }
     const nextChange = change
@@ -352,6 +368,17 @@ export function FileUploader({
     onSelectFiles?.(dropped)
   }
 
+  // The announcement the region may actually speak: only a settle whose
+  // row the current `rows` prop still carries. A departed row's
+  // announcement is retired by the diff effect on the commit that drops
+  // it; this derivation is the render-time half of the same rule, so the
+  // region can never display a row the queue no longer holds — not even
+  // for the render between that commit and its effect.
+  const liveAnnouncement =
+    announcement !== null &&
+    rows.some((row) => row.id === announcement.rowId)
+      ? announcement
+      : null
   const triggerLabel = chooseFilesLabel ?? t('fileUploader.chooseFiles')
   const dragActive = dragDepth > 0
   const pickerRendered = onSelectFiles !== undefined
@@ -525,13 +552,13 @@ export function FileUploader({
       {rows.length > 0 ? (
         <Box component="p" role="status" sx={{ m: 0 }}>
           <Typography variant="caption" color="text.secondary" component="span">
-            {announcement === null
+            {liveAnnouncement === null
               ? ''
               : t(
-                  announcement.kind === 'uploaded'
+                  liveAnnouncement.kind === 'uploaded'
                     ? 'fileUploader.announceUploaded'
                     : 'fileUploader.announceFailed',
-                  { name: announcement.name },
+                  { name: liveAnnouncement.name },
                 )}
           </Typography>
         </Box>

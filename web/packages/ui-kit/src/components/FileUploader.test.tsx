@@ -65,7 +65,7 @@ const failedAnnouncement = (name: string): string =>
  */
 function renderHarness(
   initial: FileUploaderProps,
-  options: { heading?: string } = {},
+  options: { heading?: string; removeDropsRow?: boolean } = {},
 ): RenderWithProvidersResult & {
   setRows(rows: readonly FileUploaderRow[]): void
 } {
@@ -75,7 +75,15 @@ function renderHarness(
   function Harness() {
     const [rows, setRows] = useState(initial.rows)
     applyRowsRef.current = setRows
-    return <FileUploader {...initial} rows={rows} />
+    // With removeDropsRow the host answers a Remove click the way a real
+    // host does — dropping the row from its own rows state — so a test
+    // can drive a removal through the component's rendered button and
+    // the commit it causes inside one act.
+    const onRemove = options.removeDropsRow
+      ? (rowId: string) =>
+          setRows((current) => current.filter((row) => row.id !== rowId))
+      : initial.onRemove
+    return <FileUploader {...initial} rows={rows} onRemove={onRemove} />
   }
   const view = renderWithProviders(
     options.heading !== undefined ? (
@@ -650,6 +658,62 @@ describe('FileUploader', () => {
       expect(view.getByRole('status')).toHaveTextContent('')
       view.setRows([succeededRow('r2', 'b.jpg')])
       expect(view.getByRole('status')).toHaveTextContent(uploadedAnnouncement('b.jpg'))
+    })
+
+    it('retires a standing announcement when its row leaves the queue — the region never speaks of a file the queue has let go', () => {
+      // The ordinary multi-file flow ended through the widget's own
+      // Remove button: two files upload and settle in turn (each settle
+      // announced), then the host drops the second — the row whose
+      // settle is the standing announcement. The announcement diff used
+      // to look only for settles inside the commit, so a departed row
+      // never retired its announcement: the visible role="status" region
+      // kept reading "b.jpg uploaded" while b.jpg's card was already
+      // gone from the queue.
+      const view = renderHarness(
+        {
+          rows: [uploadingRow('r1', 'a.jpg'), uploadingRow('r2', 'b.jpg')],
+        },
+        { removeDropsRow: true },
+      )
+      view.setRows([succeededRow('r1', 'a.jpg'), uploadingRow('r2', 'b.jpg')])
+      expect(view.getByRole('status')).toHaveTextContent(uploadedAnnouncement('a.jpg'))
+      view.setRows([succeededRow('r1', 'a.jpg'), succeededRow('r2', 'b.jpg')])
+      expect(view.getByRole('status')).toHaveTextContent(uploadedAnnouncement('b.jpg'))
+
+      const r2Card = view.getAllByRole('listitem')[1]!
+      fireEvent.click(within(r2Card).getByRole('button', { name: actionRemove }))
+
+      // r1 is still in the queue, so the region stays on screen — but it
+      // must no longer mention the departed b.jpg.
+      expect(view.getByRole('status')).toHaveTextContent('')
+      expect(view.getByText('a.jpg')).toBeInTheDocument()
+
+      // A later file settles normally: the removal silenced the departed
+      // row's announcement only, never the region for good.
+      view.setRows([succeededRow('r1', 'a.jpg'), uploadingRow('r3', 'c.jpg')])
+      expect(view.getByRole('status')).toHaveTextContent('')
+      view.setRows([succeededRow('r1', 'a.jpg'), succeededRow('r3', 'c.jpg')])
+      expect(view.getByRole('status')).toHaveTextContent(uploadedAnnouncement('c.jpg'))
+    })
+
+    it('keeps a standing announcement whose row survives when some other row is removed', () => {
+      const view = renderHarness(
+        {
+          rows: [uploadingRow('r1', 'a.jpg'), uploadingRow('r2', 'b.jpg')],
+        },
+        { removeDropsRow: true },
+      )
+      view.setRows([succeededRow('r1', 'a.jpg'), uploadingRow('r2', 'b.jpg')])
+      view.setRows([succeededRow('r1', 'a.jpg'), failedRow('r2', 'b.jpg', 'boom')])
+      expect(view.getByRole('status')).toHaveTextContent(failedAnnouncement('b.jpg'))
+
+      const r1Card = view.getAllByRole('listitem')[0]!
+      fireEvent.click(within(r1Card).getByRole('button', { name: actionRemove }))
+
+      // The standing announcement belongs to r2, still in the queue: a
+      // removal of a different row must not wipe it.
+      expect(view.getByText('b.jpg')).toBeInTheDocument()
+      expect(view.getByRole('status')).toHaveTextContent(failedAnnouncement('b.jpg'))
     })
 
     it('re-renders a standing announcement in the new language and announces settles after the switch in it', async () => {
