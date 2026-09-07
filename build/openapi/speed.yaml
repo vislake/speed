@@ -2046,6 +2046,14 @@ components:
         last_seen_at:
           type: string
           format: date-time
+        expires_at:
+          type: string
+          format: date-time
+          description: >-
+            When the session stops working. Expiry is enforced at use time and
+            never written back to the row, so a session whose status is still
+            "active" can have an expires_at in the past: a caller renders such a
+            row as expired, never as a live device.
         is_current:
           type: boolean
     AuthnListSessionsResponse:

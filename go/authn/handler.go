@@ -1055,6 +1055,7 @@ func toSocialLoginResponse(result *SocialLoginResult) api.AuthnSocialLoginRespon
 func toSessionResponse(session *Session, currentSessionID string) api.AuthnSession {
 	createdAt := session.CreatedAt
 	lastSeenAt := session.LastSeenAt
+	expiresAt := session.ExpiresAt
 	isCurrent := session.ID == currentSessionID
 	amr := session.AMRList()
 	return api.AuthnSession{
@@ -1066,6 +1067,7 @@ func toSessionResponse(session *Session, currentSessionID string) api.AuthnSessi
 		Amr:        &amr,
 		CreatedAt:  &createdAt,
 		LastSeenAt: &lastSeenAt,
+		ExpiresAt:  &expiresAt,
 		IsCurrent:  &isCurrent,
 	}
 }

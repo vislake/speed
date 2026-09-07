@@ -1657,6 +1657,58 @@ func TestHandler_ListSessions_MarksCurrentDevice(t *testing.T) {
 	}
 }
 
+func TestHandler_ListSessions_ExposesSessionExpiry(t *testing.T) {
+	t.Parallel()
+	// Every listed row must carry its stored expires_at: the sessions
+	// list is what tells an expired session (expiry is checked at use
+	// time and never written back to the row, so an active row can have
+	// an expires_at in the past) from a live device. A response that
+	// drops the field would render such a session as a live device
+	// forever.
+	h, f := newTestHandler(t)
+	f.registerUser(t, "expiry@example.com", testTenantA)
+	login, err := f.svc.Login(t.Context(), LoginInput{Identifier: "expiry@example.com", Password: testPassword, Device: "laptop", IP: "203.0.113.9"})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	rows, err := f.svc.ListSessions(t.Context(), login.Principal.UserID)
+	if err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	expiryByID := make(map[string]time.Time, len(rows))
+	for _, row := range rows {
+		expiryByID[row.ID] = row.ExpiresAt
+	}
+
+	rec := doHandlerJSON(t, h, http.MethodGet, "/api/v1/authn/sessions", nil, principalFor(login))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	resp := decodeBody[api.AuthnListSessionsResponse](t, rec)
+	if resp.Sessions == nil || len(*resp.Sessions) != len(rows) {
+		t.Fatalf("Sessions = %v, want %d rows", resp.Sessions, len(rows))
+	}
+	for _, s := range *resp.Sessions {
+		if s.ID == nil {
+			t.Errorf("a session row carries no id")
+			continue
+		}
+		stored, ok := expiryByID[*s.ID]
+		if !ok {
+			t.Errorf("response carries a session (%s) the service did not list", *s.ID)
+			continue
+		}
+		if s.ExpiresAt == nil {
+			t.Errorf("session %s carries no expires_at, want %v", *s.ID, stored)
+			continue
+		}
+		if !stored.Equal(*s.ExpiresAt) {
+			t.Errorf("session %s expires_at = %v, want the stored %v", *s.ID, *s.ExpiresAt, stored)
+		}
+	}
+}
+
 func TestHandler_RevokeSession_AnotherUsers_Returns404(t *testing.T) {
 	t.Parallel()
 	h, f := newTestHandler(t)

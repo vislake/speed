@@ -129,9 +129,12 @@ type AuthnRevokeOtherSessionsResponse struct {
 
 // AuthnSession defines model for AuthnSession.
 type AuthnSession struct {
-	Amr        *[]string  `json:"amr,omitempty"`
-	CreatedAt  *time.Time `json:"created_at,omitempty"`
-	Device     *string    `json:"device,omitempty"`
+	Amr       *[]string  `json:"amr,omitempty"`
+	CreatedAt *time.Time `json:"created_at,omitempty"`
+	Device    *string    `json:"device,omitempty"`
+
+	// ExpiresAt When the session stops working. Expiry is enforced at use time and never written back to the row, so a session whose status is still "active" can have an expires_at in the past: a caller renders such a row as expired, never as a live device.
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
 	ID         *string    `json:"id,omitempty"`
 	IP         *string    `json:"ip,omitempty"`
 	IsCurrent  *bool      `json:"is_current,omitempty"`
