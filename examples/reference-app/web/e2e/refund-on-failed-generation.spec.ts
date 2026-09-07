@@ -38,7 +38,7 @@
 import { expect, test } from '@playwright/test'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { INJECT_API_PORT, REFUSING_IMAGE_PORT } from '../playwright.config.js'
+import { REFUND_API_PORT, REFUSING_IMAGE_PORT } from '../playwright.config.js'
 import { bootImageProvider, bootServer, routeApiTo } from './test-utils/servers.js'
 import { DEMO_OWNER } from './test-utils/accounts.js'
 import {
@@ -115,7 +115,7 @@ test(
     // happening.
     const vendor = await bootImageProvider({ port: REFUSING_IMAGE_PORT, refuse: true })
     const server = await bootServer({
-      port: INJECT_API_PORT,
+      port: REFUND_API_PORT,
       databasePath,
       env: {
         APP_AI_GATEWAY_IMAGE_BASE_URL: `http://127.0.0.1:${REFUSING_IMAGE_PORT}`,
@@ -124,7 +124,7 @@ test(
     })
 
     try {
-      await routeApiTo(page, INJECT_API_PORT)
+      await routeApiTo(page, REFUND_API_PORT)
 
       await visitSignIn(page)
       await submitPasswordSignIn(page, DEMO_OWNER.email, DEMO_OWNER.password)

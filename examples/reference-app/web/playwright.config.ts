@@ -139,6 +139,25 @@ export const INJECT_API_PORT = runPort('E2E_INJECT_PORT', portBase + 4)
 export const REFUSING_IMAGE_PORT = runPort('E2E_REFUSING_IMAGE_PORT', portBase + 5)
 
 /**
+ * The port refund-on-failed-generation.spec.ts boots ITS server on.
+ *
+ * Its own, not shared with provisioning-recovery: both specs own a
+ * server, they run in the same tier one after the other, and a boot onto
+ * a port a previous spec's server still holds does not fail -- bootServer
+ * waits for a healthy /healthz and the incumbent answers it. So the
+ * refund gate silently adopted the recovery gate's server, which has no
+ * image provider configured, and its generation was refused before it
+ * could be enqueued: "Something went wrong. Try again later." on the
+ * panel, passing when run alone and failing in the tier.
+ *
+ * The identical mistake this suite fixed at the run level hours earlier
+ * (fixed ports plus reuseExistingServer, one worktree adopting
+ * another's server) reappeared between two of its own specs. A port a
+ * second thing might want is a port that needs its own name.
+ */
+export const REFUND_API_PORT = runPort('E2E_REFUND_PORT', portBase + 6)
+
+/**
  * The loopback address every local URL in this file names.
  *
  * `127.0.0.1` rather than `localhost`, and not a style preference: the
