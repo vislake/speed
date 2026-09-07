@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -680,5 +682,156 @@ func TestExecute_NoOpOutcomeWrite_RowStolenByAnotherWriter_LogsHonestlyNotCancel
 		if got.Status != StatusPending {
 			t.Errorf("Status = %v, want %v (the discarded outcome must leave the stolen row pending, not cancelled and not settled)", got.Status, StatusPending)
 		}
+	}
+}
+
+// injectResultWriteFailures registers a GORM update callback on db that
+// fails the next *n UPDATE statements whose update map carries the
+// "result" column -- the signature of completeSucceeded, the one outcome
+// write that persists a success result (completeRetrying, completeDeadLetter,
+// markAttemptStarted and updateProgress never touch the result column, so
+// they pass through untouched) -- with failErr, then stops failing. It is
+// the deterministic fault injection the outcome-write-failure regressions
+// below need: a failure that hits exactly the write under test and leaves
+// every other write -- in particular the convergence writes the fix
+// performs -- working.
+func injectResultWriteFailures(db *gorm.DB, remaining *int, failErr error) {
+	db.Callback().Update().Before("gorm:update").Register("test:fail-result-writes", func(tx *gorm.DB) {
+		if remaining == nil || *remaining <= 0 {
+			return
+		}
+		m, ok := tx.Statement.Dest.(map[string]any)
+		if !ok {
+			return
+		}
+		if _, has := m["result"]; !has {
+			return
+		}
+		*remaining--
+		tx.AddError(failErr)
+	})
+}
+
+// TestExecute_SuccessWriteFailure_SchedulesRetry_InsteadOfLeavingRowRunning
+// is the P1-3 regression for the success-result persistence hole: when
+// completeSucceeded itself failed, execute only logged "jobs: persisting
+// success failed" and returned, leaving the row StatusRunning -- with no
+// time-based lease and no reaper in StandaloneQueue, nothing in a live
+// process ever moved that row again (it converged only at the next Start's
+// resetInterruptedRecords). The fix converges the attempt through the same
+// terminal machinery a handler failure uses: the row is exactly as the
+// failure path finds it (running, outcome unpersisted), so the attempt is
+// settled as failed with an internal cause naming the persistence failure
+// -- a retry scheduled while attempts remain, a dead-letter once the
+// budget is exhausted. Deterministic by construction: the seeded running
+// record's success write fails exactly once (injectResultWriteFailures),
+// and execute must schedule the retry -- never leave the row running.
+// Fails on the pre-fix code, where the row still reports StatusRunning
+// after execute returns.
+func TestExecute_SuccessWriteFailure_SchedulesRetry_InsteadOfLeavingRowRunning(t *testing.T) {
+	q := NewStandaloneQueue(newTestDB(t))
+	if err := q.RegisterHandler(NewHandlerFunc("succeeds.once", func(context.Context, *Job, ProgressFn) (Result, error) {
+		return Result{Data: []byte("ok")}, nil
+	})); err != nil {
+		t.Fatalf("RegisterHandler() error = %v", err)
+	}
+
+	rec := fixtureRunningRecord("tenant-a", "succeeds.once")
+	rec.Attempts = 1   // matches the post-handoff state: runAttempt counted this first attempt
+	rec.MaxRetries = 3 // retries remain after this attempt
+	if err := q.db.Create(rec).Error; err != nil {
+		t.Fatalf("seed running record: %v", err)
+	}
+
+	failures := 1
+	injectResultWriteFailures(q.db, &failures, errors.New("injected result-write failure"))
+	q.execute(*rec)
+
+	var got jobRecord
+	if err := q.db.First(&got, "id = ?", rec.ID).Error; err != nil {
+		t.Fatalf("read back record: %v", err)
+	}
+	if got.Status != string(StatusRetrying) {
+		t.Errorf("Status = %v, want %v -- a failed success write must converge to a scheduled retry, never stay running", got.Status, StatusRetrying)
+	}
+	if !strings.Contains(got.Error, "jobs: persisting success result failed") {
+		t.Errorf("error_message = %q, want it to name the persistence failure as the retry's cause", got.Error)
+	}
+	if !got.ScheduledAt.After(rec.ScheduledAt) {
+		t.Errorf("ScheduledAt = %v, want it moved past %v by the retry backoff", got.ScheduledAt, rec.ScheduledAt)
+	}
+	if failures != 0 {
+		t.Errorf("injected failures left = %d, want 0 (the injection must have fired exactly once)", failures)
+	}
+}
+
+// succeedWithHookHandler succeeds from every Handle and records each
+// OnFailure call on onFailureCh -- the terminal-attempt counterpart of
+// cancelledBeforeDeadLetterHandler, for a handler whose Handle succeeds but
+// whose success cannot be persisted.
+type succeedWithHookHandler struct {
+	jobType     string
+	onFailureCh chan struct{}
+}
+
+func (h *succeedWithHookHandler) Type() string { return h.jobType }
+func (h *succeedWithHookHandler) Handle(context.Context, *Job, ProgressFn) (Result, error) {
+	return Result{Data: []byte("ok")}, nil
+}
+
+func (h *succeedWithHookHandler) OnFailure(context.Context, *Job, error) {
+	h.onFailureCh <- struct{}{}
+}
+
+var (
+	_ Handler     = (*succeedWithHookHandler)(nil)
+	_ FailureHook = (*succeedWithHookHandler)(nil)
+)
+
+// TestExecute_SuccessWriteFailure_OnFinalAttempt_DeadLettersWithCauseAndHook
+// is the terminal-attempt half of the same P1-3 regression: a Job whose
+// retry budget is exhausted (attempts > MaxRetries) and whose final
+// attempt's success write fails must converge to StatusDeadLetter --
+// operator-visible through DeadLetterJobs with the persistence failure as
+// its recorded cause, and running the standard FailureHook once, exactly
+// like any other genuine running -> dead-letter transition -- never a row
+// stuck StatusRunning with no outcome. Fails on the pre-fix code, where
+// execute logs the persistence failure and returns, leaving the row
+// running and the hook silent.
+func TestExecute_SuccessWriteFailure_OnFinalAttempt_DeadLettersWithCauseAndHook(t *testing.T) {
+	q := NewStandaloneQueue(newTestDB(t))
+	h := &succeedWithHookHandler{jobType: "succeeds.on_final_attempt", onFailureCh: make(chan struct{}, 1)}
+	if err := q.RegisterHandler(h); err != nil {
+		t.Fatalf("RegisterHandler() error = %v", err)
+	}
+
+	rec := fixtureRunningRecord("tenant-a", "succeeds.on_final_attempt")
+	rec.Attempts = 2   // matches the post-handoff state
+	rec.MaxRetries = 1 // exhausted: attempts(2) > MaxRetries(1)
+	if err := q.db.Create(rec).Error; err != nil {
+		t.Fatalf("seed running record: %v", err)
+	}
+
+	failures := 1
+	injectResultWriteFailures(q.db, &failures, errors.New("injected result-write failure"))
+	q.execute(*rec)
+
+	var got jobRecord
+	if err := q.db.First(&got, "id = ?", rec.ID).Error; err != nil {
+		t.Fatalf("read back record: %v", err)
+	}
+	if got.Status != string(StatusDeadLetter) {
+		t.Errorf("Status = %v, want %v -- a final attempt whose success could not be persisted must dead-letter, never stay running", got.Status, StatusDeadLetter)
+	}
+	if !strings.Contains(got.Error, "jobs: persisting success result failed") {
+		t.Errorf("error_message = %q, want it to name the persistence failure as the dead-letter's cause", got.Error)
+	}
+	if got.CompletedAt == nil {
+		t.Error("CompletedAt = nil, want it stamped by the dead-letter transition")
+	}
+	select {
+	case <-h.onFailureCh:
+	default:
+		t.Error("OnFailure not called -- a genuine running -> dead-letter transition must run the FailureHook once, exactly like any other dead-letter")
 	}
 }

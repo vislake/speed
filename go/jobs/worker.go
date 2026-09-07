@@ -448,17 +448,27 @@ func (q *StandaloneQueue) execute(rec jobRecord) {
 	now := time.Now()
 	bg := context.Background()
 	if err == nil {
-		// The success log line and the success metrics fire strictly AFTER
-		// completeSucceeded' transition report, mirroring the dead-letter
-		// branch below -- see the moved == true comment there for the full
-		// rationale, which applies identically: a concurrent Cancel can
-		// no-op the write, and a record emitted ahead of the write would
-		// survive the no-op and show a cancelled Job as succeeded.
 		moved, werr := completeSucceeded(bg, q.db, rec.ID, result, now)
 		switch {
 		case werr != nil:
+			// Persisting the success result itself failed. The row is still
+			// StatusRunning and the handler's outcome was never persisted --
+			// the identical database state a handler failure leaves -- so the
+			// attempt converges through the same terminal machinery
+			// settleFailedAttempt applies to a handler failure, with an
+			// internal cause naming the persistence failure. See that
+			// function's doc comment for the chosen semantics and why the
+			// at-least-once re-attempt is this module's standing answer to an
+			// unpersisted outcome.
 			log.Error("jobs: persisting success failed", "job_id", rec.ID, "error", werr)
+			q.settleFailedAttempt(log, rec, fmt.Errorf("jobs: persisting success result failed: %w", werr), duration)
 		case moved:
+			// The success log line and the success metrics fire strictly AFTER
+			// completeSucceeded' transition report, mirroring the dead-letter
+			// branch below -- see the moved == true comment there for the full
+			// rationale, which applies identically: a concurrent Cancel can
+			// no-op the write, and a record emitted ahead of the write would
+			// survive the no-op and show a cancelled Job as succeeded.
 			log.Info("job succeeded", "job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS)
 			q.recordJobMetrics(rec.Type, StatusSucceeded, duration)
 		default:
@@ -474,9 +484,51 @@ func (q *StandaloneQueue) execute(rec jobRecord) {
 		}
 		return
 	}
+	q.settleFailedAttempt(log, rec, err, duration)
+}
+
+// settleFailedAttempt converges one failed attempt of rec -- whose row is
+// StatusRunning -- onto the attempt's terminal machinery: a dead-letter
+// (completeDeadLetter, with the standard FailureHook run for a genuine
+// running -> dead-letter transition) once rec.Attempts exceeds
+// rec.MaxRetries, a scheduled retry (completeRetrying under the exponential
+// backoff) otherwise. cause is what the attempt failed with: the handler's
+// own error on the ordinary failure path, or -- for an attempt whose
+// HANDLER succeeded but whose outcome write failed (execute's success
+// branch) -- an internal error naming the persistence failure.
+//
+// execute funnels both shapes through this one function because they leave
+// the database in the identical state: a row still StatusRunning whose
+// outcome was never persisted. The module's recovery for that state is
+// at-least-once re-attempt -- resetInterruptedRecords re-runs every
+// running row at the next Start after a crash between Handle returning and
+// its outcome write landing -- so a success whose result could not be
+// persisted converges exactly like a handler failure: scheduled to re-run
+// later, or, once the retry budget is exhausted, an operator-visible
+// dead-letter whose recorded cause names the persistence failure, with
+// OnFailure run under the same genuine-transition rule every dead-letter
+// follows (handler.go). Re-executing the handler after an unconfirmable
+// success is the same at-least-once trade the crash path already accepts;
+// the cause text is the hook author's and operator's signal that this
+// dead-letter's attempt actually reported success.
+//
+// A persistence failure whose own convergence write errors in turn (the
+// completeRetrying/completeDeadLetter transition failing too) is logged
+// and left: two consecutive write failures mean the database is refusing
+// writes outright, nothing further can be persisted in-process, and the
+// row is recovered by the next Start's resetInterruptedRecords -- the
+// standing crash recovery -- exactly as every other failed write behaves.
+func (q *StandaloneQueue) settleFailedAttempt(log *slog.Logger, rec jobRecord, cause error, duration time.Duration) {
+	bg := context.Background()
+	now := time.Now()
+	durationMS := duration.Milliseconds()
+	timeout := time.Duration(rec.TimeoutNanos)
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
 
 	if rec.Attempts > rec.MaxRetries {
-		moved, werr := completeDeadLetter(bg, q.db, rec.ID, err.Error(), now)
+		moved, werr := completeDeadLetter(bg, q.db, rec.ID, cause.Error(), now)
 		if werr != nil {
 			log.Error("jobs: persisting dead letter failed", "job_id", rec.ID, "error", werr)
 			return
@@ -501,11 +553,8 @@ func (q *StandaloneQueue) execute(rec jobRecord) {
 			// metric, no attempt-outcome metric -- the outcome was
 			// discarded, not dead-lettered, and ops dashboards must not
 			// show it as dead-lettered. logDiscardedOutcome probes the row
-			// and picks the truthful record; the in-memory job mirrors the
-			// persisted state only for a genuine cancellation.
-			if cancelled := q.logDiscardedOutcome(log, rec, durationMS, StatusDeadLetter); cancelled {
-				job.Status = StatusCancelled
-			}
+			// and picks the truthful record.
+			q.logDiscardedOutcome(log, rec, durationMS, StatusDeadLetter)
 			return
 		}
 		// The transition report above (moved == true) is the one and only
@@ -517,14 +566,15 @@ func (q *StandaloneQueue) execute(rec jobRecord) {
 		// no-op write (a concurrent Cancel) or a failed write and show a
 		// cancelled or still-running Job as dead-lettered.
 		log.Error("job exhausted retries, moved to dead letter",
-			"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS, "error", err)
+			"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS, "error", cause)
 		q.recordJobMetrics(rec.Type, StatusDeadLetter, duration)
 		q.recordDeadLetter(rec.Type)
-		if hook, ok := handler.(FailureHook); ok {
+		if hook, ok := q.handler(rec.Type).(FailureHook); ok {
+			job := toJob(&rec)
 			job.Status = StatusDeadLetter
-			job.Error = err.Error()
-			hookCtx, hookCancel := context.WithTimeout(jobContext(tenant), timeout)
-			invokeOnFailure(hookCtx, hook, job, err, log)
+			job.Error = cause.Error()
+			hookCtx, hookCancel := context.WithTimeout(jobContext(pkgcore.TenantID(rec.TenantID)), timeout)
+			invokeOnFailure(hookCtx, hook, job, cause, log)
 			hookCancel()
 		}
 		return
@@ -536,22 +586,20 @@ func (q *StandaloneQueue) execute(rec jobRecord) {
 	// success branch above and the dead-letter branch both give: a
 	// concurrent Cancel can no-op the write, and a record emitted ahead of
 	// the write would show a cancelled Job as retrying.
-	moved, werr := completeRetrying(bg, q.db, rec.ID, err.Error(), now.Add(delay), now)
+	moved, werr := completeRetrying(bg, q.db, rec.ID, cause.Error(), now.Add(delay), now)
 	switch {
 	case werr != nil:
 		log.Error("jobs: persisting retry failed", "job_id", rec.ID, "error", werr)
 	case moved:
 		log.Warn("job attempt failed, scheduling retry",
 			"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS,
-			"retry_in_ms", delay.Milliseconds(), "error", err)
+			"retry_in_ms", delay.Milliseconds(), "error", cause)
 		q.recordJobMetrics(rec.Type, StatusRetrying, duration)
 	default:
 		// moved == false: the retry write no-op'd -- the same two-cause
 		// no-op as the success and dead-letter branches (see
 		// logDiscardedOutcome), never cancellation by assumption.
-		if cancelled := q.logDiscardedOutcome(log, rec, durationMS, StatusRetrying); cancelled {
-			job.Status = StatusCancelled
-		}
+		q.logDiscardedOutcome(log, rec, durationMS, StatusRetrying)
 	}
 }
 
