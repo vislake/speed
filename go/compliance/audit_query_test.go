@@ -110,6 +110,71 @@ func TestAuditQuery_Query_FiltersByEveryField(t *testing.T) {
 	})
 }
 
+// insertImpersonationEvent inserts one audit event written during an
+// impersonation session: Actor is the impersonated user the session
+// substituted, OnBehalfOf the real administrator behind it (pkgcore's
+// dual-identity rule) -- the row shape admin's own impersonation
+// pipeline writes (go/admin/pipeline.go).
+func insertImpersonationEvent(t *testing.T, repo *audit.Repository, tenant, actorID, onBehalfOfID, resourceType, action string, occurredAt time.Time, success bool) {
+	t.Helper()
+	evt := &audit.AuditEvent{
+		TenantID:   tenant,
+		Action:     action,
+		OccurredAt: occurredAt,
+	}
+	evt.SetActor(pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: actorID, DisplayName: actorID})
+	evt.SetOnBehalfOf(&pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: onBehalfOfID, DisplayName: onBehalfOfID})
+	evt.SetResource(audit.Resource{Type: resourceType, ID: "r-1", DisplayName: "r-1"})
+	evt.SetResult(audit.Result{Success: success})
+	if err := repo.Insert(context.Background(), evt); err != nil {
+		t.Fatalf("insert impersonation audit event: %v", err)
+	}
+}
+
+// TestAuditQuery_Query_FiltersByOnBehalfOf is P2-1's regression test for
+// the impersonation-accountability read dimension: an audit row written
+// during an impersonation session carries the impersonated user as Actor
+// and the real administrator as OnBehalfOf (pkgcore's dual-identity
+// rule), so a QueryFilter on OnBehalfOf must return exactly that
+// administrator's impersonation-era rows and no others -- not a second
+// administrator's impersonation rows, and not the administrator's own
+// non-impersonation rows, which carry no OnBehalfOf identity at all.
+// The pre-fix QueryFilter had no OnBehalfOf field, so the query this
+// test expresses could not even be formed: the read surface stopped at
+// Actor, and the administrator -- who never appears as Actor on an
+// impersonation-era row -- was unfindable on the read side the
+// dual-identity rule exists to serve.
+func TestAuditQuery_Query_FiltersByOnBehalfOf(t *testing.T) {
+	repo := audit.NewRepository(newTestAuditDB(t))
+	q := NewAuditQuery(repo)
+	base := time.Now().Add(-time.Hour)
+	insertImpersonationEvent(t, repo, "tenant-a", "impersonated-user-a", "admin-1", "note", "notes.note.create", base, true)
+	insertImpersonationEvent(t, repo, "tenant-a", "impersonated-user-b", "admin-1", "note", "notes.note.update", base.Add(time.Minute), true)
+	insertImpersonationEvent(t, repo, "tenant-a", "impersonated-user-c", "admin-2", "note", "notes.note.delete", base.Add(2*time.Minute), true)
+	insertAuditEvent(t, repo, "tenant-a", "admin-1", "note", "notes.note.read", base.Add(3*time.Minute), true)
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	events, err := q.Query(ctx, QueryFilter{OnBehalfOf: "admin-1"})
+	if err != nil {
+		t.Fatalf("Query(OnBehalfOf=admin-1): %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("Query(OnBehalfOf=admin-1) = %d events, want exactly 2 -- admin-1's two impersonation-era rows and no others", len(events))
+	}
+	actors := make(map[string]bool, len(events))
+	for _, evt := range events {
+		onBehalfOf, ok := evt.OnBehalfOf()
+		if !ok || onBehalfOf.ID != "admin-1" {
+			t.Errorf("event %s matches OnBehalfOf=admin-1 yet reads back on_behalf_of %v (ok=%v)", evt.ID, onBehalfOf, ok)
+			continue
+		}
+		actors[evt.ActorID] = true
+	}
+	if !actors["impersonated-user-a"] || !actors["impersonated-user-b"] {
+		t.Errorf("Query(OnBehalfOf=admin-1) actors = %v, want impersonated-user-a and impersonated-user-b -- admin-2's impersonation row and admin-1's own direct row must be excluded", actors)
+	}
+}
+
 // TestAuditQuery_Query_SameTimestampEventsOrderDeterministically is the
 // regression test for the sort's tiebreaker (finding P3): several events
 // sharing an identical OccurredAt must come back in a fixed, deterministic

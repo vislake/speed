@@ -16,6 +16,17 @@ import (
 type QueryFilter struct {
 	// Actor, when non-empty, matches AuditEvent.ActorID exactly.
 	Actor string
+	// OnBehalfOf, when non-empty, matches AuditEvent.OnBehalfOfID exactly
+	// -- the impersonation-accountability dimension (P2-1): an event
+	// written during an impersonation session carries the impersonated
+	// user as Actor and the real administrator behind the session as
+	// OnBehalfOf (pkgcore's dual-identity rule), so filtering by
+	// OnBehalfOf answers "what did this administrator do through their
+	// impersonation sessions" -- a question the Actor dimension alone
+	// cannot answer, since the administrator never appears as Actor on
+	// such an event. Events carrying no OnBehalfOf identity at all never
+	// match a non-empty OnBehalfOf.
+	OnBehalfOf string
 	// Resource, when non-empty, matches AuditEvent.ResourceType exactly.
 	Resource string
 	// Action, when non-empty, matches AuditEvent.Action exactly.
@@ -31,6 +42,9 @@ type QueryFilter struct {
 // matches reports whether evt satisfies every set field of f.
 func (f QueryFilter) matches(evt audit.AuditEvent) bool {
 	if f.Actor != "" && evt.ActorID != f.Actor {
+		return false
+	}
+	if f.OnBehalfOf != "" && (evt.OnBehalfOfID == nil || *evt.OnBehalfOfID != f.OnBehalfOf) {
 		return false
 	}
 	if f.Resource != "" && evt.ResourceType != f.Resource {
