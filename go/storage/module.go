@@ -23,10 +23,15 @@ const (
 	PermissionWrite = "storage:write"
 )
 
-// The audit actions storage contributes to the audit vocabulary. The object
-// lifecycle is audited at its three irreversible transitions: an upload is
+// The audit actions storage contributes to the audit vocabulary. The three
+// irreversible transitions of an object's lifecycle -- an upload is
 // declared, an upload's bytes are finalized, and an object is permanently
-// deleted. Pure reads and in-flight progress need no audit row.
+// deleted -- are where an object's story earns an audit trail; pure reads
+// and in-flight progress need no audit row. Declaring the actions here, in
+// Register, completes the vocabulary; emitting rows under them is not the
+// module's own act -- storage writes no audit rows, and a host that needs
+// them emits explicitly at those transitions under the declared actions
+// (the audit.Emit pattern the reference app's notes module uses).
 const (
 	AuditActionObjectCreate   = "storage.object.create"
 	AuditActionObjectComplete = "storage.object.complete"
