@@ -32,6 +32,21 @@ type Task struct {
 	// caller (typically json.Marshal of a request-specific struct). The
 	// queue never interprets it; only the Handler registered for Type
 	// does, by deserializing Job.Payload itself.
+	//
+	// The queue PERSISTS Payload with the Job's record and keeps it for
+	// the record's whole lifetime -- forever on StandaloneQueue, whose job
+	// rows are never deleted -- readable back by any caller that can Get
+	// the Job (the owning tenant's own code, or a system context) and by
+	// the Handler on every attempt. Never put credentials, bearer tokens
+	// or personal data here: this package cannot tell a secret from
+	// harmless bytes and will store either without complaint. The
+	// precedent is real -- go/admin's audit-export job once carried a
+	// one-time sharing delivery token in a job result (the P1-B finding,
+	// since fixed) before review caught it: a token that must be usable
+	// exactly once is a credential, and a credential at rest in a job
+	// record is exactly the leak this warning exists to prevent. Wherever
+	// the data is sensitive, Payload should carry a reference to it (an
+	// id, an object key), not the data itself.
 	Payload []byte
 
 	// IdempotencyKey, when non-empty, makes Enqueue idempotent: a second

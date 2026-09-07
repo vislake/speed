@@ -93,6 +93,20 @@ const (
 // Job.Result and returned to a caller polling Queue.Get. Its shape is a
 // contract between whichever code enqueues a Task and the Handler
 // registered for its Type — the queue itself never interprets Data.
+//
+// Data is PERSISTED with the Job's record, exactly like Task.Payload, and
+// stays for the record's whole lifetime — forever on StandaloneQueue,
+// whose job rows are never deleted — readable back by any caller that can
+// Get the Job. Task.Payload's warning applies unchanged to what a Handler
+// writes here: no credentials, bearer tokens or personal data. The
+// concrete precedent is go/admin's audit-export job, which once marshalled
+// a one-time sharing delivery token into its result (the P1-B finding,
+// since fixed) — a bearer credential at rest in the jobs table, at odds
+// with the delivery mechanism's own store-only-the-hash design — before
+// review caught it and the result was reshaped to carry the share's facts
+// (id and expiry) while the token died inside the Handler's own frame. If
+// a Handler's output includes something usable exactly once, the result
+// must carry a reference to it, never the thing itself.
 type Result struct {
 	Data []byte
 }
@@ -118,7 +132,8 @@ type Job struct {
 	TenantID pkgcore.TenantID
 
 	// Payload is the enqueuing Task's opaque, caller-serialized input,
-	// unchanged.
+	// unchanged. The persistence-and-exposure warning on Task.Payload
+	// applies to these bytes as read back here.
 	Payload []byte
 
 	// IdempotencyKey is the enqueuing Task's idempotency key, if any
