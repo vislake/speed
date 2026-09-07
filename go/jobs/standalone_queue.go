@@ -82,6 +82,19 @@ const (
 var ErrDuplicateHandlerType = apperr.Invalid("jobs.duplicate_handler_type")
 
 // Option configures a StandaloneQueue at construction time.
+//
+// Every construction option in this module follows ONE rule, stated here
+// once: an invalid value -- one this queue cannot honour -- is refused at
+// option time with a coded panic (an *apperr.Error carrying the code each
+// With* function's own doc comment names), never accepted and silently
+// reinterpreted, deferred, or left to fail after Start has reported
+// success. Each With* function below states its exact rule and why the
+// values it rejects are unhonourable; there is no silent-fallback
+// constructor option in this file. (The per-Enqueue options in queue.go
+// are a separate layer with their own individually documented rules --
+// WithMaxRetries clamps a negative count to zero, WithTimeout falls back
+// to the queue's configured default on a non-positive duration -- stated
+// on each option there; none of those rules applies here.)
 type Option func(*StandaloneQueue)
 
 // WithWorkerCount sets how many Jobs StandaloneQueue executes concurrently
@@ -111,20 +124,60 @@ func WithTenantConcurrencyLimit(n int) Option {
 }
 
 // WithPollInterval sets how often the dispatcher checks for newly-eligible
-// Jobs. Defaults to DefaultPollInterval.
+// Jobs -- and, at the same cadence, how often the writer-registration
+// heartbeat keeper beats (worker.go's runDispatcher and runWriterHeartbeat
+// both tick on it). Defaults to DefaultPollInterval. A value <= 0 is
+// refused at option time with a coded panic: both loops drive their
+// tickers with time.NewTicker, which panics on a non-positive interval --
+// accepted silently, the panic would land in a background goroutine only
+// AFTER Start had already reported success, killing the whole process in
+// the one failure direction construction-time validation exists to
+// prevent. Zero has no "poll as fast as possible" meaning worth honouring
+// either: it would busy-spin the jobs table; a positive interval is the
+// only meaningful one.
 func WithPollInterval(d time.Duration) Option {
+	if d <= 0 {
+		panic(apperr.Invalid("jobs.poll_interval_zero"))
+	}
 	return func(q *StandaloneQueue) { q.pollInterval = d }
 }
 
 // WithJobTimeout sets the per-attempt timeout applied to an Enqueue call
-// that does not use WithTimeout. Defaults to DefaultTimeout.
+// that does not use WithTimeout. Defaults to DefaultTimeout. A value <= 0
+// is refused at option time with a coded panic: a non-positive timeout is
+// this package's "not set" marker -- ResolveEnqueueOptions and execute
+// (worker.go) both treat a resolved timeout <= 0 as absent and fall back
+// to DefaultTimeout -- so a zero or negative default could never be
+// honoured literally and would silently leave every such Job on
+// DefaultTimeout, indistinguishable in operation from an option that was
+// never passed. (Running a Handle call with no deadline at all is not
+// something this queue supports: every attempt runs under a bounded
+// context.)
 func WithJobTimeout(d time.Duration) Option {
+	if d <= 0 {
+		panic(apperr.Invalid("jobs.job_timeout_zero"))
+	}
 	return func(q *StandaloneQueue) { q.defaultTimeout = d }
 }
 
 // WithBackoff sets the exponential retry backoff's base and cap. Defaults
-// to DefaultBackoffBase and DefaultBackoffMax.
+// to DefaultBackoffBase and DefaultBackoffMax. A value <= 0 for either
+// bound is refused at option time with a coded panic
+// (jobs.backoff_base_zero for the base, jobs.backoff_max_zero for the
+// cap): backoffDelay (worker.go) returns a zero or negative delay from
+// such a configuration, collapsing the exponential spread into an
+// immediate retry burst -- every failed attempt re-run back-to-back at the
+// poll cadence until retries are exhausted -- the opposite of what this
+// option exists to configure. When the base exceeds the cap, the cap
+// applies to every delay (backoffDelay's documented ceiling); both must
+// simply be positive.
 func WithBackoff(base, max time.Duration) Option {
+	if base <= 0 {
+		panic(apperr.Invalid("jobs.backoff_base_zero"))
+	}
+	if max <= 0 {
+		panic(apperr.Invalid("jobs.backoff_max_zero"))
+	}
 	return func(q *StandaloneQueue) { q.backoffBase, q.backoffMax = base, max }
 }
 

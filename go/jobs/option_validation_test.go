@@ -2,22 +2,38 @@ package jobs
 
 import (
 	"testing"
+	"time"
 
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // This file holds the option-validation regressions for the root package's
-// StandaloneQueue options: configuration values that would make the queue
-// silently process nothing (or worse) must be refused at option time with a
-// coded panic, matching pkgcore's own constructor-time-refusal convention
-// (NewSMTPMailer, NewLocalObjectStore, ...), instead of being accepted and
-// failing later -- or never. Named for the behaviour it verifies, per the
-// backend coding standard's test-naming rule, since it spans every option
-// function in standalone_queue.go.
+// StandaloneQueue CONSTRUCTION options (standalone_queue.go). It pins one
+// rule, applied uniformly to all five With* options in that file: an
+// invalid value is refused at option time with a coded panic -- matching
+// pkgcore's own constructor-time-refusal convention (NewSMTPMailer,
+// NewLocalObjectStore, ...) -- never accepted and silently reinterpreted,
+// and never left to fail after Start has already reported success. What
+// counts as invalid is per-option and stated on each With* function's own
+// doc comment, with the reason the value is unhonourable: worker counts
+// and the per-tenant concurrency limit below 1 (a queue that silently
+// processes nothing), and durations at or below zero (a zero poll interval
+// would panic a background ticker only AFTER Start had succeeded; a zero
+// or negative timeout or backoff cannot be honoured literally and would
+// silently collapse onto the default, or into an immediate retry burst).
+// The completeness claim is deliberate: every one of the five options in
+// standalone_queue.go has a regression here, so the suite really does
+// cover each option's invalid-value behaviour, and a new constructor
+// option cannot be added to that file without landing its refusal test
+// beside it. Named for the behaviour it verifies, per the backend coding
+// standard's test-naming rule. (The per-Enqueue options in queue.go are a
+// separate layer with their own individually documented rules --
+// WithMaxRetries clamps, WithTimeout falls back -- and are not what this
+// file pins.)
 
 // assertOptionPanics asserts that fn panics with a coded *apperr.Error
-// carrying code -- the option-time refusal contract every validated
-// With* option in this module shares.
+// carrying code -- the option-time refusal contract every With*
+// construction option in standalone_queue.go shares.
 func assertOptionPanics(t *testing.T, code string, fn func()) {
 	t.Helper()
 	defer func() {
@@ -53,4 +69,39 @@ func TestWithWorkerCount_ZeroOrNegative_Refused(t *testing.T) {
 func TestWithTenantConcurrencyLimit_ZeroOrNegative_Refused(t *testing.T) {
 	assertOptionPanics(t, "jobs.tenant_concurrency_limit_zero", func() { WithTenantConcurrencyLimit(0) })
 	assertOptionPanics(t, "jobs.tenant_concurrency_limit_zero", func() { WithTenantConcurrencyLimit(-1) })
+}
+
+// TestWithPollInterval_ZeroOrNegative_Refused pins the WithPollInterval(0)
+// refusal and closes the accepted-then-crashing shape that motivated it: a
+// zero poll interval used to be accepted at option time, Start reported
+// success, and only then did the dispatcher goroutine's time.NewTicker
+// panic and kill the whole process -- the one failure direction
+// construction-time validation exists to prevent. The pre-fix code fails
+// this test with "expected a coded panic, got none" before any Start is
+// ever reached.
+func TestWithPollInterval_ZeroOrNegative_Refused(t *testing.T) {
+	assertOptionPanics(t, "jobs.poll_interval_zero", func() { WithPollInterval(0) })
+	assertOptionPanics(t, "jobs.poll_interval_zero", func() { WithPollInterval(-5 * time.Millisecond) })
+}
+
+// TestWithJobTimeout_ZeroOrNegative_Refused pins the WithJobTimeout(0)
+// refusal: a non-positive timeout is this package's "not set" marker, so a
+// zero or negative configured default could never be honoured literally --
+// it would silently leave every Job on DefaultTimeout, indistinguishable in
+// operation from an option that was never passed.
+func TestWithJobTimeout_ZeroOrNegative_Refused(t *testing.T) {
+	assertOptionPanics(t, "jobs.job_timeout_zero", func() { WithJobTimeout(0) })
+	assertOptionPanics(t, "jobs.job_timeout_zero", func() { WithJobTimeout(-1 * time.Second) })
+}
+
+// TestWithBackoff_ZeroOrNegative_Refused pins the WithBackoff zero-or-
+// negative refusal on each bound: backoffDelay would return a zero or
+// negative delay from such a configuration, collapsing the exponential
+// spread into an immediate retry burst at the poll cadence until retries
+// are exhausted -- the opposite of what the option exists to configure.
+func TestWithBackoff_ZeroOrNegative_Refused(t *testing.T) {
+	assertOptionPanics(t, "jobs.backoff_base_zero", func() { WithBackoff(0, DefaultBackoffMax) })
+	assertOptionPanics(t, "jobs.backoff_base_zero", func() { WithBackoff(-1*time.Second, DefaultBackoffMax) })
+	assertOptionPanics(t, "jobs.backoff_max_zero", func() { WithBackoff(DefaultBackoffBase, 0) })
+	assertOptionPanics(t, "jobs.backoff_max_zero", func() { WithBackoff(DefaultBackoffBase, -1*time.Second) })
 }
