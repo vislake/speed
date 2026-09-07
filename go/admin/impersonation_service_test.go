@@ -33,7 +33,11 @@ func (f *fakeNotifier) Dispatch(ctx context.Context, d notification.Dispatch) (j
 
 // newTestImpersonationService wires an ImpersonationService over a fresh
 // database and a real in-process EventBus/AuditActionRegistrar, with the
-// given notifier (nil is legal: Start then simply skips the notification).
+// given notifier (nil is legal for these in-package tests: attach has run,
+// so Start proceeds with its validate-and-notify pass skipped -- a shape
+// only in-package wiring can produce since P2-4, when Start began refusing
+// services attach never ran on outright; see
+// TestImpersonationService_Start_UnwiredService_Refused).
 func newTestImpersonationService(t *testing.T, notifier Notifier) (*ImpersonationService, *pkgcore.Registry) {
 	t.Helper()
 	// RegisterSystemPurpose is process-global and idempotent -- see its own
@@ -42,7 +46,7 @@ func newTestImpersonationService(t *testing.T, notifier Notifier) (*Impersonatio
 	// order or repetition.
 	pkgcore.RegisterSystemPurpose(SystemPurposeAdminCrossTenant)
 	db := testutil.NewDB(t)
-	svc := NewImpersonationService(NewImpersonationRepository(db))
+	svc := newImpersonationService(NewImpersonationRepository(db))
 	reg := newTestRegistry()
 	if err := reg.AuditActions.Add(AuditActionImpersonationStarted, AuditActionImpersonationEnded); err != nil {
 		t.Fatalf("register audit actions: %v", err)
@@ -462,5 +466,54 @@ func TestImpersonationService_ListActive_ExcludesExpired(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].ID != stillActive.ID {
 		t.Fatalf("ListActive() = %+v, want exactly %q (the expired grant %q must be excluded)", rows, stillActive.ID, expired.ID)
+	}
+}
+
+// TestImpersonationService_Start_UnwiredService_Refused is P2-4's regression
+// test: an ImpersonationService reached before Module.Register's attach has
+// wired its mandatory host seams must refuse Start with the named
+// ErrImpersonationNotWired, never start a grant silently with the whole
+// validate-and-notify pass skipped -- the exact behaviour of the half-built
+// service the exported NewImpersonationService constructor used to hand out
+// on a library surface (no target-existence/locale resolution, no
+// target-membership validation, no mandatory security notification: the
+// seam gate below all three nil simply fell through). The only public path
+// to such a service is Module.Impersonation() before Register has run, so
+// the regression drives that path; the second leg drives the unexported
+// constructor directly, the deepest degraded shape, which stays reachable
+// in-package only. Pre-fix, both Start calls succeeded silently and wrote
+// grant rows.
+func TestImpersonationService_Start_UnwiredService_Refused(t *testing.T) {
+	// Leg 1: the one remaining public path to an unattached service --
+	// Module.Impersonation() before Register has ever run.
+	svc := NewModule(testutil.NewDB(t)).Impersonation()
+	_, err := svc.Start(context.Background(), StartInput{
+		AdminUserID:    "admin-1",
+		TargetUserID:   "user-1",
+		TargetTenantID: "tenant-1",
+		Reason:         "support ticket #42",
+	})
+	if !isCode(err, ErrImpersonationNotWired.Code) {
+		t.Fatalf("Start() error = %v, want %s", err, ErrImpersonationNotWired.Code)
+	}
+	active, listErr := svc.ListActive(context.Background())
+	if listErr != nil {
+		t.Fatalf("ListActive() error = %v", listErr)
+	}
+	if len(active) != 0 {
+		t.Fatalf("ListActive() = %+v, want no grant row: a refused Start must not write a grant", active)
+	}
+
+	// Leg 2: the bare repo-only constructor shape the finding named --
+	// reachable in-package only now that the constructor is unexported.
+	bare := newImpersonationService(NewImpersonationRepository(testutil.NewDB(t)))
+	_, err = bare.Start(context.Background(), StartInput{
+		AdminUserID:    "admin-1",
+		TargetUserID:   "user-1",
+		TargetTenantID: "tenant-1",
+		Reason:         "support ticket #42",
+	})
+	if !isCode(err, ErrImpersonationNotWired.Code) {
+		t.Fatalf("Start() on a bare constructor error = %v, want %s", err, ErrImpersonationNotWired.Code)
 	}
 }

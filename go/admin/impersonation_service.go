@@ -68,13 +68,29 @@ type MembershipChecker interface {
 type ImpersonationService struct {
 	repo *ImpersonationRepository
 
+	// attached records whether Module.Register's attach has run (P2-4's
+	// fix): Start refuses with ErrImpersonationNotWired while it is false,
+	// so a service reached before its mandatory host seams were attached
+	// fails closed instead of silently starting grants with the whole
+	// validate-and-notify pass skipped. attach flips it, and Module.Register
+	// runs attach before the service is reachable by any request, so in a
+	// correctly wired host this refusal is unreachable -- it exists to make
+	// the pre-Register window (and any future in-package misuse) loud
+	// rather than silently degraded.
+	attached bool
+
 	// bus and auditActions back the explicit audit.Emit calls Start and End
 	// make; notifier is what Start dispatches the mandatory security
 	// notification through. All three are nil until Module.Register calls
-	// attach, and every method that uses them tolerates that by skipping
-	// the side effect -- see recordAudit's and dispatchStartNotification's
-	// own doc comments for why that is the right failure mode rather than
-	// a panic or a request failure.
+	// attach, and the per-seam nil tolerances the methods below document
+	// (recordAudit's log-and-swallow, dispatchStartNotification's skip,
+	// validateTargetMembership's skip, resolveNotificationLocale's
+	// verbatim-locale branch) cover only the in-package test shapes whose
+	// attach passes a subset of the seams -- none of them is reachable
+	// through a public path, since attach is unexported and Module.Register
+	// always attaches the full mandatory set. Start itself never reaches
+	// any of them before attach has run at all: the attached guard above
+	// refuses it with ErrImpersonationNotWired.
 	bus          pkgcore.EventBus
 	auditActions pkgcore.AuditActionRegistrar
 	notifier     Notifier
@@ -120,15 +136,29 @@ type ImpersonationService struct {
 	now func() time.Time
 }
 
-// NewImpersonationService returns an ImpersonationService over repo.
-func NewImpersonationService(repo *ImpersonationRepository) *ImpersonationService {
+// newImpersonationService returns an ImpersonationService over repo.
+//
+// It is deliberately unexported (P2-4's fix): an ImpersonationService is
+// not usable until Module.Register's attach has given it the mandatory
+// host seams, and the exported half-built constructor this replaces let
+// any consumer hold a service whose Start silently skipped target-existence
+// and membership validation and the mandatory security notification
+// entirely. Construction is therefore package-private, and the only
+// sanctioned path to a service is NewModule, whose Register always attaches
+// those seams (each backed by a mandatory With* option that fails Bootstrap
+// with its own named error when missing). A service reached before that
+// moment -- Module.Impersonation() before Register has run, say -- fails
+// closed at Start with ErrImpersonationNotWired rather than degrading.
+func newImpersonationService(repo *ImpersonationRepository) *ImpersonationService {
 	return &ImpersonationService{repo: repo, now: time.Now}
 }
 
 // attach gives the service its host seams, read from the *pkgcore.Registry
 // (and, for authnSvc, from Module.authnModule.Service()) during
-// Module.Register.
+// Module.Register. It is the one moment the attached flag above flips:
+// until it has run, Start refuses with ErrImpersonationNotWired (P2-4).
 func (s *ImpersonationService) attach(bus pkgcore.EventBus, actions pkgcore.AuditActionRegistrar, notifier Notifier, authnSvc *authn.Service, members MembershipChecker) {
+	s.attached = true
 	s.bus = bus
 	s.auditActions = actions
 	s.notifier = notifier
@@ -174,14 +204,16 @@ type StartInput struct {
 }
 
 // Start opens a new impersonation grant, exactly as docs/internal/23-admin.md
-// section 4 describes: it is refused (ErrImpersonationReasonRequired,
-// ErrImpersonationTargetRequired, ErrImpersonationSelfNotAllowed,
-// ErrImpersonationTargetForbidden, ErrImpersonationTargetNotFound,
-// ErrImpersonationTargetNotMember) before anything is written, dispatches
-// the mandatory, non-unsubscribable security notification to the target
-// user BEFORE the grant row is ever created, and records
-// admin.impersonation.started as an explicit dual-identity audit event
-// once the grant row commits.
+// section 4 describes: it is refused with ErrImpersonationNotWired when
+// Module.Register has not yet attached the service's mandatory host seams
+// (P2-4's fix -- see below), and otherwise
+// (ErrImpersonationReasonRequired, ErrImpersonationTargetRequired,
+// ErrImpersonationSelfNotAllowed, ErrImpersonationTargetForbidden,
+// ErrImpersonationTargetNotFound, ErrImpersonationTargetNotMember) before
+// anything is written, dispatches the mandatory, non-unsubscribable
+// security notification to the target user BEFORE the grant row is ever
+// created, and records admin.impersonation.started as an explicit
+// dual-identity audit event once the grant row commits.
 //
 // Target validation (P3-4's fix) happens in one pass, reusing a single
 // cross-tenant system-context grant (D2's mechanism) for both the
@@ -209,7 +241,23 @@ type StartInput struct {
 // already-successful grant write (see recordAudit's own doc comment) --
 // unlike the notification, a lost audit event does not mean the target was
 // never told, so it keeps its original log-and-swallow contract.
+//
+// P2-4's fix is the ErrImpersonationNotWired refusal at the top of this
+// method: a service Module.Register has not attached yet -- reachable
+// through Module.Impersonation() before Bootstrap, and, before this fix,
+// the state the exported NewImpersonationService constructor handed any
+// caller -- can no longer start grants silently with the whole
+// validate-and-notify pass below skipped. attach runs during Register and
+// always carries the full mandatory seam set, so a correctly wired host
+// never sees this refusal; it exists to make the half-built shape loud.
 func (s *ImpersonationService) Start(ctx context.Context, in StartInput) (*ImpersonationGrant, error) {
+	if !s.attached {
+		// Before attach has run, none of the mandatory seams below is
+		// wired, so the validate-and-notify pass cannot run at all. Refuse
+		// with a named error rather than write a grant nobody has
+		// validated or notified (P2-4's fix -- Start's own doc comment).
+		return nil, ErrImpersonationNotWired
+	}
 	if in.Reason == "" {
 		return nil, ErrImpersonationReasonRequired
 	}
@@ -233,18 +281,20 @@ func (s *ImpersonationService) Start(ctx context.Context, in StartInput) (*Imper
 	}
 
 	// The whole validate-and-notify pass -- existence, tenant membership,
-	// and the mandatory notification -- runs only when at least one of its
-	// three seams is actually wired. This is the same pre-Module.Register
-	// nil-tolerance every seam on this struct already documents (bus,
-	// notifier, authnSvc, members): all three are MANDATORY options in a
-	// correctly wired production Bootstrap (WithAuthn/WithOrg/
-	// WithNotification), so this gate is never what stands between a real
-	// deployment and Finding P3-4's validation -- it exists purely so a
-	// lightweight unit test exercising unrelated behavior (Lookup/End/
-	// ListActive semantics, say) that wires none of the three keeps
-	// working exactly as it did before this fix, rather than being forced
-	// to stand up a real authn/org/notification stack to call Start at
-	// all.
+	// and the mandatory notification -- runs whenever at least one of its
+	// three seams is actually wired, and the attached guard above already
+	// refused a service attach never ran on (P2-4), so the only shapes
+	// that can reach this point with nothing to run are the in-package
+	// unit-test shapes whose attach passes a subset of the seams
+	// (newTestImpersonationService's nil notifier, say): Module.Register
+	// always attaches all three -- each is a MANDATORY With* option backed
+	// by its own named Bootstrap failure -- and no public path constructs
+	// a service outside Register, so no production wiring can ever land
+	// here half-wired. The gate therefore exists purely so a lightweight
+	// unit test exercising unrelated behavior (Lookup/End/ListActive
+	// semantics, say) that wires none of the three keeps working exactly
+	// as it did before P3-4's fix, rather than being forced to stand up a
+	// real authn/org/notification stack to call Start at all.
 	if s.authnSvc != nil || s.members != nil || s.notifier != nil {
 		locale, err := s.resolveNotificationLocale(ctx, in)
 		if err != nil {
@@ -483,10 +533,13 @@ func (s *ImpersonationService) enterTargetSystemContext(ctx context.Context, in 
 // like every other tenant-scoped repository, reads the tenant from ctx,
 // never from a parameter.
 //
-// A nil members (the org seam not wired yet -- pre-Module.Register, or a
-// lightweight unit test) is tolerated by skipping the check entirely:
-// WithOrg is mandatory in a correctly wired production Bootstrap, so this
-// is unreachable there.
+// A nil members (an in-package unit test attaching without the org seam)
+// is tolerated by skipping the check entirely: Start refuses outright
+// before this point when attach has not run at all
+// (ErrImpersonationNotWired, P2-4), and Module.Register always attaches a
+// real org seam -- WithOrg is mandatory in a correctly wired production
+// Bootstrap -- so this branch is reachable only from the in-package test
+// shapes.
 func (s *ImpersonationService) validateTargetMembership(ctx context.Context, in StartInput) error {
 	if s.members == nil {
 		return nil
@@ -514,13 +567,15 @@ func (s *ImpersonationService) validateTargetMembership(ctx context.Context, in 
 // admin_user_id and reason, so nothing here depends on one.
 //
 // A nil notifier is tolerated by returning nil (no error, nothing
-// attempted): this is the pre-Module.Register state, exactly as
-// recordAudit's own nil-bus tolerance, and is unreachable in production,
-// since WithNotification is a mandatory Register option. Every OTHER
-// failure here -- the dispatch itself was refused -- is P1-1's own fix: it
-// is returned as a real error rather than logged and swallowed, so Start
-// refuses the whole call instead of returning success over a notification
-// nobody will ever receive.
+// attempted): reachable only from an in-package test attach that wires no
+// notifier -- Start refuses outright before this point when attach has not
+// run at all (ErrImpersonationNotWired, P2-4), and Module.Register always
+// attaches a real notifier, since WithNotification is a mandatory Register
+// option -- so this branch never sees production. Every OTHER failure here
+// -- the dispatch itself was refused -- is P1-1's own fix: it is returned
+// as a real error rather than logged and swallowed, so Start refuses the
+// whole call instead of returning success over a notification nobody will
+// ever receive.
 func (s *ImpersonationService) dispatchStartNotification(ctx context.Context, in StartInput, locale string) error {
 	if s.notifier == nil {
 		return nil
@@ -569,11 +624,14 @@ func (s *ImpersonationService) dispatchStartNotification(ctx context.Context, in
 // since in every such case neither existence nor the mandatory
 // notification can be guaranteed.
 //
-// A nil authnSvc (the seam not wired yet) is tolerated: an explicit Locale
-// is trusted verbatim exactly as before this fix (existence cannot be
-// checked without the seam, and WithAuthn is mandatory in a correctly
-// wired production Bootstrap, so this branch is unreachable there), and an
-// empty Locale with no way to resolve one refuses with
+// A nil authnSvc (an in-package unit test attaching without the authn
+// seam) is tolerated: an explicit Locale is trusted verbatim exactly as
+// before this fix (existence cannot be checked without the seam --
+// reachable only from the in-package test shapes, since Start refuses
+// pre-attach outright with ErrImpersonationNotWired, P2-4, and
+// Module.Register always attaches a real *authn.Service, WithAuthn being
+// mandatory in a correctly wired production Bootstrap), and an empty
+// Locale with no way to resolve one refuses with
 // ErrImpersonationTargetValidationUnavailable.
 func (s *ImpersonationService) resolveNotificationLocale(ctx context.Context, in StartInput) (string, error) {
 	if s.authnSvc == nil {

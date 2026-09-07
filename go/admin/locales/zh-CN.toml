@@ -32,6 +32,7 @@
 "admin.request_body_invalid" = "请求体无法解析。"
 "admin.impersonation_target_not_member" = "目标用户不是目标租户的成员。"
 "admin.impersonation_target_validation_unavailable" = "无法校验目标用户的账号或租户成员身份。"
+"admin.impersonation_not_wired" = "模拟登录服务尚未完成接线，无法发起模拟登录会话。"
 "admin.tenant_concurrent_update" = "该租户的台账记录已被另一个请求修改，请刷新后重试。"
 
 "admin.impersonation_started.in_app.title" = "有管理员正在查看你的账号"

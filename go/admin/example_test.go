@@ -5,22 +5,28 @@ package admin_test
 // executed by `go test`, so a change to admin's public API that breaks the
 // documented usage fails the build rather than only rotting in prose.
 //
-// It drives D5's impersonation lifecycle -- start, a fail-closed lookup of
-// an unrelated id, and end -- entirely through admin's exported API:
-// admin.NewModule, Module.Tenants/Impersonation, and their Start/Lookup/End
-// methods. It deliberately does not call Module.Register (which needs a
-// real authn.Service, org.Module, compliance.Module and notification.Module
-// wired in -- see AGENTS.md's wiring section and
-// examples/reference-app/cmd/server for the full composition), because
-// TenantService and ImpersonationService are usable the moment NewModule
-// returns: their audit/notification side effects are simply no-ops until
-// Register attaches a bus, exactly as their own doc comments describe.
+// It demonstrates D5's impersonation pipeline failing closed at its
+// construction boundary: Module.Impersonation().Start refuses with
+// ErrImpersonationNotWired until Module.Register has attached the
+// service's mandatory host seams (P2-4's fix). Driving Start through the
+// exported surface exactly as a consumer would -- admin.NewModule plus
+// Module.Impersonation, with no Register -- used to start a grant
+// silently, with target-existence and membership validation and the
+// mandatory security notification all skipped (the shape the exported
+// half-built constructor handed out); it now fails closed with a named
+// error before anything is written. The full start/lookup/end lifecycle
+// with validation, notification and audit wired for real requires
+// Register, which in turn needs real authn, org, compliance and
+// notification modules wired in -- see AGENTS.md's wiring section and
+// examples/reference-app/cmd/server for the full composition -- so that
+// lifecycle is pinned by the module's own suites
+// (impersonation_service_locale_test.go and module_test.go) rather than
+// reconstructed here, exactly as ExampleNewExportService defers its real
+// path to export_test.go.
 
 import (
 	"context"
-	"embed"
 	"fmt"
-	"time"
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
@@ -29,26 +35,13 @@ import (
 	"github.com/vislake/speed/go/admin"
 )
 
-// stubAuthnModule stands in for a real *authn.Module purely to satisfy
-// dbkit.MigrationRegistry.Apply's dependency-order check: admin.Module
-// declares DependsOn() == []string{"authn"} (its Register must run after
-// authn's own -- see admin's own DependsOn doc comment), and the migration
-// registry's dependency sort requires every named dependency to be present
-// in the SAME registry, exactly as a real deployment's registry always
-// has authn's migrations registered alongside admin's. This example needs
-// no actual authn table, so the stub ships an empty migration set.
-type stubAuthnModule struct{}
-
-func (stubAuthnModule) Name() string                     { return "authn" }
-func (stubAuthnModule) DependsOn() []string              { return nil }
-func (stubAuthnModule) Migrations() embed.FS             { return embed.FS{} }
-func (stubAuthnModule) Locales() embed.FS                { return embed.FS{} }
-func (stubAuthnModule) OpenAPISpec() []byte              { return nil }
-func (stubAuthnModule) Register(*pkgcore.Registry) error { return nil }
-
 func Example() {
 	ctx := context.Background()
 
+	// A real host opens (and migrates) its database before Bootstrap; this
+	// example opens one so NewModule is constructed exactly as in a real
+	// host. Constructing a Module performs no I/O, and the refusal below
+	// fires before the database is ever touched.
 	db, err := dbkit.Open(ctx, dbkit.Options{
 		Dialect: dbkit.DialectSQLite,
 		DSN:     "file:admin_example?mode=memory&cache=shared",
@@ -60,59 +53,20 @@ func Example() {
 
 	module := admin.NewModule(db)
 
-	// A real host applies every bootstrapped module's migrations before
-	// opening it for business. This example needs only admin's own two
-	// tables, but the registry's dependency sort still requires "authn"
-	// (admin.Module.DependsOn()'s one entry) to be present -- see
-	// stubAuthnModule's own doc comment.
-	migrations := dbkit.NewMigrationRegistry()
-	if regErr := migrations.Register(stubAuthnModule{}); regErr != nil {
-		fmt.Println("register migrations:", regErr)
-		return
-	}
-	if regErr := migrations.Register(module); regErr != nil {
-		fmt.Println("register migrations:", regErr)
-		return
-	}
-	if applyErr := migrations.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
-		fmt.Println("apply migrations:", applyErr)
-		return
-	}
-
-	grant, err := module.Impersonation().Start(ctx, admin.StartInput{
+	// Before Module.Register has attached the service's mandatory host
+	// seams -- the state every consumer sees until Bootstrap runs -- Start
+	// fails closed with a named error instead of starting a grant whose
+	// target was never validated and who was never notified (P2-4's fix).
+	_, err = module.Impersonation().Start(ctx, admin.StartInput{
 		AdminUserID:    "admin-1",
 		TargetUserID:   "user-1",
 		TargetTenantID: pkgcore.TenantID("tenant-acme"),
 		Reason:         "customer support ticket #42",
 	})
-	if err != nil {
-		fmt.Println("start:", err)
-		return
-	}
-	fmt.Println("grant started for target:", grant.TargetUserID)
-
-	if _, ok := module.Impersonation().Lookup(ctx, "some-other-grant-id"); ok {
-		fmt.Println("unexpectedly found an unrelated grant id")
-		return
-	}
-	fmt.Println("unrelated grant id found:", false)
-
-	found, ok := module.Impersonation().Lookup(ctx, grant.ID)
-	fmt.Println("started grant is active:", ok && found.Active(time.Now()))
-
-	if _, err := module.Impersonation().End(ctx, grant.ID, "admin-1"); err != nil {
-		fmt.Println("end:", err)
-		return
-	}
-
-	_, ok = module.Impersonation().Lookup(ctx, grant.ID)
-	fmt.Println("grant active after End:", ok)
+	fmt.Println("start:", err)
 
 	// Output:
-	// grant started for target: user-1
-	// unrelated grant id found: false
-	// started grant is active: true
-	// grant active after End: false
+	// start: admin.impersonation_not_wired
 }
 
 // ExampleModule_AttachRBAC demonstrates D8's role-management surface

@@ -243,7 +243,7 @@ func NewModule(db *gorm.DB, opts ...Option) *Module {
 		tenantRepo:    tenantRepo,
 		grantRepo:     grantRepo,
 		tenants:       tenants,
-		impersonation: NewImpersonationService(grantRepo),
+		impersonation: newImpersonationService(grantRepo),
 		roles:         NewRoleService(),
 	}
 	for _, opt := range opts {

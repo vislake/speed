@@ -226,6 +226,19 @@ var (
 	// actually verified the target may even use.
 	ErrImpersonationTargetValidationUnavailable = apperr.Internal("admin.impersonation_target_validation_unavailable")
 
+	// ErrImpersonationNotWired is returned by Start (P2-4's fix) when the
+	// ImpersonationService was never attached by Module.Register's attach
+	// call -- the pre-Register window, reachable through
+	// Module.Impersonation() before Bootstrap, and, before the fix, the
+	// state the exported NewImpersonationService constructor handed any
+	// caller. A service in that state cannot run the mandatory
+	// validate-and-notify pass (target existence and locale resolution,
+	// tenant-membership validation, and the security notification), so
+	// Start refuses outright rather than writing a grant no one has
+	// validated or notified; attach always runs during Register with the
+	// full mandatory seam set, so a correctly wired host never sees this.
+	ErrImpersonationNotWired = apperr.Internal("admin.impersonation_not_wired")
+
 	// ErrTenantConcurrentUpdate is returned by TenantRepository.Update
 	// (P3-3's fix) when the conditional UPDATE's guard finds the row no
 	// longer matches what was read moments earlier -- a concurrent PATCH
@@ -266,6 +279,7 @@ var errorCodes = []string{
 	ErrRequestBodyInvalid.Code,
 	ErrImpersonationTargetNotMember.Code,
 	ErrImpersonationTargetValidationUnavailable.Code,
+	ErrImpersonationNotWired.Code,
 	ErrTenantConcurrentUpdate.Code,
 	errInternal.Code,
 }
