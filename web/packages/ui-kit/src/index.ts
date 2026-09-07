@@ -32,6 +32,7 @@ export {
 } from './components/EmptyState.js'
 export {
   ConfirmDialog,
+  CONFIRM_ARM_LOCKOUT_MS,
   type ConfirmDialogProps,
   type ConfirmDialogVariant,
 } from './components/ConfirmDialog.js'

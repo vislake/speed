@@ -3,7 +3,9 @@
  * onConfirm and onCancel -- Escape and backdrop clicks land on onCancel
  * only, cancel never confirms, the danger variant paints the confirm
  * button with the error role, doubleConfirm needs a second click to
- * fire onConfirm (re-arming after every close), and confirmLoading
+ * fire onConfirm -- the arming click holding the confirm button inert
+ * through a short lockout so a double click cannot skip the guard --
+ * re-arming after every close, and confirmLoading
  * freezes both exits. Built-in texts come from the ui-kit namespace
  * (asserted against the bundles); labels are host-overridable.
  */
@@ -17,7 +19,7 @@ import zhCN from '../locales/zh-CN.json' with { type: 'json' }
 import enUS from '../locales/en-US.json' with { type: 'json' }
 import { renderWithProviders } from '../../test-utils/render.js'
 import { expectNoAxeViolations } from '../../test-utils/axe.js'
-import { ConfirmDialog } from './ConfirmDialog.js'
+import { ConfirmDialog, CONFIRM_ARM_LOCKOUT_MS } from './ConfirmDialog.js'
 
 /**
  * A minimal stand-in for a host that reuses one mounted ConfirmDialog to
@@ -165,9 +167,121 @@ describe('ConfirmDialog', () => {
     ).toBeInTheDocument()
     expect(queryByRole('button', { name: zhCN.confirmDialog.confirmLabel })).not.toBeInTheDocument()
 
+    // The arming click entered the double-click lockout window; the
+    // deliberate second click waits it out (in real time, inside act, so
+    // the lockout's auto-clear lands in act), exactly as a user who read
+    // the re-labelled button would. The window's own shape is pinned by
+    // the P1 regression tests below.
+    await act(async () => {
+      await new Promise((resolve) =>
+        setTimeout(resolve, CONFIRM_ARM_LOCKOUT_MS + 300),
+      )
+    })
     await user.click(getByRole('button', { name: zhCN.confirmDialog.confirmAgainLabel }))
     expect(onConfirm).toHaveBeenCalledTimes(1)
     expect(onCancel).not.toHaveBeenCalled()
+  })
+
+  it('doubleConfirm: a double click cannot skip the guard -- the armed confirm stays inert through the arming lockout (P1 regression)', async () => {
+    // PRE-FIX (P1): arming (click 1) only re-labelled the button; a
+    // second click landing ~instantly -- a double click IS two clicks --
+    // found the guard armed and fired onConfirm, skipping the deliberate
+    // second step the guard exists to force. POST-FIX: the arming click
+    // also enters CONFIRM_ARM_LOCKOUT_MS of lockout during which the
+    // confirm button is disabled, so the second event of a double click
+    // cannot land on it; the lockout auto-clears and a click after it
+    // still confirms. The clock is faked only after render: the single
+    // timer that can exist under the fake clock is the lockout timer
+    // itself.
+    const { onConfirm, getByRole } = setup({
+      variant: 'danger',
+      doubleConfirm: true,
+    })
+    const confirm = getByRole('button', { name: zhCN.confirmDialog.confirmLabel })
+    const again = () => getByRole('button', { name: zhCN.confirmDialog.confirmAgainLabel })
+
+    vi.useFakeTimers()
+    try {
+      // Two clicks with no delay in between: the double-click shape. On
+      // the unfixed code the second click finds the armed guard and
+      // fires onConfirm.
+      fireEvent.click(confirm)
+      fireEvent.click(confirm)
+      expect(onConfirm).not.toHaveBeenCalled()
+
+      // The confirm stays inert for the whole lockout window, up to and
+      // including the instant before it ends.
+      expect(again()).toBeDisabled()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIRM_ARM_LOCKOUT_MS - 1)
+      })
+      fireEvent.click(again())
+      expect(onConfirm).not.toHaveBeenCalled()
+
+      // Once the window elapses the armed confirm answers a second click.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1)
+      })
+      expect(again()).toBeEnabled()
+      fireEvent.click(again())
+      expect(onConfirm).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('doubleConfirm: cancel and close stay available during the arming lockout', async () => {
+    const { onConfirm, onCancel, getByRole, rerender } = setup({
+      variant: 'danger',
+      doubleConfirm: true,
+    })
+    const confirm = getByRole('button', { name: zhCN.confirmDialog.confirmLabel })
+    const cancel = getByRole('button', { name: zhCN.confirmDialog.cancelLabel })
+    // The confirm-again button, whose accessible name only exists once
+    // the first click has armed the guard.
+    const again = () => getByRole('button', { name: zhCN.confirmDialog.confirmAgainLabel })
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.click(confirm)
+      expect(again()).toBeDisabled()
+      // The window covers only the confirm button: the cancel exit (and
+      // with it Escape/backdrop, which share its handler) stays live.
+      fireEvent.click(cancel)
+      expect(onCancel).toHaveBeenCalledTimes(1)
+      expect(onConfirm).not.toHaveBeenCalled()
+
+      // Closing mid-window must not leave a late re-enable pending: a
+      // reopen after the window would otherwise start from a stale
+      // lockout. The reopen renders unarmed and immediately clickable.
+      rerender(
+        <ConfirmDialog
+          open={false}
+          variant="danger"
+          doubleConfirm
+          onConfirm={onConfirm}
+          onCancel={onCancel}
+        />,
+      )
+      rerender(
+        <ConfirmDialog
+          open
+          variant="danger"
+          doubleConfirm
+          onConfirm={onConfirm}
+          onCancel={onCancel}
+        />,
+      )
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIRM_ARM_LOCKOUT_MS)
+      })
+      const reopened = getByRole('button', { name: zhCN.confirmDialog.confirmLabel })
+      expect(reopened).toBeEnabled()
+      fireEvent.click(reopened)
+      expect(onConfirm).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('doubleConfirm: arming the confirm is announced through a live region (P2-9 regression)', async () => {
@@ -246,6 +360,16 @@ describe('ConfirmDialog', () => {
       <BatchDeleteHarness onItemBConfirmed={onItemBConfirmed} />,
     )
     const user = userEvent.setup()
+    // Each deliberate confirm click below waits the double-click lockout
+    // window its arming click entered out (in real time, inside act -- a
+    // user who read the re-labelled button would take as long); the
+    // window's own shape is pinned by the P1 regression tests.
+    const waitOutLockout = () =>
+      act(async () => {
+        await new Promise((resolve) =>
+          setTimeout(resolve, CONFIRM_ARM_LOCKOUT_MS + 300),
+        )
+      })
 
     // Arm item A: the first click only arms, never confirms.
     await user.click(getByRole('button', { name: zhCN.confirmDialog.confirmLabel }))
@@ -258,6 +382,7 @@ describe('ConfirmDialog', () => {
     // (BatchDeleteHarness's handleConfirmed) synchronously swaps in item
     // B's confirmation, batched into the same commit as this click --
     // the finding's own reproduction shape. Item B must render UNARMED.
+    await waitOutLockout()
     await user.click(getByRole('button', { name: zhCN.confirmDialog.confirmAgainLabel }))
     expect(getByRole('button', { name: zhCN.confirmDialog.confirmLabel })).toBeInTheDocument()
     expect(
@@ -276,6 +401,7 @@ describe('ConfirmDialog', () => {
     ).toBeInTheDocument()
 
     // The second click on item B does confirm it -- the guard still works.
+    await waitOutLockout()
     await user.click(getByRole('button', { name: zhCN.confirmDialog.confirmAgainLabel }))
     expect(onItemBConfirmed).toHaveBeenCalledTimes(1)
   })

@@ -20,7 +20,7 @@ string lives in the bilingual `ui-kit` namespace registered through
 | `theme/AppThemeProvider.tsx` | `AppThemeProvider`, `AppThemeProviderProps` |
 | `components/PageHeader.tsx` | `PageHeader`, `PageHeaderProps`, `PageHeaderBreadcrumb` |
 | `components/EmptyState.tsx` | `EmptyState`, `EmptyStateProps`, `EmptyStateVariant`, `EmptyStateHeadingLevel` |
-| `components/ConfirmDialog.tsx` | `ConfirmDialog`, `ConfirmDialogProps`, `ConfirmDialogVariant` |
+| `components/ConfirmDialog.tsx` | `ConfirmDialog`, `ConfirmDialogProps`, `ConfirmDialogVariant`, `CONFIRM_ARM_LOCKOUT_MS` |
 | `components/FileUploader.tsx` | `FileUploader`, `FileUploaderProps`, `FileUploaderRow`, `FileUploaderRowStatus` |
 | `components/FormField.tsx` | `FormField`, `FormFieldProps`, `FormFieldRenderState`, `REQUIRED_ERROR_KEY` |
 | `components/FormLayout.tsx` | `FormLayout`, `FormLayoutProps`, `FormLayoutColumns` |
@@ -395,11 +395,18 @@ button busy and freezes both exits. Variants: `'default'`, and
 `'danger'` for destructive confirmations, which paints the confirm
 button in the error palette role and -- paired with `doubleConfirm` --
 re-labels the button with the built-in "click again" text on the first
-click, firing `onConfirm` only on the second. The two-step guard is
-interaction state only and resets whenever the dialog closes. Hosts
-should pass the real business content as `title`/`message` (any
-ReactNode, so their own translations flow naturally); buttons fall back
-to namespace defaults.
+click, firing `onConfirm` only on the second. The arming click also
+holds the confirm button inert for `CONFIRM_ARM_LOCKOUT_MS` (600ms):
+the window outlasts the platform double-click threshold, so a double
+click -- two clicks, the second one landing on the re-labelled button
+~100-200ms after the first -- cannot skip the guard, while a user who
+read the new label clicks after the window by construction. The two-step
+guard is interaction state only and resets whenever the dialog closes
+(which also cancels the lockout's pending re-enable timer); the lockout
+covers the confirm button alone -- Cancel, Escape and the backdrop stay
+live throughout it. Hosts should pass the real business content as
+`title`/`message` (any ReactNode, so their own translations flow
+naturally); buttons fall back to namespace defaults.
 
 ### The form family (FormField + FormLayout)
 
