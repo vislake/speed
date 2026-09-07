@@ -426,16 +426,43 @@ async function expectBeforeAndAfter(
 ): Promise<void> {
   await expect(images, `${what} does not show two images`).toHaveCount(2)
 
-  const shown = await images.evaluateAll((nodes) =>
-    nodes.map((node) => {
-      const image = node as HTMLImageElement
-      return {
-        source: image.currentSrc || image.src,
-        decoded: image.complete && image.naturalWidth > 0,
-      }
-    }),
-  )
+  // Polled, not sampled once, and this cost a round's worth of false red.
+  //
+  // The first version read the decode state immediately after the count
+  // reached two -- one `evaluateAll` and a hard assertion. But the count
+  // reaching two says the elements are THERE, not that the browser has
+  // finished with them: an <img> exists the moment it is rendered and
+  // decodes some milliseconds later. So the check raced the decode and
+  // failed on about one engine execution in six, naming a broken image
+  // while the traces showed both requests answering 200 image/png in
+  // ~35ms. The app was never at fault; the gate was reading a
+  // point-in-time sample as if it were a settled state -- the same
+  // mistake `isVisible()` made in openSurface, in a different costume.
+  //
+  // A false red is not a cheap failure. It would have gone on hitting
+  // every later block's gate, and worse, it can hide a real regression:
+  // once a gate is known to flake, its red stops being read.
+  const settled = async (): Promise<readonly { source: string; decoded: boolean }[]> =>
+    await images.evaluateAll((nodes) =>
+      nodes.map((node) => {
+        const image = node as HTMLImageElement
+        return {
+          source: image.currentSrc || image.src,
+          decoded: image.complete && image.naturalWidth > 0,
+        }
+      }),
+    )
 
+  await expect
+    .poll(async () => (await settled()).every((image) => image.decoded), { timeout: 15_000 })
+    .toBe(true)
+
+  const shown = await settled()
+
+  // Kept as an assertion rather than folded into the poll: a poll that
+  // times out says only "never became true", while this names the source
+  // that never loaded -- and a broken frame where a smile should be is
+  // exactly what a patient would report.
   const broken = shown.filter((image) => !image.decoded).map((image) => image.source)
   expect(
     broken,
