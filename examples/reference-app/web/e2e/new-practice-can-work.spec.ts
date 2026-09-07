@@ -73,9 +73,15 @@ const DEAD_END_TEXT = [
   'This clinic has no credits left for a smile simulation.',
 ] as const
 
+// @budget now: the defect this gate found is closed. Self-service
+// registration grants the new clinic the same subscription and credit
+// seed the demo tenants get (1b6f9a2), so the journey the product offers
+// no longer ends in a refusal the person cannot act on. It stays out of
+// the default run because it registers and signs in, which the sign-in
+// budget cannot absorb -- not because anything about it is unverified.
 test(
   'a practice that just signed itself up can generate its first simulation',
-  { tag: '@pending' },
+  { tag: '@budget' },
   async ({ page }) => {
     const email = `e2e-new-practice-${Date.now()}@example.com`
 
