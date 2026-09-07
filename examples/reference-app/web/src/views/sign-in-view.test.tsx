@@ -13,6 +13,19 @@
  * moving. Strings are asserted through the bundles they render from --
  * the app namespace's own fixture for host copy, auth-ui's fixture
  * (relative import, the product-shell precedent) for the surface copy.
+ *
+ * The sign-in surface offers the password channel alone. This
+ * deployment has no way to deliver an SMS code -- the server's SMS
+ * seam resolves to the console sender, so a code the surface said went
+ * to a phone reaches no phone -- and the page is what a prospective
+ * customer sees in a demo, not a developer's own machine (the state-1
+ * branch of e2e/offered-channels-work.spec.ts, the resolution e2e
+ * ownership settled for this deployment). One consequence: the channel
+ * tab strip is gone, because one channel has nothing to switch
+ * between, and the two assertions below that used to read "the
+ * password channel is up" through its tab's title text now read it
+ * through the form itself -- the tab title renders nowhere, while the
+ * identifier field is the channel, visible without a click.
  */
 
 import userEvent from '@testing-library/user-event'
@@ -70,10 +83,15 @@ describe('SignInView', () => {
       view.getByRole('button', { name: zhCN.signIn.registerAction }),
     )
 
-    // The register surface replaces the sign-in form.
+    // The register surface replaces the sign-in form: the sign-in
+    // surface's own action -- its submit button -- is gone with it.
+    // (The former proxy for the sign-in form, the password tab's title
+    // text, renders nowhere now that this deployment's one channel
+    // carries no tab strip, and the two forms' identifier fields share
+    // one label, so the submit action is the property to ask about.)
     expect(await view.findByText(zhCN.register.heading)).toBeInTheDocument()
     expect(
-      view.queryByText(authUiZhCN.passwordSignIn.title),
+      view.queryByRole('button', { name: authUiZhCN.passwordSignIn.submit }),
     ).not.toBeInTheDocument()
     expect(
       view.getByRole('button', { name: authUiZhCN.register.submit }),
@@ -86,6 +104,35 @@ describe('SignInView', () => {
     // brand's one config fetch.
     expect(configGets(rig)).toBe(1)
     expect(rig.calls).toHaveLength(1)
+  })
+
+  it('offers no SMS channel: nothing in this deployment can deliver a code to a phone', async () => {
+    // Regression for e2e/offered-channels-work.spec.ts's state 1: a
+    // channel is not offered when nothing can deliver its code. In this
+    // deployment the SMS seam resolves to the console sender, so a code
+    // the surface claims went to a phone reaches no phone -- and this
+    // page is what a prospect sees in a demo. Fails before the host
+    // stops offering the channel (the SMS tab and its phone field
+    // render), passes after.
+    const rig = rigWithBrand()
+    const view = rendered(rig)
+
+    await view.findByText(BRAND)
+    expect(
+      view.queryByRole('tab', { name: authUiZhCN.smsSignIn.title }),
+    ).not.toBeInTheDocument()
+    expect(
+      view.queryByLabelText(authUiZhCN.smsSignIn.phoneLabel),
+    ).not.toBeInTheDocument()
+
+    // The channels that CAN finish a sign-in are unaffected: the
+    // password form is the surface, visible without a click.
+    expect(
+      view.getByLabelText(authUiZhCN.passwordSignIn.identifierLabel),
+    ).toBeInTheDocument()
+    expect(
+      view.getByLabelText(authUiZhCN.passwordSignIn.passwordLabel),
+    ).toBeInTheDocument()
   })
 
   it('registers a new account into the success state, issuing no sign-in', async () => {
@@ -141,12 +188,17 @@ describe('SignInView', () => {
     expect(configGets(rig)).toBe(1)
 
     // Back to the sign-in surface: the footer prompt is host copy of
-    // the sign-in mode again, and the password channel is up.
+    // the sign-in mode again, and the password channel is up -- its
+    // form visible directly. (The former proxy for that, the channel
+    // tab's title text, renders nowhere now that one channel carries
+    // no tab strip; the identifier field is the channel.)
     await user.click(
       view.getByRole('button', { name: zhCN.register.backToSignIn }),
     )
     expect(await view.findByText(zhCN.signIn.registerPrompt)).toBeInTheDocument()
-    expect(view.getByText(authUiZhCN.passwordSignIn.title)).toBeInTheDocument()
+    expect(
+      await view.findByLabelText(authUiZhCN.passwordSignIn.identifierLabel),
+    ).toBeInTheDocument()
   })
 
   it('speaks the active language on both turns of the surface', async () => {

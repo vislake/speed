@@ -4,6 +4,18 @@
  * SignInScreen, with the host's own register surface toggled from the
  * footer link.
  *
+ * The screen offers the password channel alone. This deployment has no
+ * way to deliver an SMS code: the server's SMS seam resolves to the
+ * console sender (cmd/server's standalone wiring), so a code "sent to"
+ * a phone never reaches one -- and this page is what a prospective
+ * customer sees in a demo, not a developer's own machine where reading
+ * the code in the server log is the point. Offering the SMS tab there
+ * would invite a person down a path the deployment cannot finish and
+ * then claim a delivery that never happened (the registration dead end
+ * in another costume; e2e/offered-channels-work.spec.ts holds the
+ * choice). A deployment with a real SMS transport wires it first and
+ * then adds the channel back to the list below.
+ *
  * Registration is a destination, not a session operation: the created
  * account (auth-ui's RegisterForm hands it to the host through
  * onRegistered -- the form never signs in, by package contract) lands
@@ -60,7 +72,7 @@ export function SignInView(): ReactElement {
         </Typography>
         {mode === 'sign-in' && (
           <>
-            <SignInScreen session={session} />
+            <SignInScreen session={session} channels={['password']} />
             <Box
               sx={{
                 display: 'flex',
