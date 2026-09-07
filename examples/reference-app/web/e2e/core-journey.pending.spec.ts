@@ -616,9 +616,28 @@ test(
     await createCaseWithPhoto(page, name)
     await page.getByText(name).click()
 
-    // The work area as it stands the moment a photo is opened: whatever
-    // the automatic run is about to spend, this is everything the person
-    // was told about it.
+    // Wait for the case to actually be open before reading it.
+    //
+    // Clicking the row and reading immediately sampled the CASES LIST --
+    // "Acme Dental · Cases ... NEW CASE ..." -- because opening a case is
+    // a network round trip. No honest surface has a cost word at that
+    // moment, so the gate was structurally red and would have stayed red
+    // against any correct fix. Proven by probing the sampled text on the
+    // branch that fixes the defect: the disclosure was there, and this
+    // gate was looking at the previous page.
+    //
+    // The sixth point-in-time sample this suite has read as a settled
+    // state, and the most expensive kind: not a false pass, a false
+    // ACCUSATION -- a round that had done the work correctly was told it
+    // had not.
+    await expect(
+      page.getByRole('img', { name: /photo|patient|before/i }).first(),
+      'the case never opened, so nothing here is about what it discloses',
+    ).toBeVisible({ timeout: 30_000 })
+
+    // The work area once the photo is open and before the automatic run
+    // has produced anything: whatever that run is about to spend, this is
+    // everything the person was told about it.
     const workArea = await page.getByRole('main').innerText()
 
     expect(
