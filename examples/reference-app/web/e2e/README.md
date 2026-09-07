@@ -619,9 +619,24 @@ lives.
 |---|---|---|
 | keep-the-result | no way to save the generated image -- the only way out of the product is a screenshot | unbuilt surface |
 | add-a-colleague | no surface for a practice's people, so a colleague can only be invited through the API | unbuilt surface |
+| home-is-self-consistent (own sentence) | `home.intro` still says what is here depends on enabled features while the empty state says there is nothing to enable -- one sentence under the other | defect |
+| the-ledger-reads-as-a-statement | the credits ledger shows `go/billing`'s machine annotation (`smilesim:simulate`, `demo:seed`) to the clinic owner reading their billing history | defect |
 
-**Both remaining gates wait on a surface that does not exist. No gate
-here waits on a defect.**
+**Every gate in that list came from walking the product by hand.** Two
+are surfaces the brief names and nobody built; two are defects a suite
+cannot ask about, because asking required reading a screen the way its
+reader does. The ledger one is the sharpest of the four: `go/billing`
+declares `Reason` "machine-readable annotation with a declared shape,
+never free text" -- narrowed precisely so it would not carry writing
+meant for people, since the audit trail copies it verbatim -- and the app
+renders it under a label that already says the same thing in the
+reader's own language.
+
+Both defect gates deliberately assert a PROPERTY rather than a wording:
+that two claims do not co-occur, and that no billing-reason-shaped token
+appears in a row. Rewriting, relocating or dropping are each a pass. What
+fails is a screen that answers its own sentence, or one that shows a
+reader text written for a machine.
 
 **Two defects were found by walking the journey as a person, and both are
 closed.** A click-through as a freshly self-registered practice --
