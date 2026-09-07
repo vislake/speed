@@ -134,8 +134,12 @@ func TestComplianceSweepVsErasure_ConcurrentRemovalOfTheSameRow_ConvergesClean(t
 			err    error
 		}
 		ch := make(chan outcome, 1)
+		// The ctx must carry the subject's own tenant: Erase erases within
+		// the tenant ctx is scoped to -- the SubjectRef may only echo it
+		// back (go/compliance's Erase tenant gate).
+		ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
 		go func() {
-			result, err := complianceModule.Erasure().Erase(context.Background(), pkgcore.SubjectRef{
+			result, err := complianceModule.Erasure().Erase(ctx, pkgcore.SubjectRef{
 				TenantID:  "tenant-acme",
 				SubjectID: creator,
 			}, pkgcore.Actor{Type: pkgcore.ActorTypeSystem, ID: "compliance-race-test", DisplayName: "Compliance race test"})
@@ -158,7 +162,7 @@ func TestComplianceSweepVsErasure_ConcurrentRemovalOfTheSameRow_ConvergesClean(t
 
 		// Re-running the same erasure converges with (0, nil): nothing the
 		// race left behind, and nothing the fix left half-done.
-		again, err := complianceModule.Erasure().Erase(context.Background(), pkgcore.SubjectRef{
+		again, err := complianceModule.Erasure().Erase(ctx, pkgcore.SubjectRef{
 			TenantID:  "tenant-acme",
 			SubjectID: creator,
 		}, pkgcore.Actor{Type: pkgcore.ActorTypeSystem, ID: "compliance-race-test", DisplayName: "Compliance race test"})
