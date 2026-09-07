@@ -506,3 +506,67 @@ test(
     ).toMatch(/credit|cost|balance|charge/i)
   },
 )
+
+/**
+ * That nothing on the share panel is still a placeholder.
+ *
+ * Found by walking the journey as a person, which is the only way it
+ * could have been: the panel says when the patient's link expires, and
+ * it renders the literal "{date}". cases.share.expiresOn is written
+ * with SINGLE braces while every other date line in this app uses
+ * i18next's double ones (cases.sim.attemptDate, credits.updatedLine,
+ * credits.rowMeta), so the parameter the call site correctly passes is
+ * never substituted -- in both zh-CN and en-US.
+ *
+ * No gate here could have caught it: block C asserts that the link
+ * appears and that a patient can open it, and never read the sentence
+ * beside it. A share whose expiry reads "{date}" tells a practice
+ * nothing about how long the patient has, which is the one thing that
+ * sentence exists to say.
+ *
+ * Separate from block C rather than folded into it, and that placement
+ * is the point: block C passes, and a red assertion inside the @budget
+ * describe would cost that tier the one thing it is for -- being the
+ * tier where everything is verified. An open defect belongs where the
+ * @pending tier finds it.
+ *
+ * Asserted as a CLASS rather than as this one string: any single-braced
+ * token surviving into rendered text is the same defect wearing a
+ * different name, and this is the cheapest place to notice the next one.
+ */
+test(
+  'the share panel shows a date, not a placeholder',
+  { tag: '@pending' },
+  async ({ page }) => {
+    await signInAs(page, DEMO_OWNER)
+    await openCaseWithSimulation(page)
+    await page.getByRole('button', { name: CASE_UI.share }).click()
+    await expect(page.getByRole('textbox', { name: CASE_UI.share })).toBeVisible()
+
+    //
+    // Found by walking the journey as a person rather than by any gate
+    // here: the panel says when the link expires, and it was rendering
+    // the literal "{date}". cases.share.expiresOn is written with SINGLE
+    // braces while every other date line in this app uses i18next's
+    // double ones (cases.sim.attemptDate, credits.updatedLine,
+    // credits.rowMeta), so the parameter the call site correctly passes
+    // is never substituted -- in both zh-CN and en-US.
+    //
+    // The gate above could not have caught it and neither could any
+    // other: block C asserted that the link appears and that a patient
+    // can open it, and never read the sentence next to it. A share whose
+    // expiry reads "{date}" tells a practice nothing about how long the
+    // patient has, which is the one thing that sentence exists to say.
+    //
+    // Asserted as a class rather than as this one string: any
+    // single-braced token surviving into rendered text is the same
+    // defect wearing a different name, and this is the cheapest place to
+    // notice the next one.
+    const panel = await page.getByRole('main').innerText()
+    const placeholders = panel.match(/\{[a-zA-Z_][\w.]*\}/g) ?? []
+    expect(
+      placeholders,
+      `the share panel shows un-substituted placeholders (${placeholders.join(' , ')}) -- i18next interpolates {{name}}, so a single-braced token reaches the screen verbatim`,
+    ).toEqual([])
+  },
+)
