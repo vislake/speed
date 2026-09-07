@@ -94,34 +94,48 @@ function textOf(bundle: Record<string, unknown>, key: string): string {
  * ErrPermissionDenied, and the notes codes are the notes module
  * handler's own sentinels.
  *
- * Each citation names the file, the sentinel's current line AND the
- * sentinel identifier that defines the code -- the identifier is the
- * stable half an audit greps for when a Go edit moves the line, which
- * is how the reference-app-web.md P2-1 drift (a sentinel inserted above
- * the authn block shifted 25 of 30 line citations and stayed silent
- * until an audit re-measured them) became visible at all: a citation
- * carrying only a line number cannot be checked without re-opening the
- * Go file, one carrying the identifier can. Since that audit, the
- * suite's own "every citation sits at its declared line" check below
- * has re-measured mechanically: a Go edit that moves a sentinel now
- * fails this suite with the code, the citation and the file named
- * (the P3-rnweb-3 re-pin of the 22 authn citations an intervening
- * round's sentinel insertions had shifted).
+ * Each citation names the file, the sentinel identifier that defines
+ * the code, and the parenthesised line where the sentinel was declared
+ * when the annotation was last written. The identifier is the
+ * load-bearing half; the line is a human-audit aid only, NOT an
+ * assertion. Both halves of that history matter: a citation carrying
+ * only a line number cannot be checked without re-opening the Go file,
+ * one carrying the identifier can -- which is how the
+ * reference-app-web.md P2-1 drift (a sentinel inserted above the authn
+ * block shifted 25 of 30 line citations and stayed silent until an
+ * audit re-measured them) became visible at all. But once the suite
+ * began asserting the annotated line mechanically, every unrelated Go
+ * edit that inserted or removed a line above a sentinel reddened it:
+ * the retellings that once annotated each block below recorded
+ * twenty-odd re-pin episodes, the latest a docs round that never
+ * touched behaviour -- 89f3077, docs(jobs) -- moving ErrJobNotFound
+ * from go/jobs/job.go:186 to :201 (the jobs-3 round that landed in the
+ * same window took the blame; 0eb0644, the round's other real mover,
+ * shifted billing's ErrInsufficientCredits and ErrInternal the same
+ * three lines). Each re-pin round discovered the further drifted
+ * citations only one at a time, since the line check reported the
+ * first mismatch in traversal order and stopped.
+ *
+ * The deep check below therefore asserts the property worth keeping --
+ * the cited FILE declares the identifier exactly once. That still
+ * fails when a sentinel is deleted or renamed (the identifier vanishes
+ * from the file) or when a citation points at the wrong file (the
+ * identifier is not declared there), with the code, the file and the
+ * identifier named; it no longer fails when a sentinel merely moves
+ * within its file. Where the annotation drifts from the re-measured
+ * declaration site, the check prints the found line instead -- visible
+ * information in the run output for whoever next reads the
+ * annotation, never a red. All 73 annotations were re-measured
+ * accurate by the re-pin round this change replaces (a6b2be8); none
+ * of them is asserted after it.
  */
 const GO_PINNED: Readonly<Record<string, string>> = {
   // go/authn/errors.go -- the authn module's error sentinels, in current
-  // file order (re-measured this round: a Go edit inserted a block above
-  // ErrPasswordTooWeak since the last audit, shifting every sentinel
-  // from there to ErrSessionNotFound by +10 to +17 lines; the
-  // token-verification answers entered the enumeration with this
-  // re-measurement, and composed-stack verification then kept
-  // authn.token_invalid -- authn.authentication_required's citation
-  // moved to WHITELISTED_BEYOND_THIS_APP below, see its entry). A later
-  // rescan round's sentinel additions between ErrTenantMembershipUnavailable
-  // and ErrOAuthStateInvalid (the revocation-check and token-verification
-  // sentinels among them) shifted every citation from ErrOAuthStateInvalid
-  // to ErrSessionNotFound by exactly +12 lines; re-measured here against
-  // the current declaration sites).
+  // file order (the enumeration carries only the codes these surfaces
+  // can be answered with; authn.token_invalid's reachability reasoning
+  // sits with its entry below, and authn.authentication_required --
+  // once cited here -- moved to WHITELISTED_BEYOND_THIS_APP, see its
+  // entry).
   'authn.invalid_credentials': 'go/authn/errors.go:37 (ErrInvalidCredentials)',
   'authn.identifier_required': 'go/authn/errors.go:41 (ErrIdentifierRequired)',
   'authn.invalid_email': 'go/authn/errors.go:45 (ErrInvalidEmail)',
@@ -167,25 +181,13 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   'authn.rate_limited': 'go/authn/errors.go:285 (ErrRateLimited)',
   'authn.account_locked': 'go/authn/errors.go:293 (ErrAccountLocked)',
   'authn.channel_disabled': 'go/authn/errors.go:303 (ErrChannelDisabled)',
-  // The authn doc round that recorded the pre-authentication collapse
-  // of a spent phone-login code into the invalid answer expanded the
-  // verification-code sentinel's doc comment, shifting every citation
-  // from ErrVerificationCodeInvalid to ErrSessionNotFound by exactly
-  // +19 lines; re-measured here against the current declaration sites.
   'authn.verification_code_invalid': 'go/authn/errors.go:330 (ErrVerificationCodeInvalid)',
   'authn.mfa_not_enrolled': 'go/authn/errors.go:347 (ErrMFANotEnrolled)',
   'authn.mfa_already_enrolled': 'go/authn/errors.go:351 (ErrMFAAlreadyEnrolled)',
   // authn.mfa_code_used -- the honest-split round's new sentinel: the
   // spent-code answer (a code that passed the real check but whose
   // single-use guard already consumed it) that authn now distinguishes
-  // from the never-valid authn.mfa_invalid_code. The declaration block
-  // inserted between ErrMFAInvalidCode and ErrStepUpRequired shifted
-  // every citation from ErrMFAInvalidCode to ErrSessionNotFound;
-  // re-measured here against the current declaration sites. The
-  // over-width SSO validation block the authn input-guard round added
-  // above ErrRateLimited has since shifted that whole run again --
-  // ErrRateLimited through ErrSessionNotFound, re-measured the same
-  // way.
+  // from the never-valid authn.mfa_invalid_code.
   'authn.mfa_invalid_code': 'go/authn/errors.go:369 (ErrMFAInvalidCode)',
   'authn.mfa_code_used': 'go/authn/errors.go:384 (ErrMFACodeUsed)',
   'authn.step_up_required': 'go/authn/errors.go:388 (ErrStepUpRequired)',
@@ -197,9 +199,7 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   // handler's own sentinels.
   'notes.text_required': 'examples/reference-app/internal/notes/handler.go:31 (ErrTextRequired)',
   // The two declarations below sit after the maxRequestBodyBytes constant
-  // block the request-body-cap round added above ErrTextTooLong; the cited
-  // lines are the current declaration sites, kept in step with the Go
-  // source (the deep-check below fails any drift).
+  // block the request-body-cap round added above ErrTextTooLong.
   'notes.text_too_long': 'examples/reference-app/internal/notes/handler.go:80 (ErrTextTooLong)',
   'notes.internal_error': 'examples/reference-app/internal/notes/handler.go:84 (errInternal)',
   // examples/reference-app/internal/cases/service.go -- the cases
@@ -252,16 +252,10 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   'smilesim.output_not_found': 'examples/reference-app/cmd/server/smilesim.go:91 (smileSimErrOutputNotFound)',
   'smilesim.recipient_not_in_tenant': 'examples/reference-app/cmd/server/smilesim.go:446 (smilesimErrRecipientNotInTenant)',
   // go/jobs/job.go -- the not-found sentinel the job-status handler
-  // passes through for an unknown or another tenant's job id. (The
-  // payload-persistence warning block the docs round inserted above the
-  // record types shifted the declaration by fifteen lines; re-measured
-  // against the current site.)
+  // passes through for an unknown or another tenant's job id.
   'jobs.job_not_found': 'go/jobs/job.go:201 (ErrJobNotFound)',
   // go/billing/errors.go -- the credit-reservation refusal a simulate
-  // answers when the tenant's balance cannot cover one generation. (The
-  // ErrPlanNotFound doc rewrite at the top of the sentinel block shifted
-  // the declaration by three lines; re-measured against the current
-  // site. ErrInternal's citation below moved with it, the same +3.)
+  // answers when the tenant's balance cannot cover one generation.
   'billing.insufficient_credits': 'go/billing/errors.go:73 (ErrInsufficientCredits)',
   // go/billing/errors.go -- the handler-level envelope the credits
   // surface's two GETs fold an unclassifiable failure into (the block-D
@@ -281,10 +275,7 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   // outward-identical not-accessible refusal, the per-IP/per-token rate
   // limit, the granted-but-unopenable 502 and the internal envelope.
   // The route-level rbac answer the share action can draw is the
-  // already-pinned rbac.permission_denied above. The limited-share
-  // round's route fix that moved the view consumption to post-serve
-  // expanded the 502 sentinel's doc comment, shifting its citation by
-  // two lines; re-measured here against the current declaration site).
+  // already-pinned rbac.permission_denied above).
   'sharing.internal_error': 'go/sharing/errors.go:92 (ErrInternal)',
   'sharing.not_accessible': 'go/sharing/errors.go:60 (ErrNotAccessible)',
   'sharing.resource_unavailable': 'go/sharing/errors.go:111 (ErrResourceUnavailable)',
@@ -357,10 +348,13 @@ const SURFACE_WHITELISTS: Readonly<Record<string, readonly string[]>> = {
   'credits surface': Object.keys(CREDITS_ERROR_TEXT_KEYS),
 }
 
-/** A citation's path, line and sentinel identifier. */
+/** A citation's path, annotated line and sentinel identifier. The
+ * annotated line is the human-audit aid carried in the citation; it is
+ * never asserted -- the deep check re-measures the declaration site and
+ * prints it when the two differ. */
 interface SentinelCitation {
   readonly path: string
-  readonly line: number
+  readonly annotatedLine: number
   readonly identifier: string
 }
 
@@ -373,7 +367,7 @@ function parseCitation(code: string, citation: string): SentinelCitation {
   if (path === undefined || lineText === undefined || identifier === undefined) {
     throw new Error(`malformed citation for ${code}: ${citation}`)
   }
-  return { path, line: Number(lineText), identifier }
+  return { path, annotatedLine: Number(lineText), identifier }
 }
 
 /** The repository root as a filesystem path, derived from this test
@@ -390,23 +384,46 @@ function repoRootPath(): string {
 }
 
 describe('reachable-error whitelists vs the server code set', () => {
-  it('keeps every GO_PINNED citation at the line that declares its sentinel', () => {
+  it('declares every GO_PINNED sentinel exactly once in the file its citation names', () => {
     // The machine half of the identifier-citation discipline (see the
-    // GO_PINNED doc comment): each cited line must actually declare
-    // the cited sentinel, so a Go edit that moves a sentinel -- the
-    // drift reference-app-web.md P2-1 recorded -- fails this suite
-    // instead of waiting for the next manual audit. The files are
-    // read relative to this test file (the app lives at
+    // GO_PINNED doc comment): the cited FILE must declare the cited
+    // sentinel exactly once, so a sentinel deleted or renamed (the
+    // identifier vanishes from the file) and a citation pointed at the
+    // wrong file (the identifier is not declared there) both fail this
+    // suite with the code, the file and the identifier named. The line
+    // number is deliberately not asserted -- an unrelated Go edit that
+    // merely moves a sentinel inside its file must not redden the
+    // suite (the re-pin episodes the GO_PINNED doc comment recounts
+    // all began that way); the re-measured declaration line is printed
+    // instead whenever it differs from the citation's annotation, so a
+    // drift is visible information in the run output, never a red.
+    // The files are read relative to this test file (the app lives at
     // examples/reference-app/web, four levels under the repository
     // root, and the citations are repository-root-relative paths).
     for (const [code, citation] of Object.entries(GO_PINNED)) {
-      const { path, line, identifier } = parseCitation(code, citation)
+      const { path, annotatedLine, identifier } = parseCitation(code, citation)
       const source = readFileSync(`${repoRootPath()}${path}`, 'utf8')
-      const cited = source.split('\n')[line - 1]
-      expect(
-        cited,
-        `${code} is cited at ${path}:${line} (${identifier}), but that line does not declare the sentinel`,
-      ).toMatch(new RegExp(`^\\s*(?:var\\s+)?${identifier}\\s*=`))
+      const declaration = new RegExp(`^\\s*(?:var\\s+)?${identifier}\\s*=`)
+      const declaredLines = source
+        .split('\n')
+        .flatMap((line, index) => (declaration.test(line) ? [index + 1] : []))
+      const message =
+        declaredLines.length === 0
+          ? `${code} is cited to ${path} (${identifier}), but that file does not declare the sentinel (deleted or renamed?)`
+          : `${code} is cited to ${path} (${identifier}), but that file declares the sentinel ${declaredLines.length} times (lines ${declaredLines.join(', ')}), not exactly once`
+      expect(declaredLines.length, message).toBe(1)
+      const declaredLine = declaredLines[0]
+      if (declaredLine !== annotatedLine) {
+        // The drift goes to the raw stdout stream rather than
+        // console.log because vitest swallows a passing test's console
+        // output and echoes it only attached to a failing test -- and a
+        // passing suite is the common case here, the whole point of the
+        // file-level assertion being that a moved sentinel no longer
+        // reddens it. The raw line stays in the run log either way.
+        process.stdout.write(
+          `GO_PINNED drift: ${code} is declared at ${path}:${declaredLine} (${identifier}); its citation annotation says ${path}:${annotatedLine}\n`,
+        )
+      }
     }
   })
 
