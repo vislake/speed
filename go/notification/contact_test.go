@@ -1415,3 +1415,84 @@ func TestContactService_List_ReturnsTheRosterNewestFirst(t *testing.T) {
 		t.Errorf("FindByID returned address %q, want the decrypted plaintext %q", row.Address, newer)
 	}
 }
+
+// TestContact_CodeSendFailure_RedactsTheRecipientAddressFromTheError pins
+// the redaction of the verification-code send path's transport failures.
+// A code send is the security rules' one permitted message to a not-yet-
+// verified address, and its payload carries the plaintext code, so a
+// transport error that echoed the recipient would be one diagnostic log
+// line away from a PII leak -- delivery.go's four send paths redact for
+// exactly this reason before their failure text is stored, and this path,
+// which has no send record to store into, must redact before the error
+// leaves at all. The redaction preserves the error's classification (the
+// apperr code and the wrapped cause stay reachable through errors.Is), the
+// plaintext code never enters the error, and ordinary code sends are
+// unaffected.
+func TestContact_CodeSendFailure_RedactsTheRecipientAddressFromTheError(t *testing.T) {
+	t.Run("email", func(t *testing.T) {
+		env := newContactEnv(t)
+		ctx := tenantCtx("tenant-acme")
+		const address = "verify@example.com"
+
+		env.host.mailer.failWith = fmt.Errorf("smtp: 550 <%s>: mailbox unavailable: %w", address, ErrTransportPermanent)
+		_, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: address})
+		if err == nil {
+			t.Fatal("CreateContact succeeded while the mailer refused, want the delivery-failed error")
+		}
+		assertCode(t, err, ErrContactCodeDeliveryFailed.Code)
+		if text := err.Error(); strings.Contains(text, address) {
+			t.Errorf("the delivery-failed error carries the plaintext address: %q", text)
+		} else if !strings.Contains(text, "[redacted]") {
+			t.Errorf("the delivery-failed error = %q, want the address replaced by the redaction marker", text)
+		}
+		if contactCodeRe.MatchString(err.Error()) {
+			t.Errorf("the delivery-failed error carries a six-digit run (the code must never enter it): %q", err.Error())
+		}
+		if !errors.Is(err, ErrTransportPermanent) {
+			t.Errorf("the redacted error lost the transport's wrapped sentinel (errors.Is = false)")
+		}
+		env.host.mailer.failWith = nil
+
+		if _, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: address}); err != nil {
+			t.Fatalf("retried CreateContact after the failure cleared: %v", err)
+		}
+		if mails := env.host.mailer.messages(); len(mails) != 1 {
+			t.Errorf("mails = %d, want the retry's 1 (ordinary code sends unaffected)", len(mails))
+		} else {
+			_ = emailCodeAt(t, env, 0)
+		}
+	})
+	t.Run("sms", func(t *testing.T) {
+		env := newContactEnv(t)
+		ctx := tenantCtx("tenant-acme")
+		const address = testPhone
+
+		env.svc.sms = &recordingSMSSender{failWith: fmt.Errorf("sms: 550 %s: invalid number: %w", address, ErrTransportPermanent)}
+		_, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelSMS, Address: address})
+		if err == nil {
+			t.Fatal("CreateContact succeeded while the SMS sender refused, want the delivery-failed error")
+		}
+		assertCode(t, err, ErrContactCodeDeliveryFailed.Code)
+		if text := err.Error(); strings.Contains(text, address) {
+			t.Errorf("the delivery-failed error carries the plaintext address: %q", text)
+		} else if !strings.Contains(text, "[redacted]") {
+			t.Errorf("the delivery-failed error = %q, want the address replaced by the redaction marker", text)
+		}
+		if contactCodeRe.MatchString(err.Error()) {
+			t.Errorf("the delivery-failed error carries a six-digit run (the code must never enter it): %q", err.Error())
+		}
+		if !errors.Is(err, ErrTransportPermanent) {
+			t.Errorf("the redacted error lost the transport's wrapped sentinel (errors.Is = false)")
+		}
+		env.svc.sms = NewConsoleSMSSender(env.smsBuf)
+
+		if _, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelSMS, Address: address}); err != nil {
+			t.Fatalf("retried CreateContact after the failure cleared: %v", err)
+		}
+		if lines := smsLines(env.smsBuf); len(lines) != 1 {
+			t.Errorf("sms lines = %d, want the retry's 1 (ordinary code sends unaffected)", len(lines))
+		} else {
+			_ = smsCodeAt(t, env.smsBuf, 0)
+		}
+	})
+}

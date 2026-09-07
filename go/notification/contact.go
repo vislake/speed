@@ -778,10 +778,23 @@ func (s *ContactService) sendCode(ctx context.Context, contact *VerifiedContact)
 	if err != nil {
 		return err
 	}
+	// Both transport failures below wrap their cause in
+	// redactRecipientAddresses, exactly as delivery.go's four send paths do
+	// before their failure text is stored: a transport error routinely
+	// quotes the address it rejected, and this path's error must never
+	// carry the plaintext address either. It needs the redaction as much as
+	// those paths -- the payload this send carries is the plaintext
+	// verification code (the security rules' one permitted message to a
+	// not-yet-verified address), so this error is one added diagnostic log
+	// line away from being a leak point, and no comment at any future call
+	// site would say why this one differs from the four sites next door.
+	// The code itself never enters the error at all: it travels only in the
+	// rendered payload handed to the transport, never in what the transport
+	// failure wraps.
 	switch contact.Channel {
 	case ChannelSMS:
 		if err := s.sms.Send(ctx, SMS{To: contact.Address, Text: body}); err != nil {
-			return ErrContactCodeDeliveryFailed.WithCause(err)
+			return ErrContactCodeDeliveryFailed.WithCause(redactRecipientAddresses(err, contact.Address))
 		}
 	case ChannelEmail:
 		mailer := s.host.Mailer()
@@ -794,7 +807,7 @@ func (s *ContactService) sendCode(ctx context.Context, contact *VerifiedContact)
 			Subject: subject,
 			Text:    body,
 		}); err != nil {
-			return ErrContactCodeDeliveryFailed.WithCause(err)
+			return ErrContactCodeDeliveryFailed.WithCause(redactRecipientAddresses(err, contact.Address))
 		}
 	default:
 		return errInternal(fmt.Errorf("notification: unknown contact channel %q", contact.Channel))

@@ -107,7 +107,12 @@ var (
 	// transport refused after the code was stamped. For a create the
 	// pending row is revoked before this is returned; for a resend the
 	// fresh hash stays on the row (see ResendCode), harmless because the
-	// previous code was already dead.
+	// previous code was already dead. The wrapped cause is the transport
+	// failure with the recipient's address redacted out (contact.go's
+	// sendCode wraps it in redactRecipientAddresses, like delivery.go's
+	// send paths): the payload this failure describes carried the plaintext
+	// code to a not-yet-verified address, so the error must never carry the
+	// address that future diagnostic logging would otherwise leak.
 	ErrContactCodeDeliveryFailed = apperr.Internal("notification.contact_code_delivery_failed")
 
 	// ErrContactUnsubscribed reports an operation on a contact that has
