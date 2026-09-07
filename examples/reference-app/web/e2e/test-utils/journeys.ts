@@ -314,6 +314,45 @@ export async function switchTenant(page: Page, target: string): Promise<void> {
 }
 
 /**
+ * The text a surface shows once it has stopped changing.
+ *
+ * Exists because this suite read a point-in-time sample as a settled
+ * state SIX times, in an assertion, a wait, a helper, a balance read, a
+ * notice read and a disclosure read. Every one produced an answer that
+ * was not about the product: five let a defect through, and the sixth
+ * accused a round that had done its work correctly.
+ *
+ * Recording that as a lesson did not stop it -- the README has carried
+ * the failure class for most of a day and it happened twice more since.
+ * What was missing was not the knowledge but the convenient path: a bare
+ * `await locator.innerText()` is one call and always available, so it is
+ * what gets written. This makes waiting the equally short option.
+ *
+ * "Settled" is two identical reads a beat apart, which is enough for the
+ * shapes that actually bit: a query that has not answered, a navigation
+ * still in flight, an announcement a beat behind its trigger. It is not
+ * a guarantee against a surface that changes forever -- nothing is --
+ * and it deliberately does not assert anything about the content, so a
+ * caller's own assertion still says what the text must contain.
+ */
+export async function readSettledText(
+  locator: import('@playwright/test').Locator,
+  timeout = 15_000,
+): Promise<string> {
+  const deadline = Date.now() + timeout
+  let previous = await locator.innerText().catch(() => '')
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    const current = await locator.innerText().catch(() => '')
+    if (current === previous && current.trim() !== '') {
+      return current
+    }
+    previous = current
+  }
+  return previous
+}
+
+/**
  * Asserts a person is signed in, by the one control that is present on
  * every screen size when they are: the sign-out button.
  *

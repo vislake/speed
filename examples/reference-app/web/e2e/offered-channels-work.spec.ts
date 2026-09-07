@@ -30,7 +30,7 @@
  * for anything a prospect will open.
  */
 import { expect, test } from '@playwright/test'
-import { SIGN_IN_TEXT, visitSignIn } from './test-utils/journeys.js'
+import { SIGN_IN_TEXT, readSettledText, visitSignIn } from './test-utils/journeys.js'
 
 /** A well-formed E.164 number, so the refusal cannot be about format. */
 const VALID_PHONE = '+8613800138000'
@@ -116,7 +116,10 @@ test(
     // this gate is the acceptance criterion for the round now fixing
     // the channel, and a criterion that cannot state what it wants
     // leaves the person implementing it guessing.
-    const text = await page.locator('body').innerText()
+    // Settled, not sampled: reading this immediately is what produced
+    // the "the surface is completely silent" misdiagnosis -- the notice
+    // arrives a beat after the press.
+    const text = await readSettledText(page.locator('body'))
 
     if (CLAIM_OF_DELIVERY.split(' ').every((word) => text.includes(word))) {
       // The surface claims a phone received a code. That must be true,

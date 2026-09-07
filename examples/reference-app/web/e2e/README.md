@@ -224,6 +224,21 @@ User-Agent defect above it was fixed and stopped failing first. It would
 have surfaced as a regression in the round that fixed the real thing,
 and been blamed on it.
 
+**A point-in-time sample read as a settled state.** Six times: an
+assertion, a wait, a helper, a balance read, a notice read and a
+disclosure read. Five let a defect through; the sixth accused a round
+that had done its work correctly of not having done it, which is the
+expensive direction. The shapes were always the same -- a query that had
+not answered, a navigation still in flight, an announcement a beat
+behind its trigger.
+
+Recording it did not stop it. This section carried the failure class for
+most of a day and it happened twice more. What was missing was not the
+knowledge but the convenient path: `await locator.innerText()` is one
+call and always available, so it is what gets written. `readSettledText`
+in test-utils/journeys.ts makes waiting equally short, and that -- not
+another note -- is what a repeated mistake needs.
+
 **`isVisible()` does not wait.** It is a point-in-time question, so a
 helper that asks it first races the page's own render: a journey that
 signed in and navigated immediately found neither the nav link nor the
