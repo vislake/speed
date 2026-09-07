@@ -229,11 +229,27 @@ func (m *Module) Service() *Service { return m.svc }
 func (m *Module) Handler() *Handler { return m.handler }
 
 // EnqueueExpirySweep enqueues the expiry-sweep task for the tenant ctx
-// carries (see cleanup.go's Service.Sweep for what the task does). ctx must
-// carry a tenant; a caller with none gets ErrInternal, since a tenant-less
-// sweep is a wiring error. Fails with ErrQueueRequiredForSweep when the
-// module was built without WithQueue -- see that Option's own doc comment
-// for why this is a call-time refusal rather than a Register-time one.
+// carries (see cleanup.go's Service.Sweep for what the task does). It is
+// the host-facing schedule point: a host with workers runs it on its own
+// timer per tenant, and the task's window-scoped idempotency key
+// (expirySweepIdempotencyKey) collapses the enqueues of one
+// expirySweepWindowSize window -- a scheduler with two replicas ticking in
+// the same window, a manual re-run -- into one job, so a tenant is never
+// swept by two workers at once. An enqueue whose clock has moved into a
+// later window (expirySweepWindowStart) is a new job and runs again: this
+// is what makes the sweep periodic on queues whose idempotency is
+// unconditional, and what keeps one dead-lettered sweep from poisoning its
+// tenant forever -- see expirySweepIdempotencyKey's doc comment for the
+// full window semantics. The window is read from the module service's
+// clock (Service.now, the same seam Service.Sweep reads when the task
+// runs): one clock drives the enqueue-time window and the run-time rows in
+// production, and a test pins it once for a deterministic enqueue.
+//
+// ctx must carry a tenant; a caller with none gets ErrInternal, since a
+// tenant-less sweep is a wiring error. Fails with ErrQueueRequiredForSweep
+// when the module was built without WithQueue -- see that Option's own doc
+// comment for why this is a call-time refusal rather than a Register-time
+// one.
 func (m *Module) EnqueueExpirySweep(ctx context.Context) error {
 	if m.queue == nil {
 		return ErrQueueRequiredForSweep
@@ -245,7 +261,7 @@ func (m *Module) EnqueueExpirySweep(ctx context.Context) error {
 	_, err = m.queue.Enqueue(ctx, jobs.Task{
 		Type:           taskTypeExpirySweep,
 		TenantID:       tenant,
-		IdempotencyKey: expirySweepIdempotencyKey(tenant),
+		IdempotencyKey: expirySweepIdempotencyKey(tenant, expirySweepWindowStart(m.svc.now())),
 	})
 	return err
 }

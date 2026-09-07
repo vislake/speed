@@ -279,6 +279,10 @@ var _ jobs.Queue = (*recordingQueue)(nil)
 func TestModule_EnqueueExpirySweep_BuildsTheExpectedTask(t *testing.T) {
 	fq := &recordingQueue{}
 	m := NewModule(newTestDB(t), WithQueue(fq))
+	// Pin the module service's clock -- the seam EnqueueExpirySweep reads
+	// the enqueue's window from -- so the expected key is deterministic.
+	now := time.Date(2026, 9, 7, 10, 30, 0, 0, time.UTC)
+	m.svc.now = func() time.Time { return now }
 	if err := m.EnqueueExpirySweep(testCtx()); err != nil {
 		t.Fatalf("EnqueueExpirySweep: %v", err)
 	}
@@ -288,7 +292,7 @@ func TestModule_EnqueueExpirySweep_BuildsTheExpectedTask(t *testing.T) {
 	if fq.lastTask.TenantID != testTenant {
 		t.Errorf("Task.TenantID = %q, want %q", fq.lastTask.TenantID, testTenant)
 	}
-	if fq.lastTask.IdempotencyKey != expirySweepIdempotencyKey(testTenant) {
-		t.Errorf("Task.IdempotencyKey = %q, want %q", fq.lastTask.IdempotencyKey, expirySweepIdempotencyKey(testTenant))
+	if fq.lastTask.IdempotencyKey != expirySweepIdempotencyKey(testTenant, expirySweepWindowStart(now)) {
+		t.Errorf("Task.IdempotencyKey = %q, want %q (the enqueue's own window, not a tenant-only key)", fq.lastTask.IdempotencyKey, expirySweepIdempotencyKey(testTenant, expirySweepWindowStart(now)))
 	}
 }

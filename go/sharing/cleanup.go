@@ -18,13 +18,15 @@ package sharing
 //
 // EnqueueExpirySweepIdempotencyKey and the task type follow go/storage's own
 // expiry-sweep convention (cleanup.go there) as the established precedent
-// for "a tenant-scoped jobs.Task, one per tenant, idempotency keyed on the
-// tenant so a scheduler with replicas or a manual re-run collapses into one
-// job".
+// for "a tenant-scoped jobs.Task, one per expirySweepWindowSize window,
+// idempotency keyed on the tenant and the window so a scheduler with
+// replicas or a manual re-run collapses one window's enqueues into one job
+// while a later window's enqueue schedules the sweep again".
 
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/observability"
@@ -36,12 +38,55 @@ import (
 // rows and the clock at run time.
 const taskTypeExpirySweep = "sharing.expiry_sweep"
 
-// expirySweepIdempotencyKey derives the jobs idempotency key of a tenant's
-// expiry-sweep task from the tenant id, mirroring go/storage's identical
-// expirySweepIdempotencyKey: two enqueues for the same tenant's sweep
-// collapse into one job, so a tenant is never swept by two workers at once.
-func expirySweepIdempotencyKey(tenant pkgcore.TenantID) string {
-	return "sharing.sweep:" + string(tenant)
+// expirySweepWindowSize is the period one expiry-sweep idempotency key
+// covers: a sweep is enqueued under the key of the expirySweepWindowSize
+// window (expirySweepWindowStart) its enqueue falls in, so the same-window
+// duplicates the original key existed to collapse -- a scheduler with two
+// replicas, a manual re-run -- still merge into one job, while an enqueue
+// in a later window becomes a NEW job and the sweep runs again. The window
+// is what makes the sweep periodic at all: jobs' idempotency is
+// unconditional for one key on StandaloneQueue (a resolved key is held
+// forever), so a tenant-only key would give each tenant exactly one sweep
+// per database file -- the pre-window design's residual -- and, worse, a
+// sweep job that dead-letters would poison its tenant forever, since every
+// later enqueue would keep returning the dead job's id. A dead-lettered
+// job now poisons only its own window; the next window's enqueue is a
+// fresh key and runs. One hour means a share past its expiry is marked --
+// and a view reservation that has outlived viewReservationTimeout is
+// refunded -- at most expirySweepWindowSize after the sweep that should
+// have caught it was enqueued, while keeping the sweep load at one task
+// per tenant per hour at most.
+const expirySweepWindowSize = time.Hour
+
+// expirySweepWindowStart is the expiry-sweep window the enqueue at now
+// belongs to -- the absolute hour boundary now.Truncate(expirySweepWindowSize)
+// lands in. Two replicas enqueuing within the same window share one key
+// (and one job); a tick in a later window gets its own. Truncation is on
+// the absolute clock, never a timezone-local calendar cut, so every
+// replica agrees on the boundary regardless of its own location.
+func expirySweepWindowStart(now time.Time) time.Time {
+	return now.Truncate(expirySweepWindowSize)
+}
+
+// expirySweepIdempotencyKey derives the jobs idempotency key of one
+// expiry-sweep window for a tenant, per the rule that an idempotency key
+// derives from the business operation, never random: the operation one key
+// names is "the sweep of windowStart", not "some sweep or other" -- a
+// periodic task's identity inherently includes WHICH period it is for (the
+// same reasoning notification's derived keys encode the business
+// operation's identity). Two enqueues for one tenant's sweep in the same
+// window -- a scheduler with two replicas, a manual re-run -- collapse
+// into one job, so a tenant is never swept by two workers at once; an
+// enqueue whose clock has moved into a later window resolves a fresh key
+// and runs again, which is what makes the sweep periodic, and what keeps
+// one dead-lettered sweep from poisoning its tenant forever.
+// windowStart is the expirySweepWindowSize window start the enqueue
+// belongs to (expirySweepWindowStart). The "sharing.sweep:" prefix keeps
+// the key inside the module's namespace within the shared queue store, and
+// the RFC 3339 window stamp keeps the key readable in DeadLetterJobs while
+// staying unambiguous.
+func expirySweepIdempotencyKey(tenant pkgcore.TenantID, windowStart time.Time) string {
+	return "sharing.sweep:" + string(tenant) + ":" + windowStart.UTC().Format(time.RFC3339)
 }
 
 // Sweep runs the expiry-sweep task's two arms over the caller tenant's
